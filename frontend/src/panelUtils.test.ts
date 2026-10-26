@@ -48,6 +48,8 @@ import {
   handleGlobalEscape,
   shouldShowCodexHookTrustBanner,
   sessionIdFromPanelId,
+  workspaceProjectIdsFromPanels,
+  openTerminalSessionIds,
 } from "./panelUtils.js";
 import type { DockviewApi, DockviewGroupPanel, SerializedDockview } from "dockview-react";
 import { DEFAULT_SETTINGS } from "./api/index.js";
@@ -1038,6 +1040,71 @@ describe("extractSessionIds", () => {
 
   it("returns an empty set for a null layout", () => {
     expect(extractSessionIds(null)).toEqual(new Set());
+  });
+});
+
+// Issue #1877 — this is the Dock's grouping rule (App.tsx hands the result
+// to <Dock workspaceProjectIds> and to the sidebar). A second copy of the
+// loop would let the two trees disagree about which projects are in the
+// workspace.
+describe("workspaceProjectIdsFromPanels", () => {
+  const sessions = [
+    { id: 10, projectId: 1 },
+    { id: 11, projectId: 2 },
+    { id: 12, projectId: 1 },
+  ];
+
+  it("lists each project once, in the order its first panel was seen", () => {
+    expect(
+      workspaceProjectIdsFromPanels(
+        [
+          { params: { sessionId: 11 } },
+          { params: { sessionId: 10 } },
+          { params: { sessionId: 12 } },
+        ],
+        sessions,
+      ),
+    ).toEqual([2, 1]);
+  });
+
+  it("counts a panel that is not tiled — a floating peek still puts its project in the workspace", () => {
+    // The function does not read location at all. App passes every panel,
+    // including floats; the phone switcher's tiled-only list is a different
+    // question, and this rule must not grow that filter.
+    expect(workspaceProjectIdsFromPanels([{ params: { sessionId: 10 } }], sessions)).toEqual([1]);
+  });
+
+  it("skips panels with no session and sessions the dashboard does not know", () => {
+    expect(
+      workspaceProjectIdsFromPanels(
+        [
+          { params: {} },
+          {},
+          { params: { sessionId: "nope" } },
+          { params: { sessionId: 99 } },
+          { params: { sessionId: 11 } },
+        ],
+        sessions,
+      ),
+    ).toEqual([2]);
+  });
+});
+
+// Issue #1877 — the marker on a sidebar row. Only a terminal pane
+// (`session-<id>`) counts: that is the panel onOpenSession focuses.
+// timeline- and browserPane- are different panels.
+describe("openTerminalSessionIds", () => {
+  it("collects terminal pane ids and ignores other session-scoped panels", () => {
+    expect(
+      openTerminalSessionIds([
+        { id: "session-4" },
+        { id: "timeline-4" },
+        { id: "browserPane-9" },
+        { id: "session-4" },
+        { id: "github-1" },
+        { id: "session-7" },
+      ]),
+    ).toEqual([4, 7]);
   });
 });
 

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { Virtualizer } from "@tanstack/react-virtual";
 import { Sidebar } from "./Sidebar.js";
@@ -17,6 +17,8 @@ import type {
   Task,
 } from "./api/index.js";
 import { makeSession, makeProject, makeHost, makeTask } from "./test/fixtures.js";
+import { STORAGE_KEYS } from "./lib/persistedState.js";
+import { writeDockManualProjectIds } from "./dock/dockHelpers.js";
 
 // U3 (audit finding — "nothing degrades gracefully past ~20 sessions") —
 // covers the sidebar's new search/chip filter, persisted project collapse
@@ -147,6 +149,7 @@ const NOOP_PROPS = {
   onOpenGit: vi.fn(),
   onOpenProjectSetup: vi.fn(),
   onOpenDevice: vi.fn(),
+  onOpenGlobalLauncher: vi.fn(),
   showSourceControl: false,
 };
 
@@ -157,7 +160,8 @@ const NOOP_PROPS = {
 // wrapping to match. Harmless for the below-threshold tests, which never
 // mount VirtualizedProjectTree at all.
 function renderSidebar(
-  props: Partial<typeof NOOP_PROPS> & Pick<SidebarProps, "phoneSection"> = {},
+  props: Partial<typeof NOOP_PROPS> &
+    Partial<Pick<SidebarProps, "phoneSection" | "workspaceProjectIds" | "openSessionIds">> = {},
 ) {
   return render(
     <div className="sidebar-wrapper">
@@ -1497,6 +1501,160 @@ describe("Sidebar phoneSection (phone navigator tabs)", () => {
     expect(screen.queryByRole("button", { name: /^Tasks/ })).toBeNull();
     expect(screen.queryByText("Projects")).toBeNull();
     expect(screen.queryByLabelText("Filter sessions")).toBeNull();
+  });
+
+  // Issue #1877 — the phone tier has no workspaces. App passes null for the
+  // scope props there; the tree must stay the full project list, not the
+  // desktop's "only what's tiled" filter.
+  it("keeps every project on the phone projects tab when no workspace scope is passed", () => {
+    projects = [makeProject({ id: 1, name: "alpha" }), makeProject({ id: 2, name: "beta" })];
+    render(
+      <div className="sidebar-wrapper">
+        <Sidebar {...NOOP_PROPS} phoneSection="projects" />
+      </div>,
+    );
+    expect(screen.getByText("alpha")).toBeInTheDocument();
+    expect(screen.getByText("beta")).toBeInTheDocument();
+    expect(screen.queryByText("Nothing tiled in this workspace")).toBeNull();
+  });
+});
+
+// Issue #1877 — the sidebar's project tree follows the Dock: the projects
+// whose sessions are open in the active workspace, in that same order, plus
+// any project pinned with the Dock's "+ Add project". A session that
+// already has a terminal pane is marked, and activating it is still
+// onOpenSession (which focuses that pane). null scope means "not knowable
+// yet" (or the phone tier): the full list, never the empty-workspace copy.
+describe("sidebar workspace scope (issue #1877)", () => {
+  it("lists only the projects in the workspace, in the Dock's order", () => {
+    projects = [
+      makeProject({ id: 1, name: "alpha" }),
+      makeProject({ id: 2, name: "beta" }),
+      makeProject({ id: 3, name: "gamma" }),
+    ];
+    renderSidebar({ workspaceProjectIds: [3, 1] });
+
+    const names = [...document.querySelectorAll(".project-row-name")].map((el) => el.textContent);
+    expect(names).toEqual(["gamma", "alpha"]);
+    expect(screen.queryByText("beta")).toBeNull();
+  });
+
+  it("does not claim the dashboard is empty when the workspace simply has nothing tiled", () => {
+    projects = [makeProject({ id: 1, name: "alpha" })];
+    renderSidebar({ workspaceProjectIds: [] });
+
+    expect(screen.getByText("Nothing tiled in this workspace")).toBeInTheDocument();
+    expect(screen.queryByText("Welcome to Mullion")).toBeNull();
+    expect(screen.queryByText("alpha")).toBeNull();
+    expect(screen.queryByLabelText("Filter sessions")).toBeNull();
+  });
+
+  // App passes null until sessionsLoaded && the restored workspace match.
+  // `sessions` is still [] in that window; an empty scope array would paint
+  // the empty-workspace copy for a workspace that isn't empty, it just
+  // hasn't loaded. null is unscoped.
+  it("does not render the empty-workspace copy when sessions have not loaded and the scope is still null", () => {
+    projects = [makeProject({ id: 1, name: "alpha" }), makeProject({ id: 2, name: "beta" })];
+    sessions = [];
+    renderSidebar({ workspaceProjectIds: null });
+
+    expect(screen.queryByText("Nothing tiled in this workspace")).toBeNull();
+    expect(screen.getByText("alpha")).toBeInTheDocument();
+    expect(screen.getByText("beta")).toBeInTheDocument();
+  });
+
+  it("still shows Welcome when there are no projects at all, even if a workspace scope is passed", () => {
+    projects = [];
+    renderSidebar({ workspaceProjectIds: [] });
+    expect(screen.getByText("Welcome to Mullion")).toBeInTheDocument();
+    expect(screen.queryByText("Nothing tiled in this workspace")).toBeNull();
+  });
+
+  it("lists a project that is only pinned to the Dock, with nothing tiled", () => {
+    projects = [makeProject({ id: 1, name: "alpha" }), makeProject({ id: 2, name: "beta" })];
+    localStorage.setItem(STORAGE_KEYS.dockManualProjects, "[2]");
+    renderSidebar({ workspaceProjectIds: [] });
+
+    expect(screen.getByText("beta")).toBeInTheDocument();
+    expect(screen.queryByText("alpha")).toBeNull();
+    expect(screen.queryByText("Nothing tiled in this workspace")).toBeNull();
+  });
+
+  it("keeps a pinned project listed after the Dock writes the pin", () => {
+    projects = [makeProject({ id: 1, name: "alpha" }), makeProject({ id: 2, name: "beta" })];
+    renderSidebar({ workspaceProjectIds: [1] });
+    expect(screen.queryByText("beta")).toBeNull();
+
+    act(() => {
+      writeDockManualProjectIds([2]);
+    });
+
+    const names = [...document.querySelectorAll(".project-row-name")].map((el) => el.textContent);
+    expect(names).toEqual(["alpha", "beta"]);
+  });
+
+  it("opens the global launcher from the empty workspace, the toolbar's own opener", async () => {
+    projects = [makeProject({ id: 1, name: "alpha" })];
+    const onOpenGlobalLauncher = vi.fn();
+    const user = userEvent.setup();
+    renderSidebar({ workspaceProjectIds: [], onOpenGlobalLauncher });
+
+    await user.click(screen.getByRole("button", { name: "Launch a session" }));
+    expect(onOpenGlobalLauncher).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks a session whose terminal pane is already open, in words and in the accessible name", () => {
+    sessions = [
+      makeSession({ id: 7, projectId: 1, command: "claude code" }),
+      makeSession({ id: 8, projectId: 1, command: "npm run build" }),
+    ];
+    renderSidebar({ workspaceProjectIds: [1], openSessionIds: [7] });
+
+    const openRow = screen.getByRole("button", {
+      name: "Open session claude code, already open in this workspace",
+    });
+    expect(openRow.querySelector(".session-open-label")?.textContent).toBe("open");
+    const closedRow = screen.getByRole("button", { name: "Open session npm run build" });
+    expect(closedRow.querySelector(".session-open-label")).toBeNull();
+  });
+
+  it("activates an already-open session through onOpenSession, the path that focuses the existing pane", async () => {
+    // usePanelOpener's onOpenSession focuses `session-<id>` when that panel
+    // is already in the layout. The sidebar must not grow a second opener
+    // that would add another pane — the click is that same callback.
+    sessions = [makeSession({ id: 7, projectId: 1, name: "already tiled", nameLocked: true })];
+    const onOpenSession = vi.fn();
+    const user = userEvent.setup();
+    renderSidebar({ workspaceProjectIds: [1], openSessionIds: [7], onOpenSession });
+
+    await user.click(
+      screen.getByRole("button", {
+        name: "Open session already tiled, already open in this workspace",
+      }),
+    );
+
+    expect(onOpenSession).toHaveBeenCalledTimes(1);
+    expect(onOpenSession.mock.calls[0][0].id).toBe(7);
+  });
+
+  it("does not mark sessions when no open-session set is passed (phone)", () => {
+    sessions = [makeSession({ id: 7, projectId: 1, command: "claude code" })];
+    renderSidebar({ phoneSection: "projects" });
+    expect(document.querySelector(".session-open-label")).toBeNull();
+    expect(screen.getByRole("button", { name: "Open session claude code" })).toBeInTheDocument();
+  });
+
+  it("marks an already-open session on the virtualized path too", () => {
+    stubVirtualizerLayout();
+    sessions = Array.from({ length: 25 }, (_, i) =>
+      makeSession({ id: 1000 + i, command: `session-${i}` }),
+    );
+    renderSidebar({ workspaceProjectIds: [1], openSessionIds: [1000] });
+
+    const openRow = screen.getByRole("button", {
+      name: "Open session session-0, already open in this workspace",
+    });
+    expect(openRow.querySelector(".session-open-label")?.textContent).toBe("open");
   });
 });
 

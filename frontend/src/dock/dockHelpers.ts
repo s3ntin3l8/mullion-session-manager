@@ -1,4 +1,5 @@
 import type { DockControl, DockerServiceInfo, Session } from "../api/index.js";
+import { STORAGE_KEYS, readJSON, writeJSON } from "../lib/persistedState.js";
 
 // Pure helpers for Dock.tsx's monitor rendering — split out (Wave 5 / PR 28
 // of .claude/plans/can-we-do-a-warm-cocke.md) for the same
@@ -672,4 +673,95 @@ const COMFORT_LOG_ROWS = 16;
  */
 export function dockLogPaneComfortHeightPx(fontSize: number, padding: number): number {
   return terminalContentHeightPx(COMFORT_LOG_ROWS, fontSize, padding);
+}
+
+// Issue #1877 — Dock membership is the projects tiled into the active
+// workspace PLUS any "+ Add project" pin (`STORAGE_KEYS.dockManualProjects`).
+// These helpers are that rule. Dock.tsx's column list and the
+// sidebar's project tree both call them, so a pin cannot stay in the Dock
+// and disappear from the sidebar, and neither tree can grow its own copy
+// of the union.
+//
+// `readDockManualProjectIds` caches the parsed array while the stored
+// string is unchanged. `useSyncExternalStore` compares snapshots with
+// `Object.is`; a fresh array on every read would re-render forever.
+
+let manualIdsCache: { raw: string | null; ids: number[] } | null = null;
+const manualIdsListeners = new Set<() => void>();
+
+/** Numbers only. Anything else — a missing key, a non-array, a hand-edited
+ * blob — collapses to `[]` rather than leaking into a column id. */
+export function dockManualProjectIdsFromStorage(raw: unknown): number[] {
+  return Array.isArray(raw) ? raw.filter((x): x is number => typeof x === "number") : [];
+}
+
+function manualIdsStorageRaw(): string | null {
+  try {
+    return localStorage.getItem(STORAGE_KEYS.dockManualProjects);
+  } catch {
+    return null;
+  }
+}
+
+export function readDockManualProjectIds(): number[] {
+  const raw = manualIdsStorageRaw();
+  if (manualIdsCache?.raw === raw) return manualIdsCache.ids;
+  const ids = dockManualProjectIdsFromStorage(
+    readJSON<unknown>(STORAGE_KEYS.dockManualProjects, []),
+  );
+  manualIdsCache = { raw, ids };
+  return ids;
+}
+
+export function writeDockManualProjectIds(ids: number[]): void {
+  writeJSON(STORAGE_KEYS.dockManualProjects, ids);
+  // Snapshot what actually landed (a failed write leaves the previous
+  // string) BEFORE notifying. getSnapshot has to return that same array on
+  // every call while the string is unchanged — building it inside the
+  // listener would hand useSyncExternalStore a new array each time and
+  // re-render forever. Same-tab localStorage writes do not fire a
+  // `storage` event, so the notify is what makes a pin show up in the
+  // sidebar on the same click that updates the Dock.
+  const raw = manualIdsStorageRaw();
+  manualIdsCache = {
+    raw,
+    ids: dockManualProjectIdsFromStorage(readJSON<unknown>(STORAGE_KEYS.dockManualProjects, [])),
+  };
+  for (const listener of manualIdsListeners) listener();
+}
+
+export function subscribeDockManualProjectIds(listener: () => void): () => void {
+  manualIdsListeners.add(listener);
+  // `storage` fires in every tab except the one that wrote. Same-tab pins
+  // still go through writeDockManualProjectIds's notify above — a listener
+  // here alone would miss the click that just pinned. getSnapshot re-reads
+  // when the stored string no longer matches the cache, so this only has to
+  // wake subscribers. No `window` in the node unit tests.
+  const onStorage = (event: StorageEvent) => {
+    if (event.key !== STORAGE_KEYS.dockManualProjects) return;
+    listener();
+  };
+  if (typeof window !== "undefined") window.addEventListener("storage", onStorage);
+  return () => {
+    manualIdsListeners.delete(listener);
+    if (typeof window !== "undefined") window.removeEventListener("storage", onStorage);
+  };
+}
+
+/**
+ * Workspace-derived ids first, in the order they were given, then any
+ * manual pin not already in that set. Ids whose project no longer exists
+ * are dropped — a pin surviving a deleted project would otherwise render
+ * an empty column (and an empty sidebar row) forever.
+ */
+export function dockColumnProjectIds(
+  workspaceProjectIds: readonly number[],
+  manualIds: readonly number[],
+  projects: readonly { id: number }[],
+): number[] {
+  const ids = [...workspaceProjectIds];
+  for (const id of manualIds) {
+    if (!ids.includes(id)) ids.push(id);
+  }
+  return ids.filter((id) => projects.some((p) => p.id === id));
 }

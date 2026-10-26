@@ -13,9 +13,12 @@ import {
 } from "./lib/persistedState.js";
 import {
   clamp,
+  dockColumnProjectIds,
   dockLogPaneComfortHeightPx,
   dockMonitorMinHeightPx,
   dockMonitorMinWidthPx,
+  readDockManualProjectIds,
+  writeDockManualProjectIds,
 } from "./dock/dockHelpers.js";
 import { DockProjectGroup } from "./dock/DockProjectGroup.js";
 import { AddColumnControl } from "./dock/AddColumnControl.js";
@@ -155,7 +158,10 @@ export function Dock({
   onOpenGitHub,
   onOpenBrowser,
 }: {
-  workspaceProjectIds: number[];
+  // null: the scope is not knowable yet (cold start) or this is the phone
+  // tier, which has no workspaces. Same value the sidebar receives. Unscoped
+  // — every project — and not the empty-workspace copy, which is a known `[]`.
+  workspaceProjectIds: number[] | null;
   onOpenGitHub: (projectId: number) => void;
   // Issue #28 — same "glance row opens the fuller panel" shape as
   // onOpenGitHub above, but gated on the project having a devServerUrl
@@ -214,10 +220,7 @@ export function Dock({
     const n = readNumber(STORAGE_KEYS.dockHeight, NaN);
     return Number.isFinite(n) && n > 0 ? clamp(n, DOCK_MIN_HEIGHT, Infinity) : DEFAULT_DOCK_HEIGHT;
   });
-  const [manualIds, setManualIds] = useState<number[]>(() => {
-    const raw = readJSON<unknown>(STORAGE_KEYS.dockManualProjects, []);
-    return Array.isArray(raw) ? raw.filter((x): x is number => typeof x === "number") : [];
-  });
+  const [manualIds, setManualIds] = useState<number[]>(() => readDockManualProjectIds());
   // Dock master-detail rework — the rail width (`.dock-rail`, dock.css),
   // dragged via `.dock-rail-divider`. One shared value (persisted,
   // `crs.dockRailWidth`) rather than per-project: a user who widens the
@@ -297,12 +300,14 @@ export function Dock({
   // Workspace-derived projects first (in their existing order), then any
   // manually-pinned project not already in that set — dropping ids for
   // projects that no longer exist (e.g. deleted since the id was pinned).
+  // dockColumnProjectIds is that rule; the sidebar calls the same helper,
+  // so a pin cannot stay in this rail and vanish from the project tree.
+  // `null` is unscoped, the same as the sidebar: every project, not "nothing
+  // tiled". Collapsing it to `[]` here is what printed the empty copy while
+  // the tree still listed everything.
   const columnIds = useMemo(() => {
-    const ids = [...workspaceProjectIds];
-    for (const id of manualIds) {
-      if (!ids.includes(id)) ids.push(id);
-    }
-    return ids.filter((id) => projects.some((p) => p.id === id));
+    if (workspaceProjectIds == null) return projects.map((project) => project.id);
+    return dockColumnProjectIds(workspaceProjectIds, manualIds, projects);
   }, [workspaceProjectIds, manualIds, projects]);
 
   // Pure derivation, never written back — see `activeProjectIdRaw`'s own
@@ -316,7 +321,10 @@ export function Dock({
 
   const persistManual = (next: number[]) => {
     setManualIds(next);
-    writeJSON(STORAGE_KEYS.dockManualProjects, next);
+    // Same writer the sidebar subscribes to — a raw writeJSON here would
+    // update this rail and leave the project tree on the previous set
+    // until some unrelated re-render happened to re-read storage.
+    writeDockManualProjectIds(next);
   };
   const addColumn = (id: number) => {
     if (!manualIds.includes(id)) persistManual([...manualIds, id]);
@@ -324,8 +332,10 @@ export function Dock({
   const removeColumn = (id: number) => persistManual(manualIds.filter((x) => x !== id));
   // A project section only gets a remove-x when it's pinned AND not also
   // derived from the workspace — otherwise it would just reappear on the
-  // next render.
-  const manualOnly = (id: number) => manualIds.includes(id) && !workspaceProjectIds.includes(id);
+  // next render. While the scope is unknown every project is shown, so a
+  // remove would look like it did nothing.
+  const manualOnly = (id: number) =>
+    workspaceProjectIds != null && manualIds.includes(id) && !workspaceProjectIds.includes(id);
 
   const liveCount = sessions.filter(
     (s) =>
@@ -557,11 +567,13 @@ export function Dock({
       </div>
       {!collapsed &&
         !dockUnavailable &&
-        (columnIds.length === 0 ? (
+        // `null` is unknown, not empty — the copy is only for a known
+        // workspace with nothing tiled and nothing pinned.
+        (workspaceProjectIds != null && columnIds.length === 0 ? (
           <div className="dock-empty dock-empty-workspace">
             No projects tiled in this workspace yet
           </div>
-        ) : (
+        ) : columnIds.length === 0 ? null : (
           <div
             ref={setSplitRef}
             className={`dock-split${splitStacked ? " dock-split--stacked" : ""}`}

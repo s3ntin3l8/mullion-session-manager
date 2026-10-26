@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { VirtualItem } from "@tanstack/react-virtual";
 import { useDashboardStore } from "./store/index.js";
@@ -44,6 +52,11 @@ import {
   WarningTriangleIcon,
 } from "./ui/icons.js";
 import { STORAGE_KEYS, readJSON, writeJSON } from "./lib/persistedState.js";
+import {
+  dockColumnProjectIds,
+  readDockManualProjectIds,
+  subscribeDockManualProjectIds,
+} from "./dock/dockHelpers.js";
 import { taskLinkedSessionIds } from "./boardLanes.js";
 import { HierarchyToggle } from "./HierarchyToggle.js";
 import { buildHierarchicalRows, liveChildCount } from "./sidebarHierarchy.js";
@@ -136,6 +149,24 @@ export interface SidebarProps {
   // Issue #1326 — opens (or focuses) an Android device's video/input panel.
   // See SidebarDevices.tsx for why this lives here rather than Settings.
   onOpenDevice: (device: Device) => void;
+  // Issue #1877 — the Dock's workspaceProjectIds (App.tsx, via
+  // workspaceProjectIdsFromPanels): the projects with a session open in
+  // the live layout. null means "do not scope" — the phone tier, which has
+  // no workspaces, and desktop until that set is actually knowable (the
+  // layout restored and GET /api/sessions resolved). An empty array is a
+  // real workspace with nothing tiled into it yet. Manual Dock pins are
+  // not in this array; the tree unions them itself via dockColumnProjectIds,
+  // the same helper Dock.tsx builds its columns with.
+  workspaceProjectIds?: number[] | null;
+  // Terminal panes already in that same layout. null means "don't mark"
+  // (phone, or a caller that isn't workspace-scoped). Activating one of
+  // these still goes through onOpenSession, which focuses the existing pane
+  // rather than opening a second one — see usePanelOpener.
+  openSessionIds?: number[] | null;
+  // The empty workspace state has no project rows left, so it has no
+  // per-project "+" either. This is App's openGlobalLauncher — the
+  // toolbar's launcher / Ctrl-K — not the project-scoped opener above.
+  onOpenGlobalLauncher: () => void;
 }
 
 export function Sidebar({
@@ -151,6 +182,9 @@ export function Sidebar({
   onOpenGit,
   onOpenProjectSetup,
   onOpenDevice,
+  workspaceProjectIds = null,
+  openSessionIds = null,
+  onOpenGlobalLauncher,
 }: SidebarProps) {
   // P1 perf fix — was a single bare `useDashboardStore()` (whole-store
   // subscription); split into one selector per rendered field (via
@@ -285,6 +319,33 @@ export function Sidebar({
   // exclusion.
   const taskSessionIds = useMemo(() => taskLinkedSessionIds(tasks), [tasks]);
 
+  // Issue #1877 — null means "do not scope" (the phone tier, and desktop
+  // until App knows the workspace). An array is the panel-derived project
+  // ids, in that order. Manual Dock pins are not in the array;
+  // dockColumnProjectIds unions them the same way Dock.tsx builds its
+  // columns, so a project pinned with nothing tiled still appears here,
+  // sessions and all. A project the dashboard knows about that is neither
+  // tiled nor pinned is not in this list.
+  const manualProjectIds = useSyncExternalStore(
+    subscribeDockManualProjectIds,
+    readDockManualProjectIds,
+  );
+  const treeProjects = useMemo(() => {
+    if (workspaceProjectIds == null) return projects;
+    const ids = dockColumnProjectIds(workspaceProjectIds, manualProjectIds, projects);
+    const byId = new Map(projects.map((p) => [p.id, p]));
+    const scoped: Project[] = [];
+    for (const id of ids) {
+      const project = byId.get(id);
+      if (project) scoped.push(project);
+    }
+    return scoped;
+  }, [projects, workspaceProjectIds, manualProjectIds]);
+  const openSessionIdSet = useMemo(
+    () => (openSessionIds == null ? null : new Set(openSessionIds)),
+    [openSessionIds],
+  );
+
   // U3 — per-project base session list: the exact filter Sidebar has always
   // applied (kind === "terminal", not killed, hideEndedSessions), with TWO
   // additions — an explicitly-selected "Exited" chip bypasses
@@ -297,7 +358,7 @@ export function Sidebar({
   // for its own session set.
   const baseSessionsByProject = useMemo(() => {
     const map = new Map<number, Session[]>();
-    for (const project of projects) {
+    for (const project of treeProjects) {
       map.set(
         project.id,
         sessions.filter(
@@ -313,7 +374,7 @@ export function Sidebar({
       );
     }
     return map;
-  }, [projects, sessions, hideEndedSessions, showTaskSessions, taskSessionIds, selectedChips]);
+  }, [treeProjects, sessions, hideEndedSessions, showTaskSessions, taskSessionIds, selectedChips]);
 
   // Counted on the unfiltered base set (not whatever the search box
   // currently narrows to) — see VIRTUALIZE_SESSION_THRESHOLD's own comment
@@ -328,7 +389,7 @@ export function Sidebar({
   const filteredSessionsByProject = useMemo(() => {
     const map = new Map<number, Session[]>();
     const query = searchQuery.trim();
-    for (const project of projects) {
+    for (const project of treeProjects) {
       const base = baseSessionsByProject.get(project.id) ?? [];
       if (query === "" && selectedChips.size === 0) {
         map.set(project.id, base);
@@ -344,7 +405,7 @@ export function Sidebar({
       );
     }
     return map;
-  }, [projects, baseSessionsByProject, searchQuery, selectedChips]);
+  }, [treeProjects, baseSessionsByProject, searchQuery, selectedChips]);
 
   // U3 — a project with zero matches while a filter is active is skipped
   // entirely, not shown collapsed or with an empty body: the same "nothing
@@ -352,13 +413,14 @@ export function Sidebar({
   // `remaining.length === 0` branch takes below, just one level further in
   // (that panel hides itself as a whole when nothing's left to discover;
   // this hides each individually-empty project section while leaving
-  // matching ones alone).
+  // matching ones alone). Scoped to treeProjects (issue #1877) so a filter
+  // can't reveal a project that isn't in this workspace.
   const visibleProjects = useMemo(
     () =>
       filterActive
-        ? projects.filter((p) => (filteredSessionsByProject.get(p.id)?.length ?? 0) > 0)
-        : projects,
-    [projects, filterActive, filteredSessionsByProject],
+        ? treeProjects.filter((p) => (filteredSessionsByProject.get(p.id)?.length ?? 0) > 0)
+        : treeProjects,
+    [treeProjects, filterActive, filteredSessionsByProject],
   );
 
   // Issue #1891 — the Tasks entry above is a nav row and stays global on
@@ -389,10 +451,12 @@ export function Sidebar({
   // active: a project the filter matched nothing in is not listed at all, so
   // its sessions are not counted either.
   //
-  // With no filter active, `visibleProjects` IS `projects` and the sum is
-  // `totalBaseSessionCount` by construction — so that is what it reads,
-  // rather than a second reduction of the same numbers (one source of truth
-  // for "how many sessions").
+  // With no filter active, `visibleProjects` IS `treeProjects` — the scoped
+  // set, which is every project when the scope is null — and the sum is
+  // `totalBaseSessionCount` by construction (that count is reduced over
+  // `baseSessionsByProject`, itself built from `treeProjects`). So that is
+  // what it reads, rather than a second reduction of the same numbers (one
+  // source of truth for "how many sessions").
   const sectionSessionCount = useMemo(
     () =>
       filterActive
@@ -585,10 +649,10 @@ export function Sidebar({
         .sidebar-filter-bar's own `position: sticky` rule in styles.css) so
         it stays reachable while scrolled deep into a long session list —
         exactly the scenario ("past ~20 sessions") this filter exists for.
-        Only shown once there's at least one project — an empty dashboard
-        has nothing to filter, and the box would just add clutter to the
-        "Welcome to Mullion" empty state below. */}
-          {projects.length > 0 && (
+        Only shown once the section is actually listing a project — an empty
+        dashboard, and a workspace with nothing tiled into it, have nothing
+        to filter. */}
+          {treeProjects.length > 0 && (
             <div className="sidebar-filter-bar">
               <div className="sidebar-filter-search">
                 <SearchIcon size={13} strokeWidth={1.9} />
@@ -696,7 +760,27 @@ export function Sidebar({
               {projects.map((project) => (
                 <ProjectGitHubSubscription key={project.id} projectId={project.id} />
               ))}
-              {filterActive && visibleProjects.length === 0 ? (
+              {treeProjects.length === 0 ? (
+                // Issue #1877 — the dashboard HAS projects; none of them are
+                // tiled into this workspace or pinned to the Dock. "Welcome
+                // to Mullion" would be a lie here (that state is the
+                // projects.length === 0 branch above). Same membership as
+                // the Dock's columns: a session open in the live layout, or
+                // a "+ Add project" pin.
+                <EmptyState>
+                  <EmptyStateTitle>Nothing tiled in this workspace</EmptyStateTitle>
+                  <EmptyStateBody>
+                    A project shows up here once one of its sessions is open in this layout, or you
+                    pin it from the Dock. Launch a session to put one here.
+                  </EmptyStateBody>
+                  <EmptyStateActions>
+                    <button className="ui-empty-state-btn-primary" onClick={onOpenGlobalLauncher}>
+                      <PlusIcon size={12} strokeLinecap="round" strokeWidth={2.2} />
+                      Launch a session
+                    </button>
+                  </EmptyStateActions>
+                </EmptyState>
+              ) : filterActive && visibleProjects.length === 0 ? (
                 <EmptyState>
                   <EmptyStateTitle>No sessions match</EmptyStateTitle>
                   <EmptyStateBody>
@@ -707,6 +791,7 @@ export function Sidebar({
                 <VirtualizedProjectTree
                   rows={flatRows}
                   hosts={hosts}
+                  openSessionIds={openSessionIdSet}
                   onOpenSession={onOpenSession}
                   onOpenSessionAsFloat={onOpenSessionAsFloat}
                   onSessionEnded={onSessionEnded}
@@ -729,6 +814,7 @@ export function Sidebar({
                     onOpenProjectSetup={() => onOpenProjectSetup(project.id)}
                     hierarchicalView={hierarchicalView}
                     forceExpanded={filterActive}
+                    openSessionIds={openSessionIdSet}
                   />
                 ))
               )}
@@ -1360,6 +1446,7 @@ export function ProjectSection({
   onOpenProjectSetup,
   hierarchicalView,
   forceExpanded = false,
+  openSessionIds = null,
 }: {
   project: Project;
   sessions: Session[];
@@ -1386,6 +1473,9 @@ export function ProjectSection({
   // clearing the filter restores exactly whatever collapse state the user
   // had before.
   forceExpanded?: boolean;
+  // Issue #1877 — terminal panes already in this workspace. null (the
+  // phone tier, and every caller that isn't the sidebar) marks nothing.
+  openSessionIds?: ReadonlySet<number> | null;
 }) {
   // `manualCollapsed` is null until the user explicitly toggles — until then,
   // collapsed state is *derived* from whether the project has sessions
@@ -1457,6 +1547,7 @@ export function ProjectSection({
               depth={depth}
               onOpen={() => onOpenSession(session)}
               onOpenAsFloat={() => onOpenSessionAsFloat(session)}
+              openInWorkspace={openSessionIds?.has(session.id) ?? false}
               // P9 — returns the promise (not `void`-discarded) so
               // SessionRow's own handleEnd can catch a rejection and
               // surface it inline instead of it disappearing.
@@ -1500,6 +1591,7 @@ export function ProjectSection({
 function VirtualizedProjectTree({
   rows,
   hosts,
+  openSessionIds,
   onOpenSession,
   onOpenSessionAsFloat,
   onSessionEnded,
@@ -1509,6 +1601,7 @@ function VirtualizedProjectTree({
 }: {
   rows: SidebarFlatRow[];
   hosts: Host[];
+  openSessionIds: ReadonlySet<number> | null;
   onOpenSession: (session: Session) => void;
   onOpenSessionAsFloat: (session: Session) => void;
   onSessionEnded: (session: Session) => void;
@@ -1609,6 +1702,7 @@ function VirtualizedProjectTree({
                   depth={row.depth}
                   onOpen={() => onOpenSession(row.session)}
                   onOpenAsFloat={() => onOpenSessionAsFloat(row.session)}
+                  openInWorkspace={openSessionIds?.has(row.session.id) ?? false}
                   // P9 — see ProjectSection's identical onEnd above.
                   onEnd={() =>
                     useDashboardStore
@@ -1709,6 +1803,7 @@ export function SessionRow({
   showSubagents = true,
   foldDetails = true,
   depth = 0,
+  openInWorkspace = false,
 }: {
   session: Session;
   project: Project;
@@ -1761,6 +1856,12 @@ export function SessionRow({
   // recursing here would force that lane to opt out of a second thing
   // instead of just not knowing this prop exists at all.
   depth?: number;
+  // Issue #1877 — this session's terminal pane is already in the current
+  // workspace layout. The row says so in words; the click is still `onOpen`,
+  // which is App's onOpenSession and focuses that pane instead of adding
+  // another. Optional so the board's session lane (which has no workspace
+  // layout of its own) stays unmarked.
+  openInWorkspace?: boolean;
 }) {
   const isTerminal = session.status === "killed";
   const confirmBeforeKill = useDashboardStore((s) => s.settings.sessions.confirmBeforeKill);
@@ -2040,6 +2141,12 @@ export function SessionRow({
           <span className="session-host-badge-name">{hostBadge.name}</span>
         </span>
       )}
+      {openInWorkspace && (
+        // The word is the signal — a colour on the row would not say
+        // "this pane is already open". aria-label below repeats it: that
+        // attribute replaces the row's contents for a screen reader.
+        <span className="session-open-label">open</span>
+      )}
     </span>
   );
 
@@ -2090,7 +2197,11 @@ export function SessionRow({
         // hand for its nested reason field.
         role="button"
         tabIndex={0}
-        aria-label={`Open session ${title}`}
+        aria-label={
+          openInWorkspace
+            ? `Open session ${title}, already open in this workspace`
+            : `Open session ${title}`
+        }
         onKeyDown={(e) => {
           if (e.target !== e.currentTarget) return;
           if (e.key === "Enter" || e.key === " ") {

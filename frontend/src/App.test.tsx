@@ -5,7 +5,7 @@ import type { LayoutMode, Session } from "./api/index.js";
 
 // Set by the pane-cap test before render. Null keeps every other test on the
 // old path: DockviewReact never reports an api, and the palette stays empty.
-const { splitHarness } = vi.hoisted(() => ({
+const { splitHarness, sidebarHarness, dockHarness, persistenceHarness } = vi.hoisted(() => ({
   splitHarness: {
     api: null as {
       panels: unknown[];
@@ -24,6 +24,16 @@ const { splitHarness } = vi.hoisted(() => ({
       command: string;
     } | null,
     announced: false,
+  },
+  sidebarHarness: {
+    props: null as { workspaceProjectIds?: number[] | null } | null,
+  },
+  dockHarness: {
+    props: null as { workspaceProjectIds?: number[] | null } | null,
+  },
+  persistenceHarness: {
+    restoringRef: { current: false },
+    restoredWorkspaceIdRef: { current: null as number | null },
   },
 }));
 
@@ -45,7 +55,12 @@ vi.mock("dockview-react", () => ({
   },
 }));
 vi.mock("dockview-react/dist/styles/dockview.css", () => ({}));
-vi.mock("./Sidebar.js", () => ({ Sidebar: () => <div data-testid="sidebar" /> }));
+vi.mock("./Sidebar.js", () => ({
+  Sidebar: (props: { workspaceProjectIds?: number[] | null }) => {
+    sidebarHarness.props = props;
+    return <div data-testid="sidebar" />;
+  },
+}));
 vi.mock("./WorkspaceSwitcher.js", () => ({
   WorkspaceSwitcher: ({ onSelectWorkspace }: { onSelectWorkspace?: (id: number) => void }) => (
     <span data-testid="workspace-switcher">
@@ -107,7 +122,12 @@ vi.mock("./CommandPalette.js", () => ({
       />
     ) : null,
 }));
-vi.mock("./Dock.js", () => ({ Dock: () => null }));
+vi.mock("./Dock.js", () => ({
+  Dock: (props: { workspaceProjectIds?: number[] | null }) => {
+    dockHarness.props = props;
+    return null;
+  },
+}));
 vi.mock("./ResourceAlertBanner.js", () => ({ ResourceAlertBanner: () => null }));
 vi.mock("./panels/registry.js", () => ({
   components: {},
@@ -129,10 +149,7 @@ vi.mock("./hooks/useDockviewDrop.js", () => ({
   useDockviewDrop: () => ({ dockviewRef: { current: null } }),
 }));
 vi.mock("./hooks/useWorkspacePersistence.js", () => ({
-  useWorkspacePersistence: () => ({
-    restoringRef: { current: false },
-    restoredWorkspaceIdRef: { current: null },
-  }),
+  useWorkspacePersistence: () => persistenceHarness,
 }));
 vi.mock("./hooks/useLayoutPresentation.js", () => ({ useLayoutPresentation: vi.fn() }));
 vi.mock("./hooks/useVisualViewportInset.js", () => ({ useVisualViewportInset: vi.fn() }));
@@ -624,5 +641,88 @@ describe("App tablet pane-cap notice", () => {
     fireEvent.click(await screen.findByTestId("launch-split"));
     expect(screen.queryByText(/This split is past the tablet pane cap/)).toBeNull();
     expect(splitHarness.api?.addPanel).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Issue #1877 — workspaceProjectIdsFromPanels resolves panel sessionIds
+// against `sessions`, which is [] until GET /api/sessions lands, while the
+// layout restores on its own. Passing that [] scopes both the sidebar and
+// the Dock to "nothing" and paints their empty-workspace copy. null is
+// unscoped, and both surfaces have to receive that same value.
+describe("App sidebar workspace scope", () => {
+  function makeApi() {
+    const panels = [
+      {
+        id: "session-10",
+        params: { sessionId: 10 },
+        api: { location: { type: "grid" }, setActive: vi.fn(), close: vi.fn() },
+        group: { id: "g1" },
+      },
+    ];
+    return {
+      panels,
+      activePanel: null,
+      getPanel: (id: string) => panels.find((panel) => panel.id === id) ?? null,
+      addPanel: vi.fn(),
+      onDidActivePanelChange: () => ({ dispose: vi.fn() }),
+      onDidAddPanel: () => ({ dispose: vi.fn() }),
+    };
+  }
+
+  beforeEach(() => {
+    stubWidth("desktop");
+    splitHarness.announced = false;
+    splitHarness.api = makeApi();
+    splitHarness.launch = null;
+    sidebarHarness.props = null;
+    dockHarness.props = null;
+    persistenceHarness.restoringRef.current = false;
+    persistenceHarness.restoredWorkspaceIdRef.current = 1;
+    useDashboardStore.setState({
+      refreshWorkspaces: vi.fn().mockResolvedValue(undefined),
+      hydrateSettings: vi.fn(),
+      startThemeWatch: vi.fn(() => () => {}),
+      sessions: [],
+      sessionsLoaded: false,
+      activeWorkspaceId: 1,
+      projects: [],
+      settings: { ...useDashboardStore.getState().settings, layoutMode: "desktop" },
+    });
+  });
+
+  afterEach(() => {
+    splitHarness.api = null;
+    splitHarness.launch = null;
+    splitHarness.announced = false;
+    persistenceHarness.restoredWorkspaceIdRef.current = null;
+    sidebarHarness.props = null;
+    dockHarness.props = null;
+    cleanup();
+    vi.unstubAllGlobals();
+    vi.clearAllMocks();
+  });
+
+  it("passes null — not an empty scope — until the sessions list has loaded", async () => {
+    render(<App />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Panels are already restored and the workspace id matches, but sessions
+    // is still []. Without the sessionsLoaded gate this would be [] and the
+    // sidebar would render "Nothing tiled in this workspace" while the Dock
+    // rendered "No projects tiled in this workspace yet".
+    expect(sidebarHarness.props?.workspaceProjectIds).toBeNull();
+    expect(dockHarness.props?.workspaceProjectIds).toBeNull();
+    expect(dockHarness.props?.workspaceProjectIds).toBe(sidebarHarness.props?.workspaceProjectIds);
+
+    await act(async () => {
+      useDashboardStore.setState({ sessionsLoaded: true });
+    });
+    // Loaded, and the restored panel's session is not in the list: a real
+    // empty workspace, which both surfaces are allowed to call empty.
+    // Same array, not a second empty list built for the Dock.
+    expect(sidebarHarness.props?.workspaceProjectIds).toEqual([]);
+    expect(dockHarness.props?.workspaceProjectIds).toBe(sidebarHarness.props?.workspaceProjectIds);
   });
 });

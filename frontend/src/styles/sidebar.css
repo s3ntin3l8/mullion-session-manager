@@ -1099,6 +1099,18 @@
 .session-host-badge svg {
   flex-shrink: 0;
 }
+/* Issue #1877 — the session's terminal pane is already in this workspace.
+   The word is the whole signal: a dot alone would not say that clicking
+   the row focuses the pane you already have. */
+.session-open-label {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  line-height: 14px;
+  color: var(--dim);
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  padding: 0 5px;
+}
 .session-status-label.killed {
   color: var(--r);
   opacity: 0.85;

@@ -93,6 +93,17 @@ describe("Dock", () => {
       expect(document.querySelector(".dock-split")).not.toBeInTheDocument();
     });
 
+    // null is "not knowable yet", the same value App passes the sidebar on
+    // a cold start. It must not reuse the known-empty copy.
+    it("does not call an unknown scope empty, and lists every project", async () => {
+      useDashboardStore.setState({ projects: [PROJECT, PROJECT_2], sessions: [] });
+      render(<Dock workspaceProjectIds={null} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+      expect(screen.queryByText("No projects tiled in this workspace yet")).not.toBeInTheDocument();
+      expect(await screen.findByText("mullion")).toBeInTheDocument();
+      expect(screen.getByText("widgets")).toBeInTheDocument();
+    });
+
     it("still shows a section (with its empty-monitors placeholder) for a project with no dock.json", async () => {
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
