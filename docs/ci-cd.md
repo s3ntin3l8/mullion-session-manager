@@ -110,7 +110,7 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
   stalled on a slow mirror (632s and 509s runs; one fetched 25.9 MB at
   43.1 kB/s). That apt run only added fonts, xvfb and upgrades of libraries
   `ubuntu-latest` already has (it ships Google Chrome), so `--with-deps` was
-  dropped; the install step now has its own 5-minute `timeout-minutes` as a
+  dropped; the install step now has its own 10-minute `timeout-minutes` as a
   tripwire. A prebuilt Playwright container was considered and rejected:
   `npm ci` compiles node-pty from source on Linux and that image has no
   toolchain, so it would need apt again.

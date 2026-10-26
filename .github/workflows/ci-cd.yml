@@ -236,8 +236,9 @@ jobs:
   # prove it isn't flaky before every future merge is gated on it.
   test-e2e:
     runs-on: ubuntu-latest
-    # 15. A normal run is ~1 minute; the headroom is for a cold Chromium
-    # download. It used to be 25 (2026-10-22 CI audit) to absorb a stalled
+    # 15. A normal run is ~1 minute. The slowest legitimate step is a cold
+    # Chromium download (every lockfile change misses the cache), which the
+    # install step caps at 10 minutes on its own. It used to be 25 (2026-10-22 CI audit) to absorb a stalled
     # apt mirror in `playwright install --with-deps` (632s and 509s runs,
     # one fetching 25.9 MB at 43.1 kB/s) — apt no longer runs here, see the
     # "Install Playwright Chromium" step.
@@ -266,8 +267,10 @@ jobs:
           key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
       - name: Install Playwright Chromium
         # A tripwire: a stalled browser download on a cache miss fails THIS
-        # step by name instead of spending the whole job's budget.
-        timeout-minutes: 5
+        # step by name instead of spending the whole job's budget. 10, not
+        # tighter: a cold miss pulls ~260 MB (Chromium + headless shell), and
+        # a slow-but-progressing download must not newly fail.
+        timeout-minutes: 10
         # No `--with-deps`: it unconditionally runs `apt-get update` +
         # `install`, and apt was the variable part of this job (a run that
         # fetched 25.9 MB at 43.1 kB/s took 10m02s on its own). On
