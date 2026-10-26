@@ -108,19 +108,29 @@ function parseUpstreamTrack(
   return result;
 }
 
-/** True when the branch holds commits no remote-tracking ref has. `[gone]`
- * drops the ahead count, so an upstream deleted while the branch still had
- * unpushed work must not read as "done". An unreadable answer counts as
- * unpushed (fail closed). */
-async function hasUnpushedCommits(cwd: string, name: string): Promise<boolean> {
+/** Local branches whose tip no remote-tracking ref has, i.e. that hold
+ * unpushed commits (a tip reachable from a remote implies all its ancestors
+ * are). `[gone]` drops the ahead count, so an upstream deleted while the
+ * branch still had unpushed work must not read as "done". One spawn for all
+ * branches; `null` (unreadable) is the caller's cue to fail closed. */
+async function branchesWithUnpushedTips(cwd: string): Promise<Set<string> | null> {
   const out = await runGit(cwd, [
-    "rev-list",
-    "--count",
-    `refs/heads/${name}`,
+    "log",
+    "--branches",
     "--not",
     "--remotes",
+    "--decorate-refs=refs/heads/",
+    "--format=%D",
   ]);
-  return out === null || out.trim() !== "0";
+  if (out === null) return null;
+  const names = new Set<string>();
+  for (const line of out.split("\n")) {
+    for (const ref of line.split(", ")) {
+      const name = ref.replace(/^HEAD -> /, "").trim();
+      if (name) names.add(name);
+    }
+  }
+  return names;
 }
 
 /**
@@ -186,11 +196,14 @@ export async function listBranches(
             .filter((line) => line.length > 0),
         );
         const defaultBranchName = base.replace(/^refs\/remotes\//, "").replace(/^origin\//, "");
+        const unpushed = branches.some((b) => b.upstreamGone && !mergedNames.has(b.name))
+          ? await branchesWithUnpushedTips(cwd)
+          : new Set<string>();
         for (const branch of branches) {
           branch.isMerged = branch.name !== defaultBranchName && mergedNames.has(branch.name);
           if (branch.name === defaultBranchName) continue;
           if (branch.isMerged) branch.mergeState = "ancestor";
-          else if (branch.upstreamGone && !(await hasUnpushedCommits(cwd, branch.name))) {
+          else if (branch.upstreamGone && unpushed && !unpushed.has(branch.name)) {
             branch.mergeState = "upstream-gone";
           }
         }
