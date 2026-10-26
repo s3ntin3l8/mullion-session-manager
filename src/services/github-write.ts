@@ -683,6 +683,8 @@ export interface ReviewCommentParams {
  * `commitId` should be the PR's current head SHA (`getPullRequestByNumber`'s
  * `headSha`) — GitHub anchors `comments[].line` against that specific
  * commit's diff, not "whatever HEAD is when this call lands."
+ * Omitted (the sidebar's review box, which posts no inline comments, may not
+ * know a head), GitHub reviews the PR's current head.
  */
 export async function createPullRequestReview(
   token: string,

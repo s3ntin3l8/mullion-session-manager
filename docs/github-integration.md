@@ -677,11 +677,14 @@ performs its own HMAC verification and does not require app-level auth.
 | `/api/projects/:id/release/merge`                                | POST   | Merges the open release PR, gated hard on GitHub's own mergeability verdict. Rate-limited 10/min                                                                                                                                                                                                                                |
 
 The four sidebar write routes above (#1672) answer a 403 when GitHub refuses
-the write for lack of access (including a GraphQL permission error, which
-GitHub returns as HTTP 200), a 422 with GitHub's own reason when it refuses
-the content (a self-approval, an unknown thread id), a 429 while the shared
-rate limit is in effect, a 502 when no write token is available or GitHub is
-unreachable, and drop the PR's cached detail after a successful write.
+the write for lack of access (including GraphQL's permission errors, which
+GitHub returns as HTTP 200, for an App token or a PAT alike), a 422 when it
+refuses the content (an unknown thread id, an out-of-range line), carrying
+GitHub's own reason, or Mullion's explanation for a self-approval, a 429 while
+the rate limit is in effect, and a 502 when no write token is available or
+GitHub is unreachable. Like every route here they also answer 204 for a
+project with no github.com remote and 503 for an unreachable host. A
+successful write drops the PR's cached detail.
 
 `GET /api/projects/:id/github` degrades gracefully rather than erroring: it
 returns 204 for no github.com remote, no connected account, or any GitHub

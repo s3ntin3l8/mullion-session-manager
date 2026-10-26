@@ -235,6 +235,30 @@ describe("GitHub sidebar write routes (#1672)", () => {
       expect(calls.length).toBe(before);
     });
 
+    it("maps a PAT's GraphQL scope refusals to 403, a GraphQL rate limit to 429, no data to 502", async () => {
+      let answer: unknown = {};
+      mockGithub({ mutation: () => jsonResponse(200, answer) });
+      const app = await makeApp();
+      const id = await connectedProject(app);
+      const post = () =>
+        app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/7/threads/PRRT_1/reply`,
+          payload: { body: "hi" },
+        });
+      for (const message of [
+        "Resource not accessible by personal access token",
+        "Your token has not been granted the required scopes to execute this query.",
+      ]) {
+        answer = { errors: [{ message }] };
+        expect((await post()).statusCode, message).toBe(403);
+      }
+      answer = { errors: [{ type: "RATE_LIMITED", message: "API rate limit exceeded" }] };
+      expect((await post()).statusCode).toBe(429);
+      answer = {};
+      expect((await post()).statusCode).toBe(502);
+    });
+
     it("maps a GraphQL permission error (HTTP 200) to 403", async () => {
       mockGithub({
         mutation: () =>
@@ -486,6 +510,26 @@ describe("GitHub sidebar write routes (#1672)", () => {
       });
       expect(res.statusCode).toBe(422);
       expect(res.json().message).toMatch(/author approve or request changes/);
+    });
+
+    it("reads the reason out of object-shaped 422 errors", async () => {
+      reviewRoute(() =>
+        jsonResponse(422, {
+          message: "Validation Failed",
+          errors: [
+            { resource: "PullRequestReview", code: "custom", message: "Line is out of range" },
+          ],
+        }),
+      );
+      const app = await makeApp();
+      const id = await connectedProject(app);
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${id}/github/prs/7/reviews`,
+        payload: { event: "COMMENT", body: "x" },
+      });
+      expect(res.statusCode).toBe(422);
+      expect(res.json().message).toBe("GitHub refused to submit this review: Line is out of range");
     });
 
     it("passes another 422 through with GitHub's reason", async () => {

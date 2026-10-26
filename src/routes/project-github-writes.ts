@@ -56,12 +56,19 @@ const writeRateLimit = { rateLimit: { max: 20, timeWindow: "1 minute" } };
  */
 function replyWriteError(reply: FastifyReply, err: unknown, what: string): FastifyReply {
   if (!(err instanceof GitHubApiError)) throw err;
-  if (err instanceof GitHubRateLimitError) {
+  // A GraphQL error on an HTTP 200 (`githubGraphQL` throws those with the
+  // response's own status) — as opposed to a malformed answer with no data.
+  const graphqlError = err.statusCode === 200 && err.message.startsWith("GitHub GraphQL error: ");
+  if (err instanceof GitHubRateLimitError || (graphqlError && /rate limit/i.test(err.message))) {
     return reply.code(429).send({ message: "GitHub rate limit is in effect", statusCode: 429 });
   }
+  // "Resource not accessible by integration" (App token) / "… by personal
+  // access token" (fine-grained PAT) / "… not been granted the required
+  // scopes" (classic PAT) are GraphQL's permission refusals.
   if (
     err instanceof GitHubWriteScopeError ||
-    /not accessible by integration|must have (push|write) access/i.test(err.message)
+    (graphqlError &&
+      /not accessible by|required scopes|must have (push|write) access/i.test(err.message))
   ) {
     return reply.code(403).send({
       message: `GitHub refused to ${what}: the connected token lacks write access to this repository`,
@@ -75,11 +82,14 @@ function replyWriteError(reply: FastifyReply, err: unknown, what: string): Fasti
       statusCode: 422,
     });
   }
-  // 422 (REST validation) or a GraphQL error on a 200 (an unknown thread id,
-  // say): GitHub understood and refused — pass its own reason through.
-  if (err.statusCode === 422 || err.statusCode === 200) {
+  // 422 (REST validation) or a GraphQL error (an unknown thread id, say):
+  // GitHub understood and refused — pass its own reason through. REST's
+  // `errors` are strings or objects with a `message`; the top-level
+  // `message` ("Validation Failed") is only the fallback.
+  if (err.statusCode === 422 || graphqlError) {
     const reason =
       /"errors":\["([^"]+)"/.exec(err.message)?.[1] ??
+      /"errors":\[\{[^\]]*?"message":"([^"]+)"/.exec(err.message)?.[1] ??
       /"message":"([^"]+)"/.exec(err.message)?.[1] ??
       /^GitHub GraphQL error: (.+)$/.exec(err.message)?.[1];
     return reply.code(422).send({
