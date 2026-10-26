@@ -209,6 +209,12 @@ A task's sessions share one host. The worker decides it (the placement
 decides), and the reviewer and the rebase worker join it, because they read
 the worker's worktree.
 
+**Promoting a session to a worktree** (`promote_to_worktree`) is not re-placed.
+The worktree is cut on the host the source session runs on, from the
+project's path on that host, and the replacement session is pinned there
+even on an `auto` project — its `cwd` only exists on that machine. If the
+project has no path on that host (`hostCwds`), the promote is refused (409).
+
 **How the choice is made.**
 
 - _Unattended_ sessions (a Task Master worker or reviewer) get **no local
