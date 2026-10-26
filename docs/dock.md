@@ -32,7 +32,7 @@ A project's own section can also show:
 
 ## Quick start
 
-Create `.crs/dock.json` in your project's repo (the path must be exactly `.crs/dock.json` relative to the project root) — or, from the dashboard itself, open the Command Palette → **Dock: \<project\>** and use the built-in editor (see [Editing from the UI](#editing-from-the-ui) below); either way produces the same file:
+Create `.crs/dock.json` in your project's repo (the path must be exactly `.crs/dock.json` relative to the project root) — or, from the dashboard itself, open the project's **Dock** tab (the project hub in the right sidebar) or the Command Palette → **Dock: \<project\>** and use the built-in editor (see [Editing from the UI](#editing-from-the-ui) below); either way produces the same file:
 
 ```json
 {
@@ -161,6 +161,10 @@ edit a project's own `.crs/dock.json` from the dashboard — a structured
 form (add/remove a monitor, edit its fields) rather than a raw-JSON editor,
 since `dock.json` is small, fixed-shape data. A few things to know:
 
+- **Suggestions from `package.json`.** When the project has `dev`, `start`,
+  `serve`, `preview` or `watch` scripts that no monitor already runs, the
+  editor lists them under "Suggested from package.json" with a one-click add.
+  Adding only edits the draft; nothing is written until you Save.
 - **Only the project-scope file.** The global `<configDir>/dock.json`
   default (see [Global vs. per-project config](#global-vs-per-project-config)
   below) isn't editable from this panel yet — hand-edit it on the host, same

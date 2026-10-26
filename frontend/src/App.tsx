@@ -95,6 +95,8 @@ const WORKSPACE_LOAD_MAX_ATTEMPTS = 5;
 const WORKSPACE_LOAD_RETRY_BASE_MS = 500;
 // Issue #1555 — long enough to read, short enough not to sit on the grid.
 const PANE_CAP_NOTICE_MS = 6000;
+// dockview's floating-window titlebar (--dv-floating-titlebar-height), added to a group's height.
+const FLOATING_TITLEBAR_HEIGHT = 22;
 // Mirrors src/services/hook-adapters/codex.ts's CODEX_COMMAND_RE — used only
 // to decide whether to surface the hook-trust banner (issue #259) for a
 // currently-active session, never to make any backend decision. The
@@ -316,9 +318,38 @@ export function App() {
   // highlight's own ~1200ms window — see that effect's own comment.
   const lastHandledHighlightRef = useRef<string | null>(null);
 
+  const dockviewContainerRef = useRef<HTMLDivElement>(null);
+
   const onReady = useCallback((event: DockviewReadyEvent) => {
     setDockviewApi(event.api);
   }, []);
+
+  // `floatingGroupBounds="boundedWithinViewport"` clamps a floating group's
+  // POSITION only; it never shrinks one. A group taller than the grid area
+  // (e.g. after the Dock expands) would sit at top:0 and overhang behind the
+  // opaque Dock, unreachable. So clamp the height whenever the container
+  // resizes.
+  useEffect(() => {
+    if (!dockviewApi) return;
+    const container = dockviewContainerRef.current;
+    if (!container || typeof ResizeObserver === "undefined") return;
+    const clamp = () => {
+      // dockview sizes a floating window as group height + its titlebar
+      // (dockview's --dv-floating-titlebar-height, 22px in both themes; the
+      // theme class sits on a child of this container, so it can't be read
+      // from here).
+      const titlebar = FLOATING_TITLEBAR_HEIGHT;
+      const max = container.clientHeight - titlebar;
+      if (max <= 0) return;
+      for (const group of dockviewApi.groups) {
+        if (group.api.location.type !== "floating") continue;
+        if (group.height > max) group.api.setSize({ height: max });
+      }
+    };
+    const observer = new ResizeObserver(clamp);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [dockviewApi]);
 
   // Issue #322: track which dockview panel is currently active so the
   // notification effect below can suppress desktop notifications for the
@@ -1817,6 +1848,7 @@ export function App() {
           )}
           <div className={`grid-area-body${!backendReachable || sessionExpired ? " dimmed" : ""}`}>
             <div
+              ref={dockviewContainerRef}
               className="dockview-container"
               style={{ "--mullion-chrome-bg": dockviewChromeBg } as CSSProperties}
             >
@@ -1827,6 +1859,10 @@ export function App() {
                 tabComponents={tabComponents}
                 rightHeaderActionsComponent={PaneHeaderActions}
                 onReady={onReady}
+                // Keep floating panels' position inside the grid area (the
+                // default only keeps 100px in view). Height is clamped by the
+                // ResizeObserver effect above — this option never resizes.
+                floatingGroupBounds="boundedWithinViewport"
                 // A lone tab is otherwise sized to its own content, leaving
                 // most of the tab strip empty and the title/status cramped
                 // — full-width mode stretches a single tab to fill the
