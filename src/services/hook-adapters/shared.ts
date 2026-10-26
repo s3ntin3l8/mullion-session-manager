@@ -172,6 +172,31 @@ export function validateCliModel(value: string): boolean {
 }
 
 /**
+ * Claude Code's model ALIASES — the short names `--model` accepts and that
+ * Claude Code itself resolves (`haiku` → the current Haiku, `opusplan` →
+ * Opus for planning / Sonnet for execution, an optional `[1m]` suffix for the
+ * 1M-token window). Fine for the main model flag; NOT a valid value for
+ * `ANTHROPIC_DEFAULT_HAIKU_MODEL`, which is what the `haiku` alias itself
+ * resolves TO and therefore needs a full model id (issue #2032).
+ */
+const CLAUDE_MODEL_ALIAS_RE = /^(fable|opus|sonnet|haiku|opusplan|best|default)(\[1m\])?$/i;
+
+export function isClaudeModelAlias(value: string): boolean {
+  return CLAUDE_MODEL_ALIAS_RE.test(value);
+}
+
+/**
+ * A value Claude Code's small-model slot (`ANTHROPIC_DEFAULT_HAIKU_MODEL`) can
+ * actually hold: a safe CLI model name that is a full model id, not an alias.
+ * Exporting an alias there makes the `haiku` alias resolve to itself, which
+ * the API rejects — and every haiku-backed feature (e.g. the `/goal`
+ * Stop-hook evaluator) then fails with "issue with the selected model".
+ */
+export function validateClaudeSmallModel(value: string): boolean {
+  return validateCliModel(value) && !isClaudeModelAlias(value);
+}
+
+/**
  * opencode's model shape: `provider/model`, optionally `#variant`.
  *
  * The sibling of validateCliModel above, and it lives here for the same

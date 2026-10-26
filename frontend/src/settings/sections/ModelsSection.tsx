@@ -3,7 +3,13 @@ import type { ReactNode } from "react";
 import { api } from "../../api/index.js";
 import { GroupHeading } from "../../ui/primitives.js";
 import { ModelPicker } from "../ModelPicker.js";
-import { CLAUDE_MODELS, CODEX_FALLBACK_MODELS, useCatalog } from "../../models/modelCatalogs.js";
+import {
+  CLAUDE_MODELS,
+  CLAUDE_SMALL_MODELS,
+  CODEX_FALLBACK_MODELS,
+  isClaudeModelAlias,
+  useCatalog,
+} from "../../models/modelCatalogs.js";
 import {
   buildCliModelPairs,
   resolveInstalledRoleModels,
@@ -67,6 +73,22 @@ function reviewerModelWarning(cliKey: string, roles: InstalledRoleModels): React
   );
 }
 
+/**
+ * The Small model picker used to offer aliases (`haiku`…), and an install may
+ * still have one stored. The server ignores it (an alias there would break
+ * every haiku-backed Claude Code feature, issue #2032), so say so instead of
+ * leaving a setting that silently does nothing.
+ */
+function smallModelAliasWarning(value: string | null): ReactNode {
+  if (value === null || !isClaudeModelAlias(value)) return null;
+  return (
+    <p style={warningStyle}>
+      <code>{value}</code> is a model alias, not a full model id, so Mullion ignores it and Claude
+      Code uses its own default. Pick a full id (or Claude Code default) to clear this.
+    </p>
+  );
+}
+
 export function ModelsSection() {
   const { settings, updateSettings } = useDashboardStore();
   const opencode = useCatalog(api.listOpenCodeModels);
@@ -123,12 +145,13 @@ export function ModelsSection() {
       <ModelPicker
         label="Small model"
         ariaLabel="Claude Code small model"
-        desc="Model for Claude Code's lightweight background work. Sets ANTHROPIC_DEFAULT_HAIKU_MODEL."
+        desc="Full model id for Claude Code's lightweight background work (the /goal evaluator, summaries…). Sets ANTHROPIC_DEFAULT_HAIKU_MODEL — an alias like haiku is not accepted there."
         value={settings.claudeCode?.smallModel ?? null}
-        options={CLAUDE_MODELS}
+        options={CLAUDE_SMALL_MODELS}
         defaultLabel="Claude Code default"
         allowCustom
         onChange={(v) => updateSettings({ claudeCode: { smallModel: v } })}
+        warning={smallModelAliasWarning(settings.claudeCode?.smallModel ?? null)}
       />
       <p style={hintStyle}>{FLAG_HINT}</p>
 

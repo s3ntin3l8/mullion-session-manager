@@ -28,6 +28,24 @@ export const CLAUDE_MODELS: ModelOption[] = [
   { value: "opusplan[1m]" },
 ];
 
+// Claude Code's model ALIASES (mirrors `isClaudeModelAlias` in
+// src/services/hook-adapters/shared.ts). Fine for the main model; NOT for the
+// small model, which becomes ANTHROPIC_DEFAULT_HAIKU_MODEL — the variable the
+// `haiku` alias itself resolves to — so it needs a full model id. An alias
+// there makes the alias resolve to itself and breaks every haiku-backed
+// feature, e.g. the /goal evaluator (issue #2032).
+const CLAUDE_MODEL_ALIAS_RE = /^(fable|opus|sonnet|haiku|opusplan|best|default)(\[1m\])?$/i;
+
+export function isClaudeModelAlias(value: string): boolean {
+  return CLAUDE_MODEL_ALIAS_RE.test(value);
+}
+
+// Full model ids only (anything else goes through Custom…). Empty = Claude
+// Code's own default, which is the safe choice when unsure.
+export const CLAUDE_SMALL_MODELS: ModelOption[] = [
+  { value: "claude-haiku-5-5", label: "claude-haiku-5-5 — Haiku 5.5" },
+];
+
 // Fallback for when `codex debug models` yields nothing (codex missing, or its
 // output format changed). It's a snapshot and will age; the live catalog wins
 // whenever it returns anything, and Custom… covers the rest.

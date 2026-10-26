@@ -537,10 +537,14 @@ with `Reviewer-Model:`/`SmallModel:`) as a `provider/model` string
 (`resolveOpenCodeModel`/`validateModel`) instead. `Reviewer-Model:` also
 works for every CLI (claude-code/codex/agy take a bare `--model` value;
 install-wide, `settings.<cli>.reviewerModel` backs it). `SmallModel:` works
-for opencode (`provider/model`) and claude-code (a bare name, exported as
-`ANTHROPIC_DEFAULT_HAIKU_MODEL`; install-wide via
-`settings.claudeCode.smallModel`) — silently inert for codex/agy, which have
-no small-model setting wired up.
+for opencode (`provider/model`) and claude-code (a **full model id**, e.g.
+`claude-haiku-5-5`, exported as `ANTHROPIC_DEFAULT_HAIKU_MODEL`; install-wide
+via `settings.claudeCode.smallModel`). A model _alias_ (`haiku`, `sonnet`,
+`opus`, `opusplan`…) is ignored there — that variable is what the `haiku`
+alias itself resolves to, so an alias would point it at itself and break every
+haiku-backed Claude Code feature (issue #2032); an explicit alias in a session
+request is rejected. Silently inert for codex/agy, which have no small-model
+setting wired up.
 `commandIsOpencode`/`commandModelCli` (`hook-adapters/index.ts`) are what
 each spawn site checks to pick the right resolver.
 
