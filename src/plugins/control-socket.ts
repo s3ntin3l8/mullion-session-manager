@@ -20,6 +20,7 @@ import { resolveAndAttach } from "../routes/terminal.js";
 import { attachAggregatedEventsSocket, attachLocalEventsSocket } from "../routes/events.js";
 import { SocketChannel, WRITE_HARD_CEILING_BYTES } from "../services/socket-channel.js";
 import { reclaimSocketPath } from "../services/unix-socket.js";
+import { isPipePath } from "../cli/ipc-path.mjs";
 import { eq } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
 import type { SessionSeverity, SessionStatus } from "../shared/types.js";
@@ -2449,8 +2450,9 @@ export const controlSocketPlugin = fp(async (app: FastifyInstance) => {
     if (previousUmask !== null) process.umask(previousUmask);
   }
   // 0600: filesystem perms are the first line of defense alongside the
-  // handshake token above, same posture as hooks.ts's own hook socket.
-  chmodSync(socketPath, 0o600);
+  // handshake token above, same posture as hooks.ts's own hook socket
+  // (including its named-pipe exception).
+  if (!isPipePath(socketPath)) chmodSync(socketPath, 0o600);
 
   app.decorate("controlServer", server);
 
@@ -2461,7 +2463,7 @@ export const controlSocketPlugin = fp(async (app: FastifyInstance) => {
       server.close(() => resolve());
     });
     try {
-      unlinkSync(socketPath);
+      if (!isPipePath(socketPath)) unlinkSync(socketPath);
     } catch {
       // Already gone is fine.
     }

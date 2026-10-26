@@ -23,7 +23,9 @@ describe("SessionBackend.readTaskRereviewRequest", () => {
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "rereview-backend-"));
-    app = { pty: { hookSocketPath: path.join(dir, "hooks.sock") } } as unknown as FastifyInstance;
+    app = {
+      pty: { hookSocketPath: path.join(dir, "hooks.sock"), sessionsDir: dir },
+    } as unknown as FastifyInstance;
     clientMock.resolveReadTaskRereviewRequest.mockReset();
   });
 

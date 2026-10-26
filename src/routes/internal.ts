@@ -483,9 +483,9 @@ export function buildAgentConfig(app: FastifyInstance): AgentConfig {
   // "" (see its own doc comment) — a session genuinely receives that
   // inherited value, this just means *Mullion* isn't the one supplying it,
   // so there's nothing Mullion-owned to report a path for.
-  // path.dirname(app.pty.hookSocketPath), not app.config.SESSIONS_DIR:
+  // app.pty.sessionsDir, not app.config.SESSIONS_DIR:
   // ptyPlugin's own ensureSessionsDir() can redirect a too-long sessionsDir
-  // to a short fallback under the platform's temp dir, and hookSocketPath
+  // to a short fallback under the platform's temp dir, and app.pty.sessionsDir
   // already reflects whichever one actually won — the same reasoning
   // plugins/ssh-agent.ts's own sshAgentSocketPath call already relies on.
   //
@@ -507,7 +507,7 @@ export function buildAgentConfig(app: FastifyInstance): AgentConfig {
     configured: app.config.MULLION_SSH_AUTH_SOCK,
     ambient: ambientSshAuthSock,
     materializesBridgeSocket: app.sshAuthSockBridgeExpected,
-    sessionsDir: path.dirname(app.pty.hookSocketPath),
+    sessionsDir: app.pty.sessionsDir,
   });
   // PR7a: the "ambient" tier's own `path` is always "" (resolveSshAuthSock's
   // signal to "don't touch it" — see its own doc comment), so there's no
@@ -2062,11 +2062,7 @@ export async function internalRoutes(app: FastifyInstance) {
       if (!Number.isInteger(taskId) || !Number.isInteger(round)) {
         return reply.badRequest("taskId and round query params must be integers");
       }
-      const findingsPath = taskReviewFindingsPath(
-        path.dirname(app.pty.hookSocketPath),
-        taskId,
-        round,
-      );
+      const findingsPath = taskReviewFindingsPath(app.pty.sessionsDir, taskId, round);
       if (!existsSync(findingsPath)) return { content: null };
       const content = readFileSync(findingsPath, "utf8").trim();
       return { content: content.length > 0 ? content : null };
@@ -2082,11 +2078,7 @@ export async function internalRoutes(app: FastifyInstance) {
       if (!Number.isInteger(taskId) || !Number.isInteger(round)) {
         return reply.badRequest("taskId and round query params must be integers");
       }
-      const findingsPath = taskReviewFindingsPath(
-        path.dirname(app.pty.hookSocketPath),
-        taskId,
-        round,
-      );
+      const findingsPath = taskReviewFindingsPath(app.pty.sessionsDir, taskId, round);
       if (existsSync(findingsPath)) unlinkSync(findingsPath);
       reply.code(204);
     },
@@ -2110,7 +2102,7 @@ export async function internalRoutes(app: FastifyInstance) {
       if (!Number.isInteger(taskId)) {
         return reply.badRequest("taskId query param must be an integer");
       }
-      const titlePath = taskCommitTitlePath(path.dirname(app.pty.hookSocketPath), taskId);
+      const titlePath = taskCommitTitlePath(app.pty.sessionsDir, taskId);
       if (!existsSync(titlePath)) return { content: null };
       const content = readFileSync(titlePath, "utf8").trim();
       return { content: content.length > 0 ? content : null };
@@ -2131,11 +2123,7 @@ export async function internalRoutes(app: FastifyInstance) {
       if (!Number.isInteger(taskId) || !Number.isInteger(key)) {
         return reply.badRequest("taskId and key query params must be integers");
       }
-      const requestPath = taskRereviewRequestPath(
-        path.dirname(app.pty.hookSocketPath),
-        taskId,
-        key,
-      );
+      const requestPath = taskRereviewRequestPath(app.pty.sessionsDir, taskId, key);
       if (!existsSync(requestPath)) return { content: null };
       return { content: readFileSync(requestPath, "utf8").trim() || "(no reason given)" };
     },

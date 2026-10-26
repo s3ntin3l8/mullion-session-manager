@@ -77,5 +77,9 @@ export function longestSocketPath(dir) {
  * call site that compares against the limit.
  */
 export function fitsSunPath(dir, platform = process.platform) {
+  // Windows has no sun_path: its endpoints are named pipes (see
+  // ipc-path.mjs), whose names are a fixed-length hash of the path, so any
+  // directory can hold them and no short fallback dir is ever needed.
+  if (platform === "win32") return true;
   return longestSocketPath(dir) <= maxSunPathBytes(platform) - 1;
 }

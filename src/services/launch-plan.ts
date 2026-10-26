@@ -18,7 +18,6 @@
 // runs. Splitting the I/O out would just move that ordering hazard onto
 // every caller instead of keeping it as one documented invariant here.
 import os from "node:os";
-import path from "node:path";
 import { mkdirSync } from "node:fs";
 import type { HookMessageKind } from "./hook-protocol.js";
 import { buildSessionEnv } from "./session-env.js";
@@ -389,7 +388,7 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // was never created, unlike every other agent where a stale pointer is
   // just harmless prose. No other adapter reads this file, so this
   // ordering changes nothing for Claude Code/Codex/agy.
-  writeSessionAgentGuide(path.dirname(session.hookSocketPath), session.id);
+  writeSessionAgentGuide(session.sessionsDir, session.id);
 
   // agent-briefing follow-up to #405, redesigned by #942 — same
   // unconditional-write / must-precede-applyHookAdapters posture as
@@ -410,12 +409,7 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // truthy check here would silently treat both the same, undoing that
   // entire distinction. Caught by session-lifecycle-briefing.test.ts's own
   // empty-string case.
-  writeSessionBriefing(
-    path.dirname(session.hookSocketPath),
-    session.id,
-    console,
-    session.briefingOverride,
-  );
+  writeSessionBriefing(session.sessionsDir, session.id, console, session.briefingOverride);
 
   // Issue #937 — same unconditional-write / must-precede-applyHookAdapters
   // posture as writeSessionAgentGuide/writeSessionBriefing immediately
@@ -431,7 +425,7 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // for why an empty string is treated the same as `undefined` here, unlike
   // writeSessionBriefing's own deliberately-different posture.
   writeSessionWorkflowConventions(
-    path.dirname(session.hookSocketPath),
+    session.sessionsDir,
     session.id,
     console,
     session.workflowConventionsText,
@@ -442,9 +436,9 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // this launch only — see hook-adapters/index.ts's applyHookAdapters for
   // the defensive-fallback behavior (any adapter failure launches the
   // original, unmodified command instead of failing the session outright).
-  // `sessionsDir` is derived from hookSocketPath (`<sessionsDir>/hooks.sock`,
-  // see PtyManager's constructor) rather than threaded through as its own
-  // field, since this is the only place that needs it.
+  // `sessionsDir` is the session's own field, never derived from
+  // hookSocketPath: on Windows that is a named pipe (cli/ipc-path.mjs), which
+  // has no parent directory.
   const {
     command: launchCommand,
     envAdditions,
@@ -452,7 +446,7 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     emits,
   } = applyHookAdapters(session.command, {
     sessionId: session.id,
-    sessionsDir: path.dirname(session.hookSocketPath),
+    sessionsDir: session.sessionsDir,
     hookSocketPath: session.hookSocketPath,
     hookToken: session.hookToken,
     controlSocketPath: session.controlSocketPath,

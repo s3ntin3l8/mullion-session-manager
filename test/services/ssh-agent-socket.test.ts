@@ -341,11 +341,17 @@ describe("sshAgentSocketPath", () => {
 
 describe("materializesBridgeSocket", () => {
   it("is true for the agent role", () => {
-    expect(materializesBridgeSocket("agent")).toBe(true);
+    expect(materializesBridgeSocket("agent", "linux")).toBe(true);
   });
 
   it("is true for the primary role too (#873 PR-B — sshAgentPlugin now registers for both roles)", () => {
-    expect(materializesBridgeSocket("primary")).toBe(true);
+    expect(materializesBridgeSocket("primary", "linux")).toBe(true);
+    expect(materializesBridgeSocket("primary", "darwin")).toBe(true);
+  });
+
+  it("is false for every role on Windows until the pipe is restricted to the user (#2065)", () => {
+    expect(materializesBridgeSocket("agent", "win32")).toBe(false);
+    expect(materializesBridgeSocket("primary", "win32")).toBe(false);
   });
 });
 
