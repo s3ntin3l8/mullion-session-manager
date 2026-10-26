@@ -390,11 +390,14 @@ export type CreateSessionParams = CreateSessionBody & {
   // independently would put the reviewer on a different machine from the
   // diff it is supposed to read.
   //
-  // NOT part of CreateSessionBody: no public route sets it. Task Master only.
+  // NOT part of CreateSessionBody: no public route takes it from a client.
+  // Server-side callers that already know the host set it — Task Master, and
+  // `promote_to_worktree` (#1958), which pins the replacement to the host its
+  // worktree was cut on.
   hostId?: string;
   // Issue #1724 — WHY the session is on that host, when the caller decided
-  // it (Task Master's claim path decides the placement before the worktree
-  // is cut, so the two cannot disagree). The row records it, so the
+  // it (Task Master's claim path, and the promote route, decide the host
+  // before the worktree is cut, so the two cannot disagree). The row records it, so the
   // decision can be explained rather than re-derived.
   placementReason?: string;
   // Issue #1951 — "this session MUST run on a host matching this" (a host id

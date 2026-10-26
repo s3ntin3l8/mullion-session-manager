@@ -11,6 +11,7 @@ import { getStoredSettings } from "../services/settings.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { HostRequestError } from "../services/remote-host-client.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
+import { parseHostCwds, projectCwdOnHost } from "../services/placement.js";
 import type { SessionInfo } from "../services/pty-manager.js";
 import { isValidDevServerUrl } from "./projects.js";
 import { getOrCreateProjectPreview } from "../services/preview-registry.js";
@@ -809,15 +810,33 @@ export async function sessionsRoute(app: FastifyInstance) {
       // `row.cwd` genuinely resolves inside `project.cwd` — the only case
       // this bug is actually about — and keep the untouched (if already
       // odd) cross-repo behavior otherwise.
-      const projectRoot = path.resolve(project.cwd);
-      const sourceCwd = row.cwd ? path.resolve(row.cwd) : projectRoot;
+      //
+      // Issue #1958 — everything below runs on the SOURCE session's host, not
+      // the project's: the worktree is cut there, the replacement is pinned
+      // there (an `auto` project would otherwise be free to place it on a
+      // host where the worktree's `cwd` does not exist), and `row.cwd` is
+      // a path on that host. For a session on the project's own host this is
+      // the project's host, as before.
+      const srcHostId = resolveSessionHostId(app, row);
+      const rootOnSrcHost = projectCwdOnHost(project, srcHostId, parseHostCwds(project.hostCwds));
+      // The project's path on that host is only needed to anchor a session that
+      // sits inside the project. A session whose own cwd is another repo keeps
+      // the cross-repo behaviour above (it is cut from its own cwd), whether or
+      // not the project has a path on that host; refusing is only right when
+      // there is no cwd to cut from either.
+      if (rootOnSrcHost === null && !row.cwd) {
+        return reply.conflict(`The project has no path on host ${srcHostId}`);
+      }
+      const projectRoot = rootOnSrcHost === null ? null : path.resolve(rootOnSrcHost);
+      const sourceCwd = row.cwd ? path.resolve(row.cwd) : (projectRoot as string);
       const sourceWithinProject =
-        sourceCwd === projectRoot || sourceCwd.startsWith(projectRoot + path.sep);
+        projectRoot !== null &&
+        (sourceCwd === projectRoot || sourceCwd.startsWith(projectRoot + path.sep));
       const repoCwd = sourceWithinProject ? projectRoot : sourceCwd;
       const { baseRef, branchName, seedPrompt } = request.body;
       const resolvedWorktree = await resolveWorktreeCwd(
         app,
-        project.hostId,
+        srcHostId,
         repoCwd,
         { baseRef, branchName },
         `promote-${sessionId}-${Date.now()}`,
@@ -851,10 +870,7 @@ export async function sessionsRoute(app: FastifyInstance) {
       // Issue #1722 / roadmap 8.8 — the SESSION's host: this reads the
       // session's own live pty out of THIS process's PtyManager, so only a
       // session that lives here has one.
-      if (
-        resolveSessionHostId(app, row) === LOCAL_HOST_ID &&
-        adapterHasResumeSessionArgs(row.command)
-      ) {
+      if (srcHostId === LOCAL_HOST_ID && adapterHasResumeSessionArgs(row.command)) {
         const liveAgentSessionId = app.pty.get(String(sessionId))?.agentSessionId ?? null;
         if (liveAgentSessionId) {
           // `repoCwd`, not `sourceCwd` — #693's own fix exists because
@@ -936,6 +952,10 @@ export async function sessionsRoute(app: FastifyInstance) {
         command: row.command,
         name: row.name ?? undefined,
         cwd: worktreePath,
+        // Issue #1958 — where the worktree was cut, so placement cannot move
+        // the replacement away from its own `cwd`.
+        hostId: srcHostId,
+        placementReason: `promoted on ${srcHostId}, where its worktree was cut`,
         kind: row.kind,
         skipPermissions: row.skipPermissions ?? undefined,
         initialPrompt: effectiveSeedPrompt,
@@ -978,7 +998,7 @@ export async function sessionsRoute(app: FastifyInstance) {
         // worktree and the branch atomically, and this only runs when the
         // very next step (spawn) failed — no agent, no commit, ever
         // touched it.
-        const backend = resolveBackend(app, project.hostId);
+        const backend = resolveBackend(app, srcHostId);
         try {
           await backend.removeWorktree(worktreePath, repoCwd);
         } catch {
@@ -1017,7 +1037,7 @@ export async function sessionsRoute(app: FastifyInstance) {
       // begin with) regardless of what `initialPromptApplied` says.
       const seedDelivered = resolveSeedDelivered(
         deliverAsInitialPrompt,
-        project.hostId,
+        srcHostId,
         created.initialPromptApplied,
       );
       if (deliverAsInitialPrompt && !seedDelivered) {
@@ -1038,23 +1058,20 @@ export async function sessionsRoute(app: FastifyInstance) {
       // said no (persistent), unlike an unreachable host (possibly
       // transient).
       try {
-        await resolveBackend(app, resolveSessionHostId(app, row)).resolvePendingPromote(
-          String(sessionId),
-          {
-            decision: "accepted",
-            worktreePath,
-            newSessionId: created.row.id,
-          },
-        );
+        await resolveBackend(app, srcHostId).resolvePendingPromote(String(sessionId), {
+          decision: "accepted",
+          worktreePath,
+          newSessionId: created.row.id,
+        });
       } catch (err) {
         if (err instanceof HostRequestError) {
           app.log.warn(
-            { hostId: resolveSessionHostId(app, row), sessionId, err },
+            { hostId: srcHostId, sessionId, err },
             "resolvePendingPromote: host rejected the request",
           );
         } else {
           app.log.warn(
-            { hostId: resolveSessionHostId(app, row), sessionId, err },
+            { hostId: srcHostId, sessionId, err },
             "resolvePendingPromote: host unreachable",
           );
         }
