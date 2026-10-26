@@ -1406,6 +1406,29 @@ describe("buildReviewPrompt follow-up round", () => {
     expect(out).toContain("keeps its severity and keeps the verdict at changes-requested");
   });
 
+  it("tells the reviewer to track only blocking findings, not earlier suggestions", () => {
+    const out = buildReviewPrompt({
+      ...base,
+      priorRound: { reviewedSha: "abc1234", findings: "- [critical] **a.ts:1** — fix" },
+    });
+    expect(out).toContain("every earlier critical or warning finding");
+    expect(out).toContain("Earlier suggestions are not tracked");
+  });
+
+  it("after an approval, says the earlier suggestions were optional and must not be listed", () => {
+    const out = buildReviewPrompt({
+      ...base,
+      priorRound: {
+        reviewedSha: "abc1234",
+        findings: "- [suggestion] **a.ts:1** — rename",
+        approved: true,
+      },
+    });
+    expect(out).toContain("That review APPROVED the work");
+    expect(out).toContain("List NONE of it in `previous`");
+    expect(out).not.toContain("every earlier critical or warning finding");
+  });
+
   it("falls back to a plain follow-up when the reviewed commit is unknown", () => {
     const out = buildReviewPrompt({ ...base, priorRound: { reviewedSha: null, findings: "x" } });
     expect(out).toContain("FOLLOW-UP review");

@@ -109,7 +109,7 @@ import type { ReleaseMergeResult } from "../shared/types.js";
  */
 function priorRoundFor(
   task: typeof tasks.$inferSelect,
-): { reviewedSha: string | null; findings: string } | undefined {
+): { reviewedSha: string | null; findings: string; approved?: boolean } | undefined {
   if (!task.reviewFindings) return undefined;
   if (
     task.lastReviewVerdict !== "changes-requested" &&
@@ -119,7 +119,13 @@ function priorRoundFor(
   }
   const blocks = task.reviewFindings.split(/\n\n(?=## Round )/);
   const last = blocks[blocks.length - 1];
-  return last ? { reviewedSha: task.lastReviewedHeadSha, findings: last } : undefined;
+  return last
+    ? {
+        reviewedSha: task.lastReviewedHeadSha,
+        findings: last,
+        approved: task.lastReviewVerdict === "approved-with-suggestions",
+      }
+    : undefined;
 }
 
 /**
@@ -4909,6 +4915,10 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
             // re-review request file; an unreadable one (host down, old
             // peer build) is read as "no request" — small nit fixes are
             // exactly what the approval was granted for.
+            // An escape-hatch re-review spends a round like any other review
+            // fix-up, so a worker that asks every time still ends at the cap
+            // (and the findings file index moves on with it).
+            let rereviewRequested = false;
             let carryApproval =
               task.approvalCarriedAt !== null &&
               task.reviewSessionId !== null &&
@@ -4922,6 +4932,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 );
                 if (request !== null) {
                   carryApproval = false;
+                  rereviewRequested = true;
                   app.log.info(
                     { taskId: task.id, reason: request },
                     "task reconcile: suggestions-round worker asked for a re-review — not carrying the approval",
@@ -4937,7 +4948,9 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                     { err, taskId: task.id },
                     "task reconcile: host unreachable reading the worker's re-review request — retrying next tick",
                   );
-                  return;
+                  // `continue`, not `return`: this is one row of a host's loop,
+                  // and the rest of the host's tasks must still transition.
+                  continue;
                 }
                 app.log.warn(
                   { err, taskId: task.id },
@@ -4950,6 +4963,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
               .set({
                 status: "reviewing",
                 reviewingAt: now,
+                ...(rereviewRequested ? { autoReturnRounds: task.autoReturnRounds + 1 } : {}),
                 // See the matching claimed -> reviewing branch above for why
                 // these are nulled here rather than left alone.
                 ...(carryApproval

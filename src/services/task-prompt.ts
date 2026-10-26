@@ -689,9 +689,13 @@ function normalizeDispositions(raw: unknown): ReviewDisposition[] {
  *    `approved-with-suggestions`, no findings → `approved`.
  *
  * `notes`/`looksGood` never count. One exception, fail-safe: a reviewer that
- * wrote `changes-requested` with NO findings gave us
- * nothing to derive from, so its own word stands rather than silently
- * becoming an approval.
+ * wrote `changes-requested` with NO findings gave us nothing to derive from,
+ * so its own word stands rather than silently becoming an approval. The
+ * exception is deliberately that narrow and asymmetric: when there ARE
+ * findings the reviewer's severities are the evidence, so `changes-requested`
+ * over only-suggestions findings becomes `approved-with-suggestions` (the
+ * reviewer called nothing blocking), while `approved` over a critical finding
+ * still blocks. Either disagreement is recorded in `notes`.
  */
 export function deriveVerdict(parts: {
   findings: ReviewFinding[];
@@ -1090,7 +1094,7 @@ export function buildReviewPrompt(opts: {
    * and what it found, so this round is a DELTA review (new findings only
    * from `reviewedSha..HEAD`, plus a disposition for each earlier finding).
    * Omitted on a first review. */
-  priorRound?: { reviewedSha: string | null; findings: string };
+  priorRound?: { reviewedSha: string | null; findings: string; approved?: boolean };
 }): string {
   const preamble = [
     "Review this task's diff. You are not expected to make changes.",
@@ -1165,10 +1169,19 @@ export function buildReviewPrompt(opts: {
                 "regressions — a fix can re-break something earlier in the PR.",
               ]
             : ["Do not re-file the earlier findings as new ones."]),
-          "In `previous`, give every earlier finding a status — addressed (with the",
-          "evidence), still-open, or re-broken — re-running whatever showed the defect",
-          "rather than re-reading the diff. An earlier critical or warning that is not",
-          "fixed keeps its severity and keeps the verdict at changes-requested.",
+          ...(opts.priorRound.approved
+            ? [
+                "That review APPROVED the work: everything above was an optional suggestion,",
+                "which the worker was free to skip. List NONE of it in `previous` — an",
+                "unapplied suggestion never blocks. Review only what changed since.",
+              ]
+            : [
+                "In `previous`, give every earlier critical or warning finding a status —",
+                "addressed (with the evidence), still-open, or re-broken — re-running",
+                "whatever showed the defect rather than re-reading the diff. One that is",
+                "not fixed keeps its severity and keeps the verdict at changes-requested.",
+                "Earlier suggestions are not tracked: leave them out of `previous`.",
+              ]),
           "A NEW problem in code this round did not change, which the earlier review",
           "could have raised, blocks only if it is critical; otherwise it is a",
           "suggestion. Likewise a problem that already exists on the base branch.",

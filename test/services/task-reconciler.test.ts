@@ -7012,6 +7012,8 @@ describe("reconcileTasks", () => {
         const row = await getTask(app, taskId);
         expect(row.status).toBe("reviewing");
         expect(row.approvalCarriedAt).toBeNull();
+        // Asking for a review spends a round, so the hatch can't loop forever.
+        expect(row.autoReturnRounds).toBe(1);
         // A genuinely new review: the old pointer was dropped and a fresh
         // review session spawned in its place.
         expect(row.reviewSessionId).not.toBe(reviewSessionId);
@@ -7058,7 +7060,7 @@ describe("reconcileTasks", () => {
       // so wait; any other failure (an old peer, a 5xx) can't heal, so carry.
       async function returnedWithFinishedWorker(
         app: Awaited<ReturnType<typeof buildApp>>,
-        readRequest: () => Promise<string | null>,
+        readRequest: (taskId: number, key: number) => Promise<string | null>,
       ) {
         const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
         writeFindings(app, taskId, 0, SUGGESTIONS_JSON);
@@ -7094,6 +7096,30 @@ describe("reconcileTasks", () => {
         expect((await getTask(app, taskId)).status).toBe("in_progress");
 
         spy.mockRestore();
+        await app.close();
+      });
+
+      it("one task's unreachable host does not stall the other tasks on that host", async () => {
+        const { HostUnreachableError } = await import("../../src/services/remote-host-client.js");
+        const app = await buildApp();
+        const first = await returnedWithFinishedWorker(app, (taskId) =>
+          taskId === first.taskId
+            ? Promise.reject(new HostUnreachableError("h", "down"))
+            : Promise.resolve(null),
+        );
+        // A second task whose worker has just finished, on the same host.
+        const { taskId: otherId, sessionId: otherWorker } =
+          await createSessionAndTaskWithReviewAgent(app, "in_progress", "codex");
+        app.db.update(tasks).set({ agentCommand: "codex" }).where(eq(tasks.id, otherId)).run();
+        const firstRow = await getTask(app, first.taskId);
+        mockFinishedSessionIds(app, firstRow.sessionId as number, otherWorker);
+
+        await reconcileTasks(app);
+
+        expect((await getTask(app, first.taskId)).status).toBe("in_progress");
+        expect((await getTask(app, otherId)).status).toBe("reviewing");
+
+        first.spy.mockRestore();
         await app.close();
       });
 
