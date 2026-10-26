@@ -27,6 +27,7 @@
  */
 
 import { buildSessionEnv } from "./session-env.js";
+import { sessionShellOrNull } from "./session-shell.js";
 import { runShellCapture } from "./shell-spawn.js";
 
 // A login shell that blocks would hang the probe, so it gets a deadline —
@@ -44,8 +45,12 @@ const PROBE_KILL_ESCALATION_MS = 2_000;
  * interactive-shell resolver (issue #1833).
  */
 export function runLoginShell(script: string): Promise<string | null> {
+  // The SESSION's shell (session-shell.ts) — Git Bash on Windows. A host with
+  // none cannot run a session either, so the probe finds nothing.
+  const shell = sessionShellOrNull();
+  if (shell === null) return Promise.resolve(null);
   return runShellCapture({
-    shell: process.env.SHELL || "/bin/bash",
+    shell,
     args: ["-lc", script],
     env: buildSessionEnv(),
     timeoutMs: PROBE_TIMEOUT_MS,

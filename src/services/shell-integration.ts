@@ -164,7 +164,9 @@ export function applyShellIntegrationEnv(
     env.MAKEFLAGS = `-j ${totalCores} -l ${totalCores}`;
   }
 
-  const shellName = path.basename(shell);
+  // path.win32 splits on both separators, and ".exe" is dropped: on Windows
+  // the session shell is Git Bash's C:\...\bin\bash.exe (issue #1728).
+  const shellName = path.win32.basename(shell).replace(/\.exe$/i, "");
   if (shellName === "zsh") {
     env.MULLION_USER_ZDOTDIR = env.ZDOTDIR || env.HOME || "";
     env.ZDOTDIR = ensureShellIntegrationFiles(sessionsDir);

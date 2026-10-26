@@ -636,6 +636,32 @@ scope at all (the manager branches it off before the scope pre-check), and
 macOS separately, without waiting for a macOS device scope for the emulator
 half.
 
+### Windows agents (preview)
+
+Windows agent hosts are in progress under
+[#1728](https://github.com/s3ntin3l8/mullion-session-manager/issues/1728).
+What is specific to them:
+
+- **Sessions run in Git Bash.** Every session's command line is composed for
+  a POSIX shell (the hook adapters' quoting, `command -v` agent detection),
+  so on Windows the session shell is Git for Windows' `bash.exe` — which
+  Claude Code on Windows requires anyway. It is found through
+  `CLAUDE_CODE_GIT_BASH_PATH` (Claude Code's own setting), then a `SHELL`
+  that is a real Windows path, then the standard install locations, then
+  next to the `git` on `PATH`. A host with none refuses to launch sessions
+  and says so.
+- **Session persistence** comes from a detached pty-host master per session
+  — the Windows stand-in for `dtach`, added by
+  [#2077](https://github.com/s3ntin3l8/mullion-session-manager/pull/2077)
+  (`src/pty-host/`) — so sessions survive the agent process restarting, as
+  on Linux and macOS.
+- **Not yet:** self-update (reinstall a new release instead), the Android
+  device panel, and the ssh-agent bridge socket (until
+  [#2065](https://github.com/s3ntin3l8/mullion-session-manager/issues/2065)).
+  Project setup's symlinks need Windows' **Developer Mode** (or an
+  administrator); without it, applying a setup that writes a symlink fails
+  with an error saying so.
+
 ## Request signing
 
 Every request the primary sends to a **self-registered** host also carries

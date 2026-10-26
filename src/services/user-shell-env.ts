@@ -126,7 +126,10 @@ function runInteractiveShell(shell: string): Promise<string | null> {
 export function resolveUserShellEnv(): Promise<void> {
   if (settled || isDisabled()) return Promise.resolve();
   if (inflight) return inflight;
-  const shell = process.env.SHELL || "";
+  // Not on Windows (issue #1728): its PATH is system-wide, with no rc-file
+  // additions to recover — and a $SHELL inherited from Git Bash is an MSYS
+  // path ("/usr/bin/bash") Windows cannot spawn, so trying would only warn.
+  const shell = process.platform === "win32" ? "" : process.env.SHELL || "";
   if (!SUPPORTED_SHELLS.has(shell.split("/").pop() ?? "")) {
     log?.debug({ shell }, "user-shell-env: unsupported shell, not resolving the interactive PATH");
     settled = true;

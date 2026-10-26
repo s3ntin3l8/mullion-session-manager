@@ -87,6 +87,52 @@ export function readFilesLocally(cwd: string, relPaths: string[]): HostFileMap {
   return files;
 }
 
+/**
+ * `symlinkSync`, with Windows' refusal turned into something actionable.
+ *
+ * Windows only lets a process create a symlink with Developer Mode on (or as
+ * an administrator) and otherwise fails with a bare EPERM (issue #1728). A
+ * stand-in would be worse than the error: these links are staged and
+ * committed, so a junction or a copied file would land in the repository as
+ * something other than the symlink (mode 120000) every other platform sees.
+ * So the write fails — but saying what to do about it.
+ */
+export function createSymlink(
+  target: string,
+  linkPath: string,
+  platform: NodeJS.Platform = process.platform,
+): void {
+  try {
+    symlinkSync(target, linkPath);
+  } catch (err) {
+    if (platform === "win32" && (err as NodeJS.ErrnoException).code === "EPERM") {
+      throw new Error(
+        `cannot create the symlink ${linkPath}: Windows only allows symlinks with ` +
+          "Developer Mode on (Settings > System > For developers) or as an administrator — " +
+          "enable it on this host and retry",
+        { cause: err },
+      );
+    }
+    throw err;
+  }
+}
+
+/**
+ * Whether an existing link's `actual` target is the `wanted` one. On Windows
+ * Node writes a relative target with backslashes (`../a` is stored as
+ * `..\a`), so the two are compared with separators normalised there —
+ * otherwise every apply would delete and recreate a link that was already
+ * right. Exact comparison everywhere else.
+ */
+export function sameSymlinkTarget(
+  actual: string,
+  wanted: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (platform !== "win32") return actual === wanted;
+  return actual.replace(/\//g, "\\") === wanted.replace(/\//g, "\\");
+}
+
 /** Writes `entries` (files and/or symlinks) directly onto `cwd`'s own local
  * filesystem, then stages every change in `cwd` via `git add -A` when
  * `stage` is set — moved verbatim from routes/project-setup.ts's
@@ -141,14 +187,14 @@ export function writeEntriesLocally(
       // (pre-#895) for the full same-slug re-preview scenario this guards.
       let alreadyCorrect = false;
       try {
-        alreadyCorrect = readlinkSync(targetPath) === entry.target;
+        alreadyCorrect = sameSymlinkTarget(readlinkSync(targetPath), entry.target);
       } catch {
         // Not a symlink (ENOENT: nothing there yet; EINVAL: a real file/
         // directory sits there instead) — fall through to remove+create.
       }
       if (!alreadyCorrect) {
         rmSync(targetPath, { recursive: true, force: true });
-        symlinkSync(entry.target, targetPath);
+        createSymlink(entry.target, targetPath);
       }
     } else {
       ensureRealDir(path.dirname(targetPath));

@@ -174,6 +174,21 @@ describe("resolveUserShellEnv", () => {
     );
   });
 
+  // Issue #1728 — on Windows there is no rc-file PATH to recover, and a
+  // $SHELL inherited from Git Bash is an MSYS path Windows cannot spawn.
+  it("does not resolve on Windows, even with a bash-looking $SHELL", async () => {
+    const original = process.platform;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    try {
+      process.env.SHELL = "/usr/bin/bash";
+      await resolveUserShellEnv();
+      expect(spawned).toEqual([]);
+      expect(getUserShellPath()).toBeNull();
+    } finally {
+      Object.defineProperty(process, "platform", { value: original, configurable: true });
+    }
+  });
+
   // A child can also fail AFTER it started — a SIGTERM the shell refuses
   // produces an 'error' event too. Calling that a spawn failure would be
   // wrong, so the resolver distinguishes the two.

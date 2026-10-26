@@ -38,6 +38,7 @@ import {
 // and the backend decides how to supervise it. See LaunchPlan below.
 import type { ScopeConstraints } from "./scope/types.js";
 import { getAvailableHostCores, computeTaskMasterCpuQuota } from "./host-resources.js";
+import { sessionShell } from "./session-shell.js";
 
 // Per-agent skip-permissions flag lookup. Anchored at the start of the
 // trimmed command (optionally path-qualified), same conservative "no
@@ -192,9 +193,9 @@ export interface LaunchPlanSession {
 }
 
 export interface LaunchPlan {
-  /** `$SHELL` (or the "/bin/bash" fallback), resolved at plan-build time —
-   * also the shell bootstrapMaster's dtach master runs `finalCommand`
-   * under. */
+  /** session-shell.ts's sessionShell() — `$SHELL` (or the "/bin/bash"
+   * fallback), Git Bash on Windows — resolved at plan-build time; also the
+   * shell bootstrapMaster's dtach master runs `finalCommand` under. */
   shell: string;
   /** The fully scrubbed + augmented env the dtach master (and therefore the
    * launched agent process) should receive. */
@@ -251,7 +252,9 @@ export interface LaunchPlan {
  * *pure* function despite doing pure composition work.
  */
 export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
-  const shell = process.env.SHELL || "/bin/bash";
+  // Throws on a Windows host with no Git Bash — a launch that cannot work,
+  // reported as such rather than as a spawn error naming "/bin/bash".
+  const shell = sessionShell();
   // Issue #1715 — the scope NAME (and the systemd unit it maps to) is the
   // scope backend's business now, not this module's: the plan describes the
   // program and the constraints, and the backend decides how to supervise it
