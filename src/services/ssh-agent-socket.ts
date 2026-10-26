@@ -180,7 +180,8 @@ export type SshAuthSockSource = "configured" | "ambient" | "bridge" | "none";
  * 3. Only when neither is present do we fall back to the bridge-
  *    materialized socket — and only when the caller says this process
  *    actually materializes one (`materializesBridgeSocket`; see
- *    plugins/ssh-agent.ts — both roles, as of #873 PR-B).
+ *    plugins/ssh-agent.ts — both roles as of #873 PR-B, on every platform
+ *    except Windows until #2065; see that function for the platform rule).
  *
  * Deliberately NOT gated on whether a bridge is *currently* connected: the
  * bridge socket is a stable path (materializeSshAgentSocket binds it
