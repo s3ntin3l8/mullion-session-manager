@@ -740,6 +740,7 @@ function sessionsInProjectCheckout(
     .all();
   const matched: number[] = [];
   for (const row of rows) {
+    // NULL inherits the project's host — resolveSessionHostId (session-live-info.ts).
     const hostId = row.hostId ?? row.projectHostId;
     if (hostId !== project.hostId) continue;
     let effectiveCwd = row.cwd ?? row.projectCwd;
