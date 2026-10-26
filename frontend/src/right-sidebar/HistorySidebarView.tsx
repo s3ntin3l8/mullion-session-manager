@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { GitHistorySection } from "../git/GitHistorySection.js";
+import type { HistoryScope } from "../api/types.js";
 import { useDashboardStore } from "../store/index.js";
 import { Dropdown } from "../ui/primitives.js";
 import { ViewHeader } from "../ui/sidebar/index.js";
@@ -12,11 +13,14 @@ export function HistorySidebarView({ projectId }: RightSidebarViewProps) {
   // The worktree path chosen for History; tied to the project it was chosen
   // for, because this view does not remount on a project switch and another
   // project's worktree path is invalid here.
-  const [selection, setSelection] = useState<{ projectId: number; cwd: string }>({
-    projectId,
-    cwd: ROOT,
-  });
-  const cwd = selection.projectId === projectId ? selection.cwd : ROOT;
+  const [selection, setSelection] = useState<{
+    projectId: number;
+    cwd: string;
+    scope: HistoryScope;
+  }>({ projectId, cwd: ROOT, scope: "head" });
+  const current = selection.projectId === projectId ? selection : null;
+  const cwd = current?.cwd ?? ROOT;
+  const scope = current?.scope ?? "head";
   const worktrees = useDashboardStore((s) => s.gitBranchesByProject[projectId]?.worktrees);
   const branch = useDashboardStore((s) =>
     s.gitBranchesByProject[projectId]?.branches.find((b) => b.isCurrent),
@@ -55,12 +59,17 @@ export function HistorySidebarView({ projectId }: RightSidebarViewProps) {
             small
             ariaLabel="Worktree filter"
             value={value}
-            onChange={(next) => setSelection({ projectId, cwd: next })}
+            onChange={(next) => setSelection({ projectId, cwd: next, scope })}
             options={options}
           />
         </div>
       )}
-      <GitHistorySection projectId={projectId} cwd={value || undefined} />
+      <GitHistorySection
+        projectId={projectId}
+        cwd={value || undefined}
+        scope={scope}
+        onScopeChange={(next) => setSelection({ projectId, cwd: value, scope: next })}
+      />
     </div>
   );
 }

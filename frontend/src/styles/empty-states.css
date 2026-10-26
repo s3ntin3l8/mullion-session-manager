@@ -2469,6 +2469,13 @@ button.github-panel-row.gh-issue-row {
   width: 100%;
   text-overflow: ellipsis;
 }
+.right-sidebar-body > .history-sidebar-view {
+  display: flex;
+  flex-direction: column;
+  /* The panel body insets its children by --rs-pad-x; the graph rows and
+     toolbar carry their own padding, so this view opts out of that inset. */
+  padding-inline: 0;
+}
 .history-worktree-filter {
   padding: 8px 10px 0;
 }

@@ -269,10 +269,10 @@ describe("GitHistorySection fixes", () => {
         : null,
     );
     render(<GitHistorySection projectId={1} />);
-    expect((await screen.findByText("feature/x")).className).toContain("gh-ref-branch");
+    expect((await screen.findByText("feature/x")).className).toContain("sb-chip--success");
     // Both remotes strip to `main`: one remote-only chip, not two.
     const main = screen.getByText("main");
-    expect(main.className).toContain("gh-ref-remote");
+    expect(main.className).toContain("sb-chip--neutral");
     expect(main.title).toBe("origin/main, upstream/main · in sync with the remote");
   });
 
@@ -741,8 +741,9 @@ describe("GitSidebarView", () => {
 
 describe("HistorySidebarView", () => {
   const actions = { onOpenGit: vi.fn() } as never;
-  const withWorktrees = () =>
+  const withWorktrees = (hostId = "local") =>
     useDashboardStore.setState({
+      projects: [{ id: 1, name: "p", cwd: "/repo", hostId }],
       gitBranchesByProject: {
         1: {
           branches: [
@@ -776,6 +777,34 @@ describe("HistorySidebarView", () => {
     await waitFor(() =>
       expect(logUrls(fn).some((u) => u.includes("scope=branch%3Afeat"))).toBe(true),
     );
+  });
+
+  it("keeps the branch scope per project: a switch falls back to the current branch", async () => {
+    withWorktrees();
+    stubFetch();
+    const { rerender } = render(<HistorySidebarView projectId={1} actions={actions} />);
+    await screen.findByText("merge feat");
+    await userEvent.selectOptions(screen.getByLabelText("History scope"), "branch:feat");
+    const fn = stubFetch();
+    rerender(<HistorySidebarView projectId={2} actions={actions} />);
+    await waitFor(() =>
+      expect(logUrls(fn).some((u) => u.includes("/projects/2/git-log"))).toBe(true),
+    );
+    const urls = logUrls(fn).filter((u) => u.includes("/projects/2/git-log"));
+    expect(urls.every((u) => u.includes("scope=head"))).toBe(true);
+    expect(screen.getByLabelText("History scope")).toHaveValue("head");
+  });
+
+  it("offers no per-branch scopes on a remote-host project", async () => {
+    withWorktrees("host-2");
+    stubFetch();
+    render(<HistorySidebarView projectId={1} actions={actions} />);
+    await screen.findByText("merge feat");
+    const scope = screen.getByLabelText("History scope");
+    expect(Array.from(scope.querySelectorAll("option")).map((o) => o.value)).toEqual([
+      "head",
+      "all",
+    ]);
   });
 
   it("filters by worktree and drops it when the project changes", async () => {

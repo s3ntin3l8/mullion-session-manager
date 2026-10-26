@@ -50,14 +50,30 @@ remote-host support uses.
 ## The sidebar's Git view
 
 The right sidebar's Git view (`right-sidebar/GitSidebarView.tsx`) composes
-four collapsible sections (open/closed state is kept per user in
+three collapsible sections (open/closed state is kept per user in
 `localStorage`): **Changes** (the source-control section with inline working-tree
 diffs), **Branches** (ahead/behind, last-commit age, merged tag — fetched with
 `?detail=1` — the PR's phase chip, and two-step branch deletion with `Force`
-override), **Worktrees** (the sessions running in each, a selector that scopes
-History to a worktree, `Prune stale`, and two-step worktree removal with `Force`
-override) and **History** (a lane graph computed by `git/graphLayout.ts`, ref
-chips, per-commit files and diffs, "Load more" paging). Mutations in either the
+override) and **Worktrees** (the sessions running in each, `Prune stale`, and
+two-step worktree removal with `Force` override).
+
+## The sidebar's History view
+
+History is its own rail view (`right-sidebar/HistorySidebarView.tsx`): a lane
+graph computed by `git/graphLayout.ts` and drawn per row (`HistoryGraph`,
+capped at 6 lanes plus a dimmed overflow lane, so a deep branch elsewhere in
+the log cannot starve the subject column), one line per commit — graph,
+subject, up to two ref chips plus `+N` (a single count chip at ≤300px), time —
+with the SHA, author and full refs in the expanded row, per-commit files and
+diffs, and "Load more" paging. `origin/x` and `x` on one commit collapse into
+one synced chip, and PR chips resolve from remote refs too
+(`git/historyRefs.ts`). The scope dropdown defaults to **Current branch**, with
+**All branches** and one entry per local branch (`scope=branch:<name>`, local
+hosts only); a worktree filter scopes the log to one worktree. Scope and
+worktree are tagged with the project they were chosen for. `make
+verify-history-view` checks the layout at 260/340px in a real browser.
+
+Mutations in either the
 sidebar or `GitPanel` bump the store's `gitRefreshTrigger` counter so the
 sidebar's detailed branch list and commit history re-fetch immediately. History
 and commit detail work on remote-host projects too, proxied through the host

@@ -1,20 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/index.js";
-import type { GitCommitDetail, GitHubPrPhase, GitLogCommit } from "../api/types.js";
+import type { GitCommitDetail, GitHubPrPhase, GitLogCommit, HistoryScope } from "../api/types.js";
 import { parseUnifiedDiff, type DiffLine } from "../diffUtils.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { useDashboardStore } from "../store/index.js";
 import { ErrorText } from "../ui/ErrorText.js";
 import { Dropdown } from "../ui/primitives.js";
+import { LOCAL_HOST_ID } from "../../../src/shared/constants.js";
 import { StatusChip } from "../ui/sidebar/index.js";
 import { PHASE_LABEL } from "../github/prPhase.js";
 import { statusTone } from "../lib/statusTone.js";
 import { computeGraphLayout } from "./graphLayout.js";
 import { HistoryGraph } from "./HistoryGraph.js";
 import { buildRefChips, type RefChip } from "./historyRefs.js";
-
-/** `head` = current branch, `all` = every ref, `branch:<name>` = one branch. */
-export type HistoryScope = string;
 
 const PAGE = 100;
 /** Ref chips shown inline at normal density; the rest fold into "+N". */
@@ -28,7 +26,7 @@ function RefChipView({ chip, pr }: { chip: RefChip; pr: PrInfo | undefined }) {
     .join(" · ");
   return (
     <>
-      <StatusChip tone={chip.tone} mono title={title} className={`gh-ref gh-ref-${chip.kind}`}>
+      <StatusChip tone={chip.tone} mono title={title}>
         {chip.label}
         {chip.synced && (
           <span className="gh-ref-synced" aria-label="synced with remote">
@@ -42,7 +40,6 @@ function RefChipView({ chip, pr }: { chip: RefChip; pr: PrInfo | undefined }) {
           tone={pr.phase ? statusTone({ phase: pr.phase }) : "neutral"}
           mono
           title={pr.phase ? PHASE_LABEL[pr.phase] : undefined}
-          className="gh-ref-pr"
         >
           #{pr.number}
         </StatusChip>
@@ -138,7 +135,11 @@ export function GitHistorySection({
   projectId: number;
   /** A worktree path to scope the history to; omitted = the project root. */
   cwd?: string;
-  /** Controlled scope (the History rail view's "View in History" hand-off). */
+  /**
+   * Controlled scope. The History rail view owns it (tagged with the project,
+   * since the view does not remount on a project switch); GitPanel leaves it
+   * uncontrolled.
+   */
   scope?: HistoryScope;
   onScopeChange?: (scope: HistoryScope) => void;
 }) {
@@ -155,6 +156,10 @@ export function GitHistorySection({
   const [expanded, setExpanded] = useState<string | null>(null);
   const prs = useDashboardStore((s) => s.prsByProject[projectId]);
   const branches = useDashboardStore((s) => s.gitBranchesByProject[projectId]?.branches);
+  // `scope=branch:*` is answered by the local host only (204 from a remote one).
+  const isLocalHost = useDashboardStore(
+    (s) => s.projects.find((p) => p.id === projectId)?.hostId === LOCAL_HOST_ID,
+  );
   const remoteBranches = useDashboardStore(
     (s) => s.gitBranchesByProject[projectId]?.remoteBranches,
   );
@@ -166,13 +171,15 @@ export function GitHistorySection({
       { value: "head", label: "Current branch" },
       { value: "all", label: "All branches" },
     ];
-    for (const b of branches ?? []) opts.push({ value: `branch:${b.name}`, label: b.name });
+    if (isLocalHost) {
+      for (const b of branches ?? []) opts.push({ value: `branch:${b.name}`, label: b.name });
+    }
     // A scope handed in for a branch the list does not (yet) know still shows.
     if (!opts.some((o) => o.value === scope)) {
       opts.push({ value: scope, label: scope.replace(/^branch:/, "") });
     }
     return opts;
-  }, [branches, scope]);
+  }, [branches, isLocalHost, scope]);
 
   const viewKey = `${projectId}|${scope}|${cwd ?? ""}`;
   const viewKeyRef = useRef(viewKey);

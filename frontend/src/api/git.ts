@@ -15,6 +15,7 @@ import type {
   RepairPlan,
   GitLogResponse,
   GitCommitDetail,
+  HistoryScope,
 } from "./types.js";
 import type { GitStatus, GitDiffStats } from "../../../src/shared/types.js";
 
@@ -23,7 +24,7 @@ export const gitApi = {
   // isn't a local git repo. `cwd` scopes to one of the project's worktrees.
   getProjectGitLog: (
     projectId: number,
-    opts: { skip?: number; limit?: number; scope?: string; cwd?: string } = {},
+    opts: { skip?: number; limit?: number; scope?: HistoryScope; cwd?: string } = {},
   ) => {
     const params = new URLSearchParams();
     if (opts.skip) params.set("skip", String(opts.skip));

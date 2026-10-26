@@ -1332,6 +1332,9 @@ export interface GitLogCommit {
   refs: string[];
 }
 
+/** `head` = current branch, `all` = every ref, `branch:<name>` = one local branch. */
+export type HistoryScope = "head" | "all" | `branch:${string}`;
+
 export interface GitLogResponse {
   commits: GitLogCommit[];
   hasMore: boolean;
