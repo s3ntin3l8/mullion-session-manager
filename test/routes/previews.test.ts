@@ -4,7 +4,8 @@ import path from "node:path";
 import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
-import { previews } from "../../src/db/schema.js";
+import { eq } from "drizzle-orm";
+import { previews, projects } from "../../src/db/schema.js";
 import { verifyPreviewToken } from "../../src/services/preview-auth.js";
 
 const tmpDb = path.join(os.tmpdir(), `previews-test-${process.pid}.db`);
@@ -279,6 +280,56 @@ describe("previews route (issue #28)", () => {
     const slugs = listed.json().map((r: { slug: string }) => r.slug);
     expect(slugs.indexOf("newer-preview")).toBeLessThan(slugs.indexOf("older-preview"));
 
+    await app.close();
+  });
+
+  it("carries the project checkout's branch, and null for external or remote (A6)", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "previews-branch-"));
+    fs.mkdirSync(path.join(cwd, ".git"));
+    fs.writeFileSync(path.join(cwd, ".git", "HEAD"), "ref: refs/heads/feat/links\n");
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { createDir: true, name: "branchy", cwd },
+    });
+    const projectId = created.json().id as number;
+
+    const preview = await app.inject({
+      method: "POST",
+      url: "/api/previews",
+      payload: { kind: "project", projectId },
+    });
+    expect(preview.json().branch).toBe("feat/links");
+    const slug = preview.json().slug as string;
+
+    const one = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+    expect(one.json().branch).toBe("feat/links");
+
+    const external = await app.inject({
+      method: "POST",
+      url: "/api/previews",
+      payload: { kind: "external", url: "https://example.com/x" },
+    });
+    expect(external.json().branch).toBeNull();
+
+    const list = await app.inject({ method: "GET", url: "/api/previews" });
+    const rows = list.json() as Array<{ slug: string; branch: string | null }>;
+    expect(rows.find((r) => r.slug === slug)?.branch).toBe("feat/links");
+    expect(rows.find((r) => r.slug === external.json().slug)?.branch).toBeNull();
+
+    // A detached HEAD is not a branch a consumer could link to.
+    fs.writeFileSync(path.join(cwd, ".git", "HEAD"), `${"a".repeat(40)}\n`);
+    const detached = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+    expect(detached.json().branch).toBeNull();
+
+    // A remote-hosted project's cwd is not readable here.
+    fs.writeFileSync(path.join(cwd, ".git", "HEAD"), "ref: refs/heads/feat/links\n");
+    app.db.update(projects).set({ hostId: "remote-1" }).where(eq(projects.id, projectId)).run();
+    const remote = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+    expect(remote.json().branch).toBeNull();
+
+    fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();
   });
 });

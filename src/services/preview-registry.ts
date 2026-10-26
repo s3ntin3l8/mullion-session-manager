@@ -18,6 +18,8 @@ export interface PreviewSummary {
   projectId: number | null;
   externalUrl: string | null;
   createdAt: Date;
+  /** Filled in by the route (the registry stays a pure table view). */
+  branch?: string | null;
 }
 
 type PreviewRow = typeof previews.$inferSelect;

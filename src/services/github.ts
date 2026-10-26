@@ -101,6 +101,9 @@ export interface PROrWithChecks {
    * compiler catches a drift between them.
    */
   relayReview?: RelayReviewState;
+  /** Task Master task that opened this PR, joined server-side (epic #1965, A6). */
+  taskId?: number;
+  taskStatus?: string;
   actionsRuns: GitHubActionsRun[];
   // Review state — filled by github-pr-reviews.ts's GraphQL enrichment in the
   // background poller. Best-effort: when that fails (or the PR is past the

@@ -66,6 +66,8 @@ import {
   isWithinAnyWorktree,
   listWorktrees,
   resolveDefaultBaseRefForPicker,
+  getBranchDetail,
+  isPlainBranchName,
   type GitBranchInfo,
   type GitWorktreeInfo,
 } from "../services/git-refs.js";
@@ -78,6 +80,8 @@ import {
   isValidSha,
 } from "../services/git-log.js";
 import type { DeleteBranchResult } from "../services/git-branch-delete.js";
+import { applyPrState, planPrune } from "../services/branch-merge-state.js";
+import { getClosedPrsByBranch } from "../services/github-merged-prs.js";
 import type { RemoveListedWorktreeResult } from "../services/git-worktree.js";
 import {
   getIntegration,
@@ -123,6 +127,7 @@ import {
   requestHermesReview,
 } from "../services/hermes-review.js";
 import { getRelayReviewState, overlayRelayRuns } from "../services/relay-review-state.js";
+import { annotatePrTasks, issueTriageFor } from "../services/mullion-links.js";
 import { replyReviewError, reviewReader } from "./review-relay.js";
 import { getIssueDetail, listIssues } from "../services/github-issues.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
@@ -2103,7 +2108,7 @@ export async function projectsRoute(app: FastifyInstance) {
       // a "review requested" marker on a PR a review was asked for. The poller
       // annotates the cache with the landed check; this only overlays the
       // in-memory run index, so the request never waits on GitHub.
-      const annotated = overlayRelayRuns(prs, repoRef);
+      const annotated = annotatePrTasks(app, projectId, overlayRelayRuns(prs, repoRef));
       return { prs: annotated, prSummary: computePRSummary(annotated) };
     },
   );
@@ -2163,6 +2168,7 @@ export async function projectsRoute(app: FastifyInstance) {
           issues: result.issues.map((i) => ({
             ...i,
             taskStatus: taskStatus.get(i.number) ?? null,
+            triage: issueTriageFor(repoRef.owner, repoRef.repo, i.number),
           })),
           taskMasterEnabled: resolveTaskMasterConfig(app).enabled,
           taskLabel: app.config.MULLION_TASK_LABEL,
@@ -2189,7 +2195,8 @@ export async function projectsRoute(app: FastifyInstance) {
       if (!Number.isInteger(number) || number < 1) return reply.badRequest("Invalid issue number");
       try {
         const issuesToken = (await resolveGitHubToken(app, repoRef, "issues")) ?? token;
-        return await getIssueDetail(issuesToken, repoRef.owner, repoRef.repo, number);
+        const detail = await getIssueDetail(issuesToken, repoRef.owner, repoRef.repo, number);
+        return { ...detail, triage: issueTriageFor(repoRef.owner, repoRef.repo, number) };
       } catch (err) {
         if (!(err instanceof GitHubApiError)) throw err;
         if (err.statusCode === 404) return reply.notFound("Issue not found");
@@ -3163,7 +3170,7 @@ export async function projectsRoute(app: FastifyInstance) {
             // an in-memory overlay — it never waits on GitHub.
             prsResult[project.id] = {
               ...status,
-              prs: overlayRelayRuns(status.prs, result.value),
+              prs: annotatePrTasks(app, project.id, overlayRelayRuns(status.prs, result.value)),
             };
           })();
 
@@ -3363,7 +3370,9 @@ export async function projectsRoute(app: FastifyInstance) {
   async function resolveProjectGitBranches(
     project: typeof projects.$inferSelect,
     detail: boolean,
+    opts?: { freshPrs?: boolean },
   ): Promise<ProjectGitBranchesResult | null> {
+    let result: ProjectGitBranchesResult | null;
     if (project.hostId === LOCAL_HOST_ID) {
       const [branches, worktrees, remoteBranches, defaultBranch] = await Promise.all([
         listBranches(project.cwd, { detail }),
@@ -3371,11 +3380,43 @@ export async function projectsRoute(app: FastifyInstance) {
         listRemoteBranches(project.cwd),
         resolveDefaultBaseRefForPicker(project.cwd),
       ]);
-      return branches && worktrees && remoteBranches
-        ? { branches, worktrees, remoteBranches, defaultBranch }
-        : null;
+      result =
+        branches && worktrees && remoteBranches
+          ? { branches, worktrees, remoteBranches, defaultBranch }
+          : null;
+    } else {
+      result = await getRemoteHostClient(app, project.hostId).resolveGitBranches(
+        project.cwd,
+        detail,
+      );
     }
-    return getRemoteHostClient(app, project.hostId).resolveGitBranches(project.cwd, detail);
+    if (result && detail) await attachBranchPrState(project, result.branches, opts?.freshPrs);
+    return result;
+  }
+
+  /**
+   * Layers PR-derived merge state (squash merges) onto a detail branch list:
+   * one cached closed-PR listing per repo plus the already-cached open PRs, no
+   * per-branch GitHub call. Best-effort — no repo, no token or a GitHub error
+   * just leaves the git-derived states, which is also why a prune never trusts
+   * a `pr-merged` it could not just re-fetch (`fresh`).
+   */
+  async function attachBranchPrState(
+    project: typeof projects.$inferSelect,
+    branches: GitBranchInfo[],
+    fresh = false,
+  ): Promise<void> {
+    try {
+      const ref = await resolveRepoRefResult(app, project);
+      if (!ref.ok || !ref.value) return;
+      const token = await resolveGitHubToken(app, ref.value, "read");
+      if (!token) return;
+      const { owner, repo } = ref.value;
+      const closed = await getClosedPrsByBranch(token, owner, repo, { fresh });
+      applyPrState(branches, closed, getPRsStatus(owner, repo)?.prs ?? null);
+    } catch (err) {
+      app.log.warn({ err, projectId: project.id }, "branch PR state unavailable");
+    }
   }
 
   // Local branches + worktrees for the GitPanel (issue #162's "worktree
@@ -3490,12 +3531,25 @@ export async function projectsRoute(app: FastifyInstance) {
       return reply.badRequest("skip and limit must be non-negative integers");
     }
     const scope = request.query.scope;
-    if (scope !== undefined && scope !== "all" && scope !== "head") {
-      return reply.badRequest("scope must be all or head");
+    const branchScope = scope?.startsWith("branch:") ? scope.slice("branch:".length) : undefined;
+    if (branchScope !== undefined) {
+      if (!isPlainBranchName(branchScope)) return reply.badRequest("Invalid branch name");
+    } else if (scope !== undefined && scope !== "all" && scope !== "head") {
+      return reply.badRequest("scope must be all, head or branch:<name>");
     }
     let commits: Awaited<ReturnType<typeof getCommitLog>>;
     if (project.hostId === LOCAL_HOST_ID) {
-      commits = await getCommitLog(cwd, { skip, limit, all: scope !== "head" });
+      commits = await getCommitLog(cwd, {
+        skip,
+        limit,
+        all: scope !== "head",
+        branch: branchScope,
+      });
+    } else if (branchScope !== undefined) {
+      // The host agent has no per-branch log route yet: same "nothing to
+      // show" 204 as any other unsupported remote widget.
+      reply.code(204);
+      return;
     } else {
       const remote = await remoteHistory(project, reply, () =>
         resolveHostGitLog(app, project.hostId, project.cwd, {
@@ -3852,6 +3906,144 @@ export async function projectsRoute(app: FastifyInstance) {
         app.log.warn({ hostId: project.hostId, err }, "host unreachable, git branch delete failed");
         return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
       }
+    },
+  );
+
+  // A3 — one branch's drilldown: upstream / base ahead-behind, the commits
+  // only it has, worktree, task claim and PR. Local projects only (a remote
+  // host's git is behind the agent; History on remote hosts is A4's seam).
+  app.get<{ Params: { id: string }; Querystring: { name?: string } }>(
+    "/api/projects/:id/git-branch",
+    { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const name = request.query.name;
+      if (!name || !isPlainBranchName(name)) return reply.badRequest("Invalid branch name");
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+      if (project.hostId !== LOCAL_HOST_ID) {
+        reply.code(204);
+        return;
+      }
+      const [detail, refs] = await Promise.all([
+        getBranchDetail(project.cwd, name),
+        resolveProjectGitBranches(project, true),
+      ]);
+      if (!detail || !refs) return reply.notFound("Branch not found");
+      const branch = refs.branches.find((b) => b.name === name);
+      const worktree = refs.worktrees.find((w) => w.branch === name);
+      const taskId = branchClaimedByResumableTask(app, project.id, name);
+      return {
+        ...detail,
+        isCurrent: branch?.isCurrent ?? false,
+        mergeState: branch?.mergeState ?? null,
+        pr: branch?.pr ?? null,
+        worktreePath: worktree?.path ?? null,
+        taskId,
+      };
+    },
+  );
+
+  // A3 — local-only prune of branches that are done (merged by ancestry,
+  // upstream deleted, or squash-merged PR). `confirm` deletes `names`, each
+  // re-validated against a fresh read first: a stale preview must never widen
+  // what gets deleted. The remote is never touched.
+  const gitBranchPruneBodySchema = {
+    body: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        dryRun: { type: "boolean" },
+        confirm: { type: "boolean" },
+        names: {
+          type: "array",
+          maxItems: 200,
+          uniqueItems: true,
+          items: { type: "string", minLength: 1, maxLength: 255 },
+        },
+      },
+    },
+  };
+  app.post<{
+    Params: { id: string };
+    Body: { dryRun?: boolean; confirm?: boolean; names?: string[] };
+  }>(
+    "/api/projects/:id/git-branch-prune",
+    {
+      schema: gitBranchPruneBodySchema,
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+
+      const { dryRun, names } = request.body ?? {};
+      // Deleting needs an explicit confirm; dryRun:true always wins.
+      const confirm = request.body?.confirm === true && dryRun !== true;
+      if (confirm && (!names || names.length === 0)) {
+        return reply.badRequest("confirm requires names");
+      }
+      // Local only, like the branch detail route: a remote host's branches
+      // are not ours to delete through this preview-and-confirm flow.
+      if (project.hostId !== LOCAL_HOST_ID) {
+        reply.code(204);
+        return;
+      }
+
+      let refs: ProjectGitBranchesResult | null;
+      try {
+        // Fresh PR read on confirm: the delete decision is re-validated here.
+        refs = await resolveProjectGitBranches(project, true, { freshPrs: confirm === true });
+      } catch (err) {
+        app.log.warn({ hostId: project.hostId, err }, "host unreachable, git branch prune failed");
+        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+      }
+      if (!refs) {
+        reply.code(204);
+        return;
+      }
+      const plan = planPrune(
+        refs.branches,
+        refs.worktrees,
+        refs.defaultBranch,
+        (name) => branchClaimedByResumableTask(app, project.id, name) !== null,
+      );
+      if (!confirm) return { dryRun: true, ...plan, deleted: [], failed: [] };
+
+      const byName = new Map(plan.candidates.map((c) => [c.name, c]));
+      const guarded = new Map(plan.skipped.map((s) => [s.name, s.why]));
+      const backend = resolveBackend(app, project.hostId);
+      const deleted: string[] = [];
+      const failed: { name: string; why: string }[] = [];
+      for (const name of names ?? []) {
+        const candidate = byName.get(name);
+        if (!candidate) {
+          failed.push({ name, why: guarded.get(name) ?? "not-prunable" });
+          continue;
+        }
+        try {
+          // `ancestor` is provably contained in the base, so plain -d. The
+          // other signals (squash-merged PR, upstream gone) can't satisfy -d
+          // and were re-validated above, hence -D.
+          const force = candidate.reason !== "ancestor";
+          if (force) {
+            app.log.warn(
+              { projectId: project.id, branchName: name, reason: candidate.reason },
+              "git-branch-prune: force-deleting a branch that is not an ancestor of the base",
+            );
+          }
+          const result = await backend.deleteBranch(project.cwd, name, { force });
+          if (result.deleted) deleted.push(name);
+          else failed.push({ name, why: result.reason ?? "delete-failed" });
+        } catch (err) {
+          app.log.warn({ hostId: project.hostId, err }, "git branch prune: delete failed");
+          failed.push({ name, why: "delete-failed" });
+        }
+      }
+      return { dryRun: false, ...plan, deleted, failed };
     },
   );
 

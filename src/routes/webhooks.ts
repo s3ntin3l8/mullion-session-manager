@@ -7,6 +7,7 @@ import { resolveRepoRef } from "../services/host-git.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { projects, tasks } from "../db/schema.js";
 import { invalidatePRsCache } from "../services/github.js";
+import { invalidateMergedPrs } from "../services/github-merged-prs.js";
 import { listBlockingIssues } from "../services/github-write.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { upsertIssueTask } from "../services/task-watcher.js";
@@ -561,6 +562,7 @@ export async function webhookRoutes(app: FastifyInstance) {
       // Invalidate the per-repo PRs cache so the next REST read goes live
       // (the poller will re-fill it on the next tick).
       invalidatePRsCache(owner, repo);
+      invalidateMergedPrs(owner, repo);
 
       return reply.code(200).send({ ok: true });
     },

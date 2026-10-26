@@ -835,6 +835,29 @@ describe("FileEditorPanel", () => {
         expect(revoke).toHaveBeenCalledWith("blob:preview-1");
       });
 
+      it("makes no object URL for a preview that resolves after the view is gone", async () => {
+        const create = vi.fn(() => "blob:late");
+        vi.stubGlobal(
+          "URL",
+          Object.assign(URL, { createObjectURL: create, revokeObjectURL: vi.fn() }),
+        );
+        let release!: () => void;
+        const gate = new Promise<void>((r) => (release = r));
+        const { fn } = withPng(() => new Response("PNGDATA", { status: 200 }));
+        vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+          if (String(input).includes("/files/download")) await gate;
+          return fn(input, init);
+        });
+        const user = userEvent.setup();
+        const { unmount } = render(<FileEditorPanel params={{ projectId: 1 }} />);
+        await user.click(await screen.findByText("pic.png"));
+        await screen.findByText(/Loading preview/);
+        unmount();
+        release();
+        await new Promise((r) => setTimeout(r, 30));
+        expect(create).not.toHaveBeenCalled();
+      });
+
       it("says 'too large to preview' for an image over the preview cap", async () => {
         const { fn } = withPng(
           () =>

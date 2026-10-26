@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { Readable } from "node:stream";
 import {
   buildCanonicalString,
   hashBody,
@@ -29,6 +30,7 @@ const {
   HostUnreachableError,
   HostRequestError,
   overrideDefaultRequestTimeoutForTests,
+  overrideTransferIdleTimeoutForTests,
 } = await import("../../src/services/remote-host-client.js");
 
 // The destructuring above shadows the class names with plain consts, so the
@@ -75,6 +77,251 @@ describe("RemoteHostClient", () => {
       sessionSecret,
     });
   }
+
+  describe("streamed file transfer", () => {
+    const drain = async (r: Readable) => {
+      const chunks: Buffer[] = [];
+      for await (const c of r) chunks.push(Buffer.from(c as Uint8Array));
+      return Buffer.concat(chunks);
+    };
+
+    // A response whose body never finishes, and errors once the request is aborted.
+    function stalledBodyResponse(signal: AbortSignal | undefined) {
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            signal?.addEventListener("abort", () => controller.error(new Error("aborted")), {
+              once: true,
+            });
+          },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+
+    describe("uploadProjectFile", () => {
+      it("streams the body to the agent under its own content type, with a signed-but-unhashed request", async () => {
+        fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
+          // read what was streamed
+          const sent = await new Response(init.body as ReadableStream).text();
+          expect(sent).toBe("hello world");
+          return jsonResponse(200, { path: "d/a.txt", size: 11 });
+        });
+        const res = await sessionClient().uploadProjectFile(
+          "/work/app",
+          "d/a.txt",
+          Readable.from(["hello ", "world"]),
+          { mkdirs: true },
+        );
+        expect(res).toEqual({ path: "d/a.txt", size: 11 });
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit & { duplex: string }];
+        expect(url).toBe(
+          "http://example.invalid:1234/internal/project-files/upload?cwd=%2Fwork%2Fapp&path=d%2Fa.txt&mkdirs=1",
+        );
+        expect(init.method).toBe("POST");
+        expect(init.duplex).toBe("half");
+        expect((init.headers as Record<string, string>)["content-type"]).toBe(
+          "application/vnd.mullion.file-stream",
+        );
+        // the body is exempt from hashing, but the request is still signed
+        const headers = init.headers as Record<string, string>;
+        expect(headers[SIGNATURE_HEADER]).toBeTruthy();
+        const canonical = buildCanonicalString({
+          method: "POST",
+          requestTarget: "/internal/project-files/upload?cwd=%2Fwork%2Fapp&path=d%2Fa.txt&mkdirs=1",
+          timestamp: headers[TIMESTAMP_HEADER]!,
+          nonce: headers[NONCE_HEADER]!,
+          bodyHashed: false,
+          bodyHash: "",
+        });
+        expect(verify(DEFAULT_TEST_SESSION_SECRET, canonical, headers[SIGNATURE_HEADER]!)).toBe(
+          true,
+        );
+      });
+
+      it("turns the agent's 4xx into a HostRequestError carrying its body, and drains the rest", async () => {
+        fetchMock.mockResolvedValue(jsonResponse(409, { message: "exists", code: "conflict" }));
+        const body = new Readable({ read() {} });
+        const ended = new Promise<void>((resolve) => body.on("end", resolve));
+        const err = (await client()
+          .uploadProjectFile("/w", "a", body)
+          .catch((e: unknown) => e)) as RequestError;
+        expect(err).toBeInstanceOf(HostRequestError);
+        expect(err.statusCode).toBe(409);
+        expect(JSON.parse(err.body)).toMatchObject({ code: "conflict" });
+        body.push("the rest of a big file");
+        body.push(null);
+        await ended; // discarded, so the caller can answer its own client
+      });
+
+      it("treats a 5xx as the host being unreachable", async () => {
+        fetchMock.mockResolvedValue(new Response("boom", { status: 502 }));
+        await expect(
+          client().uploadProjectFile("/w", "a", Readable.from(["x"])),
+        ).rejects.toBeInstanceOf(HostUnreachableError);
+      });
+
+      it("maps a connection failure to HostUnreachableError", async () => {
+        fetchMock.mockRejectedValue(new TypeError("fetch failed"));
+        await expect(
+          client().uploadProjectFile("/w", "a", Readable.from(["x"])),
+        ).rejects.toBeInstanceOf(HostUnreachableError);
+      });
+
+      it("does not hang on a response whose body stalls after the headers arrive", async () => {
+        const restore = overrideTransferIdleTimeoutForTests(60);
+        try {
+          fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
+            await new Response(init.body as ReadableStream).text();
+            return stalledBodyResponse(init.signal ?? undefined);
+          });
+          await expect(
+            client().uploadProjectFile("/w", "a", Readable.from(["x"])),
+          ).rejects.toBeInstanceOf(HostUnreachableError);
+        } finally {
+          restore();
+        }
+      });
+
+      it("aborts when the upload itself goes idle", async () => {
+        const restore = overrideTransferIdleTimeoutForTests(60);
+        try {
+          fetchMock.mockImplementation(
+            (_url: string, init: RequestInit) =>
+              new Promise((_resolve, reject) => {
+                init.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+                  once: true,
+                });
+              }),
+          );
+          const body = new Readable({ read() {} }); // never produces a byte
+          await expect(client().uploadProjectFile("/w", "a", body)).rejects.toBeInstanceOf(
+            HostUnreachableError,
+          );
+        } finally {
+          restore();
+        }
+      });
+
+      it("rejects a nonsense idle-timeout override", () => {
+        expect(() => overrideTransferIdleTimeoutForTests(0)).toThrow(RangeError);
+        expect(() => overrideTransferIdleTimeoutForTests(2 ** 31)).toThrow(RangeError);
+      });
+    });
+
+    describe("downloadProjectFile", () => {
+      it("posts the JSON request (hashed) and returns the stream with its size and name", async () => {
+        fetchMock.mockResolvedValue(
+          new Response("bytes!", { status: 200, headers: { "content-length": "6" } }),
+        );
+        const dl = await sessionClient().downloadProjectFile("/work/app", "dir/file.bin");
+        expect(dl).toMatchObject({ size: 6, path: "dir/file.bin", name: "file.bin" });
+        expect((await drain(dl.stream)).toString()).toBe("bytes!");
+        const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+        expect(url).toBe("http://example.invalid:1234/internal/project-files/download");
+        expect(JSON.parse(init.body as string)).toEqual({ cwd: "/work/app", path: "dir/file.bin" });
+        const headers = init.headers as Record<string, string>;
+        const canonical = buildCanonicalString({
+          method: "POST",
+          requestTarget: "/internal/project-files/download",
+          timestamp: headers[TIMESTAMP_HEADER]!,
+          nonce: headers[NONCE_HEADER]!,
+          bodyHashed: true,
+          bodyHash: hashBody(init.body as string),
+        });
+        expect(verify(DEFAULT_TEST_SESSION_SECRET, canonical, headers[SIGNATURE_HEADER]!)).toBe(
+          true,
+        );
+      });
+
+      it.each([
+        ["missing", undefined],
+        ["empty", ""],
+        ["not a number", "abc"],
+      ])("reports an unknown size (not 0) when Content-Length is %s", async (_label, value) => {
+        const headers: Record<string, string> = {};
+        if (value !== undefined) headers["content-length"] = value;
+        // a streaming body, so the runtime adds no length of its own
+        const body = new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(new TextEncoder().encode("abc"));
+            c.close();
+          },
+        });
+        fetchMock.mockResolvedValue(new Response(body, { status: 200, headers }));
+        const dl = await client().downloadProjectFile("/w", "f");
+        expect(dl.size).toBeNull();
+        expect((await drain(dl.stream)).toString()).toBe("abc");
+      });
+
+      it("turns the agent's refusal into a HostRequestError before any byte is returned", async () => {
+        fetchMock.mockResolvedValue(jsonResponse(404, { message: "nope", code: "not_found" }));
+        const err = (await client()
+          .downloadProjectFile("/w", "missing")
+          .catch((e: unknown) => e)) as RequestError;
+        expect(err).toBeInstanceOf(HostRequestError);
+        expect(JSON.parse(err.body)).toMatchObject({ code: "not_found" });
+      });
+
+      it("maps a 5xx and a connection failure to HostUnreachableError", async () => {
+        fetchMock.mockResolvedValueOnce(new Response("x", { status: 503 }));
+        await expect(client().downloadProjectFile("/w", "f")).rejects.toBeInstanceOf(
+          HostUnreachableError,
+        );
+        fetchMock.mockRejectedValueOnce(new TypeError("fetch failed"));
+        await expect(client().downloadProjectFile("/w", "f")).rejects.toBeInstanceOf(
+          HostUnreachableError,
+        );
+      });
+
+      it("retries once with refreshed credentials after a 401", async () => {
+        const c = new RemoteHostClient({
+          hostId: "h1",
+          baseUrl: "http://example.invalid:1234",
+          token: "old-token",
+          sessionSecret: "old-secret", // pragma: allowlist secret
+          refreshCredentials: () => ({ token: "new-token", sessionSecret: "new-secret" }), // pragma: allowlist secret
+        });
+        fetchMock
+          .mockResolvedValueOnce(new Response("no", { status: 401 }))
+          .mockResolvedValueOnce(
+            new Response("ok", { status: 200, headers: { "content-length": "2" } }),
+          );
+        const dl = await c.downloadProjectFile("/w", "f");
+        expect((await drain(dl.stream)).toString()).toBe("ok");
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        const second = fetchMock.mock.calls[1]![1] as RequestInit;
+        expect((second.headers as Record<string, string>).authorization).toBe("Bearer new-token");
+      });
+
+      it("ends the stream with an error when the body goes idle mid-download", async () => {
+        const restore = overrideTransferIdleTimeoutForTests(60);
+        try {
+          fetchMock.mockImplementation(async (_url: string, init: RequestInit) => {
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                start(controller) {
+                  controller.enqueue(new TextEncoder().encode("partial"));
+                  init.signal?.addEventListener(
+                    "abort",
+                    () => controller.error(new Error("idle")),
+                    {
+                      once: true,
+                    },
+                  );
+                },
+              }),
+              { status: 200, headers: { "content-length": "999" } },
+            );
+          });
+          const dl = await client().downloadProjectFile("/w", "f");
+          await expect(drain(dl.stream)).rejects.toThrow();
+        } finally {
+          restore();
+        }
+      });
+    });
+  });
 
   describe("overrideDefaultRequestTimeoutForTests (issue #1634)", () => {
     it("widens the default request budget, restores 5s, and nests cleanly", async () => {

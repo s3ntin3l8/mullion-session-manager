@@ -24,7 +24,7 @@ import path from "node:path";
  * `git worktree add`) or via the per-session `git status` poll, both of
  * which use the `git` CLI itself (which follows worktree redirects safely).
  */
-export function readGitBranch(cwd: string): string | null {
+export function readGitBranch(cwd: string, opts: { allowDetached?: boolean } = {}): string | null {
   // Same guard as parseGitRemote (git-remote.ts:57-70) — `cwd` here is
   // always meant to be an already-resolved absolute directory (a project's
   // own `cwd` column, or an agent-side value already passed through
@@ -49,7 +49,7 @@ export function readGitBranch(cwd: string): string | null {
   // Detached HEAD — `HEAD` holds the checked-out commit's full SHA directly
   // rather than a `ref: ...` line. Short-form (7 chars), matching what
   // `git status`/a terminal prompt would typically show.
-  if (/^[0-9a-f]{40}$/i.test(content)) return content.slice(0, 7);
+  if (opts.allowDetached !== false && /^[0-9a-f]{40}$/i.test(content)) return content.slice(0, 7);
 
   return null;
 }

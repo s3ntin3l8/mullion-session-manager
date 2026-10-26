@@ -35,6 +35,9 @@ export function NonTextFileView({
         maxBytes: MAX_IMAGE_PREVIEW_BYTES,
       })
       .then((blob) => {
+        // Resolved while the effect was being torn down: its cleanup has
+        // already run, so a URL made now would never be revoked.
+        if (controller.signal.aborted) return;
         objectUrl = URL.createObjectURL(blob);
         setPreview({ path, url: objectUrl });
       })

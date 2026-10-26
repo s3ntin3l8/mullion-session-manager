@@ -4,6 +4,8 @@ import path from "node:path";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import {
+  getBranchDetail,
+  isPlainBranchName,
   listBranches,
   listRemoteBranches,
   listWorktrees,
@@ -541,5 +543,114 @@ describe("listWorktrees", () => {
     expect(linked?.branch).toBeNull();
 
     fs.rmSync(linkedPath, { recursive: true, force: true });
+  });
+});
+
+describe("listBranches mergeState and getBranchDetail", () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-refs-mergestate-"));
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a");
+    commitAll(tmpDir, "initial");
+    git(tmpDir, ["remote", "add", "origin", "https://example.invalid/r.git"]);
+    git(tmpDir, ["update-ref", "refs/remotes/origin/main", "main"]);
+    git(tmpDir, ["symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main"]);
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("reports sha always and ancestor / upstream-gone only under detail; the default branch gets none", async () => {
+    git(tmpDir, ["branch", "anc"]);
+    git(tmpDir, ["checkout", "-b", "gone"]);
+    fs.writeFileSync(path.join(tmpDir, "g.txt"), "g");
+    commitAll(tmpDir, "gone work");
+    git(tmpDir, ["config", "branch.gone.remote", "origin"]);
+    git(tmpDir, ["config", "branch.gone.merge", "refs/heads/gone"]);
+    git(tmpDir, ["update-ref", "refs/remotes/origin/elsewhere", "gone"]);
+    // gone upstream but unpushed work: not a done signal
+    git(tmpDir, ["checkout", "-b", "gone-unpushed", "main"]);
+    fs.writeFileSync(path.join(tmpDir, "u.txt"), "u");
+    commitAll(tmpDir, "unpushed work");
+    git(tmpDir, ["config", "branch.gone-unpushed.remote", "origin"]);
+    git(tmpDir, ["config", "branch.gone-unpushed.merge", "refs/heads/gone-unpushed"]);
+    git(tmpDir, ["checkout", "main"]);
+
+    const plain = await listBranches(tmpDir);
+    expect(plain?.every((b) => b.sha?.length === 40 && b.mergeState === undefined)).toBe(true);
+
+    const detailed = await listBranches(tmpDir, { detail: true });
+    expect(detailed?.find((b) => b.name === "anc")?.mergeState).toBe("ancestor");
+    expect(detailed?.find((b) => b.name === "gone")?.mergeState).toBe("upstream-gone");
+    expect(detailed?.find((b) => b.name === "gone-unpushed")?.mergeState).toBeUndefined();
+    expect(detailed?.find((b) => b.name === "main")?.mergeState).toBeUndefined();
+  });
+
+  it("getBranchDetail reports base counts, unique commits and a tracked upstream", async () => {
+    git(tmpDir, ["checkout", "-b", "feat"]);
+    fs.writeFileSync(path.join(tmpDir, "f.txt"), "f");
+    commitAll(tmpDir, "feat work");
+    git(tmpDir, ["update-ref", "refs/remotes/origin/feat", "feat"]);
+    git(tmpDir, ["config", "branch.feat.remote", "origin"]);
+    git(tmpDir, ["config", "branch.feat.merge", "refs/heads/feat"]);
+    git(tmpDir, ["checkout", "main"]);
+    fs.writeFileSync(path.join(tmpDir, "m.txt"), "m");
+    commitAll(tmpDir, "main moves");
+    git(tmpDir, ["update-ref", "refs/remotes/origin/main", "main"]);
+
+    const detail = await getBranchDetail(tmpDir, "feat");
+    expect(detail).toMatchObject({
+      name: "feat",
+      upstream: "origin/feat",
+      upstreamAhead: 0,
+      upstreamBehind: 0,
+      base: "origin/main",
+      baseAhead: 1,
+      baseBehind: 1,
+      uniqueTruncated: false,
+    });
+    expect(detail?.uniqueCommits.map((c) => c.subject)).toEqual(["feat work"]);
+    expect(detail?.lastCommit?.author).toBe(detail?.uniqueCommits[0].author);
+  });
+
+  it("getBranchDetail caps unique commits at 50 and reports an ahead upstream", async () => {
+    git(tmpDir, ["checkout", "-b", "big"]);
+    git(tmpDir, ["update-ref", "refs/remotes/origin/big", "big"]);
+    git(tmpDir, ["config", "branch.big.remote", "origin"]);
+    git(tmpDir, ["config", "branch.big.merge", "refs/heads/big"]);
+    for (let i = 0; i < 51; i++)
+      git(tmpDir, ["commit", "--allow-empty", "-m", `c${i}`, "--no-verify"]);
+    const detail = await getBranchDetail(tmpDir, "big");
+    expect(detail?.uniqueCommits).toHaveLength(50);
+    expect(detail?.uniqueTruncated).toBe(true);
+    expect(detail?.upstreamAhead).toBe(51);
+  });
+
+  it("getBranchDetail is null for a missing branch, a flag-like name or a non-repo", async () => {
+    expect(await getBranchDetail(tmpDir, "nope")).toBeNull();
+    expect(await getBranchDetail(tmpDir, "--all")).toBeNull();
+    expect(await getBranchDetail(os.tmpdir(), "main")).toBeNull();
+  });
+
+  it("isPlainBranchName rejects flags, globs, revision syntax and control bytes", () => {
+    for (const bad of [
+      "",
+      "-x",
+      "a..b",
+      "a b",
+      "a*",
+      "a~1",
+      "a^",
+      "a:b",
+      "a\\b",
+      "a\u0001",
+      "x".repeat(256),
+    ]) {
+      expect(isPlainBranchName(bad)).toBe(false);
+    }
+    expect(isPlainBranchName("feature/foo-1")).toBe(true);
   });
 });

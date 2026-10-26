@@ -65,7 +65,7 @@ describe("useProjectUploads", () => {
       mkdirs: false,
     });
     expect(calls.find((c) => c[1] === "src/sub/b.txt")![3]).toMatchObject({ mkdirs: true });
-    expect(onUploaded).toHaveBeenCalledWith("src");
+    expect(onUploaded).toHaveBeenCalledWith("src", { projectId: 4, sessionId: 9 });
     expect(result.current.progress).toBeNull();
     expect(result.current.errors).toEqual([]);
   });

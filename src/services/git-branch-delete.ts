@@ -2,7 +2,7 @@ import { spawn as spawnChild } from "node:child_process";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
-import { listWorktrees } from "./git-refs.js";
+import { isPlainBranchName, listWorktrees } from "./git-refs.js";
 
 // Branch *deletion* (issue #442) — the mutating counterpart to git-refs.ts's
 // read-only listBranches(). git-refs.ts is read-only enumeration by design
@@ -123,16 +123,7 @@ export interface DeleteBranchResult {
  * The actual `git branch -d/-D` call is unaffected either way — it treats
  * its argument literally, never as a glob — so this closes an incorrect-
  * classification bug, not a destructive-deletion one. */
-function isValidBranchName(name: string): boolean {
-  if (name.length === 0) return false;
-  if (name.startsWith("-")) return false;
-  if (name.includes("..")) return false;
-  if (/\s/.test(name)) return false;
-  if (/[*?[]/.test(name)) return false;
-  // eslint-disable-next-line no-control-regex -- deliberately matching raw control bytes
-  if (/[\x00-\x1f\x7f]/.test(name)) return false;
-  return true;
-}
+const isValidBranchName = isPlainBranchName;
 
 /**
  * Deletes a local branch (`git branch -d`, or `-D` under `force`). Pre-checks

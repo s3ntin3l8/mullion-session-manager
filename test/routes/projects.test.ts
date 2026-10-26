@@ -18,6 +18,7 @@ import type { RelayReviewState } from "../../src/shared/types.js";
 import {
   assertReviewerConfigured,
   getReviewRunForPr,
+  getRunForTarget,
   requestHermesReview,
 } from "../../src/services/hermes-review.js";
 // The relay's landed-check memo (issue #1630) — cleared per test so one
@@ -66,6 +67,8 @@ vi.mock("../../src/services/hermes-review.js", async (importOriginal) => {
   return {
     ...actual,
     getReviewRunForPr: vi.fn(actual.getReviewRunForPr),
+    // Epic #1965 A6 — the issue list/detail ask the same index for a triage run.
+    getRunForTarget: vi.fn(actual.getRunForTarget),
     // #1790 — the re-review route's dispatch, so a test can hand back a result
     // without a real Hermes.
     assertReviewerConfigured: vi.fn(actual.assertReviewerConfigured),
@@ -2084,6 +2087,64 @@ describe("projects route", () => {
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 
+      it("carries the triage run Mullion dispatched for an issue (A6)", async () => {
+        const triageRun = {
+          runId: "run_triage_1",
+          kind: "issue" as const,
+          owner: "acme",
+          repo: "widgets",
+          prNumber: 1,
+          headSha: "",
+          dispatchedAt: Date.now(),
+        };
+        vi.mocked(getRunForTarget).mockImplementation((kind, _o, _r, n) =>
+          kind === "issue" && n === 1 ? triageRun : null,
+        );
+        fetchMock.mockImplementation((input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url === "https://api.github.com/user") {
+            return Promise.resolve(jsonResponse(200, { login: "octocat" }));
+          }
+          if (url.includes("/repos/acme/widgets/issues?")) {
+            return Promise.resolve(jsonResponse(200, [rawIssue(1), rawIssue(3)]));
+          }
+          if (url.endsWith("/issues/1/comments?per_page=100")) {
+            return Promise.resolve(jsonResponse(200, []));
+          }
+          if (url.endsWith("/issues/1")) return Promise.resolve(jsonResponse(200, rawIssue(1)));
+          return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
+        });
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        try {
+          const list = await app.inject({
+            method: "GET",
+            url: `/api/projects/${id}/github/issues`,
+          });
+          const byNumber = new Map(
+            (list.json().issues as Array<{ number: number; triage: unknown }>).map((i) => [
+              i.number,
+              i.triage,
+            ]),
+          );
+          expect(byNumber.get(1)).toEqual({
+            state: "requested",
+            runId: "run_triage_1",
+            dispatchedAt: new Date(triageRun.dispatchedAt).toISOString(),
+          });
+          expect(byNumber.get(3)).toBeNull();
+
+          const detail = await app.inject({
+            method: "GET",
+            url: `/api/projects/${id}/github/issues/1`,
+          });
+          expect(detail.json().triage).toMatchObject({ state: "requested", runId: "run_triage_1" });
+        } finally {
+          vi.mocked(getRunForTarget).mockReset();
+          fs.rmSync(projectCwd, { recursive: true, force: true });
+        }
+      });
+
       it("rejects a bad sort or page", async () => {
         fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
         const app = await makeApp();
@@ -2567,6 +2628,78 @@ describe("projects route", () => {
           expect(res.statusCode).toBe(200);
           const prs = res.json().prs[String(id)].prs as Array<{ relayReview?: unknown }>;
           expect(prs[0].relayReview).toMatchObject({ state: "requested" });
+        });
+
+        it("joins each PR to its Task Master task on prNumber, else branchName (A6)", async () => {
+          const { setRepoPRsStatus } = await import("../../src/services/github.js");
+          const { tasks } = await import("../../src/db/schema.js");
+          const listed = (number: number, headBranch: string) => ({
+            ...PR_REVIEW_DEFAULTS,
+            number,
+            title: `PR ${number}`,
+            htmlUrl: `https://github.com/acme/widgets/pull/${number}`,
+            author: "me",
+            headSha: `sha${number}`,
+            headBranch,
+            baseBranch: "main",
+            ciStatus: null,
+            ciFetched: false,
+            actionsRuns: [],
+          });
+          setRepoPRsStatus("acme", "widgets", {
+            prs: [listed(41, "feat-a"), listed(42, "mullion/task-9-b"), listed(43, "other")],
+            prSummary: { total: 3, pass: 0, fail: 0, pending: 0, unknown: 3 },
+          });
+          mockGithub(gqlPr(41));
+          const app = await makeApp();
+          const { id } = await connectedProject(app);
+          const [byNumber] = app.db
+            .insert(tasks)
+            .values({ projectId: id, title: "t1", status: "reviewing", prNumber: 41 })
+            .returning()
+            .all();
+          const [byBranch] = app.db
+            .insert(tasks)
+            .values({
+              projectId: id,
+              title: "t2",
+              status: "in_progress",
+              branchName: "mullion/task-9-b",
+            })
+            .returning()
+            .all();
+          // A promoted task (it has a prNumber) is not matched by branch: its
+          // branch name reused by another PR must not claim that PR.
+          app.db
+            .insert(tasks)
+            .values({
+              projectId: id,
+              title: "t3",
+              status: "done",
+              prNumber: 99,
+              branchName: "other",
+            })
+            .run();
+          type Row = { number: number; taskId?: number; taskStatus?: string };
+          const check = (rows: Row[]) => {
+            expect(rows.find((r) => r.number === 41)).toMatchObject({
+              taskId: byNumber.id,
+              taskStatus: "reviewing",
+            });
+            expect(rows.find((r) => r.number === 42)).toMatchObject({
+              taskId: byBranch.id,
+              taskStatus: "in_progress",
+            });
+            expect(rows.find((r) => r.number === 43)?.taskId).toBeUndefined();
+          };
+          const list = await app.inject({ method: "GET", url: `/api/projects/${id}/github/prs` });
+          check(list.json().prs);
+          // The rail reads the batched route — the two must agree.
+          const batch = await app.inject({
+            method: "GET",
+            url: `/api/projects/git-refs?ids=${id}`,
+          });
+          check(batch.json().prs[String(id)].prs);
         });
 
         describe("the list routes never wait on GitHub for the relay's state (#1744)", () => {
@@ -6073,6 +6206,294 @@ describe("projects route", () => {
       fs.rmSync(remoteCwd, { recursive: true, force: true });
       await primary.close();
       await agentApp.close();
+    });
+  });
+
+  describe("A3 — branch detail, squash-aware merge state and local prune", () => {
+    const sh = (cwd: string, ...args: string[]) =>
+      execFileSync("git", ["-C", cwd, ...args], {
+        encoding: "utf8",
+        env: {
+          ...gitEnv(),
+          GIT_AUTHOR_NAME: "T",
+          GIT_AUTHOR_EMAIL: "t@example.com",
+          GIT_COMMITTER_NAME: "T",
+          GIT_COMMITTER_EMAIL: "t@example.com",
+        },
+      }).trim();
+    const realResolve = vi.mocked(resolveGitHubToken).getMockImplementation()!;
+    const pr = (number: number, headRef: string, headSha: string, mergedAt: string | null) => ({
+      number,
+      htmlUrl: `https://github.com/o/r/pull/${number}`,
+      headRef,
+      headSha,
+      headRepo: "o/r",
+      baseRef: "main",
+      mergedAt,
+      updatedAt: "2026-01-01T00:00:00Z",
+    });
+    const commitFile = (dir: string, file: string, message: string) => {
+      fs.writeFileSync(path.join(dir, file), file);
+      sh(dir, "add", ".");
+      sh(dir, "commit", "-q", "-m", message);
+    };
+
+    async function setup() {
+      const app = await buildApp();
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "projects-prune-"));
+      sh(dir, "init", "-q", "-b", "main");
+      commitFile(dir, "a.txt", "initial");
+      sh(dir, "remote", "add", "origin", "https://github.com/o/r.git");
+      sh(dir, "update-ref", "refs/remotes/origin/main", "main");
+      sh(dir, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
+      sh(dir, "branch", "anc");
+      sh(dir, "branch", "claimed");
+      sh(dir, "branch", "inwt");
+      const wt = `${dir}-wt`;
+      sh(dir, "worktree", "add", wt, "inwt");
+      // upstream deleted on the remote: tracking config, no remote ref
+      sh(dir, "checkout", "-q", "-b", "gone");
+      commitFile(dir, "g.txt", "gone work");
+      sh(dir, "config", "branch.gone.remote", "origin");
+      sh(dir, "config", "branch.gone.merge", "refs/heads/gone");
+      // its commit still lives on some other remote ref, so nothing is lost
+      sh(dir, "update-ref", "refs/remotes/origin/elsewhere", "gone");
+      // upstream gone AND a commit no remote has: must never be a candidate
+      sh(dir, "checkout", "-q", "-b", "gone-unpushed", "main");
+      commitFile(dir, "u.txt", "unpushed work");
+      sh(dir, "config", "branch.gone-unpushed.remote", "origin");
+      sh(dir, "config", "branch.gone-unpushed.merge", "refs/heads/gone-unpushed");
+      // squash-merged on GitHub: unique commit, PR head sha == tip
+      sh(dir, "checkout", "-q", "-b", "squashed", "main");
+      commitFile(dir, "s.txt", "squashed work");
+      const squashedSha = sh(dir, "rev-parse", "HEAD");
+      // name reused after a merge: PR head sha differs from the tip
+      sh(dir, "checkout", "-q", "-b", "reused", "main");
+      commitFile(dir, "r.txt", "reused work");
+      // closed unmerged
+      sh(dir, "checkout", "-q", "-b", "abandoned", "main");
+      commitFile(dir, "x.txt", "abandoned work");
+      const abandonedSha = sh(dir, "rev-parse", "HEAD");
+      sh(dir, "checkout", "-q", "main");
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "prune", cwd: dir },
+      });
+      const id = created.json().id as number;
+      const { tasks } = await import("../../src/db/schema.js");
+      app.db
+        .insert(tasks)
+        .values({ projectId: id, title: "t", status: "in_progress", branchName: "claimed" })
+        .run();
+
+      vi.mocked(resolveGitHubToken).mockResolvedValue("tok");
+      const githubWrite = await import("../../src/services/github-write.js");
+      const { clearMergedPrsCacheForTests } =
+        await import("../../src/services/github-merged-prs.js");
+      clearMergedPrsCacheForTests();
+      const list = vi
+        .spyOn(githubWrite, "listClosedPullRequests")
+        .mockResolvedValue([
+          pr(11, "squashed", squashedSha, "2026-01-01T00:00:00Z"),
+          pr(12, "reused", "f".repeat(40), "2026-01-01T00:00:00Z"),
+          pr(13, "abandoned", abandonedSha, null),
+          { ...pr(14, "anc", "e".repeat(40), "2026-01-01T00:00:00Z"), headRepo: "fork/r" },
+        ]);
+      const cleanup = async () => {
+        list.mockRestore();
+        vi.mocked(resolveGitHubToken).mockImplementation(realResolve);
+        fs.rmSync(dir, { recursive: true, force: true });
+        fs.rmSync(wt, { recursive: true, force: true });
+        await app.close();
+      };
+      return { app, dir, id, wt, list, cleanup };
+    }
+
+    it("lists mergeState and pr per branch with one GitHub listing, not one per branch", async () => {
+      const { app, id, list, cleanup } = await setup();
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/projects/${id}/git-branches?detail=1`,
+      });
+      const byName = Object.fromEntries(
+        (res.json().branches as Array<Record<string, unknown>>).map((b) => [b.name as string, b]),
+      );
+      expect(byName.anc.mergeState).toBe("ancestor");
+      expect(byName.gone.mergeState).toBe("upstream-gone");
+      expect(byName.squashed).toMatchObject({
+        mergeState: "pr-merged",
+        pr: { number: 11, state: "merged" },
+      });
+      expect(byName.abandoned).toMatchObject({ mergeState: "pr-closed", pr: { state: "closed" } });
+      // a reused name (sha mismatch) and a fork's head never count
+      expect(byName.reused.mergeState).toBeUndefined();
+      expect(byName.reused.pr).toBeUndefined();
+      expect(byName.anc.pr).toBeUndefined();
+      expect(list).toHaveBeenCalledTimes(1);
+      await cleanup();
+    });
+
+    it("dry-run reports candidates and guarded skips, deleting nothing", async () => {
+      const { app, dir, id, cleanup } = await setup();
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${id}/git-branch-prune`,
+        payload: { dryRun: true },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      expect(body.dryRun).toBe(true);
+      expect(body.candidates).toEqual(
+        expect.arrayContaining([
+          { name: "anc", reason: "ancestor" },
+          { name: "gone", reason: "upstream-gone" },
+          { name: "squashed", reason: "pr-merged" },
+        ]),
+      );
+      const names = body.candidates.map((c: { name: string }) => c.name);
+      expect(names).not.toContain("abandoned");
+      expect(names).not.toContain("reused");
+      expect(names).not.toContain("gone-unpushed");
+      expect(body.skipped).toEqual(
+        expect.arrayContaining([
+          { name: "inwt", why: "worktree" },
+          { name: "claimed", why: "task-claimed" },
+        ]),
+      );
+      expect(sh(dir, "branch", "--list", "squashed")).toContain("squashed");
+      await cleanup();
+    });
+
+    it("confirm deletes candidates locally and refuses every guard", async () => {
+      const { app, dir, id, cleanup } = await setup();
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${id}/git-branch-prune`,
+        payload: {
+          confirm: true,
+          names: ["anc", "gone", "squashed", "inwt", "claimed", "main", "abandoned", "nope"],
+        },
+      });
+      const body = res.json();
+      expect([...body.deleted].sort()).toEqual(["anc", "gone", "squashed"]);
+      expect(body.failed).toEqual(
+        expect.arrayContaining([
+          { name: "inwt", why: "worktree" },
+          { name: "claimed", why: "task-claimed" },
+          { name: "abandoned", why: "not-prunable" },
+          { name: "nope", why: "not-prunable" },
+          { name: "main", why: "not-prunable" },
+        ]),
+      );
+      expect(sh(dir, "branch", "--list", "main")).toContain("main");
+      expect(sh(dir, "branch", "--list", "inwt")).toContain("inwt");
+      expect(sh(dir, "branch", "--list", "squashed")).toBe("");
+      await cleanup();
+    });
+
+    it("re-validates a pr-merged branch server-side: a GitHub failure leaves it alone", async () => {
+      const { app, dir, id, list, cleanup } = await setup();
+      list.mockRejectedValue(new Error("boom"));
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${id}/git-branch-prune`,
+        payload: { confirm: true, names: ["squashed", "anc"] },
+      });
+      expect(res.json().deleted).toEqual(["anc"]);
+      expect(res.json().failed).toEqual([{ name: "squashed", why: "not-prunable" }]);
+      expect(sh(dir, "branch", "--list", "squashed")).toContain("squashed");
+      await cleanup();
+    });
+
+    it("never deletes without an explicit confirm, even with dryRun:false or names", async () => {
+      const { app, dir, id, cleanup } = await setup();
+      for (const payload of [
+        { dryRun: false, names: ["anc"] },
+        { dryRun: true, confirm: true, names: ["anc"] },
+      ]) {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/git-branch-prune`,
+          payload,
+        });
+        expect(res.json()).toMatchObject({ dryRun: true, deleted: [] });
+      }
+      expect(sh(dir, "branch", "--list", "anc")).toContain("anc");
+      const dup = await app.inject({
+        method: "POST",
+        url: `/api/projects/${id}/git-branch-prune`,
+        payload: { confirm: true, names: ["anc", "anc"] },
+      });
+      expect(dup.statusCode).toBe(400);
+      await cleanup();
+    });
+
+    it("rejects confirm without names and 404s an unknown project", async () => {
+      const { app, id, cleanup } = await setup();
+      const bad = await app.inject({
+        method: "POST",
+        url: `/api/projects/${id}/git-branch-prune`,
+        payload: { confirm: true },
+      });
+      expect(bad.statusCode).toBe(400);
+      const missing = await app.inject({
+        method: "POST",
+        url: "/api/projects/999999/git-branch-prune",
+        payload: {},
+      });
+      expect(missing.statusCode).toBe(404);
+      await cleanup();
+    });
+
+    it("GET git-branch returns base counts, unique commits, worktree, task and pr", async () => {
+      const { app, id, wt, cleanup } = await setup();
+      const get = (name: string) =>
+        app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/git-branch?name=${encodeURIComponent(name)}`,
+        });
+      const squashed = (await get("squashed")).json();
+      expect(squashed).toMatchObject({
+        name: "squashed",
+        base: "origin/main",
+        baseAhead: 1,
+        baseBehind: 0,
+        mergeState: "pr-merged",
+        pr: { number: 11 },
+        worktreePath: null,
+        taskId: null,
+      });
+      expect(squashed.uniqueCommits).toHaveLength(1);
+      expect(squashed.uniqueCommits[0].subject).toBe("squashed work");
+      expect(squashed.lastCommit.subject).toBe("squashed work");
+      expect((await get("gone")).json()).toMatchObject({ upstreamGone: true });
+      expect((await get("inwt")).json().worktreePath).toBe(wt);
+      expect((await get("claimed")).json().taskId).toEqual(expect.any(Number));
+      expect((await get("main")).json().isCurrent).toBe(true);
+      expect((await get("missing")).statusCode).toBe(404);
+      expect((await get("-bad")).statusCode).toBe(400);
+      const none = await app.inject({ method: "GET", url: `/api/projects/${id}/git-branch` });
+      expect(none.statusCode).toBe(400);
+      await cleanup();
+    });
+
+    it("git-log scope=branch:<name> walks only that branch", async () => {
+      const { app, id, cleanup } = await setup();
+      const ok = await app.inject({
+        method: "GET",
+        url: `/api/projects/${id}/git-log?scope=${encodeURIComponent("branch:squashed")}`,
+      });
+      expect(ok.statusCode).toBe(200);
+      const subjects = ok.json().commits.map((c: { subject: string }) => c.subject);
+      expect(subjects).toEqual(["squashed work", "initial"]);
+      const bad = await app.inject({
+        method: "GET",
+        url: `/api/projects/${id}/git-log?scope=${encodeURIComponent("branch:--all")}`,
+      });
+      expect(bad.statusCode).toBe(400);
+      await cleanup();
     });
   });
 
