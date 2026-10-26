@@ -572,6 +572,35 @@ row — so the picker stays a combobox, and the header stays a button. The
 test pins this: the picker must not be inside the element carrying
 `role="button"`.
 
+### Faded graphical objects (the runtime-verification finding)
+
+A graphical object that is deliberately de-emphasised with `opacity` still
+has to clear 3:1 (WCAG 1.4.11) as the **composite** it paints, in every
+theme. The token guard compares a token against a token, so it cannot see
+the fade at all: the inactive workspace row's drag handle painted `--dim` —
+which clears 4.5:1 on every surface on its own — at `opacity: 0.4`, and the
+composite over `--sidebar` was 1.88:1 (dark) / 1.74:1 (light).
+
+`scripts/check-token-contrast.mjs` now reads the authored rules for such
+objects, composites their colour at their authored opacity over the surface
+they sit on, and holds the result to the stated minimum, in both themes. It
+holds the de-emphasis itself too: the object must stay quieter than full
+strength at rest, and must still lift to full strength when the user
+engages with it — so the fix cannot be undone by making the handle
+permanently dim, or permanently bright.
+
+The browser check (`make verify-ui`) measures the same thing in a real
+browser and reports the resting ratio next to the engaged one, but it is a
+**manual** gate, so the lint-time half is what protects the fix in CI.
+`test/scripts/check-token-contrast.test.ts` pins that half against fixture
+trees: the real stylesheets pass, a resting opacity back at 0.4 fails with
+both themes' ratios named, a hover lift that stops short of full strength
+fails, and a handle that stops being de-emphasised at rest fails.
+
+Like the rest of this guard, it reads the stylesheets only: a rule that
+reaches the same element through a compound selector is out of its reach.
+That is why the browser check still exists.
+
 ---
 
 ## Evidence
@@ -684,11 +713,17 @@ The token sweep sees elements painted in `--dim`, `--muted` or `--fg`. Both
 fixes deliberately moved their targets **off** `--dim`: the chips to `--fg`,
 the active row's handle to plain white. So once fixed, they leave the token
 sample set entirely. A full revert is still caught (the colour goes back to
-`--dim`), but a **partial** revert is not: dropping only the `opacity: 1`
-from the active row's drag handle leaves a white icon at 40 % over the
-emerald fill — 2.10:1 in the dark theme, 2.29:1 in the light one, both under
-the 3:1 WCAG 1.4.11 asks of a graphical object — and nothing in the token
-sweep would ever look at it.
+`--dim`). A **partial** revert of the handle's opacity used to be caught too:
+dropping only the `opacity: 1` left a white icon at the old resting 40 % over
+the emerald fill — 2.10:1 (dark) / 2.29:1 (light), under the 3:1 WCAG 1.4.11
+asks of a graphical object. That stopped being true when
+[#1908](https://github.com/s3ntin3l8/mullion-session-manager/issues/1908)
+raised the inactive handle's rest to `opacity: 0.75`. White at 75 % over the
+same fill clears 3:1 (**3.74:1** dark / **4.28:1** light), so this browser
+check now reports a pass for that drop. The lint guard
+(`scripts/check-token-contrast.mjs`) pins `opacity: 1` on
+`.workspace-item.active .ws-drag-handle`, which is what still catches it —
+and that guard runs in CI, which this browser check does not.
 
 So three targets are asserted **by name**, against a stated minimum, in every
 theme, and judged on the state they are **actually painted in** with no
@@ -700,21 +735,28 @@ allowance for a de-emphasis that lifts on hover:
 | `.kbd`                                   | text                        | 4.5:1   |
 | `.kbd-btn`                               | text                        | 4.5:1   |
 
-Both reverts are verified to fail the check: dropping `opacity: 1` reports
-the handle at 2.10:1 (dark) / 2.29:1 (light), and putting `--dim` back on the
-chips reports them at 3.92:1 — caught by the guards _and_ by the token sweep.
+Putting `--dim` back on the chips reports them at 3.92:1 — caught by the
+guards _and_ by the token sweep. Dropping the active handle's `opacity: 1`
+is no longer a failure of this 3:1 check; it fails the lint pin instead.
 
 ##### How a faded element is judged
 
 An element's `opacity` is part of what it paints, so it reaches the ratio: an
 element at `opacity: 0.4` is measured at 40 % strength, not as if it were
 opaque. But a deliberate de-emphasis — this app drops an inactive workspace
-row's drag handle to `opacity: 0.4` until the row is hovered — is a
+row's drag handle below full strength until the row is hovered — is a
 reversible presentation state, so it is judged in the state it is meant to be
 read in. The rule is therefore: **judge on the worst state at the element's
 highest observed opacity**. A de-emphasis that lifts on hover is judged
 engaged; a fade that never lifts is judged exactly as painted, because that
 is the state it lives in.
+
+That rule is why the check reported the inactive drag handle's resting ratio
+(1.88:1 / 1.74:1) without failing on it — and why the resting ratio is
+reported rather than hidden: a de-emphasis that is legible only once the
+user engages with it still has to be legible at rest. It was not, and
+[#1908](https://github.com/s3ntin3l8/mullion-session-manager/issues/1908)
+raised the resting opacity until it cleared 3:1 in both themes.
 
 Before this rule the opacity never reached the ratio at all, and a fade that
 never lifted was reported as a pass.
@@ -796,14 +838,29 @@ implying more:
   its own scope. A surface that only exists behind a specific user action — a
   long settings section, a populated task board — is not opened and measured.
 - The **inactive** workspace row's drag handle is deliberately de-emphasised
-  to `opacity: 0.4` until the row is hovered, so at rest it paints at
-  **1.88:1** (dark) / **1.74:1** (light) over `--sidebar` — under the 3:1
-  WCAG 1.4.11 asks of a graphical object. The check judges it in its engaged
-  state (4.60:1 / 4.63:1), which is the state it carries meaning in, and
-  reports the resting ratio rather than hiding it. Filed as
-  [#1908](https://github.com/s3ntin3l8/mullion-session-manager/issues/1908).
+  until the row is hovered, so it is still painted below full strength at
+  rest — now at `opacity: 0.75`, which composites to **3.52:1** (dark) /
+  **3.16:1** (light) over `--sidebar` and clears the 3:1 WCAG 1.4.11 asks
+  of a graphical object. The check judges it in its engaged state
+  (4.60:1 / 4.63:1), which is the state it carries meaning in, and reports
+  the resting ratio rather than hiding it. It rested at 1.88:1 / 1.74:1
+  until [#1908](https://github.com/s3ntin3l8/mullion-session-manager/issues/1908)
+  fixed it.
 - The 200 %-zoom check covers the two viewport regimes above, not every
   window size at every zoom level.
+
+### Findings from the runtime verification
+
+The browser check found one thing the static pass could not: the inactive
+workspace row's drag handle painted below the 3:1 WCAG 1.4.11 asks of a
+graphical object at rest. It is **not graded** — it is not one of the 48
+findings above and it is not counted in them — and it is listed here
+because it came out of the runtime verification rather than out of a
+reading of the source.
+
+| Finding                                                                                                                                         | Severity   | PR    | Status |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ----- | ------ |
+| The inactive workspace row's drag handle paints at 1.88:1 (dark) / 1.74:1 (light) at rest, under the 3:1 WCAG 1.4.11 asks of a graphical object | Not graded | #1941 | fixed  |
 
 ---
 
@@ -822,10 +879,6 @@ implying more:
 | 47  | Minor    | A blocked task is visible only through the board's own "Blocked only" toggle (`UnifiedBoard.tsx:172-186`)                                  | [#1891](https://github.com/s3ntin3l8/mullion-session-manager/issues/1891) |
 | 48  | Minor    | A host's derived status has exactly one consumer: Settings → Hosts (`hostStatus.ts`)                                                       | [#1892](https://github.com/s3ntin3l8/mullion-session-manager/issues/1892) |
 
-One more finding came out of the runtime verification: the inactive workspace row's drag
-handle paints at 1.88:1 (dark) / 1.74:1 (light) at rest, under the 3:1 WCAG 1.4.11 asks of a
-graphical object. It is not graded, and not counted in the 48 above.
-
-| Finding                                               | Severity   | Issue                                                                     |
-| ----------------------------------------------------- | ---------- | ------------------------------------------------------------------------- |
-| Inactive workspace row's drag handle contrast at rest | Not graded | [#1908](https://github.com/s3ntin3l8/mullion-session-manager/issues/1908) |
+The runtime verification produced one further finding, which is not graded
+and not counted in the 48 above. It is tracked under
+[Findings from the runtime verification](#findings-from-the-runtime-verification).

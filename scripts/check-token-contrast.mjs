@@ -35,9 +35,21 @@
 //      next to `color: #fff` and the fill-role rule is violated again.
 //      It reads the stylesheets only — a colour written inline in a TSX
 //      `style={{ ... }}` object is out of its reach.
+//
+//   3. FADED GRAPHICS — a graphical object that is deliberately de-emphasised
+//      with `opacity` still has to clear 3:1 (WCAG 1.4.11) as the COMPOSITE
+//      it paints, against the surface it sits on. Checks 1 and 2 compare a
+//      token against a token, so neither of them can see an opacity fade:
+//      `.ws-drag-handle` painted `--dim` — which clears 4.5:1 on every
+//      surface on its own — at `opacity: 0.4`, and the composite over
+//      `--sidebar` was 1.88:1 (dark) / 1.74:1 (light) (issue #1908).
+//      The browser harness in `scripts/verify-ui-runtime.mjs` measures this
+//      in a real browser, but it is a MANUAL gate, so the regression it
+//      catches would not fail CI on its own.
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseColor, renderSample } from "./lib/color-math.mjs";
 
 const ROOT = path.resolve(
   process.argv[2] ?? path.join(path.dirname(fileURLToPath(import.meta.url)), ".."),
@@ -249,16 +261,356 @@ for (const file of readdirSync(STYLES_DIR).filter((f) => f.endsWith(".css"))) {
   }
 }
 
+// Faded graphics: a graphical object that is deliberately de-emphasised with
+// `opacity` still has to clear 3:1 (WCAG 1.4.11) as the COMPOSITE it paints.
+//
+// The two checks above cannot see this class of defect: they compare a token
+// against a token, so an `opacity` fade — which is what turns a legible token
+// into an illegible pixel — is invisible to them. The workspace row's drag
+// handle was the shipped example (issue #1908): `--dim` at `opacity: 0.4`
+// composited over `--sidebar` to 1.88:1 (dark) / 1.74:1 (light), and the
+// handle was a graphical object.
+//
+// Each entry names the rule that paints the object at REST, the surface it is
+// painted on, the minimum the composite has to clear, and the rule that lifts
+// the de-emphasis when the user engages with it.
+//
+// SCOPE: this reads the AUTHORED rules, and matches the selector EXACTLY.
+// `.ws-drag-handle` is the resting rule; `.workspace-item:hover
+// .ws-drag-handle` and `.workspace-item.active .ws-drag-handle` are
+// different selectors and are deliberately not merged into it. A rule that
+// reaches the same element through a compound selector — or inside an
+// `@media` block — would not be seen here;
+// `scripts/verify-ui-runtime.mjs` measures the real thing in a browser, and
+// says as much in its own report.
+//
+// Paint is `color`, or — when the object is a filled mark rather than an
+// icon — `background-color` / a solid `background`. A dot painted only with
+// `background: var(--dim)` is the same kind of object; reporting "declares
+// no colour" for it would be the check refusing to see the pixel.
+const FADED_GRAPHICS = [
+  {
+    file: "sidebar.css",
+    selector: ".ws-drag-handle",
+    liftSelector: ".workspace-item:hover .ws-drag-handle",
+    surface: "sidebar",
+    minRatio: 3,
+    what: "the workspace row's drag handle at rest",
+  },
+  {
+    file: "sidebar.css",
+    selector: ".project-git-dot",
+    liftSelector: ".project-git-dot.clean",
+    surface: "sidebar",
+    minRatio: 3,
+    what: "the project row's quiet git dot at rest",
+  },
+];
+
+// Rules that must declare `opacity: 1` themselves. Inheriting a faded
+// ancestor is not a contrast failure once that ancestor clears 3:1: white
+// at the drag handle's resting 0.75 over `--accent-fill` is 3.74:1 (dark) /
+// 4.28:1 (light), so `scripts/verify-ui-runtime.mjs`'s 3:1 guard would not
+// catch dropping the declaration. This pin is what still catches it.
+const FULL_STRENGTH_PINS = [
+  {
+    file: "sidebar.css",
+    selector: ".workspace-item.active .ws-drag-handle",
+    what: "the active workspace row's drag handle",
+  },
+];
+
+/**
+ * The stylesheet's top-level rules, with its comments stripped.
+ *
+ * Rules inside an at-rule block (`@media`, `@supports`) are skipped: this
+ * guard judges the rule as authored, and a conditional override is a
+ * different question — the browser harness in
+ * `scripts/verify-ui-runtime.mjs` measures the real thing, viewport and all.
+ */
+function rulesIn(css) {
+  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const rules = [];
+  let cursor = 0;
+  while (cursor < stripped.length) {
+    const open = stripped.indexOf("{", cursor);
+    if (open === -1) break;
+    const header = stripped.slice(cursor, open).trim();
+    // The matching close brace, so a nested block is not read as a rule.
+    let depth = 1;
+    let end = open + 1;
+    while (end < stripped.length && depth > 0) {
+      const ch = stripped[end];
+      if (ch === "{") depth++;
+      else if (ch === "}") depth--;
+      end++;
+    }
+    if (!header.startsWith("@")) {
+      rules.push({
+        selectors: header.split(",").map((s) => s.replace(/\s+/g, " ").trim()),
+        body: stripped.slice(open + 1, end - 1),
+      });
+    }
+    cursor = end;
+  }
+  return rules;
+}
+
+/**
+ * The declarations that apply to one exact selector, merged in source order.
+ *
+ * Later declarations win, as they do in the cascade for rules of equal
+ * specificity — which is what makes this a faithful reading of the
+ * stylesheet rather than a search for one declaration.
+ */
+function declarationsFor(rules, selector) {
+  const declarations = new Map();
+  for (const rule of rules) {
+    if (!rule.selectors.includes(selector)) continue;
+    for (const declaration of rule.body.split(";")) {
+      const colon = declaration.indexOf(":");
+      if (colon === -1) continue;
+      const property = declaration.slice(0, colon).trim().toLowerCase();
+      const value = declaration.slice(colon + 1).trim();
+      if (property) declarations.set(property, value);
+    }
+  }
+  return declarations;
+}
+
+/** A declaration's colour, resolved to a hex for the theme at hand. */
+function resolvePainted(value, theme) {
+  const token = /^var\(\s*--([\w-]+)\s*\)$/.exec(value);
+  if (token) return theme[token[1]] ?? null;
+  if (/^#[0-9a-fA-F]{3,8}$/.test(value)) return value;
+  return null;
+}
+
+/** Drop a trailing `!important` so `0.75 !important` is still a number. */
+function bareValue(raw) {
+  return String(raw)
+    .replace(/!important\s*$/i, "")
+    .trim();
+}
+
+/**
+ * The opacity a rule paints, or 1 when it declares none.
+ *
+ * `opacity: 0.75 !important` is 0.75. A value this cannot read (a calc, a
+ * custom property) is reported rather than treated as opaque.
+ */
+function readOpacity(declarations) {
+  if (!declarations.has("opacity"))
+    return { present: false, opacity: 1, raw: null, readable: true };
+  const raw = declarations.get("opacity");
+  const opacity = Number(bareValue(raw));
+  return { present: true, opacity, raw, readable: Number.isFinite(opacity) };
+}
+
+/**
+ * Every solid paint the object declares.
+ *
+ * `color` is the icon. `background-color`, or a `background` that is a
+ * single colour, is a filled mark. An object that declares both is measured
+ * on both — first-match would let a failing fill hide behind a passing
+ * text colour. A `background` shorthand that is not one solid colour — a
+ * gradient, a `color-mix`, `var(--dim) no-repeat`, a `var()` with a
+ * fallback — is not a paint this check can composite. It is returned
+ * separately, not dropped: when it is the object's only paint, "nothing
+ * paints it" would be the wrong diagnosis for a rule that does paint.
+ */
+function paintedDeclarations(declarations) {
+  const paints = [];
+  const cannotComposite = [];
+  for (const property of ["color", "background-color", "background"]) {
+    if (!declarations.has(property)) continue;
+    const value = bareValue(declarations.get(property));
+    if (property === "background" && !/^(?:var\(\s*--[\w-]+\s*\)|#[0-9a-fA-F]{3,8})$/.test(value)) {
+      cannotComposite.push({ property, value });
+      continue;
+    }
+    paints.push({ property, value });
+  }
+  return { paints, cannotComposite };
+}
+
+for (const faded of FADED_GRAPHICS) {
+  const file = path.join(STYLES_DIR, faded.file);
+  let css;
+  try {
+    css = readFileSync(file, "utf8");
+  } catch {
+    failures.push(
+      `${faded.file}: cannot be read, so "${faded.selector}" (${faded.what}) cannot be checked`,
+    );
+    continue;
+  }
+  const rules = rulesIn(css);
+  const resting = declarationsFor(rules, faded.selector);
+  if (resting.size === 0) {
+    failures.push(
+      `${faded.file}: "${faded.selector}" (${faded.what}) is gone — nothing paints it any more`,
+    );
+    continue;
+  }
+
+  // The de-emphasis itself: the object must still be quieter than full
+  // strength at rest, and must still come to full strength when the user
+  // engages with it. A handle that is dim at rest AND dim when hovered is a
+  // permanent fade, which is the state the browser harness judges hardest.
+  //
+  // Raising the rest all the way to 1 is the MORE accessible state, and it
+  // is not a WCAG failure. The check still refuses it, because the quiet
+  // rest is a deliberate presentation state, not a contrast requirement.
+  const { opacity, raw: opacityRaw, readable } = readOpacity(resting);
+  if (!readable) {
+    failures.push(
+      `${faded.file}: "${faded.selector}" has an opacity this check cannot read ` +
+        `(${opacityRaw})`,
+    );
+    continue;
+  }
+  if (opacity >= 1) {
+    failures.push(
+      `${faded.file}: "${faded.selector}" (${faded.what}) must stay de-emphasised at rest ` +
+        `(an opacity below 1). Full strength is the more accessible state, and this is ` +
+        `not a WCAG failure — it is the deliberate de-emphasis the design wants kept. ` +
+        `It is at ${opacity}`,
+    );
+  }
+
+  const lift = declarationsFor(rules, faded.liftSelector);
+  const liftOpacity = readOpacity(lift);
+  // An absent opacity is NOT full strength. `readOpacity` reports 1 when the
+  // property is missing so a resting rule with no fade is judged opaque —
+  // the right reading for the rest. On the lift it is the opposite: a rule
+  // that kept some other declaration and dropped `opacity: 1` would inherit
+  // the resting fade, which is the permanent de-emphasis this check exists
+  // to refuse. The declaration has to be there.
+  if (!lift.size) {
+    failures.push(
+      `${faded.file}: "${faded.liftSelector}" is gone, so "${faded.selector}" ` +
+        `(${faded.what}) never lifts — the de-emphasis has to lift when the user engages with it`,
+    );
+  } else if (!liftOpacity.present || !liftOpacity.readable || liftOpacity.opacity !== 1) {
+    failures.push(
+      `${faded.file}: "${faded.liftSelector}" must lift "${faded.selector}" to full strength ` +
+        `(opacity: 1) — it is at ${liftOpacity.present ? lift.get("opacity") : "unset"}`,
+    );
+  }
+
+  const { paints, cannotComposite } = paintedDeclarations(resting);
+  if (paints.length === 0) {
+    if (cannotComposite.length > 0) {
+      // The shorthand is there. It is not a single solid colour, so this
+      // check cannot composite it — that is a different defect from a rule
+      // that declares no paint at all.
+      for (const skipped of cannotComposite) {
+        failures.push(
+          `${faded.file}: "${faded.selector}" (${faded.what}) declares ${skipped.property} ` +
+            `${skipped.value} — a shorthand this check cannot composite, because it is not ` +
+            `a single solid colour`,
+        );
+      }
+    } else {
+      failures.push(
+        `${faded.file}: "${faded.selector}" (${faded.what}) declares no colour and no solid ` +
+          `background — nothing paints it any more`,
+      );
+    }
+    continue;
+  }
+
+  // Every paint below is measured against `--surface` (the surface the
+  // entry names). That is right for a fill, and for an icon whose only
+  // paint is `color` — both sit on that surface.
+  //
+  // An entry that declares BOTH a `color` and a background paints its text
+  // ON the fill, not on the surface: the icon's backdrop is the fill, so a
+  // `color` measured here would be against the wrong pixel. Nothing has
+  // both today. When the next entry does, composite `color` over the fill
+  // colour instead of the surface, or the number is misleading.
+  for (const painted of paints) {
+    for (const [themeName, theme] of [
+      ["dark", dark],
+      ["light", light],
+    ]) {
+      const surface = theme[faded.surface];
+      const color = resolvePainted(painted.value, theme);
+      if (!color || !surface) {
+        failures.push(
+          `${faded.file}: "${faded.selector}" (${faded.what}) paints ${painted.value} ` +
+            `(${painted.property}) on --${faded.surface}, which cannot be resolved in the ` +
+            `${themeName} theme`,
+        );
+        continue;
+      }
+      const rendered = renderSample({
+        color,
+        layers: [parseColor(surface)],
+        opacity,
+      });
+      if (!rendered.resolved || rendered.ratio === null) {
+        failures.push(
+          `${faded.file}: "${faded.selector}" (${faded.what}) paints ${painted.value} at ` +
+            `opacity ${opacity} on --${faded.surface} (${surface}) in the ${themeName} theme, ` +
+            `which cannot be measured`,
+        );
+        continue;
+      }
+      if (rendered.ratio < faded.minRatio) {
+        failures.push(
+          `${faded.file}: "${faded.selector}" (${faded.what}) paints ${painted.property} ` +
+            `${painted.value} at opacity ${opacity} on --${faded.surface} (${surface}) — ` +
+            `${rendered.ratio.toFixed(2)}:1 in the ${themeName} theme, below the ` +
+            `${faded.minRatio}:1 WCAG 1.4.11 asks of a graphical object`,
+        );
+      }
+    }
+  }
+}
+
+for (const pin of FULL_STRENGTH_PINS) {
+  const file = path.join(STYLES_DIR, pin.file);
+  let css;
+  try {
+    css = readFileSync(file, "utf8");
+  } catch {
+    failures.push(
+      `${pin.file}: cannot be read, so "${pin.selector}" (${pin.what}) cannot be pinned`,
+    );
+    continue;
+  }
+  const declared = declarationsFor(rulesIn(css), pin.selector);
+  const { present, opacity, readable } = readOpacity(declared);
+  if (!declared.size) {
+    failures.push(
+      `${pin.file}: "${pin.selector}" (${pin.what}) is gone — nothing pins it at full strength`,
+    );
+  } else if (!readable || !present || opacity !== 1) {
+    failures.push(
+      `${pin.file}: "${pin.selector}" (${pin.what}) must declare opacity: 1 itself. ` +
+        `Inheriting the resting fade still clears 3:1 — white at 0.75 over --accent-fill ` +
+        `is 3.74:1 (dark) / 4.28:1 (light) — so the runtime check would not catch dropping it. ` +
+        `It is at ${present ? declared.get("opacity") : "unset"}`,
+    );
+  }
+}
+
 if (failures.length > 0) {
   console.error("Design token contrast failures:\n");
   for (const failure of failures) console.error(`  ${failure}`);
   console.error(
     "\nWCAG 2.x thresholds: 4.5:1 for text (1.4.3), 3:1 for UI components and\n" +
-      "focus indicators (1.4.11). Fix the token values in\n" +
-      "frontend/src/styles/tokens.css, or use a fill-role token for a\n" +
-      "white-on-fill background.",
+      "focus indicators (1.4.11). A faded graphical object that fails is an\n" +
+      "opacity or a paint colour in the stylesheet named above. A token that\n" +
+      "fails is a value in frontend/src/styles/tokens.css, and white text on a\n" +
+      "flat surface wants a fill-role token instead.",
   );
   process.exit(1);
 }
 
-console.log("OK — every design token clears its WCAG contrast threshold.");
+console.log(
+  "OK — every design token clears its WCAG contrast threshold, and every\n" +
+    "de-emphasised graphical object clears 3:1 as the composite it paints.",
+);
