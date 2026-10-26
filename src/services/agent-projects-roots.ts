@@ -90,6 +90,13 @@ export function readProjectsRootsOverride(protectedDirs: string[] = []): string[
     const sig = protectedDirs.join("\0");
     if (cache && cache.mtimeMs === mtimeMs && cache.sig === sig) return cache.roots;
     let roots: string[] | null = null;
+    // Only a verdict that cannot change without the file changing is cached:
+    // a usable list, or a file that is structurally not an override (bad JSON,
+    // wrong version). A list that fails VALIDATION is not cached — that can be
+    // transient (an unmounted share, EACCES) and the file's mtime would never
+    // move to trigger a re-check, leaving the host on its env roots until
+    // restart. It is simply re-validated on the next request.
+    let cacheable = true;
     try {
       const parsed: unknown = JSON.parse(readFileSync(fd, "utf8"));
       if (
@@ -101,11 +108,12 @@ export function readProjectsRootsOverride(protectedDirs: string[] = []): string[
           protectedDirs,
         });
         if (checked.ok) roots = checked.roots;
+        else cacheable = false;
       }
     } catch {
       roots = null;
     }
-    cache = { mtimeMs, sig, roots };
+    if (cacheable) cache = { mtimeMs, sig, roots };
     return roots;
   } catch {
     return null;

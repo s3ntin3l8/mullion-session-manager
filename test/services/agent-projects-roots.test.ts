@@ -220,6 +220,26 @@ describe("the saved override", () => {
     }
   });
 
+  it("does not cache a refusal: a root that is briefly unavailable applies again once it is back", () => {
+    // An unmounted share / a permission blip makes validation refuse, and the
+    // file's mtime never moves to trigger a re-check - so the verdict must not
+    // be remembered.
+    const a = mkdir("work", "a");
+    writeProjectsRootsOverride([a]);
+    expect(readProjectsRootsOverride()).toEqual([a]);
+    // Same file content and mtime, but the directory is gone ...
+    const file = resolveAgentProjectsRootsPath();
+    const stamp = new Date(Date.now() + 20_000);
+    utimesSync(file, stamp, stamp);
+    expect(readProjectsRootsOverride()).toEqual([a]);
+    rmSync(a, { recursive: true, force: true });
+    utimesSync(file, new Date(Date.now() + 30_000), new Date(Date.now() + 30_000));
+    expect(readProjectsRootsOverride()).toBeNull();
+    // ... and back again, with the file untouched.
+    mkdirSync(a, { recursive: true });
+    expect(readProjectsRootsOverride()).toEqual([a]);
+  });
+
   it("serves a repeated read from the mtime cache but notices an edit", () => {
     const a = mkdir("work", "a");
     const b = mkdir("work", "b");
