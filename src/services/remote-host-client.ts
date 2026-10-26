@@ -57,6 +57,7 @@ import type {
   ProjectDirListing,
   ProjectFileContent,
   ProjectFileWriteResult,
+  ProjectFileStat,
   ProjectSearchListing,
 } from "./project-files.js";
 import type { GenerationTurnResult } from "./scaffold-generate.js";
@@ -1266,6 +1267,14 @@ export class RemoteHostClient {
 
   async readProjectFile(cwd: string, relPath: string): Promise<ProjectFileContent> {
     return this.request<ProjectFileContent>("/internal/project-files/read", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ cwd, path: relPath }),
+    });
+  }
+
+  async statProjectFile(cwd: string, relPath: string): Promise<ProjectFileStat> {
+    return this.request<ProjectFileStat>("/internal/project-files/stat", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ cwd, path: relPath }),

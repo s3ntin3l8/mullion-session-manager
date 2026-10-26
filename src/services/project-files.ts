@@ -312,6 +312,43 @@ export function readProjectFile(root: string, relPath: string): ProjectFileConte
   }
 }
 
+export interface ProjectFileStat {
+  path: string;
+  size: number;
+  mtimeMs: number;
+}
+
+/** Size and mtime of a regular file, without reading it — what an open editor
+ * polls to notice a change on disk (an agent edited it) at the price of one
+ * fstat instead of re-reading up to 1 MiB. The same containment as a read:
+ * resolveInProject, then the fd is opened O_NOFOLLOW and re-checked. */
+export function statProjectFile(root: string, relPath: string): ProjectFileStat {
+  const { realRoot, real, rel } = resolveInProject(root, relPath, false);
+  // Re-checked on the very local the open uses (CodeQL's path-injection query
+  // does not carry resolveInProject's barrier out through a returned field).
+  const abs = path.resolve(real);
+  if (abs !== realRoot && !abs.startsWith(realRoot + path.sep)) {
+    throw new ProjectFileError("escape", `Path "${rel}" resolves outside the project`);
+  }
+  let fd: number;
+  try {
+    fd = openSync(abs, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+  } catch (err) {
+    return mapFsError(err, rel);
+  }
+  try {
+    assertFdInside(fd, realRoot, rel);
+    const st = fstatSync(fd);
+    if (st.isDirectory()) throw new ProjectFileError("is_directory", `"${rel}" is a directory`);
+    if (!st.isFile()) throw new ProjectFileError("not_regular", `"${rel}" is not a regular file`);
+    return { path: rel, size: st.size, mtimeMs: st.mtimeMs };
+  } catch (err) {
+    return mapFsError(err, rel);
+  } finally {
+    closeSync(fd);
+  }
+}
+
 /** Read-only read of a file OUTSIDE any project, e.g. an agent CLI's plan
  * under `~/.claude/plans`. `absPath` (absolute or `~/`-prefixed) must sit
  * inside one of `roots` (Settings `externalReadRoots`); the read itself is

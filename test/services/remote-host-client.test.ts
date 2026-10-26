@@ -78,6 +78,25 @@ describe("RemoteHostClient", () => {
     });
   }
 
+  describe("statProjectFile", () => {
+    it("posts the path and returns the agent's size and mtime", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { path: "a.ts", size: 5, mtimeMs: 123.5 }));
+      const res = await client().statProjectFile("/work/app", "a.ts");
+      expect(res).toEqual({ path: "a.ts", size: 5, mtimeMs: 123.5 });
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("http://example.invalid:1234/internal/project-files/stat");
+      expect(JSON.parse(init.body as string)).toEqual({ cwd: "/work/app", path: "a.ts" });
+    });
+    it("surfaces the agent's refusal with its body", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(404, { message: "nope", code: "not_found" }));
+      const err = (await client()
+        .statProjectFile("/w", "x")
+        .catch((e: unknown) => e)) as RequestError;
+      expect(err).toBeInstanceOf(HostRequestError);
+      expect(JSON.parse(err.body)).toMatchObject({ code: "not_found" });
+    });
+  });
+
   describe("streamed file transfer", () => {
     const drain = async (r: Readable) => {
       const chunks: Buffer[] = [];

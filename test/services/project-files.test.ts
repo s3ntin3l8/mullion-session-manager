@@ -19,6 +19,7 @@ import {
   fuzzyScore,
   openProjectFileReadStream,
   writeProjectFileFromStream,
+  statProjectFile,
 } from "../../src/services/project-files.js";
 
 function codeOf(fn: () => unknown): string | undefined {
@@ -735,5 +736,54 @@ describe("project-files raw transfer", () => {
       fs.symlinkSync(path.join(outside, "secret"), path.join(root, "leak"));
       expect(codeOf(() => openProjectFileReadStream(root, "leak", LIMIT))).toBe("escape");
     });
+  });
+});
+
+describe("statProjectFile", () => {
+  let root: string;
+  let outside: string;
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-pf-stat-root-"));
+    outside = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-pf-stat-out-"));
+  });
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+
+  it("reports size and mtime without reading, and notices a change", () => {
+    fs.mkdirSync(path.join(root, "src"));
+    fs.writeFileSync(path.join(root, "src", "a.ts"), "hello");
+    const first = statProjectFile(root, "src/a.ts");
+    expect(first).toMatchObject({ path: "src/a.ts", size: 5 });
+    expect(first.mtimeMs).toBe(fs.statSync(path.join(root, "src", "a.ts")).mtimeMs);
+    fs.writeFileSync(path.join(root, "src", "a.ts"), "hello world");
+    fs.utimesSync(path.join(root, "src", "a.ts"), new Date(), new Date(Date.now() + 5000));
+    const second = statProjectFile(root, "src/a.ts");
+    expect(second.size).toBe(11);
+    expect(second.mtimeMs).not.toBe(first.mtimeMs);
+  });
+
+  it("does not mind a file too big or too binary to edit", () => {
+    fs.writeFileSync(path.join(root, "blob.bin"), Buffer.from([0, 1, 2, 255]));
+    expect(statProjectFile(root, "blob.bin").size).toBe(4);
+  });
+
+  it("refuses directories, missing files, escapes and links out of the project", () => {
+    fs.mkdirSync(path.join(root, "d"));
+    fs.writeFileSync(path.join(outside, "secret"), "s");
+    fs.symlinkSync(path.join(outside, "secret"), path.join(root, "leak"));
+    expect(codeOf(() => statProjectFile(root, "d"))).toBe("is_directory");
+    expect(codeOf(() => statProjectFile(root, "nope"))).toBe("not_found");
+    expect(codeOf(() => statProjectFile(root, "../x"))).toBe("escape");
+    expect(codeOf(() => statProjectFile(root, "/etc/passwd"))).toBe("escape");
+    expect(codeOf(() => statProjectFile(root, "leak"))).toBe("escape");
+    expect(codeOf(() => statProjectFile(root, ""))).toBe("escape");
+  });
+
+  it("follows an in-project symlink, as a read does", () => {
+    fs.writeFileSync(path.join(root, "real.txt"), "abc");
+    fs.symlinkSync(path.join(root, "real.txt"), path.join(root, "alias.txt"));
+    expect(statProjectFile(root, "alias.txt")).toMatchObject({ size: 3 });
   });
 });

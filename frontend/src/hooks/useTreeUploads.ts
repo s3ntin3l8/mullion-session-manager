@@ -20,6 +20,8 @@ export function useTreeUploads(opts: {
   expandDir: (dir: string) => void;
   loadDir: (dir: string) => unknown;
   onTruncated: () => void;
+  /** Called once a batch for the tree's current root has finished. */
+  onBatchDone?: () => void;
 }) {
   const { projectId, sessionId, selectedDir } = opts;
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -43,6 +45,7 @@ export function useTreeUploads(opts: {
       // upload may have created subfolders).
       expandDir(targetDir);
       for (const dir of expanded) if (dir !== targetDir) void loadDir(dir);
+      latest.current.onBatchDone?.();
     },
     [],
   );

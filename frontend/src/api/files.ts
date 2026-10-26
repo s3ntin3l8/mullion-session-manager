@@ -11,6 +11,7 @@ import {
 import type {
   ProjectDirListing,
   ProjectFileContent,
+  ProjectFileStat,
   ProjectFileWriteResult,
   ProjectSearchListing,
 } from "./types.js";
@@ -31,6 +32,13 @@ export const filesApi = {
   readProjectFile: (projectId: number, filePath: string, sessionId?: number) =>
     request<ProjectFileContent>(
       `/api/projects/${projectId}/file?path=${encodeURIComponent(filePath)}${sessionQuery(sessionId)}`,
+    ),
+
+  // Size + mtime only (no content): what an open editor polls to notice that the
+  // file changed on disk — an agent edited it — without re-reading it.
+  statProjectFile: (projectId: number, filePath: string, sessionId?: number) =>
+    request<ProjectFileStat>(
+      `/api/projects/${projectId}/file/stat?path=${encodeURIComponent(filePath)}${sessionQuery(sessionId)}`,
     ),
 
   // Read-only: a file outside the project under one of Settings'

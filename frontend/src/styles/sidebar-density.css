@@ -564,3 +564,32 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Git status in the file trees (ui/GitBadge.tsx). */
+.file-git-badge {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 14px;
+  font-family: var(--mono, ui-monospace, monospace);
+}
+.git-s-modified {
+  color: var(--y);
+}
+.git-s-added,
+.git-s-untracked {
+  color: var(--g);
+}
+.git-s-deleted {
+  color: var(--r);
+}
+.git-s-conflict,
+.git-s-dir-conflict {
+  color: var(--r);
+  font-weight: 800;
+}
+.git-s-dir {
+  color: var(--dim);
+}

@@ -2398,6 +2398,12 @@ export interface ProjectDirEntry {
   targetKind?: "file" | "dir" | "outside";
 }
 
+export interface ProjectFileStat {
+  path: string;
+  size: number;
+  mtimeMs: number;
+}
+
 export interface ProjectDirListing {
   path: string;
   entries: ProjectDirEntry[];

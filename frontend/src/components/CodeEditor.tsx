@@ -17,6 +17,7 @@ import {
 } from "@codemirror/language";
 import { highlightSelectionMatches, searchKeymap } from "@codemirror/search";
 import { tags as t } from "@lezer/highlight";
+import { minimalChange } from "../lib/minimalChange.js";
 import { languageForFile } from "../lib/editorLanguage.js";
 
 // Colours come from the app's CSS variables so the editor follows the
@@ -155,14 +156,17 @@ export function CodeEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // External value changes (a reload from disk, a revert) replace the doc;
+  // External value changes (a reload from disk, a revert) update the doc;
   // a change that merely echoes what the user just typed is a no-op.
   useEffect(() => {
     const view = viewRef.current;
     if (!view) return;
     const current = view.state.doc.toString();
     if (current !== value) {
-      view.dispatch({ changes: { from: 0, to: current.length, insert: value } });
+      // Only what differs, not the whole document: the cursor, the selection
+      // and the scroll position survive a reload from disk unless the edit
+      // landed on top of them.
+      view.dispatch({ changes: minimalChange(current, value) });
     }
   }, [value]);
 

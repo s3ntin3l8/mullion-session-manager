@@ -22,6 +22,7 @@ import {
   listProjectDir,
   readProjectFile,
   readExternalFile,
+  statProjectFile,
   writeProjectFile,
   makeProjectDir,
   deleteProjectPath,
@@ -279,6 +280,29 @@ export async function projectFilesRoute(app: FastifyInstance) {
         ctx,
         (cwd) => readProjectFile(cwd, relPath),
         (client, cwd) => client.readProjectFile(cwd, relPath),
+      );
+    },
+  );
+
+  // Size + mtime only, for an open editor to notice a change on disk: polled
+  // every few seconds per open panel, so it gets the search route's higher
+  // ceiling rather than the editor's own.
+  app.get<{ Params: { id: string }; Querystring: { path?: string; sessionId?: string } }>(
+    "/api/projects/:id/file/stat",
+    {
+      config: { rateLimit: { max: 240, timeWindow: "1 minute" } },
+      schema: { params: idParams, querystring: pathQuery },
+    },
+    async (request, reply) => {
+      const ctx = await resolveCtx(request.params.id, request.query.sessionId, reply);
+      if (!ctx) return;
+      const relPath = request.query.path;
+      if (!relPath) return reply.badRequest("path is required");
+      return dispatch(
+        reply,
+        ctx,
+        (cwd) => statProjectFile(cwd, relPath),
+        (client, cwd) => client.statProjectFile(cwd, relPath),
       );
     },
   );

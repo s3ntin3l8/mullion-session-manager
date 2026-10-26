@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
+import { act, render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FileEditorPanel } from "./FileEditorPanel.js";
 import { api, ApiError, type ProjectDirEntry } from "./api/index.js";
@@ -1301,6 +1301,228 @@ describe("FileEditorPanel", () => {
       await waitFor(() => expect(gone).toHaveLength(2));
       expect(gone.map((g) => g.path)).toEqual(["big.bin", ".env"]);
       off();
+    });
+  });
+
+  describe("changes on disk while a file is open", () => {
+    // `.env` is opened with mtimeMs 100 by mockFetch. `disk` is what stat reports.
+    const setup = (disk: { mtimeMs: number; content?: string; status?: number; code?: string }) => {
+      const state = { ...disk };
+      const m = mockFetch({
+        extra: (method, url) => {
+          if (method === "GET" && url.includes("/file/stat?path=.env")) {
+            if (state.status === 404)
+              return jsonResponse(404, { message: "gone", code: "not_found" });
+            if (state.status === 503) return jsonResponse(503, { message: "blip" });
+            return jsonResponse(200, { path: ".env", size: 4, mtimeMs: state.mtimeMs });
+          }
+          if (method === "GET" && url.includes("/file?path=.env") && state.content !== undefined) {
+            return jsonResponse(200, {
+              path: ".env",
+              content: state.content,
+              size: state.content.length,
+              mtimeMs: state.mtimeMs,
+            });
+          }
+        },
+      });
+      vi.stubGlobal("fetch", m.fn);
+      return { ...m, state };
+    };
+    const reads = (calls: { method: string; url: string }[]) =>
+      calls.filter((c) => c.method === "GET" && c.url.includes("/file?path=.env")).length;
+    const stats = (calls: { method: string; url: string }[]) =>
+      calls.filter((c) => c.url.includes("/file/stat?path=.env")).length;
+    const openEnv = async () => {
+      fireEvent.click(await screen.findByText(".env"));
+      return screen.findByLabelText("editor:.env");
+    };
+    const tick = async (ms = 10_000) => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    };
+
+    beforeEach(() => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("leaves an unchanged file alone (a stat, never a re-read)", async () => {
+      const { calls } = setup({ mtimeMs: 100 });
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await openEnv();
+      await tick();
+      await tick();
+      expect(stats(calls)).toBeGreaterThanOrEqual(2);
+      expect(reads(calls)).toBe(1);
+    });
+
+    it("reloads silently when the file changed and there are no unsaved edits", async () => {
+      const { calls, state } = setup({ mtimeMs: 100 });
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      const editor = await openEnv();
+      expect(editor).toHaveValue("A=1\n");
+      state.mtimeMs = 200;
+      state.content = "A=2\n";
+      await tick();
+      await waitFor(() => expect(screen.getByLabelText("editor:.env")).toHaveValue("A=2\n"));
+      expect(reads(calls)).toBe(2);
+      expect(screen.queryByText(/changed on disk/)).toBeNull();
+      // and the new mtime is now the baseline: no further reload
+      await tick();
+      expect(reads(calls)).toBe(2);
+    });
+
+    it("offers Reload/Overwrite instead of replacing unsaved edits", async () => {
+      const { calls, state } = setup({ mtimeMs: 100 });
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      const editor = await openEnv();
+      fireEvent.change(editor, { target: { value: "A=mine\n" } });
+      state.mtimeMs = 300;
+      state.content = "A=theirs\n";
+      await tick();
+      expect(await screen.findByText(/changed on disk/)).toBeInTheDocument();
+      expect(screen.getByLabelText("editor:.env")).toHaveValue("A=mine\n"); // the draft survives
+      expect(reads(calls)).toBe(1);
+      fireEvent.click(screen.getByRole("button", { name: "Reload from disk" }));
+      await waitFor(() => expect(screen.getByLabelText("editor:.env")).toHaveValue("A=theirs\n"));
+    });
+
+    it("says so when the file was deleted on disk, and keeps what is on screen", async () => {
+      const { state } = setup({ mtimeMs: 100 });
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await openEnv();
+      state.status = 404;
+      await tick();
+      expect(await screen.findByText(/\.env was deleted on disk/)).toBeInTheDocument();
+      expect(screen.getByLabelText("editor:.env")).toHaveValue("A=1\n");
+    });
+
+    it("ignores a failed check and tries again on the next tick", async () => {
+      const { calls, state } = setup({ mtimeMs: 100 });
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await openEnv();
+      state.status = 503;
+      await tick();
+      expect(screen.queryByText(/deleted on disk/)).toBeNull();
+      delete state.status;
+      state.mtimeMs = 150;
+      state.content = "A=3\n";
+      await tick();
+      await waitFor(() => expect(screen.getByLabelText("editor:.env")).toHaveValue("A=3\n"));
+      expect(stats(calls)).toBeGreaterThanOrEqual(2);
+    });
+
+    it("checks when the window regains focus, but not while the tab is hidden", async () => {
+      const { calls, state } = setup({ mtimeMs: 100 });
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await openEnv();
+      const before = stats(calls);
+      state.mtimeMs = 400;
+      state.content = "A=focus\n";
+      Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+      window.dispatchEvent(new Event("focus"));
+      await tick(0);
+      await tick(); // the interval fires but the tab is hidden
+      expect(stats(calls)).toBe(before);
+      Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+      window.dispatchEvent(new Event("focus"));
+      await waitFor(() => expect(screen.getByLabelText("editor:.env")).toHaveValue("A=focus\n"));
+    });
+
+    it("does not mistake its own save for a change on disk", async () => {
+      const { calls, state } = setup({ mtimeMs: 100 });
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      const editor = await openEnv();
+      fireEvent.change(editor, { target: { value: "A=saved\n" } });
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
+      state.mtimeMs = 200; // what the server's save reported (mockFetch's default write result)
+      await tick();
+      await tick();
+      expect(reads(calls)).toBe(1);
+      expect(screen.queryByText(/changed on disk/)).toBeNull();
+    });
+
+    it("stops checking when the file is closed or the panel unmounts", async () => {
+      const { calls } = setup({ mtimeMs: 100 });
+      const { unmount } = render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await openEnv();
+      await tick();
+      unmount();
+      const after = stats(calls);
+      await tick();
+      await tick();
+      window.dispatchEvent(new Event("focus"));
+      expect(stats(calls)).toBe(after);
+    });
+  });
+
+  describe("git status in the tree", () => {
+    const status = (files: { path: string; status: "M" | "A" | "D" | "U" | "?" }[]) => ({
+      branch: "main",
+      hash: null,
+      ahead: 0,
+      behind: 0,
+      files,
+      isClean: false,
+      hasConflicts: false,
+    });
+    const rowText = (name: string) =>
+      Array.from(
+        document.querySelectorAll<HTMLElement>(".file-editor-tree .file-editor-rowwrap"),
+      ).find(
+        (r) => r.querySelector(".agent-rules-panel-row-name")?.textContent === name,
+      ) as HTMLElement;
+
+    it("badges changed files and folders from the project's status", async () => {
+      useDashboardStore.setState({
+        gitStatuses: {
+          1: status([
+            { path: ".env", status: "M" },
+            { path: "src/index.ts", status: "A" },
+          ]),
+        },
+      });
+      const { fn } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await screen.findByText(".env");
+      expect(within(rowText(".env")).getByRole("img", { name: "Modified" })).toBeInTheDocument();
+      expect(
+        within(rowText("src")).getByRole("img", { name: "Contains changes" }),
+      ).toBeInTheDocument();
+      expect(within(rowText("big.bin")).queryByRole("img")).toBeNull();
+    });
+
+    it("uses the session's status for a tree rooted at a session", async () => {
+      useDashboardStore.setState({
+        gitStatuses: { 1: status([{ path: ".env", status: "M" }]) },
+        sessionGitStatuses: { 5: status([{ path: ".env", status: "?" }]) },
+      });
+      const { fn } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      render(<FileEditorPanel params={{ projectId: 1, sessionId: 5 }} />);
+      await screen.findByText(".env");
+      expect(within(rowText(".env")).getByRole("img", { name: "Untracked" })).toBeInTheDocument();
+    });
+
+    it("asks for fresh statuses after a save", async () => {
+      const refresh = vi.fn().mockResolvedValue(undefined);
+      useDashboardStore.setState({ refreshGitStatuses: refresh });
+      const { fn, calls } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      const user = userEvent.setup();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await user.click(await screen.findByText(".env"));
+      await user.type(await screen.findByLabelText("editor:.env"), "x");
+      await user.click(screen.getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(calls.some((c) => c.method === "PUT")).toBe(true));
+      await waitFor(() => expect(refresh).toHaveBeenCalled());
     });
   });
 });

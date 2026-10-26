@@ -143,4 +143,24 @@ describe("languageForFile", () => {
     );
     expect(comment).toBeTruthy();
   });
+
+  it("keeps the cursor where it was when an external update changes a line above it", () => {
+    const { container, rerender } = render(
+      <CodeEditor value={"one\ntwo\nthree"} fileName="a.txt" />,
+    );
+    const view = viewOf(container);
+    view.dispatch({ selection: { anchor: view.state.doc.length } }); // end of "three"
+    rerender(<CodeEditor value={"ONE CHANGED\ntwo\nthree"} fileName="a.txt" />);
+    expect(view.state.doc.toString()).toBe("ONE CHANGED\ntwo\nthree");
+    // still at the end of the last line, not thrown back to the top
+    expect(view.state.selection.main.head).toBe(view.state.doc.length);
+  });
+
+  it("keeps the cursor on its line when text is added above it", () => {
+    const { container, rerender } = render(<CodeEditor value={"a\nb\nc"} fileName="a.txt" />);
+    const view = viewOf(container);
+    view.dispatch({ selection: { anchor: 2 } }); // start of "b"
+    rerender(<CodeEditor value={"new first line\na\nb\nc"} fileName="a.txt" />);
+    expect(view.state.doc.lineAt(view.state.selection.main.head).text).toBe("b");
+  });
 });
