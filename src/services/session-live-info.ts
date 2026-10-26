@@ -355,9 +355,10 @@ export async function withLiveStatus(
  * drift apart.
  *
  * `fresh` (a remote host only) bypasses the host client's 1.5 s cache. On any
- * failure `info` is null, `hostReachable` is false and `error` is what was
- * thrown; callers that only want a view ignore it, a caller that must tell
- * "the host is down" from "the host answered and refused" reads it.
+ * failure `info` is null, `hostReachable` is false, `failure` says which kind
+ * (`unreachable` or `refused`) and `error` is what was thrown; callers that
+ * only want a view ignore the last two, a caller that must tell "the host is
+ * down" from "the host answered and refused" reads `failure`.
  */
 export async function readSessionLiveInfo(
   app: FastifyInstance,
@@ -375,13 +376,24 @@ export async function readSessionLiveInfo(
   error?: unknown;
 }> {
   const id = String(row.id);
+  // The one place the result is built, so `hostReachable` and `failure` cannot
+  // disagree: a read reached the host exactly when it did not fail.
+  const outcome = (
+    info: SessionInfo | null,
+    failure?: "unreachable" | "refused",
+    error?: unknown,
+  ) => ({
+    info,
+    hostReachable: failure === undefined,
+    ...(failure === undefined ? {} : { failure, error }),
+  });
   try {
     const backend = resolveBackend(app, hostId);
     const map =
       opts.fresh === true
         ? await backend.liveStatus([id], idleThresholdMs, undefined, { fresh: true })
         : await backend.liveStatus([id], idleThresholdMs);
-    return { info: map[id] ?? null, hostReachable: true };
+    return outcome(map[id] ?? null);
   } catch (err) {
     // Issue #1727 — the host did not answer. That is not "the session is
     // gone": it is "we cannot tell what is going on there". The session is
@@ -397,7 +409,7 @@ export async function readSessionLiveInfo(
         ? "host answered the live-status request with an error, reporting default live status"
         : "host unreachable, reporting default live status",
     );
-    return { info: null, hostReachable: false, failure, error: err };
+    return outcome(null, failure, err);
   }
 }
 
