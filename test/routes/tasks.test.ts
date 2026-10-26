@@ -365,6 +365,42 @@ describe("tasks route", () => {
     await app.close();
   });
 
+  // Issue #1954 — `placementRequirement` is written at dispatch; without an
+  // entry in TASK_ROW_COLUMNS it would never reach either GET (the silent drop
+  // the test below records). Asserted through the GET paths, not a POST's
+  // `.returning()`, which bypasses TASK_ROW_COLUMNS entirely.
+  it("exposes placementRequirement on GET /api/tasks and GET /api/tasks/:id", async () => {
+    const app = await buildApp();
+
+    const project = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { createDir: true, name: "demo-placement-req", cwd: "/tmp/demo-placement-req" },
+    });
+    const projectId = project.json().id;
+
+    const requirement = JSON.stringify({ platform: "darwin" });
+    const [row] = app.db
+      .insert(tasks)
+      .values({
+        projectId,
+        title: "needs a Mac",
+        status: "failed",
+        placementRequirement: requirement,
+      })
+      .returning({ id: tasks.id })
+      .all();
+
+    const listRes = await app.inject({ method: "GET", url: "/api/tasks" });
+    const listed = (listRes.json() as { id: number }[]).find((t) => t.id === row.id);
+    expect(listed).toMatchObject({ placementRequirement: requirement });
+
+    const singleRes = await app.inject({ method: "GET", url: `/api/tasks/${row.id}` });
+    expect(singleRes.json()).toMatchObject({ placementRequirement: requirement });
+
+    await app.close();
+  });
+
   // Issue #1038 — the first route-level test for autoReturnCapAnnouncedAt.
   // TASK_ROW_COLUMNS has silently dropped a new column four times already
   // (#816, #818, #957, lastReviewVerdict — see this file's own doc comment

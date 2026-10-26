@@ -632,7 +632,7 @@ describe("claimTask", () => {
 
     const outcome = await dispatchClaimedTask(app, task.id);
 
-    expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+    expect(outcome).toMatchObject({ ok: false, reason: "placement-refused" });
     const row = getTask(app, task.id);
     expect(row.status).toBe("failed");
     expect(row.failureReason).toContain("host-without-the-project");
@@ -1144,7 +1144,7 @@ describe("claimTask", () => {
 
       const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
-      expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+      expect(outcome).toMatchObject({ ok: false, reason: "placement-refused" });
       expect(getTask(app, task.id).status).toBe("failed");
       expect(getTask(app, task.id).failureReason).toContain(`host ${linux} (platform darwin)`);
       expect(fakeBackend.createWorktree).not.toHaveBeenCalled();
@@ -1158,7 +1158,7 @@ describe("claimTask", () => {
 
       const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
-      expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+      expect(outcome).toMatchObject({ ok: false, reason: "placement-refused" });
       expect(getTask(app, task.id).failureReason).toContain("the `Host:` line in its issue body");
       expect(getTask(app, task.id).failureReason).toContain("requires host localhost");
 
@@ -1198,7 +1198,7 @@ describe("claimTask", () => {
 
       const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
-      expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+      expect(outcome).toMatchObject({ ok: false, reason: "placement-refused" });
       const row = getTask(app, task.id);
       expect(row.status).toBe("failed");
       expect(row.sessionId).toBeNull();

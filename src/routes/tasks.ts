@@ -216,6 +216,11 @@ const TASK_ROW_COLUMNS = {
   agent: tasks.agent,
   reviewAgent: tasks.reviewAgent,
   agentCommand: tasks.agentCommand,
+  // Issue #1954 — where the task REQUIRES its worker to run (`Platform:` /
+  // `Host:`), resolved at dispatch and stored as JSON. Without this entry it
+  // would be written but never reach GET /api/tasks or GET /api/tasks/:id —
+  // the TASK_ROW_COLUMNS silent-drop this constant's other comments record.
+  placementRequirement: tasks.placementRequirement,
   // Issue #957/#958 — the resolved opencode model(s) the worker actually ran
   // under, recorded at claim time (task-model-resolve.ts). Was previously
   // missing here, the exact TASK_ROW_COLUMNS silent-drop that bit #816/#818

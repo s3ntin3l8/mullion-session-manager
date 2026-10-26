@@ -604,9 +604,10 @@ Host: 3f2a9c1e-…
   `ready`. A task with neither directive is placed exactly as before.
 - The chosen host runs the whole task: the worktree is cut and the base ref
   resolved there, and the reviewer, the rebase worker and Retry join the
-  worker's host. The requirement and the placement reason ("placed on platform
-  darwin at the task's requirement — …") are recorded on the task and its
-  session, so a past placement can be explained.
+  worker's host. The requirement is recorded on the task
+  (`placementRequirement`, in `GET /api/tasks`) and the placement reason
+  ("placed on platform darwin at the task's requirement — …") on its session, so
+  a past placement can be explained.
 - The target host needs an agent build new enough to serve the task routes
   (see [Known limitations](#known-limitations)).
 

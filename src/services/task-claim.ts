@@ -75,7 +75,7 @@ export type DispatchTaskOutcome =
   | { ok: true; session: Awaited<ReturnType<typeof withLiveStatus>>; seedDelivered: boolean }
   | {
       ok: false;
-      reason: "not-queued" | "cap" | "worktree-failed" | "spawn-failed";
+      reason: "not-queued" | "cap" | "worktree-failed" | "spawn-failed" | "placement-refused";
       detail?: string;
       /** Only set for "cap" — the concurrency limit that was hit. */
       limit?: number;
@@ -365,7 +365,11 @@ export async function dispatchClaimedTask(
         "failed",
       );
     }
-    return { ok: false, reason: "worktree-failed", detail };
+    // Its own reason, not "worktree-failed": the task is already `failed`, so
+    // the dispatch sweep must not back it off as if a retry were pending — an
+    // author who fixes `hostCwds` and moves it back to `ready` would otherwise
+    // wait out a window that protects against nothing.
+    return { ok: false, reason: "placement-refused", detail };
   }
 
   let placement: PlacementDecision;

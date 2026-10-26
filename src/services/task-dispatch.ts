@@ -174,6 +174,16 @@ async function runOneSweep(app: FastifyInstance): Promise<void> {
       // not this task's fault, and no room left either way.
       return;
     }
+    if (outcome.reason === "placement-refused") {
+      // The claim was refused outright and the task is already `failed`, with
+      // the reason on it (task-claim.ts's refuseClaim): nothing is pending, so
+      // there is nothing to back off.
+      app.log.info(
+        { taskId, detail: outcome.detail },
+        "[task-dispatch] claim refused, task failed (no retry pending)",
+      );
+      continue;
+    }
     if (outcome.reason === "not-queued") {
       // Something else already moved this row (another dispatch attempt
       // won it, or it was deleted/edited concurrently) — not a failure of
