@@ -1267,17 +1267,25 @@ export class RemoteHostClient {
         dispatcher: this.pinnedDispatcher(),
       } as RequestInit & { duplex: "half" });
     } catch (err) {
+      // fetch failed before a response existed; drop the unread body so the
+      // caller's connection is not held open.
+      body.unpipe(metered);
+      metered.destroy();
+      body.resume();
       throw new HostUnreachableError(this.hostId, err);
     } finally {
       idle.clear();
-      // The agent may have answered (a 409, a 413) while the body was still
-      // arriving: discard the rest, so the primary can reply to its own client
-      // instead of resetting the connection under it.
+    }
+    try {
+      // Read the JSON refusal (409/413 carry `code`) BEFORE discarding the
+      // request body. Destroying a still-uploading body first makes undici
+      // tear down the connection the response is arriving on.
+      return await this.readJsonResponse<{ path: string; size: number }>(res);
+    } finally {
       body.unpipe(metered);
       metered.destroy();
       body.resume();
     }
-    return this.readJsonResponse<{ path: string; size: number }>(res);
   }
 
   /**

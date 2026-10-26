@@ -636,7 +636,7 @@ export function openProjectFileReadStream(
   root: string,
   relPath: string,
   maxBytes: number,
-): ProjectFileDownload {
+): Omit<ProjectFileDownload, "size"> & { size: number } {
   const { realRoot, real, rel } = resolveInProject(root, relPath, false);
   let fd: number;
   try {
