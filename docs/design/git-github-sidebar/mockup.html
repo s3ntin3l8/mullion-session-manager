@@ -1032,6 +1032,16 @@
       .sheet {
         padding: 10px;
       }
+      .group-h .count {
+        flex: 0 1 auto;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .sheet .triad {
+        flex-wrap: wrap !important;
+      }
       .sheet h4 {
         margin: 10px 0 4px;
         font-size: 11px;
@@ -1249,7 +1259,7 @@
 
       V.source = (
         w,
-      ) => `${ViewHeader("Source Control", `<span class="mono">main</span> · <span class="ahead">↑0</span> <span class="behind">↓3</span> · 2 changed`, ibtn("fetch", "Fetch") + ibtn("pull", "Pull (ff-only)") + `<span class="ibtn" title="Clone health: OK" aria-label="Clone health">${I("health")}<i class="dot"></i></span>`, "Open repository on GitHub")}
+      ) => `${ViewHeader("Source Control", `<span class="mono">main</span> · <span class="ahead">↑0</span> <span class="behind">↓3</span> · 2 changed`, ibtn("fetch", "Fetch") + ibtn("pull", "Pull (ff-only)") + ibtn("health", "Clone health: OK", "has-dot").replace("</span>", '<i class="dot"></i></span>'), "Open repository on GitHub")}
   <div class="scroll">
   <div class="callout warn" style="margin-bottom:4px"><b>Promote requested</b> by <span class="mono">fix bundle sync</span> — move the session into a worktree.<div class="cta"><button class="btn sm primary">Review…</button><button class="btn sm">Decline</button></div></div>
   ${Sec(
