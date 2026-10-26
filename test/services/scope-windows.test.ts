@@ -385,7 +385,9 @@ describe("WindowsScopeBackend.start — the token after a failed launch", () => 
     createPtyHostToken(SESSIONS_DIR, "23");
     spawnExitCode = 1;
     probeResults.set(endpoint("23"), "live");
-    await expect(failLaunch("23")).rejects.toThrow(/exited with code 1/);
+    await expect(failLaunch("23")).rejects.toThrow(
+      /exited with code 1.*the master this launch started may still be running/,
+    );
     const fresh = spawnCalls[0].env?.[TOKEN_ENV];
     expect(readPtyHostToken(SESSIONS_DIR, "23")).toBe(fresh);
   });

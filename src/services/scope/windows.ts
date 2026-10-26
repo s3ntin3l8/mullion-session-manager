@@ -276,8 +276,19 @@ export class WindowsScopeBackend implements ScopeBackend {
       // so the token handling above can tell "already in use" from the rest.
       describeFailure: async (code) => {
         outcome.exitCode = code;
-        return code === EXIT_ENDPOINT_IN_USE
-          ? `the pipe ${endpoint} is already in use — a master for this session may still be running`
+        if (code === EXIT_ENDPOINT_IN_USE) {
+          return `the pipe ${endpoint} is already in use — a master for this session may still be running`;
+        }
+        // Any other failure with the pipe answering is most likely `-n` giving
+        // up while the master it started was still coming up — say so.
+        let probe: Awaited<ReturnType<typeof probeSocket>> = "unknown";
+        try {
+          probe = await probeSocket(endpoint);
+        } catch {
+          // Nothing to add.
+        }
+        return probe === "live"
+          ? `the pipe ${endpoint} is now served — the master this launch started may still be running`
           : null;
       },
     });
