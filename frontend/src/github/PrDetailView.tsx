@@ -106,6 +106,7 @@ function staleLabel(entry: ReviewSummaryEntry, commits: GitHubPrDetail["commits"
  */
 function PinnedReview({
   entry,
+  bodyHtml,
   commits,
   unresolved,
   busy,
@@ -114,6 +115,8 @@ function PinnedReview({
   onStop,
 }: {
   entry: ReviewSummaryEntry;
+  /** GitHub-rendered HTML of the same review; `entry.body` when absent. */
+  bodyHtml?: string;
   commits: GitHubPrDetail["commits"];
   unresolved: number;
   busy: boolean;
@@ -147,9 +150,16 @@ function PinnedReview({
       <div className="pr-card-b">
         {entry.body && (
           <>
-            <div className={`pr-pin-body${expanded ? "" : " pr-pin-body--clamp"}`}>
-              {entry.body}
-            </div>
+            {bodyHtml ? (
+              <SafeHtml
+                className={`gh-html pr-pin-body pr-pin-body--html${expanded ? "" : " pr-pin-body--clamp"}`}
+                html={bodyHtml}
+              />
+            ) : (
+              <div className={`pr-pin-body${expanded ? "" : " pr-pin-body--clamp"}`}>
+                {entry.body}
+              </div>
+            )}
             {long && (
               <button
                 type="button"
@@ -412,13 +422,20 @@ export function PrDetailView({
         : [];
   // The timeline marks a pinned review "pinned above" instead of repeating it.
   const pinnedAt = new Set<number>();
+  // The pinned card shows the matching review's rendered HTML; `body` (plain,
+  // bounded) is the fallback for a review with no timeline match, e.g. a
+  // relay review the PR detail does not list yet.
+  const pinnedHtml = new Map<ReviewSummaryEntry, string>();
   for (const p of pinned) {
     let best = -1;
     pr.reviews.forEach((r, i) => {
       if (r.author !== p.author || r.state !== p.state) return;
       if (best < 0 || Date.parse(r.createdAt) >= Date.parse(pr.reviews[best].createdAt)) best = i;
     });
-    if (best >= 0) pinnedAt.add(best);
+    if (best >= 0) {
+      pinnedAt.add(best);
+      if (p.body && pr.reviews[best].bodyHtml) pinnedHtml.set(p, pr.reviews[best].bodyHtml);
+    }
   }
   const timeline = [
     ...pr.reviews.map((r, i) => ({
@@ -555,6 +572,7 @@ export function PrDetailView({
           <PinnedReview
             key={`${p.author}-${p.state}`}
             entry={p}
+            bodyHtml={pinnedHtml.get(p)}
             commits={pr.commits}
             unresolved={unresolved}
             busy={busy !== null}

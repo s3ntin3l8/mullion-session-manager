@@ -620,6 +620,40 @@ describe("PrDetailView", () => {
       expect(pin.textContent).not.toMatch(/head \+/);
     });
 
+    it("renders the pinned review's Markdown as prose when its timeline review has HTML", async () => {
+      stub({
+        ...PR,
+        reviews: [
+          {
+            author: "hermes[bot]",
+            state: "COMMENTED",
+            bodyHtml: "<h2>Review</h2><p><strong>Verdict:</strong> APPROVE</p>",
+            createdAt: "2026-01-02T00:00:00Z",
+          },
+        ],
+        reviewSummary: summaryOf({
+          latest: [latest({ body: "## Review\n**Verdict:** APPROVE" })],
+        }),
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const pin = await screen.findByRole("region", { name: /Latest review/ });
+      expect(pin.querySelector(".pr-pin-body h2")).toHaveTextContent("Review");
+      expect(pin.querySelector(".pr-pin-body strong")).toHaveTextContent("Verdict:");
+      expect(pin).not.toHaveTextContent("## Review");
+    });
+
+    it("falls back to the plain body when no timeline review matches the pinned one", async () => {
+      stub({
+        ...PR,
+        reviews: [],
+        reviewSummary: summaryOf({ latest: [latest({ body: "plain text body" })] }),
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const pin = await screen.findByRole("region", { name: /Latest review/ });
+      expect(pin.querySelector(".pr-pin-body")).toHaveTextContent("plain text body");
+      expect(pin.querySelector(".pr-pin-body h2")).toBeNull();
+    });
+
     it("clamps a long review body and expands it", async () => {
       const body = Array.from({ length: 12 }, (_, i) => `line ${i}`).join("\n");
       stub({ ...PR, reviewSummary: summaryOf({ latest: [latest({ body })] }) });

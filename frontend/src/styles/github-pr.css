@@ -199,6 +199,9 @@ a.pr-dr-row:hover {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.pr-pin-body--html {
+  white-space: normal;
+}
 .pr-pin-body--clamp {
   display: -webkit-box;
   -webkit-line-clamp: 6;
