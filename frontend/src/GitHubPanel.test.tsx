@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { GitHubPanel } from "./GitHubPanel.js";
 import type {
@@ -12,6 +12,7 @@ import type {
   ProjectReleaseStatus,
 } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
+import { makeProject, makeSession, makeTask } from "./test/fixtures.js";
 import { useDashboardStore } from "./store/index.js";
 
 // Every test below that doesn't care about the Release section (the vast
@@ -190,6 +191,14 @@ function mockFetchWithAccordion(opts: {
   });
 }
 
+// A triad chip is a button whose title is "<Dimension>: <long text>".
+const chip = (dimension: "CI" | "Review" | "Merge") =>
+  screen.getByTitle(new RegExp(`^${dimension}:`));
+
+// The chip's full label (its compact twin carries the short form).
+const chipLabel = (dimension: "CI" | "Review" | "Merge") =>
+  chip(dimension).querySelector(".sb-chip-full")?.textContent;
+
 describe("GitHubPanel", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -284,11 +293,11 @@ describe("GitHubPanel", () => {
     vi.stubGlobal("fetch", fetchMock);
     useDashboardStore.setState({ prsByProject: {} });
     render(<GitHubPanel params={{ projectId: 1 }} />);
-    const header = await screen.findByRole("button", { name: /Fix attention race/ });
-    await userEvent.click(header);
+    await screen.findByRole("button", { name: /Fix attention race/ });
+    await userEvent.click(chip("CI"));
     expect(await screen.findByText("build")).toBeInTheDocument();
-    await userEvent.click(header);
-    await userEvent.click(header);
+    await userEvent.click(chip("CI"));
+    await userEvent.click(chip("CI"));
     const jobCalls = fetchMock.mock.calls.filter(([u]) => String(u).endsWith("/jobs"));
     expect(jobCalls).toHaveLength(1);
   });
@@ -309,7 +318,7 @@ describe("GitHubPanel", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<GitHubPanel params={{ projectId: 1 }} />);
     const header = await screen.findByRole("button", { name: /Fix attention race/ });
-    const card = header.closest(".github-panel-pr-card")!;
+    const card = header.closest(".pr-row")!;
     fireEvent.mouseEnter(card);
     fireEvent.mouseLeave(card);
     await new Promise((r) => setTimeout(r, 250));
@@ -322,8 +331,12 @@ describe("GitHubPanel", () => {
 
     expect(await screen.findByText("acme/widgets")).toBeInTheDocument();
 
-    const prLink = screen.getByRole("link", { name: "#42" });
-    expect(prLink).toHaveAttribute("href", "https://github.com/acme/widgets/pull/42");
+    // The repo's own open-on-GitHub icon sits top-right of the header.
+    const repoLink = screen.getByRole("link", { name: "Open repository on GitHub" });
+    expect(repoLink).toHaveAttribute("href", "https://github.com/acme/widgets");
+    // A PR row drills in; its number is plain meta now, not a link out.
+    expect(screen.getByText("#42")).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "#42" })).toBeNull();
 
     // Issues load through the filterable list; a row opens the detail view.
     expect(await screen.findByRole("button", { name: /GitHub integration/ })).toBeInTheDocument();
@@ -340,12 +353,17 @@ describe("GitHubPanel", () => {
         prs: {
           ...PRS_LOADED,
           prs: [
-            { ...PRS_LOADED.prs[0], relayReview: { state: "requested" } },
+            { ...PRS_LOADED.prs[0], relayReview: { state: "requested", runId: "run_1" } },
             {
               ...PRS_LOADED.prs[0],
               number: 43,
               title: "Another PR",
-              relayReview: { state: "landed", verdict: "APPROVED", author: "hermes[bot]" },
+              relayReview: {
+                state: "landed",
+                runId: "run_2",
+                verdict: "APPROVED",
+                author: "hermes[bot]",
+              },
             },
           ],
         },
@@ -353,8 +371,8 @@ describe("GitHubPanel", () => {
     );
     render(<GitHubPanel params={{ projectId: 1 }} />);
 
-    expect(await screen.findByText("Review requested")).toBeInTheDocument();
-    expect(screen.getByText("Review posted")).toBeInTheDocument();
+    expect(await screen.findByText("review running")).toBeInTheDocument();
+    expect(screen.getByText("review posted")).toBeInTheDocument();
     expect(screen.getByTitle("Review posted: APPROVED by hermes[bot]")).toBeInTheDocument();
   });
 
@@ -366,7 +384,10 @@ describe("GitHubPanel", () => {
         prs: {
           ...PRS_LOADED,
           prs: [
-            { ...PRS_LOADED.prs[0], relayReview: { state: "requested", landedChecked: false } },
+            {
+              ...PRS_LOADED.prs[0],
+              relayReview: { state: "requested", runId: "run_1", landedChecked: false },
+            },
           ],
         },
       }),
@@ -376,6 +397,7 @@ describe("GitHubPanel", () => {
     expect(
       await screen.findByTitle(/it could not be confirmed on the pull request/),
     ).toBeInTheDocument();
+    expect(screen.getByText("review unconfirmed")).toBeInTheDocument();
   });
 
   it("does not paint a changes-requested review green", async () => {
@@ -390,6 +412,7 @@ describe("GitHubPanel", () => {
               ...PRS_LOADED.prs[0],
               relayReview: {
                 state: "landed",
+                runId: "run_1",
                 verdict: "CHANGES_REQUESTED",
                 author: "hermes[bot]",
               },
@@ -400,8 +423,8 @@ describe("GitHubPanel", () => {
     );
     render(<GitHubPanel params={{ projectId: 1 }} />);
 
-    const pill = await screen.findByText("Review posted");
-    expect(pill.className).toContain("changes-requested");
+    const pill = await screen.findByText("review posted");
+    expect(pill.className).toContain("sb-chip--danger");
   });
 
   it("marks a PR from the store's list too — that is the list a running app shows", async () => {
@@ -412,14 +435,14 @@ describe("GitHubPanel", () => {
       prsByProject: {
         1: {
           ...PRS_LOADED,
-          prs: [{ ...PRS_LOADED.prs[0], relayReview: { state: "requested" } }],
+          prs: [{ ...PRS_LOADED.prs[0], relayReview: { state: "requested", runId: "run_1" } }],
         },
       },
     });
     vi.stubGlobal("fetch", mockFetch({ status: STATUS, prs: PRS_LOADED }));
     render(<GitHubPanel params={{ projectId: 1 }} />);
 
-    expect(await screen.findByText("Review requested")).toBeInTheDocument();
+    expect(await screen.findByText("review running")).toBeInTheDocument();
   });
 
   it("shows a not-applicable message on a 204 response, without listing anything", async () => {
@@ -453,7 +476,7 @@ describe("GitHubPanel", () => {
     );
     render(<GitHubPanel params={{ projectId: 4 }} />);
 
-    expect(await screen.findByText("Pull requests (0)")).toBeInTheDocument();
+    expect(await screen.findByText("No open pull requests")).toBeInTheDocument();
     expect(await screen.findByText("No open issues")).toBeInTheDocument();
   });
 
@@ -509,7 +532,8 @@ describe("GitHubPanel", () => {
     );
     render(<GitHubPanel params={{ projectId: 6 }} />);
 
-    expect(await screen.findByText("Default branch CI")).toBeInTheDocument();
+    // Collapsed by default (the mockup's closed section); open it to see the runs.
+    await userEvent.click(await screen.findByRole("button", { name: /Default branch CI/ }));
     const ciLink = screen.getByRole("link", { name: /CI/ });
     expect(ciLink).toHaveAttribute("href", "https://github.com/acme/widgets/actions/runs/1");
     expect(screen.getByText("failure")).toBeInTheDocument();
@@ -527,8 +551,8 @@ describe("GitHubPanel", () => {
     vi.stubGlobal("fetch", mockFetch({ status: STATUS, prs: PRS_LOADED }));
     render(<GitHubPanel params={{ projectId: 7 }} />);
 
-    const header = await screen.findByText("Fix attention race");
-    await userEvent.click(header.closest("button")!);
+    await screen.findByText("Fix attention race");
+    await userEvent.click(chip("CI"));
 
     expect(await screen.findByText("No workflow runs for this PR")).toBeInTheDocument();
   });
@@ -554,8 +578,8 @@ describe("GitHubPanel", () => {
     );
     render(<GitHubPanel params={{ projectId: 8 }} />);
 
-    const prHeader = await screen.findByText("Fix attention race");
-    await userEvent.click(prHeader.closest("button")!);
+    await screen.findByText("Fix attention race");
+    await userEvent.click(chip("CI"));
 
     expect(await screen.findByText("CI")).toBeInTheDocument();
     expect(await screen.findByText("Loading jobs…")).toBeInTheDocument();
@@ -573,8 +597,8 @@ describe("GitHubPanel", () => {
     vi.stubGlobal("fetch", mockFetchWithAccordion({ jobs: "error" }));
     render(<GitHubPanel params={{ projectId: 9 }} />);
 
-    const prHeader = await screen.findByText("Fix attention race");
-    await userEvent.click(prHeader.closest("button")!);
+    await screen.findByText("Fix attention race");
+    await userEvent.click(chip("CI"));
 
     expect(await screen.findByText("Failed to load jobs")).toBeInTheDocument();
   });
@@ -589,8 +613,8 @@ describe("GitHubPanel", () => {
     );
     render(<GitHubPanel params={{ projectId: 10 }} />);
 
-    const prHeader = await screen.findByText("Fix attention race");
-    await userEvent.click(prHeader.closest("button")!);
+    await screen.findByText("Fix attention race");
+    await userEvent.click(chip("CI"));
     const jobHeader = await screen.findByText("build");
     await userEvent.click(jobHeader.closest("button")!);
 
@@ -619,14 +643,15 @@ describe("GitHubPanel", () => {
     );
     render(<GitHubPanel params={{ projectId: 11 }} />);
 
-    const prHeader = await screen.findByText("Fix attention race");
-    expect(screen.getByText("1 run")).toBeInTheDocument();
-    await userEvent.click(prHeader.closest("button")!);
+    await screen.findByText("Fix attention race");
+    // Run-level until the jobs are in.
+    expect(chipLabel("CI")).toBe("✓1");
+    await userEvent.click(chip("CI"));
 
     expect(await screen.findByText("e2e")).toBeInTheDocument();
     const names = screen.getAllByText(/^(lint|e2e|deploy)$/).map((n) => n.textContent);
     expect(names).toEqual(["e2e", "deploy", "lint"]);
-    expect(screen.getByText("✗1 ⋯1 ✓1 –2")).toBeInTheDocument();
+    expect(chipLabel("CI")).toBe("✗1 ⋯1 ✓1");
     expect(screen.queryByText("shard-plan")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByText("2 skipped").closest("button")!);
@@ -656,13 +681,251 @@ describe("GitHubPanel", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<GitHubPanel params={{ projectId: 12 }} />);
 
-    const header = (await screen.findByText("Fix attention race")).closest("button")!;
-    await userEvent.click(header);
-    await userEvent.click(header);
-    await userEvent.click(header);
+    await screen.findByText("Fix attention race");
+    await userEvent.click(chip("CI"));
+    await userEvent.click(chip("CI"));
+    await userEvent.click(chip("CI"));
 
-    expect(await screen.findByText("✓1")).toBeInTheDocument();
+    await vi.waitFor(() => expect(chipLabel("CI")).toBe("✓1"));
     expect(fetchMock.mock.calls.filter(([u]) => String(u).endsWith("/jobs"))).toHaveLength(1);
+  });
+
+  describe("status-first PR rows (epic #1965, B4)", () => {
+    const summary = (over: Record<string, unknown> = {}) => ({
+      decision: null,
+      approved: [],
+      changesRequested: [],
+      commented: [],
+      requested: [],
+      relay: null,
+      unresolvedThreads: null,
+      latest: [],
+      ...over,
+    });
+    const failingPr = {
+      ...PRS_LOADED.prs[0],
+      ciStatus: "failure" as const,
+      prPhase: "ci_failing" as const,
+      unresolvedThreads: 2,
+      commentCount: 9,
+      reviewSummary: summary({
+        commented: ["hermes[bot]"],
+        approved: ["alice"],
+        requested: ["carol"],
+        relay: { state: "landed", reviewer: "hermes[bot]", url: "https://github.com/x#r" },
+      }),
+      actionsRuns: [
+        {
+          name: "CI",
+          status: "completed",
+          conclusion: "failure",
+          htmlUrl: "https://github.com/acme/widgets/actions/runs/99",
+          headSha: "abc123",
+        },
+      ],
+    };
+    const setup = (pr: unknown = failingPr) =>
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({ status: STATUS, prs: { ...PRS_LOADED, prs: [pr as never] } }),
+      );
+
+    it("shows the CI / Review / Merge triad on the row without opening anything", async () => {
+      setup();
+      render(<GitHubPanel params={{ projectId: 1 }} />);
+      await screen.findByText("Fix attention race");
+      expect(chipLabel("CI")).toBe("✗1");
+      expect(chipLabel("Review")).toBe("Commented");
+      expect(chipLabel("Merge")).toBe("Blocked: CI failing");
+      expect(screen.getByText("fix-attention → main · a", { exact: false })).toBeInTheDocument();
+      // Nothing is drilled into until a chip is clicked.
+      expect(screen.queryByRole("region", { name: "Checks" })).toBeNull();
+    });
+
+    it("tells unresolved threads apart from the comment count", async () => {
+      setup();
+      render(<GitHubPanel params={{ projectId: 1 }} />);
+      await screen.findByText("Fix attention race");
+      const threads = screen.getByTitle("2 unresolved review threads");
+      expect(threads).toHaveTextContent("2");
+      expect(screen.queryByText("9")).toBeNull();
+    });
+
+    it("omits the thread icon when nothing is unresolved", async () => {
+      setup({ ...failingPr, unresolvedThreads: 0 });
+      render(<GitHubPanel params={{ projectId: 1 }} />);
+      await screen.findByText("Fix attention race");
+      expect(screen.queryByTitle(/unresolved review thread/)).toBeNull();
+    });
+
+    it("opens the Reviews drilldown: per-reviewer latest, requested, and the relay", async () => {
+      setup();
+      render(<GitHubPanel params={{ projectId: 1 }} />);
+      await screen.findByText("Fix attention race");
+      await userEvent.click(chip("Review"));
+      const drill = screen.getByRole("region", { name: "Reviews" });
+      expect(within(drill).getByText("alice")).toBeInTheDocument();
+      expect(within(drill).getByText("hermes[bot]")).toBeInTheDocument();
+      expect(within(drill).getByText("carol")).toBeInTheDocument();
+      expect(within(drill).getByText("requested")).toBeInTheDocument();
+      expect(within(drill).getByRole("link", { name: "open on GitHub" })).toHaveAttribute(
+        "href",
+        "https://github.com/x#r",
+      );
+      // One drilldown at a time; a second click on the chip closes it.
+      await userEvent.click(chip("Merge"));
+      expect(screen.queryByRole("region", { name: "Reviews" })).toBeNull();
+      await userEvent.click(chip("Merge"));
+      expect(screen.queryByRole("region", { name: "Merge" })).toBeNull();
+    });
+
+    it("opens the Merge drilldown with the reason and a way into the PR", async () => {
+      setup();
+      render(<GitHubPanel params={{ projectId: 1 }} />);
+      await screen.findByText("Fix attention race");
+      await userEvent.click(chip("Merge"));
+      const drill = screen.getByRole("region", { name: "Merge" });
+      expect(drill).toHaveTextContent("Blocked: ci failing");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(() => new Promise(() => undefined)),
+      );
+      await userEvent.click(within(drill).getByRole("button", { name: "Open pull request" }));
+      expect(useDashboardStore.getState().githubOpenPrByProject[1]).toBe(42);
+      useDashboardStore.setState({ githubOpenPrByProject: {} });
+    });
+
+    it("says there are no reviewers in the Reviews drilldown of a fresh PR", async () => {
+      setup({ ...PRS_LOADED.prs[0], prPhase: "review_pending" });
+      render(<GitHubPanel params={{ projectId: 1 }} />);
+      await screen.findByText("Fix attention race");
+      expect(chipLabel("Review")).toBe("No reviews");
+      await userEvent.click(chip("Review"));
+      expect(screen.getByText("No reviewers")).toBeInTheDocument();
+    });
+
+    it("lists non-Actions checks under Other checks in the Checks drilldown", async () => {
+      setup({
+        ...failingPr,
+        actionsRuns: [],
+      });
+      render(<GitHubPanel params={{ projectId: 1 }} />);
+      await screen.findByText("Fix attention race");
+      await userEvent.click(chip("CI"));
+      expect(screen.getByText("No workflow runs for this PR")).toBeInTheDocument();
+    });
+
+    it("shows linked sessions, the task and the review run under the PR", async () => {
+      setup({
+        ...failingPr,
+        taskId: 7,
+        taskStatus: "reviewing",
+        relayReview: { state: "requested", runId: "run_1", status: "running" },
+      });
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 1 })],
+        sessions: [
+          makeSession({ id: 31, projectId: 1, name: "attn worker", liveBranch: "fix-attention" }),
+        ],
+        tasks: [
+          makeTask({ id: 7, projectId: 1, branchName: "fix-attention", status: "reviewing" }),
+        ],
+      });
+      render(<GitHubPanel params={{ projectId: 1 }} />);
+      await screen.findByText("Fix attention race");
+      expect(screen.getByRole("button", { name: /attn worker/ })).toBeInTheDocument();
+      expect(screen.getByText("task #7 · reviewing")).toBeInTheDocument();
+      expect(screen.getByText("review running")).toBeInTheDocument();
+      expect(chipLabel("Review")).toBe("Commented · relay running");
+      useDashboardStore.setState({ projects: [], sessions: [], tasks: [] });
+    });
+
+    it("falls back to the task fields the list carries when the store has no task", async () => {
+      setup({ ...failingPr, taskId: 7, taskStatus: "in_progress" });
+      render(<GitHubPanel params={{ projectId: 1 }} />);
+      expect(await screen.findByText("task #7 · in_progress")).toBeInTheDocument();
+    });
+
+    it("opens the PR from the row, and the header link follows the selection", async () => {
+      setup();
+      render(<GitHubPanel params={{ projectId: 1 }} />);
+      expect(
+        (await screen.findByRole("link", { name: "Open repository on GitHub" })).getAttribute(
+          "href",
+        ),
+      ).toBe("https://github.com/acme/widgets");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) =>
+          Promise.resolve(
+            url.endsWith("/github/prs/42")
+              ? jsonResponse(200, {
+                  number: 42,
+                  title: "Fix attention race",
+                  htmlUrl: "https://github.com/acme/widgets/pull/42",
+                  state: "OPEN",
+                  isDraft: false,
+                  author: "a",
+                  bodyHtml: "",
+                  baseBranch: "main",
+                  headBranch: "fix-attention",
+                  headSha: "abc",
+                  createdAt: "2026-01-01T00:00:00Z",
+                  updatedAt: "2026-01-02T00:00:00Z",
+                  additions: 0,
+                  deletions: 0,
+                  changedFiles: 0,
+                  commitCount: 0,
+                  commits: [],
+                  files: [],
+                  mergeable: "MERGEABLE",
+                  mergeStateStatus: "CLEAN",
+                  reviewDecision: null,
+                  requestedReviewers: [],
+                  reviewers: [],
+                  reviews: [],
+                  threads: [],
+                  comments: [],
+                  ciStatus: "success",
+                  ciKnown: true,
+                  actionsRuns: [],
+                  prPhase: "review_pending",
+                })
+              : jsonResponse(200, null),
+          ),
+        ),
+      );
+      await userEvent.click(screen.getByRole("button", { name: /Fix attention race/ }));
+      const prLink = await screen.findByRole("link", { name: "Open PR #42 on GitHub" });
+      expect(prLink).toHaveAttribute("href", "https://github.com/acme/widgets/pull/42");
+      // The repo icon is replaced, not joined by a second one.
+      expect(screen.queryByRole("link", { name: "Open repository on GitHub" })).toBeNull();
+      await userEvent.click(screen.getByRole("button", { name: "Back" }));
+      expect(useDashboardStore.getState().githubOpenPrByProject[1]).toBeNull();
+    });
+
+    it("drills into a fallback PR row instead of linking out", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) => {
+          if (url.endsWith("/github/prs")) return Promise.resolve(jsonResponse(200, null));
+          if (/\/github\/prs\/\d+/.test(url)) {
+            return Promise.resolve(jsonResponse(404, { message: "gone" }));
+          }
+          if (url.endsWith("/release"))
+            return Promise.resolve(jsonResponse(200, RELEASE_NOT_CONFIGURED));
+          if (url.includes("/github/issues"))
+            return Promise.resolve(jsonResponse(200, issuesResponse(STATUS)));
+          return Promise.resolve(jsonResponse(200, STATUS));
+        }),
+      );
+      render(<GitHubPanel params={{ projectId: 1 }} />);
+      const row = await screen.findByRole("button", { name: /Fix attention race/ });
+      expect(screen.queryByRole("link", { name: /Fix attention race/ })).toBeNull();
+      await userEvent.click(row);
+      expect(useDashboardStore.getState().githubOpenPrByProject[1]).toBe(42);
+      useDashboardStore.setState({ githubOpenPrByProject: {} });
+    });
   });
 
   describe("Release section (#744)", () => {

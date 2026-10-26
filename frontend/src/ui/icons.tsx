@@ -839,3 +839,23 @@ export function PasteIcon(props: IconProps) {
     </Svg>
   );
 }
+
+// Review-thread glyph (a speech panel with lines): distinct from the plain
+// comment bubble so "unresolved threads" never reads as a comment count.
+export function ThreadIcon(props: IconProps) {
+  return (
+    <Svg strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M4 5h16v10H9l-5 4z" />
+      <path d="M8 9h8M8 12h5" />
+    </Svg>
+  );
+}
+
+// "Pop out to the dock": the toolbar button that opens the view as a full panel.
+export function PopOutIcon(props: IconProps) {
+  return (
+    <Svg strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M14 4h6v6M20 4l-8 8M10 5H5a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h13a1 1 0 0 0 1-1v-5" />
+    </Svg>
+  );
+}

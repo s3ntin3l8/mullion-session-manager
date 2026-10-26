@@ -1,6 +1,6 @@
 import { GitHubPanel } from "../GitHubPanel.js";
 import { SidebarToolbar } from "./SidebarToolbar.js";
-import { ExternalLinkIcon } from "../ui/icons.js";
+import { PopOutIcon } from "../ui/icons.js";
 import type { RightSidebarViewProps } from "./views.js";
 
 // The real GitHub panel, embedded — one source of truth for PRs, checks,
@@ -13,7 +13,7 @@ export function GitHubSidebarView({ projectId, actions }: RightSidebarViewProps)
           {
             key: "open-panel",
             label: "Open GitHub panel",
-            icon: ExternalLinkIcon,
+            icon: PopOutIcon,
             onClick: () => actions.onOpenGitHub(projectId),
           },
         ]}

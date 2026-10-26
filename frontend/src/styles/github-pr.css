@@ -1,0 +1,274 @@
+/* PR list row + detail (epic #1965, B4): drilldown rows, the pinned review,
+   the Mullion card, the sticky action bar. Built on the sidebar kit's tokens;
+   .sb-drill itself (box, compact full-bleed rule) lives in sidebar-kit.css. */
+.sb-drill {
+  display: flex;
+  flex-direction: column;
+}
+.pr-dr-head {
+  padding: 6px 10px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--dim);
+  border-bottom: 1px solid var(--border-soft);
+}
+.pr-dr-row,
+.pr-dr-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  color: var(--fg);
+  text-decoration: none;
+}
+.pr-dr-group {
+  font-weight: 600;
+}
+.pr-dr-row--btn {
+  width: 100%;
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: 0.75rem;
+  text-align: left;
+  cursor: pointer;
+}
+.pr-dr-row--btn:hover,
+a.pr-dr-row:hover {
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
+}
+.pr-dr-row--btn:focus-visible,
+.pr-dr-link:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: -2px;
+}
+.pr-dr-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pr-dr-end {
+  flex: none;
+  color: var(--dim);
+  font-size: 0.6875rem;
+}
+.pr-dr-glyph {
+  flex: none;
+  width: 14px;
+  text-align: center;
+  background: none;
+  border: 0;
+}
+.pr-dr-link {
+  flex: none;
+  color: var(--accent);
+  font-size: 0.6875rem;
+}
+.pr-dr-note {
+  padding: 3px 10px 3px 24px;
+  font-size: 0.6875rem;
+  color: var(--dim);
+}
+.pr-dr-group-h {
+  padding: 6px 10px 2px;
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.pr-dr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px 8px;
+}
+.pr-dr-row .github-panel-log,
+.sb-drill .github-panel-log {
+  margin: 2px 8px 6px;
+}
+
+/* Row bits */
+.pr-threads {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.6875rem;
+  color: var(--status-info-fg);
+}
+.pr-row-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+}
+.pr-row-links:empty {
+  display: none;
+}
+
+/* Detail cards */
+.pr-card {
+  margin: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--sidebar-2);
+  overflow: hidden;
+}
+.pr-card-h {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  padding: 6px 10px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--dim);
+  border-bottom: 1px solid var(--border-soft);
+}
+.pr-card-h > :first-child {
+  white-space: nowrap;
+}
+.pr-card-h .sb-vh-sep,
+.pr-card-sp {
+  flex: 1;
+}
+.pr-card-b {
+  padding: 6px 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pr-card--pin {
+  border-left: 2px solid var(--accent);
+}
+.pr-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  background: none;
+  border: 0;
+  border-bottom: 1px solid var(--border-soft);
+  font: inherit;
+  color: var(--fg);
+  text-align: left;
+  cursor: pointer;
+}
+.pr-status-row:disabled {
+  cursor: default;
+}
+.pr-status-row:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: -2px;
+}
+.pr-status-glyph {
+  flex: none;
+  width: 16px;
+  text-align: center;
+  font-weight: 700;
+}
+.pr-status-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.pr-status-title {
+  font-size: 0.78125rem;
+  font-weight: 600;
+}
+.pr-status-sum {
+  font-size: 0.6875rem;
+  color: var(--dim);
+  overflow-wrap: anywhere;
+}
+.pr-card .sb-drill {
+  margin: 0;
+  border-width: 0 0 1px;
+  border-radius: 0;
+}
+.pr-pin-body {
+  font-size: 0.75rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.pr-pin-body--clamp {
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.pr-pin-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.pr-pinned-mark {
+  color: var(--dim);
+  font-size: 0.6875rem;
+}
+.pr-events {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.6875rem;
+  color: var(--dim);
+}
+.pr-events .attn {
+  color: var(--status-danger-fg);
+}
+.pr-sticky {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--sidebar);
+  border-top: 1px solid var(--border);
+}
+.pr-detail-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 8px;
+}
+.pr-detail-pad {
+  padding: 0 10px;
+}
+@container sidebar-frame (max-width: 300px) {
+  .pr-card {
+    margin: 0;
+    border-width: 1px 0;
+    border-radius: 0;
+  }
+  .pr-detail-pad {
+    padding: 0 8px;
+  }
+}
+.pr-tone-success {
+  color: var(--status-success-fg);
+}
+.pr-tone-danger {
+  color: var(--status-danger-fg);
+}
+.pr-tone-warn {
+  color: var(--status-warn-fg);
+}
+.pr-tone-info {
+  color: var(--status-info-fg);
+}
+.pr-tone-neutral {
+  color: var(--status-neutral-fg);
+}
+.pr-tone-merged {
+  color: var(--status-merged-fg);
+}
