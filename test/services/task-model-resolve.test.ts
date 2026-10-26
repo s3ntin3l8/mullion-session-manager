@@ -260,10 +260,15 @@ describe("resolveClaudeSmallModel", () => {
 
   it("prefers the task row, then the SmallModel: directive, then the install default", () => {
     const app = mockApp();
-    expect(resolveClaudeSmallModel(app, { taskSmallModel: "t", issueBody: "SmallModel: d" })).toBe(
-      "t",
+    expect(
+      resolveClaudeSmallModel(app, {
+        taskSmallModel: "claude-task-1",
+        issueBody: "SmallModel: claude-issue-1",
+      }),
+    ).toBe("claude-task-1");
+    expect(resolveClaudeSmallModel(app, { issueBody: "SmallModel: claude-issue-1" })).toBe(
+      "claude-issue-1",
     );
-    expect(resolveClaudeSmallModel(app, { issueBody: "SmallModel: d" })).toBe("d");
     expect(resolveClaudeSmallModel(app, { issueBody: null })).toBe("haiku-default");
   });
 
@@ -285,6 +290,26 @@ describe("resolveClaudeSmallModel", () => {
     expect(resolveClaudeSmallModel(mockApp(), { taskSmallModel: "Haiku", issueBody: null })).toBe(
       "claude-haiku-5-5",
     );
+  });
+
+  it("ignores an alias on the issue-body SmallModel: line and falls through to the install default (#2032)", () => {
+    const app = mockApp();
+    mockGetStoredSettings.mockReturnValue({
+      claudeCode: { defaultModel: null, reviewerModel: null, smallModel: "claude-haiku-5-5" },
+    });
+    expect(resolveClaudeSmallModel(app, { issueBody: "SmallModel: haiku" })).toBe(
+      "claude-haiku-5-5",
+    );
+    expect(app.log.warn).toHaveBeenCalledWith(
+      { model: "haiku" },
+      expect.stringContaining("issue body's SmallModel: line is a model alias"),
+    );
+    // A bare `default`/`best` is an alias too — never reaches the env var.
+    for (const alias of ["best", "default"]) {
+      expect(resolveClaudeSmallModel(mockApp(), { taskSmallModel: alias, issueBody: null })).toBe(
+        "claude-haiku-5-5",
+      );
+    }
   });
 
   it("falls through an invalid value and logs it; null when nothing is set", () => {
@@ -459,8 +484,10 @@ describe("explicitModelError", () => {
   });
 });
 
+// Issue #2032. The SAME case set is pinned client-side in
+// frontend/src/cliModel.test.ts (the mirror) — change both together.
 describe("isClaudeModelAlias / validateClaudeSmallModel (#2032)", () => {
-  it("recognises Claude Code's aliases, with the optional [1m] suffix, case-insensitively", () => {
+  it("treats a bare word (letters, optional [1m]) as an alias — including aliases that don't exist yet", () => {
     for (const a of [
       "haiku",
       "sonnet",
@@ -471,17 +498,32 @@ describe("isClaudeModelAlias / validateClaudeSmallModel (#2032)", () => {
       "default",
       "opus[1m]",
       "Haiku",
+      "newalias",
+      "newalias[1m]",
     ]) {
       expect(isClaudeModelAlias(a)).toBe(true);
     }
-    for (const full of ["claude-haiku-5-5", "claude-opus-4-5[1m]", "haiku-default", "gpt-6"]) {
+  });
+
+  it("never treats a real model id as an alias — ids carry a digit or a separator", () => {
+    for (const full of [
+      "claude-haiku-5-5",
+      "claude-opus-4-5[1m]",
+      "haiku-default",
+      "gpt-6",
+      "anthropic.claude-haiku-5-5-v1:0",
+      "claude-haiku@20260101",
+      "arn:aws:bedrock:us-east-1:123456789012:inference-profile/haiku",
+    ]) {
       expect(isClaudeModelAlias(full)).toBe(false);
     }
   });
 
   it("accepts only a safe, full model id as a small model", () => {
     expect(validateClaudeSmallModel("claude-haiku-5-5")).toBe(true);
+    expect(validateClaudeSmallModel("anthropic.claude-haiku-5-5-v1:0")).toBe(true);
     expect(validateClaudeSmallModel("haiku")).toBe(false);
+    expect(validateClaudeSmallModel("newalias[1m]")).toBe(false);
     expect(validateClaudeSmallModel("$(x); y")).toBe(false);
   });
 });

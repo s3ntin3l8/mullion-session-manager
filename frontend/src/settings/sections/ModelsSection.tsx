@@ -7,9 +7,9 @@ import {
   CLAUDE_MODELS,
   CLAUDE_SMALL_MODELS,
   CODEX_FALLBACK_MODELS,
-  isClaudeModelAlias,
   useCatalog,
 } from "../../models/modelCatalogs.js";
+import { isClaudeModelAlias } from "../../cliModel.js";
 import {
   buildCliModelPairs,
   resolveInstalledRoleModels,

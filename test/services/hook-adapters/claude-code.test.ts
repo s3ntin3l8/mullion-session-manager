@@ -230,7 +230,16 @@ describe("claudeCodeAdapter.prepareLaunch (issue #174)", () => {
   // to, so exporting an alias there makes it resolve to itself and every
   // haiku-backed Claude Code feature (e.g. /goal's evaluator) fails.
   it("never exports a model alias as ANTHROPIC_DEFAULT_HAIKU_MODEL", () => {
-    for (const alias of ["haiku", "sonnet", "opus", "opusplan", "sonnet[1m]"]) {
+    for (const alias of [
+      "haiku",
+      "sonnet",
+      "opus",
+      "opusplan",
+      "sonnet[1m]",
+      "best",
+      "default",
+      "newalias",
+    ]) {
       const plan = claudeCodeAdapter.prepareLaunch({ ...ctx, smallModel: alias });
       expect(plan.envAdditions).toBeUndefined();
     }

@@ -172,14 +172,22 @@ export function validateCliModel(value: string): boolean {
 }
 
 /**
- * Claude Code's model ALIASES — the short names `--model` accepts and that
- * Claude Code itself resolves (`haiku` → the current Haiku, `opusplan` →
- * Opus for planning / Sonnet for execution, an optional `[1m]` suffix for the
- * 1M-token window). Fine for the main model flag; NOT a valid value for
+ * Claude Code's model ALIASES — the short names `--model` accepts and Claude
+ * Code itself resolves (`haiku` → the current Haiku, `opusplan` → Opus for
+ * planning / Sonnet for execution, an optional `[1m]` suffix for the 1M-token
+ * window). Fine for the main model flag; NOT a valid value for
  * `ANTHROPIC_DEFAULT_HAIKU_MODEL`, which is what the `haiku` alias itself
  * resolves TO and therefore needs a full model id (issue #2032).
+ *
+ * Detected STRUCTURALLY, not from a list: an alias is a bare word — letters
+ * only (plus the optional `[1m]`). A real model id always carries a digit or a
+ * separator (`claude-haiku-5-5`, `anthropic.claude-haiku-5-5-v1:0`,
+ * `claude-haiku@20260101`, an ARN), so a new alias Claude Code adds later is
+ * caught without touching this file. The price: a gateway model whose whole id
+ * is one bare word is treated as an alias here — acceptable for the one slot
+ * where the alternative is breaking every haiku-backed feature.
  */
-const CLAUDE_MODEL_ALIAS_RE = /^(fable|opus|sonnet|haiku|opusplan|best|default)(\[1m\])?$/i;
+const CLAUDE_MODEL_ALIAS_RE = /^[a-z]+(\[1m\])?$/i;
 
 export function isClaudeModelAlias(value: string): boolean {
   return CLAUDE_MODEL_ALIAS_RE.test(value);
