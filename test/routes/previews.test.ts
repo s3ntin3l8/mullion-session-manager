@@ -8,7 +8,12 @@ import { eq } from "drizzle-orm";
 import { previews, projects, sessions } from "../../src/db/schema.js";
 import * as sessionBackendModule from "../../src/services/session-backend.js";
 import * as hostGitModule from "../../src/services/host-git.js";
-import { getOrCreateProjectPreview } from "../../src/services/preview-registry.js";
+import {
+  bindBranchPreview,
+  getOrCreateProjectPreview,
+  upsertBranchPreview,
+} from "../../src/services/preview-registry.js";
+import * as branchPreviewModule from "../../src/services/branch-preview.js";
 import { trackPreviewWorktree, deletePreviewWorktree } from "../../src/services/git-worktree.js";
 import { verifyPreviewToken } from "../../src/services/preview-auth.js";
 
@@ -73,6 +78,83 @@ describe("previews route (issue #28)", () => {
     expect(second.json().slug).toBe(first.json().slug);
 
     await app.close();
+  });
+
+  describe("branch previews (#2016)", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    it("starts a branch preview when `branch` is given, and maps refusals to their code", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const summary = {
+        slug: "b1",
+        kind: "project" as const,
+        projectId,
+        externalUrl: null,
+        sessionId: 3,
+        upstreamPort: 4000,
+        createdAt: new Date(0),
+        branch: "feat/x",
+      };
+      const start = vi
+        .spyOn(branchPreviewModule, "getOrCreateBranchPreview")
+        .mockResolvedValue(summary);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/previews",
+        payload: { kind: "project", projectId, branch: "feat/x" },
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json()).toMatchObject({ slug: "b1", branch: "feat/x", upstreamPort: 4000 });
+      expect(start.mock.calls[0].slice(1)).toEqual([projectId, "feat/x"]);
+
+      start.mockRejectedValueOnce(
+        new branchPreviewModule.BranchPreviewError("remote_unsupported", "not yet"),
+      );
+      const refused = await app.inject({
+        method: "POST",
+        url: "/api/previews",
+        payload: { kind: "project", projectId, branch: "feat/x" },
+      });
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json()).toMatchObject({ code: "remote_unsupported", message: "not yet" });
+
+      start.mockRejectedValueOnce(new Error("boom"));
+      const crashed = await app.inject({
+        method: "POST",
+        url: "/api/previews",
+        payload: { kind: "project", projectId, branch: "feat/x" },
+      });
+      expect(crashed.statusCode).toBe(500);
+
+      const empty = await app.inject({
+        method: "POST",
+        url: "/api/previews",
+        payload: { kind: "project", projectId, branch: "" },
+      });
+      expect(empty.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("reports a branch preview's own branch, never the checkout's", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const [session] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "vite", kind: "dock" })
+        .returning()
+        .all();
+      const row = upsertBranchPreview(app, projectId, "feat/x");
+      bindBranchPreview(app, row.slug, { sessionId: session.id, upstreamPort: 4100 });
+      const live = vi.spyOn(sessionBackendModule, "resolveBackend");
+
+      const res = await app.inject({ method: "GET", url: `/api/previews/${row.slug}` });
+      expect(res.json()).toMatchObject({ branch: "feat/x", upstreamPort: 4100 });
+      // Nothing to derive: no live-status round trip for a branch preview.
+      expect(live).not.toHaveBeenCalled();
+      expect(() => upsertBranchPreview(app, projectId, "")).toThrow();
+      await app.close();
+    });
   });
 
   it("404s creating a preview for an unknown projectId", async () => {

@@ -155,6 +155,10 @@ export interface UsePanelOpenerResult {
   // Issue #28's general-purpose blank browser tile (CommandPalette's "New
   // browser tab"). Always creates a fresh panel, same as onOpenBrowserUrl.
   onOpenBlankBrowser: () => void;
+  // Issues #2016/#2018 — opens (or focuses) the browser pane for one
+  // registered preview, keyed by its slug, so a second click on the same
+  // branch's preview lands on the pane already showing it.
+  onOpenPreview: (projectId: number, slug: string, branch: string | null) => void;
   // Issue #1326 — opens (or focuses) an Android device's video/input panel
   // (SidebarDevices.tsx). Host-global like onOpenBlankBrowser above (no
   // projectId), but open-or-focus-by-id like onOpenSession/onOpenGitHub/etc
@@ -452,6 +456,29 @@ export function usePanelOpener({
     setSidebarOpen(false);
   }, [dockviewApi, layout, setSidebarOpen, leaveTaskView]);
 
+  const onOpenPreview = useCallback(
+    (projectId: number, slug: string, branch: string | null) => {
+      if (!dockviewApi) return;
+      leaveTaskView();
+      const id = `browser-preview-${slug}`;
+      const existing = dockviewApi.getPanel(id);
+      if (existing) {
+        existing.api.setActive();
+      } else {
+        const panel = dockviewApi.addPanel({
+          id,
+          component: "browser",
+          title: branch ? `Preview · ${branch}` : "Preview",
+          params: { projectId, slug },
+        });
+        // Same guard as onOpenBrowserUrl above — see its own comment.
+        if (layout.tier === "phone") maximizeIfTiled(dockviewApi, panel);
+      }
+      setSidebarOpen(false);
+    },
+    [dockviewApi, layout, setSidebarOpen, leaveTaskView],
+  );
+
   const onOpenDevice = useCallback(
     (device: Device) => {
       if (!dockviewApi) return;
@@ -500,6 +527,7 @@ export function usePanelOpener({
     onOpenTask,
     onOpenBrowserUrl,
     onOpenBlankBrowser,
+    onOpenPreview,
     onOpenDevice,
   };
 }

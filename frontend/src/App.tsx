@@ -60,6 +60,7 @@ import { MobileSessionBar } from "./MobileSessionBar.js";
 import { useSessionDeepLink } from "./hooks/useSessionDeepLink.js";
 import { useOpenSessionRequest } from "./hooks/useOpenSessionRequest.js";
 import { useOpenTaskRequest } from "./hooks/useOpenTaskRequest.js";
+import { useOpenPreviewRequest } from "./hooks/useOpenPreviewRequest.js";
 import { useLayoutPresentation } from "./hooks/useLayoutPresentation.js";
 import { useBalanceOnDrop } from "./hooks/useBalanceOnDrop.js";
 import { useDockviewDrop } from "./hooks/useDockviewDrop.js";
@@ -910,6 +911,7 @@ export function App() {
     onOpenTask,
     onOpenBrowserUrl,
     onOpenBlankBrowser,
+    onOpenPreview,
     onOpenDevice,
   } = usePanelOpener({
     dockviewApi,
@@ -1074,6 +1076,7 @@ export function App() {
     restoringRef,
     restoredWorkspaceIdRef,
   });
+  useOpenPreviewRequest({ dockviewApi, restoringRef, onOpenPreview });
 
   // Issue #95 — re-syncs a push subscription on load (settings.notifications
   // .channels.push is the source of truth, not the presence of a live

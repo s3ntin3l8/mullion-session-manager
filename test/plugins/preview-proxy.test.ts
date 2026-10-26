@@ -6,7 +6,12 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
-import { createExternalPreview } from "../../src/services/preview-registry.js";
+import {
+  bindBranchPreview,
+  createExternalPreview,
+  upsertBranchPreview,
+} from "../../src/services/preview-registry.js";
+import { sessions } from "../../src/db/schema.js";
 import {
   PREVIEW_COOKIE_NAME,
   PREVIEW_TOKEN_QUERY_PARAM,
@@ -400,6 +405,38 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     expect(res.statusCode).toBe(503);
     expect(res.headers["x-frame-options"]).toBeUndefined();
     expect(res.headers["content-security-policy"]).toBeUndefined();
+    await app.close();
+  });
+
+  it("targets a branch preview's own port, not the project's devServerUrl (#2016)", async () => {
+    const app = await buildApp();
+    // No devServerUrl at all: a checkout preview would 503, a branch one serves.
+    const projectId = await createProjectWithDevServer(app, null);
+    const [session] = app.db
+      .insert(sessions)
+      .values({ projectId, command: "vite", kind: "dock" })
+      .returning()
+      .all();
+    const row = upsertBranchPreview(app, projectId, "feat/x");
+    bindBranchPreview(app, row.slug, { sessionId: session.id, upstreamPort: stubPort });
+
+    const res = await app.inject({
+      method: "GET",
+      url: "/branch/asset.js",
+      headers: { host: `preview-${row.slug}.${PREVIEW_BASE_HOST}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().path).toBe("/branch/asset.js");
+
+    // Unbound from its session (deleted), the port still resolves on the
+    // project's own host.
+    app.db.delete(sessions).run();
+    const again = await app.inject({
+      method: "GET",
+      url: "/",
+      headers: { host: `preview-${row.slug}.${PREVIEW_BASE_HOST}` },
+    });
+    expect(again.statusCode).toBe(200);
     await app.close();
   });
 

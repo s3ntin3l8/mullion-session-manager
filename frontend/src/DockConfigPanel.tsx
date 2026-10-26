@@ -436,6 +436,20 @@ export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
                     }
                   />
                 </Row>
+                <Row
+                  label="Serves branch previews"
+                  desc="Run this control in a branch's worktree to preview it. It must listen on $PORT."
+                >
+                  <input
+                    type="checkbox"
+                    aria-label="Serves branch previews"
+                    checked={selected.preview ?? false}
+                    onChange={(e) =>
+                      selectedIndex !== null &&
+                      updateControl(selectedIndex, { preview: e.target.checked })
+                    }
+                  />
+                </Row>
 
                 <div className="dock-config-panel-env">
                   <div className="settings-row-label">Environment variables</div>

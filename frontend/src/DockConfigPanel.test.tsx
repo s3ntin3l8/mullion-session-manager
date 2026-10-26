@@ -158,6 +158,34 @@ describe("DockConfigPanel", () => {
     expect(useDashboardStore.getState().dockConfigRefreshTrigger).toBe(triggerBefore + 1);
   });
 
+  it("flags a monitor as serving branch previews (#2016)", async () => {
+    const fetchMock = mockFetch({
+      get: () => jsonResponse(200, makeResult([{ id: "web", title: "Web", command: "vite" }])),
+      put: (body) =>
+        jsonResponse(200, makeResult((body as { controls: DockControlInput[] }).controls)),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    render(<DockConfigPanel params={{ projectId: 1 }} />);
+    await user.click(await screen.findByText("Web"));
+    await user.click(screen.getByRole("checkbox", { name: "Serves branch previews" }));
+    await user.click(screen.getByText("Save"));
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([, init]) => (init as RequestInit | undefined)?.method === "PUT",
+        ),
+      ).toBe(true),
+    );
+    const putCall = fetchMock.mock.calls.find(
+      ([, init]) => (init as RequestInit | undefined)?.method === "PUT",
+    );
+    expect(JSON.parse((putCall![1] as RequestInit).body as string).controls[0]).toMatchObject({
+      id: "web",
+      preview: true,
+    });
+  });
+
   it("shows a server-side validation error inline, without losing the draft or bumping the refresh trigger", async () => {
     const fetchMock = mockFetch({
       get: () => jsonResponse(200, makeResult([{ id: "x", title: "X", command: "echo x" }])),

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import type {
   GitHubIssueListItem,
   GitHubPROrWithChecks,
@@ -40,9 +40,10 @@ import { useDashboardStore } from "../store/index.js";
  *     devServer:      string | null   the project's configured dev-server URL
  *   }
  *
- * Previews, relay review runs and issue triage are not store slices, so a
- * caller that has them passes them in `inputs`; an absent input only means the
- * matching field stays null. `buildMullionLinks` is the same join as a pure
+ * Relay review runs and issue triage are not store slices, so a caller that
+ * has them passes them in `inputs`; an absent input only means the matching
+ * field stays null. Previews come from the store's `previews` slice unless a
+ * caller passes its own. `buildMullionLinks` is the same join as a pure
  * function, for tests and non-React callers.
  *
  * Every map carries the same fields: byWorktree takes preview / review run from
@@ -345,7 +346,13 @@ export function useMullionLinks(projectId: number, inputs: MullionLinksInputs = 
   const tasks = useDashboardStore((s) => s.tasks);
   const sessionGitStatuses = useDashboardStore((s) => s.sessionGitStatuses);
   const storePrs = useDashboardStore((s) => s.prsByProject[projectId]?.prs);
-  const { prs = storePrs, issues, previews, reviewRuns } = inputs;
+  const storePreviews = useDashboardStore((s) => s.previews);
+  const { prs = storePrs, issues, previews = storePreviews, reviewRuns } = inputs;
+  // The store's preview list is refreshed on demand (throttled), not polled.
+  const wantsStorePreviews = inputs.previews === undefined;
+  useEffect(() => {
+    if (wantsStorePreviews) void useDashboardStore.getState().refreshPreviews();
+  }, [projectId, wantsStorePreviews]);
   return useMemo(
     () =>
       buildMullionLinks({

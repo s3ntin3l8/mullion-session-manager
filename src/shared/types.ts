@@ -527,6 +527,11 @@ export interface DockControl {
    * dev servers where the agent works in the main checkout. Default: the
    * global settings.dock.defaultWorktreeRefresh preference. */
   worktreeRefresh?: boolean;
+  /** Issues #2016/#2018 — the control a branch preview runs, in the branch's
+   * worktree with `PORT` set to the port the preview proxies to. Without one
+   * flagged, a project's only control serves; with several and none
+   * flagged, branch previews are refused (services/branch-preview.ts). */
+  preview?: boolean;
   /** "docker" for a control synthesized from a discovered Compose service
    * (docker-service-detect.ts); absent/"config" for one read from
    * dock.json. Deliberately NOT handled by project-config.ts's

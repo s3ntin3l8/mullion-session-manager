@@ -22,6 +22,24 @@ export const browserApi = {
       body: JSON.stringify({ kind: "project", projectId }),
     }),
 
+  // Issues #2016/#2018 — starts (or reuses) the preview of a branch: the
+  // project's preview dock control running in a worktree of that branch.
+  // Idempotent per (project, branch). Refusals carry an ApiError `code`
+  // (no_preview_control, remote_unsupported, unknown_branch, …).
+  createBranchPreview: (projectId: number, branch: string) =>
+    request<Preview>("/api/previews", {
+      method: "POST",
+      body: JSON.stringify({ kind: "project", projectId, branch }),
+    }),
+
+  // Issue #2018 — the same, for a PR's head branch (resolved server-side).
+  createPrPreview: (projectId: number, prNumber: number) =>
+    request<Preview>(`/api/projects/${projectId}/github/prs/${prNumber}/preview`, {
+      method: "POST",
+    }),
+
+  listPreviews: () => request<Preview[]>("/api/previews"),
+
   createExternalPreview: (url: string) =>
     request<Preview>("/api/previews", {
       method: "POST",

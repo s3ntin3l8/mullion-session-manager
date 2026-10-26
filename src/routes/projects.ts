@@ -135,6 +135,11 @@ import {
 } from "../services/github-write.js";
 import type { GitBranchOpResult } from "../services/git-branch-ops.js";
 import { getPrDetail, invalidatePrDetail } from "../services/github-pr-detail.js";
+import {
+  BranchPreviewError,
+  getOrCreateBranchPreview,
+  sendBranchPreviewError,
+} from "../services/branch-preview.js";
 import { withRelay } from "../services/review-summary.js";
 import { derivePrPhase } from "../services/github-pr-phase.js";
 import { buildHandoffPrompt } from "../services/pr-handoff.js";
@@ -2725,6 +2730,50 @@ export async function projectsRoute(app: FastifyInstance) {
         return reply
           .code(502)
           .send({ message: "GitHub pull request unavailable", statusCode: 502 });
+      }
+    },
+  );
+
+  // Issue #2018 — starts (or reuses) the branch preview of a PR's head branch,
+  // resolved the way /handoff above resolves it. A fork's head branch is not
+  // on `origin`, so it is refused rather than half-fetched. 404 with previews
+  // off (no PREVIEW_BASE_HOST), same as POST /api/previews itself.
+  app.post<{ Params: { id: string; number: string } }>(
+    "/api/projects/:id/github/prs/:number/preview",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      if (app.config.PREVIEW_BASE_HOST.trim() === "") return reply.notFound();
+      const projectId = Number(request.params.id);
+      const ctx = await loadProjectRepoContext(app, reply, projectId, {
+        unavailableLabel: "pr preview",
+      });
+      if (!ctx) return;
+      const number = Number(request.params.number);
+      if (!Number.isInteger(number) || number < 1) return reply.badRequest("Invalid PR number");
+      let detail;
+      try {
+        detail = await getPrDetail(ctx.token, ctx.repoRef.owner, ctx.repoRef.repo, number);
+      } catch (err) {
+        if (!(err instanceof GitHubApiError)) throw err;
+        if (err.statusCode === 404) return reply.notFound("Pull request not found");
+        return reply
+          .code(502)
+          .send({ message: "GitHub pull request unavailable", statusCode: 502 });
+      }
+      if (detail.isCrossRepository === true) {
+        return reply.code(409).send({
+          statusCode: 409,
+          code: "fork_unsupported",
+          message: "Previewing a pull request from a fork is not supported yet",
+        });
+      }
+      try {
+        const preview = await getOrCreateBranchPreview(app, projectId, detail.headBranch);
+        reply.code(201);
+        return preview;
+      } catch (err) {
+        if (err instanceof BranchPreviewError) return sendBranchPreviewError(reply, err);
+        throw err;
       }
     },
   );

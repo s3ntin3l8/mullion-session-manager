@@ -777,6 +777,52 @@ describe("PrDetailView", () => {
       useDashboardStore.setState({ prsByProject: {} });
     });
 
+    it("starts the PR's preview from the Mullion card, or opens the existing one (#2018)", async () => {
+      const fetchMock = stub(PR, (url, init) =>
+        /\/github\/prs\/12\/preview$/.test(url) && init?.method === "POST"
+          ? jsonResponse(201, { slug: "pr12", branch: "feat-thing" })
+          : null,
+      );
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 1 })],
+        previews: [],
+        openPreviewRequest: null,
+      });
+      const { unmount } = render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const mullion = await screen.findByRole("region", { name: "Mullion" });
+      await userEvent.click(within(mullion).getByRole("button", { name: "Preview PR" }));
+      await waitFor(() =>
+        expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({
+          projectId: 1,
+          slug: "pr12",
+          branch: "feat-thing",
+        }),
+      );
+      unmount();
+
+      fetchMock.mockClear();
+      useDashboardStore.setState({
+        previews: [
+          {
+            slug: "existing",
+            kind: "project",
+            projectId: 1,
+            externalUrl: null,
+            createdAt: "",
+            branch: "feat-thing",
+          },
+        ],
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const card = await screen.findByRole("region", { name: "Mullion" });
+      await userEvent.click(within(card).getByRole("button", { name: "Open preview" }));
+      expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({ slug: "existing" });
+      expect(
+        fetchMock.mock.calls.some(([u, i]) => /\/preview$/.test(String(u)) && i?.method === "POST"),
+      ).toBe(false);
+      useDashboardStore.setState({ previews: [], openPreviewRequest: null });
+    });
+
     it("offers Open existing session when a session already works the PR", async () => {
       stub(PR);
       const requestOpenSession = vi.fn();

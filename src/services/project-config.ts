@@ -281,6 +281,7 @@ function normalizeRawControl(raw: unknown, source: string): DockControl | null {
     ...(typeof c.cwd === "string" ? { cwd: c.cwd } : {}),
     ...(typeof c.height === "number" ? { height: c.height } : {}),
     ...(typeof c.worktreeRefresh === "boolean" ? { worktreeRefresh: c.worktreeRefresh } : {}),
+    ...(typeof c.preview === "boolean" ? { preview: c.preview } : {}),
     ...(c.env && typeof c.env === "object"
       ? {
           // Issue #822 — drops non-string values (pre-existing) AND

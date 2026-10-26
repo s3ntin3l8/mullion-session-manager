@@ -407,9 +407,9 @@ export const projects = sqliteTable("projects", {
 // row maps an opaque, random `slug` (the "preview-<slug>" subdomain label —
 // never a decodable/encoded target, which would be an SSRF amplifier) to
 // either a project's dev server or an arbitrary external URL. `kind:
-// "project"` upserts one row per `projectId` (the unique index below
-// enforces this — SQLite treats multiple NULL `projectId`s as distinct, so
-// it only constrains the "project" rows, never "external" ones);
+// "project"` upserts one row per (`projectId`, `branch`) (the unique index
+// below enforces this — SQLite treats multiple NULL `projectId`s as distinct,
+// so it only constrains the "project" rows, never "external" ones);
 // `kind: "external"` gets one row per registered URL. See
 // src/routes/previews.ts and src/plugins/preview-proxy.ts.
 export const previews = sqliteTable(
@@ -422,19 +422,33 @@ export const previews = sqliteTable(
     externalUrl: text("external_url"),
     // Issue #2007 — the session whose dev server this project preview is
     // serving, written when that session's detected dev-server port is
-    // accepted (routes/sessions.ts, dev-server/accept). A preview is one row
-    // per project, so this is the most recent accepter. NULL means "unbound":
-    // external previews never have one, and neither does a remote-hosted
-    // project's (dev-server detection is local-only), which resolves its
-    // branch through the project checkout on its host. The branch the preview
-    // reports is derived from it (routes/previews.ts withBranches). SET NULL, not
-    // CASCADE: deleting the session must not delete the project's preview slug.
+    // accepted (routes/sessions.ts, dev-server/accept). The checkout preview
+    // is one row per project, so this is the most recent accepter. NULL means
+    // "unbound": external previews never have one, and neither does a
+    // remote-hosted project's checkout preview (dev-server detection is
+    // local-only), which resolves its branch through the project checkout on
+    // its host. The branch the checkout preview reports is derived from it
+    // (routes/previews.ts withBranches). A branch preview binds the dock
+    // session it started instead. SET NULL, not CASCADE: deleting the session
+    // must not delete the preview slug.
     sessionId: integer("session_id").references(() => sessions.id, { onDelete: "set null" }),
+    // Issues #2016/#2018 — the branch a BRANCH-SCOPED preview serves: a dock
+    // session running the project's preview control in a `dock-preview-*`
+    // worktree of that branch (services/branch-preview.ts). The empty string
+    // is the sentinel for the project-checkout preview above, and NOT NULL is
+    // deliberate: the unique index below is on (project_id, branch), and
+    // SQLite treats NULLs as distinct, so a nullable branch would let a
+    // project accumulate any number of checkout previews.
+    branch: text("branch").notNull().default(""),
+    // The port the branch preview's dev server was told to bind (its `PORT`
+    // env var). Set only on a branch preview; NULL means the proxy targets
+    // the project's devServerUrl, as it always has.
+    upstreamPort: integer("upstream_port"),
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),
   },
-  (table) => [uniqueIndex("previews_project_id_unique").on(table.projectId)],
+  (table) => [uniqueIndex("previews_project_id_branch_unique").on(table.projectId, table.branch)],
 );
 
 // One row per terminal session. `status` records user intent (has this been

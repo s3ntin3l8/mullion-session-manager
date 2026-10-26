@@ -147,6 +147,7 @@ const ALLOWED_CONTROL_KEYS = new Set([
   "height",
   "env",
   "worktreeRefresh",
+  "preview",
 ]);
 
 function validateOneControl(raw: unknown, index: number): DockControl {
@@ -179,6 +180,9 @@ function validateOneControl(raw: unknown, index: number): DockControl {
   if (c.worktreeRefresh !== undefined && typeof c.worktreeRefresh !== "boolean") {
     throw new DockConfigValidationError(`controls[${index}].worktreeRefresh must be a boolean`);
   }
+  if (c.preview !== undefined && typeof c.preview !== "boolean") {
+    throw new DockConfigValidationError(`controls[${index}].preview must be a boolean`);
+  }
   let env: Record<string, string> | undefined;
   if (c.env !== undefined) {
     if (!c.env || typeof c.env !== "object" || Array.isArray(c.env)) {
@@ -208,6 +212,7 @@ function validateOneControl(raw: unknown, index: number): DockControl {
     ...(c.cwd !== undefined ? { cwd: c.cwd as string } : {}),
     ...(c.height !== undefined ? { height: c.height as number } : {}),
     ...(c.worktreeRefresh !== undefined ? { worktreeRefresh: c.worktreeRefresh as boolean } : {}),
+    ...(c.preview !== undefined ? { preview: c.preview as boolean } : {}),
     ...(env !== undefined ? { env } : {}),
   };
 }

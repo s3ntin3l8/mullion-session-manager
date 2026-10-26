@@ -275,6 +275,50 @@ same way the manual PATCH path does, without spawning a second session. See
 `docs/dock.md`'s "Dev server auto-detect in plain sessions" section for the
 full behavior and the `dock.autoDetectDevServer` setting that gates it.
 
+## Branch previews (issues #2016, #2018)
+
+A project's own preview serves its checkout — whatever branch the project
+directory has checked out, through `devServerUrl`. A **branch preview**
+serves any other branch: Source Control's **Preview this branch** (every
+local branch row and branch detail) and the GitHub view's **Preview this
+PR** (PR row and the PR detail's Mullion card) start one. The first click
+starts it; afterwards the action reads **Open preview** and reuses it. Both
+land in the dock's browser pane, one pane per preview.
+
+Starting one:
+
+1. Picks the project's **preview control**: the dock control with
+   `"preview": true` (Dock config → "Serves branch previews"), or the
+   project's only control. With several controls and none flagged, the
+   request is refused (`409 no_preview_control`). Discovered Docker Compose
+   services never count — they don't follow `PORT`.
+2. Makes sure the branch exists locally, fetching `refs/heads/<branch>`
+   from `origin` when it doesn't (a PR's head branch you never checked out).
+3. Allocates a free loopback port and starts the control as a dock session
+   in a `.mullion-worktrees/dock-preview-*` worktree of the branch, with
+   `PORT=<port>` in its environment. **The control's command must listen on
+   `$PORT`** (e.g. `vite --port $PORT --strictPort`); see
+   [`dock.md`](dock.md)'s `PORT` convention.
+4. Binds the `(project, branch)` preview row to that session and port. The
+   proxy forwards that preview's slug to the port, not to `devServerUrl`.
+
+`POST /api/previews {kind: "project", projectId, branch}` is the API;
+`POST /api/projects/:id/github/prs/:number/preview` resolves a PR's head
+branch first. Both are idempotent per (project, branch): reuse is decided
+from the database row and the bound session's live state, so it survives a
+Mullion restart. A dead session is restarted under the same slug; a
+`dock-preview-*` worktree it left behind is recut from the branch's tip, and
+one that a different live session is still running in is refused
+(`409 worktree_busy`). The first open usually lands before the dev server
+has bound its port — the pane says so; reload in a moment.
+
+Not yet supported, refused with a code the UI explains:
+
+- A project on a **remote host** (`409 remote_unsupported`) — needs an
+  agent-side port allocator ([#2057](https://github.com/s3ntin3l8/mullion-session-manager/issues/2057)).
+- A **fork's** pull request (`409 fork_unsupported`) — its head branch isn't
+  on `origin` ([#2058](https://github.com/s3ntin3l8/mullion-session-manager/issues/2058)).
+
 ## Multi-host previews
 
 If a project's session runs on a remote **agent** host (see

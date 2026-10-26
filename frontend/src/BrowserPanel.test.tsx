@@ -225,6 +225,66 @@ describe("BrowserPanel", () => {
     );
   });
 
+  describe("a branch preview pane, bound to its slug (#2016)", () => {
+    const branchSrc = `${window.location.protocol}//preview-br1.preview.example.com/`;
+    function mock(opts: { enabled?: boolean; probe?: number; info?: "fail" } = {}) {
+      const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const method = init?.method ?? "GET";
+        if (url === "/api/projects/1/urls") return Promise.resolve(jsonResponse(200, []));
+        if (url === "/api/server-info") {
+          if (opts.info === "fail") return Promise.resolve(jsonResponse(500, { message: "nope" }));
+          return Promise.resolve(
+            jsonResponse(200, {
+              ...SERVER_INFO_BASE,
+              previewsEnabled: opts.enabled ?? true,
+              previewBaseHost: "preview.example.com",
+            }),
+          );
+        }
+        if (url === branchSrc && opts.probe) {
+          return Promise.resolve(jsonResponse(opts.probe, { message: "preview unavailable" }));
+        }
+        return Promise.reject(new Error(`unhandled fetch in test: ${method} ${url}`));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+    const noDevServer = { ...PROJECT, devServerUrl: null };
+
+    it("serves the slug through the proxy without a devServerUrl or a new preview", async () => {
+      const fetchMock = mock();
+      useDashboardStore.setState({ projects: [noDevServer] });
+      render(<BrowserPanel params={{ projectId: 1, slug: "br1" }} />);
+      const frame = await screen.findByTitle("Preview");
+      expect(frame).toHaveAttribute("src", branchSrc);
+      expect(
+        fetchMock.mock.calls.some(
+          ([u, i]) => String(u) === "/api/previews" && i?.method === "POST",
+        ),
+      ).toBe(false);
+      expect(screen.queryByText(/no dev server URL configured/)).not.toBeInTheDocument();
+    });
+
+    it("says the dev server may still be starting when the proxy can't reach it", async () => {
+      mock({ probe: 502 });
+      useDashboardStore.setState({ projects: [noDevServer] });
+      render(<BrowserPanel params={{ projectId: 1, slug: "br1" }} />);
+      expect(await screen.findByText(/may still be starting/)).toBeInTheDocument();
+    });
+
+    it("explains previews being off, and a failed server-info", async () => {
+      mock({ enabled: false });
+      useDashboardStore.setState({ projects: [noDevServer] });
+      const { unmount } = render(<BrowserPanel params={{ projectId: 1, slug: "br1" }} />);
+      expect(await screen.findByText(/Previews are not enabled/)).toBeInTheDocument();
+      unmount();
+      mock({ info: "fail" });
+      render(<BrowserPanel params={{ projectId: 1, slug: "br1" }} />);
+      expect(await screen.findByText("nope")).toBeInTheDocument();
+    });
+  });
+
   // Issue #1318 — src/plugins/preview-proxy.ts now sends
   // Access-Control-Allow-Origin on its own early-return error responses
   // (404/401/429/502/503), so a fetch() of the resolved preview `src` can

@@ -16,6 +16,11 @@ import {
   listPreviews,
   type PreviewSummary,
 } from "../services/preview-registry.js";
+import {
+  BranchPreviewError,
+  getOrCreateBranchPreview,
+  sendBranchPreviewError,
+} from "../services/branch-preview.js";
 import { isAllowedHttpUrl } from "../services/url-guard.js";
 import { PREVIEW_TOKEN_QUERY_PARAM, mintPreviewToken } from "../services/preview-auth.js";
 import { requestScheme } from "../services/request-scheme.js";
@@ -25,6 +30,8 @@ interface CreatePreviewBody {
   kind: "project" | "external";
   projectId?: number;
   url?: string;
+  /** Issues #2016/#2018 — preview this branch rather than the checkout. */
+  branch?: string;
 }
 
 const createPreviewSchema = {
@@ -36,6 +43,7 @@ const createPreviewSchema = {
       kind: { type: "string", enum: ["project", "external"] },
       projectId: { type: "number" },
       url: { type: "string", minLength: 1 },
+      branch: { type: "string", minLength: 1, maxLength: 255 },
     },
   },
 };
@@ -52,14 +60,16 @@ function isAllowedExternalUrl(value: string): boolean {
   return isAllowedHttpUrl(value, { allowLoopback: false, allowPrivate: false });
 }
 
-// The branch a project preview is serving (epic #1965, A6/A7). In order:
-// the serving session's self-reported live branch, that session's tracked
+// The branch a project preview is serving (epic #1965, A6/A7). A branch
+// preview (issues #2016/#2018) carries its own, from its row. For the
+// checkout preview, in order: the serving session's self-reported live branch, that session's tracked
 // preview worktree, then the project checkout's own HEAD — read from
 // `.git/HEAD` locally, or through the host client for a remote-hosted project
 // (whose cwd this host cannot read). External previews have none: null, never
 // a guess. A detached HEAD is null too — a short SHA is not a branch a
-// consumer could link to. Create responses carry no `branch` — the pane only
-// needs the slug, and the lookup can cost a host round trip; a GET pays it.
+// consumer could link to. A checkout preview's create response carries no
+// `branch` — the pane only needs the slug, and the lookup can cost a host
+// round trip; a GET pays it. A branch preview's always does.
 async function withBranches(
   app: FastifyInstance,
   previewList: PreviewSummary[],
@@ -77,7 +87,8 @@ async function liveBranchesBySession(
   app: FastifyInstance,
   previewList: PreviewSummary[],
 ): Promise<Map<number, string>> {
-  const ids = previewList.flatMap((p) => (p.sessionId === null ? [] : [p.sessionId]));
+  // Only the checkout preview derives its branch from the live session.
+  const ids = previewList.flatMap((p) => (p.sessionId === null || p.branch ? [] : [p.sessionId]));
   const out = new Map<number, string>();
   if (ids.length === 0) return out;
   const byHost = new Map<string, string[]>();
@@ -106,6 +117,8 @@ async function resolvePreviewBranch(
   live: Map<number, string>,
 ): Promise<string | null> {
   if (preview.kind !== "project" || preview.projectId === null) return null;
+  // A branch preview's branch is its own column, never derived.
+  if (preview.branch) return preview.branch;
   const [project] = app.db
     .select({ cwd: projects.cwd, hostId: projects.hostId })
     .from(projects)
@@ -144,6 +157,17 @@ export async function previewsRoute(app: FastifyInstance) {
         const { projectId } = request.body;
         if (typeof projectId !== "number" || !Number.isInteger(projectId)) {
           return reply.badRequest('projectId is required for kind "project"');
+        }
+        const { branch } = request.body;
+        if (branch !== undefined) {
+          try {
+            const preview = await getOrCreateBranchPreview(app, projectId, branch);
+            reply.code(201);
+            return preview;
+          } catch (err) {
+            if (err instanceof BranchPreviewError) return sendBranchPreviewError(reply, err);
+            throw err;
+          }
         }
         try {
           const preview = getOrCreateProjectPreview(app, projectId);

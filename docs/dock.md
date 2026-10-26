@@ -73,6 +73,7 @@ team-shareable). A global fallback lives at `~/.config/crs/dock.json`
 | `height`          | `number`                | no       | Initial terminal height in pixels for the monitor body                                                          |
 | `env`             | `Record<string,string>` | no       | Extra environment variables for the session (see Validation below for reserved keys and storage caveats)        |
 | `worktreeRefresh` | `boolean`               | no       | Periodically `git reset --hard` a preview worktree to the branch's local tip to live-sync it (default: `false`) |
+| `preview`         | `boolean`               | no       | The control branch previews run (see "Branch previews and `PORT`" below; default: `false`)                      |
 
 ### Branch selection
 
@@ -109,6 +110,25 @@ a local and a remote preview worktree.
 For managing branches and worktrees directly — deleting a branch, removing
 a worktree, pruning stale worktree metadata — see Source Control, documented
 separately in [`git-panel.md`](git-panel.md).
+
+### Branch previews and `PORT`
+
+Source Control's **Preview this branch** and the GitHub view's **Preview
+this PR** (issues #2016, #2018) start the project's **preview control** in a
+preview worktree of that branch — the control flagged `"preview": true`, or
+the project's only control. Several branches can be previewed at once, so
+each gets its own port: Mullion allocates a free one and passes it as
+**`PORT`** in the session's environment, and proxies the branch's preview to
+it. A preview control must therefore listen on `$PORT` rather than a fixed
+port:
+
+```json
+{ "id": "web", "title": "Web", "command": "npx vite --port $PORT --strictPort", "preview": true }
+```
+
+The control's own `env` is kept, with `PORT` set on top. See
+[`browser-previews.md`](browser-previews.md)'s "Branch previews" for the full
+behavior.
 
 ### Full example
 
@@ -440,9 +460,9 @@ notification panel) offering **"Use this port"** / **"Ignore port"**.
 
 Accepting the offer does **not** spawn a second session or a dock
 control — the dev server is already running live in your plain terminal,
-and starting a second copy of it (e.g. a `kind: "dock"` session running
-the project's dock-control command) would just collide on the port.
-Instead, accepting:
+and a second copy of the same command would collide on its port. (A dock
+control that listens on `$PORT` doesn't: each branch preview gets its own
+port — see "Branch previews and `PORT`" above.) Instead, accepting:
 
 1. Patches the project's `devServerUrl` to the detected port.
 2. Creates (or reuses) the project's preview, if `PREVIEW_BASE_HOST` is

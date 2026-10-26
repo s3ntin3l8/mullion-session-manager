@@ -20,6 +20,7 @@ import type {
   Host,
   NotificationEvent,
   PairAndConnectBody,
+  Preview,
   Project,
   ProjectUrl,
   PromoteSessionResponse,
@@ -861,6 +862,23 @@ export interface ToastsSlice {
 // whole point of threading DashboardState (not e.g. ProjectsSlice) as the
 // first generic parameter of every `StateCreator<DashboardState, [], [],
 // XSlice>` in slices/*.ts.
+export interface PreviewsSlice {
+  previews: Preview[];
+  /** Re-lists previews; throttled unless `force` (after starting one). */
+  refreshPreviews: (force?: boolean) => Promise<void>;
+  // Issues #2016/#2018 — "open this preview in the dock's browser pane",
+  // resolved by App.tsx (useOpenPreviewRequest). Same nonce shape as
+  // openSessionRequest above.
+  openPreviewRequest: {
+    projectId: number;
+    slug: string;
+    branch: string | null;
+    nonce: number;
+  } | null;
+  requestOpenPreview: (preview: { projectId: number; slug: string; branch: string | null }) => void;
+  clearOpenPreviewRequest: (nonce: number) => void;
+}
+
 export type DashboardState = ProjectsSlice &
   SessionsSlice &
   GitSlice &
@@ -871,4 +889,5 @@ export type DashboardState = ProjectsSlice &
   HostsSlice &
   DevicesSlice &
   UiSlice &
-  ToastsSlice;
+  ToastsSlice &
+  PreviewsSlice;
