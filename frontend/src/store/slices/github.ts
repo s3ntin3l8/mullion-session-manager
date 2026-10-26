@@ -5,7 +5,24 @@ import type { StateCreator } from "zustand";
 // narrow connectGitHubWS's incoming message instead of hand-inspecting an
 // `unknown`-typed parse.
 import type { GitHubWSEvent } from "../../../../src/shared/ws-protocol.js";
-import type { DashboardState, GithubSlice } from "../types.js";
+import type { DashboardState, GithubCacheEntry, GithubSlice } from "../types.js";
+import { registerGithubCacheReset } from "../githubCacheReset.js";
+import {
+  DEFAULT_ISSUE_UI,
+  fetchIssuesPage,
+  fetchPrDetail,
+  fetchPrs,
+  fetchStatus,
+  issueFilterKey,
+  issuesKey,
+  prDetailKey,
+  prsKey,
+  statusKey,
+} from "../githubResources.js";
+
+// How long a cached entry is served without a refetch. Matches the server's
+// own ~30s GitHub cache — fetching faster only returns the same answer.
+export const GITHUB_CACHE_FRESH_MS = 30_000;
 
 export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice> = (set, get) => {
   let gitHubWS: WebSocket | null = null;
@@ -27,9 +44,94 @@ export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice
   // projects' git-branches + github/prs and exhausting git-branches' 30/min
   // rate limit within seconds).
   let gitRefsEventProjectIds: Set<number> = new Set();
+  // In-flight dedup: concurrent callers for one key (a hover prefetch and the
+  // panel's own mount fetch) share a single request.
+  const inFlight = new Map<string, Promise<unknown>>();
+  registerGithubCacheReset(() => {
+    inFlight.clear();
+    set({ githubCache: {} });
+  });
+
+  const putEntry = (key: string, entry: GithubCacheEntry) =>
+    set((s) => ({ githubCache: { ...s.githubCache, [key]: entry } }));
 
   return {
-    prsRefreshTrigger: 0,
+    prsRefreshTriggerByProject: {},
+    githubCache: {},
+    githubOpenIssueByProject: {},
+    githubIssueUiByProject: {},
+
+    githubFetch: <T>(key: string, fetcher: () => Promise<T>, force = false): Promise<T> => {
+      const cached = get().githubCache[key];
+      if (
+        !force &&
+        cached &&
+        cached.fetchedAt > 0 &&
+        Date.now() - cached.fetchedAt < GITHUB_CACHE_FRESH_MS
+      ) {
+        return Promise.resolve(cached.data as T);
+      }
+      const pending = inFlight.get(key);
+      if (pending) return pending as Promise<T>;
+      const request = new Promise<T>((resolve) => resolve(fetcher()))
+        .then((data) => {
+          putEntry(key, { data, fetchedAt: Date.now(), error: null });
+          return data;
+        })
+        .catch((err: unknown) => {
+          // Keep the last good data (and its staleness) so the view degrades
+          // to "stale + an error" instead of blanking.
+          const prev = get().githubCache[key];
+          putEntry(key, {
+            data: prev?.data,
+            fetchedAt: 0,
+            error: err instanceof Error ? err.message : "Request failed",
+          });
+          throw err;
+        })
+        .finally(() => {
+          if (inFlight.get(key) === request) inFlight.delete(key);
+        });
+      inFlight.set(key, request);
+      return request;
+    },
+
+    prefetchGithubProject: (projectId: number) => {
+      const { githubFetch, githubCache, githubIssueUiByProject } = get();
+      const quiet = () => undefined;
+      void githubFetch(statusKey(projectId), () => fetchStatus(projectId)).catch(quiet);
+      void githubFetch(prsKey(projectId), () => fetchPrs(projectId)).catch(quiet);
+      // Issues in parallel with status, not after it — unless we already know
+      // the token can't list them.
+      const status = githubCache[statusKey(projectId)]?.data as { issuesHidden?: boolean } | null;
+      if (!status?.issuesHidden) {
+        const ui = githubIssueUiByProject[projectId] ?? DEFAULT_ISSUE_UI;
+        const filterKey = issueFilterKey(ui, ui.query.trim());
+        void githubFetch(issuesKey(projectId, filterKey, 1), () =>
+          fetchIssuesPage(projectId, ui, ui.query.trim(), 1),
+        ).catch(quiet);
+      }
+    },
+
+    prefetchGithubPr: (projectId: number, number: number) => {
+      void get()
+        .githubFetch(prDetailKey(projectId, number), () => fetchPrDetail(projectId, number))
+        .catch(() => undefined);
+    },
+
+    setGithubOpenIssue: (projectId, number) =>
+      set((s) => ({
+        githubOpenIssueByProject: { ...s.githubOpenIssueByProject, [projectId]: number },
+      })),
+
+    patchGithubIssueUi: (projectId, patch) =>
+      set((s) => ({
+        githubIssueUiByProject: {
+          ...s.githubIssueUiByProject,
+          [projectId]: { ...(s.githubIssueUiByProject[projectId] ?? DEFAULT_ISSUE_UI), ...patch },
+        },
+      })),
+
     githubWSConnected: false,
 
     connectGitHubWS: () => {
@@ -68,7 +170,23 @@ export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice
           // it.
           const data = JSON.parse(event.data as string) as GitHubWSEvent;
           if (data.projectId != null) {
-            set((state) => ({ prsRefreshTrigger: state.prsRefreshTrigger + 1 }));
+            const projectId = Number(data.projectId);
+            // Scoped to the project whose event fired, and its cached
+            // entries are marked stale so every mounted view revalidates.
+            set((state) => {
+              const prefix = `${projectId}:`;
+              const githubCache: Record<string, GithubCacheEntry> = {};
+              for (const [key, entry] of Object.entries(state.githubCache)) {
+                githubCache[key] = key.startsWith(prefix) ? { ...entry, fetchedAt: 0 } : entry;
+              }
+              return {
+                githubCache,
+                prsRefreshTriggerByProject: {
+                  ...state.prsRefreshTriggerByProject,
+                  [projectId]: (state.prsRefreshTriggerByProject[projectId] ?? 0) + 1,
+                },
+              };
+            });
             // prsRefreshTrigger alone only reaches GitHubPanel (its own
             // effect dependency) — prsByProject itself, which every OTHER
             // consumer (Sidebar's SessionRow, UnifiedBoard's TaskCard,
@@ -83,7 +201,7 @@ export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice
             // since the last fire (see gitRefsEventProjectIds' own doc
             // comment above) — an event about one project's CI run has no
             // reason to refetch every OTHER project too.
-            gitRefsEventProjectIds.add(Number(data.projectId));
+            gitRefsEventProjectIds.add(projectId);
             if (gitRefsEventRefreshTimer) clearTimeout(gitRefsEventRefreshTimer);
             gitRefsEventRefreshTimer = setTimeout(() => {
               gitRefsEventRefreshTimer = null;

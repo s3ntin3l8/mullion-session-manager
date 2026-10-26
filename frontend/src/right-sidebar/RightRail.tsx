@@ -11,6 +11,11 @@ interface RailButtonProps {
 function RailButton({ view, projectId, active, onClick }: RailButtonProps) {
   const badge = view.useBadge(projectId);
   const Icon = view.icon;
+  const prefetchGithubProject = useDashboardStore((st) => st.prefetchGithubProject);
+  // Warm the GitHub data before the click lands (issue #1970).
+  const warm = () => {
+    if (view.id === "github" && projectId != null) prefetchGithubProject(projectId);
+  };
   return (
     <button
       type="button"
@@ -19,6 +24,8 @@ function RailButton({ view, projectId, active, onClick }: RailButtonProps) {
       aria-pressed={active}
       title={badge ? `${view.label} — ${badge.title}` : view.label}
       onClick={onClick}
+      onMouseEnter={warm}
+      onFocus={warm}
     >
       <Icon size={17} />
       {badge?.kind === "count" && (

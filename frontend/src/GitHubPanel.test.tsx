@@ -195,7 +195,11 @@ describe("GitHubPanel", () => {
     vi.unstubAllGlobals();
     // The store is shared across the file's tests — a PR list set by one
     // test must not leak into the next.
-    useDashboardStore.setState({ prsByProject: {} });
+    useDashboardStore.setState({
+      prsByProject: {},
+      githubOpenIssueByProject: {},
+      githubIssueUiByProject: {},
+    });
   });
 
   it("shows a skeleton instead of the word Loading… while GitHub status is in flight", () => {
@@ -217,6 +221,87 @@ describe("GitHubPanel", () => {
     expect(status).toHaveClass("visually-hidden");
     expect(status).toHaveTextContent("Loading GitHub");
     expect(status.closest("[aria-busy='true']")).toBeNull();
+  });
+
+  it("never shows the loading skeleton when the store already has PRs (#1970)", () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => new Promise(() => {})),
+    );
+    useDashboardStore.setState({ prsByProject: { 1: PRS_LOADED } });
+    const { container } = render(<GitHubPanel params={{ projectId: 1 }} />);
+    expect(container.querySelector(".ui-skeleton")).toBeNull();
+    expect(screen.getByText("Fix attention race")).toBeInTheDocument();
+  });
+
+  it("starts status, PRs and issues in parallel, not issues after status (#1970)", async () => {
+    const started: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) => {
+        started.push(url);
+        return new Promise(() => {});
+      }),
+    );
+    render(<GitHubPanel params={{ projectId: 1 }} />);
+    await vi.waitFor(() => expect(started.some((u) => u.includes("/github/issues"))).toBe(true));
+    expect(started.some((u) => u.endsWith("/github"))).toBe(true);
+    expect(started.some((u) => u.endsWith("/github/prs"))).toBe(true);
+  });
+
+  it("keeps the open issue and the filters across a remount (#1970)", async () => {
+    const base = mockFetch({ status: STATUS, prs: PRS_LOADED });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        url.endsWith("/github/issues/27")
+          ? Promise.resolve(
+              jsonResponse(200, {
+                ...issuesResponse(STATUS).issues[0],
+                state: "open",
+                bodyHtml: "",
+                comments: [],
+              }),
+            )
+          : base(url),
+      ),
+    );
+    const first = render(<GitHubPanel params={{ projectId: 1 }} />);
+    await userEvent.click(await screen.findByRole("button", { name: /GitHub integration/ }));
+    expect(useDashboardStore.getState().githubOpenIssueByProject[1]).toBe(27);
+    first.unmount();
+
+    useDashboardStore.getState().patchGithubIssueUi(1, { unassigned: true });
+    render(<GitHubPanel params={{ projectId: 1 }} />);
+    // Back on the issue detail, not the list.
+    expect(await screen.findByRole("button", { name: "← Back" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "← Back" }));
+    expect(await screen.findByLabelText("Unassigned")).toBeChecked();
+  });
+
+  it("shows cached CI jobs again on re-expand without refetching them (#1970)", async () => {
+    const fetchMock = mockFetchWithAccordion({ jobs: [JOB] });
+    vi.stubGlobal("fetch", fetchMock);
+    useDashboardStore.setState({ prsByProject: {} });
+    render(<GitHubPanel params={{ projectId: 1 }} />);
+    const header = await screen.findByRole("button", { name: /Fix attention race/ });
+    await userEvent.click(header);
+    expect(await screen.findByText("build")).toBeInTheDocument();
+    await userEvent.click(header);
+    await userEvent.click(header);
+    const jobCalls = fetchMock.mock.calls.filter(([u]) => String(u).endsWith("/jobs"));
+    expect(jobCalls).toHaveLength(1);
+  });
+
+  it("prefetches a PR's detail when its card is hovered (#1970)", async () => {
+    const fetchMock = mockFetch({ status: STATUS, prs: PRS_LOADED });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<GitHubPanel params={{ projectId: 1 }} />);
+    const header = await screen.findByRole("button", { name: /Fix attention race/ });
+    await userEvent.hover(header);
+    await vi.waitFor(() =>
+      expect(fetchMock.mock.calls.some(([u]) => String(u).endsWith("/github/prs/42"))).toBe(true),
+    );
   });
 
   it("lists pull requests and issues with titles and links once loaded", async () => {

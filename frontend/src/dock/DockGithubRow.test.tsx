@@ -206,7 +206,11 @@ describe("Dock", () => {
       githubByProject[1] = () => jsonResponse(200, STATUS);
       let call = 0;
       githubPrsByProject[1] = () => jsonResponse(200, call++ === 0 ? PR_SUMMARY_V1 : PR_SUMMARY_V2);
-      useDashboardStore.setState({ projects: [PROJECT], sessions: [], prsRefreshTrigger: 0 });
+      useDashboardStore.setState({
+        projects: [PROJECT],
+        sessions: [],
+        prsRefreshTriggerByProject: {},
+      });
 
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
@@ -215,7 +219,12 @@ describe("Dock", () => {
 
       // Simulate store.ts's connectGitHubWS bumping this counter on a live
       // `/ws/github` push for project 1.
-      useDashboardStore.setState((s) => ({ prsRefreshTrigger: s.prsRefreshTrigger + 1 }));
+      useDashboardStore.setState((s) => ({
+        prsRefreshTriggerByProject: {
+          ...s.prsRefreshTriggerByProject,
+          1: (s.prsRefreshTriggerByProject[1] ?? 0) + 1,
+        },
+      }));
 
       // The widget re-fetches and now reflects the V2 summary (0 pass, 1 fail)
       // — proving the effect actually re-ran rather than the badge simply

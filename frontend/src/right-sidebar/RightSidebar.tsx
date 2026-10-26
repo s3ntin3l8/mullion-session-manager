@@ -29,6 +29,13 @@ export function RightSidebar({ tier, actions }: RightSidebarProps) {
   const setStoredWidth = useDashboardStore((s) => s.setRightSidebarWidth);
   const close = useDashboardStore((s) => s.closeRightSidebar);
   const followed = useFollowedProject();
+  // Project select and app start: warm the GitHub data for the project the
+  // sidebar follows, so the panel's first paint is already cached (#1970).
+  const prefetchGithubProject = useDashboardStore((s) => s.prefetchGithubProject);
+  const followedProjectId = followed.effectiveProjectId;
+  useEffect(() => {
+    if (followedProjectId != null) prefetchGithubProject(followedProjectId);
+  }, [followedProjectId, prefetchGithubProject]);
   // A request to show a specific project (palette "Edit project files") pins
   // the picker to it — render-phase adjustment keyed on the request's nonce.
   // The request is deliberately never cleared: the nonce is the only dedupe,

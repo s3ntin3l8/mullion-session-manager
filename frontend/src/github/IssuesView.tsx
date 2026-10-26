@@ -1,12 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/index.js";
-import type {
-  GitHubIssueDetail,
-  GitHubIssueLabel,
-  GitHubIssueListItem,
-  GitHubIssueSort,
-  GitHubIssuesResponse,
-} from "../api/types.js";
+import { useIssue, useIssues } from "../hooks/useGitHubData.js";
+import type { GitHubIssueLabel, GitHubIssueListItem, GitHubIssueSort } from "../api/types.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { useDashboardStore } from "../store/index.js";
 import { issueBranchName, issueSeedPrompt } from "./issueWork.js";
@@ -78,76 +73,56 @@ export function IssuesSection({
    *  view needn't fetch a list page just to learn it. */
   onTaskMaster?: (info: TaskMasterInfo) => void;
 }) {
-  const [selected, setSelected] = useState<string[]>([]);
-  const [unassigned, setUnassigned] = useState(false);
-  const [sort, setSort] = useState<GitHubIssueSort>("updated");
-  const [query, setQuery] = useState("");
-  const [debouncedQuery, setDebouncedQuery] = useState("");
-  const [pageState, setPageState] = useState<{ key: string; page: number }>({ key: "", page: 1 });
-  const [fetched, setFetched] = useState<{
-    key: string;
-    page: number;
-    response: GitHubIssuesResponse;
-  } | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  // Labels seen across every fetched page/filter, so a chip doesn't vanish
-  // the moment it is selected and narrows the list to its own issues.
-  const [knownLabels, setKnownLabels] = useState<GitHubIssueLabel[]>([]);
+  const [debouncedQuery, setDebouncedQuery] = useState(
+    () => useDashboardStore.getState().githubIssueUiByProject[projectId]?.query.trim() ?? "",
+  );
+  const patchUi = useDashboardStore((s) => s.patchGithubIssueUi);
+  const { ui, filterKey, page, data, error, loading } = useIssues(
+    projectId,
+    debouncedQuery,
+    !issuesHidden,
+  );
+  const onTaskMasterRef = useRef(onTaskMaster);
+  useEffect(() => {
+    onTaskMasterRef.current = onTaskMaster;
+  });
+  const { labels: selected, unassigned, sort, query, knownLabels } = ui;
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQuery(query.trim()), 300);
     return () => clearTimeout(t);
   }, [query]);
 
-  // Paging restarts from 1 whenever a filter changes — derived from the
-  // filter key rather than reset in an effect.
-  const filterKey = JSON.stringify([selected, unassigned, sort, debouncedQuery]);
-  const page = pageState.key === filterKey ? pageState.page : 1;
-  const data = fetched?.response ?? null;
-  const loading = !issuesHidden && !error && !(fetched?.key === filterKey && fetched.page === page);
-
+  // Labels seen across every fetched page/filter, so a chip doesn't vanish
+  // the moment it is selected and narrows the list to its own issues; and
+  // Task Master availability, so the detail view needn't fetch a page.
   useEffect(() => {
-    if (issuesHidden) return;
-    let cancelled = false;
-    api
-      .getProjectIssues(projectId, {
-        labels: selected,
-        assignee: unassigned ? "none" : undefined,
-        sort,
-        q: debouncedQuery || undefined,
-        page,
-      })
-      .then((res) => {
-        if (cancelled) return;
-        setError(null);
-        onTaskMaster?.({ enabled: res.taskMasterEnabled, label: res.taskLabel });
-        setFetched((prev) =>
-          page > 1 && prev?.key === filterKey
-            ? {
-                key: filterKey,
-                page,
-                response: { ...res, issues: [...prev.response.issues, ...res.issues] },
-              }
-            : { key: filterKey, page, response: res },
-        );
-        setKnownLabels((prev) => {
-          const byName = new Map(prev.map((l) => [l.name, l]));
-          for (const l of res.labels) byName.set(l.name, l);
-          return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
-        });
-      })
-      .catch((err: unknown) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Could not load issues");
-      });
-    return () => {
-      cancelled = true;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- filterKey covers the filters
-  }, [projectId, filterKey, page, issuesHidden]);
+    if (!data) return;
+    const current = useDashboardStore.getState().githubIssueUiByProject[projectId];
+    const byName = new Map((current?.knownLabels ?? []).map((l) => [l.name, l]));
+    for (const l of data.labels) byName.set(l.name, l);
+    const labels = [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
+    const taskMaster = { enabled: data.taskMasterEnabled, label: data.taskLabel };
+    const sameLabels =
+      current?.knownLabels.length === labels.length &&
+      current.knownLabels.every((l, i) => l.name === labels[i].name);
+    const sameTm =
+      current?.taskMaster?.enabled === taskMaster.enabled &&
+      current.taskMaster.label === taskMaster.label;
+    if (!sameLabels || !sameTm) patchUi(projectId, { knownLabels: labels, taskMaster });
+    onTaskMasterRef.current?.(taskMaster);
+  }, [data, projectId, patchUi]);
 
-  const toggleLabel = useCallback((name: string) => {
-    setSelected((prev) => (prev.includes(name) ? prev.filter((n) => n !== name) : [...prev, name]));
-  }, []);
+  // Any filter change restarts paging from 1 (the page is tied to the key).
+  const setFilter = (patch: Partial<typeof ui>) =>
+    patchUi(projectId, { ...patch, pageState: { key: "", page: 1 } });
+  const setUnassigned = (v: boolean) => setFilter({ unassigned: v });
+  const setSort = (v: GitHubIssueSort) => setFilter({ sort: v });
+  const setQuery = (v: string) => setFilter({ query: v });
+  const toggleLabel = (name: string) =>
+    setFilter({
+      labels: selected.includes(name) ? selected.filter((n) => n !== name) : [...selected, name],
+    });
 
   const filtered = selected.length > 0 || unassigned || debouncedQuery !== "";
 
@@ -215,7 +190,7 @@ export function IssuesSection({
             <button
               type="button"
               className="gh-issue-more"
-              onClick={() => setPageState({ key: filterKey, page: page + 1 })}
+              onClick={() => patchUi(projectId, { pageState: { key: filterKey, page: page + 1 } })}
             >
               Load more
             </button>
@@ -261,24 +236,12 @@ export function IssueDetailView({
   onBack: () => void;
   taskMaster?: TaskMasterInfo | null;
 }) {
-  const [issue, setIssue] = useState<GitHubIssueDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { data: issue, error: loadError } = useIssue(projectId, number);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const error = actionError ?? loadError;
+  const setError = setActionError;
   const [busy, setBusy] = useState<"session" | "queue" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .getProjectIssue(projectId, number)
-      .then((res) => !cancelled && setIssue(res))
-      .catch(
-        (err: unknown) =>
-          !cancelled && setError(err instanceof Error ? err.message : "Could not load the issue"),
-      );
-    return () => {
-      cancelled = true;
-    };
-  }, [projectId, number]);
 
   const startSession = async () => {
     if (!issue) return;

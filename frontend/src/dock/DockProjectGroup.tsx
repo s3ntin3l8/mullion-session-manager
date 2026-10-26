@@ -162,7 +162,7 @@ export function DockProjectGroup({
       gitBranchesByProject: s.gitBranchesByProject,
       settings: s.settings,
       dockConfigRefreshTrigger: s.dockConfigRefreshTrigger,
-      prsRefreshTrigger: s.prsRefreshTrigger,
+      prsRefreshTrigger: s.prsRefreshTriggerByProject[projectId] ?? 0,
     })),
   );
   // U8 — Settings -> Session management's "Confirm before kill" toggle.

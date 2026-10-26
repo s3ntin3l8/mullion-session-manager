@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { __resetGithubCacheForTests } from "../store/githubCacheReset.js";
 import { PrDetailView } from "./PrDetailView.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { useDashboardStore } from "../store/index.js";
@@ -282,6 +283,8 @@ describe("PrDetailView", () => {
     expect(screen.getByText("Awaiting review from alice")).toBeInTheDocument();
     expect(screen.getByText("No checks reported")).toBeInTheDocument();
     unmount();
+    // The cache would (correctly) serve the first PR for the same key.
+    __resetGithubCacheForTests();
 
     stub({
       ...PR,

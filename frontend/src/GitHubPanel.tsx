@@ -1,8 +1,8 @@
 import { checkDotClass } from "./github/checkDot.js";
 import { PHASE_LABEL, phaseTone, sortPrsByAttention } from "./github/prPhase.js";
 import { PrDetailView } from "./github/PrDetailView.js";
-import { IssueDetailView, IssuesSection, type TaskMasterInfo } from "./github/IssuesView.js";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { IssueDetailView, IssuesSection } from "./github/IssuesView.js";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "./api/index.js";
 import type {
   GitHubActionsRun,
@@ -10,7 +10,6 @@ import type {
   GitHubLogResponse,
   GitHubPRsStatus,
   GitHubPROrWithChecks,
-  GitHubStatus,
   ProjectReleaseStatus,
   RelayReviewState,
   ReleaseRunReason,
@@ -18,6 +17,7 @@ import type {
 } from "./api/index.js";
 import { ChevronDownIcon, GitHubIcon } from "./ui/icons.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
+import { useGitHubStatus, usePrList, useRunJobs } from "./hooks/useGitHubData.js";
 import { useDashboardStore } from "./store/index.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { Skeleton, SkeletonRegion } from "./ui/Skeleton.js";
@@ -240,30 +240,22 @@ function PRCard({
   onOpen: (number: number) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [jobsByRun, setJobsByRun] = useState<Record<number, RunJobs>>({});
-  // Run ids already requested (in flight or settled): a collapse/re-expand
-  // before the first batch resolves must not re-issue the fetches.
-  const requested = useRef(new Set<number>());
+  const prefetchGithubPr = useDashboardStore((st) => st.prefetchGithubPr);
+  // Cached per run, so collapsing, re-expanding or coming back from the PR
+  // detail keeps the jobs instead of refetching them.
+  const runIds = pr.actionsRuns.flatMap((run) => {
+    const id = runIdFromUrl(run.htmlUrl);
+    return id == null ? [] : [id];
+  });
+  const jobsByRun = useRunJobs(projectId, runIds, expanded);
 
-  // Expanding fetches every run's jobs (once) so the body is one flat list.
-  const toggle = () => {
-    const next = !expanded;
-    setExpanded(next);
-    if (!next) return;
-    for (const run of pr.actionsRuns) {
-      const runId = runIdFromUrl(run.htmlUrl);
-      if (runId == null || requested.current.has(runId)) continue;
-      requested.current.add(runId);
-      api
-        .getGitHubRunJobs(projectId, runId)
-        .then((j) => setJobsByRun((m) => ({ ...m, [runId]: j })))
-        .catch(() => setJobsByRun((m) => ({ ...m, [runId]: null })));
-    }
-  };
+  // Expanding shows every run's jobs as one flat list.
+  const toggle = () => setExpanded((e) => !e);
+  const warmDetail = () => prefetchGithubPr(projectId, pr.number);
   const summary = prCiSummary(pr, jobsByRun);
 
   return (
-    <div className="github-panel-pr-card">
+    <div className="github-panel-pr-card" onMouseEnter={warmDetail} onFocus={warmDetail}>
       <button className="github-panel-pr-header" onClick={toggle}>
         <span className={`github-panel-ci-dot ${pr.ciStatus ? ciDotClass(pr.ciStatus) : "none"}`} />
         <a
@@ -558,15 +550,13 @@ export function GitHubPanel({
   // Rendered inside the right sidebar: the drawer owns scrolling and padding.
   embedded?: boolean;
 }) {
-  const [status, setStatus] = useState<GitHubStatus | null | undefined>(undefined);
-  const [prsStatus, setPrsStatus] = useState<GitHubPRsStatus | null | undefined>(undefined);
   const [releaseStatus, setReleaseStatus] = useState<ProjectReleaseStatus | null | undefined>(
     undefined,
   );
-  // A dedicated trigger, separate from prsRefreshTrigger below — Run/Merge
-  // change release state Mullion itself just caused, which no webhook has
-  // pushed yet (a merge's `pull_request: closed` webhook event isn't
-  // correlated to anything release-specific — see the #744 plan's
+  // A dedicated trigger, separate from the per-project prsRefreshTrigger —
+  // Run/Merge change release state Mullion itself just caused, which no
+  // webhook has pushed yet (a merge's `pull_request: closed` webhook event
+  // isn't correlated to anything release-specific — see the #744 plan's
   // "explicitly out of scope" list). Bumping this alone re-fetches only
   // the release section, not the PR/issue lists too.
   const [releaseRefreshTrigger, setReleaseRefreshTrigger] = useState(0);
@@ -574,30 +564,31 @@ export function GitHubPanel({
   const openPr = useDashboardStore((s) => s.githubOpenPrByProject[params.projectId] ?? null);
   const setGithubOpenPr = useDashboardStore((s) => s.setGithubOpenPr);
   const setOpenPr = (n: number | null) => setGithubOpenPr(params.projectId, n);
-  // Drill-in: an open issue replaces the list until the user goes back.
-  const [openIssue, setOpenIssue] = useState<number | null>(null);
-  const [taskMaster, setTaskMaster] = useState<TaskMasterInfo | null>(null);
-  const storePrs = useDashboardStore((s) => s.prsByProject[params.projectId]);
+  // Drill-in: an open issue replaces the list until the user goes back. Kept
+  // in the store (like the open PR) so it survives the panel remounting.
+  const openIssue = useDashboardStore((s) => s.githubOpenIssueByProject[params.projectId] ?? null);
+  const setGithubOpenIssue = useDashboardStore((s) => s.setGithubOpenIssue);
+  const setOpenIssue = (n: number | null) => setGithubOpenIssue(params.projectId, n);
+  const taskMaster = useDashboardStore(
+    (s) => s.githubIssueUiByProject[params.projectId]?.taskMaster ?? null,
+  );
   const subscribeToGitHubProject = useDashboardStore((s) => s.subscribeToGitHubProject);
   const unsubscribeFromGitHubProject = useDashboardStore((s) => s.unsubscribeFromGitHubProject);
-  const prsRefreshTrigger = useDashboardStore((s) => s.prsRefreshTrigger);
-
-  // Use store's real-time PRs when available (from WS), fall back to fetched data
-  const effectivePrs = storePrs ?? prsStatus;
-
-  useAsyncData(
-    () => api.getProjectGitHub(params.projectId),
-    (s) => setStatus(s ?? null),
-    () => setStatus(null),
-    [params.projectId, prsRefreshTrigger],
+  const prsRefreshTrigger = useDashboardStore(
+    (s) => s.prsRefreshTriggerByProject[params.projectId] ?? 0,
   );
+  const prefetchGithubProject = useDashboardStore((s) => s.prefetchGithubProject);
 
-  useAsyncData(
-    () => api.getProjectGitHubPRs(params.projectId),
-    (s) => setPrsStatus(s ?? null),
-    () => setPrsStatus(null),
-    [params.projectId, prsRefreshTrigger],
-  );
+  // Status, PRs and the first issues page start together, not one after the
+  // other; the hooks below then join the same in-flight requests.
+  useEffect(() => {
+    prefetchGithubProject(params.projectId);
+  }, [params.projectId, prefetchGithubProject]);
+
+  // The store's live PRs (kept fresh by the WS) win over the cached fetch.
+  const status = useGitHubStatus(params.projectId);
+  const effectivePrs = usePrList(params.projectId);
+  const prsStatus = effectivePrs;
 
   useAsyncData(
     () => api.getProjectRelease(params.projectId),
@@ -612,7 +603,7 @@ export function GitHubPanel({
     return () => unsubscribeFromGitHubProject(params.projectId);
   }, [params.projectId, subscribeToGitHubProject, unsubscribeFromGitHubProject]);
 
-  if (status === undefined && prsStatus === undefined) {
+  if (status === undefined && effectivePrs === undefined) {
     // The loaded panel leads with a repo title, a section label, and rows.
     // Bones in that order keep the shape so the list doesn't jump in from
     // a single word. The region announces loading; the bones are hidden.
@@ -632,7 +623,7 @@ export function GitHubPanel({
     );
   }
 
-  if (status === null && prsStatus === null) {
+  if (status === null && effectivePrs === null) {
     return (
       <EmptyStateNote>
         No GitHub status available for this project. Connect an account in Settings → Integrations,
@@ -737,7 +728,6 @@ export function GitHubPanel({
           openIssues={status.openIssues}
           issuesHidden={status.issuesHidden}
           onOpenIssue={setOpenIssue}
-          onTaskMaster={setTaskMaster}
         />
       )}
 
