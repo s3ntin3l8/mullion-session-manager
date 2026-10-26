@@ -53,7 +53,9 @@ export function isValidOpenCodeModel(value: string | null | undefined): value is
  * Mirror of the backend's `isClaudeModelAlias`
  * (src/services/hook-adapters/shared.ts, issue #2032). A Claude Code model
  * ALIAS is a bare word — letters only, plus an optional `[1m]` suffix
- * (`haiku`, `opusplan`, `sonnet[1m]`, and any alias added later). Real model
+ * (`haiku`, `opusplan`, `sonnet[1m]`, and any letter-only alias added later;
+ * one that carries a digit would be read as an id — keep in step with the
+ * backend rule). Real model
  * ids always carry a digit or a separator (`claude-haiku-5-5`,
  * `anthropic.claude-haiku-5-5-v1:0`).
  *

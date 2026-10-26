@@ -182,10 +182,13 @@ export function validateCliModel(value: string): boolean {
  * Detected STRUCTURALLY, not from a list: an alias is a bare word — letters
  * only (plus the optional `[1m]`). A real model id always carries a digit or a
  * separator (`claude-haiku-5-5`, `anthropic.claude-haiku-5-5-v1:0`,
- * `claude-haiku@20260101`, an ARN), so a new alias Claude Code adds later is
- * caught without touching this file. The price: a gateway model whose whole id
- * is one bare word is treated as an alias here — acceptable for the one slot
- * where the alternative is breaking every haiku-backed feature.
+ * `claude-haiku@20260101`, an ARN), so a new LETTER-ONLY alias Claude Code adds
+ * later is caught without touching this file. Limits, accepted: an alias that
+ * itself carries a digit (`sonnet4`) would be read as a full id and exported —
+ * every alias to date is letters-only, so extend this rule if that changes —
+ * and a gateway model whose whole id is one bare word is treated as an alias.
+ * Acceptable for the one slot where the alternative is breaking every
+ * haiku-backed feature.
  */
 const CLAUDE_MODEL_ALIAS_RE = /^[a-z]+(\[1m\])?$/i;
 
