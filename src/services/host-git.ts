@@ -42,6 +42,10 @@ export type HostGitResult<T> =
        * guard). */
       reason: "unreachable";
       detail: string;
+      /** Set when the agent answered with a non-404 4xx (it is up, but
+       * rejected the request) — lets a caller tell that from a transport
+       * failure without parsing `detail`. */
+      status?: number;
     };
 
 /** Runs `fn` against the remote client for `hostId`, mapping its two error
@@ -95,7 +99,7 @@ export async function viaRemote<T>(
   } catch (err) {
     if (err instanceof HostRequestError) {
       if (err.statusCode === 404) return { ok: false, reason: "unsupported" };
-      return { ok: false, reason: "unreachable", detail: err.message };
+      return { ok: false, reason: "unreachable", detail: err.message, status: err.statusCode };
     }
     const detail =
       err instanceof HostUnreachableError

@@ -3473,7 +3473,7 @@ export async function projectsRoute(app: FastifyInstance) {
     if (!result.ok) {
       if (result.reason === "unsupported") {
         reply.code(204).send();
-      } else if (result.detail.includes("rejected the request")) {
+      } else if (result.status !== undefined) {
         // The agent answered with a 4xx (e.g. a cwd outside its
         // PROJECTS_ROOTS, a 429): it is up, so say so rather than "unreachable".
         app.log.warn(
