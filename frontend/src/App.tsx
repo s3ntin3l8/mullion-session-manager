@@ -316,6 +316,8 @@ export function App() {
   // highlight's own ~1200ms window — see that effect's own comment.
   const lastHandledHighlightRef = useRef<string | null>(null);
 
+  const dockviewContainerRef = useRef<HTMLDivElement>(null);
+
   const onReady = useCallback((event: DockviewReadyEvent) => {
     setDockviewApi(event.api);
   }, []);
@@ -327,10 +329,14 @@ export function App() {
   // resizes.
   useEffect(() => {
     if (!dockviewApi) return;
-    const container = document.querySelector<HTMLElement>(".dockview-container");
+    const container = dockviewContainerRef.current;
     if (!container || typeof ResizeObserver === "undefined") return;
     const clamp = () => {
-      const max = container.clientHeight;
+      // dockview sizes a floating window as group height + its titlebar.
+      const titlebar =
+        parseFloat(getComputedStyle(container).getPropertyValue("--dv-floating-titlebar-height")) ||
+        22;
+      const max = container.clientHeight - titlebar;
       if (max <= 0) return;
       for (const group of dockviewApi.groups) {
         if (group.api.location.type !== "floating") continue;
@@ -1839,6 +1845,7 @@ export function App() {
           )}
           <div className={`grid-area-body${!backendReachable || sessionExpired ? " dimmed" : ""}`}>
             <div
+              ref={dockviewContainerRef}
               className="dockview-container"
               style={{ "--mullion-chrome-bg": dockviewChromeBg } as CSSProperties}
             >
