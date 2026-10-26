@@ -138,7 +138,11 @@ export function withLiveInfo(
   // established (the live info is the idle/no-signal fallback). Optional and
   // defaulting to "reachable", so every existing caller keeps today's
   // behaviour.
-  opts: { hostReachable?: boolean } = {},
+  //
+  // Issue #2010 — `hostRefusedStatus` is set when the host answered with an
+  // error (HTTP status) instead of not answering; it only changes the
+  // suspended detail, never the status.
+  opts: { hostReachable?: boolean; hostRefusedStatus?: number } = {},
 ) {
   const live = buildLiveInfo(info);
   let browserUrl = live.browserUrl;
@@ -165,6 +169,7 @@ export function withLiveInfo(
   const derived = deriveSessionStatus({
     dbStatus: row.status,
     hostReachable: opts.hostReachable,
+    hostRefusedStatus: opts.hostRefusedStatus,
     info: live,
   });
   return {
@@ -344,8 +349,13 @@ export async function withLiveStatus(
   idleThresholdMs: number,
   hostId: string,
 ) {
-  const { info, hostReachable } = await readSessionLiveInfo(app, row, idleThresholdMs, hostId);
-  return withLiveInfo(app, row, info, hostId, { hostReachable });
+  const { info, hostReachable, hostRefusedStatus } = await readSessionLiveInfo(
+    app,
+    row,
+    idleThresholdMs,
+    hostId,
+  );
+  return withLiveInfo(app, row, info, hostId, { hostReachable, hostRefusedStatus });
 }
 
 /**
@@ -374,6 +384,8 @@ export async function readSessionLiveInfo(
    * error: its rate limit, a stale token). Absent when the read succeeded. */
   failure?: "unreachable" | "refused";
   error?: unknown;
+  /** The HTTP status the host refused with — set exactly when `failure` is `refused`. */
+  hostRefusedStatus?: number;
 }> {
   const id = String(row.id);
   // The one place the result is built, so `hostReachable` and `failure` cannot
@@ -386,6 +398,10 @@ export async function readSessionLiveInfo(
     info,
     hostReachable: failure === undefined,
     ...(failure === undefined ? {} : { failure, error }),
+    // From `failure`, not a second `instanceof` test, so the pair cannot disagree.
+    ...(failure === "refused" && error instanceof HostRequestError
+      ? { hostRefusedStatus: error.statusCode }
+      : {}),
   });
   try {
     const backend = resolveBackend(app, hostId);
