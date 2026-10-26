@@ -1,11 +1,15 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { eq } from "drizzle-orm";
-import { previews, projects } from "../../src/db/schema.js";
+import { previews, projects, sessions } from "../../src/db/schema.js";
+import * as sessionBackendModule from "../../src/services/session-backend.js";
+import * as hostGitModule from "../../src/services/host-git.js";
+import { getOrCreateProjectPreview } from "../../src/services/preview-registry.js";
+import { trackPreviewWorktree, deletePreviewWorktree } from "../../src/services/git-worktree.js";
 import { verifyPreviewToken } from "../../src/services/preview-auth.js";
 
 const tmpDb = path.join(os.tmpdir(), `previews-test-${process.pid}.db`);
@@ -300,7 +304,8 @@ describe("previews route (issue #28)", () => {
       url: "/api/previews",
       payload: { kind: "project", projectId },
     });
-    expect(preview.json().branch).toBe("feat/links");
+    // Create responses skip the branch lookup (the pane only needs the slug).
+    expect(preview.json().branch).toBeUndefined();
     const slug = preview.json().slug as string;
 
     const one = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
@@ -311,7 +316,7 @@ describe("previews route (issue #28)", () => {
       url: "/api/previews",
       payload: { kind: "external", url: "https://example.com/x" },
     });
-    expect(external.json().branch).toBeNull();
+    expect(external.json().branch).toBeUndefined();
 
     const list = await app.inject({ method: "GET", url: "/api/previews" });
     const rows = list.json() as Array<{ slug: string; branch: string | null }>;
@@ -331,6 +336,145 @@ describe("previews route (issue #28)", () => {
 
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();
+  });
+
+  describe("branch follows the session serving the preview (A7, #2007)", () => {
+    afterEach(() => vi.restoreAllMocks());
+
+    // Answers for whichever session ids the route asks about.
+    function fakeLive(liveBranch: string | null) {
+      vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue({
+        liveStatus: vi
+          .fn()
+          .mockImplementation(async (ids: string[]) =>
+            Object.fromEntries(ids.map((id) => [id, { liveBranch }])),
+          ),
+      } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
+    }
+
+    async function setup(app: Awaited<ReturnType<typeof buildApp>>) {
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "previews-session-"));
+      fs.mkdirSync(path.join(cwd, ".git"));
+      fs.writeFileSync(path.join(cwd, ".git", "HEAD"), "ref: refs/heads/main-checkout\n");
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: `sess-${Math.random()}`, cwd },
+      });
+      const projectId = created.json().id as number;
+      const [session] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "claude" })
+        .returning()
+        .all();
+      return { cwd, projectId, sessionId: session.id };
+    }
+
+    it("prefers the bound session's live branch, then its worktree, then the checkout", async () => {
+      const app = await buildApp();
+      const { cwd, projectId, sessionId } = await setup(app);
+      fakeLive("feat/live");
+
+      // Binding happens server-side (dev-server accept), not via the POST body.
+      const bound = getOrCreateProjectPreview(app, projectId, sessionId);
+      expect(bound.sessionId).toBe(sessionId);
+      const slug = bound.slug;
+      const viaLive = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+      expect(viaLive.json().branch).toBe("feat/live");
+
+      // No live branch yet: the session's tracked worktree wins over the checkout.
+      vi.restoreAllMocks();
+      vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue({
+        liveStatus: vi.fn().mockResolvedValue({}),
+      } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
+      trackPreviewWorktree(sessionId, {
+        worktreePath: path.join(cwd, "wt"),
+        branch: "feat/worktree",
+        worktreeRefresh: false,
+        parentCwd: cwd,
+        projectId,
+      });
+      const viaWorktree = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+      expect(viaWorktree.json().branch).toBe("feat/worktree");
+
+      deletePreviewWorktree(sessionId);
+      const viaCheckout = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+      expect(viaCheckout.json().branch).toBe("main-checkout");
+
+      // A throwing backend (unreachable host) degrades to the checkout.
+      vi.restoreAllMocks();
+      vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue({
+        liveStatus: vi.fn().mockRejectedValue(new Error("down")),
+      } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
+      const unreachable = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+      expect(unreachable.json().branch).toBe("main-checkout");
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("ignores a session of another project and unbinds when the session is deleted", async () => {
+      const app = await buildApp();
+      const a = await setup(app);
+      const b = await setup(app);
+      fakeLive("feat/live");
+
+      const res = getOrCreateProjectPreview(app, a.projectId, b.sessionId);
+      expect(res.sessionId).toBeNull();
+      const unbound = await app.inject({ method: "GET", url: `/api/previews/${res.slug}` });
+      expect(unbound.json().branch).toBe("main-checkout");
+
+      const bound = getOrCreateProjectPreview(app, a.projectId, a.sessionId);
+      expect(bound.sessionId).toBe(a.sessionId);
+      const list = await app.inject({ method: "GET", url: "/api/previews" });
+      expect(
+        (list.json() as Array<{ slug: string; branch: string }>).find((r) => r.slug === bound.slug)
+          ?.branch,
+      ).toBe("feat/live");
+      app.db.delete(sessions).where(eq(sessions.id, a.sessionId)).run();
+      const after = await app.inject({ method: "GET", url: `/api/previews/${bound.slug}` });
+      expect(after.json().sessionId).toBeNull();
+
+      fs.rmSync(a.cwd, { recursive: true, force: true });
+      fs.rmSync(b.cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("resolves a remote-hosted project's branch through the host client, null on failure", async () => {
+      const app = await buildApp();
+      const { cwd, projectId } = await setup(app);
+      app.db.update(projects).set({ hostId: "remote-1" }).where(eq(projects.id, projectId)).run();
+      const slug = getOrCreateProjectPreview(app, projectId).slug;
+
+      const spy = vi
+        .spyOn(hostGitModule, "resolveHostGitBranch")
+        .mockResolvedValue({ ok: true, value: "feat/remote" });
+      const ok = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+      expect(ok.json().branch).toBe("feat/remote");
+      expect(spy).toHaveBeenCalledWith(expect.anything(), "remote-1", cwd);
+
+      // A detached HEAD (7-char SHA from the agent) is not a branch.
+      spy.mockResolvedValue({ ok: true, value: "abc1234" });
+      // The SHA filter lives in resolveHostGitBranch itself, so exercise it too.
+      spy.mockRestore();
+      vi.spyOn(
+        await import("../../src/services/remote-host-client.js"),
+        "getRemoteHostClient",
+      ).mockReturnValue({ resolveGitBranch: async () => "abc1234" } as never);
+      const detachedRemote = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+      expect(detachedRemote.json().branch).toBeNull();
+      vi.restoreAllMocks();
+      vi.spyOn(hostGitModule, "resolveHostGitBranch").mockResolvedValue({
+        ok: false,
+        reason: "unreachable",
+        detail: "x",
+      });
+      const down = await app.inject({ method: "GET", url: `/api/previews/${slug}` });
+      expect(down.json().branch).toBeNull();
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
   });
 });
 

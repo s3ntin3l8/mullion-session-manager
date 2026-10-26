@@ -26,7 +26,7 @@ import { EventEmitter } from "node:events";
 import { execFileSync, spawn as spawnChildProcess } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { eq } from "drizzle-orm";
-import { projects, sessions } from "../../src/db/schema.js";
+import { previews, projects, sessions } from "../../src/db/schema.js";
 import { gitEnv } from "../../src/services/git-env.js";
 import type { SessionBackend } from "../../src/services/session-backend.js";
 
@@ -2085,6 +2085,14 @@ describe("sessions route", () => {
           expect(body.devServerUrl).toBe("5173");
           expect(body.preview).toMatchObject({ kind: "project" });
           expect(typeof body.preview.slug).toBe("string");
+          // Issue #2007 — the accepting session is the one serving the preview.
+          expect(body.preview.sessionId).toBe(sessionId);
+          const [row] = app.db
+            .select()
+            .from(previews)
+            .where(eq(previews.slug, body.preview.slug))
+            .all();
+          expect(row.sessionId).toBe(sessionId);
           await app.close();
         } finally {
           delete process.env.PREVIEW_BASE_HOST;

@@ -1642,8 +1642,10 @@ export interface Preview {
   kind: "project" | "external";
   projectId: number | null;
   externalUrl: string | null;
+  /** Session serving this preview (issue #2007); null when unbound. */
+  sessionId?: number | null;
   createdAt: string;
-  /** Branch the project's checkout is on; null for external or unreadable. */
+  /** Branch the preview serves: the serving session's, else the project checkout's; null for external or unreadable. */
   branch?: string | null;
 }
 

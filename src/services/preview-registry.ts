@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
-import { previews, projects } from "../db/schema.js";
+import { previews, projects, sessions } from "../db/schema.js";
 
 // Never a decodable/encoded target (see schema.ts) — an opaque random slug,
 // used verbatim as the "preview-<slug>" DNS label. crypto.randomUUID()'s
@@ -17,6 +17,8 @@ export interface PreviewSummary {
   kind: "project" | "external";
   projectId: number | null;
   externalUrl: string | null;
+  /** The session serving this preview (issue #2007); null when unbound. */
+  sessionId: number | null;
   createdAt: Date;
   /** Filled in by the route (the registry stays a pure table view). */
   branch?: string | null;
@@ -30,6 +32,7 @@ function toSummary(row: PreviewRow): PreviewSummary {
     kind: row.kind,
     projectId: row.projectId,
     externalUrl: row.externalUrl,
+    sessionId: row.sessionId,
     createdAt: row.createdAt,
   };
 }
@@ -48,7 +51,11 @@ export class UnknownProjectError extends Error {
  * and therefore its existing "preview-<slug>" subdomain — rather than
  * minting a fresh one on every open.
  */
-export function getOrCreateProjectPreview(app: FastifyInstance, projectId: number): PreviewSummary {
+export function getOrCreateProjectPreview(
+  app: FastifyInstance,
+  projectId: number,
+  sessionId?: number,
+): PreviewSummary {
   const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
   if (!project) throw new UnknownProjectError(projectId);
 
@@ -65,11 +72,24 @@ export function getOrCreateProjectPreview(app: FastifyInstance, projectId: numbe
     .onConflictDoNothing({ target: previews.projectId })
     .run();
 
-  const [row] = app.db
-    .select()
-    .from(previews)
-    .where(and(eq(previews.kind, "project"), eq(previews.projectId, projectId)))
-    .all();
+  const where = and(eq(previews.kind, "project"), eq(previews.projectId, projectId));
+
+  // Issue #2007 — bind the session serving this preview. Only a session of
+  // THIS project counts; anything else is ignored rather than rejected, since
+  // the binding is a best-effort hint for the branch and must never fail the
+  // dev-server accept that calls this.
+  if (sessionId !== undefined) {
+    const [session] = app.db
+      .select({ projectId: sessions.projectId })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId))
+      .all();
+    if (session?.projectId === projectId) {
+      app.db.update(previews).set({ sessionId }).where(where).run();
+    }
+  }
+
+  const [row] = app.db.select().from(previews).where(where).all();
   return toSummary(row);
 }
 

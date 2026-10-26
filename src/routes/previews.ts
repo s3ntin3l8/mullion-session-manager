@@ -3,6 +3,10 @@ import { eq } from "drizzle-orm";
 import { projects } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { readGitBranch } from "../services/git-branch.js";
+import { getPreviewWorktree } from "../services/git-worktree.js";
+import { resolveHostGitBranch } from "../services/host-git.js";
+import { resolveBackend } from "../services/session-backend.js";
+import { resolveSessionHostIds } from "../services/session-live-info.js";
 import {
   UnknownProjectError,
   createExternalPreview,
@@ -48,24 +52,77 @@ function isAllowedExternalUrl(value: string): boolean {
   return isAllowedHttpUrl(value, { allowLoopback: false, allowPrivate: false });
 }
 
-// The branch a project preview is serving (epic #1965, A6). A preview row has
-// no owning session — it is one dev-server slot per project — so the branch is
-// the project checkout's own HEAD, read cheaply from `.git/HEAD`. External
-// previews and remote-hosted projects (whose cwd this host cannot read) have
-// none: null, never a guess. A detached HEAD is null too — a short SHA is not
-// a branch a consumer could link to.
-function withBranch(app: FastifyInstance, preview: PreviewSummary): PreviewSummary {
-  let branch: string | null = null;
-  if (preview.kind === "project" && preview.projectId !== null) {
-    const [project] = app.db
-      .select({ cwd: projects.cwd, hostId: projects.hostId })
-      .from(projects)
-      .where(eq(projects.id, preview.projectId))
-      .all();
-    if (project && project.hostId === LOCAL_HOST_ID)
-      branch = readGitBranch(project.cwd, { allowDetached: false });
+// The branch a project preview is serving (epic #1965, A6/A7). In order:
+// the serving session's self-reported live branch, that session's tracked
+// preview worktree, then the project checkout's own HEAD — read from
+// `.git/HEAD` locally, or through the host client for a remote-hosted project
+// (whose cwd this host cannot read). External previews have none: null, never
+// a guess. A detached HEAD is null too — a short SHA is not a branch a
+// consumer could link to. Create responses carry no `branch` — the pane only
+// needs the slug, and the lookup can cost a host round trip; a GET pays it.
+async function withBranches(
+  app: FastifyInstance,
+  previewList: PreviewSummary[],
+): Promise<PreviewSummary[]> {
+  const live = await liveBranchesBySession(app, previewList);
+  return Promise.all(
+    previewList.map(async (p) => ({ ...p, branch: await resolvePreviewBranch(app, p, live) })),
+  );
+}
+
+// One `liveStatus` per host for every bound session (not one per preview).
+// A host that doesn't answer just contributes nothing: the read must not fail
+// on an unreachable host, so those previews fall through to the next source.
+async function liveBranchesBySession(
+  app: FastifyInstance,
+  previewList: PreviewSummary[],
+): Promise<Map<number, string>> {
+  const ids = previewList.flatMap((p) => (p.sessionId === null ? [] : [p.sessionId]));
+  const out = new Map<number, string>();
+  if (ids.length === 0) return out;
+  const byHost = new Map<string, string[]>();
+  for (const [id, hostId] of resolveSessionHostIds(app, ids)) {
+    byHost.set(hostId, [...(byHost.get(hostId) ?? []), String(id)]);
   }
-  return { ...preview, branch };
+  await Promise.all(
+    [...byHost].map(async ([hostId, hostIds]) => {
+      try {
+        const info = await resolveBackend(app, hostId).liveStatus(hostIds, 0);
+        for (const id of hostIds) {
+          const branch = info[id]?.liveBranch;
+          if (branch) out.set(Number(id), branch);
+        }
+      } catch (err) {
+        app.log.warn({ hostId, err }, "preview live branch lookup failed");
+      }
+    }),
+  );
+  return out;
+}
+
+async function resolvePreviewBranch(
+  app: FastifyInstance,
+  preview: PreviewSummary,
+  live: Map<number, string>,
+): Promise<string | null> {
+  if (preview.kind !== "project" || preview.projectId === null) return null;
+  const [project] = app.db
+    .select({ cwd: projects.cwd, hostId: projects.hostId })
+    .from(projects)
+    .where(eq(projects.id, preview.projectId))
+    .all();
+  if (!project) return null;
+
+  if (preview.sessionId !== null) {
+    const liveBranch = live.get(preview.sessionId);
+    if (liveBranch) return liveBranch;
+    const worktree = getPreviewWorktree(preview.sessionId);
+    if (worktree?.branch) return worktree.branch;
+  }
+
+  if (project.hostId === LOCAL_HOST_ID) return readGitBranch(project.cwd, { allowDetached: false });
+  const result = await resolveHostGitBranch(app, project.hostId, project.cwd);
+  return result.ok ? result.value : null;
 }
 
 export async function previewsRoute(app: FastifyInstance) {
@@ -75,7 +132,7 @@ export async function previewsRoute(app: FastifyInstance) {
   // than silently succeed into a dead end.
   if (app.config.PREVIEW_BASE_HOST.trim() === "") return;
 
-  app.get("/api/previews", async () => listPreviews(app).map((p) => withBranch(app, p)));
+  app.get("/api/previews", async () => withBranches(app, listPreviews(app)));
 
   app.post<{ Body: CreatePreviewBody }>(
     "/api/previews",
@@ -91,7 +148,7 @@ export async function previewsRoute(app: FastifyInstance) {
         try {
           const preview = getOrCreateProjectPreview(app, projectId);
           reply.code(201);
-          return withBranch(app, preview);
+          return preview;
         } catch (err) {
           if (err instanceof UnknownProjectError) return reply.notFound(err.message);
           throw err;
@@ -104,14 +161,14 @@ export async function previewsRoute(app: FastifyInstance) {
       }
       const preview = createExternalPreview(app, url);
       reply.code(201);
-      return withBranch(app, preview);
+      return preview;
     },
   );
 
   app.get<{ Params: { slug: string } }>("/api/previews/:slug", async (request, reply) => {
     const preview = getPreviewBySlug(app, request.params.slug);
     if (!preview) return reply.notFound();
-    return withBranch(app, preview);
+    return (await withBranches(app, [preview]))[0];
   });
 
   app.delete<{ Params: { slug: string } }>("/api/previews/:slug", async (request, reply) => {

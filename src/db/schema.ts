@@ -419,6 +419,16 @@ export const previews = sqliteTable(
     kind: text("kind", { enum: ["project", "external"] }).notNull(),
     projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }),
     externalUrl: text("external_url"),
+    // Issue #2007 — the session whose dev server this project preview is
+    // serving, written when that session's detected dev-server port is
+    // accepted (routes/sessions.ts, dev-server/accept). A preview is one row
+    // per project, so this is the most recent accepter. NULL means "unbound":
+    // external previews never have one, and neither does a remote-hosted
+    // project's (dev-server detection is local-only), which resolves its
+    // branch through the project checkout on its host. The branch the preview
+    // reports is derived from it (routes/previews.ts withBranches). SET NULL, not
+    // CASCADE: deleting the session must not delete the project's preview slug.
+    sessionId: integer("session_id").references(() => sessions.id, { onDelete: "set null" }),
     createdAt: integer("created_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),
