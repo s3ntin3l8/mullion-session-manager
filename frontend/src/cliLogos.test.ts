@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { resolveAgentLogo, resolveLauncherLogo, commandToBinary } from "./cliLogos.js";
+import minimaxLogo from "./assets/cli-logos/minimax.svg";
 import type { Launcher } from "./api/index.js";
 
 const DARK = "dark" as const;
@@ -22,6 +23,10 @@ describe("resolveAgentLogo", () => {
     expect(resolveAgentLogo("/home/user/.local/bin/opencode --flag", DARK)).toBe(
       resolveAgentLogo("opencode", DARK),
     );
+  });
+
+  it("resolves the MiniMax logo for mcode", () => {
+    expect(resolveAgentLogo("mcode", DARK)).toBe(minimaxLogo);
   });
 
   it("returns null for an unknown binary", () => {
@@ -52,6 +57,11 @@ describe("resolveLauncherLogo", () => {
   it("resolves a detected agent launcher by id", () => {
     const launcher = makeLauncher({ id: "agent:claude" });
     expect(resolveLauncherLogo(launcher, DARK)).toBeTruthy();
+  });
+
+  it("resolves a detected mcode launcher by id", () => {
+    const launcher = makeLauncher({ id: "agent:mcode" });
+    expect(resolveLauncherLogo(launcher, DARK)).toBe(resolveAgentLogo("mcode", DARK));
   });
 
   it("returns null for a shell launcher", () => {
