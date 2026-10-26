@@ -10,6 +10,7 @@ import type * as SettingsModule from "../../src/services/settings.js";
 const mockGetRepoPRsStatus = vi.hoisted(() => vi.fn());
 const mockRefreshDefaultBranchCi = vi.hoisted(() => vi.fn());
 const mockResolveGitHubToken = vi.hoisted(() => vi.fn());
+const mockResolveChecksReadToken = vi.hoisted(() => vi.fn());
 const mockResolveGitHubRepo = vi.hoisted(() => vi.fn());
 const mockGetRemoteHostClient = vi.hoisted(() => vi.fn());
 const mockEnrich = vi.hoisted(() => vi.fn());
@@ -61,6 +62,7 @@ vi.mock("../../src/services/github-integration.js", () => ({
   // directly. The mock's return value is used with `await`, which works
   // fine on a plain (non-Promise) value.
   resolveGitHubToken: mockResolveGitHubToken,
+  resolveChecksReadToken: mockResolveChecksReadToken,
 }));
 
 vi.mock("../../src/services/git-remote.js", () => ({
@@ -122,6 +124,8 @@ describe("startGitHubPRPoller", () => {
     mockRefreshDefaultBranchCi.mockReset();
     mockRefreshDefaultBranchCi.mockResolvedValue(undefined);
     mockResolveGitHubToken.mockReset();
+    mockResolveChecksReadToken.mockReset();
+    mockResolveChecksReadToken.mockResolvedValue(null);
     mockResolveGitHubRepo.mockReset();
     mockGetRemoteHostClient.mockReset();
     mockGetRemoteHostClient.mockReturnValue({ resolveGitHubRepo: mockResolveGitHubRepo });
@@ -180,6 +184,35 @@ describe("startGitHubPRPoller", () => {
     expect(mockRefreshDefaultBranchCi).toHaveBeenCalledWith("ghp_token", "test-owner", "test-repo");
     expect(mockRefreshDefaultBranchCi).toHaveBeenCalledTimes(2);
 
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  // Issue #1672 — the review-state enrichment selects the head commit's
+  // statusCheckRollup, so it reads with the checks-read token when there is
+  // one and keeps the read token when that mint is unavailable.
+  it.each([
+    ["the checks-read token when the App grants it", "ghs_checks", "ghs_checks"],
+    ["the read token when the checks-read mint is unavailable", null, "ghp_token"],
+  ])("enriches review state with %s", async (_label, checksToken, expected) => {
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
+    mockResolveChecksReadToken.mockResolvedValue(checksToken);
+    mockGetRepoPRsStatus.mockResolvedValue({
+      prs: [{ number: 41 }],
+      prSummary: { total: 1, pass: 0, fail: 0, pending: 0, unknown: 1 },
+    });
+    vi.useFakeTimers();
+    const cleanup = startGitHubPRPoller(mockApp([{ id: 1, cwd: "/tmp/one", hostId: "local" }]));
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mockEnrich).toHaveBeenCalledWith(
+      expected,
+      "test-owner",
+      "test-repo",
+      expect.any(Array),
+      expect.anything(),
+    );
+    // Everything else on the poll keeps the read token.
+    expect(mockGetRepoPRsStatus).toHaveBeenCalledWith("ghp_token", "test-owner", "test-repo");
     cleanup();
     vi.useRealTimers();
   });

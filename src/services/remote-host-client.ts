@@ -50,6 +50,7 @@ import type {
 } from "./git-worktree.js";
 import type { DeleteBranchResult } from "./git-branch-delete.js";
 import type { GitPullResult } from "./git-pull.js";
+import type { GitBranchOpResult } from "./git-branch-ops.js";
 import type { CloneHealth, RepairOutcome, RepairPlan } from "./git-doctor.js";
 import type { PushResult } from "./git-push.js";
 import type { ScaffoldEntry } from "./mullion-scaffold.js";
@@ -1183,6 +1184,36 @@ export class RemoteHostClient {
     return this.request("/internal/git-pull", {
       method: "POST",
       body: JSON.stringify({ cwd }),
+    });
+  }
+
+  /** The guarded checkout / create / rebase on this agent's filesystem
+   * (issue #1672) — mirror /internal/git-checkout, /internal/git-branch-create
+   * and /internal/git-rebase, each returning git-branch-ops.ts's
+   * GitBranchOpResult. */
+  resolveGitCheckout(cwd: string, branch: string): Promise<GitBranchOpResult> {
+    return this.request("/internal/git-checkout", {
+      method: "POST",
+      body: JSON.stringify({ cwd, branch }),
+    });
+  }
+
+  resolveGitBranchCreate(
+    cwd: string,
+    name: string,
+    startPoint: string,
+    checkout?: boolean,
+  ): Promise<GitBranchOpResult> {
+    return this.request("/internal/git-branch-create", {
+      method: "POST",
+      body: JSON.stringify({ cwd, name, startPoint, checkout }),
+    });
+  }
+
+  resolveGitRebase(cwd: string, onto?: string): Promise<GitBranchOpResult> {
+    return this.request("/internal/git-rebase", {
+      method: "POST",
+      body: JSON.stringify({ cwd, onto }),
     });
   }
 

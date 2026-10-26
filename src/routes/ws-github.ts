@@ -1,9 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket } from "@fastify/websocket";
-import { subscribeToProject } from "../services/github-ws-broadcast.js";
+import { subscribeToProject, unsubscribeFromProject } from "../services/github-ws-broadcast.js";
 
 interface SubscribeMessage {
-  type: "subscribe";
+  // `unsubscribe` (issue #1672) mirrors `subscribe`: the frontend sends it
+  // when the last view of a project unmounts, while the shared socket stays
+  // open for the projects still on screen.
+  type: "subscribe" | "unsubscribe";
   // The frontend's own projectId is a number (see store.ts's
   // subscribeToGitHubProject), so `JSON.stringify` sends it as a JSON
   // number, not a string. subscribeToProject's own keying (and the
@@ -26,12 +29,9 @@ export async function githubWSRoute(app: FastifyInstance) {
       }
 
       const msg = parsed as SubscribeMessage;
-      if (
-        msg?.type === "subscribe" &&
-        (typeof msg.projectId === "string" || typeof msg.projectId === "number")
-      ) {
-        subscribeToProject(String(msg.projectId), socket);
-      }
+      if (typeof msg?.projectId !== "string" && typeof msg?.projectId !== "number") return;
+      if (msg.type === "subscribe") subscribeToProject(String(msg.projectId), socket);
+      else if (msg.type === "unsubscribe") unsubscribeFromProject(String(msg.projectId), socket);
     });
 
     socket.on("close", () => {

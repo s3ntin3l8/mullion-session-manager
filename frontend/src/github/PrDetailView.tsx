@@ -232,7 +232,9 @@ export function PrDetailView({
   const error = actionError ?? loadError;
   const setError = setActionError;
   const [notice, setNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"merge" | "review" | "handoff" | "stop" | "task" | null>(null);
+  const [busy, setBusy] = useState<
+    "merge" | "update" | "review" | "handoff" | "stop" | "task" | null
+  >(null);
   const [openStatus, setOpenStatus] = useState<StatusKey | null>(null);
   const [showBody, setShowBody] = useState(false);
   const [showFiles, setShowFiles] = useState(false);
@@ -267,7 +269,7 @@ export function PrDetailView({
   const startSessionFrom = useStartSessionFrom(projectId);
 
   const run = async (
-    kind: "merge" | "review" | "handoff" | "stop" | "task",
+    kind: "merge" | "update" | "review" | "handoff" | "stop" | "task",
     fn: () => Promise<string | void>,
   ) => {
     setBusy(kind);
@@ -289,6 +291,16 @@ export function PrDetailView({
       await api.mergeProjectPr(projectId, number, pr.headSha);
       reload();
       return "Merged (squash)";
+    });
+
+  // GitHub's "Update branch" (issue #1672): merge the base into a PR that has
+  // fallen behind it, pinned to the head on screen.
+  const updateBranch = () =>
+    run("update", async () => {
+      if (!pr) return;
+      await api.updateProjectPrBranch(projectId, number, pr.headSha);
+      reload();
+      return "Branch update requested — checks re-run on the new head";
     });
 
   const reReview = () =>
@@ -709,6 +721,15 @@ export function PrDetailView({
 
       {pr.state === "OPEN" && (
         <div className="pr-sticky">
+          {pr.mergeStateStatus === "BEHIND" && (
+            <Button
+              disabled={busy !== null}
+              title="Merge the base branch into this pull request's branch"
+              onClick={updateBranch}
+            >
+              {busy === "update" ? "Updating…" : "Update branch"}
+            </Button>
+          )}
           <ConfirmButton
             variant="neutral"
             title="Squash and merge this pull request"

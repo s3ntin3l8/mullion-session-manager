@@ -32,6 +32,12 @@ import {
   type WorktreeResult,
 } from "./git-worktree.js";
 import { deleteBranch, type DeleteBranchResult } from "./git-branch-delete.js";
+import {
+  checkoutBranch,
+  createBranch,
+  rebaseBranch,
+  type GitBranchOpResult,
+} from "./git-branch-ops.js";
 import type { PromoteDecision } from "../plugins/hooks.js";
 import { adapterHasInitialPromptArgs } from "./hook-adapters/index.js";
 import { compileOutputMatcher, waitForOutput } from "./output-wait.js";
@@ -285,6 +291,17 @@ export interface SessionBackend {
   // one layer up, in routes/projects.ts (see git-branch-delete.ts's own
   // doc comment).
   deleteBranch(cwd: string, name: string, opts?: { force?: boolean }): Promise<DeleteBranchResult>;
+  // Issue #1672 — the Git view's guarded checkout / create / rebase of the
+  // project checkout, on whichever host owns `cwd`. Same DB-less split as
+  // deleteBranch: the active-session guard lives in routes/projects.ts.
+  checkoutBranch(cwd: string, branch: string): Promise<GitBranchOpResult>;
+  createBranch(
+    cwd: string,
+    name: string,
+    startPoint: string,
+    opts?: { checkout?: boolean },
+  ): Promise<GitBranchOpResult>;
+  rebaseBranch(cwd: string, onto?: string): Promise<GitBranchOpResult>;
   // Issue #442 — removes any worktree `git worktree list` itself reports
   // for `cwd` (not just a task-scoped one) on whichever host owns it. The
   // `sessions-active` refusal reason isn't produced here either, for the
@@ -550,6 +567,23 @@ class LocalBackend implements SessionBackend {
 
   deleteBranch(cwd: string, name: string, opts?: { force?: boolean }): Promise<DeleteBranchResult> {
     return deleteBranch(cwd, name, opts);
+  }
+
+  checkoutBranch(cwd: string, branch: string): Promise<GitBranchOpResult> {
+    return checkoutBranch(cwd, branch);
+  }
+
+  createBranch(
+    cwd: string,
+    name: string,
+    startPoint: string,
+    opts?: { checkout?: boolean },
+  ): Promise<GitBranchOpResult> {
+    return createBranch(cwd, name, startPoint, opts);
+  }
+
+  rebaseBranch(cwd: string, onto?: string): Promise<GitBranchOpResult> {
+    return rebaseBranch(cwd, onto);
   }
 
   removeListedWorktree(
@@ -848,6 +882,23 @@ class RemoteBackend implements SessionBackend {
 
   deleteBranch(cwd: string, name: string, opts?: { force?: boolean }): Promise<DeleteBranchResult> {
     return this.client.resolveDeleteBranch(cwd, name, opts?.force);
+  }
+
+  checkoutBranch(cwd: string, branch: string): Promise<GitBranchOpResult> {
+    return this.client.resolveGitCheckout(cwd, branch);
+  }
+
+  createBranch(
+    cwd: string,
+    name: string,
+    startPoint: string,
+    opts?: { checkout?: boolean },
+  ): Promise<GitBranchOpResult> {
+    return this.client.resolveGitBranchCreate(cwd, name, startPoint, opts?.checkout);
+  }
+
+  rebaseBranch(cwd: string, onto?: string): Promise<GitBranchOpResult> {
+    return this.client.resolveGitRebase(cwd, onto);
   }
 
   removeListedWorktree(

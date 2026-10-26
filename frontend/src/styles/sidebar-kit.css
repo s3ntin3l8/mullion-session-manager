@@ -675,6 +675,26 @@ button.sb-chip--label[aria-pressed="true"] {
 .sc-search:focus-within {
   border-color: var(--accent);
 }
+/* Branches header → New branch (issue #1672). */
+.sc-new-branch {
+  padding: 2px 0 6px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.sc-new-branch-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 10px;
+}
+.sc-check {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: auto;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
 .sc-group-h {
   display: flex;
   align-items: center;

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import type { GitPullReason } from "../api/types.js";
-import { pullReasonMessage, reasonMessage } from "./gitReasons.js";
+import type { GitBranchOpReason, GitPullReason } from "../api/types.js";
+import { branchOpReasonMessage, pullReasonMessage, reasonMessage } from "./gitReasons.js";
 
 // The pull refusals have their own renderer — pullReasonMessage, the Git
 // panel's — and their own copy, because the sidebar's one-line slot needs
@@ -60,5 +60,48 @@ describe("pullReasonMessage copy", () => {
   // rendered by reasonMessage — one copy of that copy, on purpose.
   it("shares the not-a-repo copy with the branch and worktree refusals", () => {
     expect(pullReasonMessage("not-a-repo", undefined)).toBe(reasonMessage("not-a-repo", undefined));
+  });
+});
+
+// Issue #1672 — the checkout / create / rebase refusals. A Record over the
+// union, so a new reason with no row is a compile error, as above.
+describe("branchOpReasonMessage copy", () => {
+  const unionCases: Record<GitBranchOpReason, RegExp> = {
+    "not-a-repo": /Not a git repository/i,
+    "invalid-name": /Invalid branch name/i,
+    "no-such-branch": /no longer exists/i,
+    "no-such-ref": /No such branch or ref/i,
+    "already-exists": /already exists/i,
+    "already-current": /Already on this branch/i,
+    "checked-out": /another worktree/i,
+    "unborn-head": /no commits/i,
+    "detached-head": /detached HEAD/i,
+    "dirty-tree": /uncommitted changes/i,
+    "operation-in-progress": /stopped mid-way/i,
+    "no-base": /Nothing to rebase onto/i,
+    "already-up-to-date": /Already up to date/i,
+    conflicts: /conflicts — aborted/i,
+    failed: /operation failed/i,
+    "sessions-active": /stop it first/i,
+    busy: /already running/i,
+  };
+
+  for (const [reason, matches] of Object.entries(unionCases)) {
+    it(`explains ${reason}`, () => {
+      expect(branchOpReasonMessage(reason as GitBranchOpReason)).toMatch(matches);
+    });
+  }
+
+  it("names the conflicting files, capped, and the rebase target", () => {
+    const files = ["a", "b", "c", "d", "e", "f", "g"];
+    expect(branchOpReasonMessage("conflicts", "origin/main", files)).toBe(
+      "Rebase onto origin/main conflicts in a, b, c, d, e and 2 more — aborted, nothing changed.",
+    );
+  });
+
+  it("carries git's own detail for a failure, and survives an unknown reason", () => {
+    expect(branchOpReasonMessage("failed", "fatal: boom")).toBe("Failed: fatal: boom");
+    expect(branchOpReasonMessage(undefined)).toMatch(/failed/i);
+    expect(branchOpReasonMessage("from-the-future" as GitBranchOpReason, "x")).toBe("Failed: x");
   });
 });

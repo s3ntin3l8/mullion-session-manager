@@ -25,6 +25,12 @@ export function subscribeToProject(projectId: string, socket: WebSocket): void {
   channel.subscribe(projectId, socket);
 }
 
+/** The client's own `unsubscribe` frame: stops one project's events on a
+ * socket that stays open for the others (issue #1672). */
+export function unsubscribeFromProject(projectId: string, socket: WebSocket): void {
+  channel.unsubscribe(projectId, socket);
+}
+
 export function broadcastToProject(projectId: string, event: GitHubWSEvent): void {
   channel.broadcast(projectId, event);
 }

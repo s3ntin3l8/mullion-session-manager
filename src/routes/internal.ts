@@ -114,6 +114,8 @@ import { inspectGitClone, planRepair, repairGitClone } from "../services/git-doc
 import { isCloneBusy, markCloneBusy, releaseClone } from "../services/git-clone-busy.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { runGitPull } from "../services/git-pull.js";
+import { checkoutBranch, createBranch, rebaseBranch } from "../services/git-branch-ops.js";
+import type { GitBranchOpResult } from "../services/git-branch-ops.js";
 import { pushBranch } from "../services/git-push.js";
 import { compileOutputMatcher, waitForOutput } from "../services/output-wait.js";
 import {
@@ -201,6 +203,9 @@ import {
   gitWorktreeRemoveListedSchema,
   gitWorktreePruneMetadataSchema,
   gitPullSchema,
+  gitCheckoutSchema,
+  gitBranchCreateSchema,
+  gitRebaseSchema,
   gitPushSchema,
   gitRepairSchema,
   gitWorktreeResumeSchema,
@@ -237,6 +242,9 @@ import type {
   GitWorktreeRemoveListedBody,
   GitWorktreePruneMetadataBody,
   GitPullBody,
+  GitCheckoutBody,
+  GitBranchCreateBody,
+  GitRebaseBody,
   GitPushBody,
   GitRepairBody,
   GitWorktreeResumeBody,
@@ -1534,6 +1542,62 @@ export async function internalRoutes(app: FastifyInstance) {
       } finally {
         releaseClone(LOCAL_HOST_ID, resolvedCwd);
       }
+    },
+  );
+
+  // Issue #1672 — the guarded checkout / create / rebase of a remote-hosted
+  // project's checkout, on THIS agent's filesystem. Each claims the clone
+  // like /internal/git-pull above: all three rewrite the index a repair
+  // rewrites. Always 200 with a reason envelope for a git-level refusal.
+  // The "an active session works here" guard ran on the primary already —
+  // it needs the sessions table, which the agent's own copy does not hold.
+  const withClaimedClone = async (
+    cwd: string,
+    op: () => Promise<GitBranchOpResult>,
+  ): Promise<GitBranchOpResult> => {
+    if (isCloneBusy(LOCAL_HOST_ID, cwd)) {
+      return { ok: false, reason: "busy", detail: "a git operation is already running" };
+    }
+    markCloneBusy(LOCAL_HOST_ID, cwd);
+    try {
+      return await op();
+    } finally {
+      releaseClone(LOCAL_HOST_ID, cwd);
+    }
+  };
+
+  app.post<{ Body: GitCheckoutBody }>(
+    "/internal/git-checkout",
+    { ...INTERNAL_RATE_LIMIT, schema: gitCheckoutSchema },
+    async (request, reply) => {
+      const { cwd, branch } = request.body;
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      return await withClaimedClone(resolvedCwd, () => checkoutBranch(resolvedCwd, branch));
+    },
+  );
+
+  app.post<{ Body: GitBranchCreateBody }>(
+    "/internal/git-branch-create",
+    { ...INTERNAL_RATE_LIMIT, schema: gitBranchCreateSchema },
+    async (request, reply) => {
+      const { cwd, name, startPoint, checkout } = request.body;
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      return await withClaimedClone(resolvedCwd, () =>
+        createBranch(resolvedCwd, name, startPoint, { checkout }),
+      );
+    },
+  );
+
+  app.post<{ Body: GitRebaseBody }>(
+    "/internal/git-rebase",
+    { ...INTERNAL_RATE_LIMIT, schema: gitRebaseSchema },
+    async (request, reply) => {
+      const { cwd, onto } = request.body;
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      return await withClaimedClone(resolvedCwd, () => rebaseBranch(resolvedCwd, onto));
     },
   );
 

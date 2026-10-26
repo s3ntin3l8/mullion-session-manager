@@ -305,6 +305,27 @@ describe("github-app (#489)", () => {
         metadata: "read",
       });
     });
+
+    // #1672 — the rollup reads replace the read token with this one, so it
+    // must hold everything READ_PERMISSIONS does, plus checks and statuses.
+    it("requests the read set plus checks/statuses for scope: 'checks-read'", async () => {
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValue(
+          jsonResponse(200, { token: "ghs_abc", expires_at: "2026-01-01T01:00:00Z" }),
+        );
+      vi.stubGlobal("fetch", fetchMock);
+      await mintInstallationToken("fake.jwt.token", 7, "acme", "widgets", "checks-read");
+      const [, opts] = fetchMock.mock.calls[0];
+      const body = JSON.parse(opts.body as string);
+      expect(body.permissions).toEqual({
+        actions: "read",
+        metadata: "read",
+        pull_requests: "read",
+        checks: "read",
+        statuses: "read",
+      });
+    });
   });
 
   describe("getInstallationToken", () => {

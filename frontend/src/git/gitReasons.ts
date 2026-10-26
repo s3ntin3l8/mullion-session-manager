@@ -1,4 +1,4 @@
-import type { GitPullReason } from "../api/types.js";
+import type { GitBranchOpReason, GitPullReason } from "../api/types.js";
 
 // Issue #442 — reasons a branch-delete/worktree-remove refusal is worth
 // offering a Force retry for. Every other reason (invalid-name, no-such-
@@ -112,6 +112,62 @@ export function pullReasonMessage(reason: GitPullReason | undefined, detail?: st
       // a newer backend lands.
       assertNever(reason);
       return detail ? `Pull failed: ${detail}` : "Pull failed — try again.";
+    }
+  }
+}
+
+/**
+ * A refused checkout / branch create / rebase (issue #1672). Exhaustive by
+ * type like pullReasonMessage above, with the same forward-compatible default.
+ * `conflicts` lists the files the aborted rebase stopped on.
+ */
+export function branchOpReasonMessage(
+  reason: GitBranchOpReason | undefined,
+  detail?: string,
+  conflicts?: readonly string[],
+): string {
+  switch (reason) {
+    case undefined:
+    case "failed":
+      return detail ? `Failed: ${detail}` : "The operation failed — try again.";
+    case "not-a-repo":
+    case "invalid-name":
+    case "no-such-branch":
+    case "checked-out":
+      return reasonMessage(reason, detail);
+    case "no-such-ref":
+      return `No such branch or ref${detail ? `: ${detail}` : ""}.`;
+    case "already-exists":
+      return "A branch with that name already exists.";
+    case "already-current":
+      return "Already on this branch.";
+    case "unborn-head":
+      return "The current branch has no commits.";
+    case "detached-head":
+      return "The checkout is on a detached HEAD — check out a branch first.";
+    case "dirty-tree":
+      return "The checkout has uncommitted changes — commit or stash them first.";
+    case "operation-in-progress":
+      return "A merge or rebase is stopped mid-way in the checkout — finish or abort it first.";
+    case "no-base":
+      return "Nothing to rebase onto: no upstream and no origin default branch.";
+    case "already-up-to-date":
+      return `Already up to date${detail ? ` with ${detail}` : ""}.`;
+    case "conflicts": {
+      const files = conflicts ?? [];
+      const shown = files.slice(0, 5).join(", ");
+      const more = files.length > 5 ? ` and ${files.length - 5} more` : "";
+      return `Rebase${detail ? ` onto ${detail}` : ""} conflicts${
+        shown ? ` in ${shown}${more}` : ""
+      } — aborted, nothing changed.`;
+    }
+    case "sessions-active":
+      return `${reasonMessage(reason, detail)} It works in this checkout — stop it first.`;
+    case "busy":
+      return "A git operation is already running for this repository — try again in a moment.";
+    default: {
+      assertNever(reason);
+      return detail ? `Failed: ${detail}` : "The operation failed — try again.";
     }
   }
 }

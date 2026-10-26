@@ -39,6 +39,7 @@ import {
   resolveGitHubToken,
   resolveReviewerToken,
   resolveChecksToken,
+  resolveChecksReadToken,
   resolveMarkerTokens,
   markerUnavailableMessage,
   clearChecksMarkerOutcomesForTests,
@@ -848,6 +849,62 @@ describe("github-integration service", () => {
         owner: "acme",
         repo: "widgets",
       });
+      await app.close();
+    });
+  });
+
+  describe("resolveChecksReadToken (#1672)", () => {
+    const repo = { owner: "acme", repo: "widgets" };
+
+    beforeEach(() => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+    });
+
+    it("returns the App's checks-read token", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockGetInstallationToken.mockResolvedValue({
+        token: "ghs_rollup",
+        installationsChecked: null,
+      });
+
+      expect(await resolveChecksReadToken(app, repo)).toBe("ghs_rollup");
+      expect(mockGetInstallationToken).toHaveBeenCalledWith(
+        "123",
+        expect.any(String),
+        "acme",
+        "widgets",
+        "checks-read",
+      );
+      await app.close();
+    });
+
+    // The caller keeps its own read token: one ungranted scope must not move
+    // the PR reads to the PAT.
+    it("returns null, never the PAT, when the App is absent or the mint 422s", async () => {
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      expect(await resolveChecksReadToken(app, repo)).toBeNull();
+      expect(mockGetInstallationToken).not.toHaveBeenCalled();
+
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockGetInstallationToken.mockRejectedValueOnce(new GitHubAppError("no checks", 422));
+      expect(await resolveChecksReadToken(app, repo)).toBeNull();
+
+      mockGetInstallationToken.mockResolvedValueOnce({
+        token: null,
+        installationsChecked: null,
+        failureStatus: 422,
+      });
+      expect(await resolveChecksReadToken(app, repo)).toBeNull();
+      await app.close();
+    });
+
+    it("rethrows an unexpected error", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockGetInstallationToken.mockRejectedValueOnce(new TypeError("a bug"));
+      await expect(resolveChecksReadToken(app, repo)).rejects.toThrow(TypeError);
       await app.close();
     });
   });

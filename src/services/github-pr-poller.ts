@@ -4,7 +4,7 @@ import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { projects, tasks } from "../db/schema.js";
 import { parseGitRemote, type GitHubRepoRef } from "./git-remote.js";
-import { resolveGitHubToken } from "./github-integration.js";
+import { resolveChecksReadToken, resolveGitHubToken } from "./github-integration.js";
 import {
   GitHubApiError,
   getPullRequestMergeState,
@@ -158,8 +158,11 @@ export function startGitHubPRPoller(app: FastifyInstance, tracker?: ActivityTrac
     sweepProjectId?: number,
   ): Promise<void> {
     const status = await getRepoPRsStatus(token, owner, repo);
-    // Review state (GraphQL) is best-effort and never throws.
-    await enrichPrsWithReviewState(token, owner, repo, status.prs, app.log);
+    // Review state (GraphQL) is best-effort and never throws. It carries the
+    // head commit's statusCheckRollup, so it reads with a token that sees
+    // non-Actions checks too when the App has that grant (issue #1672).
+    const rollupToken = (await resolveChecksReadToken(app, { owner, repo })) ?? token;
+    await enrichPrsWithReviewState(rollupToken, owner, repo, status.prs, app.log);
     // The review relay's state (issue #1744): the landed check is a GitHub call,
     // so it happens here, off the request path; the routes read the cache.
     try {

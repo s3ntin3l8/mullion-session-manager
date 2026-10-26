@@ -263,6 +263,44 @@ export interface GitPullResult {
 }
 
 // ---------------------------------------------------------------------------
+// git-branch-ops.ts — GitBranchOpReason / GitBranchOpResult (issue #1672)
+//
+// The guarded checkout / create / rebase of the project's own checkout. A
+// refusal is a 200 with a reason, the same contract as GitPullResult.
+// ---------------------------------------------------------------------------
+
+export type GitBranchOpReason =
+  | "not-a-repo"
+  | "invalid-name"
+  | "no-such-branch"
+  | "no-such-ref"
+  | "already-exists"
+  | "already-current"
+  | "checked-out"
+  | "unborn-head"
+  | "detached-head"
+  | "dirty-tree"
+  | "operation-in-progress"
+  | "no-base"
+  | "already-up-to-date"
+  | "conflicts"
+  | "failed"
+  // Added one layer up, by the routes: they need the sessions table and the
+  // clone registry, which the DB-less git service has no access to.
+  | "sessions-active"
+  | "busy";
+
+export interface GitBranchOpResult {
+  ok: boolean;
+  reason?: GitBranchOpReason;
+  /** Human-readable context: the worktree holding a branch, the ids of the
+   * active sessions, a truncated git stderr, or the ref a rebase used. */
+  detail?: string;
+  /** `conflicts` only: the files the aborted rebase stopped on. */
+  conflicts?: string[];
+}
+
+// ---------------------------------------------------------------------------
 // services/git-doctor.ts — CloneHealth, RepairPlan, RepairOutcome
 // (issues #1851 and #1896)
 //

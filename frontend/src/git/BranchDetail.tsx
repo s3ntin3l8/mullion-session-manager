@@ -7,7 +7,14 @@ import { describeError } from "../lib/describeError.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { useDashboardStore } from "../store/index.js";
 import { ConfirmButton } from "../ui/ConfirmButton.js";
-import { GlobeIcon, HistoryIcon, PlayTriangleIcon, TrashIcon } from "../ui/icons.js";
+import {
+  GitBranchIcon,
+  GlobeIcon,
+  HistoryIcon,
+  PlayTriangleIcon,
+  PullIcon,
+  TrashIcon,
+} from "../ui/icons.js";
 import {
   Button,
   DetailHeader,
@@ -17,6 +24,7 @@ import {
   TaskChip,
 } from "../ui/sidebar/index.js";
 import { mergeChip } from "./branchGroups.js";
+import { rebaseNotice, runBranchOp } from "./branchOps.js";
 import { prTriad } from "./prTriad.js";
 import { FORCEABLE_REASONS, reasonMessage } from "./gitReasons.js";
 import { openSessionOn } from "./sessionLaunch.js";
@@ -61,6 +69,10 @@ export function BranchDetail({
   // So a double click can't make two sessions.
   const [starting, setStarting] = useState(false);
   const [actionError, setActionError] = useState<{ message: string; reason?: string } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [moving, setMoving] = useState(false);
+  // Bumped after a checkout/rebase, which changes what this view shows.
+  const [loadKey, setLoadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,7 +89,7 @@ export function BranchDetail({
     return () => {
       cancelled = true;
     };
-  }, [projectId, name]);
+  }, [projectId, name, loadKey]);
 
   const detail = state.kind === "ready" ? state.detail : null;
   const taskId = detail?.taskId ?? task?.id ?? null;
@@ -109,6 +121,31 @@ export function BranchDetail({
     } catch (err) {
       setActionError({ message: describeError(err, "Request failed — try again.") });
     }
+  };
+
+  // Issue #1672 — guarded checkout / rebase. A refusal shows inline, and
+  // carries no `reason`: neither offers a Force.
+  const moveHead = async (kind: "checkout" | "rebase") => {
+    if (moving) return;
+    setMoving(true);
+    setNotice(null);
+    const outcome = await runBranchOp(
+      projectId,
+      () =>
+        kind === "checkout"
+          ? api.checkoutProjectGitBranch(projectId, name)
+          : api.rebaseProjectGitBranch(projectId),
+      kind === "checkout" ? () => `Checked out ${name}.` : rebaseNotice,
+    );
+    setMoving(false);
+    if (!outcome.ok) {
+      setActionError({ message: outcome.message });
+      return;
+    }
+    setActionError(null);
+    setNotice(outcome.notice);
+    setLoadKey((k) => k + 1);
+    onReload();
   };
 
   const openSession = async () => {
@@ -317,6 +354,11 @@ export function BranchDetail({
           </section>
         )}
 
+        {notice && (
+          <div className="sc-note" role="status">
+            {notice}
+          </div>
+        )}
         {actionError && (
           <div className="sc-row-error" role="alert">
             {actionError.message}
@@ -344,6 +386,31 @@ export function BranchDetail({
         <Button onClick={() => openRightSidebarHistory(projectId, `branch:${name}`)}>
           <HistoryIcon size={12} /> History
         </Button>
+        {detail?.isCurrent ? (
+          <ConfirmButton
+            variant="neutral"
+            title="Rebase onto its upstream (or the default branch)"
+            armedLabel="Confirm rebase"
+            disabled={moving}
+            onConfirm={() => void moveHead("rebase")}
+          >
+            <PullIcon size={12} /> Rebase…
+          </ConfirmButton>
+        ) : (
+          detail && (
+            <Button
+              disabled={moving || detail.worktreePath !== null}
+              title={
+                detail.worktreePath
+                  ? `Can't check out — in use by ${detail.worktreePath.split("/").pop()}`
+                  : "Check out this branch in the project checkout"
+              }
+              onClick={() => void moveHead("checkout")}
+            >
+              <GitBranchIcon size={12} /> Checkout
+            </Button>
+          )
+        )}
         <ConfirmButton
           title={blocked ?? "Delete branch"}
           disabled={blocked !== null}

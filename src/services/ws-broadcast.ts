@@ -113,6 +113,8 @@ export function createBroadcastChannel<TEvent>(
 export interface KeyedBroadcastChannel<TEvent, TKey> {
   /** Adds `socket` to `key`'s subscriber set; removes it automatically on `close`/`error`. */
   subscribe(key: TKey, socket: WebSocket): void;
+  /** Removes `socket` from `key`'s subscriber set only; its other keys stay live. */
+  unsubscribe(key: TKey, socket: WebSocket): void;
   /** Fans `event` out to `key`'s subscribers only — never any other key's. */
   broadcast(key: TKey, event: TEvent): void;
   /** Test-only introspection. */
@@ -179,6 +181,15 @@ export function createKeyedBroadcastChannel<TEvent, TKey>(): KeyedBroadcastChann
     keys.add(key);
   }
 
+  function unsubscribe(key: TKey, socket: WebSocket): void {
+    // The socket's close/error listeners stay attached even when this was
+    // its last key: they are idempotent, and a later subscribe() on the
+    // same socket reuses them instead of stacking a second pair.
+    const keys = socketKeys.get(socket);
+    if (!keys?.delete(key)) return;
+    channels.get(key)?.unsubscribe(socket);
+  }
+
   function broadcast(key: TKey, event: TEvent): void {
     channels.get(key)?.broadcast(event);
   }
@@ -198,5 +209,11 @@ export function createKeyedBroadcastChannel<TEvent, TKey>(): KeyedBroadcastChann
     channels.clear();
   }
 
-  return { subscribe, broadcast, getSubscriberCountForTests, clearSubscribersForTests };
+  return {
+    subscribe,
+    unsubscribe,
+    broadcast,
+    getSubscriberCountForTests,
+    clearSubscribersForTests,
+  };
 }

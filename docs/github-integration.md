@@ -192,7 +192,9 @@ Configuring one:
    org's equivalent) with **Issues: Read & write**, **Pull requests: Read &
    write**, **Contents: Read & write**, **Actions: Read & write** (#744 —
    `Read-only` covers the CI dot and repo-status widget, but not
-   dispatching the release-please workflow), and **Metadata: Read-only**
+   dispatching the release-please workflow), **Checks: Read-only** and
+   **Commit statuses: Read-only** (#1672 — CI that isn't GitHub Actions; see
+   the **checks-read** set below), and **Metadata: Read-only**
    permissions. No webhook subscription is needed here — that's the
    classic-App webhook path above.
 2. Generate a private key for it and install the App on whichever
@@ -277,6 +279,24 @@ write`, a permission none of the other sets grants, so it is its own set
   Repository permissions → Checks: Read & write, then accept the update on the
   installation. (Reading check runs, which the relay does to continue a PR's
   session, works with any token.)
+
+- **checks-read** (#1672) — the **read** set plus Checks: read and Commit
+  statuses: read — used for the PR reads that select the head commit's
+  `statusCheckRollup`: the PR poller's review-state enrichment (the PR list's
+  CI dot) and the PR drill-in. With only the **read** set, that rollup sees
+  just the Actions check runs; a third-party CI's check runs need Checks:
+  read, and a commit status (posted through the statuses API, the way many
+  external CI services report) needs Commit statuses: read. It is a separate
+  set, not two more keys on **read**, so an installation that hasn't
+  approved them yet 422s this mint alone. **It has no PAT fallback:** a
+  failed mint keeps the App's own read token for those reads, which is
+  exactly the Actions-only CI of before, rather than moving the PR reads to
+  the PAT. To see non-Actions CI on such an install, re-approve the App:
+  Settings → Developer settings → GitHub Apps → Permissions & events →
+  Repository permissions → **Checks: Read-only** and **Commit statuses:
+  Read-only**, then accept the update on the installation. The failed mint
+  is negative-cached like any other scope, so the change shows up once that
+  cache entry expires (or after a restart).
 
 The sets are minted and cached independently, so an installation that only
 granted the write set (e.g. one approved before Actions/Metadata were added
@@ -542,8 +562,10 @@ sends `{"type": "subscribe", "projectId": <number|string>}` per project it
 wants events for — one socket can subscribe to several projects — and the
 server pushes the matching `GitHubWSEvent` (`pr`/`issue`/`ci`/`release`/
 `push`, see `github-ws-broadcast.ts`) to every socket subscribed to that
-`projectId`. There's no unsubscribe message; a subscription lasts for the
-socket's lifetime and is cleared on close.
+`projectId`. `{"type": "unsubscribe", "projectId": …}` (#1672) drops that one
+project from the socket, which stays open for the others (the frontend sends
+it when the last view of a project unmounts); closing the socket clears all
+of its subscriptions.
 
 Task Master shares this same delivery path (`#490`): a `labeled`/`opened`
 issue event drives ingest immediately (`opened` is needed too — an issue
@@ -664,6 +686,7 @@ performs its own HMAC verification and does not require app-level auth.
 | `/api/integrations/github/webhooks`                              | DELETE | Disable webhooks: tears down registered hooks                                                                                                                                                                                                                                                                                   |
 | `/api/projects/:id/github`                                       | GET    | Per-project repo status (issues, PRs, Actions runs, `ciStatus`). Rate-limited 30/min                                                                                                                                                                                                                                            |
 | `/api/projects/:id/github/prs`                                   | GET    | Open PR list for the project's repo; optional `?branch=<name>` filters to the PR (if any) whose head is that branch. Rate-limited 30/min                                                                                                                                                                                        |
+| `/api/projects/:id/github/prs/:number/update-branch`             | POST   | GitHub's "Update branch" (#1672): merges the base into a PR that has fallen behind it. Body `{ headSha }` pins the head the user saw; 409 when GitHub refuses (the head moved, nothing to update, or the merge conflicts), 403 without write access. Needs a `write`-scoped token. Rate-limited 10/min                          |
 | `/api/projects/:id/github/prs/:number/review`                    | GET    | The review relay's state for one PR (#1630): `none` / `requested` / `landed`, the landed review's verdict, author, text and link. Rate-limited 30/min                                                                                                                                                                           |
 | `/api/projects/:id/github/prs/:number/threads/:threadId/reply`   | POST   | `{ body }`. Replies to a review thread, addressed by its GraphQL node id (`threads[].id` in the PR detail); answers the posted comment. Write token. Rate-limited 20/min                                                                                                                                                        |
 | `/api/projects/:id/github/prs/:number/threads/:threadId/resolve` | POST   | Resolves a review thread. Write token. Rate-limited 20/min                                                                                                                                                                                                                                                                      |

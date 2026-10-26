@@ -18,6 +18,8 @@ import type {
   GitStatus,
   GitPullReason,
   GitPullResult,
+  GitBranchOpReason,
+  GitBranchOpResult,
   CloneHealth,
   RepairOutcome,
   RepairPlan,
@@ -44,6 +46,7 @@ import type {
 import type { PlacementMode, TaskStatus } from "../../../src/shared/constants.js";
 
 export type { GitPullReason, GitPullResult, CloneHealth, RepairOutcome, RepairPlan };
+export type { GitBranchOpReason, GitBranchOpResult };
 export type { GitBranchInfo, GitBranchMergeState, GitBranchPr, GitWorktreeInfo };
 export type {
   ProjectReleaseStatus,

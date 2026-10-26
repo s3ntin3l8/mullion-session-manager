@@ -134,6 +134,13 @@ export const githubApi = {
       { method: "POST", body: JSON.stringify(review) },
     ),
 
+  // GitHub's "Update branch" (issue #1672), pinned to the head on screen.
+  updateProjectPrBranch: (projectId: number, number: number, headSha: string) =>
+    request<{ updated: boolean }>(`/api/projects/${projectId}/github/prs/${number}/update-branch`, {
+      method: "POST",
+      body: JSON.stringify({ headSha }),
+    }),
+
   getProjectPrHandoff: (projectId: number, number: number) =>
     request<{ prompt: string; branch: string }>(
       `/api/projects/${projectId}/github/prs/${number}/handoff`,
