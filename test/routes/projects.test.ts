@@ -3344,6 +3344,18 @@ describe("projects route", () => {
         );
       });
 
+      it("502s, not 'unreachable', when the agent rejects the request with a 4xx", async () => {
+        await withAgent(
+          () => ({ status: 400, body: { message: "cwd is outside PROJECTS_ROOTS" } }),
+          async ({ app, id }) => {
+            const res = await app.inject({ method: "GET", url: `/api/projects/${id}/git-log` });
+            expect(res.statusCode).toBe(502);
+            expect(res.body).toContain("rejected the request");
+            expect(res.body).not.toContain("is unreachable");
+          },
+        );
+      });
+
       it("503s when the host is unreachable", async () => {
         vi.unstubAllGlobals();
         const app = await makeApp();
