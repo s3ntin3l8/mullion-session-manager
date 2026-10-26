@@ -106,6 +106,7 @@ function staleLabel(entry: ReviewSummaryEntry, commits: GitHubPrDetail["commits"
  */
 function PinnedReview({
   entry,
+  bodyHtml,
   commits,
   unresolved,
   busy,
@@ -114,6 +115,8 @@ function PinnedReview({
   onStop,
 }: {
   entry: ReviewSummaryEntry;
+  /** GitHub-rendered HTML of the same review; `entry.body` when absent. */
+  bodyHtml?: string;
   commits: GitHubPrDetail["commits"];
   unresolved: number;
   busy: boolean;
@@ -123,7 +126,9 @@ function PinnedReview({
 }) {
   const [expanded, setExpanded] = useState(false);
   // Clamped to 6 lines; the toggle only appears when there is more to show.
-  const long = entry.body.split("\n").length > 6 || entry.body.length > 420;
+  // Rendered HTML's height does not track the source's line count, so its
+  // toggle is always offered (as for the PR body) rather than guessed.
+  const long = !!bodyHtml || entry.body.split("\n").length > 6 || entry.body.length > 420;
   const stale = entry.stale ? staleLabel(entry, commits) : null;
   return (
     <div
@@ -147,9 +152,16 @@ function PinnedReview({
       <div className="pr-card-b">
         {entry.body && (
           <>
-            <div className={`pr-pin-body${expanded ? "" : " pr-pin-body--clamp"}`}>
-              {entry.body}
-            </div>
+            {bodyHtml ? (
+              <SafeHtml
+                className={`gh-html pr-pin-body pr-pin-body--html${expanded ? "" : " pr-pin-body--clamp"}`}
+                html={bodyHtml}
+              />
+            ) : (
+              <div className={`pr-pin-body${expanded ? "" : " pr-pin-body--clamp"}`}>
+                {entry.body}
+              </div>
+            )}
             {long && (
               <button
                 type="button"
@@ -412,13 +424,26 @@ export function PrDetailView({
         : [];
   // The timeline marks a pinned review "pinned above" instead of repeating it.
   const pinnedAt = new Set<number>();
+  // The pinned card shows the matching review's rendered HTML; `body` (plain,
+  // bounded) is the fallback for a review with no timeline match, e.g. a
+  // relay review the PR detail does not list yet.
+  const pinnedHtml = new Map<ReviewSummaryEntry, string>();
   for (const p of pinned) {
+    // One matched index drives both the "pinned above" mark and the HTML, so
+    // the card and the timeline never disagree about which review is pinned.
+    // With a `submittedAt` only that exact review matches (author + state can
+    // also match an older round by the same bot); without one (a relay review
+    // the summary does not carry yet) the newest same-author/state review does.
     let best = -1;
     pr.reviews.forEach((r, i) => {
       if (r.author !== p.author || r.state !== p.state) return;
+      if (p.submittedAt && Date.parse(p.submittedAt) !== Date.parse(r.createdAt)) return;
       if (best < 0 || Date.parse(r.createdAt) >= Date.parse(pr.reviews[best].createdAt)) best = i;
     });
-    if (best >= 0) pinnedAt.add(best);
+    if (best < 0) continue;
+    pinnedAt.add(best);
+    const html = pr.reviews[best].bodyHtml;
+    if (p.body && p.submittedAt && html) pinnedHtml.set(p, html);
   }
   const timeline = [
     ...pr.reviews.map((r, i) => ({
@@ -555,6 +580,7 @@ export function PrDetailView({
           <PinnedReview
             key={`${p.author}-${p.state}`}
             entry={p}
+            bodyHtml={pinnedHtml.get(p)}
             commits={pr.commits}
             unresolved={unresolved}
             busy={busy !== null}

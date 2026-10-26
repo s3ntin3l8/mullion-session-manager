@@ -199,6 +199,16 @@ a.pr-dr-row:hover {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.pr-pin-body--html {
+  white-space: normal;
+}
+.pr-pin-body--html :is(h1, h2, h3, h4, h5, h6) {
+  font-size: 0.8125rem;
+  margin: 0.5em 0 0.25em;
+}
+.pr-pin-body--html > :first-child {
+  margin-top: 0;
+}
 .pr-pin-body--clamp {
   display: -webkit-box;
   -webkit-line-clamp: 6;

@@ -620,6 +620,81 @@ describe("PrDetailView", () => {
       expect(pin.textContent).not.toMatch(/head \+/);
     });
 
+    it("renders the pinned review's Markdown as prose when its timeline review has HTML", async () => {
+      stub({
+        ...PR,
+        reviews: [
+          {
+            author: "hermes[bot]",
+            state: "COMMENTED",
+            bodyHtml: "<h2>Review</h2><p><strong>Verdict:</strong> APPROVE</p>",
+            createdAt: "2026-01-02T00:00:00Z",
+          },
+        ],
+        reviewSummary: summaryOf({
+          latest: [latest({ body: "## Review\n**Verdict:** APPROVE" })],
+        }),
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const pin = await screen.findByRole("region", { name: /Latest review/ });
+      expect(pin.querySelector(".pr-pin-body h2")).toHaveTextContent("Review");
+      expect(pin.querySelector(".pr-pin-body strong")).toHaveTextContent("Verdict:");
+      expect(pin).not.toHaveTextContent("## Review");
+    });
+
+    it("clamps rendered review HTML and offers Read more", async () => {
+      stub({
+        ...PR,
+        reviews: [
+          {
+            author: "hermes[bot]",
+            state: "COMMENTED",
+            bodyHtml: "<p>short html</p>",
+            createdAt: "2026-01-02T00:00:00Z",
+          },
+        ],
+        reviewSummary: summaryOf({ latest: [latest({ body: "short html" })] }),
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const pin = await screen.findByRole("region", { name: /Latest review/ });
+      expect(pin.querySelector(".pr-pin-body--html.pr-pin-body--clamp")).not.toBeNull();
+      await userEvent.click(within(pin).getByRole("button", { name: "Read more" }));
+      expect(pin.querySelector(".pr-pin-body--html.pr-pin-body--clamp")).toBeNull();
+    });
+
+    it("keeps the pinned body when the timeline review is an older round by the same author", async () => {
+      stub({
+        ...PR,
+        reviews: [
+          {
+            author: "hermes[bot]",
+            state: "COMMENTED",
+            bodyHtml: "<p>OLD round</p>",
+            createdAt: "2025-12-01T00:00:00Z",
+          },
+        ],
+        reviewSummary: summaryOf({ latest: [latest({ body: "NEW round" })] }),
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const pin = await screen.findByRole("region", { name: /Latest review/ });
+      expect(pin.querySelector(".pr-pin-body")).toHaveTextContent("NEW round");
+      expect(pin).not.toHaveTextContent("OLD round");
+      // The older round is not the pinned review, so it is not marked as such.
+      expect(screen.queryByText("pinned above")).toBeNull();
+    });
+
+    it("falls back to the plain body when no timeline review matches the pinned one", async () => {
+      stub({
+        ...PR,
+        reviews: [],
+        reviewSummary: summaryOf({ latest: [latest({ body: "plain text body" })] }),
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const pin = await screen.findByRole("region", { name: /Latest review/ });
+      expect(pin.querySelector(".pr-pin-body")).toHaveTextContent("plain text body");
+      expect(pin.querySelector(".pr-pin-body h2")).toBeNull();
+    });
+
     it("clamps a long review body and expands it", async () => {
       const body = Array.from({ length: 12 }, (_, i) => `line ${i}`).join("\n");
       stub({ ...PR, reviewSummary: summaryOf({ latest: [latest({ body })] }) });
