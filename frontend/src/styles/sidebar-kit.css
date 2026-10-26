@@ -482,3 +482,81 @@ button.sb-chip:focus-visible,
     padding: 7px 8px;
   }
 }
+
+/* Mullion links (B7): session pills, linked actions. */
+.sb-pills {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.sb-pill-item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.sb-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--status-neutral-border);
+  background: var(--status-neutral-bg);
+  color: var(--status-neutral-fg);
+  font-size: 11px;
+  cursor: pointer;
+}
+.sb-pill-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+.sb-pill-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sb-pill-attn {
+  font-weight: 700;
+}
+.sb-pill-children {
+  margin-left: 10px;
+  padding-left: 6px;
+  border-left: 1px dotted var(--status-neutral-border);
+}
+.sb-linked-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.sb-pill--success {
+  color: var(--status-success-fg);
+  background: var(--status-success-bg);
+  border-color: var(--status-success-border);
+}
+.sb-pill--danger {
+  color: var(--status-danger-fg);
+  background: var(--status-danger-bg);
+  border-color: var(--status-danger-border);
+}
+.sb-pill--warn {
+  color: var(--status-warn-fg);
+  background: var(--status-warn-bg);
+  border-color: var(--status-warn-border);
+}
+.sb-pill--info {
+  color: var(--status-info-fg);
+  background: var(--status-info-bg);
+  border-color: var(--status-info-border);
+}
+.sb-pill--merged {
+  color: var(--status-merged-fg);
+  background: var(--status-merged-bg);
+  border-color: var(--status-merged-border);
+}

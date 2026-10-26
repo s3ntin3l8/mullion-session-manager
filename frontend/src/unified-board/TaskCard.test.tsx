@@ -196,6 +196,31 @@ describe("UnifiedBoard task columns", () => {
     expect(link.querySelector(".github-panel-ci-dot.good")).toBeInTheDocument();
   });
 
+  it("prefers the task's recorded PR number over the branch (matchSessionPr)", () => {
+    tasks = [makeTask({ id: 7, status: "reviewing", branchName: "mullion/task-7", prNumber: 21 })];
+    const pr = (number: number, headBranch: string) => ({
+      number,
+      title: `pr ${number}`,
+      htmlUrl: `https://github.com/o/r/pull/${number}`,
+      author: "mullion-bot",
+      headSha: "abc",
+      headBranch,
+      baseBranch: "main",
+      ciStatus: "success" as const,
+      actionsRuns: [],
+    });
+    prsByProject = {
+      1: {
+        prs: [pr(12, "mullion/task-7"), pr(21, "worker-switched-branch")],
+        prSummary: { total: 2, pass: 2, fail: 0, pending: 0, unknown: 0 },
+      },
+    };
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    expect(screen.getByRole("link", { name: /#21/ })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /#12/ })).toBeNull();
+  });
+
   it("shows no PR badge when no open PR matches the task's branch", () => {
     tasks = [makeTask({ id: 7, status: "reviewing", branchName: "mullion/task-7" })];
     prsByProject = {
