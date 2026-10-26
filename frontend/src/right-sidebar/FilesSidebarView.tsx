@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useFileTreeMutations } from "../hooks/useFileTreeMutations.js";
 import { useTreeUploads } from "../hooks/useTreeUploads.js";
-import { useUploadDropTarget } from "../hooks/useUploadDropTarget.js";
+import { useTreeDropTarget } from "../hooks/useTreeDropTarget.js";
+import { hasDirtyFileUnder, useDirtyFilesVersion } from "../lib/dirtyFiles.js";
+import { endFileDrag, startFileDrag, type FileDragPayload } from "../lib/fileDrag.js";
+import { emitFilePathGone } from "../lib/filePathEvents.js";
+import { baseName, joinRel } from "../lib/fileTreeMove.js";
+import { joinAbs } from "../lib/posixPath.js";
+import { useDashboardStore } from "../store/index.js";
+import { KebabMenu, type KebabMenuItem } from "../ui/KebabMenu.js";
 import { TreeUploadInputs } from "../ui/TreeUploadInputs.js";
 import { UploadStatus } from "../ui/UploadStatus.js";
 import { api, ApiError } from "../api/index.js";
@@ -33,55 +41,107 @@ interface DirState {
 // Highlight key for the tree-wide drop target (uploads into the selected folder).
 const ROOT_DROP_KEY = "\0root";
 
-function joinPath(dir: string, name: string): string {
-  return dir === "" ? name : `${dir}/${name}`;
-}
+const BLOCKED_TITLE = "Save or discard your changes first";
 
-// A lazily loaded project file tree for the right sidebar. A click on a file
-// opens it in an editor-only panel; New file / New folder create inside the
-// last folder clicked. Rename and delete stay in the full file-editor panel.
-export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) {
+// A lazily loaded file tree for the right sidebar. It follows the focused
+// session: for a session in its own git worktree the tree is that worktree's
+// (what the agent is editing), otherwise the project's. A click on a file opens
+// it in an editor-only panel; every row has a ⋯ menu (also on right-click) for
+// open / download / copy path / rename / delete, rows drag onto a folder to move
+// them or onto a terminal to reference them, and files dropped in from the OS
+// upload.
+export function FilesSidebarView({
+  projectId,
+  checkoutSessionId = null,
+  actions,
+}: RightSidebarViewProps) {
   const [dirs, setDirs] = useState<Record<string, DirState>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([""]));
   const [error, setError] = useState<string | null>(null);
-  // The folder New file / New folder create in: the last folder clicked.
+  // The folder New file / New folder / Upload act on: the last folder clicked.
   const [selectedDir, setSelectedDir] = useState("");
   const [creating, setCreating] = useState(false);
   const [newEntry, setNewEntry] = useState<{ kind: "file" | "dir"; name: string } | null>(null);
-  // The project this view is currently showing — a listing that resolves
-  // after the followed project changed belongs to the old project and must
-  // not land in the new one's tree.
-  const activeProject = useRef(projectId);
+  const [renaming, setRenaming] = useState<{ path: string; value: string } | null>(null);
+  // The row whose ⋯ menu a right-click is opening: its actions are shown even
+  // though the pointer isn't hovering them.
+  const [menuRow, setMenuRow] = useState<string | null>(null);
+
+  // Which checkout the tree shows: the followed session's worktree, unless the
+  // user flipped to the project root or the backend refused the worktree.
+  const [showProjectRoot, setShowProjectRoot] = useState(false);
+  const [rootRefused, setRootRefused] = useState(false);
+  const [lastCheckout, setLastCheckout] = useState(checkoutSessionId);
+  if (checkoutSessionId !== lastCheckout) {
+    // Following a different session: forget the last one's override.
+    setLastCheckout(checkoutSessionId);
+    setShowProjectRoot(false);
+    setRootRefused(false);
+  }
+  const sessionId =
+    !showProjectRoot && !rootRefused && checkoutSessionId !== null ? checkoutSessionId : undefined;
+  const rootKey = `${projectId}:${sessionId ?? ""}`;
+  const projectCwd = useDashboardStore((s) => s.projects.find((p) => p.id === projectId)?.cwd);
+  const sessionCwd = useDashboardStore((s) =>
+    sessionId === undefined ? undefined : s.sessions.find((x) => x.id === sessionId)?.cwd,
+  );
+  const rootCwd = (sessionId === undefined ? projectCwd : sessionCwd) ?? null;
+  // A listing that resolves after the followed project/checkout changed
+  // belongs to the old one and must not land in the new one's tree.
+  const activeRoot = useRef(rootKey);
+  useDirtyFilesVersion(); // re-render when a file gains/loses unsaved edits
+  const blocked = (path: string) => hasDirtyFileUnder(projectId, sessionId, path);
 
   const loadDir = useCallback(
     async (dirPath: string) => {
       try {
-        const listing = await api.listProjectFiles(projectId, dirPath);
-        if (activeProject.current !== projectId) return;
+        const listing = await api.listProjectFiles(projectId, dirPath, sessionId);
+        if (activeRoot.current !== rootKey) return;
         setDirs((prev) => ({
           ...prev,
           [dirPath]: { entries: listing.entries, truncated: listing.truncated },
         }));
         setError(null);
       } catch (err) {
-        if (activeProject.current !== projectId) return;
+        if (activeRoot.current !== rootKey) return;
+        // The backend won't root the tree at that session (its directory moved
+        // outside the project, or it can't be verified): fall back to the
+        // project's own checkout rather than showing a dead tree.
+        if (dirPath === "" && sessionId !== undefined && err instanceof ApiError) {
+          setRootRefused(true);
+          return;
+        }
         setError(err instanceof ApiError ? err.message : "Couldn't list files");
       }
     },
-    [projectId],
+    [projectId, sessionId, rootKey],
   );
 
-  // Start over whenever the followed project changes.
+  // Start over whenever the followed project or checkout changes.
   useEffect(() => {
-    activeProject.current = projectId;
+    activeRoot.current = rootKey;
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setDirs({});
     setExpanded(new Set([""]));
     setSelectedDir("");
     setNewEntry(null);
+    setRenaming(null);
     setCreating(false);
     void loadDir("");
-  }, [projectId, loadDir]);
+  }, [rootKey, loadDir]);
+
+  const expandedRef = useRef(expanded);
+  useEffect(() => {
+    expandedRef.current = expanded;
+  });
+
+  const expandDir = useCallback(
+    (dirPath: string) => {
+      setExpanded((prev) => new Set(prev).add(dirPath));
+      void loadDir(dirPath);
+    },
+    [loadDir],
+  );
 
   const toggleDir = (dirPath: string) => {
     const open = expanded.has(dirPath);
@@ -100,15 +160,40 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
     for (const dirPath of expanded) void loadDir(dirPath);
   };
 
-  const expandDir = useCallback(
-    (dirPath: string) => {
-      setExpanded((prev) => new Set(prev).add(dirPath));
-      void loadDir(dirPath);
+  // Folders whose contents changed: re-list the open ones, and drop the cached
+  // listing of a closed one so expanding it later doesn't show stale rows.
+  const relist = useCallback(
+    (changed: string[]) => {
+      for (const dirPath of changed) {
+        if (dirPath === "" || expandedRef.current.has(dirPath)) void loadDir(dirPath);
+        else
+          setDirs((prev) => {
+            const { [dirPath]: _gone, ...rest } = prev;
+            return rest;
+          });
+      }
     },
     [loadDir],
   );
+
+  // A file or folder (and everything under it) is gone from `path`: drop its
+  // cached listings, and close the editor panels that were open on it.
+  const forgetPath = useCallback(
+    (path: string) => {
+      const under = (k: string) => k === path || k.startsWith(`${path}/`);
+      setDirs((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => !under(k))));
+      setExpanded((prev) => new Set([...prev].filter((k) => !under(k))));
+      setSelectedDir((cur) => (under(cur) ? "" : cur));
+      emitFilePathGone({ projectId, sessionId, path });
+    },
+    [projectId, sessionId],
+  );
+
+  const mutations = useFileTreeMutations({ projectId, sessionId, onChanged: relist });
+
   const tree = useTreeUploads({
     projectId,
+    sessionId,
     dirs,
     expanded,
     selectedDir,
@@ -117,11 +202,38 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
     onTruncated: () =>
       setError("That folder is too large to upload in one go — some files were left out"),
   });
-  const { dropKey, dropProps } = useUploadDropTarget(tree.onUpload, tree.onTruncated);
 
-  const startCreate = (kind: "file" | "dir") => {
+  const moveInto = useCallback(
+    async (drag: FileDragPayload, toDir: string) => {
+      setError(null);
+      const res = await mutations.move(drag.path, toDir);
+      if (!res.ok) {
+        setError(res.error);
+        return;
+      }
+      forgetPath(drag.path);
+      expandDir(toDir);
+    },
+    [mutations, forgetPath, expandDir],
+  );
+  const { dropKey, dropProps } = useTreeDropTarget({
+    onUpload: tree.onUpload,
+    onTruncated: tree.onTruncated,
+    move: {
+      tree: { projectId, sessionId: sessionId ?? null },
+      canMove: (drag) => !blocked(drag.path),
+      onMove: (drag, toDir) => void moveInto(drag, toDir),
+    },
+    // A drag resting on a closed folder opens it so the target can be reached.
+    onHoverFolder: (dir) => {
+      if (!expandedRef.current.has(dir)) expandDir(dir);
+    },
+  });
+
+  const startCreate = (kind: "file" | "dir", inDir = selectedDir) => {
     // Make sure the target folder is visible so the new entry shows up there.
-    if (!expanded.has(selectedDir)) toggleDir(selectedDir);
+    setSelectedDir(inDir);
+    if (!expanded.has(inDir)) expandDir(inDir);
     setNewEntry({ kind, name: "" });
   };
 
@@ -133,27 +245,133 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
       setError("A name can't contain '/'");
       return;
     }
-    const target = joinPath(selectedDir, name);
-    const forProject = projectId;
+    const target = joinRel(selectedDir, name);
+    const forRoot = rootKey;
     setCreating(true);
     try {
       if (newEntry.kind === "file") {
-        await api.writeProjectFile(projectId, target, "", { create: true });
+        await api.writeProjectFile(projectId, target, "", { create: true }, sessionId);
       } else {
-        await api.mkdirProjectDir(projectId, target);
+        await api.mkdirProjectDir(projectId, target, sessionId);
       }
       // The followed project changed mid-request: the new tree owns the view.
-      if (activeProject.current !== forProject) return;
+      if (activeRoot.current !== forRoot) return;
       setNewEntry(null);
       setError(null);
       await loadDir(selectedDir);
-      if (newEntry.kind === "file") actions.onOpenFile(projectId, target);
+      if (newEntry.kind === "file") actions.onOpenFile(projectId, target, sessionId);
     } catch (err) {
-      if (activeProject.current !== forProject) return;
+      if (activeRoot.current !== forRoot) return;
       setError(err instanceof ApiError ? err.message : "Couldn't create it");
     } finally {
       setCreating(false);
     }
+  };
+
+  const commitRename = async () => {
+    if (!renaming) return;
+    const { path, value } = renaming;
+    setRenaming(null);
+    setError(null);
+    const res = await mutations.rename(path, value);
+    if (res.ok) forgetPath(path);
+    else if (res.error) setError(res.error);
+  };
+
+  const commitDelete = async (path: string) => {
+    setError(null);
+    const res = await mutations.remove(path);
+    if (res.ok) forgetPath(path);
+    else setError(res.error);
+  };
+
+  const copy = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      useDashboardStore.getState().pushToast({ message: "Path copied", kind: "success" });
+    } catch {
+      setError("Couldn't copy to the clipboard");
+    }
+  };
+
+  const download = (path: string) => {
+    const a = document.createElement("a");
+    a.href = api.projectFileDownloadUrl(projectId, path, sessionId);
+    a.download = "";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
+
+  const rowMenu = (entryPath: string, name: string, isDir: boolean): KebabMenuItem[] => {
+    const copyItems: KebabMenuItem[] = [
+      { key: "copy-rel", label: "Copy relative path", onClick: () => void copy(entryPath) },
+      {
+        key: "copy-abs",
+        label: "Copy absolute path",
+        disabled: rootCwd === null,
+        onClick: () => rootCwd !== null && void copy(joinAbs(rootCwd, entryPath)),
+      },
+    ];
+    const editItems: KebabMenuItem[] = [
+      {
+        key: "rename",
+        label: "Rename",
+        disabled: blocked(entryPath),
+        title: blocked(entryPath) ? BLOCKED_TITLE : undefined,
+        // The name input takes focus; the menu must not hand it back to its trigger.
+        opensOverlay: true,
+        onClick: () => setRenaming({ path: entryPath, value: name }),
+      },
+      {
+        key: "delete",
+        label: "Delete",
+        armLabel: isDir ? "Click again to delete (empty folders only)" : "Click again to delete",
+        confirm: true,
+        danger: true,
+        disabled: blocked(entryPath),
+        title: blocked(entryPath) ? BLOCKED_TITLE : undefined,
+        onClick: () => void commitDelete(entryPath),
+      },
+    ];
+    if (isDir) {
+      return [
+        {
+          key: "upload-files",
+          label: "Upload files here",
+          onClick: () => tree.pickUploadIn(entryPath, tree.fileInputRef.current),
+        },
+        {
+          key: "upload-folder",
+          label: "Upload a folder here",
+          onClick: () => tree.pickUploadIn(entryPath, tree.folderInputRef.current),
+        },
+        {
+          key: "new-file",
+          label: "New file here",
+          opensOverlay: true,
+          onClick: () => startCreate("file", entryPath),
+        },
+        {
+          key: "new-folder",
+          label: "New folder here",
+          opensOverlay: true,
+          onClick: () => startCreate("dir", entryPath),
+        },
+        ...copyItems,
+        ...editItems,
+      ];
+    }
+    return [
+      {
+        key: "open",
+        label: "Open",
+        onClick: () => actions.onOpenFile(projectId, entryPath, sessionId),
+      },
+      { key: "download", label: "Download", onClick: () => download(entryPath) },
+      ...copyItems,
+      ...editItems,
+    ];
   };
 
   const renderDir = (dirPath: string, depth: number): ReactNode => {
@@ -165,42 +383,50 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
         {dir.entries
           .filter((e) => !(e.kind === "dir" && HIDDEN_DIRS.has(e.name)))
           .map((entry) => {
-            const entryPath = joinPath(dirPath, entry.name);
+            const entryPath = joinRel(dirPath, entry.name);
             const isDir =
               entry.kind === "dir" || (entry.kind === "symlink" && entry.targetKind === "dir");
             const unopenable = entry.kind === "symlink" && entry.targetKind === "outside";
-            if (isDir) {
-              const open = expanded.has(entryPath);
-              return (
-                <div key={entryPath}>
-                  <button
-                    type="button"
-                    className={`agent-rules-panel-row file-editor-row${entryPath === selectedDir ? " selected" : ""}${dropKey === entryPath ? " file-drop-target" : ""}`}
-                    style={indent}
-                    aria-expanded={open}
-                    onClick={() => toggleDir(entryPath)}
-                    {...dropProps(entryPath)}
-                  >
-                    {open ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
-                    <FolderIcon size={13} />
-                    <span className="agent-rules-panel-row-name">{entry.name}</span>
-                  </button>
-                  {open && renderDir(entryPath, depth + 1)}
-                </div>
-              );
-            }
-            return (
+            const open = isDir && expanded.has(entryPath);
+            const isRenaming = renaming?.path === entryPath;
+            const hot = dropKey === entryPath;
+            const rowProps = isDir ? dropProps(entryPath, { folder: true }) : dropProps(dirPath);
+            const mainRow = isRenaming ? (
+              <input
+                className="file-editor-new-input"
+                style={indent}
+                autoFocus
+                value={renaming.value}
+                aria-label={`Rename ${entry.name}`}
+                onChange={(e) => setRenaming({ path: entryPath, value: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void commitRename();
+                  if (e.key === "Escape") setRenaming(null);
+                }}
+                onBlur={() => setRenaming((r) => (r?.path === entryPath ? null : r))}
+              />
+            ) : isDir ? (
               <button
-                key={entryPath}
+                type="button"
+                className={`agent-rules-panel-row file-editor-row${entryPath === selectedDir ? " selected" : ""}${hot ? " file-drop-target" : ""}`}
+                style={indent}
+                aria-expanded={open}
+                onClick={() => toggleDir(entryPath)}
+              >
+                {open ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
+                <FolderIcon size={13} />
+                <span className="agent-rules-panel-row-name">{entry.name}</span>
+              </button>
+            ) : (
+              <button
                 type="button"
                 className={`agent-rules-panel-row file-editor-row${unopenable ? " file-editor-row-muted" : ""}`}
                 style={indent}
                 disabled={unopenable}
                 title={unopenable ? "Symlink to outside the project — can't be opened" : undefined}
-                {...dropProps(dirPath)}
                 onClick={() => {
                   setSelectedDir(dirPath);
-                  actions.onOpenFile(projectId, entryPath);
+                  actions.onOpenFile(projectId, entryPath, sessionId);
                 }}
               >
                 <FileTextIcon size={13} />
@@ -209,6 +435,50 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
                   <span className="agent-rules-panel-row-meta">link</span>
                 )}
               </button>
+            );
+            return (
+              <div key={entryPath}>
+                <div
+                  className={`file-editor-rowwrap${menuRow === entryPath ? " menu-open" : ""}`}
+                  // The drag source is the row wrapper, not the button inside it:
+                  // Firefox won't drag a <button>.
+                  draggable={!isRenaming && !unopenable && rootCwd !== null}
+                  onDragStart={(e) =>
+                    rootCwd !== null &&
+                    startFileDrag(e.dataTransfer, {
+                      projectId,
+                      sessionId: sessionId ?? null,
+                      path: entryPath,
+                      kind: isDir ? "dir" : "file",
+                      rootCwd,
+                    })
+                  }
+                  onDragEnd={endFileDrag}
+                  onContextMenu={(e) => {
+                    if (isRenaming || unopenable) return;
+                    e.preventDefault();
+                    // Open the row's own ⋯ menu: reveal its actions, then click it.
+                    const wrap = e.currentTarget;
+                    setMenuRow(entryPath);
+                    requestAnimationFrame(() =>
+                      wrap.querySelector<HTMLButtonElement>(".kebab-trigger-btn")?.click(),
+                    );
+                  }}
+                  onMouseLeave={() => setMenuRow((cur) => (cur === entryPath ? null : cur))}
+                  {...rowProps}
+                >
+                  {mainRow}
+                  {!isRenaming && !unopenable && (
+                    <span className="file-editor-row-actions">
+                      <KebabMenu
+                        title={`Actions for ${entry.name}`}
+                        items={rowMenu(entryPath, entry.name, isDir)}
+                      />
+                    </span>
+                  )}
+                </div>
+                {open && renderDir(entryPath, depth + 1)}
+              </div>
             );
           })}
         {dir.truncated && (
@@ -220,10 +490,14 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
     );
   };
 
+  const rootLabel = rootCwd !== null && sessionId !== undefined ? baseName(rootCwd) : null;
+
   return (
     <div
       className={`files-sidebar-view${dropKey === ROOT_DROP_KEY ? " file-drop-target" : ""}`}
-      {...dropProps(selectedDir, ROOT_DROP_KEY)}
+      // The background: uploads go into the selected folder, a dragged row
+      // moves to the project root.
+      {...dropProps(selectedDir, { key: ROOT_DROP_KEY, moveDir: "" })}
     >
       <TreeUploadInputs
         fileRef={tree.fileInputRef}
@@ -249,13 +523,13 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
             key: "upload-files",
             label: `Upload files to ${selectedDir || "project root"}`,
             icon: UploadIcon,
-            onClick: () => tree.fileInputRef.current?.click(),
+            onClick: () => tree.pickUploadIn(selectedDir, tree.fileInputRef.current),
           },
           {
             key: "upload-folder",
             label: `Upload a folder to ${selectedDir || "project root"}`,
             icon: FolderUpIcon,
-            onClick: () => tree.folderInputRef.current?.click(),
+            onClick: () => tree.pickUploadIn(selectedDir, tree.folderInputRef.current),
           },
           {
             key: "open-editor",
@@ -265,6 +539,26 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
           },
         ]}
       />
+      {checkoutSessionId !== null && (
+        <div className="files-root-chip">
+          <span className="files-root-chip-label" title={rootCwd ?? undefined}>
+            {rootRefused
+              ? "Project root (this worktree can't be browsed here)"
+              : rootLabel !== null
+                ? `Worktree: ${rootLabel}`
+                : "Project root"}
+          </span>
+          {!rootRefused && (
+            <button
+              type="button"
+              className="git-panel-fetch-btn"
+              onClick={() => setShowProjectRoot((v) => !v)}
+            >
+              {showProjectRoot ? "Show worktree" : "Show project root"}
+            </button>
+          )}
+        </div>
+      )}
       {newEntry && (
         <input
           className="file-editor-new-input"

@@ -1,11 +1,15 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { FileEditorPanel } from "./FileEditorPanel.js";
 import { api, ApiError, type ProjectDirEntry } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { useDashboardStore } from "./store/index.js";
+import { makeProject } from "./test/fixtures.js";
+import { hasDirtyFileUnder } from "./lib/dirtyFiles.js";
+import { activeFileDrag, endFileDrag } from "./lib/fileDrag.js";
+import { subscribeFilePathGone, type FilePathGone } from "./lib/filePathEvents.js";
 
 // CodeMirror is exercised for real in components/CodeEditor.test.tsx; here a
 // textarea stands in so the panel's own behaviour is the thing under test.
@@ -435,7 +439,9 @@ describe("FileEditorPanel", () => {
       const del = screen.getAllByTitle(/Delete src\?/)[0];
       await user.click(del);
       await user.click(screen.getAllByTitle(/Delete src\?|Confirm/i)[0] ?? del);
-      expect(await screen.findByText('"src" is not empty')).toBeInTheDocument();
+      expect(
+        await screen.findByText("src isn't empty — only empty folders can be deleted"),
+      ).toBeInTheDocument();
     });
 
     it("blocks rename/delete of the open file while it has unsaved edits", async () => {
@@ -1055,6 +1061,246 @@ describe("FileEditorPanel", () => {
       expect(await screen.findByText("dup.txt already exists")).toBeInTheDocument();
       await user.click(screen.getByRole("button", { name: "Dismiss upload errors" }));
       expect(screen.queryByText("dup.txt already exists")).toBeNull();
+    });
+  });
+
+  describe("drag to move, and shared edit state", () => {
+    const fakeDt = () => {
+      const data = new Map<string, string>();
+      return {
+        setData: (k: string, v: string) => void data.set(k, v),
+        getData: (k: string) => data.get(k) ?? "",
+        get types() {
+          return [...data.keys()];
+        },
+        dropEffect: "none",
+        effectAllowed: "all",
+        items: [],
+        files: [],
+      };
+    };
+    // Only the tree's own rows: an open file's name is in the header too.
+    const rowOf = (name: string) =>
+      Array.from(
+        document.querySelectorAll<HTMLElement>(".file-editor-tree .file-editor-rowwrap"),
+      ).find(
+        (r) => r.querySelector(".agent-rules-panel-row-name")?.textContent === name,
+      ) as HTMLElement;
+    beforeEach(() => {
+      useDashboardStore.setState({ projects: [makeProject({ id: 1, cwd: "/work/app" })] });
+    });
+    afterEach(() => endFileDrag());
+
+    const movable = () => {
+      let moved = false;
+      const m = mockFetch({
+        extra: (method, url) => {
+          if (method === "POST" && url.endsWith("/files/rename")) {
+            moved = true;
+            return jsonResponse(200, { path: "src/.env" });
+          }
+          if (moved && url.includes("/files?path=") && !url.includes("src")) {
+            return jsonResponse(200, {
+              path: "",
+              entries: [dir("src"), file("big.bin")],
+              truncated: false,
+            });
+          }
+          if (moved && url.includes("/file?path=src%2F.env")) {
+            return jsonResponse(200, { path: "src/.env", content: "A=1\n", size: 4, mtimeMs: 100 });
+          }
+        },
+      });
+      vi.stubGlobal("fetch", m.fn);
+      return m;
+    };
+
+    it("moves a file onto a folder, announcing the old path as gone", async () => {
+      const gone: FilePathGone[] = [];
+      const off = subscribeFilePathGone((e) => gone.push(e));
+      const { calls } = movable();
+      render(<FileEditorPanel params={{ projectId: 1, sessionId: undefined }} />);
+      await screen.findByText(".env");
+      const dt = fakeDt();
+      fireEvent.dragStart(rowOf(".env"), { dataTransfer: dt });
+      expect(JSON.parse(dt.getData("application/x-mullion-file"))).toMatchObject({
+        projectId: 1,
+        sessionId: null,
+        path: ".env",
+        kind: "file",
+      });
+      fireEvent.dragOver(rowOf("src"), { dataTransfer: dt });
+      expect(rowOf("src").querySelector(".file-drop-target")).toBeTruthy();
+      fireEvent.drop(rowOf("src"), { dataTransfer: dt });
+      await waitFor(() =>
+        expect(calls.find((c) => c.url.endsWith("/files/rename"))!.body).toMatchObject({
+          from: ".env",
+          to: "src/.env",
+        }),
+      );
+      expect(gone).toEqual([{ projectId: 1, sessionId: undefined, path: ".env" }]);
+      off();
+    });
+
+    it("follows the open file when it is the one moved", async () => {
+      const user = userEvent.setup();
+      const { calls } = movable();
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await user.click(await screen.findByText(".env"));
+      await screen.findByLabelText("editor:.env");
+      const dt = fakeDt();
+      fireEvent.dragStart(rowOf(".env"), { dataTransfer: dt });
+      fireEvent.drop(rowOf("src"), { dataTransfer: dt });
+      expect(await screen.findByLabelText("editor:src/.env")).toBeInTheDocument();
+      expect(calls.some((c) => c.url.includes("/file?path=src%2F.env"))).toBe(true);
+    });
+
+    it("moves to the root when dropped on the tree background", async () => {
+      const user = userEvent.setup();
+      let moved = false;
+      const { fn, calls } = mockFetch({
+        extra: (method, url) => {
+          if (method === "POST" && url.endsWith("/files/rename")) {
+            moved = true;
+            return jsonResponse(200, { path: "index.ts" });
+          }
+          if (moved && url.includes("/files?path=")) {
+            return jsonResponse(200, {
+              path: "",
+              entries: [dir("src"), file("index.ts")],
+              truncated: false,
+            });
+          }
+        },
+      });
+      vi.stubGlobal("fetch", fn);
+      const { container } = render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await user.click(await screen.findByText("src"));
+      await screen.findByText("index.ts");
+      const dt = fakeDt();
+      fireEvent.dragStart(rowOf("index.ts"), { dataTransfer: dt });
+      fireEvent.drop(container.querySelector(".file-editor-tree") as HTMLElement, {
+        dataTransfer: dt,
+      });
+      await waitFor(() =>
+        expect(calls.find((c) => c.url.endsWith("/files/rename"))!.body).toMatchObject({
+          from: "src/index.ts",
+          to: "index.ts",
+        }),
+      );
+    });
+
+    it("shows a move clash and a refused drop does nothing", async () => {
+      const { fn, calls } = mockFetch({
+        extra: (method, url) =>
+          method === "POST" && url.endsWith("/files/rename")
+            ? jsonResponse(409, { message: "exists", code: "conflict" })
+            : undefined,
+      });
+      vi.stubGlobal("fetch", fn);
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await screen.findByText(".env");
+      const dt = fakeDt();
+      fireEvent.dragStart(rowOf(".env"), { dataTransfer: dt });
+      fireEvent.drop(rowOf("src"), { dataTransfer: dt });
+      expect(await screen.findByText(".env already exists in src")).toBeInTheDocument();
+      // a drop of the same row back on the root background is "already there"
+      calls.length = 0;
+      fireEvent.dragStart(rowOf(".env"), { dataTransfer: dt });
+      fireEvent.drop(rowOf("big.bin"), { dataTransfer: dt });
+      expect(calls.some((c) => c.url.endsWith("/files/rename"))).toBe(false);
+    });
+
+    it("rows are not draggable while the project's directory is unknown", async () => {
+      useDashboardStore.setState({ projects: [] });
+      const { fn } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await screen.findByText(".env");
+      expect(rowOf(".env").getAttribute("draggable")).toBe("false");
+      // a drag that did start would carry no root: nothing must be recorded
+      fireEvent.dragStart(rowOf(".env"), { dataTransfer: fakeDt() });
+      expect(activeFileDrag()).toBeNull();
+    });
+
+    it("does not drag a symlink out of the project, nor accept a drag onto its own folder", async () => {
+      const { fn } = mockFetch({
+        extra: (method, url) =>
+          method === "GET" && url.includes("/files?path=") && !url.includes("src")
+            ? jsonResponse(200, {
+                path: "",
+                entries: [
+                  { name: "escape", kind: "symlink", size: 0, targetKind: "outside" },
+                  dir("src"),
+                ],
+                truncated: false,
+              })
+            : undefined,
+      });
+      vi.stubGlobal("fetch", fn);
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await screen.findByText("escape");
+      expect(rowOf("escape").getAttribute("draggable")).toBe("false");
+    });
+
+    it("refuses to move a file with unsaved edits, here or in another panel", async () => {
+      const user = userEvent.setup();
+      const { fn, calls } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await user.click(await screen.findByText(".env"));
+      const editor = await screen.findByLabelText("editor:.env");
+      await user.type(editor, "x");
+      await waitFor(() => expect(hasDirtyFileUnder(1, undefined, ".env")).toBe(true));
+      const dt = fakeDt();
+      fireEvent.dragStart(rowOf(".env"), { dataTransfer: dt });
+      fireEvent.drop(rowOf("src"), { dataTransfer: dt });
+      expect(calls.some((c) => c.url.endsWith("/files/rename"))).toBe(false);
+    });
+
+    it("keeps the shared registry in step with the draft, and clears it on unmount", async () => {
+      const user = userEvent.setup();
+      const { fn } = mockFetch();
+      vi.stubGlobal("fetch", fn);
+      const { unmount } = render(
+        <FileEditorPanel params={{ projectId: 1, sessionId: undefined }} />,
+      );
+      await user.click(await screen.findByText(".env"));
+      await user.type(await screen.findByLabelText("editor:.env"), "x");
+      await waitFor(() => expect(hasDirtyFileUnder(1, undefined, ".env")).toBe(true));
+      await user.click(screen.getByRole("button", { name: "Discard changes" }));
+      await waitFor(() => expect(hasDirtyFileUnder(1, undefined, ".env")).toBe(false));
+      await user.type(screen.getByLabelText("editor:.env"), "y");
+      await waitFor(() => expect(hasDirtyFileUnder(1, undefined, ".env")).toBe(true));
+      unmount();
+      expect(hasDirtyFileUnder(1, undefined, ".env")).toBe(false);
+    });
+
+    it("announces the old path as gone after a rename and after a delete", async () => {
+      const gone: FilePathGone[] = [];
+      const off = subscribeFilePathGone((e) => gone.push(e));
+      const user = userEvent.setup();
+      const { fn } = mockFetch({
+        extra: (method, url) => {
+          if (method === "POST" && url.endsWith("/files/rename"))
+            return jsonResponse(200, { path: "z" });
+          if (method === "DELETE") return jsonResponse(200, { path: "big.bin" });
+        },
+      });
+      vi.stubGlobal("fetch", fn);
+      render(<FileEditorPanel params={{ projectId: 1 }} />);
+      await screen.findByText("big.bin");
+      await user.click(screen.getByLabelText("Rename big.bin"));
+      const input = screen.getByRole("textbox", { name: "Rename big.bin" });
+      await user.clear(input);
+      await user.type(input, "z.bin{Enter}");
+      await waitFor(() => expect(gone).toHaveLength(1));
+      const del = screen.getAllByTitle(/Delete \.env\?/)[0];
+      await user.click(del);
+      await user.click(screen.getAllByTitle(/Delete \.env\?|Confirm/i)[0] ?? del);
+      await waitFor(() => expect(gone).toHaveLength(2));
+      expect(gone.map((g) => g.path)).toEqual(["big.bin", ".env"]);
+      off();
     });
   });
 });

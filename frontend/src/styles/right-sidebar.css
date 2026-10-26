@@ -117,6 +117,11 @@
   bottom: 0;
   z-index: 45;
 }
+/* A file row being dragged (lib/fileDrag.ts): let the drop reach whatever is
+   under the floating drawer — a terminal pane — instead of the scrim. */
+.file-dragging .right-sidebar-scrim {
+  pointer-events: none;
+}
 /* Dim the scrim on the tiers where this drawer is an overlay. Width used to
    decide that, so a forced desktop on a narrow window dimmed a docked panel
    and a forced tablet on a wide window did not (issue #1531). */

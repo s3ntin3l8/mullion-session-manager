@@ -65,6 +65,29 @@ describe("useTreeUploads", () => {
     expect(api.uploadProjectFile).not.toHaveBeenCalled();
   });
 
+  it("'upload here' sends the next pick to that folder, then reverts to the selected one", async () => {
+    const { hook } = setup();
+    const input = document.createElement("input");
+    const click = vi.spyOn(input, "click").mockImplementation(() => {});
+    act(() => hook.result.current.pickUploadIn("src/deep", input));
+    expect(click).toHaveBeenCalled();
+    await act(async () =>
+      hook.result.current.pickFiles([file("a.txt")] as unknown as FileList, input),
+    );
+    await vi.waitFor(() => expect(api.uploadProjectFile).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.uploadProjectFile).mock.calls[0]![1]).toBe("src/deep/a.txt");
+    await act(async () =>
+      hook.result.current.pickFiles([file("b.txt")] as unknown as FileList, input),
+    );
+    await vi.waitFor(() => expect(api.uploadProjectFile).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(api.uploadProjectFile).mock.calls[1]![1]).toBe("src/b.txt");
+  });
+
+  it("tolerates a missing input element when asked to open a picker", () => {
+    const { hook } = setup();
+    expect(() => hook.result.current.pickUploadIn("x", null)).not.toThrow();
+  });
+
   it("a picked folder keeps its relative paths and asks for parent folders", async () => {
     const { hook } = setup({ selectedDir: "" });
     const f = file("deep.txt", "pics/2024/deep.txt");

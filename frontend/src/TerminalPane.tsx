@@ -46,6 +46,8 @@ import { quotePastedPath } from "./terminal-pane/quote-paste-path.js";
 import { TerminalLinkTooltip } from "./terminal-pane/TerminalLinkTooltip.js";
 import { VoiceMicButton } from "./terminal-pane/VoiceMicButton.js";
 import { droppedFiles } from "./lib/dropped-files.js";
+import { hasFileDrag, readFileDrag } from "./lib/fileDrag.js";
+import { resolveDroppedPath } from "./terminal-pane/resolve-dropped-path.js";
 import { useVoiceDictation } from "./voice/useVoiceDictation.js";
 // ResizeMessage/GeometryMessage physically live in src/shared/ws-protocol.ts
 // (repo root, NOT this frontend workspace — see src/routes/terminal.ts's own
@@ -356,8 +358,12 @@ export function TerminalPane(props: {
   // primitive dep).
   const [fitRetryTick, setFitRetryTick] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // True while a file is dragged over the pane (desktop drop-to-attach).
-  const [dragActive, setDragActive] = useState(false);
+  // What is dragged over the pane (desktop drop-to-attach): OS files to upload,
+  // or a row from a file tree whose path gets typed in. null = nothing.
+  const [dragActive, setDragActive] = useState<"files" | "path" | null>(null);
+  // Types text into the terminal as a paste (the mount effect's own
+  // pasteToTerminal) — how a file dragged from a file tree is referenced.
+  const pastePathRef = useRef<(text: string) => void>(() => {});
   // Exposes the mount effect's own upload-and-inject logic to the "attach
   // image" button's file input handler below, same pattern as retryRef/
   // pasteHandlerRef — the button lives in this component's render, but the
@@ -1588,6 +1594,10 @@ export function TerminalPane(props: {
       });
     }
     uploadFilesRef.current = uploadAndInjectFiles;
+    pastePathRef.current = (text: string) => {
+      term.focus();
+      pasteToTerminal(text);
+    };
 
     // Checks the clipboard for an image entry (a screenshot or copied photo,
     // as opposed to copied text) and, if found, routes it through the upload
@@ -2028,6 +2038,7 @@ export function TerminalPane(props: {
       // it over to the next session this pane is switched to.
       setCopyModeSheet(null);
       uploadFilesRef.current = () => {};
+      pastePathRef.current = () => {};
       voiceInsertRef.current = () => {};
       // Drops any window/document listeners left by an in-progress hold —
       // without this, unmounting mid-hold (e.g. closing the pane while
@@ -2356,12 +2367,16 @@ export function TerminalPane(props: {
   // stray drop never navigates the page; only where the attach affordances are
   // enabled (read via the ref, like attachImage) does it highlight and upload.
   const isFileDrag = (e: React.DragEvent) => e.dataTransfer.types.includes("Files");
+  // A row dragged out of a file tree (application/x-mullion-file): referencing
+  // it types its path, nothing is uploaded.
+  const isPathDrag = (e: React.DragEvent) => hasFileDrag(e.dataTransfer);
   const onFileDrag = (e: React.DragEvent) => {
-    if (!isFileDrag(e)) return;
+    const files = isFileDrag(e);
+    if (!files && !isPathDrag(e)) return;
     e.preventDefault();
     if (!inputAffordancesRef.current) return;
     e.dataTransfer.dropEffect = "copy";
-    setDragActive(true);
+    setDragActive(files ? "files" : "path");
   };
 
   return (
@@ -2385,18 +2400,41 @@ export function TerminalPane(props: {
       onDragEnter={onFileDrag}
       onDragOver={onFileDrag}
       onDragLeave={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragActive(false);
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragActive(null);
       }}
       onDrop={(e) => {
+        if (isPathDrag(e)) {
+          e.preventDefault();
+          setDragActive(null);
+          if (!inputAffordancesRef.current) return;
+          const payload = readFileDrag(e.dataTransfer);
+          if (!payload) return;
+          // Resolved against THIS session's directory and project: the same
+          // file in its own checkout, relative to where the shell is.
+          const { sessions, projects } = useDashboardStore.getState();
+          const session = sessions.find((x) => x.id === props.params.sessionId);
+          const project = projects.find((p) => p.id === session?.projectId);
+          const path = resolveDroppedPath(payload, {
+            projectId: session?.projectId ?? null,
+            cwd: session?.cwd ?? null,
+            projectCwd: project?.cwd ?? null,
+          });
+          pastePathRef.current(`${quotePastedPath(path)} `);
+          return;
+        }
         if (!isFileDrag(e)) return;
         e.preventDefault();
-        setDragActive(false);
+        setDragActive(null);
         if (!inputAffordancesRef.current) return;
         const { files, skipped } = droppedFiles(e.dataTransfer);
         if (files.length > 0 || skipped > 0) uploadFilesRef.current(files, skipped);
       }}
     >
-      {dragActive && <div className="terminal-drop-overlay">Drop files to attach</div>}
+      {dragActive && (
+        <div className="terminal-drop-overlay">
+          {dragActive === "path" ? "Drop to insert path" : "Drop files to attach"}
+        </div>
+      )}
       {
         // Issue #91's padding is an absolute inset, NOT CSS padding on this
         // div: FitAddon.proposeDimensions() measures the computed

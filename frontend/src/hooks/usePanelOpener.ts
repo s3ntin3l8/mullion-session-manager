@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import type { DockviewApi } from "dockview-react";
 import type { Device, Project, Session, Task, Workspace } from "../api/index.js";
@@ -11,6 +11,7 @@ import {
   maximizeIfTiled,
   openExternalFilePanel,
   openFileOnlyPanel,
+  closeFilePanelsUnder,
   openDevicePanel,
   openOrFocusProjectPanel,
   openProjectHubPanel,
@@ -19,6 +20,7 @@ import {
   openTimelinePanel,
 } from "../panelUtils.js";
 import type { ProjectPanelKindConfig } from "../panelUtils.js";
+import { subscribeFilePathGone } from "../lib/filePathEvents.js";
 import type { LayoutContext } from "../lib/layoutTier.js";
 import type { ProjectHubTab } from "../ProjectHubPanel.js";
 
@@ -128,7 +130,7 @@ export interface UsePanelOpenerResult {
   onOpenExternalFile: (projectId: number) => void;
   // Opens a specific file (project-relative path) in the project's file
   // editor — the right sidebar's Files view.
-  onOpenFile: (projectId: number, path: string) => void;
+  onOpenFile: (projectId: number, path: string, sessionId?: number) => void;
   // Opens (or focuses) a project's DB-backed Mullion briefing editor.
   onOpenProjectBriefing: (projectId: number) => void;
   // PR-6 — opens (or focuses) a project's "scaffold Mullion integration as
@@ -371,13 +373,22 @@ export function usePanelOpener({
   );
 
   const onOpenFile = useCallback(
-    (projectId: number, path: string) => {
+    (projectId: number, path: string, sessionId?: number) => {
       if (!dockviewApi) return;
       leaveTaskView();
-      openFileOnlyPanel(dockviewApi, projectId, projects, layout, path);
+      openFileOnlyPanel(dockviewApi, projectId, projects, layout, path, sessionId);
     },
     [dockviewApi, projects, layout, leaveTaskView],
   );
+
+  // A file or folder was renamed, moved or deleted from a file tree: close the
+  // editor-only panels that were open on it (they only fail on their next save).
+  useEffect(() => {
+    if (!dockviewApi) return;
+    return subscribeFilePathGone((e) =>
+      closeFilePanelsUnder(dockviewApi, e.projectId, e.path, e.sessionId),
+    );
+  }, [dockviewApi]);
 
   const onOpenBrowser = useCallback(
     (projectId: number) => {

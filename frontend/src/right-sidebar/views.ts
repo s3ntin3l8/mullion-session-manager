@@ -20,7 +20,7 @@ export interface RightSidebarActions {
   onOpenGit: (projectId: number) => void;
   onOpenGitHub: (projectId: number) => void;
   onOpenFileEditor: (projectId: number) => void;
-  onOpenFile: (projectId: number, path: string) => void;
+  onOpenFile: (projectId: number, path: string, sessionId?: number) => void;
   onOpenAgentRules: (projectId: number) => void;
   onOpenProjectBriefing: (projectId: number) => void;
   onOpenProjectSetup: (projectId: number) => void;
@@ -30,6 +30,10 @@ export interface RightSidebarActions {
 
 export interface RightSidebarViewProps {
   projectId: number;
+  /** The session whose own checkout (a git worktree) the focused panel is in,
+   * when that differs from the project's — null otherwise. Only views that
+   * browse files care. */
+  checkoutSessionId?: number | null;
   actions: RightSidebarActions;
 }
 
