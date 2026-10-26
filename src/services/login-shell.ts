@@ -39,15 +39,24 @@ const PROBE_KILL_ESCALATION_MS = 2_000;
 
 /**
  * Runs one script in a login shell and resolves its trimmed stdout (null when
- * empty, failed or timed out).
+ * empty, failed or timed out). Never rejects — agent-detect.ts's probe()
+ * relies on that, awaiting every probe in one Promise.all.
  *
  * The spawn/timeout/kill machinery lives in `shell-spawn.ts`, shared with the
  * interactive-shell resolver (issue #1833).
  */
 export function runLoginShell(script: string): Promise<string | null> {
   // The SESSION's shell (session-shell.ts) — Git Bash on Windows. A host with
-  // none cannot run a session either, so the probe finds nothing.
-  const shell = sessionShellOrNull();
+  // none cannot run a session either, so the probe finds nothing. Any OTHER
+  // failure resolving it is unexpected: logged, so it is not mistaken for
+  // "nothing installed", but still a null — one probe must not reject them all.
+  let shell: string | null;
+  try {
+    shell = sessionShellOrNull();
+  } catch (err) {
+    console.warn("[login-shell] could not resolve the session shell:", err);
+    return Promise.resolve(null);
+  }
   if (shell === null) return Promise.resolve(null);
   return runShellCapture({
     shell,
