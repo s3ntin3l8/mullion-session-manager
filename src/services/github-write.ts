@@ -1272,6 +1272,10 @@ export async function markPullRequestReadyForReview(
   );
 }
 
+/** GitHub's `PullRequestReviewState`. */
+export type PrReviewState =
+  "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING";
+
 export interface PrReviewThreadComment {
   /** Null for a deleted/ghost account — GitHub itself allows this. */
   author: string | null;
@@ -1282,6 +1286,11 @@ export interface PrReviewThreadComment {
   path: string | null;
   line: number | null;
   body: string;
+  /** State of the review this comment was posted as part of (APPROVED,
+   * CHANGES_REQUESTED, COMMENTED, DISMISSED, PENDING), or null when GitHub
+   * reports none — a reply in a thread belongs to its own review, so a human
+   * answering under an approval reads COMMENTED, not APPROVED. */
+  reviewState: PrReviewState | null;
 }
 
 export interface PrReviewThread {
@@ -1364,6 +1373,7 @@ export async function fetchPullRequestReviewThreads(
                 path: string | null;
                 line: number | null;
                 body: string;
+                pullRequestReview: { state: PrReviewState } | null;
               }>;
             };
           }>;
@@ -1389,6 +1399,7 @@ export async function fetchPullRequestReviewThreads(
                   path
                   line
                   body
+                  pullRequestReview { state }
                 }
               }
             }
@@ -1428,6 +1439,7 @@ export async function fetchPullRequestReviewThreads(
         path: c.path,
         line: c.line,
         body: c.body,
+        reviewState: c.pullRequestReview?.state ?? null,
       })),
     })),
     truncated,

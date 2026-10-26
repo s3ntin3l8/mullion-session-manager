@@ -1222,11 +1222,24 @@ export function buildReviewPrompt(opts: {
  * `reseedTaskIfSessionExited` decides the previous session is gone, so it
  * may be a completely fresh one with no memory of the task.
  */
-export function buildCiFailurePrompt(opts: WorkerPreambleOptions & { ci: ReviewCiInfo }): string {
+export function buildCiFailurePrompt(
+  opts: WorkerPreambleOptions & {
+    ci: ReviewCiInfo;
+    /** Set when the task's approval is carried through this fix (no
+     * re-review): where the worker writes a line to ask for one anyway. */
+    rereviewRequestPath?: string;
+  },
+): string {
   const preamble = buildTaskMasterPreamble(opts);
   const failure =
     `A required CI check failed on this task's PR after it reached review.\n\n${renderCiSummary(opts.ci)}\n\n` +
-    "Pull the latest changes, read the failing check's log, and fix it — then push and finish again.";
+    "Pull the latest changes, read the failing check's log, and fix it — then push and finish again." +
+    (opts.rereviewRequestPath
+      ? "\n\nThis work was already reviewed and approved, and a fix for CI is not " +
+        "reviewed again. If your fix grew past a small change and genuinely needs " +
+        `a second pair of eyes, write a line saying why to ${opts.rereviewRequestPath} ` +
+        "(outside the worktree, so it does not dirty it) and it will be reviewed."
+      : "");
   return `${preamble}${SECTION_BREAK}${failure}${SECTION_BREAK}${taskSpec(opts.task)}`;
 }
 

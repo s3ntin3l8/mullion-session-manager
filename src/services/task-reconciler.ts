@@ -177,6 +177,19 @@ async function detectReviewStall(
   return null;
 }
 
+/** Does the task's approval still stand for the head under review? True when
+ * an approving verdict was ingested for the CURRENT review session — the same
+ * pair of facts the auto-approve gate reads — so a later head-moving return
+ * (a CI fix, a reviewer's inline suggestions) can carry it instead of
+ * re-reviewing. */
+function hasCurrentApproval(task: typeof tasks.$inferSelect): boolean {
+  return (
+    isApprovingVerdict(task.lastReviewVerdict) &&
+    task.reviewSessionId !== null &&
+    task.reviewFindingsIngestedSessionId === task.reviewSessionId
+  );
+}
+
 /**
  * What the previous review round found, for a FOLLOW-UP review's delta
  * prompt — the last `## Round N` block of `tasks.reviewFindings`, plus the
@@ -2839,15 +2852,20 @@ async function attemptReturnRedCiToWorker(
   // Issue #1724 — the worker these notes go back to runs on the host that
   // holds its worktree, so its sessions dir is resolved there.
   const workerHostId = resolveTaskWorkerHost(app, task);
-  const commitTitlePath = project.conventionalCommitTitles
-    ? taskCommitTitlePath(
-        await resolveSessionsDirWithFallback(app, resolveBackend(app, workerHostId), {
+  const carryApproval = hasCurrentApproval(task);
+  // Only resolved when something below uses it: a remote-hosted task pays a
+  // round trip for the lookup.
+  const sessionsDir =
+    project.conventionalCommitTitles || carryApproval
+      ? await resolveSessionsDirWithFallback(app, resolveBackend(app, workerHostId), {
           taskId: task.id,
           hostId: workerHostId,
-        }),
-        task.id,
-      )
-    : undefined;
+        })
+      : null;
+  const commitTitlePath =
+    project.conventionalCommitTitles && sessionsDir !== null
+      ? taskCommitTitlePath(sessionsDir, task.id)
+      : undefined;
   // #939/#1016 — resolved once per spawn, fail-open — see
   // task-issue-context.ts's own doc comment.
   const issueContext = await resolveTaskIssueContextSafe(app, task, project);
@@ -2864,8 +2882,26 @@ async function attemptReturnRedCiToWorker(
     ci: { headSha: current.headSha, status: current.status, runs: current.runs },
     commitTitlePath,
     agentCommand: task.agentCommand,
+    rereviewRequestPath:
+      carryApproval && sessionsDir !== null && task.lastReviewVerdictAt
+        ? taskRereviewRequestPath(
+            sessionsDir,
+            task.id,
+            rereviewRequestKey(task.lastReviewVerdictAt),
+          )
+        : undefined,
   });
-  await autoReturnTask(app, task, project, { reason: "ci", seedPrompt: prompt });
+  // A fix for a red check moves the head but does not make the reviewed work
+  // any less approved — the same way a human fixing CI by hand on the PR
+  // would not re-open an approval. The round is still spent (the cap bounds
+  // a CI loop); only the re-review is skipped. A worker whose fix grew into a
+  // real change can ask for one the way a suggestions round can (the prompt
+  // names the file).
+  await autoReturnTask(app, task, project, {
+    reason: "ci",
+    seedPrompt: prompt,
+    carryApproval,
+  });
   return true;
 }
 
@@ -2984,8 +3020,20 @@ async function attemptReturnPrCommentsToWorker(
     Math.max(...newComments.map((c) => new Date(c.createdAt).getTime())),
   );
 
+  // Comments a reviewer posted INSIDE an approving review are suggestions, not
+  // a request for changes: apply them once, spend no round, and let the
+  // approval stand — but only on a task Task Master itself currently
+  // approves (`hasCurrentApproval`, the rule an approved-with-suggestions
+  // round needs too). Otherwise an external APPROVED review could resume a
+  // changes-requested task past its cap, and the worker would be told nobody
+  // reviews a round that the return gate does re-review. A reply under an
+  // approval belongs to its own COMMENTED review, so it — and any batch
+  // mixing the two — takes the ordinary path below.
+  const approvedBatch =
+    hasCurrentApproval(task) && newComments.every((c) => c.reviewState === "APPROVED");
+
   const maxRounds = resolveMaxAutoReturnRounds(project, resolvedTaskMaster.maxAutoReturnRounds);
-  if (task.autoReturnRounds >= maxRounds) {
+  if (!approvedBatch && task.autoReturnRounds >= maxRounds) {
     if (prCommentCapCommentedRounds.get(task.id) === task.autoReturnRounds) return true;
     // Issue #1038 — same reasoning as the red-CI cap notice above: no other
     // durable write to piggyback on, so its own CAS'd write, set before the
@@ -3021,18 +3069,53 @@ async function attemptReturnPrCommentsToWorker(
   // Issue #1724 — the worker these notes go back to runs on the host that
   // holds its worktree, so its sessions dir is resolved there.
   const workerHostId = resolveTaskWorkerHost(app, task);
+  const sessionsDir = await resolveSessionsDirWithFallback(app, resolveBackend(app, workerHostId), {
+    taskId: task.id,
+    hostId: workerHostId,
+  });
   const commitTitlePath = project.conventionalCommitTitles
-    ? taskCommitTitlePath(
-        await resolveSessionsDirWithFallback(app, resolveBackend(app, workerHostId), {
-          taskId: task.id,
-          hostId: workerHostId,
-        }),
-        task.id,
-      )
+    ? taskCommitTitlePath(sessionsDir, task.id)
     : undefined;
   // #939/#1016 — resolved once per spawn, fail-open — see
   // task-issue-context.ts's own doc comment.
   const issueContext = await resolveTaskIssueContextSafe(app, task, project);
+  if (approvedBatch) {
+    const returned = await autoReturnTask(app, task, project, {
+      reason: "suggestions",
+      seedPrompt: buildSuggestionsPrompt({
+        task: {
+          ...task,
+          comments: issueContext?.comments,
+          parent: issueContext?.parent,
+          siblings: issueContext?.siblings,
+        },
+        branchName: task.branchName ?? deriveTaskBranchName(task),
+        worktreePath: task.worktreePath,
+        budgetMinutes: resolvedTaskMaster.budgetMinutes,
+        commitTitlePath,
+        agentCommand: task.agentCommand,
+        suggestions: newComments
+          .map(
+            (c) =>
+              `- **${c.path ?? "(general)"}${c.line ? `:${c.line}` : ""}** (${c.author}) — ${c.body}`,
+          )
+          .join("\n"),
+        rereviewRequestPath: taskRereviewRequestPath(
+          sessionsDir,
+          task.id,
+          task.lastReviewVerdictAt ? rereviewRequestKey(task.lastReviewVerdictAt) : 0,
+        ),
+      }),
+    });
+    if (returned.ok) {
+      app.db
+        .update(tasks)
+        .set({ lastPrReviewCommentAt: newestCommentAt })
+        .where(eq(tasks.id, task.id))
+        .run();
+    }
+    return true;
+  }
   const prompt = buildPrReviewCommentsPrompt({
     task: {
       ...task,
@@ -3553,7 +3636,7 @@ export async function autoReturnTask(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
-  opts: { reason: AutoReturnReason; seedPrompt: string },
+  opts: { reason: AutoReturnReason; seedPrompt: string; carryApproval?: boolean },
 ): Promise<{ ok: boolean }> {
   // A suggestions round (an approved review's leftover nits) spends nothing:
   // it's not a fix-up the cap is rationing, and it must stay possible even on
@@ -3567,7 +3650,7 @@ export async function autoReturnTask(
     .set({
       status: "in_progress",
       autoReturnRounds: roundAfter,
-      approvalCarriedAt: spendsRound ? null : new Date(),
+      approvalCarriedAt: (opts.carryApproval ?? false) || !spendsRound ? new Date() : null,
       lastAutoReturnReason: opts.reason,
       // Issue #1038 — every caller of autoReturnTask already gated on
       // !capReached, so this is null already in every designed path; clear

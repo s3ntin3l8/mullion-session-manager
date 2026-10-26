@@ -1039,6 +1039,7 @@ describe("github-write service", () => {
                           path: "src/foo.ts",
                           line: 42,
                           body: "Please fix this null check.",
+                          pullRequestReview: { state: "APPROVED" },
                         },
                       ],
                     },
@@ -1058,6 +1059,7 @@ describe("github-write service", () => {
     expect(url).toBe("https://api.github.com/graphql");
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body.query).toContain("reviewThreads");
+    expect(body.query).toContain("pullRequestReview { state }");
     expect(body.variables).toEqual({
       owner: "owner",
       repo: "repo",
@@ -1078,11 +1080,52 @@ describe("github-write service", () => {
               path: "src/foo.ts",
               line: 42,
               body: "Please fix this null check.",
+              reviewState: "APPROVED",
             },
           ],
         },
       ],
     });
+  });
+
+  it("fetchPullRequestReviewThreads reads a comment with no review as reviewState null", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        data: {
+          viewer: { login: "mullion-bot[bot]" },
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                totalCount: 1,
+                nodes: [
+                  {
+                    id: "T1",
+                    isResolved: false,
+                    comments: {
+                      totalCount: 1,
+                      nodes: [
+                        {
+                          author: { login: "octocat" },
+                          createdAt: "2026-08-20T10:00:00Z",
+                          path: "src/foo.ts",
+                          line: 1,
+                          body: "orphan",
+                          pullRequestReview: null,
+                        },
+                      ],
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const result = await fetchPullRequestReviewThreads("tok", "owner", "repo", 9);
+
+    expect(result.threads[0].comments[0].reviewState).toBeNull();
   });
 
   it("fetchPullRequestReviewThreads returns an empty result when the PR/repo isn't found, without throwing", async () => {
