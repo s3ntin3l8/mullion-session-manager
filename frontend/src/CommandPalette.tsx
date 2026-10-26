@@ -1363,7 +1363,9 @@ export function CommandPalette({
                   : navEntry?.type === "workspace"
                     ? "Switch workspace"
                     : navEntry?.type === "command"
-                      ? `Run ${navEntry.command.title}`
+                      ? navEntry.command.drillIn
+                        ? `Open ${navEntry.command.title}`
+                        : `Run ${navEntry.command.title}`
                       : `Launch in ${target?.name ?? "…"}`}
           </span>
           {pickerOpen && (

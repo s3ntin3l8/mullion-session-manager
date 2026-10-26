@@ -2923,5 +2923,12 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     expect(footer).toBeTruthy();
     expect(footer?.textContent).toContain("Run Settings");
     expect(footer?.textContent).not.toMatch(/Launch in/);
+
+    // A drill-in row is a command too, but Enter opens a sub-list, not a
+    // run. Hover selects it the same way the arrow keys do.
+    const project = screen.getByRole("button", { name: /Project:/ });
+    await user.hover(project);
+    expect(footer?.textContent).toMatch(/Open Project:/);
+    expect(footer?.textContent).not.toMatch(/Run Project:/);
   });
 });
