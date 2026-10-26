@@ -390,6 +390,7 @@ export function NotificationBell({
 }) {
   const theme = useDashboardStore((s) => s.theme);
   const sessions = useDashboardStore((s) => s.sessions);
+  const openRightSidebarPr = useDashboardStore((s) => s.openRightSidebarPr);
   const projects = useDashboardStore((s) => s.projects);
   const events = useDashboardStore((s) => s.events);
   const lastSeenSeq = useDashboardStore((s) => s.lastSeenSeq);
@@ -802,6 +803,13 @@ export function NotificationBell({
                               ackAttention(session.id);
                               onOpenSession(session);
                             }}
+                            onOpenPr={(session, number) => {
+                              suppressRestore();
+                              setOpen(false);
+                              markSessionRead(session.id);
+                              ackAttention(session.id);
+                              openRightSidebarPr(session.projectId, number);
+                            }}
                             onTimeline={
                               onOpenTimeline
                                 ? (session) => {
@@ -889,6 +897,7 @@ function EventRow({
   item,
   session,
   onOpen,
+  onOpenPr,
   onTimeline,
   onOpenBrowser,
   onMarkRead,
@@ -897,6 +906,10 @@ function EventRow({
   item: FeedEventItem;
   session: Session | undefined;
   onOpen: (session: Session) => void;
+  // Desktop only (the phone has no right sidebar): a pr_* event's row opens
+  // its PR in the sidebar instead of the session's terminal, which stays one
+  // click away on the row's "Session" button.
+  onOpenPr?: (session: Session, number: number) => void;
   // Phone sheet only: the row's tap opens the terminal there, so the
   // timeline (this panel's per-session complement) is its own action.
   onTimeline?: (session: Session) => void;
@@ -922,9 +935,14 @@ function EventRow({
   const label = notifyLabel(item.event);
   const repeatCount = item.foldedSeqs.length;
 
+  const prNumber =
+    item.event.kind.startsWith("pr_") && typeof item.event.payload.number === "number"
+      ? item.event.payload.number
+      : null;
   const open = () => {
     if (!session) return;
-    onOpen(session);
+    if (onOpenPr && prNumber !== null) onOpenPr(session, prNumber);
+    else onOpen(session);
   };
 
   // Minimal review gate (issue #178) — gated on the SESSION's own live
@@ -1008,6 +1026,20 @@ function EventRow({
         <span className="notif-event-time">{age}</span>
         {isPendingGate && matchingGate && (
           <GateActions sessionId={item.sessionId} gateId={matchingGate.gateId} />
+        )}
+        {onOpenPr && prNumber !== null && session && (
+          <button
+            className="notif-timeline-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpen(session);
+            }}
+            // Same guard as the Timeline button below: the row's own
+            // onKeyDown would otherwise treat Enter/Space here as "open PR".
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            Session
+          </button>
         )}
         {onTimeline && session && (
           <button

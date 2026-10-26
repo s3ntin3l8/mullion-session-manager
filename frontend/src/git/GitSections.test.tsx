@@ -238,6 +238,18 @@ describe("GitHistorySection", () => {
     errors.mockRestore();
   });
 
+  it("says the host is unreachable instead of showing an empty history", async () => {
+    useDashboardStore.setState({
+      projects: [{ id: 1, hostId: "h1" }] as never,
+      hosts: [{ id: "h1", name: "box", health: "offline" }] as never,
+    });
+    stubFetch(() => jsonResponse(204, undefined));
+    render(<GitHistorySection projectId={1} />);
+    expect(await screen.findByText("Host box is unreachable")).toBeInTheDocument();
+    expect(screen.queryByText("No history available")).toBeNull();
+    useDashboardStore.setState({ projects: [], hosts: [] });
+  });
+
   it("explains an unavailable history and a failed load", async () => {
     stubFetch(() => jsonResponse(204, undefined));
     const { unmount } = render(<GitHistorySection projectId={1} />);

@@ -42,6 +42,8 @@ const renameSessionMock = vi.fn().mockResolvedValue(undefined);
 // getState().toggleSessionMute after a click, which would miss a fresh
 // vi.fn() created per getState() call.
 const toggleSessionMuteMock = vi.fn();
+const openBranchMock = vi.fn();
+const openViewMock = vi.fn();
 vi.mock("../store/index.js", () => {
   const useDashboardStore = (selector: (s: unknown) => unknown) =>
     selector({
@@ -66,6 +68,8 @@ vi.mock("../store/index.js", () => {
     sessions,
     mutedSessionIds: [],
     toggleSessionMute: toggleSessionMuteMock,
+    openRightSidebarBranch: openBranchMock,
+    openRightSidebarView: openViewMock,
   });
   return { useDashboardStore };
 });
@@ -111,6 +115,33 @@ describe("SessionRow row 1 — header: kebab menu", () => {
     await user.click(muteItem);
 
     expect(useDashboardStore.getState().toggleSessionMute).toHaveBeenCalledWith(expect.any(Number));
+  });
+});
+
+describe("SessionRow row 1 — header: Reveal in Git", () => {
+  const renderRow = (liveBranch: string | null) =>
+    render(
+      <SessionRow
+        session={makeSession({ status: "active", liveBranch })}
+        project={PROJECT}
+        onOpen={vi.fn()}
+        onEnd={vi.fn()}
+      />,
+    );
+
+  it("opens the Source Control view on the session's branch", async () => {
+    sessionGitStatuses = {};
+    renderRow("feat/x");
+    await userEvent.click(screen.getByTitle("More…"));
+    await userEvent.click(screen.getByText("Reveal in Git"));
+    expect(openBranchMock).toHaveBeenCalledWith(PROJECT.id, "feat/x");
+  });
+
+  it("falls back to just opening the Git view when the branch is unknown", async () => {
+    renderRow(null);
+    await userEvent.click(screen.getByTitle("More…"));
+    await userEvent.click(screen.getByText("Reveal in Git"));
+    expect(openViewMock).toHaveBeenCalledWith("git", PROJECT.id);
   });
 });
 

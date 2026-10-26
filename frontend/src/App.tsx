@@ -1940,7 +1940,11 @@ export function App() {
             )}
           </div>
         </div>
-        <RightSidebar tier={layoutTier} actions={rightSidebarActions} />
+        <RightSidebar
+          tier={layoutTier}
+          actions={rightSidebarActions}
+          workspaceProjectIds={scopedWorkspaceProjectIds}
+        />
       </div>
       {paletteOpen && (
         <CommandPalette

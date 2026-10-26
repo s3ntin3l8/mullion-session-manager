@@ -93,6 +93,7 @@ export function TaskDetail({
   // not-found guard below) — same posture as UnifiedBoard.tsx's TaskCard,
   // joined on task.branchName once `task` is known to exist.
   const prsByProject = useDashboardStore((s) => s.prsByProject);
+  const openRightSidebarPr = useDashboardStore((s) => s.openRightSidebarPr);
 
   const [agentLaunchers, setAgentLaunchers] = useState<Launcher[]>([]);
   useAsyncData(
@@ -281,6 +282,14 @@ export function TaskDetail({
             href={matchedPr?.htmlUrl ?? task.prUrl}
             target="_blank"
             rel="noreferrer"
+            // Opens the PR in the right sidebar; a modified click (new tab,
+            // download) and a row with no PR number keep the GitHub link.
+            onClick={(e) => {
+              const n = matchedPr?.number ?? task.prNumber;
+              if (n === null || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+              e.preventDefault();
+              openRightSidebarPr(task.projectId, n);
+            }}
           >
             {/* Prefer matchedPr's number for the same reason the href above
                 does (PR #577/#582): it's the branch-matched CURRENT PR, so

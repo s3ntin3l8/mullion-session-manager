@@ -148,6 +148,20 @@ describe("attachKeyConflictHandler", () => {
     );
   });
 
+  it("lets Ctrl/Cmd+Alt+G and +H bubble to the Git/GitHub sidebar shortcuts", () => {
+    const { term, fire } = makeFakeTerm();
+    attachKeyConflictHandler({
+      term,
+      reservedKeys: new Set(),
+      getClipboardKeys: () => ({ ctrlV: false, ctrlC: false }),
+    });
+    expect(fire({ key: "g", code: "KeyG", ctrlKey: true, altKey: true })).toBe(false);
+    expect(fire({ key: "˙", code: "KeyH", metaKey: true, altKey: true })).toBe(false);
+    // A bare Alt+G/H is a readline chord and still reaches the shell.
+    expect(fire({ key: "g", code: "KeyG", altKey: true })).toBe(true);
+    expect(fire({ key: "h", code: "KeyH", altKey: true })).toBe(true);
+  });
+
   it("intercepts Ctrl+Shift+F to toggle the find bar", () => {
     const { term, fire } = makeFakeTerm();
     const onToggleFind = vi.fn();

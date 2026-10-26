@@ -23,6 +23,10 @@ function ctx(over: Partial<PaletteCommandContext> = {}) {
     integrationsSettings: vi.fn(),
     blankBrowser: vi.fn(),
     newWorkspace: vi.fn(),
+    goToPr: vi.fn(),
+    openSessionOnBranch: vi.fn(),
+    queueIssue: vi.fn(),
+    prune: vi.fn(),
   };
   const context: PaletteCommandContext = {
     projectId: 5,
@@ -36,8 +40,10 @@ function ctx(over: Partial<PaletteCommandContext> = {}) {
   return { context, open };
 }
 
-const titles = (placement: "top" | "project", c: ReturnType<typeof buildPaletteCommands>) =>
-  c.filter((x) => x.placement === placement).map((x) => x.title);
+const titles = (
+  placement: "top" | "project" | "search",
+  c: ReturnType<typeof buildPaletteCommands>,
+) => c.filter((x) => x.placement === placement).map((x) => x.title);
 
 describe("buildPaletteCommands", () => {
   it("lists each placement in title order, with setup entries under the Project drill-in", () => {
@@ -277,5 +283,66 @@ describe("the Dock command's availability (issue #1881)", () => {
     // wherever the Dock IS shown — so it is not withdrawn, only explained.
     expect(dock("coarse-pointer").id).toBe("dock-config");
     expect(dock("coarse-pointer").keywords).toContain("dock");
+  });
+});
+
+function sidebarCtx(over: Partial<PaletteCommandContext> = {}) {
+  const r = ctx(over);
+  r.context.open.toggleRightSidebar = vi.fn();
+  return r;
+}
+
+describe("git / GitHub deep-link commands", () => {
+  it("lists Prune merged branches on the top level and runs it for the project", () => {
+    const { context, open } = sidebarCtx();
+    const commands = buildPaletteCommands(context);
+    const prune = commands.find((c) => c.id === "prune-merged")!;
+    expect(prune.placement).toBe("top");
+    prune.run();
+    expect(open.prune).toHaveBeenCalledWith(5);
+  });
+
+  it("finds Go to PR rows by number or title, but never lists them on an empty query", () => {
+    const { context, open } = sidebarCtx({
+      prs: [
+        { number: 42, title: "Fix the thing" },
+        { number: 7, title: "Other" },
+      ],
+    });
+    const commands = buildPaletteCommands(context);
+    expect(titles("top", commands).some((t) => t.startsWith("Go to PR"))).toBe(false);
+
+    const hits = searchPaletteCommands(commands, "pr 42");
+    expect(hits.map((c) => c.id)).toEqual(["go-to-pr-42"]);
+    hits[0].run();
+    expect(open.goToPr).toHaveBeenCalledWith(5, 42);
+    expect(searchPaletteCommands(commands, "other").map((c) => c.id)).toEqual(["go-to-pr-7"]);
+  });
+
+  it("finds Open session on branch rows by branch name", () => {
+    const { context, open } = sidebarCtx({ branches: ["main", "feat/login"] });
+    const hits = searchPaletteCommands(buildPaletteCommands(context), "login");
+    expect(hits.map((c) => c.title)).toEqual(["Open session on branch feat/login"]);
+    hits[0].run();
+    expect(open.openSessionOnBranch).toHaveBeenCalledWith(5, "feat/login");
+  });
+
+  it("builds a Queue issue row from a typed number", () => {
+    const { context, open } = sidebarCtx();
+    const commands = buildPaletteCommands(context);
+    const hits = searchPaletteCommands(commands, "queue #12");
+    expect(hits.map((c) => c.title)).toEqual(["Queue issue #12 for Task Master"]);
+    hits[0].run();
+    expect(open.queueIssue).toHaveBeenCalledWith(5, 12);
+    // The template itself is never a result, and a bare "queue" matches nothing.
+    expect(searchPaletteCommands(commands, "queue")).toEqual([]);
+  });
+
+  it("omits the sidebar deep links where there is no right sidebar (phone)", () => {
+    const { context } = sidebarCtx({ prs: [{ number: 1, title: "x" }] });
+    context.open.toggleRightSidebar = undefined;
+    const ids = buildPaletteCommands(context).map((c) => c.id);
+    expect(ids).not.toContain("prune-merged");
+    expect(ids).not.toContain("go-to-pr-1");
   });
 });

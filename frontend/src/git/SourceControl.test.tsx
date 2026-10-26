@@ -999,3 +999,38 @@ describe("per-project and per-click state", () => {
     expect(screen.getByText("This repository is healthy.")).toBeInTheDocument();
   });
 });
+
+describe("Deep-link requests", () => {
+  it("opens the branch detail when Reveal in Git queues a branch request", async () => {
+    m.getProjectGitBranch.mockResolvedValue(detail());
+    renderView();
+    await ready();
+    act(() => useDashboardStore.getState().openRightSidebarBranch(1, "feat/open"));
+    await screen.findByText("Commits only on this branch");
+    expect(m.getProjectGitBranch).toHaveBeenCalledWith(1, "feat/open");
+    // One-shot: cleared once applied.
+    expect(useDashboardStore.getState().rightSidebarBranchRequest).toBeNull();
+  });
+
+  it("opens the prune preview when the palette queues a prune request", async () => {
+    m.pruneProjectGitBranches.mockResolvedValue({
+      dryRun: true,
+      candidates: [{ name: "old-done", reason: "pr-merged" }],
+      skipped: [],
+      deleted: [],
+      failed: [],
+    });
+    renderView();
+    await ready();
+    act(() => useDashboardStore.getState().openRightSidebarPrune(1));
+    await screen.findByText("Will delete");
+    expect(useDashboardStore.getState().rightSidebarPruneRequest).toBeNull();
+  });
+
+  it("ignores a request for another project", async () => {
+    renderView();
+    await ready();
+    act(() => useDashboardStore.getState().openRightSidebarBranch(99, "feat/open"));
+    expect(screen.queryByText("Commits only on this branch")).toBeNull();
+  });
+});

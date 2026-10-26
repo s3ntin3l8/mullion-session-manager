@@ -74,6 +74,36 @@ damaged clone shows the repair plan and a confirmed **Repair**, #1896), an
   worktrees marked `auto`, `.wt/` worktrees grouped with "safe to remove" once
   their branch is merged or gone, `Prune stale`, and two-step removal.
 
+### Deep links, palette and shortcuts
+
+Everything that mentions a PR or a branch opens it **inside** the right sidebar
+instead of leaving for GitHub:
+
+- A session row's PR chip, a `pr_*` event in the notification bell (the row's
+  **Session** button still opens the terminal), a `pr_*` row's **Open PR #n**
+  link in the session timeline, and a task's pull-request link open the PR
+  drill-in in the GitHub view. A modified click on the task link (new tab) keeps
+  the GitHub URL.
+- A session row's **⋯ → Reveal in Git** opens this view on the session's branch
+  detail.
+- Clicking the **GitHub rail icon** while a PR needs attention (failing CI,
+  changes requested, conflicts) opens the most urgent such PR; with nothing
+  needing attention it opens the list. While GitHub is showing, a click closes it.
+- **Palette:** `Prune merged branches` (opens the prune preview), `Go to PR …`
+  (type `pr 42` or part of the title; open PRs only) and
+  `Open session on branch …` (type part of the branch name) are found by
+  searching, and `queue 42` offers **Queue issue #42 for Task Master**. The
+  sidebar-bound ones are omitted on phone, which has no right sidebar.
+- **Shortcuts:** Ctrl/⌘ + Alt + **G** opens (or, if showing, closes) the Git
+  view and Ctrl/⌘ + Alt + **H** the GitHub view — the same family as
+  Ctrl/⌘ + Alt + **B** for the sidebar. The Ctrl/⌘ is deliberate: a bare
+  Alt + G/H is a readline/Option-key chord the terminal must keep. Both are
+  listed in Settings → Shortcuts.
+- The sidebar's **project picker** offers only the active workspace's projects
+  (plus manual Dock pins); a project pinned from elsewhere stays selectable.
+- A remote project's **History** shows "Host … is unreachable" when the host's
+  heartbeat is offline, like Branches does.
+
 A pending promote request shows as a banner (Review… opens the promote dialog),
 and a remote host that cannot be reached shows an "unreachable" state with Retry
 instead of an empty list.

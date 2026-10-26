@@ -2247,6 +2247,11 @@ export function SessionRow({
           isMuted={isMuted}
           onToggleMute={() => useDashboardStore.getState().toggleSessionMute(session.id)}
           onOpenAsFloat={onOpenAsFloat}
+          onRevealInGit={() => {
+            const st = useDashboardStore.getState();
+            if (displayBranch) st.openRightSidebarBranch(project.id, displayBranch);
+            else st.openRightSidebarView("git", project.id);
+          }}
           onPromote={() => setPromoteOpen(true)}
           onRename={(value) => {
             // The store rolls the optimistic rename back on a rejected

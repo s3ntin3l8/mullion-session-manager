@@ -80,4 +80,40 @@ describe("useFollowedProject", () => {
 
     expect(result.current.effectiveProjectId).toBeNull();
   });
+
+  describe("workspace scope (#1877)", () => {
+    const three = () =>
+      useDashboardStore.setState({
+        projects: [project(1, "a"), project(2, "b"), project(3, "c")],
+      });
+
+    it("offers only the workspace's projects and falls back to the first of them", () => {
+      three();
+      const { result } = renderHook(() => useFollowedProject([2, 3]));
+      expect(result.current.dropdownOptions.map((o) => o.label)).toEqual([
+        "Follow active panel",
+        "b",
+        "c",
+      ]);
+      expect(result.current.effectiveProjectId).toBe(2);
+    });
+
+    it("keeps a pinned out-of-scope project selectable", () => {
+      three();
+      const { result } = renderHook(() => useFollowedProject([2]));
+      act(() => result.current.setPinnedProjectId(1));
+      expect(result.current.dropdownOptions.map((o) => o.value)).toEqual([
+        FOLLOW_SENTINEL,
+        "2",
+        "1",
+      ]);
+      expect(result.current.dropdownValue).toBe("1");
+    });
+
+    it("null means unscoped", () => {
+      three();
+      const { result } = renderHook(() => useFollowedProject(null));
+      expect(result.current.dropdownOptions).toHaveLength(4);
+    });
+  });
 });

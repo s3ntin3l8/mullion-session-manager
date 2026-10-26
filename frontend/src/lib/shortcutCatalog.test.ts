@@ -109,6 +109,8 @@ describe("SHORTCUTS", () => {
       "command-palette",
       "settings",
       "right-sidebar",
+      "git-view",
+      "github-view",
       "dismiss",
     ]);
     expect(SHORTCUTS.map((shortcut) => shortcut.id)).toEqual([

@@ -156,3 +156,38 @@ describe("right sidebar hydration", () => {
     expect(useDashboardStore.getState().githubOpenPrByProject[3]).toBeNull();
   });
 });
+
+describe("git deep-link requests", () => {
+  it("openRightSidebarBranch opens the Git view and queues a one-shot branch request", () => {
+    useDashboardStore.getState().openRightSidebarView("files");
+    useDashboardStore.getState().openRightSidebarBranch(5, "feat/x");
+
+    const s = useDashboardStore.getState();
+    expect(s.rightSidebarView).toBe("git");
+    expect(s.rightSidebarOpen).toBe(true);
+    expect(s.rightSidebarBranchRequest).toMatchObject({ projectId: 5, branch: "feat/x" });
+    expect(s.rightSidebarProjectRequest?.projectId).toBe(5);
+
+    useDashboardStore.getState().clearRightSidebarBranchRequest();
+    expect(useDashboardStore.getState().rightSidebarBranchRequest).toBeNull();
+  });
+
+  it("openRightSidebarPrune queues a prune request with a fresh nonce each time", () => {
+    useDashboardStore.getState().openRightSidebarPrune(5);
+    const first = useDashboardStore.getState().rightSidebarPruneRequest;
+    useDashboardStore.getState().openRightSidebarPrune(5);
+    const second = useDashboardStore.getState().rightSidebarPruneRequest;
+    expect(useDashboardStore.getState().rightSidebarView).toBe("git");
+    expect(second!.nonce).toBeGreaterThan(first!.nonce);
+
+    useDashboardStore.getState().clearRightSidebarPruneRequest();
+    expect(useDashboardStore.getState().rightSidebarPruneRequest).toBeNull();
+  });
+
+  it("openRightSidebarPr opens the PR drill-in on the GitHub view", () => {
+    useDashboardStore.getState().openRightSidebarPr(5, 42);
+    const s = useDashboardStore.getState();
+    expect(s.rightSidebarView).toBe("github");
+    expect(s.githubOpenPrByProject[5]).toBe(42);
+  });
+});

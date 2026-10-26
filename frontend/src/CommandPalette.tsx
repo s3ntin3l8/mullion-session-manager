@@ -19,6 +19,7 @@ import { buildPaletteCommands, searchPaletteCommands } from "./paletteCommands.j
 import type { PaletteCommand } from "./paletteCommands.js";
 import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
 import { describeError } from "./lib/describeError.js";
+import { openSessionOn } from "./git/sessionLaunch.js";
 import { WorktreeOptions } from "./command-palette/WorktreeOptions.js";
 import { useFocusTrap, isVisible } from "./hooks/useFocusTrap.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
@@ -292,6 +293,13 @@ export function CommandPalette({
   const [launchersLoadedFor, setLaunchersLoadedFor] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const effectiveProjectId = manualTargetProjectId ?? targetProjectId;
+  // Feed the search-only "Go to PR" / "Open session on branch" rows.
+  const projectPrs = useDashboardStore((s) =>
+    effectiveProjectId !== null ? s.prsByProject[effectiveProjectId]?.prs : undefined,
+  );
+  const projectBranches = useDashboardStore((s) =>
+    effectiveProjectId !== null ? s.gitBranchesByProject[effectiveProjectId]?.branches : undefined,
+  );
   const launchersLoaded = launchersLoadedFor === effectiveProjectId;
 
   // P11 — same posture as Settings.tsx: a fresh mount per open (this
@@ -523,6 +531,8 @@ export function CommandPalette({
     // the Dock is available (issue #1881).
     dockUnavailable: useDockUnavailableReason(),
     activeSession,
+    prs: projectPrs?.map((pr) => ({ number: pr.number, title: pr.title })),
+    branches: projectBranches?.map((b) => b.name),
     open: {
       github: onOpenGitHub,
       git: onOpenGit,
@@ -543,6 +553,25 @@ export function CommandPalette({
       hosts: onOpenHosts,
       settings: onOpenSettings,
       timeline: onOpenTimeline,
+      goToPr: (projectId, number) =>
+        useDashboardStore.getState().openRightSidebarPr(projectId, number),
+      prune: (projectId) => useDashboardStore.getState().openRightSidebarPrune(projectId),
+      openSessionOnBranch: (projectId, branch) => {
+        void openSessionOn(projectId, { branch }).catch((err: unknown) =>
+          useDashboardStore
+            .getState()
+            .reportError(`Could not open a session on ${branch}.`, describeError(err)),
+        );
+      },
+      queueIssue: (projectId, number) => {
+        void api
+          .queueProjectIssue(projectId, number)
+          .catch((err: unknown) =>
+            useDashboardStore
+              .getState()
+              .reportError(`Could not queue issue #${number}.`, describeError(err)),
+          );
+      },
       newWorkspace: () => {
         setSubView("workspace-name");
         setSubIndex(0);

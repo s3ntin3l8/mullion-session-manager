@@ -213,6 +213,24 @@ export const RIGHT_SIDEBAR_SHORTCUT: ShortcutDefinition = {
   binding: { kind: "either-mod", code: "KeyB", alt: "require", shift: "forbid" },
 };
 
+// Same family as the sidebar toggle: Ctrl/Cmd required, so a bare Alt+letter
+// (readline's word motions, macOS Option dead keys) still reaches the terminal.
+export const GIT_VIEW_SHORTCUT: ShortcutDefinition = {
+  id: "git-view",
+  action: "Git view",
+  detail: "Open the Source Control view in the right sidebar, or close it if it is showing.",
+  scope: "app",
+  binding: { kind: "either-mod", code: "KeyG", alt: "require", shift: "forbid" },
+};
+
+export const GITHUB_VIEW_SHORTCUT: ShortcutDefinition = {
+  id: "github-view",
+  action: "GitHub view",
+  detail: "Open the GitHub view in the right sidebar, or close it if it is showing.",
+  scope: "app",
+  binding: { kind: "either-mod", code: "KeyH", alt: "require", shift: "forbid" },
+};
+
 export const DISMISS_SHORTCUT: ShortcutDefinition = {
   id: "dismiss",
   action: "Dismiss",
@@ -254,6 +272,8 @@ export const SHORTCUTS: readonly ShortcutDefinition[] = [
   COMMAND_PALETTE_SHORTCUT,
   SETTINGS_SHORTCUT,
   RIGHT_SIDEBAR_SHORTCUT,
+  GIT_VIEW_SHORTCUT,
+  GITHUB_VIEW_SHORTCUT,
   DISMISS_SHORTCUT,
   FIND_SHORTCUT,
   COPY_SHORTCUT,

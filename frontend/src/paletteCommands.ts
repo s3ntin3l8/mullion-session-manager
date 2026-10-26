@@ -37,7 +37,10 @@ export interface PaletteCommand {
   keywords: string[];
   // Where it shows on an empty query: the top-level Commands list, or
   // the "Project ›" drill-in list.
-  placement: "top" | "project";
+  // `search` rows (one per PR / branch, plus the typed-number ones) are never
+  // listed on an empty query — they would bury the fixed commands — and are
+  // only found by typing.
+  placement: "top" | "project" | "search";
   // Set when the command's effect cannot be seen on this device — the Dock
   // on a touch-only or phone-tier device (issue #1881). The row carries the
   // label in its own availability slot rather than in the subtitle, which is
@@ -56,6 +59,10 @@ export interface PaletteCommand {
   // form does. A command with `prompt` still has a real `run` — the flag is
   // not a substitute for one.
   prompt?: "workspace-name";
+  // A command that takes a number typed in the search box ("queue 42").
+  // `searchPaletteCommands` builds the concrete row from the match; the
+  // template itself is never a result.
+  parametric?: { pattern: RegExp; build: (n: number) => PaletteCommand };
   run: () => void;
 }
 
@@ -91,6 +98,11 @@ export interface PaletteCommandOpeners {
   // only tells the palette to stay open while the name is typed — it is not
   // the behaviour itself.
   newWorkspace: () => void;
+  // Source Control / GitHub deep links. All take the palette's project.
+  goToPr: (projectId: number, number: number) => void;
+  openSessionOnBranch: (projectId: number, branch: string) => void;
+  queueIssue: (projectId: number, number: number) => void;
+  prune: (projectId: number) => void;
 }
 
 export interface PaletteCommandContext {
@@ -107,6 +119,10 @@ export interface PaletteCommandContext {
   // pane menu's "View timeline" for that session, so it is omitted when
   // there isn't one — the menu only offers the item on a session pane.
   activeSession?: Session | null;
+  // The project's open PRs and local branch names, for the search-only
+  // "Go to PR" / "Open session on branch" rows. Empty until loaded.
+  prs?: { number: number; title: string }[];
+  branches?: string[];
 }
 
 export function buildPaletteCommands({
@@ -116,6 +132,8 @@ export function buildPaletteCommands({
   open,
   dockUnavailable,
   activeSession,
+  prs = [],
+  branches = [],
 }: PaletteCommandContext): PaletteCommand[] {
   const name = projectName ?? "this project";
   const commands: PaletteCommand[] = [];
@@ -243,6 +261,60 @@ export function buildPaletteCommands({
         keywords: ["preview", "dev server", "browser"],
         placement: "top",
         run: () => open.browser(id),
+      },
+      // Both deep-link into the right sidebar, so they are omitted where
+      // there is none (phone) — same gate as the toggle command.
+      ...(open.toggleRightSidebar
+        ? [
+            {
+              id: "prune-merged",
+              title: "Prune merged branches",
+              subtitle: "Preview and delete branches already merged",
+              icon: GitBranchIcon,
+              keywords: ["prune", "merged", "branches", "delete", "cleanup"],
+              placement: "top",
+              run: () => open.prune(id),
+            } satisfies PaletteCommand,
+          ]
+        : []),
+      ...(open.toggleRightSidebar ? prs : []).map((pr): PaletteCommand => ({
+        id: `go-to-pr-${pr.number}`,
+        title: `Go to PR #${pr.number}: ${pr.title}`,
+        subtitle: "Open the pull request in the GitHub sidebar",
+        icon: GitHubIcon,
+        keywords: [`pr ${pr.number}`, `pr #${pr.number}`, `#${pr.number}`, `go to pr`],
+        placement: "search",
+        run: () => open.goToPr(id, pr.number),
+      })),
+      ...branches.map((branch): PaletteCommand => ({
+        id: `session-on-${branch}`,
+        title: `Open session on branch ${branch}`,
+        subtitle: "Start the default agent in a worktree for this branch",
+        icon: GitBranchIcon,
+        keywords: ["open session", "session on branch", branch],
+        placement: "search",
+        run: () => open.openSessionOnBranch(id, branch),
+      })),
+      {
+        id: "queue-issue",
+        title: "Queue issue for Task Master",
+        subtitle: "Type “queue 42” to label issue #42",
+        icon: CheckIcon,
+        keywords: [],
+        placement: "search",
+        parametric: {
+          pattern: /^queue\s+#?(\d+)$/i,
+          build: (n) => ({
+            id: `queue-issue-${n}`,
+            title: `Queue issue #${n} for Task Master`,
+            subtitle: "Adds the Task Master label to the issue",
+            icon: CheckIcon,
+            keywords: [],
+            placement: "search",
+            run: () => open.queueIssue(id, n),
+          }),
+        },
+        run: () => {},
       },
       ...favoriteUrls.map((u): PaletteCommand => ({
         id: `url-${u.id}`,
@@ -384,11 +456,17 @@ export function buildPaletteCommands({
 export function searchPaletteCommands(commands: PaletteCommand[], query: string): PaletteCommand[] {
   const q = query.trim().toLowerCase();
   if (q === "") return [];
-  return commands.filter(
+  const typed = commands.flatMap((c) => {
+    const m = c.parametric?.pattern.exec(q);
+    return m ? [c.parametric!.build(Number.parseInt(m[1], 10))] : [];
+  });
+  const matched = commands.filter(
     (c) =>
       !c.drillIn &&
+      !c.parametric &&
       [c.title, ...c.keywords, c.breadcrumb ? `${c.breadcrumb} ${c.title}` : null].some(
         (field) => field != null && field.toLowerCase().includes(q),
       ),
   );
+  return [...typed, ...matched];
 }

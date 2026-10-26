@@ -691,6 +691,29 @@ export function SessionTimeline({
                 <span className={`session-timeline-row-kind kind-${event.kind}`}>{label}</span>
                 <span className="session-timeline-row-text" title={fullText}>
                   {displayText}
+                  {/* A pr_* row opens its PR in the right sidebar (the
+                      project comes from the event's still-live session). */}
+                  {event.kind.startsWith("pr_") &&
+                    typeof event.payload.number === "number" &&
+                    (() => {
+                      const prNumber = event.payload.number;
+                      const owner = sessions.find((s) => s.id === event.sessionId);
+                      if (!owner) return null;
+                      return (
+                        <button
+                          type="button"
+                          className="session-timeline-row-pr"
+                          onClick={() =>
+                            useDashboardStore
+                              .getState()
+                              .openRightSidebarPr(owner.projectId, prNumber)
+                          }
+                        >
+                          {" "}
+                          Open PR #{prNumber}
+                        </button>
+                      );
+                    })()}
                   {/* Hermes review, PR #560 — `event.sessionId === null` alone
                       is unreachable here: every history fetch is scoped by an
                       explicit `sessionId` filter (eq(sessionEvents.sessionId,

@@ -79,6 +79,9 @@ export interface HeaderProps {
   // name for both would be exactly the kind of one-character-diff trap this
   // split is supposed to make easier to review, not harder.
   onConfirmEnd: () => void;
+  // "Reveal in Git" — opens the right sidebar's Source Control view on this
+  // session's branch. Absent → no menu item.
+  onRevealInGit?: () => void;
 }
 
 export function Header({
@@ -103,6 +106,7 @@ export function Header({
   isMuted,
   onToggleMute,
   onConfirmEnd,
+  onRevealInGit,
 }: HeaderProps) {
   const [renaming, setRenaming] = useState(false);
   const [draftName, setDraftName] = useState("");
@@ -230,6 +234,16 @@ export function Header({
                 // Opens the promote dialog, which traps focus itself.
                 opensOverlay: true,
               } as const,
+              ...(onRevealInGit
+                ? [
+                    {
+                      key: "reveal-in-git",
+                      label: "Reveal in Git",
+                      icon: <GitBranchIcon size={14} style={{ color: "var(--muted)" }} />,
+                      onClick: onRevealInGit,
+                    } as const,
+                  ]
+                : []),
               {
                 key: "mute",
                 label: isMuted ? "Unmute notifications" : "Mute notifications",

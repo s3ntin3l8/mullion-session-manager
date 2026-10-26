@@ -1,6 +1,11 @@
-import { useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
 import { useDashboardStore } from "../store/index.js";
 import { resolveActiveProjectId } from "../panelUtils.js";
+import {
+  dockColumnProjectIds,
+  readDockManualProjectIds,
+  subscribeDockManualProjectIds,
+} from "../dock/dockHelpers.js";
 
 // Sentinel Dropdown value meaning "go back to following the active panel" —
 // distinct from any real project id (Dropdown is generic over string, and
@@ -19,8 +24,29 @@ export interface FollowedProject {
 // Which project a project-scoped surface (SourceControlSection, the right
 // sidebar) should show. Extracted from SourceControlSection so the sidebar
 // can resolve it once for every view instead of each view re-deriving it.
-export function useFollowedProject(): FollowedProject {
+//
+// Issue #1877 — `workspaceProjectIds` (App's scopedWorkspaceProjectIds, the
+// same list the left Sidebar scopes its tree by) narrows the picker to the
+// workspace's projects, plus manual Dock pins. null means "do not scope"
+// (phone, or before App knows the workspace). A pinned or followed project
+// outside the scope still gets its own option, so the Dropdown value never
+// points at nothing.
+export function useFollowedProject(
+  workspaceProjectIds: readonly number[] | null = null,
+): FollowedProject {
   const projects = useDashboardStore((s) => s.projects);
+  const manualProjectIds = useSyncExternalStore(
+    subscribeDockManualProjectIds,
+    readDockManualProjectIds,
+  );
+  const scopeKey = workspaceProjectIds?.join(",") ?? null;
+  const scopedProjects = useMemo(() => {
+    if (workspaceProjectIds == null) return projects;
+    const ids = new Set(dockColumnProjectIds(workspaceProjectIds, manualProjectIds, projects));
+    return projects.filter((p) => ids.has(p.id));
+    // scopeKey stands in for the array's identity (App rebuilds it per render).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projects, scopeKey, manualProjectIds]);
   const sessions = useDashboardStore((s) => s.sessions);
   const activePanelId = useDashboardStore((s) => s.activePanelId);
 
@@ -81,7 +107,12 @@ export function useFollowedProject(): FollowedProject {
   }
 
   const effectiveProjectId =
-    pinnedProjectId ?? derivedId ?? lastDerivedId ?? projects[0]?.id ?? null;
+    pinnedProjectId ??
+    derivedId ??
+    lastDerivedId ??
+    scopedProjects[0]?.id ??
+    projects[0]?.id ??
+    null;
   // While following, the option names the project actually on screen; once
   // pinned it reads as the action that releases the pin.
   // Only a real follow source counts — the first-project fallback isn't
@@ -92,8 +123,15 @@ export function useFollowedProject(): FollowedProject {
     pinnedProjectId == null && followedName ? `Following: ${followedName}` : "Follow active panel";
   const dropdownOptions = [
     { value: FOLLOW_SENTINEL, label: followLabel },
-    ...projects.map((p) => ({ value: String(p.id), label: p.name })),
+    ...scopedProjects.map((p) => ({ value: String(p.id), label: p.name })),
   ];
+  // Out-of-scope but on screen (pinned from the palette, or the last panel's
+  // project after a workspace switch): keep it selectable rather than blank.
+  const shownId = pinnedProjectId ?? effectiveProjectId;
+  if (shownId != null && pinnedProjectId != null && !scopedProjects.some((p) => p.id === shownId)) {
+    const extra = projects.find((p) => p.id === shownId);
+    if (extra) dropdownOptions.push({ value: String(extra.id), label: extra.name });
+  }
   const dropdownValue = pinnedProjectId != null ? String(pinnedProjectId) : FOLLOW_SENTINEL;
   const onDropdownChange = (v: string) =>
     setPinnedProjectId(v === FOLLOW_SENTINEL ? null : Number.parseInt(v, 10));

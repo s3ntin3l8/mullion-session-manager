@@ -6,6 +6,8 @@ import {
   FIND_SHORTCUT,
   matchShortcut,
   RIGHT_SIDEBAR_SHORTCUT,
+  GIT_VIEW_SHORTCUT,
+  GITHUB_VIEW_SHORTCUT,
   VOICE_SHORTCUT,
 } from "./shortcutCatalog.js";
 
@@ -175,7 +177,11 @@ export function attachKeyConflictHandler(opts: {
       // never sees it; returning false makes xterm skip the event and let
       // it bubble. The phone gate lives on the window listener, not here:
       // this branch only has to get out of the way.
-      if (matchShortcut(RIGHT_SIDEBAR_SHORTCUT, event)) {
+      if (
+        matchShortcut(RIGHT_SIDEBAR_SHORTCUT, event) ||
+        matchShortcut(GIT_VIEW_SHORTCUT, event) ||
+        matchShortcut(GITHUB_VIEW_SHORTCUT, event)
+      ) {
         return false;
       }
       // Voice dictation push-to-talk. The chord is user-configurable

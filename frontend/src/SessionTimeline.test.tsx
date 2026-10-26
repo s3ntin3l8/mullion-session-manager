@@ -18,9 +18,10 @@ let events: Record<number, NotificationEvent[]>;
 // markSessionRead doc comment on why a passive view must never call it.
 const markSessionRead = vi.fn();
 const ackAttention = vi.fn();
+const openRightSidebarPr = vi.fn();
 
 function storeState() {
-  return { sessions, events, markSessionRead, ackAttention };
+  return { sessions, events, markSessionRead, ackAttention, openRightSidebarPr };
 }
 
 vi.mock("./store/index.js", () => {
@@ -297,6 +298,15 @@ describe("SessionTimeline (issue #212)", () => {
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveTextContent("Bell");
     expect(rows[1]).toHaveTextContent("Tool failed: a-tool — boom");
+  });
+
+  it("opens a pr_* row's PR in the right sidebar via its session's project", async () => {
+    events = {
+      1: [makeEvent({ seq: 1, kind: "pr_merged", payload: { number: 9, title: "Ship it" } })],
+    };
+    render(<SessionTimeline params={{ sessionIds: [1] }} />);
+    await userEvent.click(screen.getByRole("button", { name: /Open PR #9/ }));
+    expect(openRightSidebarPr).toHaveBeenCalledWith(sessions[0].projectId, 9);
   });
 
   it("drops events describeEvent can't describe (e.g. a bare title_change with no title)", async () => {

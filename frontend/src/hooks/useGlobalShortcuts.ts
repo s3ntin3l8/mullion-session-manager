@@ -5,6 +5,8 @@ import { useDashboardStore } from "../store/index.js";
 import {
   COMMAND_PALETTE_SHORTCUT,
   DISMISS_SHORTCUT,
+  GIT_VIEW_SHORTCUT,
+  GITHUB_VIEW_SHORTCUT,
   matchShortcut,
   RIGHT_SIDEBAR_SHORTCUT,
   SETTINGS_SHORTCUT,
@@ -112,6 +114,12 @@ export function useGlobalShortcuts({
       } else if (matchShortcut(RIGHT_SIDEBAR_SHORTCUT, e) && rightSidebarEnabled) {
         e.preventDefault();
         useDashboardStore.getState().toggleRightSidebar();
+      } else if (matchShortcut(GIT_VIEW_SHORTCUT, e) && rightSidebarEnabled) {
+        e.preventDefault();
+        useDashboardStore.getState().toggleRightSidebarView("git");
+      } else if (matchShortcut(GITHUB_VIEW_SHORTCUT, e) && rightSidebarEnabled) {
+        e.preventDefault();
+        useDashboardStore.getState().toggleRightSidebarView("github");
       } else if (matchShortcut(DISMISS_SHORTCUT, e)) {
         // U9 — see handleGlobalEscape's own doc comment for why
         // clearSplitRequest belongs here: the palette also renders for a
