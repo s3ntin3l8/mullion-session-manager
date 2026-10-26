@@ -230,9 +230,28 @@ describe("github-write service", () => {
     // The PR's commits come from /pulls/{n}/commits, each commit's check runs
     // from /commits/{sha}/check-runs; answered by URL so the order the reads
     // happen in does not matter.
-    const serve = (shas: string[], runsBySha: Record<string, unknown[]>) =>
+    // `forced` = the PR's force-push events, as the heads they replaced (null = a
+    // before-commit GitHub has already collected).
+    const forcePushes = (forced: Array<string | null>) =>
+      jsonResponse(200, {
+        data: {
+          repository: {
+            pullRequest: {
+              timelineItems: {
+                nodes: forced.map((oid) => ({ beforeCommit: oid === null ? null : { oid } })),
+              },
+            },
+          },
+        },
+      });
+    const serve = (
+      shas: string[],
+      runsBySha: Record<string, unknown[]>,
+      forced: Array<string | null> = [],
+    ) =>
       fetchMock.mockImplementation(async (url: string) => {
         const u = String(url);
+        if (u.includes("/graphql")) return forcePushes(forced);
         if (u.includes("/pulls/9/commits")) {
           const page = Number(/[?&]page=(\d+)/.exec(u)?.[1] ?? "1");
           return jsonResponse(
@@ -329,12 +348,14 @@ describe("github-write service", () => {
       // A systemic failure (a token without access, a rate limit) fails all of the
       // up-to-50 reads; one dispatch must not log 50 warnings.
       fetchMock.mockImplementation(async (url: string) =>
-        String(url).includes("/pulls/9/commits")
-          ? jsonResponse(
-              200,
-              ["a", "b", "c"].map((sha) => ({ sha })),
-            )
-          : jsonResponse(500, {}),
+        String(url).includes("/graphql")
+          ? forcePushes([])
+          : String(url).includes("/pulls/9/commits")
+            ? jsonResponse(
+                200,
+                ["a", "b", "c"].map((sha) => ({ sha })),
+              )
+            : jsonResponse(500, {}),
       );
       const onError = vi.fn();
       const markers = await listReviewMarkers(
@@ -354,6 +375,96 @@ describe("github-write service", () => {
     it("still fails when the PR's commits cannot be read at all", async () => {
       fetchMock.mockResolvedValue(jsonResponse(500, {}));
       await expect(list()).rejects.toBeInstanceOf(GitHubApiError);
+    });
+
+    describe("heads from before a force-push (s3ntin3l8/.github#136)", () => {
+      it("returns a marker that sits on a commit the PR no longer contains", async () => {
+        // The reviewed commit was dropped by a rebase: it is not in /pulls/9/commits any
+        // more, only in the force-push event as the head that was replaced.
+        serve(["head"], { gone: [checkRun({ id: 7 })] }, ["gone"]);
+        expect((await list()).map((m) => ({ oid: m.oid, id: m.id }))).toEqual([
+          { oid: "gone", id: 7 },
+        ]);
+      });
+
+      it("asks for the force-pushes with the PR token, and reads their check runs with the checks token", async () => {
+        serve(["head"], { gone: [checkRun()] }, ["gone"]);
+        await list();
+        const gql = fetchMock.mock.calls.find((c) => String(c[0]).includes("/graphql"));
+        expect(authOf(gql as unknown[])).toContain("pr-tok");
+        expect(authOf(gql as unknown[])).not.toContain("checks-tok");
+        const goneRuns = fetchMock.mock.calls.find((c) =>
+          String(c[0]).includes("/commits/gone/check-runs"),
+        );
+        expect(authOf(goneRuns as unknown[])).toContain("checks-tok");
+      });
+
+      it("reads a head that is both in the PR and a before-commit once", async () => {
+        serve(["aaa", "head"], { aaa: [checkRun({ id: 4 })] }, ["aaa"]);
+        const markers = await list();
+        expect(markers.map((m) => m.oid)).toEqual(["aaa"]);
+        const reads = fetchMock.mock.calls.filter((c) =>
+          String(c[0]).includes("/commits/aaa/check-runs"),
+        );
+        expect(reads).toHaveLength(1);
+      });
+
+      it("skips a before-commit GitHub has already collected", async () => {
+        serve(["head"], { head: [checkRun({ id: 2 })] }, [null]);
+        const onError = vi.fn();
+        const markers = await listReviewMarkers(
+          "pr-tok",
+          "checks-tok",
+          "owner",
+          "repo",
+          9,
+          "Hermes review",
+          onError,
+        );
+        expect(markers.map((m) => m.oid)).toEqual(["head"]);
+        expect(onError).not.toHaveBeenCalled();
+      });
+
+      it("counts a dropped head whose check runs are gone with the unreadable commits", async () => {
+        serve(["head"], { head: [checkRun({ id: 2 })] }, ["gone"]);
+        const inner = fetchMock.getMockImplementation() as (url: string) => Promise<Response>;
+        fetchMock.mockImplementation(async (url: string) =>
+          String(url).includes("/commits/gone/check-runs") ? jsonResponse(404, {}) : inner(url),
+        );
+        const onError = vi.fn();
+        const markers = await listReviewMarkers(
+          "pr-tok",
+          "checks-tok",
+          "owner",
+          "repo",
+          9,
+          "Hermes review",
+          onError,
+        );
+        expect(markers.map((m) => m.oid)).toEqual(["head"]);
+        expect(onError).toHaveBeenCalledWith(expect.stringContaining("gone"));
+      });
+
+      it("falls back to the PR's current commits, and says so, when the force-push read fails", async () => {
+        serve(["head"], { head: [checkRun({ id: 2 })] }, ["gone"]);
+        const inner = fetchMock.getMockImplementation() as (url: string) => Promise<Response>;
+        fetchMock.mockImplementation(async (url: string) =>
+          String(url).includes("/graphql") ? jsonResponse(500, {}) : inner(url),
+        );
+        const onError = vi.fn();
+        const markers = await listReviewMarkers(
+          "pr-tok",
+          "checks-tok",
+          "owner",
+          "repo",
+          9,
+          "Hermes review",
+          onError,
+        );
+        expect(markers.map((m) => m.oid)).toEqual(["head"]);
+        expect(onError).toHaveBeenCalledTimes(1);
+        expect(onError).toHaveBeenCalledWith(expect.stringContaining("force-push history"));
+      });
     });
 
     it("searches only the newest 50 commits of a long PR, across pages", async () => {

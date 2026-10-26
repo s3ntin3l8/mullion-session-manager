@@ -30,6 +30,7 @@ import {
   githubRateLimitRemainingMs,
   GitHubRateLimitError,
 } from "./github-fetch.js";
+import { graphql } from "./github-pr-reviews.js";
 import type { ReleaseDetectionResult, ReleasePullRequestStatus } from "../shared/types.js";
 
 const GITHUB_API_BASE = "https://api.github.com";
@@ -935,6 +936,59 @@ const PR_COMMITS_PAGE_SIZE = 100;
 const PR_COMMITS_MAX_PAGES = 3;
 /** Commits whose check runs are read at the same time. */
 const MARKER_FETCH_CONCURRENCY = 10;
+/** How many of a PR's newest force-pushes are searched for the heads it had before them. */
+const MARKER_FORCE_PUSH_WINDOW = 20;
+
+const FORCE_PUSHED_HEADS_QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      timelineItems(itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT], last: ${MARKER_FORCE_PUSH_WINDOW}) {
+        nodes { ... on HeadRefForcePushedEvent { beforeCommit { oid } } }
+      }
+    }
+  }
+}`;
+
+interface ForcePushedHeadsData {
+  repository: {
+    pullRequest: {
+      timelineItems: {
+        nodes: Array<{ beforeCommit?: { oid?: string } | null } | null> | null;
+      } | null;
+    } | null;
+  } | null;
+}
+
+/**
+ * The heads a PR had BEFORE each of its last force-pushes, oldest first
+ * (s3ntin3l8/.github#136). A rebase or a recreated branch drops the reviewed
+ * commit from the PR, but the ledger marker stays on it; REST's timeline only
+ * names the commit AFTER a force-push, so this is GraphQL. A `beforeCommit`
+ * GitHub has already collected comes back null and is skipped. `null` = the
+ * read was not possible (rate limit, backoff, a token without access): the
+ * caller degrades to the PR's current commits.
+ *
+ * Reuses `graphql()`, so it also stands down while the poller is in GraphQL
+ * backoff. That can make this read fail when the shared workflow's does not,
+ * and the two bases then differ for that dispatch: a lost dedup, never a
+ * wrong review.
+ */
+async function listForcePushedHeads(
+  prToken: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<string[] | null> {
+  validateGitHubRepoRef(owner, repo);
+  const data = await graphql<ForcePushedHeadsData>(prToken, FORCE_PUSHED_HEADS_QUERY, {
+    owner,
+    repo,
+    number: prNumber,
+  });
+  const nodes = data?.repository?.pullRequest?.timelineItems?.nodes;
+  if (!nodes) return null;
+  return nodes.flatMap((n) => (n?.beforeCommit?.oid ? [n.beforeCommit.oid] : []));
+}
 
 /**
  * The finished (`success`) ledger markers on a PR's last commits. A run that
@@ -950,9 +1004,14 @@ const MARKER_FETCH_CONCURRENCY = 10;
  * with FORBIDDEN for it on a private repository. Its own check-run reads work.
  * (It is the same split `readRememberedSession` relies on.)
  *
- * Cost: up to 3 requests for the PR's commits plus one per commit of the
- * window (50), in batches of 10 — `base()` runs on every relay dispatch, and
- * the window is what sizes it.
+ * The heads the PR had before its last force-pushes are searched too (see
+ * `listForcePushedHeads`), so a rewrite that dropped the reviewed commit does
+ * not hide its marker (s3ntin3l8/.github#136). The workflow does the same.
+ *
+ * Cost: up to 3 requests for the PR's commits, one GraphQL request for the
+ * force-pushes, plus one per candidate commit (the window of 50 and up to 20
+ * dropped heads), in batches of 10 — `base()` runs on every relay dispatch,
+ * and the windows are what size it.
  */
 export async function listReviewMarkers(
   prToken: string,
@@ -983,7 +1042,12 @@ export async function listReviewMarkers(
     commits.push(...data.map((c) => c.sha));
     if (data.length < PR_COMMITS_PAGE_SIZE) break;
   }
-  const window = commits.slice(-MARKER_COMMIT_WINDOW);
+  const forcePushed = await listForcePushedHeads(prToken, owner, repo, prNumber);
+  if (forcePushed === null) {
+    onError?.("force-push history unreadable, searching the PR's current commits only");
+  }
+  // A head that is still in the PR (it was force-pushed to and then back) is read once.
+  const window = [...new Set([...commits.slice(-MARKER_COMMIT_WINDOW), ...(forcePushed ?? [])])];
   const out: ReviewMarker[] = [];
   const failed: string[] = [];
   for (let i = 0; i < window.length; i += MARKER_FETCH_CONCURRENCY) {

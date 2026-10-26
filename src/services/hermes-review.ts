@@ -957,8 +957,9 @@ export async function requestRelay(
     await target.beforeDispatch?.();
     const baseSha = target.resolveBase ? await target.resolveBase() : undefined;
     // An empty range means the reviewed commit holds the head's content (it IS
-    // the head, or has its tree — a rewrite that changed nothing, while the
-    // reviewed commit is still one of the PR's commits, s3ntin3l8/.github#136):
+    // the head, or has its tree — a rewrite that changed nothing; the reviewed
+    // commit may have been dropped from the PR by it, its marker is still found
+    // through the force-push history, s3ntin3l8/.github#136):
     // there is nothing new to review, and a run for it would be a
     // second review of the same diff. The reviewed commit comes from the
     // ledger, not from a review's commit_id, which GitHub re-points at the
