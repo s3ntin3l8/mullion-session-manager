@@ -118,6 +118,17 @@ export function usePrDetail(projectId: number, number: number) {
   return { pr: pr.data, error: pr.error, review: review.data ?? null, refresh };
 }
 
+const JOBS_REVALIDATE_DEBOUNCE_MS = 400;
+
+function useDebouncedValue<T>(value: T, ms: number): T {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return debounced;
+}
+
 /** CI jobs per run id; `null` = that run's fetch failed, `undefined` = not loaded. */
 export function useRunJobs(
   projectId: number,
@@ -126,7 +137,9 @@ export function useRunJobs(
 ): Record<number, GitHubJob[] | null | undefined> {
   const cache = useDashboardStore((s) => s.githubCache);
   const githubFetch = useDashboardStore((s) => s.githubFetch);
-  const trigger = useProjectTrigger(projectId);
+  // Debounced: a CI burst sends several events, and every expanded card would
+  // otherwise re-request all of its runs' jobs once per event.
+  const trigger = useDebouncedValue(useProjectTrigger(projectId), JOBS_REVALIDATE_DEBOUNCE_MS);
   const idsKey = runIds.join(",");
   useEffect(() => {
     if (!enabled) return;

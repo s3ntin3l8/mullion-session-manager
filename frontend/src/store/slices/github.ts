@@ -47,11 +47,11 @@ export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice
   // In-flight dedup: concurrent callers for one key (a hover prefetch and the
   // panel's own mount fetch) share a single request.
   const inFlight = new Map<string, Promise<unknown>>();
-  // Bumped by the test reset: a request still in flight from before it must
-  // not write its (previous test's) response back as fresh.
-  let generation = 0;
+  // A request only writes its result while it is still the registered one for
+  // its key: dropping it from `inFlight` (a project invalidation, or the test
+  // reset) means a response that lands later cannot overwrite newer state or
+  // be served as fresh.
   registerGithubCacheReset(() => {
-    generation++;
     inFlight.clear();
     set({ githubCache: {}, githubOpenIssueByProject: {}, githubIssueUiByProject: {} });
   });
@@ -77,17 +77,18 @@ export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice
       }
       const pending = inFlight.get(key);
       if (pending) return pending as Promise<T>;
-      const startedIn = generation;
       const request = new Promise<T>((resolve) => resolve(fetcher()))
         .then((data) => {
-          if (startedIn === generation) putEntry(key, { data, fetchedAt: Date.now(), error: null });
+          if (inFlight.get(key) === request) {
+            putEntry(key, { data, fetchedAt: Date.now(), error: null });
+          }
           return data;
         })
         .catch((err: unknown) => {
           // Keep the last good data (and its staleness) so the view degrades
           // to "stale + an error" instead of blanking.
           const prev = get().githubCache[key];
-          if (startedIn === generation) {
+          if (inFlight.get(key) === request) {
             putEntry(key, {
               data: prev?.data,
               fetchedAt: 0,
@@ -178,6 +179,12 @@ export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice
           const data = JSON.parse(event.data as string) as GitHubWSEvent;
           if (data.projectId != null) {
             const projectId = Number(data.projectId);
+            // Requests already in flight predate this event: unregister them
+            // so their (pre-event) responses are dropped, and the views'
+            // revalidation below starts a fresh fetch.
+            for (const key of [...inFlight.keys()]) {
+              if (key.startsWith(`${projectId}:`)) inFlight.delete(key);
+            }
             // Scoped to the project whose event fired, and its cached
             // entries are marked stale so every mounted view revalidates.
             set((state) => {

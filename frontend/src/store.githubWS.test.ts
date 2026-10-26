@@ -128,6 +128,22 @@ describe("store /ws/github integration", () => {
     stop();
   });
 
+  it("drops a response that was in flight when an event for its project arrived", async () => {
+    let resolve!: (v: string) => void;
+    const slow = useDashboardStore
+      .getState()
+      .githubFetch("1:late", () => new Promise<string>((r) => (resolve = r)));
+    const stop = useDashboardStore.getState().connectGitHubWS();
+    instances[0].__open();
+
+    instances[0].__message(JSON.stringify({ projectId: 1 }));
+    resolve("pre-event");
+    await slow;
+
+    expect(useDashboardStore.getState().githubCache["1:late"]).toBeUndefined();
+    stop();
+  });
+
   it("debounces a burst of messages (e.g. a check suite's started/completed events) into a single refresh", async () => {
     vi.useFakeTimers();
     const refreshGitRefs = vi.fn(async () => {});
