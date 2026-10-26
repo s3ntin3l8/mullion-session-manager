@@ -365,7 +365,15 @@ export async function readSessionLiveInfo(
   idleThresholdMs: number,
   hostId: string,
   opts: { fresh?: boolean } = {},
-): Promise<{ info: SessionInfo | null; hostReachable: boolean; error?: unknown }> {
+): Promise<{
+  info: SessionInfo | null;
+  hostReachable: boolean;
+  /** Why the read failed, classified once here: the host `unreachable` (a
+   * network fault, a timeout) or `refused` the request (it ANSWERED with an
+   * error: its rate limit, a stale token). Absent when the read succeeded. */
+  failure?: "unreachable" | "refused";
+  error?: unknown;
+}> {
   const id = String(row.id);
   try {
     const backend = resolveBackend(app, hostId);
@@ -382,13 +390,14 @@ export async function readSessionLiveInfo(
     // Say which it was: a host that ANSWERED with an error (its rate limit, a
     // stale token) is not a network fault, and a log that blames one sends
     // whoever reads it looking in the wrong place.
+    const failure = err instanceof HostRequestError ? "refused" : "unreachable";
     app.log.warn(
       { hostId, sessionId: row.id, err },
-      err instanceof HostRequestError
+      failure === "refused"
         ? "host answered the live-status request with an error, reporting default live status"
         : "host unreachable, reporting default live status",
     );
-    return { info: null, hostReachable: false, error: err };
+    return { info: null, hostReachable: false, failure, error: err };
   }
 }
 

@@ -42,7 +42,6 @@ import {
   resolveSessionHostId,
   withLiveInfo,
 } from "../services/session-live-info.js";
-import { HostRequestError } from "../services/remote-host-client.js";
 import { getStoredSettings } from "../services/settings.js";
 import { MAX_PROMPT_BYTES, sanitizePromptText } from "../services/hook-adapters/shared.js";
 
@@ -863,7 +862,7 @@ async function readRemoteSession(
     .get();
   if (!row) return { snapshot: null, turnInFlight: false };
   const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
-  const { info, hostReachable, error } = await readSessionLiveInfo(
+  const { info, hostReachable, failure, error } = await readSessionLiveInfo(
     app,
     row,
     idleThresholdMs,
@@ -875,7 +874,7 @@ async function readRemoteSession(
   // wait run to its timeout blaming a dead host. Throw it, so the wait's
   // consecutive-failure limit ends it with the real reason (and a prompt's
   // pre-check answers 500 with it). An unreachable host stays `suspended`.
-  if (error instanceof HostRequestError) throw error;
+  if (failure === "refused") throw error;
   const view = withLiveInfo(app, row, info, hostId, { hostReachable });
   return {
     snapshot: {

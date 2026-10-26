@@ -54,7 +54,12 @@ describe("readSessionLiveInfo", () => {
 
     const result = await readSessionLiveInfo(app, row, 30_000, "mac");
 
-    expect(result).toEqual({ info: null, hostReachable: false, error: err });
+    expect(result).toEqual({
+      info: null,
+      hostReachable: false,
+      failure: "unreachable",
+      error: err,
+    });
     expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({ hostId: "mac", sessionId: 7 }),
       "host unreachable, reporting default live status",
@@ -67,7 +72,12 @@ describe("readSessionLiveInfo", () => {
 
     const result = await readSessionLiveInfo(app, row, 30_000, "mac");
 
-    expect(result).toEqual({ info: null, hostReachable: false, error: err });
+    expect(result).toEqual({
+      info: null,
+      hostReachable: false,
+      failure: "refused",
+      error: err,
+    });
     // The same default view as an unreachable host (the REST path is unchanged),
     // but a log line that says what actually happened.
     const [, message] = warn.mock.calls[0] as [unknown, string];
