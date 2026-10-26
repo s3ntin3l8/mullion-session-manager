@@ -302,6 +302,11 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
     // polling the list faster than that here wouldn't surface anything
     // new anyway. Sidebar's own mount effect covers the immediate load.
     const TASKS_REFRESH_EVERY_N_TICKS = 15;
+    // Same ~60s cadence — keeps GET /api/projects fields that change outside
+    // any project mutation fresh (detectedDevServerPort, currentBranch,
+    // ruleFiles). The list costs a git HEAD read and a filesystem check per
+    // project server-side, so it rides the slow cadence, not the 4s one.
+    const PROJECTS_REFRESH_EVERY_N_TICKS = 15;
 
     const tick = () => {
       // If the gateway forward-auth session is expired, halt the cascade
@@ -350,6 +355,11 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
       if (tickCount % TASKS_REFRESH_EVERY_N_TICKS === 0) {
         void get()
           .refreshTasks()
+          .catch(() => {});
+      }
+      if (tickCount % PROJECTS_REFRESH_EVERY_N_TICKS === 0) {
+        void get()
+          .refreshProjects()
           .catch(() => {});
       }
     };
