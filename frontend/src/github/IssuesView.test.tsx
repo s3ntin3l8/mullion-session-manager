@@ -207,6 +207,32 @@ describe("IssueDetailView", () => {
     expect(onBack).toHaveBeenCalled();
   });
 
+  it("comments on the issue and links the posted comment (#1672)", async () => {
+    const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+      if (url.endsWith("/issues/7/comments")) {
+        expect(init?.method).toBe("POST");
+        expect(JSON.parse(String(init?.body))).toEqual({ body: "on it" });
+        return Promise.resolve(
+          jsonResponse(200, { id: 2, htmlUrl: "https://github.com/a/b/issues/7#c2" }),
+        );
+      }
+      if (url.includes("/github/issues/7")) return Promise.resolve(jsonResponse(200, DETAIL));
+      return Promise.resolve(jsonResponse(200, LIST));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<IssueDetailView projectId={1} number={7} onBack={vi.fn()} />);
+    await userEvent.type(
+      await screen.findByRole("textbox", { name: "Comment on this issue" }),
+      "on it",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Comment" }));
+    expect(await screen.findByText(/Comment posted/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "view on GitHub" })).toHaveAttribute(
+      "href",
+      "https://github.com/a/b/issues/7#c2",
+    );
+  });
+
   it("starts a session in a new issue worktree seeded with the issue, and opens it", async () => {
     vi.stubGlobal(
       "fetch",

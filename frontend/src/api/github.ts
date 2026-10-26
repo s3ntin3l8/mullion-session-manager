@@ -9,6 +9,8 @@ import type {
   GitHubLogResponse,
   GitHubIssuesResponse,
   GitHubPrDetail,
+  GitHubPrDetailComment,
+  GitHubPrReviewEvent,
   GitHubIssueDetail,
   GitHubIssueSort,
   WebhookRegistrationResult,
@@ -100,6 +102,36 @@ export const githubApi = {
     request<{ merged: boolean; sha: string }>(
       `/api/projects/${projectId}/github/prs/${number}/merge`,
       { method: "POST", body: JSON.stringify({ headSha }) },
+    ),
+
+  // The sidebar's own writes (#1672): thread reply/resolve, a comment on an
+  // issue or PR, a PR review.
+  replyToPrThread: (projectId: number, number: number, threadId: string, body: string) =>
+    request<GitHubPrDetailComment & { htmlUrl: string }>(
+      `/api/projects/${projectId}/github/prs/${number}/threads/${encodeURIComponent(threadId)}/reply`,
+      { method: "POST", body: JSON.stringify({ body }) },
+    ),
+
+  resolvePrThread: (projectId: number, number: number, threadId: string) =>
+    request<{ resolved: boolean }>(
+      `/api/projects/${projectId}/github/prs/${number}/threads/${encodeURIComponent(threadId)}/resolve`,
+      { method: "POST" },
+    ),
+
+  commentOnProjectIssue: (projectId: number, number: number, body: string) =>
+    request<{ id: number; htmlUrl: string }>(
+      `/api/projects/${projectId}/github/issues/${number}/comments`,
+      { method: "POST", body: JSON.stringify({ body }) },
+    ),
+
+  reviewProjectPr: (
+    projectId: number,
+    number: number,
+    review: { event: GitHubPrReviewEvent; body: string; headSha?: string },
+  ) =>
+    request<{ id: number; htmlUrl: string }>(
+      `/api/projects/${projectId}/github/prs/${number}/reviews`,
+      { method: "POST", body: JSON.stringify(review) },
     ),
 
   getProjectPrHandoff: (projectId: number, number: number) =>

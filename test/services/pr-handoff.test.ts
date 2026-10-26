@@ -8,6 +8,7 @@ const pr = {
   headBranch: "feat-thing",
   threads: [
     {
+      id: "T1",
       isResolved: false,
       isOutdated: false,
       path: "src/a.ts",
@@ -15,6 +16,7 @@ const pr = {
       comments: [{ author: "hermes", bodyHtml: "<p>Guard &lt;null&gt; here</p>", createdAt: "t" }],
     },
     {
+      id: "T2",
       isResolved: true,
       isOutdated: false,
       path: "src/b.ts",
@@ -22,6 +24,7 @@ const pr = {
       comments: [{ author: "x", bodyHtml: "done", createdAt: "t" }],
     },
     {
+      id: "T3",
       isResolved: false,
       isOutdated: true,
       path: "src/c.ts",
@@ -120,6 +123,7 @@ describe("buildHandoffPrompt", () => {
         reviews: [],
         threads: [
           {
+            id: "T0",
             isResolved: false,
             isOutdated: false,
             path: "a.ts",
@@ -149,6 +153,7 @@ describe("buildHandoffPrompt", () => {
         reviews: [],
         threads: [
           {
+            id: "T1",
             isResolved: false,
             isOutdated: false,
             path: null,

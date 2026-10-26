@@ -3292,3 +3292,14 @@ button.github-panel-row.gh-issue-row {
   gap: 6px;
   align-items: center;
 }
+/* GitHub sidebar comment / review / reply boxes (github/Composer.tsx). */
+.gh-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 0;
+}
+.gh-composer-input {
+  width: 100%;
+  box-sizing: border-box;
+}

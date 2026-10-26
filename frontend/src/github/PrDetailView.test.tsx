@@ -43,6 +43,7 @@ const PR: GitHubPrDetail = {
   ],
   threads: [
     {
+      id: "T1",
       isResolved: false,
       isOutdated: false,
       path: "src/a.ts",
@@ -52,6 +53,7 @@ const PR: GitHubPrDetail = {
       ],
     },
     {
+      id: "T2",
       isResolved: true,
       isOutdated: false,
       path: "src/b.ts",
@@ -927,6 +929,124 @@ describe("PrDetailView", () => {
       const drill = screen.getByRole("region", { name: "Reviews" });
       expect(within(drill).getByText("hermes-bot")).toBeInTheDocument();
       expect(within(drill).queryByText("No reviewers")).toBeNull();
+    });
+
+    // #1672 — reply / resolve / comment / review from the drill-in.
+    it("replies to a thread and shows the reply before the refetch catches up", async () => {
+      __resetGithubCacheForTests();
+      const fn = stub(PR, (url) =>
+        url.includes("/threads/T1/reply")
+          ? jsonResponse(200, {
+              author: "me",
+              bodyHtml: "<p>done now</p>",
+              createdAt: "2026-02-01T00:00:00Z",
+              htmlUrl: "https://github.com/a/b/pull/12#r1",
+            })
+          : null,
+      );
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      await screen.findByText("guard null");
+      await userEvent.click(screen.getAllByRole("button", { name: "Reply" })[0]);
+      const box = screen.getByRole("textbox", { name: "Reply" });
+      await userEvent.type(box, "done now");
+      await userEvent.click(
+        within(box.closest(".gh-composer") as HTMLElement).getByRole("button", { name: "Reply" }),
+      );
+      // The stub keeps answering with the PR as it was; the reply still shows.
+      expect(await screen.findByText("done now")).toBeInTheDocument();
+      const call = fn.mock.calls.find(([u]) => String(u).includes("/threads/T1/reply"))!;
+      expect(call[1]?.method).toBe("POST");
+      expect(JSON.parse(String(call[1]?.body))).toEqual({ body: "done now" });
+    });
+
+    it("shows a reply once when the refetch already carries it", async () => {
+      __resetGithubCacheForTests();
+      const reply = {
+        author: "me",
+        bodyHtml: "<p>done now</p>",
+        createdAt: "2026-02-01T00:00:00Z",
+      };
+      let posted = false;
+      const withReply = {
+        ...PR,
+        threads: [
+          { ...PR.threads[0], comments: [...PR.threads[0].comments, reply] },
+          PR.threads[1],
+        ],
+      };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string) => {
+          if (url.includes("/threads/T1/reply")) {
+            posted = true;
+            return Promise.resolve(jsonResponse(200, { ...reply, htmlUrl: "u" }));
+          }
+          return Promise.resolve(jsonResponse(200, posted ? withReply : PR));
+        }),
+      );
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      await screen.findByText("guard null");
+      await userEvent.click(screen.getAllByRole("button", { name: "Reply" })[0]);
+      const box = screen.getByRole("textbox", { name: "Reply" });
+      await userEvent.type(box, "done now");
+      await userEvent.click(
+        within(box.closest(".gh-composer") as HTMLElement).getByRole("button", { name: "Reply" }),
+      );
+      await screen.findByText("done now");
+      await waitFor(() => expect(screen.getAllByText("done now")).toHaveLength(1));
+    });
+
+    it("resolves a thread, moving it under Resolved threads", async () => {
+      __resetGithubCacheForTests();
+      const fn = stub(PR, (url) =>
+        url.includes("/threads/T1/resolve") ? jsonResponse(200, { resolved: true }) : null,
+      );
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      await screen.findByText("Unresolved threads (1)");
+      await userEvent.click(screen.getByRole("button", { name: "Resolve" }));
+      expect(await screen.findByText("Resolved threads (2)")).toBeInTheDocument();
+      expect(screen.queryByText(/Unresolved threads/)).toBeNull();
+      expect(fn.mock.calls.some(([u]) => String(u).includes("/threads/T1/resolve"))).toBe(true);
+    });
+
+    it("comments on the PR and submits a review pinned to the head sha", async () => {
+      __resetGithubCacheForTests();
+      const fn = stub(PR, (url) =>
+        url.endsWith("/issues/12/comments") || url.endsWith("/prs/12/reviews")
+          ? jsonResponse(200, { id: 1, htmlUrl: "https://github.com/a/b/pull/12#c1" })
+          : null,
+      );
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      await userEvent.type(
+        await screen.findByRole("textbox", { name: "Comment on this pull request" }),
+        "thanks",
+      );
+      const review = screen.getByRole("group", { name: "Review" });
+      await userEvent.click(
+        screen.getAllByRole("button", { name: "Comment" }).find((b) => !review.contains(b))!,
+      );
+      expect(await screen.findByText("Comment posted")).toBeInTheDocument();
+      const comment = fn.mock.calls.find(([u]) => String(u).endsWith("/issues/12/comments"))!;
+      expect(JSON.parse(String(comment[1]?.body))).toEqual({ body: "thanks" });
+
+      await userEvent.click(within(review).getByRole("button", { name: "Approve" }));
+      expect(await screen.findByText("Review submitted")).toBeInTheDocument();
+      const posted = fn.mock.calls.find(([u]) => String(u).endsWith("/prs/12/reviews"))!;
+      expect(JSON.parse(String(posted[1]?.body))).toEqual({
+        event: "APPROVE",
+        body: "",
+        headSha: "abc",
+      });
+    });
+
+    it("offers no review box on a closed PR", async () => {
+      __resetGithubCacheForTests();
+      stub({ ...PR, state: "MERGED" });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      expect(
+        await screen.findByRole("textbox", { name: "Comment on this pull request" }),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("group", { name: "Review" })).toBeNull();
     });
 
     it("says reviews and conversation are unavailable on a partial detail", async () => {

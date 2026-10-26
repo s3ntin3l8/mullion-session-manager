@@ -683,6 +683,8 @@ export interface ReviewCommentParams {
  * `commitId` should be the PR's current head SHA (`getPullRequestByNumber`'s
  * `headSha`) — GitHub anchors `comments[].line` against that specific
  * commit's diff, not "whatever HEAD is when this call lands."
+ * Omitted (the sidebar's review box, which posts no inline comments, may not
+ * know a head), GitHub reviews the PR's current head.
  */
 export async function createPullRequestReview(
   token: string,
@@ -691,11 +693,17 @@ export async function createPullRequestReview(
   pullNumber: number,
   params: {
     body: string;
-    commitId: string;
+    /** Omitted: GitHub reviews the PR's current head. */
+    commitId?: string;
     comments?: ReviewCommentParams[];
     event?: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
   },
 ): Promise<{ id: number; htmlUrl: string }> {
+  // Inline comments are anchored to `commitId`'s diff; without it GitHub
+  // would anchor them to whatever the head is when this lands.
+  if (params.comments?.length && !params.commitId) {
+    throw new Error("createPullRequestReview: inline comments need a commitId");
+  }
   const result = await githubRequest<{ id: number; html_url: string }>(
     token,
     owner,
@@ -1452,6 +1460,55 @@ export async function resolveReviewThread(token: string, threadId: string): Prom
     }`,
     { id: threadId },
   );
+}
+
+/** A reply just posted to a review thread, in the PR drill-in's own comment shape. */
+export interface ReviewThreadReply {
+  author: string | null;
+  bodyHtml: string;
+  createdAt: string;
+  htmlUrl: string;
+}
+
+/**
+ * Replies to a review thread, addressed by its GraphQL node id — the same id
+ * `resolveReviewThread` takes, so the sidebar needs nothing else to do both.
+ * (REST's `pulls/:n/comments/:id/replies` needs the thread's *first*
+ * comment's database id instead, and a reply-to-a-reply id there is a 404
+ * that reads as "no write access".) No authorization check of its own, same
+ * posture as `resolveReviewThread`.
+ */
+export async function replyToReviewThread(
+  token: string,
+  threadId: string,
+  body: string,
+): Promise<ReviewThreadReply> {
+  const data = await githubGraphQL<{
+    addPullRequestReviewThreadReply: {
+      comment: {
+        author: { login: string } | null;
+        bodyHTML: string;
+        createdAt: string;
+        url: string;
+      } | null;
+    } | null;
+  }>(
+    token,
+    `mutation($id: ID!, $body: String!) {
+      addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $id, body: $body }) {
+        comment { author { login } bodyHTML createdAt url }
+      }
+    }`,
+    { id: threadId, body },
+  );
+  const comment = data.addPullRequestReviewThreadReply?.comment;
+  if (!comment) throw new GitHubApiError("GitHub did not return the posted reply", 502);
+  return {
+    author: comment.author?.login ?? null,
+    bodyHtml: comment.bodyHTML,
+    createdAt: comment.createdAt,
+    htmlUrl: comment.url,
+  };
 }
 
 /**
