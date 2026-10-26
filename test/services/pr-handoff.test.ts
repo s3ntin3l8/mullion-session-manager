@@ -98,6 +98,21 @@ describe("buildHandoffPrompt", () => {
     expect(text).toContain("Changes requested by hermes: fix the race");
   });
 
+  it("drops a reviewer's request once their latest review is DISMISSED", () => {
+    const text = buildHandoffPrompt(
+      {
+        ...pr,
+        threads: [],
+        reviews: [
+          { author: "bob", state: "CHANGES_REQUESTED", bodyHtml: "<p>nope</p>", createdAt: "t" },
+          { author: "bob", state: "DISMISSED", bodyHtml: "", createdAt: "t" },
+        ],
+      },
+      [],
+    );
+    expect(text).not.toContain("nope");
+  });
+
   it("strips nested/spliced tags and script blocks completely", () => {
     const text = buildHandoffPrompt(
       {

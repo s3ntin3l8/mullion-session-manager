@@ -37,6 +37,9 @@ function clip(text: string): string {
   return text.length > MAX_COMMENT_CHARS ? `${text.slice(0, MAX_COMMENT_CHARS)}…` : text;
 }
 
+/** A latest review in one of these states lifted the reviewer's earlier request. */
+const SUPERSEDING = new Set(["APPROVED", "DISMISSED"]);
+
 export function buildHandoffPrompt(
   pr: Pick<PrDetail, "number" | "title" | "htmlUrl" | "headBranch" | "threads" | "reviews">,
   failingChecks: string[],
@@ -55,7 +58,7 @@ export function buildHandoffPrompt(
     lines.push("");
   }
   // Per reviewer: their newest request/remark that has text — unless their
-  // latest review is an approval, which supersedes what they said before. An
+  // latest review is an approval or a dismissal, which lifts what they said before. An
   // inline-only review (no text, its threads are listed above) must not hide
   // the earlier review that did carry the text.
   const latestByAuthor = new Map<string, PrDetail["reviews"][number]>();
@@ -68,7 +71,7 @@ export function buildHandoffPrompt(
     }
   }
   const changes = [...textByAuthor]
-    .filter(([who]) => latestByAuthor.get(who)?.state !== "APPROVED")
+    .filter(([who]) => !SUPERSEDING.has(latestByAuthor.get(who)?.state ?? ""))
     .map(([, r]) => r);
   for (const r of changes) {
     const verb = r.state === "CHANGES_REQUESTED" ? "Changes requested by" : "Review comments from";

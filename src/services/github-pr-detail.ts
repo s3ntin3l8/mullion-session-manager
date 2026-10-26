@@ -202,7 +202,7 @@ const QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
       headCommit: commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 50) { totalCount nodes { __typename ... on CheckRun { name status conclusion detailsUrl checkSuite { app { slug } } } ... on StatusContext { context state targetUrl } } } } } } }
       reviewRequests(first: 10) { nodes { requestedReviewer { ... on User { login } ... on Team { name } } } }
       ${OPINIONATED_REVIEWS_SELECTION}
-      ${latestReviewsSelection(20)}
+      ${latestReviewsSelection()}
       reviews(last: 50) { nodes { author { login } state bodyHTML submittedAt comments { totalCount } } }
       reviewThreads(last: 50) { nodes { isResolved isOutdated path line comments(first: 30) { nodes { author { login } bodyHTML createdAt } } } }
       comments(last: 50) { nodes { author { login } bodyHTML createdAt } }

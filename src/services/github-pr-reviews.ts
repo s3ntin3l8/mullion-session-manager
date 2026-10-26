@@ -38,9 +38,6 @@ const REQUEST_TIMEOUT_MS = 8_000;
 // it self-corrects as soon as the PR sees activity moves it into the page.
 const PR_PAGE = 50;
 const THREADS_PER_PR = 50;
-// Every-state reviews read per PR (bodies feed `ReviewSummary.latest`): one per
-// author, so a handful covers a PR's reviewers.
-const LATEST_REVIEWS_PER_PR = 8;
 // Stop spending points when the hourly budget is nearly gone; resume at reset.
 const LOW_BUDGET_REMAINING = 200;
 const DEFAULT_BACKOFF_MS = 60_000;
@@ -158,7 +155,7 @@ const PR_LIST_QUERY = `query($owner: String!, $repo: String!) {
         number isDraft updatedAt mergeable mergeStateStatus reviewDecision
         reviewRequests(first: 5) { nodes { requestedReviewer { __typename ... on User { login } ... on Team { name } } } }
         ${OPINIONATED_REVIEWS_SELECTION}
-        ${latestReviewsSelection(LATEST_REVIEWS_PER_PR)}
+        ${latestReviewsSelection()}
         comments { totalCount }
         commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
       }

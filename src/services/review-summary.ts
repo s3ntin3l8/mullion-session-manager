@@ -21,7 +21,10 @@ export interface GqlLatestReviewNode {
 }
 
 /** The GraphQL selection both queries use, so they cannot drift. */
-export function latestReviewsSelection(first: number): string {
+/** Page size for `latestReviews`, shared by the list and the detail so their summaries cannot differ. */
+export const LATEST_REVIEWS_PAGE = 10;
+
+export function latestReviewsSelection(first: number = LATEST_REVIEWS_PAGE): string {
   return `latestReviews(first: ${first}) { nodes { author { login __typename } state body submittedAt commit { oid } } }`;
 }
 
