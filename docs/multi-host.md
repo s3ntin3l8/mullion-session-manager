@@ -816,15 +816,25 @@ default** goes back to the `.env` value).
   directories**, no `..`, no commas, nothing too broad (the filesystem root, the
   home directory itself or a folder that contains it such as `/Users`), and
   nothing inside a credentials directory under home (`~/.ssh`, `~/.gnupg`,
-  `~/.aws`, `~/.kube`, `~/.docker`, `~/.config/gcloud`). At most 16, never empty.
+  `~/.aws`, `~/.kube`, `~/.docker`, `~/.config/gcloud`), and nothing that
+  **overlaps Mullion's own install or data** on that host — `~/.mullion`,
+  `MULLION_HOME`, the sessions directory and the database file are refused as a
+  root whether the root contains them or sits inside them. At most 16, never
+  empty.
 - It is stored as a small override file on the agent
   (`~/.mullion/agent-projects-roots.json`), **not** by rewriting its `.env`
   (which holds the agent token). A missing or unreadable file means "no
-  override" — the `.env` value applies.
+  override" — the `.env` value applies. What is **read back** is validated again
+  too, so a hand-edited file naming something unsafe is ignored rather than
+  trusted; and a saved list that no longer validates (say a root on a share
+  that is not mounted right now) falls back to the `.env` roots and applies
+  again by itself once the path is back.
 - **The host's operator can forbid it:** set `PROJECTS_ROOTS_LOCKED=true` in
-  the agent's environment and the primary cannot change the roots at all (the
-  dialog says so, and a previously saved override is ignored). The agent
-  enforces this, not the UI.
+  the agent's environment and the primary cannot set the roots at all (the
+  dialog says so, and a previously saved override is ignored). A stale override
+  saved before the pin is reported by the dialog, which offers **Reset to
+  default** to clear it — clearing is allowed because it only moves toward the
+  pinned value. The agent enforces this, not the UI.
 - Trust, plainly: the primary can already start arbitrary sessions on an agent
   (a session's directory is deliberately not confined to the roots), so an
   editable roots list removes only defence in depth against a buggy primary or a
