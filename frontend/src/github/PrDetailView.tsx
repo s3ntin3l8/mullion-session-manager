@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/index.js";
-import { usePrDetail, useRunJobs } from "../hooks/useGitHubData.js";
+import { usePrDetail, usePrList, useRunJobs } from "../hooks/useGitHubData.js";
 import { useMullionLinks, type SessionLink } from "../hooks/useMullionLinks.js";
 import type { GitHubPrDetail, GitHubPrDetailThread, ReviewSummaryEntry } from "../api/types.js";
 import { describeEvent } from "../eventDescriptions.js";
@@ -213,12 +213,14 @@ export function PrDetailView({
   const error = actionError ?? loadError;
   const setError = setActionError;
   const [notice, setNotice] = useState<string | null>(null);
-  const [busy, setBusy] = useState<"merge" | "review" | "handoff" | "stop" | null>(null);
+  const [busy, setBusy] = useState<"merge" | "review" | "handoff" | "stop" | "task" | null>(null);
   const [openStatus, setOpenStatus] = useState<StatusKey | null>(null);
   const [showBody, setShowBody] = useState(false);
   const [showFiles, setShowFiles] = useState(false);
   const [showCommits, setShowCommits] = useState(false);
-  const links = useMullionLinks(projectId);
+  // The same PR list the panel joins on, so the row and the detail agree on
+  // linked sessions before the WS push has filled the store.
+  const links = useMullionLinks(projectId, { prs: usePrList(projectId)?.prs });
   const events = useDashboardStore((s) => s.events);
   const requestOpenSession = useDashboardStore((s) => s.requestOpenSession);
   const reload = () => {
@@ -243,7 +245,7 @@ export function PrDetailView({
   }, [refresh]);
 
   const run = async (
-    kind: "merge" | "review" | "handoff" | "stop",
+    kind: "merge" | "review" | "handoff" | "stop" | "task",
     fn: () => Promise<string | void>,
   ) => {
     setBusy(kind);
@@ -319,7 +321,7 @@ export function PrDetailView({
   }
 
   const statuses = prStatuses(pr, relayReview, jobsByRun);
-  const entry = links.byPr.get(pr.number);
+  const entry = links.byPr.get(pr.number) ?? links.byBranch.get(pr.headBranch);
   const sessionAction = decideSessionAction(entry);
   const reviewRun = entry?.reviewRun ?? null;
   const relayActive = reviewRun?.state === "requested" && !reviewRun.unverified;
@@ -329,6 +331,21 @@ export function PrDetailView({
       await api.stopReview(reviewRun.runId);
       reload();
       return "Review stopped";
+    });
+  // Task Master's own actions on this PR's task (Merge is the sticky bar's).
+  const taskStatus = entry?.task?.status;
+  const taskId = entry?.task?.id;
+  const approveTask = () =>
+    run("task", async () => {
+      if (taskId == null) return;
+      await useDashboardStore.getState().approveTask(taskId);
+      return `Task #${taskId} approved`;
+    });
+  const retryTask = () =>
+    run("task", async () => {
+      if (taskId == null) return;
+      await useDashboardStore.getState().retryTask(taskId);
+      return `Task #${taskId} retried`;
     });
   const openThreads = pr.threads.filter((t) => !t.isResolved);
   const resolvedThreads = pr.threads.filter((t) => t.isResolved);
@@ -510,7 +527,21 @@ export function PrDetailView({
           <div className="pr-card-h">Mullion</div>
           <div className="pr-card-b">
             {entry && entry.sessions.length > 0 && <SessionPills links={entry.sessions} />}
-            {entry?.task && <TaskChip task={entry.task} />}
+            {entry?.task && (
+              <div className="pr-pin-foot">
+                <TaskChip task={entry.task} />
+                {taskStatus === "reviewing" && (
+                  <Button size="sm" disabled={busy !== null} onClick={approveTask}>
+                    Approve task
+                  </Button>
+                )}
+                {taskStatus === "failed" && (
+                  <Button size="sm" disabled={busy !== null} onClick={retryTask}>
+                    Retry task
+                  </Button>
+                )}
+              </div>
+            )}
             {reviewRun && (
               <div className="pr-pin-foot">
                 <StatusChip

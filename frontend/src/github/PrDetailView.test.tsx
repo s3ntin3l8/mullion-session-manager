@@ -739,6 +739,45 @@ describe("PrDetailView", () => {
       });
     });
 
+    it.each([
+      ["reviewing", "Approve task", "approveTask", "Task #5 approved"],
+      ["failed", "Retry task", "retryTask", "Task #5 retried"],
+    ] as const)(
+      "offers %s tasks their Task Master action from the Mullion card",
+      async (status, label, action, notice) => {
+        stub(PR);
+        const fn = vi.fn().mockResolvedValue({});
+        useDashboardStore.setState({
+          [action]: fn,
+          projects: [makeProject({ id: 1 })],
+          tasks: [makeTask({ id: 5, projectId: 1, branchName: "feat-thing", status })],
+          prsByProject: {
+            1: {
+              prs: [
+                {
+                  number: 12,
+                  title: "Add thing",
+                  htmlUrl: "u",
+                  author: "me",
+                  headSha: "abc",
+                  headBranch: "feat-thing",
+                  baseBranch: "main",
+                  ciStatus: "success",
+                  actionsRuns: [],
+                },
+              ],
+              prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+            },
+          },
+        });
+        render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+        await userEvent.click(await screen.findByRole("button", { name: label }));
+        expect(await screen.findByText(notice)).toBeInTheDocument();
+        expect(fn).toHaveBeenCalledWith(5);
+        useDashboardStore.setState({ projects: [], tasks: [], prsByProject: {} });
+      },
+    );
+
     it("shows nothing-linked copy when no session, task or run is linked", async () => {
       stub(PR);
       render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);

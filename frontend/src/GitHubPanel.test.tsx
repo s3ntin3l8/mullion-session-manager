@@ -804,7 +804,7 @@ describe("GitHubPanel", () => {
       expect(screen.getByText("No reviewers")).toBeInTheDocument();
     });
 
-    it("lists non-Actions checks under Other checks in the Checks drilldown", async () => {
+    it("says a PR with no workflow runs has none, in its Checks drilldown", async () => {
       setup({
         ...failingPr,
         actionsRuns: [],
