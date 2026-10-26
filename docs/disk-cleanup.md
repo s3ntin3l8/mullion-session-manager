@@ -271,11 +271,29 @@ A worktree that fails a check is left in place, and the reason is recorded on
 the session row as `worktreeKeptReason` (`in-use`, `still-running`, `unpushed`,
 `dirty`, `conflicts`, `branch-missing` or `remove-failed`), next to
 `worktreeBranch`, `worktreeRepoCwd`, `worktreeLastAttemptAt` and, once removed,
-`worktreeReclaimedAt` — all of which
-`GET /api/sessions` returns, so a leftover can be found with
-`mullion session list --json` (or the API) and cleared by hand with `git worktree
-remove <path>` once its work is safe. The sweep retries it, so pushing the branch
-or committing the work is enough: the next pass reclaims it. A host that is
+`worktreeReclaimedAt`.
+
+**Settings → Storage → Kept session worktrees** lists every one of them: the
+project, the host, the path, the branch, why it was kept and when it was last
+tried. Each row says what to do about it:
+
+- `unpushed`: push with an upstream — the row has the
+  `git push -u origin <branch>` to copy.
+- `dirty`, `conflicts`: commit the work (and push it with `-u`) or discard it.
+- `in-use`, `still-running`: nothing; it goes once nothing runs in it.
+- Any row: **Remove worktree**, for one you have decided to drop. It goes
+  through the Git panel's removal route
+  (`POST /api/projects/:id/git-worktree-remove`, given the session's
+  `sessionId`), so it runs on the session's own host against the repository
+  the worktree was cut from. It refuses while a session is active inside the
+  worktree, while the session's own process is not confirmed gone, and on
+  uncommitted changes or conflicts — each of which a second, separately
+  confirmed **Force remove** overrides. The branch is kept either way, and the
+  row drops off once the directory is gone.
+
+The same fields ride on `GET /api/sessions` (`mullion session list --json`) for
+scripting. The sweep retries every kept worktree, so pushing the branch or
+committing the work is enough: the next pass reclaims it. A host that is
 unreachable is simply tried again later; only the attempt is stamped
 (`worktreeLastAttemptAt`). Each pass takes at most 100 sessions — ones never
 tried first, then the least recently tried — so leftovers that cannot be

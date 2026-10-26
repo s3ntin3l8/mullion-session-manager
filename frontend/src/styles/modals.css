@@ -1535,6 +1535,31 @@
   color: var(--dim);
   font-weight: 700;
 }
+/* Issue #2026 — Settings → Storage's "Kept session worktrees": several lines
+   per row (path, reason, remedy, actions), so the value column wraps. */
+.kept-worktree-row {
+  align-items: flex-start;
+}
+.kept-worktree-row .settings-info-value {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  white-space: normal;
+}
+.kept-worktree-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kept-worktree-reason,
+.kept-worktree-remedy {
+  font-family: inherit;
+  color: var(--muted);
+}
+.kept-worktree-actions {
+  display: flex;
+  gap: 6px;
+}
 .storage-details {
   margin-top: 16px;
 }

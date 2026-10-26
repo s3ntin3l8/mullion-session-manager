@@ -17,6 +17,7 @@ import { useDashboardStore } from "../../store/index.js";
 import { useStorageProbes } from "../useStorageProbes.js";
 import { useCleanupJob } from "../useCleanupJob.js";
 import { summarizeCleanup } from "../cleanupSummary.js";
+import { KeptSessionWorktrees } from "./KeptSessionWorktrees.js";
 
 function describeWorktree(candidate: DevWorktreeCandidate): string {
   const kind = candidate.kind === "claude-agent" ? "Claude agent" : "worktree";
@@ -425,6 +426,8 @@ export function StorageSection() {
           </div>
         </>
       )}
+
+      <KeptSessionWorktrees />
 
       {temp?.available && temp.claudeScratch.skipped && (
         <div className="settings-footer-note">

@@ -170,6 +170,7 @@ export type {
   DeleteBranchResult,
   RemoveWorktreeReason,
   RemoveWorktreeResult,
+  WorktreeKeptReason,
   AgentRuleAgent,
   BundleSyncCli,
   AgentRuleScope,

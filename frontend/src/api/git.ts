@@ -164,11 +164,19 @@ export const gitApi = {
     }),
 
   // Issue #442 — Source Control manual worktree removal. Same "refusal is a 200,
-  // not a throw" shape as deleteProjectGitBranch above.
-  removeProjectGitWorktree: (projectId: number, worktreePath: string, force?: boolean) =>
+  // not a throw" shape as deleteProjectGitBranch above. `sessionId` (issue
+  // #2026) names the ended session that owns the worktree: the server then
+  // runs the removal on THAT session's host, against the repository the
+  // worktree was cut from, and marks it reclaimed once it is gone.
+  removeProjectGitWorktree: (
+    projectId: number,
+    worktreePath: string,
+    force?: boolean,
+    sessionId?: number,
+  ) =>
     request<RemoveWorktreeResult>(`/api/projects/${projectId}/git-worktree-remove`, {
       method: "POST",
-      body: JSON.stringify({ worktreePath, force }),
+      body: JSON.stringify({ worktreePath, force, sessionId }),
     }),
 
   // Issue #442 — Source Control "Prune stale" button (`git worktree prune` only —

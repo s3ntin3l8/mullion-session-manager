@@ -24,6 +24,12 @@ import { getRemoteHostClient, HostRequestError } from "../services/remote-host-c
 import { previewPlacement } from "../services/placement.js";
 import { portFromUrl } from "../plugins/preview-proxy.js";
 import { resolveBackend } from "../services/session-backend.js";
+import { resolveSessionHostId } from "../services/session-live-info.js";
+import {
+  claimReclaimSlot,
+  recordReclaimed,
+  releaseReclaimSlot,
+} from "../services/session-worktree-reclaim.js";
 import type { GitHubRepoRef } from "../services/git-remote.js";
 import {
   resolveHostGitCommit,
@@ -4142,10 +4148,18 @@ export async function projectsRoute(app: FastifyInstance) {
         // single ref-like string, and Linux's own PATH_MAX is 4096.
         worktreePath: { type: "string", minLength: 1, maxLength: 4096 },
         force: { type: "boolean" },
+        // Issue #2026 — the ended session that owns this worktree (Settings →
+        // Storage's "Kept session worktrees"). It may live on a different host
+        // than the project, and was cut from `worktreeRepoCwd`, so both come
+        // from the session row instead of the project.
+        sessionId: { type: "integer", minimum: 1 },
       },
     },
   };
-  app.post<{ Params: { id: string }; Body: { worktreePath: string; force?: boolean } }>(
+  app.post<{
+    Params: { id: string };
+    Body: { worktreePath: string; force?: boolean; sessionId?: number };
+  }>(
     "/api/projects/:id/git-worktree-remove",
     {
       schema: gitWorktreeRemoveBodySchema,
@@ -4158,14 +4172,42 @@ export async function projectsRoute(app: FastifyInstance) {
       const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
       if (!project) return reply.notFound();
 
-      const { worktreePath, force } = request.body;
+      const { worktreePath, force, sessionId } = request.body;
+
+      // Where the removal runs: the project's host and checkout, or — for a
+      // session's own worktree — the session's host and the repository the
+      // worktree was cut from.
+      let target: { id: number; hostId: string; cwd: string } = project;
+      let owner: typeof sessions.$inferSelect | undefined;
+      if (sessionId !== undefined) {
+        [owner] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+        if (!owner || owner.projectId !== project.id) {
+          return reply.notFound("No such session in this project");
+        }
+        if (!owner.worktreeBranch || !owner.worktreeRepoCwd || !owner.cwd) {
+          return reply.badRequest("This session does not own a worktree");
+        }
+        if (path.resolve(owner.cwd) !== path.resolve(worktreePath)) {
+          return reply.badRequest("worktreePath is not this session's worktree");
+        }
+        if (owner.worktreeReclaimedAt) return { removed: false, reason: "not-listed" };
+        // A live session's worktree is not a leftover — even under force.
+        if (owner.status === "active") {
+          return reply.badRequest("This session is still active");
+        }
+        target = {
+          id: project.id,
+          hostId: resolveSessionHostId(app, owner),
+          cwd: owner.worktreeRepoCwd,
+        };
+      }
 
       // The main worktree IS project.cwd — skip the live-session guard for
       // it (almost every session in a non-isolated project has an
       // effective cwd under it, which would otherwise report a confusing
       // "sessions-active" for what removeListedWorktree itself already
       // refuses as "is-main" regardless of force).
-      const isMainWorktreeTarget = path.resolve(worktreePath) === path.resolve(project.cwd);
+      const isMainWorktreeTarget = path.resolve(worktreePath) === path.resolve(target.cwd);
 
       // Live-session guard — same force-overrides-as-UX-safety-net posture
       // as the task-branch guard above (Hermes review on PR #505): the
@@ -4174,7 +4216,7 @@ export async function projectsRoute(app: FastifyInstance) {
       // regardless of force), and a force bypass is logged rather than
       // silently skipped.
       if (!isMainWorktreeTarget) {
-        const sessionIds = sessionsUnderWorktree(app, project, worktreePath);
+        const sessionIds = sessionsUnderWorktree(app, target, worktreePath);
         if (sessionIds.length > 0) {
           if (!force) {
             const result:
@@ -4193,12 +4235,47 @@ export async function projectsRoute(app: FastifyInstance) {
         }
       }
 
-      const backend = resolveBackend(app, project.hostId);
+      // The reclaim sweep may be working on this same session right now;
+      // share its in-flight slot rather than run git against it twice.
+      if (owner && !claimReclaimSlot(owner.id)) {
+        return reply.conflict("Mullion is reclaiming this worktree right now — try again shortly");
+      }
+      const backend = resolveBackend(app, target.hostId);
       try {
-        return await backend.removeListedWorktree(project.cwd, worktreePath, { force });
+        // The owning session has ENDED, but its agent may still be exiting
+        // inside the directory (a cascade kill, a kill whose terminate
+        // failed) — the reclaim sweep's `still-running`. Same rule as the
+        // sweep: only a confirmed-dead process proceeds; force overrides.
+        if (owner) {
+          const liveness = (await backend.liveness([String(owner.id)]))[String(owner.id)];
+          if (liveness !== "dead") {
+            if (!force) {
+              return { removed: false, reason: "still-running", detail: liveness };
+            }
+            app.log.warn(
+              { projectId: project.id, worktreePath, sessionId: owner.id, liveness },
+              "force-removing a session worktree whose process is not confirmed gone",
+            );
+          }
+        }
+        const result = await backend.removeListedWorktree(target.cwd, worktreePath, { force });
+        // `not-listed` / `directory-gone`: git no longer has a worktree at
+        // this path, or its directory is already gone — nothing of the
+        // session's is left to remove, so the row must not linger. Not
+        // `not-a-repo`: listWorktrees also reports that for a git failure,
+        // and the sweep double-checks that case itself before stamping.
+        if (
+          owner &&
+          (result.removed || result.reason === "not-listed" || result.reason === "directory-gone")
+        ) {
+          recordReclaimed(app, owner);
+        }
+        return result;
       } catch (err) {
-        app.log.warn({ hostId: project.hostId, err }, "host unreachable, worktree remove failed");
-        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        app.log.warn({ hostId: target.hostId, err }, "host unreachable, worktree remove failed");
+        return reply.serviceUnavailable(`Host ${target.hostId} is unreachable`);
+      } finally {
+        if (owner) releaseReclaimSlot(owner.id);
       }
     },
   );

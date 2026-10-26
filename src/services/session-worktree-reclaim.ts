@@ -62,6 +62,22 @@ export type ReclaimOutcome =
  * same session do not both run git against it. */
 const inFlight = new Set<number>();
 
+/**
+ * Holds the same in-flight slot for a manual removal (Settings → Storage), so
+ * a sweep tick and the user's Remove never run git against one session at
+ * once. False when a reclaim already holds it; release with
+ * `releaseReclaimSlot` once done.
+ */
+export function claimReclaimSlot(sessionId: number): boolean {
+  if (inFlight.has(sessionId)) return false;
+  inFlight.add(sessionId);
+  return true;
+}
+
+export function releaseReclaimSlot(sessionId: number): void {
+  inFlight.delete(sessionId);
+}
+
 /** Whether `branch` has nothing to lose by its worktree going away: pushed to an
  * upstream it is not ahead of, whose upstream was deleted (the usual sign of a
  * merged-and-cleaned-up PR), or merged into the default branch. A worktree
@@ -142,7 +158,10 @@ function recordKept(app: FastifyInstance, row: typeof sessions.$inferSelect, rea
   );
 }
 
-function recordReclaimed(app: FastifyInstance, row: typeof sessions.$inferSelect) {
+/** Marks the session's worktree as gone. Also called by the manual removal in
+ * Settings → Storage (`POST /api/projects/:id/git-worktree-remove` with a
+ * `sessionId`), so a worktree the user removed drops off that list. */
+export function recordReclaimed(app: FastifyInstance, row: typeof sessions.$inferSelect) {
   app.db
     .update(sessions)
     .set({ worktreeReclaimedAt: new Date(), worktreeKeptReason: null })
