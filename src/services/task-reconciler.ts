@@ -2852,14 +2852,20 @@ async function attemptReturnRedCiToWorker(
   // Issue #1724 — the worker these notes go back to runs on the host that
   // holds its worktree, so its sessions dir is resolved there.
   const workerHostId = resolveTaskWorkerHost(app, task);
-  const sessionsDir = await resolveSessionsDirWithFallback(app, resolveBackend(app, workerHostId), {
-    taskId: task.id,
-    hostId: workerHostId,
-  });
-  const commitTitlePath = project.conventionalCommitTitles
-    ? taskCommitTitlePath(sessionsDir, task.id)
-    : undefined;
   const carryApproval = hasCurrentApproval(task);
+  // Only resolved when something below uses it: a remote-hosted task pays a
+  // round trip for the lookup.
+  const sessionsDir =
+    project.conventionalCommitTitles || carryApproval
+      ? await resolveSessionsDirWithFallback(app, resolveBackend(app, workerHostId), {
+          taskId: task.id,
+          hostId: workerHostId,
+        })
+      : null;
+  const commitTitlePath =
+    project.conventionalCommitTitles && sessionsDir !== null
+      ? taskCommitTitlePath(sessionsDir, task.id)
+      : undefined;
   // #939/#1016 — resolved once per spawn, fail-open — see
   // task-issue-context.ts's own doc comment.
   const issueContext = await resolveTaskIssueContextSafe(app, task, project);
@@ -2877,7 +2883,7 @@ async function attemptReturnRedCiToWorker(
     commitTitlePath,
     agentCommand: task.agentCommand,
     rereviewRequestPath:
-      carryApproval && task.lastReviewVerdictAt
+      carryApproval && sessionsDir !== null && task.lastReviewVerdictAt
         ? taskRereviewRequestPath(
             sessionsDir,
             task.id,
