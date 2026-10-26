@@ -23,7 +23,9 @@ To run the child on a **different machine** — e.g. a Mac for Xcode/iOS work or
 macOS-only spike — pass `host: "<hostId>"` or `platform: "darwin"` (CLI
 `--host`/`--platform`) and usually `isolate: true` (`--isolate`): the child
 gets its own fresh worktree on that host and should commit and push its
-branch for you to fetch. A target is a hard requirement — if no eligible host
+branch for you to fetch — with `git push -u origin <branch>`: Mullion removes
+the worktree directory itself when the child ends, once the branch is pushed
+(it has an upstream) or merged and the tree is clean; the branch stays. A target is a hard requirement — if no eligible host
 has the project you get a 409, not a silent fallback. `session wait`, `children`,
 `logs`, `kill`, `prompt_session` (CLI `session prompt`) and `wait_for_output` (CLI
 `session wait-output`) work on a remote child, including `prompt_session` with

@@ -404,6 +404,22 @@ describe("reconcileExitedSessions", () => {
   // column) and spawn a brand-new systemd-run scope for a program this
   // function had already confirmed (via the liveness check) was dead — orphaning
   // it the moment this function then flips the row underneath it.
+  // Issue #1964 — a session that exited on its own gets the same chance to have
+  // its isolated worktree reclaimed as one that was killed.
+  it("tries to reclaim an exited session's own worktree (#1964)", async () => {
+    const app = await openTestApp();
+    const sessionId = await createSession(app);
+    mockMasterAlive(app, false);
+    const reclaimModule = await import("../../src/services/session-worktree-reclaim.js");
+    const reclaim = vi
+      .spyOn(reclaimModule, "reclaimSessionWorktree")
+      .mockResolvedValue({ status: "skipped", reason: "no-worktree" });
+
+    await reconcileExitedSessions(app);
+
+    expect(reclaim).toHaveBeenCalledWith(app, sessionId);
+  });
+
   it("flips the row to exited BEFORE cleanupPreviewWorktree resolves, not after (A9)", async () => {
     const app = await openTestApp();
     const sessionId = await createSession(app);

@@ -6,6 +6,7 @@ import { resolveBackend, warnHostError } from "./session-backend.js";
 import type { SessionLiveness } from "./session-process.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { cleanupPreviewWorktree } from "./git-worktree.js";
+import { reclaimSessionWorktree } from "./session-worktree-reclaim.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 import { recordTaskTransition } from "./task-state.js";
 
@@ -220,6 +221,10 @@ async function reconcileRow(
   // OS-level process is gone: whether THIS pass or some other writer
   // owns the DB row's terminal transition doesn't change that.
   const cleaned = await cleanupPreviewWorktree(row.session.id, app.log);
+  // Issue #1964 — the same for an isolated session's own worktree: tried once
+  // now that the process is gone, retried by the periodic sweep if its branch
+  // is not yet pushed or merged. Not awaited — see killSession.
+  void reclaimSessionWorktree(app, row.session.id);
   // #182 — same teardown as the user-initiated DELETE path
   // (session-lifecycle.ts's killSession), for the auto-detected
   // program-exited-on-its-own case.

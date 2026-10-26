@@ -174,6 +174,10 @@ describe("promote lands the replacement where its worktree was cut (issue #1958)
     expect(promoted?.hostId).toBe(busy);
     expect(promoted?.cwd).toBe(WORKTREE);
     expect(promoted?.placementReason).toBe(`promoted on ${busy}, where its worktree was cut`);
+    // Issue #1964 — the replacement owns the worktree promote just cut for it,
+    // so it is reclaimed when the session ends.
+    expect(promoted?.worktreeBranch).toBe("mullion/session-x");
+    expect(promoted?.worktreeRepoCwd).toBe(REMOTE_CWD);
     expect(backendFor(busy).createWorktree.mock.calls[0]?.[0]).toBe(REMOTE_CWD);
   });
 

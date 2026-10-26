@@ -14,7 +14,8 @@
 // those modules deliberately have no FastifyInstance import.
 import type { FastifyInstance } from "fastify";
 import { getGitStatus, isGitRepo, type GitStatus } from "./git-status.js";
-import { resolveDefaultBaseRef, resolveCommitSha } from "./git-refs.js";
+import { listBranches, resolveDefaultBaseRef, resolveCommitSha } from "./git-refs.js";
+import type { GitBranchInfo } from "../shared/types.js";
 import { pushBranch, type PushResult } from "./git-push.js";
 import { parseGitRemote, type GitHubRepoRef } from "./git-remote.js";
 import { getFileDiff } from "./git-diff.js";
@@ -149,6 +150,28 @@ export async function resolveHostGitStatus(
     return { ok: true, value: { isRepo: true, status } };
   }
   return viaRemote(app, hostId, (client) => client.resolveGitStatus(cwd, { fresh: true }));
+}
+
+/**
+ * The branches of the repository at `cwd`, with upstream / ahead / gone /
+ * merged detail, on whichever host owns it — `listBranches` locally,
+ * `/internal/git-branches?detail=1` remotely. An empty list for a path that is
+ * not a repository. Used to tell whether a session's branch is pushed or
+ * merged before its worktree is reclaimed (issue #1964). Local calls never
+ * fail; only a remote host returns `ok: false`.
+ */
+export async function resolveHostBranches(
+  app: FastifyInstance,
+  hostId: string,
+  cwd: string,
+): Promise<HostGitResult<GitBranchInfo[]>> {
+  if (hostId === LOCAL_HOST_ID) {
+    return { ok: true, value: (await listBranches(cwd, { detail: true })) ?? [] };
+  }
+  return viaRemote(app, hostId, async (client) => {
+    const result = await client.resolveGitBranches(cwd, true);
+    return result?.branches ?? [];
+  });
 }
 
 /**

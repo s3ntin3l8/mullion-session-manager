@@ -952,6 +952,9 @@ export async function sessionsRoute(app: FastifyInstance) {
         command: row.command,
         name: row.name ?? undefined,
         cwd: worktreePath,
+        // Issue #1964 — the replacement owns the worktree this handler just
+        // cut for it, so it is reclaimed when the session ends.
+        ownedWorktree: { branch: resolvedWorktree.branch, repoCwd },
         // Issue #1958 — where the worktree was cut, so placement cannot move
         // the replacement away from its own `cwd`.
         hostId: srcHostId,

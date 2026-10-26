@@ -191,7 +191,8 @@ Claude Code adapter registers a `WorktreeCreate`/`WorktreeRemove` hook
 Each is a full checkout, usually with its own `node_modules`, a few
 hundred MB apiece, and nothing removes one once its PR is merged. Aggressive
 cleanup removes the ones whose work is already elsewhere. `.mullion-worktrees/`
-is not touched: Task Master owns those.
+is not touched here: Task Master owns its own, and an isolated session's are
+reclaimed on their own (see [Isolated session worktrees](#isolated-session-worktrees)).
 
 A worktree is only offered when **all** of these hold:
 
@@ -236,3 +237,50 @@ thing it does is fetch each project that has developer worktrees.
 Known limits: a worktree outside `.wt/`, `.worktrees/` and `.claude/worktrees/` is never
 considered, and a repo whose default branch can't be determined (no `origin`)
 gets neither `merged` nor `detached-merged`.
+
+## Isolated session worktrees
+
+`services/session-worktree-reclaim.ts`. A session that runs in a worktree
+Mullion cut for it — the launcher's **isolate** toggle, a child spawned with
+`--isolate`, and **promote to worktree** — owns that worktree
+(`.mullion-worktrees/…`, on a `mullion/…` branch). It used to be left behind
+when the session ended. Mullion now removes it itself, on the host the session
+ran on (a remote host included), when the session ends and again from a
+periodic sweep (the first pass two minutes after boot, then every 30 minutes).
+Task Master's worktrees are not these: the task reclaims its own.
+
+It is removed only when **all** of these hold:
+
+- No other active session is working inside it, and the session's own process
+  is confirmed gone (a kill whose `terminate` failed still marks it ended; its
+  agent may be running there yet, which is recorded as `still-running`).
+- Its branch is **pushed** (it has an upstream it is not ahead of), its
+  upstream was **deleted** (a merged PR's auto-deleted branch), or it is
+  **merged** into the default branch. A session branch is created without
+  tracking, so a branch pushed with a bare `git push origin <branch>` has no
+  upstream and counts as unpushed: push with **`git push -u origin <branch>`**.
+- Its tree is **clean**: no uncommitted or untracked changes, no merge
+  conflicts. Nothing is ever forced.
+
+**The branch is always kept**; only the directory goes, so a commit is never
+lost. What git ignores (`node_modules`, a local `.env`) goes with the directory.
+
+A worktree that fails a check is left in place, and the reason is recorded on
+the session row as `worktreeKeptReason` (`in-use`, `still-running`, `unpushed`,
+`dirty`, `conflicts`, `branch-missing` or `remove-failed`), next to
+`worktreeBranch`, `worktreeRepoCwd`, `worktreeLastAttemptAt` and, once removed,
+`worktreeReclaimedAt` — all of which
+`GET /api/sessions` returns, so a leftover can be found with
+`mullion session list --json` (or the API) and cleared by hand with `git worktree
+remove <path>` once its work is safe. The sweep retries it, so pushing the branch
+or committing the work is enough: the next pass reclaims it. A host that is
+unreachable is simply tried again later; only the attempt is stamped
+(`worktreeLastAttemptAt`). Each pass takes at most 100 sessions — ones never
+tried first, then the least recently tried — so leftovers that cannot be
+resolved (a decommissioned host, an abandoned dirty tree) rotate to the back
+instead of crowding out the rest. The server log says what each pass did.
+
+Known limits: a worktree whose session row was deleted is no longer known to
+Mullion; one created before this existed is not tracked (they carry no
+`worktreeBranch`); and "pushed" is judged from the branch's upstream, not from
+whether some remote branch happens to contain its tip.
