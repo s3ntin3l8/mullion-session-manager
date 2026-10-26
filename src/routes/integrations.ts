@@ -44,7 +44,11 @@ import {
   isCardExhausted,
   isCardWindowReset,
 } from "../services/runway-client.js";
-import { agentForProvider, agentQuarantineInfo } from "../services/runway-quarantine.js";
+import {
+  agentFromMap,
+  agentQuarantineInfo,
+  isEnforceableAgent,
+} from "../services/runway-quarantine.js";
 import { getStoredSettings } from "../services/settings.js";
 
 interface SetTokenBody {
@@ -499,11 +503,15 @@ export async function integrationsRoute(app: FastifyInstance) {
     // key already lives, so nothing about the key reaches the client.
     const unmapped = new Set<string>();
     for (const card of limits.cards) {
-      const agent = agentForProvider(app, card.providerId);
+      const agent = agentFromMap(settings.runway?.providerMap, card.providerId);
       if (agent === null) {
         unmapped.add(card.providerId);
         continue;
       }
+      // Mapped, but to a name no claim can resolve to (a typo, or a CLI
+      // display name like `claude-code`): the gate never matches it, so it
+      // is reported as uncovered while still shown below.
+      if (!isEnforceableAgent(agent)) unmapped.add(card.providerId);
       agents.push({
         agent,
         providerId: card.providerId,

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api, ApiError } from "../../api/index.js";
 import type { RunwayIntegration, RunwayQuota } from "../../api/index.js";
 import { useDashboardStore } from "../../store/index.js";
+import { settleSettingsPatch } from "../../store/slices/ui.js";
 import {
   GroupHeading,
   ListRow,
@@ -205,8 +206,11 @@ export function RunwaySection() {
   useEffect(() => {
     if (!ready) return;
     let cancelled = false;
-    api
-      .getRunwayQuota()
+    // The server derives the list from ITS copy of the map, and
+    // updateSettings only arms a debounced PATCH — so the edit is settled
+    // first, or the answer comes from the pre-edit map.
+    settleSettingsPatch()
+      .then(() => api.getRunwayQuota())
       .then((q) => {
         if (!cancelled) setQuota(q);
       })
@@ -301,7 +305,7 @@ export function RunwaySection() {
         <div className="settings-row-desc" data-testid="runway-unmapped">
           {quota.unmappedProviders.length === 0
             ? "Every provider Runway reports is mapped."
-            : `Runway reports providers with no agent mapping: ${quota.unmappedProviders.join(", ")}. Tasks on an agent are only held for providers that are mapped.`}
+            : `Runway reports providers with no usable agent mapping: ${quota.unmappedProviders.join(", ")}. Tasks on an agent are only held for providers that are mapped.`}
         </div>
       )}
       {error && <ErrorText style={{ marginTop: 8 }}>{error}</ErrorText>}
