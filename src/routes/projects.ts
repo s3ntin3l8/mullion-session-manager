@@ -123,6 +123,7 @@ import {
   requestHermesReview,
 } from "../services/hermes-review.js";
 import { getRelayReviewState, overlayRelayRuns } from "../services/relay-review-state.js";
+import { annotatePrTasks, issueTriageFor } from "../services/mullion-links.js";
 import { replyReviewError, reviewReader } from "./review-relay.js";
 import { getIssueDetail, listIssues } from "../services/github-issues.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
@@ -2103,7 +2104,7 @@ export async function projectsRoute(app: FastifyInstance) {
       // a "review requested" marker on a PR a review was asked for. The poller
       // annotates the cache with the landed check; this only overlays the
       // in-memory run index, so the request never waits on GitHub.
-      const annotated = overlayRelayRuns(prs, repoRef);
+      const annotated = annotatePrTasks(app, projectId, overlayRelayRuns(prs, repoRef));
       return { prs: annotated, prSummary: computePRSummary(annotated) };
     },
   );
@@ -2163,6 +2164,7 @@ export async function projectsRoute(app: FastifyInstance) {
           issues: result.issues.map((i) => ({
             ...i,
             taskStatus: taskStatus.get(i.number) ?? null,
+            triage: issueTriageFor(repoRef.owner, repoRef.repo, i.number),
           })),
           taskMasterEnabled: resolveTaskMasterConfig(app).enabled,
           taskLabel: app.config.MULLION_TASK_LABEL,
@@ -2189,7 +2191,8 @@ export async function projectsRoute(app: FastifyInstance) {
       if (!Number.isInteger(number) || number < 1) return reply.badRequest("Invalid issue number");
       try {
         const issuesToken = (await resolveGitHubToken(app, repoRef, "issues")) ?? token;
-        return await getIssueDetail(issuesToken, repoRef.owner, repoRef.repo, number);
+        const detail = await getIssueDetail(issuesToken, repoRef.owner, repoRef.repo, number);
+        return { ...detail, triage: issueTriageFor(repoRef.owner, repoRef.repo, number) };
       } catch (err) {
         if (!(err instanceof GitHubApiError)) throw err;
         if (err.statusCode === 404) return reply.notFound("Issue not found");
@@ -3163,7 +3166,7 @@ export async function projectsRoute(app: FastifyInstance) {
             // an in-memory overlay — it never waits on GitHub.
             prsResult[project.id] = {
               ...status,
-              prs: overlayRelayRuns(status.prs, result.value),
+              prs: annotatePrTasks(app, project.id, overlayRelayRuns(status.prs, result.value)),
             };
           })();
 
