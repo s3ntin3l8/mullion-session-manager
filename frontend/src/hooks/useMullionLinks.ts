@@ -45,6 +45,11 @@ import { useDashboardStore } from "../store/index.js";
  * matching field stays null. `buildMullionLinks` is the same join as a pure
  * function, for tests and non-React callers.
  *
+ * Every map carries the same fields: byWorktree takes preview / review run from
+ * the branch its worktree is on, byIssue from the task and triage run.
+ * `taskOwned` means the branch (or worktree) IS the task's own, not merely that
+ * a task's session is on it.
+ *
  * Joins: sessions by `liveBranch`/`previewBranch` and `liveCwd`/`cwd`; a PR's
  * sessions via `matchSessionPr` (a task's recorded PR number beats the branch);
  * child sessions (`parentSessionId`) nest under their parent.
@@ -66,6 +71,8 @@ export interface ReviewLink {
   state: "requested" | "landed";
   /** The relay run's own status (queued, running, completed, …) when known. */
   status?: string;
+  /** The landed lookup itself failed: the run may already have posted. */
+  unverified?: boolean;
   /** What the run acts on. */
   kind: "pull_request" | "issue";
 }
@@ -200,9 +207,11 @@ export function buildMullionLinks(args: BuildMullionLinksArgs): MullionLinks {
       projectTasks.find((t) => t.branchName === branch) ??
       (list.map(taskOfSession).find(Boolean) as Task | undefined) ??
       null;
-    entry.taskOwned = isTaskBranch(branch) || !!entry.task?.branchName;
+    // Owned only when THIS branch is the task's own, not merely because a
+    // task's session happens to be on it (the delete guard is branch-keyed).
+    entry.taskOwned = isTaskBranch(branch) || entry.task?.branchName === branch;
     entry.preview = previews.find((p) => p.branch === branch) ?? null;
-    const pr = prs.find((p) => p.headBranch === branch);
+    const pr = matchSessionPr(prs, { branch, taskPrNumber: entry.task?.prNumber });
     entry.reviewRun = pr ? prReviewLink(pr, args.reviewRuns) : null;
     out.byBranch.set(branch, entry);
   }
@@ -215,7 +224,13 @@ export function buildMullionLinks(args: BuildMullionLinksArgs): MullionLinks {
       (list.map(taskOfSession).find(Boolean) as Task | undefined) ??
       null;
     entry.task = task;
-    entry.taskOwned = !!task || list.some((s) => isTaskBranch(sessionBranch(s)));
+    entry.taskOwned =
+      task?.worktreePath === path || list.some((s) => isTaskBranch(sessionBranch(s)));
+    // Preview / review run come from the branch this worktree is on.
+    const branch = task?.branchName ?? list.map(sessionBranch).find(Boolean) ?? null;
+    const byBranch = branch ? out.byBranch.get(branch) : undefined;
+    entry.preview = byBranch?.preview ?? null;
+    entry.reviewRun = byBranch?.reviewRun ?? null;
     out.byWorktree.set(path, entry);
   }
   for (const t of projectTasks) {
@@ -223,6 +238,9 @@ export function buildMullionLinks(args: BuildMullionLinksArgs): MullionLinks {
       const entry = emptyEntry(devServer);
       entry.task = t;
       entry.taskOwned = true;
+      const byBranch = t.branchName ? out.byBranch.get(t.branchName) : undefined;
+      entry.preview = byBranch?.preview ?? null;
+      entry.reviewRun = byBranch?.reviewRun ?? null;
       out.byWorktree.set(t.worktreePath, entry);
     }
   }
@@ -245,7 +263,7 @@ export function buildMullionLinks(args: BuildMullionLinksArgs): MullionLinks {
     });
     fill(entry, list);
     entry.task = task;
-    entry.taskOwned = !!task || isTaskBranch(pr.headBranch);
+    entry.taskOwned = isTaskBranch(pr.headBranch) || task?.branchName === pr.headBranch;
     entry.preview = previews.find((p) => p.branch === pr.headBranch) ?? null;
     entry.reviewRun = prReviewLink(pr, args.reviewRuns);
     out.byPr.set(pr.number, entry);
@@ -259,7 +277,6 @@ export function buildMullionLinks(args: BuildMullionLinksArgs): MullionLinks {
     const entry = emptyEntry(devServer);
     const task = projectTasks.find((t) => t.issueNumber === number) ?? null;
     entry.task = task;
-    entry.taskOwned = !!task;
     if (task) {
       fill(
         entry,
@@ -287,7 +304,13 @@ function prReviewLink(
 ): ReviewLink | null {
   const relay = pr.relayReview;
   if (relay && relay.state !== "none" && relay.runId) {
-    return { runId: relay.runId, state: relay.state, status: relay.status, kind: "pull_request" };
+    return {
+      runId: relay.runId,
+      state: relay.state,
+      status: relay.status,
+      kind: "pull_request",
+      ...(relay.landedChecked === false ? { unverified: true } : {}),
+    };
   }
   const run = runs?.find(
     (r) => (r.kind ?? "pull_request") === "pull_request" && r.prNumber === pr.number,

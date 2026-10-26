@@ -510,6 +510,9 @@ button.sb-chip:focus-visible,
   font-size: 0.6875rem;
   cursor: pointer;
 }
+.sb-pill:focus-visible {
+  outline: 1.5px solid var(--accent);
+}
 .sb-pill-dot {
   width: 7px;
   height: 7px;
@@ -534,29 +537,4 @@ button.sb-chip:focus-visible,
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-}
-.sb-pill--success {
-  color: var(--status-success-fg);
-  background: var(--status-success-bg);
-  border-color: var(--status-success-border);
-}
-.sb-pill--danger {
-  color: var(--status-danger-fg);
-  background: var(--status-danger-bg);
-  border-color: var(--status-danger-border);
-}
-.sb-pill--warn {
-  color: var(--status-warn-fg);
-  background: var(--status-warn-bg);
-  border-color: var(--status-warn-border);
-}
-.sb-pill--info {
-  color: var(--status-info-fg);
-  background: var(--status-info-bg);
-  border-color: var(--status-info-border);
-}
-.sb-pill--merged {
-  color: var(--status-merged-fg);
-  background: var(--status-merged-bg);
-  border-color: var(--status-merged-border);
 }

@@ -18,7 +18,7 @@ export function LinkedActions({ entry, onStartSession, onPreview }: LinkedAction
   const [stopping, setStopping] = useState(false);
   const action = decideSessionAction(entry);
   const run = entry?.reviewRun;
-  const inFlight = run?.state === "requested";
+  const inFlight = run?.state === "requested" && !run.unverified;
 
   const stop = async () => {
     if (!run) return;

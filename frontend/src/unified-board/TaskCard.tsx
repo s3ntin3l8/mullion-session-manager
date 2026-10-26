@@ -61,11 +61,11 @@ export function TaskCard({
 
   // Matched client-side against the project's unfiltered PR list, same
   // posture as Sidebar.tsx's own matchedPr (its doc comment explains why:
-  // avoids firing a `?branch=` request per card). Joined on task.branchName
-  // — deterministic (`mullion/task-<id>`, set at claim time) — rather than
-  // SessionRow's own displayBranch precedence dance, which exists only to
-  // handle a worktree session's hook-reported branch lagging its actual
-  // one; a task's branchName has no such ambiguity.
+  // avoids firing a `?branch=` request per card). Joined by matchSessionPr:
+  // the task's recorded PR number first (it survives the worker switching
+  // branches), else task.branchName — deterministic (`mullion/task-<id>`, set
+  // at claim time) — rather than SessionRow's own displayBranch precedence
+  // dance.
   const prsStatus = useDashboardStore((s) => (project ? s.prsByProject[project.id] : undefined));
   const matchedPr = matchSessionPr(prsStatus?.prs, {
     branch: task.branchName,

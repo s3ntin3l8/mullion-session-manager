@@ -66,6 +66,8 @@ describe("buildMullionLinks", () => {
     const links = buildMullionLinks({ project, sessions: [s, plain], tasks: [task], prs });
     expect(links.byPr.get(21)?.sessions.map((l) => l.session.id)).toEqual([4]);
     expect(links.byPr.get(21)?.task).toBe(task);
+    // The task's session sits on a user branch: not task-owned there.
+    expect(links.byBranch.get("switched")?.taskOwned).toBe(false);
     expect(links.byPr.get(10)?.sessions.map((l) => l.session.id)).toEqual([5]);
   });
 
@@ -164,5 +166,49 @@ describe("useMullionLinks", () => {
     const { result } = renderHook(() => useMullionLinks(1));
     expect(result.current.byPr.get(10)?.sessions).toHaveLength(1);
     expect(result.current.byBranch.get("feat/x")?.devServer).toBe("http://localhost:5173");
+  });
+});
+
+describe("review/preview consistency across maps", () => {
+  it("branch entry joins the run via matchSessionPr, worktree entry inherits preview + run", () => {
+    const task = makeTask({ id: 7, sessionId: 4, prNumber: 21, branchName: "mullion/task-7" });
+    const s = makeSession({ id: 4, liveBranch: "mullion/task-7", liveCwd: "/wt/t7" });
+    const prs = [
+      pr({
+        number: 21,
+        headBranch: "worker-switched",
+        relayReview: { state: "requested", runId: "r21", landedChecked: false },
+      }),
+    ];
+    const preview = {
+      slug: "p",
+      kind: "project",
+      projectId: 1,
+      externalUrl: null,
+      createdAt: "",
+      branch: "mullion/task-7",
+    } as const;
+    const links = buildMullionLinks({
+      project,
+      sessions: [s],
+      tasks: [task],
+      prs,
+      previews: [preview],
+    });
+    expect(links.byBranch.get("mullion/task-7")?.reviewRun).toMatchObject({
+      runId: "r21",
+      unverified: true,
+    });
+    expect(links.byWorktree.get("/wt/t7")?.reviewRun?.runId).toBe("r21");
+    expect(links.byWorktree.get("/wt/t7")?.preview?.slug).toBe("p");
+    // A task worktree with no session inherits via the task's branch too.
+    const bare = buildMullionLinks({
+      project,
+      sessions: [],
+      tasks: [{ ...task, worktreePath: "/wt/t7" }],
+      prs,
+      previews: [preview],
+    });
+    expect(bare.byWorktree.get("/wt/t7")?.preview?.slug).toBe("p");
   });
 });

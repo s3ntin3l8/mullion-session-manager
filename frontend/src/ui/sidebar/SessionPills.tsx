@@ -24,7 +24,7 @@ export function SessionPills({ links, onOpenSession }: SessionPillsProps) {
         <li key={l.session.id} className="sb-pill-item">
           <button
             type="button"
-            className={`sb-pill sb-pill--${severityTone(l.severity)}`}
+            className={`sb-pill sb-chip--${severityTone(l.severity)}`}
             onClick={() => open(l.session.id)}
             title={`${STATUS_PRESENTATION[l.session.sessionStatus].label} — open session`}
           >

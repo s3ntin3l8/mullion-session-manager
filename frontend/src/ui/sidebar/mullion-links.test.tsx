@@ -55,7 +55,7 @@ describe("SessionPills", () => {
     const onOpen = vi.fn();
     render(<SessionPills links={e.sessions} onOpenSession={onOpen} />);
     const parentBtn = screen.getByRole("button", { name: /parent/ });
-    expect(parentBtn.className).toContain("sb-pill--danger");
+    expect(parentBtn.className).toContain("sb-chip--danger");
     expect(screen.getByRole("img", { name: "needs attention" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /kid/ }));
     expect(onOpen).toHaveBeenCalledWith(2);
@@ -143,6 +143,14 @@ describe("LinkedActions", () => {
     vi.mocked(api.stopReview).mockRejectedValueOnce(new Error("nope"));
     fireEvent.click(screen.getByRole("button", { name: "Stop review" }));
     await waitFor(() => expect(pushToast).toHaveBeenCalled());
+  });
+
+  it("hides Stop review when the landed lookup could not be verified", () => {
+    const e = entryFor([], {
+      reviewRun: { runId: "r1", state: "requested", unverified: true, kind: "pull_request" },
+    });
+    render(<LinkedActions entry={e} />);
+    expect(screen.queryByRole("button", { name: "Stop review" })).toBeNull();
   });
 
   it("hides Stop review for a landed run", () => {
