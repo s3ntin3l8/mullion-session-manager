@@ -141,6 +141,7 @@
   --surface: #ffffff;
   --surface-hover: #f0f0ed;
   --accent: #0b6e4b;
+  /* Independent of --b/--g/--y/--p/--c on purpose (see the dark block). */
   --lane-1: #0969da;
   --lane-2: #1a7f37;
   --lane-3: #9a6700;

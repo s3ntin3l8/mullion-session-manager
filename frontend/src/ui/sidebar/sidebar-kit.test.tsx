@@ -262,6 +262,23 @@ describe("SidebarRow", () => {
   });
 });
 
+describe("SidebarRow click isolation", () => {
+  it("does not activate the row from clicks inside extra or trailing", () => {
+    const onClick = vi.fn();
+    render(
+      <SidebarRow
+        title="row"
+        onClick={onClick}
+        extra={<button>drill</button>}
+        trailing={<button>chip</button>}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "drill" }));
+    fireEvent.click(screen.getByRole("button", { name: "chip" }));
+    expect(onClick).not.toHaveBeenCalled();
+  });
+});
+
 describe("SidebarSection persistence hardening", () => {
   it("ignores a non-object stored value", () => {
     localStorage.setItem("crs.sidebarKitSections", "null");

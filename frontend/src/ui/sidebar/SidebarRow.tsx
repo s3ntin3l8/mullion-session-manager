@@ -64,15 +64,16 @@ export function SidebarRow({
           <div className="sb-row-title">{title}</div>
         )}
         {meta != null && <span className="sb-row-meta">{meta}</span>}
-        {extra != null && <div className="sb-row-extra">{extra}</div>}
+        {extra != null && (
+          // Drilldowns/triads live here; their clicks are theirs, not the row's.
+          <div className="sb-row-extra" onClick={(e) => e.stopPropagation()}>
+            {extra}
+          </div>
+        )}
       </div>
       {(trailing != null || actions != null) && (
-        <div className="sb-row-trail">
-          {actions != null && (
-            <span className="sb-row-actions" onClick={(e) => e.stopPropagation()}>
-              {actions}
-            </span>
-          )}
+        <div className="sb-row-trail" onClick={(e) => e.stopPropagation()}>
+          {actions != null && <span className="sb-row-actions">{actions}</span>}
           {trailing}
         </div>
       )}
