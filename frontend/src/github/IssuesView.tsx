@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { api } from "../api/index.js";
 import { useIssue, useIssues } from "../hooks/useGitHubData.js";
 import { useStartSessionFrom } from "../hooks/useStartSessionFrom.js";
@@ -11,7 +11,7 @@ import type {
 import type { Tone } from "../lib/statusTone.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { useDashboardStore } from "../store/index.js";
-import { findIssueSession, issueBranchName, issueSeedPrompt } from "./issueWork.js";
+import { indexIssueSessions, issueBranchName, issueSeedPrompt } from "./issueWork.js";
 import { EmptyStateNote } from "../ui/EmptyState.js";
 import { ErrorText } from "../ui/ErrorText.js";
 import { BoltIcon, MessageIcon, PlayTriangleIcon } from "../ui/icons.js";
@@ -142,11 +142,19 @@ export function IssuesSection({
     });
 
   const sessions = useDashboardStore((st) => st.sessions);
+  const gitStatuses = useDashboardStore((st) => st.sessionGitStatuses);
+  const issueSessions = useMemo(
+    () => indexIssueSessions(sessions, gitStatuses, projectId),
+    [sessions, gitStatuses, projectId],
+  );
+  const [starting, setStarting] = useState<ReadonlySet<number>>(new Set());
   const startSessionFrom = useStartSessionFrom(projectId);
   const [queued, setQueued] = useState<ReadonlySet<number>>(new Set());
   const [actionError, setActionError] = useState<string | null>(null);
 
   const startIssueSession = async (issue: GitHubIssueListItem) => {
+    if (starting.has(issue.number)) return;
+    setStarting((st) => new Set(st).add(issue.number));
     setActionError(null);
     try {
       await startSessionFrom({
@@ -155,6 +163,12 @@ export function IssuesSection({
       });
     } catch (err) {
       setActionError(err instanceof Error ? err.message : "Could not start a session");
+    } finally {
+      setStarting((st) => {
+        const next = new Set(st);
+        next.delete(issue.number);
+        return next;
+      });
     }
   };
   const queueIssue = async (issue: GitHubIssueListItem) => {
@@ -227,7 +241,7 @@ export function IssuesSection({
             <IssueRow
               key={issue.number}
               issue={issue}
-              session={findIssueSession(sessions, projectId, issue)}
+              session={issueSessions.get(issue.number)}
               canQueue={ui.taskMaster?.enabled ?? data.taskMasterEnabled}
               queued={queued.has(issue.number)}
               onOpen={() => onOpenIssue(issue.number)}
@@ -346,7 +360,11 @@ export function IssueDetailView({
   const [queued, setQueued] = useState(false);
   const startSessionFrom = useStartSessionFrom(projectId);
   const sessions = useDashboardStore((st) => st.sessions);
-  const session = issue ? findIssueSession(sessions, projectId, issue) : undefined;
+  const gitStatuses = useDashboardStore((st) => st.sessionGitStatuses);
+  const session = useMemo(
+    () => indexIssueSessions(sessions, gitStatuses, projectId).get(number),
+    [sessions, gitStatuses, projectId, number],
+  );
 
   const startSession = async () => {
     if (!issue) return;

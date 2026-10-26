@@ -583,7 +583,7 @@ button.sb-chip:focus-visible,
 .sb-chip--label {
   background: color-mix(in srgb, var(--label-c) 13%, var(--sidebar));
   border-color: color-mix(in srgb, var(--label-c) 40%, var(--sidebar));
-  color: var(--label-c);
+  color: var(--fg);
 }
 button.sb-chip--label[aria-pressed="true"] {
   background: color-mix(in srgb, var(--label-c) 30%, var(--sidebar));

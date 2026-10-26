@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { IssueDetailView, IssuesSection } from "./IssuesView.js";
-import { issueBranchName, issueSeedPrompt } from "./issueWork.js";
+import { indexIssueSessions, issueBranchName, issueSeedPrompt } from "./issueWork.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { useDashboardStore } from "../store/index.js";
 import { useState } from "react";
@@ -58,6 +58,28 @@ describe("issueBranchName / issueSeedPrompt", () => {
     const prompt = issueSeedPrompt({ number: 7, title: "Crash", htmlUrl: "https://x/7" });
     expect(prompt).toContain("#7");
     expect(prompt).toContain("gh issue view 7");
+  });
+});
+
+describe("indexIssueSessions", () => {
+  const sess = (id: number, projectId: number, liveBranch: string | null) => ({
+    id,
+    projectId,
+    liveBranch,
+  });
+  it("keys on the issue number, prefers git status, and ignores other projects", () => {
+    const sessions = [
+      sess(1, 1, "main"),
+      sess(2, 1, "issue-7-old-title"),
+      sess(3, 2, "issue-8-x"),
+      sess(4, 1, "main"),
+      sess(5, 1, "issue-70"),
+    ];
+    const map = indexIssueSessions(sessions, { 1: { branch: "issue-9-slug" }, 4: null }, 1);
+    expect([...map.keys()].sort((a, b) => a - b)).toEqual([7, 9, 70]);
+    expect(map.get(9)?.id).toBe(1);
+    expect(map.get(7)?.id).toBe(2);
+    expect(map.has(8)).toBe(false);
   });
 });
 
@@ -356,7 +378,8 @@ describe("Issues list ↔ detail round trip", () => {
       );
     });
     vi.stubGlobal("fetch", fetchMock);
-    const createSession = vi.fn().mockResolvedValue({ id: 56 });
+    let finish: (v: never) => void = () => {};
+    const createSession = vi.fn(() => new Promise<never>((res) => (finish = res)));
     const requestOpenSession = vi.fn();
     useDashboardStore.setState({ createSession, requestOpenSession });
     const onOpen = vi.fn();
@@ -367,8 +390,12 @@ describe("Issues list ↔ detail round trip", () => {
     expect(await screen.findByText("Queued")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Queue for Task Master" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Start session" }));
+    await userEvent.click(screen.getByRole("button", { name: "Start session" }));
+    expect(createSession).toHaveBeenCalledTimes(1);
+    finish({ id: 56 } as never);
     await waitFor(() => expect(requestOpenSession).toHaveBeenCalledWith(56));
     expect(onOpen).not.toHaveBeenCalled();
+    expect(createSession).toHaveBeenCalledTimes(1);
   });
 
   it("shows the existing session on the row and opens it instead of starting another", async () => {
