@@ -24,7 +24,7 @@ import { subscribeFilePathGone } from "../lib/filePathEvents.js";
 import type { LayoutContext } from "../lib/layoutTier.js";
 import type { ProjectHubTab } from "../ProjectHubPanel.js";
 
-// The six near-identical project-scoped panel kinds (GitHub, Git, Agent
+// The near-identical project-scoped panel kinds (GitHub, Agent
 // Rules, Dock Config, Skills, Browser) — see openOrFocusProjectPanel's own
 // header comment in panelUtils.ts for the shared open-or-focus shape these
 // configs drive. Module-level (not created per-render) so each is a stable
@@ -36,11 +36,6 @@ import type { ProjectHubTab } from "../ProjectHubPanel.js";
 const GITHUB_CONFIG: ProjectPanelKindConfig = {
   kind: "github",
   titleLabel: "GitHub",
-  applyDesktopPositioning: true,
-};
-const GIT_CONFIG: ProjectPanelKindConfig = {
-  kind: "git",
-  titleLabel: "Git",
   applyDesktopPositioning: true,
 };
 const FILE_EDITOR_CONFIG: ProjectPanelKindConfig = {
@@ -117,7 +112,8 @@ export interface UsePanelOpenerResult {
   onOpenTimeline: (session: Session) => void;
   // Opens (or focuses) a project's GitHub panel.
   onOpenGitHub: (projectId: number) => void;
-  // Opens (or focuses) a project's git status panel (issue #76).
+  // Opens the Source Control view in the right sidebar for a project (the
+  // dock Git panel it used to open is retired — see GitPanelRedirect.tsx).
   onOpenGit: (projectId: number) => void;
   // Opens (or focuses) a project's tabbed Project panel, optionally on a
   // specific tab (Agent Rules, Briefing, Scaffold, Dock, Skills).
@@ -188,14 +184,14 @@ export interface UsePanelOpenerResult {
 // hook at the exact position `onOpenSession`'s own declaration used to
 // occupy, before both of those.
 //
-// Six of the twelve (onOpenGitHub/onOpenGit/onOpenAgentRules/
+// Five of the twelve (onOpenGitHub/onOpenAgentRules/
 // onOpenDockConfig/onOpenSkills/onOpenBrowser) share one truly identical
 // shape (open-or-focus-by-`<kind>-<projectId>`, float-if-tiled-else-dock,
 // project-derived title) and are built from one shared pure helper,
 // openOrFocusProjectPanel (panelUtils.ts), parameterized by the config
 // table above — same "pure function in panelUtils.ts, wrapped in a
 // useCallback here" split as openSessionPanel/openTimelinePanel already
-// use. The other six (onOpenSession, onOpenSessionAsFloat, onOpenTimeline,
+// use. The other seven (onOpenGit, onOpenSession, onOpenSessionAsFloat, onOpenTimeline,
 // onOpenTasks, onOpenBrowserUrl, onOpenBlankBrowser) each have genuinely
 // distinct logic — see their own doc comments below — and stay as
 // individually-written callbacks rather than being forced through a shared
@@ -311,12 +307,13 @@ export function usePanelOpener({
 
   const onOpenGit = useCallback(
     (projectId: number) => {
-      if (!dockviewApi) return;
+      // Source Control is a right-sidebar view, not a dock panel, so there is
+      // no dockviewApi to wait for.
       leaveTaskView();
-      openOrFocusProjectPanel(dockviewApi, projectId, projects, layout, GIT_CONFIG);
+      useDashboardStore.getState().openRightSidebarView("git", projectId);
       setSidebarOpen(false);
     },
-    [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
+    [setSidebarOpen, leaveTaskView],
   );
 
   const onOpenProjectHub = useCallback(

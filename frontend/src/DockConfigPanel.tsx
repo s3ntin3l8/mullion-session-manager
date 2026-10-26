@@ -22,7 +22,7 @@ export interface DockConfigPanelParams {
 
 // U4 (finding U4, .claude/plans/can-we-do-a-moonlit-treasure.md) — a
 // dockview panel (opened from the CommandPalette's Integrations section,
-// same "open-or-focus-by-stable-id" pattern as GitPanel/AgentRulesPanel/
+// same "open-or-focus-by-stable-id" pattern as AgentRulesPanel/
 // SkillsPanel) editing a project's own `.crs/dock.json` — the monitor list
 // docs/dock.md documents as hand-edited-on-the-host today. Structured
 // (add/remove/edit monitor entries with labeled fields) rather than a raw

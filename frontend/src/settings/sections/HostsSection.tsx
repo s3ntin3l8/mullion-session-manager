@@ -213,7 +213,7 @@ export function HostsSection() {
   // an acceptable cost for not coupling this section's correctness to
   // another file's mount order (Hermes review, PR #35).
   //
-  // Also polls on LIVE_REFRESH_INTERVAL_MS (same interval GitPanel's own
+  // Also polls on LIVE_REFRESH_INTERVAL_MS (same interval Source Control's own
   // live-status effect uses) so the heartbeat-driven health dot (issue
   // #246) actually updates while this section stays open, instead of only
   // on mount/after a host mutation — matching #246's "continuously-updated

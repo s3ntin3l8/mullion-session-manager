@@ -148,8 +148,7 @@
    of sidebar width, and .cmux-scroll styles that as a visible 9px
    scrollbar. .dock gets away with the same straddle because .dock's
    `overflow: hidden` clips the overhang instead of scrolling it. Same
-   trap called out next to `.dock-split` in dock.css and next to
-   `.github-panel-repo-name` in empty-states.css. */
+   trap called out next to `.dock-split` in dock.css. */
 .sidebar-resize-handle {
   position: absolute;
   top: 0;
@@ -1384,7 +1383,7 @@
 /* Row 4 (issue #177) — recent file-change chips, same ellipsis-truncated
    single-line posture as rows 2/3 above. Each chip reuses
    .github-panel-ci-dot's good/bad/pending language for create/delete/modify
-   (GitPanel.tsx's own per-file badges), not a new dot vocabulary. */
+   (the Source Control per-file badges), not a new dot vocabulary. */
 .session-file-changes-line {
   display: flex;
   align-items: center;

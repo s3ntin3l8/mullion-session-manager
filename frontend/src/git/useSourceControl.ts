@@ -97,7 +97,7 @@ export interface CloneHealthState {
 }
 
 /**
- * The clone health check and the confirmed repair, ported from GitPanel
+ * The clone health check and the confirmed repair, ported from Source Control
  * (#1851, #1896). The check is read-only; the plan is read on a damaged
  * result so the user sees what the repair would do BEFORE arming it.
  */

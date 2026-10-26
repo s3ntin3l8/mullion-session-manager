@@ -422,7 +422,7 @@ function positioningForTier(
 // A dockview panel's `params` is untyped (Parameters = Record<string,
 // unknown> | undefined) from the group/board's point of view — only a
 // `terminal` component panel's params are actually `{ sessionId: number }`;
-// a sibling panel could in principle be a GitHubPanel/GitPanel/BrowserPanel
+// a sibling panel could in principle be a GitHubPanel/BrowserPanel
 // with no sessionId at all, so every caller must guard rather than assume.
 // Shared by PaneTab.tsx (the tab-group attention accent) and
 // MobileSessionBar.tsx (the phone session switcher) so the two don't
@@ -1140,6 +1140,13 @@ function collectFloatingPanelIds(
 // post-restore scheduleSave) instead of carrying the id forever.
 export const LEGACY_PANEL_IDS = ["tasks"] as const;
 
+// Component kinds whose panels are swept by *kind* rather than by fixed id,
+// because their ids are per project (`git-<projectId>`, the retired dock Git
+// panel — Source Control now lives in the right sidebar; see
+// GitPanelRedirect.tsx). Like LEGACY_PANEL_IDS, the kind itself must stay
+// registered in panels/registry.tsx.
+export const LEGACY_PANEL_KINDS = ["git"] as const;
+
 // The five per-project setup panels that now live as tabs of one
 // `project-hub-<projectId>` panel (ProjectHubPanel.tsx). Their old component
 // kinds stay registered (panels/registry.tsx renders the hub on the matching
@@ -1192,8 +1199,26 @@ export function migrateLegacyProjectPanels(
 // effect) knows to persist the cleaned layout — same shape as its existing
 // closedKilledPanels flag, kept separate from it since the two sweeps close
 // panels for unrelated reasons.
-export function closeLegacyPanels(api: DockviewApi): boolean {
+//
+// `onRetiredPanel` is told the `projectId` of each swept retired-kind panel
+// (the dock Git panel): fromJSON renders panel content on a later React pass,
+// so the sweep closes the panel before GitPanelRedirect could ever mount —
+// this callback is how the restore still lands the user in the Source Control
+// sidebar view the panel became.
+export function closeLegacyPanels(
+  api: DockviewApi,
+  onRetiredPanel?: (kind: string, projectId: number | undefined) => void,
+): boolean {
   let closed = false;
+  for (const panel of [...api.panels]) {
+    const kind = panel.api.component;
+    if ((LEGACY_PANEL_KINDS as readonly string[]).includes(kind)) {
+      const projectId = (panel.params as { projectId?: number } | undefined)?.projectId;
+      panel.api.close();
+      closed = true;
+      onRetiredPanel?.(kind, projectId);
+    }
+  }
   for (const id of LEGACY_PANEL_IDS) {
     const panel = api.getPanel(id);
     if (panel) {

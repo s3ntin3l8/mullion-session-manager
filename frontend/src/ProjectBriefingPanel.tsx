@@ -236,7 +236,7 @@ interface InjectOverrideRowProps {
   onChange: (value: boolean | null) => void;
 }
 
-// Issue #884 — reuses GitPanel.tsx's own toggle + "inherited" label + reset-
+// Issue #884 — reuses Source Control's own toggle + "inherited" label + reset-
 // to-default pattern verbatim (same CSS classes, same three-state shape:
 // null = inherit the global setting, true/false = explicit per-project
 // override) rather than inventing a new tri-state control for what's
@@ -453,7 +453,7 @@ function ToolingFieldEditor({
 // state" shape is identical.
 //
 // Fetched once on open, never polled — same "these change rarely" precedent
-// as AgentRulesPanel/GitPanel's own fetch-once posture.
+// as AgentRulesPanel/Source Control's own fetch-once posture.
 export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelParams }) {
   const [tooling, setTooling] = useState<
     { briefing: string | null; skill: string | null; reviewerAgent: string | null } | undefined

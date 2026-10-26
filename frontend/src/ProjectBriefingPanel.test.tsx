@@ -582,7 +582,7 @@ describe("ProjectBriefingPanel", () => {
   });
 
   // Issue #884 — the per-project injectAgentGuide/injectProjectBriefing
-  // override row, reusing GitPanel.tsx's own toggle+inherited+reset
+  // override row, reusing Source Control's own toggle+inherited+reset
   // pattern. Reads project/settings straight off the dashboard store
   // (no fetch of its own), so these tests seed the store directly rather
   // than mocking a network call for this part.

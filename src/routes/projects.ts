@@ -3186,7 +3186,7 @@ export async function projectsRoute(app: FastifyInstance) {
           const branchesPromise = (async () => {
             // No `detail` param, same as the background poll path already
             // documented on the per-project route's own comment (the
-            // GitPanel's own on-demand fetch is what opts into the
+            // Source Control's own on-demand fetch is what opts into the
             // isMerged enrichment).
             try {
               branchesResult[project.id] = await resolveProjectGitBranches(project, false);
@@ -3342,7 +3342,7 @@ export async function projectsRoute(app: FastifyInstance) {
     },
   );
 
-  // Fuller git status for the GitPanel/sidebar badge (issue #76): branch,
+  // Fuller git status for Source Control'sidebar badge (issue #76): branch,
   // short hash, ahead/behind vs. upstream, and per-file status — cloned from
   // the /github handler just above. Two distinct "nothing to show" cases,
   // deliberately given different status codes so the frontend can tell a
@@ -3358,13 +3358,13 @@ export async function projectsRoute(app: FastifyInstance) {
   //
   // `?fresh=1` (issue #433, Hermes review on PR #506) opts into
   // getGitStatus's `forceFresh`, bypassing its CACHE_TTL_MS in-memory cache
-  // — used by the sidebar's Source Control section and GitPanel's own
+  // — used by the sidebar's Source Control section and Source Control's own
   // manual "Fetch" buttons, whose whole point is to show the state
   // immediately after a `git fetch`, not whatever was cached up to 5s
   // beforehand. The default 4s live-refresh poll never sets this, so the
   // cache still does its job for that path. Local only for now — a remote-
   // hosted project's Fetch button still shows the agent's own cached read
-  // (same limitation GitPanel.tsx's handleFetch already had).
+  // (same limitation Source Control's handleFetch already had).
   app.get<{ Params: { id: string }; Querystring: { fresh?: string } }>(
     "/api/projects/:id/git-status",
     { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
@@ -3491,11 +3491,11 @@ export async function projectsRoute(app: FastifyInstance) {
     }
   }
 
-  // Local branches + worktrees for the GitPanel (issue #162's "worktree
+  // Local branches + worktrees for Source Control (issue #162's "worktree
   // awareness" — Mullion observes whatever worktrees exist, whoever created
   // them, rather than managing its own). Unlike /git-status, this is
   // deliberately NOT part of the sidebar's 4s live-refresh loop — the
-  // frontend only calls this when the GitPanel is opened (git-refs.ts's own
+  // frontend only calls this when Source Control is opened (git-refs.ts's own
   // doc comment on why). Same "widget just doesn't render" 204 degradation
   // as /git-status.
   app.get<{ Params: { id: string }; Querystring: { detail?: string } }>(
@@ -3509,7 +3509,7 @@ export async function projectsRoute(app: FastifyInstance) {
       if (!project) return reply.notFound();
 
       // Issue #442 — opt-in isMerged enrichment (extra base-resolution +
-      // `git branch --merged` spawns), set only by the GitPanel's own
+      // `git branch --merged` spawns), set only by Source Control's own
       // explicit fetch. The batch /git-refs route below calls this with no
       // `detail` param, so it keeps paying for exactly the one
       // for-each-ref spawn it always has.
@@ -3909,7 +3909,7 @@ export async function projectsRoute(app: FastifyInstance) {
     },
   );
 
-  // Issue #442 — GitPanel manual branch deletion. POST, not DELETE (a
+  // Issue #442 — Source Control manual branch deletion. POST, not DELETE (a
   // branch name can contain "/"). Same write-tier rate limit as git-fetch
   // above, rather than git-status's 30/min.
   const gitBranchDeleteBodySchema = {
@@ -3944,7 +3944,7 @@ export async function projectsRoute(app: FastifyInstance) {
       const { name, force } = request.body;
 
       // Task-branch guard (binding decision #5). Force always overrides —
-      // this is a UX safety net for the GitPanel's two-step confirm, not a
+      // this is a UX safety net for Source Control's two-step confirm, not a
       // security boundary: anyone with host access to this project can
       // already run `git branch -D` directly in a terminal session with no
       // confirmation at all, so a caller sending `force: true` on the very
@@ -4119,7 +4119,7 @@ export async function projectsRoute(app: FastifyInstance) {
     },
   );
 
-  // Issue #442 — GitPanel manual worktree removal. Validity gate is
+  // Issue #442 — Source Control manual worktree removal. Validity gate is
   // membership in `listWorktrees` (git-worktree.ts's removeListedWorktree),
   // not a path prefix — see that function's own doc comment.
   const gitWorktreeRemoveBodySchema = {
@@ -4194,7 +4194,7 @@ export async function projectsRoute(app: FastifyInstance) {
     },
   );
 
-  // Issue #442 — GitPanel "Prune stale" button: clears administrative
+  // Issue #442 — Source Control "Prune stale" button: clears administrative
   // metadata for worktrees whose directory is already gone (`git worktree
   // prune`). Never removes a worktree that still exists on disk.
   app.post<{ Params: { id: string } }>(

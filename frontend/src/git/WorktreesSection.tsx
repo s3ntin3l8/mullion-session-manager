@@ -111,7 +111,7 @@ export function WorktreesSection({
     }
   };
 
-  // Ported from GitPanel: an in-flight guard so a double click can't make two sessions.
+  // Ported from Source Control: an in-flight guard so a double click can't make two sessions.
   const openHere = async (path: string) => {
     if (opening.has(path)) return;
     setOpening((prev) => new Set(prev).add(path));

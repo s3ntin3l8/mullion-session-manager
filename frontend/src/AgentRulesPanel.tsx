@@ -26,7 +26,7 @@ function formatSize(bytes: number | null): string {
 }
 
 // A dockview panel (opened from the CommandPalette's Integrations section,
-// same pattern as GitPanel/GitHubPanel) showing every CLAUDE.md/AGENTS.md/
+// same pattern as GitHubPanel) showing every CLAUDE.md/AGENTS.md/
 // AGENTS.override.md/GEMINI.md target for a project — one row per (agent,
 // scope), grouped by agent. Deliberately a raw source editor, not a
 // structured "toggle individual rules" UI: tessera reached the same
@@ -38,7 +38,7 @@ function formatSize(bytes: number | null): string {
 // view.
 //
 // Fetched once on open, never polled — these files change rarely (same
-// "fetch once" precedent as GitPanel's branches/worktrees list, which cites
+// "fetch once" precedent as Source Control's branches/worktrees list, which cites
 // the same reasoning: unlike live git status, there's no tick-driven reason
 // to keep re-fetching).
 export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
@@ -68,7 +68,7 @@ export function AgentRulesPanel({ params }: { params: AgentRulesPanelParams }) {
         setLoadError(false);
       } catch (err) {
         if (cancelledRef?.current) return;
-        // Same "don't clear what's already shown" posture as GitPanel's own
+        // Same "don't clear what's already shown" posture as Source Control's own
         // fetchStatus — a transient failure keeps the last-known-good list
         // rather than blanking the panel. Only surfaces as an error state
         // if this is the very first fetch (targets is still undefined).

@@ -15,10 +15,17 @@ import { makeProject, makeSession, makeTask, makeWorkspace } from "../test/fixtu
 const triggerPanelHighlight = vi.fn();
 const setActiveWorkspaceId = vi.fn();
 const setViewMode = vi.fn();
+const openRightSidebarView = vi.fn();
 const startDevice = vi.fn();
 
 function storeState() {
-  return { triggerPanelHighlight, setActiveWorkspaceId, setViewMode, startDevice };
+  return {
+    triggerPanelHighlight,
+    setActiveWorkspaceId,
+    setViewMode,
+    openRightSidebarView,
+    startDevice,
+  };
 }
 
 vi.mock("../store/index.js", () => {
@@ -90,6 +97,7 @@ beforeEach(() => {
   triggerPanelHighlight.mockClear();
   setActiveWorkspaceId.mockClear();
   setViewMode.mockClear();
+  openRightSidebarView.mockClear();
   startDevice.mockReset();
   startDevice.mockResolvedValue(undefined);
 });
@@ -420,14 +428,13 @@ describe("usePanelOpener — onOpenTimeline", () => {
 });
 
 // One test per project-scoped panel kind — proves the config table
-// (usePanelOpener.ts's GITHUB_CONFIG/GIT_CONFIG/etc.) reaches
+// (usePanelOpener.ts's GITHUB_CONFIG/etc.) reaches
 // openOrFocusProjectPanel correctly. The open-or-focus/float-if-tiled
 // branching itself is panelUtils.test.ts's concern (openOrFocusProjectPanel
 // is exercised for real, not mocked, here).
 describe("usePanelOpener — project-scoped panel kinds", () => {
   it.each([
     ["onOpenGitHub", "github", "GitHub: project-alpha"],
-    ["onOpenGit", "git", "Git: project-alpha"],
     ["onOpenBrowser", "browser", "Preview: project-alpha"],
   ] as const)("%s opens a %s-<projectId> panel titled %s", (fnName, kind, title) => {
     const api = mockDockviewApi();
@@ -444,6 +451,24 @@ describe("usePanelOpener — project-scoped panel kinds", () => {
       }),
     );
     expect(setSidebarOpen).toHaveBeenCalledWith(false);
+  });
+
+  it("onOpenGit opens the Source Control sidebar view, not a dock panel", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+
+    result.current.onOpenGit(1);
+
+    expect(openRightSidebarView).toHaveBeenCalledWith("git", 1);
+    expect(api.addPanel).not.toHaveBeenCalled();
+    expect(setViewMode).toHaveBeenCalledWith("list");
+    expect(setSidebarOpen).toHaveBeenCalledWith(false);
+  });
+
+  it("onOpenGit works without a dockviewApi (the sidebar needs none)", () => {
+    const { result } = setup({ dockviewApi: null });
+    result.current.onOpenGit(1);
+    expect(openRightSidebarView).toHaveBeenCalledWith("git", 1);
   });
 
   // Agent Rules / Briefing / Scaffold / Dock / Skills are tabs of one Project
@@ -594,7 +619,6 @@ describe("usePanelOpener — project-scoped panel kinds", () => {
 
   it.each([
     "onOpenGitHub",
-    "onOpenGit",
     "onOpenAgentRules",
     "onOpenDockConfig",
     "onOpenSkills",
@@ -719,7 +743,6 @@ describe("usePanelOpener — leaveTaskView (issue: no way back from Tasks)", () 
 
   it.each([
     "onOpenGitHub",
-    "onOpenGit",
     "onOpenAgentRules",
     "onOpenDockConfig",
     "onOpenSkills",
@@ -733,7 +756,6 @@ describe("usePanelOpener — leaveTaskView (issue: no way back from Tasks)", () 
 
   it.each([
     "onOpenGitHub",
-    "onOpenGit",
     "onOpenAgentRules",
     "onOpenDockConfig",
     "onOpenSkills",

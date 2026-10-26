@@ -135,7 +135,7 @@ export function buildPaletteCommands({
       {
         id: "git",
         title: "Git",
-        subtitle: "Branch, status, and changed files",
+        subtitle: "Source Control: branch, changes, and worktrees",
         icon: GitBranchIcon,
         keywords: ["git", "branch", "changes", "diff"],
         placement: "top",

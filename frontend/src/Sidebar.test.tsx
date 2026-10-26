@@ -1034,7 +1034,7 @@ describe("Sidebar git pull kebab entry", () => {
       expect(pullProjectGit).toHaveBeenCalledWith(PROJECT.id);
     });
     // Hermes review, PR #1366 — other pull surfaces invalidate refs too
-    // (SourceControlSection.tsx:254, GitPanel.tsx:280), so without this
+    // (SourceControlSection.tsx:254, the Source Control view), so without this
     // call branch labels and diff stats stay stale until their own poll.
     expect(refreshGitStatuses).toHaveBeenCalled();
     expect(refreshGitRefs).toHaveBeenCalledWith([PROJECT.id]);

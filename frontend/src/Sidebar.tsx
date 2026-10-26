@@ -139,7 +139,7 @@ export interface SidebarProps {
   // task-detail panel), not a second definition of "blocked".
   onOpenTask: (task: Task) => void;
   // Issue #433 scope B — SourceControlSection's own "Open Git Panel" action.
-  // App.tsx already had this callback (for GitPanel's own command-palette
+  // App.tsx already had this callback (for Source Control's own command-palette
   // entry, issue #76) but never threaded it down to Sidebar until now.
   onOpenGit: (projectId: number) => void;
   // Phase 4 (issue #1205's plan, Gap F) — "Scaffold Mullion" used to be
@@ -1129,11 +1129,11 @@ function ProjectHeader({
 
   // Ahead/behind sync badge (issue #433 scope A) — `behind` only advances on
   // a `git fetch`, so it's only ever as fresh as the last one (auto-fetch,
-  // or a manual Fetch from the GitPanel/Source Control section). The title's
+  // or a manual Fetch from the Source Control section). The title's
   // "as of last fetch" caveat is what keeps a stale `↓0` (auto-fetch off, or
   // a branch with no upstream, both of which report 0/0 the same way
-  // GitPanel's own ahead/behind row does) from silently reading as "you are
-  // up to date" — see GitPanel.tsx's own `> 0` guards for the same posture.
+  // Source Control's own ahead/behind row does) from silently reading as "you are
+  // up to date" — see Source Control's own `> 0` guards for the same posture.
   const gitSyncTitle = gitStatus
     ? `${gitStatus.branch}: ` +
       [
@@ -1195,7 +1195,7 @@ function ProjectHeader({
           server-side into gitStatus.ahead/behind and already polled via
           the same gitStatuses map as the dot above; just not surfaced
           here until now. Renders nothing at 0/0 (a synced branch, or one
-          with no upstream) — see GitPanel.tsx's own ahead/behind row for
+          with no upstream) — see Source Control's own ahead/behind row for
           the identical guard. */}
         {gitStatus && (gitStatus.ahead > 0 || gitStatus.behind > 0) && (
           <span
@@ -1310,7 +1310,7 @@ function ProjectHeader({
                     }
                     // Hermes review, PR #1366, line 1023 — other pull
                     // surfaces invalidate refs too (SourceControlSection.tsx:254
-                    // and GitPanel.tsx:280 both fire `refreshGitRefs` after a
+                    // and the Source Control view both fire `refreshGitRefs` after a
                     // successful pull). Without this call, branch labels and
                     // diff stats stay stale until their own poll tick lands.
                     // SourceControlSection also writes a fresh status

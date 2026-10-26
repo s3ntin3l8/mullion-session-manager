@@ -375,7 +375,7 @@ describe("SourceControlSection (issue #433 scope B)", () => {
     );
   });
 
-  it("Open Git Panel calls onOpenGit with the current project id", async () => {
+  it("Open Source Control calls onOpenGit with the current project id", async () => {
     const user = userEvent.setup();
     const onOpenGit = vi.fn();
     useDashboardStore.setState({
@@ -386,7 +386,7 @@ describe("SourceControlSection (issue #433 scope B)", () => {
     });
     render(<SourceControlSection onOpenGit={onOpenGit} />);
     await user.click(screen.getByText("Source Control"));
-    await user.click(screen.getByText("Open Git Panel"));
+    await user.click(screen.getByText("Open Source Control"));
 
     expect(onOpenGit).toHaveBeenCalledWith(PROJECT_A.id);
   });

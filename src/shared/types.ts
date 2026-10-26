@@ -163,7 +163,7 @@ export interface SkillInfo {
 export interface GitBranchInfo {
   name: string;
   isCurrent: boolean;
-  // Issue #442 — enrichment fields for the GitPanel's branch-management UI.
+  // Issue #442 — enrichment fields for Source Control's branch-management UI.
   // All optional: the same shape crosses the /internal/git-branches proxy,
   // so a new primary talking to an old agent (or the reverse) must degrade
   // rather than break (see the plan's binding decision #7).
@@ -181,7 +181,7 @@ export interface GitBranchInfo {
   lastCommitRelative?: string;
   /** Whether this branch is an ancestor of the resolved default base ref
    * (`git branch --merged`). Only computed when `listBranches` is called
-   * with `{ detail: true }` (the GitPanel's explicit `?detail=1` fetch).
+   * with `{ detail: true }` (Source Control's explicit `?detail=1` fetch).
    * Left `undefined` (not `false`) when detail wasn't requested, or when the
    * base-ref chain fell through to `HEAD` (no remote configured) — "merged
    * into whatever branch you're standing on" is a misleading thing to label

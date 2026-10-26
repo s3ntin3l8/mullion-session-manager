@@ -8,7 +8,7 @@ import path from "node:path";
 // separate from git-status.ts's fuller `git status` call: this is cheap
 // enough to run on every GET /api/projects — the endpoint already polled by
 // the live-refresh loop — while the richer dirty/ahead-behind/file-list view
-// (git-status.ts) is reserved for the GitPanel and gated behind its own
+// (git-status.ts) is reserved for Source Control and gated behind its own
 // cache.
 
 /**

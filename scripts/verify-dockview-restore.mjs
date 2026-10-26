@@ -29,6 +29,12 @@
  *      be gone. The blob carries a second, ordinary group alongside it, so
  *      "the legacy group is gone" cannot be confused with "the whole layout
  *      failed to restore".
+ *   6. A saved layout that still holds a retired dock `git-<projectId>`
+ *      panel (#1976) restores without being wiped: the `git` kind stays
+ *      registered as GitPanelRedirect, so fromJSON does not throw. The
+ *      restore sweep closes the panel (and its group with it), the Source Control right
+ *      sidebar view opens, the ordinary panel next to it survives, and the
+ *      re-saved layout no longer names the git panel.
  *
  * Steps 4 and 5 store the blobs through the demo's own Node-side API helper
  * rather than through the browser. The demo runs vite on one port and the
@@ -331,6 +337,73 @@ async function run(browser, demo, signal) {
       `panels=${JSON.stringify(resavedPanels)} groups=${JSON.stringify(
         resavedGroups.map((g) => g?.data?.id),
       )}`,
+    );
+
+    // --- 6. a retired dock `git` panel restores without wiping the layout ---
+    // Same shape as step 5, but the stale panel is a per-project `git-1` of
+    // the retired kind. Its kind must still be registered (GitPanelRedirect),
+    // otherwise fromJSON reverts the WHOLE layout and the kept group below
+    // would vanish with it. closeLegacyPanels sweeps it by component kind and
+    // opens Source Control for its project.
+    const gitLayout = {
+      ...legacyLayout,
+      grid: {
+        ...legacyLayout.grid,
+        root: {
+          ...legacyLayout.grid.root,
+          data: [
+            {
+              ...leaf,
+              data: { ...leaf.data, views: ["git-1"], activeView: "git-1", id: "git-group" },
+            },
+            legacyLayout.grid.root.data[1],
+          ],
+        },
+      },
+      panels: {
+        [sessionPanelId]: openLayout.panels[sessionPanelId],
+        "git-1": {
+          ...sessionPanel,
+          id: "git-1",
+          contentComponent: "git",
+          params: { projectId: 1 },
+        },
+      },
+    };
+
+    await page.evaluate(() => {
+      // Start from a closed drawer so "it opened" is the redirect's doing.
+      globalThis.localStorage.setItem("crs.rightSidebarOpen", "0");
+      globalThis.localStorage.setItem("crs.rightSidebarView", "files");
+    });
+    const patchesBeforeGit = autosaved.count;
+    await demo.api(`/api/workspaces/${workspaceId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ layout: gitLayout }),
+    });
+    await page.reload({ waitUntil: "networkidle" });
+    await page.waitForTimeout(4000);
+    const gitRestored = await boardState(page);
+    check(
+      "a restored retired 'git' panel closes and the layout around it survives",
+      gitRestored.groups === 1 && gitRestored.tabs === 1 && !gitRestored.emptyText,
+      JSON.stringify(gitRestored),
+    );
+    const sidebar = await page.evaluate(() => ({
+      view: globalThis.localStorage.getItem("crs.rightSidebarView"),
+      open: globalThis.localStorage.getItem("crs.rightSidebarOpen"),
+    }));
+    check(
+      "the redirect opens the Source Control right-sidebar view",
+      sidebar.view === "git" && sidebar.open === "1",
+      JSON.stringify(sidebar),
+    );
+    const gitResaved = await waitForPatch(autosaved, patchesBeforeGit, 15_000, signal);
+    const gitPanels = Object.keys(autosaved.body?.panels ?? {});
+    check(
+      "the sweep re-saves the layout without the retired git panel",
+      gitResaved && !gitPanels.includes("git-1") && gitPanels.length === 1,
+      `panels=${JSON.stringify(gitPanels)}`,
     );
   } finally {
     // The browser context leaks on the failure path otherwise; the demo still

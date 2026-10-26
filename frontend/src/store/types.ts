@@ -210,7 +210,7 @@ export interface SessionsSlice {
 
 export interface GitSlice {
   // Per-project git status (issue #76), keyed by project id — powers the
-  // GitPanel's own live re-poll plus the sidebar dirty badge and pane-tab
+  // Source Control's own live re-poll plus the sidebar dirty badge and pane-tab
   // branch label's dirty ("*") marker. `null` means "fetched, not
   // applicable" (not a repo, or an unreachable remote host); a missing key
   // means "not fetched yet" (e.g. right after a project is created, before

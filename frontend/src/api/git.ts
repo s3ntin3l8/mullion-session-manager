@@ -54,7 +54,7 @@ export const gitApi = {
   // undefined for the 204 "not applicable" response (see src/shared/types.ts's
   // GitStatus). `opts.fresh` (issue #433, Hermes review on PR #506) bypasses the
   // backend's ~5s git-status cache — pass it only for an explicit user
-  // "Fetch" action (SourceControlSection, GitPanel), never the 4s
+  // "Fetch" action (SourceControlSection), never the 4s
   // live-refresh poll, which should keep benefiting from that cache.
   getProjectGitStatus: (projectId: number, opts: { fresh?: boolean } = {}) =>
     request<GitStatus | undefined>(
@@ -137,7 +137,7 @@ export const gitApi = {
       method: "POST",
     }),
 
-  // Issue #442 — GitPanel manual branch deletion. `deleted: false` with a
+  // Issue #442 — Source Control manual branch deletion. `deleted: false` with a
   // `reason` is a normal 200 response (a git-level refusal), not a thrown
   // ApiError — only a genuine HTTP error (4xx/5xx) throws.
   deleteProjectGitBranch: (projectId: number, name: string, force?: boolean) =>
@@ -163,7 +163,7 @@ export const gitApi = {
       body: JSON.stringify(body),
     }),
 
-  // Issue #442 — GitPanel manual worktree removal. Same "refusal is a 200,
+  // Issue #442 — Source Control manual worktree removal. Same "refusal is a 200,
   // not a throw" shape as deleteProjectGitBranch above.
   removeProjectGitWorktree: (projectId: number, worktreePath: string, force?: boolean) =>
     request<RemoveWorktreeResult>(`/api/projects/${projectId}/git-worktree-remove`, {
@@ -171,7 +171,7 @@ export const gitApi = {
       body: JSON.stringify({ worktreePath, force }),
     }),
 
-  // Issue #442 — GitPanel "Prune stale" button (`git worktree prune` only —
+  // Issue #442 — Source Control "Prune stale" button (`git worktree prune` only —
   // never removes a worktree that still exists on disk).
   pruneProjectGitWorktrees: (projectId: number) =>
     request<{ pruned: boolean }>(`/api/projects/${projectId}/git-worktree-prune`, {
