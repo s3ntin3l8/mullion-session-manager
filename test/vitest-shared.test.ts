@@ -22,3 +22,33 @@ describe("vitest.shared maxWorkers", () => {
     expect(await load(undefined)).toBeGreaterThanOrEqual(2);
   });
 });
+
+// reporters is also computed at import time; GITHUB_ACTIONS is stubbed too,
+// since the suite itself may be running under GitHub Actions.
+async function loadReporters(ci: string, githubActions: string) {
+  vi.resetModules();
+  vi.stubEnv("CI", ci);
+  vi.stubEnv("GITHUB_ACTIONS", githubActions);
+  return (await import("../vitest.shared.js")).reporters;
+}
+
+describe("vitest.shared reporters", () => {
+  it("keeps Vitest's default reporters locally", async () => {
+    expect(await loadReporters("", "")).toBeUndefined();
+  });
+
+  it("adds a junit.xml report under CI", async () => {
+    expect(await loadReporters("true", "")).toEqual([
+      "default",
+      ["junit", { outputFile: "junit.xml" }],
+    ]);
+  });
+
+  it("keeps the github-actions annotations under GitHub Actions", async () => {
+    expect(await loadReporters("true", "true")).toEqual([
+      "default",
+      "github-actions",
+      ["junit", { outputFile: "junit.xml" }],
+    ]);
+  });
+});
