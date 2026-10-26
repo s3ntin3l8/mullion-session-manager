@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/index.js";
 import type { CloneHealth, GitBranchesResult, RepairOutcome, RepairPlan } from "../api/types.js";
 import { describeError } from "../lib/describeError.js";
@@ -114,14 +114,20 @@ export function useCloneHealth(projectId: number, onRepaired: () => void): Clone
   const { checking, health, healthError, repairPlan, repairOutcome, repairError, repairing } =
     state.projectId === projectId ? state : EMPTY_HEALTH;
 
-  const patch = useCallback(
-    (pid: number, fields: Partial<HealthFields>) =>
-      setState((prev) => ({
-        ...(prev.projectId === pid ? prev : { projectId: pid, ...EMPTY_HEALTH }),
-        ...fields,
-      })),
-    [],
-  );
+  // The project on screen NOW. A write for any other project is dropped, never
+  // adopted: adopting would replace the current project's verdict with a stale one.
+  const currentRef = useRef(projectId);
+  useEffect(() => {
+    currentRef.current = projectId;
+  }, [projectId]);
+
+  const patch = useCallback((pid: number, fields: Partial<HealthFields>) => {
+    if (pid !== currentRef.current) return;
+    setState((prev) => ({
+      ...(prev.projectId === pid ? prev : { projectId: pid, ...EMPTY_HEALTH }),
+      ...fields,
+    }));
+  }, []);
 
   const check = useCallback(async () => {
     patch(projectId, { ...EMPTY_HEALTH, checking: true });

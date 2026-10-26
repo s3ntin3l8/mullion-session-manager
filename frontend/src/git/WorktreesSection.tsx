@@ -46,13 +46,16 @@ export function WorktreesSection({
   const projectName = useDashboardStore((s) => s.projects.find((p) => p.id === projectId)?.name);
   const openRightSidebarPr = useDashboardStore((s) => s.openRightSidebarPr);
   const [pruning, setPruning] = useState(false);
-  const [pruneError, setPruneError] = useState<string | null>(null);
+  const [pruneErrorState, setPruneErrorState] = useState<{
+    projectId: number;
+    message: string;
+  } | null>(null);
+  const pruneError = pruneErrorState?.projectId === projectId ? pruneErrorState.message : null;
   const [opening, setOpening] = useState<ReadonlySet<string>>(new Set());
   const [rowErrors, setRowErrors] = useState<Record<string, RowError>>({});
   const [prevProjectId, setPrevProjectId] = useState(projectId);
   if (projectId !== prevProjectId) {
     setPrevProjectId(projectId);
-    setPruneError(null);
     setRowErrors({});
     setOpening(new Set());
   }
@@ -78,13 +81,13 @@ export function WorktreesSection({
 
   const pruneStale = async () => {
     setPruning(true);
-    setPruneError(null);
+    setPruneErrorState(null);
     try {
       await api.pruneProjectGitWorktrees(projectId);
       refreshGitEverywhere(projectId);
       onReload();
     } catch (err) {
-      setPruneError(describeError(err, "Prune failed — try again."));
+      setPruneErrorState({ projectId, message: describeError(err, "Prune failed — try again.") });
     } finally {
       setPruning(false);
     }

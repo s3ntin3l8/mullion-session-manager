@@ -998,4 +998,22 @@ describe("per-project and per-click state", () => {
     await userEvent.click(open);
     await waitFor(() => expect(createSession).toHaveBeenCalledTimes(2));
   });
+
+  it("a late health verdict for project A does not wipe project B's", async () => {
+    const settle: Array<(v: unknown) => void> = [];
+    m.postProjectGitHealth.mockImplementation(() => new Promise((r) => settle.push(r)) as never);
+    seed({
+      projects: [makeProject({ id: 1, cwd: "/repo" }), makeProject({ id: 2, cwd: "/other" })],
+    });
+    const { rerender } = renderView();
+    await ready();
+    await userEvent.click(screen.getByRole("button", { name: /Check clone health/ }));
+    rerender(<GitSidebarView projectId={2} actions={actions} />);
+    await ready();
+    await userEvent.click(screen.getByRole("button", { name: /Check clone health/ }));
+    await act(async () => settle[1]?.({ healthy: true, gitDir: "/b", timedOut: false }));
+    expect(await screen.findByText("This repository is healthy.")).toBeInTheDocument();
+    await act(async () => settle[0]?.({ healthy: false, gitDir: null, timedOut: false }));
+    expect(screen.getByText("This repository is healthy.")).toBeInTheDocument();
+  });
 });
