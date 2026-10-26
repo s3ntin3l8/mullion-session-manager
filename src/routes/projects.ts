@@ -25,7 +25,14 @@ import { previewPlacement } from "../services/placement.js";
 import { portFromUrl } from "../plugins/preview-proxy.js";
 import { resolveBackend } from "../services/session-backend.js";
 import type { GitHubRepoRef } from "../services/git-remote.js";
-import { resolveRepoRefResult } from "../services/host-git.js";
+import {
+  resolveHostGitCommit,
+  resolveHostGitCommitFile,
+  resolveHostGitLog,
+  resolveRepoRefResult,
+  type HostGitResult,
+  type HostHistoryValue,
+} from "../services/host-git.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { listExistingProjectRuleFileNames } from "../services/agent-rules.js";
 import {
@@ -3435,22 +3442,59 @@ export async function projectsRoute(app: FastifyInstance) {
     },
   );
 
-  // History for the right sidebar's Git view. Local hosts only (a remote
-  // host's git runs in its agent; a mirrored /internal/git-log is deferred
-  // — those projects get the same 204 "nothing to show" as other git
-  // widgets). `cwd` optionally scopes the query to one of the project's own
-  // worktrees; it is accepted only if `git worktree list` reports it, so it
-  // can never point git at an arbitrary directory.
+  // History for the right sidebar's Git view. A local project reads git
+  // directly; a remote one goes through the host agent's /internal/git-log,
+  // /git-commit and /git-commit-file (issue #1969), which re-validate the
+  // worktree on their side. `cwd` optionally scopes the query to one of the
+  // project's own worktrees; it is accepted only if `git worktree list`
+  // reports it, so it can never point git at an arbitrary directory.
   async function resolveGitLogCwd(
     project: typeof projects.$inferSelect,
     requestedCwd: string | undefined,
-  ): Promise<string | null | "forbidden"> {
-    if (project.hostId !== LOCAL_HOST_ID) return null;
+  ): Promise<string | "forbidden"> {
     if (requestedCwd === undefined || requestedCwd === project.cwd) return project.cwd;
+    if (project.hostId !== LOCAL_HOST_ID) return requestedCwd; // the agent validates it
     const worktrees = await listWorktrees(project.cwd);
     // Hand back git's own path for the match, never the request's string.
     const match = worktrees?.find((w) => w.path === requestedCwd);
     return match ? match.path : "forbidden";
+  }
+
+  // Runs a remote history read. Returns the value, or sends the reply: 204
+  // for an agent too old to have the route (same "nothing to show" as other
+  // git widgets), 503 when the host can't be reached, 400 for a worktree the
+  // agent refused. `undefined` in the return means "reply already sent".
+  async function remoteHistory<T>(
+    project: typeof projects.$inferSelect,
+    reply: FastifyReply,
+    call: () => Promise<HostGitResult<HostHistoryValue<T>>>,
+  ): Promise<{ value: T } | undefined> {
+    const result = await call();
+    if (!result.ok) {
+      if (result.reason === "unsupported") {
+        reply.code(204).send();
+      } else if (result.status !== undefined) {
+        // The agent answered with a 4xx (e.g. a cwd outside its
+        // PROJECTS_ROOTS, a 429): it is up, so say so rather than "unreachable".
+        app.log.warn(
+          { hostId: project.hostId, detail: result.detail },
+          "host rejected git history request",
+        );
+        reply.badGateway(result.detail);
+      } else {
+        app.log.warn(
+          { hostId: project.hostId, detail: result.detail },
+          "host unreachable, git history unavailable",
+        );
+        reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+      }
+      return undefined;
+    }
+    if (result.value.forbidden) {
+      reply.badRequest("cwd is not one of this project's worktrees");
+      return undefined;
+    }
+    return { value: result.value.value };
   }
 
   const gitLogRateLimit = { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } };
@@ -3465,10 +3509,6 @@ export async function projectsRoute(app: FastifyInstance) {
     if (!project) return reply.notFound();
     const cwd = await resolveGitLogCwd(project, request.query.cwd);
     if (cwd === "forbidden") return reply.badRequest("cwd is not one of this project's worktrees");
-    if (cwd === null) {
-      reply.code(204);
-      return;
-    }
     const skip = request.query.skip === undefined ? 0 : Number(request.query.skip);
     const limit = request.query.limit === undefined ? 100 : Number(request.query.limit);
     if (!Number.isInteger(skip) || skip < 0 || !Number.isInteger(limit) || limit < 1) {
@@ -3478,7 +3518,21 @@ export async function projectsRoute(app: FastifyInstance) {
     if (scope !== undefined && scope !== "all" && scope !== "head") {
       return reply.badRequest("scope must be all or head");
     }
-    const commits = await getCommitLog(cwd, { skip, limit, all: scope !== "head" });
+    let commits: Awaited<ReturnType<typeof getCommitLog>>;
+    if (project.hostId === LOCAL_HOST_ID) {
+      commits = await getCommitLog(cwd, { skip, limit, all: scope !== "head" });
+    } else {
+      const remote = await remoteHistory(project, reply, () =>
+        resolveHostGitLog(app, project.hostId, project.cwd, {
+          worktree: cwd === project.cwd ? undefined : cwd,
+          skip,
+          limit,
+          scope: scope === "head" ? "head" : "all",
+        }),
+      );
+      if (!remote) return reply;
+      commits = remote.value;
+    }
     if (!commits) {
       reply.code(204);
       return;
@@ -3498,11 +3552,22 @@ export async function projectsRoute(app: FastifyInstance) {
       const cwd = await resolveGitLogCwd(project, request.query.cwd);
       if (cwd === "forbidden")
         return reply.badRequest("cwd is not one of this project's worktrees");
-      if (cwd === null) {
-        reply.code(204);
-        return;
+      let detail: Awaited<ReturnType<typeof getCommitDetail>>;
+      if (project.hostId === LOCAL_HOST_ID) {
+        detail = await getCommitDetail(cwd, request.params.sha);
+      } else {
+        const remote = await remoteHistory(project, reply, () =>
+          resolveHostGitCommit(
+            app,
+            project.hostId,
+            project.cwd,
+            request.params.sha,
+            cwd === project.cwd ? undefined : cwd,
+          ),
+        );
+        if (!remote) return reply;
+        detail = remote.value;
       }
-      const detail = await getCommitDetail(cwd, request.params.sha);
       if (!detail) return reply.notFound("Commit not found");
       return detail;
     },
@@ -3522,11 +3587,23 @@ export async function projectsRoute(app: FastifyInstance) {
     if (!project) return reply.notFound();
     const cwd = await resolveGitLogCwd(project, request.query.cwd);
     if (cwd === "forbidden") return reply.badRequest("cwd is not one of this project's worktrees");
-    if (cwd === null) {
-      reply.code(204);
-      return;
+    let patch: string | null;
+    if (project.hostId === LOCAL_HOST_ID) {
+      patch = await getCommitFileDiff(cwd, request.params.sha, file);
+    } else {
+      const remote = await remoteHistory(project, reply, () =>
+        resolveHostGitCommitFile(
+          app,
+          project.hostId,
+          project.cwd,
+          request.params.sha,
+          file,
+          cwd === project.cwd ? undefined : cwd,
+        ),
+      );
+      if (!remote) return reply;
+      patch = remote.value;
     }
-    const patch = await getCommitFileDiff(cwd, request.params.sha, file);
     if (patch === null) return reply.notFound("Diff not available");
     return { patch };
   });

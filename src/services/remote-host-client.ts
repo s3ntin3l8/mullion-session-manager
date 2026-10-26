@@ -27,6 +27,7 @@ import { toGitStatusFailure, type GitStatusResult } from "./git-status.js";
 import type { SshAuthSockSource } from "./ssh-agent-socket.js";
 import type { GitBranchInfo, GitWorktreeInfo } from "./git-refs.js";
 import type { GitDiffStats } from "./git-diff.js";
+import type { CommitDetail, CommitLogEntry } from "./git-log.js";
 import type { UpdateStatus, ApplyUpdateBody } from "./update-apply.js";
 import { getHostRow, decryptToken } from "./host-registry.js";
 import {
@@ -1039,6 +1040,41 @@ export class RemoteHostClient {
   ): Promise<{ patch: string | null }> {
     let url = `/internal/git-file-diff?cwd=${encodeURIComponent(cwd)}&path=${encodeURIComponent(filePath)}`;
     if (baseRef) url += `&base=${encodeURIComponent(baseRef)}`;
+    return this.request(url);
+  }
+
+  /** Commit history (issue #1969) for a remote-hosted project's Git view —
+   * mirrors /internal/git-log. `worktree` scopes it to one of the project's
+   * worktrees; the agent answers `forbidden: true` when it isn't one. */
+  resolveGitLog(
+    cwd: string,
+    opts: { worktree?: string; skip: number; limit: number; scope: "all" | "head" },
+  ): Promise<{ commits: CommitLogEntry[] | null; forbidden?: boolean }> {
+    let url = `/internal/git-log?cwd=${encodeURIComponent(cwd)}&skip=${opts.skip}&limit=${opts.limit}&scope=${opts.scope}`;
+    if (opts.worktree) url += `&worktree=${encodeURIComponent(opts.worktree)}`;
+    return this.request(url);
+  }
+
+  /** One commit's message and changed files — mirrors /internal/git-commit. */
+  resolveGitCommit(
+    cwd: string,
+    sha: string,
+    worktree?: string,
+  ): Promise<{ detail: CommitDetail | null; forbidden?: boolean }> {
+    let url = `/internal/git-commit?cwd=${encodeURIComponent(cwd)}&sha=${encodeURIComponent(sha)}`;
+    if (worktree) url += `&worktree=${encodeURIComponent(worktree)}`;
+    return this.request(url);
+  }
+
+  /** One file's patch within a commit — mirrors /internal/git-commit-file. */
+  resolveGitCommitFile(
+    cwd: string,
+    sha: string,
+    filePath: string,
+    worktree?: string,
+  ): Promise<{ patch: string | null; forbidden?: boolean }> {
+    let url = `/internal/git-commit-file?cwd=${encodeURIComponent(cwd)}&sha=${encodeURIComponent(sha)}&path=${encodeURIComponent(filePath)}`;
+    if (worktree) url += `&worktree=${encodeURIComponent(worktree)}`;
     return this.request(url);
   }
 

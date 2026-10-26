@@ -1941,6 +1941,78 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  it("serves history, commit detail and a commit file diff from this host (issue #1969)", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-history-root-"));
+    const cwd = path.join(repoRoot, "real-repo");
+    fs.mkdirSync(cwd, { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() }).toString().trim();
+    git("init", "-b", "main");
+    fs.writeFileSync(path.join(cwd, "a.txt"), "one\n");
+    git("add", "-A");
+    git("commit", "-m", "first", "--no-verify");
+    const head = git("rev-parse", "HEAD");
+    git("worktree", "add", "-b", "wt-branch", path.join(repoRoot, "wt"));
+
+    const previousRoots = process.env.PROJECTS_ROOTS;
+    process.env.PROJECTS_ROOTS = repoRoot;
+    const app = await buildApp();
+    const get = (url: string) =>
+      app.inject({ method: "GET", url, headers: { authorization: `Bearer ${TOKEN}` } });
+    const q = encodeURIComponent(cwd);
+
+    const log = await get(`/internal/git-log?cwd=${q}&limit=5&scope=head`);
+    expect(log.statusCode).toBe(200);
+    expect(log.json().commits[0]).toEqual(expect.objectContaining({ sha: head, subject: "first" }));
+
+    const wtPath = git("worktree", "list", "--porcelain")
+      .split("\n")
+      .find((l) => l.endsWith("/wt"))!
+      .replace("worktree ", "");
+    const inWt = await get(`/internal/git-log?cwd=${q}&worktree=${encodeURIComponent(wtPath)}`);
+    expect(inWt.json().commits).toHaveLength(1);
+
+    const forbidden = await get(
+      `/internal/git-log?cwd=${q}&worktree=${encodeURIComponent("/tmp")}`,
+    );
+    expect(forbidden.statusCode).toBe(200);
+    expect(forbidden.json()).toEqual({ commits: null, forbidden: true });
+
+    expect((await get(`/internal/git-log?cwd=${q}&skip=-1`)).statusCode).toBe(400);
+    expect((await get(`/internal/git-log?cwd=${q}&scope=nope`)).statusCode).toBe(400);
+    expect((await get("/internal/git-log")).statusCode).toBe(400);
+
+    const commit = await get(`/internal/git-commit?cwd=${q}&sha=${head}`);
+    expect(commit.json().detail).toEqual(
+      expect.objectContaining({
+        sha: head,
+        files: [expect.objectContaining({ path: "a.txt" })],
+      }),
+    );
+    expect((await get(`/internal/git-commit?cwd=${q}&sha=zz`)).statusCode).toBe(400);
+    expect((await get(`/internal/git-commit?sha=${head}`)).statusCode).toBe(400);
+    const forbiddenCommit = await get(
+      `/internal/git-commit?cwd=${q}&sha=${head}&worktree=${encodeURIComponent("/tmp")}`,
+    );
+    expect(forbiddenCommit.json()).toEqual({ detail: null, forbidden: true });
+
+    const file = await get(`/internal/git-commit-file?cwd=${q}&sha=${head}&path=a.txt`);
+    expect(file.json().patch).toContain("+one");
+    expect(
+      (await get(`/internal/git-commit-file?cwd=${q}&sha=${head}&path=..%2Fx`)).statusCode,
+    ).toBe(400);
+    expect((await get(`/internal/git-commit-file?sha=${head}&path=a.txt`)).statusCode).toBe(400);
+    const forbiddenFile = await get(
+      `/internal/git-commit-file?cwd=${q}&sha=${head}&path=a.txt&worktree=${encodeURIComponent("/tmp")}`,
+    );
+    expect(forbiddenFile.json()).toEqual({ patch: null, forbidden: true });
+
+    process.env.PROJECTS_ROOTS = previousRoots;
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+    await app.close();
+  });
+
   it("resolves isMerged when ?detail=1 is set (issue #442)", async () => {
     const { execFileSync } = await import("node:child_process");
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-branches-detail-root-"));
