@@ -4,6 +4,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { afterAll } from "vitest";
 import { schema } from "../src/plugins/env.js";
+import { reapDtachMasters } from "./helpers/reap-dtach.js";
 import { scrubGitHookEnv } from "./helpers/git-hook-env.js";
 
 // Give every test file an isolated SQLite database so parallel workers never
@@ -154,6 +155,7 @@ if (!process.env.MULLION_TEST_REAL_HOME) {
 scrubGitHookEnv();
 
 afterAll(() => {
+  reapDtachMasters(tmpSessionsDir);
   fs.rmSync(tmpDb, { force: true });
   fs.rmSync(`${tmpDb}-wal`, { force: true });
   fs.rmSync(`${tmpDb}-shm`, { force: true });
