@@ -1709,12 +1709,14 @@ identical gap in the Conventional Commits title's seed path (`#761`'s
 **A red-CI fix keeps the approval.** When the task's verdict is approving and
 current (`hasCurrentApproval`: an approving verdict ingested for the current
 review session), the red-CI return passes `carryApproval`, so the worker's
-return sets `approvalCarriedAt` and skips the re-review — the same posture as
-the manual path, where a head that moves for a CI fix does not re-open an
-approval. The round is still spent (the cap bounds a CI loop). Auto-rebase is
-unchanged on purpose: it only ever runs for a genuine merge conflict, which
-rewrites code the reviewer saw, so it re-reviews; a clean "update branch"
-merge does not touch the review fields at all.
+return sets `approvalCarriedAt` and skips the re-review — as when a human fixes
+CI by hand on the PR, a head that moves for a CI fix does not re-open an
+approval. The round is still spent (the cap bounds a CI loop), and the CI prompt
+names the same re-review request file a suggestions round offers, for a fix
+that grew into a real change. Auto-rebase is unchanged on purpose: it only
+ever runs for a genuine merge conflict, which rewrites code the reviewer saw,
+so it re-reviews; a clean "update branch" merge does not touch the review
+fields at all.
 
 **New PR review comments return the task to the worker (`#757`).** A human
 leaving inline review comments directly on GitHub — not through Mullion's
@@ -1745,15 +1747,16 @@ regardless of which auth mode is configured.
 **Comments inside an approving review are suggestions, not a request for
 changes.** A comment's `pullRequestReview.state` is the state of the review it
 was posted as part of. When _every_ new comment in a round belongs to an
-`APPROVED` review, the round is a suggestions round instead of a `pr-comment`
-one: `reason: "suggestions"` with `buildSuggestionsPrompt` (comments rendered
-as the suggestions), no round spent, allowed on a task at its cap, and the
-Task Master approval carried (see [Review agent mechanics](#review-agent-mechanics))
-so the worker's return does not trigger a re-review. A reply under such a
-review is its own `COMMENTED` review, so it — and any batch that mixes the
-two — takes the ordinary `pr-comment` path below. The carry only holds when
-the task has a current approving verdict; without one the worker's return
-gets its usual review.
+`APPROVED` review **and the task's own verdict is currently approving**
+(`hasCurrentApproval`), the round is a suggestions round instead of a
+`pr-comment` one: `reason: "suggestions"` with `buildSuggestionsPrompt`
+(comments rendered as the suggestions), no round spent, allowed on a task at
+its cap, and the approval carried (see
+[Review agent mechanics](#review-agent-mechanics)) so the worker's return does
+not trigger a re-review. Requiring Task Master's own approval keeps an external
+`APPROVED` review from resuming a changes-requested task past its cap. A reply
+under such a review is its own `COMMENTED` review, so it — and any batch that
+mixes the two — takes the ordinary `pr-comment` path below.
 
 Shares `tasks.autoReturnRounds`/`maxAutoReturnRounds` with every other
 auto-return trigger (`reason: "pr-comment"`). Once the cap is spent, one PR

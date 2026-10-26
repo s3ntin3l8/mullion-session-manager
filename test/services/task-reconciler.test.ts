@@ -4836,6 +4836,25 @@ describe("reconcileTasks", () => {
           await app.close();
         });
 
+        it("is an ordinary round when Task Master's own verdict is not an approval — an external APPROVED review can't resume a changes-requested task past its cap", async () => {
+          const app = await buildApp();
+          const { taskId } = await createPrCommentCandidate(app, {
+            lastReviewVerdict: "changes-requested",
+            autoReturnRounds: DEFAULT_MAX_AUTO_RETURN_ROUNDS,
+          });
+          mockThreads(approvedThread());
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, taskId);
+          expect(row.status).toBe("reviewing");
+          expect(row.autoReturnRounds).toBe(DEFAULT_MAX_AUTO_RETURN_ROUNDS);
+          expect(row.approvalCarriedAt).toBeNull();
+          expect(row.needsHumanReason).toBe("cap");
+
+          await app.close();
+        });
+
         it("treats a batch that also holds an ordinary comment as a normal round", async () => {
           const app = await buildApp();
           const { taskId } = await createPrCommentCandidate(app, { lastReviewVerdict: "approved" });

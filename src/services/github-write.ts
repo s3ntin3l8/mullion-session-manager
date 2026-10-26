@@ -1264,6 +1264,10 @@ export async function markPullRequestReadyForReview(
   );
 }
 
+/** GitHub's `PullRequestReviewState`. */
+export type PrReviewState =
+  "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED" | "PENDING";
+
 export interface PrReviewThreadComment {
   /** Null for a deleted/ghost account — GitHub itself allows this. */
   author: string | null;
@@ -1278,7 +1282,7 @@ export interface PrReviewThreadComment {
    * CHANGES_REQUESTED, COMMENTED, DISMISSED, PENDING), or null when GitHub
    * reports none — a reply in a thread belongs to its own review, so a human
    * answering under an approval reads COMMENTED, not APPROVED. */
-  reviewState: string | null;
+  reviewState: PrReviewState | null;
 }
 
 export interface PrReviewThread {
@@ -1361,7 +1365,7 @@ export async function fetchPullRequestReviewThreads(
                 path: string | null;
                 line: number | null;
                 body: string;
-                pullRequestReview: { state: string } | null;
+                pullRequestReview: { state: PrReviewState } | null;
               }>;
             };
           }>;

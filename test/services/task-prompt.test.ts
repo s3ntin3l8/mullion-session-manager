@@ -6,6 +6,7 @@ import {
   buildReviewPrompt,
   buildReviewFeedbackPrompt,
   buildSuggestionsPrompt,
+  buildCiFailurePrompt,
   deriveVerdict,
   isApprovingVerdict,
   taskRereviewRequestPath,
@@ -1389,6 +1390,27 @@ describe("buildSuggestionsPrompt", () => {
 
   it("tells the worker how to ask for a real review", () => {
     expect(out).toContain("/sessions/task-1.rereview.99");
+  });
+});
+
+describe("buildCiFailurePrompt", () => {
+  const base = {
+    task: TASK,
+    branchName: "mullion/task-1",
+    worktreePath: BASE.worktreePath,
+    budgetMinutes: 60,
+    agentCommand: "claude",
+    ci: { headSha: "abc1234", status: "failure" as const, runs: [] },
+  };
+
+  it("offers the re-review request file only when the approval is carried through the fix", () => {
+    expect(buildCiFailurePrompt(base)).not.toContain("second pair of eyes");
+    const out = buildCiFailurePrompt({
+      ...base,
+      rereviewRequestPath: "/sessions/task-1.rereview.9",
+    });
+    expect(out).toContain("already reviewed and approved");
+    expect(out).toContain("/sessions/task-1.rereview.9");
   });
 });
 

@@ -2852,15 +2852,14 @@ async function attemptReturnRedCiToWorker(
   // Issue #1724 — the worker these notes go back to runs on the host that
   // holds its worktree, so its sessions dir is resolved there.
   const workerHostId = resolveTaskWorkerHost(app, task);
+  const sessionsDir = await resolveSessionsDirWithFallback(app, resolveBackend(app, workerHostId), {
+    taskId: task.id,
+    hostId: workerHostId,
+  });
   const commitTitlePath = project.conventionalCommitTitles
-    ? taskCommitTitlePath(
-        await resolveSessionsDirWithFallback(app, resolveBackend(app, workerHostId), {
-          taskId: task.id,
-          hostId: workerHostId,
-        }),
-        task.id,
-      )
+    ? taskCommitTitlePath(sessionsDir, task.id)
     : undefined;
+  const carryApproval = hasCurrentApproval(task);
   // #939/#1016 — resolved once per spawn, fail-open — see
   // task-issue-context.ts's own doc comment.
   const issueContext = await resolveTaskIssueContextSafe(app, task, project);
@@ -2877,15 +2876,25 @@ async function attemptReturnRedCiToWorker(
     ci: { headSha: current.headSha, status: current.status, runs: current.runs },
     commitTitlePath,
     agentCommand: task.agentCommand,
+    rereviewRequestPath:
+      carryApproval && task.lastReviewVerdictAt
+        ? taskRereviewRequestPath(
+            sessionsDir,
+            task.id,
+            rereviewRequestKey(task.lastReviewVerdictAt),
+          )
+        : undefined,
   });
   // A fix for a red check moves the head but does not make the reviewed work
-  // any less approved — same as on the manual path, where nothing re-reviews
-  // an approval because the head moved. The round is still spent (the cap
-  // bounds a CI loop); only the re-review is skipped.
+  // any less approved — the same way a human fixing CI by hand on the PR
+  // would not re-open an approval. The round is still spent (the cap bounds
+  // a CI loop); only the re-review is skipped. A worker whose fix grew into a
+  // real change can ask for one the way a suggestions round can (the prompt
+  // names the file).
   await autoReturnTask(app, task, project, {
     reason: "ci",
     seedPrompt: prompt,
-    carryApproval: hasCurrentApproval(task),
+    carryApproval,
   });
   return true;
 }
@@ -3007,10 +3016,15 @@ async function attemptReturnPrCommentsToWorker(
 
   // Comments a reviewer posted INSIDE an approving review are suggestions, not
   // a request for changes: apply them once, spend no round, and let the
-  // approval stand (the same rule as an approved Task Master review). A reply
-  // under an approval belongs to its own COMMENTED review, so it — and any
-  // batch mixing the two — takes the ordinary path below.
-  const approvedBatch = newComments.every((c) => c.reviewState === "APPROVED");
+  // approval stand — but only on a task Task Master itself currently
+  // approves (`hasCurrentApproval`, the rule an approved-with-suggestions
+  // round needs too). Otherwise an external APPROVED review could resume a
+  // changes-requested task past its cap, and the worker would be told nobody
+  // reviews a round that the return gate does re-review. A reply under an
+  // approval belongs to its own COMMENTED review, so it — and any batch
+  // mixing the two — takes the ordinary path below.
+  const approvedBatch =
+    hasCurrentApproval(task) && newComments.every((c) => c.reviewState === "APPROVED");
 
   const maxRounds = resolveMaxAutoReturnRounds(project, resolvedTaskMaster.maxAutoReturnRounds);
   if (!approvedBatch && task.autoReturnRounds >= maxRounds) {
@@ -3630,7 +3644,7 @@ export async function autoReturnTask(
     .set({
       status: "in_progress",
       autoReturnRounds: roundAfter,
-      approvalCarriedAt: opts.carryApproval || !spendsRound ? new Date() : null,
+      approvalCarriedAt: (opts.carryApproval ?? false) || !spendsRound ? new Date() : null,
       lastAutoReturnReason: opts.reason,
       // Issue #1038 — every caller of autoReturnTask already gated on
       // !capReached, so this is null already in every designed path; clear
