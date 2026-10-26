@@ -446,8 +446,9 @@ export function StorageSection() {
                 <span className="settings-info-key">
                   {candidate.projectName} / {candidate.slug}
                 </span>
-                {/* The full path, not just a tooltip: deleting by hand is the only remedy. */}
-                <span className="settings-info-value">
+                {/* The full path, on screen and in a tooltip (the value cell truncates
+                    with an ellipsis): deleting by hand is the only remedy. */}
+                <span className="settings-info-value" title={candidate.path}>
                   <code>{candidate.path}</code> · {formatBytes(candidate.bytes)}
                 </span>
               </div>

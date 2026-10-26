@@ -801,6 +801,8 @@ describe("Settings -> Storage", () => {
       expect(value).toHaveTextContent("2.0 GiB");
       // The path is on screen, not only in a tooltip: it's what gets deleted by hand.
       expect(value).toHaveTextContent("/p/.wt/feat");
+      // ...and in a tooltip, since the cell truncates a long path.
+      expect(value).toHaveAttribute("title", "/p/.wt/feat");
       expect(screen.getByText(/git doesn't know \(not removed\)/)).toBeInTheDocument();
       expect(screen.getByText(/cleanup leaves them alone/)).toBeInTheDocument();
       expect(
