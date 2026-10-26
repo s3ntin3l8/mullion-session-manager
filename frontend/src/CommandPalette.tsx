@@ -20,9 +20,13 @@ import type { PaletteCommand } from "./paletteCommands.js";
 import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
 import { describeError } from "./lib/describeError.js";
 import { WorktreeOptions } from "./command-palette/WorktreeOptions.js";
-import { useFocusTrap } from "./hooks/useFocusTrap.js";
+import { useFocusTrap, isVisible } from "./hooks/useFocusTrap.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import { useDockUnavailableReason } from "./lib/useDockUnavailableReason.js";
+import {
+  ACTIVE_TERMINAL_FOCUS_SELECTOR,
+  WORKSPACE_FOCUS_FALLBACK_SELECTOR,
+} from "./paletteFocusTargets.js";
 import { ModelSelect } from "./settings/ModelPicker.js";
 import {
   commandHasModelFlag,
@@ -47,6 +51,22 @@ const SOURCE_LABEL: Record<Launcher["kind"], string | null> = {
   task: "tasks.json",
   custom: ".crs/actions.json",
 };
+
+// A workspace-switch focus move is scheduled for the tick after close so a
+// pane the layout restore focuses can win, and so the active workspace row
+// has committed. Passive effect cleanups run before that macrotask, so the
+// closing instance cannot keep the timer itself — clearing it there would
+// swallow the move. It re-arms this module-level timer on unmount; the next
+// palette mount cancels it, which is the reopen that must not have focus
+// stolen out from under its own initial focus.
+let deferredWorkspaceFocusTimer: ReturnType<typeof setTimeout> | null = null;
+
+function cancelDeferredWorkspaceFocus() {
+  if (deferredWorkspaceFocusTimer !== null) {
+    clearTimeout(deferredWorkspaceFocusTimer);
+    deferredWorkspaceFocusTimer = null;
+  }
+}
 
 // Expands Settings -> Session management's naming-pattern tokens
 // ({agent} {project} {n}) into a concrete session name at launch time — see
@@ -290,16 +310,16 @@ export function CommandPalette({
   // that gap (U9) and is why closeSettings/clearPalette live there, not
   // here).
   //
-  // suppressRestore(): almost every action in this palette closes it by ALSO
-  // opening something else (a launched session, an existing session/
-  // workspace, a GitHub/Git/Skills/Dock panel, a browser tab, Settings'
-  // Integrations section) — each of those moves focus to whatever it opened
-  // (a terminal pane per PR13/U7, a Settings modal, ...), and without this
-  // the trap's own restore-on-close effect would win the race and snap focus
-  // back to whatever triggered the palette right after. `closeAfterAction`
-  // below is the one path that does; the Escape key and the backdrop click
-  // are the only two that close WITHOUT opening anything, so they call
-  // `onClose` directly and get the normal restore-to-trigger behavior.
+  // suppressRestore(): only for an action that moves focus on purpose
+  // (launching or opening a session focuses the terminal, per PR13/U7;
+  // Settings, a blank preview's address bar, and the external-file path
+  // field focus themselves). Without it, this trap's restore-on-close
+  // would win the race and snap back to the opener. Everything else —
+  // switching workspace, opening the task board, toggling the right
+  // sidebar, opening a panel that doesn't take focus — must NOT suppress,
+  // or unmounting this dialog drops focus on <body> and the next Tab
+  // starts at the top of the document. Escape and the backdrop click
+  // already call `onClose` directly and get the normal restore.
   //
   // Mobile/tablet touch fix — `initialFocusRef: inputRef` (unconditionally,
   // before this change) auto-raised the on-screen keyboard the instant this
@@ -314,13 +334,111 @@ export function CommandPalette({
   // any other input — this only changes what grabs focus on OPEN.
   const isCoarsePointer = useCoarsePointer();
   const modalRef = useRef<HTMLDivElement>(null);
-  const { onKeyDown: onTrapKeyDown, suppressRestore } = useFocusTrap({
+  const {
+    onKeyDown: onTrapKeyDown,
+    suppressRestore,
+    restoreTarget,
+  } = useFocusTrap({
     active: true,
     containerRef: modalRef,
     initialFocusRef: isCoarsePointer ? modalRef : inputRef,
   });
-  const closeAfterAction = () => {
+  // The workspace-switch tick. Lives on a ref so unmount can clear it and
+  // re-arm `deferredWorkspaceFocusTimer` (see that binding) — a stale tick
+  // after this palette opens again would move focus off the new input.
+  const workspaceFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const workspaceFocusRunRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    cancelDeferredWorkspaceFocus();
+    return () => {
+      const pending = workspaceFocusRunRef.current;
+      if (workspaceFocusTimerRef.current !== null) {
+        clearTimeout(workspaceFocusTimerRef.current);
+        workspaceFocusTimerRef.current = null;
+      }
+      workspaceFocusRunRef.current = null;
+      if (!pending) return;
+      deferredWorkspaceFocusTimer = window.setTimeout(() => {
+        deferredWorkspaceFocusTimer = null;
+        pending();
+      }, 0);
+    };
+  }, []);
+  const scheduleWorkspaceFocus = (run: () => void) => {
+    cancelDeferredWorkspaceFocus();
+    if (workspaceFocusTimerRef.current !== null) {
+      clearTimeout(workspaceFocusTimerRef.current);
+    }
+    workspaceFocusRunRef.current = run;
+    workspaceFocusTimerRef.current = window.setTimeout(() => {
+      workspaceFocusTimerRef.current = null;
+      const pending = workspaceFocusRunRef.current;
+      workspaceFocusRunRef.current = null;
+      pending?.();
+    }, 0);
+  };
+  // `movesFocus` — see the comment above. Default true: the launch and
+  // open-session paths do move focus, and they're the common call.
+  const closeAfterAction = (movesFocus = true) => {
+    if (movesFocus) suppressRestore();
+    onClose();
+  };
+  // A workspace switch doesn't focus anything. The trap's restore is the
+  // right landing spot when the opener survives (the toolbar button, a
+  // sidebar control). It isn't when the opener sits in `.dockview-container`:
+  // the layout restore that follows this close clears that grid, so a
+  // restore there unmounts a moment later and focus falls through to
+  // <body>. The grid check is a prediction — that node is still connected
+  // on this tick. `handleSelectWorkspace` also closes the mobile sidebar,
+  // which can unmount an opener that was NOT in the grid; that only shows
+  // up as `!isConnected` after the commit, so a node that looked alive is
+  // checked again on the deferred tick and treated as gone. Aim at the new
+  // workspace's active pane, or the sidebar row that now marks it — both
+  // stay in the tab order — and don't let the trap fight that. Deferred a
+  // tick so a pane the restore itself focuses (TerminalPane on becoming
+  // active) wins, and so the row's active marker has committed.
+  const placeFocusAfterWorkspaceSwitch = () => {
+    const active = document.activeElement;
+    const stillInPalette = !!active && !!modalRef.current?.contains(active);
+    if (active && active !== document.body && !stillInPalette) return;
+    if (!isCoarsePointer) {
+      const pane = document.querySelector<HTMLElement>(ACTIVE_TERMINAL_FOCUS_SELECTOR);
+      if (pane && isVisible(pane)) {
+        pane.focus();
+        return;
+      }
+    }
+    const rows = document.querySelectorAll<HTMLElement>(WORKSPACE_FOCUS_FALLBACK_SELECTOR);
+    for (const row of rows) {
+      if (isVisible(row)) {
+        row.focus();
+        return;
+      }
+    }
+  };
+  const closeAfterWorkspaceSwitch = () => {
+    const opener = restoreTarget();
+    // <body> is what you get when nothing was focused (⌘K from a blur) —
+    // restoring there is the bug, not a landing spot.
+    const openerLooksAlive =
+      !!opener &&
+      opener.isConnected &&
+      opener !== document.body &&
+      opener !== document.documentElement &&
+      !opener.closest(".dockview-container");
+    if (openerLooksAlive) {
+      // Schedule before onClose: a caller that unmounts synchronously (App
+      // unmounts on the following commit; tests sometimes unmount inside
+      // onClose) must still find this tick to clear and re-arm.
+      scheduleWorkspaceFocus(() => {
+        if (opener.isConnected) return;
+        placeFocusAfterWorkspaceSwitch();
+      });
+      onClose();
+      return;
+    }
     suppressRestore();
+    scheduleWorkspaceFocus(placeFocusAfterWorkspaceSwitch);
     onClose();
   };
 
@@ -530,6 +648,9 @@ export function CommandPalette({
         creatingWorkspaceRef.current = false;
       });
   };
+  const focusTakingCommandIds = new Set(
+    commands.filter((command) => command.movesFocus).map((command) => command.id),
+  );
   const runCommand = (command: PaletteCommand) => {
     // `.run()` is the behaviour, including opening the name step.
     // `prompt` only keeps the palette open and clears the box so the
@@ -540,7 +661,7 @@ export function CommandPalette({
       inputRef.current?.focus();
       return;
     }
-    closeAfterAction();
+    closeAfterAction(focusTakingCommandIds.has(command.id));
   };
   const activateCommand = (command: PaletteCommand) => {
     if (command.drillIn) {
@@ -915,7 +1036,7 @@ export function CommandPalette({
                   closeAfterAction();
                 } else if (picked.type === "workspace") {
                   selectWorkspace(picked.workspace.id);
-                  closeAfterAction();
+                  closeAfterWorkspaceSwitch();
                 } else if (picked.type === "command") {
                   activateCommand(picked.command);
                 } else {
@@ -1241,7 +1362,7 @@ export function CommandPalette({
                       onMouseEnter={() => setSelectedIndex(absoluteIndex)}
                       onClick={() => {
                         selectWorkspace(workspace.id);
-                        closeAfterAction();
+                        closeAfterWorkspaceSwitch();
                       }}
                     >
                       <span

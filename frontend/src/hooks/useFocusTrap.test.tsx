@@ -297,4 +297,84 @@ describe("useFocusTrap", () => {
     await user.click(screen.getByText("open"));
     expect(screen.getByText("visible")).toHaveFocus();
   });
+
+  // Same shape as display:none, for `visibility: hidden`. The closed sidebar
+  // drawer uses visibility (not display) so its virtualizer keeps a height;
+  // a focus trap that ignores it would land inside that drawer.
+  it("filters visibility:hidden descendants out of both the initial focus target and the Tab trap", async () => {
+    function HarnessWithVisibilityHidden() {
+      const [active, setActive] = useState(false);
+      const containerRef = useRef<HTMLDivElement>(null);
+      const { onKeyDown } = useFocusTrap({ active, containerRef });
+      return (
+        <div>
+          <button onClick={() => setActive(true)}>open</button>
+          {active && (
+            <div ref={containerRef} onKeyDown={onKeyDown}>
+              <button style={{ visibility: "hidden" }}>hidden-first</button>
+              <button>visible</button>
+              <button style={{ visibility: "hidden" }}>hidden-last</button>
+            </div>
+          )}
+        </div>
+      );
+    }
+    const user = userEvent.setup();
+    render(<HarnessWithVisibilityHidden />);
+    await user.click(screen.getByText("open"));
+    expect(screen.getByText("visible")).toHaveFocus();
+    await user.tab();
+    expect(screen.getByText("visible")).toHaveFocus();
+  });
+
+  it("filters a visibility:hidden ANCESTOR out too, not just an element's own visibility", async () => {
+    function HarnessWithHiddenVisibilityAncestor() {
+      const [active, setActive] = useState(false);
+      const containerRef = useRef<HTMLDivElement>(null);
+      const { onKeyDown } = useFocusTrap({ active, containerRef });
+      return (
+        <div>
+          <button onClick={() => setActive(true)}>open</button>
+          {active && (
+            <div ref={containerRef} onKeyDown={onKeyDown}>
+              <div style={{ visibility: "hidden" }}>
+                <button>hidden-inside-hidden-wrapper</button>
+              </div>
+              <button>visible</button>
+            </div>
+          )}
+        </div>
+      );
+    }
+    const user = userEvent.setup();
+    render(<HarnessWithHiddenVisibilityAncestor />);
+    await user.click(screen.getByText("open"));
+    expect(screen.getByText("visible")).toHaveFocus();
+  });
+
+  // `visibility` inherits, but a descendant may opt back in. That child is
+  // actually shown; treating any hidden ancestor as fatal would skip it.
+  it("still focuses a descendant that opts back in with visibility:visible", async () => {
+    function HarnessWithVisibilityOverride() {
+      const [active, setActive] = useState(false);
+      const containerRef = useRef<HTMLDivElement>(null);
+      const { onKeyDown } = useFocusTrap({ active, containerRef });
+      return (
+        <div>
+          <button onClick={() => setActive(true)}>open</button>
+          {active && (
+            <div ref={containerRef} onKeyDown={onKeyDown}>
+              <div style={{ visibility: "hidden" }}>
+                <button style={{ visibility: "visible" }}>opted-back-in</button>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+    const user = userEvent.setup();
+    render(<HarnessWithVisibilityOverride />);
+    await user.click(screen.getByText("open"));
+    expect(screen.getByText("opted-back-in")).toHaveFocus();
+  });
 });

@@ -24,6 +24,11 @@ type CommandIcon = ComponentType<{ size?: number; style?: CSSProperties }>;
 // can match them against a query.
 export interface PaletteCommand {
   id: string;
+  // The opener takes focus itself after the palette closes — Settings' trap,
+  // a blank preview's address bar, the external-file path field. The palette
+  // derives its suppress-restore set from this flag, so a command that
+  // autofocuses cannot be added without being included.
+  movesFocus?: boolean;
   title: string;
   subtitle: string;
   icon: CommandIcon;
@@ -221,6 +226,7 @@ export function buildPaletteCommands({
       },
       {
         id: "external-file",
+        movesFocus: true,
         title: "Open file by path",
         subtitle: "View an agent's plan or other readable file outside the project",
         icon: FileTextIcon,
@@ -266,6 +272,7 @@ export function buildPaletteCommands({
   commands.push(
     {
       id: "integrations-settings",
+      movesFocus: true,
       title: "Manage integrations…",
       subtitle: "Settings → Integrations",
       icon: GitHubIcon,
@@ -275,6 +282,7 @@ export function buildPaletteCommands({
     },
     {
       id: "blank-browser",
+      movesFocus: true,
       title: "New preview tab",
       subtitle: "Embed any external site — type an address directly",
       icon: GlobeIcon,
