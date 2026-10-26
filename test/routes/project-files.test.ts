@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
+import http from "node:http";
+import { Readable } from "node:stream";
 import { execFileSync } from "node:child_process";
 import { closeDb } from "../../src/db/client.js";
 import { sessions } from "../../src/db/schema.js";
@@ -21,6 +23,45 @@ function uniqueSessionsDir(): string {
 }
 
 const { buildApp } = await import("../../src/app.js");
+
+// A client still sending a large body must SEE the refusal, not a reset.
+async function postMidUpload(
+  app: Awaited<ReturnType<typeof buildApp>>,
+  urlPath: string,
+  declaredLength: number,
+): Promise<{ status?: number; error?: string }> {
+  await app.listen({ port: 0, host: "127.0.0.1" });
+  const address = app.server.address();
+  if (address === null || typeof address === "string") throw new Error("no address");
+  return new Promise((resolve) => {
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port: address.port,
+        path: urlPath,
+        method: "POST",
+        headers: {
+          "content-type": "application/octet-stream",
+          "content-length": String(declaredLength),
+        },
+      },
+      (res) => {
+        res.resume();
+        resolve({ status: res.statusCode });
+        req.destroy();
+      },
+    );
+    req.on("error", (err) => resolve({ error: (err as NodeJS.ErrnoException).code }));
+    // keep the body coming well after the server has made up its mind
+    let sent = 0;
+    const pump = setInterval(() => {
+      if (sent >= declaredLength || req.destroyed) return clearInterval(pump);
+      const chunk = Buffer.alloc(Math.min(64 * 1024, declaredLength - sent));
+      sent += chunk.length;
+      req.write(chunk);
+    }, 5);
+  });
+}
 
 describe("project-files routes", () => {
   let projectCwd: string;
@@ -500,6 +541,176 @@ describe("project-files routes", () => {
     }
   });
 
+  describe("raw transfer", () => {
+    const upload = (
+      app: Awaited<ReturnType<typeof buildApp>>,
+      projectId: number,
+      rel: string,
+      body: Buffer | string,
+      extra = "",
+    ) =>
+      app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/files/upload?path=${encodeURIComponent(rel)}${extra}`,
+        headers: { "content-type": "application/octet-stream" },
+        payload: body,
+      });
+
+    it("uploads binary bytes, refuses an existing name, and downloads them back", async () => {
+      const { app, projectId } = await createProject();
+      const bytes = Buffer.from([0, 1, 2, 3, 250, 251, 0, 255]);
+      const up = await upload(app, projectId, "pic.bin", bytes);
+      expect(up.statusCode).toBe(200);
+      expect(up.json()).toEqual({ path: "pic.bin", size: bytes.length });
+      expect(fs.readFileSync(path.join(projectCwd, "pic.bin")).equals(bytes)).toBe(true);
+
+      const again = await upload(app, projectId, "pic.bin", "other");
+      expect(again.statusCode).toBe(409);
+      expect(again.json().code).toBe("conflict");
+      expect(fs.readFileSync(path.join(projectCwd, "pic.bin")).equals(bytes)).toBe(true);
+
+      const down = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/files/download?path=pic.bin`,
+      });
+      expect(down.statusCode).toBe(200);
+      expect(down.rawPayload.equals(bytes)).toBe(true);
+      expect(down.headers["content-type"]).toBe("application/octet-stream");
+      expect(down.headers["content-length"]).toBe(String(bytes.length));
+      expect(down.headers["x-content-type-options"]).toBe("nosniff");
+      expect(down.headers["content-disposition"]).toMatch(/^attachment; filename="pic\.bin"/);
+      await app.close();
+    });
+
+    it("encodes awkward file names in Content-Disposition", async () => {
+      fs.writeFileSync(path.join(projectCwd, 'a "b"é.txt'), "x");
+      const { app, projectId } = await createProject();
+      const down = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/files/download?path=${encodeURIComponent('a "b"é.txt')}`,
+      });
+      expect(down.statusCode).toBe(200);
+      const cd = down.headers["content-disposition"] as string;
+      expect(cd).toContain('filename="a _b__.txt"');
+      expect(cd).toContain("filename*=UTF-8''a%20%22b%22%C3%A9.txt");
+      await app.close();
+    });
+
+    it("mkdirs creates parent folders for a folder upload", async () => {
+      const { app, projectId } = await createProject();
+      const missing = await upload(app, projectId, "d/e/f.txt", "x");
+      expect(missing.statusCode).toBe(404);
+      const ok = await upload(app, projectId, "d/e/f.txt", "x", "&mkdirs=1");
+      expect(ok.statusCode).toBe(200);
+      expect(fs.readFileSync(path.join(projectCwd, "d", "e", "f.txt"), "utf8")).toBe("x");
+      await app.close();
+    });
+
+    it("rejects traversal, a missing path and a non-stream body", async () => {
+      const { app, projectId } = await createProject();
+      expect((await upload(app, projectId, "../evil", "x")).statusCode).toBe(400);
+      const noPath = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/files/upload`,
+        headers: { "content-type": "application/octet-stream" },
+        payload: "x",
+      });
+      expect(noPath.statusCode).toBe(400);
+      // a JSON body is parsed by Fastify's default parser, so it is not a raw
+      // stream: refused, never written
+      const json = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/files/upload?path=j.txt`,
+        payload: { a: 1 },
+      });
+      expect(json.statusCode).toBe(400);
+      expect(fs.existsSync(path.join(projectCwd, "j.txt"))).toBe(false);
+      await app.close();
+    });
+
+    it("413s a declared length over the cap and an actual body over it", async () => {
+      const { app, projectId } = await createProject();
+      const max = app.config.FILE_TRANSFER_MAX_BYTES;
+      const declared = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/files/upload?path=big`,
+        headers: { "content-type": "application/octet-stream", "content-length": String(max + 1) },
+        payload: "tiny",
+      });
+      expect(declared.statusCode).toBe(413);
+      expect(declared.json().code).toBe("too_large");
+
+      (app.config as { FILE_TRANSFER_MAX_BYTES: number }).FILE_TRANSFER_MAX_BYTES = 4;
+      const actual = await upload(app, projectId, "big", "0123456789");
+      expect(actual.statusCode).toBe(413);
+      expect(fs.existsSync(path.join(projectCwd, "big"))).toBe(false);
+      expect(fs.readdirSync(projectCwd).filter((n) => n.startsWith(".mullion-part-"))).toEqual([]);
+
+      fs.writeFileSync(path.join(projectCwd, "five"), "01234");
+      const dl = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/files/download?path=five`,
+      });
+      expect(dl.statusCode).toBe(413);
+      (app.config as { FILE_TRANSFER_MAX_BYTES: number }).FILE_TRANSFER_MAX_BYTES = max;
+      await app.close();
+    });
+
+    it("answers an over-cap upload with 413 while the client is still sending", async () => {
+      const { app, projectId } = await createProject();
+      const max = app.config.FILE_TRANSFER_MAX_BYTES;
+      const out = await postMidUpload(
+        app,
+        `/api/projects/${projectId}/files/upload?path=big.bin`,
+        max + 1_000_000,
+      );
+      expect(out).toEqual({ status: 413 });
+      await app.close();
+    });
+
+    it("answers a name clash with 409 while the client is still sending", async () => {
+      fs.writeFileSync(path.join(projectCwd, "taken.bin"), "keep");
+      const { app, projectId } = await createProject();
+      const out = await postMidUpload(
+        app,
+        `/api/projects/${projectId}/files/upload?path=taken.bin`,
+        4 * 1024 * 1024,
+      );
+      expect(out).toEqual({ status: 409 });
+      expect(fs.readFileSync(path.join(projectCwd, "taken.bin"), "utf8")).toBe("keep");
+      expect(fs.readdirSync(projectCwd).filter((n) => n.startsWith(".mullion-part-"))).toEqual([]);
+      await app.close();
+    });
+
+    it("refuses to download a folder, a missing file and an escape", async () => {
+      fs.mkdirSync(path.join(projectCwd, "dir"));
+      const { app, projectId } = await createProject();
+      const get = (rel: string) =>
+        app.inject({
+          method: "GET",
+          url: `/api/projects/${projectId}/files/download?path=${encodeURIComponent(rel)}`,
+        });
+      expect((await get("dir")).statusCode).toBe(400);
+      expect((await get("nope")).statusCode).toBe(404);
+      expect((await get("../x")).statusCode).toBe(400);
+      expect(
+        (await app.inject({ method: "GET", url: `/api/projects/${projectId}/files/download` }))
+          .statusCode,
+      ).toBe(400);
+      await app.close();
+    });
+
+    it("404s for an unknown project", async () => {
+      const app = await buildApp();
+      expect((await upload(app, 999999, "a", "x")).statusCode).toBe(404);
+      expect(
+        (await app.inject({ method: "GET", url: "/api/projects/999999/files/download?path=a" }))
+          .statusCode,
+      ).toBe(404);
+      await app.close();
+    });
+  });
+
   describe("remote host", () => {
     async function startAgent(token: string) {
       const prevEnv: Record<string, string | undefined> = {};
@@ -708,6 +919,110 @@ describe("project-files routes", () => {
       const res = await primary.inject({ method: "GET", url: `/api/projects/${projectId}/files` });
       expect(res.statusCode).toBe(501);
       expect(res.json().message).toMatch(/too old/);
+      await primary.close();
+      await bare.close();
+    });
+
+    it("streams an upload and a download through the agent", async () => {
+      const { agentApp, port } = await startAgent("pf-token-xfer");
+      const { primary, projectId } = await remoteProject(port, "pf-token-xfer", projectCwd);
+      const bytes = Buffer.alloc(3 * 1024 * 1024);
+      for (let i = 0; i < bytes.length; i += 4096) bytes[i] = i % 251;
+
+      const up = await primary.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/files/upload?path=${encodeURIComponent("sub/blob.bin")}&mkdirs=1`,
+        headers: { "content-type": "application/octet-stream" },
+        payload: bytes,
+      });
+      expect(up.statusCode).toBe(200);
+      expect(up.json()).toEqual({ path: "sub/blob.bin", size: bytes.length });
+      expect(fs.readFileSync(path.join(projectCwd, "sub", "blob.bin")).equals(bytes)).toBe(true);
+
+      const clash = await primary.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/files/upload?path=${encodeURIComponent("sub/blob.bin")}`,
+        headers: { "content-type": "application/octet-stream" },
+        payload: "x",
+      });
+      expect(clash.statusCode).toBe(409);
+      expect(clash.json().code).toBe("conflict");
+
+      const down = await primary.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/files/download?path=${encodeURIComponent("sub/blob.bin")}`,
+      });
+      expect(down.statusCode).toBe(200);
+      expect(down.rawPayload.equals(bytes)).toBe(true);
+      expect(down.headers["content-length"]).toBe(String(bytes.length));
+      expect(down.headers["content-disposition"]).toMatch(/filename="blob\.bin"/);
+
+      const missing = await primary.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/files/download?path=nope`,
+      });
+      expect(missing.statusCode).toBe(404);
+      expect(missing.json().code).toBe("not_found");
+
+      await primary.close();
+      await agentApp.close();
+    });
+
+    it("serves a download whose agent omitted Content-Length without sending 0", async () => {
+      const bare = (await import("fastify")).default();
+      bare.post("/internal/project-files/download", (_req, reply) =>
+        reply
+          .header("content-type", "application/octet-stream")
+          .send(Readable.from(["hello ", "world"])),
+      );
+      await bare.listen({ port: 0, host: "127.0.0.1" });
+      const address = bare.server.address();
+      if (address === null || typeof address === "string") throw new Error("no address");
+      const { primary, projectId } = await remoteProject(address.port, "any", projectCwd);
+      const down = await primary.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/files/download?path=greeting.txt`,
+      });
+      expect(down.statusCode).toBe(200);
+      expect(down.body).toBe("hello world");
+      expect(down.headers["content-length"]).not.toBe("0");
+      await primary.close();
+      await bare.close();
+    });
+
+    it("answers a remote name clash while the client is still sending", async () => {
+      fs.writeFileSync(path.join(projectCwd, "taken.bin"), "keep");
+      const { agentApp, port } = await startAgent("pf-token-early");
+      const { primary, projectId } = await remoteProject(port, "pf-token-early", projectCwd);
+      const out = await postMidUpload(
+        primary,
+        `/api/projects/${projectId}/files/upload?path=taken.bin`,
+        4 * 1024 * 1024,
+      );
+      expect(out).toEqual({ status: 409 });
+      await primary.close();
+      await agentApp.close();
+    });
+
+    it("replies 501 to upload/download when the agent lacks the routes", async () => {
+      const bare = (await import("fastify")).default();
+      bare.setNotFoundHandler((_req, reply) => reply.code(404).send({ message: "Not Found" }));
+      await bare.listen({ port: 0, host: "127.0.0.1" });
+      const address = bare.server.address();
+      if (address === null || typeof address === "string") throw new Error("no address");
+      const { primary, projectId } = await remoteProject(address.port, "any", projectCwd);
+      const up = await primary.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/files/upload?path=a.bin`,
+        headers: { "content-type": "application/octet-stream" },
+        payload: "x",
+      });
+      expect(up.statusCode).toBe(501);
+      const down = await primary.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/files/download?path=a.bin`,
+      });
+      expect(down.statusCode).toBe(501);
       await primary.close();
       await bare.close();
     });

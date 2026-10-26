@@ -6,6 +6,7 @@
 // (.env) — nothing here logs a request body or a file's content.
 import path from "node:path";
 import { realpathSync } from "node:fs";
+import type { Readable } from "node:stream";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
@@ -26,9 +27,17 @@ import {
   deleteProjectPath,
   renameProjectPath,
   searchProjectFiles,
+  openProjectFileReadStream,
+  writeProjectFileFromStream,
 } from "../services/project-files.js";
 
 const FILES_RATE_LIMIT = { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } };
+// A folder upload is one request per file (up to the drop walker's 5000-entry
+// cap, three at a time, a few ms each on loopback), so the transfer routes get
+// a ceiling far above the editor's own. The client also honours Retry-After
+// (useProjectUploads), so a lower app-wide ceiling slows a batch down instead
+// of failing it.
+const TRANSFER_RATE_LIMIT = { config: { rateLimit: { max: 6000, timeWindow: "1 minute" } } };
 
 const idParams = {
   type: "object",
@@ -84,6 +93,11 @@ export async function projectFilesRoute(app: FastifyInstance) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === "EACCES" || code === "EPERM") {
       return reply.serviceUnavailable("Permission denied accessing the file");
+    }
+    // The client hung up mid-upload: nobody is left to read a reply, and the
+    // half-written temp file is already gone (writeProjectFileFromStream).
+    if (code === "ERR_STREAM_PREMATURE_CLOSE" || code === "ECONNRESET" || code === "ABORT_ERR") {
+      return reply.code(400).send({ message: "Upload aborted" });
     }
     throw err;
   }
@@ -203,25 +217,37 @@ export async function projectFilesRoute(app: FastifyInstance) {
   }
 
   // The hostId-branching every route shares: run `local` against the
-  // primary's filesystem, or `remote` against the project's host.
+  // primary's filesystem, or `remote` against the project's host. A failure is
+  // already answered (the reply is handed back so the caller can return it).
+  async function attempt<T>(
+    reply: FastifyReply,
+    ctx: Ctx,
+    local: (cwd: string) => T | Promise<T>,
+    remote: (client: ReturnType<typeof getRemoteHostClient>, cwd: string) => Promise<T>,
+  ): Promise<{ ok: true; value: T } | { ok: false; reply: FastifyReply }> {
+    if (ctx.hostId === LOCAL_HOST_ID) {
+      try {
+        return { ok: true, value: await local(ctx.cwd) };
+      } catch (err) {
+        return { ok: false, reply: localErrorReply(reply, err) };
+      }
+    }
+    try {
+      return { ok: true, value: await remote(getRemoteHostClient(app, ctx.hostId), ctx.cwd) };
+    } catch (err) {
+      return { ok: false, reply: remoteErrorReply(reply, ctx.hostId, err) };
+    }
+  }
+
+  // The usual shape: the result IS the response body (or the error reply).
   async function dispatch<T>(
     reply: FastifyReply,
     ctx: Ctx,
     local: (cwd: string) => T | Promise<T>,
     remote: (client: ReturnType<typeof getRemoteHostClient>, cwd: string) => Promise<T>,
   ) {
-    if (ctx.hostId === LOCAL_HOST_ID) {
-      try {
-        return await local(ctx.cwd);
-      } catch (err) {
-        return localErrorReply(reply, err);
-      }
-    }
-    try {
-      return await remote(getRemoteHostClient(app, ctx.hostId), ctx.cwd);
-    } catch (err) {
-      return remoteErrorReply(reply, ctx.hostId, err);
-    }
+    const result = await attempt(reply, ctx, local, remote);
+    return result.ok ? result.value : result.reply;
   }
 
   app.get<{ Params: { id: string }; Querystring: { path?: string; sessionId?: string } }>(
@@ -392,6 +418,112 @@ export async function projectFilesRoute(app: FastifyInstance) {
         (cwd) => deleteProjectPath(cwd, relPath),
         (client, cwd) => client.deleteProjectPath(cwd, relPath),
       );
+    },
+  );
+
+  // ---- Raw-byte transfer (streamed, never buffered) -------------------------
+  // The body of an upload is the file itself. A parser that hands the request
+  // stream through (instead of `parseAs: "buffer"`) keeps memory flat for any
+  // size; Fastify then doesn't enforce `bodyLimit` for us, so the cap is
+  // checked against Content-Length up front and against the bytes actually
+  // received while writing. Scoped to this plugin's own encapsulated context.
+  app.addContentTypeParser("application/octet-stream", (_req, payload, done) => {
+    done(null, payload);
+  });
+
+  const maxTransferBytes = () => app.config.FILE_TRANSFER_MAX_BYTES;
+
+  app.post<{
+    Params: { id: string };
+    Querystring: { path?: string; sessionId?: string; mkdirs?: string };
+  }>(
+    "/api/projects/:id/files/upload",
+    {
+      ...TRANSFER_RATE_LIMIT,
+      schema: {
+        params: idParams,
+        querystring: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            path: { type: "string", maxLength: 4096 },
+            sessionId: { type: "string" },
+            mkdirs: { type: "string", enum: ["1"] },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const ctx = await resolveCtx(request.params.id, request.query.sessionId, reply);
+      if (!ctx) return;
+      const relPath = request.query.path;
+      if (!relPath) {
+        request.raw.resume();
+        return reply.badRequest("path is required");
+      }
+      const body = request.body as Readable | undefined;
+      if (!body || typeof body.pipe !== "function") {
+        request.raw.resume();
+        return reply.badRequest("expected a raw file body");
+      }
+      const max = maxTransferBytes();
+      const declared = Number(request.headers["content-length"]);
+      if (Number.isFinite(declared) && declared > max) {
+        // Answer an over-cap upload without leaving its body unread (a reset
+        // would hide the 413 from a client that is still sending).
+        request.raw.resume();
+        return reply.code(413).send({
+          message: `"${relPath}" is over the ${max} byte transfer limit`,
+          code: "too_large",
+        });
+      }
+      const mkdirs = request.query.mkdirs === "1";
+      return dispatch(
+        reply,
+        ctx,
+        (cwd) => writeProjectFileFromStream(cwd, relPath, body, { maxBytes: max, mkdirs }),
+        (client, cwd) => client.uploadProjectFile(cwd, relPath, body, { mkdirs }),
+      );
+    },
+  );
+
+  // Content-Disposition filename: an ASCII fallback plus the RFC 5987 form.
+  function contentDisposition(name: string): string {
+    const ascii = name.replace(/[^\x20-\x7e]|["\\%]/g, "_");
+    return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(name).replace(
+      /['()*]/g,
+      (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
+    )}`;
+  }
+
+  app.get<{ Params: { id: string }; Querystring: { path?: string; sessionId?: string } }>(
+    "/api/projects/:id/files/download",
+    { ...TRANSFER_RATE_LIMIT, schema: { params: idParams, querystring: pathQuery } },
+    async (request, reply) => {
+      const ctx = await resolveCtx(request.params.id, request.query.sessionId, reply);
+      if (!ctx) return;
+      const relPath = request.query.path;
+      if (!relPath) return reply.badRequest("path is required");
+      const max = maxTransferBytes();
+      const result = await attempt(
+        reply,
+        ctx,
+        (cwd) => openProjectFileReadStream(cwd, relPath, max),
+        (client, cwd) => client.downloadProjectFile(cwd, relPath),
+      );
+      if (!result.ok) return result.reply;
+      const dl = result.value;
+      // Always an attachment with an opaque type: a project file (an .html, an
+      // .svg) must never render as a same-origin document.
+      reply
+        .header("content-type", "application/octet-stream")
+        .header("content-disposition", contentDisposition(dl.name))
+        .header("x-content-type-options", "nosniff")
+        .header("cache-control", "no-store");
+      // A size the agent didn't report is left off (chunked) rather than sent
+      // as 0, which would truncate the download.
+      if (dl.size !== null) reply.header("content-length", String(dl.size));
+      return reply.send(dl.stream);
     },
   );
 

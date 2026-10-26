@@ -45,6 +45,7 @@ import { TerminalToasts } from "./terminal-pane/TerminalToasts.js";
 import { quotePastedPath } from "./terminal-pane/quote-paste-path.js";
 import { TerminalLinkTooltip } from "./terminal-pane/TerminalLinkTooltip.js";
 import { VoiceMicButton } from "./terminal-pane/VoiceMicButton.js";
+import { droppedFiles } from "./lib/dropped-files.js";
 import { useVoiceDictation } from "./voice/useVoiceDictation.js";
 // ResizeMessage/GeometryMessage physically live in src/shared/ws-protocol.ts
 // (repo root, NOT this frontend workspace — see src/routes/terminal.ts's own
@@ -64,32 +65,6 @@ const MAX_CONCURRENT_UPLOADS = 3;
 const MAX_FILES_PER_UPLOAD = 20;
 // ...and in total bytes (each file is also capped server-side at 25 MiB).
 const MAX_BYTES_PER_UPLOAD = 100 * 1024 * 1024;
-
-// Files from a drop, minus folders (which the browser exposes as an empty
-// pseudo-file the upload would just fail on). Walks `items` (kind === "file")
-// rather than index-matching it against `files` — a drag from another app can
-// carry string items too, which would shift the indexes. Falls back to
-// `files` where `items` is unavailable.
-function droppedFiles(dt: DataTransfer): { files: File[]; skipped: number } {
-  if (!dt.items || dt.items.length === 0) return { files: Array.from(dt.files), skipped: 0 };
-  const out: File[] = [];
-  let skipped = 0;
-  for (const item of Array.from(dt.items)) {
-    if (item.kind !== "file") continue;
-    const file = item.getAsFile();
-    if (!file) continue;
-    // Without webkitGetAsEntry, a folder is indistinguishable from a file
-    // except by its zero size and empty type — and an empty file is not worth
-    // uploading anyway.
-    const entry = item.webkitGetAsEntry?.();
-    if (entry ? entry.isDirectory : file.size === 0 && file.type === "") {
-      skipped++;
-      continue;
-    }
-    out.push(file);
-  }
-  return { files: out, skipped };
-}
 
 // Independent code review, PR #708 — mirrors routes/terminal.ts's own
 // isResizeMessage() runtime guard for the opposite direction of the same

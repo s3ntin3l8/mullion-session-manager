@@ -454,3 +454,84 @@
   flex-direction: column;
   gap: 1px;
 }
+
+/* UploadStatus.tsx / the file trees' drop-to-upload target. */
+.upload-status {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.71875rem;
+}
+.upload-status-row,
+.upload-status-errors {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.upload-status-text {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+.upload-status-current {
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.upload-status-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  overflow: hidden;
+}
+.upload-status-bar-fill {
+  height: 100%;
+  background: var(--accent-solid);
+  transition: width 0.15s linear;
+}
+.upload-status-errors {
+  color: var(--r);
+}
+.upload-status-errors ul {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding-left: 14px;
+  overflow-wrap: anywhere;
+}
+.file-drop-target {
+  outline: 2px dashed var(--accent-solid);
+  outline-offset: -2px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent-solid) 8%, transparent);
+}
+
+.files-sidebar-view {
+  min-height: 100%; /* the whole pane is a drop-to-upload target, empty space included */
+}
+.file-editor-image-preview {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 12px;
+  /* a checkerboard so transparent PNG/SVG edges stay visible on any theme */
+  background-image:
+    linear-gradient(45deg, color-mix(in srgb, var(--fg) 6%, transparent) 25%, transparent 25%),
+    linear-gradient(-45deg, color-mix(in srgb, var(--fg) 6%, transparent) 25%, transparent 25%);
+  background-size: 16px 16px;
+}
+.file-editor-image-preview img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}

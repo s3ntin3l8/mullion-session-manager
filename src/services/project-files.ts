@@ -20,6 +20,8 @@
 import {
   closeSync,
   constants as fsConstants,
+  createReadStream,
+  createWriteStream,
   fstatSync,
   ftruncateSync,
   linkSync,
@@ -36,8 +38,11 @@ import {
   writeFileSync,
 } from "node:fs";
 import { readdir } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { Transform, type Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import { expandHome } from "./project-config.js";
 import { PathEscapeError, realpathExistingPrefix, resolveWithin } from "./safe-path.js";
 
@@ -603,4 +608,239 @@ export async function searchProjectFiles(
     (a, b) => b.score - a.score || a.path.length - b.path.length || (a.path < b.path ? -1 : 1),
   );
   return { results: scored.slice(0, limit).map(({ path: p }) => ({ path: p })), truncated };
+}
+
+// ---------------------------------------------------------------------------
+// Raw-byte transfer (upload / download). Unlike the text editor's read/write
+// above — whole-file, UTF-8, 1 MiB — these stream: memory stays flat whatever
+// the file size, and binary content is fine. They reuse the same containment
+// (resolveInProject / resolveEntry, O_NOFOLLOW, assertFdInside).
+// ---------------------------------------------------------------------------
+
+export interface ProjectFileDownload {
+  stream: Readable;
+  /** Bytes the stream will deliver; null when a remote host didn't say. */
+  size: number | null;
+  /** Project-relative path the request resolved to. */
+  path: string;
+  /** Basename, for Content-Disposition. */
+  name: string;
+}
+
+/** Opens a regular file for streaming. The fd is opened and vetted (O_NOFOLLOW,
+ * assertFdInside, regular-file, size cap) BEFORE this returns, so every
+ * refusal is a ProjectFileError thrown synchronously — the caller never has a
+ * half-sent response to unwind. The returned stream owns the fd and closes it
+ * on end, error or destroy. */
+export function openProjectFileReadStream(
+  root: string,
+  relPath: string,
+  maxBytes: number,
+): Omit<ProjectFileDownload, "size"> & { size: number } {
+  const { realRoot, real, rel } = resolveInProject(root, relPath, false);
+  let fd: number;
+  try {
+    fd = openSync(real, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+  } catch (err) {
+    return mapFsError(err, rel);
+  }
+  try {
+    assertFdInside(fd, realRoot, rel);
+    const st = fstatSync(fd);
+    if (st.isDirectory()) throw new ProjectFileError("is_directory", `"${rel}" is a directory`);
+    if (!st.isFile()) throw new ProjectFileError("not_regular", `"${rel}" is not a regular file`);
+    if (st.size > maxBytes) {
+      throw new ProjectFileError(
+        "too_large",
+        `"${rel}" is over the ${maxBytes} byte transfer limit`,
+      );
+    }
+    // `path` is ignored when `fd` is given; autoClose (the default) closes it.
+    const stream = createReadStream("", { fd, autoClose: true });
+    return { stream, size: st.size, path: rel, name: path.basename(rel) };
+  } catch (err) {
+    closeSync(fd);
+    return mapFsError(err, rel);
+  }
+}
+
+/** Creates every missing folder of `relDir`, one level at a time, each through
+ * resolveEntry so a symlinked parent can't lead out. An existing folder (or a
+ * symlink to one that stays inside the project) is merged into; an existing
+ * non-folder in the way is a `conflict`. */
+function ensureProjectDirs(root: string, relDir: string): void {
+  if (relDir === "" || relDir === ".") return;
+  const parts = relDir.split("/").filter((p) => p !== "" && p !== ".");
+  let acc = "";
+  for (const part of parts) {
+    acc = acc === "" ? part : `${acc}/${part}`;
+    const entry = resolveEntry(root, acc);
+    let st;
+    try {
+      st = lstatSync(entry.abs);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") return mapFsError(err, entry.rel);
+      try {
+        mkdirSync(entry.abs);
+      } catch (mkErr) {
+        // A concurrent upload of a sibling file created it first — fine.
+        if ((mkErr as NodeJS.ErrnoException).code !== "EEXIST") return mapFsError(mkErr, entry.rel);
+      }
+      continue;
+    }
+    if (st.isDirectory()) continue;
+    if (st.isSymbolicLink()) {
+      // resolveInProject re-checks containment of the link's target.
+      const target = resolveInProject(root, entry.rel, true);
+      try {
+        if (statSync(target.real).isDirectory()) continue;
+      } catch (err) {
+        return mapFsError(err, entry.rel);
+      }
+    }
+    throw new ProjectFileError("conflict", `"${entry.rel}" already exists and is not a folder`);
+  }
+}
+
+/** Streams `source` into a NEW file at `relPath`. Never overwrites: the bytes
+ * land in a temp file beside the target (`.mullion-part-<uuid>`) and are then
+ * published with link(2), which fails with EEXIST for a target that exists at
+ * that instant — so create-only holds even against a concurrent writer. The
+ * temp file is always removed again (success, failure, client abort).
+ * `maxBytes` is enforced on the bytes actually received, not on a header the
+ * client controls. `mkdirs` creates missing parent folders (folder upload). */
+export async function writeProjectFileFromStream(
+  root: string,
+  relPath: string,
+  source: Readable,
+  opts: { maxBytes: number; mkdirs?: boolean },
+): Promise<{ path: string; size: number }> {
+  // Everything up to the temp file being open refuses WITHOUT having read the
+  // body. The route is about to answer, and replying to a request whose body is
+  // still arriving resets the connection under a client that is mid-upload — it
+  // would see a network error instead of the 409/404 it earned. So an early
+  // refusal discards the rest of the body first (same as preview-proxy.ts).
+  let entry: EntryRef;
+  let abs: string;
+  let tmpAbs: string;
+  let fd: number;
+  try {
+    if (opts.mkdirs) {
+      const dir = path.dirname(relPath);
+      ensureProjectDirs(root, dir === "." ? "" : dir);
+    }
+    entry = resolveEntry(root, relPath);
+    // resolveEntry already contains the path. The check is repeated on the
+    // local the sinks use: CodeQL's path-injection query does not carry a
+    // barrier out through a returned field.
+    abs = path.resolve(entry.abs);
+    if (abs !== entry.realRoot && !abs.startsWith(entry.realRoot + path.sep)) {
+      throw new ProjectFileError("escape", `Path "${entry.rel}" resolves outside the project`);
+    }
+    // A free pre-check so a name that is already taken is refused before any
+    // byte is written (link(2) below stays the authority — this only saves the
+    // common case from writing a temp file first).
+    try {
+      lstatSync(abs);
+      throw new ProjectFileError("conflict", `"${entry.rel}" already exists`);
+    } catch (err) {
+      if (err instanceof ProjectFileError) throw err;
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") return mapFsError(err, entry.rel);
+    }
+    tmpAbs = path.resolve(path.dirname(abs), `.mullion-part-${randomUUID()}`);
+    if (!tmpAbs.startsWith(entry.realRoot + path.sep)) {
+      throw new ProjectFileError("escape", `Path "${entry.rel}" resolves outside the project`);
+    }
+    try {
+      fd = openSync(
+        tmpAbs,
+        fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW,
+        0o644,
+      );
+    } catch (err) {
+      return mapFsError(err, entry.rel);
+    }
+    try {
+      assertFdInside(fd, entry.realRoot, entry.rel);
+    } catch (err) {
+      // Not yet handed to a stream, so nothing else will close it.
+      closeSync(fd);
+      try {
+        unlinkSync(tmpAbs);
+      } catch {
+        // already gone
+      }
+      throw err;
+    }
+  } catch (err) {
+    source.resume();
+    throw err;
+  }
+  let received = 0;
+  const cleanup = () => {
+    try {
+      unlinkSync(tmpAbs);
+    } catch {
+      // already gone (published via rename, or never created)
+    }
+  };
+  try {
+    const counter = new Transform({
+      transform(chunk: Buffer, _enc, cb) {
+        received += chunk.length;
+        if (received > opts.maxBytes) {
+          cb(
+            new ProjectFileError(
+              "too_large",
+              `"${entry.rel}" is over the ${opts.maxBytes} byte transfer limit`,
+            ),
+          );
+          return;
+        }
+        cb(null, chunk);
+      },
+    });
+    // createWriteStream owns the fd from here and closes it when done.
+    await pipeline(source, counter, createWriteStream("", { fd, autoClose: true }));
+    publishNewFile(tmpAbs, abs, entry.rel, entry.realRoot);
+    return { path: entry.rel, size: received };
+  } catch (err) {
+    return mapFsError(err, entry.rel);
+  } finally {
+    cleanup();
+  }
+}
+
+/** link(2) the finished temp file to its final name (EEXIST -> `conflict`).
+ * A filesystem that refuses hard links falls back to check-then-rename, with
+ * the same small residual window renameProjectPath documents. */
+function publishNewFile(tmpAbs: string, destAbs: string, rel: string, realRoot: string): void {
+  // Same barrier as the caller, on the locals this function actually passes
+  // to link/rename. A parameter is a new taint source to the query.
+  const dest = path.resolve(destAbs);
+  const tmp = path.resolve(tmpAbs);
+  if (
+    (dest !== realRoot && !dest.startsWith(realRoot + path.sep)) ||
+    !tmp.startsWith(realRoot + path.sep)
+  ) {
+    throw new ProjectFileError("escape", `Path "${rel}" resolves outside the project`);
+  }
+  try {
+    linkSync(tmp, dest);
+    return;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EEXIST") {
+      throw new ProjectFileError("conflict", `"${rel}" already exists`);
+    }
+    if (code !== "EPERM" && code !== "ENOTSUP" && code !== "EMLINK" && code !== "EXDEV") throw err;
+  }
+  try {
+    lstatSync(dest);
+    throw new ProjectFileError("conflict", `"${rel}" already exists`);
+  } catch (err) {
+    if (err instanceof ProjectFileError) throw err;
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+  renameSync(tmp, dest);
 }

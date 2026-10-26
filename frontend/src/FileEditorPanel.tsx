@@ -2,7 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { api, ApiError } from "./api/index.js";
 import type { ProjectDirEntry, ProjectFileContent, ProjectSearchListing } from "./api/index.js";
 import { CodeEditor } from "./components/CodeEditor.js";
+import { NonTextFileView, type NonTextReason } from "./components/NonTextFileView.js";
+import { useProjectUploads } from "./hooks/useProjectUploads.js";
+import { useUploadDropTarget } from "./hooks/useUploadDropTarget.js";
+import { itemsFromInput, type UploadItem } from "./lib/dropped-files.js";
+import { UploadStatus } from "./ui/UploadStatus.js";
 import {
+  DownloadIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   FileTextIcon,
@@ -41,6 +47,9 @@ interface DirState {
 
 // The editor binds Mod-s: Cmd+S on macOS, Ctrl+S elsewhere.
 const SAVE_SHORTCUT = isMacPlatform() ? "⌘S" : "Ctrl+S";
+
+// Highlight key for the tree-wide drop target (uploads into the selected folder).
+const ROOT_DROP_KEY = "\0root";
 
 function joinPath(dir: string, name: string): string {
   return dir === "" ? name : `${dir}/${name}`;
@@ -82,6 +91,11 @@ function FileEditorBody({
   const [draft, setDraft] = useState("");
   // A file we can't show as text (too large / binary) or failed to open.
   const [fileNote, setFileNote] = useState<string | null>(null);
+  // A file that exists but isn't editable as text: shown with a Download (and
+  // an inline preview for an image) instead of an error.
+  const [nonText, setNonText] = useState<{ path: string; reason: NonTextReason } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const [saving, setSaving] = useState(false);
   const [conflict, setConflict] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -151,19 +165,20 @@ function FileEditorBody({
         setFile(loaded);
         setDraft(loaded.content);
         setFileNote(null);
+        setNonText(null);
         setTreeOpen(false);
       } catch (err) {
         if (seq !== openSeq.current) return;
         const code = err instanceof ApiError ? err.code : undefined;
         setFile(null);
         setDraft("");
-        setFileNote(
-          code === "too_large"
-            ? `${filePath} is over the 1 MiB edit limit — too large to edit here.`
-            : code === "binary"
-              ? `${filePath} isn't a UTF-8 text file — it can't be edited here.`
-              : errorMessage(err, `Couldn't open ${filePath}`),
-        );
+        if (code === "too_large" || code === "binary") {
+          setFileNote(null);
+          setNonText({ path: filePath, reason: code });
+        } else {
+          setNonText(null);
+          setFileNote(errorMessage(err, `Couldn't open ${filePath}`));
+        }
         setTreeOpen(false);
       }
     },
@@ -343,16 +358,17 @@ function FileEditorBody({
         await api.deleteProjectPath(projectId, entryPath, sessionId);
         forgetSubtree(entryPath);
         await loadDir(parentDir(entryPath));
-        if (file?.path === entryPath) {
+        if (file?.path === entryPath || nonText?.path === entryPath) {
           setFile(null);
           setDraft("");
+          setNonText(null);
           setFileNote(`${entryPath} was deleted.`);
         }
       } catch (err) {
         setTreeError(errorMessage(err, "Failed to delete"));
       }
     },
-    [projectId, sessionId, file, forgetSubtree, loadDir],
+    [projectId, sessionId, file, nonText, forgetSubtree, loadDir],
   );
 
   const handleRename = useCallback(async () => {
@@ -375,13 +391,49 @@ function FileEditorBody({
       forgetSubtree(from);
       await loadDir(parentDir(from));
       // The open file moved with it (itself, or a folder above it): reopen.
-      if (file && (file.path === from || file.path.startsWith(`${from}/`))) {
-        await openFile(to + file.path.slice(from.length));
+      const open = file?.path ?? nonText?.path;
+      if (open && (open === from || open.startsWith(`${from}/`))) {
+        await openFile(to + open.slice(from.length));
       }
     } catch (err) {
       setTreeError(errorMessage(err, "Failed to rename"));
     }
-  }, [renaming, projectId, sessionId, file, forgetSubtree, loadDir, openFile]);
+  }, [renaming, projectId, sessionId, file, nonText, forgetSubtree, loadDir, openFile]);
+
+  // Upload into a folder (the selected one, or the one a file/folder was
+  // dropped on) and re-list everything open: a folder upload creates subfolders.
+  const expandedRef = useRef(expanded);
+  useEffect(() => {
+    expandedRef.current = expanded;
+  });
+  const afterUpload = useCallback(
+    (targetDir: string) => {
+      setExpanded((prev) => new Set(prev).add(targetDir));
+      void Promise.all([...new Set([targetDir, ...expandedRef.current])].map((d) => loadDir(d)));
+    },
+    [loadDir],
+  );
+  // Names already listed in a folder we have loaded: an upload onto one is
+  // refused without sending its body (the server still decides).
+  const dirsRef = useRef(dirs);
+  useEffect(() => {
+    dirsRef.current = dirs;
+  });
+  const existsHint = useCallback((path: string) => {
+    const slash = path.lastIndexOf("/");
+    const entries = dirsRef.current[slash < 0 ? "" : path.slice(0, slash)]?.entries;
+    return entries?.some((e) => e.name === path.slice(slash + 1)) ?? false;
+  }, []);
+  const uploads = useProjectUploads({ projectId, sessionId, onUploaded: afterUpload, existsHint });
+  const startUpload = uploads.upload;
+  const { dropKey, dropProps } = useUploadDropTarget(
+    (items: UploadItem[], dir: string) => void startUpload(items, dir),
+    () => setTreeError("That folder is too large to upload in one go — some files were left out"),
+  );
+  const pickFiles = (files: FileList | null, input: HTMLInputElement) => {
+    if (files && files.length > 0) void startUpload(itemsFromInput(files), selectedDir);
+    input.value = ""; // the same selection can be picked again
+  };
 
   const renderDir = (dirPath: string, depth: number): ReactNode => {
     const dir = dirs[dirPath];
@@ -417,13 +469,14 @@ function FileEditorBody({
             />
           ) : isDir ? (
             <button
-              className="agent-rules-panel-row file-editor-row"
+              className={`agent-rules-panel-row file-editor-row${dropKey === entryPath ? " file-drop-target" : ""}`}
               style={indent}
               onClick={() => {
                 setSelectedDir(entryPath);
                 void toggleDir(entryPath);
               }}
               aria-expanded={expanded.has(entryPath)}
+              {...dropProps(entryPath)}
             >
               {expanded.has(entryPath) ? (
                 <ChevronDownIcon size={12} />
@@ -442,6 +495,7 @@ function FileEditorBody({
                 void openFile(entryPath);
               }}
               disabled={unopenable || (dirty && entryPath !== file?.path)}
+              {...dropProps(dirPath)}
               title={
                 unopenable
                   ? "Symlink to outside the project — can't be edited"
@@ -461,6 +515,17 @@ function FileEditorBody({
                 {mainRow}
                 {!isRenaming && (
                   <span className="file-editor-row-actions">
+                    {!isDir && !unopenable && (
+                      <a
+                        className="git-panel-toggle-reset"
+                        href={api.projectFileDownloadUrl(projectId, entryPath, sessionId)}
+                        download
+                        aria-label={`Download ${entry.name}`}
+                        title="Download"
+                      >
+                        <DownloadIcon size={12} />
+                      </a>
+                    )}
                     <button
                       className="git-panel-toggle-reset"
                       aria-label={`Rename ${entry.name}`}
@@ -535,7 +600,26 @@ function FileEditorBody({
       }}
     >
       {!editorOnly && (
-        <div className="agent-rules-panel-list file-editor-tree cmux-scroll">
+        <div
+          className={`agent-rules-panel-list file-editor-tree cmux-scroll${dropKey === ROOT_DROP_KEY ? " file-drop-target" : ""}`}
+          {...dropProps(selectedDir, ROOT_DROP_KEY)}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            hidden
+            aria-label="Upload files"
+            onChange={(e) => pickFiles(e.target.files, e.target)}
+          />
+          <input
+            ref={folderInputRef}
+            type="file"
+            hidden
+            aria-label="Upload folder"
+            {...({ webkitdirectory: "" } as Record<string, string>)}
+            onChange={(e) => pickFiles(e.target.files, e.target)}
+          />
           <div className="file-editor-tree-actions">
             <button
               className="git-panel-fetch-btn"
@@ -560,7 +644,27 @@ function FileEditorBody({
             >
               New folder
             </button>
+            <button
+              className="git-panel-fetch-btn"
+              onClick={() => fileInputRef.current?.click()}
+              title={`Upload files to ${selectedDir || "the project root"}`}
+            >
+              Upload
+            </button>
+            <button
+              className="git-panel-fetch-btn"
+              onClick={() => folderInputRef.current?.click()}
+              title={`Upload a folder to ${selectedDir || "the project root"}`}
+            >
+              Upload folder
+            </button>
           </div>
+          <UploadStatus
+            progress={uploads.progress}
+            errors={uploads.errors}
+            onCancel={uploads.cancel}
+            onDismiss={uploads.dismissErrors}
+          />
           <input
             ref={searchInputRef}
             className="file-editor-new-input file-editor-search"
@@ -646,7 +750,15 @@ function FileEditorBody({
             Files
           </button>
         )}
-        {!file ? (
+        {!file && nonText ? (
+          <NonTextFileView
+            key={nonText.path}
+            projectId={projectId}
+            sessionId={sessionId}
+            path={nonText.path}
+            reason={nonText.reason}
+          />
+        ) : !file ? (
           <EmptyStateNote>
             <FileTextIcon size={20} />
             <div>{fileNote ?? "Select a file to view or edit it."}</div>
@@ -667,6 +779,15 @@ function FileEditorBody({
                 )}
               </div>
               <div className="agent-rules-panel-editor-actions">
+                <a
+                  className="file-editor-icon-btn"
+                  href={api.projectFileDownloadUrl(projectId, file.path, sessionId)}
+                  download
+                  aria-label="Download file"
+                  title="Download"
+                >
+                  <DownloadIcon size={15} />
+                </a>
                 {dirty && (
                   <button
                     className="file-editor-icon-btn"

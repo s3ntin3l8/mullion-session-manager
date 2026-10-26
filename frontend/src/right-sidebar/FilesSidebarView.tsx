@@ -1,4 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useProjectUploads } from "../hooks/useProjectUploads.js";
+import { useUploadDropTarget } from "../hooks/useUploadDropTarget.js";
+import { itemsFromInput, type UploadItem } from "../lib/dropped-files.js";
+import { UploadStatus } from "../ui/UploadStatus.js";
 import { api, ApiError } from "../api/index.js";
 import type { ProjectDirEntry } from "../api/index.js";
 import {
@@ -9,7 +13,9 @@ import {
   FileTextIcon,
   FolderIcon,
   FolderPlusIcon,
+  FolderUpIcon,
   RefreshIcon,
+  UploadIcon,
 } from "../ui/icons.js";
 import { SidebarToolbar } from "./SidebarToolbar.js";
 import { EmptyStateNote } from "../ui/EmptyState.js";
@@ -23,6 +29,9 @@ interface DirState {
   entries: ProjectDirEntry[];
   truncated: boolean;
 }
+
+// Highlight key for the tree-wide drop target (uploads into the selected folder).
+const ROOT_DROP_KEY = "\0root";
 
 function joinPath(dir: string, name: string): string {
   return dir === "" ? name : `${dir}/${name}`;
@@ -43,6 +52,8 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
   // after the followed project changed belongs to the old project and must
   // not land in the new one's tree.
   const activeProject = useRef(projectId);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
   const loadDir = useCallback(
     async (dirPath: string) => {
@@ -89,6 +100,47 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
   const refresh = () => {
     // Re-list everything that is currently open.
     for (const dirPath of expanded) void loadDir(dirPath);
+  };
+
+  const expandedRef = useRef(expanded);
+  useEffect(() => {
+    expandedRef.current = expanded;
+  });
+  const afterUpload = useCallback(
+    (targetDir: string) => {
+      if (activeProject.current !== projectId) return;
+      // Show where the files went, and re-list every open folder (a folder
+      // upload may have created subfolders).
+      setExpanded((prev) => new Set(prev).add(targetDir));
+      void loadDir(targetDir);
+      for (const dirPath of expandedRef.current) if (dirPath !== targetDir) void loadDir(dirPath);
+    },
+    [projectId, loadDir],
+  );
+  // Names already listed in a folder we have loaded: an upload onto one is
+  // refused without sending its body (the server still decides).
+  const dirsRef = useRef(dirs);
+  useEffect(() => {
+    dirsRef.current = dirs;
+  });
+  const existsHint = useCallback((path: string) => {
+    const slash = path.lastIndexOf("/");
+    const entries = dirsRef.current[slash < 0 ? "" : path.slice(0, slash)]?.entries;
+    return entries?.some((e) => e.name === path.slice(slash + 1)) ?? false;
+  }, []);
+  const uploads = useProjectUploads({ projectId, onUploaded: afterUpload, existsHint });
+  const startUpload = uploads.upload;
+  const truncatedNote = useCallback(
+    () => setError("That folder is too large to upload in one go — some files were left out"),
+    [],
+  );
+  const { dropKey, dropProps } = useUploadDropTarget(
+    (items: UploadItem[], dir: string) => void startUpload(items, dir),
+    truncatedNote,
+  );
+  const pickFiles = (files: FileList | null, input: HTMLInputElement) => {
+    if (files && files.length > 0) void startUpload(itemsFromInput(files), selectedDir);
+    input.value = ""; // the same selection can be picked again
   };
 
   const startCreate = (kind: "file" | "dir") => {
@@ -147,10 +199,11 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
                 <div key={entryPath}>
                   <button
                     type="button"
-                    className={`agent-rules-panel-row file-editor-row${entryPath === selectedDir ? " selected" : ""}`}
+                    className={`agent-rules-panel-row file-editor-row${entryPath === selectedDir ? " selected" : ""}${dropKey === entryPath ? " file-drop-target" : ""}`}
                     style={indent}
                     aria-expanded={open}
                     onClick={() => toggleDir(entryPath)}
+                    {...dropProps(entryPath)}
                   >
                     {open ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
                     <FolderIcon size={13} />
@@ -168,6 +221,7 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
                 style={indent}
                 disabled={unopenable}
                 title={unopenable ? "Symlink to outside the project — can't be opened" : undefined}
+                {...dropProps(dirPath)}
                 onClick={() => {
                   setSelectedDir(dirPath);
                   actions.onOpenFile(projectId, entryPath);
@@ -191,7 +245,28 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
   };
 
   return (
-    <div className="files-sidebar-view">
+    <div
+      className={`files-sidebar-view${dropKey === ROOT_DROP_KEY ? " file-drop-target" : ""}`}
+      {...dropProps(selectedDir, ROOT_DROP_KEY)}
+    >
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        hidden
+        aria-label="Upload files"
+        onChange={(e) => pickFiles(e.target.files, e.target)}
+      />
+      <input
+        ref={folderInputRef}
+        type="file"
+        hidden
+        aria-label="Upload folder"
+        // Non-standard but universal: a folder picker whose files carry
+        // their path inside it on `webkitRelativePath`.
+        {...({ webkitdirectory: "" } as Record<string, string>)}
+        onChange={(e) => pickFiles(e.target.files, e.target)}
+      />
       <SidebarToolbar
         actions={[
           { key: "refresh", label: "Refresh", icon: RefreshIcon, onClick: refresh },
@@ -206,6 +281,18 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
             label: `New folder in ${selectedDir || "project root"}`,
             icon: FolderPlusIcon,
             onClick: () => startCreate("dir"),
+          },
+          {
+            key: "upload-files",
+            label: `Upload files to ${selectedDir || "project root"}`,
+            icon: UploadIcon,
+            onClick: () => fileInputRef.current?.click(),
+          },
+          {
+            key: "upload-folder",
+            label: `Upload a folder to ${selectedDir || "project root"}`,
+            icon: FolderUpIcon,
+            onClick: () => folderInputRef.current?.click(),
           },
           {
             key: "open-editor",
@@ -231,6 +318,12 @@ export function FilesSidebarView({ projectId, actions }: RightSidebarViewProps) 
           }}
         />
       )}
+      <UploadStatus
+        progress={uploads.progress}
+        errors={uploads.errors}
+        onCancel={uploads.cancel}
+        onDismiss={uploads.dismissErrors}
+      />
       {error && <EmptyStateNote>{error}</EmptyStateNote>}
       {renderDir("", 0)}
     </div>

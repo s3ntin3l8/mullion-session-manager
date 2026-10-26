@@ -264,7 +264,10 @@ stale socket left after a `SIGKILL`. Results are recorded in issue #1741.
   `agent-rules` (per-agent rule-file read/write), `project-files` (the
   file-editor panel's surface — `GET /api/projects/:id/files[?path]` listing,
   `GET`/`PUT`/`DELETE /api/projects/:id/file`, `POST .../files/mkdir` and
-  `.../files/rename`, `GET .../files/search?q` — over `services/project-files.ts`,
+  `.../files/rename`, `GET .../files/search?q`, and the streamed byte transfer
+  `POST .../files/upload?path[&mkdirs=1]` (raw body, create-only: temp file +
+  `link(2)`, so an existing name is a 409 and a racing writer can't be clobbered)
+  and `GET .../files/download?path` (always an opaque attachment) — over `services/project-files.ts`,
   which holds every path to the project root by lexical + realpath containment
   and `O_NOFOLLOW` opens; an optional `sessionId` re-roots it at that session's
   cwd (a worktree's own checkout) — accepted only when that cwd is inside the project or, on

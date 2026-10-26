@@ -164,3 +164,9 @@ export const PLACEMENT_MODES = ["pinned", "auto"] as const;
 // Consumers import the type from HERE, not from src/shared/types.ts — one
 // import path for the list and the type it yields.
 export type PlacementMode = (typeof PLACEMENT_MODES)[number];
+
+/** Content-Type of a streamed file body on the primary->agent hop of the file
+ * browser's upload (routes/internal.ts registers the parser for it). Not
+ * application/octet-stream: /internal/uploads buffers that type, and a plugin
+ * context allows one parser per type. */
+export const FILE_STREAM_CONTENT_TYPE = "application/vnd.mullion.file-stream";

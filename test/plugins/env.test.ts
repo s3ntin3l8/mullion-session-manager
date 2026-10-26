@@ -45,6 +45,7 @@ describe("env plugin", () => {
     expect(app.config.RATE_LIMIT_MAX).toBe(300);
     expect(app.config.RATE_LIMIT_WINDOW).toBe("1 minute");
     expect(app.config.MULLION_UPLOAD_RETENTION_DAYS).toBe(7);
+    expect(app.config.FILE_TRANSFER_MAX_BYTES).toBe(2 * 1024 * 1024 * 1024);
     expect(app.config.PROJECTS_ROOTS).toBe("");
     expect(app.config.CRS_CONFIG_DIR).toBe("~/.config/crs");
     expect(app.config.MULLION_ROLE).toBe("primary");

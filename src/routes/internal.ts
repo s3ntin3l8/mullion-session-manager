@@ -94,6 +94,8 @@ import {
   deleteProjectPath,
   renameProjectPath,
   searchProjectFiles,
+  openProjectFileReadStream,
+  writeProjectFileFromStream,
 } from "../services/project-files.js";
 import { runGitFetch } from "../services/git-fetch.js";
 import { inspectGitClone, planRepair, repairGitClone } from "../services/git-doctor.js";
@@ -103,6 +105,7 @@ import { runGitPull } from "../services/git-pull.js";
 import { pushBranch } from "../services/git-push.js";
 import { compileOutputMatcher, waitForOutput } from "../services/output-wait.js";
 import { deliverPrompt, REMOTE_WAIT_CHUNK_MS } from "../services/session-prompt.js";
+import { FILE_STREAM_CONTENT_TYPE } from "../shared/constants.js";
 import { getCachedAgents } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { attachSocketToSession } from "./terminal.js";
@@ -1599,6 +1602,73 @@ export async function internalRoutes(app: FastifyInstance) {
       if (resolvedCwd === null) return;
       try {
         return renameProjectPath(resolvedCwd, request.body.from, request.body.to);
+      } catch (err) {
+        return replyProjectFileError(reply, err);
+      }
+    },
+  );
+
+  // Streamed counterparts of the editor's read/write (the file browser's
+  // upload/download). The body of an upload is the raw file under its own
+  // content type — /internal/uploads below already owns application/octet-
+  // stream in this plugin context, and buffers it. The path is exempt from
+  // body hashing (request-signature.ts), so the byte count is enforced while
+  // writing, not trusted from a header.
+  app.addContentTypeParser(FILE_STREAM_CONTENT_TYPE, (_req, payload, done) => {
+    done(null, payload);
+  });
+
+  app.post<{ Querystring: { cwd?: string; path?: string; mkdirs?: string } }>(
+    "/internal/project-files/upload",
+    {
+      ...INTERNAL_RATE_LIMIT,
+      schema: {
+        querystring: {
+          type: "object",
+          required: ["cwd", "path"],
+          additionalProperties: false,
+          properties: {
+            cwd: { type: "string", minLength: 1, maxLength: 4096 },
+            path: { type: "string", minLength: 1, maxLength: 4096 },
+            mkdirs: { type: "string", enum: ["1"] },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const resolvedCwd = requireWithinRoots(app, reply, request.query.cwd as string, "cwd");
+      if (resolvedCwd === null) return;
+      const body = request.body as Readable | undefined;
+      if (!body || typeof body.pipe !== "function") {
+        return reply.badRequest("expected a raw file body");
+      }
+      try {
+        return await writeProjectFileFromStream(resolvedCwd, request.query.path as string, body, {
+          maxBytes: app.config.FILE_TRANSFER_MAX_BYTES,
+          mkdirs: request.query.mkdirs === "1",
+        });
+      } catch (err) {
+        return replyProjectFileError(reply, err);
+      }
+    },
+  );
+
+  app.post<{ Body: ProjectFilesPathBody }>(
+    "/internal/project-files/download",
+    { ...INTERNAL_RATE_LIMIT, schema: projectFilesPathSchema },
+    async (request, reply) => {
+      const resolvedCwd = requireWithinRoots(app, reply, request.body.cwd, "cwd");
+      if (resolvedCwd === null) return;
+      try {
+        const dl = openProjectFileReadStream(
+          resolvedCwd,
+          request.body.path,
+          app.config.FILE_TRANSFER_MAX_BYTES,
+        );
+        return reply
+          .header("content-type", "application/octet-stream")
+          .header("content-length", String(dl.size))
+          .send(dl.stream);
       } catch (err) {
         return replyProjectFileError(reply, err);
       }

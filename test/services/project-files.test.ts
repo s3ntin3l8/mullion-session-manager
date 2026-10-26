@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
+import { Readable } from "node:stream";
 import {
   ProjectFileError,
   MAX_PROJECT_FILE_BYTES,
@@ -16,6 +17,8 @@ import {
   renameProjectPath,
   searchProjectFiles,
   fuzzyScore,
+  openProjectFileReadStream,
+  writeProjectFileFromStream,
 } from "../../src/services/project-files.js";
 
 function codeOf(fn: () => unknown): string | undefined {
@@ -490,6 +493,247 @@ describe("project-files service", () => {
       expect(codeOf(() => readExternalFile(path.join(plans, "p.md"), ["/"]))).toBe(
         "not_allowlisted",
       );
+    });
+  });
+});
+
+describe("project-files raw transfer", () => {
+  let root: string;
+  let outside: string;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-pf-xfer-root-"));
+    outside = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-pf-xfer-out-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(outside, { recursive: true, force: true });
+  });
+
+  const LIMIT = 1024 * 1024 * 64;
+
+  async function codeOfAsync(fn: () => Promise<unknown>): Promise<string | undefined> {
+    try {
+      await fn();
+    } catch (err) {
+      if (err instanceof ProjectFileError) return err.code;
+      throw err;
+    }
+    return undefined;
+  }
+
+  function leftovers(dir: string): string[] {
+    return fs.readdirSync(dir).filter((n) => n.startsWith(".mullion-part-"));
+  }
+
+  describe("writeProjectFileFromStream", () => {
+    it("streams binary bytes into a new file and leaves no temp file", async () => {
+      const bytes = Buffer.alloc(5 * 1024 * 1024, 0xab);
+      bytes[10] = 0; // NUL: binary is fine here
+      const res = await writeProjectFileFromStream(root, "blob.bin", Readable.from([bytes]), {
+        maxBytes: LIMIT,
+      });
+      expect(res).toEqual({ path: "blob.bin", size: bytes.length });
+      expect(fs.readFileSync(path.join(root, "blob.bin")).equals(bytes)).toBe(true);
+      expect(leftovers(root)).toEqual([]);
+    });
+
+    it("refuses to overwrite and keeps the existing bytes", async () => {
+      fs.writeFileSync(path.join(root, "a.txt"), "keep");
+      expect(
+        await codeOfAsync(() =>
+          writeProjectFileFromStream(root, "a.txt", Readable.from(["new"]), { maxBytes: LIMIT }),
+        ),
+      ).toBe("conflict");
+      expect(fs.readFileSync(path.join(root, "a.txt"), "utf8")).toBe("keep");
+      expect(leftovers(root)).toEqual([]);
+    });
+
+    it("refuses an existing name BEFORE writing anything, and discards the unread body", async () => {
+      fs.writeFileSync(path.join(root, "taken.txt"), "keep");
+      const source = new Readable({ read() {} });
+      const ended = new Promise<void>((resolve) => source.on("end", resolve));
+      const result = writeProjectFileFromStream(root, "taken.txt", source, { maxBytes: LIMIT });
+      await expect(result).rejects.toMatchObject({ code: "conflict" });
+      // no temp file was ever created for the doomed upload
+      expect(leftovers(root)).toEqual([]);
+      // ...and the rest of the body is drained, not left to reset the connection
+      source.push("late bytes");
+      source.push(null);
+      await ended;
+    });
+
+    it("discards the unread body for every early refusal (escape, missing parent, mkdirs conflict)", async () => {
+      fs.writeFileSync(path.join(root, "file"), "x");
+      for (const [rel, mkdirs] of [
+        ["../x", false],
+        ["no/such/x.txt", false],
+        ["file/x.txt", true],
+      ] as const) {
+        const source = new Readable({ read() {} });
+        const ended = new Promise<void>((resolve) => source.on("end", resolve));
+        await expect(
+          writeProjectFileFromStream(root, rel, source, { maxBytes: LIMIT, mkdirs }),
+        ).rejects.toBeInstanceOf(ProjectFileError);
+        source.push(null);
+        await ended;
+      }
+    });
+
+    it("refuses a target that is an existing directory", async () => {
+      fs.mkdirSync(path.join(root, "d"));
+      expect(
+        await codeOfAsync(() =>
+          writeProjectFileFromStream(root, "d", Readable.from(["x"]), { maxBytes: LIMIT }),
+        ),
+      ).toBe("conflict");
+    });
+
+    it("enforces the byte cap on what is actually received and cleans up", async () => {
+      expect(
+        await codeOfAsync(() =>
+          writeProjectFileFromStream(root, "big", Readable.from([Buffer.alloc(100)]), {
+            maxBytes: 50,
+          }),
+        ),
+      ).toBe("too_large");
+      expect(fs.existsSync(path.join(root, "big"))).toBe(false);
+      expect(leftovers(root)).toEqual([]);
+    });
+
+    it("removes the temp file when the source dies mid-stream", async () => {
+      async function* dying() {
+        yield Buffer.from("partial");
+        throw Object.assign(new Error("client went away"), { code: "ECONNRESET" });
+      }
+      await expect(
+        writeProjectFileFromStream(root, "half", Readable.from(dying()), { maxBytes: LIMIT }),
+      ).rejects.toThrow(/client went away/);
+      expect(fs.existsSync(path.join(root, "half"))).toBe(false);
+      expect(leftovers(root)).toEqual([]);
+    });
+
+    it("rejects traversal and absolute paths", async () => {
+      for (const bad of ["../x", "a/../../x", "/etc/x", "x\0y"]) {
+        expect(
+          await codeOfAsync(() =>
+            writeProjectFileFromStream(root, bad, Readable.from(["x"]), { maxBytes: LIMIT }),
+          ),
+          bad,
+        ).toBe("escape");
+      }
+      expect(fs.readdirSync(outside)).toEqual([]);
+    });
+
+    it("refuses to write through a symlinked folder that leaves the project", async () => {
+      fs.symlinkSync(outside, path.join(root, "link"));
+      expect(
+        await codeOfAsync(() =>
+          writeProjectFileFromStream(root, "link/x.txt", Readable.from(["x"]), {
+            maxBytes: LIMIT,
+          }),
+        ),
+      ).toBe("escape");
+      expect(fs.readdirSync(outside)).toEqual([]);
+    });
+
+    it("is not_found when the parent folder is missing and mkdirs is off", async () => {
+      expect(
+        await codeOfAsync(() =>
+          writeProjectFileFromStream(root, "no/such/x.txt", Readable.from(["x"]), {
+            maxBytes: LIMIT,
+          }),
+        ),
+      ).toBe("not_found");
+    });
+
+    it("creates missing parent folders with mkdirs and merges into existing ones", async () => {
+      fs.mkdirSync(path.join(root, "pkg"));
+      fs.writeFileSync(path.join(root, "pkg", "old.txt"), "old");
+      await writeProjectFileFromStream(root, "pkg/sub/deep/new.txt", Readable.from(["n"]), {
+        maxBytes: LIMIT,
+        mkdirs: true,
+      });
+      expect(fs.readFileSync(path.join(root, "pkg", "sub", "deep", "new.txt"), "utf8")).toBe("n");
+      expect(fs.readFileSync(path.join(root, "pkg", "old.txt"), "utf8")).toBe("old");
+    });
+
+    it("mkdirs refuses a parent that exists as a file", async () => {
+      fs.writeFileSync(path.join(root, "pkg"), "i am a file");
+      expect(
+        await codeOfAsync(() =>
+          writeProjectFileFromStream(root, "pkg/x.txt", Readable.from(["x"]), {
+            maxBytes: LIMIT,
+            mkdirs: true,
+          }),
+        ),
+      ).toBe("conflict");
+    });
+
+    it("mkdirs follows an inside symlinked folder but not one that leaves the project", async () => {
+      fs.mkdirSync(path.join(root, "real"));
+      fs.symlinkSync(path.join(root, "real"), path.join(root, "alias"));
+      await writeProjectFileFromStream(root, "alias/x.txt", Readable.from(["x"]), {
+        maxBytes: LIMIT,
+        mkdirs: true,
+      });
+      expect(fs.readFileSync(path.join(root, "real", "x.txt"), "utf8")).toBe("x");
+
+      fs.symlinkSync(outside, path.join(root, "escape"));
+      expect(
+        await codeOfAsync(() =>
+          writeProjectFileFromStream(root, "escape/x.txt", Readable.from(["x"]), {
+            maxBytes: LIMIT,
+            mkdirs: true,
+          }),
+        ),
+      ).toBe("escape");
+      expect(fs.readdirSync(outside)).toEqual([]);
+    });
+
+    it("only one of two racing uploads to the same name wins", async () => {
+      const results = await Promise.allSettled([
+        writeProjectFileFromStream(root, "race.txt", Readable.from(["one"]), { maxBytes: LIMIT }),
+        writeProjectFileFromStream(root, "race.txt", Readable.from(["two"]), { maxBytes: LIMIT }),
+      ]);
+      expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+      const lost = results.find((r) => r.status === "rejected") as PromiseRejectedResult;
+      expect((lost.reason as ProjectFileError).code).toBe("conflict");
+      expect(["one", "two"]).toContain(fs.readFileSync(path.join(root, "race.txt"), "utf8"));
+      expect(leftovers(root)).toEqual([]);
+    });
+  });
+
+  describe("openProjectFileReadStream", () => {
+    async function drain(stream: Readable): Promise<Buffer> {
+      const chunks: Buffer[] = [];
+      for await (const c of stream) chunks.push(c as Buffer);
+      return Buffer.concat(chunks);
+    }
+
+    it("streams a file's exact bytes with its size and basename", async () => {
+      const bytes = Buffer.from([0, 1, 2, 255, 254, 0]);
+      fs.mkdirSync(path.join(root, "d"));
+      fs.writeFileSync(path.join(root, "d", "f.bin"), bytes);
+      const dl = openProjectFileReadStream(root, "d/f.bin", LIMIT);
+      expect(dl).toMatchObject({ size: bytes.length, path: "d/f.bin", name: "f.bin" });
+      expect((await drain(dl.stream)).equals(bytes)).toBe(true);
+    });
+
+    it("refuses directories, missing files, oversize files and escapes before streaming", () => {
+      fs.mkdirSync(path.join(root, "d"));
+      fs.writeFileSync(path.join(root, "big"), "0123456789");
+      expect(codeOf(() => openProjectFileReadStream(root, "d", LIMIT))).toBe("is_directory");
+      expect(codeOf(() => openProjectFileReadStream(root, "nope", LIMIT))).toBe("not_found");
+      expect(codeOf(() => openProjectFileReadStream(root, "big", 5))).toBe("too_large");
+      expect(codeOf(() => openProjectFileReadStream(root, "../x", LIMIT))).toBe("escape");
+    });
+
+    it("refuses a symlink that leaves the project", () => {
+      fs.writeFileSync(path.join(outside, "secret"), "s");
+      fs.symlinkSync(path.join(outside, "secret"), path.join(root, "leak"));
+      expect(codeOf(() => openProjectFileReadStream(root, "leak", LIMIT))).toBe("escape");
     });
   });
 });

@@ -792,6 +792,26 @@ export function DownloadIcon(props: IconProps) {
   );
 }
 
+export function UploadIcon(props: IconProps) {
+  return (
+    <Svg strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M12 15V4" />
+      <path d="M7.5 8.5 12 4l4.5 4.5" />
+      <path d="M5 19.5h14" />
+    </Svg>
+  );
+}
+
+export function FolderUpIcon(props: IconProps) {
+  return (
+    <Svg strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      <path d="M12 16v-5.5" />
+      <path d="M9.5 12.5 12 10l2.5 2.5" />
+    </Svg>
+  );
+}
+
 export function CopyIcon(props: IconProps) {
   return (
     <Svg strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" {...props}>

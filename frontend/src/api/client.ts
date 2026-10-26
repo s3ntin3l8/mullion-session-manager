@@ -135,7 +135,7 @@ export function setGlobalRateLimitMax(max: number): void {
 // back to `defaultMs` for any unparseable value — a missing/malformed
 // header shouldn't ever be read as "retry immediately" (the cycle we're
 // trying to break), and the default is the typical rate-limit window.
-function parseRetryAfterMs(value: string | null, defaultMs: number): number {
+export function parseRetryAfterMs(value: string | null, defaultMs: number): number {
   if (value === null || value === "") return defaultMs;
   // Seconds form: a non-negative integer. A bare number is the common
   // shape @fastify/rate-limit and most reverse proxies emit.
@@ -154,7 +154,7 @@ function parseRetryAfterMs(value: string | null, defaultMs: number): number {
   return delta;
 }
 
-const DEFAULT_RETRY_AFTER_MS = 60_000;
+export const DEFAULT_RETRY_AFTER_MS = 60_000;
 
 // Reload-loop guard: sessionStorage (not a module-level variable — a
 // full-page reload resets JS state but not sessionStorage) records the last
