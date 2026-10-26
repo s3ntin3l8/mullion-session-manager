@@ -8886,6 +8886,11 @@ describe("reconcileTasks", () => {
       // Not spent — the human did the work, not the worker.
       expect(row.autoReturnRounds).toBe(DEFAULT_MAX_AUTO_RETURN_ROUNDS);
       expect(row.status).toBe("reviewing");
+      // The stall guard's premise: no worker spell started, so claimedAt must
+      // stay older than the verdict that parked the task (detectReviewStall
+      // only runs when claimedAt is NEWER than lastReviewVerdictAt). A re-arm
+      // that refreshed it would silently re-enable no-progress false parks.
+      expect(row.claimedAt?.getTime()).toBe(task.claimedAt?.getTime());
 
       await app.close();
     });

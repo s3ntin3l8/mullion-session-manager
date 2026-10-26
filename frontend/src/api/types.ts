@@ -290,8 +290,8 @@ export interface Project {
   // produce a verdict at all. Mirrors projects.autoApprove.
   autoApprove: boolean | null;
   // #756 — per-project override of the auto-return round cap. Null means
-  // "use the install default" (currently 2). Mirrors
-  // projects.maxAutoReturnRounds.
+  // "use the install-wide taskMaster.maxAutoReturnRounds" (default 10); 0
+  // means unlimited. Mirrors projects.maxAutoReturnRounds.
   maxAutoReturnRounds: number | null;
   // #761 — off by default: the PR title is the raw task title. On, the
   // worker is asked to write a Conventional Commits title alongside its
@@ -1871,7 +1871,8 @@ export interface Task {
   // "reviewing -> in_progress" round back to the worker — not just from a
   // changes-requested review verdict anymore (a red required CI check and
   // an unresolved PR review comment are later triggers on the same model).
-  // Bounded by a resolved per-project cap (default 2) and never reset —
+  // Bounded by a resolved cap (the project's, else the install-wide setting;
+  // default 10, 0 = unlimited) and never reset —
   // see TaskDetail.tsx's review card. Renamed from `reviewRounds`.
   autoReturnRounds: number;
   // Which trigger most recently spent a round — "review" | "ci" |
