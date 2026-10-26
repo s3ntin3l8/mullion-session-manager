@@ -1201,7 +1201,7 @@ async function refuseAfterApproval(
     app.log.warn({ err, ...at }, "review-request: could not read reviews for the approval guard");
     return;
   }
-  if (verdict?.state === "APPROVED") throw new ReviewApprovedError(verdict.commitId);
+  if (verdict?.state === "APPROVED") throw new ReviewApprovedError();
 }
 
 async function existingBotReviewWarning(

@@ -570,13 +570,12 @@ describe("review-request routes", () => {
         },
       );
 
-    it("refuses with a 409 that says to apply the suggestions and names the approved commit", async () => {
+    it("refuses with a 409 that says to apply the suggestions and how to force", async () => {
       runHook();
       mocks.listPullRequestReviews.mockResolvedValue([review("APPROVED")]);
       const res = await post(sessionId, {});
       expect(res.statusCode).toBe(409);
       expect(res.json().message).toContain("already approved");
-      expect(res.json().message).toContain("sha4242");
       expect(res.json().message).toContain("force");
     });
 
@@ -639,13 +638,14 @@ describe("review-request routes", () => {
       expect((await post(sessionId, {})).statusCode).toBe(200);
     });
 
-    it("counts any bot's approval when no reviewer login is configured", async () => {
+    it("lets the request through when no reviewer login is configured (unknown identity, no verdict)", async () => {
       applySettingsPatch(app, { reviewRelay: { reviewerBotLogin: "" } });
       runHook();
+      // Any bot's approval would otherwise refuse the request in the review bot's name.
       mocks.listPullRequestReviews.mockResolvedValue([
         review("APPROVED", { author: "other[bot]" }),
       ]);
-      expect((await post(sessionId, {})).statusCode).toBe(409);
+      expect((await post(sessionId, {})).statusCode).toBe(200);
     });
 
     it("lets the request through when the reviews cannot be read", async () => {

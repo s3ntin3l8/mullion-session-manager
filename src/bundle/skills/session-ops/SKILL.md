@@ -153,7 +153,7 @@ What you _can_ do for a dev-server-shaped task, at session scope:
   once an operator has configured the review relay in Mullion's Settings.
   A re-review of a **new** commit (after pushing fixes to a changes-requested
   review) goes through right away — only a repeat request for the same commit
-  is refused by the cooldown. Once the review bot has **approved**, don't
+  is refused by the cooldown. Once the review bot has approved, don't
   re-request for its remaining suggestions: apply them and push (the relay
   refuses with a 409; `--force` / `force` is only for a change that grew
   beyond them or a human's ask). If a requested review never appears, `mullion review status` (or

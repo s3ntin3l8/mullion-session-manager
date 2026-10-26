@@ -475,7 +475,9 @@ review`; **empty = the ledger is off**, like `hermes-review-ledger: off`), and
   changes-requested review, a dismissed approval or a human's approval does
   not — and `reviewRelay.reReviewAfterApproval` (`refuse`, the default, or
   `allow`) turns the guard off. `--force` (MCP: `force`) asks anyway, for a
-  change that grew beyond the suggestions or a human's request. The confirmation names the run id. A commit that has already been
+  change that grew beyond the suggestions or a human's request. The guard is for
+  agents: the dashboard's **Re-review** button is a human asking, so it is never
+  refused, whatever the setting. The confirmation names the run id. A commit that has already been
   reviewed is refused the same way — there is nothing new to review, so push
   a new commit to ask for another round (or dismiss that review first).
   The relay also writes an in-flight **marker** (a check run named by

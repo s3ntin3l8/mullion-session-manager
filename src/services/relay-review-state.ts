@@ -48,11 +48,17 @@ export function isReviewerLogin(author: string, reviewerBotLogin: string): boole
  * DISMISSED one was retracted, so neither can reverse an approval or revive a
  * request for changes. A human's review, or another bot's, is not the reviewer
  * bot's verdict at all (`isReviewerLogin`).
+ *
+ * With no reviewer login configured the reviewer's identity is unknown, so
+ * there is no verdict: `isReviewerLogin` would match every author, and any
+ * bot's approval (claude[bot], Copilot) would refuse the request in the
+ * review bot's name. Unknown identity fails open.
  */
 export function reviewerStandingVerdict(
   reviews: ReadonlyArray<{ author: string; authorIsBot: boolean; state: string; commitId: string }>,
   reviewerBotLogin: string,
 ): { state: "APPROVED" | "CHANGES_REQUESTED"; commitId: string } | null {
+  if (reviewerBotLogin === "") return null;
   const decisive = reviews.filter(
     (r) =>
       r.authorIsBot &&

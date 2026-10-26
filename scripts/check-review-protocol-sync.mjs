@@ -46,12 +46,8 @@ const root =
  *   without another round; without it a surface teaches the endless
  *   re-review cycle the relay now refuses.
  */
-const CLAUSES = [
-  "one review per pull request",
-  "10-30 minutes",
-  "review_status",
-  "once the review bot has approved",
-];
+const APPROVAL_CLAUSE = "once the review bot has approved";
+const CLAUSES = ["one review per pull request", "10-30 minutes", "review_status", APPROVAL_CLAUSE];
 
 /**
  * The files that RESTATE the rule in prose, with the label used in the
@@ -62,6 +58,16 @@ const SURFACES = [
   { label: "AGENTS.md", file: "AGENTS.md" },
   { label: "docs/agent-guide.md", file: "docs/agent-guide.md" },
   { label: "docs/cli.md", file: "docs/cli.md" },
+];
+
+/**
+ * Files that point at the relay rather than restate the whole protocol (a
+ * skill an agent reads while it works), so they carry only the approval
+ * clause — the one that stops the re-review cycle. Whitespace is normalised:
+ * a re-wrapped paragraph must not hide the phrase.
+ */
+const APPROVAL_SURFACES = [
+  { label: "the session-ops skill", file: "src/bundle/skills/session-ops/SKILL.md" },
 ];
 
 function read(rel) {
@@ -89,6 +95,25 @@ for (const surface of SURFACES) {
         `${missing.map((c) => `"${c}"`).join(", ")}. The rule is stated in ` +
         `src/cli/review-protocol.mjs (REVIEW_PROTOCOL_NOTE); restate it here, or ` +
         `import it from there.`,
+    );
+    failed = true;
+  }
+}
+
+for (const surface of APPROVAL_SURFACES) {
+  let text;
+  try {
+    text = read(surface.file);
+  } catch {
+    console.error(`${surface.label}: ${surface.file} is missing — cannot check the approval rule.`);
+    failed = true;
+    continue;
+  }
+  if (!text.replace(/\s+/g, " ").toLowerCase().includes(APPROVAL_CLAUSE)) {
+    console.error(
+      `${surface.label} (${surface.file}) does not carry the approval rule: missing ` +
+        `"${APPROVAL_CLAUSE}". After the review bot approves, an agent applies its ` +
+        `suggestions without another round (src/cli/review-protocol.mjs).`,
     );
     failed = true;
   }
@@ -143,4 +168,6 @@ if (missingNote.length > 0) {
 if (failed) {
   process.exit(1);
 }
-console.log(`review protocol: ${SURFACES.length} surfaces carry the rule.`);
+console.log(
+  `review protocol: ${SURFACES.length} surfaces carry the rule, ${APPROVAL_SURFACES.length} the approval clause.`,
+);

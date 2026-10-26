@@ -142,9 +142,12 @@ export class ReviewAlreadyLandedError extends Error {
  * suggestions, or a human asked for it.
  */
 export class ReviewApprovedError extends Error {
-  constructor(readonly approvedSha: string) {
+  constructor() {
+    // No commit is named: a review's commit_id is re-pointed at the head by an
+    // "Update branch" or a force-push, so it is not reliable evidence of what
+    // was approved.
     super(
-      `The review bot already approved this pull request (at ${approvedSha.slice(0, 7)}). ` +
+      `The review bot already approved this pull request. ` +
         `Apply its suggestions and push without another review round. ` +
         `Pass force only if the change grew beyond them, or a human asked for another review`,
     );

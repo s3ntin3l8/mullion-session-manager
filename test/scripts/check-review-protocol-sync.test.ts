@@ -39,6 +39,7 @@ const FIXTURE_FILES: Record<string, string> = {
   "src/mcp/client.mjs": `import { REVIEW_REQUEST_TIMEOUT_MS } from "../cli/review-protocol.mjs";\n`,
   "src/services/workflow-conventions.ts": `import { REVIEW_PROTOCOL_NOTE } from "../cli/review-protocol.mjs";\nconst F = "x " + REVIEW_PROTOCOL_NOTE;\n`,
   "src/cli/review-protocol.mjs": `export const REVIEW_PROTOCOL_NOTE = "${NOTE}";\n`,
+  "src/bundle/skills/session-ops/SKILL.md": `Once the review bot has approved, don't re-request.\n`,
 };
 
 function fixture(overrides: Record<string, string> = {}): string {
@@ -87,6 +88,22 @@ describe("check-review-protocol-sync", () => {
         "check review_status once. After pushing fixes, ask again.\n",
     });
     await expect(run(dir)).rejects.toThrow(/once the review bot has approved/);
+  });
+
+  it("fails when the session-ops skill drops the approval rule", async () => {
+    const dir = makeFixture({
+      "src/bundle/skills/session-ops/SKILL.md": "Re-request a review after pushing fixes.\n",
+    });
+    await expect(run(dir)).rejects.toThrow(/session-ops skill .* does not carry the approval rule/);
+  });
+
+  it("accepts the approval rule in the skill however the paragraph is wrapped", async () => {
+    const dir = makeFixture({
+      "src/bundle/skills/session-ops/SKILL.md":
+        "Once the review bot\n  has approved, don't re-request.\n",
+    });
+    const { stdout } = await run(dir);
+    expect(stdout).toContain("approval clause");
   });
 
   it("fails when a client keeps its own copy of the wording", async () => {

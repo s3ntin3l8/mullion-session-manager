@@ -547,7 +547,9 @@ export interface AppSettings {
      * nits, so the cycle never ends); "allow" re-reviews every new head, as
      * before. A request with `force` goes through either way. Only the
      * reviewer bot's own newest decisive review counts, so a later
-     * CHANGES_REQUESTED, a dismissed approval or a human's approval does not.
+     * CHANGES_REQUESTED, a dismissed approval or a human's approval does not;
+     * with no `reviewerBotLogin` set there is no verdict to go by, so nothing
+     * is refused.
      */
     reReviewAfterApproval: "refuse" | "allow";
   };
