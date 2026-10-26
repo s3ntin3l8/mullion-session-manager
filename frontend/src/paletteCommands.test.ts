@@ -147,6 +147,16 @@ describe("buildPaletteCommands", () => {
     expect(noProject.map((c) => c.id)).toContain("toggle-right-sidebar");
   });
 
+  it("flags only the commands whose openers take focus (#1884)", () => {
+    // CommandPalette derives its suppress-restore set from `movesFocus`.
+    // These three autofocus a field; every other command must stay out or
+    // the trap will not restore.
+    const ids = buildPaletteCommands(ctx().context)
+      .filter((c) => c.movesFocus)
+      .map((c) => c.id);
+    expect(ids).toEqual(["external-file", "integrations-settings", "blank-browser"]);
+  });
+
   it("the drill-in row's run is a harmless no-op (the palette handles it)", () => {
     const drill = buildPaletteCommands(ctx().context).find((c) => c.drillIn)!;
     expect(() => drill.run()).not.toThrow();

@@ -9,6 +9,7 @@ import { DEFAULT_SETTINGS } from "./api/index.js";
 import type { Launcher, Project, Session } from "./api/index.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { makeSession, makeWorkspace } from "./test/fixtures.js";
+import { ACTIVE_TERMINAL_FOCUS_SELECTOR, WORKSPACE_FOCUS_FALLBACK } from "./paletteFocusTargets.js";
 
 // Issue #27: the palette's "Integrations" section — a GitHub-panel shortcut
 // for the current project plus a link into Settings -> Integrations.
@@ -764,64 +765,170 @@ describe("CommandPalette -> focus management (P11)", () => {
   // The opener is a terminal inside the grid this switch is about to clear.
   // Restoring to it would land on <body> once that node unmounts, so focus
   // moves to the new workspace's active pane, or the sidebar row that marks
-  // it, instead.
+  // it, instead. The DOM is built from the same selector the palette queries
+  // — a renamed constant fails this file's import, not a still-green string.
+  function mountFromSelector(selector: string): HTMLElement {
+    const parts = selector.trim().split(/\s+/);
+    let root: HTMLElement | null = null;
+    let parent: HTMLElement | null = null;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i]!;
+      const isLast = i === parts.length - 1;
+      const el = document.createElement(isLast && part.includes("textarea") ? "textarea" : "div");
+      for (const match of part.matchAll(/\.([A-Za-z0-9_-]+)/g)) {
+        el.classList.add(match[1]!);
+      }
+      if (root === null) root = el;
+      else parent!.appendChild(el);
+      parent = el;
+    }
+    if (!root) throw new Error(`empty selector: ${selector}`);
+    return root;
+  }
+
+  function workspaceFallbackRow(label: string): HTMLElement {
+    const row = document.createElement("div");
+    row.dataset.focusFallback = WORKSPACE_FOCUS_FALLBACK;
+    row.tabIndex = 0;
+    row.textContent = label;
+    return row;
+  }
+
   it("moves focus to the new workspace's pane, not a trigger inside the grid", async () => {
-    render(
-      <div>
-        <div className="dockview-container">
-          <div className="dv-active-group">
-            <button>old terminal</button>
-            <textarea className="xterm-helper-textarea" aria-label="new pane" />
-          </div>
-        </div>
-        <div className="workspace-item active" role="button" tabIndex={0}>
-          sidebar workspace
-        </div>
-      </div>,
-    );
-    const trigger = screen.getByText("old terminal");
-    trigger.focus();
+    const terminal = mountFromSelector(ACTIVE_TERMINAL_FOCUS_SELECTOR);
+    const pane = terminal.querySelector("textarea") as HTMLTextAreaElement;
+    pane.setAttribute("aria-label", "new pane");
+    const trigger = document.createElement("button");
+    trigger.textContent = "old terminal";
+    pane.parentElement!.insertBefore(trigger, pane);
+    const row = workspaceFallbackRow("sidebar workspace");
+    const host = document.createElement("div");
+    host.append(terminal, row);
+    document.body.append(host);
+    try {
+      trigger.focus();
 
-    useDashboardStore.setState({
-      workspaces: [makeWorkspace({ id: 9, name: "Release train" })],
-      activeWorkspaceId: null,
-    });
-    const user = userEvent.setup();
-    const { unmount } = renderPalette();
-    await screen.findByPlaceholderText("Launch a session or run a command…");
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "release");
-    await user.click(await screen.findByText("Release train"));
+      useDashboardStore.setState({
+        workspaces: [makeWorkspace({ id: 9, name: "Release train" })],
+        activeWorkspaceId: null,
+      });
+      const user = userEvent.setup();
+      const { unmount } = renderPalette();
+      await screen.findByPlaceholderText("Launch a session or run a command…");
+      await user.type(screen.getByPlaceholderText(/Launch a session/), "release");
+      await user.click(await screen.findByText("Release train"));
 
-    await vi.waitFor(() => expect(screen.getByLabelText("new pane")).toHaveFocus());
-    unmount();
-    expect(trigger).not.toHaveFocus();
-    expect(screen.getByLabelText("new pane")).toHaveFocus();
+      await vi.waitFor(() => expect(pane).toHaveFocus());
+      unmount();
+      expect(trigger).not.toHaveFocus();
+      expect(pane).toHaveFocus();
+    } finally {
+      host.remove();
+    }
   });
 
   it("moves focus to the active workspace row when the grid has no pane to take it", async () => {
-    render(
-      <div>
-        <div className="dockview-container">
-          <button>old terminal</button>
-        </div>
-        <div className="workspace-item active" role="button" tabIndex={0}>
-          sidebar workspace
-        </div>
-      </div>,
-    );
-    screen.getByText("old terminal").focus();
+    const gridClass = ACTIVE_TERMINAL_FOCUS_SELECTOR.split(/\s+/)[0]!.replace(/^\./, "");
+    const grid = document.createElement("div");
+    grid.className = gridClass;
+    const trigger = document.createElement("button");
+    trigger.textContent = "old terminal";
+    grid.append(trigger);
+    const row = workspaceFallbackRow("sidebar workspace");
+    const host = document.createElement("div");
+    host.append(grid, row);
+    document.body.append(host);
+    try {
+      trigger.focus();
 
-    useDashboardStore.setState({
-      workspaces: [makeWorkspace({ id: 9, name: "Release train" })],
-      activeWorkspaceId: null,
-    });
-    const user = userEvent.setup();
-    renderPalette();
-    await screen.findByPlaceholderText("Launch a session or run a command…");
-    await user.type(screen.getByPlaceholderText(/Launch a session/), "release");
-    await user.click(await screen.findByText("Release train"));
+      useDashboardStore.setState({
+        workspaces: [makeWorkspace({ id: 9, name: "Release train" })],
+        activeWorkspaceId: null,
+      });
+      const user = userEvent.setup();
+      renderPalette();
+      await screen.findByPlaceholderText("Launch a session or run a command…");
+      await user.type(screen.getByPlaceholderText(/Launch a session/), "release");
+      await user.click(await screen.findByText("Release train"));
 
-    await vi.waitFor(() => expect(screen.getByText("sidebar workspace")).toHaveFocus());
+      await vi.waitFor(() => expect(row).toHaveFocus());
+    } finally {
+      host.remove();
+    }
+  });
+
+  // handleSelectWorkspace's setSidebarOpen(false) unmounts a mobile opener
+  // that was outside the grid, so the dockview prediction says it survives.
+  // The disconnect lands in the commit after the click; the deferred tick
+  // has to notice and aim at the row instead of leaving focus on <body>.
+  it("moves focus to the workspace row when the switch disconnects an opener outside the grid", async () => {
+    const opener = document.createElement("button");
+    opener.textContent = "mobile opener";
+    const row = workspaceFallbackRow("sidebar workspace");
+    document.body.append(opener, row);
+    try {
+      opener.focus();
+
+      useDashboardStore.setState({
+        workspaces: [makeWorkspace({ id: 9, name: "Release train" })],
+        activeWorkspaceId: null,
+      });
+      let unmountPalette: () => void = () => {};
+      const user = userEvent.setup();
+      const view = renderPalette({
+        onShowWorkspace: () => {
+          // After this handler returns, same as React committing
+          // setSidebarOpen(false) — not synchronously, or the survival
+          // check would already see a disconnected node.
+          queueMicrotask(() => opener.remove());
+        },
+        onClose: () => {
+          queueMicrotask(() => unmountPalette());
+        },
+      });
+      unmountPalette = view.unmount;
+      await screen.findByPlaceholderText("Launch a session or run a command…");
+      await user.type(screen.getByPlaceholderText(/Launch a session/), "release");
+      await user.click(await screen.findByText("Release train"));
+
+      await vi.waitFor(() => expect(row).toHaveFocus());
+    } finally {
+      row.remove();
+      opener.remove();
+    }
+  });
+
+  it("skips a visibility:hidden workspace row and lands on a shown one", async () => {
+    const gridClass = ACTIVE_TERMINAL_FOCUS_SELECTOR.split(/\s+/)[0]!.replace(/^\./, "");
+    const grid = document.createElement("div");
+    grid.className = gridClass;
+    const trigger = document.createElement("button");
+    trigger.textContent = "old terminal";
+    grid.append(trigger);
+    const hidden = workspaceFallbackRow("hidden workspace");
+    hidden.style.visibility = "hidden";
+    const shown = workspaceFallbackRow("shown workspace");
+    const host = document.createElement("div");
+    host.append(grid, hidden, shown);
+    document.body.append(host);
+    try {
+      trigger.focus();
+
+      useDashboardStore.setState({
+        workspaces: [makeWorkspace({ id: 9, name: "Release train" })],
+        activeWorkspaceId: null,
+      });
+      const user = userEvent.setup();
+      renderPalette();
+      await screen.findByPlaceholderText("Launch a session or run a command…");
+      await user.type(screen.getByPlaceholderText(/Launch a session/), "release");
+      await user.click(await screen.findByText("Release train"));
+
+      await vi.waitFor(() => expect(shown).toHaveFocus());
+      expect(hidden).not.toHaveFocus();
+    } finally {
+      host.remove();
+    }
   });
 
   it("restores focus after opening the task board, which does not move focus itself", async () => {
@@ -858,6 +965,33 @@ describe("CommandPalette -> focus management (P11)", () => {
     const user = userEvent.setup();
     const { unmount } = renderPalette();
     await user.click(await screen.findByText("Manage integrations…"));
+
+    unmount();
+    expect(trigger).not.toHaveFocus();
+  });
+
+  it("does NOT restore focus when opening a blank preview, which focuses its address bar", async () => {
+    render(<button>open palette</button>);
+    const trigger = screen.getByText("open palette");
+    trigger.focus();
+
+    const user = userEvent.setup();
+    const { unmount } = renderPalette();
+    await user.click(await screen.findByText("New preview tab"));
+
+    unmount();
+    expect(trigger).not.toHaveFocus();
+  });
+
+  it("does NOT restore focus when opening a file by path, which focuses its path field", async () => {
+    render(<button>open palette</button>);
+    const trigger = screen.getByText("open palette");
+    trigger.focus();
+
+    const user = userEvent.setup();
+    const { unmount } = renderPalette();
+    await user.click(await screen.findByText(/Project: mullion/));
+    await user.click(await screen.findByText("Open file by path"));
 
     unmount();
     expect(trigger).not.toHaveFocus();

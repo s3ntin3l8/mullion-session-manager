@@ -19,6 +19,7 @@ import {
   PlusIcon,
   RenameIcon,
 } from "./ui/icons.js";
+import { WORKSPACE_FOCUS_FALLBACK } from "./paletteFocusTargets.js";
 
 // Workspaces (named, persistent split-layouts — Mullion's own "tab" concept)
 // and Projects/Sessions (the folder-grouped inventory of durable terminals
@@ -827,6 +828,10 @@ function WorkspaceItem({
       // Enter/Space from ALSO switching to this workspace.
       role="button"
       tabIndex={0}
+      // The palette's focus fallback after a workspace switch lands here
+      // when the opener will not survive. Only the active row — a stale
+      // highlight is not a place to put the caret.
+      data-focus-fallback={active ? WORKSPACE_FOCUS_FALLBACK : undefined}
       // Which workspace is currently in effect. `aria-current` is how a
       // screen reader announces "you are here" in a list like this; the
       // visual `.active` class alone says nothing to one.

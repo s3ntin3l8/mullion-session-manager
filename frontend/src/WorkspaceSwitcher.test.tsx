@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { Profiler, type ProfilerOnRenderCallback } from "react";
 import * as panelUtils from "./panelUtils.js";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher.js";
+import { WORKSPACE_FOCUS_FALLBACK } from "./paletteFocusTargets.js";
 import { useDashboardStore } from "./store/index.js";
 import { api } from "./api/index.js";
 import type { Group, Workspace, Session, Task } from "./api/index.js";
@@ -355,6 +356,10 @@ describe("WorkspaceSwitcher", () => {
       });
       const { container } = render(<WorkspaceSwitcher />);
       expect(container.querySelector(".workspace-item")).toHaveClass("active");
+      expect(container.querySelector(".workspace-item")).toHaveAttribute(
+        "data-focus-fallback",
+        WORKSPACE_FOCUS_FALLBACK,
+      );
     });
 
     it("drops the active-workspace highlight while viewMode is kanban, without touching activeWorkspaceId itself", () => {
@@ -368,6 +373,7 @@ describe("WorkspaceSwitcher", () => {
       });
       const { container } = render(<WorkspaceSwitcher />);
       expect(container.querySelector(".workspace-item")).not.toHaveClass("active");
+      expect(container.querySelector(".workspace-item")).not.toHaveAttribute("data-focus-fallback");
       // The underlying selection is untouched — only the paint is
       // suppressed, so leaving Tasks restores the real highlight.
       expect(useDashboardStore.getState().activeWorkspaceId).toBe(1);

@@ -20,9 +20,13 @@ import type { PaletteCommand } from "./paletteCommands.js";
 import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
 import { describeError } from "./lib/describeError.js";
 import { WorktreeOptions } from "./command-palette/WorktreeOptions.js";
-import { useFocusTrap } from "./hooks/useFocusTrap.js";
+import { useFocusTrap, isVisible } from "./hooks/useFocusTrap.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import { useDockUnavailableReason } from "./lib/useDockUnavailableReason.js";
+import {
+  ACTIVE_TERMINAL_FOCUS_SELECTOR,
+  WORKSPACE_FOCUS_FALLBACK_SELECTOR,
+} from "./paletteFocusTargets.js";
 import { ModelSelect } from "./settings/ModelPicker.js";
 import {
   commandHasModelFlag,
@@ -48,30 +52,20 @@ const SOURCE_LABEL: Record<Launcher["kind"], string | null> = {
   custom: ".crs/actions.json",
 };
 
-// These commands' openers take focus themselves, after this dialog has
-// closed: Settings' own focus trap, an empty preview's address bar
-// (BrowserPanel autoFocuses only while its status is "empty" — the blank
-// tab), and the external-file path field (autoFocus when no path was
-// passed). suppressRestore exists so this trap doesn't win that race.
-// Every other command opens a panel or toggles a surface that never moves
-// focus; suppressing there leaves a keyboard user on <body>.
-const FOCUS_TAKING_COMMAND_IDS = new Set([
-  "integrations-settings",
-  "blank-browser",
-  "external-file",
-]);
+// A workspace-switch focus move is scheduled for the tick after close so a
+// pane the layout restore focuses can win, and so the active workspace row
+// has committed. Passive effect cleanups run before that macrotask, so the
+// closing instance cannot keep the timer itself — clearing it there would
+// swallow the move. It re-arms this module-level timer on unmount; the next
+// palette mount cancels it, which is the reopen that must not have focus
+// stolen out from under its own initial focus.
+let deferredWorkspaceFocusTimer: ReturnType<typeof setTimeout> | null = null;
 
-// A node the workspace-switch fallback can actually land on. `display: none`
-// (a collapsed sidebar duplicate) makes `.focus()` a silent no-op, same
-// check useFocusTrap uses — offsetWidth/getClientRects are 0 in jsdom.
-function isShown(el: HTMLElement): boolean {
-  let node: HTMLElement | null = el;
-  while (node) {
-    if (window.getComputedStyle(node).display === "none") return false;
-    if (node.getAttribute("aria-hidden") === "true") return false;
-    node = node.parentElement;
+function cancelDeferredWorkspaceFocus() {
+  if (deferredWorkspaceFocusTimer !== null) {
+    clearTimeout(deferredWorkspaceFocusTimer);
+    deferredWorkspaceFocusTimer = null;
   }
-  return true;
 }
 
 // Expands Settings -> Session management's naming-pattern tokens
@@ -349,6 +343,40 @@ export function CommandPalette({
     containerRef: modalRef,
     initialFocusRef: isCoarsePointer ? modalRef : inputRef,
   });
+  // The workspace-switch tick. Lives on a ref so unmount can clear it and
+  // re-arm `deferredWorkspaceFocusTimer` (see that binding) — a stale tick
+  // after this palette opens again would move focus off the new input.
+  const workspaceFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const workspaceFocusRunRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    cancelDeferredWorkspaceFocus();
+    return () => {
+      const pending = workspaceFocusRunRef.current;
+      if (workspaceFocusTimerRef.current !== null) {
+        clearTimeout(workspaceFocusTimerRef.current);
+        workspaceFocusTimerRef.current = null;
+      }
+      workspaceFocusRunRef.current = null;
+      if (!pending) return;
+      deferredWorkspaceFocusTimer = window.setTimeout(() => {
+        deferredWorkspaceFocusTimer = null;
+        pending();
+      }, 0);
+    };
+  }, []);
+  const scheduleWorkspaceFocus = (run: () => void) => {
+    cancelDeferredWorkspaceFocus();
+    if (workspaceFocusTimerRef.current !== null) {
+      clearTimeout(workspaceFocusTimerRef.current);
+    }
+    workspaceFocusRunRef.current = run;
+    workspaceFocusTimerRef.current = window.setTimeout(() => {
+      workspaceFocusTimerRef.current = null;
+      const pending = workspaceFocusRunRef.current;
+      workspaceFocusRunRef.current = null;
+      pending?.();
+    }, 0);
+  };
   // `movesFocus` — see the comment above. Default true: the launch and
   // open-session paths do move focus, and they're the common call.
   const closeAfterAction = (movesFocus = true) => {
@@ -360,48 +388,58 @@ export function CommandPalette({
   // sidebar control). It isn't when the opener sits in `.dockview-container`:
   // the layout restore that follows this close clears that grid, so a
   // restore there unmounts a moment later and focus falls through to
-  // <body>. Aim at the new workspace's active pane, or the sidebar row
-  // that now marks it — both stay in the tab order — and don't let the
-  // trap fight that. Deferred a tick so a pane the restore itself focuses
-  // (TerminalPane on becoming active) wins, and so the row's `.active`
-  // class has committed.
+  // <body>. The grid check is a prediction — that node is still connected
+  // on this tick. `handleSelectWorkspace` also closes the mobile sidebar,
+  // which can unmount an opener that was NOT in the grid; that only shows
+  // up as `!isConnected` after the commit, so a node that looked alive is
+  // checked again on the deferred tick and treated as gone. Aim at the new
+  // workspace's active pane, or the sidebar row that now marks it — both
+  // stay in the tab order — and don't let the trap fight that. Deferred a
+  // tick so a pane the restore itself focuses (TerminalPane on becoming
+  // active) wins, and so the row's active marker has committed.
+  const placeFocusAfterWorkspaceSwitch = () => {
+    const active = document.activeElement;
+    const stillInPalette = !!active && !!modalRef.current?.contains(active);
+    if (active && active !== document.body && !stillInPalette) return;
+    if (!isCoarsePointer) {
+      const pane = document.querySelector<HTMLElement>(ACTIVE_TERMINAL_FOCUS_SELECTOR);
+      if (pane && isVisible(pane)) {
+        pane.focus();
+        return;
+      }
+    }
+    const rows = document.querySelectorAll<HTMLElement>(WORKSPACE_FOCUS_FALLBACK_SELECTOR);
+    for (const row of rows) {
+      if (isVisible(row)) {
+        row.focus();
+        return;
+      }
+    }
+  };
   const closeAfterWorkspaceSwitch = () => {
     const opener = restoreTarget();
     // <body> is what you get when nothing was focused (⌘K from a blur) —
     // restoring there is the bug, not a landing spot.
-    const openerSurvives =
+    const openerLooksAlive =
       !!opener &&
       opener.isConnected &&
       opener !== document.body &&
       opener !== document.documentElement &&
       !opener.closest(".dockview-container");
-    if (openerSurvives) {
+    if (openerLooksAlive) {
+      // Schedule before onClose: a caller that unmounts synchronously (App
+      // unmounts on the following commit; tests sometimes unmount inside
+      // onClose) must still find this tick to clear and re-arm.
+      scheduleWorkspaceFocus(() => {
+        if (opener.isConnected) return;
+        placeFocusAfterWorkspaceSwitch();
+      });
       onClose();
       return;
     }
     suppressRestore();
+    scheduleWorkspaceFocus(placeFocusAfterWorkspaceSwitch);
     onClose();
-    window.setTimeout(() => {
-      const active = document.activeElement;
-      const stillInPalette = !!active && !!modalRef.current?.contains(active);
-      if (active && active !== document.body && !stillInPalette) return;
-      if (!isCoarsePointer) {
-        const pane = document.querySelector<HTMLElement>(
-          ".dockview-container .dv-active-group .xterm-helper-textarea",
-        );
-        if (pane && isShown(pane)) {
-          pane.focus();
-          return;
-        }
-      }
-      const rows = document.querySelectorAll<HTMLElement>('.workspace-item.active[role="button"]');
-      for (const row of rows) {
-        if (isShown(row)) {
-          row.focus();
-          return;
-        }
-      }
-    }, 0);
   };
 
   // See `onShowWorkspace`'s own doc comment on CommandPaletteProps — falls
@@ -610,6 +648,9 @@ export function CommandPalette({
         creatingWorkspaceRef.current = false;
       });
   };
+  const focusTakingCommandIds = new Set(
+    commands.filter((command) => command.movesFocus).map((command) => command.id),
+  );
   const runCommand = (command: PaletteCommand) => {
     // `.run()` is the behaviour, including opening the name step.
     // `prompt` only keeps the palette open and clears the box so the
@@ -620,7 +661,7 @@ export function CommandPalette({
       inputRef.current?.focus();
       return;
     }
-    closeAfterAction(FOCUS_TAKING_COMMAND_IDS.has(command.id));
+    closeAfterAction(focusTakingCommandIds.has(command.id));
   };
   const activateCommand = (command: PaletteCommand) => {
     if (command.drillIn) {

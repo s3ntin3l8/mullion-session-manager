@@ -40,8 +40,10 @@ const FOCUSABLE_SELECTOR =
 // hook. `aria-hidden` ancestry is jsdom-safe AND is exactly how
 // CommandPalette.tsx already marks its own conditionally-hidden
 // skip-permissions block (`visibility: hidden` + `aria-hidden` on the same
-// wrapper) — without this check the Tab trap could focus a checkbox that's
-// invisible on screen, a real focus black hole for a keyboard user.
+// wrapper). `visibility` is checked on its own too (see `isVisibilityHidden`)
+// so a node that is only `visibility: hidden` — the closed sidebar drawer,
+// which deliberately does not use `display: none` — is the same kind of
+// focus black hole.
 function isAriaHidden(el: Element): boolean {
   return el.closest('[aria-hidden="true"]') !== null;
 }
@@ -71,9 +73,35 @@ function isDisplayNone(el: Element): boolean {
   return false;
 }
 
+// `visibility` inherits, unlike `display`. Walking every ancestor and treating
+// a hidden one as fatal would hide a descendant that opted back in with
+// `visibility: visible`. Computed style is that walk already: jsdom resolves
+// the inherited value and the override, so the element itself is enough.
+// `collapse` is the table-row equivalent of hidden — same "cannot land here".
+function isVisibilityHidden(el: Element): boolean {
+  let node: Element | null = el;
+  while (node) {
+    const visibility = window.getComputedStyle(node).visibility;
+    if (visibility === "hidden" || visibility === "collapse") return true;
+    // A resolved `visible` (own or inherited) means this node is shown.
+    // Stop, so a `visibility: visible` child of a hidden parent stays
+    // focusable — the parent's computed value is not this element's.
+    if (visibility === "visible") return false;
+    node = node.parentElement;
+  }
+  return false;
+}
+
+// Shared with CommandPalette's workspace-switch fallback. The two used to
+// each walk "is this node something we can focus?" and the palette's copy
+// was not `visibility`-aware — keep a single predicate so they cannot drift.
+export function isVisible(el: HTMLElement): boolean {
+  return !isAriaHidden(el) && !isDisplayNone(el) && !isVisibilityHidden(el);
+}
+
 function getFocusable(container: HTMLElement): HTMLElement[] {
-  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
-    (el) => !isAriaHidden(el) && !isDisplayNone(el),
+  return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter((el) =>
+    isVisible(el),
   );
 }
 
