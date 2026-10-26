@@ -1135,7 +1135,7 @@ export function CommandPalette({
             <div className="cmd-palette-group-label">
               {query.trim() ? `Create ${query.trim()}` : "New workspace"}
             </div>
-            <div style={{ padding: "12px 11px", fontSize: 12.5, color: "var(--muted)" }}>
+            <div style={{ padding: "12px 11px", fontSize: "0.78125rem", color: "var(--muted)" }}>
               Enter creates the workspace. Escape cancels.
             </div>
           </div>

@@ -154,7 +154,7 @@
   background: transparent;
   color: var(--fg);
   padding: 6px 12px;
-  font-size: 12px;
+  font-size: 0.75rem;
   font-family: inherit;
   text-align: left;
   cursor: pointer;
@@ -171,7 +171,7 @@
 }
 .sidebar-blocked-task-state {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 0.625rem;
   line-height: 14px;
   color: var(--y);
   border: 1px solid var(--border-soft);
@@ -185,7 +185,7 @@
   background: transparent;
   color: var(--dim);
   font-family: inherit;
-  font-size: 12px;
+  font-size: 0.75rem;
   text-align: left;
   padding: 4px 12px 2px;
   cursor: pointer;
