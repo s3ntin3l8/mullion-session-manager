@@ -46,13 +46,13 @@ export interface DetectedAgent {
    * this agent's launch can ever produce (see the matching HookAgentAdapter's
    * own `emits` doc comment), so the frontend can hide status legend
    * entries/filters this agent can never reach. Empty for shells and for any
-   * KNOWN_AGENTS binary with no hook adapter at all (aider, gemini, pi) —
+   * KNOWN_AGENTS binary with no hook adapter at all (gemini, pi) —
    * those reach only the byte-heuristic working/idle/needs_input/exited
    * states derived from PTY output, never a hook-confirmed one. */
   emits: readonly HookMessageKind[];
 }
 
-const KNOWN_SHELLS = ["bash", "zsh", "fish"];
+const KNOWN_SHELLS = ["bash", "zsh"];
 // Deliberately not exhaustive — a curated set of common AI-CLI launch
 // targets; project-level .crs/actions.json covers anything else. Exported
 // (Phase 6, 6.2/#215) so task-agent-resolve.ts's issue-body `Agent:` line
@@ -61,7 +61,6 @@ export const KNOWN_AGENTS = [
   "claude",
   "codex",
   "opencode",
-  "aider",
   "gemini",
   "agy",
   "pi",
@@ -77,7 +76,7 @@ export const KNOWN_AGENTS = [
 // which pattern-match the full launch COMMAND rather than this bare binary
 // name — this is a separate, narrower lookup for capability reporting only,
 // not a second source of truth for which adapter handles a given launch).
-// Binaries with no entry (aider, gemini, pi) have no hook adapter at all.
+// Binaries with no entry (gemini, pi) have no hook adapter at all.
 const HOOK_ADAPTER_EMITS_BY_BIN: Partial<Record<string, readonly HookMessageKind[]>> = {
   claude: claudeCodeAdapter.emits,
   codex: codexAdapter.emits,

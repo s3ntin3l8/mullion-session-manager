@@ -286,7 +286,7 @@ describe("buildInvocation", () => {
   });
 
   it("throws UnsupportedGenerationAgentError for an unknown agent command", () => {
-    expect(() => buildInvocation("aider", "x")).toThrow(UnsupportedGenerationAgentError);
+    expect(() => buildInvocation("pi", "x")).toThrow(UnsupportedGenerationAgentError);
   });
 });
 
@@ -310,7 +310,7 @@ describe("generateScaffoldContent", () => {
         hostId: LOCAL_HOST_ID,
         cwd: repoDir,
         slug: "demo",
-        agentCommand: "aider",
+        agentCommand: "pi",
         seed: {},
         hasSkill: false,
         hasReviewer: false,

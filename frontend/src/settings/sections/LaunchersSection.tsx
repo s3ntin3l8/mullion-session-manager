@@ -10,7 +10,6 @@ import { AGENT_OPTIONS } from "../agentOptions.js";
 const SHELL_OPTIONS = [
   { value: "zsh", label: "zsh" },
   { value: "bash", label: "bash" },
-  { value: "fish", label: "fish" },
 ];
 
 export function LaunchersSection() {

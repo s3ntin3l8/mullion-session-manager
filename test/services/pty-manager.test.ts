@@ -199,7 +199,6 @@ describe("getSkipPermissionFlag", () => {
     expect(getSkipPermissionFlag("opencode")).toBe("--auto");
     expect(getSkipPermissionFlag("gemini")).toBe("--approval-mode yolo");
     expect(getSkipPermissionFlag("agy")).toBe("--dangerously-skip-permissions --mode accept-edits");
-    expect(getSkipPermissionFlag("aider")).toBe("--yes");
   });
 
   it("returns the flag for a path-qualified binary", () => {

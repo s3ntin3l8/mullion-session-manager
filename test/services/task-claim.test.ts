@@ -205,7 +205,7 @@ describe("claimTask", () => {
     const cwd = createGitRepo();
     const projectId = await createProject(app, cwd);
     // gemini has no hook adapter at all (KNOWN_AGENTS with no adapter entry
-    // — currently aider/gemini/pi), so it's genuinely seed-incapable — see
+    // — currently gemini/pi), so it's genuinely seed-incapable — see
     // task-agent-resolve.test.ts's commandSupportsSeed coverage. opencode
     // used to be this test's example too, but it gained `initialPromptArgs`
     // (`--prompt`) and is seed-capable now — see hook-adapters/opencode.ts.

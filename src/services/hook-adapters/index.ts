@@ -67,7 +67,7 @@ export function getAdapterEmits(command: string): readonly HookMessageKind[] {
  * Returns the argv suffix that starts the first adapter matching `command`
  * with `prompt` as its initial turn, or `null` when no adapter matches, or
  * the matched adapter has no `initialPromptArgs` (currently only agents with
- * no adapter at all — `aider`/`gemini`/`pi` — lack this; every registered
+ * no adapter at all — `gemini`/`pi` — lack this; every registered
  * adapter, including opencode, has one). Same pure lookup shape as
  * getAdapterEmits above — no I/O, safe to call from a hot path. Task
  * Master's worker/review-agent spawns (task-claim.ts, task-reconciler.ts)
@@ -97,7 +97,7 @@ export function adapterHasInitialPromptArgs(command: string): boolean {
 /**
  * sessions.prompt — how to type `text` into the already-running agent that
  * `command` resolves to, or `null` when the matched adapter (or no adapter,
- * e.g. a plain shell or `aider`) has no opt-in `submitPrompt`. Pure lookup,
+ * e.g. a plain shell or `gemini`) has no opt-in `submitPrompt`. Pure lookup,
  * same shape as getAdapterInitialPromptArgs above — and the sanctioned way
  * for callers to branch on the agent family without parsing `command`.
  */

@@ -309,7 +309,7 @@ export interface HookAgentAdapter {
    * review-agent spawns (see task-claim.ts, task-reconciler.ts) and for
    * routes/sessions.ts's promote handler. Pure, no I/O — same posture as
    * `matches()`/`prepareLaunch()`. Absent for agents with no initial-prompt
-   * argv at all (currently `aider`/`gemini`/`pi`, none of which have an
+   * argv at all (currently `gemini`/`pi`, none of which have an
    * adapter) or none wired yet; the caller (hook-adapters/index.ts's
    * getAdapterInitialPromptArgs) treats a missing function the same as
    * "this agent can't receive an initial prompt this way." NOT gated on

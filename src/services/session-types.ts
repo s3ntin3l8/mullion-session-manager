@@ -19,7 +19,7 @@ export interface CreateSessionOptions {
    * a prompt to start the agent's first turn with, delivered as argv via
    * the matched hook adapter's `initialPromptArgs` (hook-adapters/index.ts's
    * getAdapterInitialPromptArgs). A no-op for an agent with no such argv
-   * form at all (currently only `aider`/`gemini`/`pi`, none of which have
+   * form at all (currently only `gemini`/`pi`, none of which have
    * an adapter — every registered adapter, including OpenCode's `--prompt`,
    * has one now) — the session still spawns, just with no prompt submitted,
    * same as before this option existed. See Session.spawn()'s own doc

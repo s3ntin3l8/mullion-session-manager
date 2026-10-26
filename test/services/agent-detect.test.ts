@@ -153,9 +153,8 @@ describe("detectAgents", () => {
     expect(byId["agent:codex"].emits).toContain("turn_start");
     expect(byId["agent:opencode"].emits).toContain("permission_request");
     expect(byId["agent:agy"].emits).toContain("file_change");
-    // No hook adapter at all for these three — always an empty capability
+    // No hook adapter at all for these two — always an empty capability
     // list, regardless of whether the binary is actually installed.
-    expect(byId["agent:aider"].emits).toEqual([]);
     expect(byId["agent:gemini"].emits).toEqual([]);
     expect(byId["agent:pi"].emits).toEqual([]);
   });

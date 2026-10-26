@@ -772,7 +772,7 @@ Master doesn't use today; kept anyway since it's strictly more robust.
 Not every agent can receive an initial prompt this way (only adapters that
 declare an `initialPromptArgs` argv form — Claude Code, Codex, agy, and
 OpenCode today; no `KNOWN_AGENTS` entry with no adapter at all has one,
-currently `aider`/`gemini`/`pi`). For an **autonomous claim** (the worker
+currently `gemini`/`pi`). For an **autonomous claim** (the worker
 agent only), a resolved agent with no such form is refused outright rather
 than spawning a blind agent with no instructions. A **manual** human claim
 still proceeds — a person is present to paste the prompt in — with the
