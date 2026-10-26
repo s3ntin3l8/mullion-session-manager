@@ -338,6 +338,18 @@ describe("dev-worktrees", () => {
       }
     });
 
+    it("doesn't call a registered worktree orphaned when the root is a symlink", async () => {
+      const real = path.join(base, "elsewhere");
+      fs.mkdirSync(real);
+      fs.symlinkSync(real, path.join(repo, ".wt"));
+      git(repo, ["worktree", "add", "-b", "via-link", path.join(repo, ".wt", "a"), "origin/main"]);
+      fs.mkdirSync(path.join(real, "stray"));
+      const orphans = (await inspectDevWorktrees(opts())).candidates.filter(
+        (c) => c.reason === "orphaned",
+      );
+      expect(orphans.map((c) => c.slug)).toEqual(["stray"]);
+    });
+
     it("finds orphans in a project that has no registered developer worktree at all", async () => {
       fs.mkdirSync(path.join(repo, ".wt", "leftover"), { recursive: true });
       const status = await inspectDevWorktrees(opts());

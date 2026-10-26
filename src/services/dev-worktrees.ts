@@ -297,7 +297,11 @@ async function findOrphans(
   const known = worktrees.map((worktree) => path.resolve(worktree.path));
   const orphans: Evaluated[] = [];
   for (const { dir, kind } of ROOTS) {
-    const rootDir = path.join(root, dir);
+    // Real path: `git worktree list` prints one, so a symlinked `.wt` (or
+    // `.claude`) would otherwise make every registered worktree under it look
+    // unknown.
+    const rootDir = await fs.realpath(path.join(root, dir)).catch(() => null);
+    if (!rootDir) continue;
     for (const orphan of await unregisteredDirs(rootDir, known)) {
       orphans.push({
         projectId: project.id,

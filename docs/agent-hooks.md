@@ -1318,7 +1318,7 @@ scrub list, so a nested Mullion doesn't inherit it). On a Bash PostToolUse,
 `forwarder-core.mjs`'s `worktreeNudge` runs the same `git worktree add`
 detection the sidebar uses, and when the worktree path has no `.wt` segment,
 the forwarder prints a PostToolUse reply whose `additionalContext` names
-`.wt/<branch>` and the `promote_to_worktree` tool. It never blocks: the
+`.wt/<branch>`. It also mentions `promote_to_worktree`, but says plainly that that tool makes a Mullion-managed worktree under `.mullion-worktrees/`, not one under `.wt/`. It never blocks: the
 worktree already exists by then, and the PreToolUse gate that once could
 have blocked it was removed in #178 because it fired on every Bash call. The
 decision is made from the payload and that env var alone, with no round trip

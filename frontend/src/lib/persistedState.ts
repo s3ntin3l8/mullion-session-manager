@@ -48,6 +48,9 @@ export const STORAGE_KEYS = {
   themeHint: "crs.themeHint",
   dismissedUpdateVersion: "crs.dismissedUpdateVersion",
   dismissedCodexHookTrustVersion: "crs.dismissedCodexHookTrustVersion",
+  // Issue #1979 — the generated conventions text whose "differs" notice was
+  // dismissed; the notice returns only once the generator's output changes.
+  dismissedConventionsNotice: "crs.dismissedConventionsNotice",
   viewMode: "crs.viewMode",
   hierarchicalView: "crs.hierarchicalView",
   dockCollapsed: "crs.dockCollapsed",

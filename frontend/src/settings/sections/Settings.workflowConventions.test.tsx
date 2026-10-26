@@ -581,6 +581,36 @@ describe("Settings -> Agent context -> conventions with no wizard snapshot", () 
     );
   });
 
+  it("Dismiss hides it for good, until the generated text changes", async () => {
+    const user = userEvent.setup();
+    localStorage.clear();
+    withConventions({
+      workflowConventionsText: "hand edited",
+      workflowConventionAnswers: { branching: "branch-pr" },
+      workflowConventionsAppliedText: "",
+    });
+    const first = render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
+    await screen.findByText(/differs from what your saved wizard answers/);
+    await user.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByText(/differs from what your saved wizard answers/)).toBeNull();
+    first.unmount();
+
+    const second = render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/api/workflow-conventions/preview",
+        expect.anything(),
+      ),
+    );
+    expect(screen.queryByText(/differs from what your saved wizard answers/)).toBeNull();
+    second.unmount();
+
+    previewText = "New rules from a newer wizard.";
+    render(<Settings onClose={vi.fn()} initialSection="agent-context" />);
+    expect(await screen.findByText(/differs from what your saved wizard answers/)).toBeVisible();
+    localStorage.clear();
+  });
+
   it("stays hidden when the preview request fails", async () => {
     fetchMock.mockImplementation((input: RequestInfo | URL) =>
       String(input) === "/api/workflow-conventions/preview"

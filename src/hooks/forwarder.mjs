@@ -161,9 +161,6 @@ async function forward() {
   // touch multiple files — see forwarder-core.mjs's mapCodexPostToolUse),
   // or nothing at all.
   const messages = Array.isArray(result) ? result : result === null ? [] : [result];
-  if (messages.length === 0) {
-    return null;
-  }
   // Issue #1979 — decided here, from the payload alone (no server round
   // trip), and printed by main() once the fire-and-forget send below is done.
   const nudge = worktreeNudge(
@@ -172,6 +169,9 @@ async function forward() {
     payload,
     process.env.MULLION_WORKTREES_IN_DOT_WT === "1",
   );
+  if (messages.length === 0) {
+    return nudge ? { type: "postToolUse", additionalContext: nudge } : null;
+  }
 
   // Issue #462 — a message array can carry a piggybacked sibling (most
   // commonly cwd_changed — see forwarder-core.mjs's mapClaudeCodeEvent)

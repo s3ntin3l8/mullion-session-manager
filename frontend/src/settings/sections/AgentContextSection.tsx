@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api/index.js";
+import { readString, STORAGE_KEYS, writeString } from "../../lib/persistedState.js";
 import { useDashboardStore } from "../../store/index.js";
 import { ConfirmButton } from "../../ui/ConfirmButton.js";
 import { GroupHeading, Row, Toggle } from "../../ui/primitives.js";
@@ -47,8 +48,17 @@ export function AgentContextSection() {
     };
   }, [unsnapshotted, answersKey]);
   const generated = unsnapshotted && preview?.key === answersKey ? preview.text : null;
+  // A hand edit after a wizard apply also clears the snapshot server-side, so
+  // this can't tell it from pre-snapshot text: let the user dismiss it, until
+  // the generator's output changes again.
+  const [dismissed, setDismissed] = useState(() =>
+    readString(STORAGE_KEYS.dismissedConventionsNotice, ""),
+  );
   const staleConventions =
-    generated !== null && generated !== "" && generated !== s.workflowConventionsText;
+    generated !== null &&
+    generated !== "" &&
+    generated !== s.workflowConventionsText &&
+    generated !== dismissed;
 
   return (
     <>
@@ -115,7 +125,16 @@ export function AgentContextSection() {
               }
             >
               Re-apply
-            </ConfirmButton>
+            </ConfirmButton>{" "}
+            <button
+              className="git-panel-fetch-btn"
+              onClick={() => {
+                writeString(STORAGE_KEYS.dismissedConventionsNotice, generated);
+                setDismissed(generated);
+              }}
+            >
+              Dismiss
+            </button>
           </div>
         )}
         <div style={{ marginTop: 8 }}>
