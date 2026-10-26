@@ -6,7 +6,7 @@ import { IssueDetailView, IssuesSection } from "./IssuesView.js";
 import { issueBranchName, issueSeedPrompt } from "./issueWork.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { useDashboardStore } from "../store/index.js";
-import { makeProject, makeSession } from "../test/fixtures.js";
+import { makeProject, makeSession, makeTask } from "../test/fixtures.js";
 import { useState } from "react";
 
 const LIST = {
@@ -304,6 +304,29 @@ describe("IssueDetailView", () => {
     await userEvent.click(screen.getByRole("button", { name: "Open session" }));
     expect(requestOpenSession).toHaveBeenCalledWith(31);
     useDashboardStore.setState({ sessions: [] });
+  });
+
+  it("shows Queued, not an enabled queue button, when a task already tracks the issue", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        Promise.resolve(jsonResponse(200, url.includes("/github/issues/7") ? DETAIL : LIST)),
+      ),
+    );
+    useDashboardStore.setState({
+      projects: [makeProject({ id: 1 })],
+      tasks: [makeTask({ id: 4, projectId: 1, issueNumber: 7, status: "in_progress" })],
+    });
+    render(
+      <IssueDetailView
+        projectId={1}
+        number={7}
+        onBack={vi.fn()}
+        taskMaster={{ enabled: true, label: "mullion-task" }}
+      />,
+    );
+    expect(await screen.findByRole("button", { name: "Queued" })).toBeDisabled();
+    useDashboardStore.setState({ tasks: [] });
   });
 
   it("shows an error when the issue cannot be loaded", async () => {

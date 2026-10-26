@@ -4,7 +4,6 @@ import { useIssue, useIssues } from "../hooks/useGitHubData.js";
 import { useMullionLinks, type MullionLinkEntry } from "../hooks/useMullionLinks.js";
 import { useStartSessionFrom } from "../hooks/useStartSessionFrom.js";
 import type { GitHubIssueLabel, GitHubIssueListItem, GitHubIssueSort } from "../api/types.js";
-import type { Tone } from "../lib/statusTone.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { useDashboardStore } from "../store/index.js";
 import { issueBranchName, issueSeedPrompt } from "./issueWork.js";
@@ -14,7 +13,7 @@ import { BoltIcon, MessageIcon, PlayTriangleIcon } from "../ui/icons.js";
 import { Dropdown } from "../ui/primitives.js";
 import { SafeHtml } from "../ui/SafeHtml.js";
 import { Button, DetailHeader, IconButton, SidebarRow, StatusChip } from "../ui/sidebar/index.js";
-import { decideSessionAction } from "../ui/sidebar/linkDecisions.js";
+import { decideSessionAction, taskTone } from "../ui/sidebar/linkDecisions.js";
 import { SessionPills } from "../ui/sidebar/SessionPills.js";
 import { TaskChip } from "../ui/sidebar/TaskChip.js";
 
@@ -59,14 +58,6 @@ interface LabelChipProps {
   label: GitHubIssueLabel;
   active?: boolean;
   onClick?: () => void;
-}
-
-/** Task Master's status vocabulary onto the one tone set. */
-function taskTone(status: string): Tone {
-  if (status === "done") return "merged";
-  if (status === "failed" || status === "blocked") return "danger";
-  if (status === "in_progress" || status === "in_review") return "info";
-  return "neutral";
 }
 
 export interface TaskMasterInfo {
@@ -372,6 +363,8 @@ export function IssueDetailView({
   const startSessionFrom = useStartSessionFrom(projectId);
   const link = useMullionLinks(projectId).byIssue.get(number);
   const action = decideSessionAction(link);
+  // A linked task means it is already queued (survives a remount).
+  const isQueued = queued || !!link?.task;
 
   const startSession = async () => {
     if (!issue) return;
@@ -447,8 +440,8 @@ export function IssueDetailView({
                   : "Start session"}
             </Button>
             {taskMaster?.enabled && (
-              <Button disabled={busy !== null || queued} onClick={queue}>
-                {busy === "queue" ? "Queueing…" : queued ? "Queued" : "Queue for Task Master"}
+              <Button disabled={busy !== null || isQueued} onClick={queue}>
+                {busy === "queue" ? "Queueing…" : isQueued ? "Queued" : "Queue for Task Master"}
               </Button>
             )}
           </div>
