@@ -151,9 +151,16 @@ describe("review marker sweep", () => {
   it("closes an expired marker as neutral even when the run's status cannot be read", async () => {
     // A Hermes outage or a revoked key is the case the age limit is for.
     runStatus = () => new Response("{}", { status: 500 });
+    const warn = vi.spyOn(app.log, "warn");
     const later = Date.now() + MARKER_MAX_AGE_MS + 1;
     await expect(sweepOpenReviewMarkers(app, later)).resolves.toBe(1);
     expect(patched[0]).toMatchObject({ conclusion: "neutral" });
+    // Not silent: a neutral close for an unreadable run is distinguishable afterwards.
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run_1" }),
+      expect.stringContaining("status is unreadable"),
+    );
+    warn.mockRestore();
   });
 
   it("keeps a young marker open, and retries, when the run's status cannot be read", async () => {

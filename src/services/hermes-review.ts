@@ -1548,6 +1548,10 @@ export async function sweepOpenReviewMarkers(
         // An unreadable status (Hermes down, a revoked key) must not pin the
         // marker past its age limit: that is the outage the limit is for.
         if (!expired) throw err;
+        app.log.warn(
+          { err, runId: record.runId, owner: record.owner, repo: record.repo },
+          "closing the in-flight marker neutral — the run status is unreadable",
+        );
       }
       conclusion ??= expired ? "neutral" : null;
       if (!conclusion) continue;
