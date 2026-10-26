@@ -2,6 +2,13 @@ import { useEffect } from "react";
 import type { Dispatch, SetStateAction } from "react";
 import { handleGlobalEscape } from "../panelUtils.js";
 import { useDashboardStore } from "../store/index.js";
+import {
+  COMMAND_PALETTE_SHORTCUT,
+  DISMISS_SHORTCUT,
+  matchShortcut,
+  RIGHT_SIDEBAR_SHORTCUT,
+  SETTINGS_SHORTCUT,
+} from "../lib/shortcutCatalog.js";
 
 // Structurally identical to App.tsx's own (unexported) `PaletteState` —
 // deliberately re-declared here rather than imported from App.tsx: this
@@ -89,29 +96,23 @@ export function useGlobalShortcuts({
 }: UseGlobalShortcutsParams): void {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+      // Chords come from shortcutCatalog.ts, which the Settings cheat
+      // sheet renders. This effect only wires a match to its action.
+      // Order matches the old if/else: palette, then Settings, then the
+      // sidebar, then Escape — a keydown stops at the first match.
+      if (matchShortcut(COMMAND_PALETTE_SHORTCUT, e)) {
         e.preventDefault();
         // Issue #730 — route through openGlobalLauncher so the workspace-
         // context gate is enforced for the keyboard shortcut, not just the
         // toolbar button.
         openGlobalLauncher();
-      } else if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+      } else if (matchShortcut(SETTINGS_SHORTCUT, e)) {
         e.preventDefault();
         openSettings();
-      } else if (
-        (e.metaKey || e.ctrlKey) &&
-        e.altKey &&
-        !e.shiftKey &&
-        // `code`, not `key`: Option+B types "∫" on macOS and AltGr layouts
-        // change `key` too. A focused terminal lets this chord through —
-        // see attachKeyConflictHandler (lib/terminalKeys.ts).
-        e.code === "KeyB" &&
-        // Not on phone, where the sidebar isn't rendered.
-        rightSidebarEnabled
-      ) {
+      } else if (matchShortcut(RIGHT_SIDEBAR_SHORTCUT, e) && rightSidebarEnabled) {
         e.preventDefault();
         useDashboardStore.getState().toggleRightSidebar();
-      } else if (e.key === "Escape") {
+      } else if (matchShortcut(DISMISS_SHORTCUT, e)) {
         // U9 — see handleGlobalEscape's own doc comment for why
         // clearSplitRequest belongs here: the palette also renders for a
         // pending split-right/split-down splitRequest (App.tsx's own

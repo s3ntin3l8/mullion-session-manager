@@ -92,7 +92,7 @@ export const SECTIONS: Array<{
     id: "input",
     group: "Personal",
     title: "Keyboard & input",
-    desc: "Clipboard, key capture, and voice dictation.",
+    desc: "Clipboard, key capture, voice dictation, and keyboard shortcuts.",
     icon: (size) => <KeyboardIcon size={size} />,
   },
   {
@@ -253,6 +253,10 @@ export const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   {
     section: "input",
     text: "clipboard shortcuts ctrl v paste ctrl c copy selection sigint insert",
+  },
+  {
+    section: "input",
+    text: "keyboard shortcuts command palette escape right sidebar find scrollback copy selection copy mode",
   },
   {
     section: "input",

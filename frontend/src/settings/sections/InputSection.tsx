@@ -2,6 +2,7 @@ import { DEFAULT_VOICE_CHORD } from "../../api/index.js";
 import { useDashboardStore } from "../../store/index.js";
 import { Dropdown, Eyebrow, Row, Toggle } from "../../ui/primitives.js";
 import { KeyChordField } from "../KeyChordField.js";
+import { ShortcutList } from "../ShortcutList.js";
 
 // Voice dictation language options — a short curated list (the languages
 // Claude Code's own /voice dictation documents supporting), plus "Browser
@@ -24,6 +25,7 @@ export function InputSection() {
   const t = settings.terminal;
   return (
     <>
+      <ShortcutList voiceHotkey={t.voice.hotkey} />
       <Row label="Copy on select" desc="Selecting text copies it to the clipboard.">
         <Toggle
           on={t.copyOnSelect}
