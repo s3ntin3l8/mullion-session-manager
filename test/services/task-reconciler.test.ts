@@ -7000,6 +7000,29 @@ describe("reconcileTasks", () => {
         return row;
       }
 
+      // The install-wide cap lives in the file-wide settings row, so a test
+      // that changes it must put it back or every later cap test inherits it.
+      async function withInstallCap(
+        app: Awaited<ReturnType<typeof buildApp>>,
+        cap: number,
+        run: () => Promise<void>,
+      ) {
+        await app.inject({
+          method: "PATCH",
+          url: "/api/settings",
+          payload: { taskMaster: { maxAutoReturnRounds: cap } },
+        });
+        try {
+          await run();
+        } finally {
+          await app.inject({
+            method: "PATCH",
+            url: "/api/settings",
+            payload: { taskMaster: { maxAutoReturnRounds: 10 } },
+          });
+        }
+      }
+
       it("never caps a project set to 0 (unlimited)", async () => {
         const app = await buildApp();
         const task = await seedReviewing(app, { maxAutoReturnRounds: 0 }, { autoReturnRounds: 50 });
@@ -7017,56 +7040,51 @@ describe("reconcileTasks", () => {
 
       it("uses the install-wide cap when the project sets none, and parks at it with reason 'cap'", async () => {
         const app = await buildApp();
-        await app.inject({
-          method: "PATCH",
-          url: "/api/settings",
-          payload: { taskMaster: { maxAutoReturnRounds: 1 } },
+        await withInstallCap(app, 1, async () => {
+          const task = await seedReviewing(app, {}, { autoReturnRounds: 1 });
+          writeFindings(app, task.id, 1, BLOCKER_JSON);
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, task.id);
+          expect(row.status).toBe("reviewing");
+          expect(row.autoReturnCapAnnouncedAt).not.toBeNull();
+          expect(row.needsHumanReason).toBe("cap");
         });
-        const task = await seedReviewing(app, {}, { autoReturnRounds: 1 });
-        writeFindings(app, task.id, 1, BLOCKER_JSON);
-
-        await reconcileTasks(app);
-
-        const row = await getTask(app, task.id);
-        expect(row.status).toBe("reviewing");
-        expect(row.autoReturnCapAnnouncedAt).not.toBeNull();
-        expect(row.needsHumanReason).toBe("cap");
 
         await app.close();
       });
 
       it("treats an install-wide 0 as unlimited when the project sets none", async () => {
         const app = await buildApp();
-        await app.inject({
-          method: "PATCH",
-          url: "/api/settings",
-          payload: { taskMaster: { maxAutoReturnRounds: 0 } },
+        await withInstallCap(app, 0, async () => {
+          const task = await seedReviewing(app, {}, { autoReturnRounds: 30 });
+          writeFindings(app, task.id, 30, BLOCKER_JSON);
+
+          await reconcileTasks(app);
+
+          expect((await getTask(app, task.id)).status).toBe("in_progress");
         });
-        const task = await seedReviewing(app, {}, { autoReturnRounds: 30 });
-        writeFindings(app, task.id, 30, BLOCKER_JSON);
-
-        await reconcileTasks(app);
-
-        expect((await getTask(app, task.id)).status).toBe("in_progress");
 
         await app.close();
       });
 
       it("a project's own cap overrides the install-wide one", async () => {
         const app = await buildApp();
-        await app.inject({
-          method: "PATCH",
-          url: "/api/settings",
-          payload: { taskMaster: { maxAutoReturnRounds: 0 } },
+        await withInstallCap(app, 0, async () => {
+          const task = await seedReviewing(
+            app,
+            { maxAutoReturnRounds: 1 },
+            { autoReturnRounds: 1 },
+          );
+          writeFindings(app, task.id, 1, BLOCKER_JSON);
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, task.id);
+          expect(row.status).toBe("reviewing");
+          expect(row.needsHumanReason).toBe("cap");
         });
-        const task = await seedReviewing(app, { maxAutoReturnRounds: 1 }, { autoReturnRounds: 1 });
-        writeFindings(app, task.id, 1, BLOCKER_JSON);
-
-        await reconcileTasks(app);
-
-        const row = await getTask(app, task.id);
-        expect(row.status).toBe("reviewing");
-        expect(row.needsHumanReason).toBe("cap");
 
         await app.close();
       });

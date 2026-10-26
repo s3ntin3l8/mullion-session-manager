@@ -422,13 +422,13 @@ describe("sanitizeSettings", () => {
       ).toBe(4);
     });
 
-    it("clamps an out-of-range maxAutoReturnRounds and repairs a non-numeric one to the default", () => {
-      expect(
-        mergeSettings({ taskMaster: { maxAutoReturnRounds: 9999 } }).taskMaster.maxAutoReturnRounds,
-      ).toBe(100);
-      expect(
-        mergeSettings({ taskMaster: { maxAutoReturnRounds: -3 } }).taskMaster.maxAutoReturnRounds,
-      ).toBe(0);
+    it("repairs an out-of-range or non-numeric maxAutoReturnRounds to the default", () => {
+      for (const bad of [9999, -3]) {
+        expect(
+          mergeSettings({ taskMaster: { maxAutoReturnRounds: bad } }).taskMaster
+            .maxAutoReturnRounds,
+        ).toBe(10);
+      }
       const dirty = { ...DEFAULT_SETTINGS, taskMaster: { ...DEFAULT_SETTINGS.taskMaster } };
       dirty.taskMaster.maxAutoReturnRounds = NaN;
       expect(sanitizeSettings(dirty).taskMaster.maxAutoReturnRounds).toBe(10);
