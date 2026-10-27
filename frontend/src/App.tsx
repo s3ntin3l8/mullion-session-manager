@@ -1076,7 +1076,14 @@ export function App() {
     restoringRef,
     restoredWorkspaceIdRef,
   });
-  useOpenPreviewRequest({ dockviewApi, restoringRef, onOpenPreview });
+  // Issues #2016/#2018 — resolves requestOpenPreview, same contract again.
+  useOpenPreviewRequest({
+    dockviewApi,
+    activeWorkspaceId,
+    onOpenPreview,
+    restoringRef,
+    restoredWorkspaceIdRef,
+  });
 
   // Issue #95 — re-syncs a push subscription on load (settings.notifications
   // .channels.push is the source of truth, not the presence of a live
