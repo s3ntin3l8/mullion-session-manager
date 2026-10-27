@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.3.49](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.48...v0.3.49) (2026-10-27)
+
+
+### Features
+
+* **dock:** detect a dev-server port conflict before launch and surface EADDRINUSE ([e4e998f](https://github.com/s3ntin3l8/mullion-session-manager/commit/e4e998f8c7761dd5385ee67eddffe6144db81fde))
+* **dock:** offer and show a detected dev-server port for dock sessions ([1c28168](https://github.com/s3ntin3l8/mullion-session-manager/commit/1c28168d1916ccbaa1d27ff4a29830c3f7e7d739))
+* **git:** guarded checkout/create/rebase, update-branch, non-Actions checks, ws unsubscribe ([#2060](https://github.com/s3ntin3l8/mullion-session-manager/issues/2060)) ([3229f32](https://github.com/s3ntin3l8/mullion-session-manager/commit/3229f32dfd1605549fea473b199b66e6489bcfb4))
+* **github:** reply, resolve, comment and review from the sidebar ([#2055](https://github.com/s3ntin3l8/mullion-session-manager/issues/2055)) ([066b785](https://github.com/s3ntin3l8/mullion-session-manager/commit/066b7855da981c8098ab1361fa9bc5d2e1e0e21c))
+* **github:** task chip opens the task; session review-gate badge ([#2051](https://github.com/s3ntin3l8/mullion-session-manager/issues/2051)) ([1e29600](https://github.com/s3ntin3l8/mullion-session-manager/commit/1e29600148b74d41caa991ae9487248d02bb9007))
+* **previews:** branch-scoped previews for branches and PRs ([#2096](https://github.com/s3ntin3l8/mullion-session-manager/issues/2096)) ([b678eef](https://github.com/s3ntin3l8/mullion-session-manager/commit/b678eef58fcb1ada8a3a918368ec89585e3dc0f2))
+* **runway:** model-aware opencode quota targets in the provider map ([#2067](https://github.com/s3ntin3l8/mullion-session-manager/issues/2067)) ([9d32cf7](https://github.com/s3ntin3l8/mullion-session-manager/commit/9d32cf773f8e8141b322145d10b3e67484671994)), closes [#2054](https://github.com/s3ntin3l8/mullion-session-manager/issues/2054)
+* **tasks:** approve with suggestions — apply them once, without another review ([#2029](https://github.com/s3ntin3l8/mullion-session-manager/issues/2029)) ([#2044](https://github.com/s3ntin3l8/mullion-session-manager/issues/2044)) ([68b691e](https://github.com/s3ntin3l8/mullion-session-manager/commit/68b691e73f0b30c14a1896d75b588bc690643c43))
+* **tasks:** default round cap of 10, unlimited opt-in, and a stall guard ([#2042](https://github.com/s3ntin3l8/mullion-session-manager/issues/2042)) ([#2063](https://github.com/s3ntin3l8/mullion-session-manager/issues/2063)) ([66d9a6f](https://github.com/s3ntin3l8/mullion-session-manager/commit/66d9a6fc77caf7571dc7a37896b6949b5bf47c07))
+* **tasks:** keep the approval across a CI fix and an approved review's comments ([#2043](https://github.com/s3ntin3l8/mullion-session-manager/issues/2043)) ([#2078](https://github.com/s3ntin3l8/mullion-session-manager/issues/2078)) ([c257c94](https://github.com/s3ntin3l8/mullion-session-manager/commit/c257c944760323a60f9894d14930b9a807a5131e))
+* **ui:** add the MiniMax logo for mcode ([#2048](https://github.com/s3ntin3l8/mullion-session-manager/issues/2048)) ([3bb6fb2](https://github.com/s3ntin3l8/mullion-session-manager/commit/3bb6fb2b3b437aebb4a319c01af9fe89ad292da7))
+* **ui:** list kept isolated-session worktrees in Settings → Storage ([#2053](https://github.com/s3ntin3l8/mullion-session-manager/issues/2053)) ([8b3611c](https://github.com/s3ntin3l8/mullion-session-manager/commit/8b3611c726a66aa535641369eb3df0f9aa5b7f34))
+* **windows:** map local IPC endpoints to named pipes on Windows ([#2068](https://github.com/s3ntin3l8/mullion-session-manager/issues/2068)) ([2eb57eb](https://github.com/s3ntin3l8/mullion-session-manager/commit/2eb57eb0b067372ff215445a1c952eba23b78f18))
+* **windows:** run sessions in Git Bash; clear symlink and self-update errors ([#2087](https://github.com/s3ntin3l8/mullion-session-manager/issues/2087)) ([ed84ccb](https://github.com/s3ntin3l8/mullion-session-manager/commit/ed84ccbed926abbf58350601c182eaf2637505c9))
+* **windows:** run sessions on Windows through a pty-host master ([#2077](https://github.com/s3ntin3l8/mullion-session-manager/issues/2077)) ([c3d0c1d](https://github.com/s3ntin3l8/mullion-session-manager/commit/c3d0c1d94a4cea83717690f704beac262325eca2))
+* **worktrees:** off-convention nudge, orphan report, conventions notice ([#2061](https://github.com/s3ntin3l8/mullion-session-manager/issues/2061)) ([5e86385](https://github.com/s3ntin3l8/mullion-session-manager/commit/5e86385f82a394b35da64c13b1d92dbf899803b8))
+
+
+### Bug Fixes
+
+* **github:** render the pinned review's body as prose, not Markdown source ([#2056](https://github.com/s3ntin3l8/mullion-session-manager/issues/2056)) ([05d353d](https://github.com/s3ntin3l8/mullion-session-manager/commit/05d353d58893d4849e57a34ea7e1048b26500257))
+* **hooks:** pre-trust a fresh worktree for Claude Code children ([#2091](https://github.com/s3ntin3l8/mullion-session-manager/issues/2091)) ([#2095](https://github.com/s3ntin3l8/mullion-session-manager/issues/2095)) ([c5cd71b](https://github.com/s3ntin3l8/mullion-session-manager/commit/c5cd71b59e5048299cdc3df34ac4c7c4f44d67c5))
+* **review-relay:** name the head commit and the follow-up range in the dispatch message ([29431d2](https://github.com/s3ntin3l8/mullion-session-manager/commit/29431d2cbfe41fdef01b27b487bda00f332848e3))
+* **review-relay:** read ledger markers on force-pushed heads (s3ntin3l8/.github[#136](https://github.com/s3ntin3l8/mullion-session-manager/issues/136)) ([#2089](https://github.com/s3ntin3l8/mullion-session-manager/issues/2089)) ([e8b46fb](https://github.com/s3ntin3l8/mullion-session-manager/commit/e8b46fb9edb728e1ded27c55f3854a3325767ca6))
+* **runway:** make the provider map configurable, report unmapped providers, verify default ids ([#2062](https://github.com/s3ntin3l8/mullion-session-manager/issues/2062)) ([808a79f](https://github.com/s3ntin3l8/mullion-session-manager/commit/808a79fa2c21820290b5d7a1b522bb7a2e915225)), closes [#1841](https://github.com/s3ntin3l8/mullion-session-manager/issues/1841)
+* **system-stats:** the StatsDependencies seam types fs.stat/fs.statfs as the OVERLOADED Node APIs, so no double can satisfy it ([b4d510a](https://github.com/s3ntin3l8/mullion-session-manager/commit/b4d510a5f08cbe66f12ad5031545b74b09e30f2e)), closes [#1916](https://github.com/s3ntin3l8/mullion-session-manager/issues/1916)
+* **ui:** clearing the Dev server field in Edit Project does not save ([e816cc2](https://github.com/s3ntin3l8/mullion-session-manager/commit/e816cc2d4018d0d3561f09c1ff442160a43d9016))
+* **ui:** detectedDevServerPort goes stale because the projects list is never re-polled ([eb8636b](https://github.com/s3ntin3l8/mullion-session-manager/commit/eb8636b58b77b96076917c7ccf71a6a189904230))
+* **uiux:** the command palette's "Launch in" target follows the active pane's project ([be04e2d](https://github.com/s3ntin3l8/mullion-session-manager/commit/be04e2d063a4615db3c5bc468b92b5fc4b3c7697))
+
 ## [0.3.48](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.47...v0.3.48) (2026-10-26)
 
 
