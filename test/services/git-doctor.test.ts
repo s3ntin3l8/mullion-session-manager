@@ -58,17 +58,6 @@ async function doctor(opts: { apply?: boolean; force?: boolean } = {}): Promise<
   }
 }
 
-/**
- * How `git fsck --connectivity-only` reports the emptied staged tree. Up to
- * git 2.55 it reaches the index and says "invalid sha1 pointer in cache-tree"
- * — #1836's exact symptom. git 2.56 reads the empty loose object first and
- * stops there: "error: object file … is empty", then "fatal: loose object …
- * is corrupt". Either is fsck finding this damage; which one depends only on
- * the git the run has (CI runners carry both during a rollout).
- */
-const FSCK_SAW_EMPTY_TREE =
-  /invalid sha1 pointer in cache-tree|object file \S+ is empty|loose object \S+ .*is corrupt/;
-
 const git = (args: string[], cwd = repo) =>
   execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnv() }).trim();
 
@@ -93,6 +82,34 @@ function damage(sha: string) {
   fs.rmSync(target, { force: true });
   fs.writeFileSync(target, "");
 }
+
+/**
+ * What `git fsck` says about the emptied tree. Depending on which check it reaches
+ * first, it reports either the cache-tree pointer ("invalid sha1 pointer in
+ * cache-tree of .git/index") or just the empty object file ("object file
+ * .git/objects/xx/… is empty"). The same git version has been seen to print each
+ * (CI runners on git 2.56.0 passed one run and failed the next), so this is not a
+ * version difference. Both are the same damage; the tests accept either rather than
+ * pinning a sentence git may or may not reach.
+ */
+const FSCK_DAMAGE = /invalid sha1 pointer|object file \S+ is empty/;
+
+describe("FSCK_DAMAGE", () => {
+  // Pins both alternatives without depending on which line the host git emits.
+  it("matches the cache-tree line", () => {
+    expect("error: invalid sha1 pointer in cache-tree of .git/index").toMatch(FSCK_DAMAGE);
+  });
+
+  it("matches the empty-object line", () => {
+    expect(
+      "error: object file .git/objects/64/bce7b8449e3dccaef34b8ff972276034dbe98a is empty",
+    ).toMatch(FSCK_DAMAGE);
+  });
+
+  it("does not match unrelated fsck output", () => {
+    expect("Checking object directories: 100% (256/256), done.").not.toMatch(FSCK_DAMAGE);
+  });
+});
 
 /**
  * Builds the scenario from the issue: a tree that exists only as a loose
@@ -174,7 +191,7 @@ describe("git-doctor — the read-only inspection", () => {
     expect(health.zeroByteObjects).toHaveLength(1);
     expect(health.zeroByteObjects[0]).toContain(tree.slice(0, 2));
     expect(health.fsckErrors.length).toBeGreaterThan(0);
-    expect(health.fsckErrors.join("\n")).toMatch(FSCK_SAW_EMPTY_TREE);
+    expect(health.fsckErrors.join("\n")).toMatch(FSCK_DAMAGE);
     // Read-only: the damage is still there.
     expect(zeroByteObjects()).toHaveLength(1);
   });
@@ -336,14 +353,13 @@ describe("git-doctor — the report", () => {
   it("finds a zero-byte object and the fsck errors it causes, and changes nothing", async () => {
     const tree = damageTheStagedTree();
 
-    // The symptom — on git <= 2.55 exactly as #1836 recorded it (see
-    // FSCK_SAW_EMPTY_TREE for 2.56).
-    expect(fsckOutput()).toMatch(FSCK_SAW_EMPTY_TREE);
+    // The symptom, reproduced exactly as #1836 recorded it.
+    expect(fsckOutput()).toMatch(FSCK_DAMAGE);
 
     const result = await doctor();
     expect(result.status).toBe(1);
     expect(result.stdout).toContain(tree);
-    expect(result.stdout).toMatch(FSCK_SAW_EMPTY_TREE);
+    expect(result.stdout).toMatch(FSCK_DAMAGE);
     // Report mode never mutates.
     expect(zeroByteObjects()).toHaveLength(1);
   });
@@ -454,7 +470,7 @@ describe("git-doctor — the repair", () => {
     expect(refused.stdout).toContain("would discard what you staged");
     expect(refused.stdout).toContain("--force overrides");
     // The index was left alone, so the damage it names is still there.
-    expect(fsckOutput()).toMatch(FSCK_SAW_EMPTY_TREE);
+    expect(fsckOutput()).toMatch(FSCK_DAMAGE);
   });
 
   it("rebuilds when the staged content IS in the working tree", async () => {
@@ -464,7 +480,7 @@ describe("git-doctor — the repair", () => {
 
     const result = await doctor({ apply: true });
     expect(result.stdout).toContain("index rebuilt");
-    expect(fsckOutput()).not.toMatch(FSCK_SAW_EMPTY_TREE);
+    expect(fsckOutput()).not.toMatch(FSCK_DAMAGE);
   });
 
   it("--force overrides the refusal", async () => {
@@ -472,7 +488,7 @@ describe("git-doctor — the repair", () => {
 
     const forced = await doctor({ apply: true, force: true });
     expect(forced.stdout).toContain("index rebuilt");
-    expect(fsckOutput()).not.toMatch(FSCK_SAW_EMPTY_TREE);
+    expect(fsckOutput()).not.toMatch(FSCK_DAMAGE);
   });
 
   it("keeps the staged work when it does rebuild the index", async () => {
