@@ -111,8 +111,11 @@ function holdWorkflowChange(
   change: WorkflowChange,
 ): PromoteFailure {
   recordWorkflowHold(app, task.id, change);
+  // Not a sync error: this is an expected operator gate, shown by its own
+  // panel from `tasks.workflowChange`. Drop a stale banner from an earlier
+  // unverified attempt so the two do not contradict each other.
+  clearGithubSyncError(app, task.id);
   const detail = `This branch changes ${change.files.join(", ")} — approve the workflow change to push it`;
-  recordGithubSyncError(app, task.id, detail);
   return { ok: false, reason: "workflow-approval-required", detail };
 }
 

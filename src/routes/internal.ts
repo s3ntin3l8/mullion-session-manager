@@ -1302,9 +1302,15 @@ export async function internalRoutes(app: FastifyInstance) {
       if (!isGitRepo(resolvedCwd)) {
         return { isRepo: false, stats: null };
       }
-      const effectiveBase = base === "AUTO" ? (getDefaultBaseRef(resolvedCwd) ?? undefined) : base;
+      const autoBase = base === "AUTO" ? getDefaultBaseRef(resolvedCwd) : null;
+      const effectiveBase = base === "AUTO" ? (autoBase ?? undefined) : base;
       const stats = await getDiffStats(resolvedCwd, effectiveBase, { fresh: fresh === "1" });
-      return { isRepo: true, stats };
+      // `AUTO` that resolves to nothing falls back to `git diff HEAD`, which is
+      // empty on a clean tree whatever the branch holds. `baseResolved` lets a
+      // caller (the workflow gate) tell that apart from a verified-empty diff.
+      return base === "AUTO"
+        ? { isRepo: true, stats, baseResolved: autoBase !== null }
+        : { isRepo: true, stats };
     },
   );
 

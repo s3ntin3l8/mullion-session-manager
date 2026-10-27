@@ -1084,7 +1084,7 @@ export class RemoteHostClient {
     cwd: string,
     baseRef?: string,
     opts: { fresh?: boolean } = {},
-  ): Promise<{ isRepo: boolean; stats: GitDiffStats | null }> {
+  ): Promise<{ isRepo: boolean; stats: GitDiffStats | null; baseResolved?: boolean }> {
     let url = `/internal/git-diff?cwd=${encodeURIComponent(cwd)}`;
     if (baseRef) url += `&base=${encodeURIComponent(baseRef)}`;
     if (opts.fresh) url += "&fresh=1";

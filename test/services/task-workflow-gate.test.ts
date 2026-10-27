@@ -120,7 +120,7 @@ describe("task-workflow-gate", () => {
       const task = insertTask();
       const gate = await evaluateWorkflowGate(app, task, "local");
       expect(gate.kind).toBe("unverified");
-      expect((gate as { detail: string }).detail).toContain("Could not verify");
+      expect((gate as { detail: string }).detail).toContain("no origin/main or origin/master");
     });
 
     it("is unverified when a remote host cannot answer", async () => {
@@ -221,6 +221,16 @@ describe("task-workflow-gate", () => {
       const row = reload(task.id);
       expect(row.workflowApprovedSha).toBeNull();
       expect(parseWorkflowChange(row.workflowChange)?.sha).toBe(moved);
+    });
+
+    it("drops a stale hold when the head is already approved", async () => {
+      const head = commitFile(".github/workflows/ci.yml", "name: ci\n");
+      const task = insertTask();
+      app.db.update(tasks).set({ workflowApprovedSha: head }).where(eq(tasks.id, task.id)).run();
+      recordWorkflowHold(app, task.id, { sha: head, files: [".github/workflows/ci.yml"] });
+      const result = await approveWorkflowChange(app, reload(task.id), "local", head);
+      expect(result).toEqual({ ok: true, sha: head });
+      expect(reload(task.id).workflowChange).toBeNull();
     });
 
     it("is idempotent when the current head is already approved", async () => {

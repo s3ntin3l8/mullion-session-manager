@@ -55,29 +55,37 @@ export function parseWorkflowChange(raw: string | null): WorkflowChange | null {
   return null;
 }
 
+/** Why the changed files could not be read. */
+type WorkflowFilesUnknown = "no-base" | "host";
+
 /** Workflow files the task's branch changes against the repo's default
- * base, read fresh (never the 5 s diff-stat cache), or `null` when they could
- * not be read. `null` is deliberately distinct from `[]` (verified none). */
+ * base, read fresh (never the 5 s diff-stat cache), or why they could not be
+ * read. "Unknown" is deliberately distinct from `[]` (verified none). */
 async function listWorkflowFiles(
   app: FastifyInstance,
   cwd: string,
   hostId: string,
-): Promise<string[] | null> {
+): Promise<string[] | WorkflowFilesUnknown> {
   if (hostId === LOCAL_HOST_ID) {
     // No base ref -> no branch diff to inspect (`git diff HEAD` of a clean
     // tree is empty whatever the branch holds), so that is "unknown", not "none".
     const base = getDefaultBaseRef(cwd);
-    if (base === null) return null;
+    if (base === null) return "no-base";
     const stats = await getDiffStats(cwd, base, { fresh: true });
-    return stats?.workflowFiles ?? null;
+    return stats?.workflowFiles ?? "host";
   }
   try {
-    const { stats } = await getRemoteHostClient(app, hostId).resolveGitDiffStats(cwd, "AUTO", {
-      fresh: true,
-    });
-    return stats?.workflowFiles ?? null;
+    const { stats, baseResolved } = await getRemoteHostClient(app, hostId).resolveGitDiffStats(
+      cwd,
+      "AUTO",
+      { fresh: true },
+    );
+    // Same rule as the local branch: an unresolvable base made the host diff
+    // `HEAD`, whose empty result must not read as "no workflow changes".
+    if (baseResolved === false) return "no-base";
+    return stats?.workflowFiles ?? "host";
   } catch {
-    return null;
+    return "host";
   }
 }
 
@@ -106,7 +114,14 @@ export async function evaluateWorkflowGate(
 ): Promise<WorkflowGate> {
   if (!task.worktreePath) return { kind: "clear" };
   const files = await listWorkflowFiles(app, task.worktreePath, hostId);
-  if (files === null) {
+  if (files === "no-base") {
+    return {
+      kind: "unverified",
+      detail:
+        "Could not verify whether this branch changes .github/workflows/ — the repository has no origin/main or origin/master ref to diff against (fetch the remote; retrying)",
+    };
+  }
+  if (files === "host") {
     return {
       kind: "unverified",
       detail:
@@ -166,7 +181,10 @@ export async function approveWorkflowChange(
     clearWorkflowHold(app, task);
     return { ok: false, reason: "nothing-held" };
   }
-  if (gate.kind === "approved") return { ok: true, sha: gate.sha };
+  if (gate.kind === "approved") {
+    clearWorkflowHold(app, task);
+    return { ok: true, sha: gate.sha };
+  }
   const { change } = gate;
   if (change.sha === "") return { ok: false, reason: "unreadable", change };
   if (change.sha !== expectedSha) {

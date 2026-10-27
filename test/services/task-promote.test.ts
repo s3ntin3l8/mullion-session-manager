@@ -66,6 +66,8 @@ vi.mock("../../src/services/host-git.js", async (importOriginal) => {
   return {
     ...actual,
     resolveRepoRef: mockResolveRepoRef,
+    // Real push, wrapped so a test can assert which token it was handed.
+    pushHostBranch: vi.fn(actual.pushHostBranch),
   };
 });
 // #484 — host-git.ts's remote branch (for a project whose hostId isn't
@@ -98,6 +100,7 @@ vi.mock("../../src/services/remote-host-client.js", () => ({
 
 const { promoteTaskToPR, openDraftPRForTask, closeDraftPRForTask } =
   await import("../../src/services/task-promote.js");
+const { pushHostBranch: spiedPushHostBranch } = await import("../../src/services/host-git.js");
 const { HostRequestError, HostUnreachableError } =
   await import("../../src/services/remote-host-client.js");
 
@@ -410,11 +413,9 @@ describe("promoteTaskToPR", () => {
 
       expect(result).toMatchObject({ ok: false, reason: "workflow-approval-required" });
       expect(mockRecordWorkflowHold).toHaveBeenCalledWith(expect.anything(), 7, change);
-      expect(mockRecordGithubSyncError).toHaveBeenCalledWith(
-        expect.anything(),
-        7,
-        expect.stringContaining(".github/workflows/ci.yml"),
-      );
+      // A hold is an expected operator gate, not a failed GitHub write: the
+      // dedicated workflowChange field carries it, not the sync-error banner.
+      expect(mockRecordGithubSyncError).not.toHaveBeenCalled();
       expect(mockGetToken).not.toHaveBeenCalled();
       expect(mockResolveWorkflowWriteToken).not.toHaveBeenCalled();
       expect(mockCreatePullRequest).not.toHaveBeenCalled();
@@ -433,6 +434,14 @@ describe("promoteTaskToPR", () => {
 
       expect(result).toMatchObject({ ok: true, prNumber: 9 });
       expect(mockResolveWorkflowWriteToken).toHaveBeenCalledTimes(1);
+      // The push itself carried the elevated token, not the ordinary one.
+      expect(spiedPushHostBranch).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.anything(),
+        cwd,
+        "mullion/task-1",
+        "ghs_elevated",
+      );
       // The elevated token is for the branch push alone, never the PR API calls.
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
         "ghp_token",
