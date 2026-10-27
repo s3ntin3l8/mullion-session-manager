@@ -103,6 +103,17 @@ function shellExecArgv(argv: string[]): string[] {
   return argv.map(shellQuoteArg);
 }
 
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/** `screencap -p` on a multi-display device writes a "[Warning] Multiple
+ * displays were found…" line to the same stream before the PNG, so the raw
+ * output is not a valid image. Returns the bytes from the PNG signature on,
+ * or null when the output holds no PNG at all. */
+export function extractPng(bytes: Uint8Array): Uint8Array | null {
+  const at = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).indexOf(PNG_SIGNATURE);
+  return at < 0 ? null : bytes.subarray(at);
+}
+
 type DeviceAction =
   | { action: "screenshot" }
   | { action: "tap"; x: number; y: number }
@@ -879,7 +890,15 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
       switch (action.action) {
         case "screenshot": {
           const png = await shell.spawnWait(shellExecArgv(["screencap", "-p"]));
-          return { screenshot: Buffer.from(png).toString("base64") };
+          const image = extractPng(png);
+          if (!image) {
+            const head = Buffer.from(png.subarray(0, 200))
+              .toString("utf8")
+              // eslint-disable-next-line no-control-regex
+              .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "?");
+            return reply.badGateway(`screencap did not return a PNG: ${head}`);
+          }
+          return { screenshot: Buffer.from(image).toString("base64") };
         }
         case "tap": {
           await shell.spawnWaitText(
