@@ -647,7 +647,12 @@ function resolveTargetProjectId(
       .from(sessions)
       .where(eq(sessions.id, Number(conn.sessionId)))
       .get();
-    const ownProjectId = row?.projectId != null ? String(row.projectId) : null;
+    // The row must still be active: the PtyManager lookup this replaced also
+    // 400'd once the session had exited.
+    const ownProjectId =
+      row?.projectId != null && sessionRowIsActive(app, conn.sessionId!)
+        ? String(row.projectId)
+        : null;
     if (ownProjectId === null) {
       return {
         ok: false,
@@ -1879,13 +1884,13 @@ export const OPS: Record<string, OpSpec> = {
   "events.subscribe": {
     scopes: ["full", "session"],
     handler: ({ app, conn, id, body, reply }) => {
+      if (conn.socket === null) {
+        reply(STREAM_UNAVAILABLE);
+        return;
+      }
       const slotError = streamSlotError(conn, id);
       if (slotError) {
         reply(slotError);
-        return;
-      }
-      if (conn.socket === null) {
-        reply(STREAM_UNAVAILABLE);
         return;
       }
       const channel = new SocketChannel(conn.socket, id);

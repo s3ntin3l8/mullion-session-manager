@@ -114,4 +114,21 @@ describe("dispatch over a socket-less connection (#1656)", () => {
     expect(conn.activeWaits).toBe(0);
     expect(frames).toEqual([]);
   });
+
+  it("400s for a pinned session that is no longer active", async () => {
+    const app = await buildTestApp();
+    await app.ready();
+    const projectId = Number(
+      app.db.insert(projects).values({ name: "gone", cwd: "/tmp/gone" }).run().lastInsertRowid,
+    );
+    const sessionId = Number(
+      app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", cwd: "/tmp/gone", status: "exited" })
+        .run().lastInsertRowid,
+    );
+    const { conn, frames } = sinkConn("session", String(sessionId));
+    await dispatch(app, conn, { id: 9, op: "projects.actions" });
+    expect(frames[0]).toMatchObject({ id: 9, ok: false, status: 400 });
+  });
 });
