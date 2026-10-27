@@ -470,7 +470,7 @@ describe("git-doctor — the repair", () => {
     expect(refused.stdout).toContain("would discard what you staged");
     expect(refused.stdout).toContain("--force overrides");
     // The index was left alone, so the damage it names is still there.
-    expect(fsckOutput()).toContain("invalid sha1 pointer in cache-tree");
+    expect(fsckOutput()).toMatch(FSCK_DAMAGE);
   });
 
   it("rebuilds when the staged content IS in the working tree", async () => {
@@ -480,7 +480,7 @@ describe("git-doctor — the repair", () => {
 
     const result = await doctor({ apply: true });
     expect(result.stdout).toContain("index rebuilt");
-    expect(fsckOutput()).not.toContain("invalid sha1 pointer in cache-tree");
+    expect(fsckOutput()).not.toMatch(FSCK_DAMAGE);
   });
 
   it("--force overrides the refusal", async () => {
@@ -488,7 +488,7 @@ describe("git-doctor — the repair", () => {
 
     const forced = await doctor({ apply: true, force: true });
     expect(forced.stdout).toContain("index rebuilt");
-    expect(fsckOutput()).not.toContain("invalid sha1 pointer in cache-tree");
+    expect(fsckOutput()).not.toMatch(FSCK_DAMAGE);
   });
 
   it("keeps the staged work when it does rebuild the index", async () => {
