@@ -74,10 +74,11 @@ OIDC configured), **every** handshake is accepted at **full scope** — not
 just an empty one — the socket's `0600` filesystem permissions (on Windows,
 the named pipe's access list, once narrowed to the user Mullion runs as and
 SYSTEM — see Security notes below) are the only gate in that mode, the same
-posture the HTTP API already takes when auth is off (a Bearer header presented when `MULLION_AUTH_TOKEN` is unset isn't
-rejected either; the whole gate is simply absent). This is checked before
-any token comparison, so a stale or forged token in this mode is never
-treated worse than presenting no token at all.
+posture the HTTP API already takes when auth is off (a Bearer header
+presented when `MULLION_AUTH_TOKEN` is unset isn't rejected either; the whole
+gate is simply absent). This is checked before any token comparison, so a
+stale or forged token in this mode is never treated worse than presenting no
+token at all.
 
 Note: an OIDC-only deployment (OIDC configured, no `MULLION_AUTH_TOKEN`) has
 no static full-scope secret to present here — only session-scoped
