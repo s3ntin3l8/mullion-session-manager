@@ -186,6 +186,11 @@ export interface DeviceManagerOptions {
    * records the failure in its own `status`/`error` fields, so this is a
    * log line, not the source of truth. */
   onSpawnError?: (id: string, err: Error) => void;
+  /** Reports the outcome of the boot-time `adb start-server`: `ok: true` when
+   * it exited 0, otherwise the spawn error or non-zero exit with adb's own
+   * stderr. Same seam as onSpawnError — a log line, never the source of
+   * truth, and it never blocks construction (issue #2115). */
+  onAdbServerStart?: (result: { ok: true } | { ok: false; error: Error; stderr: string }) => void;
   /** Fired synchronously from the very start of Device.spawn(), before
    * `systemd-run` is even invoked — NOT after boot succeeds — so that a
    * Mullion restart at ANY point afterward (including mid-boot, which can
@@ -261,6 +266,24 @@ export interface DeviceInfo {
   status: DeviceLiveStatus;
   serial: string | null;
   error: string | null;
+}
+
+/** Runs an adb-server call, rewording a refused connection into something an
+ * operator can act on: the bare ECONNREFUSED names neither adb nor the port
+ * Mullion expected it on (issue #2115). Everything else passes through. */
+async function adbCall<T>(port: number, call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (err) {
+    const refused =
+      (err as NodeJS.ErrnoException | null)?.code === "ECONNREFUSED" ||
+      (err instanceof Error && err.message.includes("ECONNREFUSED"));
+    if (!refused) throw err;
+    throw new Error(
+      `adb server is not running on 127.0.0.1:${port} — check DEVICE_ADB_PATH and DEVICE_ADB_SERVER_PORT (${(err as Error).message})`,
+      { cause: err },
+    );
+  }
 }
 
 type ScrcpyVideoStream = Awaited<AdbScrcpyClient<AdbScrcpyOptionsLatest<true>>["videoStream"]>;
@@ -679,7 +702,9 @@ export class Device {
     this.status = "booting";
     try {
       try {
-        await this.serverClient.wireless.connect(address);
+        await adbCall(this.manager.adbServerPort, () =>
+          this.serverClient.wireless.connect(address),
+        );
       } catch (err) {
         if (!(err instanceof AdbServerClient.AlreadyConnectedError)) throw err;
       }
@@ -849,7 +874,9 @@ export class Device {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       if (scopeExit?.error) throw scopeExit.error;
-      const devices = await this.serverClient.getDevices();
+      const devices = await adbCall(this.manager.adbServerPort, () =>
+        this.serverClient.getDevices(),
+      );
       if (devices.some((d) => d.serial === serial)) return;
       if (Date.now() > deadline) {
         throw new Error(`device ${serial} did not appear on adb within ${timeoutMs}ms`);
@@ -1051,8 +1078,39 @@ export class DeviceManager {
       // boot, and a synchronous exec here would block the ENTIRE event
       // loop (every other plugin registration, WS accept, and request)
       // for however long `adb start-server` takes.
-      const child = spawnChild(opts.adbPath, ["start-server"], { stdio: "ignore" });
-      child.on("error", () => {});
+      //
+      // The server must start on the port `serverClient` connects to
+      // (issue #2115): adb takes it from ANDROID_ADB_SERVER_PORT, and
+      // without it a non-default DEVICE_ADB_SERVER_PORT never meets the
+      // server this starts on 5037.
+      const child = spawnChild(opts.adbPath, ["start-server"], {
+        stdio: ["ignore", "ignore", "pipe"],
+        env: { ...process.env, ANDROID_ADB_SERVER_PORT: String(opts.adbServerPort) },
+      });
+      let stderr = "";
+      child.stderr?.on("data", (chunk: Buffer) => {
+        if (stderr.length < 2000) stderr += chunk.toString();
+      });
+      let reported = false;
+      const report = (result: Parameters<NonNullable<typeof opts.onAdbServerStart>>[0]): void => {
+        // 'error' and 'exit' can both fire (a failed spawn still emits exit
+        // on some platforms) — one outcome per start.
+        if (reported) return;
+        reported = true;
+        opts.onAdbServerStart?.(result);
+      };
+      child.on("error", (error) => report({ ok: false, error, stderr: stderr.trim() }));
+      child.on("exit", (code, signal) =>
+        report(
+          code === 0
+            ? { ok: true }
+            : {
+                ok: false,
+                error: new Error(`adb start-server exited with ${code ?? `signal ${signal}`}`),
+                stderr: stderr.trim(),
+              },
+        ),
+      );
     }
   }
 
@@ -1193,7 +1251,9 @@ export class DeviceManager {
       // never collapse to "dead" for a caller about to take a destructive
       // action, the same trust rule device-process.ts's own
       // DeviceScopeOwnershipListing documents.
-      const liveDevices = await this.serverClient.getDevices();
+      const liveDevices = await adbCall(this.opts.adbServerPort, () =>
+        this.serverClient.getDevices(),
+      );
       if (!liveDevices.some((d) => d.serial === serial)) {
         // Confirmed gone, not just unreachable — safe, and necessary (so a
         // future spawn() for this id isn't wedged by the still-occupied
@@ -1327,7 +1387,9 @@ export class DeviceManager {
    * an allowlist, not shell-style escaping (this never touches a shell). */
   async pair(address: string, password: string): Promise<void> {
     this.assertEnabled("physical");
-    await this.serverClient.wireless.pair(address, password);
+    await adbCall(this.opts.adbServerPort, () =>
+      this.serverClient.wireless.pair(address, password),
+    );
   }
 
   /** Reconciliation liveness check for a device whose scope may have

@@ -710,7 +710,9 @@ export const schema = {
     },
     // TCP port the local adb server listens on — 5037 is adb's own
     // universal default; overridable for a host already running an adb
-    // server on a nonstandard port.
+    // server on a nonstandard port. The boot-time `adb start-server` is
+    // started on this same port (ANDROID_ADB_SERVER_PORT), and its outcome
+    // is logged.
     DEVICE_ADB_SERVER_PORT: {
       type: "number",
       default: 5037,

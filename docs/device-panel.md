@@ -16,7 +16,10 @@ default — see [`configuration.md`](configuration.md)). See the
 `ansible-playbooks` repo's `lxc-kvm`/`android-sdk` roles. `DEVICE_ADB_SERVER_PORT`
 (default `5037`, adb's own universal default) is the TCP port the local adb
 server listens on — only worth changing if something else on the host
-already holds `5037`.
+already holds `5037`. At boot Mullion runs `adb start-server` on that port
+(via `ANDROID_ADB_SERVER_PORT`) and logs the outcome: `adb server started`,
+or a warning with adb's stderr. A refused connection later reads "adb server
+is not running on 127.0.0.1:<port>" so the expected port is visible.
 
 **Linux and macOS** (issues
 [#1720](https://github.com/s3ntin3l8/mullion-session-manager/issues/1720) and

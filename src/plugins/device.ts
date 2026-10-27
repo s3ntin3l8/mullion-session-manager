@@ -141,6 +141,16 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
     onSpawnError: (id, err) => {
       app.log.warn({ err, deviceId: id }, "device spawn failed");
     },
+    onAdbServerStart: (result) => {
+      const port = app.config.DEVICE_ADB_SERVER_PORT;
+      if (result.ok) app.log.info({ port }, "adb server started");
+      else {
+        app.log.warn(
+          { err: result.error, port, adbPath: app.config.DEVICE_ADB_PATH, stderr: result.stderr },
+          "adb start-server failed — devices cannot connect until an adb server runs on this port",
+        );
+      }
+    },
     // DeviceManager deliberately never touches app.db itself (see
     // DeviceManagerOptions' own header comment) — this is the one place
     // that crosses that line, wired here rather than per-route since the

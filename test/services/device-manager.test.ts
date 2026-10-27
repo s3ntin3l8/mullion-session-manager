@@ -615,6 +615,80 @@ describe("DeviceManager", () => {
     });
   });
 
+  describe("adb server start-up (#2115)", () => {
+    const ADDRESS = "192.168.1.23:37251";
+    /** Makes the next `adb` spawn behave as `script` says; everything else
+     * keeps the harness's default behaviour. */
+    function fakeAdbStart(script: (ee: ReturnType<typeof createMockChild>) => void): void {
+      const baseImpl = vi.mocked(spawnChildProcess).getMockImplementation()!;
+      vi.mocked(spawnChildProcess).mockImplementationOnce(((
+        file: string,
+        args: readonly string[],
+        options: SpawnOptions,
+      ) => {
+        if (file !== "/usr/bin/adb") return baseImpl(file, args, options);
+        const ee = createMockChild();
+        (ee as unknown as { stderr: EventEmitter }).stderr = new EventEmitter();
+        setImmediate(() => script(ee));
+        return ee as unknown as ChildProcess.ChildProcess;
+      }) as typeof spawnChildProcess);
+    }
+
+    it("starts the server on the configured port and reports success", async () => {
+      const results: unknown[] = [];
+      fakeAdbStart((ee) => ee.emit("exit", 0, null));
+      new DeviceManager(
+        baseOpts({ adbServerPort: 5137, onAdbServerStart: (r) => results.push(r) }),
+      );
+      await vi.waitFor(() => expect(results).toEqual([{ ok: true }]));
+      const call = vi.mocked(spawnChildProcess).mock.calls.find((c) => c[0] === "/usr/bin/adb")!;
+      expect(call[1]).toEqual(["start-server"]);
+      expect((call[2] as SpawnOptions).env?.ANDROID_ADB_SERVER_PORT).toBe("5137");
+    });
+
+    it("reports a non-zero exit together with adb's stderr", async () => {
+      const results: Array<{ ok: boolean; error?: Error; stderr?: string }> = [];
+      fakeAdbStart((ee) => {
+        (ee as unknown as { stderr: EventEmitter }).stderr.emit("data", Buffer.from("boom\n"));
+        ee.emit("exit", 1, null);
+      });
+      new DeviceManager(baseOpts({ onAdbServerStart: (r) => results.push(r) }));
+      await vi.waitFor(() => expect(results).toHaveLength(1));
+      expect(results[0].ok).toBe(false);
+      expect(results[0].error?.message).toMatch(/exited with 1/);
+      expect(results[0].stderr).toBe("boom");
+    });
+
+    it("reports a spawn error once, even if exit follows", async () => {
+      const results: unknown[] = [];
+      fakeAdbStart((ee) => {
+        ee.emit("error", new Error("spawn /usr/bin/adb ENOENT"));
+        ee.emit("exit", null, null);
+      });
+      new DeviceManager(baseOpts({ onAdbServerStart: (r) => results.push(r) }));
+      await vi.waitFor(() => expect(results).toHaveLength(1));
+      expect(results[0]).toMatchObject({ ok: false });
+    });
+
+    it("rewords a refused adb connection to name the port", async () => {
+      mockWirelessPair.mockRejectedValueOnce(
+        Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:5137"), { code: "ECONNREFUSED" }),
+      );
+      const manager = new DeviceManager(baseOpts({ adbServerPort: 5137 }));
+      await expect(manager.pair(ADDRESS, "123456")).rejects.toThrow(
+        /adb server is not running on 127\.0\.0\.1:5137.*DEVICE_ADB_PATH/,
+      );
+    });
+
+    it("leaves other adb errors untouched", async () => {
+      mockWirelessPair.mockRejectedValueOnce(new Error("pairing code rejected"));
+      const manager = new DeviceManager(baseOpts());
+      await expect(manager.pair(ADDRESS, "123456")).rejects.toThrow(
+        "pairing code rejected",
+      );
+    });
+  });
+
   it("getOrCreate spawns a device end to end and reaches status streaming", async () => {
     mockDeviceList = [{ serial: "emulator-5554" }];
     const manager = new DeviceManager(baseOpts());
