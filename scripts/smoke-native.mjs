@@ -67,13 +67,23 @@ function smokePty() {
   });
 }
 
+/**
+ * Exit explicitly — on Windows node-pty's ConPTY machinery keeps the event
+ * loop alive after the child has exited, so the script would otherwise never
+ * end — but only once stdout and stderr have flushed: when they are pipes
+ * (CI) their writes are asynchronous, and a bare process.exit() could drop
+ * the very lines this script exists to print. Writes complete in order, so
+ * an empty write's callback means everything before it is out.
+ */
+function exitFlushed(code) {
+  process.stdout.write("", () => process.stderr.write("", () => process.exit(code)));
+}
+
 try {
   smokeSqlite();
   await smokePty();
+  exitFlushed(0);
 } catch (err) {
   console.error(`native smoke check failed: ${err instanceof Error ? err.message : err}`);
-  process.exit(1);
+  exitFlushed(1);
 }
-// Explicit: on Windows node-pty's ConPTY machinery keeps the event loop alive
-// after the child has exited, so the script would otherwise never end.
-process.exit(0);
