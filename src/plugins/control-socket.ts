@@ -112,8 +112,21 @@ export const MAX_CONNECTIONS = 256;
 
 type Scope = "full" | "session";
 
-interface ConnectionState {
-  readonly socket: net.Socket;
+/** Where a connection's frames come from: this process's own control socket,
+ * or (#1656) a relay carrying a remote host's session. */
+export type ConnectionOrigin = "local" | { relayHostId: string };
+
+export interface ConnectionState {
+  /** The reply sink every op writes through (`dispatch`'s `reply` included),
+   * so an op never touches the transport. */
+  send: (message: { id: number | null } & Record<string, unknown>) => void;
+  /** Runs `listener` once if the connection closes; returns the unsubscribe. */
+  onClose: (listener: () => void) => () => void;
+  /** The raw socket, for the streaming ops (`attach`, `events.*`) that write
+   * through a SocketChannel. Null on a connection with no local socket (a
+   * relay), where those ops are refused. */
+  readonly socket: net.Socket | null;
+  readonly origin: ConnectionOrigin;
   scope: Scope;
   /** Set only for scope "session" — the connection is pinned to this
    * session id for the lifetime of the connection (see resolveHandshake). */
@@ -241,7 +254,17 @@ function projectCoordinates(app: FastifyInstance, projectId: number): boolean {
   return row?.allowCrossProjectSpawn === true;
 }
 
-function send(socket: net.Socket, message: { id: number | null } & Record<string, unknown>): void {
+/** Streaming ops need the raw socket; a relayed connection has none (#2125). */
+const STREAM_UNAVAILABLE: ReplyPayload = {
+  ok: false,
+  status: 501,
+  error: "not-available-over-relay: streaming ops need a local control-socket connection",
+};
+
+function writeFrame(
+  socket: net.Socket,
+  message: { id: number | null } & Record<string, unknown>,
+): void {
   if (!socket.writable) return;
   socket.write(`${JSON.stringify(message)}\n`);
   // A peer that never reads would otherwise let replies pile up in this
@@ -618,8 +641,18 @@ function resolveTargetProjectId(
   const provided = extractProjectId(body);
 
   if (conn.scope === "session") {
-    const session = app.pty.get(conn.sessionId!);
-    const ownProjectId = session?.projectId != null ? String(session.projectId) : null;
+    // A DB read, not app.pty: a relayed session is not in this process's PtyManager.
+    const row = app.db
+      .select({ projectId: sessions.projectId })
+      .from(sessions)
+      .where(eq(sessions.id, Number(conn.sessionId)))
+      .get();
+    // The row must still be active: the PtyManager lookup this replaced also
+    // 400'd once the session had exited.
+    const ownProjectId =
+      row?.projectId != null && sessionRowIsActive(app, conn.sessionId!)
+        ? String(row.projectId)
+        : null;
     if (ownProjectId === null) {
       return {
         ok: false,
@@ -954,7 +987,7 @@ async function runWait(
   }
   const controller = new AbortController();
   const onClose = () => controller.abort();
-  conn.socket.once("close", onClose);
+  const offClose = conn.onClose(onClose);
   conn.activeWaits = (conn.activeWaits ?? 0) + 1;
   // Issue #1962 — a child on another host has no Session in THIS process's
   // PtyManager, so its event head, its events and its status all come from
@@ -1029,7 +1062,7 @@ async function runWait(
         : bad(500, message);
   } finally {
     conn.activeWaits -= 1;
-    conn.socket.off("close", onClose);
+    offClose();
   }
 }
 
@@ -1219,7 +1252,7 @@ export const OPS: Record<string, OpSpec> = {
       }
       const controller = new AbortController();
       const onClose = () => controller.abort();
-      conn.socket.once("close", onClose);
+      const offClose = conn.onClose(onClose);
       conn.activeWaits = (conn.activeWaits ?? 0) + 1;
       try {
         const callerActive = () =>
@@ -1255,7 +1288,7 @@ export const OPS: Record<string, OpSpec> = {
         reply({ ok: true, status: 200, result: outcome });
       } finally {
         conn.activeWaits -= 1;
-        conn.socket.off("close", onClose);
+        offClose();
       }
     },
   },
@@ -1721,6 +1754,10 @@ export const OPS: Record<string, OpSpec> = {
   "sessions.attach": {
     scopes: ["full", "session"],
     handler: ({ app, conn, id, body, reply }) => {
+      if (conn.socket === null) {
+        reply(STREAM_UNAVAILABLE);
+        return;
+      }
       const target = resolveTargetSessionId(conn, body);
       if (!target.ok) {
         reply(target.reply);
@@ -1852,6 +1889,10 @@ export const OPS: Record<string, OpSpec> = {
   "events.subscribe": {
     scopes: ["full", "session"],
     handler: ({ app, conn, id, body, reply }) => {
+      if (conn.socket === null) {
+        reply(STREAM_UNAVAILABLE);
+        return;
+      }
       const slotError = streamSlotError(conn, id);
       if (slotError) {
         reply(slotError);
@@ -2414,7 +2455,7 @@ function handleConnection(
         return;
       }
       if (lineBytes > MAX_LINE_BYTES) {
-        send(socket, {
+        writeFrame(socket, {
           id: null,
           ok: false,
           status: 400,
@@ -2446,7 +2487,13 @@ function handleConnection(
         }
         clearTimeout(handshakeTimer);
         conn = {
+          send: (message) => writeFrame(socket, message),
+          onClose: (listener) => {
+            socket.once("close", listener);
+            return () => socket.off("close", listener);
+          },
           socket,
+          origin: "local",
           scope: resolved.scope,
           sessionId: resolved.sessionId,
           openChannels: new Map(),
@@ -2457,7 +2504,7 @@ function handleConnection(
 
       const result = parseControlMessage(line);
       if (!result.ok) {
-        send(socket, { id: result.id, ok: false, status: 400, error: result.error });
+        writeFrame(socket, { id: result.id, ok: false, status: 400, error: result.error });
         continue;
       }
 
@@ -2495,7 +2542,7 @@ function handleConnection(
   });
 }
 
-async function dispatch(
+export async function dispatch(
   app: FastifyInstance,
   conn: ConnectionState,
   message: ControlMessage,
@@ -2506,7 +2553,7 @@ async function dispatch(
   // throw outside the try — an unhandled rejection that takes the process down.
   const spec = Object.hasOwn(OPS, message.op) ? OPS[message.op] : undefined;
   if (!spec) {
-    send(conn.socket, {
+    conn.send({
       id: message.id,
       ok: false,
       status: 404,
@@ -2515,7 +2562,7 @@ async function dispatch(
     return;
   }
   if (!spec.scopes.includes(conn.scope)) {
-    send(conn.socket, {
+    conn.send({
       id: message.id,
       ok: false,
       status: 403,
@@ -2524,11 +2571,11 @@ async function dispatch(
     return;
   }
 
-  const reply = (payload: ReplyPayload) => send(conn.socket, { id: message.id, ...payload });
+  const reply = (payload: ReplyPayload) => conn.send({ id: message.id, ...payload });
   try {
     await spec.handler({ app, conn, id: message.id, body: message.body, reply });
   } catch (err) {
-    // Defense-in-depth: send() already guards on socket.writable, but a
+    // Defense-in-depth: writeFrame() already guards on socket.writable, but a
     // handler throwing after the connection has gone away mid-flight is
     // exactly the moment writing a reply is most likely to itself fail —
     // this must never surface as an unhandled rejection from the `void
