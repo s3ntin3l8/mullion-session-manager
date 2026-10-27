@@ -15,6 +15,7 @@ import {
   BranchPreviewError,
   getOrCreateBranchPreview,
   pickPreviewControl,
+  previewWorktreePathWithin,
 } from "../../src/services/branch-preview.js";
 import {
   CHECKOUT_BRANCH,
@@ -288,6 +289,28 @@ describe("branch previews (issues #2016/#2018)", () => {
     expect(getOrCreateProjectPreview(app, projectId).slug).toBe(checkout.slug);
     const rows = app.db.select().from(previews).where(eq(previews.projectId, projectId)).all();
     expect(rows.map((r) => r.branch).sort()).toEqual([CHECKOUT_BRANCH, "feat/x"]);
+  });
+
+  it("holds a preview worktree path inside the project's .mullion-worktrees", () => {
+    const cwd = path.join(os.tmpdir(), "bp-contain");
+    const base = path.join(cwd, ".mullion-worktrees");
+    // The real derivation, even for a hostile-looking branch, stays inside.
+    for (const branch of ["feat/x", "../../../etc", "a/../../b"]) {
+      const inside = previewWorktreePathWithin(cwd, dockPreviewWorktreePath(cwd, branch));
+      expect(path.dirname(inside)).toBe(base);
+    }
+    // Anything that would resolve outside the base, or to the base itself, is refused.
+    for (const escape of [
+      path.join(base, "..", "..", "etc"),
+      "../outside",
+      "/etc/passwd",
+      base,
+      path.join(base, "dock-preview-x", "..", ".."),
+    ]) {
+      expect(() => previewWorktreePathWithin(cwd, escape)).toThrow(
+        expect.objectContaining({ code: "invalid_branch", statusCode: 400 }),
+      );
+    }
   });
 
   it("refuses with a code for each case it cannot serve", async () => {

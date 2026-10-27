@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import fs from "node:fs";
 import net from "node:net";
+import path from "node:path";
 import { and, eq, ne } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import type { DockControl } from "../shared/types.js";
@@ -50,20 +51,22 @@ export type BranchPreviewErrorCode =
   | "remote_unsupported"
   | "no_preview_control"
   | "unknown_branch"
+  | "invalid_branch"
   | "worktree_busy"
   | "start_failed";
 
-const STATUS: Record<BranchPreviewErrorCode, 404 | 409 | 502> = {
+const STATUS: Record<BranchPreviewErrorCode, 400 | 404 | 409 | 502> = {
   unknown_project: 404,
   remote_unsupported: 409,
   no_preview_control: 409,
   unknown_branch: 404,
+  invalid_branch: 400,
   worktree_busy: 409,
   start_failed: 502,
 };
 
 export class BranchPreviewError extends Error {
-  readonly statusCode: 404 | 409 | 502;
+  readonly statusCode: 400 | 404 | 409 | 502;
   constructor(
     readonly code: BranchPreviewErrorCode,
     message: string,
@@ -134,6 +137,31 @@ export async function allocatePreviewPort(taken: ReadonlySet<number>): Promise<n
 }
 
 /**
+ * The branch's `dock-preview-*` worktree path, resolved and held to
+ * `<projectCwd>/.mullion-worktrees`. The name is derived from the request's
+ * branch: `dockPreviewWorktreePath` sanitizes it, but the path is checked
+ * again here, before any filesystem or git call touches it, so a name that
+ * slipped past the sanitizer can never reach outside the worktree root.
+ */
+export function previewWorktreePathWithin(projectCwd: string, candidate: string): string {
+  const base = path.resolve(projectCwd, ".mullion-worktrees");
+  const resolved = path.resolve(base, candidate);
+  const relative = path.relative(base, resolved);
+  if (
+    !relative ||
+    relative.startsWith("..") ||
+    path.isAbsolute(relative) ||
+    !resolved.startsWith(base + path.sep)
+  ) {
+    throw new BranchPreviewError(
+      "invalid_branch",
+      "That branch name can't name a preview worktree",
+    );
+  }
+  return resolved;
+}
+
+/**
  * A `dock-preview-*` directory for the branch already exists. If a live
  * session still runs in it — a dock monitor started on the same branch from
  * the dock — it is that session's, and starting a second dev server in it is
@@ -145,8 +173,9 @@ async function clearStaleWorktree(
   app: FastifyInstance,
   projectId: number,
   projectCwd: string,
-  worktreePath: string,
+  candidate: string,
 ): Promise<void> {
+  const worktreePath = previewWorktreePathWithin(projectCwd, candidate);
   if (!fs.existsSync(worktreePath)) return;
   const occupants = app.db
     .select({ id: sessions.id })
