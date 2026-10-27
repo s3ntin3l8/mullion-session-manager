@@ -299,9 +299,9 @@ export interface RelayTarget {
   /**
    * Does the head hold the same content as the reviewed commit (the same
    * commit, or the same tree)? A rewrite that changed nothing has nothing new to
-   * review (while the reviewed commit is still one of the PR's commits: a rewrite that
-   * drops it hides its marker, s3ntin3l8/.github#136); an "Update branch" merge does. The
-   * workflow skips on the same test. Without it only the same commit counts.
+   * review, even when it dropped the reviewed commit from the PR (its marker is found
+   * through the force-push history, s3ntin3l8/.github#136); an "Update branch" merge
+   * does. The workflow skips on the same test. Without it only the same commit counts.
    */
   sameContent?: (baseSha: string, headSha: string) => Promise<boolean>;
   /** Dispatching Mullion session, when the request came from an agent. */
@@ -991,8 +991,9 @@ export async function requestRelay(
     await target.beforeDispatch?.();
     const baseSha = target.resolveBase ? await target.resolveBase() : undefined;
     // An empty range means the reviewed commit holds the head's content (it IS
-    // the head, or has its tree — a rewrite that changed nothing, while the
-    // reviewed commit is still one of the PR's commits, s3ntin3l8/.github#136):
+    // the head, or has its tree — a rewrite that changed nothing; the reviewed
+    // commit may have been dropped from the PR by it, its marker is still found
+    // through the force-push history, s3ntin3l8/.github#136):
     // there is nothing new to review, and a run for it would be a
     // second review of the same diff. The reviewed commit comes from the
     // ledger, not from a review's commit_id, which GitHub re-points at the

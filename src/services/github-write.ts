@@ -935,6 +935,79 @@ const PR_COMMITS_PAGE_SIZE = 100;
 const PR_COMMITS_MAX_PAGES = 3;
 /** Commits whose check runs are read at the same time. */
 const MARKER_FETCH_CONCURRENCY = 10;
+/** How many of a PR's newest force-pushes are searched for the heads it had before them. */
+const MARKER_FORCE_PUSH_WINDOW = 20;
+
+const FORCE_PUSHED_HEADS_QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      timelineItems(itemTypes: [HEAD_REF_FORCE_PUSHED_EVENT], last: ${MARKER_FORCE_PUSH_WINDOW}) {
+        nodes { ... on HeadRefForcePushedEvent { beforeCommit { oid } } }
+      }
+    }
+  }
+}`;
+
+interface ForcePushedHeadsData {
+  repository: {
+    pullRequest: {
+      timelineItems: {
+        nodes: Array<{ beforeCommit?: { oid?: string } | null } | null> | null;
+      } | null;
+    } | null;
+  } | null;
+}
+
+/**
+ * The heads a PR had BEFORE each of its last force-pushes, oldest first
+ * (s3ntin3l8/.github#136). A rebase or a recreated branch drops the reviewed
+ * commit from the PR, but the ledger marker stays on it; REST's timeline only
+ * names the commit AFTER a force-push, so this is GraphQL. A `beforeCommit`
+ * GitHub has already collected comes back null and is skipped. `{ reason }` = the
+ * read was not possible (rate limit, a failed or partial answer, a token without
+ * access): the caller degrades to the PR's current commits, which can make the
+ * relay's base differ from the shared workflow's for that dispatch (a lost
+ * dedup, never a wrong review).
+ *
+ * Goes through `githubGraphQL()` (this file's shared POST on `githubApiFetch`), so
+ * a GraphQL throttle is recorded into the shared rate-limit budget like every
+ * other read here. Deliberately NOT the poller's `graphql()` helper
+ * (github-pr-reviews.ts): that one arms an app-wide backoff on a 403/429 and
+ * shares a warning slot with the PR-list refresh, so a failure of this read
+ * would pause the UI.
+ */
+async function listForcePushedHeads(
+  prToken: string,
+  owner: string,
+  repo: string,
+  prNumber: number,
+): Promise<{ heads: string[] } | { reason: string }> {
+  validateGitHubRepoRef(owner, repo);
+  let data: ForcePushedHeadsData;
+  try {
+    data = await githubGraphQL<ForcePushedHeadsData>(prToken, FORCE_PUSHED_HEADS_QUERY, {
+      owner,
+      repo,
+      number: prNumber,
+    });
+  } catch (err) {
+    // A rate limit (already recorded into the shared budget by githubApiFetch), a
+    // token without access, a GraphQL error: the caller degrades the same way for
+    // all of them, and reports why. `githubGraphQL` words a 403/404 as a refused WRITE
+    // ("the token likely lacks write access"), which would mislead in a log about a read.
+    return {
+      reason:
+        err instanceof GitHubWriteScopeError
+          ? `HTTP ${err.statusCode}: the token cannot read the pull request's timeline`
+          : err instanceof Error
+            ? err.message
+            : String(err),
+    };
+  }
+  const nodes = data?.repository?.pullRequest?.timelineItems?.nodes;
+  if (!nodes) return { reason: "the answer had no force-push timeline" };
+  return { heads: nodes.flatMap((n) => (n?.beforeCommit?.oid ? [n.beforeCommit.oid] : [])) };
+}
 
 /**
  * The finished (`success`) ledger markers on a PR's last commits. A run that
@@ -950,9 +1023,14 @@ const MARKER_FETCH_CONCURRENCY = 10;
  * with FORBIDDEN for it on a private repository. Its own check-run reads work.
  * (It is the same split `readRememberedSession` relies on.)
  *
- * Cost: up to 3 requests for the PR's commits plus one per commit of the
- * window (50), in batches of 10 — `base()` runs on every relay dispatch, and
- * the window is what sizes it.
+ * The heads the PR had before its last force-pushes are searched too (see
+ * `listForcePushedHeads`), so a rewrite that dropped the reviewed commit does
+ * not hide its marker (s3ntin3l8/.github#136). The workflow does the same.
+ *
+ * Cost: up to 3 requests for the PR's commits, one GraphQL request for the
+ * force-pushes, plus one per candidate commit (the window of 50 and up to 20
+ * dropped heads), in batches of 10 — `base()` runs on every relay dispatch,
+ * and the windows are what size it.
  */
 export async function listReviewMarkers(
   prToken: string,
@@ -983,7 +1061,19 @@ export async function listReviewMarkers(
     commits.push(...data.map((c) => c.sha));
     if (data.length < PR_COMMITS_PAGE_SIZE) break;
   }
-  const window = commits.slice(-MARKER_COMMIT_WINDOW);
+  const forcePushed = await listForcePushedHeads(prToken, owner, repo, prNumber);
+  if ("reason" in forcePushed) {
+    onError?.(
+      `force-push history unreadable (${forcePushed.reason}), searching the PR's current commits only`,
+    );
+  }
+  // A head that is still in the PR (it was force-pushed to and then back) is read once.
+  const window = [
+    ...new Set([
+      ...commits.slice(-MARKER_COMMIT_WINDOW),
+      ...("heads" in forcePushed ? forcePushed.heads : []),
+    ]),
+  ];
   const out: ReviewMarker[] = [];
   const failed: string[] = [];
   for (let i = 0; i < window.length; i += MARKER_FETCH_CONCURRENCY) {
