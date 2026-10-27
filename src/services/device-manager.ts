@@ -522,7 +522,7 @@ export class Device {
           recordScopeExit(
             exit.error ??
               new Error(
-                `device scope exited during boot with code ${exit.code ?? "null"} (unit ${exit.scopeName})`,
+                `device scope exited during boot with code ${exit.code ?? "null"} (scope ${exit.scopeName})`,
               ),
           );
           this.handleExit();

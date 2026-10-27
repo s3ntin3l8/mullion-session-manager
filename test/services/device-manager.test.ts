@@ -487,7 +487,7 @@ describe("DeviceManager", () => {
       const device = await manager.getOrCreate(spawnEmulator());
       await vi.waitFor(() => expect(device.toInfo().status).toBe("error"));
       expect(device.toInfo().error).toMatch(
-        /device scope exited during boot with code 3 \(unit marker-7\)/,
+        /device scope exited during boot with code 3 \(scope marker-7\)/,
       );
     });
 

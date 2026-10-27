@@ -1,6 +1,7 @@
 import { execFile, spawn as spawnChild } from "node:child_process";
 import {
   closeSync,
+  existsSync,
   openSync,
   readFileSync,
   renameSync,
@@ -80,8 +81,8 @@ interface PsRow {
 interface DeviceMarker {
   v: 1;
   pid: number;
-  /** null when `ps` could not be read at launch: the pid is recorded but cannot be confirmed later. */
-  lstart: string | null;
+  /** The process's start time, normalised. Always present: `start()` refuses to record a launch it can't read one for. */
+  lstart: string;
 }
 
 /** Parses `ps -ax -o pid=,pgid=,lstart=,comm=` output (lstart is always 5 tokens). */
@@ -120,12 +121,14 @@ function readMarker(markerPath: string): DeviceMarker | "empty" | "unreadable" |
   if (raw.trim() === "") return "empty";
   try {
     const parsed = JSON.parse(raw) as Partial<DeviceMarker>;
-    if (parsed.v === 1 && Number.isInteger(parsed.pid) && (parsed.pid as number) > 0) {
-      return {
-        v: 1,
-        pid: parsed.pid as number,
-        lstart: typeof parsed.lstart === "string" ? parsed.lstart : null,
-      };
+    if (
+      parsed.v === 1 &&
+      Number.isInteger(parsed.pid) &&
+      (parsed.pid as number) > 0 &&
+      typeof parsed.lstart === "string" &&
+      parsed.lstart !== ""
+    ) {
+      return { v: 1, pid: parsed.pid as number, lstart: parsed.lstart };
     }
   } catch {
     // fall through
@@ -230,12 +233,29 @@ export class MarkerDeviceScopeBackend implements ScopeBackend {
 
   constructor(private readonly opts: DeviceScopeBackendOptions) {}
 
+  /**
+   * Where this id's marker lives. New launches write to the current sessions dir;
+   * for reading, every dir this instance may own devices in is searched (issue
+   * #1770: a marker created before the sessions dir moved stays in the old one),
+   * current dir first. An id with no marker anywhere resolves to the current dir,
+   * so "absent" is answered there.
+   */
   private markerPath(id: string): string {
-    return deviceMarkerPath(this.opts.sessionsDir, id);
+    const current = deviceMarkerPath(this.opts.sessionsDir, id);
+    for (const dir of [this.opts.sessionsDir, ...(this.opts.ownedDirs ?? [])]) {
+      const candidate = deviceMarkerPath(dir, id);
+      if (candidate === current) {
+        if (existsSync(candidate)) return candidate;
+        continue;
+      }
+      if (existsSync(candidate)) return candidate;
+    }
+    return current;
   }
 
   async start(spec: ScopeLaunchSpec): Promise<void> {
-    const markerPath = this.markerPath(spec.id);
+    // A new launch always records into the current sessions dir.
+    const markerPath = deviceMarkerPath(this.opts.sessionsDir, spec.id);
     const [program, ...args] = spec.argv;
     const child = spawnChild(program, args, {
       detached: true,
@@ -323,7 +343,6 @@ export class MarkerDeviceScopeBackend implements ScopeBackend {
     const row = table.find((r) => r.pid === marker.pid);
     if (!row) return "dead";
     const isEmulator = EMULATOR_COMM.test(path.basename(row.comm));
-    if (marker.lstart === null) return "unknown";
     if (row.lstart === marker.lstart) return isEmulator ? "alive" : "unknown";
     // Start time differs. Another program means the pid was reused (ours is
     // gone); an emulator binary could still be ours — never guess "dead".
@@ -354,9 +373,6 @@ export class MarkerDeviceScopeBackend implements ScopeBackend {
     const row = table.find((r) => r.pid === marker.pid);
     if (!row) return;
     const isEmulator = EMULATOR_COMM.test(path.basename(row.comm));
-    if (marker.lstart === null) {
-      throw new DeviceScopeStopError(`device ${id}: no start time recorded for pid ${marker.pid}`);
-    }
     if (row.lstart !== marker.lstart) {
       // The pid now belongs to another program: ours is gone. A same-named binary
       // could still be ours (e.g. a clock step) — never guess.

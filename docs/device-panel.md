@@ -53,10 +53,13 @@ Both backends share one trust rule: a scope whose ownership can't be confirmed
 is **"unknown"** — never "dead" (which would make the manager mark a live
 device exited and tear it down) and never "not ours". `getOrCreate()` reports
 an unknown scope as an error rather than spawning a second emulator over a
-possibly-live one. On macOS "unknown" covers an unreadable `ps`, a marker with
-no recorded launch, and a pid whose start time changed but is still an
-emulator; "dead" is only an absent marker, a pid gone from the process table,
-or a pid now running some other program.
+possibly-live one. On macOS "unknown" covers an unreadable `ps`, an unreadable
+marker, a marker with no recorded launch _yet_ (empty and younger than 60 s — a
+launch in flight), and a pid whose start time changed but is still an emulator.
+"Dead" is an absent marker, a pid gone from the process table, a pid now running
+some other program, or an **empty marker older than 60 s**: no pid was ever
+recorded, which is what a Mullion that died mid-launch leaves behind, and
+reading it as "dead" lets the next launch reclaim the id instead of wedging it.
 
 On a platform without a capability, the routes that **add, start or change**
 such a device answer **400** with the platform named ("Emulator devices are not

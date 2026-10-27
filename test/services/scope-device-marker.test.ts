@@ -312,6 +312,41 @@ describe("MarkerDeviceScopeBackend.isAliveBatch — the liveness table", () => {
     expect(await live()).toBe("dead");
   });
 
+  it("finds a marker in a fallback root the instance owns (#1770), and answers for the current dir otherwise", async () => {
+    const old = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-devscope-old-"));
+    try {
+      fs.writeFileSync(
+        deviceMarkerPath(old, "7"),
+        JSON.stringify({ v: 1, pid: 10, lstart: LSTART }),
+      );
+      psOutput = row(10, 10, LSTART, EMULATOR);
+      const withOld = new MarkerDeviceScopeBackend({
+        sessionsDir: dir,
+        ownedDirs: new Set([dir, old]),
+      });
+      expect((await withOld.isAliveBatch(["7"]))["7"]).toBe("alive");
+      // Not owning that dir: the same marker is invisible, so the id reads as absent.
+      const without = new MarkerDeviceScopeBackend({ sessionsDir: dir });
+      expect((await without.isAliveBatch(["7"]))["7"]).toBe("dead");
+      // And stop() acts on the fallback-root marker.
+      aliveAfterSignal.add(10);
+      killSpy.mockImplementation(((pid: number, signal: string | number = 0) => {
+        if (signal === 0) {
+          if (!killed.length) return true;
+          const err = new Error("ESRCH") as NodeJS.ErrnoException;
+          err.code = "ESRCH";
+          throw err;
+        }
+        killed.push({ pid, signal });
+        return true;
+      }) as typeof process.kill);
+      await withOld.stop("7");
+      expect(killed[0]).toEqual({ pid: -10, signal: "SIGTERM" });
+    } finally {
+      fs.rmSync(old, { recursive: true, force: true });
+    }
+  });
+
   it("pid absent from the table -> dead", async () => {
     writeRecord("7", { v: 1, pid: 10, lstart: LSTART });
     psOutput = row(99, 99, LSTART, EMULATOR);
@@ -422,7 +457,7 @@ describe("MarkerDeviceScopeBackend.stop", () => {
       row(10, 10, "Wed Oct 28 01:00:00 2026", EMULATOR),
     ],
     [
-      "a launch whose start time was never captured",
+      "a marker with no start time (never written by start(), so treated as unreadable)",
       () => writeRecord("7", { v: 1, pid: 10, lstart: null }),
       row(10, 10, LSTART, EMULATOR),
     ],
