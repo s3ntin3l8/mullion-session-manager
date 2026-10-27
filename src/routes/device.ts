@@ -539,6 +539,9 @@ export async function deviceRoute(app: FastifyInstance): Promise<void> {
         const [row] = app.db.select().from(devices).where(eq(devices.id, deviceId)).all();
         if (!row) return reply.notFound(`No device ${deviceId}`);
         if (row.status === "killed") return reply.badRequest(`Device ${deviceId} was killed`);
+        if (row.kind !== "physical" && !app.deviceEmulatorEnabled) {
+          return reply.badRequest(app.deviceEmulatorUnavailableMessage);
+        }
       },
     },
     (socket, req) => {

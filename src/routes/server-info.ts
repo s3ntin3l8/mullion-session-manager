@@ -108,11 +108,14 @@ export async function serverInfoRoute(app: FastifyInstance) {
       features: {
         browser: app.config.BROWSER_ENABLED,
         // The EFFECTIVE device-panel gate, not the raw flag: on a platform
-        // the panel does not exist on (issue #1720 — it is Linux-only), the
-        // UI must not offer it. The frontend already keys the Devices
+        // that can run no device kind at all (issue #1720), the UI must not
+        // offer it. The frontend already keys the Devices
         // section off this flag, so no new signal is needed for it to
         // disappear.
         devices: app.devicePanelEnabled,
+        // Which device kinds this host can run (issue #1854). Empty when the
+        // panel is off, so a client never offers a kind the server refuses.
+        deviceKinds: app.devicePanelEnabled ? app.deviceKinds : [],
         deviceDiscovery: app.bootDeviceDiscoveryEnabled && app.devicePanelEnabled,
       },
     };

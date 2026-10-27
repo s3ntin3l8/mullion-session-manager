@@ -13,7 +13,12 @@ import path from "node:path";
 import fs from "node:fs";
 import { buildTestApp, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
-import { isDevicePanelSupported } from "../../src/services/device-manager.js";
+import { devices } from "../../src/db/schema.js";
+import {
+  deviceCapabilities,
+  isDeviceKindSupported,
+  isDevicePanelSupported,
+} from "../../src/services/device-manager.js";
 
 const ptyMock = createNodePtyMock();
 vi.mock("node-pty", () => ({ spawn: ptyMock.spawn }));
@@ -65,41 +70,111 @@ describe("device panel platform gate (issue #1720, roadmap 8.6)", () => {
     delete process.env.DEVICE_ENABLED;
   });
 
-  describe("isDevicePanelSupported", () => {
-    it("is true on linux — the platform the panel's scope mechanism exists on", () => {
+  describe("device capabilities per platform", () => {
+    it("linux can run both physical and emulator devices", () => {
       expect(isDevicePanelSupported("linux")).toBe(true);
+      expect(isDeviceKindSupported("physical", "linux")).toBe(true);
+      expect(isDeviceKindSupported("emulator", "linux")).toBe(true);
     });
 
-    it("is false on darwin — there is no systemd scope to put an emulator in", () => {
-      expect(isDevicePanelSupported("darwin")).toBe(false);
+    it("darwin is physical-only — an emulator needs a device scope it does not have yet", () => {
+      expect(isDevicePanelSupported("darwin")).toBe(true);
+      expect(isDeviceKindSupported("physical", "darwin")).toBe(true);
+      expect(isDeviceKindSupported("emulator", "darwin")).toBe(false);
+      expect([...deviceCapabilities("darwin")]).toEqual(["physical"]);
     });
 
-    it("is false on windows, which has no supported primary at all", () => {
+    it("windows has no capability at all — the whole panel is off", () => {
       expect(isDevicePanelSupported("win32")).toBe(false);
+      expect(deviceCapabilities("win32").size).toBe(0);
     });
   });
 
-  describe("on a platform the panel does not support (darwin)", () => {
-    it("keeps the panel off even with DEVICE_ENABLED=true, and says WHY", async () => {
+  describe("on a platform with physical devices only (darwin)", () => {
+    it("turns the panel on with DEVICE_ENABLED=true but keeps emulators off, and says WHY", async () => {
       await withPlatform("darwin", async () => {
         process.env.DEVICE_ENABLED = "true";
         const app = await buildTestApp();
         try {
           await app.ready();
-          expect(app.devicePanelEnabled).toBe(false);
-          expect(app.devicePanelSupported).toBe(false);
-          expect(app.devicePanelUnavailableMessage).toMatch(/not supported on darwin/);
+          expect(app.devicePanelEnabled).toBe(true);
+          expect(app.deviceEmulatorSupported).toBe(false);
+          expect(app.deviceEmulatorEnabled).toBe(false);
+          expect(app.deviceKinds).toEqual(["physical"]);
+          expect(app.deviceEmulatorUnavailableMessage).toMatch(/not supported on darwin/);
+          expect(app.deviceEmulatorUnavailableMessage).toMatch(/only physical devices are/);
           // The platform reason DOMINATES: telling the operator to set
           // DEVICE_ENABLED=true would send them off to change a .env and
           // restart for nothing.
-          expect(app.devicePanelUnavailableMessage).not.toMatch(/set DEVICE_ENABLED=true/);
+          expect(app.deviceEmulatorUnavailableMessage).not.toMatch(/set DEVICE_ENABLED=true/);
         } finally {
           await app.close();
         }
       });
     });
 
-    it("answers the device routes with 400 and the platform message — not a 500", async () => {
+    it("rejects an unknown kind instead of letting it fall through to the emulator path", async () => {
+      await withPlatform("darwin", async () => {
+        process.env.DEVICE_ENABLED = "true";
+        const app = await buildTestApp();
+        try {
+          const res = await app.inject({
+            method: "POST",
+            url: "/api/devices",
+            payload: { kind: "bogus", avdName: "dev35" },
+          });
+          expect(res.statusCode).toBe(400);
+          expect(res.json().message).toMatch(/kind must be/);
+        } finally {
+          await app.close();
+        }
+      });
+    });
+
+    it("refuses to start an emulator row and to open its stream", async () => {
+      await withPlatform("darwin", async () => {
+        process.env.DEVICE_ENABLED = "true";
+        const app = await buildTestApp();
+        try {
+          // Rows as a DB carried over from a Linux host would hold them.
+          const [emu] = app.db
+            .insert(devices)
+            .values({ kind: "emulator", avdName: "dev35", status: "active" })
+            .returning()
+            .all();
+          const start = await app.inject({ method: "POST", url: `/api/devices/${emu.id}/start` });
+          expect(start.statusCode).toBe(400);
+          expect(start.json().message).toMatch(/Emulator devices are not supported on darwin/);
+          const ws = await app.inject({ method: "GET", url: `/ws/device/${emu.id}` });
+          expect(ws.statusCode).toBe(400);
+          expect(ws.json().message).toMatch(/Emulator devices are not supported on darwin/);
+          // The WS routes of the AVD provisioning surface carry the same gate.
+          expect(app.deviceEmulatorSupported).toBe(false);
+        } finally {
+          await app.close();
+        }
+      });
+    });
+
+    it("leaves pairing open — it is physical-only and needs no scope", async () => {
+      await withPlatform("darwin", async () => {
+        process.env.DEVICE_ENABLED = "true";
+        const app = await buildTestApp();
+        try {
+          const res = await app.inject({
+            method: "POST",
+            url: "/api/devices/pair",
+            payload: { pairingAddress: "nope", pairingCode: "123456" },
+          });
+          expect(res.statusCode).toBe(400);
+          expect(res.json().message).toMatch(/pairingAddress must be host:port/);
+        } finally {
+          await app.close();
+        }
+      });
+    });
+
+    it("refuses an emulator create with 400 and the platform message — not a 500", async () => {
       await withPlatform("darwin", async () => {
         process.env.DEVICE_ENABLED = "true";
         const app = await buildTestApp();
@@ -117,7 +192,26 @@ describe("device panel platform gate (issue #1720, roadmap 8.6)", () => {
       });
     });
 
-    it("answers the AVD and system-image routes with the same reason", async () => {
+    it("lets a physical create past the gate — it fails on the body, not the platform", async () => {
+      await withPlatform("darwin", async () => {
+        process.env.DEVICE_ENABLED = "true";
+        const app = await buildTestApp();
+        try {
+          const res = await app.inject({
+            method: "POST",
+            url: "/api/devices",
+            payload: { kind: "physical", address: "not-an-address" },
+          });
+          expect(res.statusCode).toBe(400);
+          expect(res.json().message).toMatch(/address must be host:port/);
+          expect(res.json().message).not.toMatch(/not supported/);
+        } finally {
+          await app.close();
+        }
+      });
+    });
+
+    it("answers the AVD and system-image routes with the emulator reason", async () => {
       await withPlatform("darwin", async () => {
         process.env.DEVICE_ENABLED = "true";
         const app = await buildTestApp();
@@ -133,29 +227,72 @@ describe("device panel platform gate (issue #1720, roadmap 8.6)", () => {
       });
     });
 
-    it("reports the panel as unavailable in server-info, so the UI hides it", async () => {
+    it("reports devices on and the physical-only kind list in server-info, so the UI hides emulators", async () => {
       await withPlatform("darwin", async () => {
         process.env.DEVICE_ENABLED = "true";
         const app = await buildTestApp();
         try {
           const res = await app.inject({ method: "GET", url: "/api/server-info" });
           expect(res.statusCode).toBe(200);
-          expect(res.json().features.devices).toBe(false);
+          expect(res.json().features.devices).toBe(true);
+          expect(res.json().features.deviceKinds).toEqual(["physical"]);
         } finally {
           await app.close();
         }
       });
     });
+  });
 
-    it("does not bind the mDNS scanner — the panel's companion stays off too", async () => {
+  describe("mDNS discovery follows the panel, not the emulator capability", () => {
+    it("is wired on darwin, where the physical half works", async () => {
       await withPlatform("darwin", async () => {
         process.env.DEVICE_ENABLED = "true";
         const app = await buildTestApp();
         try {
           await app.ready();
-          // The discovery service is constructed disabled, so it never builds
-          // a Bonjour instance and never binds a multicast socket.
-          expect(app.deviceDiscovery.getDiscovered()).toEqual([]);
+          const info = await app.inject({ method: "GET", url: "/api/server-info" });
+          expect(info.json().features.devices).toBe(true);
+          expect(app.deviceDiscovery).toBeDefined();
+        } finally {
+          await app.close();
+        }
+      });
+    });
+  });
+
+  describe("on a platform with no device support (win32)", () => {
+    it("keeps the whole panel off even with DEVICE_ENABLED=true, and says WHY", async () => {
+      await withPlatform("win32", async () => {
+        process.env.DEVICE_ENABLED = "true";
+        const app = await buildTestApp();
+        try {
+          await app.ready();
+          expect(app.devicePanelEnabled).toBe(false);
+          expect(app.devicePanelSupported).toBe(false);
+          expect(app.deviceKinds).toEqual([]);
+          expect(app.devicePanelUnavailableMessage).toMatch(/not supported on win32/);
+          expect(app.devicePanelUnavailableMessage).not.toMatch(/set DEVICE_ENABLED=true/);
+          const res = await app.inject({
+            method: "POST",
+            url: "/api/devices",
+            payload: { kind: "physical", address: "10.0.0.2:5555" },
+          });
+          expect(res.statusCode).toBe(400);
+          expect(res.json().message).toMatch(/not supported on win32/);
+          // The emulator surfaces must not claim "only physical devices are" where
+          // physical devices are unsupported too.
+          for (const [method, url, payload] of [
+            ["POST", "/api/devices", { avdName: "dev35" }],
+            ["GET", "/api/avds", undefined],
+          ] as const) {
+            const emu = await app.inject({ method, url, payload });
+            expect(emu.statusCode, url).toBe(400);
+            expect(emu.json().message, url).toMatch(/not supported on win32/);
+            expect(emu.json().message, url).not.toMatch(/only physical/);
+          }
+          const info = await app.inject({ method: "GET", url: "/api/server-info" });
+          expect(info.json().features.devices).toBe(false);
+          expect(info.json().features.deviceKinds).toEqual([]);
         } finally {
           await app.close();
         }

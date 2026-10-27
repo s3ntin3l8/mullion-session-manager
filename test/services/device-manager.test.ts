@@ -381,6 +381,54 @@ describe("DeviceManager", () => {
     ).rejects.toThrow(/disabled/);
   });
 
+  describe("per-kind capabilities (issue #1854)", () => {
+    const PHYSICAL_ADDRESS = "192.168.1.23:37251";
+    const emulatorSpawn = {
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    };
+
+    it("refuses an emulator when the platform has only the physical capability", async () => {
+      const manager = new DeviceManager(baseOpts({ capabilities: new Set(["physical"]) }));
+      await expect(manager.getOrCreate(emulatorSpawn)).rejects.toThrow(
+        /Emulator devices are not supported on .* only physical devices are/,
+      );
+    });
+
+    it("still lets a physical device and pair() through a physical-only platform", async () => {
+      const manager = new DeviceManager(baseOpts({ capabilities: new Set(["physical"]) }));
+      await manager.pair(PHYSICAL_ADDRESS, "123456");
+      expect(mockWirelessPair).toHaveBeenCalledWith(PHYSICAL_ADDRESS, "123456");
+      mockDeviceList = [{ serial: PHYSICAL_ADDRESS }];
+      await manager.getOrCreate({
+        id: "2",
+        kind: "physical" as const,
+        avdName: null,
+        serial: PHYSICAL_ADDRESS,
+        label: null,
+        port: null,
+      });
+      // Let the fire-and-forget connect settle so nothing leaks into later tests.
+      await waitForStatus(manager, "2", "streaming");
+      await manager.killAll();
+    });
+
+    it("refuses everything when the platform has no capability at all, without claiming physical devices exist", async () => {
+      const manager = new DeviceManager(baseOpts({ capabilities: new Set() }));
+      await expect(manager.pair(PHYSICAL_ADDRESS, "123456")).rejects.toThrow(
+        /Physical devices are not supported/,
+      );
+      // The injected (empty) set drives the wording, not this host's platform table.
+      const emulatorError = await manager.getOrCreate(emulatorSpawn).catch((e: Error) => e.message);
+      expect(emulatorError).toMatch(/Emulator devices are not supported/);
+      expect(emulatorError).not.toMatch(/only physical/);
+    });
+  });
+
   it("getOrCreate spawns a device end to end and reaches status streaming", async () => {
     mockDeviceList = [{ serial: "emulator-5554" }];
     const manager = new DeviceManager(baseOpts());

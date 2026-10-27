@@ -291,6 +291,28 @@ describe("Settings -> Devices (issue #1326)", () => {
     ).toBeInTheDocument();
   });
 
+  it("hides the emulator controls when the server only runs physical devices (#1854)", async () => {
+    vi.spyOn(api, "getServerInfo").mockResolvedValue({
+      ...SERVER_INFO_FIXTURE,
+      features: { ...SERVER_INFO_FIXTURE.features, deviceKinds: ["physical"] },
+    });
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+    expect(
+      await screen.findByText(/Emulators are not supported on this server/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Create an emulator")).not.toBeInTheDocument();
+    expect(screen.getByText("Pair a phone or tablet")).toBeInTheDocument();
+  });
+
+  it("keeps the emulator controls when the server lists the emulator kind (#1854)", async () => {
+    vi.spyOn(api, "getServerInfo").mockResolvedValue({
+      ...SERVER_INFO_FIXTURE,
+      features: { ...SERVER_INFO_FIXTURE.features, deviceKinds: ["physical", "emulator"] },
+    });
+    render(<Settings onClose={vi.fn()} initialSection="devices" />);
+    expect(await screen.findByText("Create an emulator")).toBeInTheDocument();
+  });
+
   it("shows the empty state when no device exists", async () => {
     render(<Settings onClose={vi.fn()} initialSection="devices" />);
 

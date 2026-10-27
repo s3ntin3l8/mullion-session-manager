@@ -1861,6 +1861,8 @@ export interface ServerInfo {
     browser: boolean;
     devices: boolean;
     deviceDiscovery: boolean;
+    // Device kinds this host can run (#1854). Optional: an older server omits it.
+    deviceKinds?: ("physical" | "emulator")[];
   };
 }
 

@@ -151,10 +151,11 @@ without `brew install coreutils`.
 `launchd/com.mullion.primary.plist`, and a Mac's **local** sessions run
 under the same detached-`dtach` scope backend an agent's sessions use. The
 enrollment protocol is agent-dials-primary and carries no OS assumption, so
-**a macOS primary with Linux agents** is a valid topology. One caveat: the
-[Android device panel](../docs/device-panel.md) is **Linux-only** (its
-emulator needs a `systemd --user` scope), so on macOS the panel is off even
-with `DEVICE_ENABLED=true`.
+**a macOS primary with Linux agents** is a valid topology. The
+[Android device panel](../docs/device-panel.md) works on macOS for **physical**
+devices (an Android phone over adb wireless debugging) with
+`DEVICE_ENABLED=true`; **emulators** need a device scope macOS does not have
+yet and answer a 400 saying so (issue #1854).
 
 **`bwrap` (bubblewrap) — OPTIONAL (issue #1081):** not checked as a hard
 requirement, unlike the binaries above. When `bwrap` is present AND

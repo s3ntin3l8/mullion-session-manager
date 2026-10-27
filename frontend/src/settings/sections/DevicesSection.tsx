@@ -499,6 +499,11 @@ export function DevicesSection() {
   const [reconnecting, setReconnecting] = useState<Record<number, boolean>>({});
   const [reconnectError, setReconnectError] = useState<Record<number, string>>({});
   const discoveryOn = Boolean(serverInfo?.features.devices && serverInfo.features.deviceDiscovery);
+  // Emulators are hidden only when the server positively lists its kinds and
+  // "emulator" is not among them (#1854: macOS is physical-only). An older
+  // server, or one with the panel off (empty list), keeps today's UI.
+  const deviceKinds = serverInfo?.features.deviceKinds;
+  const emulatorOn = !deviceKinds?.length || deviceKinds.includes("emulator");
   const hasPhysical = devices.some((d) => d.kind === "physical" && d.status === "active");
   usePolling(
     (isCancelled) => {
@@ -699,8 +704,8 @@ export function DevicesSection() {
         </div>
       )}
       <DeviceDiscoverySetting />
-      <EmulatorWindowSetting />
-      <EmulatorGpuSetting />
+      {emulatorOn && <EmulatorWindowSetting />}
+      {emulatorOn && <EmulatorGpuSetting />}
       <GroupHeading
         title="Android devices"
         desc="Emulators and phones whose screens you can open in a panel."
@@ -826,21 +831,23 @@ export function DevicesSection() {
           <PlusIcon size={13} />
           Pair a phone or tablet
         </AddButton>
-        <AddButton
-          onClick={() => {
-            // Self-review (code-review high) — without this, closing the
-            // form after a failed create (e.g. DEVICE_ENABLED=false) and
-            // reopening it shows that same stale error before the user has
-            // typed or submitted anything.
-            setCreateError(null);
-            setCreateAvdError(null);
-            setNewAvdOpen(false);
-            setCreateOpen((open) => !open);
-          }}
-        >
-          <PlusIcon size={13} />
-          Create an emulator
-        </AddButton>
+        {emulatorOn && (
+          <AddButton
+            onClick={() => {
+              // Self-review (code-review high) — without this, closing the
+              // form after a failed create (e.g. DEVICE_ENABLED=false) and
+              // reopening it shows that same stale error before the user has
+              // typed or submitted anything.
+              setCreateError(null);
+              setCreateAvdError(null);
+              setNewAvdOpen(false);
+              setCreateOpen((open) => !open);
+            }}
+          >
+            <PlusIcon size={13} />
+            Create an emulator
+          </AddButton>
+        )}
       </div>
       {pairOpen && (
         <PairDeviceDialog onClose={() => setPairOpen(false)} onPaired={() => setPairOpen(false)} />
@@ -851,12 +858,13 @@ export function DevicesSection() {
       )}
       {loaded && devices.length === 0 && !loadError && !createOpen && (
         <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 10 }}>
-          No Android devices yet. Pair a phone or create an emulator to open its screen from the
-          sidebar.
+          {emulatorOn
+            ? "No Android devices yet. Pair a phone or create an emulator to open its screen from the sidebar."
+            : "No Android devices yet. Pair a phone to open its screen from the sidebar. Emulators are not supported on this server's platform."}
         </div>
       )}
 
-      {createOpen && (
+      {createOpen && emulatorOn && (
         <div style={{ marginTop: 10 }}>
           {!avdsLoaded && (
             <div className="settings-readonly-value" style={{ marginTop: 4 }}>
