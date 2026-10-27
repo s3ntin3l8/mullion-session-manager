@@ -23,6 +23,9 @@ import { GIT_CONFIG_NO_AUTO_GC_ENV } from "../../src/services/session-env.js";
 /** Enough files that the loose objects clear git's auto-gc threshold. */
 const FILE_COUNT = 300;
 
+/** Files added per round while topping up objects/17 (see makeClone). */
+const FILL_BATCH = 100;
+
 let root: string;
 
 // The commit identity comes from the environment, never from `git config
@@ -101,10 +104,14 @@ function makeClone(name: string): string {
   // of 1 that needs at least two objects in objects/17, and which hashes land
   // there depends only on the file contents — so add files until it holds
   // enough, rather than trusting FILE_COUNT to happen to put them there.
-  for (let i = FILE_COUNT + 1; sampledLooseCount(clone) < 2; i++) {
-    if (i > FILE_COUNT * 10) throw new Error("could not fill objects/17");
-    fs.writeFileSync(path.join(clone, "many", `f${i}.txt`), `content ${i}\n`);
-    git(clone, "add", path.join("many", `f${i}.txt`));
+  // A batch per `git add`, not a spawn per file: each object lands in
+  // objects/17 with odds of 1 in 256.
+  for (let next = FILE_COUNT + 1; sampledLooseCount(clone) < 2; next += FILL_BATCH) {
+    if (next > FILE_COUNT * 10) throw new Error("could not fill objects/17");
+    for (let i = next; i < next + FILL_BATCH; i++) {
+      fs.writeFileSync(path.join(clone, "many", `f${i}.txt`), `content ${i}\n`);
+    }
+    git(clone, "add", "-A");
   }
   git(clone, "commit", "-q", "-m", "many");
   // Now let the auto-maintenance run again, so the NEXT fetch's has work to
