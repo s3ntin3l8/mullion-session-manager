@@ -477,7 +477,7 @@ describe("task-github-sync", () => {
         project,
       );
 
-      expect(result).toEqual({ filesChanged: 2, insertions: 3, deletions: 0 });
+      expect(result).toEqual({ filesChanged: 2, insertions: 3, deletions: 0, workflowFiles: [] });
       fs.rmSync(cwd, { recursive: true, force: true });
     });
 

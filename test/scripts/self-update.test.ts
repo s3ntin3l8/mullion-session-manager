@@ -116,7 +116,15 @@ async function buildFakeRelease(
         path.join(pkgDir, "package.json"),
         JSON.stringify({ name: pkg, main: "index.js" }),
       );
-      fs.writeFileSync(path.join(pkgDir, "index.js"), "module.exports = {};\n");
+      // self-update.sh's smoke check opens an in-memory better-sqlite3 DB
+      // (its binding only loads in the constructor, #2066), so that stub must
+      // be constructible and closable; node-pty's is only require()d.
+      fs.writeFileSync(
+        path.join(pkgDir, "index.js"),
+        pkg === "better-sqlite3"
+          ? "module.exports = class Database { close() {} };\n"
+          : "module.exports = {};\n",
+      );
     }
 
     const tarballDir = fs.mkdtempSync(path.join(os.tmpdir(), "self-update-tarballs-"));

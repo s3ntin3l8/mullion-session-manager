@@ -7,6 +7,7 @@ import { gitEnv } from "../../src/services/git-env.js";
 import { GitHubApiError } from "../../src/services/github.js";
 import type * as GithubWrite from "../../src/services/github-write.js";
 import type * as HostGit from "../../src/services/host-git.js";
+import type * as WorkflowGate from "../../src/services/task-workflow-gate.js";
 import type { tasks, projects } from "../../src/db/schema.js";
 
 const mockGetToken = vi.fn();
@@ -20,10 +21,29 @@ const mockUpdatePullRequestTitle = vi.fn();
 const mockRecordGithubSyncError = vi.fn();
 const mockClearGithubSyncError = vi.fn();
 const mockGetRemoteHostClient = vi.fn();
+const mockResolveWorkflowWriteToken = vi.fn();
+const mockEvaluateWorkflowGate = vi.fn();
+const mockRecordWorkflowHold = vi.fn();
+const mockClearWorkflowHold = vi.fn();
 
 vi.mock("../../src/services/github-integration.js", () => ({
   resolveGitHubToken: mockGetToken,
+  resolveWorkflowWriteToken: mockResolveWorkflowWriteToken,
 }));
+// The gate reads the worktree's diff and head and writes the task row; mocked
+// like every other collaborator here (its own behavior is covered in
+// task-workflow-gate.test.ts). Defaults to "clear" in beforeEach.
+vi.mock("../../src/services/task-workflow-gate.js", async (importOriginal) => {
+  // Only the functions are swapped; the real WORKFLOW_UNVERIFIED_PREFIX stays,
+  // so the banner-clearing contract is pinned to the production constant.
+  const actual = await importOriginal<typeof WorkflowGate>();
+  return {
+    ...actual,
+    evaluateWorkflowGate: mockEvaluateWorkflowGate,
+    recordWorkflowHold: mockRecordWorkflowHold,
+    clearWorkflowHold: mockClearWorkflowHold,
+  };
+});
 vi.mock("../../src/services/github-write.js", async (importOriginal) => {
   const actual = await importOriginal<typeof GithubWrite>();
   return {
@@ -53,6 +73,8 @@ vi.mock("../../src/services/host-git.js", async (importOriginal) => {
   return {
     ...actual,
     resolveRepoRef: mockResolveRepoRef,
+    // Real push, wrapped so a test can assert which token it was handed.
+    pushHostBranch: vi.fn(actual.pushHostBranch),
   };
 });
 // #484 — host-git.ts's remote branch (for a project whose hostId isn't
@@ -85,6 +107,9 @@ vi.mock("../../src/services/remote-host-client.js", () => ({
 
 const { promoteTaskToPR, openDraftPRForTask, closeDraftPRForTask } =
   await import("../../src/services/task-promote.js");
+const { WORKFLOW_UNVERIFIED_PREFIX } = await import("../../src/services/task-workflow-gate.js");
+const { pushHostBranch } = await import("../../src/services/host-git.js");
+const spiedPushHostBranch = vi.mocked(pushHostBranch);
 const { HostRequestError, HostUnreachableError } =
   await import("../../src/services/remote-host-client.js");
 
@@ -156,6 +181,7 @@ function baseProject(overrides: Partial<typeof projects.$inferSelect> = {}) {
 describe("promoteTaskToPR", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockEvaluateWorkflowGate.mockResolvedValue({ kind: "clear" });
     mockGetToken.mockReturnValue("ghp_token");
     mockResolveRepoRef.mockResolvedValue({ owner: "test-owner", repo: "test-repo" });
     mockCreatePullRequest.mockResolvedValue({
@@ -370,6 +396,265 @@ describe("promoteTaskToPR", () => {
 
     fs.rmSync(remote, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  describe("workflow-change approval gate", () => {
+    function workflowRepo() {
+      const remote = createBareRemote();
+      const cwd = createGitRepoWithRemote(remote);
+      git(cwd, ["checkout", "-b", "mullion/task-1"]);
+      fs.mkdirSync(path.join(cwd, ".github", "workflows"), { recursive: true });
+      fs.writeFileSync(path.join(cwd, ".github", "workflows", "ci.yml"), "name: ci\n");
+      git(cwd, ["add", "-A"]);
+      git(cwd, ["commit", "-m", "touch ci", "--no-verify"]);
+      return { remote, cwd };
+    }
+    const cleanup = (...dirs: string[]) =>
+      dirs.forEach((d) => fs.rmSync(d, { recursive: true, force: true }));
+
+    it("holds a workflow edit: records it, pushes nothing, resolves no token", async () => {
+      const { remote, cwd } = workflowRepo();
+      const change = { sha: "a".repeat(40), files: [".github/workflows/ci.yml"] };
+      mockEvaluateWorkflowGate.mockResolvedValue({ kind: "held", change });
+
+      const task = baseTask({ id: 7, worktreePath: cwd, branchName: "mullion/task-1" });
+      const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+      expect(result).toMatchObject({ ok: false, reason: "workflow-approval-required" });
+      expect(mockRecordWorkflowHold).toHaveBeenCalledWith(expect.anything(), 7, change);
+      // A hold is an expected operator gate, not a failed GitHub write: the
+      // dedicated workflowChange field carries it, not the sync-error banner.
+      expect(mockRecordGithubSyncError).not.toHaveBeenCalled();
+      expect(mockGetToken).not.toHaveBeenCalled();
+      expect(mockResolveWorkflowWriteToken).not.toHaveBeenCalled();
+      expect(mockCreatePullRequest).not.toHaveBeenCalled();
+      // Nothing reached the remote: the task branch was never pushed.
+      expect(git(remote, ["branch", "--list", "mullion/task-1"]).trim()).toBe("");
+      cleanup(remote, cwd);
+    });
+
+    it("a hold drops only the gate's own unverified banner, not an unrelated sync error", async () => {
+      const { remote, cwd } = workflowRepo();
+      const change = { sha: "a".repeat(40), files: [".github/workflows/ci.yml"] };
+      mockEvaluateWorkflowGate.mockResolvedValue({ kind: "held", change });
+      const ctx = { config: {} } as never;
+
+      mockClearGithubSyncError.mockClear();
+      await promoteTaskToPR(
+        ctx,
+        baseTask({
+          id: 7,
+          worktreePath: cwd,
+          branchName: "mullion/task-1",
+          githubSyncError: "HTTP 500 from GitHub while labelling",
+        }),
+        baseProject({ cwd }),
+      );
+      expect(mockClearGithubSyncError).not.toHaveBeenCalled();
+
+      await promoteTaskToPR(
+        ctx,
+        baseTask({
+          id: 7,
+          worktreePath: cwd,
+          branchName: "mullion/task-1",
+          githubSyncError: `${WORKFLOW_UNVERIFIED_PREFIX} — the diff could not be read`,
+        }),
+        baseProject({ cwd }),
+      );
+      expect(mockClearGithubSyncError).toHaveBeenCalledWith(expect.anything(), 7);
+      cleanup(remote, cwd);
+    });
+
+    it("an approved head pushes under the elevated token but uses the ordinary token for PR calls", async () => {
+      const { remote, cwd } = workflowRepo();
+      mockEvaluateWorkflowGate.mockResolvedValue({ kind: "approved", sha: "a".repeat(40) });
+      mockResolveWorkflowWriteToken.mockResolvedValue({ ok: true, token: "ghs_elevated" });
+
+      const task = baseTask({ id: 7, worktreePath: cwd, branchName: "mullion/task-1" });
+      const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+      expect(result).toMatchObject({ ok: true, prNumber: 9 });
+      expect(mockResolveWorkflowWriteToken).toHaveBeenCalledTimes(1);
+      // The push itself carried the elevated token, not the ordinary one.
+      expect(spiedPushHostBranch).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.anything(),
+        cwd,
+        "mullion/task-1",
+        "ghs_elevated",
+      );
+      // The elevated token is for the branch push alone, never the PR API calls.
+      expect(mockCreatePullRequest).toHaveBeenCalledWith(
+        "ghp_token",
+        "test-owner",
+        "test-repo",
+        expect.anything(),
+      );
+      expect(git(remote, ["branch", "--list", "mullion/task-1"]).trim()).toContain(
+        "mullion/task-1",
+      );
+      cleanup(remote, cwd);
+    });
+
+    it.each([
+      ["openDraftPRForTask", "a new PR", null],
+      ["openDraftPRForTask", "an existing PR", 9],
+      ["promoteTaskToPR", "a new PR", null],
+      ["promoteTaskToPR", "an existing PR", 9],
+    ] as const)(
+      "%s pushes %s under the elevated token (all four call sites)",
+      async (entry, _label, prNumber) => {
+        const { remote, cwd } = workflowRepo();
+        mockEvaluateWorkflowGate.mockResolvedValue({ kind: "approved", sha: "a".repeat(40) });
+        mockResolveWorkflowWriteToken.mockResolvedValue({ ok: true, token: "ghs_elevated" });
+        mockGetPullRequestByNumber.mockResolvedValue({
+          state: "open",
+          merged: false,
+          draft: false,
+          title: "t",
+        });
+        mockMarkPullRequestReadyForReview.mockResolvedValue(undefined);
+        spiedPushHostBranch.mockClear();
+
+        const task = baseTask({
+          id: 7,
+          worktreePath: cwd,
+          branchName: "mullion/task-1",
+          prNumber,
+          prUrl: prNumber === null ? null : "https://github.com/test-owner/test-repo/pull/9",
+        });
+        const fn = entry === "openDraftPRForTask" ? openDraftPRForTask : promoteTaskToPR;
+        await fn({ config: {}, log: { warn: vi.fn() } } as never, task, baseProject({ cwd }));
+
+        expect(spiedPushHostBranch).toHaveBeenCalledTimes(1);
+        expect(spiedPushHostBranch).toHaveBeenLastCalledWith(
+          expect.anything(),
+          expect.anything(),
+          cwd,
+          "mullion/task-1",
+          "ghs_elevated",
+        );
+        cleanup(remote, cwd);
+      },
+    );
+
+    it("re-verifies after minting: a commit that lands during the mint voids the approval", async () => {
+      const { remote, cwd } = workflowRepo();
+      const change = { sha: "b".repeat(40), files: [".github/workflows/ci.yml"] };
+      mockEvaluateWorkflowGate
+        .mockResolvedValueOnce({ kind: "approved", sha: "a".repeat(40) })
+        .mockResolvedValueOnce({ kind: "held", change });
+      mockResolveWorkflowWriteToken.mockResolvedValue({ ok: true, token: "ghs_elevated" });
+
+      const task = baseTask({ id: 7, worktreePath: cwd, branchName: "mullion/task-1" });
+      const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+      expect(result).toMatchObject({ ok: false, reason: "workflow-approval-required" });
+      expect(mockRecordWorkflowHold).toHaveBeenCalledWith(expect.anything(), 7, change);
+      expect(mockCreatePullRequest).not.toHaveBeenCalled();
+      expect(git(remote, ["branch", "--list", "mullion/task-1"]).trim()).toBe("");
+      cleanup(remote, cwd);
+    });
+
+    it("pushes normally when the workflow edit is removed during the mint", async () => {
+      const { remote, cwd } = workflowRepo();
+      mockEvaluateWorkflowGate
+        .mockResolvedValueOnce({ kind: "approved", sha: "a".repeat(40) })
+        .mockResolvedValueOnce({ kind: "clear" });
+      mockResolveWorkflowWriteToken.mockResolvedValue({ ok: true, token: "ghs_elevated" });
+
+      const task = baseTask({ id: 7, worktreePath: cwd, branchName: "mullion/task-1" });
+      const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+      expect(result).toMatchObject({ ok: true });
+      expect(mockClearWorkflowHold).toHaveBeenCalled();
+      cleanup(remote, cwd);
+    });
+
+    it("does not push, and records a retryable push-failed, when the changed files cannot be verified", async () => {
+      const { remote, cwd } = workflowRepo();
+      mockEvaluateWorkflowGate.mockResolvedValue({
+        kind: "unverified",
+        detail: "Could not verify whether this branch changes .github/workflows/",
+      });
+
+      const task = baseTask({ id: 7, worktreePath: cwd, branchName: "mullion/task-1" });
+      const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+      expect(result).toMatchObject({
+        ok: false,
+        reason: "push-failed",
+        detail: expect.stringContaining("Could not verify"),
+      });
+      expect(mockRecordWorkflowHold).not.toHaveBeenCalled();
+      expect(mockGetToken).not.toHaveBeenCalled();
+      expect(mockCreatePullRequest).not.toHaveBeenCalled();
+      expect(git(remote, ["branch", "--list", "mullion/task-1"]).trim()).toBe("");
+      cleanup(remote, cwd);
+    });
+
+    it("an approved head fails as no-token, with no PAT fallback, when the elevated mint is refused", async () => {
+      const { remote, cwd } = workflowRepo();
+      mockEvaluateWorkflowGate.mockResolvedValue({ kind: "approved", sha: "a".repeat(40) });
+      mockResolveWorkflowWriteToken.mockResolvedValue({
+        ok: false,
+        detail: "The GitHub App has not been granted Workflows: write",
+      });
+
+      const task = baseTask({ id: 7, worktreePath: cwd, branchName: "mullion/task-1" });
+      const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+      expect(result).toMatchObject({
+        ok: false,
+        reason: "no-token",
+        detail: expect.stringContaining("Workflows: write"),
+      });
+      expect(mockGetToken).not.toHaveBeenCalled();
+      expect(mockCreatePullRequest).not.toHaveBeenCalled();
+      expect(mockRecordGithubSyncError).toHaveBeenCalledWith(
+        expect.anything(),
+        7,
+        expect.stringContaining("Workflows: write"),
+      );
+      cleanup(remote, cwd);
+    });
+
+    it("clears a stale hold once the branch no longer edits workflows", async () => {
+      const remote = createBareRemote();
+      const cwd = createGitRepoWithRemote(remote);
+      git(cwd, ["checkout", "-b", "mullion/task-1"]);
+      const task = baseTask({ id: 7, worktreePath: cwd, branchName: "mullion/task-1" });
+      await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+      expect(mockClearWorkflowHold).toHaveBeenCalledWith(expect.anything(), task);
+      cleanup(remote, cwd);
+    });
+
+    it("rewrites GitHub's raw workflows-permission rejection into an actionable message", async () => {
+      const remote = createBareRemote();
+      const cwd = createGitRepoWithRemote(remote);
+      git(cwd, ["checkout", "-b", "mullion/task-1"]);
+      fs.writeFileSync(path.join(cwd, "b.txt"), "b");
+      git(cwd, ["add", "-A"]);
+      git(cwd, ["commit", "-m", "work", "--no-verify"]);
+      // A pre-receive hook standing in for GitHub's own refusal.
+      const hook = path.join(remote, "hooks", "pre-receive");
+      fs.writeFileSync(
+        hook,
+        "#!/bin/sh\necho 'refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml` without `workflows` permission' >&2\nexit 1\n",
+      );
+      fs.chmodSync(hook, 0o755);
+
+      const task = baseTask({ id: 7, worktreePath: cwd, branchName: "mullion/task-1" });
+      const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+      expect(result).toMatchObject({
+        ok: false,
+        reason: "push-failed",
+        detail: expect.stringContaining("cannot report workflow changes"),
+      });
+      cleanup(remote, cwd);
+    });
   });
 
   it("refuses when the project's GitHub repo can't be resolved", async () => {

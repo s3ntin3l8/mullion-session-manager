@@ -480,6 +480,11 @@ export interface GitDiffStats {
   filesChanged: number;
   insertions: number;
   deletions: number;
+  // Changed paths under `.github/workflows/` (a rename reports both sides'
+  // text as git prints it). Absent from a host agent that predates the
+  // workflow-change approval gate — a caller must read that as "unknown",
+  // never as "none".
+  workflowFiles?: string[];
 }
 
 // ---------------------------------------------------------------------------

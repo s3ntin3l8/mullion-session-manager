@@ -8,6 +8,16 @@ make install-hooks    # pre-commit + pre-push git hooks (see below — do this b
 cd frontend && npm ci
 ```
 
+**On Windows** (an agent host, #1728): Node 26 and
+[Git for Windows](https://gitforwindows.org/) (its Git Bash is the session
+shell) — no Visual Studio / C++ build tools. A plain `npm ci` works:
+`better-sqlite3` loads the N-API prebuild it ships, because `package.json`'s
+`allowScripts` denies its install script (which would otherwise run
+`node-gyp rebuild` and fail looking for Visual Studio), and `node-pty` ships a
+`win32-x64` prebuild too (#2066). `node scripts/smoke-native.mjs` checks that
+both native modules load. `make` is not needed for any of this — run the `npm`
+commands directly.
+
 See the [Quick Start](README.md#-quick-start) in `README.md` for running the
 app locally, and [`docs/architecture.md`](docs/architecture.md) for the full
 architecture/layout tour.

@@ -315,3 +315,44 @@ jobs:
         run: echo "$(pwd)/node_modules/.bin:$PATH" >> "$GITHUB_PATH"
       - name: Run e2e suite
         run: npm run test:e2e
+
+  # Advisory, NOT a required check (#2066) until it has a track record (#2129). A
+  # Windows agent host (#1728) must install with a plain `npm ci` and no C++
+  # build tools: package.json's `allowScripts` denies better-sqlite3's
+  # install script, so npm never runs its implicit `node-gyp rebuild` and the
+  # package loads the N-API prebuild it ships. The runner image HAS Visual
+  # Studio, so a green `npm ci` alone would not prove that — the second step
+  # fails if better-sqlite3 was compiled at all. Then both native modules
+  # must actually load (scripts/smoke-native.mjs), and the tests that drive
+  # the Windows host code paths for real (named pipes, the pty-host over
+  # ConPTY, the Windows scope backend) run here; the rest of the suite is
+  # Linux-host behaviour and runs in test-node.
+  test-windows:
+    runs-on: windows-latest
+    continue-on-error: true
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: "26"
+          cache: "npm"
+      - name: Install dependencies
+        run: npm ci
+      - name: better-sqlite3 was not compiled
+        shell: pwsh
+        run: |
+          if (Test-Path node_modules/better-sqlite3/build) {
+            throw "better-sqlite3 was compiled from source; allowScripts should have skipped its install script (#2066)"
+          }
+      - name: Native module smoke check
+        run: node scripts/smoke-native.mjs
+      - name: Windows host tests
+        run: >-
+          npx vitest run
+          test/cli/ipc-path.test.ts
+          test/pty-host
+          test/services/pty-host-client.test.ts
+          test/services/scope-windows.test.ts

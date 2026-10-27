@@ -780,6 +780,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     failureReason: null,
     dispatchFailingSince: null,
     githubSyncError: null,
+    workflowChange: null,
     baseSha: null,
     dependencyCount: null,
     blockedState: "clear",

@@ -161,6 +161,7 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     failureReason: null,
     dispatchFailingSince: null,
     githubSyncError: null,
+    workflowChange: null,
     dependencyCount: null,
     blockedState: "clear",
     blockers: [],

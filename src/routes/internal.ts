@@ -1291,20 +1291,26 @@ export async function internalRoutes(app: FastifyInstance) {
   // has to run on *this* agent's own filesystem, and this route's own
   // transient git failures need to stay distinguishable from "host
   // unreachable" the same way).
-  app.get<{ Querystring: { cwd?: string; base?: string } }>(
+  app.get<{ Querystring: { cwd?: string; base?: string; fresh?: string } }>(
     "/internal/git-diff",
     INTERNAL_RATE_LIMIT,
     async (request, reply) => {
-      const { cwd, base } = request.query;
+      const { cwd, base, fresh } = request.query;
       if (!cwd) return reply.badRequest("cwd query param is required");
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
       if (!isGitRepo(resolvedCwd)) {
         return { isRepo: false, stats: null };
       }
-      const effectiveBase = base === "AUTO" ? (getDefaultBaseRef(resolvedCwd) ?? undefined) : base;
-      const stats = await getDiffStats(resolvedCwd, effectiveBase);
-      return { isRepo: true, stats };
+      const autoBase = base === "AUTO" ? getDefaultBaseRef(resolvedCwd) : null;
+      const effectiveBase = base === "AUTO" ? (autoBase ?? undefined) : base;
+      const stats = await getDiffStats(resolvedCwd, effectiveBase, { fresh: fresh === "1" });
+      // `AUTO` that resolves to nothing falls back to `git diff HEAD`, which is
+      // empty on a clean tree whatever the branch holds. `baseResolved` lets a
+      // caller (the workflow gate) tell that apart from a verified-empty diff.
+      return base === "AUTO"
+        ? { isRepo: true, stats, baseResolved: autoBase !== null }
+        : { isRepo: true, stats };
     },
   );
 

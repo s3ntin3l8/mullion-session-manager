@@ -396,6 +396,7 @@ export interface TasksSlice {
   // "Merge now" / "Retry merge" — re-arms the merge sweep for a `done` task
   // with a linked PR.
   mergeTask: (id: number) => Promise<Task>;
+  approveWorkflowChange: (id: number, sha: string) => Promise<void>;
   // reviewing -> in_progress: optional feedback, re-seeds the worker if its
   // session already exited.
   rejectTask: (id: number, feedback?: string) => Promise<Task>;
