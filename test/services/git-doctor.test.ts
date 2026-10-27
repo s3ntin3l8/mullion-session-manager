@@ -58,6 +58,17 @@ async function doctor(opts: { apply?: boolean; force?: boolean } = {}): Promise<
   }
 }
 
+/**
+ * How `git fsck --connectivity-only` reports the emptied staged tree. Up to
+ * git 2.55 it reaches the index and says "invalid sha1 pointer in cache-tree"
+ * — #1836's exact symptom. git 2.56 reads the empty loose object first and
+ * stops there: "error: object file … is empty", then "fatal: loose object …
+ * is corrupt". Either is fsck finding this damage; which one depends only on
+ * the git the run has (CI runners carry both during a rollout).
+ */
+const FSCK_SAW_EMPTY_TREE =
+  /invalid sha1 pointer in cache-tree|object file \S+ is empty|loose object \S+ .*is corrupt/;
+
 const git = (args: string[], cwd = repo) =>
   execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnv() }).trim();
 
@@ -163,7 +174,7 @@ describe("git-doctor — the read-only inspection", () => {
     expect(health.zeroByteObjects).toHaveLength(1);
     expect(health.zeroByteObjects[0]).toContain(tree.slice(0, 2));
     expect(health.fsckErrors.length).toBeGreaterThan(0);
-    expect(health.fsckErrors.join("\n")).toContain("invalid sha1 pointer");
+    expect(health.fsckErrors.join("\n")).toMatch(FSCK_SAW_EMPTY_TREE);
     // Read-only: the damage is still there.
     expect(zeroByteObjects()).toHaveLength(1);
   });
@@ -325,13 +336,14 @@ describe("git-doctor — the report", () => {
   it("finds a zero-byte object and the fsck errors it causes, and changes nothing", async () => {
     const tree = damageTheStagedTree();
 
-    // The symptom, reproduced exactly as #1836 recorded it.
-    expect(fsckOutput()).toContain("invalid sha1 pointer in cache-tree");
+    // The symptom — on git <= 2.55 exactly as #1836 recorded it (see
+    // FSCK_SAW_EMPTY_TREE for 2.56).
+    expect(fsckOutput()).toMatch(FSCK_SAW_EMPTY_TREE);
 
     const result = await doctor();
     expect(result.status).toBe(1);
     expect(result.stdout).toContain(tree);
-    expect(result.stdout).toContain("invalid sha1 pointer");
+    expect(result.stdout).toMatch(FSCK_SAW_EMPTY_TREE);
     // Report mode never mutates.
     expect(zeroByteObjects()).toHaveLength(1);
   });

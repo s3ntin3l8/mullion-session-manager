@@ -45,6 +45,15 @@ const git = (cwd: string, ...args: string[]) =>
 const looseCount = (cwd: string) =>
   Number(/^count: (\d+)/m.exec(git(cwd, "count-objects", "-v"))![1]);
 
+/** Loose objects in objects/17 — the one directory git's auto check samples. */
+const sampledLooseCount = (cwd: string) => {
+  try {
+    return fs.readdirSync(path.join(cwd, ".git", "objects", "17")).length;
+  } catch {
+    return 0;
+  }
+};
+
 /** Pack count — what the auto-gc leaves behind. */
 const packCount = (cwd: string) =>
   fs.readdirSync(path.join(cwd, ".git", "objects", "pack")).filter((f) => f.endsWith(".pack"))
@@ -87,9 +96,24 @@ function makeClone(name: string): string {
     fs.writeFileSync(path.join(clone, "many", `f${i}.txt`), `content ${i}\n`);
   }
   git(clone, "add", "-A");
+  // git does not COUNT loose objects for its auto check: it samples one
+  // fan-out directory, objects/17, and scales it by 256. With a threshold
+  // of 1 that needs at least two objects in objects/17, and which hashes land
+  // there depends only on the file contents — so add files until it holds
+  // enough, rather than trusting FILE_COUNT to happen to put them there.
+  for (let i = FILE_COUNT + 1; sampledLooseCount(clone) < 2; i++) {
+    if (i > FILE_COUNT * 10) throw new Error("could not fill objects/17");
+    fs.writeFileSync(path.join(clone, "many", `f${i}.txt`), `content ${i}\n`);
+    git(clone, "add", path.join("many", `f${i}.txt`));
+  }
   git(clone, "commit", "-q", "-m", "many");
-  // Now let the auto-gc run again, so the NEXT fetch's has work to do.
+  // Now let the auto-maintenance run again, so the NEXT fetch's has work to
+  // do. gc.auto > 0 is what turns it back on; since git 2.56 the repack it
+  // runs by default (the geometric strategy) has its OWN loose-object
+  // threshold, maintenance.geometric-repack.auto (default 6700), so that one
+  // is lowered too. An older git ignores the key.
   git(clone, "config", "gc.auto", "1");
+  git(clone, "config", "maintenance.geometric-repack.auto", "1");
   fs.rmSync(path.join(clone, ".git", "gc.log"), { force: true });
 
   return clone;
