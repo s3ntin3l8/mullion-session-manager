@@ -257,7 +257,7 @@ interface GitHubWorkflowRunApiItem {
 // same aggregation the Dock widget's repo-level CI dot and the per-PR status
 // already use, reused rather than reimplemented for a task's own PR head.
 //
-// `approvalPending` is for the display paths (PR list/detail): a run GitHub
+// `approvalPending` is for the display paths (PR and repo CI dots): a run GitHub
 // holds at `action_required` (a bot-opened PR, a first-time contributor)
 // hasn't run yet and nothing has failed, so it reads as still pending. The
 // default keeps the gate semantics the Task Master reconciler relies on.
@@ -466,7 +466,9 @@ export async function refreshDefaultBranchCi(
   owner: string,
   repo: string,
 ): Promise<void> {
-  const status = computeCiStatus(await fetchActionsRuns(token, owner, repo));
+  const status = computeCiStatus(await fetchActionsRuns(token, owner, repo), {
+    approvalPending: true,
+  });
   if (status === null && getCachedDefaultBranchCi(owner, repo)) return;
   setDefaultBranchCi(owner, repo, status);
 }
@@ -576,7 +578,11 @@ export async function getRepoStatus(
     // as-is here froze `ciStatus` for as long as nobody opened or closed an
     // issue. Re-fetch just the runs.
     const actionsRuns = await fetchActionsRuns(token, owner, repo);
-    cached.data = { ...cached.data, actionsRuns, ciStatus: computeCiStatus(actionsRuns) };
+    cached.data = {
+      ...cached.data,
+      actionsRuns,
+      ciStatus: computeCiStatus(actionsRuns, { approvalPending: true }),
+    };
     cached.ts = Date.now();
     return cached.data;
   }
@@ -606,7 +612,7 @@ export async function getRepoStatus(
     pulls,
     issues,
     actionsRuns,
-    ciStatus: computeCiStatus(actionsRuns),
+    ciStatus: computeCiStatus(actionsRuns, { approvalPending: true }),
   };
   cacheSet(key, { ts: Date.now(), etag: res.headers.get("etag"), data });
   return data;

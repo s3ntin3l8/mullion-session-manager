@@ -111,6 +111,8 @@ function ReleaseSection({
         onChanged();
       } else {
         setRunError(runReasonMessage(result.reason, result.detail));
+        // A 422 means the cached detection was stale; refetch so Run reflects it.
+        if (result.reason === "no-dispatch-trigger") onChanged();
       }
     } catch (err) {
       setRunError(
@@ -223,6 +225,11 @@ function ReleaseSection({
           </div>
         }
       />
+      {notDispatchable && (
+        <div className="github-panel-empty-row">
+          Run is unavailable: add <code>workflow_dispatch:</code> to <code>{workflowPath}</code>.
+        </div>
+      )}
       {runError && <div className="github-panel-empty-row github-panel-conflicts">{runError}</div>}
       {mergeError && (
         <div className="github-panel-empty-row github-panel-conflicts">{mergeError}</div>

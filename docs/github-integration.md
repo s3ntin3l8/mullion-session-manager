@@ -790,11 +790,22 @@ live override of its env default, no restart needed).
   token can list workflows but lacks the separate `Actions: write` dispatch
   scope; every click just fails with a `dispatch-failed` reason. Symmetric
   with the CI-dot gap above, not yet fixed for either.
-- `workflow_dispatch` only exists on a workflow file once that file is on
-  the repo's default branch — the Run button 422s with `reason:
-"no-dispatch-trigger"` for a repo whose release workflow hasn't picked up
-  a `workflow_dispatch:` trigger yet (including this repo itself, before
-  the PR that added it merges).
+- Detection reads the workflow file and reports `dispatchable` on the
+  release workflow in `ProjectReleaseStatus` (`true`/`false`, or `null` when
+  the file couldn't be read). When it is `false` — no `workflow_dispatch:`
+  trigger — Run is **disabled up front** with an inline note naming the
+  file; `null` leaves Run enabled and lets the real dispatch decide. A
+  result that isn't `true` is cached for 5 minutes instead of an hour, so a
+  repo that adds the trigger gets Run back quickly. The `reason:
+"no-dispatch-trigger"` 422 stays as the fallback (an unreadable file, a
+  stale cache): it drops the cached detection and the panel refetches.
+- The release PR is listed only under Release, not again under Pull
+  requests, and its row opens the normal PR detail view.
+- A workflow run GitHub holds at `action_required` (a bot-opened PR such as
+  release-please's, or a first-time contributor, waiting for a maintainer to
+  approve it) counts as pending — "awaiting approval" — in the PR and
+  default-branch CI status, not as failed. Task Master's own CI gate keeps
+  treating it as not passing.
 - GitHub Enterprise and non-github.com remotes aren't supported.
 - `.../dependencies/blocked_by` and `.../dependencies/blocking` (`#667`)
   are each capped at one page (100 items), matching the issue/PR listing

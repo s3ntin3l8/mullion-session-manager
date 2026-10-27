@@ -993,7 +993,7 @@ describe("GitHubPanel", () => {
 
     function mockFetchRelease(opts: {
       release: ProjectReleaseStatus;
-      prs?: GitHubPRsStatus;
+      prs?: GitHubPRsStatus | "fail";
       status?: GitHubStatus;
       run?: () => Response;
       merge?: () => Response;
@@ -1001,6 +1001,7 @@ describe("GitHubPanel", () => {
       return vi.fn((url: string, init?: RequestInit) => {
         const method = init?.method ?? "GET";
         if (url.endsWith("/github/prs")) {
+          if (opts.prs === "fail") return Promise.resolve(jsonResponse(500, { error: "down" }));
           return Promise.resolve(jsonResponse(200, opts.prs ?? PRS_EMPTY));
         }
         if (url.endsWith("/release/run") && method === "POST") {
@@ -1049,10 +1050,12 @@ describe("GitHubPanel", () => {
         ...RELEASE_NO_PR,
         pr: releasePrFixture({ number: 42, title: "Fix attention race" }),
       };
-      vi.stubGlobal("fetch", mockFetchRelease({ release }));
+      vi.stubGlobal("fetch", mockFetchRelease({ release, prs: "fail" }));
       render(<GitHubPanel params={{ projectId: 20 }} />);
       await screen.findByText("Fix attention race");
       expect(screen.getAllByText("Fix attention race")).toHaveLength(1);
+      // The fallback list itself is gone, not merely deduplicated.
+      expect(screen.getByText("No open pull requests")).toBeInTheDocument();
     });
 
     it("disables Run, naming the workflow file, when it has no workflow_dispatch trigger", async () => {
@@ -1068,6 +1071,8 @@ describe("GitHubPanel", () => {
       const run = await screen.findByRole("button", { name: /Run/ });
       expect(run).toBeDisabled();
       expect(run).toHaveAttribute("title", expect.stringContaining("release-please.yml"));
+      // Visible on screen too, since a disabled button shows no tooltip everywhere.
+      expect(screen.getByText(/Run is unavailable/)).toBeInTheDocument();
     });
 
     it("keeps Run enabled when the workflow file couldn't be read (dispatchable: null)", async () => {
@@ -1258,6 +1263,26 @@ describe("GitHubPanel", () => {
       await user.click(runButton);
 
       expect(await screen.findByText(/doesn't accept manual runs yet/)).toBeInTheDocument();
+    });
+
+    it("refetches release status after a no-dispatch-trigger refusal, but not after other refusals", async () => {
+      const fetchMock = mockFetchRelease({
+        release: RELEASE_NO_PR,
+        run: () => jsonResponse(200, { dispatched: false, reason: "no-dispatch-trigger" }),
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const releaseReads = () =>
+        fetchMock.mock.calls.filter(
+          ([url, init]) => url.endsWith("/release") && (init?.method ?? "GET") === "GET",
+        ).length;
+      const user = userEvent.setup();
+      render(<GitHubPanel params={{ projectId: 25 }} />);
+
+      const runButton = await screen.findByRole("button", { name: /Run/ });
+      const before = releaseReads();
+      await user.click(runButton);
+      await screen.findByText(/doesn't accept manual runs yet/);
+      await vi.waitFor(() => expect(releaseReads()).toBeGreaterThan(before));
     });
 
     it("renders a refusal banner when Merge is refused", async () => {
