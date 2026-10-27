@@ -403,6 +403,29 @@ function GitHubAppSection({
         />
       </StyledList>
 
+      {githubApp?.mintOutcomes && githubApp.mintOutcomes.length > 0 && (
+        <ul
+          aria-label="GitHub App permissions"
+          style={{
+            fontSize: "0.75rem",
+            color: "var(--y)",
+            margin: "8px 0 0",
+            paddingLeft: 18,
+            overflowWrap: "anywhere",
+          }}
+        >
+          {githubApp.mintOutcomes.map((o) => (
+            <li key={`${o.scope}:${o.owner}/${o.repo}`}>
+              {`${o.scope}: ${
+                o.state === "error"
+                  ? `token mint failed${o.status ? ` (HTTP ${o.status})` : ""}`
+                  : `App lacks ${o.permission}${o.status ? ` (HTTP ${o.status})` : ""}`
+              } — ${o.fellBackToPat ? "using your PAT" : "no PAT fallback"} (${o.owner}/${o.repo}, ${formatRelativeAge(o.at)})`}
+            </li>
+          ))}
+        </ul>
+      )}
+
       {formOpen && (
         <div style={{ marginTop: 10 }}>
           <Row label="App ID" desc="The number shown on the App's settings page." align="start">

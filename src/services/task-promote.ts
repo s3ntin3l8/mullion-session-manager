@@ -99,11 +99,24 @@ export type PromoteOutcome =
         | "remote-not-supported"
         // The branch edits `.github/workflows/` and the operator has not
         // approved its current head (task-workflow-gate.ts). Nothing was pushed.
-        | "workflow-approval-required";
+        | "workflow-approval-required"
+        // GitHub answered the push with a 403 (`Permission to o/r denied to
+        // <app>[bot]`): the App installation lacks access or Contents: write.
+        // Permanent until the operator changes the installation, so callers
+        // retry at their slowest cadence instead of stepping up to it.
+        | "push-forbidden";
       detail?: string;
     };
 
 type PromoteFailure = PromoteOutcome & { ok: false };
+
+// git's stderr when GitHub says the credential has no write access to the repo
+// (`remote: Permission to o/r.git denied to <identity>.`) — the one 403 shape
+// that does not heal by waiting. A bare `error: 403` is deliberately NOT
+// matched: a secondary rate limit, an SSO/IP-allowlist block or a grant that
+// has not propagated yet are recoverable and stay ordinary `push-failed`.
+// The workflows-permission refusal is a different message, matched separately.
+const FORBIDDEN_PUSH_PATTERN = /Permission to (\S+?)(?:\.git)? denied to (.+?)\.?\s*$/m;
 
 /** Records the hold on the task row and builds the outcome that stops a push. */
 function holdWorkflowChange(
@@ -388,6 +401,14 @@ async function pushForPromotion(
   // Backstop for a host whose agent cannot report workflow paths: GitHub
   // refuses a workflow edit pushed without `workflows` permission, so say
   // what that means instead of leaving the raw git stderr.
+  const forbiddenMatch = FORBIDDEN_PUSH_PATTERN.exec(value.detail ?? "");
+  if (forbiddenMatch) {
+    // The push token is the App's, or the shared PAT when the App could not
+    // mint one, so name who was refused instead of assuming it was the App.
+    const forbidden = `GitHub refused the push (403): ${forbiddenMatch[2]} has no write access to ${forbiddenMatch[1]}. For the GitHub App, give the installation access to the repository with Contents: write; for a PAT, grant it write access (Settings → Integrations → GitHub shows what the App is missing). It retries on its own within the hour, or right away once the credential is re-saved`;
+    recordGithubSyncError(app, task.id, forbidden);
+    return { ok: false, reason: "push-forbidden", detail: forbidden };
+  }
   const detail = /without `?workflows?`? (permission|scope)/.test(value.detail ?? "")
     ? "This branch changes .github/workflows/ and this host cannot report workflow changes for approval — push it manually, or update the host agent"
     : (value.detail ?? "Failed to push the task's branch");

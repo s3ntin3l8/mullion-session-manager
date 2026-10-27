@@ -1463,6 +1463,7 @@ export async function tasksRoute(app: FastifyInstance) {
         case "no-repo":
           return reply.badGateway(outcome.detail ?? "Could not resolve the project's GitHub repo");
         case "push-failed":
+        case "push-forbidden":
           return reply.badGateway(outcome.detail ?? "Failed to push the task's branch");
         case "pr-create-failed":
           return reply.badGateway(outcome.detail ?? "Failed to create the pull request");

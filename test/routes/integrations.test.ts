@@ -12,6 +12,15 @@ import {
   GITHUB_REVIEWER_PROVIDER,
 } from "../../src/services/github-integration.js";
 import { resetDeviceFlowForTests } from "../../src/services/github-device-flow.js";
+import type * as TaskReconciler from "../../src/services/task-reconciler.js";
+
+// #2104 — only the wake-up for parked push failures is swapped out, so a test
+// can see exactly which saves trigger it.
+const mockRetryPermanentPushFailuresNow = vi.hoisted(() => vi.fn());
+vi.mock("../../src/services/task-reconciler.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof TaskReconciler>();
+  return { ...actual, retryPermanentPushFailuresNow: mockRetryPermanentPushFailuresNow };
+});
 
 function jsonResponse(status: number, body: unknown) {
   return new Response(JSON.stringify(body), {
@@ -111,6 +120,70 @@ describe("integrations route (issue #27)", () => {
     );
     expect(res.body).not.toMatch(/ghp_super_secret/);
     await app.close();
+  });
+
+  describe("waking tasks parked on a permanent push failure (#2104)", () => {
+    beforeEach(() => {
+      mockRetryPermanentPushFailuresNow.mockClear();
+    });
+
+    it("a saved PAT wakes them", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/token",
+        payload: { token: "ghp_super_secret" },
+      });
+      expect(mockRetryPermanentPushFailuresNow).toHaveBeenCalledTimes(1);
+      await app.close();
+    });
+
+    it("a rejected PAT does not", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(401, { message: "Bad credentials" }));
+      const app = await buildApp();
+      await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/token",
+        payload: { token: "bad-token" },
+      });
+      expect(mockRetryPermanentPushFailuresNow).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("a saved primary App wakes them; a rejected one does not", async () => {
+      stubGithubFetch({ appId: "123" });
+      const app = await buildApp();
+      const rejected = await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/app",
+        payload: { appId: "not-a-number", privateKey: FAKE_APP_PRIVATE_KEY },
+      });
+      expect(rejected.statusCode).toBe(400);
+      expect(mockRetryPermanentPushFailuresNow).not.toHaveBeenCalled();
+
+      const saved = await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/app",
+        payload: { appId: "123", privateKey: FAKE_APP_PRIVATE_KEY },
+      });
+      expect(saved.statusCode).toBe(200);
+      expect(mockRetryPermanentPushFailuresNow).toHaveBeenCalledTimes(1);
+      await app.close();
+    });
+
+    it("a saved reviewer App does not: it never pushes", async () => {
+      stubGithubFetch({ appId: "222", appSlug: "test-reviewer-app" });
+      const app = await buildApp();
+      const saved = await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/reviewer-app",
+        payload: { appId: "222", privateKey: FAKE_APP_PRIVATE_KEY },
+      });
+      expect(saved.statusCode).toBe(200);
+      expect(mockRetryPermanentPushFailuresNow).not.toHaveBeenCalled();
+      await app.close();
+    });
   });
 
   it("PUT 400s when GitHub rejects the token", async () => {

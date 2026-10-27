@@ -657,6 +657,89 @@ describe("promoteTaskToPR", () => {
     });
   });
 
+  it("classifies a 403 push as permanent: push-forbidden with an actionable detail (#2104)", async () => {
+    const remote = createBareRemote();
+    const cwd = createGitRepoWithRemote(remote);
+    git(cwd, ["checkout", "-b", "mullion/task-1"]);
+    fs.writeFileSync(path.join(cwd, "b.txt"), "b");
+    git(cwd, ["add", "-A"]);
+    git(cwd, ["commit", "-m", "work", "--no-verify"]);
+    // A pre-receive hook standing in for GitHub's own 403.
+    const hook = path.join(remote, "hooks", "pre-receive");
+    fs.writeFileSync(
+      hook,
+      "#!/bin/sh\necho 'remote: Permission to acme/widgets.git denied to mullion-session-manager[bot].' >&2\nexit 1\n",
+    );
+    fs.chmodSync(hook, 0o755);
+
+    const task = baseTask({ id: 7, worktreePath: cwd, branchName: "mullion/task-1" });
+    const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "push-forbidden",
+      // Names who was refused and where, instead of assuming it was the App.
+      detail: expect.stringMatching(
+        /mullion-session-manager\[bot\] has no write access to acme\/widgets.*Contents: write/,
+      ),
+    });
+    expect(mockRecordGithubSyncError).toHaveBeenCalledWith(
+      expect.anything(),
+      7,
+      expect.stringContaining("Contents: write"),
+    );
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("names a multi-word identity in full (an SSH deploy key) in the 403 detail (#2104)", async () => {
+    const remote = createBareRemote();
+    const cwd = createGitRepoWithRemote(remote);
+    git(cwd, ["checkout", "-b", "mullion/task-1"]);
+    fs.writeFileSync(path.join(cwd, "b.txt"), "b");
+    git(cwd, ["add", "-A"]);
+    git(cwd, ["commit", "-m", "work", "--no-verify"]);
+    const hook = path.join(remote, "hooks", "pre-receive");
+    fs.writeFileSync(
+      hook,
+      "#!/bin/sh\necho 'ERROR: Permission to acme/widgets.git denied to deploy key.' >&2\nexit 1\n",
+    );
+    fs.chmodSync(hook, 0o755);
+
+    const task = baseTask({ id: 7, worktreePath: cwd, branchName: "mullion/task-1" });
+    const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "push-forbidden",
+      detail: expect.stringContaining("deploy key has no write access to acme/widgets"),
+    });
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("keeps a bare HTTP 403 (rate limit, SSO block) as an ordinary push-failed, not permanent (#2104)", async () => {
+    const remote = createBareRemote();
+    const cwd = createGitRepoWithRemote(remote);
+    git(cwd, ["checkout", "-b", "mullion/task-1"]);
+    fs.writeFileSync(path.join(cwd, "b.txt"), "b");
+    git(cwd, ["add", "-A"]);
+    git(cwd, ["commit", "-m", "work", "--no-verify"]);
+    const hook = path.join(remote, "hooks", "pre-receive");
+    fs.writeFileSync(
+      hook,
+      "#!/bin/sh\necho 'fatal: unable to access the remote: The requested URL returned error: 403' >&2\nexit 1\n",
+    );
+    fs.chmodSync(hook, 0o755);
+
+    const task = baseTask({ id: 7, worktreePath: cwd, branchName: "mullion/task-1" });
+    const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+    expect(result).toMatchObject({ ok: false, reason: "push-failed" });
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
   it("refuses when the project's GitHub repo can't be resolved", async () => {
     const remote = createBareRemote();
     const cwd = createGitRepoWithRemote(remote);

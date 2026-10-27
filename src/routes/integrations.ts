@@ -22,6 +22,7 @@ import {
 } from "../services/github-device-flow.js";
 import { enableWebhooks, disableWebhooks } from "../services/github-webhook.js";
 import { computeKeyFingerprint } from "../services/github-app.js";
+import { retryPermanentPushFailuresNow } from "../services/task-reconciler.js";
 import {
   clearHermesKey,
   getHermesIntegration,
@@ -130,7 +131,10 @@ export async function integrationsRoute(app: FastifyInstance) {
     { schema: setTokenSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
       try {
-        return await setPat(app, request.body.token);
+        const saved = await setPat(app, request.body.token);
+        // A re-saved credential may fix a permanent push 403 (#2104).
+        retryPermanentPushFailuresNow();
+        return saved;
       } catch (err) {
         if (err instanceof InvalidTokenError) {
           return reply.badRequest(err.message);
@@ -248,6 +252,10 @@ export async function integrationsRoute(app: FastifyInstance) {
     // what was actually a successful configure.
     const keyFingerprint = computeKeyFingerprint(privateKey);
     setGitHubApp(app, appId, privateKey, provider);
+    // Only after the credential was actually saved (every rejection above
+    // returns before here), and only for the App that pushes: a re-saved
+    // primary App may fix a permanent push 403 (#2104).
+    if (provider === GITHUB_PROVIDER) retryPermanentPushFailuresNow();
     if (verification.status === "verified") {
       return { verified: true, appSlug: verification.appSlug, keyFingerprint };
     }

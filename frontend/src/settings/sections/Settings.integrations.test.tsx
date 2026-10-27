@@ -318,6 +318,77 @@ describe("Settings -> Integrations", () => {
       ).toBeInTheDocument();
     });
 
+    it("lists the App permissions that are missing and what fell back to the PAT (#2104)", async () => {
+      integration = {
+        ...integration,
+        githubApp: {
+          configured: true,
+          appId: "555",
+          installationCount: 1,
+          keyFingerprint: "abcdefabcdefabcdef",
+          keyRotatedAt: "2026-01-01T00:00:00.000Z",
+          mintOutcomes: [
+            {
+              scope: "dispatch",
+              permission: "Actions: write",
+              state: "denied",
+              status: 422,
+              owner: "acme",
+              repo: "widgets",
+              fellBackToPat: true,
+              at: Date.now(),
+            },
+            {
+              scope: "workflows",
+              permission: "Workflows: write",
+              state: "denied",
+              status: 422,
+              owner: "acme",
+              repo: "widgets",
+              fellBackToPat: false,
+              at: Date.now(),
+            },
+            {
+              scope: "issues",
+              permission: "Issues and Pull requests: read",
+              state: "error",
+              status: 502,
+              owner: "acme",
+              repo: "widgets",
+              fellBackToPat: true,
+              at: Date.now(),
+            },
+          ],
+        },
+      };
+      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      const list = await within(section()).findByRole("list", { name: "GitHub App permissions" });
+      expect(
+        within(list).getByText(/dispatch: App lacks Actions: write \(HTTP 422\) — using your PAT/),
+      ).toBeInTheDocument();
+      expect(
+        within(list).getByText(/workflows: App lacks Workflows: write.*no PAT fallback/),
+      ).toBeInTheDocument();
+    });
+
+    it("shows no permissions list when every scope minted fine", async () => {
+      integration = {
+        ...integration,
+        githubApp: {
+          configured: true,
+          appId: "555",
+          installationCount: 1,
+          keyFingerprint: "abcdefabcdefabcdef",
+          keyRotatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      };
+      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      await within(section()).findByText("App #555");
+      expect(
+        within(section()).queryByRole("list", { name: "GitHub App permissions" }),
+      ).not.toBeInTheDocument();
+    });
+
     it("is independent of the PAT/OAuth connection — visible while disconnected", async () => {
       render(<Settings onClose={vi.fn()} initialSection="integrations" />);
       expect(await screen.findByText("Not connected")).toBeInTheDocument();

@@ -120,7 +120,8 @@ export type ApproveOutcome =
         | "push-failed"
         | "pr-create-failed"
         | "remote-not-supported"
-        | "workflow-approval-required";
+        | "workflow-approval-required"
+        | "push-forbidden";
       detail?: string;
     }
   // The promotion (push + PR) succeeded, but the task moved out of
