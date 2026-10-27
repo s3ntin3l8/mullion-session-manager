@@ -22,7 +22,9 @@ export function parseWorkflowChange(raw: string | null | undefined): WorkflowCha
 
 /** The workflow hold supersedes an earlier push rejection, but not a new
  * token-mint failure or an unrelated GitHub error. Keep the stored error so
- * it becomes visible again if the hold clears without a successful push. */
+ * it becomes visible again if the hold clears without a successful push.
+ * This matches historical App errors stored before the backend started
+ * rewriting this rejection; PAT/OAuth and current host errors stay visible. */
 export function visibleTaskSyncError(
   task: Pick<Task, "workflowChange" | "githubSyncError">,
 ): string | null {

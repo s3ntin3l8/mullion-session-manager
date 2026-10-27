@@ -1962,6 +1962,26 @@ describe("TaskDetail workflow-change approval", () => {
     expect(screen.getByText(/The branch changed since this approval/)).toBeInTheDocument();
   });
 
+  it("refreshes a no-longer-applicable workflow hold and restores task approval without a stale error", async () => {
+    approveWorkflowChange.mockRejectedValueOnce(
+      new ApiError("No workflow change is waiting for approval on this task", 409),
+    );
+    tasks = [makeTask({ id: 1, status: "reviewing", workflowChange: change })];
+    const user = userEvent.setup();
+    const { rerender } = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    refreshTasks.mockImplementationOnce(async () => {
+      tasks = [makeTask({ id: 1, status: "reviewing", workflowChange: null })];
+    });
+    await user.click(screen.getByRole("button", { name: "Approve workflow change" }));
+    expect(refreshTasks).toHaveBeenCalledTimes(2);
+    rerender(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByRole("group", { name: "Workflow change" })).toBeNull();
+    expect(
+      screen.queryByText("No workflow change is waiting for approval on this task"),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Approve task" })).toBeEnabled();
+  });
+
   it("shows a generic error for a non-API failure", async () => {
     approveWorkflowChange.mockRejectedValueOnce(new Error("network down"));
     tasks = [makeTask({ id: 1, status: "reviewing", workflowChange: change })];

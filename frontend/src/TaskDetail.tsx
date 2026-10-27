@@ -1181,7 +1181,7 @@ function TrackingEpicApprovalConfirm({
 // Shows the files so the approval is informed; the sha rides along so the
 // server can refuse if the branch moved after this was rendered.
 function WorkflowChangeApproval({ task }: { task: Task }) {
-  const { taskMasterEnabled, approveWorkflowChange } = useDashboardStore();
+  const { taskMasterEnabled, approveWorkflowChange, refreshTasks } = useDashboardStore();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const change = parseWorkflowChange(task.workflowChange);
@@ -1209,6 +1209,10 @@ function WorkflowChangeApproval({ task }: { task: Task }) {
             try {
               await approveWorkflowChange(task.id, change.sha);
             } catch (err) {
+              // A stale approval can clear a hold that no longer applies or
+              // replace it with a new head. Refresh before showing an error so
+              // an obsolete panel doesn't leave the next action hidden.
+              if (err instanceof ApiError && err.statusCode === 409) await refreshTasks();
               setError(
                 err instanceof ApiError ? err.message : "Failed to approve the workflow change",
               );

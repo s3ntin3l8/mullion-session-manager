@@ -35,6 +35,7 @@ import { ChecksDrill, MergeDrill, ReviewsDrill } from "./PrStatusViews.js";
 import { prStatuses, reviewerRows, runIdFromUrl, type DimStatus } from "./prPhase.js";
 import { ReviewGateActions } from "./ReviewGateActions.js";
 import { usePrThreadWrites } from "./usePrThreadWrites.js";
+import { parseWorkflowChange } from "../workflowChange.js";
 
 // The PR drill-in: status first (Checks / Reviews / Merge, each an expandable
 // row), then the pinned latest review, the Mullion links, the change summary
@@ -616,10 +617,13 @@ export function PrDetailView({
             {entry?.task && (
               <div className="pr-pin-foot">
                 <TaskChip task={entry.task} />
-                {taskStatus === "reviewing" && (
+                {taskStatus === "reviewing" && !parseWorkflowChange(entry.task.workflowChange) && (
                   <Button size="sm" disabled={busy !== null} onClick={approveTask}>
                     Approve task
                   </Button>
+                )}
+                {taskStatus === "reviewing" && parseWorkflowChange(entry.task.workflowChange) && (
+                  <span className="gh-detail-meta">Needs workflow approval — open task</span>
                 )}
                 {taskStatus === "failed" && (
                   <Button size="sm" disabled={busy !== null} onClick={retryTask}>

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { __resetGithubCacheForTests } from "../store/githubCacheReset.js";
 import { PrDetailView } from "./PrDetailView.js";
@@ -935,6 +935,54 @@ describe("PrDetailView", () => {
         useDashboardStore.setState({ projects: [], tasks: [], prsByProject: {} });
       },
     );
+
+    it("offers workflow-held tasks the task link instead of task approval, then restores approval", async () => {
+      stub(PR);
+      const requestOpenTask = vi.fn();
+      const task = makeTask({
+        id: 5,
+        projectId: 1,
+        branchName: "feat-thing",
+        status: "reviewing",
+        workflowChange: JSON.stringify({
+          sha: "a".repeat(40),
+          files: [".github/workflows/ci.yml"],
+        }),
+      });
+      useDashboardStore.setState({
+        requestOpenTask,
+        projects: [makeProject({ id: 1 })],
+        tasks: [task],
+        prsByProject: {
+          1: {
+            prs: [
+              {
+                number: 12,
+                title: "Add thing",
+                htmlUrl: "u",
+                author: "me",
+                headSha: "abc",
+                headBranch: "feat-thing",
+                baseBranch: "main",
+                ciStatus: "success",
+                actionsRuns: [],
+              },
+            ],
+            prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+          },
+        },
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const card = await screen.findByRole("region", { name: "Mullion" });
+      expect(within(card).queryByRole("button", { name: "Approve task" })).toBeNull();
+      expect(within(card).getByText("Needs workflow approval — open task")).toBeInTheDocument();
+      await userEvent.click(within(card).getByRole("button", { name: "task #5 · reviewing" }));
+      expect(requestOpenTask).toHaveBeenCalledWith(5);
+      act(() => useDashboardStore.setState({ tasks: [{ ...task, workflowChange: null }] }));
+      expect(within(card).getByRole("button", { name: "Approve task" })).toBeEnabled();
+      expect(within(card).queryByText("Needs workflow approval — open task")).toBeNull();
+      useDashboardStore.setState({ projects: [], tasks: [], prsByProject: {} });
+    });
 
     // #2019 — a linked session held at Mullion's review gate: badge plus
     // Approve/Deny in the Mullion card, through POST /api/sessions/:id/review-gate.
