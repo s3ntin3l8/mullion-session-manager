@@ -443,6 +443,19 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
       );
     });
 
+    it("an auto flag for a host the dialog does not show does not force a save of the map", async () => {
+      const user = userEvent.setup();
+      const onCreate = renderEdit({
+        initialHostCwds: { "mac-1": "/Users/x/mullion" },
+        // "gone-9" was deleted (or the project moved off it): there is no row for it.
+        initialHostCwdsMeta: { auto: ["gone-9"], declined: [] },
+      });
+
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+      expect(onCreate.mock.calls[0][0]).not.toHaveProperty("hostCwds");
+    });
+
     it("shows no badge for a flagged host that has no path", () => {
       renderEdit({ initialHostCwds: {}, initialHostCwdsMeta: { auto: ["mac-1"], declined: [] } });
       expect(screen.queryByText("auto-detected")).toBeNull();

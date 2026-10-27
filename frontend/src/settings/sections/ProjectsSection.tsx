@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useDashboardStore } from "../../store/index.js";
-import { api } from "../../api/index.js";
-import type { ServerInfo } from "../../api/index.js";
+import { api, RateLimitedError } from "../../api/index.js";
+import type { DetectCheckoutsResult, ServerInfo } from "../../api/index.js";
 import { CloseIcon, FolderIcon, PlusIcon, RefreshIcon } from "../../ui/icons.js";
 import {
   GroupHeading,
@@ -34,12 +34,29 @@ export function ProjectsSection() {
     setDetecting(true);
     setDetectStatus(null);
     try {
-      const results = await Promise.all(
-        hosts.map((h) => api.detectHostCheckouts(h.id).catch(() => null)),
-      );
+      // One host at a time. The route's rate limit is ONE shared bucket (10 a
+      // minute) for every host, so a fan-out would trip it on a larger fleet,
+      // and a throttled host is not an unreachable one: say which it was.
+      const results: Array<DetectCheckoutsResult | null> = [];
+      let throttled = false;
+      for (const h of hosts) {
+        try {
+          results.push(await api.detectHostCheckouts(h.id));
+        } catch (err) {
+          if (err instanceof RateLimitedError) {
+            throttled = true;
+            break;
+          }
+          results.push(null);
+        }
+      }
+      const notAsked = hosts.length - results.length;
+      const throttledNote = throttled
+        ? `throttled: ${notAsked} host${notAsked === 1 ? "" : "s"} not asked, try again in a minute`
+        : null;
       const answered = results.filter((r) => r !== null);
       if (answered.length === 0) {
-        setDetectStatus("No host answered");
+        setDetectStatus(throttled ? "Throttled, try again in a minute" : "No host answered");
       } else if (answered.every((r) => !r.enabled)) {
         setDetectStatus("Turn on auto-detect first");
       } else {
@@ -50,9 +67,11 @@ export function ProjectsSection() {
           results.length - answered.length + answered.filter((r) => r.skipped !== undefined).length;
         const base =
           added === 0 ? "Nothing new found" : `${added} mapping${added === 1 ? "" : "s"} added`;
-        setDetectStatus(
-          failed === 0 ? base : `${base} (${failed} host${failed === 1 ? "" : "s"} unreachable)`,
-        );
+        const notes = [
+          failed === 0 ? null : `${failed} host${failed === 1 ? "" : "s"} unreachable`,
+          throttledNote,
+        ].filter((n) => n !== null);
+        setDetectStatus(notes.length === 0 ? base : `${base} (${notes.join("; ")})`);
         if (added > 0) void refreshProjects();
       }
     } finally {

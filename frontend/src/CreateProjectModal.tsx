@@ -429,7 +429,11 @@ export function CreateProjectModal({
     const hostCwdsChanged =
       isEdit &&
       hosts.length > 0 &&
-      (autoDetectedHostIds.size > 0 ||
+      // Only a flag for a host this dialog actually shows counts: one for a host
+      // that was deleted (or that the project moved off) would otherwise send the
+      // map on an unedited save, and every mapped host missing from the host list
+      // reads as removed and declined.
+      ([...autoDetectedHostIds].some((id) => knownHostIds.has(id)) ||
         !sameHostPaths(editedHostPaths, normalizeHostPaths(initialHostCwds)));
     setSubmitting(true);
     setError(null);

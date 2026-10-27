@@ -4,7 +4,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProjectsSection } from "./ProjectsSection.js";
 import { useDashboardStore } from "../../store/index.js";
-import { api, DEFAULT_SETTINGS } from "../../api/index.js";
+import { api, DEFAULT_SETTINGS, RateLimitedError } from "../../api/index.js";
 import type * as ApiModule from "../../api/index.js";
 import { makeHost } from "../../test/fixtures.js";
 
@@ -139,6 +139,56 @@ describe("ProjectsSection: auto-detect checkouts", () => {
     await waitFor(() =>
       expect(screen.getByText("Nothing new found (1 host unreachable)")).toBeInTheDocument(),
     );
+  });
+
+  it("asks the hosts one at a time, never all at once (one shared rate-limit bucket)", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    vi.mocked(api.detectHostCheckouts).mockImplementation(async () => {
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight--;
+      return { enabled: true, added: [] };
+    });
+    const user = userEvent.setup();
+    render(<ProjectsSection />);
+
+    await user.click(screen.getByRole("button", { name: "Detect" }));
+
+    await waitFor(() => expect(screen.getByText("Nothing new found")).toBeInTheDocument());
+    expect(maxInFlight).toBe(1);
+  });
+
+  it("says 'throttled' when the server rate-limits the sweep, not 'unreachable', and stops asking", async () => {
+    vi.mocked(api.detectHostCheckouts).mockImplementation(async (id) => {
+      if (id === "local") return { enabled: true, added: [] };
+      throw new RateLimitedError(429, 60_000);
+    });
+    const user = userEvent.setup();
+    render(<ProjectsSection />);
+
+    await user.click(screen.getByRole("button", { name: "Detect" }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("Nothing new found (throttled: 1 host not asked, try again in a minute)"),
+      ).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/unreachable/)).toBeNull();
+  });
+
+  it("when the very first call is throttled it says so instead of 'no host answered'", async () => {
+    vi.mocked(api.detectHostCheckouts).mockRejectedValue(new RateLimitedError(429, 60_000));
+    const user = userEvent.setup();
+    render(<ProjectsSection />);
+
+    await user.click(screen.getByRole("button", { name: "Detect" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Throttled, try again in a minute")).toBeInTheDocument(),
+    );
+    expect(vi.mocked(api.detectHostCheckouts)).toHaveBeenCalledTimes(1);
   });
 
   it("reports when no host answered", async () => {
