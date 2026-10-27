@@ -1597,7 +1597,16 @@ export function restoreTiledGroupWidths(
 // bails rather than dividing its space among the others. The
 // last participant is skipped so it absorbs the rounding, and the near-minimum
 // cascade gap in `restoreTiledGroupWidths`'s header comment applies here too.
-type GridNode = { type: "leaf"; data: { id: string } } | { type: "branch"; data: GridNode[] };
+//
+// Hidden nodes (`visible: false` in the serialized grid) are left out of the
+// participants: a group dockview hid (a popout's reference group, say) takes no
+// space, so counting it would hand its share to nobody — 4 slots for 3 visible
+// panes, i.e. 25/25/50 where 33/33/33 was asked for.
+type GridNode =
+  | { type: "leaf"; data: { id: string }; visible?: boolean }
+  | { type: "branch"; data: GridNode[]; visible?: boolean };
+
+const isShown = (node: GridNode): boolean => node.visible !== false;
 
 export interface ParentBranch {
   axis: "width" | "height";
@@ -1611,9 +1620,8 @@ export function findParentBranch(
   const walk = (node: GridNode, horizontal: boolean): ParentBranch | null => {
     if (node.type !== "branch") return null;
     if (node.data.some((c) => c.type === "leaf" && c.data.id === groupId)) {
-      return node.data.length > 1
-        ? { axis: horizontal ? "width" : "height", siblings: node.data }
-        : null;
+      const siblings = node.data.filter(isShown);
+      return siblings.length > 1 ? { axis: horizontal ? "width" : "height", siblings } : null;
     }
     for (const child of node.data) {
       const found = walk(child, !horizontal);
@@ -1638,7 +1646,10 @@ function balanceParticipants(
     const resizeId =
       sibling.type === "leaf"
         ? sibling.data.id
-        : (sibling.data.find((c) => c.type === "leaf")?.data as { id: string } | undefined)?.id;
+        : (
+            sibling.data.find((c) => c.type === "leaf" && isShown(c))?.data as
+              { id: string } | undefined
+          )?.id;
     const group = resizeId ? api.getGroup(resizeId) : undefined;
     // A sibling we can't resize would be squeezed to the group minimum by the
     // others absorbing its space, so give up on the whole balance instead.

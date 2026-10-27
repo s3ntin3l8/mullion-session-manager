@@ -2273,6 +2273,8 @@ describe("snapshotTiledGroupWidths / restoreTiledGroupWidths (fold/unfold pane-s
 describe("findParentBranch / balanceSiblingsOf / canBalanceSiblingsOf", () => {
   const leaf = (id: string) => ({ type: "leaf" as const, data: { id } });
   const branch = (...data: unknown[]) => ({ type: "branch" as const, data });
+  // dockview serializes a hidden node (e.g. a popout's reference group) with `visible: false`.
+  const hidden = (id: string) => ({ ...leaf(id), visible: false });
 
   function mockApi(
     grid: { root: unknown; orientation: string },
@@ -2307,6 +2309,13 @@ describe("findParentBranch / balanceSiblingsOf / canBalanceSiblingsOf", () => {
       expect(findParentBranch(grid, "c")?.axis).toBe("height");
     });
 
+    it("leaves a hidden sibling out, so a pane beside only a hidden group is an only child", () => {
+      const grid = { root: branch(hidden("h"), leaf("a"), leaf("b")), orientation: "HORIZONTAL" };
+      expect(findParentBranch(grid, "a")?.siblings).toHaveLength(2);
+      const lone = { root: branch(hidden("h"), leaf("a")), orientation: "HORIZONTAL" };
+      expect(findParentBranch(lone, "a")).toBeNull();
+    });
+
     it("returns null for a missing group or an only child", () => {
       const grid = { root: branch(leaf("a")), orientation: "HORIZONTAL" };
       expect(findParentBranch(grid, "a")).toBeNull();
@@ -2330,6 +2339,46 @@ describe("findParentBranch / balanceSiblingsOf / canBalanceSiblingsOf", () => {
       expect(a.api.setSize).toHaveBeenCalledWith({ width: 333 });
       expect(b.api.setSize).toHaveBeenCalledWith({ width: 333 });
       expect(c.api.setSize).not.toHaveBeenCalled();
+    });
+
+    it("ignores a hidden group, so three visible panes get a third each (not 25/25/50)", () => {
+      const h = mockGroup("h", "grid", { width: 0, height: 600 });
+      const a = mockGroup("a", "grid", { width: 250, height: 600 });
+      const b = mockGroup("b", "grid", { width: 250, height: 600 });
+      const c = mockGroup("c", "grid", { width: 500, height: 600 });
+      const api = mockApi(
+        {
+          root: branch(hidden("h"), leaf("a"), leaf("b"), leaf("c")),
+          orientation: "HORIZONTAL",
+        },
+        [h, a, b, c],
+      );
+
+      expect(balanceSiblingsOf(api, "b")).toBe(true);
+
+      expect(a.api.setSize).toHaveBeenCalledWith({ width: 333 });
+      expect(b.api.setSize).toHaveBeenCalledWith({ width: 333 });
+      expect(c.api.setSize).not.toHaveBeenCalled();
+      expect(h.api.setSize).not.toHaveBeenCalled();
+    });
+
+    it("resizes a branch sibling through its visible direct leaf, skipping a hidden one", () => {
+      const a = mockGroup("a", "grid", { width: 700, height: 600 });
+      const h = mockGroup("h", "grid", { width: 0, height: 300 });
+      const top = mockGroup("top", "grid", { width: 300, height: 300 });
+      const c = mockGroup("c", "grid", { width: 500, height: 600 });
+      const api = mockApi(
+        {
+          root: branch(leaf("a"), branch(hidden("h"), leaf("top")), leaf("c")),
+          orientation: "HORIZONTAL",
+        },
+        [a, h, top, c],
+      );
+
+      balanceSiblingsOf(api, "a");
+
+      expect(top.api.setSize).toHaveBeenCalledWith({ width: 500 });
+      expect(h.api.setSize).not.toHaveBeenCalled();
     });
 
     it("balances heights in a vertical column", () => {
