@@ -209,6 +209,9 @@ export async function approveWorkflowChange(
   const { change } = gate;
   if (change.sha === "") return { ok: false, reason: "unreadable", change };
   if (change.sha !== expectedSha) {
+    // Deliberately not announced: this is the operator's own approval click
+    // finding the branch moved, so they are already looking at it (the push
+    // path, task-promote.ts's holdWorkflowChange, announces a new hold).
     recordWorkflowHold(app, task.id, change);
     return { ok: false, reason: "stale", change };
   }

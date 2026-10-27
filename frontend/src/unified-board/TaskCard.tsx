@@ -194,6 +194,10 @@ export function TaskCard({
   // strip only says WHAT is needed; a click anywhere on the card (the strip
   // included) opens that drawer.
   const workflowHold = parseWorkflowChange(task.workflowChange);
+  // (The strip below is role="status", not this card's usual role="img" +
+  // aria-label badge: it has real visible text, and a polite live-region
+  // announcement when a hold first appears is deliberate — it is the one badge
+  // on this card asking for the operator's action.)
 
   return (
     <div
