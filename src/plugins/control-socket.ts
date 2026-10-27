@@ -1472,7 +1472,7 @@ export const OPS: Record<string, OpSpec> = {
         ...fullRest
       } = body ?? {};
       // Issue #2110 — a coordinator names the project to spawn into. Staying
-      // in the parent's own project needs no permission; any OTHER project
+      // in the parent's own project (by its numeric id) needs no permission; any OTHER project
       // needs the parent's project to be a coordinator. createSessionRecord's
       // validateParent enforces the same rule again for every caller.
       let childProjectId = parentProjectId;
