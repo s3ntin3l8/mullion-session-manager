@@ -29,7 +29,7 @@ jobs:
   test-node:
     permissions:
       contents: read
-    uses: s3ntin3l8/.github/.github/workflows/ci-node.yml@main
+    uses: s3ntin3l8/.github/.github/workflows/ci-node.yml@fix/ci-node-shard-test-results
     with:
       node-version: "26"
       typecheck-script: "typecheck"
