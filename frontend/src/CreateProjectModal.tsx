@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FolderIcon, GlobeIcon, HostsIcon, BotIcon } from "./ui/icons.js";
 import { api, ApiError, LOCAL_HOST_ID, normalizeAgentId } from "./api/index.js";
 import type { Host, Launcher, PlacementMode, PlacementPreview } from "./api/index.js";
@@ -207,6 +207,14 @@ export function CreateProjectModal({
   const [agentLaunchers, setAgentLaunchers] = useState<Launcher[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<{ message: string; code?: string } | null>(null);
+  // The error block sits right under the path field, far above the Save
+  // button on a tall edit form (Dev server and the rest are below it), so a
+  // failed save used to look like nothing happened (issue #2082). Bring it
+  // into view whenever a new error is set.
+  const errorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (error) errorRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [error]);
   // Only rendered inside the PROJECT_DIR_MISSING confirm block below — it's
   // the only moment it has any effect, and a permanently-visible checkbox
   // that usually does nothing invites "why didn't it init?" reports.
@@ -342,6 +350,8 @@ export function CreateProjectModal({
     if (submitting) return;
     const trimmedPath = path.trim();
     if (!trimmedPath) {
+      // Say why nothing was saved, rather than only moving focus (#2082).
+      setError({ message: "Repository path is required." });
       pathInputRef.current?.focus();
       return;
     }
@@ -650,7 +660,7 @@ export function CreateProjectModal({
       </label>
 
       {error && (
-        <div className="create-modal-dir-confirm">
+        <div className="create-modal-dir-confirm" ref={errorRef} role="alert">
           <span className="create-modal-field-hint error">{error.message}</span>
           {error.code === CREATE_DIR_CODE && (
             <>
