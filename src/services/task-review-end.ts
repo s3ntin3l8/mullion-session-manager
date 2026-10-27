@@ -92,6 +92,9 @@ export async function endReviewingTask(
   task: TaskRow,
   project: ProjectRow,
   end: ReviewEnd,
+  // When GitHub says the PR merged, so the archive timestamp is the merge's,
+  // not the (possibly minutes later) moment a sweep noticed it.
+  mergedAt?: Date | null,
 ): Promise<boolean> {
   const now = new Date();
   const terminal = end === "closed" ? ("failed" as const) : ("done" as const);
@@ -100,7 +103,12 @@ export async function endReviewingTask(
     end === "closed"
       ? { ...common, status: "failed" as const, failureReason: CLOSED_WITHOUT_MERGE_REASON }
       : end === "merged"
-        ? { ...common, status: "done" as const, mergedAt: now, archivedAt: now }
+        ? {
+            ...common,
+            status: "done" as const,
+            mergedAt: mergedAt ?? now,
+            archivedAt: mergedAt ?? now,
+          }
         : { ...common, status: "done" as const };
 
   const [updated] = app.db
@@ -141,9 +149,18 @@ export async function endReviewingOnPrState(
   app: FastifyInstance,
   task: TaskRow,
   project: ProjectRow,
-  pr: { state: "open" | "closed"; merged: boolean },
+  pr: { state: "open" | "closed"; merged: boolean; mergedAt?: string | null },
 ): Promise<boolean> {
-  if (pr.merged) return endReviewingTask(app, task, project, "merged");
+  if (pr.merged) {
+    const at = pr.mergedAt ? new Date(pr.mergedAt) : null;
+    return endReviewingTask(
+      app,
+      task,
+      project,
+      "merged",
+      at && !Number.isNaN(at.getTime()) ? at : null,
+    );
+  }
   if (pr.state !== "closed") return false;
   const superseded = await branchHasNothingToMerge(app, task);
   return endReviewingTask(app, task, project, superseded ? "superseded" : "closed");

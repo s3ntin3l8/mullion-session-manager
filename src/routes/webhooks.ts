@@ -316,6 +316,8 @@ export async function webhookRoutes(app: FastifyInstance) {
                 void endReviewingOnPrState(app, reviewing, taskProject, {
                   state: "closed",
                   merged: "merged" in pr && pr.merged === true,
+                  mergedAt:
+                    "merged_at" in pr && typeof pr.merged_at === "string" ? pr.merged_at : null,
                 }).catch((err) =>
                   app.log.warn(
                     { err, taskId: reviewing.id, prNumber },

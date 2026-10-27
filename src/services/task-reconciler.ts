@@ -472,6 +472,7 @@ async function fetchCurrentCiStatus(
   // merged PR is the end of a reviewing task, not something to keep polling.
   prState: "open" | "closed";
   merged: boolean;
+  mergedAt: string | null;
 } | null> {
   if (task.prNumber === null) return null;
   const repoRef = await resolveRepoRef(app, project);
@@ -498,6 +499,7 @@ async function fetchCurrentCiStatus(
     mergeableState: pr.mergeableState,
     prState: pr.state,
     merged: pr.merged,
+    mergedAt: pr.mergedAt,
   };
 }
 
@@ -2920,6 +2922,25 @@ const MAX_PR_COMMENT_CAP_COMMENTED_ENTRIES = 500;
 const prCommentCapCommentedRounds = new Map<number, number>();
 
 /**
+ * #2103 — just the PR's lifecycle (state, merged, merge time): one REST call,
+ * unlike `fetchCurrentCiStatus`, which also reads the Actions runs. For the
+ * slow sweep, which only needs to know whether the PR ended.
+ */
+async function fetchPrLifecycle(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+): Promise<{ prState: "open" | "closed"; merged: boolean; mergedAt: string | null } | null> {
+  if (task.prNumber === null) return null;
+  const repoRef = await resolveRepoRef(app, project);
+  if (!repoRef) return null;
+  const token = await resolveGitHubToken(app, repoRef, "read");
+  if (!token) return null;
+  const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
+  return { prState: pr.state, merged: pr.merged, mergedAt: pr.mergedAt };
+}
+
+/**
  * #2103 — ends a reviewing task whose PR is merged/closed, then forgets its
  * retry bookkeeping. `current` is what `fetchCurrentCiStatus` already read.
  */
@@ -2927,11 +2948,12 @@ async function endReviewingFromPr(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
-  current: { prState: "open" | "closed"; merged: boolean },
+  current: { prState: "open" | "closed"; merged: boolean; mergedAt: string | null },
 ): Promise<boolean> {
   const ended = await endReviewingOnPrState(app, task, project, {
     state: current.prState,
     merged: current.merged,
+    mergedAt: current.mergedAt,
   });
   if (ended) {
     autoApproveRetryState.delete(task.id);
@@ -2964,11 +2986,20 @@ async function processReviewingPrState(app: FastifyInstance): Promise<void> {
     .where(
       and(
         eq(tasks.status, "reviewing"),
-        eq(projects.autoApprove, false),
+        // `auto_approve` is nullable with no default, so a freshly created
+        // project holds NULL: that is "off" too, and `= false` alone skips it.
+        or(eq(projects.autoApprove, false), isNull(projects.autoApprove)),
         isNotNull(tasks.prNumber),
       ),
     )
     .all();
+
+  // Forget tasks that left `reviewing` by any path (approve/reject/give-up
+  // included), so the throttle map never outlives the tasks it describes.
+  const live = new Set(rows.map((r) => r.task.id));
+  for (const id of reviewingPrStateCheckedAt.keys()) {
+    if (!live.has(id)) reviewingPrStateCheckedAt.delete(id);
+  }
 
   const now = Date.now();
   let checked = 0;
@@ -2980,7 +3011,7 @@ async function processReviewingPrState(app: FastifyInstance): Promise<void> {
     checked++;
     reviewingPrStateCheckedAt.set(task.id, now);
     try {
-      const current = await fetchCurrentCiStatus(app, task, project);
+      const current = await fetchPrLifecycle(app, task, project);
       if (current && (await endReviewingFromPr(app, task, project, current))) {
         reviewingPrStateCheckedAt.delete(task.id);
         continue;

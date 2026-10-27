@@ -3831,6 +3831,35 @@ describe("reconcileTasks", () => {
         await app.close();
       });
 
+      it("the slow sweep also covers a project whose autoApprove is NULL (the default)", async () => {
+        const app = await buildApp();
+        const { taskId, projectId } = await createAutoApproveCandidate(app, { autoApprove: false });
+        app.db.update(projects).set({ autoApprove: null }).where(eq(projects.id, projectId)).run();
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ state: "closed", merged: false }));
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+
+        await reconcileTasks(app);
+
+        expect((await getTask(app, taskId)).status).toBe("failed");
+        await app.close();
+      });
+
+      it("records the PR's own merge time, not the moment the sweep noticed", async () => {
+        const app = await buildApp();
+        const { taskId } = await createAutoApproveCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(
+          mockPr({ state: "closed", merged: true, mergedAt: "2026-01-02T03:04:05Z" }),
+        );
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.mergedAt?.toISOString()).toBe("2026-01-02T03:04:05.000Z");
+        expect(row.archivedAt?.toISOString()).toBe("2026-01-02T03:04:05.000Z");
+        await app.close();
+      });
+
       it("the slow sweep re-reads an open PR at most once per interval", async () => {
         const app = await buildApp();
         const { taskId } = await createAutoApproveCandidate(app, { autoApprove: false });
