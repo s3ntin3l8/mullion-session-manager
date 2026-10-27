@@ -1411,6 +1411,8 @@ export interface GitHubIssuesResponse {
   issues: GitHubIssueListItem[];
   page: number;
   hasMore: boolean;
+  /** A title search hit the backend's scan cap; older matches may be missing. */
+  truncated?: boolean;
   /** Every label on the returned page, for the filter chips. */
   labels: GitHubIssueLabel[];
   taskMasterEnabled: boolean;

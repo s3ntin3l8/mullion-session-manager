@@ -218,9 +218,11 @@ export function IssuesSection({
             <div className="github-panel-empty-row">
               {data.hasMore
                 ? "No matches on this page — load more"
-                : filtered
-                  ? "No issues match these filters"
-                  : "No open issues"}
+                : data.truncated
+                  ? "No matches in the most recent issues — search stopped early"
+                  : filtered
+                    ? "No issues match these filters"
+                    : "No open issues"}
             </div>
           )}
           {data?.issues.map((issue) => (
@@ -235,6 +237,11 @@ export function IssuesSection({
               onQueue={() => queueIssue(issue)}
             />
           ))}
+          {data?.truncated && data.issues.length > 0 && !loading && (
+            <div className="github-panel-empty-row">
+              Search stopped early — older issues were not checked
+            </div>
+          )}
           {loading && <div className="github-panel-empty-row">Loading…</div>}
           {data?.hasMore && !loading && (
             <button

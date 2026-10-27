@@ -12,6 +12,8 @@
 import { githubApiFetch, GitHubApiError } from "./github-fetch.js";
 
 const PAGE_SIZE = 50;
+/** Most raw list pages a title search reads (1000 issues) before giving up and flagging `truncated`. */
+const MAX_SEARCH_PAGES = 20;
 const HTML_ACCEPT = "application/vnd.github.html+json";
 
 export interface IssueLabel {
@@ -37,6 +39,8 @@ export interface IssueListResult {
   issues: IssueListItem[];
   page: number;
   hasMore: boolean;
+  /** A title search stopped at its scan cap, so older matches may exist beyond the results. */
+  truncated?: boolean;
   /** Every label seen on the returned page, for the filter chips. */
   labels: IssueLabel[];
 }
@@ -63,7 +67,7 @@ export interface IssueListQuery {
   /** A login, `*` (any assignee) or `none`. */
   assignee?: string;
   sort?: IssueSort;
-  /** Case-insensitive substring match on the title, applied to the fetched page. */
+  /** Case-insensitive substring match on the title, searched across the repo's open issues. */
   q?: string;
   page?: number;
 }
@@ -154,41 +158,80 @@ export async function listIssues(
   query: IssueListQuery = {},
 ): Promise<IssueListResult> {
   const page = Math.max(1, Math.trunc(query.page ?? 1));
-  const params = new URLSearchParams({
+  const needle = query.q?.trim().toLowerCase();
+  const base = new URLSearchParams({
     state: "open",
     per_page: String(PAGE_SIZE),
-    page: String(page),
     sort: query.sort ?? "updated",
     direction: "desc",
   });
-  if (query.labels) params.set("labels", query.labels);
-  if (query.assignee) params.set("assignee", query.assignee);
+  if (query.labels) base.set("labels", query.labels);
+  if (query.assignee) base.set("assignee", query.assignee);
 
   const repoPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
-  const needle = query.q?.trim().toLowerCase();
-  // `123` / `#123` is an issue number: look it up directly (page 1 only) so
-  // it is found even when it is not on the fetched page.
-  const numberMatch = page === 1 ? /^#?(\d+)$/.exec(needle ?? "") : null;
-  const [raw, byNumber] = await Promise.all([
-    getJson<RawIssue[]>(`${repoPath}/issues?${params}`, token),
-    numberMatch ? findOpenIssue(token, repoPath, Number(numberMatch[1])) : null,
-  ]);
+  const fetchRawPage = (n: number) => {
+    const params = new URLSearchParams(base);
+    params.set("page", String(n));
+    return getJson<RawIssue[]>(`${repoPath}/issues?${params}`, token);
+  };
   // `/issues` returns PRs too (they carry a `pull_request` field).
-  const rawIssues = raw.filter((i) => !i.pull_request);
-  const pageItems = rawIssues.map(toItem);
-  const items = pageItems.filter((i) => !needle || i.title.toLowerCase().includes(needle));
-  if (byNumber && !items.some((i) => i.number === byNumber.number)) items.unshift(toItem(byNumber));
+  const toIssues = (raw: RawIssue[]) => raw.filter((i) => !i.pull_request).map(toItem);
+
+  let items: IssueListItem[];
+  let labelSource: IssueListItem[];
+  let hasMore: boolean;
+  let truncated = false;
+
+  if (!needle) {
+    const raw = await fetchRawPage(page);
+    items = labelSource = toIssues(raw);
+    // A full raw page (PRs included) may have another page behind it.
+    hasMore = raw.length >= PAGE_SIZE;
+  } else {
+    // GitHub can't filter by title substring on the list endpoint, so scan raw
+    // pages from the start (labels/assignee/sort already applied) until the
+    // matches cover the requested page plus one more, the repo is exhausted,
+    // or the scan cap is hit.
+    const matches: IssueListItem[] = [];
+    const scanned: IssueListItem[] = [];
+    const wanted = page * PAGE_SIZE + 1;
+    let exhausted = false;
+    for (let n = 1; n <= MAX_SEARCH_PAGES && matches.length < wanted; n++) {
+      const raw = await fetchRawPage(n);
+      const issues = toIssues(raw);
+      scanned.push(...issues);
+      matches.push(...issues.filter((i) => i.title.toLowerCase().includes(needle)));
+      if (raw.length < PAGE_SIZE) {
+        exhausted = true;
+        break;
+      }
+    }
+    items = matches.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+    labelSource = scanned;
+    hasMore = matches.length > page * PAGE_SIZE;
+    // Out of scan budget with more raw pages unread: older matches may be missing.
+    truncated = !hasMore && !exhausted;
+
+    // `123` / `#123` is an issue number: look it up directly (page 1 only) so
+    // it is found even when it is not among the scanned pages.
+    const numberMatch = page === 1 ? /^#?(\d+)$/.exec(needle) : null;
+    const byNumber = numberMatch
+      ? await findOpenIssue(token, repoPath, Number(numberMatch[1]))
+      : null;
+    if (byNumber && !items.some((i) => i.number === byNumber.number))
+      items.unshift(toItem(byNumber));
+  }
 
   const seen = new Map<string, IssueLabel>();
-  for (const item of pageItems) {
+  for (const item of labelSource) {
     for (const l of item.labels) if (!seen.has(l.name)) seen.set(l.name, l);
   }
 
   return {
     issues: items,
     page,
-    // A full raw page (PRs included) may have another page behind it.
-    hasMore: raw.length >= PAGE_SIZE,
+    hasMore,
+    ...(truncated ? { truncated } : {}),
     labels: [...seen.values()].sort((a, b) => a.name.localeCompare(b.name)),
   };
 }
