@@ -467,6 +467,27 @@ describe("github-write service", () => {
         expect(onError).toHaveBeenCalledWith(expect.stringContaining("force-push history"));
       });
 
+      it("words a refused read as a read, not as a missing write scope", async () => {
+        serve(["head"], { head: [checkRun({ id: 2 })] }, ["gone"]);
+        const inner = fetchMock.getMockImplementation() as (url: string) => Promise<Response>;
+        fetchMock.mockImplementation(async (url: string) =>
+          String(url).includes("/graphql") ? jsonResponse(403, {}) : inner(url),
+        );
+        const onError = vi.fn();
+        await listReviewMarkers(
+          "pr-tok",
+          "checks-tok",
+          "owner",
+          "repo",
+          9,
+          "Hermes review",
+          onError,
+        );
+        const report = String(onError.mock.calls[0]?.[0]);
+        expect(report).toContain("cannot read the pull request's timeline");
+        expect(report).not.toContain("write access");
+      });
+
       it("falls back to the PR's current commits, and says so, when the force-push read fails", async () => {
         serve(["head"], { head: [checkRun({ id: 2 })] }, ["gone"]);
         const inner = fetchMock.getMockImplementation() as (url: string) => Promise<Response>;

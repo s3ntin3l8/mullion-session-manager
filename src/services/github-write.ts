@@ -993,8 +993,16 @@ async function listForcePushedHeads(
   } catch (err) {
     // A rate limit (already recorded into the shared budget by githubApiFetch), a
     // token without access, a GraphQL error: the caller degrades the same way for
-    // all of them, and reports why.
-    return { reason: (err as Error).message };
+    // all of them, and reports why. `githubGraphQL` words a 403/404 as a refused WRITE
+    // ("the token likely lacks write access"), which would mislead in a log about a read.
+    return {
+      reason:
+        err instanceof GitHubWriteScopeError
+          ? `HTTP ${err.statusCode}: the token cannot read the pull request's timeline`
+          : err instanceof Error
+            ? err.message
+            : String(err),
+    };
   }
   const nodes = data?.repository?.pullRequest?.timelineItems?.nodes;
   if (!nodes) return { reason: "the answer had no force-push timeline" };
