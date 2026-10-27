@@ -167,7 +167,7 @@ function Get-Verified([string]$Url, [string]$Dest, [string]$Sha256, [string]$Ste
   }
 }
 
-function Test-ProcessesUnder([string]$Root) {
+function Test-ProcessesUnder([string]$Root, [string[]]$AlsoRoots = @()) {
   # Processes running from $Root -- a session's pty-host master, the updater,
   # the server. Detached masters survive a task stop, so the task being stopped
   # does not mean nothing is running. A process counts when its image or its
@@ -175,7 +175,14 @@ function Test-ProcessesUnder([string]$Root) {
   # line that merely mentions the root itself -- this script's own, or its
   # caller's (-InstallRoot <root>) -- is not a process of the install. This
   # process and its ancestors are never counted.
-  $prefixes = @(($Root.TrimEnd('\', '/').ToLowerInvariant().Replace('/', '\')) + '\')
+  $prefixes = @()
+  # $AlsoRoots: the root as the caller spelled it. GetFullPath expands 8.3 names
+  # in Windows PowerShell 5.1, but a process started through a path that is only
+  # partly short (C:\Users\RUNNER~1\...\Mullion home) reports that spelling,
+  # which is neither the long nor the all-short form.
+  foreach ($r in (@($Root) + $AlsoRoots)) {
+    if ($r) { $prefixes += (($r.TrimEnd('\', '/').ToLowerInvariant().Replace('/', '\')) + '\') }
+  }
   # A process may have been started through the 8.3 short form of the path
   # (C:\Users\RUNNER~1\...) or the long one; WMI reports whichever it was given.
   try {
@@ -224,6 +231,7 @@ if (-not $InstallRoot) {
   if (-not $env:LOCALAPPDATA) { Fail 2 'platform' 'LOCALAPPDATA is not set; pass -InstallRoot' }
   $InstallRoot = Join-Path $env:LOCALAPPDATA 'Mullion'
 }
+$InstallRootAsGiven = $InstallRoot
 $InstallRoot = Get-FullPath $InstallRoot
 if ($InstallRoot -eq [IO.Path]::GetPathRoot($InstallRoot)) {
   Fail 2 'platform' "the install root must be a folder, not the drive root $InstallRoot"
@@ -255,10 +263,10 @@ if ($Uninstall) {
   if ($task) { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue }
 
   # Stopping the task ends the launcher and the server, but not instantly.
-  $running = @(Test-ProcessesUnder $InstallRoot)
+  $running = @(Test-ProcessesUnder $InstallRoot @($InstallRootAsGiven))
   for ($i = 0; $running.Count -gt 0 -and $i -lt 16; $i++) {
     Start-Sleep -Milliseconds 500
-    $running = @(Test-ProcessesUnder $InstallRoot)
+    $running = @(Test-ProcessesUnder $InstallRoot @($InstallRootAsGiven))
   }
   if ($running.Count -gt 0 -and -not $Force) {
     if ($task) { Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue }

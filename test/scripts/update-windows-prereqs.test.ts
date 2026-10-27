@@ -99,7 +99,7 @@ describe("update-windows-prereqs", () => {
       (calls: string[] = []) =>
       async (url: string) => {
         calls.push(url);
-        return url.includes("nodejs.org") ? SHASUMS : JSON.stringify(RELEASE);
+        return new URL(url).hostname === "nodejs.org" ? SHASUMS : JSON.stringify(RELEASE);
       };
     // Never the real script: a run that gets as far as writing must not touch it.
     const quiet = {
