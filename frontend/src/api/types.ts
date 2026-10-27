@@ -676,7 +676,7 @@ export interface MintOutcome {
   scope: string;
   /** The GitHub permission that scope needs, in the App settings' wording. */
   permission: string;
-  state: "ok" | "denied" | "not-installed";
+  state: "ok" | "denied" | "not-installed" | "error";
   status?: number;
   owner: string;
   repo: string;

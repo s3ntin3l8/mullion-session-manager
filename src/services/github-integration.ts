@@ -496,6 +496,9 @@ export async function resolveGitHubToken(
   // `resolveChecksToken` (#1790).
   scope: Exclude<InstallationTokenScope, "checks" | "checks-read" | "workflows"> = "write",
 ): Promise<string | null> {
+  // #2104 — the failed-mint result, recorded once the PAT lookup says whether
+  // the operation actually has something to fall back to.
+  let pendingOutcome: { appId: string; state: MintOutcome["state"]; status?: number } | null = null;
   try {
     // Hermes review, PR #504: the credentials read (which decrypts the
     // stored private key) belongs INSIDE this try, not before it — a
@@ -516,13 +519,16 @@ export async function resolveGitHubToken(
         recordMintOutcome(appCreds.appId, scope, repo, { state: "ok", fellBackToPat: false });
         return result.token;
       }
-      recordMintOutcome(appCreds.appId, scope, repo, {
-        // A negative-cached failure (installationsChecked null) is a denied
-        // mint that already happened; otherwise the App is just not installed.
-        state: result.installationsChecked === null ? "denied" : "not-installed",
+      // A negative-cached failure (installationsChecked null) is a mint that
+      // already failed; otherwise the App is just not installed here.
+      pendingOutcome = {
+        appId: appCreds.appId,
+        state:
+          result.installationsChecked === null
+            ? mintFailureState(result.failureStatus)
+            : "not-installed",
         status: result.failureStatus,
-        fellBackToPat: true,
-      });
+      };
       // Hermes review, PR #504: distinct from the catch below — the App
       // is configured and reachable, it's just not installed on this
       // particular owner. Logged separately (debug, not warn) so an
@@ -565,18 +571,27 @@ export async function resolveGitHubToken(
     }
     const failedAppId = getConfiguredAppId(app);
     if (failedAppId) {
-      recordMintOutcome(failedAppId, scope, repo, {
-        state: "denied",
-        status: err instanceof GitHubAppError ? err.status : undefined,
-        fellBackToPat: true,
-      });
+      const failedStatus = err instanceof GitHubAppError ? err.status : undefined;
+      pendingOutcome = {
+        appId: failedAppId,
+        state: mintFailureState(failedStatus),
+        status: failedStatus,
+      };
     }
     app.log.warn(
       { err, owner: repo.owner, repo: repo.repo },
       "[github-integration] GitHub App installation token mint failed — falling back to the shared PAT/OAuth token",
     );
   }
-  return getToken(app);
+  const pat = await getToken(app);
+  if (pendingOutcome) {
+    recordMintOutcome(pendingOutcome.appId, scope, repo, {
+      state: pendingOutcome.state,
+      status: pendingOutcome.status,
+      fellBackToPat: pat !== null,
+    });
+  }
+  return pat;
 }
 
 /**
@@ -699,7 +714,9 @@ export interface MintOutcome {
   scope: string;
   /** The GitHub permission that scope needs, in the App settings' wording. */
   permission: string;
-  state: "ok" | "denied" | "not-installed";
+  /** `denied`: GitHub refused the permission; `error`: the mint failed for
+   * another reason (a bad key, a network error, a 5xx) — not a missing grant. */
+  state: "ok" | "denied" | "not-installed" | "error";
   /** HTTP status GitHub answered the mint with, when it did. */
   status?: number;
   owner: string;
@@ -709,7 +726,14 @@ export interface MintOutcome {
   at: number;
 }
 
+// Keyed per repo so a success on one repo cannot hide a failure on another.
 const mintOutcomes = new Map<string, MintOutcome>();
+const MAX_MINT_OUTCOMES = 200;
+
+/** Whether a failed mint means "GitHub refused the permission" (vs. an outage or bad key). */
+function mintFailureState(status: number | undefined): "denied" | "error" {
+  return status === 403 || status === 404 || status === 422 ? "denied" : "error";
+}
 
 function recordMintOutcome(
   appId: string,
@@ -717,7 +741,12 @@ function recordMintOutcome(
   repo: { owner: string; repo: string },
   result: Pick<MintOutcome, "state" | "status" | "fellBackToPat">,
 ): void {
-  mintOutcomes.set(`${appId}:${scope}`, {
+  const key = `${appId}:${scope}:${repo.owner}/${repo.repo}`;
+  if (!mintOutcomes.has(key) && mintOutcomes.size >= MAX_MINT_OUTCOMES) {
+    const oldest = mintOutcomes.keys().next().value;
+    if (oldest !== undefined) mintOutcomes.delete(oldest);
+  }
+  mintOutcomes.set(key, {
     scope,
     permission: SCOPE_PERMISSION[scope] ?? scope,
     owner: repo.owner,
@@ -731,7 +760,7 @@ function failedMintOutcomes(appId: string): MintOutcome[] {
   return [...mintOutcomes.entries()]
     .filter(([key, o]) => key.startsWith(`${appId}:`) && o.state !== "ok")
     .map(([, o]) => o)
-    .sort((a, b) => a.scope.localeCompare(b.scope));
+    .sort((a, b) => a.scope.localeCompare(b.scope) || a.at - b.at);
 }
 
 /** Test-only reset. */
@@ -767,7 +796,7 @@ export async function resolveWorkflowWriteToken(
       return { ok: true, token: result.token };
     }
     recordMintOutcome(appCreds.appId, "workflows", repo, {
-      state: "denied",
+      state: mintFailureState(result.status),
       status: result.status,
       fellBackToPat: false,
     });

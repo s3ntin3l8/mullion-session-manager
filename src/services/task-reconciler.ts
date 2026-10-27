@@ -1167,10 +1167,8 @@ async function maybeOpenDraftPR(
       { taskId: task.id, detail: result.detail },
       "task reconcile: draft PR not opened — the GitHub App cannot push to this repository",
     );
-    draftPrRetryState.set(task.id, {
-      lastAttemptedAt: Date.now(),
-      attempts: PERMANENT_FAILURE_ATTEMPTS,
-    });
+    permanentFailureTaskIds.add(task.id);
+    setDraftPrRetryState(task.id, PERMANENT_FAILURE_ATTEMPTS, Date.now());
     return;
   }
   if (!result.ok) {
@@ -1256,6 +1254,31 @@ const draftPrRetryState = new Map<number, { lastAttemptedAt: number; attempts: n
 // An attempt count high enough that either backoff curve is already at its
 // ceiling: how a permanent failure (a 403 push) skips the doubling ramp.
 const PERMANENT_FAILURE_ATTEMPTS = 64;
+// Tasks parked at that ceiling, so a credential change can wake them at once
+// instead of leaving them idle for up to the full ceiling.
+const permanentFailureTaskIds = new Set<number>();
+
+/** Bounded insert into the draft-PR retry map (oldest-first eviction). */
+function setDraftPrRetryState(taskId: number, attempts: number, now: number): void {
+  if (!draftPrRetryState.has(taskId) && draftPrRetryState.size >= MAX_DRAFT_PR_RETRY_ENTRIES) {
+    const oldest = draftPrRetryState.keys().next().value;
+    if (oldest !== undefined) draftPrRetryState.delete(oldest);
+  }
+  draftPrRetryState.set(taskId, { lastAttemptedAt: now, attempts });
+}
+
+/**
+ * #2104 — wakes every task parked on a permanent push failure (a 403): called
+ * when the operator re-saves the GitHub credential, the one signal Mullion has
+ * that the cause may be fixed. Without it they would idle for the full ceiling.
+ */
+export function retryPermanentPushFailuresNow(): void {
+  for (const id of permanentFailureTaskIds) {
+    draftPrRetryState.delete(id);
+    autoApproveRetryState.delete(id);
+  }
+  permanentFailureTaskIds.clear();
+}
 
 // `attempts` is stored post-increment (1 after the very first attempt —
 // see the `.set()` call below), so the exponent is `attempts - 1`: the
@@ -3331,6 +3354,7 @@ async function attemptAutoApprove(
         { taskId: task.id, detail: outcome.detail },
         "task reconcile: auto-approve push refused (403) — the GitHub App cannot write to this repository",
       );
+      permanentFailureTaskIds.add(task.id);
       autoApproveRetryState.set(task.id, {
         lastAttemptedAt: Date.now(),
         attempts: PERMANENT_FAILURE_ATTEMPTS,

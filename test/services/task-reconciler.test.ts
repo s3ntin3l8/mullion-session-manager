@@ -376,6 +376,7 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb, getDb } = await import("../../src/db/client.js");
 const {
   reconcileTasks,
+  retryPermanentPushFailuresNow,
   DEFAULT_MAX_AUTO_RETURN_ROUNDS,
   resetRequiredStatusContextsForbiddenWarningsForTests,
 } = await import("../../src/services/task-reconciler.js");
@@ -1986,8 +1987,8 @@ describe("reconcileTasks", () => {
         await reconcileTasks(app);
         expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(1);
 
-        // Past the 60-minute ceiling it tries again.
-        vi.setSystemTime(Date.now() + 40 * 60_000);
+        // Re-saving the credential wakes it at once, with no time passing.
+        retryPermanentPushFailuresNow();
         await reconcileTasks(app);
         expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(2);
 

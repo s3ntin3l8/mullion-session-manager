@@ -415,12 +415,14 @@ function GitHubAppSection({
           }}
         >
           {githubApp.mintOutcomes.map((o) => (
-            <li key={o.scope}>
+            <li key={`${o.scope}:${o.owner}/${o.repo}`}>
               {`${o.scope}: ${
                 o.state === "not-installed"
                   ? `App is not installed on ${o.owner}`
-                  : `App lacks ${o.permission}${o.status ? ` (HTTP ${o.status})` : ""}`
-              } — ${o.fellBackToPat ? "using your PAT" : "no fallback"} (${o.owner}/${o.repo}, ${formatRelativeAge(o.at)})`}
+                  : o.state === "error"
+                    ? `token mint failed${o.status ? ` (HTTP ${o.status})` : ""}`
+                    : `App lacks ${o.permission}${o.status ? ` (HTTP ${o.status})` : ""}`
+              } — ${o.fellBackToPat ? "using your PAT" : "no PAT fallback"} (${o.owner}/${o.repo}, ${formatRelativeAge(o.at)})`}
             </li>
           ))}
         </ul>

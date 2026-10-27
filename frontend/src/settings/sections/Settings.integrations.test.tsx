@@ -349,6 +349,16 @@ describe("Settings -> Integrations", () => {
               at: Date.now(),
             },
             {
+              scope: "issues",
+              permission: "Issues and Pull requests: read",
+              state: "error",
+              status: 502,
+              owner: "acme",
+              repo: "widgets",
+              fellBackToPat: true,
+              at: Date.now(),
+            },
+            {
               scope: "write",
               permission: "Contents, Issues and Pull requests: write",
               state: "not-installed",
@@ -366,7 +376,7 @@ describe("Settings -> Integrations", () => {
         within(list).getByText(/dispatch: App lacks Actions: write \(HTTP 422\) — using your PAT/),
       ).toBeInTheDocument();
       expect(
-        within(list).getByText(/workflows: App lacks Workflows: write.*no fallback/),
+        within(list).getByText(/workflows: App lacks Workflows: write.*no PAT fallback/),
       ).toBeInTheDocument();
       expect(
         within(list).getByText(/write: App is not installed on other — using your PAT/),

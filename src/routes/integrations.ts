@@ -22,6 +22,7 @@ import {
 } from "../services/github-device-flow.js";
 import { enableWebhooks, disableWebhooks } from "../services/github-webhook.js";
 import { computeKeyFingerprint } from "../services/github-app.js";
+import { retryPermanentPushFailuresNow } from "../services/task-reconciler.js";
 import {
   clearHermesKey,
   getHermesIntegration,
@@ -130,7 +131,10 @@ export async function integrationsRoute(app: FastifyInstance) {
     { schema: setTokenSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
       try {
-        return await setPat(app, request.body.token);
+        const saved = await setPat(app, request.body.token);
+        // A re-saved credential may fix a permanent push 403 (#2104).
+        retryPermanentPushFailuresNow();
+        return saved;
       } catch (err) {
         if (err instanceof InvalidTokenError) {
           return reply.badRequest(err.message);
@@ -260,16 +264,20 @@ export async function integrationsRoute(app: FastifyInstance) {
   app.put<{ Body: SetGitHubAppBody }>(
     "/api/integrations/github/app",
     { schema: setGitHubAppSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
-    async (request, reply) =>
+    async (request, reply) => {
       // Hermes review, PR #826: the same-appId guard is symmetric — this
       // side used to not check at all, so configuring the reviewer App
       // FIRST and then re-pointing the primary at that same id sailed
       // through here, silently reintroducing the 422 at review time
       // instead of at config time.
-      putGitHubAppLike(GITHUB_PROVIDER, request.body, reply, {
+      const saved = await putGitHubAppLike(GITHUB_PROVIDER, request.body, reply, {
         provider: GITHUB_REVIEWER_PROVIDER,
         label: "the reviewer App",
-      }),
+      });
+      // A re-saved App credential may fix a permanent push 403 (#2104).
+      retryPermanentPushFailuresNow();
+      return saved;
+    },
   );
 
   app.delete("/api/integrations/github/app", async (_request, reply) => {

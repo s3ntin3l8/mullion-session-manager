@@ -1030,6 +1030,47 @@ describe("github-integration service", () => {
       await app.close();
     });
 
+    it("calls a non-refusal mint failure an error, and does not claim a PAT fallback when there is none (#2104)", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "555", REAL_APP_PRIVATE_KEY);
+      fetchMock.mockResolvedValue(jsonResponse(200, [{ id: 1, account: { login: "acme" } }]));
+      mockGetInstallationToken.mockRejectedValueOnce(new GitHubAppError("GitHub is down", 502));
+
+      // No PAT configured: the operation has nothing to fall back to.
+      expect(await resolveGitHubToken(app, { owner: "acme", repo: "widgets" })).toBeNull();
+
+      expect((await getGitHubAppStatus(app)).mintOutcomes).toEqual([
+        expect.objectContaining({
+          scope: "write",
+          state: "error",
+          status: 502,
+          fellBackToPat: false,
+        }),
+      ]);
+      await app.close();
+    });
+
+    it("keeps one outcome per repo, so a success elsewhere does not hide a failure (#2104)", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      setGitHubApp(app, "555", REAL_APP_PRIVATE_KEY);
+      fetchMock.mockResolvedValue(jsonResponse(200, [{ id: 1, account: { login: "acme" } }]));
+
+      mockGetInstallationToken.mockRejectedValueOnce(new GitHubAppError("denied", 403));
+      await resolveGitHubToken(app, { owner: "acme", repo: "broken" }, "write");
+      mockGetInstallationToken.mockResolvedValueOnce({
+        token: "ghs_ok",
+        installationsChecked: null,
+      });
+      await resolveGitHubToken(app, { owner: "acme", repo: "fine" }, "write");
+
+      expect((await getGitHubAppStatus(app)).mintOutcomes).toEqual([
+        expect.objectContaining({ repo: "broken", state: "denied", status: 403 }),
+      ]);
+      await app.close();
+    });
+
     it("records the workflows scope (no PAT fallback) when its mint is refused", async () => {
       const app = await buildApp();
       setGitHubApp(app, "555", REAL_APP_PRIVATE_KEY);
