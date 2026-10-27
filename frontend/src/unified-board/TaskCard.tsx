@@ -11,7 +11,7 @@ import { rowClassNameForSeverity } from "../sessionStatus.js";
 import { BlockedIcon, BotIcon, ClockIcon, GitHubIcon, WarningTriangleIcon } from "../ui/icons.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { needsHumanText } from "../needsHuman.js";
-import { parseWorkflowChange } from "../workflowChange.js";
+import { parseWorkflowChange, visibleTaskSyncError } from "../workflowChange.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { TaskSessionSlot } from "./TaskSessionSlot.js";
 
@@ -194,6 +194,7 @@ export function TaskCard({
   // strip only says WHAT is needed; a click anywhere on the card (the strip
   // included) opens that drawer.
   const workflowHold = parseWorkflowChange(task.workflowChange);
+  const syncError = visibleTaskSyncError(task);
   // (The strip below is role="status", not this card's usual role="img" +
   // aria-label badge: it has real visible text, and a polite live-region
   // announcement when a hold first appears is deliberate — it is the one badge
@@ -359,12 +360,12 @@ export function TaskCard({
             an aria-label on an icon-conveying-status element like this
             (vs. a plain span, which has no implicit role for
             aria-label to attach meaning to on every screen reader). */}
-        {task.githubSyncError && (
+        {syncError && !workflowHold && (
           <span
             className="task-card-sync-error"
             role="img"
-            title={`GitHub sync: ${task.githubSyncError}`}
-            aria-label={`GitHub sync error: ${task.githubSyncError}`}
+            title={`GitHub sync: ${syncError}`}
+            aria-label={`GitHub sync error: ${syncError}`}
           >
             <WarningTriangleIcon size={11} aria-hidden="true" />
           </span>
@@ -373,9 +374,9 @@ export function TaskCard({
             otherwise unreadable there. Hidden everywhere except phone
             (mobile.css); aria-hidden because the icon's aria-label already
             carries this text. */}
-        {task.githubSyncError && (
+        {syncError && (
           <span className="task-card-sync-error-text" aria-hidden="true">
-            {task.githubSyncError}
+            {syncError}
           </span>
         )}
       </div>
@@ -403,10 +404,11 @@ export function TaskCard({
         <div
           className="task-card-workflow-hold"
           role="status"
-          title={`Changes ${workflowHold.files.join(", ")} — open the task to approve`}
+          title={`Changes ${workflowHold.files.join(", ")} — open the task to approve${syncError ? `; GitHub sync: ${syncError}` : ""}`}
+          aria-label={`Needs workflow approval${syncError ? `; GitHub sync error: ${syncError}` : ""}`}
         >
           <WarningTriangleIcon size={11} aria-hidden="true" />
-          <span>Needs workflow approval</span>
+          <span>Needs workflow approval{syncError ? " · GitHub sync error" : ""}</span>
         </div>
       )}
       {/* D5 — a Failed column of several identical-looking cards conveys

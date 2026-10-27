@@ -937,7 +937,7 @@ describe("TaskDetail claim action", () => {
     tasks = [makeTask({ id: 1, status: "claimed" })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.queryByRole("button", { name: "Claim" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Approve task" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
   });
 });
@@ -1050,7 +1050,7 @@ describe("TaskDetail approve/reject actions", () => {
     const user = userEvent.setup();
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
 
-    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await user.click(screen.getByRole("button", { name: "Approve task" }));
     expect(approveTask).toHaveBeenCalledWith(1);
   });
 
@@ -1071,7 +1071,7 @@ describe("TaskDetail approve/reject actions", () => {
     tasks = [makeTask({ id: 1, status: "reviewing" })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
 
-    expect(screen.getByRole("button", { name: "Approve" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Approve task" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Reject" })).not.toBeDisabled();
   });
 
@@ -1470,7 +1470,7 @@ describe("TaskDetail action failure paths", () => {
     const user = userEvent.setup();
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
 
-    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await user.click(screen.getByRole("button", { name: "Approve task" }));
 
     expect(screen.getByText("Failed to approve task")).toBeInTheDocument();
   });
@@ -1492,7 +1492,7 @@ describe("TaskDetail action failure paths", () => {
     );
 
     // First click — warning appears, force-confirm button surfaces.
-    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await user.click(screen.getByRole("button", { name: "Approve task" }));
 
     expect(screen.getByText(/5 sub-issues, 2 completed, 3 open/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Close anyway/i })).toBeInTheDocument();
@@ -1514,7 +1514,7 @@ describe("TaskDetail action failure paths", () => {
       new ApiError("tracking-epic warning", 409, "tracking-epic-with-open-sub-issues"),
     );
 
-    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await user.click(screen.getByRole("button", { name: "Approve task" }));
     await user.click(screen.getByRole("button", { name: /Cancel/i }));
 
     expect(approveTask).toHaveBeenCalledTimes(1);
@@ -1530,7 +1530,7 @@ describe("TaskDetail action failure paths", () => {
       new ApiError("concurrent reject raced the approve", 409, "cas-lost"),
     );
 
-    await user.click(screen.getByRole("button", { name: "Approve" }));
+    await user.click(screen.getByRole("button", { name: "Approve task" }));
 
     // A plain 409 with a different code should not surface the force
     // confirmation — the existing 409-handling code path already exists
@@ -1890,6 +1890,64 @@ describe("TaskDetail workflow-change approval", () => {
     expect(screen.getByText(".github/workflows/release.yml")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Approve workflow change" }));
     expect(approveWorkflowChange).toHaveBeenCalledWith(1, "a".repeat(40));
+    expect(approveTask).not.toHaveBeenCalled();
+  });
+
+  it("puts the workflow approval immediately after the title, with task approval hidden", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        body: "A long task description",
+        workflowChange: change,
+      }),
+    ];
+    const { container } = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    const panel = screen.getByRole("group", { name: "Workflow change" });
+    expect(container.querySelector(".task-detail-header")?.nextElementSibling).toBe(panel);
+    expect(screen.queryByRole("button", { name: "Approve task" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Reject" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Give up" })).toBeEnabled();
+  });
+
+  it("restores task approval after the workflow hold clears on refresh", async () => {
+    tasks = [makeTask({ id: 1, status: "reviewing", workflowChange: change })];
+    const user = userEvent.setup();
+    const { rerender } = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Approve workflow change" }));
+    expect(screen.queryByRole("button", { name: "Approve task" })).toBeNull();
+
+    tasks = [makeTask({ id: 1, status: "reviewing", workflowChange: null })];
+    rerender(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByRole("group", { name: "Workflow change" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Approve task" }));
+    expect(approveTask).toHaveBeenCalledWith(1);
+  });
+
+  it("hides the superseded push rejection while workflow approval is pending", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        workflowChange: change,
+        githubSyncError:
+          "refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml` without `workflows` permission",
+      }),
+    ];
+    const { container } = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByRole("group", { name: "Workflow change" })).toBeInTheDocument();
+    expect(container.querySelector(".task-detail-sync-error")).toBeNull();
+  });
+
+  it.each([
+    "GitHub rejected this write (HTTP 403)",
+    "The GitHub App has not been granted Workflows: write on this repository — approve the permission in the App's settings, then retry",
+  ])("keeps a current GitHub error visible alongside the workflow hold: %s", (githubSyncError) => {
+    tasks = [makeTask({ id: 1, status: "reviewing", workflowChange: change, githubSyncError })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText(`GitHub sync: ${githubSyncError}`)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve workflow change" })).toBeInTheDocument();
   });
 
   it("surfaces the server's message when the approval is refused (e.g. the branch moved)", async () => {
@@ -1902,6 +1960,27 @@ describe("TaskDetail workflow-change approval", () => {
 
     await user.click(screen.getByRole("button", { name: "Approve workflow change" }));
     expect(screen.getByText(/The branch changed since this approval/)).toBeInTheDocument();
+  });
+
+  it("refreshes a no-longer-applicable workflow hold and restores task approval without a stale error", async () => {
+    approveWorkflowChange.mockRejectedValueOnce(
+      new ApiError("No workflow change is waiting for approval on this task", 409),
+    );
+    tasks = [makeTask({ id: 1, status: "reviewing", workflowChange: change })];
+    const user = userEvent.setup();
+    const { rerender } = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    refreshTasks.mockImplementationOnce(async () => {
+      tasks = [makeTask({ id: 1, status: "reviewing", workflowChange: null })];
+    });
+    refreshTasks.mockClear();
+    await user.click(screen.getByRole("button", { name: "Approve workflow change" }));
+    expect(refreshTasks).toHaveBeenCalledTimes(1);
+    rerender(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByRole("group", { name: "Workflow change" })).toBeNull();
+    expect(
+      screen.queryByText("No workflow change is waiting for approval on this task"),
+    ).toBeNull();
+    expect(screen.getByRole("button", { name: "Approve task" })).toBeEnabled();
   });
 
   it("shows a generic error for a non-API failure", async () => {

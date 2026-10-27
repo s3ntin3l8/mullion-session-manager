@@ -836,6 +836,7 @@
 .task-detail-workflow-change-files {
   margin: 0;
   padding-left: 18px;
+  overflow-wrap: anywhere;
 }
 .task-detail-sync-error {
   display: flex;
