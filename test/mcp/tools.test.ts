@@ -63,6 +63,7 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "kill_child_session",
       "stop_dock_session",
       "get_scrollback",
+      "push_task_branch",
       "request_review",
       "review_status",
       "stop_review",
@@ -456,6 +457,18 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     const text = await tool.handler({}, { listPreviews });
     expect(listPreviews).toHaveBeenCalledWith();
     expect(JSON.parse(text)).toEqual([{ slug: "abc" }]);
+  });
+
+  it("push_task_branch calls client.pushTaskBranch and returns the result", async () => {
+    const tool = TOOLS.find((t) => t.name === "push_task_branch")!;
+    const client = {
+      pushTaskBranch: vi.fn().mockResolvedValue({ ok: true, prUrl: "u", prNumber: 3 }),
+    };
+    const out = await tool.handler({}, client as never);
+    expect(client.pushTaskBranch).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(out)).toEqual({ ok: true, prUrl: "u", prNumber: 3 });
+    expect(tool.description).toContain("instead of `git push`");
+    expect(tool.description).toContain("operator");
   });
 
   it("request_review passes pr_number to client.requestReview and returns the result", async () => {

@@ -17,6 +17,15 @@
  */
 export const REVIEW_REQUEST_TIMEOUT_MS = 60_000;
 
+// #2102 — `mullion task push` / `push_task_branch` wait on a real git push, so
+// the client budget must outlast the slowest server-side path or the agent gets
+// a bare timeout (no reason/guidance) while the push carries on: a local push is
+// capped at 120s (GIT_TIMEOUT_MS) plus a best-effort 30s fetch before a
+// force-with-lease; a remote-hosted push RPC is itself capped at 140s
+// (remote-host-client.ts); and the request then runs a status check and a PR
+// title sync. 240s leaves margin over all of that.
+export const TASK_PUSH_REQUEST_TIMEOUT_MS = 240_000;
+
 /**
  * The normative sentence about asking for a review. It is read by an agent
  * at the moment it is about to ask, which is the only moment the rule can

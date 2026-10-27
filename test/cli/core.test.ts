@@ -2666,6 +2666,26 @@ describe("runCommand", () => {
     });
   });
 
+  describe("task push (issue #2102)", () => {
+    it("requests tasks.push for the caller's own session and reports the PR", async () => {
+      const client = fakeClient({
+        request: vi.fn(async () => ({ ok: true, prUrl: "https://github.com/o/r/pull/9" })),
+      });
+      const io = fakeIo();
+      await runCommand(["task", "push"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("tasks.push", {});
+      // Outlasts the slowest server-side push path.
+      expect((client as { requestTimeoutMs?: number }).requestTimeoutMs).toBe(240_000);
+    });
+
+    it("targets an explicit --session", async () => {
+      const client = fakeClient({ request: vi.fn(async () => ({ ok: true, prUrl: "u" })) });
+      const io = fakeIo();
+      await runCommand(["--session", "7", "task", "push"], { client, io });
+      expect(client.request).toHaveBeenCalledWith("tasks.push", { sessionId: "7" });
+    });
+  });
+
   describe("bundle commands (issue #944/#945)", () => {
     it("bundle status requests bundle.status with no arguments", async () => {
       const client = fakeClient();

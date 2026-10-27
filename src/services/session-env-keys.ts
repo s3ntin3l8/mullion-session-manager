@@ -1,4 +1,8 @@
-import { GIT_CONFIG_NO_AUTO_GC_ENV, SERVER_ENV_KEYS } from "./session-env.js";
+import {
+  GIT_CONFIG_NO_AUTO_GC_ENV,
+  GIT_CONFIG_TASK_PUSH_BLOCK_ENV,
+  SERVER_ENV_KEYS,
+} from "./session-env.js";
 
 // Issue #822 — the reserved-key predicate shared by dock-config.ts's write
 // path (throws on a reserved key), project-config.ts's read path (drops one
@@ -32,6 +36,11 @@ const RESERVED_SERVER_ENV_KEYS = new Set<string>(SERVER_ENV_KEYS);
 // `core.bare=true` being the #1602 hazard again — and turn the gc protection
 // off at the same time.
 const RESERVED_GIT_CONFIG_NO_AUTO_GC_KEYS = new Set<string>(Object.keys(GIT_CONFIG_NO_AUTO_GC_ENV));
+// #2102 — index 1 of the same GIT_CONFIG_* list is the task-push block, so a
+// session's own `env` cannot overwrite it either.
+const RESERVED_GIT_CONFIG_TASK_PUSH_KEYS = new Set<string>(
+  Object.keys(GIT_CONFIG_TASK_PUSH_BLOCK_ENV),
+);
 
 export function isReservedSessionEnvKey(key: string): boolean {
   if (key.length === 0) return true;
@@ -49,5 +58,6 @@ export function isReservedSessionEnvKey(key: string): boolean {
   // from a different source (issue #822, Hermes review).
   if (RESERVED_SERVER_ENV_KEYS.has(key)) return true;
   if (RESERVED_GIT_CONFIG_NO_AUTO_GC_KEYS.has(key)) return true;
+  if (RESERVED_GIT_CONFIG_TASK_PUSH_KEYS.has(key)) return true;
   return false;
 }

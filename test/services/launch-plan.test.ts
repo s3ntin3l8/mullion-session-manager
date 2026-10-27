@@ -685,6 +685,34 @@ describe("buildLaunchPlan — shell/argv/constraints shape", () => {
     expect(plan.argv).toEqual(["dtach", "-n", "/tmp/sessions/55.sock", plan.shell, "-lc", "bash"]);
   });
 
+  describe("task-push block (#2102)", () => {
+    it("a Task Master session's own git push is pointed at an unreachable sentinel", () => {
+      const env = buildLaunchPlan(baseSession({ taskId: 123 })).env;
+      // Index 0 stays the gc.auto override; index 1 is the pushurl block.
+      expect(env.GIT_CONFIG_COUNT).toBe("2");
+      expect(env.GIT_CONFIG_KEY_0).toBe("gc.auto");
+      expect(env.GIT_CONFIG_KEY_1).toBe("remote.origin.pushurl");
+      expect(env.GIT_CONFIG_VALUE_1).toBe("use-mullion-task-push://blocked");
+    });
+
+    it("a manual session keeps only the gc.auto override: its pushes are untouched", () => {
+      const env = buildLaunchPlan(baseSession({ taskId: undefined })).env;
+      expect(env.GIT_CONFIG_COUNT).toBe("1");
+      expect(env.GIT_CONFIG_KEY_1).toBeUndefined();
+    });
+
+    it("a caller-supplied env cannot override the block", () => {
+      const env = buildLaunchPlan(
+        baseSession({
+          taskId: 123,
+          env: { GIT_CONFIG_VALUE_1: "https://github.com/o/r.git", GIT_CONFIG_COUNT: "1" },
+        }),
+      ).env;
+      expect(env.GIT_CONFIG_COUNT).toBe("2");
+      expect(env.GIT_CONFIG_VALUE_1).toBe("use-mullion-task-push://blocked");
+    });
+  });
+
   it("manual sessions have full burst capacity (CPUWeight=100 and no CPUQuota)", () => {
     const plan = buildLaunchPlan(baseSession({ taskId: undefined }));
     expect(plan.constraints?.cpuWeight).toBe(100);

@@ -1319,10 +1319,15 @@ the task's branch to fix the conflict instead of just backing off:
   directory out from under a running agent, not just leak one.
 - The seed prompt (`buildRebasePrompt`) asks the worker to rebase onto the
   current base, resolve conflicts, re-run the repo's own verification gate,
-  and — unlike every other Task Master spawn — push the result itself with
-  `git push --force-with-lease`: Mullion's own push only ever happens once,
-  at the `-> reviewing` transition, and neither call site revisits it
-  through the ordinary path.
+  and — unlike every other Task Master spawn — pushes the result inside its
+  own turn, but through Mullion (`mullion task push` / the `push_task_branch`
+  tool, #2102), never with `git push`: Mullion's own automatic push only ever
+  happens once, at the `-> reviewing` transition, and neither call site
+  revisits it through the ordinary path. The push goes through the workflow-
+  change approval gate with the bot's identity, as a force-with-lease, and any
+  failure (a stale lease, a held workflow change, refused credentials) comes
+  back to the agent in the same turn. A task session's plain `git push` is
+  refused (its `remote.origin.pushurl` is overridden in its environment).
 - The task's status never changes as a _direct_ result of this function —
   a `done` task stays `done` throughout its own call site; a `reviewing`
   task stays `reviewing` throughout its own (the rebase worker's eventual

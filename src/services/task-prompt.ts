@@ -1233,7 +1233,8 @@ export function buildCiFailurePrompt(
   const preamble = buildTaskMasterPreamble(opts);
   const failure =
     `A required CI check failed on this task's PR after it reached review.\n\n${renderCiSummary(opts.ci)}\n\n` +
-    "Pull the latest changes, read the failing check's log, and fix it — then push and finish again." +
+    "Pull the latest changes, read the failing check's log, and fix it — then commit and finish " +
+    "again. Mullion pushes the branch itself when you do; do not `git push`." +
     (opts.rereviewRequestPath
       ? "\n\nThis work was already reviewed and approved, and a fix for CI is not " +
         "reviewed again. If your fix grew past a small change and genuinely needs " +
@@ -1304,11 +1305,15 @@ export function buildSuggestionsPrompt(
  *   worker on the same branch the whole time, so it doesn't actually violate
  *   that rule, but it reads like it might, so this spells out why it doesn't.
  * - "Mullion pushes the branch... do not push it yourself" does NOT hold
- *   here: Mullion's only push happens once, at the "-> reviewing" transition
- *   (`task-promote.ts`), and a `done` task never revisits that transition
- *   (`done` has no outgoing edges — see `task-state.ts`). The merge sweep
- *   only re-reads GitHub's own `mergeableState` on its next tick; a resolved
- *   conflict that stays unpushed is invisible to it forever.
+ *   here: Mullion's only automatic push happens once, at the "-> reviewing"
+ *   transition (`task-promote.ts`), and a `done` task never revisits that
+ *   transition (`done` has no outgoing edges — see `task-state.ts`). The
+ *   merge sweep only re-reads GitHub's own `mergeableState` on its next tick;
+ *   a resolved conflict that stays unpushed is invisible to it forever. So
+ *   the worker asks Mullion to push, in its own turn (`mullion task push`,
+ *   #2102): the push goes through the workflow-change approval gate with the
+ *   bot's identity, and a failure comes back to the agent that can fix it. It
+ *   is never a plain `git push` with the operator's credentials.
  * - "Ending your turn... moves this task to review" is simply false here —
  *   this task already left "reviewing" once, back when it was first
  *   approved. Ending the turn only signals THIS rebase attempt is over, not
@@ -1326,14 +1331,19 @@ export function buildRebasePrompt(opts: WorkerPreambleOptions & { baseRef: strin
     "commits onto a newer base, it does not switch to or create another branch, so this does not " +
     'conflict with the "do not switch, rebase onto, or create another branch" rule above (that ' +
     "rule is about branch identity, not this operation).\n\n" +
-    'This turn is the one exception to "do not push it yourself": once the rebase is clean and ' +
-    "the gate passes, push with `git push --force-with-lease origin " +
-    `${opts.branchName}\` (not a plain push — ${opts.branchName} already has commits on the ` +
-    "remote). Mullion picks up the result automatically on its next check; do not open or " +
-    "comment on any pull request yourself.\n\n" +
+    'This turn is the one exception to "do not push it yourself" — but not with `git push`: ' +
+    "once the rebase is clean, the gate passes and everything is committed, run `mullion task " +
+    "push` (or the `push_task_branch` tool). Mullion pushes the rebased branch with its own " +
+    "identity, as a force-with-lease because the branch already has commits on the remote, and " +
+    "tells you the outcome. If it reports that the remote moved (a stale lease), fetch, rebase " +
+    "again, re-run the gate and call it again. If it reports that the branch changes " +
+    ".github/workflows/ and needs the operator's approval, or that its credentials were " +
+    "refused, only the operator can resolve that: end your turn and say so, do not try another " +
+    "way to push. A plain `git push` from this session is refused. Do not open or comment on " +
+    "any pull request yourself.\n\n" +
     "One more correction to the instructions above: ending your turn here does NOT move this " +
     "task to review — that already happened earlier in its lifecycle. It only signals that this " +
-    "rebase attempt is finished; Mullion notices the push (or the lack of one) on its own.";
+    "rebase attempt is finished; Mullion notices the pushed result (or the lack of one) on its own.";
   return `${preamble}${SECTION_BREAK}${instructions}${SECTION_BREAK}${taskSpec(opts.task)}`;
 }
 

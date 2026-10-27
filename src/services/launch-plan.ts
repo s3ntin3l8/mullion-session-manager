@@ -20,7 +20,7 @@
 import os from "node:os";
 import { mkdirSync } from "node:fs";
 import type { HookMessageKind } from "./hook-protocol.js";
-import { buildSessionEnv } from "./session-env.js";
+import { GIT_CONFIG_TASK_PUSH_BLOCK_ENV, buildSessionEnv } from "./session-env.js";
 import { applyShellIntegrationEnv } from "./shell-integration.js";
 import { writeSessionAgentGuide } from "./agent-guide.js";
 import { writeSessionBriefing } from "./project-briefing.js";
@@ -271,6 +271,11 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // overridden by it. A dock control or direct caller's env is real, but
   // Mullion's own session plumbing always wins.
   Object.assign(sessionEnv, session.env);
+  // #2102 — a Task Master session's own `git push origin` must fail: its
+  // branch is pushed by Mullion (gated, bot identity), not with the operator's
+  // ambient credentials. After session.env, so the caller cannot override it
+  // (the keys are reserved there too).
+  if (session.taskId !== undefined) Object.assign(sessionEnv, GIT_CONFIG_TASK_PUSH_BLOCK_ENV);
   // Issue: sidebar worktree display — injects the OSC 7 shell-integration
   // hook (ZDOTDIR shim for zsh, PROMPT_COMMAND for bash) so this session's
   // shell announces its cwd on every prompt draw, feeding Session.liveCwd.

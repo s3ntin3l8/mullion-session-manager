@@ -21,7 +21,11 @@ import {
   statusHookMessages,
   statusTruncationNote,
 } from "./client.mjs";
-import { REVIEW_REQUEST_TIMEOUT_MS, REVIEW_PROTOCOL_NOTE } from "./review-protocol.mjs";
+import {
+  REVIEW_REQUEST_TIMEOUT_MS,
+  REVIEW_PROTOCOL_NOTE,
+  TASK_PUSH_REQUEST_TIMEOUT_MS,
+} from "./review-protocol.mjs";
 
 /** Reads a whole stream (io.stdin in production, a fake in tests) as UTF-8. */
 function readAll(stream) {
@@ -154,6 +158,7 @@ const NOUNS = new Set([
   "events",
   "bundle",
   "device",
+  "task",
 ]);
 
 /** Resolves the leading tokens of a (post-global-flag-extraction) argv into
@@ -1455,6 +1460,19 @@ const bundleCommands = {
   },
 };
 
+// #2102 — a Task Master worker pushes its branch through Mullion (the gated
+// path, bot identity) instead of with its own git credentials.
+const taskCommands = {
+  async push(client, _args, opts) {
+    const body = {};
+    if (opts.session !== undefined) body.sessionId = opts.session;
+    // A push can take as long as the git remote (plus the lease pre-fetch).
+    client.requestTimeoutMs = TASK_PUSH_REQUEST_TIMEOUT_MS;
+    const result = await client.request("tasks.push", body);
+    return { json: result, text: `pushed; pull request: ${result.prUrl}` };
+  },
+};
+
 const eventsCommands = {
   async tail(client, args, _opts, io) {
     const { flags } = extractFlags(args, { children: "boolean" });
@@ -1896,6 +1914,7 @@ export const COMMANDS = {
   bundle: bundleCommands,
   device: deviceCommands,
   events: eventsCommands,
+  task: taskCommands,
   notify: runNotify,
   status: runStatus,
   review: runReview,
@@ -1915,6 +1934,7 @@ Commands:
   preview create|get|delete|list
   dock start|stop|list
   device list|create|pair|pair-and-connect|discovered|connect|start|stop|delete|screenshot|tap|swipe|text|key|logcat|clipboard
+  task push        push your Task Master branch through Mullion (gated; never git push)
   bundle status|resync|remove
   events tail [--children]
   history [--session <id>] [--kind <k>] [--since <ms>] [--until <ms>]

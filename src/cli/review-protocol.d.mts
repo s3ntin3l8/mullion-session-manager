@@ -3,5 +3,6 @@
 // TypeScript side — services/workflow-conventions.ts — can import the one
 // canonical wording instead of restating it.
 export const REVIEW_REQUEST_TIMEOUT_MS: number;
+export const TASK_PUSH_REQUEST_TIMEOUT_MS: number;
 export const REVIEW_PROTOCOL_NOTE: string;
 export const REVIEW_REPO_NOTE: string;

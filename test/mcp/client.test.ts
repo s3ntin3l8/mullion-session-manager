@@ -626,6 +626,16 @@ describe("MullionClient (issue #271)", () => {
     // failing attempt, and a companion "does not retry" test locks in
     // that the already-working (real session-scope) case takes no extra
     // round trip at all.
+    describe("pushTaskBranch (#2102)", () => {
+      it("sends tasks.push with no body fields, with a budget that outlasts a real git push", async () => {
+        const client = new MullionClient({ MULLION_SOCKET_PATH: "/nonexistent.sock" });
+        const spy = vi.spyOn(client, "controlRequest").mockResolvedValue({ ok: true, prUrl: "u" });
+        expect(await client.pushTaskBranch()).toEqual({ ok: true, prUrl: "u" });
+        // slowest server-side path (remote RPC 140s + status check + title sync): the client must outwait it.
+        expect(spy).toHaveBeenCalledWith("tasks.push", {}, 240_000);
+      });
+    });
+
     describe("requestReview", () => {
       it("sends reviews.request with no body fields by default", async () => {
         const socketPath = await startControlServer((msg, socket) => {

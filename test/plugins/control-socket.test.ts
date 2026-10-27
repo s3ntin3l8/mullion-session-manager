@@ -1265,6 +1265,52 @@ describe("controlSocketPlugin (issue #185)", () => {
       });
     });
 
+    // #2102 — a worker pushes through Mullion, pinned to its own session.
+    describe("tasks.push", () => {
+      it("session scope: rejects pushing another session's task", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const { sessionId: otherSessionId } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "tasks.push", body: { sessionId: otherSessionId } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(false);
+        expect(reply.status).toBe(403);
+        socket.destroy();
+      });
+
+      it("session scope: defaults to its own session and reaches the task-push route", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken, sessionId } = await createRealSession();
+        const injectSpy = vi.spyOn(app, "inject");
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "tasks.push", body: {} })}\n`);
+        await waitForReply(socket);
+        const forwarded = injectedOptions(injectSpy).find(
+          (o) => o.url === `/api/sessions/${sessionId}/task-push`,
+        );
+        expect(forwarded).toBeDefined();
+        expect(forwarded!.method).toBe("POST");
+        socket.destroy();
+      });
+
+      it("full scope: requires an explicit sessionId", async () => {
+        app = await buildApp();
+        await app.ready();
+        await createRealSession();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "tasks.push", body: {} })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(false);
+        expect(reply.status).toBe(400);
+        socket.destroy();
+      });
+    });
+
     describe("repo and branch targeting", () => {
       // Each op forwards only the target fields the caller set, as the
       // route's own body/query, so the route's schema is the one validator.
