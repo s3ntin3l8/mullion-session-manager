@@ -807,6 +807,23 @@
   font-size: 0.71875rem;
   color: var(--y);
 }
+.task-detail-workflow-change {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--y);
+  border-radius: 6px;
+  font-size: 0.75rem;
+}
+.task-detail-workflow-change-title {
+  color: var(--y);
+  font-weight: 600;
+}
+.task-detail-workflow-change-files {
+  margin: 0;
+  padding-left: 18px;
+}
 .task-detail-sync-error {
   display: flex;
   align-items: center;

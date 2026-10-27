@@ -7756,6 +7756,7 @@ describe("projects route", () => {
         filesChanged: 1,
         insertions: 2,
         deletions: 1,
+        workflowFiles: [],
       });
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
@@ -7828,6 +7829,7 @@ describe("projects route", () => {
         filesChanged: 0,
         insertions: 0,
         deletions: 0,
+        workflowFiles: [],
       });
 
       fs.rmSync(projectCwd, { recursive: true, force: true });
@@ -7923,6 +7925,7 @@ describe("projects route", () => {
         filesChanged: 0,
         insertions: 0,
         deletions: 0,
+        workflowFiles: [],
       });
 
       // With base=main: shows feature branch delta
@@ -7935,6 +7938,7 @@ describe("projects route", () => {
         filesChanged: 1,
         insertions: 3,
         deletions: 0,
+        workflowFiles: [],
       });
 
       // With an invalid base ref pattern: 400
@@ -8017,6 +8021,7 @@ describe("projects route", () => {
         filesChanged: 1,
         insertions: 3,
         deletions: 0,
+        workflowFiles: [],
       });
 
       fs.rmSync(remoteDir, { recursive: true, force: true });

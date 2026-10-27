@@ -190,6 +190,11 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
       return task;
     },
 
+    approveWorkflowChange: async (id, sha) => {
+      await api.approveWorkflowChange(id, sha);
+      void get().refreshTasks();
+    },
+
     rejectTask: async (id, feedback) => {
       const task = await api.rejectTask(id, feedback);
       // A reject can re-seed a fresh session in the same worktree

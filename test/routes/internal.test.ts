@@ -1855,8 +1855,79 @@ describe("internal routes (agent role, issue #26)", () => {
     // { isRepo, status }, for the same "durable vs. transient" reason.
     expect(res.json()).toEqual({
       isRepo: true,
-      stats: { filesChanged: 1, insertions: 1, deletions: 0 },
+      stats: { filesChanged: 1, insertions: 1, deletions: 0, workflowFiles: [] },
     });
+
+    process.env.PROJECTS_ROOTS = previousRoots;
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("fresh=1 bypasses the diff-stat cache so the workflow-change gate sees a just-made edit", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-diff-fresh-root-"));
+    const cwd = path.join(repoRoot, "real-repo");
+    fs.mkdirSync(cwd, { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
+    git("init", "-b", "main");
+    fs.writeFileSync(path.join(cwd, "a.txt"), "one\n");
+    git("add", "-A");
+    git("commit", "-m", "initial", "--no-verify");
+
+    const previousRoots = process.env.PROJECTS_ROOTS;
+    process.env.PROJECTS_ROOTS = repoRoot;
+    const app = await buildApp();
+    const get = (qs = "") =>
+      app.inject({
+        method: "GET",
+        url: `/internal/git-diff?cwd=${encodeURIComponent(cwd)}${qs}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+
+    expect((await get()).json().stats.workflowFiles).toEqual([]);
+    fs.mkdirSync(path.join(cwd, ".github", "workflows"), { recursive: true });
+    fs.writeFileSync(path.join(cwd, ".github", "workflows", "ci.yml"), "name: ci\n");
+    git("add", "-A");
+    // Cached: the stale, workflow-free answer is still served.
+    expect((await get()).json().stats.workflowFiles).toEqual([]);
+    expect((await get("&fresh=1")).json().stats.workflowFiles).toEqual([
+      ".github/workflows/ci.yml",
+    ]);
+
+    process.env.PROJECTS_ROOTS = previousRoots;
+    fs.rmSync(repoRoot, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("base=AUTO reports baseResolved so a caller can tell 'no base ref' from 'no changes'", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "internal-git-diff-auto-root-"));
+    const cwd = path.join(repoRoot, "real-repo");
+    fs.mkdirSync(cwd, { recursive: true });
+    const git = (...args: string[]) =>
+      execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
+    git("init", "-b", "main");
+    fs.writeFileSync(path.join(cwd, "a.txt"), "one\n");
+    git("add", "-A");
+    git("commit", "-m", "initial", "--no-verify");
+
+    const previousRoots = process.env.PROJECTS_ROOTS;
+    process.env.PROJECTS_ROOTS = repoRoot;
+    const app = await buildApp();
+    const get = (qs: string) =>
+      app.inject({
+        method: "GET",
+        url: `/internal/git-diff?cwd=${encodeURIComponent(cwd)}${qs}`,
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+
+    // No origin/* ref yet: AUTO resolves to nothing.
+    expect((await get("&base=AUTO&fresh=1")).json().baseResolved).toBe(false);
+    git("update-ref", "refs/remotes/origin/main", "HEAD");
+    expect((await get("&base=AUTO&fresh=1")).json().baseResolved).toBe(true);
+    // An explicit base carries no flag: there was nothing to resolve.
+    expect((await get("&base=main&fresh=1")).json()).not.toHaveProperty("baseResolved");
 
     process.env.PROJECTS_ROOTS = previousRoots;
     fs.rmSync(repoRoot, { recursive: true, force: true });

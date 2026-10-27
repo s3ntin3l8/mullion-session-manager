@@ -8,9 +8,10 @@ import {
   listInstallations,
   getAuthenticatedApp,
   computeKeyFingerprint,
+  mintWorkflowWriteToken,
   GitHubAppError,
+  type InstallationTokenScope,
 } from "./github-app.js";
-import type { InstallationTokenScope } from "./github-app.js";
 import { DecryptionError } from "./encryption.js";
 import { GitHubApiError } from "./github.js";
 import { githubApiFetch } from "./github-fetch.js";
@@ -483,7 +484,7 @@ export async function resolveGitHubToken(
   // "checks" is excluded on purpose: GitHub only lets a GitHub App create
   // check runs, so a PAT/OAuth fallback for it can never succeed. Use
   // `resolveChecksToken` (#1790).
-  scope: Exclude<InstallationTokenScope, "checks" | "checks-read"> = "write",
+  scope: Exclude<InstallationTokenScope, "checks" | "checks-read" | "workflows"> = "write",
 ): Promise<string | null> {
   try {
     // Hermes review, PR #504: the credentials read (which decrypts the
@@ -653,6 +654,45 @@ export function recordChecksMarkerOutcome(
 /** Test-only reset. */
 export function clearChecksMarkerOutcomesForTests(): void {
   checksOutcomes.clear();
+}
+
+/**
+ * The App token that may push `.github/workflows/` changes, or the reason it
+ * could not be minted. Unlike `resolveGitHubToken` there is NO PAT/OAuth
+ * fallback: a workflow edit going out under the operator's own broad
+ * credential is exactly what the workflow-change approval gate exists to
+ * prevent, so when the App cannot mint it the caller must surface
+ * `detail` and stop. Call only for a head commit the operator has approved.
+ */
+export async function resolveWorkflowWriteToken(
+  app: FastifyInstance,
+  repo: { owner: string; repo: string },
+): Promise<{ ok: true; token: string } | { ok: false; detail: string }> {
+  const appCreds = getGitHubAppCredentials(app);
+  if (!appCreds) {
+    return { ok: false, detail: "No GitHub App is configured to push workflow changes" };
+  }
+  try {
+    const result = await mintWorkflowWriteToken(
+      appCreds.appId,
+      appCreds.privateKeyPem,
+      repo.owner,
+      repo.repo,
+    );
+    if (result.ok) return { ok: true, token: result.token };
+    return {
+      ok: false,
+      detail:
+        result.status === 422
+          ? "The GitHub App has not been granted Workflows: write on this repository — approve the permission in the App's settings, then retry"
+          : `Could not mint a workflows token: ${result.detail}`,
+    };
+  } catch (err) {
+    if (err instanceof DecryptionError || err instanceof GitHubApiError) {
+      return { ok: false, detail: `Could not mint a workflows token: ${err.message}` };
+    }
+    throw err;
+  }
 }
 
 /**
