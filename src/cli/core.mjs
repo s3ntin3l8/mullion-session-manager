@@ -1009,7 +1009,7 @@ const sessionCommands = {
         sessionId: id,
         mode: "rendered",
       });
-      io.stdout.write(`${rendered.text ?? ""}\n`);
+      if (rendered.text) io.stdout.write(`${rendered.text}\n`);
       return { streamed: true };
     }
     const result = await client.request("sessions.scrollback", { sessionId: id });

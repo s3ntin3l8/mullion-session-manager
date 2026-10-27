@@ -2632,7 +2632,9 @@ export async function internalRoutes(app: FastifyInstance) {
       // where the PTY's real size is known.
       if (request.query.mode === "rendered") {
         return {
-          text: session ? await renderScrollback(session.getScrollback(), session.size) : "",
+          text: session
+            ? await renderScrollback(session.getRenderableScrollback(), session.size)
+            : "",
         };
       }
       return { b64: session ? session.getScrollback().toString("base64") : "" };

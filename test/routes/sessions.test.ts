@@ -1362,6 +1362,42 @@ describe("sessions route", () => {
       await app.close();
     });
 
+    it("?mode=rendered keeps the whole history for a session that is LIVE on the alternate screen (issue #2112)", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = created.json().id;
+      await waitUntil(async () => {
+        const list = await app.inject({
+          method: "GET",
+          url: `/api/sessions?projectId=${projectId}`,
+        });
+        return list.json()[0]?.alive === true;
+      });
+      const pty = ptyMock.spawnedPtys[ptyMock.spawnedPtys.length - 1];
+      // Shell output, then a TUI that enters the alternate screen and stays there:
+      // getScrollback()'s preamble now opens with ESC[?1049h, which would put the
+      // whole replay into the (scrollback-less) alternate buffer.
+      pty.emitData(`${Array.from({ length: 60 }, (_, i) => `shell line ${i}`).join("\r\n")}\r\n`);
+      pty.emitData("\x1b[?1049h\x1b[HTUI screen\r\n");
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/sessions/${sessionId}/scrollback?mode=rendered`,
+      });
+      const { text } = res.json() as { text: string };
+      expect(text).toContain("shell line 0");
+      expect(text).toContain("shell line 59");
+      expect(text).toContain("--- alternate screen ---");
+      expect(text.endsWith("TUI screen")).toBe(true);
+
+      await app.close();
+    });
+
     it("?mode=rendered answers an empty text for an untracked session, and 400s an unknown mode", async () => {
       const app = await buildApp();
       const { sessions } = await import("../../src/db/schema.js");

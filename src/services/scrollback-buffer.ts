@@ -163,8 +163,8 @@ export class ScrollbackBuffer {
    * Everything currently buffered, oldest first, prefixed with `preamble`
    * bytes. The concat happens here (rather than exposing the raw slab list
    * to the caller) so this class stays the sole owner of the ring's internal
-   * representation. Session.getScrollback() is the only caller, passing its
-   * synthesized alt-screen/mouse-mode preamble (see that method's own doc
+   * representation. Session.getScrollback() passes its synthesized
+   * alt-screen/mouse-mode preamble (Session.getRenderableScrollback() passes none) (see that method's own doc
    * comment on Session for why that synthesis can't live here — it depends
    * on Session-level state this class doesn't and shouldn't track).
    */

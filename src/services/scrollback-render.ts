@@ -20,14 +20,16 @@ export interface RenderOptions {
   maxLines?: number;
 }
 
-function bufferLines(buffer: TerminalType["buffer"]["active"]): string[] {
+/** The last `limit` lines of `buffer`, trailing blank rows (the unused part of
+ * the screen) dropped. Walks backwards from the end so only the lines that are
+ * returned are ever built (the emulator keeps up to EMULATOR_SCROLLBACK_LINES). */
+function bufferLines(buffer: TerminalType["buffer"]["active"], limit: number): string[] {
+  const text = (i: number): string => buffer.getLine(i)?.translateToString(true) ?? "";
+  let end = buffer.length;
+  while (end > 0 && text(end - 1) === "") end--;
   const lines: string[] = [];
-  for (let i = 0; i < buffer.length; i++) {
-    lines.push(buffer.getLine(i)?.translateToString(true) ?? "");
-  }
-  // Trailing blank rows (the unused part of the screen) carry no information.
-  while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
-  return lines;
+  for (let i = end - 1; i >= 0 && lines.length < limit; i--) lines.push(text(i));
+  return lines.reverse();
 }
 
 /**
@@ -55,13 +57,16 @@ export async function renderScrollback(bytes: Uint8Array, opts: RenderOptions): 
   });
   try {
     await new Promise<void>((resolve) => term.write(bytes, resolve));
-    const normal = bufferLines(term.buffer.normal);
-    const lines =
-      term.buffer.active.type === "alternate"
-        ? [...normal, "--- alternate screen ---", ...bufferLines(term.buffer.alternate)]
-        : normal;
     const max = opts.maxLines ?? RENDERED_MAX_LINES;
-    return (lines.length > max ? lines.slice(lines.length - max) : lines).join("\n");
+    if (term.buffer.active.type !== "alternate") {
+      return bufferLines(term.buffer.normal, max).join("\n");
+    }
+    // Ended on the alternate screen: that screen is the part that matters, so it
+    // gets the line budget first and the normal buffer (what was on the terminal
+    // before the program switched) fills what is left.
+    const alt = bufferLines(term.buffer.alternate, max);
+    const normal = bufferLines(term.buffer.normal, Math.max(0, max - alt.length - 1));
+    return [...normal, "--- alternate screen ---", ...alt].join("\n");
   } finally {
     term.dispose();
   }

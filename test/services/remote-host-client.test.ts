@@ -1365,6 +1365,15 @@ describe("RemoteHostClient", () => {
     expect(await client().resolveRenderedScrollback("never-spawned")).toBe("");
   });
 
+  it("resolveRenderedScrollback renders the raw bytes itself when an older agent ignores mode=rendered (issue #2112)", async () => {
+    // A pre-#2112 agent has no querystring schema: it answers the raw {b64}.
+    const raw = "\r\x1b[2K| thinking\r\x1b[2Kfinal answer\r\n";
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, { b64: Buffer.from(raw, "utf8").toString("base64") }),
+    );
+    expect(await client().resolveRenderedScrollback("42")).toBe("final answer");
+  });
+
   it("resolves an empty Buffer for a session id the agent has never tracked", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, { b64: "" }));
     const result = await client().resolveScrollback("never-spawned");

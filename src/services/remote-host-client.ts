@@ -1,3 +1,4 @@
+import { renderScrollback } from "./scrollback-render.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -1912,10 +1913,18 @@ export class RemoteHostClient {
   /** The session's scrollback rendered as plain text (issue #2112) — rendered
    * ON the agent, where the PTY's real size is known, so only text crosses. */
   async resolveRenderedScrollback(id: string): Promise<string> {
-    const result = await this.request<{ text?: string }>(
+    const result = await this.request<{ text?: string; b64?: string }>(
       `/internal/sessions/${encodeURIComponent(id)}/scrollback?mode=rendered`,
     );
-    return typeof result.text === "string" ? result.text : "";
+    if (typeof result.text === "string") return result.text;
+    // An agent build that predates this mode ignores `?mode=` and answers the raw
+    // `{b64}`; an empty string there would read as "no output". Render the bytes
+    // here instead, at a default size (that older agent cannot tell us the real
+    // one), so a mixed-version fleet stays readable.
+    if (typeof result.b64 === "string" && result.b64.length > 0) {
+      return renderScrollback(Buffer.from(result.b64, "base64"), { cols: 120, rows: 40 });
+    }
+    return "";
   }
 
   /** Stashes a seed prompt (issue #271) on this agent's own PtyManager, for

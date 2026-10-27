@@ -59,6 +59,22 @@ describe("renderScrollback (issue #2112)", () => {
     expect(out.split("\n")).toEqual(["l47", "l48", "l49"]);
   });
 
+  it("budgets the line cap to the alternate screen first, then the normal buffer", async () => {
+    const normal = Array.from({ length: 20 }, (_, i) => `n${i}`).join("\r\n");
+    const out = await renderScrollback(
+      enc(`${normal}\r\n${ESC}[?1049h${ESC}[Halt1\r\nalt2\r\nalt3`),
+      { cols: 20, rows: 5, maxLines: 6 },
+    );
+    expect(out.split("\n")).toEqual([
+      "n18",
+      "n19",
+      "--- alternate screen ---",
+      "alt1",
+      "alt2",
+      "alt3",
+    ]);
+  });
+
   it("returns an empty string for no output", async () => {
     expect(await renderScrollback(new Uint8Array(), size)).toBe("");
   });

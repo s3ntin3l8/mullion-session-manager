@@ -2547,6 +2547,16 @@ describe("runCommand", () => {
       });
       expect(io.written.map((b) => b.toString()).join("")).toBe("the final answer\n");
     });
+
+    it("session logs --text prints nothing for an empty screen (issue #2112)", async () => {
+      const io = fakeIo();
+      const code = await runCommand(["logs", "1", "--text"], {
+        client: fakeClient({ request: vi.fn(async () => ({ text: "" })) }),
+        io,
+      });
+      expect(code).toBe(0);
+      expect(io.written).toEqual([]);
+    });
   });
 
   describe("project/preview/dock commands", () => {

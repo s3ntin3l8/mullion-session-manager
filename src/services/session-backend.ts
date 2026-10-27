@@ -468,7 +468,7 @@ class LocalBackend implements SessionBackend {
   async getRenderedScrollback(id: string): Promise<string> {
     const session = this.app.pty.get(id);
     if (!session) return "";
-    return renderScrollback(session.getScrollback(), session.size);
+    return renderScrollback(session.getRenderableScrollback(), session.size);
   }
 
   listSessionProcesses(id: string): Promise<CgroupProcess[]> {
