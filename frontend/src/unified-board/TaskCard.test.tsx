@@ -549,6 +549,44 @@ describe("UnifiedBoard task columns", () => {
       expect(document.querySelector(".task-card-sync-error")).toBeNull();
     });
 
+    it("shows one warning for a workflow hold that supersedes a rejected push", () => {
+      tasks = [
+        makeTask({
+          id: 1,
+          status: "reviewing",
+          workflowChange: hold,
+          githubSyncError:
+            "refusing to allow a GitHub App to create or update workflow `.github/workflows/ci.yml` without `workflows` permission",
+        }),
+      ];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.getByRole("status")).toHaveTextContent("Needs workflow approval");
+      expect(document.querySelector(".task-card-sync-error")).toBeNull();
+      expect(document.querySelector(".task-card-sync-error-text")).toBeNull();
+    });
+
+    it("combines an unrelated sync error into the workflow warning without a second glyph", () => {
+      tasks = [
+        makeTask({
+          id: 1,
+          status: "reviewing",
+          workflowChange: hold,
+          githubSyncError: "403 Forbidden",
+        }),
+      ];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      const strip = screen.getByRole("status");
+      expect(strip).toHaveTextContent("Needs workflow approval · GitHub sync error");
+      expect(strip).toHaveAccessibleName(
+        "Needs workflow approval; GitHub sync error: 403 Forbidden",
+      );
+      expect(strip).toHaveAttribute("title", expect.stringContaining("403 Forbidden"));
+      expect(document.querySelector(".task-card-sync-error")).toBeNull();
+      expect(document.querySelector(".task-card-sync-error-text")).toHaveTextContent(
+        "403 Forbidden",
+      );
+    });
+
     it("clicking the strip opens the task drawer, where the approval control lives", async () => {
       const user = userEvent.setup();
       tasks = [makeTask({ id: 9, status: "reviewing", workflowChange: hold })];

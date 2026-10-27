@@ -22,7 +22,7 @@ import { sessionPrDotClass } from "./lib/sidebarStatus.js";
 import { Markdown } from "./ui/Markdown.js";
 import { STATUS_PRESENTATION, formatStatusLabel } from "./sessionStatus.js";
 import { needsHumanText } from "./needsHuman.js";
-import { parseWorkflowChange } from "./workflowChange.js";
+import { parseWorkflowChange, visibleTaskSyncError } from "./workflowChange.js";
 
 const UNSET_AGENT = "";
 
@@ -192,6 +192,7 @@ export function TaskDetail({
             t.parentIssueRepo === thisTaskRepoSlug,
         )
       : [];
+  const syncError = visibleTaskSyncError(task);
 
   return (
     <div className="task-detail cmux-scroll">
@@ -202,8 +203,10 @@ export function TaskDetail({
         </span>
       </div>
 
-      {/* One row for every action this task can take right now, directly
-          under the title — not after the description, where a long body
+      <WorkflowChangeApproval task={task} />
+
+      {/* One row for the remaining task actions, below any workflow approval
+          panel and above the description, where a long body
           used to push Move/Claim/Approve/etc. below the fold. No chrome of
           its own (no padding/border/min-height): TaskActions returns null
           for claimed/in_progress/done and DeleteTaskAction renders nothing
@@ -444,14 +447,12 @@ export function TaskDetail({
           token). Previously invisible outside a server-log grep; this is
           durable across remounts, unlike TaskActions' own transient
           setError. */}
-      {task.githubSyncError && (
+      {syncError && (
         <div className="task-detail-sync-error">
           <GitHubIcon size={12} />
-          GitHub sync: {task.githubSyncError}
+          GitHub sync: {syncError}
         </div>
       )}
-
-      <WorkflowChangeApproval task={task} />
 
       {/* #667 — this is where "why isn't this moving?" actually gets
           answered; the board card (UnifiedBoard.tsx's TaskCard) only ever
@@ -1046,35 +1047,37 @@ function TaskActions({ task }: { task: Task }) {
 
   return (
     <div className="task-detail-actions">
-      <button
-        className="notif-gate-btn notif-gate-approve"
-        disabled={submitting || !taskMasterEnabled}
-        onClick={async () => {
-          setSubmitting(true);
-          setError(null);
-          try {
-            await approveTask(task.id);
-          } catch (err) {
-            // #1020 — branch on the 409's machine-readable `code` (per
-            // api/client.ts's guidance), not the message text. Only the
-            // tracking-epic warning surfaces the advisory confirmation; any
-            // other 409 falls through to the generic error path.
-            if (
-              err instanceof ApiError &&
-              err.statusCode === 409 &&
-              err.code === "tracking-epic-with-open-sub-issues"
-            ) {
-              setTrackingEpicWarning(err.message);
-            } else {
-              setError(err instanceof ApiError ? err.message : "Failed to approve task");
+      {!parseWorkflowChange(task.workflowChange) && (
+        <button
+          className="notif-gate-btn notif-gate-approve"
+          disabled={submitting || !taskMasterEnabled}
+          onClick={async () => {
+            setSubmitting(true);
+            setError(null);
+            try {
+              await approveTask(task.id);
+            } catch (err) {
+              // #1020 — branch on the 409's machine-readable `code` (per
+              // api/client.ts's guidance), not the message text. Only the
+              // tracking-epic warning surfaces the advisory confirmation; any
+              // other 409 falls through to the generic error path.
+              if (
+                err instanceof ApiError &&
+                err.statusCode === 409 &&
+                err.code === "tracking-epic-with-open-sub-issues"
+              ) {
+                setTrackingEpicWarning(err.message);
+              } else {
+                setError(err instanceof ApiError ? err.message : "Failed to approve task");
+              }
+            } finally {
+              setSubmitting(false);
             }
-          } finally {
-            setSubmitting(false);
-          }
-        }}
-      >
-        Approve
-      </button>
+          }}
+        >
+          Approve task
+        </button>
+      )}
       {/* Issue #1345 — visible only for exactly the state the backend
           route will actually accept, mirroring its own three checks
           (routes/tasks.ts): lastReviewVerdict === "inconclusive",

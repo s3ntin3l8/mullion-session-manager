@@ -1,5 +1,6 @@
 // The workflow-change approval gate's payload (`tasks.workflowChange`, set by
 // the backend's task-workflow-gate.ts while a push waits on the operator).
+import type { Task } from "./api/index.js";
 
 export interface WorkflowChange {
   sha: string;
@@ -17,4 +18,21 @@ export function parseWorkflowChange(raw: string | null | undefined): WorkflowCha
     // a corrupt value reads as "nothing waiting"
   }
   return null;
+}
+
+/** The workflow hold supersedes an earlier push rejection, but not a new
+ * token-mint failure or an unrelated GitHub error. Keep the stored error so
+ * it becomes visible again if the hold clears without a successful push. */
+export function visibleTaskSyncError(
+  task: Pick<Task, "workflowChange" | "githubSyncError">,
+): string | null {
+  const error = task.githubSyncError;
+  if (
+    parseWorkflowChange(task.workflowChange) &&
+    error?.includes("refusing to allow a GitHub App to create or update workflow") &&
+    error.includes("without `workflows` permission")
+  ) {
+    return null;
+  }
+  return error;
 }
