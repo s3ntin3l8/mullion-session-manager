@@ -1,9 +1,11 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, or, sql } from "drizzle-orm";
 import path from "node:path";
+import fs from "node:fs/promises";
 import { projects, sessions, tasks } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 import { isGitRepo } from "./git-status.js";
+import { resolveBackend } from "./session-backend.js";
 
 // Task states a worktree is still needed in (a `done`/`cancelled` task keeps its
 // `worktreePath` forever, so it must not count). Shared with routes/projects.ts's
@@ -64,4 +66,157 @@ export function worktreeInUse(app: FastifyInstance, worktreePath: string): boole
   return resumable.some(
     (task) => task.worktreePath !== null && path.resolve(task.worktreePath) === resolvedTarget,
   );
+}
+
+/** Resolve an existing ancestor without blocking the event loop. */
+async function canonicalPath(value: string): Promise<string> {
+  const resolved = path.resolve(value);
+  let prefix = resolved;
+  for (;;) {
+    try {
+      const real = await fs.realpath(prefix);
+      return path.resolve(real, path.relative(prefix, resolved));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const parent = path.dirname(prefix);
+      if (parent === prefix) throw error;
+      prefix = parent;
+    }
+  }
+}
+
+/** Sessions on the worktree's host whose recorded or live cwd is inside it.
+ * Ended sessions remain blockers until their process is confirmed dead. */
+export async function sessionsUsingWorktree(
+  app: FastifyInstance,
+  worktreePath: string,
+  hostId: string,
+  excludeId?: number,
+  stopOnActive = false,
+): Promise<{ active: number[]; alive: number[]; unknown: number[] }> {
+  const resolvedPath = path.resolve(worktreePath);
+  const effectiveCwd = sql<string>`coalesce(${sessions.cwd}, ${projects.cwd})`;
+  const hostMatch = sql`coalesce(${sessions.hostId}, ${projects.hostId}) = ${hostId}`;
+  let recordedMatch = sql`substr(${effectiveCwd}, 1, ${resolvedPath.length}) = ${resolvedPath}`;
+  const liveIds: number[] = [];
+  const matchedPaths = new Set<string>();
+  const checkedPaths = new Set<string>();
+  const uncertainPaths = new Set<string>();
+  const uncertainLive = new Set<number>();
+  if (hostId === LOCAL_HOST_ID) {
+    const canonicalTarget = await canonicalPath(resolvedPath);
+    const seen = new Set<string>();
+    const aliases: string[] = [];
+    const readPaths = () =>
+      app.db
+        .selectDistinct({ cwd: effectiveCwd })
+        .from(sessions)
+        .innerJoin(projects, eq(sessions.projectId, projects.id))
+        .where(hostMatch)
+        .all()
+        .filter(({ cwd }) => !seen.has(cwd));
+    // Repeat when sessions appeared while filesystem resolution was in flight.
+    // Bounded retries fail closed if the set of paths keeps changing.
+    for (let round = 0; round < 3; round++) {
+      const paths = readPaths();
+      if (paths.length === 0) break;
+      let next = 0;
+      await Promise.all(
+        Array.from({ length: Math.min(16, paths.length) }, async () => {
+          for (;;) {
+            const entry = paths[next++];
+            if (!entry) return;
+            seen.add(entry.cwd);
+            checkedPaths.add(entry.cwd);
+            try {
+              if (isWithin(await canonicalPath(entry.cwd), canonicalTarget)) {
+                aliases.push(entry.cwd);
+                matchedPaths.add(entry.cwd);
+              }
+            } catch {
+              uncertainPaths.add(entry.cwd);
+              aliases.push(entry.cwd);
+            }
+          }
+        }),
+      );
+      if (round === 2 && readPaths().length > 0)
+        throw new Error("Session paths changed during worktree check");
+    }
+    // A session appearing after the last scan at a lexical child still blocks.
+    if (aliases.length > 0) recordedMatch = or(recordedMatch, inArray(effectiveCwd, aliases))!;
+    const liveSnapshot = app.pty.list();
+    for (const session of liveSnapshot) {
+      if (!session.liveCwd) continue;
+      const id = Number(session.id);
+      if (!Number.isInteger(id)) continue;
+      try {
+        if (isWithin(await canonicalPath(session.liveCwd), canonicalTarget)) liveIds.push(id);
+      } catch {
+        uncertainLive.add(id);
+        liveIds.push(id);
+      }
+    }
+    // Live-cwd resolution also yields; do not use a path snapshot that changed
+    // while it was in progress.
+    const liveKey = (sessions: ReturnType<typeof app.pty.list>) =>
+      JSON.stringify(sessions.map(({ id, liveCwd }) => [id, liveCwd]).sort());
+    if (readPaths().length > 0 || liveKey(liveSnapshot) !== liveKey(app.pty.list())) {
+      throw new Error("Session paths changed during worktree check");
+    }
+  }
+  const rows = app.db
+    .select({
+      id: sessions.id,
+      status: sessions.status,
+      cwd: sessions.cwd,
+      projectCwd: projects.cwd,
+    })
+    .from(sessions)
+    .innerJoin(projects, eq(sessions.projectId, projects.id))
+    .where(
+      and(
+        hostMatch,
+        liveIds.length > 0 ? or(recordedMatch, inArray(sessions.id, liveIds)) : recordedMatch,
+      ),
+    )
+    .all();
+  const matching = rows.filter((row) => {
+    if (row.id === excludeId) return false;
+    const recorded = row.cwd ?? row.projectCwd;
+    if (hostId !== LOCAL_HOST_ID) return isWithin(recorded, resolvedPath);
+    return (
+      !checkedPaths.has(recorded) ||
+      matchedPaths.has(recorded) ||
+      uncertainPaths.has(recorded) ||
+      liveIds.includes(row.id)
+    );
+  });
+  const definitelyInside = (row: (typeof matching)[number]) => {
+    const recorded = row.cwd ?? row.projectCwd;
+    return (
+      hostId !== LOCAL_HOST_ID ||
+      matchedPaths.has(recorded) ||
+      (liveIds.includes(row.id) && !uncertainLive.has(row.id))
+    );
+  };
+  const active = matching
+    .filter((row) => row.status === "active" && definitelyInside(row))
+    .map((row) => row.id);
+  const unknown = matching
+    .filter((row) => row.status === "active" && !definitelyInside(row))
+    .map((row) => row.id);
+  if (stopOnActive && active.length > 0) return { active, alive: [], unknown };
+  const ended = matching.filter((row) => row.status !== "active");
+  const alive: number[] = [];
+  if (ended.length > 0) {
+    const states = await resolveBackend(app, hostId).liveness(ended.map((row) => String(row.id)));
+    for (const row of ended) {
+      const state = states[String(row.id)];
+      if (state === "dead") continue;
+      if (state === "alive" && definitelyInside(row)) alive.push(row.id);
+      else unknown.push(row.id);
+    }
+  }
+  return { active, alive, unknown };
 }

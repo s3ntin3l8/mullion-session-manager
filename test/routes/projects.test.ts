@@ -7205,6 +7205,185 @@ describe("projects route", () => {
       await app.close();
     });
 
+    it.each(["active", "alive", "unknown"] as const)(
+      "guards a cross-project session that is %s, with a force override",
+      async (state) => {
+        const app = await buildApp();
+        const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+        const { projects, sessions } = await import("../../src/db/schema.js");
+        const otherProjectId = Number(
+          app.db
+            .insert(projects)
+            .values({
+              name: "other-worktree-project",
+              cwd: worktreePath,
+            })
+            .run().lastInsertRowid,
+        );
+        const sessionId = Number(
+          app.db
+            .insert(sessions)
+            .values({
+              projectId: otherProjectId,
+              command: "bash",
+              cwd: worktreePath,
+              status: state === "active" ? "active" : "killed",
+            })
+            .run().lastInsertRowid,
+        );
+        const liveness = vi.spyOn(app.pty, "isMasterAliveStateBatch").mockResolvedValue({
+          [String(sessionId)]: state === "active" ? "dead" : state,
+        });
+        try {
+          const refused = await app.inject({
+            method: "POST",
+            url: `/api/projects/${projectId}/git-worktree-remove`,
+            payload: { worktreePath },
+          });
+          expect(refused.json()).toEqual({
+            removed: false,
+            reason: "sessions-active",
+            detail: String(sessionId),
+          });
+          expect(fs.existsSync(worktreePath)).toBe(true);
+          const forced = await app.inject({
+            method: "POST",
+            url: `/api/projects/${projectId}/git-worktree-remove`,
+            payload: { worktreePath, force: true },
+          });
+          expect(forced.json()).toEqual({ removed: true });
+        } finally {
+          liveness.mockRestore();
+          fs.rmSync(projectCwd, { recursive: true, force: true });
+          await app.close();
+        }
+      },
+    );
+
+    it("guards a session using a symlink alias to the worktree", async () => {
+      const app = await buildApp();
+      const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+      const alias = path.join(projectCwd, "alias");
+      fs.symlinkSync(worktreePath, alias);
+      const { projects, sessions } = await import("../../src/db/schema.js");
+      const otherId = Number(
+        app.db.insert(projects).values({ name: "alias-project", cwd: alias }).run().lastInsertRowid,
+      );
+      const sessionId = Number(
+        app.db.insert(sessions).values({ projectId: otherId, command: "bash", cwd: alias }).run()
+          .lastInsertRowid,
+      );
+      try {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath },
+        });
+        expect(res.json()).toEqual({
+          removed: false,
+          reason: "sessions-active",
+          detail: String(sessionId),
+        });
+        expect(fs.existsSync(worktreePath)).toBe(true);
+      } finally {
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      }
+    });
+
+    it("reports an unresolvable session path and permits force", async () => {
+      const app = await buildApp();
+      const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+      const loop = path.join(projectCwd, "loop");
+      fs.symlinkSync(loop, loop);
+      const { projects, sessions } = await import("../../src/db/schema.js");
+      const otherId = Number(
+        app.db.insert(projects).values({ name: "unknown-path-project", cwd: loop }).run()
+          .lastInsertRowid,
+      );
+      const sessionId = Number(
+        app.db.insert(sessions).values({ projectId: otherId, command: "bash", cwd: loop }).run()
+          .lastInsertRowid,
+      );
+      try {
+        const refused = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath },
+        });
+        expect(refused.json()).toEqual({
+          removed: false,
+          reason: "sessions-active",
+          detail: String(sessionId),
+        });
+        const forced = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath, force: true },
+        });
+        expect(forced.json()).toEqual({ removed: true });
+      } finally {
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      }
+    });
+
+    it("does not block on a session in a sibling with the same path prefix", async () => {
+      const app = await buildApp();
+      const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+      const sibling = `${worktreePath}-other`;
+      fs.mkdirSync(sibling);
+      const { sessions } = await import("../../src/db/schema.js");
+      app.db.insert(sessions).values({ projectId, command: "bash", cwd: sibling }).run();
+      try {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath },
+        });
+        expect(res.json()).toEqual({ removed: true });
+        expect(fs.existsSync(sibling)).toBe(true);
+      } finally {
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      }
+    });
+
+    it("detects a session started while paths are being resolved", async () => {
+      const app = await buildApp();
+      const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+      const { sessions } = await import("../../src/db/schema.js");
+      app.db.insert(sessions).values({ projectId, command: "bash", cwd: projectCwd }).run();
+      let addedId = 0;
+      const realpath = fs.promises.realpath.bind(fs.promises);
+      const spy = vi.spyOn(fs.promises, "realpath").mockImplementation(async (p, options) => {
+        if (p === projectCwd && !addedId) {
+          addedId = Number(
+            app.db.insert(sessions).values({ projectId, command: "bash", cwd: worktreePath }).run()
+              .lastInsertRowid,
+          );
+        }
+        return realpath(p, options as never) as Promise<string>;
+      });
+      try {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath },
+        });
+        expect(addedId).toBeGreaterThan(0);
+        expect(res.json()).toEqual({
+          removed: false,
+          reason: "sessions-active",
+          detail: String(addedId),
+        });
+      } finally {
+        spy.mockRestore();
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      }
+    });
+
     it("does not report sessions-active for a done task's stale worktreePath reference (independent review, PR #505)", async () => {
       // sessionsUnderWorktree's task-row match must share the same
       // RESUMABLE_TASK_STATUSES scope branchClaimedByResumableTask already
@@ -7397,7 +7576,9 @@ describe("projects route", () => {
         });
 
         const removeListedWorktree = vi.fn().mockResolvedValue({ removed: true });
-        const liveness = vi.fn().mockResolvedValue({ [String(ownerId)]: "dead" });
+        const liveness = vi.fn(async (ids: string[]) =>
+          Object.fromEntries(ids.map((id) => [id, "dead"])),
+        );
         const resolveBackendSpy = vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue({
           removeListedWorktree,
           liveness,

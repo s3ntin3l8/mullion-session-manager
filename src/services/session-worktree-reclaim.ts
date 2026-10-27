@@ -29,7 +29,6 @@
 // (plugins/session-worktree-sweep.ts) for the ones that were not yet pushed or
 // merged at that moment — an agent has no database and no timers of its own.
 
-import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { and, asc, eq, isNotNull, isNull, ne, sql } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
@@ -37,6 +36,7 @@ import type { GitBranchInfo } from "../shared/types.js";
 import { resolveHostBranches, resolveHostGitStatus } from "./host-git.js";
 import { resolveBackend } from "./session-backend.js";
 import { resolveSessionHostId } from "./session-live-info.js";
+import { sessionsUsingWorktree } from "./worktree-usage.js";
 
 export type KeptReason =
   | "in-use"
@@ -87,57 +87,6 @@ function branchIsSafe(branch: GitBranchInfo): boolean {
   if (branch.isMerged === true) return true;
   if (branch.upstreamGone === true) return true;
   return branch.upstream !== undefined && (branch.ahead ?? 0) === 0;
-}
-
-function isWithin(candidate: string, directory: string): boolean {
-  const resolved = path.resolve(candidate);
-  return resolved === directory || resolved.startsWith(directory + path.sep);
-}
-
-/**
- * Another session working inside the worktree, on this host. Checked against
- * the primary's database, which knows every session on every host —
- * `worktreeInUse` (worktree-usage.ts) only sees the local ones.
- *
- * `"in-use"`: one is active, or an ENDED one's process is still alive — a
- * cascade kill marks children killed while their agents may still be exiting
- * inside the directory, and a kill whose `terminate` failed is the same.
- * `"unknown"`: an ended one whose process could not be confirmed gone either
- * way. `null`: nothing else is in there.
- *
- * Candidates are narrowed in SQL to the rows whose `cwd` starts with the
- * worktree's path, so a pass over many sessions never loads every active row;
- * only those few are then checked for a real path boundary and their host.
- */
-async function otherSessionsInside(
-  app: FastifyInstance,
-  row: typeof sessions.$inferSelect,
-  hostId: string,
-): Promise<"in-use" | "unknown" | null> {
-  const worktree = path.resolve(row.cwd as string);
-  const candidates = app.db
-    .select()
-    .from(sessions)
-    .where(
-      and(
-        ne(sessions.id, row.id),
-        isNotNull(sessions.cwd),
-        sql`substr(${sessions.cwd}, 1, ${worktree.length}) = ${worktree}`,
-      ),
-    )
-    .all()
-    .filter(
-      (other) =>
-        isWithin(other.cwd as string, worktree) && resolveSessionHostId(app, other) === hostId,
-    );
-  if (candidates.length === 0) return null;
-  if (candidates.some((other) => other.status === "active")) return "in-use";
-
-  const ids = candidates.map((other) => String(other.id));
-  const liveness = await resolveBackend(app, hostId).liveness(ids);
-  if (ids.some((id) => liveness[id] === "alive")) return "in-use";
-  if (ids.some((id) => liveness[id] !== "dead")) return "unknown";
-  return null;
 }
 
 /** Stamps the attempt, whatever happens next — it is what the sweep orders by. */
@@ -211,9 +160,9 @@ async function reclaim(app: FastifyInstance, sessionId: number): Promise<Reclaim
     return { status: "kept", reason };
   };
 
-  const sibling = await otherSessionsInside(app, row, hostId);
-  if (sibling === "in-use") return keep("in-use");
-  if (sibling === "unknown") return { status: "deferred" };
+  const sibling = await sessionsUsingWorktree(app, row.cwd, hostId, row.id, true);
+  if (sibling.active.length > 0 || sibling.alive.length > 0) return keep("in-use");
+  if (sibling.unknown.length > 0) return { status: "deferred" };
 
   // The session's own process, too. A kill whose `terminate` failed still
   // marks the row ended, and its agent may be running in this directory yet;
