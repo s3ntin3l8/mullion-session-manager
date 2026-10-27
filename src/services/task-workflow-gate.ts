@@ -8,12 +8,11 @@
 // (github-integration.ts's resolveWorkflowWriteToken). Any commit after the
 // approval changes the head and voids it.
 //
-// The enforcement is two-layered on purpose. This module decides whether to
-// hold and whether an approval covers the current head; GitHub itself is the
-// backstop: with no `workflows` scope in the token it rejects a push that
-// touches the directory, so a host this module cannot read (an agent build
-// that predates the gate) fails closed at the remote instead of slipping a
-// workflow edit through.
+// This module is the enforcement, not GitHub. Only an App installation token
+// is refused by GitHub for lacking `workflows`; the shared PAT/OAuth fallback
+// (resolveGitHubToken) may carry the `workflow` scope and would push a workflow
+// edit unchallenged. So anything this module cannot positively verify as free
+// of workflow changes is `unverified` and waits, rather than reading as clear.
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { tasks } from "../db/schema.js";
@@ -32,8 +31,12 @@ export interface WorkflowChange {
 }
 
 export type WorkflowGate =
-  /** Nothing under `.github/workflows/` changed (or this host cannot say). */
+  /** Verified: nothing under `.github/workflows/` changed. */
   | { kind: "clear" }
+  /** The changed files could not be read (a diff timeout, no base ref, an
+   * unreachable host, an agent build that predates the gate). Never treated
+   * as clear: the push waits and is retried, with no operator action. */
+  | { kind: "unverified"; detail: string }
   /** The operator approved exactly this head commit. */
   | { kind: "approved"; sha: string }
   /** Workflow files changed and no approval covers the current head. */
@@ -53,15 +56,19 @@ export function parseWorkflowChange(raw: string | null): WorkflowChange | null {
 }
 
 /** Workflow files the task's branch changes against the repo's default
- * base, read fresh (never the 5 s diff-stat cache), or `null` when this host
- * cannot answer — unreachable, or an agent build that predates the gate. */
+ * base, read fresh (never the 5 s diff-stat cache), or `null` when they could
+ * not be read. `null` is deliberately distinct from `[]` (verified none). */
 async function listWorkflowFiles(
   app: FastifyInstance,
   cwd: string,
   hostId: string,
 ): Promise<string[] | null> {
   if (hostId === LOCAL_HOST_ID) {
-    const stats = await getDiffStats(cwd, getDefaultBaseRef(cwd) ?? undefined, { fresh: true });
+    // No base ref -> no branch diff to inspect (`git diff HEAD` of a clean
+    // tree is empty whatever the branch holds), so that is "unknown", not "none".
+    const base = getDefaultBaseRef(cwd);
+    if (base === null) return null;
+    const stats = await getDiffStats(cwd, base, { fresh: true });
     return stats?.workflowFiles ?? null;
   }
   try {
@@ -90,6 +97,7 @@ async function resolveHeadSha(
  * Decides whether this task's branch may be pushed with the ordinary token.
  * An undeterminable head SHA with workflow changes present is `held` with an
  * empty sha: nothing can match it, so it can never be approved by accident.
+ * An unreadable file list is `unverified`, never `clear`.
  */
 export async function evaluateWorkflowGate(
   app: FastifyInstance,
@@ -98,7 +106,14 @@ export async function evaluateWorkflowGate(
 ): Promise<WorkflowGate> {
   if (!task.worktreePath) return { kind: "clear" };
   const files = await listWorkflowFiles(app, task.worktreePath, hostId);
-  if (files === null || files.length === 0) return { kind: "clear" };
+  if (files === null) {
+    return {
+      kind: "unverified",
+      detail:
+        "Could not verify whether this branch changes .github/workflows/ — the diff could not be read on its host (retrying; update the host agent if this persists)",
+    };
+  }
+  if (files.length === 0) return { kind: "clear" };
   const sha = (await resolveHeadSha(app, task.worktreePath, hostId)) ?? "";
   if (sha !== "" && sha === task.workflowApprovedSha) return { kind: "approved", sha };
   return { kind: "held", change: { sha, files } };
@@ -146,6 +161,7 @@ export async function approveWorkflowChange(
   const held = parseWorkflowChange(task.workflowChange);
   if (!held) return { ok: false, reason: "nothing-held" };
   const gate = await evaluateWorkflowGate(app, task, hostId);
+  if (gate.kind === "unverified") return { ok: false, reason: "unreadable" };
   if (gate.kind === "clear") {
     clearWorkflowHold(app, task);
     return { ok: false, reason: "nothing-held" };

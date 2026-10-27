@@ -40,13 +40,17 @@ const KILL_ESCALATION_MS = 2_000;
  * case — a repo with no commits yet has nothing to diff against), spawn
  * error, or timeout — "git failed" and "nothing to diff" are both just
  * "nothing to show" here, same posture as git-status.ts's runGitStatus. */
-function runGitDiffNumstat(cwd: string, baseRef?: string): Promise<string | null> {
+function runGitDiffNumstat(
+  cwd: string,
+  baseRef?: string,
+  flags: string[] = ["--numstat"],
+): Promise<string | null> {
   return new Promise((resolve) => {
     let stdout = "";
     let settled = false;
     const args = baseRef
-      ? ["-C", cwd, "diff", `${baseRef}...HEAD`, "--numstat"]
-      : ["-C", cwd, "diff", "HEAD", "--numstat"];
+      ? ["-C", cwd, "diff", `${baseRef}...HEAD`, ...flags]
+      : ["-C", cwd, "diff", "HEAD", ...flags];
     const child = spawnChild("git", [...GIT_NO_AUTO_GC, ...args], {
       stdio: ["ignore", "pipe", "ignore"],
       env: gitEnv(),
@@ -104,16 +108,26 @@ function parseNumstat(output: string): GitDiffStats {
   let filesChanged = 0;
   let insertions = 0;
   let deletions = 0;
-  const workflowFiles: string[] = [];
   for (const line of output.split("\n")) {
     if (line.trim() === "") continue;
-    const [added, removed, path] = line.split("\t");
+    const [added, removed] = line.split("\t");
     filesChanged++;
-    if (path?.includes(".github/workflows/")) workflowFiles.push(path);
     if (added !== "-") insertions += Number(added) || 0;
     if (removed !== "-") deletions += Number(removed) || 0;
   }
-  return { filesChanged, insertions, deletions, workflowFiles };
+  return { filesChanged, insertions, deletions };
+}
+
+const WORKFLOW_DIR = ".github/workflows/";
+
+/** Changed paths under `.github/workflows/` from `--name-only -z --no-renames`
+ * output. Not derived from `--numstat`: that prints a rename that shares a
+ * leading directory in brace form (`.github/{foo => workflows}/ci.yml`), whose
+ * text contains no `.github/workflows/` at all, so a `git mv` into the
+ * directory would read as no workflow change. `--no-renames` reports a rename
+ * as a delete plus an add with both full paths, and `-z` avoids C-quoting. */
+function parseWorkflowFiles(output: string): string[] {
+  return output.split("\0").filter((p) => p.startsWith(WORKFLOW_DIR));
 }
 
 /** Resolve the default base ref for a git working tree: the remote's HEAD
@@ -197,10 +211,16 @@ export async function getDiffStats(
     if (pending) return pending;
   }
 
-  const promise = runGitDiffNumstat(cwd, baseRef)
-    .then((output) => {
+  const promise = Promise.all([
+    runGitDiffNumstat(cwd, baseRef),
+    runGitDiffNumstat(cwd, baseRef, ["--name-only", "-z", "--no-renames"]),
+  ])
+    .then(([output, names]) => {
       if (output === null) return null;
       const result = parseNumstat(output);
+      // Left absent, not [], when the name listing failed: absent means
+      // "unknown" to the workflow-change gate, [] means "none".
+      if (names !== null) result.workflowFiles = parseWorkflowFiles(names);
       cache.set(cacheKey, { ts: Date.now(), result });
       return result;
     })

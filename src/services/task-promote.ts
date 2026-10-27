@@ -77,6 +77,8 @@ import {
   evaluateWorkflowGate,
   recordWorkflowHold,
   clearWorkflowHold,
+  type WorkflowChange,
+  type WorkflowGate,
 } from "./task-workflow-gate.js";
 
 type TaskRow = typeof tasks.$inferSelect;
@@ -101,6 +103,34 @@ export type PromoteOutcome =
     };
 
 type PromoteFailure = PromoteOutcome & { ok: false };
+
+/** Records the hold on the task row and builds the outcome that stops a push. */
+function holdWorkflowChange(
+  app: FastifyInstance,
+  task: TaskRow,
+  change: WorkflowChange,
+): PromoteFailure {
+  recordWorkflowHold(app, task.id, change);
+  const detail = `This branch changes ${change.files.join(", ")} — approve the workflow change to push it`;
+  recordGithubSyncError(app, task.id, detail);
+  return { ok: false, reason: "workflow-approval-required", detail };
+}
+
+/** The failure a non-pushable gate result maps to, or null when the push may
+ * go ahead (clear or approved). `unverified` is a retryable push failure, not
+ * an approval request: nothing is known to need the operator. */
+function workflowGateBlock(
+  app: FastifyInstance,
+  task: TaskRow,
+  gate: WorkflowGate,
+): PromoteFailure | null {
+  if (gate.kind === "held") return holdWorkflowChange(app, task, gate.change);
+  if (gate.kind === "unverified") {
+    recordGithubSyncError(app, task.id, gate.detail);
+    return { ok: false, reason: "push-failed", detail: gate.detail };
+  }
+  return null;
+}
 
 /**
  * Shared preamble for every path that advances a PR-bearing task: the
@@ -127,7 +157,16 @@ async function preparePromotion(
   // worktree was before placement existed.
   worktreeHostId: string = project.hostId,
 ): Promise<
-  { ok: true; repoRef: GitHubRepoRef; token: string } | { ok: false; outcome: PromoteFailure }
+  | {
+      ok: true;
+      repoRef: GitHubRepoRef;
+      token: string;
+      // The elevated `workflows: write` token, present only for an approved
+      // workflow change. Used for the branch push ALONE; every PR API call
+      // keeps using `token`.
+      pushToken?: string;
+    }
+  | { ok: false; outcome: PromoteFailure }
 > {
   if (!task.worktreePath || !task.branchName) {
     return {
@@ -237,15 +276,9 @@ async function preparePromotion(
   // after the dirty-tree gate (a half-committed tree has no meaningful head)
   // and before any token is resolved, so a held task never reaches the remote.
   const gate = await evaluateWorkflowGate(app, task, worktreeHostId);
-  if (gate.kind === "held") {
-    recordWorkflowHold(app, task.id, gate.change);
-    const detail = `This branch changes ${gate.change.files.join(", ")} — approve the workflow change to push it`;
-    recordGithubSyncError(app, task.id, detail);
-    return {
-      ok: false,
-      outcome: { ok: false, reason: "workflow-approval-required", detail },
-    };
-  }
+  const blocked = workflowGateBlock(app, task, gate);
+  if (blocked) return { ok: false, outcome: blocked };
+  let pushToken: string | undefined;
   if (gate.kind === "approved") {
     // No PAT/OAuth fallback: a workflow edit must never go out under the
     // operator's own broad credential. A failed mint says what to grant.
@@ -257,9 +290,20 @@ async function preparePromotion(
         outcome: { ok: false, reason: "no-token", detail: elevated.detail },
       };
     }
-    return { ok: true, repoRef, token: elevated.token };
+    // The mint is a network round trip; a commit landing during it would be
+    // pushed under an approval that covered a different head. Re-verify now,
+    // as late as possible before the push (the push itself still follows by a
+    // local git call, so this narrows the window rather than closing it).
+    const recheck = await evaluateWorkflowGate(app, task, worktreeHostId);
+    const reblocked = workflowGateBlock(app, task, recheck);
+    if (reblocked) return { ok: false, outcome: reblocked };
+    // `held` here means a new commit voided the approval; `clear`, that the
+    // workflow edit was removed meanwhile — an ordinary push then.
+    if (recheck.kind === "approved") pushToken = elevated.token;
+    else clearWorkflowHold(app, task);
+  } else {
+    clearWorkflowHold(app, task);
   }
-  clearWorkflowHold(app, task);
 
   // #489 — repo-scoped (App installation token when configured, falling
   // back to the shared PAT/OAuth token) rather than the plain getToken this
@@ -273,7 +317,7 @@ async function preparePromotion(
     };
   }
 
-  return { ok: true, repoRef, token };
+  return { ok: true, repoRef, token, pushToken };
 }
 
 /** Resolves the base branch on whichever host owns `project.cwd`
@@ -338,7 +382,7 @@ async function pushForPromotion(
   // Backstop for a host whose agent cannot report workflow paths: GitHub
   // refuses a workflow edit pushed without `workflows` permission, so say
   // what that means instead of leaving the raw git stderr.
-  const detail = /without `?workflows`? permission/.test(value.detail ?? "")
+  const detail = /without `?workflows?`? (permission|scope)/.test(value.detail ?? "")
     ? "This branch changes .github/workflows/ and this host cannot report workflow changes for approval — push it manually, or update the host agent"
     : (value.detail ?? "Failed to push the task's branch");
   recordGithubSyncError(app, task.id, detail);
@@ -502,10 +546,16 @@ export async function openDraftPRForTask(
 ): Promise<PromoteOutcome> {
   const prepared = await preparePromotion(app, task, project, worktreeHostId);
   if (!prepared.ok) return prepared.outcome;
-  const { repoRef, token } = prepared;
+  const { repoRef, token, pushToken } = prepared;
 
   if (task.prNumber !== null) {
-    const pushFailure = await pushForPromotion(app, task, project, token, worktreeHostId);
+    const pushFailure = await pushForPromotion(
+      app,
+      task,
+      project,
+      pushToken ?? token,
+      worktreeHostId,
+    );
     if (pushFailure) return pushFailure;
     // #782 — this branch makes NO other GitHub call today (it returns
     // task.prUrl/prNumber straight from the DB row), so this omits
@@ -559,7 +609,13 @@ export async function openDraftPRForTask(
     };
   }
 
-  const pushFailure = await pushForPromotion(app, task, project, token, worktreeHostId);
+  const pushFailure = await pushForPromotion(
+    app,
+    task,
+    project,
+    pushToken ?? token,
+    worktreeHostId,
+  );
   if (pushFailure) return pushFailure;
 
   return createOrRecoverPR(app, task, repoRef, token, base, /* draft */ true);
@@ -583,10 +639,16 @@ export async function promoteTaskToPR(
 ): Promise<PromoteOutcome> {
   const prepared = await preparePromotion(app, task, project, worktreeHostId);
   if (!prepared.ok) return prepared.outcome;
-  const { repoRef, token } = prepared;
+  const { repoRef, token, pushToken } = prepared;
 
   if (task.prNumber !== null) {
-    const pushFailure = await pushForPromotion(app, task, project, token, worktreeHostId);
+    const pushFailure = await pushForPromotion(
+      app,
+      task,
+      project,
+      pushToken ?? token,
+      worktreeHostId,
+    );
     if (pushFailure) return pushFailure;
     try {
       const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
@@ -640,7 +702,13 @@ export async function promoteTaskToPR(
     };
   }
 
-  const pushFailure = await pushForPromotion(app, task, project, token, worktreeHostId);
+  const pushFailure = await pushForPromotion(
+    app,
+    task,
+    project,
+    pushToken ?? token,
+    worktreeHostId,
+  );
   if (pushFailure) return pushFailure;
 
   return createOrRecoverPR(app, task, repoRef, token, base, /* draft */ false);

@@ -584,7 +584,9 @@ export async function getInstallationToken(
   privateKeyPem: string,
   owner: string,
   repo: string,
-  scope: InstallationTokenScope = "write",
+  // `workflows` is excluded: this function caches, and the elevated token must
+  // never be reusable — see mintWorkflowWriteToken.
+  scope: Exclude<InstallationTokenScope, "workflows"> = "write",
 ): Promise<InstallationTokenResult> {
   // Cached by (appId, scope, owner, repo), not (installationId, repo) — on
   // a cache hit this must skip `resolveInstallationId` entirely, not just

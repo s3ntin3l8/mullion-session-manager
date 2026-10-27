@@ -423,7 +423,7 @@ describe("promoteTaskToPR", () => {
       cleanup(remote, cwd);
     });
 
-    it("an approved head pushes and opens the PR with the elevated token, never the PAT", async () => {
+    it("an approved head pushes under the elevated token but uses the ordinary token for PR calls", async () => {
       const { remote, cwd } = workflowRepo();
       mockEvaluateWorkflowGate.mockResolvedValue({ kind: "approved", sha: "a".repeat(40) });
       mockResolveWorkflowWriteToken.mockResolvedValue({ ok: true, token: "ghs_elevated" });
@@ -432,9 +432,10 @@ describe("promoteTaskToPR", () => {
       const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
 
       expect(result).toMatchObject({ ok: true, prNumber: 9 });
-      expect(mockGetToken).not.toHaveBeenCalled();
+      expect(mockResolveWorkflowWriteToken).toHaveBeenCalledTimes(1);
+      // The elevated token is for the branch push alone, never the PR API calls.
       expect(mockCreatePullRequest).toHaveBeenCalledWith(
-        "ghs_elevated",
+        "ghp_token",
         "test-owner",
         "test-repo",
         expect.anything(),
@@ -442,6 +443,61 @@ describe("promoteTaskToPR", () => {
       expect(git(remote, ["branch", "--list", "mullion/task-1"]).trim()).toContain(
         "mullion/task-1",
       );
+      cleanup(remote, cwd);
+    });
+
+    it("re-verifies after minting: a commit that lands during the mint voids the approval", async () => {
+      const { remote, cwd } = workflowRepo();
+      const change = { sha: "b".repeat(40), files: [".github/workflows/ci.yml"] };
+      mockEvaluateWorkflowGate
+        .mockResolvedValueOnce({ kind: "approved", sha: "a".repeat(40) })
+        .mockResolvedValueOnce({ kind: "held", change });
+      mockResolveWorkflowWriteToken.mockResolvedValue({ ok: true, token: "ghs_elevated" });
+
+      const task = baseTask({ id: 7, worktreePath: cwd, branchName: "mullion/task-1" });
+      const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+      expect(result).toMatchObject({ ok: false, reason: "workflow-approval-required" });
+      expect(mockRecordWorkflowHold).toHaveBeenCalledWith(expect.anything(), 7, change);
+      expect(mockCreatePullRequest).not.toHaveBeenCalled();
+      expect(git(remote, ["branch", "--list", "mullion/task-1"]).trim()).toBe("");
+      cleanup(remote, cwd);
+    });
+
+    it("pushes normally when the workflow edit is removed during the mint", async () => {
+      const { remote, cwd } = workflowRepo();
+      mockEvaluateWorkflowGate
+        .mockResolvedValueOnce({ kind: "approved", sha: "a".repeat(40) })
+        .mockResolvedValueOnce({ kind: "clear" });
+      mockResolveWorkflowWriteToken.mockResolvedValue({ ok: true, token: "ghs_elevated" });
+
+      const task = baseTask({ id: 7, worktreePath: cwd, branchName: "mullion/task-1" });
+      const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+      expect(result).toMatchObject({ ok: true });
+      expect(mockClearWorkflowHold).toHaveBeenCalled();
+      cleanup(remote, cwd);
+    });
+
+    it("does not push, and records a retryable push-failed, when the changed files cannot be verified", async () => {
+      const { remote, cwd } = workflowRepo();
+      mockEvaluateWorkflowGate.mockResolvedValue({
+        kind: "unverified",
+        detail: "Could not verify whether this branch changes .github/workflows/",
+      });
+
+      const task = baseTask({ id: 7, worktreePath: cwd, branchName: "mullion/task-1" });
+      const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+      expect(result).toMatchObject({
+        ok: false,
+        reason: "push-failed",
+        detail: expect.stringContaining("Could not verify"),
+      });
+      expect(mockRecordWorkflowHold).not.toHaveBeenCalled();
+      expect(mockGetToken).not.toHaveBeenCalled();
+      expect(mockCreatePullRequest).not.toHaveBeenCalled();
+      expect(git(remote, ["branch", "--list", "mullion/task-1"]).trim()).toBe("");
       cleanup(remote, cwd);
     });
 

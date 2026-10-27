@@ -113,6 +113,22 @@ describe("task-workflow-gate", () => {
       expect(await evaluateWorkflowGate(app, task, "local")).toEqual({ kind: "clear" });
     });
 
+    it("is unverified, never clear, when there is no base ref to diff against", async () => {
+      commitFile(".github/workflows/ci.yml", "name: ci\n");
+      git(worktree, ["update-ref", "-d", "refs/remotes/origin/main"]);
+      clearGitDiffStatsCacheForTests();
+      const task = insertTask();
+      const gate = await evaluateWorkflowGate(app, task, "local");
+      expect(gate.kind).toBe("unverified");
+      expect((gate as { detail: string }).detail).toContain("Could not verify");
+    });
+
+    it("is unverified when a remote host cannot answer", async () => {
+      const task = insertTask();
+      // Host id with no registered client: the lookup throws, which must not read as clear.
+      expect((await evaluateWorkflowGate(app, task, "no-such-host")).kind).toBe("unverified");
+    });
+
     it("holds a branch that edits .github/workflows/, naming the head commit and files", async () => {
       const head = commitFile(".github/workflows/ci.yml", "name: ci\n");
       const task = insertTask();
@@ -172,6 +188,18 @@ describe("task-workflow-gate", () => {
         ok: false,
         reason: "nothing-held",
       });
+    });
+
+    it("refuses as unreadable when the changed files cannot be verified", async () => {
+      const task = insertTask();
+      git(worktree, ["update-ref", "-d", "refs/remotes/origin/main"]);
+      clearGitDiffStatsCacheForTests();
+      recordWorkflowHold(app, task.id, { sha: "c".repeat(40), files: ["w.yml"] });
+      expect(await approveWorkflowChange(app, reload(task.id), "local", "c".repeat(40))).toEqual({
+        ok: false,
+        reason: "unreadable",
+      });
+      expect(reload(task.id).workflowApprovedSha).toBeNull();
     });
 
     it("drops a hold whose workflow edit has since been removed", async () => {

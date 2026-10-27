@@ -164,6 +164,55 @@ describe("getDiffStats", () => {
     expect(stats?.workflowFiles).toEqual([".github/workflows/ci.yml"]);
   });
 
+  it("sees a workflow file moved into place by a brace-form rename (git mv into .github/workflows)", async () => {
+    initRepo(tmpDir);
+    fs.mkdirSync(path.join(tmpDir, ".github", "foo"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, ".github", "foo", "ci.yml"), "name: ci\n");
+    commitAll(tmpDir, "initial");
+    git(tmpDir, ["checkout", "-b", "feature"]);
+    fs.mkdirSync(path.join(tmpDir, ".github", "workflows"), { recursive: true });
+    git(tmpDir, ["mv", ".github/foo/ci.yml", ".github/workflows/ci.yml"]);
+    commitAll(tmpDir, "move into workflows");
+
+    // numstat would print this as `.github/{foo => workflows}/ci.yml`, which
+    // contains no ".github/workflows/" — the path listing must not depend on it.
+    const stats = await getDiffStats(tmpDir, "main", { fresh: true });
+    expect(stats?.workflowFiles).toContain(".github/workflows/ci.yml");
+  });
+
+  it("sees a workflow file renamed out of the directory and one deleted", async () => {
+    initRepo(tmpDir);
+    fs.mkdirSync(path.join(tmpDir, ".github", "workflows"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, ".github", "workflows", "a.yml"), "name: a\n");
+    fs.writeFileSync(path.join(tmpDir, ".github", "workflows", "b.yml"), "name: b\n");
+    commitAll(tmpDir, "initial");
+    git(tmpDir, ["checkout", "-b", "feature"]);
+    fs.mkdirSync(path.join(tmpDir, "docs"), { recursive: true });
+    git(tmpDir, ["mv", ".github/workflows/a.yml", "docs/a.yml"]);
+    git(tmpDir, ["rm", "-q", ".github/workflows/b.yml"]);
+    commitAll(tmpDir, "remove workflows");
+
+    const stats = await getDiffStats(tmpDir, "main", { fresh: true });
+    expect(stats?.workflowFiles?.sort()).toEqual([
+      ".github/workflows/a.yml",
+      ".github/workflows/b.yml",
+    ]);
+  });
+
+  it("does not treat a look-alike path as a workflow", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a\n");
+    commitAll(tmpDir, "initial");
+    git(tmpDir, ["checkout", "-b", "feature"]);
+    fs.mkdirSync(path.join(tmpDir, "x", ".github", "workflows"), { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, ".github", "workflows-old"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, "x", ".github", "workflows", "n.yml"), "n\n");
+    fs.writeFileSync(path.join(tmpDir, ".github", "workflows-old", "o.yml"), "o\n");
+    commitAll(tmpDir, "lookalikes");
+
+    expect((await getDiffStats(tmpDir, "main", { fresh: true }))?.workflowFiles).toEqual([]);
+  });
+
   it("fresh bypasses the TTL cache so a just-committed workflow edit is seen", async () => {
     initRepo(tmpDir);
     fs.writeFileSync(path.join(tmpDir, "a.txt"), "a\n");
