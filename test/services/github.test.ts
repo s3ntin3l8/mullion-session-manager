@@ -728,6 +728,45 @@ describe("default-branch CI cache", () => {
     expect(getCachedDefaultBranchCi("dbci-owner", "repo")).toBe("failure");
   });
 
+  it("refreshDefaultBranchCi reads a run held at action_required as pending, not failed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockGithubApi({
+        runs: [
+          {
+            name: "CI",
+            status: "completed",
+            conclusion: "action_required",
+            html_url: "u",
+            head_sha: "a",
+          },
+        ],
+      }),
+    );
+    await refreshDefaultBranchCi("tok", "dbci-held", "repo");
+    expect(getCachedDefaultBranchCi("dbci-held", "repo")).toBe("in_progress");
+  });
+
+  it("getRepoStatus reads a run held at action_required as pending, not failed", async () => {
+    vi.stubGlobal(
+      "fetch",
+      mockGithubApi({
+        issues: [ISSUE],
+        runs: [
+          {
+            name: "CI",
+            status: "completed",
+            conclusion: "action_required",
+            html_url: "u",
+            head_sha: "a",
+          },
+        ],
+      }),
+    );
+    const status = await getRepoStatus("tok", "held-owner", "held-repo");
+    expect(status.ciStatus).toBe("in_progress");
+  });
+
   it("a failed lookup (null) never clears a known status, but records null when nothing was known", async () => {
     vi.stubGlobal("fetch", mockGithubApi({ runsOk: false }));
     await refreshDefaultBranchCi("tok", "dbci-blip", "repo");

@@ -1265,24 +1265,43 @@ describe("GitHubPanel", () => {
       expect(await screen.findByText(/doesn't accept manual runs yet/)).toBeInTheDocument();
     });
 
-    it("refetches release status after a no-dispatch-trigger refusal, but not after other refusals", async () => {
-      const fetchMock = mockFetchRelease({
-        release: RELEASE_NO_PR,
-        run: () => jsonResponse(200, { dispatched: false, reason: "no-dispatch-trigger" }),
-      });
-      vi.stubGlobal("fetch", fetchMock);
-      const releaseReads = () =>
-        fetchMock.mock.calls.filter(
-          ([url, init]) => url.endsWith("/release") && (init?.method ?? "GET") === "GET",
-        ).length;
-      const user = userEvent.setup();
-      render(<GitHubPanel params={{ projectId: 25 }} />);
+    describe("release status refetch after a refused Run", () => {
+      async function clickRunAndCountReads(reason: string, banner: RegExp) {
+        const fetchMock = mockFetchRelease({
+          release: RELEASE_NO_PR,
+          run: () => jsonResponse(200, { dispatched: false, reason }),
+        });
+        vi.stubGlobal("fetch", fetchMock);
+        const releaseReads = () =>
+          fetchMock.mock.calls.filter(
+            ([url, init]) => url.endsWith("/release") && (init?.method ?? "GET") === "GET",
+          ).length;
+        const user = userEvent.setup();
+        render(<GitHubPanel params={{ projectId: 25 }} />);
+        const runButton = await screen.findByRole("button", { name: /Run/ });
+        const before = releaseReads();
+        await user.click(runButton);
+        await screen.findByText(banner);
+        // Give a (wrongly) triggered refetch time to land before counting.
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return { before, after: releaseReads() };
+      }
 
-      const runButton = await screen.findByRole("button", { name: /Run/ });
-      const before = releaseReads();
-      await user.click(runButton);
-      await screen.findByText(/doesn't accept manual runs yet/);
-      await vi.waitFor(() => expect(releaseReads()).toBeGreaterThan(before));
+      it("refetches after a no-dispatch-trigger refusal", async () => {
+        const { before, after } = await clickRunAndCountReads(
+          "no-dispatch-trigger",
+          /doesn't accept manual runs yet/,
+        );
+        expect(after).toBeGreaterThan(before);
+      });
+
+      it("does not refetch after a dispatch-failed refusal", async () => {
+        const { before, after } = await clickRunAndCountReads(
+          "dispatch-failed",
+          /Failed to start a release run/,
+        );
+        expect(after).toBe(before);
+      });
     });
 
     it("renders a refusal banner when Merge is refused", async () => {
