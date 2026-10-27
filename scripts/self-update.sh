@@ -225,11 +225,14 @@ if [ ! -f "$RELEASE_DIR/dist/server.js" ]; then
   rm -rf "$RELEASE_DIR"
   fail "dist/server.js missing from installed release"
 fi
-# Native modules (better-sqlite3, node-pty) are compiled by npm ci above
-# against *this host's* Node ABI — confirm they actually load before this
-# release is ever pointed at by `current`. Run with cwd=$RELEASE_DIR so
-# require() resolves this release's own node_modules, not $MULLION_HOME's.
-(cd "$RELEASE_DIR" && "$NODE_EXEC_PATH" -e "require('better-sqlite3'); require('node-pty');") || {
+# Native modules: node-pty is compiled by npm ci above against *this host's*
+# Node ABI; better-sqlite3 loads the N-API prebuild it ships (package.json's
+# allowScripts denies its install script, #2066). Confirm both actually load
+# before this release is ever pointed at by `current`. better-sqlite3 resolves
+# its binding lazily, in the Database constructor, so a bare require() would
+# not load it — open an in-memory DB. Run with cwd=$RELEASE_DIR so require()
+# resolves this release's own node_modules, not $MULLION_HOME's.
+(cd "$RELEASE_DIR" && "$NODE_EXEC_PATH" -e "new (require('better-sqlite3'))(':memory:').close(); require('node-pty');") || {
   rm -rf "$RELEASE_DIR"
   fail "native module smoke check failed (better-sqlite3/node-pty didn't load)"
 }
