@@ -2,7 +2,7 @@
 
 Mullion can connect to GitHub to surface repo status — open issues/PRs and
 CI/Actions workflow status — for any project whose git `origin` points at
-github.com. This is one credential per install (Settings → Integrations),
+github.com. This is one credential per install (Settings → GitHub),
 not per-project or per-user: everyone using the dashboard shares the same
 connected GitHub identity.
 
@@ -27,12 +27,12 @@ same as "no repo detected": no widget, no error.
 
 ## Connecting
 
-Settings → Integrations → GitHub offers two independent ways to connect:
+Settings → GitHub offers two independent ways to connect:
 
 ### Personal access token (always available, zero setup)
 
 Create a **fine-grained PAT** with read access to **Contents, Issues, and
-Pull requests**, paste it into Settings → Integrations, and click Connect.
+Pull requests**, paste it into Settings → GitHub, and click Connect.
 The token is validated against GitHub's `/user` endpoint before being
 stored, so a malformed or already-revoked token is rejected immediately
 rather than failing mysteriously later.
@@ -153,7 +153,7 @@ This requires one-time setup by whoever operates the Mullion instance:
    safe to bake into the built frontend bundle or a log line, unlike
    `DB_ENCRYPTION_KEY`/`MULLION_AGENT_TOKEN`. (Agent hosts never need this —
    GitHub integration is primary-only, same as the rest of the DB.)
-3. Settings → Integrations now shows a "Connect with GitHub" button. Click
+3. Settings → GitHub now shows a "Connect with GitHub" button. Click
    it, and follow the device code / `github.com/login/device` flow shown in
    the modal.
 
@@ -212,7 +212,7 @@ Configuring one:
 "verified": true, "appSlug": "...", "keyFingerprint": "..." }`. Stored
    encrypted at rest, independent of the PAT/OAuth token — configuring one
    doesn't disturb the other. `DELETE /api/integrations/github/app` clears
-   it. Settings → Integrations → GitHub shows whether an App is configured,
+   it. Settings → GitHub shows whether an App is configured,
    its App id, installation count, and the current key's fingerprint —
    never the private key itself, which no endpoint echoes back.
 
@@ -316,7 +316,7 @@ any other write failure does (see [`tasks-internals.md`](tasks-internals.md#gith
 cached for the same ~1h per repo _and_ per flavor, so installing the App on
 a new owner (or re-approving a widened permission set) and expecting the
 very next call to pick it up won't work — re-`PUT` the App config (even
-with unchanged values, or via Settings → Integrations → GitHub → **Rotate
+with unchanged values, or via Settings → GitHub → **Rotate
 key** with the same key pasted back in) flushes both caches immediately
 instead of waiting out the hour. Because the `PUT` now makes a live call to
 GitHub (see above), this workaround itself degrades gracefully during an
@@ -328,7 +328,7 @@ outage: the caches still flush (`setGitHubApp` runs either way), just with
 GitHub allows up to 25 active keys per App at once specifically so a
 rotation never has a gap where nothing works — use that. There is no
 separate "rotate" endpoint; `PUT /api/integrations/github/app` is both
-"configure" and "rotate," and Settings → Integrations → GitHub → **Rotate
+"configure" and "rotate," and Settings → GitHub → **Rotate
 key** is the same request with the App id prefilled.
 
 **Planned rotation:**
@@ -447,7 +447,7 @@ Configuring one:
    reintroduce the exact 422 this mechanism exists to route around, so it's
    caught at config time instead of surfacing later as a mysterious
    COMMENT-only review. `DELETE /api/integrations/github/reviewer-app`
-   clears it. Settings → Integrations → GitHub shows a second "Reviewer App"
+   clears it. Settings → GitHub shows a second "Reviewer App"
    card, identical in shape to the App card above (App id, installation
    count, key fingerprint, rotation date) and rotated the same way.
 4. Optional: give it a distinct avatar so its reviews are visually
@@ -514,7 +514,7 @@ replaces the fixed 60s poll cycle with push delivery: GitHub POSTs events
 to your Mullion instance, and the poller adapts to a slower, rate-limit-
 friendly quiet cycle after a webhook confirms there's nothing new.
 
-Webhooks are opt-in. Enable them in Settings → Integrations → GitHub and
+Webhooks are opt-in. Enable them in Settings → GitHub and
 set `MULLION_WEBHOOK_BASE_URL` (see Configuration below). When enabled, the
 backend registers a webhook on every connected repo that has a github.com
 origin, using the stored PAT/OAuth token, subscribed to `pull_request`,
@@ -541,7 +541,7 @@ GitHub's hook actually signs with from diverging after a restart with no
 fresh local secret while the live hook kept the old one, silently 401ing
 every delivery afterward).
 
-Settings → Integrations → GitHub shows how many repos currently have a
+Settings → GitHub shows how many repos currently have a
 live registration (`webhookRegisteredCount`), read from the same
 per-project registration record the reconciler diffs against.
 
@@ -736,7 +736,7 @@ copy of this table now, so it doesn't drift from `.env.example` the way it
 once did.
 
 The three poll intervals above are also UI-configurable at runtime:
-Settings → Integrations → GitHub → **Update checks** shows "Active
+Settings → GitHub → **Update checks** shows "Active
 repositories," "Quiet repositories," and "Webhook silence limit" (each a
 live override of its env default, no restart needed).
 

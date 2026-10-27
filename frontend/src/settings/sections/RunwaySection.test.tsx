@@ -10,7 +10,7 @@ import { jsonResponse } from "../../test/jsonResponse.js";
 // Same fake-server-over-global-fetch pattern as Settings.reviewRelay.test.tsx:
 // the admin key is write-only, so nothing here may ever read it back.
 
-describe("Settings -> Integrations -> Runway quota", () => {
+describe("Settings -> Runway quota", () => {
   let runway: { hasKey: boolean; updatedAt: string | null };
   let settingsPatches: Array<Record<string, unknown>>;
   let fetchMock: ReturnType<typeof vi.fn>;

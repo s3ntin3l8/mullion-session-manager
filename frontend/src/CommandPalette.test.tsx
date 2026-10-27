@@ -77,7 +77,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -108,7 +108,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -139,7 +139,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -172,7 +172,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -205,7 +205,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -238,7 +238,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenSkills={onOpenSkills}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -271,7 +271,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={onOpenBrowser}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -302,7 +302,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={onOpenBlankBrowser}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -312,8 +312,8 @@ describe("CommandPalette -> Integrations section", () => {
     expect(onOpenBlankBrowser).toHaveBeenCalled();
   });
 
-  it("opens Settings -> Integrations", async () => {
-    const onOpenIntegrationsSettings = vi.fn();
+  it("finds and opens GitHub settings through search", async () => {
+    const onOpenSettingsSection = vi.fn();
     const user = userEvent.setup();
     render(
       <CommandPalette
@@ -333,14 +333,15 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={onOpenIntegrationsSettings}
+        onOpenSettingsSection={onOpenSettingsSection}
         onOpenBrowserUrl={vi.fn()}
         onOpenTasks={vi.fn()}
       />,
     );
 
-    await user.click(await screen.findByText("Manage integrations…"));
-    expect(onOpenIntegrationsSettings).toHaveBeenCalled();
+    await user.type(await screen.findByPlaceholderText(/Launch a session/), "github settings");
+    await user.click(await screen.findByText("GitHub settings"));
+    expect(onOpenSettingsSection).toHaveBeenCalledWith("github");
   });
 
   // Issue #1434 — the palette used to claim it had a Tasks entry (its own
@@ -367,7 +368,7 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
         onOpenTasks={onOpenTasks}
       />,
@@ -398,16 +399,16 @@ describe("CommandPalette -> Integrations section", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
     );
 
-    await screen.findByText("Manage integrations…");
+    await screen.findByText("Task board");
     expect(screen.getByText("Task board")).toBeInTheDocument();
     await user.type(screen.getByPlaceholderText(/Launch a session/), "bash");
-    expect(screen.queryByText("Manage integrations…")).not.toBeInTheDocument();
+    expect(screen.queryByText("GitHub settings")).not.toBeInTheDocument();
     expect(screen.queryByText("Task board")).not.toBeInTheDocument();
   });
 });
@@ -441,7 +442,7 @@ describe("CommandPalette -> P9 silent failures", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
         {...overrides}
@@ -536,7 +537,7 @@ describe("CommandPalette -> focus management (P11)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
         {...overrides}
@@ -965,7 +966,8 @@ describe("CommandPalette -> focus management (P11)", () => {
 
     const user = userEvent.setup();
     const { unmount } = renderPalette();
-    await user.click(await screen.findByText("Manage integrations…"));
+    await user.type(await screen.findByPlaceholderText(/Launch a session/), "github settings");
+    await user.click(await screen.findByText("GitHub settings"));
 
     unmount();
     expect(trigger).not.toHaveFocus();
@@ -1100,7 +1102,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -1131,7 +1133,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -1166,7 +1168,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -1201,7 +1203,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -1251,7 +1253,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -1289,7 +1291,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -1328,7 +1330,7 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -1438,7 +1440,7 @@ describe("CommandPalette -> per-session model picker (issue #1424)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
         onOpenTasks={vi.fn()}
         {...overrides}
@@ -1726,7 +1728,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -1775,7 +1777,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -1822,7 +1824,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -1871,7 +1873,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -1921,7 +1923,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -1968,7 +1970,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -2028,7 +2030,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -2081,7 +2083,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -2127,7 +2129,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -2174,7 +2176,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
         onShowWorkspace={onShowWorkspace}
@@ -2218,7 +2220,7 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
         onShowWorkspace={onShowWorkspace}
@@ -2301,7 +2303,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -2341,7 +2343,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -2376,7 +2378,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -2415,7 +2417,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -2451,7 +2453,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -2491,7 +2493,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -2531,7 +2533,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -2577,7 +2579,7 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -2628,7 +2630,7 @@ describe("CommandPalette -> close affordance (issue: mobile 'esc' chip did nothi
         onOpenProjectSetup={vi.fn()}
         onOpenDockConfig={vi.fn()}
         onOpenSkills={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
@@ -2700,7 +2702,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     onOpenSkills: vi.fn(),
     onOpenBrowser: vi.fn(),
     onOpenBlankBrowser: vi.fn(),
-    onOpenIntegrationsSettings: vi.fn(),
+    onOpenSettingsSection: vi.fn(),
     onOpenTasks: vi.fn(),
     onOpenBrowserUrl: vi.fn(),
   });
@@ -2741,7 +2743,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     expect(screen.getByText("GitHub")).toBeTruthy();
     expect(screen.getByText("Git")).toBeTruthy();
     expect(screen.getByText("Preview")).toBeTruthy();
-    expect(screen.getByText("Manage integrations…")).toBeTruthy();
+    expect(screen.queryByText("GitHub settings")).toBeNull();
     for (const hidden of [
       "Agent Rules",
       "Mullion Briefing",
@@ -2986,7 +2988,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
   it("omits Toggle right sidebar when the host provides no opener (phone)", async () => {
     renderPalette(openers());
 
-    expect(await screen.findByText("Manage integrations…")).toBeTruthy();
+    expect(await screen.findByText("New preview tab")).toBeTruthy();
     expect(screen.queryByText("Toggle right sidebar")).toBeNull();
   });
 
@@ -2994,7 +2996,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     useDashboardStore.setState({ projects: [] });
     renderPalette(openers(), { scope: "global", projectId: undefined });
 
-    expect(await screen.findByText("Manage integrations…")).toBeTruthy();
+    expect(await screen.findByText("New preview tab")).toBeTruthy();
     expect(screen.getByText("New preview tab")).toBeTruthy();
     expect(screen.queryByText(/^Project:/)).toBeNull();
     expect(screen.queryByText(/^GitHub:/)).toBeNull();
@@ -3297,7 +3299,7 @@ describe("CommandPalette -> default target follows the active pane", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={onOpenBrowser}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,

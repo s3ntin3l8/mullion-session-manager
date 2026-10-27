@@ -1,3 +1,4 @@
+import type { SettingsSection } from "./settings/settingsSections.js";
 import type { ComponentType, CSSProperties } from "react";
 import {
   CheckIcon,
@@ -78,7 +79,7 @@ export interface PaletteCommandOpeners {
   skills: (projectId: number) => void;
   browser: (projectId: number) => void;
   browserUrl: (projectId: number, url: string, label: string) => void;
-  integrationsSettings: () => void;
+  settingsSection: (section: SettingsSection) => void;
   blankBrowser: () => void;
   // Absent where there is no right sidebar (phone) — the command is then
   // omitted rather than shown dead.
@@ -342,16 +343,26 @@ export function buildPaletteCommands({
   }
 
   commands.push(
-    {
-      id: "integrations-settings",
+    ...(
+      [
+        [
+          "github",
+          "GitHub settings",
+          ["github", "account", "webhooks", "settings", "integrations"],
+        ],
+        ["review-relay", "Review relay", ["review relay", "hermes", "reviewer", "settings"]],
+        ["runway", "Runway", ["runway", "quota", "settings"]],
+      ] as const
+    ).map(([section, title, keywords]): PaletteCommand => ({
+      id: `settings-${section}`,
       movesFocus: true,
-      title: "Manage integrations…",
-      subtitle: "Settings → Integrations",
-      icon: GitHubIcon,
-      keywords: ["integrations", "settings"],
-      placement: "top",
-      run: () => open.integrationsSettings(),
-    },
+      title,
+      subtitle: `Settings → ${title}`,
+      icon: GearIcon,
+      keywords: [...keywords],
+      placement: "search",
+      run: () => open.settingsSection(section),
+    })),
     {
       id: "blank-browser",
       movesFocus: true,

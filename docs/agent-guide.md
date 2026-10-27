@@ -441,7 +441,7 @@ suggestions: apply them and push, even though the head moved. Small targeted
 fixes do not change the verdict, and re-reviewing them only breeds the next
 round of nits, so the cycle never ends. The relay enforces this — a request
 on a pull request the bot's newest decisive review approved is refused with a
-409 (`reviewRelay.reReviewAfterApproval`, Settings → Integrations; set it to
+409 (`reviewRelay.reReviewAfterApproval`, Settings → Review relay; set it to
 `allow` to re-review every head). Pass `--force` (MCP: `force`) only when your
 change grew beyond the suggestions, or a human asked for another review.
 

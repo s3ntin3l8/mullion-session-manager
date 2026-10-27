@@ -1,3 +1,4 @@
+import type { SettingsSection } from "./settings/settingsSections.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { api, normalizeAgentId } from "./api/index.js";
@@ -185,7 +186,7 @@ interface CommandPaletteProps {
   // Issue #432: same section, opening the (read-only) skills panel for this
   // project.
   onOpenSkills: (projectId: number) => void;
-  onOpenIntegrationsSettings: () => void;
+  onOpenSettingsSection: (section: SettingsSection) => void;
   // Issue #1434: the palette used to claim (in its own and App.tsx's
   // comments) that it could enter Tasks, but had no such entry — this is
   // that entry. Project-independent (the task board is install-wide, not
@@ -246,7 +247,7 @@ export function CommandPalette({
   onOpenDockConfig,
   onOpenSkills,
   onOpenBrowser,
-  onOpenIntegrationsSettings,
+  onOpenSettingsSection,
   onOpenTasks,
   onOpenDevices,
   onOpenHosts,
@@ -555,7 +556,7 @@ export function CommandPalette({
       skills: onOpenSkills,
       browser: onOpenBrowser,
       browserUrl: onOpenBrowserUrl,
-      integrationsSettings: onOpenIntegrationsSettings,
+      settingsSection: onOpenSettingsSection,
       blankBrowser: onOpenBlankBrowser,
       toggleRightSidebar: onToggleRightSidebar,
       tasks: onOpenTasks,

@@ -20,7 +20,9 @@ import { NotificationsSection } from "./settings/sections/NotificationsSection.j
 import { DockSection } from "./settings/sections/DockSection.js";
 import { SessionsSection } from "./settings/sections/SessionsSection.js";
 import { TaskMasterSection } from "./settings/sections/TaskMasterSection.js";
-import { IntegrationsSection } from "./settings/sections/IntegrationsSection.js";
+import { ReviewRelaySection } from "./settings/sections/ReviewRelaySection.js";
+import { RunwaySection } from "./settings/sections/RunwaySection.js";
+import { GitHubSection } from "./settings/sections/GitHubSection.js";
 import { ServerInfoSection } from "./settings/sections/ServerInfoSection.js";
 import { StorageSection } from "./settings/sections/StorageSection.js";
 import { AccountSection } from "./settings/sections/AccountSection.js";
@@ -278,7 +280,9 @@ export function Settings({
               {section === "browser" && <BrowserSection />}
               {section === "devices" && <DevicesSection />}
               {section === "hosts" && <HostsSection />}
-              {section === "integrations" && <IntegrationsSection />}
+              {section === "github" && <GitHubSection />}
+              {section === "review-relay" && <ReviewRelaySection />}
+              {section === "runway" && <RunwaySection />}
               {section === "storage" && <StorageSection />}
               {section === "server" && <ServerInfoSection />}
             </div>

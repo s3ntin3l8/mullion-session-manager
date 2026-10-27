@@ -1,3 +1,4 @@
+import { SettingsGroup, SettingsHelp } from "../SettingsForm.js";
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../../api/index.js";
 import type { RunwayIntegration, RunwayQuota } from "../../api/index.js";
@@ -26,14 +27,12 @@ function TextSettingRow({
   desc,
   value,
   placeholder,
-  width = 260,
   onCommit,
 }: {
   label: string;
   desc: string;
   value: string;
   placeholder?: string;
-  width?: number;
   onCommit: (v: string) => void;
 }) {
   // Call sites pass `key={value}`, so a value changed from outside (e.g. the
@@ -46,7 +45,7 @@ function TextSettingRow({
   };
   return (
     <Row label={label} desc={desc} align="start">
-      <div className="settings-numberfield" style={{ width }}>
+      <div className="settings-numberfield">
         <input
           type="text"
           autoComplete="off"
@@ -125,7 +124,7 @@ function ProviderMapField({
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6, width: 320 }}>
+    <div className="settings-form-field-stack">
       <div className="settings-numberfield" style={{ width: "100%" }}>
         <input
           type="text"
@@ -230,91 +229,109 @@ export function RunwaySection() {
   }, [ready, mapKey]);
 
   return (
-    <div style={{ marginTop: 24 }} data-testid="runway-section">
+    <div className="settings-form" data-testid="runway-section">
       <GroupHeading
         title="Runway quota"
         desc="Runway is a separate AI-usage tracker. Mullion polls it to learn each provider's remaining quota and will not claim a task onto an agent whose provider is out of quota. Agents never see the API key."
       />
-      <StyledList>
-        <ListRow
-          testId="runway-row"
-          dot={ready ? "on" : "off"}
-          title={ready ? "Runway quota ready" : "Runway quota not configured"}
-          subtitle={
-            integration?.hasKey ? "API key set" : "Set the Runway URL and the API key below"
-          }
-          trailing={
-            integration?.hasKey ? (
-              <SecondaryButton onClick={clearKey}>Clear key</SecondaryButton>
-            ) : undefined
-          }
+      <SettingsGroup title="Connection">
+        {" "}
+        <StyledList>
+          <ListRow
+            testId="runway-row"
+            dot={ready ? "on" : "off"}
+            title={ready ? "Runway quota ready" : "Runway quota not configured"}
+            subtitle={
+              integration?.hasKey ? "API key set" : "Set the Runway URL and the API key below"
+            }
+            trailing={
+              integration?.hasKey ? (
+                <SecondaryButton onClick={clearKey}>Clear key</SecondaryButton>
+              ) : undefined
+            }
+          />
+        </StyledList>
+        <TextSettingRow
+          label="Runway server URL"
+          desc="Base URL of the Runway server — the base URL with no trailing path, e.g. https://runway.example.com"
+          // The key is prefixed rather than being the raw value: an empty
+          // value would make the key "" and collide with a sibling row's
+          // (React rejects duplicate keys).
+          key={`runway-url:${runway.apiUrl}`}
+          value={runway.apiUrl}
+          placeholder="https://runway.example.com"
+          onCommit={(v) => updateSettings({ runway: { apiUrl: v } })}
         />
-      </StyledList>
-
-      <TextSettingRow
-        label="Runway server URL"
-        desc="Base URL of the Runway server — the base URL with no trailing path, e.g. https://runway.example.com"
-        // The key is prefixed rather than being the raw value: an empty
-        // value would make the key "" and collide with a sibling row's
-        // (React rejects duplicate keys).
-        key={`runway-url:${runway.apiUrl}`}
-        value={runway.apiUrl}
-        placeholder="https://runway.example.com"
-        onCommit={(v) => updateSettings({ runway: { apiUrl: v } })}
-      />
-      <Row
-        label="Admin key"
-        desc="Stored encrypted on the server; never shown again. Used only to read quota — agents never see it."
-        align="start"
-      >
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <div className="settings-numberfield" style={{ width: 260 }}>
-            <input
-              type="password"
-              autoComplete="off"
-              style={{ flex: 1, textAlign: "left", width: "auto" }}
-              placeholder={integration?.hasKey ? "Replace key…" : "Runway admin key"}
-              value={key}
-              aria-label="Admin key"
-              onChange={(e) => setKey(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") saveKey();
-              }}
-            />
+        <Row
+          label="Admin key"
+          desc="Stored encrypted on the server; never shown again. Used only to read quota — agents never see it."
+          align="start"
+        >
+          <div className="settings-form-field-actions">
+            <div className="settings-numberfield">
+              <input
+                type="password"
+                autoComplete="off"
+                style={{ flex: 1, textAlign: "left", width: "auto" }}
+                placeholder={integration?.hasKey ? "Replace key…" : "Runway admin key"}
+                value={key}
+                aria-label="Admin key"
+                onChange={(e) => setKey(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") saveKey();
+                }}
+              />
+            </div>
+            <SecondaryButton onClick={saveKey} disabled={saving || !key.trim()}>
+              {saving ? "Saving…" : "Save key"}
+            </SecondaryButton>
           </div>
-          <SecondaryButton onClick={saveKey} disabled={saving || !key.trim()}>
-            {saving ? "Saving…" : "Save key"}
-          </SecondaryButton>
-        </div>
-      </Row>
-      <Row
-        label="Poll interval (seconds)"
-        desc="How often Mullion asks Runway for fresh quota readings."
-      >
-        <PollField
-          key={`runway-poll:${runway.pollSeconds}`}
-          value={runway.pollSeconds}
-          onCommit={(v) => updateSettings({ runway: { pollSeconds: v } })}
-        />
-      </Row>
-      <Row
-        label="Provider map"
-        desc="Runway's provider ids name PROVIDERS (anthropic, opencode, chatgpt, minimax, gemini, github, ollama, xai, zai, deepseek, kimi_*, …) while Mullion's agents are CLIs (claude, codex, opencode, agy, mcode) — the RESOLVED command, which is what the backend matches on — so the correspondence is per-install and has to be told to Mullion here. opencode spends several providers, so a value can be opencode/PROVIDER (e.g. xai → opencode/xai) to hold only tasks on that provider's models, and can be a list. An agent that is not in the map is never quarantined."
-        align="start"
-      >
-        <ProviderMapField
-          key={`runway-provider-map:${JSON.stringify(runway.providerMap)}`}
-          value={runway.providerMap}
-          onCommit={(v) => updateSettings({ runway: { providerMap: v } })}
-        />
-      </Row>
-      {ready && quota?.configured && quota.fetchedAt !== null && (
-        <div className="settings-row-desc" data-testid="runway-unmapped">
-          {quota.unmappedProviders.length === 0
-            ? "Every provider Runway reports is mapped."
-            : `Runway reports providers with no usable agent mapping: ${quota.unmappedProviders.join(", ")}. Tasks on an agent are only held for providers that are mapped to an agent Mullion can run.`}
-        </div>
-      )}
+        </Row>
+      </SettingsGroup>
+      <SettingsGroup title="Quota polling">
+        {" "}
+        <Row
+          label="Poll interval (seconds)"
+          desc="How often Mullion asks Runway for fresh quota readings."
+        >
+          <PollField
+            key={`runway-poll:${runway.pollSeconds}`}
+            value={runway.pollSeconds}
+            onCommit={(v) => updateSettings({ runway: { pollSeconds: v } })}
+          />
+        </Row>
+      </SettingsGroup>
+      <SettingsGroup title="Provider mapping">
+        {" "}
+        <Row
+          label="Provider map"
+          desc={
+            <SettingsHelp summary="Map each provider to the agent CLI that uses its quota. Unmapped agents are not held.">
+              Runway's provider ids name PROVIDERS (anthropic, opencode, chatgpt, minimax, gemini,
+              github, ollama, xai, zai, deepseek, kimi_*, …) while Mullion's agents are CLIs
+              (claude, codex, opencode, agy, mcode) — the RESOLVED command, which is what the
+              backend matches on — so the correspondence is per-install and has to be told to
+              Mullion here. opencode spends several providers, so a value can be opencode/PROVIDER
+              (e.g. xai → opencode/xai) to hold only tasks on that provider's models, and can be a
+              list. An agent that is not in the map is never quarantined.
+            </SettingsHelp>
+          }
+          align="start"
+        >
+          <ProviderMapField
+            key={`runway-provider-map:${JSON.stringify(runway.providerMap)}`}
+            value={runway.providerMap}
+            onCommit={(v) => updateSettings({ runway: { providerMap: v } })}
+          />
+        </Row>
+        {ready && quota?.configured && quota.fetchedAt !== null && (
+          <div className="settings-row-desc" data-testid="runway-unmapped">
+            {quota.unmappedProviders.length === 0
+              ? "Every provider Runway reports is mapped."
+              : `Runway reports providers with no usable agent mapping: ${quota.unmappedProviders.join(", ")}. Tasks on an agent are only held for providers that are mapped to an agent Mullion can run.`}
+          </div>
+        )}
+      </SettingsGroup>
       {error && <ErrorText style={{ marginTop: 8 }}>{error}</ErrorText>}
     </div>
   );

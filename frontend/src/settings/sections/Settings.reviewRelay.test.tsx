@@ -19,7 +19,7 @@ const NOT_CONFIGURED_APP = {
   keyRotatedAt: null,
 };
 
-describe("Settings -> Integrations -> Review relay", () => {
+describe("Settings -> Review relay", () => {
   let hermes: { hasKey: boolean; updatedAt: string | null };
   let testResponse: () => Response;
   let modelOptions: () => Response;
@@ -127,7 +127,7 @@ describe("Settings -> Integrations -> Review relay", () => {
   });
 
   async function renderCard() {
-    render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+    render(<Settings onClose={vi.fn()} initialSection="review-relay" />);
     return screen.findByTestId("review-relay-section");
   }
 
