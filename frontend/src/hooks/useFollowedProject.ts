@@ -106,10 +106,19 @@ export function useFollowedProject(
     setLastDerivedId(null);
   }
 
+  // The remembered project only bridges non-project panels (Settings, Tasks)
+  // within the workspace it came from. After a workspace switch it names a
+  // project outside the new scope; honouring it would leave a "following"
+  // picker stuck on the old workspace's project, so fall through to the new
+  // workspace's first project instead until a panel there takes focus.
+  const usableLastDerivedId =
+    lastDerivedId != null && scopedProjects.some((p) => p.id === lastDerivedId)
+      ? lastDerivedId
+      : null;
   const effectiveProjectId =
     pinnedProjectId ??
     derivedId ??
-    lastDerivedId ??
+    usableLastDerivedId ??
     scopedProjects[0]?.id ??
     projects[0]?.id ??
     null;
@@ -117,7 +126,7 @@ export function useFollowedProject(
   // pinned it reads as the action that releases the pin.
   // Only a real follow source counts — the first-project fallback isn't
   // "following" anything.
-  const followSourceId = derivedId ?? lastDerivedId;
+  const followSourceId = derivedId ?? usableLastDerivedId;
   const followedName = projects.find((p) => p.id === followSourceId)?.name;
   const followLabel =
     pinnedProjectId == null && followedName ? `Following: ${followedName}` : "Follow active panel";

@@ -110,6 +110,45 @@ describe("useFollowedProject", () => {
       expect(result.current.dropdownValue).toBe("1");
     });
 
+    it("follow → workspace switch → still following the new workspace", () => {
+      three();
+      useDashboardStore.setState({ sessions: [session(10, 1)], activePanelId: "session-10" });
+      const { result, rerender } = renderHook(({ ids }) => useFollowedProject(ids), {
+        initialProps: { ids: [1] as number[] },
+      });
+      act(() => result.current.onDropdownChange(FOLLOW_SENTINEL));
+      expect(result.current.effectiveProjectId).toBe(1);
+
+      // Switch workspace: the focused panel goes away, the scope changes.
+      act(() => useDashboardStore.setState({ activePanelId: null }));
+      rerender({ ids: [2, 3] });
+      expect(result.current.pinnedProjectId).toBeNull();
+      expect(result.current.dropdownValue).toBe(FOLLOW_SENTINEL);
+      expect(result.current.effectiveProjectId).toBe(2);
+      expect(result.current.dropdownOptions[0].label).toBe("Follow active panel");
+
+      // Focusing a panel in the new workspace is followed again.
+      act(() =>
+        useDashboardStore.setState({ sessions: [session(30, 3)], activePanelId: "session-30" }),
+      );
+      expect(result.current.effectiveProjectId).toBe(3);
+      expect(result.current.dropdownOptions[0].label).toBe("Following: c");
+    });
+
+    it("pin → workspace switch → still pinned", () => {
+      three();
+      const { result, rerender } = renderHook(({ ids }) => useFollowedProject(ids), {
+        initialProps: { ids: [1, 2] as number[] },
+      });
+      act(() => result.current.onDropdownChange("1"));
+
+      rerender({ ids: [2, 3] });
+
+      expect(result.current.pinnedProjectId).toBe(1);
+      expect(result.current.effectiveProjectId).toBe(1);
+      expect(result.current.dropdownValue).toBe("1");
+    });
+
     it("null means unscoped", () => {
       three();
       const { result } = renderHook(() => useFollowedProject(null));
