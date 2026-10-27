@@ -278,6 +278,17 @@ describe("device panel platform gate (issue #1720, roadmap 8.6)", () => {
           });
           expect(res.statusCode).toBe(400);
           expect(res.json().message).toMatch(/not supported on win32/);
+          // The emulator surfaces must not claim "only physical devices are" where
+          // physical devices are unsupported too.
+          for (const [method, url, payload] of [
+            ["POST", "/api/devices", { avdName: "dev35" }],
+            ["GET", "/api/avds", undefined],
+          ] as const) {
+            const emu = await app.inject({ method, url, payload });
+            expect(emu.statusCode, url).toBe(400);
+            expect(emu.json().message, url).toMatch(/not supported on win32/);
+            expect(emu.json().message, url).not.toMatch(/only physical/);
+          }
           const info = await app.inject({ method: "GET", url: "/api/server-info" });
           expect(info.json().features.devices).toBe(false);
           expect(info.json().features.deviceKinds).toEqual([]);

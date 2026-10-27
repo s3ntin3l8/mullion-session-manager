@@ -101,8 +101,15 @@ export function isDeviceKindSupported(
  * never reads two ways.
  */
 export function unsupportedKindMessage(kind: DeviceCapability, platform: string): string {
+  // "only physical devices are" is only true where physical devices exist — on a
+  // platform with no capability at all (win32) it would contradict the panel's own
+  // "not supported" answer for a physical create.
+  const physicalExists = isDeviceKindSupported("physical", platform as NodeJS.Platform);
+  if (kind === "emulator" && physicalExists) {
+    return `Emulator devices are not supported on ${platform} — only physical devices are.`;
+  }
   return kind === "emulator"
-    ? `Emulator devices are not supported on ${platform} — only physical devices are.`
+    ? `Emulator devices are not supported on ${platform}.`
     : `Physical devices are not supported on ${platform}.`;
 }
 
