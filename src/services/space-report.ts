@@ -17,8 +17,10 @@ const DEFAULT_DEPTH = 3;
 const DEFAULT_TOP = 25;
 // Below the top level only the few biggest children of each directory are kept.
 const CHILDREN_KEPT = 8;
-// An entry under 1% of its parent is noise in a "where did it go" view.
-const MIN_SHARE = 0.01;
+// A walk that has looked at this many entries stops counting and says so, the
+// way temp-storage's WALK_ENTRY_CAP bounds its walks: a home directory full of
+// `node_modules` can otherwise mean minutes of disk churn per run.
+const ENTRY_CAP = 3_000_000;
 
 export interface SpaceEntry {
   path: string;
@@ -43,6 +45,8 @@ export interface SpaceReport {
   outsideBytes: number;
   /** Directories that couldn't be read; their contents are in `outsideBytes`. */
   unreadableEntries: number;
+  /** The walk hit its entry cap: every figure is a lower bound. */
+  truncated: boolean;
   error?: string;
 }
 
@@ -51,6 +55,8 @@ export interface SpaceReportOptions {
   root?: string;
   depth?: number;
   top?: number;
+  /** Test seam: how many entries to look at before stopping. */
+  entryCap?: number;
   /** Absolute paths owned by a cleanup source, and what to call it. */
   covered?: ReadonlyArray<{ path: string; label: string }>;
 }
@@ -60,6 +66,8 @@ interface Walk {
   maxDepth: number;
   top: number;
   unreadable: number;
+  /** Entries still allowed; below zero the walk has hit its cap. */
+  left: number;
 }
 
 // `depth` is the depth of `dir` itself; the root is 0.
@@ -77,6 +85,7 @@ async function measure(
   }
   const listing = depth < walk.maxDepth;
   const parts = await mapLimit(names, DIR_ENTRY_CONCURRENCY, async (name) => {
+    if (--walk.left < 0) return null;
     const full = path.join(dir, name);
     try {
       const st = await limited(() => fs.lstat(full));
@@ -102,7 +111,7 @@ async function measure(
   if (!listing) return { bytes, children: [] };
   const keep = depth === 0 ? walk.top : CHILDREN_KEPT;
   const children = entries
-    .filter((entry) => entry.bytes >= bytes * MIN_SHARE && entry.bytes > 0)
+    .filter((entry) => entry.bytes > 0)
     .sort((a, b) => b.bytes - a.bytes)
     .slice(0, keep);
   return { bytes, children };
@@ -126,6 +135,7 @@ export async function inspectSpaceReport(options: SpaceReportOptions = {}): Prom
     filesystemUsedBytes: 0,
     outsideBytes: 0,
     unreadableEntries: 0,
+    truncated: false,
   };
   try {
     const rootStat = await limited(() => fs.stat(root));
@@ -135,6 +145,7 @@ export async function inspectSpaceReport(options: SpaceReportOptions = {}): Prom
       maxDepth: options.depth ?? DEFAULT_DEPTH,
       top: options.top ?? DEFAULT_TOP,
       unreadable: 0,
+      left: options.entryCap ?? ENTRY_CAP,
     };
     const [{ bytes, children }, fsStats] = await Promise.all([
       measure(root, 0, walk),
@@ -150,6 +161,7 @@ export async function inspectSpaceReport(options: SpaceReportOptions = {}): Prom
       filesystemUsedBytes,
       outsideBytes: Math.max(0, filesystemUsedBytes - bytes),
       unreadableEntries: walk.unreadable,
+      truncated: walk.left < 0,
     };
   } catch (error) {
     return {

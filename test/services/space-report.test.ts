@@ -52,16 +52,27 @@ describe("space report", () => {
     expect(b.bytes).toBeGreaterThanOrEqual(500 * 1024);
   });
 
-  it("keeps only the top entries, and leaves out ones that are noise next to the rest", async () => {
+  it("keeps only the top entries by size", async () => {
     await put("one/blob", 900);
     await put("two/blob", 800);
     await put("three/blob", 700);
-    await put("dust", 1);
-    // 1 KiB (+ its block) is well under 1% of the ~2.4 MiB total.
     const report = await inspectSpaceReport({ root, top: 2 });
     expect(names(report.entries)).toEqual(["one", "two"]);
-    const all = await inspectSpaceReport({ root });
-    expect(names(all.entries)).not.toContain("dust");
+  });
+
+  it("still lists the biggest children when every one is a tiny share of a big parent", async () => {
+    for (let i = 0; i < 150; i++) await put(`cache/d${String(i).padStart(3, "0")}/f`, 4);
+    const report = await inspectSpaceReport({ root });
+    const [cache] = report.entries;
+    expect(cache.children).toHaveLength(8);
+  });
+
+  it("stops at its entry cap and says every figure is a lower bound", async () => {
+    for (let i = 0; i < 30; i++) await put(`d${String(i)}/f`, 8);
+    const capped = await inspectSpaceReport({ root, entryCap: 10 });
+    expect(capped).toMatchObject({ available: true, truncated: true });
+    expect(capped.scannedBytes).toBeLessThan((await inspectSpaceReport({ root })).scannedBytes);
+    expect((await inspectSpaceReport({ root })).truncated).toBe(false);
   });
 
   it("doesn't follow symlinks out of the tree", async () => {

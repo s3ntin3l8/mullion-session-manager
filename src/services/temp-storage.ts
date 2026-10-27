@@ -378,7 +378,7 @@ export async function dirSize(dir: string): Promise<number> {
   return sizes.reduce((sum, size) => sum + size, 0);
 }
 
-function npmCachePath(options: TempStorageOptions): string {
+export function npmCachePath(options: TempStorageOptions = {}): string {
   return path.join(options.npmCacheDir ?? path.join(os.homedir(), ".npm"), "_cacache");
 }
 

@@ -161,6 +161,8 @@ export function estimateSafePrune(
  * but never volumes. The summary rows' `Reclaimable` understates this on the
  * containerd image store (a 6.6 GB build cache reported 1.1 GB reclaimable,
  * though the prune frees all of it), so the per-entry sizes are summed instead.
+ * That counts every unused entry, not only dangling cache: `system prune --all`
+ * is what the aggressive tier runs, and on this store it removes all of them.
  */
 export function estimateAggressivePrune(verboseJson: string): number {
   const df = JSON.parse(verboseJson) as Record<string, Array<Record<string, unknown>> | undefined>;

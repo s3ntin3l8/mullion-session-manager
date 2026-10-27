@@ -8,7 +8,7 @@ import { claudeSessionsDirsFor } from "../services/claude-scratch.js";
 import { getStoredSettings } from "../services/settings.js";
 import { expandHome, parseProjectsRootsEnv } from "../services/project-config.js";
 import { inspectDockerStorage, pruneDockerStorage } from "../services/docker-storage.js";
-import { inspectTempStorage, pruneTempStorage } from "../services/temp-storage.js";
+import { inspectTempStorage, npmCachePath, pruneTempStorage } from "../services/temp-storage.js";
 import {
   cacheDirPaths,
   inspectCacheStorage,
@@ -21,6 +21,7 @@ import {
   pruneOpencodeStorage,
 } from "../services/opencode-storage.js";
 import {
+  DEV_WORKTREE_DIRS,
   inspectDevWorktrees,
   pruneDevWorktrees,
   type DevWorktreeOptions,
@@ -216,12 +217,15 @@ export async function systemResourcesRoute(app: FastifyInstance) {
   // What the "where the space is" report marks as something cleanup can handle.
   const spaceCovered = () => [
     ...cacheDirPaths().map(({ path: dir, label }) => ({ path: dir, label })),
-    { path: path.join(os.homedir(), ".npm"), label: "npm cache" },
+    // The directory the temp tier actually empties, not all of ~/.npm.
+    { path: npmCachePath(), label: "npm cache" },
     { path: path.dirname(defaultOpencodeDbPath()), label: "opencode database" },
-    ...devWorktreeOptions().projects.map((project) => ({
-      path: path.join(project.cwd, ".wt"),
-      label: "developer worktrees",
-    })),
+    ...devWorktreeOptions().projects.flatMap((project) =>
+      DEV_WORKTREE_DIRS.map((dir) => ({
+        path: path.join(project.cwd, dir),
+        label: "developer worktrees",
+      })),
+    ),
   ];
   const space = createMeasuredProbe(() => inspectSpaceReport({ covered: spaceCovered() }), {
     ttlMs: SLOW_INSPECT_CACHE_MS,
@@ -251,7 +255,10 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     app.addHook("onReady", async () => {
       warmUp = setTimeout(() => {
         // Measuring starts on read; nobody waits for the answer.
-        for (const [name, probe] of probeRoutes) if (name !== "docker") void probe.read();
+        // Not the space report: a whole-home walk isn't worth starting unasked.
+        for (const [name, probe] of probeRoutes) {
+          if (name !== "docker" && name !== "space") void probe.read();
+        }
       }, WARM_UP_DELAY_MS);
       warmUp.unref();
     });

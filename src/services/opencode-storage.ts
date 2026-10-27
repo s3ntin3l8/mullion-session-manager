@@ -163,30 +163,18 @@ const UNLISTABLE_HELPERS = new Set(["(sd-pam)"]);
 
 const readProc = (file: string) => fs.readFile(file, "utf8").catch(() => null);
 
-// The binary, its subcommands (bare words before the first flag) and its bare
-// flags: enough to tell what to stop, without anything that could be a secret
-// or a path: the value after a flag (`--token abc`), `--password=...`, or an
-// argument after the subcommands.
-const SAFE_TOKEN = /^-{0,2}[A-Za-z][\w-]*$/;
-
-function safeArguments(args: string[]): string[] {
-  const kept: string[] = [];
-  let seenFlag = false;
-  for (const arg of args) {
-    if (arg.startsWith("-")) {
-      seenFlag = true;
-      if (SAFE_TOKEN.test(arg)) kept.push(arg);
-    } else if (!seenFlag && SAFE_TOKEN.test(arg)) {
-      kept.push(arg);
-    }
-  }
-  return kept;
-}
+// The binary and its bare flags: enough to tell what to stop. Never a word that
+// isn't a flag: that could be the value of the flag before it (`--token abc`) or
+// a positional argument (`auth login <token>`), and a credential must not end
+// up in an API response.
+const SAFE_FLAG = /^--?[A-Za-z][\w-]*$/;
 
 async function commandOf(procDir: string, pid: string): Promise<string> {
   const raw = await readProc(path.join(procDir, pid, "cmdline"));
   const [binary = "", ...args] = (raw ?? "").split("\0").filter((token) => token !== "");
-  const command = [path.basename(binary), ...safeArguments(args)].join(" ").trim();
+  const command = [path.basename(binary), ...args.filter((arg) => SAFE_FLAG.test(arg))]
+    .join(" ")
+    .trim();
   return command.length > COMMAND_MAX_CHARS ? `${command.slice(0, COMMAND_MAX_CHARS)}…` : command;
 }
 

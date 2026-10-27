@@ -126,6 +126,8 @@ export interface SpaceReportStatus {
   /** Used space the walk didn't account for: outside the home directory, or unreadable. */
   outsideBytes: number;
   unreadableEntries: number;
+  /** The walk stopped at its entry cap, so every figure is a lower bound. */
+  truncated?: boolean;
   error?: string;
 }
 

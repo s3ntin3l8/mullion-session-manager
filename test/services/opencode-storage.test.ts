@@ -170,14 +170,14 @@ describe("opencode-storage", () => {
       expect(scan.unknown).toMatch(/cannot read .*no-proc \(ENOENT\)/);
     });
 
-    it("names the holder by binary and bare flags, leaving out values and paths", async () => {
+    it("names the holder by binary and bare flags only: no flag value, no positional argument", async () => {
       await holdOpen(42, dbPath);
       await fs.writeFile(
         path.join(procDir, "42", "cmdline"),
-        "/opt/bin/opencode.exe\0serve\0--token\0s3cret\0--password=hunter2\0--service\0/data/x",
+        "/opt/bin/opencode.exe\0run\0sk-ant-positional-secret\0--token\0s3cret\0--password=hunter2\0--service\0/data/x",
       );
       expect((await findHolders(dbPath, procDir)).holders).toEqual([
-        { pid: 42, command: "opencode.exe serve --token --service" },
+        { pid: 42, command: "opencode.exe --token --service" },
       ]);
     });
 
@@ -185,11 +185,11 @@ describe("opencode-storage", () => {
       await holdOpen(41, dbPath);
       await fs.writeFile(
         path.join(procDir, "41", "cmdline"),
-        `opencode\0serve\0${"x".repeat(200)}`,
+        `opencode\0${Array.from({ length: 40 }, (_, i) => `--flag${String(i)}`).join("\0")}`,
       );
       const [holder] = (await findHolders(dbPath, procDir)).holders;
       expect(holder.pid).toBe(41);
-      expect(holder.command.startsWith("opencode serve xxx")).toBe(true);
+      expect(holder.command.startsWith("opencode --flag0 --flag1")).toBe(true);
       expect(holder.command.length).toBeLessThanOrEqual(121);
     });
 

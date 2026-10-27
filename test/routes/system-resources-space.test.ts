@@ -15,6 +15,7 @@ vi.mock("../../src/services/space-report.js", async (importOriginal) => ({
   inspectSpaceReport: (options?: SpaceReport.SpaceReportOptions) => inspectSpaceReport(options),
 }));
 
+import { projects } from "../../src/db/schema.js";
 import { buildTestApp } from "../helpers/app.js";
 
 describe("/api/storage/space", () => {
@@ -38,6 +39,26 @@ describe("/api/storage/space", () => {
     const labels = (inspectSpaceReport.mock.calls[0]?.[0]?.covered ?? []).map((c) => c.label);
     expect(labels).toEqual(
       expect.arrayContaining(["uv", "Go module cache", "npm cache", "opencode database"]),
+    );
+    const covered = inspectSpaceReport.mock.calls[0]?.[0]?.covered ?? [];
+    // Only the directory the temp tier empties, not all of ~/.npm.
+    expect(covered.find((c) => c.label === "npm cache")?.path).toMatch(/\.npm\/_cacache$/);
+  });
+
+  it("marks every developer-worktree root of a local project, not just .wt", async () => {
+    inspectSpaceReport.mockClear();
+    const app = await buildTestApp();
+    app.db.insert(projects).values({ name: "p", cwd: "/tmp/space-route-proj" }).run();
+    await app.inject({ method: "GET", url: "/api/storage/space" });
+    const covered = (inspectSpaceReport.mock.calls[0]?.[0]?.covered ?? [])
+      .filter((c) => c.label === "developer worktrees")
+      .map((c) => c.path);
+    expect(covered).toEqual(
+      expect.arrayContaining([
+        "/tmp/space-route-proj/.wt",
+        "/tmp/space-route-proj/.worktrees",
+        "/tmp/space-route-proj/.claude/worktrees",
+      ]),
     );
   });
 });

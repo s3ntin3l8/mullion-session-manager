@@ -77,6 +77,12 @@ export function SpaceReport({
           figures below are from the last measurement.
         </div>
       )}
+      {probe.truncated && (
+        <div className="settings-footer-note">
+          This is a very large folder tree, so the scan stopped early: every figure below is at
+          least that much.
+        </div>
+      )}
       {probe.state === "error" && <ErrorText>Could not refresh: {probe.error}</ErrorText>}
       {probe.entries.map((entry) => (
         <SpaceRow

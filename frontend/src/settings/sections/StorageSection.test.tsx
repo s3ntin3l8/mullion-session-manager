@@ -1014,6 +1014,12 @@ describe("Settings -> Storage: progress and where the space is", () => {
       expect(screen.getByText("~/Android").closest("details")).toBeNull();
     });
 
+    it("says so when the scan stopped early and the figures are lower bounds", async () => {
+      setup({ space: { ...report, truncated: true } });
+      render(<StorageSection />);
+      expect(await screen.findByText(/scan stopped early/)).toBeInTheDocument();
+    });
+
     it("accounts for the space outside the home folder, noting unreadable folders", async () => {
       setup({ space: report });
       render(<StorageSection />);
