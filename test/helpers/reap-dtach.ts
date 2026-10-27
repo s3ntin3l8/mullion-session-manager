@@ -5,7 +5,28 @@
 // lives under the given (per-worker, disposable) sessions dir.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import { parseProcessTable } from "../../src/services/scope/detached.js";
+
+interface PsRow {
+  pid: number;
+  ppid: number;
+  command: string;
+}
+
+// Local rather than src/services/scope/detached.ts's parseProcessTable: this
+// helper is imported by test/setup.ts, and importing src/ there loads
+// node:child_process before a test's vi.mock can apply.
+function parsePs(stdout: string): PsRow[] {
+  const rows: PsRow[] = [];
+  for (const line of stdout.split("\n")) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 4) continue;
+    const pid = Number.parseInt(parts[0], 10);
+    const ppid = Number.parseInt(parts[1], 10);
+    if (!Number.isInteger(pid) || !Number.isInteger(ppid)) continue;
+    rows.push({ pid, ppid, command: parts.slice(3).join(" ") });
+  }
+  return rows;
+}
 
 /**
  * Pids of `dtach` masters named in a `ps -ax -o pid=,ppid=,pgid=,command=`
@@ -17,7 +38,7 @@ export function dtachMastersFromPs(
   psStdout: string,
   dir: string,
 ): { masters: number[]; children: number[] } {
-  const table = parseProcessTable(psStdout);
+  const table = parsePs(psStdout);
   const masters = table
     .filter((e) => {
       const argv = e.command.split(" ");
