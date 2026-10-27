@@ -15,7 +15,12 @@ self.addEventListener("push", (event) => {
 });
 
 async function handlePush(event) {
-  let payload = { title: "Mullion", body: "A session needs your attention.", sessionId: null };
+  let payload = {
+    title: "Mullion",
+    body: "A session needs your attention.",
+    sessionId: null,
+    taskId: null,
+  };
   if (event.data) {
     try {
       payload = { ...payload, ...event.data.json() };
@@ -37,7 +42,16 @@ async function handlePush(event) {
   // touches a value that was actually present in the payload.
   if (payload.sessionId != null) payload.sessionId = Number(payload.sessionId);
 
-  const tag = payload.sessionId != null ? `mullion-session-${payload.sessionId}` : "mullion";
+  // #2108 — a task notification (a push held for workflow approval) carries
+  // taskId instead of sessionId; its own tag keeps it from replacing, or being
+  // replaced by, a session notification.
+  if (payload.taskId != null) payload.taskId = Number(payload.taskId);
+  const tag =
+    payload.sessionId != null
+      ? `mullion-session-${payload.sessionId}`
+      : payload.taskId != null
+        ? `mullion-task-${payload.taskId}`
+        : "mullion";
 
   // Always show first, then close if a visible tab already owns this event
   // (below) — never an early return. userVisibleOnly:true requires a
@@ -49,7 +63,7 @@ async function handlePush(event) {
     tag,
     icon: "/icon-192.png",
     badge: "/icon-192.png",
-    data: { sessionId: payload.sessionId },
+    data: { sessionId: payload.sessionId, taskId: payload.taskId },
   });
 
   const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });

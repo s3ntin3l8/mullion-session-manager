@@ -24,6 +24,7 @@ const { closeDb } = await import("../../src/db/client.js");
 const { projects, sessions, pushSubscriptions } = await import("../../src/db/schema.js");
 const {
   deliverPushNotification,
+  notifyTaskNeedsAttention,
   createCoalesceState,
   PUSH_COALESCE_MS,
   PUSH_TTL_SECONDS,
@@ -620,6 +621,52 @@ describe("push-delivery (issue #95)", () => {
       } else {
         expect(mockSendNotification).not.toHaveBeenCalled();
       }
+      await app.close();
+    });
+  });
+
+  describe("notifyTaskNeedsAttention (#2108)", () => {
+    it("sends a task-keyed push to every subscription, with a generic body", async () => {
+      const app = await buildApp();
+      const { endpoint } = await setupNotifiableSession(app);
+
+      await notifyTaskNeedsAttention(app, 42, "Task #42: a workflow change needs your approval");
+
+      expect(mockSendNotification).toHaveBeenCalledTimes(1);
+      const [subscription, payload, options] = mockSendNotification.mock.calls[0];
+      expect(subscription.endpoint).toBe(endpoint);
+      expect(JSON.parse(payload)).toEqual({
+        title: "Mullion",
+        body: "Task #42: a workflow change needs your approval",
+        taskId: 42,
+      });
+      expect(options.TTL).toBe(PUSH_TTL_SECONDS);
+      await app.close();
+    });
+
+    it("sends nothing while the push channel is off", async () => {
+      const app = await buildApp();
+      await setupNotifiableSession(app);
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { notifications: { channels: { push: false } } },
+      });
+
+      await notifyTaskNeedsAttention(app, 42, "x");
+
+      expect(mockSendNotification).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("sends nothing when no device is subscribed", async () => {
+      const app = await buildApp();
+      await setupNotifiableSession(app);
+      app.db.delete(pushSubscriptions).run();
+
+      await notifyTaskNeedsAttention(app, 42, "x");
+
+      expect(mockSendNotification).not.toHaveBeenCalled();
       await app.close();
     });
   });

@@ -606,6 +606,19 @@
   font-size: 0.65625rem;
   color: var(--y);
 }
+/* #2108 — a push held for operator approval of a workflow change. Same
+   full-width strip as .task-card-blocked-strip (a held task never moves on its
+   own, so it must read at column-scan distance), in the warning colour, with
+   the label allowed to wrap rather than ellipsise. */
+.task-card-workflow-hold {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.65625rem;
+  font-weight: 600;
+  color: var(--y);
+  overflow-wrap: anywhere;
+}
 .task-card-hint {
   font-size: 0.625rem;
   color: var(--y);

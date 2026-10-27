@@ -143,17 +143,29 @@ export async function evaluateWorkflowGate(
   return { kind: "held", change: { sha, files } };
 }
 
-/** Records the hold on the task row so the board and drawer can show it. */
+/**
+ * Records the hold on the task row so the board and drawer can show it.
+ * Returns whether this is a NEW hold (a different head commit than the one
+ * already recorded): the push is retried on every sweep tick, and only the
+ * first sighting of a head is worth telling the operator about.
+ */
 export function recordWorkflowHold(
   app: FastifyInstance,
   taskId: number,
   change: WorkflowChange,
-): void {
+): boolean {
+  const previous = app.db
+    .select({ workflowChange: tasks.workflowChange })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))
+    .get();
+  const isNew = parseWorkflowChange(previous?.workflowChange ?? null)?.sha !== change.sha;
   app.db
     .update(tasks)
     .set({ workflowChange: JSON.stringify(change), updatedAt: new Date() })
     .where(eq(tasks.id, taskId))
     .run();
+  return isNew;
 }
 
 /** Drops a hold that no longer applies (the workflow edit was removed). */

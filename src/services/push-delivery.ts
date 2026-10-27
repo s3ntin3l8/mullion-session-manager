@@ -169,6 +169,20 @@ export async function deliverPushNotification(
   // throwing on a first-ever call).
   coalesceState.set(event.sessionId, now);
 
+  await sendToSubscriptions(app, subscriptions, { publicKey, privateKey }, payload);
+}
+
+type Subscriptions = ReturnType<typeof getSubscriptionsForSend>;
+
+// The send itself, shared by the session push above and the task push below:
+// every subscription gets the same payload, a 404/410 prunes its endpoint, any
+// other failure is recorded and logged.
+async function sendToSubscriptions(
+  app: FastifyInstance,
+  subscriptions: Subscriptions,
+  { publicKey, privateKey }: { publicKey: string; privateKey: string },
+  payload: string,
+): Promise<void> {
   await Promise.all(
     subscriptions.map(async (sub) => {
       try {
@@ -212,6 +226,31 @@ export async function deliverPushNotification(
         }
       }
     }),
+  );
+}
+
+/**
+ * #2108 — tells the operator a TASK needs them (today: a push held for
+ * workflow-change approval). Not session-keyed, so it skips
+ * `deliverPushNotification`'s per-session status matrix and coalescing: the
+ * caller decides when it is worth sending (once per held head commit). Only
+ * the push channel setting gates it. The body is generic on purpose, like the
+ * session push: a notification tray is outside this app's access control.
+ */
+export async function notifyTaskNeedsAttention(
+  app: FastifyInstance,
+  taskId: number,
+  body: string,
+): Promise<void> {
+  if (!getStoredSettings(app.db).notifications.channels.push) return;
+  const subscriptions = getSubscriptionsForSend(app);
+  if (subscriptions.length === 0) return;
+  const keys = getOrCreateVapidKeys(app);
+  await sendToSubscriptions(
+    app,
+    subscriptions,
+    keys,
+    JSON.stringify({ title: "Mullion", body, taskId }),
   );
 }
 
