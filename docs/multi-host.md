@@ -758,8 +758,20 @@ What is specific to them:
   than a pipe, because Git Bash's `ssh` cannot open a pipe
   ([#2131](https://github.com/s3ntin3l8/mullion-session-manager/issues/2131);
   see [`ssh-agent.md`](ssh-agent.md#on-a-windows-agent-host)).
-- **Not yet:** self-update (reinstall a new release instead) and the Android
-  device panel.
+- **Install and autostart** (`install.sh --role agent`, run from Git Bash —
+  [`deploy/README.md`](../deploy/README.md#windows-the-scheduled-task-deployment-issue-2160--1728),
+  [#2160](https://github.com/s3ntin3l8/mullion-session-manager/issues/2160)):
+  the agent runs as a **per-user scheduled task** started at logon, not as a
+  Windows service, because the agent CLIs, their logins and Git Bash are per
+  user. It needs no administrator rights, no Developer Mode and no C++ build
+  tools. The task runs `scripts/windows-launcher.mjs`, which reads the
+  install's `.env`, restarts the server if it fails and logs to
+  `logs/mullion.log`. Stopping the task ends the server but not the sessions.
+- **Not yet:** self-update (reinstall a new release instead,
+  [#2161](https://github.com/s3ntin3l8/mullion-session-manager/issues/2161)),
+  running before logon or as a service
+  ([#2162](https://github.com/s3ntin3l8/mullion-session-manager/issues/2162)),
+  a Windows primary, and the Android device panel.
   Project setup's symlinks need Windows' **Developer Mode** (or an
   administrator); without it, applying a setup that writes a symlink fails
   with an error saying so.

@@ -139,8 +139,12 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
   shipped N-API prebuild, #2066), loads both native modules for real
   (`scripts/smoke-native.mjs`), and runs the tests that exercise the Windows
   host code paths (named pipes, the pty-host over ConPTY, the Windows scope
-  backend). It is `continue-on-error` and not a required check until it has
-  a track record (#2129).
+  backend, the ssh-agent bridge's MSYS socket) and the Windows install
+  (#2160): the launcher, the directory-junction helpers in
+  `scripts/portable.sh` run under the runner's real Git Bash, and
+  `deploy/windows/register-task.ps1` registering and removing a real
+  scheduled task. It is `continue-on-error` and not a required check until it
+  has a track record (#2129).
 - **Test sharding**:
   - Node tests shard into 4×`test-shard` → `test-merge`. Frontend tests
     shard into 2×`test-shard` → `test-merge`.

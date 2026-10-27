@@ -16,7 +16,10 @@ shell) — no Visual Studio / C++ build tools. A plain `npm ci` works:
 `node-gyp rebuild` and fail looking for Visual Studio), and `node-pty` ships a
 `win32-x64` prebuild too (#2066). `node scripts/smoke-native.mjs` checks that
 both native modules load. `make` is not needed for any of this — run the `npm`
-commands directly.
+commands directly. Building from source (`npm run build`) is the exception:
+its scripts use `cp -r` and `mkdir -p`, which npm's default script shell
+(cmd.exe) does not have, so point npm at Git Bash first —
+`npm config set script-shell "C:\Program Files\Git\bin\bash.exe"`.
 
 See the [Quick Start](README.md#-quick-start) in `README.md` for running the
 app locally, and [`docs/architecture.md`](docs/architecture.md) for the full

@@ -357,5 +357,8 @@ jobs:
           test/pty-host
           test/services/pty-host-client.test.ts
           test/services/scope-windows.test.ts
+          test/scripts/portable-links.test.ts
+          test/scripts/windows-launcher.test.ts
+          test/scripts/windows-register-task.test.ts
           test/services/msys-socket.test.ts
           test/services/ssh-agent-msys-gitbash.test.ts

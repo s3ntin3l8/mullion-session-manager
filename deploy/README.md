@@ -41,6 +41,13 @@ applied by anything in this repo or its CI. `install.sh` and
   release tarball, so the installed job points at
   `<install root>/current/scripts/run-with-env.sh` and keeps working across
   updates.
+- `windows/register-task.ps1` and `scripts/windows-launcher.mjs` — the
+  Windows counterparts of the unit and the launcher (issue #2160): the
+  PowerShell script registers (or, with `-Remove`, removes) the per-user
+  scheduled task, and the launcher is what the task runs — it parses the
+  `.env`, starts `node dist/server.js` from `current`, restarts it if it fails
+  and writes its output to `logs/mullion.log`. See
+  [Windows](#windows-the-scheduled-task-deployment-issue-2160--1728).
 - `traefik-dynamic.yml` — Traefik dynamic (file provider) router + service
   pointing at the app's local port. Also includes a commented-out webhook
   router for GitHub webhook delivery — see
@@ -146,6 +153,12 @@ either: the checksum verification, the command timeout, and the release
 pruning all use the portable spellings in `scripts/portable.sh` (`shasum -a
 256`, a background watchdog, a numeric version sort), so a stock Mac works
 without `brew install coreutils`.
+
+**On Windows** (agent hosts only, issue #2160) none of that applies: no
+`systemd`, no `dtach` (the detached pty-host replaces it), no C++ build tools
+and no administrator rights. It needs **Node 26** and **Git for Windows**, and
+`install.sh` is run from Git Bash. See the
+[Windows section](#windows-the-scheduled-task-deployment-issue-2160--1728).
 
 **macOS is a supported PRIMARY** (issue #1720, roadmap 8.6) — the same
 `install.sh --role primary` installs a launchd agent from
@@ -724,6 +737,95 @@ without an install: that the plists are valid property lists, that they carry
 the keys above, that the installer refuses cleanly without `launchctl`, and —
 the load-bearing one — that a `dtach` master really does survive its launchd
 job being stopped.
+
+## Windows: the scheduled-task deployment (issue #2160 / #1728)
+
+A Windows machine can be a Mullion **agent host** (a primary still runs on
+Linux or macOS; `install.sh --role primary` refuses on Windows). Sessions run
+in Git Bash, and survive the agent restarting the same way they do elsewhere —
+through a detached pty-host master per session instead of `dtach`.
+
+**You need:** Windows 10 or 11 on x64, [Node 26](https://nodejs.org/), and
+[Git for Windows](https://gitforwindows.org/). No C++ build tools, no
+Developer Mode and no administrator rights.
+
+**Install**, from **Git Bash** (the installer is a bash script, and Git Bash
+is what the sessions use anyway):
+
+```bash
+curl -fsSL -o mullion-install.sh \
+  https://github.com/s3ntin3l8/mullion-session-manager/releases/latest/download/mullion-install.sh
+MULLION_AGENT_PROJECTS_ROOTS="C:/Users/me/code" \
+MULLION_AGENT_PRIMARY_URL="https://mullion.example.com" \
+MULLION_AGENT_ENROLLMENT_TOKEN="…" \
+  sh mullion-install.sh --role agent ~/AppData/Local/Mullion
+```
+
+The variables are the same as for any agent ([Automating agent
+deploys](#automating-agent-deploys-issue-245--roadmap-71--77)); leave them off
+and edit `<install root>/.env` by hand instead. Re-running the installer
+re-registers the task and moves `current` to the newest release.
+
+**What you get**, under the install root you gave:
+
+- the usual layout — `releases/<version>/`, `data/`, the `.env` — where
+  `current` is a **directory junction** (a real symlink needs Developer Mode
+  or administrator rights; Git Bash's `ln -s` would silently make a copy);
+- `logs/mullion.log`, rotated at 10 MiB to `mullion.log.1`: a scheduled task
+  has no console, so this is where the server's output goes;
+- `install.json`, which says which role, version, task, `.env` and log this is
+  — for a program (a tray app, a script) that needs to find the install
+  without knowing the layout. It points at the `.env`; it carries none of it;
+- a `mullion` launcher script in `~/bin`, which Git Bash's login shell puts on
+  `PATH` — so a session finds it (`~/.local/bin`, where the other platforms
+  link the CLI, is not on Git Bash's `PATH`);
+- a **per-user scheduled task**, `Mullion-agent`, that runs at logon.
+
+**Why a scheduled task and not a Windows service.** The agent CLIs, their
+logins, your git credentials and Git Bash are all per user, so the agent has
+to run as you, in your session — a service under another account would have
+to recreate all of that, needs administrator rights and a service wrapper,
+and has no desktop for `claude login` or a headed browser. Running as you also
+keeps the named pipes' access list (you and SYSTEM) correct as it is. The
+trade-off is that the agent starts **when you log on**, not at boot; a headless
+machine would want a service, which is a separate issue
+([#2162](https://github.com/s3ntin3l8/mullion-session-manager/issues/2162)).
+
+The task runs `scripts/windows-launcher.mjs`, which does what a systemd unit's
+`EnvironmentFile=` and `Restart=on-failure` do: it reads the `.env` on every
+start, runs the server from `current`, and restarts it two seconds after it
+fails (backing off to thirty while it keeps failing).
+
+**Operating it** (from PowerShell, or Git Bash with `//` before each switch):
+
+```powershell
+schtasks /Query /TN Mullion-agent /FO LIST     # is it registered, running?
+Get-Content -Wait "$env:LOCALAPPDATA\Mullion\logs\mullion.log"
+Stop-ScheduledTask Mullion-agent               # stop the agent …
+Start-ScheduledTask Mullion-agent              # … and start it again
+```
+
+Stopping the task ends the launcher and the server **abruptly** (there is no
+graceful shutdown on Windows), but not the sessions: each runs in a detached
+pty-host master, which keeps going and is reattached when the agent is back.
+Editing the `.env` takes effect on the next start. **Logging off** ends your
+processes, sessions included — as it does for anything you start.
+
+**Remove it:**
+
+```bash
+powershell.exe -NoProfile -ExecutionPolicy Bypass \
+  -File "<install root>/current/deploy/windows/register-task.ps1" -TaskName Mullion-agent -Remove
+```
+
+then delete the install root. (Stop your sessions first: a running session's
+pty-host holds files in its release open.)
+
+**Not yet:** self-update — "Update now" answers that this host should be
+updated by reinstalling, which is re-running the installer above
+([#2161](https://github.com/s3ntin3l8/mullion-session-manager/issues/2161));
+a Windows primary; and running before logon
+([#2162](https://github.com/s3ntin3l8/mullion-session-manager/issues/2162)).
 
 ## Automating agent deploys (issue #245 / roadmap 7.1 + 7.7)
 

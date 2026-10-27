@@ -216,6 +216,74 @@ esac
 exit 0
 `,
   );
+  // The Windows branch's tools (issue #2160), shimmed the way systemctl and
+  // launchctl are, so its exact sequence is asserted on a Linux runner and a
+  // real task is never registered. They are only reached when a test shims
+  // `uname` as Git Bash's.
+  //
+  //   cygpath       identity — the paths are already native here
+  //   powershell.exe  logs its arguments and PSModulePath, and keeps a
+  //                   registry of tasks (schtasks.registered, "NAME|HOME"
+  //                   lines): register-task.ps1's -TaskName adds one,
+  //                   -TaskName ... -Remove drops it
+  //   schtasks      answers `//Query //TN NAME [//XML]` from that registry
+  writeShim(
+    binDir,
+    "cygpath",
+    `#!/usr/bin/env bash\nfor last in "$@"; do P="$last"; done\nprintf '%s\\n' "$P"\n`,
+  );
+  writeShim(
+    binDir,
+    "powershell.exe",
+    `#!/usr/bin/env bash
+DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+echo "$*" >> "$DIR/powershell.log"
+echo "PSModulePath=\${PSModulePath-unset}" >> "$DIR/powershell.env"
+NAME=""; HOME_ARG=""; REMOVE=false
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -TaskName) NAME="$2"; shift ;;
+    -MullionHome) HOME_ARG="$2"; shift ;;
+    -Remove) REMOVE=true ;;
+  esac
+  shift
+done
+REG="$DIR/schtasks.registered"
+if [ -n "$NAME" ]; then
+  touch "$REG"
+  awk -F'|' -v n="$NAME" '$1 != n' "$REG" > "$REG.tmp"
+  mv "$REG.tmp" "$REG"
+  if [ "$REMOVE" != true ]; then echo "$NAME|$HOME_ARG" >> "$REG"; fi
+fi
+exit 0
+`,
+  );
+  writeShim(
+    binDir,
+    "schtasks",
+    `#!/usr/bin/env bash
+DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+echo "$*" >> "$DIR/schtasks.log"
+NAME=""; XML=false
+while [ $# -gt 0 ]; do
+  case "$1" in
+    //TN) NAME="$2"; shift ;;
+    //XML) XML=true ;;
+  esac
+  shift
+done
+LINE="$(awk -F'|' -v n="$NAME" '$1 == n' "$DIR/schtasks.registered" 2>/dev/null | head -1)"
+if [ -z "$LINE" ]; then
+  echo "ERROR: The system cannot find the file specified." >&2
+  exit 1
+fi
+if [ "$XML" = true ]; then
+  echo "<Task><Actions><Exec><WorkingDirectory>\${LINE#*|}</WorkingDirectory></Exec></Actions></Task>"
+else
+  echo "TaskName: $NAME"
+fi
+`,
+  );
   // Copying (not symlinking) the real node binary — same reasoning as
   // self-update.test.ts's own writeShims: a symlinked binary can resolve
   // its own sibling paths differently, and this also gives the prereq
@@ -1114,6 +1182,222 @@ sed -n "/<key>$LEAF<\\/key>/{n;s/.*<string>\\(.*\\)<\\/string>.*/\\1/p;}" "$FILE
       expect(plist.slice(plist.indexOf("-->") + 3)).not.toContain("CHANGEME");
       expect(plist).toContain("com.mullion.agent");
       expect(plist).toContain("<string>agent</string>");
+    });
+  });
+
+  // The Windows branch (issue #2160, part of #1728). Git for Windows' bash
+  // reports `MINGW64_NT-…` from `uname -s`, so a shimmed `uname` runs the
+  // scheduled-task branch on a Linux runner, with cygpath / powershell.exe /
+  // schtasks shimmed (see writeShims). What this proves is the installer's
+  // own logic: the platform detection, the prerequisites, the task
+  // registration sequence, the other-role teardown, `current` and the CLI
+  // launcher. register-task.ps1 itself is covered, for real, by
+  // test/scripts/windows-register-task.test.ts on Windows.
+  describe("Windows scheduled-task branch", () => {
+    function writeWindowsShim(): void {
+      writeShim(
+        binDir,
+        "uname",
+        `#!/usr/bin/env bash
+if [ "$1" = "-s" ]; then echo MINGW64_NT-10.0-26200; else echo Windows; fi
+`,
+      );
+    }
+
+    function readLog(name: string): string[] {
+      const p = path.join(binDir, name);
+      if (!fs.existsSync(p)) return [];
+      return fs
+        .readFileSync(p, "utf8")
+        .trim()
+        .split("\n")
+        .filter((line) => line.length > 0);
+    }
+
+    function seedTask(name: string, home: string): void {
+      fs.appendFileSync(path.join(binDir, "schtasks.registered"), `${name}|${home}\n`);
+    }
+
+    afterEach(() => {
+      fs.rmSync(path.join(binDir, "uname"), { force: true });
+    });
+
+    it("registers the agent as a per-user scheduled task through PowerShell — no systemd unit, no launchd job", async () => {
+      writeWindowsShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      const { stdout } = await runScript(["--role", "agent", mullionHome]);
+      const homeReal = fs.realpathSync(mullionHome);
+
+      expect(stdout).toMatch(/Platform: MINGW64_NT-10\.0-26200 \(windows\)/);
+      const calls = readLog("powershell.log");
+      expect(calls).toHaveLength(1);
+      const call = calls[0];
+      expect(call).toContain("-NoProfile -NonInteractive -ExecutionPolicy Bypass -File");
+      expect(call).toContain("register-task.ps1");
+      expect(call).toContain("-TaskName Mullion-agent");
+      expect(call).toContain(`-NodePath ${path.join(binDir, "node")}`);
+      expect(call).toContain(
+        `-LauncherPath ${path.join(homeReal, "current", "scripts", "windows-launcher.mjs")}`,
+      );
+      expect(call).toContain(`-MullionHome ${homeReal}`);
+      expect(call.trim().endsWith("-Start")).toBe(true);
+
+      expect(readSystemctlLog()).toEqual([]);
+      expect(fs.existsSync(path.join(fakeHome, ".config", "systemd"))).toBe(false);
+      expect(fs.existsSync(path.join(fakeHome, "Library", "LaunchAgents"))).toBe(false);
+      expect(fs.existsSync(path.join(binDir, "launchctl.log"))).toBe(false);
+      expect(stdout).toContain("tail -f " + path.join(homeReal, "logs", "mullion.log"));
+    });
+
+    it("runs PowerShell without the PSModulePath a PowerShell 7 parent leaves behind", async () => {
+      // Windows PowerShell 5.1 cannot load the modules that path points at,
+      // and the ScheduledTasks module is one of them.
+      writeWindowsShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      await runScript(["--role", "agent", mullionHome], {
+        env: { PSModulePath: "/opt/pwsh7/Modules" },
+      });
+      expect(readLog("powershell.env")).toEqual(["PSModulePath=unset"]);
+    });
+
+    it("does not need dtach on Windows — the pty-host replaces it — but does need powershell.exe", async () => {
+      writeWindowsShim();
+      fs.rmSync(path.join(binDir, "powershell.exe"));
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      const failure = await runScript(["--role", "agent", mullionHome]).catch(
+        (err: { stderr: string }) => err,
+      );
+      expect((failure as { stderr: string }).stderr).toMatch(
+        /Missing required host binaries: powershell\.exe\b/,
+      );
+      expect((failure as { stderr: string }).stderr).not.toMatch(/dtach/);
+      expect((failure as { stderr: string }).stderr).toMatch(/Windows section/);
+    });
+
+    it("needs no PowerShell at all with --no-systemd, and still points current at the release", async () => {
+      writeWindowsShim();
+      fs.rmSync(path.join(binDir, "powershell.exe"));
+      const mullionHome = freshMullionHome();
+      const releaseDir = skipDownload(mullionHome);
+      const { stdout } = await runScript(["--role", "agent", "--no-systemd", mullionHome]);
+      expect(stdout).toMatch(/Skipping scheduled task registration/);
+      expect(readLog("powershell.log")).toEqual([]);
+      expect(fs.realpathSync(path.join(mullionHome, "current"))).toBe(fs.realpathSync(releaseDir));
+    });
+
+    it("refuses --role primary before touching anything: a Windows host is an agent host so far", async () => {
+      writeWindowsShim();
+      const unusedHome = path.join(fakeHome, "would-be-mullion-home");
+      const failure = await runScript(["--role", "primary", unusedHome]).catch(
+        (err: { stderr: string }) => err,
+      );
+      expect((failure as { stderr: string }).stderr).toMatch(
+        /--role primary is not supported on Windows yet/,
+      );
+      expect(fs.existsSync(unusedHome)).toBe(false);
+      expect(readLog("powershell.log")).toEqual([]);
+    });
+
+    it("points current at the release and replaces it on a re-install", async () => {
+      writeWindowsShim();
+      const mullionHome = freshMullionHome();
+      const releaseDir = skipDownload(mullionHome);
+      await runScript(["--role", "agent", mullionHome]);
+      await runScript(["--role", "agent", mullionHome]);
+      expect(fs.lstatSync(path.join(mullionHome, "current")).isSymbolicLink()).toBe(true);
+      expect(fs.realpathSync(path.join(mullionHome, "current"))).toBe(fs.realpathSync(releaseDir));
+      expect(fs.existsSync(path.join(mullionHome, "current.tmp"))).toBe(false);
+      // Two installs, two registrations: re-registering is how it updates.
+      expect(readLog("powershell.log")).toHaveLength(2);
+    });
+
+    it("writes install.json so a program can find the install without knowing the layout", async () => {
+      writeWindowsShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      await runScript(["--role", "agent", mullionHome]);
+      const homeReal = fs.realpathSync(mullionHome);
+      const info = JSON.parse(fs.readFileSync(path.join(mullionHome, "install.json"), "utf8"));
+      expect(info).toEqual({
+        role: "agent",
+        version: "9.9.9",
+        home: homeReal,
+        envFile: `${homeReal}/.env`,
+        logFile: `${homeReal}/logs/mullion.log`,
+        taskName: "Mullion-agent",
+        node: path.join(binDir, "node"),
+      });
+      // It points at the .env; it must not carry what is in it.
+      expect(JSON.stringify(info)).not.toMatch(/TOKEN|SECRET/i);
+    });
+
+    it("writes the .env with the install root in the form Node understands", async () => {
+      writeWindowsShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      await runScript(["--role", "agent", mullionHome]);
+      const homeReal = fs.realpathSync(mullionHome);
+      const env = readEnvFile(mullionHome);
+      expect(env).toContain(`MULLION_HOME=${homeReal}`);
+      expect(env).toContain(`SESSIONS_DIR=${homeReal}/data/sessions`);
+      expect(env).toContain("MULLION_ROLE=agent");
+    });
+
+    it("gives the CLI a launcher script that follows current, not a symlink that a copy would freeze", async () => {
+      writeWindowsShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome, { withCli: true });
+      await runScript(["--role", "agent", mullionHome]);
+      // ~/bin, not ~/.local/bin: Git Bash's profile puts ~/bin on PATH.
+      const cli = path.join(fakeHome, "bin", "mullion");
+      expect(fs.existsSync(path.join(fakeHome, ".local", "bin", "mullion"))).toBe(false);
+      expect(fs.lstatSync(cli).isSymbolicLink()).toBe(false);
+      const body = fs.readFileSync(cli, "utf8");
+      expect(body).toMatch(/^#!\/bin\/sh\nexec /);
+      expect(body).toContain(path.join(binDir, "node"));
+      expect(body).toContain(`${fs.realpathSync(mullionHome)}/current/dist/cli/mullion.mjs`);
+      expect(body).toContain('"$@"');
+    });
+
+    it("removes the other role's task when it belongs to this install root", async () => {
+      writeWindowsShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      seedTask("Mullion-primary", fs.realpathSync(mullionHome));
+      const { stdout } = await runScript(["--role", "agent", mullionHome]);
+      expect(stdout).toMatch(/Removing Mullion-primary \(this host is now role: agent\)/);
+      const calls = readLog("powershell.log");
+      expect(calls).toHaveLength(2);
+      expect(calls[0]).toContain("-TaskName Mullion-primary -Remove");
+      expect(calls[1]).toContain("-TaskName Mullion-agent");
+      expect(readLog("schtasks.registered")).toEqual([
+        `Mullion-agent|${fs.realpathSync(mullionHome)}`,
+      ]);
+    });
+
+    it("leaves the other role's task alone when it belongs to a different install root, and warns about the port", async () => {
+      writeWindowsShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      const otherRoot = freshMullionHome();
+      seedTask("Mullion-primary", fs.realpathSync(otherRoot));
+      const { stdout, stderr } = await runScript(["--role", "agent", mullionHome]);
+      expect(stdout).toMatch(/Leaving Mullion-primary registered: it is installed in/);
+      expect(stderr).toMatch(/BOTH bind port 3000/);
+      const calls = readLog("powershell.log");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).not.toContain("-Remove");
+    });
+
+    it("removes nothing when the other role has no task", async () => {
+      writeWindowsShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      await runScript(["--role", "agent", mullionHome]);
+      expect(readLog("powershell.log").filter((line) => line.includes("-Remove"))).toEqual([]);
     });
   });
 

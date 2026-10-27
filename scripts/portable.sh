@@ -18,6 +18,28 @@ is_darwin() {
   [ "$(uname -s)" = "Darwin" ]
 }
 
+# True under Git for Windows' bash (MSYS2/Cygwin) — issue #2160. There
+# `uname -s` is MINGW64_NT-<build> (or MSYS_NT-/CYGWIN_NT-). The installer's
+# tests shim `uname` to exercise this branch on Linux.
+is_windows() {
+  case "$(uname -s)" in
+    MINGW* | MSYS* | CYGWIN*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# A path in the form Node and Windows programs understand. Git Bash's own
+# paths are MSYS-style (/c/Users/me), which Node reads as a path on the
+# CURRENT drive; `cygpath -m` gives the mixed form (C:/Users/me) that Node,
+# Windows and Git Bash all accept. Unchanged anywhere but Windows.
+native_path() {
+  if is_windows; then
+    cygpath -m "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
 # The launchd domain a per-user agent lives in (`gui/$UID`). launchd's own
 # tooling wants the numeric uid, not the user name.
 launchd_gui_domain() {
@@ -174,10 +196,62 @@ readlink_target() {
 # silently moving the link somewhere else.
 replace_symlink() {
   local source="$1" destination="$2"
+  if is_windows; then
+    # No atomic replace over a junction: remove the old link (never what it
+    # points at), then move the new one into place. `current` is briefly
+    # absent in between; the callers hold the updater's lock.
+    if [ -e "$destination" ] || [ -L "$destination" ]; then
+      remove_dir_link "$destination"
+    fi
+    mv "$source" "$destination"
+    return 0
+  fi
   if mv -T "$source" "$destination" 2>/dev/null; then
     return 0
   fi
   mv -hf "$source" "$destination"
+}
+
+# Create LINK pointing at the directory TARGET — issue #2160. A symlink
+# everywhere but Windows, where one needs Developer Mode or administrator
+# rights (and Git Bash's `ln -s` silently makes a COPY without them): there it
+# is a directory junction, which needs neither. Node makes it, since node is a
+# prerequisite and takes its arguments as plain argv (no cmd.exe quoting for a
+# path with a space in it).
+make_dir_link() {
+  local target="$1" link="$2"
+  if is_windows; then
+    node -e 'require("fs").symlinkSync(process.argv[1], process.argv[2], "junction")' \
+      "$(cygpath -w "$target")" "$(cygpath -w "$link")"
+  else
+    ln -s "$target" "$link"
+  fi
+}
+
+# Remove a link made by make_dir_link, and only the link — never the
+# directory it points at. A junction is removed with rmdir (which does not
+# follow it); `rm -rf` through a junction is exactly what must not happen.
+# A missing path is fine.
+remove_dir_link() {
+  local link="$1"
+  if is_windows; then
+    if [ -e "$link" ] || [ -L "$link" ]; then
+      # rmdir removes a junction itself and refuses a real, non-empty
+      # directory. The ENOTDIR fallback is for a plain symlink — what this
+      # branch sees when the installer's tests run it on Linux.
+      node -e '
+        const fs = require("fs");
+        try {
+          fs.rmdirSync(process.argv[1]);
+        } catch (err) {
+          if (err.code !== "ENOTDIR") throw err;
+          fs.unlinkSync(process.argv[1]);
+        }
+      ' "$(cygpath -w "$link")"
+    fi
+  else
+    rm -f "$link" 2>/dev/null || true
+  fi
 }
 
 # --- directory listing ------------------------------------------------------

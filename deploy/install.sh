@@ -37,6 +37,13 @@
 #   owner/repo    defaults to MULLION_UPDATE_REPO's own default
 #                 (s3ntin3l8/mullion-session-manager) — override only for a
 #                 fork publishing releases elsewhere.
+#
+# On Windows (issue #2160, part of #1728) run it from Git for Windows' bash —
+# deploy/mullion-install.sh fetches and runs it, as elsewhere. The job is a
+# per-user scheduled task started at logon (deploy/windows/register-task.ps1),
+# the role must be `agent`, and no administrator rights are needed. Pass the
+# install root as a Windows-style path, e.g. ~/AppData/Local/Mullion. See
+# deploy/README.md's Windows section.
 
 set -euo pipefail
 
@@ -118,14 +125,27 @@ REPO="${2:-s3ntin3l8/mullion-session-manager}"
 echo "==> Role: $ROLE"
 
 # The platform decides which job type this host gets: a launchd agent plist
-# on macOS, a systemd --user unit on Linux (issue #1718).
+# on macOS, a systemd --user unit on Linux (issue #1718), a per-user scheduled
+# task on Windows (issue #2160) — where this script runs in Git for Windows'
+# bash, which Mullion needs there anyway (sessions run in it).
 PLATFORM="$(uname -s)"
 if [ "$PLATFORM" = "Darwin" ]; then
   PLATFORM_KIND="launchd"
+elif is_windows; then
+  PLATFORM_KIND="windows"
 else
   PLATFORM_KIND="systemd"
 fi
 echo "==> Platform: $PLATFORM ($PLATFORM_KIND)"
+
+# A Windows host is an AGENT host so far (#1728): the database, the frontend
+# and the gateway story have never been run there. Refused up front, before
+# anything is downloaded or written.
+if [ "$PLATFORM_KIND" = "windows" ] && [ "$ROLE" != "agent" ]; then
+  echo "--role $ROLE is not supported on Windows yet — a Windows host runs as an agent (--role agent)." >&2
+  echo "See deploy/README.md's Windows section and https://github.com/$REPO/issues/1728." >&2
+  exit 1
+fi
 
 echo "==> Checking host prerequisites"
 missing=()
@@ -133,12 +153,24 @@ missing=()
 # neither exists on a stock macOS — the portable spellings now live in
 # scripts/portable.sh (a watchdog and `shasum`), so they are no longer
 # prerequisites at all.
-for bin in node npm dtach curl tar; do
+#
+# `dtach` is not one on Windows: a session's persistence there comes from the
+# detached pty-host master (src/pty-host/), not from dtach. `cygpath` ships
+# with Git Bash and is how the paths handed to Windows programs are written.
+if [ "$PLATFORM_KIND" = "windows" ]; then
+  REQUIRED_BINS=(node npm curl tar cygpath)
+else
+  REQUIRED_BINS=(node npm dtach curl tar)
+fi
+for bin in "${REQUIRED_BINS[@]}"; do
   command -v "$bin" >/dev/null 2>&1 || missing+=("$bin")
 done
 if [ "$SKIP_SERVICE" = false ]; then
   if [ "$PLATFORM_KIND" = "launchd" ]; then
     command -v launchctl >/dev/null 2>&1 || missing+=("launchctl")
+  elif [ "$PLATFORM_KIND" = "windows" ]; then
+    # Windows PowerShell registers the scheduled task (deploy/windows/register-task.ps1).
+    command -v powershell.exe >/dev/null 2>&1 || missing+=("powershell.exe")
   else
     for bin in systemd-run systemctl; do
       command -v "$bin" >/dev/null 2>&1 || missing+=("$bin")
@@ -150,6 +182,9 @@ if [ "${#missing[@]}" -gt 0 ]; then
   if [ "$PLATFORM_KIND" = "launchd" ]; then
     echo "See deploy/README.md's prerequisites (Node 26, dtach, launchctl, and —" >&2
     echo "for the native-module compile step below — python3/make/g++)." >&2
+  elif [ "$PLATFORM_KIND" = "windows" ]; then
+    echo "See deploy/README.md's Windows section: Node 26 and Git for Windows," >&2
+    echo "run from Git Bash. No C++ build tools are needed." >&2
   else
     echo "See deploy/README.md's prerequisites (Node 26, dtach, a systemd --user" >&2
     echo "session, and — for the native-module compile step below — python3/make/g++)." >&2
@@ -178,6 +213,12 @@ NPM_CI_TIMEOUT_SECONDS=600
 
 mkdir -p "$MULLION_HOME_INPUT"
 MULLION_HOME="$(cd "$MULLION_HOME_INPUT" && pwd)"
+# On Windows Git Bash's `pwd` is an MSYS path (/c/Users/me/Mullion), which
+# Node reads as a path on the CURRENT drive. Everything written to the .env,
+# the task and install.json must be a path Node and Windows understand, and
+# the mixed form (C:/Users/me/Mullion) is also one Git Bash itself accepts —
+# so it is the form used throughout. A no-op elsewhere.
+MULLION_HOME="$(native_path "$MULLION_HOME")"
 echo "==> Installing into $MULLION_HOME"
 
 if [ -f "$MULLION_HOME/.env" ]; then
@@ -300,9 +341,11 @@ fi
 echo "==> Pointing current -> $VERSION"
 # `ln -sfn`/`mv -T` are GNU spellings; BSD ln has no -n and BSD mv has no -T
 # (and plain mv would move the temp link INTO the directory `current` points
-# at). The helper replaces the symlink itself on both platforms.
-rm -f "$MULLION_HOME/current.tmp" 2>/dev/null || true
-ln -s "$RELEASE_DIR" "$MULLION_HOME/current.tmp"
+# at). The helper replaces the symlink itself on both platforms. On Windows
+# the "symlink" is a directory junction (scripts/portable.sh), which needs no
+# Developer Mode or administrator rights.
+remove_dir_link "$MULLION_HOME/current.tmp"
+make_dir_link "$RELEASE_DIR" "$MULLION_HOME/current.tmp"
 replace_symlink "$MULLION_HOME/current.tmp" "$MULLION_HOME/current"
 
 # Phase 4 (#134, PR7) — points at $MULLION_HOME/current (the symlink just
@@ -315,14 +358,36 @@ replace_symlink "$MULLION_HOME/current.tmp" "$MULLION_HOME/current"
 # tag) — an unconditional `ln -sfn` would happily create a dangling
 # symlink in that case (code review, PR #403).
 MULLION_CLI_LINKED=false
+# Where the CLI goes, relative to $HOME. ~/.local/bin is on a Linux or Mac
+# user's PATH by their distro's / shell's profile, but NOT on Git Bash's:
+# its /etc/profile.d/env.sh puts ~/bin there, and that is what a session's
+# login shell (`bash -lc`) sees (issue #2160). A Windows machine that happens
+# to have ~/.local/bin on its Windows PATH for other tools would hide the
+# difference — which is how it was nearly missed.
+if [ "$PLATFORM_KIND" = "windows" ]; then
+  CLI_BIN_DIR="bin"
+else
+  CLI_BIN_DIR=".local/bin"
+fi
 if [ -f "$MULLION_HOME/current/dist/cli/mullion.mjs" ]; then
-  echo "==> Linking mullion CLI to ~/.local/bin/mullion"
-  mkdir -p ~/.local/bin
-  rm -f ~/.local/bin/mullion 2>/dev/null || true
-  ln -s "$MULLION_HOME/current/dist/cli/mullion.mjs" ~/.local/bin/mullion
+  echo "==> Linking mullion CLI to ~/$CLI_BIN_DIR/mullion"
+  mkdir -p ~/"$CLI_BIN_DIR"
+  rm -f ~/"$CLI_BIN_DIR"/mullion 2>/dev/null || true
+  if [ "$PLATFORM_KIND" = "windows" ]; then
+    # Git Bash's `ln -s` makes a COPY without Developer Mode, which would
+    # freeze the CLI at this release. A two-line launcher script follows
+    # `current` instead, and is what a Git Bash session (where the agents
+    # run `mullion`) finds on PATH. It has to name node itself: a session's
+    # PATH is not guaranteed to have it.
+    printf '#!/bin/sh\nexec "%s" "%s/current/dist/cli/mullion.mjs" "$@"\n' \
+      "$NODE_PATH" "$MULLION_HOME" > ~/"$CLI_BIN_DIR"/mullion
+    chmod 755 ~/"$CLI_BIN_DIR"/mullion
+  else
+    ln -s "$MULLION_HOME/current/dist/cli/mullion.mjs" ~/"$CLI_BIN_DIR"/mullion
+  fi
   MULLION_CLI_LINKED=true
 else
-  echo "==> mullion CLI not present in this release (dist/cli/mullion.mjs missing) — skipping ~/.local/bin/mullion link"
+  echo "==> mullion CLI not present in this release (dist/cli/mullion.mjs missing) — skipping ~/$CLI_BIN_DIR/mullion link"
 fi
 
 # Hermes review, PR #529 (fifth round): src/app.ts checks `.trim() !== ""`,
@@ -703,6 +768,8 @@ warn_if_port_collision() {
 # skipped.
 if [ "$PLATFORM_KIND" = "launchd" ]; then
   SERVICE_LOG_HINT="tail -f $MULLION_HOME/logs/com.mullion.$ROLE.err.log"
+elif [ "$PLATFORM_KIND" = "windows" ]; then
+  SERVICE_LOG_HINT="tail -f $MULLION_HOME/logs/mullion.log"
 else
   if [ "$ROLE" = "primary" ]; then
     SERVICE_LOG_HINT="journalctl --user -u mullion.service -f"
@@ -711,9 +778,39 @@ else
   fi
 fi
 
+# --- Windows scheduled-task helpers (issue #2160) -----------------------------
+#
+# `schtasks` takes `/Query`-style switches, which Git Bash would otherwise
+# rewrite as a path (`/Query` -> `C:/Program Files/Git/Query`); `//Query`
+# is the spelling it leaves alone.
+
+# Runs deploy/windows/register-task.ps1 under Windows PowerShell. PSModulePath
+# is dropped: one inherited from PowerShell 7 points Windows PowerShell 5.1
+# at modules it cannot load, and the ScheduledTasks module is one of them.
+windows_register_task() {
+  env -u PSModulePath powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+    -File "$(cygpath -w "$SCRIPT_DIR/windows/register-task.ps1")" "$@"
+}
+
+windows_task_registered() {
+  schtasks //Query //TN "$1" >/dev/null 2>&1
+}
+
+# The install root a registered task belongs to — its WorkingDirectory, which
+# register-task.ps1 sets to the root. Empty when it cannot be read.
+windows_task_home() {
+  local xml dir
+  xml="$(schtasks //Query //TN "$1" //XML 2>/dev/null)" || return 0
+  dir="$(printf '%s' "$xml" | tr -d '\r' | sed -n 's|.*<WorkingDirectory>\(.*\)</WorkingDirectory>.*|\1|p' | head -1)"
+  [ -n "$dir" ] || return 0
+  cygpath -m "$dir"
+}
+
 if [ "$SKIP_SERVICE" = true ]; then
   if [ "$PLATFORM_KIND" = "launchd" ]; then
     echo "==> Skipping launchd job installation (--no-systemd / MULLION_SKIP_SYSTEMD)"
+  elif [ "$PLATFORM_KIND" = "windows" ]; then
+    echo "==> Skipping scheduled task registration (--no-systemd / MULLION_SKIP_SYSTEMD)"
   else
     echo "==> Skipping systemd user unit installation (--no-systemd / MULLION_SKIP_SYSTEMD)"
   fi
@@ -810,6 +907,71 @@ elif [ "$PLATFORM_KIND" = "launchd" ]; then
 
   echo "==> Done. Status:"
   launchctl print "$(launchd_gui_domain)/$LABEL" || true
+elif [ "$PLATFORM_KIND" = "windows" ]; then
+  # Windows: a per-user scheduled task that runs at logon (issue #2160, part
+  # of #1728) — the counterpart of the systemd --user unit and the launchd
+  # agent job. Per user, not a Windows service, because the agent CLIs, their
+  # logins and Git Bash are per user (and the named pipes are narrowed to the
+  # user Mullion runs as). The task runs scripts/windows-launcher.mjs, which
+  # reads the .env and supervises the server — the roles EnvironmentFile= and
+  # Restart= play in the systemd unit. Stopping the task ends the launcher and
+  # the server; the detached pty-host masters, and so the sessions, survive.
+  echo "==> Registering the scheduled task"
+  mkdir -p "$MULLION_HOME/logs"
+  if [ "$ROLE" = "primary" ]; then
+    TASK_NAME="Mullion-primary"
+    OTHER_TASK_NAME="Mullion-agent"
+  else
+    TASK_NAME="Mullion-agent"
+    OTHER_TASK_NAME="Mullion-primary"
+  fi
+
+  # Same teardown rule as the other platforms: the OTHER role's task is
+  # removed when it belongs to THIS install root (or its root cannot be
+  # determined), and left alone — with a port-collision warning — when it
+  # belongs to a different one (issue #1800).
+  if windows_task_registered "$OTHER_TASK_NAME"; then
+    OTHER_TASK_HOME="$(windows_task_home "$OTHER_TASK_NAME")"
+    if [ -n "$OTHER_TASK_HOME" ] && ! same_install_root "$MULLION_HOME" "$OTHER_TASK_HOME"; then
+      echo "==> Leaving $OTHER_TASK_NAME registered: it is installed in $OTHER_TASK_HOME, a different install root from $MULLION_HOME"
+      warn_if_port_collision "$OTHER_TASK_NAME" "$OTHER_TASK_HOME"
+    else
+      echo "==> Removing $OTHER_TASK_NAME (this host is now role: $ROLE)"
+      windows_register_task -TaskName "$OTHER_TASK_NAME" -Remove ||
+        echo "WARNING: failed to remove $OTHER_TASK_NAME — it may still be running and could collide with $TASK_NAME on PORT until removed by hand (schtasks /Delete /TN $OTHER_TASK_NAME /F)." >&2
+    fi
+  fi
+
+  # -Start runs it now; re-running this installer re-registers (replacing the
+  # definition, which stops the old run first).
+  windows_register_task \
+    -TaskName "$TASK_NAME" \
+    -NodePath "$(cygpath -w "$NODE_PATH")" \
+    -LauncherPath "$(cygpath -w "$MULLION_HOME/current/scripts/windows-launcher.mjs")" \
+    -MullionHome "$(cygpath -w "$MULLION_HOME")" \
+    -Start
+
+  # install.json: how a program (a tray app, a script) finds this install
+  # without reimplementing the layout — which role, which task, where the
+  # .env and the log are. No secrets: the .env itself stays where it is.
+  MULLION_JSON_HOME="$MULLION_HOME" MULLION_JSON_ROLE="$ROLE" MULLION_JSON_VERSION="$VERSION" \
+    MULLION_JSON_TASK="$TASK_NAME" MULLION_JSON_NODE="$(native_path "$NODE_PATH")" \
+    "$NODE_PATH" -e '
+      const e = process.env;
+      const info = {
+        role: e.MULLION_JSON_ROLE,
+        version: e.MULLION_JSON_VERSION,
+        home: e.MULLION_JSON_HOME,
+        envFile: e.MULLION_JSON_HOME + "/.env",
+        logFile: e.MULLION_JSON_HOME + "/logs/mullion.log",
+        taskName: e.MULLION_JSON_TASK,
+        node: e.MULLION_JSON_NODE,
+      };
+      require("fs").writeFileSync(e.MULLION_JSON_HOME + "/install.json", JSON.stringify(info, null, 2) + "\n");
+    '
+
+  echo "==> Done. Status:"
+  schtasks //Query //TN "$TASK_NAME" //FO LIST || true
 else
   echo "==> Installing the systemd --user unit"
   mkdir -p ~/.config/systemd/user
@@ -910,7 +1072,7 @@ EOF
 fi
 if [ "$MULLION_CLI_LINKED" = true ]; then
   cat <<EOF
-  - The \`mullion\` CLI is linked at ~/.local/bin/mullion (docs/cli.md) —
-    add ~/.local/bin to PATH if it isn't already.
+  - The \`mullion\` CLI is linked at ~/$CLI_BIN_DIR/mullion (docs/cli.md) —
+    add ~/$CLI_BIN_DIR to PATH if it isn't already.
 EOF
 fi
