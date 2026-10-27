@@ -74,7 +74,13 @@ describe("space report", () => {
     const full = await inspectSpaceReport({ root });
     expect(capped.scannedBytes).toBeLessThan(full.scannedBytes);
     // What the walk never reached lands in the "outside" figure, an upper bound.
-    expect(capped.outsideBytes).toBeGreaterThan(full.outsideBytes);
+    // Asserted from each report alone: comparing two statfs readings of a shared
+    // tmpdir would flake whenever another test writes between them.
+    for (const report of [capped, full]) {
+      expect(report.outsideBytes).toBe(
+        Math.max(0, report.filesystemUsedBytes - report.scannedBytes),
+      );
+    }
     expect(full.truncated).toBe(false);
   });
 
