@@ -1143,4 +1143,68 @@ describe("CreateProjectModal — confirm-first directory creation and error hand
     });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
+  describe("clearing the Dev server field (issue #2082)", () => {
+    const renderEdit = (extra = {}) => {
+      const onClose = vi.fn();
+      const onCreate = vi.fn().mockResolvedValue(undefined);
+      render(
+        <CreateProjectModal
+          mode="edit"
+          initialName="mullion"
+          initialPath="/home/x/mullion"
+          initialDevServerUrl="3200"
+          onClose={onClose}
+          onCreate={onCreate}
+          {...extra}
+        />,
+      );
+      return { onClose, onCreate };
+    };
+    const field = () => screen.getByPlaceholderText("5173");
+
+    it("saves devServerUrl: null when the field is cleared and Save changes is clicked", async () => {
+      const user = userEvent.setup();
+      const { onClose, onCreate } = renderEdit();
+
+      await user.clear(field());
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+      expect(onCreate).toHaveBeenCalledTimes(1);
+      expect(onCreate.mock.calls[0][0].devServerUrl).toBeNull();
+      await waitFor(() => expect(onClose).toHaveBeenCalled());
+    });
+
+    it("saves devServerUrl: null when Enter is pressed in the cleared field", async () => {
+      const user = userEvent.setup();
+      const { onCreate } = renderEdit();
+
+      await user.clear(field());
+      await user.keyboard("{Enter}");
+
+      await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
+      expect(onCreate.mock.calls[0][0].devServerUrl).toBeNull();
+    });
+
+    it("shows why nothing was saved when the path is empty, and keeps the clear pending", async () => {
+      const user = userEvent.setup();
+      const { onCreate } = renderEdit({ initialPath: "" });
+
+      await user.clear(field());
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+      expect(onCreate).not.toHaveBeenCalled();
+      expect(await screen.findByRole("alert")).toHaveTextContent("Repository path is required.");
+    });
+
+    it("still saves null with a differing detected port offered (the field is not re-filled)", async () => {
+      const user = userEvent.setup();
+      const { onCreate } = renderEdit({ detectedDevServerPort: "5173" });
+
+      await user.clear(field());
+      expect(field()).toHaveValue("");
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+      expect(onCreate.mock.calls[0][0].devServerUrl).toBeNull();
+    });
+  });
 });
