@@ -1930,7 +1930,11 @@ export class RemoteHostClient {
     // enter/exit, mouse and bracketed-paste modes) followed by the ring. A leading
     // `ESC[?1049h` would put the whole replay into the alternate buffer, which has
     // no scrollback, so the leading run of private-mode sequences is dropped — the
-    // ring's own escapes switch screens where they happened.
+    // ring's own escapes switch screens where they happened. The match is greedy,
+    // so a private-mode run that begins the ring itself and abuts the preamble
+    // (e.g. `ESC[?25l` then the TUI's own `ESC[?1049h`) goes too: the content then
+    // lands in the normal buffer, which has scrollback, and only the
+    // `--- alternate screen ---` marker is lost — benign.
     //
     // The size is a fixed 120x40: an older agent cannot tell us the real one, so a
     // session that ran at another width is re-wrapped. Accepted for a skew path.
