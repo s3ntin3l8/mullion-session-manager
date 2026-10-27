@@ -33,8 +33,8 @@ async function loadReporters(ci: string, githubActions: string) {
 }
 
 describe("vitest.shared reporters", () => {
-  it("keeps Vitest's default reporters locally", async () => {
-    expect(await loadReporters("", "")).toBeUndefined();
+  it("names the default reporter explicitly locally (an unset option picks a silent agent reporter)", async () => {
+    expect(await loadReporters("", "")).toEqual(["default"]);
   });
 
   it("adds a junit.xml report under CI", async () => {

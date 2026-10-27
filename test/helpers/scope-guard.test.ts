@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   SHIM_EXIT_CODE,
   describeScopeLeaks,
+  findLeakedDtachMasters,
   findLeakedScopes,
   installSystemdRunShim,
   readBlockedLaunches,
@@ -76,5 +77,30 @@ describe("describeScopeLeaks", () => {
     expect(msg).toContain("systemd-run -u crs-session-x-1");
     expect(msg).toContain("1 crs-session scope(s) left running");
     expect(msg).toContain("crs-session-x-2.scope");
+  });
+});
+
+describe("findLeakedDtachMasters (issue #2112, macOS)", () => {
+  const root = "/tmp/mst-AbC123";
+  const ps = [
+    "  101     1   101 /usr/bin/dtach -n /tmp/mst-AbC123/vitest-sessions-9/2.sock -Ez sh",
+    "  102   101   101 sh",
+    "  103     1   103 /usr/bin/dtach -n /tmp/mst-OTHER/vitest-sessions-1/3.sock -Ez sh",
+    "  104     1   104 /usr/bin/dtach -n /Users/me/.mullion/sessions/1.sock -Ez sh",
+  ].join("\n");
+
+  it("returns only the masters whose socket lives under this run's root", () => {
+    const rows = findLeakedDtachMasters(root, () => ps);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toContain("/tmp/mst-AbC123/vitest-sessions-9/2.sock");
+  });
+
+  it("returns nothing when the process table can't be read", () => {
+    expect(findLeakedDtachMasters(root, () => null)).toEqual([]);
+  });
+
+  it("describeScopeLeaks reports them", () => {
+    expect(describeScopeLeaks([], [], ["101 dtach -n x"])).toContain("dtach master(s)");
+    expect(describeScopeLeaks([], [], [])).toBeNull();
   });
 });

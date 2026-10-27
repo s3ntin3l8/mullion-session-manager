@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { findDtachMasters, reapDtachMasters } from "./reap-dtach.js";
+import { dtachMastersFromPs, findDtachMasters, reapDtachMasters } from "./reap-dtach.js";
 
 describe("reap-dtach", () => {
   let child: ChildProcess | undefined;
@@ -28,7 +28,44 @@ describe("reap-dtach", () => {
     await exited;
   });
 
-  it("returns nothing when procfs is absent", () => {
-    expect(findDtachMasters("/x", "/no-such-proc")).toEqual([]);
+  it("returns nothing when procfs is absent and the process table matches nothing", () => {
+    expect(findDtachMasters("/x", "/no-such-proc", () => "  1  0  1 init\n")).toEqual([]);
+  });
+
+  it("returns nothing when procfs is absent and the process table can't be read", () => {
+    expect(findDtachMasters("/x", "/no-such-proc", () => null)).toEqual([]);
+  });
+
+  it("falls back to the process table when procfs is absent", () => {
+    const ps = "  10  1  10 /usr/bin/dtach -n /x/1.sock zsh\n";
+    expect(findDtachMasters("/x", "/no-such-proc", () => ps)).toEqual(
+      process.platform === "win32" ? [] : [10],
+    );
+  });
+
+  it("reads the process table once per reap", () => {
+    let reads = 0;
+    reapDtachMasters("/x", "/no-such-proc", () => {
+      reads++;
+      return null;
+    });
+    expect(reads).toBe(process.platform === "win32" ? 0 : 1);
+  });
+});
+
+describe("dtachMastersFromPs (macOS, no procfs)", () => {
+  const ps = [
+    "  10     1  10 /usr/local/bin/dtach -n /tmp/mst-X/vitest-sessions-1/2.sock -Ez zsh",
+    "  11    10  10 zsh",
+    "  12     1  12 dtach -n /tmp/mst-Y/other.sock -Ez zsh",
+    "  13     1  13 vim /tmp/mst-X/vitest-sessions-1/notes",
+  ].join("\n");
+
+  it("finds the master under the dir and its direct children, and nothing else", () => {
+    expect(dtachMastersFromPs(ps, "/tmp/mst-X")).toEqual({ masters: [10], children: [11] });
+  });
+
+  it("is empty when nothing matches", () => {
+    expect(dtachMastersFromPs(ps, "/tmp/nope")).toEqual({ masters: [], children: [] });
   });
 });

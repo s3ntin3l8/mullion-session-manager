@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import { afterAll } from "vitest";
 import { schema } from "../src/plugins/env.js";
 import { reapDtachMasters } from "./helpers/reap-dtach.js";
+import { SESSION_RUNTIME_ENV_KEYS } from "./helpers/session-runtime-env.js";
 import { scrubGitHookEnv } from "./helpers/git-hook-env.js";
 
 // Give every test file an isolated SQLite database so parallel workers never
@@ -104,6 +105,17 @@ const PRESERVED_VARS = new Set([
 ]);
 for (const key of Object.keys(schema.properties)) {
   if (!PRESERVED_VARS.has(key)) delete process.env[key];
+}
+// ...and the per-session injections that are NOT schema keys (the hook
+// socket/token, MULLION_SESSION_ID, MULLION_WORKTREES_IN_DOT_WT, ...). A suite
+// run from inside a Mullion-hosted session inherits all of them, and a test
+// asserting "no .wt convention" would otherwise fail only there (issue #2112).
+// The list lives in a helper with no src/ imports: a src module that captures
+// a spawn binding at load (e.g. shell-spawn.ts) would bind the real
+// child_process before a test's own vi.mock can apply, which lets real spawns
+// through.
+for (const key of SESSION_RUNTIME_ENV_KEYS) {
+  delete process.env[key];
 }
 
 // Agent-owned config-root overrides — not Mullion's own schema vars above, but

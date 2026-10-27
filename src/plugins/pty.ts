@@ -531,9 +531,13 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   });
   const sessionsDir = sessionsDirs.current;
   if (sessionsDir !== path.resolve(app.config.SESSIONS_DIR)) {
-    app.log.info(
+    // A warn, not an info: the sessions dir (sockets, markers, per-session
+    // state) now lives OUTSIDE the configured data dir, which an operator
+    // isolating a spike (AGENTS.md "Spikes must be fully isolated") needs to
+    // see (issue #2112).
+    app.log.warn(
       { from: app.config.SESSIONS_DIR, to: sessionsDir },
-      `sessionsDir socket path approaches this platform's ${maxSunPathBytes()}-byte sun_path limit, using short fallback`,
+      `sessionsDir socket path approaches this platform's ${maxSunPathBytes()}-byte sun_path limit, using short fallback ${sessionsDir} — OUTSIDE the configured SESSIONS_DIR`,
     );
   }
   // A fallback root that could not hold the sessions dir (unwritable, stale,
