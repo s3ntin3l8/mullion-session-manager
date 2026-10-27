@@ -12,6 +12,7 @@ export type ProjectHubTab = "agent-rules" | "briefing" | "scaffold" | "dock" | "
 export interface ProjectHubPanelParams {
   projectId: number;
   tab?: ProjectHubTab;
+  dockView?: "previews";
   // Bumped by openProjectHubPanel each time it re-targets an already-open
   // panel, so a request for the SAME tab the params already name (after the
   // user navigated elsewhere) still switches back — same convention as
@@ -22,7 +23,7 @@ export interface ProjectHubPanelParams {
 interface TabDef {
   id: ProjectHubTab;
   label: string;
-  Body: ComponentType<{ params: { projectId: number } }>;
+  Body: ComponentType<{ params: { projectId: number; view?: "previews"; rev?: number } }>;
 }
 
 const PROJECT_HUB_TABS: TabDef[] = [
@@ -37,11 +38,24 @@ const DEFAULT_TAB: ProjectHubTab = "agent-rules";
 
 // One tab's body behind its own ErrorBoundary, so one tab's crashing fetch
 // doesn't take the others (or the whole panel) down.
-function TabBody({ tab, projectId }: { tab: TabDef; projectId: number }) {
+function TabBody({
+  tab,
+  projectId,
+  dockView,
+  rev,
+}: {
+  tab: TabDef;
+  projectId: number;
+  dockView?: "previews";
+  rev?: number;
+}) {
   const [resetKey, setResetKey] = useState(0);
   return (
     <ErrorBoundary onReset={() => setResetKey((k) => k + 1)}>
-      <tab.Body key={resetKey} params={{ projectId }} />
+      <tab.Body
+        key={resetKey}
+        params={{ projectId, view: tab.id === "dock" ? dockView : undefined, rev }}
+      />
     </ErrorBoundary>
   );
 }
@@ -106,7 +120,12 @@ export function ProjectHubPanel({ params, onTabChange }: ProjectHubPanelProps) {
           className="project-hub-body"
           hidden={activeTab !== t.id}
         >
-          <TabBody tab={t} projectId={params.projectId} />
+          <TabBody
+            tab={t}
+            projectId={params.projectId}
+            dockView={params.dockView}
+            rev={params.rev}
+          />
         </div>
       ))}
     </div>

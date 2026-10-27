@@ -2208,7 +2208,34 @@ export class RemoteHostClient {
       duplex?: "half";
     },
   ): Promise<Response> {
-    const requestTarget = `/internal/preview/${port}${pathAndQuery}`;
+    return this.openPreviewHttpRequest(`/internal/preview/${port}${pathAndQuery}`, init);
+  }
+
+  openConfiguredPreviewHttp(
+    url: string,
+    init: { method: string; headers: Headers; body?: ReadableStream<Uint8Array>; duplex?: "half" },
+  ): Promise<Response> {
+    return this.openPreviewHttpRequest(
+      `/internal/configured-preview?${new URLSearchParams({ url })}`,
+      init,
+    );
+  }
+
+  openConfiguredPreviewWs(url: string): NodeWebSocket {
+    const requestTarget = `/internal/ws/configured-preview?${new URLSearchParams({ url })}`;
+    return new NodeWebSocket(`${this.wsBaseUrl}${requestTarget}`, {
+      headers: {
+        authorization: `Bearer ${this.token}`,
+        ...this.signatureHeaders("GET", requestTarget, undefined),
+      },
+      ...this.pinnedWsOptions(),
+    });
+  }
+
+  private async openPreviewHttpRequest(
+    requestTarget: string,
+    init: { method: string; headers: Headers; body?: ReadableStream<Uint8Array>; duplex?: "half" },
+  ): Promise<Response> {
     const headers = new Headers(init.headers);
     // Issue #249 / roadmap 7.5 — `init.headers` here is seeded from a
     // BROWSER-controlled request forwarded through the preview proxy

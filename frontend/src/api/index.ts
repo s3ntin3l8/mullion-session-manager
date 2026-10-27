@@ -205,6 +205,8 @@ export type {
   DockerServiceActionResult,
   Preview,
   ProjectUrl,
+  NamedPreviewTarget,
+  ProjectPreviewConfig,
   ServerInfo,
   Task,
   TaskBlocker,

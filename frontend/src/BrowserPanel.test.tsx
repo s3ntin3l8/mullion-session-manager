@@ -253,6 +253,36 @@ describe("BrowserPanel", () => {
     }
     const noDevServer = { ...PROJECT, devServerUrl: null };
 
+    it("labels a named-only target and permits retry after an unreachable endpoint", async () => {
+      mock({ probe: 503 });
+      useDashboardStore.setState({ projects: [noDevServer] });
+      render(
+        <BrowserPanel params={{ projectId: 1, previewSlug: "br1", targetName: "Docker web" }} />,
+      );
+      expect(await screen.findByText(/Check its configured destination/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    });
+
+    it("keeps a named target distinct from the default and refreshes it on a repeated open", async () => {
+      mock();
+      useDashboardStore.setState({ projects: [noDevServer] });
+      const { rerender } = render(
+        <BrowserPanel
+          params={{ projectId: 1, previewSlug: "br1", targetName: "Docker web", targetRev: 1 }}
+        />,
+      );
+      const frame = await screen.findByTitle("Preview");
+      expect(frame).toHaveAttribute("src", branchSrc);
+      expect(screen.getByText("Docker web")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Dev server/ })).toBeNull();
+      rerender(
+        <BrowserPanel
+          params={{ projectId: 1, previewSlug: "br1", targetName: "Docker web", targetRev: 2 }}
+        />,
+      );
+      await waitFor(() => expect(screen.getByTitle("Preview")).not.toBe(frame));
+    });
+
     it("serves the slug through the proxy without a devServerUrl or a new preview", async () => {
       const fetchMock = mock();
       useDashboardStore.setState({ projects: [noDevServer] });

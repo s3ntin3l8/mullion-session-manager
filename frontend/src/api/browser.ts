@@ -7,9 +7,22 @@
 // Split out of the former flat frontend/src/api.ts (PR 22 of the
 // refactoring roadmap).
 import { request } from "./client.js";
-import type { Preview } from "./types.js";
+import type { Preview, ProjectPreviewConfig } from "./types.js";
 
 export const browserApi = {
+  getProjectPreviewTargets: (projectId: number) =>
+    request<ProjectPreviewConfig>(`/api/projects/${projectId}/preview-targets`),
+  saveProjectPreviewTargets: (projectId: number, config: ProjectPreviewConfig) =>
+    request<ProjectPreviewConfig>(`/api/projects/${projectId}/preview-targets`, {
+      method: "PUT",
+      body: JSON.stringify(config),
+    }),
+  createTargetPreview: (projectId: number, targetId: string) =>
+    request<Preview>("/api/previews", {
+      method: "POST",
+      body: JSON.stringify({ kind: "target", projectId, targetId }),
+    }),
+
   getDevServerStatus: (projectId: number) =>
     request<{ online: boolean }>(`/api/projects/${projectId}/dev-server-status`),
 

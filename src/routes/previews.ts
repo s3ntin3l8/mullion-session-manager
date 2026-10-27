@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
-import { projects } from "../db/schema.js";
+import { projects, projectPreviewTargets } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { getPreviewWorktree } from "../services/git-worktree.js";
@@ -12,6 +12,7 @@ import {
   createExternalPreview,
   deletePreviewBySlug,
   getOrCreateProjectPreview,
+  getOrCreateTargetPreview,
   getPreviewBySlug,
   listPreviews,
   type PreviewSummary,
@@ -27,7 +28,8 @@ import { requestScheme } from "../services/request-scheme.js";
 import { isAuthEnabled, isRequestAuthenticated } from "../services/auth.js";
 
 interface CreatePreviewBody {
-  kind: "project" | "external";
+  kind: "project" | "external" | "target";
+  targetId?: string;
   projectId?: number;
   url?: string;
   /** Issues #2016/#2018 — preview this branch rather than the checkout. */
@@ -40,9 +42,10 @@ const createPreviewSchema = {
     required: ["kind"],
     additionalProperties: false,
     properties: {
-      kind: { type: "string", enum: ["project", "external"] },
+      kind: { type: "string", enum: ["project", "external", "target"] },
       projectId: { type: "number" },
       url: { type: "string", minLength: 1 },
+      targetId: { type: "string", minLength: 1 },
       branch: { type: "string", minLength: 1, maxLength: 255 },
     },
   },
@@ -143,7 +146,20 @@ export async function previewsRoute(app: FastifyInstance) {
   // created preview row could never resolve to a working "preview-<slug>"
   // subdomain, so don't register these routes — creation must 404 rather
   // than silently succeed into a dead end.
-  if (app.config.PREVIEW_BASE_HOST.trim() === "") return;
+  if (app.config.PREVIEW_BASE_HOST.trim() === "") {
+    app.post<{ Body: CreatePreviewBody }>(
+      "/api/previews",
+      { schema: createPreviewSchema },
+      async (request, reply) => {
+        if (request.body.kind === "target")
+          return reply.conflict(
+            "Named targets require the preview proxy. Configure PREVIEW_BASE_HOST.",
+          );
+        return reply.notFound();
+      },
+    );
+    return;
+  }
 
   app.get("/api/previews", async () => withBranches(app, listPreviews(app)));
 
@@ -155,6 +171,21 @@ export async function previewsRoute(app: FastifyInstance) {
     async (request, reply) => {
       const { kind } = request.body;
 
+      if (kind === "target") {
+        if (!app.config.PREVIEW_BASE_HOST)
+          return reply.conflict(
+            "Named targets require the preview proxy. Configure PREVIEW_BASE_HOST.",
+          );
+        const [target] = app.db
+          .select()
+          .from(projectPreviewTargets)
+          .where(eq(projectPreviewTargets.id, request.body.targetId ?? ""))
+          .all();
+        if (!target || target.projectId !== request.body.projectId)
+          return reply.notFound("Preview target not found");
+        reply.code(201);
+        return getOrCreateTargetPreview(app, target.projectId, target.id);
+      }
       if (kind === "project") {
         const { projectId } = request.body;
         if (typeof projectId !== "number" || !Number.isInteger(projectId)) {

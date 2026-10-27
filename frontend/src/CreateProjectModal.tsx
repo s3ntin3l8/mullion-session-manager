@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FolderIcon, GlobeIcon, HostsIcon, BotIcon } from "./ui/icons.js";
+import { FolderIcon, HostsIcon, BotIcon } from "./ui/icons.js";
 import { api, ApiError, LOCAL_HOST_ID, MAX_HOST_CWDS, normalizeAgentId } from "./api/index.js";
 import type {
   Host,
@@ -165,8 +165,6 @@ export function CreateProjectModal({
   mode = "create",
   initialName = "",
   initialPath = "",
-  initialDevServerUrl = null,
-  detectedDevServerPort = null,
   hosts = [],
   projectId,
   initialDefaultAgent = null,
@@ -198,7 +196,6 @@ export function CreateProjectModal({
   // Issue #2090 — clones of this project the primary found on the other hosts.
   // Purely advisory: a failed or slow lookup just means no "Detected" line.
   const [hostSuggestions, setHostSuggestions] = useState<HostCheckoutSuggestion[]>([]);
-  const [devServerUrl, setDevServerUrl] = useState(initialDevServerUrl ?? "");
   const [defaultAgent, setDefaultAgent] = useState(initialDefaultAgent ?? UNSET_AGENT);
   const [defaultReviewAgent, setDefaultReviewAgent] = useState(
     initialDefaultReviewAgent ?? UNSET_AGENT,
@@ -394,7 +391,6 @@ export function CreateProjectModal({
       return;
     }
     const finalName = name.trim() || trailingSegment(trimmedPath);
-    const trimmedDevServerUrl = devServerUrl.trim();
     // Issue #1951 follow-up — only hosts that still exist are sent (the API
     // refuses the whole PATCH on an unknown host id), and only when the map
     // really changed, because PATCH replaces it.
@@ -468,11 +464,6 @@ export function CreateProjectModal({
         name: finalName,
         cwd: trimmedPath,
         hostId: isEdit ? undefined : hostId,
-        devServerUrl: isEdit
-          ? trimmedDevServerUrl === ""
-            ? null
-            : trimmedDevServerUrl
-          : undefined,
         defaultAgent: isEdit ? (defaultAgent === UNSET_AGENT ? null : defaultAgent) : undefined,
         defaultReviewAgent: isEdit
           ? defaultReviewAgent === UNSET_AGENT
@@ -828,43 +819,6 @@ export function CreateProjectModal({
         </span>
         <span className="create-modal-field-hint">Defaults to the folder name if left blank.</span>
       </label>
-
-      {isEdit && (
-        <label className="create-modal-field">
-          <span className="create-modal-field-label">Dev server</span>
-          <span className="create-modal-input-row">
-            <GlobeIcon size={15} style={{ color: "var(--muted)", flexShrink: 0 }} />
-            <input
-              className="mono"
-              value={devServerUrl}
-              onChange={(e) => setDevServerUrl(e.target.value)}
-              placeholder="5173"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void confirm();
-              }}
-            />
-          </span>
-          <span className="create-modal-field-hint">
-            Port or full URL — powers the browser preview pane. Leave blank to clear.
-          </span>
-          {/* Derived at render time, not stored in state — a pure
-                  comparison of two already-tracked values needs no effect,
-                  and re-deriving on every render is what keeps this in sync
-                  if `detectedDevServerPort` changes while the modal's open
-                  (e.g. the dock session finishes starting up) without ever
-                  touching `devServerUrl` itself. */}
-          {detectedDevServerPort !== null &&
-            detectedDevServerPort.trim() !== devServerUrl.trim() && (
-              <button
-                type="button"
-                className="create-modal-detected-devserver"
-                onClick={() => setDevServerUrl(detectedDevServerPort)}
-              >
-                Detected dev server on port {detectedDevServerPort} — use it?
-              </button>
-            )}
-        </label>
-      )}
 
       {isEdit && (
         <label className="create-modal-field">

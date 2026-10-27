@@ -622,3 +622,7 @@ in it.
   The banner must contain `Local:` followed by an `http(s)://localhost`
   URL — some frameworks use different labels or non-standard ports
   without the word "Local".
+
+### Named preview destinations
+
+**Preview ▾** in each project header opens its configured destinations even when the monitor group is collapsed. Configure the Dev server and additional IP:port or HTTP(S) destinations under **Project → Dock → Previews**. These runtime settings live in Mullion's database, independently of the monitor definitions in `.crs/dock.json`. Per-monitor badges no longer repeat the project's same URL. See [Named project targets](browser-previews.md#named-project-targets).

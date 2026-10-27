@@ -63,10 +63,13 @@ export interface KebabMenuItem {
 export function KebabMenu({
   items,
   title = "More…",
+  trigger,
   menuPlacement = "bottom",
+  menuAlign = "right",
 }: {
   items: KebabMenuItem[];
   title?: string;
+  trigger?: ReactNode;
   // "top" grows the portaled menu upward from the trigger instead of
   // dropping it down — for a trigger pinned near the bottom of the
   // viewport (the Dock), a downward menu can run off-screen with no way to
@@ -74,6 +77,7 @@ export function KebabMenu({
   // menuPlacement; deliberately no measured auto-flip (see getMenuStyle
   // below) — a caller in that position simply always wants "top".
   menuPlacement?: "bottom" | "top";
+  menuAlign?: "left" | "right";
 }) {
   const theme = useDashboardStore((s) => s.theme);
   const [open, setOpen] = useState(false);
@@ -242,8 +246,10 @@ export function KebabMenu({
     if (!rect) return null;
     const style: React.CSSProperties = {
       position: "fixed",
-      right: window.innerWidth - rect.right,
-      left: "auto",
+      right: menuAlign === "left" ? "auto" : window.innerWidth - rect.right,
+      left:
+        menuAlign === "left" ? Math.max(8, Math.min(rect.left, window.innerWidth - 222)) : "auto",
+      maxWidth: window.innerWidth - 16,
       overflowY: "auto",
     };
     const visible = visibleViewport();
@@ -300,7 +306,7 @@ export function KebabMenu({
           }
         }}
       >
-        <OverflowIcon size={15} />
+        {trigger ?? <OverflowIcon size={15} />}
       </button>
       {open &&
         menuStyle &&

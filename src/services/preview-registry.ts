@@ -14,7 +14,8 @@ function newSlug(): string {
 
 export interface PreviewSummary {
   slug: string;
-  kind: "project" | "external";
+  kind: "project" | "external" | "target";
+  targetId?: string | null;
   projectId: number | null;
   externalUrl: string | null;
   /** The session serving this preview (issue #2007); null when unbound. */
@@ -37,6 +38,7 @@ function toSummary(row: PreviewRow): PreviewSummary {
   return {
     slug: row.slug,
     kind: row.kind,
+    ...(row.kind === "target" ? { targetId: row.targetId } : {}),
     projectId: row.projectId,
     externalUrl: row.externalUrl,
     sessionId: row.sessionId,
@@ -79,7 +81,7 @@ export function getOrCreateProjectPreview(
   app.db
     .insert(previews)
     .values({ slug: newSlug(), kind: "project", projectId, branch: CHECKOUT_BRANCH })
-    .onConflictDoNothing({ target: [previews.projectId, previews.branch] })
+    .onConflictDoNothing()
     .run();
 
   const where = and(
@@ -137,7 +139,7 @@ export function upsertBranchPreview(
   app.db
     .insert(previews)
     .values({ slug: newSlug(), kind: "project", projectId, branch })
-    .onConflictDoNothing({ target: [previews.projectId, previews.branch] })
+    .onConflictDoNothing()
     .run();
   return findBranchPreview(app, projectId, branch)!;
 }
@@ -195,4 +197,19 @@ export function deletePreviewBySlug(app: FastifyInstance, slug: string): boolean
 export function listPreviews(app: FastifyInstance): PreviewSummary[] {
   const rows = app.db.select().from(previews).orderBy(desc(previews.createdAt)).all();
   return rows.map(toSummary);
+}
+
+/** A configured target has its own stable origin, independent of branch slugs. */
+export function getOrCreateTargetPreview(
+  app: FastifyInstance,
+  projectId: number,
+  targetId: string,
+): PreviewSummary {
+  app.db
+    .insert(previews)
+    .values({ slug: newSlug(), kind: "target", projectId, targetId })
+    .onConflictDoNothing({ target: previews.targetId })
+    .run();
+  const [row] = app.db.select().from(previews).where(eq(previews.targetId, targetId)).all();
+  return toSummary(row);
 }

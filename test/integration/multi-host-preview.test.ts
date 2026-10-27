@@ -440,4 +440,69 @@ describe("multi-host preview proxy (issue #28 phase 6)", () => {
 
     expect(res.headers.location).toBe("/other");
   });
+  it("proxies named targets from the project host with paths, bodies and no credentials leaking", async () => {
+    const config = await primary.app.inject({
+      method: "PUT",
+      url: `/api/projects/${projectId}/preview-targets`,
+      payload: {
+        devServerUrl: String(stubPort),
+        targets: [
+          {
+            id: "remote-web",
+            name: "Docker web",
+            destination: `http://127.0.0.1:${stubPort}/sub?configured=yes`,
+            connectionOrigin: "project",
+          },
+        ],
+      },
+    });
+    expect(config.statusCode).toBe(200);
+    const registered = await primary.app.inject({
+      method: "POST",
+      url: "/api/previews",
+      payload: { kind: "target", projectId, targetId: "remote-web" },
+    });
+    expect(registered.statusCode).toBe(201);
+    const slug = registered.json().slug;
+    const response = await primary.app.inject({
+      method: "POST",
+      url: "/api?a=1",
+      payload: "hello",
+      headers: {
+        host: `preview-${slug}.${PREVIEW_BASE_HOST}`,
+        authorization: "Bearer browser-secret",
+        "content-type": "text/plain",
+        cookie: `${PREVIEW_COOKIE_NAME}=do-not-forward; app=ok`,
+      },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      path: "/sub/api?a=1&configured=yes",
+      body: "hello",
+      headers: { cookie: "app=ok" },
+    });
+    expect(response.json().headers.authorization).toBeUndefined();
+    expect(response.json().headers["x-request-signature"]).toBeUndefined();
+    const ws = new NodeWebSocket(`ws://127.0.0.1:${primary.port}/hmr`, {
+      headers: { host: `preview-${slug}.${PREVIEW_BASE_HOST}` },
+    });
+    expect(await waitForOpenOrClose(ws)).toBe("open");
+    expect(await sendUntilEcho(ws, "named")).toBe("echo:named");
+    ws.close();
+    await waitUntil(() => ws.readyState === NodeWebSocket.CLOSED);
+  });
+
+  it("rejects malformed configured remote targets before connecting", async () => {
+    for (const url of ["javascript:bad", "http://169.254.169.254/"]) {
+      const result = await agent.app.inject({
+        url: `/internal/configured-preview?${new URLSearchParams({ url })}`,
+        headers: { authorization: `Bearer ${AGENT_TOKEN}` },
+      });
+      expect(result.statusCode).toBe(400);
+    }
+    const unauthorized = await agent.app.inject({
+      url: "/internal/configured-preview?url=http://localhost:5173/",
+    });
+    expect(unauthorized.statusCode).toBe(401);
+  });
 });

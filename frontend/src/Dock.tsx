@@ -158,6 +158,8 @@ export function Dock({
   workspaceProjectIds,
   onOpenGitHub,
   onOpenBrowser,
+  onOpenBlankBrowser,
+  onManagePreviews,
   onOpenSession,
 }: {
   // null: the scope is not knowable yet (cold start) or this is the phone
@@ -170,6 +172,8 @@ export function Dock({
   // configured (see the row below) rather than a fetched status, since
   // there's no server round-trip needed to know whether it's applicable.
   onOpenBrowser: (projectId: number) => void;
+  onOpenBlankBrowser?: () => void;
+  onManagePreviews?: (projectId: number) => void;
   // Issue #2069 — "Open holder" on a port-in-use row.
   onOpenSession?: (session: Session) => void;
 }) {
@@ -606,6 +610,8 @@ export function Dock({
                   onUnpin={() => setPinned(null)}
                   onOpenGitHub={onOpenGitHub}
                   onOpenBrowser={onOpenBrowser}
+                  onOpenBlankBrowser={onOpenBlankBrowser}
+                  onManagePreviews={onManagePreviews}
                   onOpenSession={onOpenSession}
                   onRemove={manualOnly(id) ? () => removeColumn(id) : undefined}
                 />

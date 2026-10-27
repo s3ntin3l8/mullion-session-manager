@@ -2,7 +2,6 @@ import { Fragment } from "react";
 import type { DockControl, Session } from "../api/index.js";
 import {
   ContainerIcon,
-  GlobeIcon,
   RefreshIcon,
   KillIcon,
   PlayTriangleIcon,
@@ -45,8 +44,6 @@ export function DockMonitor({
   selectedValue,
   worktreeOptions,
   onWorktreeChange,
-  devServerUrl,
-  onOpenBrowser,
   updateAvailable,
   dockerStatus,
   held = false,
@@ -81,8 +78,6 @@ export function DockMonitor({
   selectedValue: string;
   worktreeOptions: CustomSelectOption[];
   onWorktreeChange: (newValue: string) => void;
-  devServerUrl: string | null | undefined;
-  onOpenBrowser: () => void;
   updateAvailable: boolean;
   dockerStatus: DockerStatusPresentation | null;
   // PR2b — this control briefly vanished from discovery (a compose recreate
@@ -318,20 +313,6 @@ export function DockMonitor({
                 onChange={onWorktreeChange}
               />
             </span>
-          )}
-          {devServerUrl && (
-            <button
-              className="dock-monitor-url"
-              onClick={(e) => {
-                e.stopPropagation();
-                onOpenBrowser();
-              }}
-              title={`Open preview for ${devServerUrl}`}
-              type="button"
-            >
-              <GlobeIcon size={11} />
-              <span className="dock-monitor-url-text">{devServerUrl}</span>
-            </button>
           )}
           {control.docker && (
             <span

@@ -1074,7 +1074,7 @@ describe("Dock", () => {
     // service, Check for update) and the per-compose-project one inside
     // .dock-stack-header (Restart/Apply/Pull-or-Rebuild/Stop stack) —
     // hoisted out of the row so it stops repeating once per service in the
-    // same stack. A plain `document.querySelector(".kebab-trigger-btn")`
+    // same stack. A plain `document.querySelector(".dock-monitor .kebab-trigger-btn")`
     // would silently grab whichever renders first in the DOM, so every test
     // below picks the one it actually means to exercise.
     function serviceKebab(): HTMLElement {
@@ -2113,7 +2113,7 @@ describe("Dock", () => {
       render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
 
       await screen.findByText("Dev server");
-      expect(document.querySelector(".kebab-trigger-btn")).not.toBeInTheDocument();
+      expect(document.querySelector(".dock-monitor .kebab-trigger-btn")).not.toBeInTheDocument();
       expect(document.querySelector(".dock-stack-header")).not.toBeInTheDocument();
     });
 

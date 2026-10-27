@@ -22,6 +22,15 @@ export function resetPreviewsThrottleForTests(): void {
 }
 
 export const createPreviewsSlice: StateCreator<DashboardState, [], [], PreviewsSlice> = (set) => ({
+  previewPickerProjectId: null,
+  requestPreviewPicker: (projectId) => set({ previewPickerProjectId: projectId }),
+  projectPreviewConfigs: {},
+  refreshProjectPreviewConfig: async (projectId) => {
+    const config = await api.getProjectPreviewTargets(projectId);
+    set((state) => ({
+      projectPreviewConfigs: { ...state.projectPreviewConfigs, [projectId]: config },
+    }));
+  },
   previews: [],
   refreshPreviews: (force = false) => {
     if (inflight) return inflight;

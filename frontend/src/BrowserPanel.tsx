@@ -18,6 +18,8 @@ export interface BrowserPanelParams {
    * from `slug`, which the params write-back below rewrites from whatever
    * the pane last loaded (and clears while it loads). */
   previewSlug?: string;
+  targetName?: string;
+  targetRev?: number;
   activeSavedUrlId?: number | null;
   activeSavedUrlLabel?: string | null;
 }
@@ -318,7 +320,12 @@ export function BrowserPanel({
             if (await isPreviewProxyError(src)) {
               if (cancelled) return;
               // Most often the branch's dev server is still starting.
-              setFetchState({ status: "unavailable", message: BRANCH_PREVIEW_STARTING_MESSAGE });
+              setFetchState({
+                status: "unavailable",
+                message: params.targetName
+                  ? "This preview target is not reachable. Check its configured destination and connection origin, then retry."
+                  : BRANCH_PREVIEW_STARTING_MESSAGE,
+              });
               return;
             }
             if (cancelled) return;
@@ -404,6 +411,8 @@ export function BrowserPanel({
     projectId,
     devServerUrl,
     previewSlug,
+    params.targetName,
+    params.targetRev,
     reloadKey,
     activeSavedUrlId,
     savedUrls,
@@ -634,7 +643,8 @@ export function BrowserPanel({
       // a reload re-runs the identical, still-dangerous URL through the same
       // check every time.
       const canRetry =
-        (!!devServerUrl || activeSavedUrlId !== null || isExternal) && state.retryable !== false;
+        (!!devServerUrl || !!previewSlug || activeSavedUrlId !== null || isExternal) &&
+        state.retryable !== false;
       return (
         <div className="browser-panel-empty">
           <div>{state.message}</div>
@@ -650,51 +660,55 @@ export function BrowserPanel({
         </div>
       );
     }
-    const currentLabel = activeSavedUrlLabel ?? "Dev server";
+    const currentLabel = params.targetName ?? activeSavedUrlLabel ?? "Dev server";
     const currentSrc = state.status === "ready" ? state.src : "";
     return (
       <div className="browser-panel">
         <div className="browser-panel-toolbar">
-          <div className="browser-panel-dropdown" ref={dropdownRef}>
-            <button
-              className="browser-panel-dropdown-btn"
-              onClick={() => setDropdownOpen((v) => !v)}
-            >
-              <span className="browser-panel-dropdown-label">{currentLabel}</span>
-              <ChevronDownIcon size={11} />
-            </button>
-            {dropdownOpen && (
-              <div className="browser-panel-dropdown-menu">
-                <button
-                  className={`browser-panel-dropdown-item${activeSavedUrlId === null ? " active" : ""}`}
-                  onClick={navigateToDevServer}
-                >
-                  Dev server
-                </button>
-                {savedUrls.length > 0 && <div className="browser-panel-dropdown-separator" />}
-                {savedUrls.map((u) => (
+          {params.targetName ? (
+            <span className="browser-panel-dropdown-label">{params.targetName}</span>
+          ) : (
+            <div className="browser-panel-dropdown" ref={dropdownRef}>
+              <button
+                className="browser-panel-dropdown-btn"
+                onClick={() => setDropdownOpen((v) => !v)}
+              >
+                <span className="browser-panel-dropdown-label">{currentLabel}</span>
+                <ChevronDownIcon size={11} />
+              </button>
+              {dropdownOpen && (
+                <div className="browser-panel-dropdown-menu">
                   <button
-                    key={u.id}
-                    className={`browser-panel-dropdown-item${activeSavedUrlId === u.id ? " active" : ""}`}
-                    onClick={() => navigateToSavedUrl(u.id, u.url, u.label)}
+                    className={`browser-panel-dropdown-item${activeSavedUrlId === null ? " active" : ""}`}
+                    onClick={navigateToDevServer}
                   >
-                    {u.favorite && <span className="browser-panel-dropdown-star">★</span>}
-                    {u.label}
+                    Dev server
                   </button>
-                ))}
-                <div className="browser-panel-dropdown-separator" />
-                <button
-                  className="browser-panel-dropdown-item"
-                  onClick={() => {
-                    setDropdownOpen(false);
-                    setModalOpen(true);
-                  }}
-                >
-                  Manage URLs…
-                </button>
-              </div>
-            )}
-          </div>
+                  {savedUrls.length > 0 && <div className="browser-panel-dropdown-separator" />}
+                  {savedUrls.map((u) => (
+                    <button
+                      key={u.id}
+                      className={`browser-panel-dropdown-item${activeSavedUrlId === u.id ? " active" : ""}`}
+                      onClick={() => navigateToSavedUrl(u.id, u.url, u.label)}
+                    >
+                      {u.favorite && <span className="browser-panel-dropdown-star">★</span>}
+                      {u.label}
+                    </button>
+                  ))}
+                  <div className="browser-panel-dropdown-separator" />
+                  <button
+                    className="browser-panel-dropdown-item"
+                    onClick={() => {
+                      setDropdownOpen(false);
+                      setModalOpen(true);
+                    }}
+                  >
+                    Manage URLs…
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           <span className="browser-panel-url" title={currentSrc}>
             {state.src}
           </span>
@@ -760,7 +774,7 @@ export function BrowserPanel({
           </button>
         </div>
         <iframe
-          key={reloadKey}
+          key={`${reloadKey}:${params.targetRev ?? 0}`}
           className="browser-panel-frame"
           src={state.src}
           title="Preview"
@@ -921,7 +935,12 @@ export function BrowserPanel({
       {state.status === "loading" && <div className="browser-panel-empty">Loading…</div>}
       {state.status === "unavailable" && <div className="browser-panel-empty">{state.message}</div>}
       {state.status === "ready" && (
-        <iframe key={reloadKey} className="browser-panel-frame" src={state.src} title="Preview" />
+        <iframe
+          key={`${reloadKey}:${params.targetRev ?? 0}`}
+          className="browser-panel-frame"
+          src={state.src}
+          title="Preview"
+        />
       )}
     </div>
   );

@@ -46,6 +46,7 @@ export const NONCE_TTL_MS = DRIFT_WINDOW_MS * 2;
 // agree (because they're looking at the same path) or the signature simply
 // fails to verify.
 const UNSIGNED_BODY_PATH_PREFIXES = [
+  "/internal/configured-preview",
   "/internal/preview/",
   "/internal/uploads",
   // The file browser's streamed upload (up to FILE_TRANSFER_MAX_BYTES).

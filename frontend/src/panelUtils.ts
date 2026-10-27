@@ -915,11 +915,12 @@ export function openProjectHubPanel(
   projects: { id: number; name: string | null }[],
   layout: LayoutContext,
   tab?: ProjectHubTab,
+  dockView?: "previews",
 ): void {
   const panelId = `project-hub-${projectId}`;
   const existing = api.getPanel(panelId);
   if (existing) {
-    existing.api.updateParameters({ projectId, tab, rev: nextRev() });
+    existing.api.updateParameters({ projectId, tab, dockView, rev: nextRev() });
     existing.api.setActive();
     if (layout.tier === "phone") maximizeIfTiled(api, existing);
     return;
@@ -929,7 +930,7 @@ export function openProjectHubPanel(
     id: panelId,
     component: "project-hub",
     title: project ? `Project: ${project.name}` : "Project",
-    params: { projectId, tab },
+    params: { projectId, tab, dockView },
     ...positioningForTier(api, layout),
   });
   if (layout.tier === "phone") maximizeIfTiled(api, panel);

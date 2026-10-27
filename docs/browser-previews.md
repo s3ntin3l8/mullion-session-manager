@@ -24,8 +24,7 @@ There are two kinds of preview, in either mode:
   direct-embed mode has no server-side fetch, so there's nothing to
   validate — the guard simply doesn't apply.
 
-Open a preview by clicking the dev-server URL row in a project's Dock
-section (see [`dock.md`](dock.md)'s UI reference), the command palette
+Open a preview using **Preview ▾** in a project's Dock header (see [`dock.md`](dock.md)'s UI reference), the command palette
 ("Preview: `<project>`" for the project preview, or "New preview tab" for
 an empty pane with the address bar focused, for typing an arbitrary URL
 directly).
@@ -417,3 +416,13 @@ agent's own loopback, never pivot into its LAN.
   a saved URL or the no-proxy direct-embed fallback (`previewsEnabled`
   false): those already surface a connection failure via the iframe's own
   browser-native error page plus the toolbar's online/offline dot.
+
+## Named project targets
+
+Use **Project → Dock → Previews** to configure the existing Dev server and additional named destinations such as Docker web or API docs. The Dev server field has moved out of Edit project. Preview configuration is stored in Mullion's database; changing an address does not edit `.crs/dock.json` or restart monitors.
+
+Destinations accept a port, `IP:port`, `hostname:port`, or a full HTTP(S) URL with a path/query. Shorthand uses HTTP. Each additional target chooses **Project host** (the default) or **Main Mullion server** as the connection origin; localhost refers to that machine. The Dock's **Preview ▾** menu shows names and destinations, **New preview tab**, and **Manage previews…**. The palette's Preview action offers the same choices when the Dock is hidden.
+
+Named targets require `PREVIEW_BASE_HOST`. Each has its own stable pane and preview slug. Reopening or reloading uses its saved destination; removing a target removes its registered preview. Targets are explicit destinations, independent of Docker discovery, monitor lifecycle, bookmarks, and branch/PR previews.
+
+Named targets on remote hosts use a separate authenticated configured-target transport which permits explicit loopback/private HTTP(S) destinations, with DNS pinning and credentials stripped before the onward hop. This expands the capability of the trusted primary for these configured requests; the legacy remote dev-server transport remains loopback-only. Upgrade the owning host if it does not yet support named targets. An unavailable host never causes a fallback to a different connection origin.
