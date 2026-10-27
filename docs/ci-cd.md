@@ -1,11 +1,8 @@
 # CI/CD
 
 Workflows are **callers** of `s3ntin3l8/.github/.github/workflows/*.yml@main`
-— all pinned to `@main` except `dependency-review.yml`, which pins the
-reusable workflow to a specific commit SHA instead
-(`@8c62b6d0671313b8b975882f0a6d871673b6def8 # main @ 2026-09-10`, a trailing
-comment recording which date's `main` that SHA corresponds to) rather than
-floating on `@main` like every other caller here:
+— every one of them tracks `@main` (no SHA pins on these reusable refs; third-party actions are still pinned, see _Action pinning_), so a fix in the shared
+repo is live on the next run:
 
 - `ci-cd.yml` (test-node + test-frontend + test-e2e — no Docker image is built)
 - `codeql.yml`, `dependency-review.yml`, `release-please.yml`
@@ -15,10 +12,10 @@ floating on `@main` like every other caller here:
   `npx playwright install` a real Chromium (and install a pinned, integrity-
   checked `opencode` binary — see "test-e2e" below) before its test step —
   something `ci-node.yml` has no hook for.
-- **`claude.yml` and `hermes.yml`** are two more callers, not exceptions —
+- **`claude-code.yml` and `hermes.yml`** are two more callers, not exceptions —
   both invoke `s3ntin3l8/.github`'s own reusable workflows
   (`claude-code.yml`/`hermes-review.yml`) rather than running custom steps.
-  `claude.yml` wires up `@claude`-mention-triggered Claude Code runs on
+  `claude-code.yml` wires up `@claude`-mention-triggered Claude Code runs on
   issues/PRs (issue comments, PR review comments, PR reviews, and newly-
   opened/assigned issues). `hermes.yml` wires up the s3ntin3l8-hermes
   review bot two ways — `auto-review` (once per PR, on `opened` for a
