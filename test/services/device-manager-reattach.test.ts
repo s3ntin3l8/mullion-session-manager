@@ -98,7 +98,11 @@ const mockGetDevices = vi.fn(async () => {
 });
 const mockCreateAdb = vi.fn(async ({ serial }: { serial: string }) => {
   if (mockCreateAdbShouldFail) throw new Error("createAdb failed");
-  return { serial, close: vi.fn(async () => {}) };
+  return {
+    serial,
+    close: vi.fn(async () => {}),
+    subprocess: { noneProtocol: { spawnWaitText: vi.fn(async () => "1\n") } },
+  };
 });
 
 vi.mock("@yume-chan/adb", () => ({
@@ -245,6 +249,35 @@ describe("DeviceManager.getOrCreate() — reattach path", () => {
     // spawn() for this id isn't wedged by the still-occupied unit name) to
     // stop the now-empty scope.
     expect(stopCalls.length).toBeGreaterThan(0);
+  });
+
+  it("a scrcpy video-stream failure on reattach closes only the connection and never stops the live scope (#2127)", async () => {
+    scopeAliveFor("7");
+    mockGetDevicesShouldFail = false;
+    mockAdbDevices = [{ serial: "emulator-5556" }];
+    const close = vi.fn(async () => {});
+    mockStart.mockResolvedValueOnce({
+      exited: new Promise(() => {}),
+      // A getter so the rejected promise only exists once awaited.
+      get videoStream() {
+        return Promise.reject(new Error("ExactReadable ended"));
+      },
+      controller: {},
+      close,
+    } as never);
+    const manager = buildManager();
+    const device = await manager.getOrCreate({
+      id: "7",
+      kind: "emulator",
+      serial: null,
+      avdName: "dev35",
+      label: null,
+      port: 5556,
+    });
+    await vi.waitFor(() => expect(device.toInfo().status).toBe("error"));
+    expect(device.toInfo().error).toMatch(/ExactReadable ended/);
+    expect(close).toHaveBeenCalled();
+    expect(stopCalls).toEqual([]);
   });
 
   it("does NOT stop the scope when the emulator is confirmed live but the reconnect itself fails (transient adb/scrcpy error)", async () => {
@@ -575,7 +608,11 @@ describe("DeviceManager.getOrCreate() — normal spawn path is unaffected", () =
     const received: Array<{ type?: string }> = [];
     dev.onVideoPacket((pkt) => received.push(pkt));
 
-    await (dev as unknown as { pumpVideo: () => Promise<void> }).pumpVideo();
+    await (
+      dev as unknown as {
+        pumpVideo: (stream: { stream: { getReader: () => typeof mockReader } }) => Promise<void>;
+      }
+    ).pumpVideo({ stream: { getReader: () => mockReader } });
 
     expect(received).toHaveLength(2);
     expect(received[0].type).toBe("configuration");
