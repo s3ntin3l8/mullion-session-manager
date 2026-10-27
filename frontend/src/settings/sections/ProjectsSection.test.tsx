@@ -110,6 +110,21 @@ describe("ProjectsSection: auto-detect checkouts", () => {
     await waitFor(() => expect(screen.getByText("Turn on auto-detect first")).toBeInTheDocument());
   });
 
+  it("does not let an unreachable host read as 'nothing to find there'", async () => {
+    vi.mocked(api.detectHostCheckouts).mockImplementation(async (id) => {
+      if (id === "mac-1") throw new Error("offline");
+      return { enabled: true, added: [] };
+    });
+    const user = userEvent.setup();
+    render(<ProjectsSection />);
+
+    await user.click(screen.getByRole("button", { name: "Detect" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Nothing new found (1 host unreachable)")).toBeInTheDocument(),
+    );
+  });
+
   it("reports when no host answered", async () => {
     vi.mocked(api.detectHostCheckouts).mockRejectedValue(new Error("offline"));
     const user = userEvent.setup();

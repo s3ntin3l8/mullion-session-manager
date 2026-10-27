@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { CreateProjectModal } from "./CreateProjectModal.js";
 import { api, ApiError } from "./api/index.js";
 import type { Launcher } from "./api/index.js";
-import { makeHost } from "./test/fixtures.js";
+import { makeHost, makeProject } from "./test/fixtures.js";
 import type * as ApiModule from "./api/index.js";
 
 vi.mock("./api/index.js", async (importOriginal) => {
@@ -19,6 +19,7 @@ vi.mock("./api/index.js", async (importOriginal) => {
       getPlacementPreview: vi.fn(),
       previewPlacement: vi.fn(),
       getHostSuggestions: vi.fn(),
+      listProjects: vi.fn(),
     },
   };
 });
@@ -43,11 +44,13 @@ beforeEach(() => {
   vi.mocked(api.getPlacementPreview).mockReset();
   vi.mocked(api.previewPlacement).mockReset();
   vi.mocked(api.getHostSuggestions).mockReset();
+  vi.mocked(api.listProjects).mockReset();
   // Default answers, so a test that renders the modal without caring about
   // one of these fetches still has a promise to await (the hook calls
   // .then() on whatever the fetcher returns).
   vi.mocked(api.listProjectActions).mockResolvedValue([]);
   vi.mocked(api.getHostSuggestions).mockResolvedValue({ hosts: [] });
+  vi.mocked(api.listProjects).mockResolvedValue([]);
   const preview = {
     placement: "auto" as const,
     hostId: "local",
@@ -377,6 +380,72 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({ hostCwds: { "mac-1": "/Users/x/mullion" } }),
       );
+    });
+
+    // The map is sent whole, so a host the sweep added AFTER the dialog opened
+    // would read as removed (and be declined) unless the dialog re-reads first.
+    it("keeps a host the server gained since the dialog opened, instead of removing it on save", async () => {
+      vi.mocked(api.listProjects).mockResolvedValue([
+        makeProject({
+          id: 1,
+          hostCwds: { "mac-1": "/Users/x/mullion", "box-2": "/srv/found-meanwhile" },
+        }),
+      ]);
+      const user = userEvent.setup();
+      const onCreate = renderEdit({
+        initialHostCwds: { "mac-1": "/Users/x/mullion" },
+        initialHostCwdsMeta: { auto: ["mac-1"], declined: [] },
+      });
+
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hostCwds: { "mac-1": "/Users/x/mullion", "box-2": "/srv/found-meanwhile" },
+        }),
+      );
+    });
+
+    it("does not override a host the user set themselves, and still removes one they cleared", async () => {
+      vi.mocked(api.listProjects).mockResolvedValue([
+        makeProject({
+          id: 1,
+          hostCwds: { "mac-1": "/Users/x/mullion", "box-2": "/srv/found-meanwhile" },
+        }),
+      ]);
+      const user = userEvent.setup();
+      const onCreate = renderEdit({
+        initialHostCwds: { "mac-1": "/Users/x/mullion" },
+        initialHostCwdsMeta: { auto: ["mac-1"], declined: [] },
+      });
+
+      await user.type(screen.getByRole("textbox", { name: "Path on builder" }), "/mine");
+      await user.clear(screen.getByRole("textbox", { name: "Path on macbook" }));
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ hostCwds: { "box-2": "/mine" } }),
+      );
+    });
+
+    it("falls back to its own map when the project cannot be re-read", async () => {
+      vi.mocked(api.listProjects).mockRejectedValue(new Error("offline"));
+      const user = userEvent.setup();
+      const onCreate = renderEdit({
+        initialHostCwds: { "mac-1": "/Users/x/mullion" },
+        initialHostCwdsMeta: { auto: ["mac-1"], declined: [] },
+      });
+
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ hostCwds: { "mac-1": "/Users/x/mullion" } }),
+      );
+    });
+
+    it("shows no badge for a flagged host that has no path", () => {
+      renderEdit({ initialHostCwds: {}, initialHostCwdsMeta: { auto: ["mac-1"], declined: [] } });
+      expect(screen.queryByText("auto-detected")).toBeNull();
     });
 
     it("drops the badge once the path is edited, and never shows it for an operator's own path", async () => {

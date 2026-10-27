@@ -437,6 +437,32 @@ export function CreateProjectModal({
     setSubmitting(true);
     setError(null);
     try {
+      // Issue #2090 — PATCH replaces the whole map, and the dialog's copy is as
+      // old as the moment it was opened. If the auto-detect sweep has added a
+      // host since, that host is missing from what we are about to send and the
+      // server would read it as REMOVED (and decline it). So before sending,
+      // read the project again and keep any host it gained that the user did not
+      // set themselves. A failed read just falls back to the dialog's own map.
+      let hostCwdsToSend: Record<string, string> | undefined = hostCwdsChanged
+        ? editedHostPaths
+        : undefined;
+      if (hostCwdsToSend && projectId !== undefined) {
+        try {
+          const latest = (await api.listProjects()).find((p) => p.id === projectId);
+          for (const [hostKey, latestPath] of Object.entries(latest?.hostCwds ?? {})) {
+            if (
+              latestPath &&
+              knownHostIds.has(hostKey) &&
+              initialHostCwds[hostKey] === undefined &&
+              !editedHostPaths[hostKey]
+            ) {
+              hostCwdsToSend = { ...hostCwdsToSend, [hostKey]: latestPath };
+            }
+          }
+        } catch {
+          // keep the dialog's own map
+        }
+      }
       const result = await onCreate({
         name: finalName,
         cwd: trimmedPath,
@@ -468,7 +494,7 @@ export function CreateProjectModal({
         // both modes: on create it goes in the same opts bag as
         // createDir/gitInit, on edit it is a plain patch field.
         placement,
-        ...(hostCwdsChanged ? { hostCwds: editedHostPaths } : {}),
+        ...(hostCwdsToSend ? { hostCwds: hostCwdsToSend } : {}),
         ...(opts?.createDir ? { createDir: true, gitInit } : {}),
       });
       // `gitInitialized: false` alone is ambiguous — it also means "never
@@ -655,14 +681,16 @@ export function CreateProjectModal({
                 }}
                 placeholder="not on this host"
               />
-              {autoDetectedHostIds.has(h.id) && hostPaths[h.id] === initialHostCwds[h.id] && (
-                <span
-                  style={{ color: "var(--muted)", flexShrink: 0 }}
-                  title="Mullion filled this path in because the host has a clone with the same origin. Saving keeps it."
-                >
-                  auto-detected
-                </span>
-              )}
+              {autoDetectedHostIds.has(h.id) &&
+                initialHostCwds[h.id] !== undefined &&
+                hostPaths[h.id] === initialHostCwds[h.id] && (
+                  <span
+                    style={{ color: "var(--muted)", flexShrink: 0 }}
+                    title="Mullion filled this path in because the host has a clone with the same origin. Saving keeps it."
+                  >
+                    auto-detected
+                  </span>
+                )}
             </label>
           ))}
           {hostPathRows.map((h) => {
