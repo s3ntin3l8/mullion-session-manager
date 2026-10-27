@@ -20,6 +20,7 @@ import {
 import { createSuiteTmpDir } from "./helpers/suite-tmpdir.js";
 import {
   describeScopeLeaks,
+  findLeakedDtachMasters,
   findLeakedScopes,
   installSystemdRunShim,
   readBlockedLaunches,
@@ -78,6 +79,8 @@ export function teardown(): void {
         const msg = describeScopeLeaks(
           readBlockedLaunches(scopeGuard),
           findLeakedScopes(suiteTmpDir),
+          // macOS has no scopes to list; the process table is the only record.
+          process.platform === "darwin" ? findLeakedDtachMasters(suiteTmpDir) : [],
         );
         if (msg) throw new Error(msg);
       },

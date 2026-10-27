@@ -73,12 +73,15 @@ export const maxWorkers: number | undefined = process.env.CI
 // `./junit.xml` and the frontend `frontend/junit.xml`, the two paths the shard
 // upload names. Setting `reporters` replaces Vitest's default list, which adds
 // `github-actions` (the inline failure annotations) itself only when the
-// option is unset -- so it is listed here explicitly. Local runs keep the
-// default reporters.
+// option is unset -- so it is listed here explicitly. Local runs name
+// "default" explicitly rather than leaving the option unset: an unset option
+// lets Vitest pick an agent-aware reporter when it sees AI_AGENT/CLAUDECODE in
+// the environment, and run from a hosted session that printed NOTHING for a
+// failing test, so the pre-push gate failed with no test name (issue #2112).
 export const reporters: InlineConfig["reporters"] = process.env.CI
   ? [
       "default",
       ...(process.env.GITHUB_ACTIONS === "true" ? ["github-actions"] : []),
       ["junit", { outputFile: "junit.xml" }],
     ]
-  : undefined;
+  : ["default"];

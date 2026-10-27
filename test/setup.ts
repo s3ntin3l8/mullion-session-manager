@@ -4,6 +4,7 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { afterAll } from "vitest";
 import { schema } from "../src/plugins/env.js";
+import { SERVER_ENV_KEYS } from "../src/services/session-env.js";
 import { reapDtachMasters } from "./helpers/reap-dtach.js";
 import { scrubGitHookEnv } from "./helpers/git-hook-env.js";
 
@@ -103,6 +104,13 @@ const PRESERVED_VARS = new Set([
   "MULLION_TRUST_GATEWAY",
 ]);
 for (const key of Object.keys(schema.properties)) {
+  if (!PRESERVED_VARS.has(key)) delete process.env[key];
+}
+// ...and the per-session injections that are NOT schema keys (the hook
+// socket/token, MULLION_SESSION_ID, MULLION_WORKTREES_IN_DOT_WT, ...). A suite
+// run from inside a Mullion-hosted session inherits all of them, and a test
+// asserting "no .wt convention" would otherwise fail only there (issue #2112).
+for (const key of SERVER_ENV_KEYS) {
   if (!PRESERVED_VARS.has(key)) delete process.env[key];
 }
 

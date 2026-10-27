@@ -18,6 +18,7 @@
 //      this run's private temp root (the shim can be bypassed by an absolute
 //      path; the listing cannot).
 import { execFileSync } from "node:child_process";
+import { dtachMastersFromPs, readPsTable } from "./reap-dtach.js";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -76,6 +77,26 @@ export function findLeakedScopes(rootDir: string, list: () => string = listScope
     .filter((line) => line.includes(rootDir));
 }
 
+/**
+ * dtach masters still running from this run, as `pid command` rows. Linux
+ * covers these through the systemd scope listing above; macOS has no scopes,
+ * so the process table is the only place a leaked master shows up (issue
+ * #2112). `ps` is injectable for tests; the default reads the real table and
+ * returns [] when it cannot.
+ */
+export function findLeakedDtachMasters(
+  rootDir: string,
+  ps: () => string | null = readPsTable,
+): string[] {
+  const out = ps();
+  if (!out) return [];
+  const { masters } = dtachMastersFromPs(out, rootDir);
+  return out
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => masters.includes(Number.parseInt(l, 10)));
+}
+
 function listScopes(): string {
   try {
     return execFileSync(
@@ -98,7 +119,11 @@ function listScopes(): string {
 }
 
 /** Human-readable failure for the run, or null when the run was clean. */
-export function describeScopeLeaks(blocked: string[], leaked: string[]): string | null {
+export function describeScopeLeaks(
+  blocked: string[],
+  leaked: string[],
+  leakedMasters: string[] = [],
+): string | null {
   const parts: string[] = [];
   if (blocked.length > 0) {
     parts.push(
@@ -112,6 +137,13 @@ export function describeScopeLeaks(blocked: string[], leaked: string[]): string 
       `${leaked.length} crs-session scope(s) left running by this run:\n` +
         leaked.map((l) => `  ${l}`).join("\n") +
         "\nStop them with `systemctl --user stop <unit>`.",
+    );
+  }
+  if (leakedMasters.length > 0) {
+    parts.push(
+      `${leakedMasters.length} dtach master(s) left running by this run:\n` +
+        leakedMasters.map((l) => `  ${l}`).join("\n") +
+        "\nKill them by pid.",
     );
   }
   return parts.length > 0 ? parts.join("\n\n") : null;
