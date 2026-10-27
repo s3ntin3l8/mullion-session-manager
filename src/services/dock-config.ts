@@ -42,6 +42,7 @@ import {
 import path from "node:path";
 import type { DockControl } from "./project-config.js";
 import { isReservedSessionEnvKey } from "./session-env-keys.js";
+import { isValidPort } from "./port-probe.js";
 
 // Re-exported so route layers only need to import from this module for the
 // dock-config triple, the same "one import surface per feature" shape
@@ -148,6 +149,7 @@ const ALLOWED_CONTROL_KEYS = new Set([
   "env",
   "worktreeRefresh",
   "preview",
+  "port",
 ]);
 
 function validateOneControl(raw: unknown, index: number): DockControl {
@@ -179,6 +181,11 @@ function validateOneControl(raw: unknown, index: number): DockControl {
   }
   if (c.worktreeRefresh !== undefined && typeof c.worktreeRefresh !== "boolean") {
     throw new DockConfigValidationError(`controls[${index}].worktreeRefresh must be a boolean`);
+  }
+  if (c.port !== undefined && !isValidPort(c.port)) {
+    throw new DockConfigValidationError(
+      `controls[${index}].port must be an integer between 1 and 65535`,
+    );
   }
   if (c.preview !== undefined && typeof c.preview !== "boolean") {
     throw new DockConfigValidationError(`controls[${index}].preview must be a boolean`);
@@ -213,6 +220,7 @@ function validateOneControl(raw: unknown, index: number): DockControl {
     ...(c.height !== undefined ? { height: c.height as number } : {}),
     ...(c.worktreeRefresh !== undefined ? { worktreeRefresh: c.worktreeRefresh as boolean } : {}),
     ...(c.preview !== undefined ? { preview: c.preview as boolean } : {}),
+    ...(c.port !== undefined ? { port: c.port as number } : {}),
     ...(env !== undefined ? { env } : {}),
   };
 }

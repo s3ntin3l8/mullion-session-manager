@@ -15,7 +15,7 @@ import { render, screen, waitFor, act, fireEvent } from "@testing-library/react"
 import userEvent from "@testing-library/user-event";
 import { Dock } from "../Dock.js";
 import { useDashboardStore } from "../store/index.js";
-import { DEFAULT_SETTINGS } from "../api/index.js";
+import { ApiError, DEFAULT_SETTINGS } from "../api/index.js";
 import type { GitBranchesResult, Session } from "../api/index.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { makeProject, makeSession } from "../test/fixtures.js";
@@ -3145,6 +3145,65 @@ describe("Dock", () => {
         await user.click(header);
 
         expect(await screen.findByText("Failed to start — try again")).toBeInTheDocument();
+      });
+
+      // Issue #2069 — a 409 port_in_use is a refusal with something to act on,
+      // not a generic failure: the row says who holds the port and offers the
+      // holder's two actions when a Mullion session does.
+      it("shows a port_in_use refusal on the row, with Open holder / Stop holder and start", async () => {
+        dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+        const createSession = vi
+          .fn()
+          .mockRejectedValueOnce(
+            new ApiError("Port 5173 is in use by session 7", 409, "port_in_use", {
+              port: 5173,
+              holderSessionId: 7,
+            }),
+          )
+          .mockResolvedValue({});
+        const deleteSession = vi.fn().mockResolvedValue(undefined);
+        const holder = makeSession({ id: 7, command: "vite", kind: "terminal" });
+        setupStore({ createSession, deleteSession, gitBranchesByProject: {} });
+        useDashboardStore.setState({ sessions: [holder] });
+        const onOpenSession = vi.fn();
+        const user = userEvent.setup();
+        render(
+          <Dock
+            workspaceProjectIds={[1]}
+            onOpenGitHub={vi.fn()}
+            onOpenBrowser={vi.fn()}
+            onOpenSession={onOpenSession}
+          />,
+        );
+
+        await user.click(await screen.findByText("Dev server"));
+        expect(await screen.findByText(/Port 5173 is in use by session 7/)).toBeInTheDocument();
+        expect(screen.queryByText("Failed to start — try again")).not.toBeInTheDocument();
+
+        await user.click(screen.getByText("Open holder"));
+        expect(onOpenSession).toHaveBeenCalledWith(expect.objectContaining({ id: 7 }));
+
+        await user.click(screen.getByText("Stop holder and start"));
+        await waitFor(() => expect(deleteSession).toHaveBeenCalledWith(7));
+        await waitFor(() => expect(createSession).toHaveBeenCalledTimes(2));
+        expect(screen.queryByText(/Port 5173 is in use/)).not.toBeInTheDocument();
+      });
+
+      it("offers no holder actions when another process holds the port", async () => {
+        dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
+        const createSession = vi.fn().mockRejectedValue(
+          new ApiError("Port 5173 is in use by another process", 409, "port_in_use", {
+            port: 5173,
+          }),
+        );
+        setupStore({ createSession, gitBranchesByProject: {} });
+        const user = userEvent.setup();
+        render(<Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={vi.fn()} />);
+
+        await user.click(await screen.findByText("Dev server"));
+        expect(await screen.findByText(/in use by another process/)).toBeInTheDocument();
+        expect(screen.queryByText("Open holder")).not.toBeInTheDocument();
+        expect(screen.queryByText("Stop holder and start")).not.toBeInTheDocument();
       });
 
       // Audit finding 10 — the kill path was the ONE sibling in this file

@@ -123,3 +123,66 @@ export function detectDevServerPortForSessionIds(
 export function detectDevServerPortForPlainSession(session: Session): string | null {
   return parseDevServerPort(session.getScrollbackTail(DEV_SERVER_SCAN_TAIL_BYTES).toString("utf8"));
 }
+
+// Issue #2069 — the failure counterpart to the banner scan above: a dev
+// server whose port was already taken prints one of these instead of a
+// "Local:" line, and then exits (or, for Vite without strictPort, quietly
+// moves on — the "trying another one" form is excluded for that reason, it
+// is not a failure).
+//   Node:  "Error: listen EADDRINUSE: address already in use :::3000"
+//   Go/..: "listen tcp 127.0.0.1:8080: bind: address already in use"
+//   Vite:  "Error: Port 5173 is already in use" (strictPort) / "Port 3000 is in use"
+const PORT_IN_USE_PATTERNS: RegExp[] = [
+  /EADDRINUSE[^\n]*?:(\d{1,5})\b/g,
+  /address already in use[^\n]*?:(\d{1,5})\b/gi,
+  /:(\d{1,5}): bind: address already in use/gi,
+  /\bPort (\d{1,5}) is (?:already )?in use(?!,?\s*trying)/gi,
+];
+
+/**
+ * Returns the port from the *last* "port already in use" failure line in
+ * `text`, or null if none appears. Same "last, not first" rule as
+ * parseDevServerPort: only the most recent failure describes the process
+ * that just exited.
+ */
+export function parsePortInUse(text: string): string | null {
+  const plain = text.replace(ANSI_ESCAPE_SEQUENCE, "");
+  let lastPort: string | null = null;
+  let lastIndex = -1;
+  for (const pattern of PORT_IN_USE_PATTERNS) {
+    for (const match of plain.matchAll(pattern)) {
+      const port = Number(match[1]);
+      if (port >= 1 && port <= 65535 && match.index > lastIndex) {
+        lastPort = String(port);
+        lastIndex = match.index;
+      }
+    }
+  }
+  return lastPort;
+}
+
+/** "port 5173 in use" — the ended-detail text for a session whose output
+ * ends in a bind failure (see parsePortInUse), or null. */
+export function portInUseReason(text: string): string | null {
+  const port = parsePortInUse(text);
+  return port ? `port ${port} in use` : null;
+}
+
+/**
+ * The live Mullion session (among `sessionIds`) whose terminal output
+ * announces `port` as its dev server's, or null. Local-host only, same
+ * scoping as detectDevServerPortForSessionIds: `app.pty` only tracks
+ * sessions this process spawned.
+ */
+export function findSessionHoldingPort(
+  app: FastifyInstance,
+  sessionIds: string[],
+  port: number,
+): string | null {
+  for (const id of sessionIds) {
+    const session = app.pty.get(id);
+    if (!session?.isAlive) continue;
+    if (detectDevServerPortForPlainSession(session) === String(port)) return id;
+  }
+  return null;
+}

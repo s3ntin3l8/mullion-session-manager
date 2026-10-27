@@ -18,6 +18,9 @@ export class ApiError extends Error {
     // @fastify/sensible errors and successful-request paths. Lets a caller
     // branch on the actual failure instead of substring-matching `message`.
     public readonly code?: string,
+    // The rest of the error body, for a code that carries structured detail
+    // (e.g. `port_in_use`'s `port` / `holderSessionId`).
+    public readonly body?: Record<string, unknown>,
   ) {
     super(message);
     this.name = "ApiError";
@@ -354,7 +357,12 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new ApiError(body.message || `${path} failed with ${res.status}`, res.status, body.code);
+    throw new ApiError(
+      body.message || `${path} failed with ${res.status}`,
+      res.status,
+      body.code,
+      body,
+    );
   }
   if (res.status === 204) {
     clearAuthExpiryReloadGuard();

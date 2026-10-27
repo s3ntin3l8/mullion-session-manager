@@ -238,3 +238,23 @@ describe("project-config", () => {
     });
   });
 });
+
+describe("dock control port (issue #2069)", () => {
+  it("keeps a valid port and drops an invalid one when reading dock.json", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pc-port-"));
+    fs.mkdirSync(path.join(dir, ".crs"));
+    fs.writeFileSync(
+      path.join(dir, ".crs", "dock.json"),
+      JSON.stringify({
+        controls: [
+          { id: "a", title: "A", command: "x", port: 5173 },
+          { id: "b", title: "B", command: "y", port: 70000 },
+        ],
+      }),
+    );
+    const controls = resolveProjectDock(dir, path.join(dir, "no-global"));
+    expect(controls.find((c) => c.id === "a")?.port).toBe(5173);
+    expect(controls.find((c) => c.id === "b")?.port).toBeUndefined();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});

@@ -3303,3 +3303,15 @@ button.github-panel-row.gh-issue-row {
   width: 100%;
   box-sizing: border-box;
 }
+
+/* Issue #2069 — "Open holder" / "Stop holder and start" on a port-in-use row. */
+.dock-monitor-port-action {
+  margin-left: 6px;
+  padding: 0 4px;
+  background: none;
+  border: none;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+}

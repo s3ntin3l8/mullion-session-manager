@@ -51,6 +51,9 @@ export function DockMonitor({
   dockerStatus,
   held = false,
   checkStatus,
+  portConflict,
+  onOpenHolder,
+  onStopHolderAndStart,
   armed,
   confirmBeforeKill,
   onSelect,
@@ -95,6 +98,12 @@ export function DockMonitor({
   // row, tag, and kebab all go inert while held, not just cosmetically dim.
   held?: boolean;
   checkStatus: { message: string; isError: boolean } | undefined;
+  // Issue #2069 — the last start was refused because the control's port is
+  // taken; `holderSessionId` is set when a Mullion session holds it, which
+  // is what makes the two actions below offerable.
+  portConflict?: { port: number; holderSessionId?: number; message: string };
+  onOpenHolder?: () => void;
+  onStopHolderAndStart?: () => void;
   armed: boolean;
   confirmBeforeKill: boolean;
   onSelect: () => void;
@@ -403,6 +412,35 @@ export function DockMonitor({
                   },
                 ]}
               />
+            </span>
+          )}
+          {portConflict && (
+            <span className="dock-monitor-tag dock-monitor-check-status error">
+              {portConflict.message}
+              {portConflict.holderSessionId !== undefined && onOpenHolder && (
+                <button
+                  type="button"
+                  className="dock-monitor-port-action"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOpenHolder();
+                  }}
+                >
+                  Open holder
+                </button>
+              )}
+              {portConflict.holderSessionId !== undefined && onStopHolderAndStart && (
+                <button
+                  type="button"
+                  className="dock-monitor-port-action"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onStopHolderAndStart();
+                  }}
+                >
+                  Stop holder and start
+                </button>
+              )}
             </span>
           )}
           {checkStatus && (

@@ -527,6 +527,11 @@ export interface DockControl {
    * dev servers where the agent works in the main checkout. Default: the
    * global settings.dock.defaultWorktreeRefresh preference. */
   worktreeRefresh?: boolean;
+  /** Issue #2069 — the TCP port this control's server binds (integer
+   * 1–65535). When set, POST /api/sessions probes it before spawning a
+   * `kind: "dock"` session for the control and refuses with a 409
+   * `port_in_use` instead of letting the bind fail inside the PTY. */
+  port?: number;
   /** Issues #2016/#2018 — the control a branch preview runs, in the branch's
    * worktree with `PORT` set to the port the preview proxies to. Without one
    * flagged, a project's only control serves; with several and none

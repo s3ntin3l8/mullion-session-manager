@@ -74,6 +74,25 @@ team-shareable). A global fallback lives at `~/.config/crs/dock.json`
 | `env`             | `Record<string,string>` | no       | Extra environment variables for the session (see Validation below for reserved keys and storage caveats)        |
 | `worktreeRefresh` | `boolean`               | no       | Periodically `git reset --hard` a preview worktree to the branch's local tip to live-sync it (default: `false`) |
 | `preview`         | `boolean`               | no       | The control branch previews run (see "Branch previews and `PORT`" below; default: `false`)                      |
+| `port`            | `number`                | no       | TCP port (1–65535) the control's server binds; checked before launch (see "Port conflicts" below)               |
+
+### Port conflicts
+
+Mullion never picks a dev-server port, so two sessions for one control (two
+worktrees, a second tab, `mullion dock start`, MCP `start_dock_session`) can
+race for it. When a control sets `port` — or, for the project's preview-flagged
+(or only) control, when the project's `devServerUrl` is a bare port — Mullion
+probes `127.0.0.1:<port>` before spawning a dock session. If it is taken, the
+start is refused with `409 { "code": "port_in_use", "port", "holderSessionId"? }`
+and nothing is spawned. `holderSessionId` is a live Mullion session whose
+output announced that port; absent means another process holds it. The Dock
+shows "Port 5173 is in use by session 12" on the row, with **Open holder** and
+**Stop holder and start** when a session holds it; the CLI and MCP print the
+same message. Local projects only.
+
+If a session's output ends in `EADDRINUSE`, "address already in use" or
+"Port N is in use" (not Vite's "…trying another one"), its ended detail reads
+"port N in use".
 
 ### Branch selection
 

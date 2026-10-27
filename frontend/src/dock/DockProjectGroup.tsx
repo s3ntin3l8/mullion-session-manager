@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { api } from "../api/index.js";
-import type { DockControl, DockerUpdateCheckResult, GitBranchesResult } from "../api/index.js";
+import { api, ApiError } from "../api/index.js";
+import type {
+  DockControl,
+  DockerUpdateCheckResult,
+  GitBranchesResult,
+  Session,
+} from "../api/index.js";
 import { useDashboardStore } from "../store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import { ChevronDownIcon, GlobeIcon } from "../ui/icons.js";
@@ -102,6 +107,7 @@ export function DockProjectGroup({
   onUnpin,
   onOpenGitHub,
   onOpenBrowser,
+  onOpenSession,
   onRemove,
 }: {
   projectId: number;
@@ -136,6 +142,8 @@ export function DockProjectGroup({
   onUnpin: () => void;
   onOpenGitHub: (projectId: number) => void;
   onOpenBrowser: (projectId: number) => void;
+  // Issue #2069 — "Open holder" on a port-in-use row.
+  onOpenSession?: (session: Session) => void;
   // Present only for a manually-pinned project not also derived from the
   // workspace — see Dock's manualOnly().
   onRemove?: () => void;
@@ -177,6 +185,24 @@ export function DockProjectGroup({
     setEphemeralControls((prev) => [...prev.filter((c) => c.id !== control.id), control]);
   const [updateChecks, setUpdateChecks] = useState<Record<string, DockerUpdateCheckResult>>({});
   const { statusById: checkStatusById, show: showCheckStatus } = useTransientStatus(4000);
+  // Issue #2069 — a start the backend refused with 409 `port_in_use`. Kept
+  // until the next start attempt (not a transient tag) because it carries
+  // actions: the holder may need opening or stopping, not just reading about.
+  const [portConflicts, setPortConflicts] = useState<
+    Record<string, { port: number; holderSessionId?: number; message: string }>
+  >({});
+  const setPortConflict = (
+    controlId: string,
+    conflict: { port: number; holderSessionId?: number; message: string } | null,
+  ) =>
+    setPortConflicts((prev) => {
+      if (conflict === null) {
+        if (!(controlId in prev)) return prev;
+        const { [controlId]: _gone, ...rest } = prev;
+        return rest;
+      }
+      return { ...prev, [controlId]: conflict };
+    });
   const KILL_ARM_DISARM_MS = 6000; // matches ConfirmButton.tsx's own window
   const {
     armedIds: killArmedIds,
@@ -734,10 +760,38 @@ export function DockProjectGroup({
       setSelectedKey(rowKey);
       pendingSelectKeyRef.current = { key: rowKey, setAt: Date.now() };
       bumpToggleGen(control.id);
-      launchForValue(selectedValue).catch(() => {
-        showCheckStatus(control.id, "Failed to start — try again", true);
+      setPortConflict(control.id, null);
+      launchForValue(selectedValue).catch((err: unknown) => {
+        if (err instanceof ApiError && err.code === "port_in_use") {
+          const port = Number(err.body?.port);
+          const holder = Number(err.body?.holderSessionId);
+          setPortConflict(control.id, {
+            port,
+            ...(Number.isInteger(holder) ? { holderSessionId: holder } : {}),
+            message: err.message,
+          });
+        } else {
+          showCheckStatus(control.id, "Failed to start — try again", true);
+        }
         if (pendingSelectKeyRef.current?.key === rowKey) pendingSelectKeyRef.current = null;
       });
+    };
+    const portConflict = portConflicts[control.id];
+    const openHolder = () => {
+      const holder = useDashboardStore
+        .getState()
+        .sessions.find((s) => s.id === portConflict?.holderSessionId);
+      if (holder) onOpenSession?.(holder);
+    };
+    const stopHolderAndStart = () => {
+      const holderId = portConflict?.holderSessionId;
+      if (holderId === undefined) return;
+      setPortConflict(control.id, null);
+      void useDashboardStore
+        .getState()
+        .deleteSession(holderId)
+        .then(() => launchForValue(selectedValue))
+        .catch(() => showCheckStatus(control.id, "Failed to start — try again", true));
     };
     // Wired to a rail row's own click/Enter/Space — always changes focus
     // (and, per `onActivate`, which project is active); only starts the
@@ -834,6 +888,9 @@ export function DockProjectGroup({
         dockerStatus={dockerStatus}
         held={heldMerge.heldIds.has(control.id)}
         checkStatus={checkStatusById[control.id]}
+        portConflict={portConflict}
+        onOpenHolder={onOpenSession ? openHolder : undefined}
+        onStopHolderAndStart={stopHolderAndStart}
         armed={killArmedIds.has(control.id)}
         confirmBeforeKill={confirmBeforeKill}
         onSelect={selectRow}
