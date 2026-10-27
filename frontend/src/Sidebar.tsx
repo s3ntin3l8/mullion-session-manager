@@ -1387,6 +1387,7 @@ function ProjectHeader({
               hosts={hosts}
               projectHostId={project.hostId}
               initialHostCwds={project.hostCwds}
+              initialHostCwdsMeta={project.hostCwdsMeta}
               onClose={() => setEditOpen(false)}
               onCreate={({
                 name,

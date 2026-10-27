@@ -10,10 +10,11 @@ import {
   Row,
   SecondaryButton,
   StyledList,
+  Toggle,
 } from "../../ui/primitives.js";
 
 export function ProjectsSection() {
-  const { settings, updateSettings, projects } = useDashboardStore();
+  const { settings, updateSettings, projects, hosts, refreshProjects } = useDashboardStore();
   const [info, setInfo] = useState<ServerInfo | null>(null);
   const [rescanStatus, setRescanStatus] = useState<string | null>(null);
   const [rescanning, setRescanning] = useState(false);
@@ -24,6 +25,34 @@ export function ProjectsSection() {
       .then(setInfo)
       .catch(() => setInfo(null));
   }, []);
+
+  // Issue #2090 — "Detect now": run the auto-detect sweep on every host.
+  const [detectStatus, setDetectStatus] = useState<string | null>(null);
+  const [detecting, setDetecting] = useState(false);
+
+  const detectNow = async () => {
+    setDetecting(true);
+    setDetectStatus(null);
+    try {
+      const results = await Promise.all(
+        hosts.map((h) => api.detectHostCheckouts(h.id).catch(() => null)),
+      );
+      const answered = results.filter((r) => r !== null);
+      if (answered.length === 0) {
+        setDetectStatus("No host answered");
+      } else if (answered.every((r) => !r.enabled)) {
+        setDetectStatus("Turn on auto-detect first");
+      } else {
+        const added = answered.reduce((n, r) => n + r.added.length, 0);
+        setDetectStatus(
+          added === 0 ? "Nothing new found" : `${added} mapping${added === 1 ? "" : "s"} added`,
+        );
+        if (added > 0) void refreshProjects();
+      }
+    } finally {
+      setDetecting(false);
+    }
+  };
 
   const roots = settings.projectRoots;
   const [addingRoot, setAddingRoot] = useState(false);
@@ -188,6 +217,33 @@ export function ProjectsSection() {
           )}
           <SecondaryButton onClick={rescan} disabled={rescanning} icon={<RefreshIcon size={13} />}>
             Rescan
+          </SecondaryButton>
+        </div>
+      </Row>
+
+      <Row
+        label="Auto-detect checkouts on other hosts"
+        desc="When a host comes online, record where each project lives on it, if the host has exactly one clone with the same origin remote. It never overwrites a path you set or a host whose path you removed. Off by default: these paths also decide where a session's children may be sent."
+      >
+        <Toggle
+          on={settings.autoDetectHostCheckouts}
+          onChange={(v) => updateSettings({ autoDetectHostCheckouts: v })}
+        />
+      </Row>
+      <Row
+        label="Detect checkouts now"
+        desc="Look for each project's clone on every online host now (needs the setting above)."
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {detectStatus && (
+            <span style={{ fontSize: "0.71875rem", color: "var(--dim)" }}>{detectStatus}</span>
+          )}
+          <SecondaryButton
+            onClick={() => void detectNow()}
+            disabled={detecting}
+            icon={<RefreshIcon size={13} />}
+          >
+            Detect
           </SecondaryButton>
         </div>
       </Row>

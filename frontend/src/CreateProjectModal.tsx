@@ -1,7 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { FolderIcon, GlobeIcon, HostsIcon, BotIcon } from "./ui/icons.js";
 import { api, ApiError, LOCAL_HOST_ID, normalizeAgentId } from "./api/index.js";
-import type { Host, Launcher, PlacementMode, PlacementPreview } from "./api/index.js";
+import type {
+  Host,
+  HostCheckoutSuggestion,
+  HostCwdsMeta,
+  Launcher,
+  PlacementMode,
+  PlacementPreview,
+} from "./api/index.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { useDashboardStore } from "./store/index.js";
 import { Dropdown } from "./ui/primitives.js";
@@ -120,6 +127,10 @@ interface CreateProjectModalProps {
   // paths it already has on others.
   projectHostId?: string;
   initialHostCwds?: Record<string, string>;
+  // Issue #2090 — which of those paths were auto-detected (not yet saved by
+  // an operator): they carry an "auto-detected" badge, and saving the dialog
+  // acknowledges them.
+  initialHostCwdsMeta?: HostCwdsMeta;
 }
 
 /** Most entries the API accepts in `hostCwds` (src/routes/projects.ts). */
@@ -172,6 +183,7 @@ export function CreateProjectModal({
   initialPlacement = "pinned",
   projectHostId = LOCAL_HOST_ID,
   initialHostCwds = {},
+  initialHostCwdsMeta,
 }: CreateProjectModalProps) {
   const [path, setPath] = useState(initialPath);
   const [name, setName] = useState(initialName);
@@ -186,6 +198,9 @@ export function CreateProjectModal({
   const [previewError, setPreviewError] = useState<string | null>(null);
   // Issue #1951 follow-up — the per-host paths being edited, keyed by host id.
   const [hostPaths, setHostPaths] = useState<Record<string, string>>(initialHostCwds);
+  // Issue #2090 — clones of this project the primary found on the other hosts.
+  // Purely advisory: a failed or slow lookup just means no "Detected" line.
+  const [hostSuggestions, setHostSuggestions] = useState<HostCheckoutSuggestion[]>([]);
   const [devServerUrl, setDevServerUrl] = useState(initialDevServerUrl ?? "");
   const [defaultAgent, setDefaultAgent] = useState(initialDefaultAgent ?? UNSET_AGENT);
   const [defaultReviewAgent, setDefaultReviewAgent] = useState(
@@ -253,6 +268,24 @@ export function CreateProjectModal({
   // Every registered host the project is NOT pinned to: those are the ones it
   // may also live on. (A remote-hosted project can also live on this machine.)
   const hostPathRows = hosts.filter((h) => h.id !== projectHostId);
+  // Issue #2090 — ask the primary where this project already has a clone on the
+  // other hosts, once the dialog is open on an existing project. Advisory only,
+  // so a failure is silent.
+  const lookupSuggestions = isEdit && projectId !== undefined && hostPathRows.length > 0;
+  useEffect(() => {
+    if (!lookupSuggestions || projectId === undefined) return;
+    let cancelled = false;
+    api
+      .getHostSuggestions(projectId)
+      .then((res) => {
+        if (!cancelled) setHostSuggestions(res.hosts);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [lookupSuggestions, projectId]);
+  const autoDetectedHostIds = new Set(initialHostCwdsMeta?.auto ?? []);
   // The host's name for the preview line — the local host is "this machine"
   // in the UI (its API row is named "Local").
   const previewHostName = (id: string) =>
@@ -393,10 +426,14 @@ export function CreateProjectModal({
     // `hostCwds: {}` and silently wipe the map — with the rows hidden, so the
     // user never sees it. Without a host list there is nothing to compare
     // against: leave the map alone.
+    //
+    // Issue #2090 — an auto-detected path is acknowledged by SAVING the map, so
+    // while any is still flagged the map is sent even when nothing was edited.
     const hostCwdsChanged =
       isEdit &&
       hosts.length > 0 &&
-      !sameHostPaths(editedHostPaths, normalizeHostPaths(initialHostCwds));
+      (autoDetectedHostIds.size > 0 ||
+        !sameHostPaths(editedHostPaths, normalizeHostPaths(initialHostCwds)));
     setSubmitting(true);
     setError(null);
     try {
@@ -618,8 +655,55 @@ export function CreateProjectModal({
                 }}
                 placeholder="not on this host"
               />
+              {autoDetectedHostIds.has(h.id) && hostPaths[h.id] === initialHostCwds[h.id] && (
+                <span
+                  style={{ color: "var(--muted)", flexShrink: 0 }}
+                  title="Mullion filled this path in because the host has a clone with the same origin. Saving keeps it."
+                >
+                  auto-detected
+                </span>
+              )}
             </label>
           ))}
+          {hostPathRows.map((h) => {
+            const suggestion = hostSuggestions.find((s) => s.hostId === h.id);
+            if (!suggestion || (hostPaths[h.id] ?? "").trim() !== "") return null;
+            const hostLabel = h.id === LOCAL_HOST_ID ? "this machine" : h.name;
+            return (
+              <div
+                key={`suggest-${h.id}`}
+                className="create-modal-field-hint"
+                data-testid={`host-suggestion-${h.id}`}
+              >
+                Detected on {hostLabel}:{" "}
+                {suggestion.candidates.map((c) => (
+                  <button
+                    key={c.cwd}
+                    type="button"
+                    className="mono"
+                    aria-label={`Use ${c.cwd} on ${hostLabel}`}
+                    onClick={() => {
+                      setError(null);
+                      setHostPaths((prev) => ({ ...prev, [h.id]: c.cwd }));
+                    }}
+                    style={{
+                      background: "none",
+                      border: "none",
+                      padding: "0 6px 0 0",
+                      cursor: "pointer",
+                      color: "var(--accent)",
+                      textDecoration: "underline",
+                    }}
+                  >
+                    {c.cwd}
+                    {c.match === "name" ? " (same name only)" : ""}
+                  </button>
+                ))}
+                {suggestion.ambiguous ? " More than one clone has this project's origin." : ""}
+                {suggestion.declined ? " You removed this host's path earlier." : ""}
+              </div>
+            );
+          })}
           <span className="create-modal-field-hint">
             Absolute path of this project's checkout on each host. A host with no path here is never
             chosen to run its sessions — automatically or when a session asks for a host or

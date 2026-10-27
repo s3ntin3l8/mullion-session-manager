@@ -2,7 +2,13 @@
 // reading the config of a remote Mullion host. Split out of the former flat
 // frontend/src/api.ts (PR 22 of the refactoring roadmap).
 import { request } from "./client.js";
-import type { Host, HostConfig, HostUpdateStatus, UpdateStatus } from "./types.js";
+import type {
+  DetectCheckoutsResult,
+  Host,
+  HostConfig,
+  HostUpdateStatus,
+  UpdateStatus,
+} from "./types.js";
 
 export const hostsApi = {
   listHosts: () => request<Host[]>("/api/hosts"),
@@ -37,6 +43,13 @@ export const hostsApi = {
 
   pingHost: (id: string) =>
     request<{ online: boolean }>(`/api/hosts/${encodeURIComponent(id)}/ping`, { method: "POST" }),
+
+  // Issue #2090 — "Detect now": run the auto-detect sweep for this host. A no-op
+  // (`enabled: false`) while the setting is off, so the caller can say so.
+  detectHostCheckouts: (id: string) =>
+    request<DetectCheckoutsResult>(`/api/hosts/${encodeURIComponent(id)}/detect-checkouts`, {
+      method: "POST",
+    }),
 
   getHostConfig: (id: string) => request<HostConfig>(`/api/hosts/${encodeURIComponent(id)}/config`),
 

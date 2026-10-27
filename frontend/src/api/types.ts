@@ -275,6 +275,11 @@ export interface Project {
   //
   // NOT optional: the API always sends it, empty when there is no map.
   hostCwds: Record<string, string>;
+  // Issue #2090 — which of those entries were auto-detected and which hosts
+  // the operator declined. Optional only so a response from an older server
+  // (and the many hand-built test fixtures) still type-checks; the current API
+  // always sends it.
+  hostCwdsMeta?: HostCwdsMeta;
   // Where this project's dev server listens (issue #28) — a bare port
   // ("5173") or a full URL. The authoritative, manually-set fallback the
   // preview proxy resolves against; null when unconfigured.
@@ -1166,6 +1171,38 @@ export interface DiscoveredProject {
   cwd: string;
   isGitRepo: boolean;
   isRegistered: boolean;
+}
+
+// Issue #2090 — mirrors src/services/host-cwds-meta.ts's HostCwdsMeta: which
+// `hostCwds` entries were auto-detected (and not yet saved by an operator), and
+// which hosts the operator declined (auto-detect never re-adds those).
+export interface HostCwdsMeta {
+  auto: string[];
+  declined: string[];
+}
+
+// Mirrors src/services/host-checkout-detect.ts: a clone of the project on
+// another host. `origin`: the same repository (matching `origin` remote);
+// `name`: only the directory name matches, a weaker suggestion.
+export interface HostCheckoutCandidate {
+  cwd: string;
+  match: "origin" | "name";
+}
+
+export interface HostCheckoutSuggestion {
+  hostId: string;
+  hostName: string;
+  candidates: HostCheckoutCandidate[];
+  // More than one clone on the host has the project's origin.
+  ambiguous: boolean;
+  // The operator removed this host's path earlier.
+  declined: boolean;
+}
+
+export interface DetectCheckoutsResult {
+  // False while settings.autoDetectHostCheckouts is off: nothing was changed.
+  enabled: boolean;
+  added: Array<{ projectId: number; hostId: string; cwd: string }>;
 }
 
 // Mirrors src/services/github.ts's GitHubRepoStatus 1:1 (issue #27).
@@ -2206,6 +2243,9 @@ export interface AppSettings {
   tabletPaneCap: TabletPaneCap;
   balancePanesOnDrop: boolean;
   projectRoots: string[];
+  // Issue #2090 — opt-in (default off): map each project onto a host's
+  // matching clone automatically. Mirrors AppSettings.autoDetectHostCheckouts.
+  autoDetectHostCheckouts: boolean;
   // Mirrors AppSettings.externalReadRoots: folders outside any project the
   // file viewer may open read-only (absolute or `~/`).
   externalReadRoots: string[];

@@ -529,6 +529,7 @@ function renderPane(
       tabletPaneCap: 2,
       balancePanesOnDrop: true,
       projectRoots: [],
+      autoDetectHostCheckouts: false,
       externalReadRoots: [],
       diskCleanup: { cacheDirs: [] },
       launchers: {
