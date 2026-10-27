@@ -42,55 +42,90 @@ import {
 // no-op-ing, so a misconfigured caller fails loudly.
 
 /**
- * The platforms the device panel works on.
+ * What the device panel can do on each platform — a capability per device
+ * KIND, not a single on/off per platform (issue #1854).
  *
- * **Why the panel is Linux-only.** The panel's scope is load-bearing at all
- * three points of an emulator's life, and all three go through systemd:
- * `buildDeviceLaunchPlan` (device-process.ts) launches the emulator with
+ * **Why the emulator is Linux-only (for now).** An emulator's scope is
+ * load-bearing at all three points of its life, and all three go through
+ * systemd: `buildDeviceLaunchPlan` (device-process.ts) launches it with
  * `systemd-run --user --scope`, `isDeviceAliveState` reads the scope's
  * liveness, and `stopDeviceScope` tears it down. macOS has no equivalent —
  * and the darwin `ScopeBackend` cannot stand in, because it is socket-keyed
- * to a SESSION's dtach socket (`DetachedScopeBackend.socketPathFor`), which
- * an emulator has no analogue of. A macOS device scope is a real piece of
- * work (a detached, launchd-reparented process tracked by pid + marker
- * file), so it is tracked separately rather than half-built here.
+ * to a SESSION's dtach socket, which an emulator has no analogue of. A macOS
+ * device scope (a detached, launchd-reparented process tracked by pid +
+ * marker file) is tracked separately in #1854.
  *
- * **What is NOT gated by this.** The panel's PHYSICAL half — an Android
- * phone over adb wireless debugging — needs no scope at all:
+ * **Why "physical" is everywhere.** The PHYSICAL half — an Android phone
+ * over adb wireless debugging — needs no scope at all:
  * `DeviceManager.getOrCreate` branches `kind === "physical"` off before the
- * scope pre-check, and `stopDeviceScope` returns early for it. `adb` and
- * `scrcpy` both exist on macOS. That half could be enabled on macOS
- * separately, without waiting for a macOS device scope; the follow-up issue
- * records it.
+ * scope pre-check, and `stopDeviceScope` returns early for it. It talks to
+ * the adb server over TCP and pushes the scrcpy server jar; `adb` exists on
+ * macOS.
+ *
+ * Keyed per platform × kind so a further driver (an iOS Simulator panel on
+ * macOS hosts, #1943) can add its own capability without another special case.
  */
-export const DEVICE_PANEL_SUPPORTED_PLATFORMS: readonly NodeJS.Platform[] = ["linux"];
+export type DeviceCapability = "physical" | "emulator";
+
+export const DEVICE_PLATFORM_CAPABILITIES: Readonly<
+  Partial<Record<NodeJS.Platform, readonly DeviceCapability[]>>
+> = {
+  linux: ["physical", "emulator"],
+  darwin: ["physical"],
+};
+
+/** The capabilities the device panel has on `platform` (empty when none). */
+export function deviceCapabilities(
+  platform: NodeJS.Platform = process.platform,
+): ReadonlySet<DeviceCapability> {
+  return new Set(DEVICE_PLATFORM_CAPABILITIES[platform] ?? []);
+}
 
 /**
- * Whether the device panel works on `platform`.
+ * Whether the device panel can handle a `kind` device on `platform`.
  *
  * The platform parameter is injectable so the gate can be exercised from a
- * test on any host — the predicate is the single source of truth for "is the
- * device panel usable here", and every caller (the plugin) goes through it.
+ * test on any host — these predicates are the single source of truth for "is
+ * this usable here", and every caller (the plugin) goes through them.
  */
+export function isDeviceKindSupported(
+  kind: DeviceCapability,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return deviceCapabilities(platform).has(kind);
+}
+
+/**
+ * The 400 / thrown text for a device kind the platform cannot run. One source
+ * for the routes and `DeviceManager.assertEnabled`, so the same condition
+ * never reads two ways.
+ */
+export function unsupportedKindMessage(kind: DeviceCapability, platform: string): string {
+  return kind === "emulator"
+    ? `Emulator devices are not supported on ${platform} — only physical devices are.`
+    : `Physical devices are not supported on ${platform}.`;
+}
+
+/** Whether the device panel does ANYTHING on `platform`. */
 export function isDevicePanelSupported(platform: NodeJS.Platform = process.platform): boolean {
-  return DEVICE_PANEL_SUPPORTED_PLATFORMS.includes(platform);
+  return deviceCapabilities(platform).size > 0;
 }
 
 export interface DeviceManagerOptions {
   enabled: boolean;
   /**
-   * Whether this PLATFORM supports the device panel at all. Defaults to
-   * `true` — a caller that does not care (tests, and any caller that has
-   * already decided) keeps today's behavior. The plugin (src/plugins/device.ts)
-   * passes the real answer from `isDevicePanelSupported()`.
+   * The device KINDS this PLATFORM supports. Defaults to all of them — a
+   * caller that does not care (tests, and any caller that has already
+   * decided) keeps today's behavior. The plugin (src/plugins/device.ts)
+   * passes the real answer from `deviceCapabilities()`.
    *
    * Distinct from `enabled` on purpose: `enabled` is the operator's
    * DEVICE_ENABLED flag, and `supported` is a property of the platform. The
    * two produce DIFFERENT messages, and conflating them would tell a macOS
-   * operator to set DEVICE_ENABLED=true — which would not help, because the
-   * panel is unsupported there for a structural reason.
+   * operator to set DEVICE_ENABLED=true — which would not help, because an
+   * emulator is unsupported there for a structural reason.
    */
-  supported?: boolean;
+  capabilities?: ReadonlySet<DeviceCapability>;
   /** Absolute path to the `adb` binary — used only for one idempotent
    * `adb start-server` call at construction; every other operation talks to
    * the running server directly over TCP. */
@@ -928,14 +963,12 @@ export class DeviceManager {
     }
   }
 
-  private assertEnabled(): void {
-    // SUPPORT FIRST, then the flag. On a platform the panel does not exist
-    // on, telling the operator to set DEVICE_ENABLED=true would be a lie that
-    // sends them off to change a .env and restart for nothing.
-    if (this.opts.supported === false) {
-      throw new Error(
-        `the device panel is not supported on ${process.platform} (it is Linux-only)`,
-      );
+  private assertEnabled(kind: DeviceCapability): void {
+    // SUPPORT FIRST, then the flag. On a platform that cannot run this kind
+    // of device, telling the operator to set DEVICE_ENABLED=true would be a
+    // lie that sends them off to change a .env and restart for nothing.
+    if (this.opts.capabilities && !this.opts.capabilities.has(kind)) {
+      throw new Error(unsupportedKindMessage(kind, process.platform));
     }
     if (!this.opts.enabled) {
       throw new Error("device panel is disabled (set DEVICE_ENABLED=true)");
@@ -1005,7 +1038,7 @@ export class DeviceManager {
    * listing; connectPhysical() is unconditionally the right (and only)
    * thing to do for every call with this kind. */
   async getOrCreate(opts: DeviceSpawnOptions): Promise<Device> {
-    this.assertEnabled();
+    this.assertEnabled(opts.kind === "physical" ? "physical" : "emulator");
     const existing = this.devices.get(opts.id);
     if (existing && existing.isAlive) return existing;
 
@@ -1195,7 +1228,7 @@ export class DeviceManager {
    * reached — see routes/devices.ts's own comment on why that validation is
    * an allowlist, not shell-style escaping (this never touches a shell). */
   async pair(address: string, password: string): Promise<void> {
-    this.assertEnabled();
+    this.assertEnabled("physical");
     await this.serverClient.wireless.pair(address, password);
   }
 

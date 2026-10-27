@@ -628,32 +628,25 @@ topology: the `hosts` table's `local` row simply becomes the Mac, and
 up in the primary's list under the **agent's** host id, and the terminal
 attach proxies to whichever host the session actually lives on.
 
-#### The Android device panel is Linux-only
+#### The Android device panel on macOS: physical devices only
 
-The device panel ([`device-panel.md`](device-panel.md)) is **off on macOS**,
-even with `DEVICE_ENABLED=true`: the emulator runs in a `systemd --user`
+The device panel ([`device-panel.md`](device-panel.md)) works on macOS for
+**physical** devices — an Android phone over adb wireless debugging, which
+needs no scope (`adb` is the only binary used) — with `DEVICE_ENABLED=true`,
+including the mDNS scanner that finds pairable phones.
+
+**Emulators are Linux-only for now**: the emulator runs in a `systemd --user`
 scope (`systemd-run` starts it, `systemctl` reads its liveness and tears it
 down), and macOS has no equivalent — the darwin scope backend is keyed to a
-_session's_ dtach socket, which an emulator has no analogue of.
+_session's_ dtach socket, which an emulator has no analogue of. So on macOS
+every route that **adds, starts or changes** an emulator answers **400
+"Emulator devices are not supported on darwin — only physical devices are."**
+— a legible reason rather than a raw `spawn systemctl ENOENT`. The app boots
+either way, and the `/api/devices` reads and the teardown routes stay open.
 
-So on macOS every route that **adds, starts or changes** a device answers
-**400 "The device panel is not supported on darwin — it is Linux-only."** — a
-legible reason rather than a raw `spawn systemctl ENOENT` — and the panel's
-mDNS scanner never binds a multicast socket. The `/api/devices` reads and
-the teardown routes stay open on purpose: they were never gated on
-`DEVICE_ENABLED` either, and an operator must be able to stop a device even
-where the panel cannot create one. The app boots either way: the gate is a narrowing of an
-existing flag, so it can only ever turn the panel _off_ on a platform it was
-already off by default on.
-
-A macOS device scope is real work and is tracked separately — see
+A macOS emulator scope (a detached, launchd-reparented process tracked by pid
+and marker file) is real work and is tracked in
 [#1854](https://github.com/s3ntin3l8/mullion-session-manager/issues/1854).
-One lead worth knowing before that issue is picked up: the panel's
-**physical** half — an Android phone over adb wireless debugging — needs no
-scope at all (the manager branches it off before the scope pre-check), and
-`adb` and `scrcpy` both exist on macOS. So that half could be enabled on
-macOS separately, without waiting for a macOS device scope for the emulator
-half.
 
 ### Windows agents (preview)
 

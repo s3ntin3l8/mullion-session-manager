@@ -178,10 +178,21 @@ interface CreateDeviceBody {
 
 export async function devicesRoute(app: FastifyInstance): Promise<void> {
   app.post<{ Body: CreateDeviceBody }>("/api/devices", async (request, reply) => {
-    if (!app.devicePanelEnabled) {
-      return reply.badRequest(app.devicePanelUnavailableMessage);
-    }
     const { kind = "emulator", avdName, address, projectId, name } = request.body ?? {};
+    // Validate before gating: an unknown kind would pass the physical-level
+    // gate below and then fall through to the emulator path (and its row).
+    if (kind !== "emulator" && kind !== "physical") {
+      return reply.badRequest('kind must be "emulator" or "physical"');
+    }
+    // Gate on the KIND (issue #1854): physical works wherever the panel does,
+    // an emulator additionally needs a platform device scope.
+    if (kind === "emulator" ? !app.deviceEmulatorEnabled : !app.devicePanelEnabled) {
+      return reply.badRequest(
+        kind === "emulator"
+          ? app.deviceEmulatorUnavailableMessage
+          : app.devicePanelUnavailableMessage,
+      );
+    }
 
     if (kind === "physical") {
       if (avdName !== undefined) {
@@ -689,6 +700,9 @@ export async function devicesRoute(app: FastifyInstance): Promise<void> {
     if (!Number.isInteger(id)) return reply.badRequest("id path param is required");
     const [row] = app.db.select().from(devices).where(eq(devices.id, id)).all();
     if (!row) return reply.notFound(`No device ${id}`);
+    if (row.kind !== "physical" && !app.deviceEmulatorEnabled) {
+      return reply.badRequest(app.deviceEmulatorUnavailableMessage);
+    }
 
     // The "at most one ACTIVE physical row per adb address" guard (#1350)
     // that POST create, pair-and-connect, and PATCH below all apply — start

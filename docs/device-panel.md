@@ -18,22 +18,37 @@ default — see [`configuration.md`](configuration.md)). See the
 server listens on — only worth changing if something else on the host
 already holds `5037`.
 
-**Linux-only** (issue [#1720](https://github.com/s3ntin3l8/mullion-session-manager/issues/1720),
-roadmap 8.6). The panel's emulator runs in a `systemd --user` scope —
-`systemd-run` starts it, `systemctl` reads its liveness and tears it down —
-and macOS has no equivalent: the darwin scope backend is keyed to a
-_session's_ dtach socket, which an emulator has no analogue of. So on macOS
-the panel is off even with `DEVICE_ENABLED=true`, and every route that
-**adds, starts or changes** a device answers **400 "The device panel is
-not supported on darwin — it is Linux-only."** rather than a raw `spawn
-systemctl ENOENT`. The `/api/devices` reads (`GET /api/devices`,
-`/api/devices/discovered`, `/api/devices/:id`) and the teardown routes
-(`POST /api/devices/:id/stop`, `DELETE /api/devices/:id`) stay open on
-purpose — they were never gated on `DEVICE_ENABLED` either, and an
-operator must be able to stop a device even where the panel cannot create
-one. A macOS device
-scope is tracked separately — see
-[#1854](https://github.com/s3ntin3l8/mullion-session-manager/issues/1854).
+**Physical devices everywhere, emulators on Linux only** (issues
+[#1720](https://github.com/s3ntin3l8/mullion-session-manager/issues/1720) and
+[#1854](https://github.com/s3ntin3l8/mullion-session-manager/issues/1854),
+roadmap 8.6). What the panel can do is a capability per platform _and_ device
+kind (`DEVICE_PLATFORM_CAPABILITIES` in `src/services/device-manager.ts`):
+
+| Platform | Physical (adb wireless) | Emulator |
+| -------- | ----------------------- | -------- |
+| Linux    | yes                     | yes      |
+| macOS    | yes                     | no       |
+| Windows  | no                      | no       |
+
+A **physical** device needs no scope at all — Mullion talks to the adb server
+over TCP and pushes the scrcpy server jar, so it only needs `adb` on the host.
+An **emulator** runs in a `systemd --user` scope — `systemd-run` starts it,
+`systemctl` reads its liveness and tears it down — and macOS has no
+equivalent yet: the darwin scope backend is keyed to a _session's_ dtach
+socket, which an emulator has no analogue of. A macOS device scope is tracked
+in [#1854](https://github.com/s3ntin3l8/mullion-session-manager/issues/1854).
+
+On macOS, then, `POST /api/devices` with `kind: "physical"`, pairing and
+discovery work with `DEVICE_ENABLED=true`, while every emulator route
+(`POST /api/devices` for an emulator, starting an emulator row, the AVD and
+system-image routes) answers **400 "Emulator devices are not supported on
+darwin — only physical devices are."** rather than a raw `spawn systemctl
+ENOENT`. `GET /api/server-info` reports the kinds a host can run as
+`features.deviceKinds` (`["physical"]` on macOS), and the Settings → Devices
+page hides the emulator controls when `"emulator"` is not listed. The
+`/api/devices` reads and the teardown routes (`POST /api/devices/:id/stop`,
+`DELETE /api/devices/:id`) stay open on purpose — an operator must be able to
+stop a device even where the panel cannot create one.
 
 ### Stream tuning
 
