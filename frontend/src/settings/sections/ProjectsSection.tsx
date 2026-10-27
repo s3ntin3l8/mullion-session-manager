@@ -44,10 +44,12 @@ export function ProjectsSection() {
         setDetectStatus("Turn on auto-detect first");
       } else {
         const added = answered.reduce((n, r) => n + r.added.length, 0);
-        const failed = results.length - answered.length;
+        // A host that did not answer, or was offline/parked, must not read as
+        // "nothing to find there".
+        const failed =
+          results.length - answered.length + answered.filter((r) => r.skipped !== undefined).length;
         const base =
           added === 0 ? "Nothing new found" : `${added} mapping${added === 1 ? "" : "s"} added`;
-        // A host that did not answer must not read as "nothing to find there".
         setDetectStatus(
           failed === 0 ? base : `${base} (${failed} host${failed === 1 ? "" : "s"} unreachable)`,
         );

@@ -1203,6 +1203,9 @@ export interface DetectCheckoutsResult {
   // False while settings.autoDetectHostCheckouts is off: nothing was changed.
   enabled: boolean;
   added: Array<{ projectId: number; hostId: string; cwd: string }>;
+  // Set when the host could not be asked (offline, or parked), so "nothing
+  // found" and "could not look" are told apart.
+  skipped?: "offline" | "drained";
 }
 
 // Mirrors src/services/github.ts's GitHubRepoStatus 1:1 (issue #27).

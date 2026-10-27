@@ -125,6 +125,22 @@ describe("ProjectsSection: auto-detect checkouts", () => {
     );
   });
 
+  it("counts an offline or parked host as unreachable too", async () => {
+    vi.mocked(api.detectHostCheckouts).mockImplementation(async (id) =>
+      id === "mac-1"
+        ? { enabled: true, added: [], skipped: "offline" }
+        : { enabled: true, added: [] },
+    );
+    const user = userEvent.setup();
+    render(<ProjectsSection />);
+
+    await user.click(screen.getByRole("button", { name: "Detect" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Nothing new found (1 host unreachable)")).toBeInTheDocument(),
+    );
+  });
+
   it("reports when no host answered", async () => {
     vi.mocked(api.detectHostCheckouts).mockRejectedValue(new Error("offline"));
     const user = userEvent.setup();

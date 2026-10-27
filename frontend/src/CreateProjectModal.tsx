@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { FolderIcon, GlobeIcon, HostsIcon, BotIcon } from "./ui/icons.js";
-import { api, ApiError, LOCAL_HOST_ID, normalizeAgentId } from "./api/index.js";
+import { api, ApiError, LOCAL_HOST_ID, MAX_HOST_CWDS, normalizeAgentId } from "./api/index.js";
 import type {
   Host,
   HostCheckoutSuggestion,
@@ -132,9 +132,6 @@ interface CreateProjectModalProps {
   // acknowledges them.
   initialHostCwdsMeta?: HostCwdsMeta;
 }
-
-/** Most entries the API accepts in `hostCwds` (src/routes/projects.ts). */
-const MAX_HOST_CWDS = 32;
 
 /** The non-empty, trimmed entries of an editable per-host path map. */
 function normalizeHostPaths(paths: Record<string, string>): Record<string, string> {
