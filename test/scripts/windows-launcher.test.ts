@@ -238,24 +238,24 @@ describe("serverEnv", () => {
       const env = serverEnv({
         home: "h",
         taskName: "",
-        baseEnv: { Path: `C:/a${sep}C:/b` },
+        baseEnv: { Path: `/a${sep}/b` },
         envFileText: "",
         caseInsensitive: true,
-        nodeDir: "C:/runtime/node",
+        nodeDir: "/runtime/node",
       });
-      expect(env.Path).toBe(["C:/runtime/node", "C:/a", "C:/b"].join(sep));
+      expect(env.Path).toBe(["/runtime/node", "/a", "/b"].join(sep));
       expect(env).not.toHaveProperty("PATH");
     });
 
     it("leaves PATH alone when the directory is already on it (case-insensitively on Windows)", () => {
-      const baseEnv = { Path: `C:/a${sep}C:/Runtime/Node` };
+      const baseEnv = { Path: `/a${sep}/Runtime/Node` };
       const env = serverEnv({
         home: "h",
         taskName: "",
         baseEnv,
         envFileText: "",
         caseInsensitive: true,
-        nodeDir: "c:/runtime/node",
+        nodeDir: "/runtime/node",
       });
       expect(env.Path).toBe(baseEnv.Path);
     });

@@ -65,10 +65,10 @@ export function renderPins(p) {
     BEGIN,
     `$PinNodeVersion = '${p.nodeVersion}'`,
     `$PinNodeUrl = '${p.nodeUrl}'`,
-    `$PinNodeSha256 = '${p.nodeSha256}'`,
+    `$PinNodeSha256 = '${p.nodeSha256}' # pragma: allowlist secret`,
     `$PinGitVersion = '${p.gitVersion}'`,
     `$PinGitUrl = '${p.gitUrl}'`,
-    `$PinGitSha256 = '${p.gitSha256}'`,
+    `$PinGitSha256 = '${p.gitSha256}' # pragma: allowlist secret`,
     END,
   ].join("\n");
 }
@@ -95,10 +95,13 @@ async function main() {
   const engines = JSON.parse(
     readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
   ).engines.node;
-  const major = /(\d+)/.exec(engines)[1];
+  const major = /(\d+)/.exec(engines)?.[1] ?? "";
+  // Only digits go into the URL below: the value comes from a file.
+  if (!/^\d{1,3}$/.test(major))
+    throw new Error(`cannot read a Node major from engines.node "${engines}"`);
 
   const node = parseNodeShasums(
-    await getText(`https://nodejs.org/dist/latest-v${major}.x/SHASUMS256.txt`),
+    await getText(`https://nodejs.org/dist/latest-v${encodeURIComponent(major)}.x/SHASUMS256.txt`),
     major,
   );
   const release = JSON.parse(

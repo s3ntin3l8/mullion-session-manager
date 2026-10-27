@@ -18,6 +18,7 @@ import { windowsPowerShellEnv } from "../../src/cli/pipe-acl.mjs";
 const run = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL("../../deploy/windows/mullion-install.ps1", import.meta.url));
 const describeOnWindows = process.platform === "win32" ? describe : describe.skip;
+const realPath = (p: string) => fs.realpathSync.native(p).toLowerCase();
 const sha256 = (file: string) =>
   crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 
@@ -204,7 +205,11 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
         expect(done.gitBash).toBe(gitBash);
 
         const rec = JSON.parse(fs.readFileSync(release.record, "utf8"));
-        expect(rec.args).toEqual(["--role", "agent", root.replace(/\\/g, "/")]);
+        // Compared as real paths: a CI runner's temp dir is an 8.3 short name
+        // (C:\Users\RUNNER~1) that the script is given and the OS reports long.
+        expect(rec.args.slice(0, 2)).toEqual(["--role", "agent"]);
+        expect(realPath(rec.args[2])).toBe(realPath(root));
+        expect(rec.args).toHaveLength(3);
         expect(rec).toMatchObject({
           tag: "v0.3.51",
           base: release.url,
@@ -288,7 +293,7 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
         expect(res.events.filter((e) => e.step === "node").map((e) => e.status)).toContain("ok");
         // The release installer ran with the private Node first on PATH.
         const rec = JSON.parse(fs.readFileSync(release.record, "utf8"));
-        expect(String(rec.nodeExe).toLowerCase()).toBe(privateNode.toLowerCase());
+        expect(realPath(String(rec.nodeExe))).toBe(realPath(privateNode));
         // No leftovers from the download.
         expect(fs.readdirSync(path.join(root, "runtime"))).toEqual(["node"]);
       },

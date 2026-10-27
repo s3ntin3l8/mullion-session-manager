@@ -70,10 +70,10 @@ param(
 # BEGIN PINS (refreshed by scripts/update-windows-prereqs.mjs)
 $PinNodeVersion = '26.12.1'
 $PinNodeUrl = 'https://nodejs.org/dist/v26.12.1/node-v26.12.1-win-x64.zip'
-$PinNodeSha256 = 'b3efd5c70cba3308ed46e7e699a9b8aac075bbc6b027fcb39c84c31acc25e2b4'
+$PinNodeSha256 = 'b3efd5c70cba3308ed46e7e699a9b8aac075bbc6b027fcb39c84c31acc25e2b4' # pragma: allowlist secret
 $PinGitVersion = '2.56.0.4'
 $PinGitUrl = 'https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.4/PortableGit-2.56.0.4-64-bit.7z.exe'
-$PinGitSha256 = 'b1f3e52216e2ed6882d1bebfd4d3fdf319bec40d2edbbf9fd26ec4fd3fce7ed1'
+$PinGitSha256 = 'b1f3e52216e2ed6882d1bebfd4d3fdf319bec40d2edbbf9fd26ec4fd3fce7ed1' # pragma: allowlist secret
 # END PINS
 
 $ErrorActionPreference = 'Stop'
@@ -165,7 +165,15 @@ function Test-ProcessesUnder([string]$Root) {
   # line that merely mentions the root itself -- this script's own, or its
   # caller's (-InstallRoot <root>) -- is not a process of the install. This
   # process and its ancestors are never counted.
-  $prefix = ($Root.TrimEnd('\', '/').ToLowerInvariant().Replace('/', '\')) + '\'
+  $prefixes = @(($Root.TrimEnd('\', '/').ToLowerInvariant().Replace('/', '\')) + '\')
+  # A process may have been started through the 8.3 short form of the path
+  # (C:\Users\RUNNER~1\...) or the long one; WMI reports whichever it was given.
+  try {
+    $folder = (New-Object -ComObject Scripting.FileSystemObject).GetFolder($Root)
+    foreach ($form in @($folder.Path, $folder.ShortPath)) {
+      $prefixes += ($form.TrimEnd('\', '/').ToLowerInvariant() + '\')
+    }
+  } catch { }
   $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
   $skip = @{}
   $cursor = $PID
@@ -178,7 +186,9 @@ function Test-ProcessesUnder([string]$Root) {
   foreach ($p in $all) {
     if ($skip.ContainsKey([int]$p.ProcessId)) { continue }
     $hay = ((@($p.ExecutablePath, $p.CommandLine) | Where-Object { $_ }) -join ' ').ToLowerInvariant().Replace('/', '\')
-    if ($hay.Contains($prefix)) { $found += $p }
+    foreach ($prefix in $prefixes) {
+      if ($hay.Contains($prefix)) { $found += $p; break }
+    }
   }
   return $found
 }
