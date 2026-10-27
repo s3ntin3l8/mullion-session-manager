@@ -422,6 +422,17 @@ describe("Issues list ↔ detail round trip", () => {
     expect(screen.getByLabelText("Sort issues")).toHaveValue("comments");
   });
 
+  it("sends a numeric query (#7) to the server and shows the issue it returns", async () => {
+    const fetchMock = vi.fn((_url: string) => Promise.resolve(jsonResponse(200, LIST)));
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Harness />);
+    await userEvent.type(await screen.findByLabelText("Search issues"), "#7");
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([u]) => String(u).includes("q=%237"))).toBe(true),
+    );
+    expect(await screen.findByRole("button", { name: /Crash on start/ })).toBeInTheDocument();
+  });
+
   it("starts or queues from the row's hover actions without opening the issue", async () => {
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
       if (url.endsWith("/queue") && init?.method === "POST") {
