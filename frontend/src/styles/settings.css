@@ -134,3 +134,179 @@
   content: "Waiting for output...";
   color: var(--dim);
 }
+
+/* ============================================================ */
+/* Settings → Models — CLI × role grid (issue #2073)              */
+/* One row per CLI. The select fills its column; a closed native */
+/* select otherwise sizes to the longest option and blows the    */
+/* pane out. Narrow panes (and therefore phone) stack to a card. */
+/* ============================================================ */
+.settings-models {
+  container: models / inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 14px;
+}
+.settings-models-legend {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.settings-models-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.settings-models-head,
+.settings-models-row {
+  display: grid;
+  grid-template-columns: minmax(7.5rem, 9.25rem) repeat(3, minmax(0, 1fr));
+  column-gap: 12px;
+  row-gap: 0;
+  align-items: start;
+}
+.settings-models-head {
+  /* 13px matches the row's 12px padding + 1px border, so the columns line up. */
+  padding: 0 13px 4px;
+}
+.settings-models-col {
+  display: block;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+.settings-models-col-desc {
+  display: block;
+  margin-top: 3px;
+  font-size: 0.75rem;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.settings-models-row {
+  padding: 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+}
+.settings-models-name {
+  min-width: 0;
+  padding-top: 8px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  line-height: 1.3;
+}
+.settings-models-missing {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.6875rem;
+  font-weight: 400;
+  color: var(--dim);
+}
+.settings-models-cell {
+  min-width: 0;
+}
+.settings-models-cell .model-select-stretch,
+.settings-models-cell .model-select-stretch .settings-dropdown {
+  width: 100%;
+  min-width: 0;
+}
+.settings-models-cell .settings-dropdown select {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+.settings-models-cell .settings-numberfield {
+  min-width: 0;
+}
+/* Visible only in the stacked card. The select's accessible name already
+   includes the CLI and the role, so the short caption is not announced.
+   The sentence under it is announced: it is the only place the card says
+   what an empty Reviewer or Small means, once the column header is hidden. */
+.settings-models-role,
+.settings-models-role-desc {
+  display: none;
+}
+.settings-models-empty {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  color: var(--dim);
+  font-size: 0.8125rem;
+}
+.settings-models-wide {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.settings-models-wide:has(.settings-models-note, .settings-models-warning) {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+.settings-models-note {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+.settings-models-warning {
+  margin: 0;
+  font-size: 0.71875rem;
+  /* Amber, not the error red: this is an advisory note, and the codebase
+     colours advisory prose amber throughout (PromoteDialog, HostsSection,
+     IntegrationsSection). Red reads as a failure in a neutral settings row. */
+  color: var(--y);
+  line-height: 1.45;
+}
+
+@container models (max-width: 680px) {
+  .settings-models-head {
+    display: none;
+  }
+  .settings-models-row {
+    display: flex;
+    flex-direction: column;
+    /* The shared grid rule above is `align-items: start`. On a flex column
+       that sizes each cell to its widest option instead of the card, so the
+       select stops being full width. Stretch is what the grid got for free. */
+    align-items: stretch;
+    gap: 10px;
+  }
+  .settings-models-name {
+    padding-top: 0;
+  }
+  .settings-models-cell {
+    width: 100%;
+  }
+  .settings-models-role {
+    display: block;
+    margin-bottom: 2px;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+  .settings-models-role-desc {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 0.75rem;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--muted);
+    line-height: 1.4;
+  }
+  .settings-models-cell-empty {
+    display: none;
+  }
+  .settings-models-wide {
+    grid-column: auto;
+  }
+}

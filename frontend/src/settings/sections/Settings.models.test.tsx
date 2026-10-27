@@ -19,10 +19,22 @@ const CODEX_MODELS = ["gpt-6-astra", "gpt-5.6-sol"];
 // Issue #1784 — mcode's catalog is `provider/model` ids.
 const MCODE_MODELS = ["minimax/MiniMax-M3.1-Flash", "minimax/MiniMax-M3"];
 
+// Every model CLI detected, so the grid stays fully open. A test that cares
+// about the "Show N more" collapse overrides `/api/agents`.
+const DETECTED_AGENTS = ["claude", "codex", "opencode", "agy", "mcode"].map((id) => ({
+  id: `agent:${id}`,
+  title: id,
+  command: id,
+  kind: "agent" as const,
+  available: true,
+  path: `/usr/bin/${id}`,
+  emits: [] as string[],
+}));
+
 describe("Settings -> Models", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
 
-  const routeFetch = (overrides: Record<string, () => Response> = {}) =>
+  const routeFetch = (overrides: Record<string, () => Response | Promise<Response>> = {}) =>
     fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       const method = init?.method ?? "GET";
@@ -38,6 +50,9 @@ describe("Settings -> Models", () => {
       }
       if (url === "/api/mcode/models" && method === "GET") {
         return Promise.resolve(jsonResponse(200, MCODE_MODELS));
+      }
+      if (url === "/api/agents" && method === "GET") {
+        return Promise.resolve(jsonResponse(200, DETECTED_AGENTS));
       }
       if (url === "/api/settings" && method === "PATCH") {
         return Promise.resolve(jsonResponse(200, DEFAULT_SETTINGS));
@@ -77,7 +92,11 @@ describe("Settings -> Models", () => {
   it("populates the opencode selects from the catalog", async () => {
     render(<ModelsSection />);
 
-    for (const name of ["Implementer model", "Reviewer model", "Small model"]) {
+    for (const name of [
+      "opencode implementer model",
+      "opencode reviewer model",
+      "opencode small model",
+    ]) {
       const select = screen.getByRole("combobox", { name });
       await waitFor(() =>
         expect(Array.from(select.querySelectorAll("option")).map((o) => o.textContent)).toEqual([
@@ -261,7 +280,7 @@ describe("Settings -> Models", () => {
     const user = userEvent.setup();
     render(<ModelsSection />);
 
-    const select = screen.getByRole("combobox", { name: "agy implementer model" });
+    const select = screen.getByRole("combobox", { name: "Antigravity implementer model" });
     await waitFor(() =>
       expect(within(select).getByText("gemini-3.1-pro-high")).toBeInTheDocument(),
     );
@@ -288,7 +307,7 @@ describe("Settings -> Models", () => {
     const user = userEvent.setup();
     render(<ModelsSection />);
 
-    const select = screen.getByRole("combobox", { name: "Implementer model" });
+    const select = screen.getByRole("combobox", { name: "opencode implementer model" });
     await waitFor(() =>
       expect(within(select).getByText("anthropic/claude-sonnet-4-5")).toBeInTheDocument(),
     );
@@ -305,7 +324,7 @@ describe("Settings -> Models", () => {
     render(<ModelsSection />);
 
     expect(await screen.findByText(/couldn't load the model list/i)).toBeInTheDocument();
-    const agySelect = screen.getByRole("combobox", { name: "agy implementer model" });
+    const agySelect = screen.getByRole("combobox", { name: "Antigravity implementer model" });
     await waitFor(() =>
       expect(within(agySelect).getByText("gemini-3.1-pro-high")).toBeInTheDocument(),
     );
@@ -531,8 +550,8 @@ describe("Settings -> Models", () => {
       // Exactly one note, and it is in Claude Code's block — the reviewer
       // model row of every other CLI is inert for this install.
       expect(screen.getAllByText(warning)).toHaveLength(1);
-      const claudeRow = screen.getAllByText("Reviewer model")[0].closest(".settings-row");
-      expect(within(claudeRow as HTMLElement).getByText(warning)).toBeInTheDocument();
+      const claudeRow = screen.getByTestId("models-row-claude");
+      expect(within(claudeRow).getByText(warning)).toBeInTheDocument();
     });
 
     it("does not warn when the reviewer names a different model", () => {
@@ -621,11 +640,7 @@ describe("Settings -> Models", () => {
       });
       render(<ModelsSection />);
 
-      // The reviewer row for each CLI is labelled "Reviewer model"; Claude
-      // Code's is the first group.
-      const reviewerLabels = screen.getAllByText("Reviewer model");
-      expect(reviewerLabels.length).toBeGreaterThan(0);
-      const claudeRow = reviewerLabels[0].closest(".settings-row") as HTMLElement;
+      const claudeRow = screen.getByTestId("models-row-claude");
       const region = within(claudeRow).getByRole("status");
       // Mounted, and empty — the reviewer is on haiku and the worker on
       // opusplan, so there is nothing to say yet.
@@ -646,5 +661,151 @@ describe("Settings -> Models", () => {
       expect(within(claudeRow).getByRole("status")).toBe(region);
       expect(region.textContent ?? "").toMatch(/no second opinion/i);
     });
+  });
+
+  describe("CLI rows that are not on this host", () => {
+    const agents = (available: Record<string, boolean>) =>
+      ["claude", "codex", "opencode", "agy", "mcode"].map((id) => ({
+        id: `agent:${id}`,
+        title: id,
+        command: id,
+        kind: "agent" as const,
+        available: available[id] ?? false,
+        path: null,
+        emits: [] as string[],
+      }));
+
+    it("collapses CLIs that are not detected, not selected, and have no saved model", async () => {
+      const user = userEvent.setup();
+      routeFetch({
+        "/api/agents": () =>
+          jsonResponse(
+            200,
+            agents({ claude: true, codex: false, opencode: false, agy: false, mcode: false }),
+          ),
+      });
+      render(<ModelsSection />);
+
+      expect(await screen.findByRole("button", { name: "Show 4 more CLIs" })).toHaveAttribute(
+        "aria-expanded",
+        "false",
+      );
+      expect(screen.queryByRole("combobox", { name: "Codex implementer model" })).toBeNull();
+      expect(screen.getByRole("combobox", { name: "Claude Code implementer model" })).toBeTruthy();
+      expect(
+        within(screen.getByTestId("models-row-claude")).queryByText("not detected"),
+      ).toBeNull();
+
+      await user.click(screen.getByRole("button", { name: "Show 4 more CLIs" }));
+      expect(screen.getByRole("combobox", { name: "Codex implementer model" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Hide 4 CLIs" })).toHaveAttribute(
+        "aria-expanded",
+        "true",
+      );
+      expect(within(screen.getByTestId("models-row-codex")).getByText("not detected")).toBeTruthy();
+    });
+
+    it("keeps a CLI with a saved model visible, and marks it not detected", async () => {
+      routeFetch({
+        "/api/agents": () => jsonResponse(200, agents({ claude: true })),
+      });
+      useDashboardStore.setState({
+        settings: {
+          ...DEFAULT_SETTINGS,
+          codex: { defaultModel: "gpt-5.6-sol", reviewerModel: null },
+        },
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+
+      expect(await screen.findByRole("button", { name: "Show 3 more CLIs" })).toBeInTheDocument();
+      const row = screen.getByTestId("models-row-codex");
+      expect(within(row).getByRole("combobox", { name: "Codex implementer model" })).toHaveValue(
+        "gpt-5.6-sol",
+      );
+      expect(within(row).getByText("not detected")).toBeInTheDocument();
+    });
+
+    it("keeps the review agent visible even when that CLI was not detected", async () => {
+      routeFetch({
+        "/api/agents": () => jsonResponse(200, agents({ claude: true })),
+      });
+      useDashboardStore.setState({
+        settings: {
+          ...DEFAULT_SETTINGS,
+          taskMaster: {
+            ...DEFAULT_SETTINGS.taskMaster,
+            defaultAgent: "claude",
+            defaultReviewAgent: "opencode",
+          },
+        },
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+
+      expect(await screen.findByRole("button", { name: "Show 3 more CLIs" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("combobox", { name: "opencode implementer model" }),
+      ).toBeInTheDocument();
+      expect(screen.queryByRole("combobox", { name: "Codex implementer model" })).toBeNull();
+    });
+
+    it("shows every CLI when none would otherwise remain", async () => {
+      routeFetch({ "/api/agents": () => jsonResponse(200, agents({})) });
+      useDashboardStore.setState({
+        settings: {
+          ...DEFAULT_SETTINGS,
+          taskMaster: {
+            ...DEFAULT_SETTINGS.taskMaster,
+            defaultAgent: "nope",
+            defaultReviewAgent: "none",
+          },
+        },
+        settingsLoaded: true,
+      });
+      render(<ModelsSection />);
+
+      expect(await screen.findAllByText("not detected")).toHaveLength(5);
+      expect(screen.queryByRole("button", { name: /more CLIs|Hide \d/ })).toBeNull();
+      expect(
+        screen.getByRole("combobox", { name: "MiniMax Code implementer model" }),
+      ).toBeInTheDocument();
+    });
+
+    it("shows every CLI, with no not-detected mark, when detection fails", async () => {
+      let settle: (response: Response) => void = () => {};
+      const pending = new Promise<Response>((resolve) => {
+        settle = resolve;
+      });
+      routeFetch({ "/api/agents": () => pending });
+      render(<ModelsSection />);
+
+      expect(screen.getByRole("combobox", { name: "Codex implementer model" })).toBeInTheDocument();
+      await act(async () => {
+        settle(jsonResponse(500, { message: "boom" }));
+      });
+      expect(screen.queryByText("not detected")).toBeNull();
+      expect(screen.getByRole("combobox", { name: "Codex implementer model" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /more CLIs|Hide \d/ })).toBeNull();
+    });
+  });
+
+  it("keeps the card explanations on the row, and the column sentences in the header only", () => {
+    render(<ModelsSection />);
+
+    expect(screen.getAllByText("New sessions and workers.")).toHaveLength(1);
+    expect(
+      screen.getAllByText("Review sessions. Empty follows the implementer, except opencode."),
+    ).toHaveLength(1);
+    expect(screen.getAllByText("Background work. Only Claude Code and opencode.")).toHaveLength(1);
+
+    const claude = within(screen.getByTestId("models-row-claude"));
+    expect(claude.getByText("Empty follows the implementer.")).toBeInTheDocument();
+    expect(claude.getByText("Background work.")).toBeInTheDocument();
+    expect(claude.queryByText("New sessions and workers.")).toBeNull();
+
+    const opencode = within(screen.getByTestId("models-row-opencode"));
+    expect(opencode.getByText("Empty stays on opencode's own default.")).toBeInTheDocument();
+    expect(opencode.queryByText(/except opencode/)).toBeNull();
   });
 });
