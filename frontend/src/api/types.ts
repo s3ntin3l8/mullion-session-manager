@@ -98,9 +98,36 @@ export interface ProbeMeta {
   state: "measuring" | "ready" | "error";
   /** ISO time of the figures below; null until a first run lands. */
   measuredAt: string | null;
+  /** ISO time the run in progress started; only while `measuring`. */
+  startedAt?: string;
+  /** How long the run behind the figures took. */
+  durationMs?: number;
   error?: string;
 }
 export type Measured<T> = (T & ProbeMeta) | ProbeMeta;
+
+/** One entry of the "where the space is" report (read-only; nothing here is deleted). */
+export interface SpaceEntry {
+  path: string;
+  bytes: number;
+  isDirectory: boolean;
+  /** The cleanup source that owns this path, e.g. "uv" or "npm cache". */
+  coveredBy?: string;
+  children?: SpaceEntry[];
+}
+
+export interface SpaceReportStatus {
+  available: boolean;
+  /** The home directory the entries are under. */
+  root: string;
+  entries: SpaceEntry[];
+  scannedBytes: number;
+  filesystemUsedBytes: number;
+  /** Used space the walk didn't account for: outside the home directory, or unreadable. */
+  outsideBytes: number;
+  unreadableEntries: number;
+  error?: string;
+}
 
 export interface DockerStorageStatus {
   available: boolean;
@@ -186,6 +213,8 @@ export interface OpencodeStorageStatus {
   liveBytes: number;
   /** Another process has it open, so compacting it is skipped. */
   inUse: boolean;
+  /** Who has it open, when `inUse`: what to stop to let the compaction run. */
+  holders?: Array<{ pid: number; command: string }>;
   /** Couldn't tell who has it open; skipped just the same. */
   holdersUnknown: boolean;
   /** What couldn't be looked into, e.g. `cannot list /proc/1234/fd (EACCES)`. */

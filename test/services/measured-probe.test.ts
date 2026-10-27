@@ -15,7 +15,52 @@ describe("createMeasuredProbe", () => {
   it("answers 'measuring' without waiting for a slow run", async () => {
     const run = deferred<{ bytes: number }>();
     const probe = createMeasuredProbe(() => run.promise, { ttlMs: 1000, waitMs: 5 });
-    expect(await probe.read()).toEqual({ state: "measuring", measuredAt: null });
+    expect(await probe.read()).toMatchObject({ state: "measuring", measuredAt: null });
+  });
+
+  it("reports when the run in flight started, and how long the last run took", async () => {
+    let clock = Date.parse("2026-01-01T00:00:00Z");
+    const run = deferred<{ bytes: number }>();
+    const outcomes: Array<{ durationMs: number; error?: string }> = [];
+    const probe = createMeasuredProbe(() => run.promise, {
+      ttlMs: 1000,
+      waitMs: 5,
+      now: () => clock,
+      onRun: (outcome) => outcomes.push(outcome),
+    });
+    expect(await probe.read()).toEqual({
+      state: "measuring",
+      measuredAt: null,
+      startedAt: "2026-01-01T00:00:00.000Z",
+    });
+    clock += 42_000;
+    run.resolve({ bytes: 1 });
+    await vi.waitFor(async () => expect((await probe.read()).state).toBe("ready"));
+    expect(await probe.read()).toEqual({
+      bytes: 1,
+      state: "ready",
+      measuredAt: "2026-01-01T00:00:42.000Z",
+      durationMs: 42_000,
+    });
+    expect(outcomes).toEqual([{ durationMs: 42_000 }]);
+  });
+
+  it("reports a failed run to onRun and keeps the last good duration beside the error", async () => {
+    let clock = 0;
+    const outcomes: Array<{ durationMs: number; error?: string }> = [];
+    const fn = vi
+      .fn<() => Promise<{ bytes: number }>>()
+      .mockResolvedValueOnce({ bytes: 1 })
+      .mockRejectedValueOnce(new Error("boom"));
+    const probe = createMeasuredProbe(fn, {
+      ttlMs: 10,
+      now: () => clock,
+      onRun: (outcome) => outcomes.push(outcome),
+    });
+    await probe.read();
+    clock = 1000;
+    expect(await probe.read()).toMatchObject({ state: "error", error: "boom", bytes: 1 });
+    expect(outcomes.map((o) => o.error)).toEqual([undefined, "boom"]);
   });
 
   it("returns the value, flat, once the run finishes inside the wait", async () => {
@@ -27,6 +72,7 @@ describe("createMeasuredProbe", () => {
       bytes: 7,
       state: "ready",
       measuredAt: "2026-01-01T00:00:00.000Z",
+      durationMs: 0,
     });
   });
 
@@ -87,8 +133,11 @@ describe("createMeasuredProbe", () => {
     await probe.read();
     probe.invalidate();
     // A read while the orphan still runs joins its wait: no second run yet.
-    expect(await probe.read()).toEqual({ state: "measuring", measuredAt: null });
-    expect(await probe.read({ refresh: true })).toEqual({ state: "measuring", measuredAt: null });
+    expect(await probe.read()).toMatchObject({ state: "measuring", measuredAt: null });
+    expect(await probe.read({ refresh: true })).toMatchObject({
+      state: "measuring",
+      measuredAt: null,
+    });
     expect(fn).toHaveBeenCalledTimes(1);
     stale.resolve({ bytes: 1 });
     // The orphan's figure is thrown away; the run that was asked for follows it.

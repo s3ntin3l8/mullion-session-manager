@@ -9,8 +9,17 @@ import { getStoredSettings } from "../services/settings.js";
 import { expandHome, parseProjectsRootsEnv } from "../services/project-config.js";
 import { inspectDockerStorage, pruneDockerStorage } from "../services/docker-storage.js";
 import { inspectTempStorage, pruneTempStorage } from "../services/temp-storage.js";
-import { inspectCacheStorage, pruneCacheStorage } from "../services/cache-storage.js";
-import { inspectOpencodeStorage, pruneOpencodeStorage } from "../services/opencode-storage.js";
+import {
+  cacheDirPaths,
+  inspectCacheStorage,
+  pruneCacheStorage,
+} from "../services/cache-storage.js";
+import {
+  defaultOpencodeDbPath,
+  describeHolders,
+  inspectOpencodeStorage,
+  pruneOpencodeStorage,
+} from "../services/opencode-storage.js";
 import {
   inspectDevWorktrees,
   pruneDevWorktrees,
@@ -22,6 +31,7 @@ import { resolveRepoRef } from "../services/host-git.js";
 import { worktreeInUse } from "../services/worktree-usage.js";
 import { sampleSystemStats, type MonitoredPath } from "../services/system-stats.js";
 import { createMeasuredProbe } from "../services/measured-probe.js";
+import { inspectSpaceReport } from "../services/space-report.js";
 import {
   CLEANUP_IN_PROGRESS,
   createCleanupRunner,
@@ -33,11 +43,18 @@ import {
 const STATS_CACHE_MS = 10_000;
 // `docker system df -v` is quick enough to keep fresh.
 const DOCKER_INSPECT_CACHE_MS = 30_000;
-// The temp, cache, opencode and worktree measurements walk the disk (minutes,
-// for a large /tmp), so they are held for five minutes; the Refresh button
-// (`?refresh=1`) is how a user asks for a new one sooner. The clock runs from
-// when a measurement finishes, never from when it started.
-const SLOW_INSPECT_CACHE_MS = 5 * 60_000;
+// The temp, cache, opencode, worktree and space measurements walk the disk
+// (minutes, for a large tree), so they are held for half an hour: coming back
+// to the page later shows the figures at once instead of starting over. The
+// Refresh button (`?refresh=1`) is how a user asks for a new one sooner. The
+// clock runs from when a measurement finishes, never from when it started.
+const SLOW_INSPECT_CACHE_MS = 30 * 60_000;
+// Slow probes are measured once shortly after boot so the first visit to the
+// page isn't a cold start.
+const WARM_UP_DELAY_MS = 20_000;
+// A run slower than this is logged at warn: it names the probe that makes the
+// page slow.
+const SLOW_RUN_WARN_MS = 10_000;
 const refreshRequested = (query: { refresh?: string }) => query.refresh === "1";
 const REFRESH_QUERY = {
   schema: { querystring: { type: "object", properties: { refresh: { type: "string" } } } },
@@ -166,21 +183,49 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     },
   );
 
+  // Logs how long each run took, so a slow probe is visible in production.
+  const logRun =
+    (name: string) =>
+    ({ durationMs, error }: { durationMs: number; error?: string }) => {
+      const fields = { probe: name, durationMs, ...(error === undefined ? {} : { error }) };
+      if (durationMs >= SLOW_RUN_WARN_MS) app.log.warn(fields, "slow storage measurement");
+      else app.log.debug(fields, "storage measurement");
+    };
+
   const docker = createMeasuredProbe(() => inspectDockerStorage(), {
     ttlMs: DOCKER_INSPECT_CACHE_MS,
+    onRun: logRun("docker"),
   });
   const temp = createMeasuredProbe(
     () => inspectTempStorage({ claudeSessionsDirs: claudeSessionsDirs(app) }),
-    { ttlMs: SLOW_INSPECT_CACHE_MS },
+    { ttlMs: SLOW_INSPECT_CACHE_MS, onRun: logRun("temp") },
   );
   const opencode = createMeasuredProbe(() => inspectOpencodeStorage(), {
     ttlMs: SLOW_INSPECT_CACHE_MS,
+    onRun: logRun("opencode"),
   });
   const worktrees = createMeasuredProbe(() => inspectDevWorktrees(devWorktreeOptions()), {
     ttlMs: SLOW_INSPECT_CACHE_MS,
+    onRun: logRun("worktrees"),
   });
   const caches = createMeasuredProbe(() => inspectCacheStorage(), {
     ttlMs: SLOW_INSPECT_CACHE_MS,
+    onRun: logRun("caches"),
+  });
+
+  // What the "where the space is" report marks as something cleanup can handle.
+  const spaceCovered = () => [
+    ...cacheDirPaths().map(({ path: dir, label }) => ({ path: dir, label })),
+    { path: path.join(os.homedir(), ".npm"), label: "npm cache" },
+    { path: path.dirname(defaultOpencodeDbPath()), label: "opencode database" },
+    ...devWorktreeOptions().projects.map((project) => ({
+      path: path.join(project.cwd, ".wt"),
+      label: "developer worktrees",
+    })),
+  ];
+  const space = createMeasuredProbe(() => inspectSpaceReport({ covered: spaceCovered() }), {
+    ttlMs: SLOW_INSPECT_CACHE_MS,
+    onRun: logRun("space"),
   });
 
   const probeRoutes = [
@@ -189,6 +234,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     ["opencode", opencode],
     ["worktrees", worktrees],
     ["caches", caches],
+    ["space", space],
   ] as const;
   for (const [name, probe] of probeRoutes) {
     app.get<{ Querystring: { refresh?: string } }>(
@@ -196,6 +242,19 @@ export async function systemResourcesRoute(app: FastifyInstance) {
       REFRESH_QUERY,
       async (request) => probe.read({ refresh: refreshRequested(request.query) }),
     );
+  }
+
+  // Not under test: a boot-time measurement would walk the real disk.
+  if (app.config.NODE_ENV !== "test") {
+    let warmUp: NodeJS.Timeout | undefined;
+    app.addHook("onReady", async () => {
+      warmUp = setTimeout(() => {
+        // Measuring starts on read; nobody waits for the answer.
+        for (const [name, probe] of probeRoutes) if (name !== "docker") void probe.read();
+      }, WARM_UP_DELAY_MS);
+      warmUp.unref();
+    });
+    app.addHook("onClose", async () => clearTimeout(warmUp));
   }
 
   // A source's own "already running" guard surfaces as a code, not a sentence.
@@ -281,7 +340,7 @@ export async function systemResourcesRoute(app: FastifyInstance) {
         : opencodeSeen.compacting
           ? "It is already being compacted"
           : opencodeSeen.inUse
-            ? "opencode is running"
+            ? `opencode is running${describeHolders(opencodeSeen.holders)}`
             : opencodeSeen.holdersUnknown
               ? "Can't tell whether opencode is running"
               : null;

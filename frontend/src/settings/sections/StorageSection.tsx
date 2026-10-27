@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import type {
   CleanupJob,
@@ -12,12 +13,14 @@ import { formatRelativeAge } from "../../relativeTime.js";
 import { Eyebrow, SecondaryButton, Toggle } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { formatBytes } from "../../formatBytes.js";
+import { formatDuration } from "../../formatDuration.js";
 import { ConfirmButton } from "../../ui/ConfirmButton.js";
 import { useDashboardStore } from "../../store/index.js";
 import { useStorageProbes } from "../useStorageProbes.js";
 import { useCleanupJob } from "../useCleanupJob.js";
 import { summarizeCleanup } from "../cleanupSummary.js";
 import { KeptSessionWorktrees } from "./KeptSessionWorktrees.js";
+import { SpaceReport } from "./SpaceReport.js";
 
 function describeWorktree(candidate: DevWorktreeCandidate): string {
   const kind = candidate.kind === "claude-agent" ? "Claude agent" : "worktree";
@@ -32,6 +35,25 @@ function describeWorktree(candidate: DevWorktreeCandidate): string {
   return `${kind}, ${why}`;
 }
 
+/** " (pid 123: opencode serve)" for the first process holding opencode's database. */
+function holderText(holders: Array<{ pid: number; command: string }> | undefined): string {
+  const [first] = holders ?? [];
+  if (!first) return "";
+  const more = holders!.length > 1 ? ` and ${String(holders!.length - 1)} more` : "";
+  return ` (pid ${String(first.pid)}${first.command ? `: ${first.command}` : ""}${more})`;
+}
+
+/** The current time, re-read every second while `active`, so elapsed counters tick. */
+function useNow(active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [active]);
+  return now;
+}
+
 /** One source's line in a tier card. */
 interface TierRow {
   label: string;
@@ -39,6 +61,9 @@ interface TierRow {
   bytes: number | null;
   /** Still measuring, so the figure is missing or about to change. */
   pending: boolean;
+  /** ISO time the measurement in progress started, for "measuring… 1m 20s". */
+  since?: string;
+
   note?: string;
 }
 
@@ -54,7 +79,7 @@ function tierRow<T>(
   if (!hasMeasuredData(probe)) {
     return probe?.state === "error"
       ? { label, bytes: null, pending: false, note: probe.error ?? "Could not measure" }
-      : { label, bytes: null, pending: true };
+      : { label, bytes: null, pending: true, since: probe?.startedAt };
   }
   const read_ = read(probe);
   if (!read_) return null;
@@ -62,9 +87,15 @@ function tierRow<T>(
     label,
     bytes: read_.bytes,
     pending: probe.state === "measuring",
+    since: probe.startedAt,
     note:
       probe.state === "error" ? `Could not refresh: ${probe.error ?? "unknown error"}` : read_.note,
   };
+}
+
+/** " 1m 20s" since a measurement started, or "" when the start isn't known. */
+function elapsed(since: string | undefined, now: number): string {
+  return since ? ` ${formatDuration(now - Date.parse(since))}` : "";
 }
 
 function TierCard({
@@ -72,12 +103,14 @@ function TierCard({
   variant,
   rows,
   busy,
+  now,
   action,
 }: {
   title: string;
   variant: "safe" | "aggressive";
   rows: TierRow[];
   busy: boolean;
+  now: number;
   action: ReactNode;
 }) {
   const total = rows.reduce((sum, row) => sum + (row.bytes ?? 0), 0);
@@ -101,9 +134,9 @@ function TierCard({
             <span className={`storage-tier-figure${row.pending ? " pending" : ""}`}>
               {row.bytes === null
                 ? row.pending
-                  ? "measuring…"
+                  ? `measuring…${elapsed(row.since, now)}`
                   : "—"
-                : `${formatBytes(row.bytes)}${row.pending ? " · updating…" : ""}`}
+                : `${formatBytes(row.bytes)}${row.pending ? ` · updating…${elapsed(row.since, now)}` : ""}`}
             </span>
           </div>
         ))}
@@ -200,6 +233,7 @@ function DiskRow({ filesystem }: { filesystem: SystemStats["filesystems"][number
 export function StorageSection() {
   const probes = useStorageProbes();
   const { stats, statsError, busy, refresh } = probes;
+  const now = useNow(busy);
   const docker = hasMeasuredData(probes.docker) ? probes.docker : null;
   const temp = hasMeasuredData(probes.temp) ? probes.temp : null;
   const caches = hasMeasuredData(probes.caches) ? probes.caches : null;
@@ -262,7 +296,7 @@ export function StorageSection() {
     const blocked = data.compacting
       ? "compacting now"
       : data.inUse
-        ? "skipped: opencode is running"
+        ? `skipped: opencode is running${holderText(data.holders)} · ${formatBytes(data.reclaimableBytes)} once it is closed`
         : data.holdersUnknown
           ? "skipped: can't tell if it's running"
           : undefined;
@@ -285,11 +319,27 @@ export function StorageSection() {
     probes.caches,
     probes.opencode,
     probes.worktrees,
+    probes.space,
   ]
     .map((probe) => (hasMeasuredData(probe) ? probe.measuredAt : null))
     .filter((at): at is string => at !== null)
     .map((at) => Date.parse(at));
   const oldest = measuredTimes.length > 0 ? Math.min(...measuredTimes) : null;
+  // The longest a measurement has been running, and how long the slowest took.
+  const allProbes = [
+    probes.docker,
+    probes.temp,
+    probes.caches,
+    probes.opencode,
+    probes.worktrees,
+    probes.space,
+  ];
+  const runningSince = allProbes
+    .map((probe) => (probe?.state === "measuring" ? probe.startedAt : undefined))
+    .filter((at): at is string => at !== undefined)
+    .map((at) => Date.parse(at));
+  const longestRunMs = runningSince.length > 0 ? now - Math.min(...runningSince) : null;
+  const slowestTookMs = Math.max(0, ...allProbes.map((probe) => probe?.durationMs ?? 0));
 
   return (
     <>
@@ -316,9 +366,20 @@ export function StorageSection() {
           {busy ? "Measuring…" : "Refresh"}
         </SecondaryButton>
         <span className="storage-refresh-age">
-          {oldest !== null ? `Measured ${formatRelativeAge(oldest)}` : ""}
+          {oldest !== null
+            ? `Measured ${formatRelativeAge(oldest)}${
+                slowestTookMs > 0 ? ` (slowest took ${formatDuration(slowestTookMs)})` : ""
+              }`
+            : ""}
         </span>
       </div>
+      {busy && (
+        <div className="storage-measuring-note" role="status">
+          Measuring{longestRunMs !== null ? ` for ${formatDuration(longestRunMs)}` : ""}. This runs
+          on the server, so you can leave this page and come back: finished figures are kept for 30
+          minutes.
+        </div>
+      )}
       {dockerUnavailable && (
         <div className="settings-footer-note">
           Docker cleanup unavailable:{" "}
@@ -331,6 +392,7 @@ export function StorageSection() {
           title="Safe"
           variant="safe"
           busy={busy}
+          now={now}
           rows={present([dockerSafeRow, tempSafeRow])}
           action={
             <ConfirmButton
@@ -348,6 +410,7 @@ export function StorageSection() {
           title="Aggressive"
           variant="aggressive"
           busy={busy}
+          now={now}
           rows={present([
             dockerAggressiveRow,
             tempAggressiveRow,
@@ -512,7 +575,7 @@ export function StorageSection() {
             {opencode.compacting
               ? "It is being compacted right now, which can take several minutes; the figures are from before it started."
               : opencode.inUse
-                ? "opencode is running right now, so this is skipped until it is closed."
+                ? `opencode is running right now${holderText(opencode.holders)}, so this is skipped until it is closed.`
                 : opencode.holdersUnknown
                   ? `Mullion couldn't tell whether opencode is running${
                       opencode.holdersUnknownReason ? ` (${opencode.holdersUnknownReason})` : ""
@@ -532,6 +595,12 @@ export function StorageSection() {
           </div>
         )}
       </details>
+
+      <Eyebrow
+        title="Where the space is"
+        desc="The biggest folders in your home directory. Read-only: nothing here is deleted; “cleanable” marks what the tiers above already handle."
+      />
+      <SpaceReport probe={probes.space} now={now} />
     </>
   );
 }

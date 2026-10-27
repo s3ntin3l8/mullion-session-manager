@@ -89,6 +89,8 @@ export interface OpencodeStorageStatus {
   liveBytes: number;
   /** Some other process has it open; a VACUUM would lock it out, so it is skipped. */
   inUse: boolean;
+  /** Who has it open, when `inUse`; what to stop to let the compaction run. */
+  holders?: Holder[];
   /**
    * Who has it open couldn't be established (no readable /proc, or one of this
    * user's own processes can't be looked into). Unknown is not "nobody": it is
@@ -133,15 +135,38 @@ async function sizeOf(file: string): Promise<number> {
 }
 
 /**
- * Pids (other than this process) with the database, its WAL or its shared-memory
- * file open. `unknown` is set, with what couldn't be looked into, when that
- * can't be fully established: no readable /proc, or a process of this same user
- * whose descriptors can't be listed. Another user's processes can't be opencode
- * (it runs as the server's user) and are skipped.
+ * A process with the database, its WAL or its shared-memory file open.
+ * `command` is its command line (truncated), so the user can tell what to stop.
+ */
+export interface Holder {
+  pid: number;
+  command: string;
+}
+
+/**
+ * Processes (other than this one) holding the database open. A holder that is
+ * found is definitive. `unknown` is set, with what couldn't be looked into, only
+ * when no holder was found and the scan couldn't be completed: no readable
+ * /proc, or a process of this same user whose descriptors can't be listed.
+ * Another user's processes can't be opencode (it runs as the server's user) and
+ * are skipped.
  */
 export interface HolderScan {
-  holders: number[];
+  holders: Holder[];
   unknown?: string;
+}
+
+const COMMAND_MAX_CHARS = 120;
+// Own-user helpers whose descriptors are never listable (non-dumpable) and that
+// can't be opencode; without this every systemd host reports "can't tell".
+const UNLISTABLE_HELPERS = new Set(["(sd-pam)"]);
+
+const readProc = (file: string) => fs.readFile(file, "utf8").catch(() => null);
+
+async function commandOf(procDir: string, pid: string): Promise<string> {
+  const raw = await readProc(path.join(procDir, pid, "cmdline"));
+  const command = (raw ?? "").replace(/\0/g, " ").trim();
+  return command.length > COMMAND_MAX_CHARS ? `${command.slice(0, COMMAND_MAX_CHARS)}…` : command;
 }
 
 export async function findHolders(dbPath: string, procDir = "/proc"): Promise<HolderScan> {
@@ -155,7 +180,8 @@ export async function findHolders(dbPath: string, procDir = "/proc"): Promise<Ho
   } catch (error) {
     return { holders: [], unknown: `cannot read ${procDir} (${errnoOf(error)})` };
   }
-  const holders: number[] = [];
+  const holders: Holder[] = [];
+  let unknown: string | undefined;
   for (const pid of pids) {
     if (!/^\d+$/.test(pid) || Number(pid) === process.pid) continue;
     const fdDir = path.join(procDir, pid, "fd");
@@ -169,19 +195,24 @@ export async function findHolders(dbPath: string, procDir = "/proc"): Promise<Ho
         () => null,
       );
       if (owner !== null && owner === process.getuid?.()) {
-        return { holders, unknown: `cannot list ${fdDir} (${errnoOf(error)})` };
+        const comm = (await readProc(path.join(procDir, pid, "comm")))?.trim();
+        // Keep scanning: a later process may be the holder, and a holder found
+        // beats not knowing.
+        if (!(comm && UNLISTABLE_HELPERS.has(comm))) {
+          unknown ??= `cannot list ${fdDir} (${errnoOf(error)})`;
+        }
       }
-      continue; // another user's process
+      continue; // another user's process, or one that was recorded above
     }
     for (const fd of fds) {
       const target = await fs.readlink(path.join(fdDir, fd)).catch(() => null);
       if (target !== null && watched.has(target)) {
-        holders.push(Number(pid));
+        holders.push({ pid: Number(pid), command: await commandOf(procDir, pid) });
         break;
       }
     }
   }
-  return { holders };
+  return holders.length > 0 ? { holders } : { holders, ...(unknown ? { unknown } : {}) };
 }
 
 export async function inspectOpencodeStorage(
@@ -223,6 +254,7 @@ export async function inspectOpencodeStorage(
         reclaimableBytes: free * pageSize,
         liveBytes: (pageCount - free) * pageSize,
         inUse: scan.holders.length > 0,
+        ...(scan.holders.length > 0 ? { holders: scan.holders } : {}),
         holdersUnknown: scan.unknown !== undefined,
         ...(scan.unknown === undefined ? {} : { holdersUnknownReason: scan.unknown }),
         compacting,
@@ -315,6 +347,13 @@ const defaultFreeBytes = async (dir: string) => {
   return stats.bavail * stats.bsize;
 };
 
+export function describeHolders(holders: readonly Holder[] = []): string {
+  if (holders.length === 0) return "";
+  const [first] = holders;
+  const more = holders.length > 1 ? ` and ${String(holders.length - 1)} more` : "";
+  return ` (pid ${String(first.pid)}${first.command ? `: ${first.command}` : ""}${more})`;
+}
+
 const unknownHoldersOutput = (reason?: string) =>
   `Couldn't tell whether opencode is running${reason ? ` (${reason})` : ""}; its database was skipped.`;
 
@@ -343,7 +382,7 @@ export async function pruneOpencodeStorage(
     }
     if (status.inUse) {
       return {
-        output: "opencode is running; its database was skipped. Close it and run again.",
+        output: `opencode is running${describeHolders(status.holders)}; its database was skipped. Close it and run again.`,
         reclaimedBytes: 0,
       };
     }

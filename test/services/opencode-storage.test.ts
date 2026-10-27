@@ -152,7 +152,7 @@ describe("opencode-storage", () => {
       await fs.symlink(real, path.join(base, "link"));
       await holdOpen(21, path.join(real, "opencode.db"));
       expect(await findHolders(path.join(base, "link", "opencode.db"), procDir)).toEqual({
-        holders: [21],
+        holders: [{ pid: 21, command: "" }],
       });
     });
 
@@ -161,13 +161,57 @@ describe("opencode-storage", () => {
       await fs.mkdir(path.join(procDir, "12")); // no fd dir: not ours to read
       await fs.mkdir(path.join(procDir, "self"));
       await holdOpen(13, `${dbPath}-shm`);
-      expect(await findHolders(dbPath, procDir)).toEqual({ holders: [13] });
+      expect(await findHolders(dbPath, procDir)).toEqual({ holders: [{ pid: 13, command: "" }] });
     });
 
     it("can't tell, rather than saying nobody, when /proc is unreadable", async () => {
       const scan = await findHolders(dbPath, path.join(base, "no-proc"));
       expect(scan.holders).toEqual([]);
       expect(scan.unknown).toMatch(/cannot read .*no-proc \(ENOENT\)/);
+    });
+
+    it("names the holder by its command line, truncated", async () => {
+      await holdOpen(41, dbPath);
+      await fs.writeFile(
+        path.join(procDir, "41", "cmdline"),
+        `opencode\0serve\0${"x".repeat(200)}`,
+      );
+      const [holder] = (await findHolders(dbPath, procDir)).holders;
+      expect(holder.pid).toBe(41);
+      expect(holder.command.startsWith("opencode serve xxx")).toBe(true);
+      expect(holder.command.length).toBeLessThanOrEqual(121);
+    });
+
+    describe("with one of this user's own processes unreadable", () => {
+      const unreadable = async (pid: number, comm?: string) => {
+        await holdOpen(pid, path.join(base, "other.db"));
+        if (comm) await fs.writeFile(path.join(procDir, String(pid), "comm"), `${comm}\n`);
+        await fs.chmod(path.join(procDir, String(pid), "fd"), 0o000);
+      };
+      const restore = (pid: number) => fs.chmod(path.join(procDir, String(pid), "fd"), 0o700);
+
+      it("still finds the real holder: a holder found beats not knowing", async () => {
+        if (process.getuid?.() === 0) return;
+        await unreadable(5, "something-else");
+        await holdOpen(6, dbPath);
+        try {
+          const scan = await findHolders(dbPath, procDir);
+          expect(scan.holders.map((h) => h.pid)).toEqual([6]);
+          expect(scan.unknown).toBeUndefined();
+        } finally {
+          await restore(5);
+        }
+      });
+
+      it("isn't bothered by systemd's (sd-pam), whose descriptors are never listable", async () => {
+        if (process.getuid?.() === 0) return;
+        await unreadable(7, "(sd-pam)");
+        try {
+          expect(await findHolders(dbPath, procDir)).toEqual({ holders: [] });
+        } finally {
+          await restore(7);
+        }
+      });
     });
 
     it("can't tell when one of this user's own processes can't be looked into", async () => {

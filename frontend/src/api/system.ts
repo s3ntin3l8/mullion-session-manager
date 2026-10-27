@@ -18,6 +18,7 @@ import type {
   TempStorageStatus,
   CacheStorageStatus,
   OpencodeStorageStatus,
+  SpaceReportStatus,
   Measured,
   DevWorktreeStatus,
   CleanupJob,
@@ -97,6 +98,9 @@ export const systemApi = {
 
   getOpencodeStorage: (refresh?: boolean) =>
     request<Measured<OpencodeStorageStatus>>(`/api/storage/opencode${refresh ? "?refresh=1" : ""}`),
+
+  getSpaceReport: (refresh?: boolean) =>
+    request<Measured<SpaceReportStatus>>(`/api/storage/space${refresh ? "?refresh=1" : ""}`),
 
   getDevWorktrees: (refresh?: boolean) =>
     request<Measured<DevWorktreeStatus>>(`/api/storage/worktrees${refresh ? "?refresh=1" : ""}`),

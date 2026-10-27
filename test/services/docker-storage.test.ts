@@ -5,6 +5,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import {
   DOCKER_PRUNE_AGGRESSIVE_ARGS,
   DOCKER_SAFE_PRUNE_STEPS,
+  estimateAggressivePrune,
   estimateSafePrune,
   inspectDockerStorage,
   parseDockerUsage,
@@ -179,6 +180,53 @@ describe("Docker storage", () => {
     expect(estimateSafePrune(verbose, dangling, now)).toBe(
       1000 ** 3 + 10 * 1000 ** 2 + 100 * 1000 ** 2 + 50 * 1000 ** 2,
     );
+  });
+
+  it("estimates the aggressive tier from every unused entry, never volumes", () => {
+    const verbose = JSON.stringify({
+      Images: [
+        { ID: "a", Containers: "0", UniqueSize: "1GB" },
+        { ID: "b", Containers: "2", UniqueSize: "9GB" },
+      ],
+      Containers: [
+        { State: "exited", Size: "10MB" },
+        { State: "running", Size: "30MB" },
+      ],
+      BuildCache: [
+        { CacheType: "regular", InUse: "false", Size: "100MB" },
+        { CacheType: "source.local", InUse: "false", Size: "400MB" },
+        { CacheType: "frontend", InUse: "false", Size: "1GB" },
+        { CacheType: "regular", InUse: "true", Size: "300MB" },
+      ],
+      Volumes: [{ Name: "v", Size: "5GB" }],
+    });
+    expect(estimateAggressivePrune(verbose)).toBe(
+      1000 ** 3 + 10 * 1000 ** 2 + 100 * 1000 ** 2 + 400 * 1000 ** 2 + 1000 ** 3,
+    );
+    expect(estimateAggressivePrune("{}")).toBe(0);
+  });
+
+  it("counts all unused build cache when the summary row understates it (containerd store)", async () => {
+    const df =
+      '{"Type":"Images","TotalCount":"2","Active":"2","Size":"3GB","Reclaimable":"0B"}\n' +
+      '{"Type":"Build Cache","TotalCount":"3","Active":"0","Size":"6.5GB","Reclaimable":"1.1GB"}\n';
+    const verbose = JSON.stringify({
+      Images: [],
+      Containers: [],
+      BuildCache: [
+        { CacheType: "regular", InUse: "false", Size: "1.1GB" },
+        { CacheType: "source.local", InUse: "false", Size: "2.4GB" },
+        { CacheType: "frontend", InUse: "false", Size: "3GB" },
+      ],
+    });
+    const spawn: SpawnDocker = (command, args) => {
+      const joined = args.join(" ");
+      const stdout = joined.includes("-v") ? verbose : joined.startsWith("images") ? "" : df;
+      return fakeSpawn({ stdout }).spawn(command, args);
+    };
+    await expect(inspectDockerStorage(spawn)).resolves.toMatchObject({
+      estimates: { aggressiveBytes: 6.5 * 1000 ** 3 },
+    });
   });
 
   it("reports per-tier estimates, excluding volumes from the aggressive tier", async () => {
