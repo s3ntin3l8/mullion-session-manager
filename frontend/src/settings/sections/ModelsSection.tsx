@@ -1,8 +1,10 @@
-import { useDashboardStore } from "../../store/index.js";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import { api } from "../../api/index.js";
-import { GroupHeading } from "../../ui/primitives.js";
-import { ModelPicker } from "../ModelPicker.js";
+import { useDashboardStore } from "../../store/index.js";
+import { api, normalizeAgentId } from "../../api/index.js";
+import type { AppSettings } from "../../api/index.js";
+import { ModelSelect } from "../ModelPicker.js";
+import type { ModelOption } from "../ModelPicker.js";
 import {
   CLAUDE_MODELS,
   CLAUDE_SMALL_MODELS,
@@ -15,22 +17,114 @@ import {
   resolveInstalledRoleModels,
   type InstalledRoleModels,
 } from "../../modelRoles.js";
+import { AGENT_OPTIONS } from "../agentOptions.js";
 
-const hintStyle = { fontSize: "0.75rem", color: "var(--muted)", margin: "4px 0 0", paddingLeft: 6 };
+// Issue #2073 — one row per CLI, columns for the three roles. Order and
+// visible names come from AGENT_OPTIONS so this list cannot drift from the
+// Agents page (Antigravity, not "agy"). A CLI with no entry here is not a
+// model-capable agent and is not rendered.
+function cliLayout(key: string): { hasSmall: boolean; allowCustom: boolean } | null {
+  switch (key) {
+    case "claude":
+      return { hasSmall: true, allowCustom: true };
+    case "codex":
+      return { hasSmall: false, allowCustom: true };
+    case "opencode":
+      return { hasSmall: true, allowCustom: false };
+    case "agy":
+      return { hasSmall: false, allowCustom: true };
+    case "mcode":
+      return { hasSmall: false, allowCustom: true };
+    default:
+      return null;
+  }
+}
 
-const warningStyle = {
-  fontSize: "0.71875rem",
-  // Amber, not the error red: this is an advisory note, and the codebase
-  // colours advisory prose amber throughout (PromoteDialog, HostsSection,
-  // IntegrationsSection). Red reads as a failure in a neutral settings row.
-  color: "var(--y)",
-  margin: 0,
-  paddingLeft: 6,
-  maxWidth: 280,
-};
+const MODEL_CLIS = AGENT_OPTIONS.flatMap((option) => {
+  const layout = cliLayout(option.value);
+  return layout ? [{ ...option, ...layout }] : [];
+});
 
-const FLAG_HINT =
-  "Adds --model to new sessions and Task Master workers. A task's Model: / Reviewer-Model: line overrides these; a launcher command that already passes --model is left alone.";
+type AgentProbe =
+  { status: "loading" } | { status: "error" } | { status: "ready"; available: ReadonlySet<string> };
+
+/**
+ * Which model CLIs are actually on this host.
+ *
+ * This is NOT `resolveInstalledRoleModels`. That function answers which
+ * model the worker and the reviewer resolve to at the install-wide tier
+ * ("installed" there means install-wide, not "the binary exists"). The
+ * on-disk signal is the same `available` flag Settings → Agents already
+ * renders, from GET /api/agents.
+ *
+ * `loading` and `error` are not "nothing is installed" — collapsing on
+ * either would flash every row shut, and a failed probe would hide CLIs
+ * the user can still configure.
+ */
+function useDetectedAgents(): AgentProbe {
+  const [probe, setProbe] = useState<AgentProbe>({ status: "loading" });
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listAgents()
+      .then((agents) => {
+        if (cancelled) return;
+        const available = new Set<string>();
+        for (const agent of agents) {
+          if (agent.kind === "agent" && agent.available) available.add(normalizeAgentId(agent.id));
+        }
+        setProbe({ status: "ready", available });
+      })
+      .catch(() => {
+        if (!cancelled) setProbe({ status: "error" });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  return probe;
+}
+
+function hasStoredModel(settings: AppSettings, key: string): boolean {
+  const present = (value: string | null | undefined) => value != null && value !== "";
+  switch (key) {
+    case "claude":
+      return (
+        present(settings.claudeCode.defaultModel) ||
+        present(settings.claudeCode.reviewerModel) ||
+        present(settings.claudeCode.smallModel)
+      );
+    case "codex":
+      return present(settings.codex.defaultModel) || present(settings.codex.reviewerModel);
+    case "agy":
+      return present(settings.agy.defaultModel) || present(settings.agy.reviewerModel);
+    case "mcode":
+      return present(settings.mcode.defaultModel) || present(settings.mcode.reviewerModel);
+    case "opencode":
+      return (
+        present(settings.opencode.implementerModel) ||
+        present(settings.opencode.reviewerModel) ||
+        present(settings.opencode.defaultSmallModel)
+      );
+    default:
+      return false;
+  }
+}
+
+/** In the main list, not behind "Show N more". */
+function isPrimary(settings: AppSettings, key: string, probe: AgentProbe): boolean {
+  if (probe.status !== "ready") return true;
+  if (probe.available.has(key)) return true;
+  if (settings.taskMaster.defaultAgent === key || settings.taskMaster.defaultReviewAgent === key) {
+    return true;
+  }
+  return hasStoredModel(settings, key);
+}
+
+function moreLabel(count: number, open: boolean): string {
+  const noun = count === 1 ? "CLI" : "CLIs";
+  return open ? `Hide ${count} ${noun}` : `Show ${count} more ${noun}`;
+}
 
 /**
  * The advisory note under a reviewer-model picker when the reviewer and the
@@ -65,7 +159,7 @@ function reviewerModelWarning(cliKey: string, roles: InstalledRoleModels): React
   if (!roles.shared) return null;
   if (roles.reviewCli !== cliKey) return null;
   return (
-    <p style={warningStyle}>
+    <p className="settings-models-warning">
       Install-wide, your reviewer runs on the same model as your worker ({roles.reviewer}) — no
       second opinion. A task's own <code>Model:</code> / <code>Reviewer-Model:</code> line overrides
       this — and <code>Model:</code> applies to both roles, so it can also make them the same.
@@ -82,11 +176,15 @@ function reviewerModelWarning(cliKey: string, roles: InstalledRoleModels): React
 function smallModelAliasWarning(value: string | null): ReactNode {
   if (value === null || !isClaudeModelAlias(value)) return null;
   return (
-    <p style={warningStyle}>
+    <p className="settings-models-warning">
       <code>{value}</code> is a model alias, not a full model id, so Mullion ignores it and Claude
       Code uses its own default. Pick a full id (or Claude Code default) to clear this.
     </p>
   );
+}
+
+function ariaName(label: string, role: "implementer" | "reviewer" | "small"): string {
+  return `${label} ${role} model`;
 }
 
 export function ModelsSection() {
@@ -97,6 +195,8 @@ export function ModelsSection() {
   // Issue #1784 — mcode's catalog, read from mcode's own config.yaml by the
   // backend (GET /api/mcode/models).
   const mcode = useCatalog(api.listMcodeModels);
+  const probe = useDetectedAgents();
+  const [showRest, setShowRest] = useState(false);
 
   const setOpencode = (
     key: "implementerModel" | "reviewerModel" | "defaultSmallModel",
@@ -104,6 +204,10 @@ export function ModelsSection() {
   ) => updateSettings({ opencode: { [key]: value } });
 
   const opencodeOptions = opencode.models.map((value) => ({ value }));
+  const codexOptions =
+    codex.models.length > 0 ? codex.models.map((value) => ({ value })) : CODEX_FALLBACK_MODELS;
+  const agyOptions = agy.models.map((value) => ({ value }));
+  const mcodeOptions = mcode.models.map((value) => ({ value }));
 
   // Each CLI's own two roles, keyed by the agent-option value the
   // install-wide agent settings use ("claude", "codex", "agy", "opencode").
@@ -118,179 +222,279 @@ export function ModelsSection() {
     pairs: cliPairs,
   });
 
+  const primaryCount = MODEL_CLIS.filter((cli) => isPrimary(settings, cli.value, probe)).length;
+  const showAll = primaryCount === 0 || primaryCount === MODEL_CLIS.length;
+  const hiddenCount = showAll ? 0 : MODEL_CLIS.length - primaryCount;
+
+  const catalogNote = (key: string): string | null => {
+    if (key === "agy") {
+      if (agy.status === "error") {
+        return "Couldn't load the agy model list. Try reopening Settings, or use Custom….";
+      }
+      if (agy.status === "ready" && agy.models.length === 0) {
+        return "No models found. Check that agy is installed and signed in, or use Custom….";
+      }
+      return null;
+    }
+    if (key === "opencode") {
+      if (opencode.status === "error") {
+        // Reached only for a genuine HTTP/network failure fetching
+        // GET /api/opencode/models — NOT for "opencode isn't installed":
+        // listOpenCodeModels() swallows exec failures (ENOENT included) and
+        // returns [], so that case lands in the "ready && empty" branch.
+        return "Couldn't load the model list. Try reopening Settings.";
+      }
+      if (opencode.status === "ready" && opencode.models.length === 0) {
+        return "No models found. Check that opencode is installed and has a provider configured.";
+      }
+      return "Pick from opencode's list — no custom id. A task can also set SmallModel:.";
+    }
+    if (key === "mcode") {
+      if (mcode.status === "error") {
+        return "Couldn't load the MiniMax Code model list. Try reopening Settings, or use Custom….";
+      }
+      if (mcode.status === "ready" && mcode.models.length === 0) {
+        return "No models found. Check that mcode is installed and signed in, or use Custom….";
+      }
+      return null;
+    }
+    return null;
+  };
+
+  const roleBinding = (
+    key: string,
+    role: "implementer" | "reviewer" | "small",
+    label: string,
+  ): {
+    value: string | null;
+    options: ModelOption[];
+    defaultLabel: string;
+    allowCustom: boolean;
+    onChange: (value: string | null) => void;
+  } | null => {
+    const layout = cliLayout(key);
+    if (!layout) return null;
+    if (role === "small" && !layout.hasSmall) return null;
+    const allowCustom = layout.allowCustom;
+    if (key === "claude") {
+      if (role === "small") {
+        return {
+          value: settings.claudeCode.smallModel,
+          options: CLAUDE_SMALL_MODELS,
+          defaultLabel: "Claude Code default",
+          allowCustom,
+          onChange: (v) => updateSettings({ claudeCode: { smallModel: v } }),
+        };
+      }
+      return role === "implementer"
+        ? {
+            value: settings.claudeCode.defaultModel,
+            options: CLAUDE_MODELS,
+            defaultLabel: "Claude Code default",
+            allowCustom,
+            onChange: (v) => updateSettings({ claudeCode: { defaultModel: v } }),
+          }
+        : {
+            value: settings.claudeCode.reviewerModel,
+            options: CLAUDE_MODELS,
+            defaultLabel: "Same as implementer",
+            allowCustom,
+            onChange: (v) => updateSettings({ claudeCode: { reviewerModel: v } }),
+          };
+    }
+    if (key === "codex") {
+      return {
+        value: role === "implementer" ? settings.codex.defaultModel : settings.codex.reviewerModel,
+        options: codexOptions,
+        defaultLabel: role === "implementer" ? "Codex default" : "Same as implementer",
+        allowCustom,
+        onChange: (v) =>
+          updateSettings(
+            role === "implementer"
+              ? { codex: { defaultModel: v } }
+              : { codex: { reviewerModel: v } },
+          ),
+      };
+    }
+    if (key === "agy") {
+      return {
+        value: role === "implementer" ? settings.agy.defaultModel : settings.agy.reviewerModel,
+        options: agyOptions,
+        defaultLabel: role === "implementer" ? `${label} default` : "Same as implementer",
+        allowCustom,
+        onChange: (v) =>
+          updateSettings(
+            role === "implementer" ? { agy: { defaultModel: v } } : { agy: { reviewerModel: v } },
+          ),
+      };
+    }
+    if (key === "mcode") {
+      return {
+        value: role === "implementer" ? settings.mcode.defaultModel : settings.mcode.reviewerModel,
+        options: mcodeOptions,
+        defaultLabel: role === "implementer" ? "mcode default" : "Same as implementer",
+        allowCustom,
+        onChange: (v) =>
+          updateSettings(
+            role === "implementer"
+              ? { mcode: { defaultModel: v } }
+              : { mcode: { reviewerModel: v } },
+          ),
+      };
+    }
+    if (key === "opencode") {
+      const field =
+        role === "implementer"
+          ? "implementerModel"
+          : role === "reviewer"
+            ? "reviewerModel"
+            : "defaultSmallModel";
+      return {
+        value: settings.opencode[field],
+        options: opencodeOptions,
+        defaultLabel: "opencode default",
+        allowCustom,
+        onChange: (v) => setOpencode(field, v),
+      };
+    }
+    return null;
+  };
+
   return (
-    <>
-      <GroupHeading title="Claude Code" />
-      <ModelPicker
-        label="Implementer model"
-        ariaLabel="Claude Code implementer model"
-        desc="Model for new Claude Code sessions and Task Master workers."
-        value={settings.claudeCode?.defaultModel ?? null}
-        options={CLAUDE_MODELS}
-        defaultLabel="Claude Code default"
-        allowCustom
-        onChange={(v) => updateSettings({ claudeCode: { defaultModel: v } })}
-      />
-      <ModelPicker
-        label="Reviewer model"
-        ariaLabel="Claude Code reviewer model"
-        desc="Model for sessions that review tasks. Empty uses the implementer model."
-        value={settings.claudeCode?.reviewerModel ?? null}
-        options={CLAUDE_MODELS}
-        defaultLabel="Same as implementer"
-        allowCustom
-        onChange={(v) => updateSettings({ claudeCode: { reviewerModel: v } })}
-        warning={reviewerModelWarning("claude", installedRoles)}
-      />
-      <ModelPicker
-        label="Small model"
-        ariaLabel="Claude Code small model"
-        desc="Full model id for Claude Code's lightweight background work (the /goal evaluator, summaries…). Sets ANTHROPIC_DEFAULT_HAIKU_MODEL — an alias like haiku is not accepted there."
-        value={settings.claudeCode?.smallModel ?? null}
-        options={CLAUDE_SMALL_MODELS}
-        defaultLabel="Claude Code default"
-        allowCustom
-        onChange={(v) => updateSettings({ claudeCode: { smallModel: v } })}
-        warning={smallModelAliasWarning(settings.claudeCode?.smallModel ?? null)}
-      />
-      <p style={hintStyle}>{FLAG_HINT}</p>
-
-      <div style={{ paddingTop: 12 }}>
-        <GroupHeading title="Codex" />
-      </div>
-      <ModelPicker
-        label="Implementer model"
-        ariaLabel="Codex implementer model"
-        desc="Model for new Codex sessions and Task Master workers."
-        value={settings.codex?.defaultModel ?? null}
-        options={
-          codex.models.length > 0 ? codex.models.map((value) => ({ value })) : CODEX_FALLBACK_MODELS
-        }
-        defaultLabel="Codex default"
-        allowCustom
-        onChange={(v) => updateSettings({ codex: { defaultModel: v } })}
-      />
-      <ModelPicker
-        label="Reviewer model"
-        ariaLabel="Codex reviewer model"
-        desc="Model for sessions that review tasks. Empty uses the implementer model."
-        value={settings.codex?.reviewerModel ?? null}
-        options={
-          codex.models.length > 0 ? codex.models.map((value) => ({ value })) : CODEX_FALLBACK_MODELS
-        }
-        defaultLabel="Same as implementer"
-        allowCustom
-        onChange={(v) => updateSettings({ codex: { reviewerModel: v } })}
-        warning={reviewerModelWarning("codex", installedRoles)}
-      />
-      <p style={hintStyle}>{FLAG_HINT}</p>
-
-      <div style={{ paddingTop: 12 }}>
-        <GroupHeading title="agy" />
-      </div>
-      <ModelPicker
-        label="Implementer model"
-        ariaLabel="agy implementer model"
-        desc="Model for new agy sessions and Task Master workers."
-        value={settings.agy?.defaultModel ?? null}
-        options={agy.models.map((value) => ({ value }))}
-        defaultLabel="agy default"
-        allowCustom
-        onChange={(v) => updateSettings({ agy: { defaultModel: v } })}
-      />
-      <ModelPicker
-        label="Reviewer model"
-        ariaLabel="agy reviewer model"
-        desc="Model for sessions that review tasks. Empty uses the implementer model."
-        value={settings.agy?.reviewerModel ?? null}
-        options={agy.models.map((value) => ({ value }))}
-        defaultLabel="Same as implementer"
-        allowCustom
-        onChange={(v) => updateSettings({ agy: { reviewerModel: v } })}
-        warning={reviewerModelWarning("agy", installedRoles)}
-      />
-      <p style={hintStyle}>
-        {agy.status === "error"
-          ? "Couldn't load the agy model list. Try reopening Settings, or use Custom…."
-          : agy.status === "ready" && agy.models.length === 0
-            ? "No models found. Check that agy is installed and signed in, or use Custom…."
-            : FLAG_HINT}
+    <div className="settings-models">
+      <p className="settings-models-legend">
+        Install-wide defaults for new sessions and Task Master workers. A task's <code>Model:</code>{" "}
+        or <code>Reviewer-Model:</code> line overrides them, and <code>Model:</code> applies to both
+        roles. A launcher that already passes <code>--model</code> (or <code>-m</code> for MiniMax
+        Code) is left alone.
       </p>
-
-      <div style={{ paddingTop: 12 }}>
-        <GroupHeading title="opencode" />
+      <div className="settings-models-grid">
+        <div className="settings-models-head">
+          <span />
+          <span>
+            <span className="settings-models-col">Implementer</span>
+            <span className="settings-models-col-desc">New sessions and workers.</span>
+          </span>
+          <span>
+            <span className="settings-models-col">Reviewer</span>
+            <span className="settings-models-col-desc">
+              Review sessions. Empty follows the implementer, except opencode.
+            </span>
+          </span>
+          <span>
+            <span className="settings-models-col">Small</span>
+            <span className="settings-models-col-desc">
+              Background work. Only Claude Code and opencode.
+            </span>
+          </span>
+        </div>
+        {MODEL_CLIS.filter(
+          (cli) => showAll || showRest || isPrimary(settings, cli.value, probe),
+        ).map((cli) => {
+          const note = catalogNote(cli.value);
+          const notDetected = probe.status === "ready" && !probe.available.has(cli.value);
+          const implementer = roleBinding(cli.value, "implementer", cli.label);
+          const reviewer = roleBinding(cli.value, "reviewer", cli.label);
+          const small = roleBinding(cli.value, "small", cli.label);
+          return (
+            <div
+              key={cli.value}
+              className="settings-models-row"
+              data-testid={`models-row-${cli.value}`}
+            >
+              <div className="settings-models-name">
+                {cli.label}
+                {notDetected && <span className="settings-models-missing">not detected</span>}
+              </div>
+              {implementer && (
+                <RoleCell
+                  label="Implementer"
+                  ariaLabel={ariaName(cli.label, "implementer")}
+                  {...implementer}
+                />
+              )}
+              {reviewer && (
+                <RoleCell
+                  label="Reviewer"
+                  ariaLabel={ariaName(cli.label, "reviewer")}
+                  {...reviewer}
+                />
+              )}
+              {small ? (
+                <RoleCell label="Small" ariaLabel={ariaName(cli.label, "small")} {...small} />
+              ) : (
+                <div className="settings-models-cell settings-models-cell-empty">
+                  <span className="settings-models-role" aria-hidden="true">
+                    Small
+                  </span>
+                  <span className="settings-models-empty">
+                    <span aria-hidden="true">—</span>
+                    <span className="visually-hidden">{cli.label} has no small-model setting</span>
+                  </span>
+                </div>
+              )}
+              <div className="settings-models-wide">
+                {note && <p className="settings-models-note">{note}</p>}
+                {/* Always mounted so a warning's arrival is announced. Empty
+                    when there is nothing to say. Catalog notes stay outside
+                    this region: they appear because a fetch finished, not
+                    because the user changed a dropdown. */}
+                <div className="settings-models-status" role="status">
+                  {reviewerModelWarning(cli.value, installedRoles)}
+                  {cli.value === "claude"
+                    ? smallModelAliasWarning(settings.claudeCode.smallModel)
+                    : null}
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
-      <ModelPicker
-        label="Implementer model"
-        desc="Model for sessions that work on tasks."
-        value={settings.opencode?.implementerModel ?? null}
-        options={opencodeOptions}
-        defaultLabel="opencode default"
-        allowCustom={false}
-        onChange={(v) => setOpencode("implementerModel", v)}
-      />
-      <ModelPicker
-        label="Reviewer model"
-        desc="Model for sessions that review tasks."
-        value={settings.opencode?.reviewerModel ?? null}
-        options={opencodeOptions}
-        defaultLabel="opencode default"
-        allowCustom={false}
-        onChange={(v) => setOpencode("reviewerModel", v)}
-        warning={reviewerModelWarning("opencode", installedRoles)}
-      />
-      <ModelPicker
-        label="Small model"
-        desc="Model for lightweight jobs such as generating titles."
-        value={settings.opencode?.defaultSmallModel ?? null}
-        options={opencodeOptions}
-        defaultLabel="opencode default"
-        allowCustom={false}
-        onChange={(v) => setOpencode("defaultSmallModel", v)}
-      />
-      <p style={hintStyle}>
-        {opencode.status === "error"
-          ? // Reached only for a genuine HTTP/network failure fetching
-            // GET /api/opencode/models — NOT for "opencode isn't installed":
-            // listOpenCodeModels() swallows exec failures (ENOENT included) and
-            // returns [], so that case lands in the "ready && empty" branch.
-            "Couldn't load the model list. Try reopening Settings."
-          : opencode.status === "ready" && opencode.models.length === 0
-            ? "No models found. Check that opencode is installed and has a provider configured."
-            : "Applies to opencode sessions only. A task can override these with Model:, Reviewer-Model:, or SmallModel: lines."}
-      </p>
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          className="settings-add-btn"
+          aria-expanded={showRest}
+          onClick={() => setShowRest((open) => !open)}
+        >
+          {moreLabel(hiddenCount, showRest)}
+        </button>
+      )}
+    </div>
+  );
+}
 
-      <div style={{ paddingTop: 12 }}>
-        <GroupHeading title="MiniMax Code" />
-      </div>
-      <ModelPicker
-        label="Implementer model"
-        ariaLabel="MiniMax Code implementer model"
-        desc="Model for new MiniMax Code sessions and Task Master workers."
-        value={settings.mcode?.defaultModel ?? null}
-        options={mcode.models.map((value) => ({ value }))}
-        defaultLabel="mcode default"
-        allowCustom
-        onChange={(v) => updateSettings({ mcode: { defaultModel: v } })}
+function RoleCell({
+  label,
+  ariaLabel,
+  value,
+  options,
+  defaultLabel,
+  allowCustom,
+  onChange,
+}: {
+  label: string;
+  ariaLabel: string;
+  value: string | null;
+  options: ModelOption[];
+  defaultLabel: string;
+  allowCustom: boolean;
+  onChange: (value: string | null) => void;
+}) {
+  return (
+    <div className="settings-models-cell">
+      <span className="settings-models-role" aria-hidden="true">
+        {label}
+      </span>
+      <ModelSelect
+        stretch
+        ariaLabel={ariaLabel}
+        value={value}
+        options={options}
+        defaultLabel={defaultLabel}
+        allowCustom={allowCustom}
+        onChange={onChange}
       />
-      <ModelPicker
-        label="Reviewer model"
-        ariaLabel="MiniMax Code reviewer model"
-        desc="Model for sessions that review tasks. Empty uses the implementer model."
-        value={settings.mcode?.reviewerModel ?? null}
-        options={mcode.models.map((value) => ({ value }))}
-        defaultLabel="Same as implementer"
-        allowCustom
-        onChange={(v) => updateSettings({ mcode: { reviewerModel: v } })}
-        warning={reviewerModelWarning("mcode", installedRoles)}
-      />
-      <p style={hintStyle}>
-        {mcode.status === "error"
-          ? "Couldn't load the MiniMax Code model list. Try reopening Settings, or use Custom…."
-          : mcode.status === "ready" && mcode.models.length === 0
-            ? "No models found. Check that mcode is installed and signed in, or use Custom…."
-            : "Adds -m to new MiniMax Code sessions and Task Master workers. The list comes from mcode's own config.yaml; a task's Model: / Reviewer-Model: line overrides it."}
-      </p>
-    </>
+    </div>
   );
 }

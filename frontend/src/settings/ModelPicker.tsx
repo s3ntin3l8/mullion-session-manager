@@ -25,6 +25,7 @@ export function ModelSelect({
   allowCustom,
   onChange,
   small = false,
+  stretch = false,
 }: {
   ariaLabel: string;
   value: string | null;
@@ -35,6 +36,10 @@ export function ModelSelect({
   // The command palette's options strip is far narrower than a Settings Row —
   // maps to Dropdown's own `small` class.
   small?: boolean;
+  // Settings → Models puts one select per grid cell. The cell is the width
+  // constraint; the control fills it instead of shrinking to the longest
+  // option (which blows the row out). Not the palette's `small`.
+  stretch?: boolean;
 }) {
   const inList = value === null || options.some((o) => o.value === value);
   // `customOpen` is only the user's explicit choice of Custom…. A stored value
@@ -58,6 +63,13 @@ export function ModelSelect({
 
   const customMode = allowCustom && (customOpen || !inList);
   const selectValue = customMode ? CUSTOM : (value ?? "");
+  const selected = options.find((o) => o.value === value);
+  // A stretched closed select clips a long id. The title is the full label.
+  const titleText = stretch
+    ? customMode
+      ? draft.trim() || "Custom…"
+      : (selected?.label ?? value ?? defaultLabel)
+    : undefined;
 
   // Only a real list entry or the default may be stored from the select; the
   // custom entry just reveals the text field.
@@ -98,14 +110,19 @@ export function ModelSelect({
 
   return (
     <div
+      className={stretch ? "model-select model-select-stretch" : "model-select"}
+      title={titleText}
       style={{
         display: "flex",
         flexDirection: "column",
         gap: 6,
         // A Settings Row right-aligns its control column against the label;
         // the palette's compact strip is left-aligned instead, with its own
-        // "Model" caption above (CommandPalette.tsx).
-        alignItems: small ? "flex-start" : "flex-end",
+        // "Model" caption above (CommandPalette.tsx). A Models grid cell
+        // stretches so the select and the custom field share the column.
+        alignItems: stretch ? "stretch" : small ? "flex-start" : "flex-end",
+        width: stretch ? "100%" : undefined,
+        minWidth: stretch ? 0 : undefined,
       }}
     >
       <Dropdown
