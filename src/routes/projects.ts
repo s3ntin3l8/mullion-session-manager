@@ -126,6 +126,7 @@ import {
 import {
   addLabels,
   detectReleaseWorkflow,
+  invalidateReleaseWorkflowCache,
   dispatchWorkflow,
   getCachedReleasePullRequestStatus,
   GitHubWriteScopeError,
@@ -2396,7 +2397,7 @@ export async function projectsRoute(app: FastifyInstance) {
       const live = await memo.promise;
       runs = live.runs;
       runsAnswered = live.ok;
-      actionsStatus = computeCiStatus(live.runs);
+      actionsStatus = computeCiStatus(live.runs, { approvalPending: true });
     }
     // Checks that are not Actions runs only show up in the head commit's rollup.
     const ciStatus = combineCiStatus(actionsStatus, detail.checksRollup);
@@ -3024,6 +3025,9 @@ export async function projectsRoute(app: FastifyInstance) {
         // its own reason so the UI can say "add workflow_dispatch: to your
         // release workflow" rather than a generic failure.
         const reason = err.statusCode === 422 ? "no-dispatch-trigger" : "dispatch-failed";
+        if (reason === "no-dispatch-trigger") {
+          invalidateReleaseWorkflowCache(repoRef.owner, repoRef.repo);
+        }
         app.log.warn(
           { err, owner: repoRef.owner, repo: repoRef.repo },
           "release-please run failed",

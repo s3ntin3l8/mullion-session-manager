@@ -335,6 +335,33 @@ describe("computeCiStatus", () => {
   });
 });
 
+describe("computeCiStatus — approvalPending", () => {
+  const held = [
+    { name: "a", status: "completed", conclusion: "action_required", htmlUrl: "u", headSha: "s" },
+    { name: "b", status: "completed", conclusion: "success", htmlUrl: "u", headSha: "s" },
+  ];
+
+  it("reads a run held at action_required as a failure by default (the reconciler's gate)", () => {
+    expect(computeCiStatus(held)).toBe("failure");
+  });
+
+  it("reads it as still pending on the display paths", () => {
+    expect(computeCiStatus(held, { approvalPending: true })).toBe("in_progress");
+  });
+
+  it("still reports a real failure next to a held run", () => {
+    expect(
+      computeCiStatus(
+        [
+          ...held,
+          { name: "c", status: "completed", conclusion: "failure", htmlUrl: "u", headSha: "s" },
+        ],
+        { approvalPending: true },
+      ),
+    ).toBe("failure");
+  });
+});
+
 describe("setRepoPRsStatus / getPRsStatus cache", () => {
   afterEach(() => {
     vi.unstubAllGlobals();

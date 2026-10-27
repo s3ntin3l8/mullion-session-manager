@@ -33,6 +33,7 @@ import {
   findReleasePullRequest,
   detectReleaseWorkflow,
   clearReleaseWorkflowCacheForTests,
+  invalidateReleaseWorkflowCache,
   getCachedReleasePullRequestStatus,
   invalidateReleaseCache,
   clearReleasePrCacheForTests,
@@ -1547,10 +1548,113 @@ describe("github-write service", () => {
           ],
         }),
       );
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          content: Buffer.from("on:\n  push:\n  workflow_dispatch:\n").toString("base64"),
+          encoding: "base64",
+        }),
+      );
       expect(await detectReleaseWorkflow("tok", "owner", "repo")).toEqual({
         kind: "found",
-        workflow: { id: 2, name: "Release Please", path: ".github/workflows/release-please.yml" },
+        workflow: {
+          id: 2,
+          name: "Release Please",
+          path: ".github/workflows/release-please.yml",
+          dispatchable: true,
+        },
       });
+    });
+
+    it("reports dispatchable: false when the workflow has no workflow_dispatch trigger", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          workflows: [
+            { id: 2, name: "Release Please", path: ".github/workflows/release-please.yml" },
+          ],
+        }),
+      );
+      // A commented-out mention must not count.
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          content: Buffer.from("on:\n  push:\n  # workflow_dispatch:\n").toString("base64"),
+          encoding: "base64",
+        }),
+      );
+      expect(await detectReleaseWorkflow("tok", "owner", "repo")).toMatchObject({
+        kind: "found",
+        workflow: { dispatchable: false },
+      });
+    });
+
+    it("reports dispatchable: null when the workflow file can't be read", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, {
+          workflows: [
+            { id: 2, name: "Release Please", path: ".github/workflows/release-please.yml" },
+          ],
+        }),
+      );
+      fetchMock.mockResolvedValueOnce(textResponse(404, "Not Found"));
+      expect(await detectReleaseWorkflow("tok", "owner", "repo")).toMatchObject({
+        kind: "found",
+        workflow: { dispatchable: null },
+      });
+    });
+
+    it("re-reads a non-dispatchable workflow after 5 minutes, not an hour", async () => {
+      vi.useFakeTimers();
+      try {
+        const listing = jsonResponse(200, {
+          workflows: [
+            { id: 2, name: "Release Please", path: ".github/workflows/release-please.yml" },
+          ],
+        });
+        fetchMock.mockResolvedValueOnce(listing);
+        fetchMock.mockResolvedValueOnce(
+          jsonResponse(200, {
+            content: Buffer.from("on:\n  push:\n").toString("base64"),
+            encoding: "base64",
+          }),
+        );
+        await detectReleaseWorkflow("tok", "owner", "repo");
+        const calls = fetchMock.mock.calls.length;
+        await detectReleaseWorkflow("tok", "owner", "repo");
+        expect(fetchMock.mock.calls.length).toBe(calls);
+
+        vi.advanceTimersByTime(6 * 60_000);
+        fetchMock.mockResolvedValueOnce(
+          jsonResponse(200, {
+            workflows: [
+              { id: 2, name: "Release Please", path: ".github/workflows/release-please.yml" },
+            ],
+          }),
+        );
+        fetchMock.mockResolvedValueOnce(
+          jsonResponse(200, {
+            content: Buffer.from("on:\n  workflow_dispatch:\n").toString("base64"),
+            encoding: "base64",
+          }),
+        );
+        expect(await detectReleaseWorkflow("tok", "owner", "repo")).toMatchObject({
+          workflow: { dispatchable: true },
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("invalidateReleaseWorkflowCache forces the next detection to re-fetch", async () => {
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, { workflows: [{ id: 1, name: "CI", path: ".github/workflows/ci.yml" }] }),
+      );
+      await detectReleaseWorkflow("tok", "owner", "repo");
+      const calls = fetchMock.mock.calls.length;
+      invalidateReleaseWorkflowCache("owner", "repo");
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, { workflows: [{ id: 1, name: "CI", path: ".github/workflows/ci.yml" }] }),
+      );
+      await detectReleaseWorkflow("tok", "owner", "repo");
+      expect(fetchMock.mock.calls.length).toBeGreaterThan(calls);
     });
 
     it("returns 'not-configured' when the list succeeds but nothing matches", async () => {
@@ -1634,7 +1738,12 @@ describe("github-write service", () => {
       );
       expect(await detectReleaseWorkflow("tok", "owner", "repo")).toEqual({
         kind: "found",
-        workflow: { id: 7, name: "Release", path: ".github/workflows/release.yml" },
+        workflow: {
+          id: 7,
+          name: "Release",
+          path: ".github/workflows/release.yml",
+          dispatchable: false,
+        },
       });
     });
 
@@ -1657,7 +1766,7 @@ describe("github-write service", () => {
       );
       expect(await detectReleaseWorkflow("tok", "owner", "repo")).toEqual({
         kind: "found",
-        workflow: { id: 8, name: "CI", path: ".github/workflows/ci.yml" },
+        workflow: { id: 8, name: "CI", path: ".github/workflows/ci.yml", dispatchable: false },
       });
     });
 

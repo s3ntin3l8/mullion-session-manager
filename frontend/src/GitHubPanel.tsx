@@ -90,10 +90,12 @@ function ReleaseSection({
   projectId,
   release,
   onChanged,
+  onOpenPr,
 }: {
   projectId: number;
   release: ProjectReleaseStatus;
   onChanged: () => void;
+  onOpenPr: (number: number) => void;
 }) {
   const [isRunning, setIsRunning] = useState(false);
   const [runError, setRunError] = useState<string | null>(null);
@@ -109,6 +111,8 @@ function ReleaseSection({
         onChanged();
       } else {
         setRunError(runReasonMessage(result.reason, result.detail));
+        // A 422 means the cached detection was stale; refetch so Run reflects it.
+        if (result.reason === "no-dispatch-trigger") onChanged();
       }
     } catch (err) {
       setRunError(
@@ -155,6 +159,11 @@ function ReleaseSection({
   }
 
   const pr = release.pr;
+  // GitHub 422s a manual run of a workflow with no `workflow_dispatch:`;
+  // `null` (file unreadable) stays enabled and lets the real dispatch decide.
+  const workflowPath = release.detection.kind === "found" ? release.detection.workflow.path : "";
+  const notDispatchable =
+    release.detection.kind === "found" && release.detection.workflow.dispatchable === false;
   const canMerge =
     pr !== null && !pr.draft && pr.mergeable === true && pr.mergeableState === "clean";
 
@@ -171,9 +180,16 @@ function ReleaseSection({
           ) : undefined
         }
         title={pr ? pr.title : "No release PR open"}
+        onClick={pr ? () => onOpenPr(pr.number) : undefined}
         meta={
           pr ? (
-            <a href={pr.htmlUrl} target="_blank" rel="noreferrer" className="mono">
+            <a
+              href={pr.htmlUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="mono"
+              onClick={(e) => e.stopPropagation()}
+            >
               #{pr.number}
             </a>
           ) : undefined
@@ -183,8 +199,12 @@ function ReleaseSection({
             <Button
               size="sm"
               onClick={handleRun}
-              disabled={isRunning}
-              title="Run release-please now, without waiting for the next push to the default branch"
+              disabled={isRunning || notDispatchable}
+              title={
+                notDispatchable
+                  ? `Add workflow_dispatch: to ${workflowPath} to run releases from here`
+                  : "Run release-please now, without waiting for the next push to the default branch"
+              }
             >
               {isRunning ? "Running…" : "Run"}
             </Button>
@@ -205,6 +225,11 @@ function ReleaseSection({
           </div>
         }
       />
+      {notDispatchable && (
+        <div className="github-panel-empty-row">
+          Run is unavailable: add <code>workflow_dispatch:</code> to <code>{workflowPath}</code>.
+        </div>
+      )}
       {runError && <div className="github-panel-empty-row github-panel-conflicts">{runError}</div>}
       {mergeError && (
         <div className="github-panel-empty-row github-panel-conflicts">{mergeError}</div>
@@ -325,10 +350,12 @@ export function GitHubPanel({
     );
   }
 
-  const prs = effectivePrs?.prs ?? [];
+  // The open release PR belongs to the Release section, not this list.
+  const releasePrNumber = releaseStatus?.pr?.number ?? null;
+  const prs = (effectivePrs?.prs ?? []).filter((pr) => pr.number !== releasePrNumber);
+  const statusPulls = (status?.pulls ?? []).filter((pr) => pr.number !== releasePrNumber);
   const showEmptyPrs =
-    ((effectivePrs && effectivePrs.prs.length === 0) || (!effectivePrs && status)) &&
-    status?.pulls.length === 0;
+    ((effectivePrs && prs.length === 0) || (!effectivePrs && status)) && statusPulls.length === 0;
 
   return (
     <div className={embedded ? "github-panel embedded" : "github-panel cmux-scroll"}>
@@ -348,6 +375,7 @@ export function GitHubPanel({
           projectId={params.projectId}
           release={releaseStatus}
           onChanged={() => setReleaseRefreshTrigger((n) => n + 1)}
+          onOpenPr={setOpenPr}
         />
       )}
       {/* Deliberately a SIBLING of ReleaseSection, only for the
@@ -383,9 +411,9 @@ export function GitHubPanel({
       {/* Fallback when PR poller cache is empty (cold-start, remote-hosted
           Phase 1 skip) but the live /github endpoint has PRs. A row drills in
           like any other: the detail loads on its own. */}
-      {!effectivePrs && status && status.pulls.length > 0 && (
-        <SidebarSection title="Pull requests" count={status.openPRs} persistKey="github-prs">
-          {status.pulls.map((pr) => (
+      {!effectivePrs && status && statusPulls.length > 0 && (
+        <SidebarSection title="Pull requests" count={statusPulls.length} persistKey="github-prs">
+          {statusPulls.map((pr) => (
             <SidebarRow
               key={pr.number}
               title={pr.title}

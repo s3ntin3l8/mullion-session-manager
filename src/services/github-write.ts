@@ -1879,18 +1879,27 @@ function isReleasePleaseBody(body: string): boolean {
   );
 }
 
+/**
+ * Whether a workflow file declares a `workflow_dispatch` trigger — the one
+ * thing GitHub's dispatch API needs, and it 422s without. Comments are
+ * stripped first so a `# add workflow_dispatch: here` note doesn't count.
+ */
+function hasDispatchTrigger(body: string): boolean {
+  return /\bworkflow_dispatch\b/.test(body.replace(/#.*$/gm, ""));
+}
+
 async function findReleasePleaseWorkflowByContent(
   token: string,
   owner: string,
   repo: string,
   workflows: GitHubWorkflow[],
-): Promise<GitHubWorkflow | null> {
+): Promise<{ workflow: GitHubWorkflow; body: string } | null> {
   for (const workflow of workflows) {
     const basename = workflow.path.split("/").pop();
     if (basename === undefined) continue;
     if (RELEASE_WORKFLOW_FILENAMES.includes(basename)) continue;
     const body = await fetchWorkflowBody(token, owner, repo, workflow);
-    if (body !== null && isReleasePleaseBody(body)) return workflow;
+    if (body !== null && isReleasePleaseBody(body)) return { workflow, body };
   }
   return null;
 }
@@ -1908,6 +1917,10 @@ const releaseWorkflowCache = new Map<string, ReleaseWorkflowCacheEntry>();
 // the PR poller. Same TTL/"only successes cached" posture as
 // fetchRequiredStatusContexts (github.ts).
 const RELEASE_WORKFLOW_CACHE_TTL_MS = 60 * 60_000;
+// A workflow that isn't (known to be) dispatchable is re-read sooner, so a
+// repo that just added `workflow_dispatch:` gets its Run button back without
+// waiting out the hour.
+const RELEASE_WORKFLOW_UNDISPATCHABLE_TTL_MS = 5 * 60_000;
 
 /**
  * Detects whether a repo has a release-please workflow, distinguishing "not
@@ -1932,8 +1945,25 @@ export async function detectReleaseWorkflow(
   try {
     const workflows = await listWorkflows(token, owner, repo);
     let workflow = findReleasePleaseWorkflow(workflows);
-    workflow ??= await findReleasePleaseWorkflowByContent(token, owner, repo, workflows);
-    result = workflow ? { kind: "found", workflow } : { kind: "not-configured" };
+    let body: string | null = null;
+    if (workflow) {
+      body = await fetchWorkflowBody(token, owner, repo, workflow);
+    } else {
+      const hit = await findReleasePleaseWorkflowByContent(token, owner, repo, workflows);
+      workflow = hit?.workflow ?? null;
+      body = hit?.body ?? null;
+    }
+    result = workflow
+      ? {
+          kind: "found",
+          workflow: {
+            ...workflow,
+            // null = the file couldn't be read, so Run stays enabled and a
+            // real dispatch decides.
+            dispatchable: body === null ? null : hasDispatchTrigger(body),
+          },
+        }
+      : { kind: "not-configured" };
   } catch (err) {
     // Narrowed to GitHubWriteScopeError specifically, NOT the base
     // GitHubApiError — GitHubRateLimitError also extends GitHubApiError
@@ -1947,8 +1977,21 @@ export async function detectReleaseWorkflow(
     return { kind: "no-actions-scope" };
   }
 
-  releaseWorkflowCache.set(key, { result, expiresAt: Date.now() + RELEASE_WORKFLOW_CACHE_TTL_MS });
+  const ttl =
+    result.kind === "found" && result.workflow.dispatchable !== true
+      ? RELEASE_WORKFLOW_UNDISPATCHABLE_TTL_MS
+      : RELEASE_WORKFLOW_CACHE_TTL_MS;
+  releaseWorkflowCache.set(key, { result, expiresAt: Date.now() + ttl });
   return result;
+}
+
+/**
+ * Drops the cached detection for `owner/repo` — called when a dispatch 422s,
+ * so the next read re-checks the workflow file instead of trusting a cached
+ * "dispatchable" answer.
+ */
+export function invalidateReleaseWorkflowCache(owner: string, repo: string): void {
+  releaseWorkflowCache.delete(`${owner}/${repo}`);
 }
 
 // Test-only: clears the module-scope cache above so one test's cached
