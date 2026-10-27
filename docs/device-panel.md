@@ -457,7 +457,9 @@ sending them over the WebSocket.
 
 `screenshot` always returns a bare base64 PNG: anything `screencap` printed
 before the PNG signature (the multi-display warning) is stripped, and output
-with no PNG at all is a 502 carrying the head of that output.
+with no complete PNG is a 502 carrying the head of that output. It is always
+the device's _default_ display (`screencap` without `-d`), which on a
+foldable may not be the screen the user is looking at.
 
 `tap`/`swipe`/`key`/`screenshot`/`logcat` all run as plain `adb shell`
 commands against the device's live adb connection

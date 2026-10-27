@@ -103,15 +103,20 @@ function shellExecArgv(argv: string[]): string[] {
   return argv.map(shellQuoteArg);
 }
 
+const PNG_IEND = Buffer.from("IEND");
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 /** `screencap -p` on a multi-display device writes a "[Warning] Multiple
  * displays were found…" line to the same stream before the PNG, so the raw
  * output is not a valid image. Returns the bytes from the PNG signature on,
- * or null when the output holds no PNG at all. */
+ * or null when the output holds no complete PNG (no signature, or no IEND). */
 export function extractPng(bytes: Uint8Array): Uint8Array | null {
-  const at = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).indexOf(PNG_SIGNATURE);
-  return at < 0 ? null : bytes.subarray(at);
+  const buf = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const at = buf.indexOf(PNG_SIGNATURE);
+  if (at < 0) return null;
+  // A truncated write has the signature but no closing IEND chunk (+ 4-byte CRC).
+  if (buf.indexOf(PNG_IEND, at) < 0) return null;
+  return bytes.subarray(at);
 }
 
 type DeviceAction =

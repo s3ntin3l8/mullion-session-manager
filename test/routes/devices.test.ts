@@ -570,6 +570,7 @@ describe("devices routes", () => {
         const FAKE_PNG = Buffer.concat([
           Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
           Buffer.from("fake-png-body"),
+          Buffer.from("IEND\0\0\0\0", "latin1"),
         ]);
         const spawnWait = vi
           .fn()
