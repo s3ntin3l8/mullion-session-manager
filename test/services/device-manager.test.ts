@@ -505,6 +505,31 @@ describe("DeviceManager", () => {
       fs.rmSync(marker, { force: true });
     });
 
+    it("kill() also removes a marker left in a fallback root (#1770) and names it in the hint", async () => {
+      const old = fs.mkdtempSync(path.join(os.tmpdir(), "device-manager-old-"));
+      try {
+        const marker = deviceMarkerPath(old, "58");
+        fs.writeFileSync(marker, "");
+        const unknownBackend = fakeBackend({
+          isAliveBatch: vi.fn(async () => ({ "58": "unknown" })),
+        });
+        const opts = baseOpts({ scopeBackend: unknownBackend as never, ownedDirs: new Set([old]) });
+        // The hint names the marker that exists, not the (absent) current-dir path.
+        await expect(new DeviceManager(opts).getOrCreate(spawnEmulator("58"))).rejects.toThrow(
+          new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+        );
+        const okBackend = fakeBackend();
+        await new DeviceManager({ ...opts, scopeBackend: okBackend as never }).kill(
+          "58",
+          "emulator",
+        );
+        expect(okBackend.stop).toHaveBeenCalledWith("58");
+        expect(fs.existsSync(marker)).toBe(false);
+      } finally {
+        fs.rmSync(old, { recursive: true, force: true });
+      }
+    });
+
     it("kill() removes the marker once the backend confirms the stop", async () => {
       const marker = deviceMarkerPath(SESSIONS_DIR, "56");
       fs.writeFileSync(marker, "");

@@ -10,7 +10,7 @@ import type {
   ReadableStream as YumeReadableStream,
 } from "@yume-chan/stream-extra";
 import { ReadableStream as NodeWebReadableStream } from "node:stream/web";
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import {
   deriveInstanceId,
   deviceMarkerPath,
@@ -312,7 +312,14 @@ function scopeFor(opts: DeviceManagerOptions): ScopeBackend {
  * never rejects and the marker is just a file. */
 async function stopScopeAndForget(opts: DeviceManagerOptions, id: string): Promise<void> {
   await scopeFor(opts).stop(id);
-  removeDeviceMarker(opts.sessionsDir, id);
+  // Every root this instance may own markers in (issue #1770), not just the current
+  // one: a marker found in a fallback root must not outlive its own successful stop.
+  for (const dir of deviceMarkerDirs(opts)) removeDeviceMarker(dir, id);
+}
+
+/** The sessions dir plus every fallback root an earlier release shipped, current first. */
+function deviceMarkerDirs(opts: DeviceManagerOptions): string[] {
+  return [...new Set([opts.sessionsDir, ...(opts.ownedDirs ?? [])])];
 }
 
 /** How an operator stops a scope Mullion can't (or must not) reach itself — worded
@@ -321,7 +328,9 @@ function manualStopHint(opts: DeviceManagerOptions, id: string): string {
   if (scopeFor(opts).kind === "systemd-device") {
     return `systemctl --user stop crs-device-${deriveInstanceId(opts.sessionsDir)}-${id}.scope`;
   }
-  const marker = deviceMarkerPath(opts.sessionsDir, id);
+  // Name the marker that actually exists (it may live in a fallback root).
+  const candidates = deviceMarkerDirs(opts).map((dir) => deviceMarkerPath(dir, id));
+  const marker = candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
   return `if its emulator is still running, quit it (its pid is recorded in ${marker}); otherwise delete that file`;
 }
 
