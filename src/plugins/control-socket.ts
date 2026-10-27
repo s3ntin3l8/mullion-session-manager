@@ -1550,8 +1550,15 @@ export const OPS: Record<string, OpSpec> = {
               return forwarded;
             })()
           : fullRest;
+      // A name the spawner chose is pinned: unlocked, the agent's own terminal
+      // title replaces it in the sidebar within seconds (issue #2112). A
+      // full-scope caller that sends an explicit `nameLocked` keeps its value;
+      // session scope can't send one (SESSION_SPAWN_CHILD_FIELDS).
+      const pinName =
+        typeof rest.name === "string" && rest.name.trim() !== "" && rest.nameLocked === undefined;
       const payload = {
         ...rest,
+        ...(pinName ? { nameLocked: true } : {}),
         projectId: childProjectId,
         parentSessionId: Number(parent.id),
       };

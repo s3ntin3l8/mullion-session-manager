@@ -621,6 +621,40 @@ export function describeTarget(target: PlacementTarget): string {
  * The refusal names only the TARGET the caller asked for, never other hosts:
  * a session-scoped caller must not be able to enumerate the fleet through it.
  */
+/**
+ * Why nothing matching a target is eligible, in words a coordinator can act
+ * on. Built ONLY from the hosts that already match the requested target (plus
+ * whether any host has yet to report a platform), so a session-scoped caller
+ * learns nothing about hosts it did not ask for.
+ */
+function refusalReasons(
+  matching: PlacementCandidate[],
+  localCapacity: HostCapacity | null,
+  all: PlacementCandidate[],
+  wantedPlatform: string | undefined,
+): string[] {
+  const why = new Set<string>();
+  for (const candidate of matching) {
+    if (!candidate.online) why.add("a matching host is offline");
+    else if (candidate.drained) why.add("a matching host is parked/drained");
+    else if ((candidate.isLocal ? localCapacity : candidate.capacity) === null) {
+      why.add("a matching host has no capacity reading yet");
+    }
+    if (candidate.projectCwd === null) why.add("the project has no checkout on a matching host");
+  }
+  if (matching.length === 0) {
+    why.add(
+      wantedPlatform === undefined
+        ? "no such host"
+        : `no host has reported platform ${wantedPlatform}`,
+    );
+    if (wantedPlatform !== undefined && all.some((c) => (c.platform ?? "") === "")) {
+      why.add("a host that has not reported its platform yet may match once it is online");
+    }
+  }
+  return [...why];
+}
+
 export function resolveTargetHost(
   app: FastifyInstance,
   opts: {
@@ -634,9 +668,13 @@ export function resolveTargetHost(
     requestedBy?: string;
   },
 ): TargetPlacementResult {
-  const refusal = (transient: boolean, unreadable = false): TargetPlacementResult => ({
+  const refusal = (
+    transient: boolean,
+    unreadable = false,
+    why: string[] = [],
+  ): TargetPlacementResult => ({
     ok: false,
-    detail: `no eligible host matches ${describeTarget(opts.target)}`,
+    detail: `no eligible host matches ${describeTarget(opts.target)}${why.length > 0 ? ` (${why.join("; ")})` : ""}`,
     transient,
     ...(unreadable ? { unreadable } : {}),
   });
@@ -647,7 +685,7 @@ export function resolveTargetHost(
   } catch (err) {
     app.log.warn({ err, target: opts.target }, "placement: could not evaluate a targeted spawn");
     // Could not read the fleet: nothing says a retry would fail too.
-    return refusal(true, true);
+    return refusal(true, true, ["the host list could not be read"]);
   }
 
   const wantedPlatform = opts.target.platform?.toLowerCase();
@@ -681,7 +719,11 @@ export function resolveTargetHost(
           (candidate.platform ?? "").toLowerCase() === wantedPlatform ||
           (candidate.platform ?? "") === ""),
     );
-    return refusal(mightMatch);
+    return refusal(
+      mightMatch,
+      false,
+      refusalReasons(matching, collected.localCapacity, collected.candidates, wantedPlatform),
+    );
   }
 
   const decorated: PlacementDecision = {

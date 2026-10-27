@@ -1115,6 +1115,18 @@ describe("review-request routes", () => {
     const res = await post(sessionId, {});
     expect(res.statusCode).toBe(404);
     expect(res.json().message).toContain("feat/thing");
+    // Says the branch came from the session's working directory and what to do
+    // when the agent works elsewhere (issue #2112).
+    expect(res.json().message).toContain("working directory");
+    expect(res.json().message).toContain("prNumber or branch");
+  });
+
+  it("does not blame the working directory when the caller named the branch", async () => {
+    mocks.findPullRequestByHead.mockResolvedValue(null);
+    const res = await post(sessionId, { branch: "feat/named" });
+    expect(res.statusCode).toBe(404);
+    expect(res.json().message).toContain("feat/named");
+    expect(res.json().message).not.toContain("working directory");
   });
 
   it("404s when the branch can't be determined", async () => {
