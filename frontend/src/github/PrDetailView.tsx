@@ -373,6 +373,7 @@ export function PrDetailView({
     });
   // Task Master's own actions on this PR's task (Merge is the sticky bar's).
   const taskStatus = entry?.task?.status;
+  const workflowHold = parseWorkflowChange(entry?.task?.workflowChange);
   const taskId = entry?.task?.id;
   const approveTask = () =>
     run("task", async () => {
@@ -617,12 +618,12 @@ export function PrDetailView({
             {entry?.task && (
               <div className="pr-pin-foot">
                 <TaskChip task={entry.task} />
-                {taskStatus === "reviewing" && !parseWorkflowChange(entry.task.workflowChange) && (
+                {taskStatus === "reviewing" && !workflowHold && (
                   <Button size="sm" disabled={busy !== null} onClick={approveTask}>
                     Approve task
                   </Button>
                 )}
-                {taskStatus === "reviewing" && parseWorkflowChange(entry.task.workflowChange) && (
+                {taskStatus === "reviewing" && workflowHold && (
                   <span className="gh-detail-meta">Needs workflow approval — open task</span>
                 )}
                 {taskStatus === "failed" && (

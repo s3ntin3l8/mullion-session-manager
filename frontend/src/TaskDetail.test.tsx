@@ -1972,8 +1972,9 @@ describe("TaskDetail workflow-change approval", () => {
     refreshTasks.mockImplementationOnce(async () => {
       tasks = [makeTask({ id: 1, status: "reviewing", workflowChange: null })];
     });
+    refreshTasks.mockClear();
     await user.click(screen.getByRole("button", { name: "Approve workflow change" }));
-    expect(refreshTasks).toHaveBeenCalledTimes(2);
+    expect(refreshTasks).toHaveBeenCalledTimes(1);
     rerender(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.queryByRole("group", { name: "Workflow change" })).toBeNull();
     expect(
