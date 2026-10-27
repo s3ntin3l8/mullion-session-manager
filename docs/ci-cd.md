@@ -1,11 +1,8 @@
 # CI/CD
 
 Workflows are **callers** of `s3ntin3l8/.github/.github/workflows/*.yml@main`
-— all pinned to `@main` except `dependency-review.yml`, which pins the
-reusable workflow to a specific commit SHA instead
-(`@8c62b6d0671313b8b975882f0a6d871673b6def8 # main @ 2026-09-10`, a trailing
-comment recording which date's `main` that SHA corresponds to) rather than
-floating on `@main` like every other caller here:
+— every one of them tracks `@main` (no SHA pins), so a fix in the shared
+repo is live on the next run:
 
 - `ci-cd.yml` (test-node + test-frontend + test-e2e — no Docker image is built)
 - `codeql.yml`, `dependency-review.yml`, `release-please.yml`
