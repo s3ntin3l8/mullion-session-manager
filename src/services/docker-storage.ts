@@ -155,6 +155,30 @@ export function estimateSafePrune(
   return total;
 }
 
+/**
+ * Mirrors the aggressive cleanup (`system prune --all`) against `system df -v`
+ * output: every unused image, stopped container and unused build-cache entry,
+ * but never volumes. The summary rows' `Reclaimable` understates this on the
+ * containerd image store (a 6.6 GB build cache reported 1.1 GB reclaimable,
+ * though the prune frees all of it), so the per-entry sizes are summed instead.
+ * That counts every unused entry, not only dangling cache: `system prune --all`
+ * is what the aggressive tier runs, and on this store it removes all of them.
+ */
+export function estimateAggressivePrune(verboseJson: string): number {
+  const df = JSON.parse(verboseJson) as Record<string, Array<Record<string, unknown>> | undefined>;
+  let total = 0;
+  for (const image of df.Images ?? []) {
+    if (String(image.Containers) === "0") total += parseSize(image.UniqueSize);
+  }
+  for (const container of df.Containers ?? []) {
+    if (container.State !== "running") total += parseSize(container.Size);
+  }
+  for (const entry of df.BuildCache ?? []) {
+    if (String(entry.InUse) === "false") total += parseSize(entry.Size);
+  }
+  return total;
+}
+
 async function runDocker(
   args: readonly string[],
   spawnDocker: SpawnDocker = (command, commandArgs) => spawn(command, commandArgs),
@@ -201,7 +225,9 @@ async function runDocker(
   });
 }
 
-async function estimateSafeBytes(spawnDocker?: SpawnDocker): Promise<number | null> {
+async function estimateTiers(
+  spawnDocker?: SpawnDocker,
+): Promise<{ safeBytes: number; aggressiveBytes: number } | null> {
   try {
     const [verbose, dangling] = await Promise.all([
       runDocker(DOCKER_VERBOSE_USAGE_ARGS, spawnDocker, VERBOSE_OUTPUT_LIMIT_BYTES),
@@ -213,7 +239,10 @@ async function estimateSafeBytes(spawnDocker?: SpawnDocker): Promise<number | nu
         .map((line) => line.trim())
         .filter(Boolean),
     );
-    return estimateSafePrune(verbose, ids);
+    return {
+      safeBytes: estimateSafePrune(verbose, ids),
+      aggressiveBytes: estimateAggressivePrune(verbose),
+    };
   } catch {
     return null;
   }
@@ -223,21 +252,24 @@ export async function inspectDockerStorage(
   spawnDocker?: SpawnDocker,
 ): Promise<DockerStorageStatus> {
   try {
-    const [usage, safeBytes] = await Promise.all([
+    const [usage, tiers] = await Promise.all([
       runDocker(DOCKER_USAGE_ARGS, spawnDocker),
-      estimateSafeBytes(spawnDocker),
+      estimateTiers(spawnDocker),
     ]);
     const rows = parseDockerUsage(usage);
+    const rowsAggressive = rows
+      .filter((row) => row.type !== "Local Volumes")
+      .reduce((sum, row) => sum + row.reclaimableBytes, 0);
     return {
       available: true,
       rows,
       totalSizeBytes: rows.reduce((sum, row) => sum + row.sizeBytes, 0),
       reclaimableBytes: rows.reduce((sum, row) => sum + row.reclaimableBytes, 0),
       estimates: {
-        safeBytes,
-        aggressiveBytes: rows
-          .filter((row) => row.type !== "Local Volumes")
-          .reduce((sum, row) => sum + row.reclaimableBytes, 0),
+        safeBytes: tiers?.safeBytes ?? null,
+        // The larger of the two: the rows are all there is when the verbose call
+        // fails, and the per-entry sum corrects them where they understate.
+        aggressiveBytes: Math.max(rowsAggressive, tiers?.aggressiveBytes ?? 0),
       },
     };
   } catch (error) {

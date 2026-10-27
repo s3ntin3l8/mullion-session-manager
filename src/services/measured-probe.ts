@@ -9,6 +9,10 @@ export interface ProbeMeta {
   state: "measuring" | "ready" | "error";
   /** ISO time the held value was measured; null until a first run lands. */
   measuredAt: string | null;
+  /** ISO time the run in flight started; only while `measuring`. */
+  startedAt?: string;
+  /** How long the run that produced the held value took. */
+  durationMs?: number;
   error?: string;
 }
 
@@ -37,11 +41,14 @@ export interface MeasuredProbeOptions {
   /** How long a read waits for a run before answering "measuring". */
   waitMs?: number;
   now?: () => number;
+  /** Called when a run ends (not one that was invalidated), for logging. */
+  onRun?: (outcome: { durationMs: number; error?: string }) => void;
 }
 
 interface Held<T> {
   value?: T;
   measuredAt?: number;
+  durationMs?: number;
   error?: string;
   /** When the held value or error stops being fresh. */
   freshUntil: number;
@@ -61,9 +68,12 @@ export function createMeasuredProbe<T extends object>(
   // A read arrived while an invalidated (orphaned) run was still going: start a
   // fresh run the moment it ends.
   let rerunWanted = false;
+  let startedAt = 0;
 
   const start = () => {
     const mine = generation;
+    startedAt = now();
+    const began = startedAt;
     const finish = (next: Held<T>) => {
       inFlight = null;
       // invalidate() bumped the generation: this result is for a world that no
@@ -76,17 +86,33 @@ export function createMeasuredProbe<T extends object>(
         return;
       }
       held = next;
+      try {
+        options.onRun?.({
+          durationMs: now() - began,
+          ...(next.error === undefined ? {} : { error: next.error }),
+        });
+      } catch {
+        // Logging must never fail a measurement that has already landed.
+      }
     };
     // `new Promise` so a run that throws before returning a promise is a
     // failed measurement like any other, not an exception out of read().
     inFlight = new Promise<T>((resolve) => resolve(run())).then(
-      (value) => finish({ value, measuredAt: now(), freshUntil: now() + options.ttlMs }),
+      (value) =>
+        finish({
+          value,
+          measuredAt: now(),
+          durationMs: now() - began,
+          freshUntil: now() + options.ttlMs,
+        }),
       (error: unknown) =>
         // Kept (and kept fresh) so a failing probe retries on the TTL, not on
         // every poll.
         finish({
           // Keep the last good figures visible next to the failure.
-          ...(held?.value !== undefined ? { value: held.value, measuredAt: held.measuredAt } : {}),
+          ...(held?.value !== undefined
+            ? { value: held.value, measuredAt: held.measuredAt, durationMs: held.durationMs }
+            : {}),
           error: error instanceof Error ? error.message : "Measurement failed",
           freshUntil: now() + options.ttlMs,
         }),
@@ -99,6 +125,8 @@ export function createMeasuredProbe<T extends object>(
     const meta: ProbeMeta = {
       state: measuring ? "measuring" : held?.error ? "error" : held ? "ready" : "measuring",
       measuredAt: held?.measuredAt !== undefined ? new Date(held.measuredAt).toISOString() : null,
+      ...(measuring ? { startedAt: new Date(startedAt).toISOString() } : {}),
+      ...(held?.durationMs !== undefined ? { durationMs: held.durationMs } : {}),
       ...(!measuring && held?.error ? { error: held.error } : {}),
     };
     return held?.value !== undefined ? { ...held.value, ...meta } : meta;

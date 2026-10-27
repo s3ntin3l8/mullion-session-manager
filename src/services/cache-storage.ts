@@ -3,17 +3,25 @@ import os from "node:os";
 import path from "node:path";
 import { dirSize } from "./temp-storage.js";
 
-// A fixed allowlist of re-creatable subtrees of ~/.cache (issue #1606). The
+// A fixed allowlist of re-creatable cache directories (issue #1606): mostly
+// subtrees of ~/.cache, plus a few toolchain caches that live elsewhere under
+// the home directory (`base: "home"`). The
 // ids are all a client ever supplies (via settings); the paths never come from
 // outside, so nothing beyond these directories can be targeted. Everything in
 // here is rebuilt or re-downloaded on next use, which is why cleaning is opt-in
 // per cache and only ever runs in the aggressive tier.
 export const CACHE_DIRS = [
-  { id: "ms-playwright", label: "Playwright browsers", dir: "ms-playwright" },
-  { id: "huggingface", label: "Hugging Face models", dir: "huggingface" },
-  { id: "pre-commit", label: "pre-commit environments", dir: "pre-commit" },
-  { id: "pip", label: "pip", dir: "pip" },
-  { id: "go-build", label: "Go build cache", dir: "go-build" },
+  { id: "ms-playwright", label: "Playwright browsers", dir: "ms-playwright", base: "cache" },
+  { id: "huggingface", label: "Hugging Face models", dir: "huggingface", base: "cache" },
+  { id: "pre-commit", label: "pre-commit environments", dir: "pre-commit", base: "cache" },
+  { id: "pip", label: "pip", dir: "pip", base: "cache" },
+  { id: "go-build", label: "Go build cache", dir: "go-build", base: "cache" },
+  { id: "uv", label: "uv", dir: "uv", base: "cache" },
+  // Go writes module files read-only; see `removeEntry`. Default location only
+  // (GOMODCACHE / GOPATH aren't consulted).
+  { id: "go-mod", label: "Go module cache", dir: "go/pkg/mod", base: "home" },
+  { id: "gradle", label: "Gradle caches", dir: ".gradle/caches", base: "home" },
+  { id: "cargo-registry", label: "Cargo registry", dir: ".cargo/registry", base: "home" },
 ] as const;
 
 export type CacheDirId = (typeof CACHE_DIRS)[number]["id"];
@@ -22,6 +30,8 @@ export const CACHE_DIR_IDS: readonly CacheDirId[] = CACHE_DIRS.map((c) => c.id);
 export interface CacheStorageOptions {
   /** Defaults to `~/.cache`. */
   cacheRoot?: string;
+  /** Defaults to the user's home directory. */
+  homeDir?: string;
 }
 
 export interface CacheDirStatus {
@@ -44,8 +54,44 @@ export interface CachePruneResult {
   error?: string;
 }
 
+const homeDir = (options: CacheStorageOptions) => options.homeDir ?? os.homedir();
 const cacheRoot = (options: CacheStorageOptions) =>
-  options.cacheRoot ?? path.join(os.homedir(), ".cache");
+  options.cacheRoot ?? path.join(homeDir(options), ".cache");
+const cachePath = (entry: (typeof CACHE_DIRS)[number], options: CacheStorageOptions) =>
+  path.join(entry.base === "home" ? homeDir(options) : cacheRoot(options), entry.dir);
+
+// Go makes everything it unpacks read-only (directories included), so a plain
+// recursive remove fails with EACCES. Make directories writable on the way down
+// first; symlinks are never followed.
+async function makeWritable(target: string): Promise<void> {
+  const st = await fs.lstat(target);
+  if (!st.isDirectory()) return;
+  await fs.chmod(target, st.mode | 0o700);
+  for (const name of await fs.readdir(target)) await makeWritable(path.join(target, name));
+}
+
+// Only for the cache that is read-only by design: elsewhere an entry that can't
+// be removed is a real problem to report, not something to chmod around.
+async function removeEntry(target: string, readOnlyByDesign: boolean): Promise<void> {
+  try {
+    await fs.rm(target, { recursive: true, force: true });
+  } catch (error) {
+    if (!readOnlyByDesign || (error as NodeJS.ErrnoException).code !== "EACCES") throw error;
+    await makeWritable(target);
+    await fs.rm(target, { recursive: true, force: true });
+  }
+}
+
+/** Where each allowlisted cache lives, for callers that need to recognise the paths. */
+export function cacheDirPaths(
+  options: CacheStorageOptions = {},
+): Array<{ id: CacheDirId; label: string; path: string }> {
+  return CACHE_DIRS.map((entry) => ({
+    id: entry.id,
+    label: entry.label,
+    path: cachePath(entry, options),
+  }));
+}
 
 /** Keeps only known ids, once each, in allowlist order. */
 export function sanitizeCacheDirIds(value: unknown): CacheDirId[] {
@@ -68,8 +114,9 @@ export async function inspectCacheStorage(
 ): Promise<CacheStorageStatus> {
   const root = cacheRoot(options);
   const caches: CacheDirStatus[] = [];
-  for (const { id, label, dir } of CACHE_DIRS) {
-    const full = path.join(root, dir);
+  for (const entry of CACHE_DIRS) {
+    const { id, label } = entry;
+    const full = cachePath(entry, options);
     const exists = await realDirectory(full);
     caches.push({ id, label, exists, bytes: exists ? await dirSize(full) : 0 });
   }
@@ -92,13 +139,13 @@ export async function pruneCacheStorage(
   if (pruneRunning) throw new Error("CACHE_PRUNE_IN_PROGRESS");
   pruneRunning = true;
   try {
-    const root = cacheRoot(options);
     const selected = sanitizeCacheDirIds(ids);
     let reclaimedBytes = 0;
     const cleaned: string[] = [];
     const errors: string[] = [];
-    for (const { id, dir } of CACHE_DIRS.filter((c) => selected.includes(c.id))) {
-      const full = path.join(root, dir);
+    for (const entry of CACHE_DIRS.filter((c) => selected.includes(c.id))) {
+      const { id } = entry;
+      const full = cachePath(entry, options);
       if (!(await realDirectory(full))) continue;
       const before = await dirSize(full);
       let names: string[] = [];
@@ -113,7 +160,7 @@ export async function pruneCacheStorage(
       }
       for (const name of names) {
         try {
-          await fs.rm(path.join(full, name), { recursive: true, force: true });
+          await removeEntry(path.join(full, name), id === "go-mod");
         } catch (error) {
           if (errors.length < 3) {
             errors.push(

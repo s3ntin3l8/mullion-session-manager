@@ -99,6 +99,8 @@ export type {
   TempStorageStatus,
   CacheStorageStatus,
   OpencodeStorageStatus,
+  SpaceEntry,
+  SpaceReportStatus,
   DevWorktreeStatus,
   DevWorktreeCandidate,
   CleanupJob,

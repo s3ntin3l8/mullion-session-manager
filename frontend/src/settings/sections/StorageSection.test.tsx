@@ -12,6 +12,7 @@ import {
   type OpencodeStorageStatus,
   type TempStorageStatus,
   type CacheStorageStatus,
+  type SpaceReportStatus,
   type CleanupJob,
   type CleanupStepState,
 } from "../../api/index.js";
@@ -68,6 +69,16 @@ const noWorktrees: DevWorktreeStatus = { available: true, candidates: [], totalB
 
 const noCaches: CacheStorageStatus = { available: true, root: "/home/me/.cache", caches: [] };
 
+const noSpace: SpaceReportStatus = {
+  available: true,
+  root: "/home/me",
+  entries: [],
+  scannedBytes: 0,
+  filesystemUsedBytes: 88 * GIB,
+  outsideBytes: 0,
+  unreadableEntries: 0,
+};
+
 const ready = <T extends object>(value: T) => ({
   ...value,
   state: "ready" as const,
@@ -119,12 +130,14 @@ function setup(
     caches?: CacheStorageStatus;
     opencode?: OpencodeStorageStatus;
     worktrees?: DevWorktreeStatus;
+    space?: SpaceReportStatus;
   } = {},
 ) {
   useDashboardStore.setState({ settings: DEFAULT_SETTINGS, settingsLoaded: true });
   vi.spyOn(api, "getCacheStorage").mockResolvedValue(ready(overrides.caches ?? noCaches));
   vi.spyOn(api, "getOpencodeStorage").mockResolvedValue(ready(overrides.opencode ?? noOpencode));
   vi.spyOn(api, "getDevWorktrees").mockResolvedValue(ready(overrides.worktrees ?? noWorktrees));
+  vi.spyOn(api, "getSpaceReport").mockResolvedValue(ready(overrides.space ?? noSpace));
   vi.spyOn(api, "getCleanupStatus").mockResolvedValue({ state: "idle" });
   vi.spyOn(api, "getSystemStats").mockResolvedValue(stats);
   vi.spyOn(api, "getDockerStorage").mockResolvedValue(ready(overrides.docker ?? docker));
@@ -907,6 +920,154 @@ describe("Settings -> Storage", () => {
       expect(screen.getByText("not found")).toBeInTheDocument();
       await userEvent.click(toggle);
       expect(useDashboardStore.getState().settings.diskCleanup.cacheDirs).toEqual([]);
+    });
+  });
+});
+
+describe("Settings -> Storage: progress and where the space is", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const startedAgo = (ms: number) => new Date(Date.now() - ms).toISOString();
+
+  it("says how long a measurement has run, and that it carries on if the page is left", async () => {
+    setup();
+    vi.spyOn(api, "getTempStorage").mockResolvedValue({
+      state: "measuring",
+      measuredAt: null,
+      startedAt: startedAgo(80_000),
+    });
+    render(<StorageSection />);
+    const safe = (await screen.findByText("Safe")).closest(".storage-tier") as HTMLElement;
+    expect(within(safe).getByText("Temp files").nextElementSibling).toHaveTextContent(
+      /measuring… 1m \d+s/,
+    );
+    const note = await screen.findByRole("status");
+    expect(note).toHaveTextContent(/Measuring for 1m/);
+    expect(note).toHaveTextContent(/leave this page and come back/);
+  });
+
+  it("says how long the slowest measurement took next to its age", async () => {
+    setup();
+    vi.spyOn(api, "getDockerStorage").mockResolvedValue({
+      ...ready(docker),
+      durationMs: 42_000,
+    });
+    render(<StorageSection />);
+    expect(await screen.findByText(/slowest took 42s/)).toBeInTheDocument();
+  });
+
+  it("names the process holding opencode's database, and what closing it would free", async () => {
+    setup({
+      opencode: {
+        available: true,
+        path: "/home/me/.local/share/opencode/opencode.db",
+        fileBytes: 18 * GIB,
+        reclaimableBytes: 15 * GIB,
+        liveBytes: 3 * GIB,
+        inUse: true,
+        holders: [{ pid: 3310180, command: "opencode serve --service" }],
+        holdersUnknown: false,
+        compacting: false,
+      },
+    });
+    render(<StorageSection />);
+    const row = (await screen.findByText("opencode database")).closest(
+      ".storage-tier-row",
+    ) as HTMLElement;
+    expect(row).toHaveTextContent("pid 3310180: opencode serve --service");
+    expect(row).toHaveTextContent("15 GiB once it is closed");
+    expect(row.querySelector(".storage-tier-figure")).toHaveTextContent("0 B");
+  });
+
+  describe("where the space is", () => {
+    const report: SpaceReportStatus = {
+      available: true,
+      root: "/home/me",
+      scannedBytes: 60 * GIB,
+      filesystemUsedBytes: 88 * GIB,
+      outsideBytes: 28 * GIB,
+      unreadableEntries: 2,
+      entries: [
+        {
+          path: "/home/me/.cache",
+          bytes: 11 * GIB,
+          isDirectory: true,
+          children: [
+            { path: "/home/me/.cache/uv", bytes: 6 * GIB, isDirectory: true, coveredBy: "uv" },
+          ],
+        },
+        { path: "/home/me/Android", bytes: 15 * GIB, isDirectory: true },
+      ],
+    };
+
+    it("lists the biggest folders under ~, nested, with what cleanup already covers", async () => {
+      setup({ space: report });
+      render(<StorageSection />);
+      expect(await screen.findByText("Where the space is")).toBeInTheDocument();
+      expect(await screen.findByText("~/.cache")).toBeInTheDocument();
+      expect(screen.getByText("~/Android")).toBeInTheDocument();
+      expect(screen.getByText("15 GiB")).toBeInTheDocument();
+      // Nested entries sit inside a details group, with the chip on the covered one.
+      const uv = screen.getByText("~/.cache/uv");
+      expect(uv.closest("details")).not.toBeNull();
+      expect(within(uv).getByText("cleanable: uv")).toBeInTheDocument();
+      expect(screen.getByText("~/Android").closest("details")).toBeNull();
+    });
+
+    it("says so when the scan stopped early and the figures are lower bounds", async () => {
+      setup({ space: { ...report, truncated: true } });
+      render(<StorageSection />);
+      expect(await screen.findByText(/scan stopped early/)).toBeInTheDocument();
+      // What was never scanned lands in "outside", so it is labelled as such.
+      expect(screen.getByText(/Outside your home folder, or not scanned/)).toBeInTheDocument();
+    });
+
+    it("accounts for the space outside the home folder, noting unreadable folders", async () => {
+      setup({ space: report });
+      render(<StorageSection />);
+      const outside = (await screen.findByText(/Outside your home folder/)).closest(
+        ".space-row",
+      ) as HTMLElement;
+      expect(outside).toHaveTextContent("or not readable (2 folders)");
+      expect(outside).toHaveTextContent("28 GiB");
+    });
+
+    it("shows how long it has been measuring, and keeps the old figures while it updates", async () => {
+      setup();
+      vi.spyOn(api, "getSpaceReport").mockResolvedValue({
+        state: "measuring",
+        measuredAt: null,
+        startedAt: startedAgo(30_000),
+      });
+      const { unmount } = render(<StorageSection />);
+      expect(await screen.findByText(/^Measuring… 3\ds$/)).toBeInTheDocument();
+      unmount();
+      vi.spyOn(api, "getSpaceReport").mockResolvedValue({
+        ...report,
+        state: "measuring",
+        measuredAt: new Date().toISOString(),
+        startedAt: startedAgo(5_000),
+      });
+      render(<StorageSection />);
+      expect(await screen.findByText("~/Android")).toBeInTheDocument();
+      expect(screen.getByText(/figures below are from the last measurement/)).toBeInTheDocument();
+    });
+
+    it("reports a failed or unavailable report instead of measuring forever", async () => {
+      setup();
+      vi.spyOn(api, "getSpaceReport").mockResolvedValue({
+        state: "error",
+        measuredAt: null,
+        error: "walk failed",
+      });
+      const { unmount } = render(<StorageSection />);
+      expect(await screen.findByText("walk failed")).toBeInTheDocument();
+      unmount();
+      vi.spyOn(api, "getSpaceReport").mockResolvedValue(
+        ready({ ...noSpace, available: false, error: "no home" }),
+      );
+      render(<StorageSection />);
+      expect(await screen.findByText("no home")).toBeInTheDocument();
     });
   });
 });

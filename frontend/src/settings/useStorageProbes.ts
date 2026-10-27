@@ -6,12 +6,14 @@ import type {
   DockerStorageStatus,
   Measured,
   OpencodeStorageStatus,
+  SpaceReportStatus,
   SystemStats,
   TempStorageStatus,
 } from "../api/index.js";
 import { usePolling } from "../hooks/usePolling.js";
 
-// The server measures Docker, temp files, caches, opencode and worktrees in the
+// The server measures Docker, temp files, caches, opencode, worktrees and the
+// space report in the
 // background and answers at once with whatever it has, so a probe that is still
 // `measuring` is polled until it settles.
 const MEASURING_POLL_MS = 2000;
@@ -57,7 +59,8 @@ export function useStorageProbes() {
   const caches = useProbe<CacheStorageStatus>((r) => api.getCacheStorage(r));
   const opencode = useProbe<OpencodeStorageStatus>((r) => api.getOpencodeStorage(r));
   const worktrees = useProbe<DevWorktreeStatus>((r) => api.getDevWorktrees(r));
-  const probes = [docker, temp, caches, opencode, worktrees];
+  const space = useProbe<SpaceReportStatus>((r) => api.getSpaceReport(r));
+  const probes = [docker, temp, caches, opencode, worktrees, space];
 
   const loadStats = (refresh = false) =>
     api.getSystemStats(refresh).then(
@@ -104,6 +107,7 @@ export function useStorageProbes() {
     caches: caches.value,
     opencode: opencode.value,
     worktrees: worktrees.value,
+    space: space.value,
     /** A refresh was just asked for, or any measurement is still running. */
     busy: requesting || anyMeasuring,
     refresh,

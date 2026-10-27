@@ -112,7 +112,7 @@ interface WalkResult {
 }
 
 // Allocated bytes, matching what deleting actually frees.
-const diskBytes = (st: Stats) => st.blocks * 512;
+export const diskBytes = (st: Stats) => st.blocks * 512;
 
 // A /tmp with a million files spends minutes waiting on one lstat at a time, so
 // the walks run their syscalls concurrently. Every stat/readdir/lstat this
@@ -128,14 +128,14 @@ const TOP_LEVEL_CONCURRENCY = 8;
 // Entries of one directory are visited this many at a time. The limiter above
 // bounds syscalls in flight; this bounds the promises (and suspended frames)
 // allocated for a directory with a hundred thousand entries.
-const DIR_ENTRY_CONCURRENCY = FS_CONCURRENCY;
+export const DIR_ENTRY_CONCURRENCY = FS_CONCURRENCY;
 let activeFsCalls = 0;
 // A queue with a moving head: `Array#shift` is O(length), which made a wide
 // directory quadratic.
 const fsWaiters: Array<() => void> = [];
 let fsWaitersHead = 0;
 
-async function limited<T>(call: () => Promise<T>): Promise<T> {
+export async function limited<T>(call: () => Promise<T>): Promise<T> {
   if (activeFsCalls < FS_CONCURRENCY) activeFsCalls++;
   else await new Promise<void>((resolve) => fsWaiters.push(resolve));
   try {
@@ -156,7 +156,7 @@ async function limited<T>(call: () => Promise<T>): Promise<T> {
 }
 
 /** Like `Promise.all(items.map(fn))`, with at most `limit` calls running; results keep input order. */
-async function mapLimit<T, R>(
+export async function mapLimit<T, R>(
   items: readonly T[],
   limit: number,
   fn: (item: T) => Promise<R>,
@@ -378,7 +378,7 @@ export async function dirSize(dir: string): Promise<number> {
   return sizes.reduce((sum, size) => sum + size, 0);
 }
 
-function npmCachePath(options: TempStorageOptions): string {
+export function npmCachePath(options: TempStorageOptions = {}): string {
   return path.join(options.npmCacheDir ?? path.join(os.homedir(), ".npm"), "_cacache");
 }
 

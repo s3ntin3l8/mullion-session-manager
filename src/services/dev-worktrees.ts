@@ -40,6 +40,9 @@ const ROOTS = [
   { dir: path.join(".claude", "worktrees"), kind: "claude-agent" },
 ] as const;
 
+/** Directories (relative to a project) that hold developer worktrees. */
+export const DEV_WORKTREE_DIRS: readonly string[] = ROOTS.map((root) => root.dir);
+
 export type DevWorktreeKind = (typeof ROOTS)[number]["kind"];
 
 /**

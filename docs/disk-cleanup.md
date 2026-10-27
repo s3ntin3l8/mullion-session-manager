@@ -42,15 +42,25 @@ whole job finishes the page asks for fresh figures.
 
 Measuring can be slow (a `/tmp` with a million files takes a while even with
 the walk's 16 concurrent syscalls), so no request waits for it. Each
-inspection (Docker, temp files, caches, opencode, worktrees) is wrapped by
+inspection (Docker, temp files, caches, opencode, worktrees, the space report) is wrapped by
 `services/measured-probe.ts`: a read starts a background run if the held
 result is stale, waits about a second and a half, and otherwise answers
 `state: "measuring"` with the last known figures (if any). The page polls
 every two seconds while anything is measuring. At most one run per inspection
 is ever in flight, `?refresh=1` (the Refresh button) joins a running one
 instead of starting a second, and the freshness window (30 s for Docker,
-5 minutes for the disk walks) counts from when a run _finishes_. A prune
-drops the held result; a run still in flight can't be stopped, so its figure is thrown away and the next run starts only once it has ended.
+30 minutes for the disk walks, so coming back to the page later shows figures
+at once) counts from when a run _finishes_. A prune
+drops the held result (and the space report's, which spans every source); a run still in flight can't be stopped, so its figure is thrown away and the next run starts only once it has ended.
+
+Each answer carries `startedAt` (while a run is in flight) and `durationMs`
+(of the run behind the figures), which is how the page shows "measuring… 1m
+20s" and says that measuring carries on server-side if the page is left. Every
+run is logged with its probe name and duration (`debug`, or `warn` from 10 s),
+so the slow probe on a given host can be identified from the server log. In
+production the disk walks are also measured once about 20 s after boot (not the
+space report, which walks the whole home directory), so the first visit isn't a
+cold start.
 
 ## Docker
 
@@ -58,6 +68,12 @@ drops the held result; a run still in flight can't be stopped, so its figure is 
 containers and unused networks older than 7 days, and build cache older than
 24 hours. Aggressive drops the windows and also removes unused tagged images
 (`docker system prune --all`). Volumes are never touched.
+
+The aggressive estimate is the larger of the summary rows' `Reclaimable` and
+the sum of the per-entry sizes in `docker system df -v` (unused images,
+stopped containers, unused build cache of every type). On the containerd image
+store the Build Cache row's `Reclaimable` is only the private part, far below
+what the prune frees, so the rows alone understate it.
 
 ## Temp files
 
@@ -115,11 +131,17 @@ cross-checked against `/proc`:
   `emptyhome` and any project dir holding something other than session
   directories are never touched.
 
-## `~/.cache`
+## Opt-in caches
 
 `services/cache-storage.ts`. An opt-in allowlist of re-creatable caches
-(Playwright browsers, Hugging Face models, pip, ...), ticked in the settings
-page and emptied in aggressive mode only. The server only empties ids that
+(Playwright browsers, Hugging Face models, pip, uv, ...), ticked in the settings
+page and emptied in aggressive mode only. Most are under `~/.cache`; the
+toolchain caches that live elsewhere in the home directory are listed with
+`base: "home"`: the Go module cache (`~/go/pkg/mod`, default location only),
+Gradle (`~/.gradle/caches`) and the Cargo registry (`~/.cargo/registry`). Emptying
+Gradle's cache while a build runs can break that build. Go writes its module
+files read-only, so only that cache is made writable and retried when a removal
+fails with `EACCES`; symlinks are never followed or changed. The server only empties ids that
 are both ticked in the stored settings and requested, so neither side can
 widen the other.
 
@@ -143,13 +165,18 @@ so it is deliberately narrow:
   dir is seen too), and skips, without error, if it finds one. It never starts
   or stops opencode. The last look is taken just before the lock: the child
   process is started first and only told to go once that check is clear, so
-  nothing but a pipe write separates the two. If it can't tell (no readable
+  nothing but a pipe write separates the two. A holder that is found is
+  definitive, and the page names it (pid, binary and its bare flags: never an
+  argument value, which could be a credential), so you know what to stop. If no
+  holder is found but the scan couldn't look at everything (no readable
   `/proc`, or one of the user's own processes can't be listed), that counts as
   "running", never as "nobody": the Settings page says it couldn't tell and
   what it couldn't look into (for example `cannot list /proc/1234/fd
 (EACCES)`), so a host where one process is unreadable (`hidepid`, a sandbox)
-  can be diagnosed. Stop
-  opencode (or its background service) and run the cleanup again.
+  can be diagnosed. systemd's `(sd-pam)` helper, whose descriptors are never
+  listable and which can't be opencode, is the one exemption. Stop
+  opencode (or its background service, or the container running it) and run the
+  cleanup again.
 - **Room to work.** A `VACUUM` builds the compacted copy in a temporary file
   and, in WAL mode, then writes it through the WAL, so the volume needs about
   twice the live size free (with 20% slack). The temporary file is kept on the
@@ -176,6 +203,20 @@ so it is deliberately narrow:
   `VACUUM` is atomic and leaves the database as it was.
 - **Not retention.** This reclaims free pages only. Deleting old sessions is
   opencode's to do (it has no bulk or age-based command yet); see #1664.
+
+## Where the space is
+
+`services/space-report.ts`, `GET /api/storage/space`. A read-only report of the
+biggest entries under the home directory (three levels deep, the eight biggest
+children of each, the top 25 at the top), with the space outside the home
+directory (and in unreadable folders) as its own line. It exists to answer
+"what is using my disk?" for the space no cleanup tier handles: nothing in it
+can be deleted. Entries a cleanup source owns carry a `coveredBy` label (the
+opt-in caches, `~/.npm/_cacache`, opencode's data directory, developer
+worktree roots), which the page shows as "cleanable: …". The walk stays on the
+home directory's filesystem, never follows symlinks, shares the temp walks'
+syscall limiter, and stops at 3 million entries (`truncated`, every figure then
+a lower bound). It takes tens of seconds on a large home directory.
 
 ## Developer worktrees
 

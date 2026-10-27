@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type * as OpencodeStorage from "../../src/services/opencode-storage.js";
 import os from "node:os";
 import type * as CacheStorage from "../../src/services/cache-storage.js";
 import type * as DockerStorage from "../../src/services/docker-storage.js";
@@ -78,7 +79,8 @@ const pruneOpencodeStorage = vi.fn(async (..._args: unknown[]) => ({
   output: "Compacted opencode.db.",
   reclaimedBytes: 11,
 }));
-vi.mock("../../src/services/opencode-storage.js", () => ({
+vi.mock("../../src/services/opencode-storage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof OpencodeStorage>()),
   inspectOpencodeStorage: (...args: unknown[]) => inspectOpencodeStorage(...args),
   pruneOpencodeStorage: (...args: unknown[]) => pruneOpencodeStorage(...args),
 }));
@@ -349,6 +351,16 @@ describe("/api/storage/cleanup", () => {
 
     it.each([
       ["opencode is running", { inUse: true }],
+      [
+        "opencode is running (pid 7: opencode serve --service and 1 more)",
+        {
+          inUse: true,
+          holders: [
+            { pid: 7, command: "opencode serve --service" },
+            { pid: 8, command: "opencode" },
+          ],
+        },
+      ],
       ["Can't tell whether opencode is running", { holdersUnknown: true }],
       ["It is already being compacted", { compacting: true }],
     ])("skips opencode when measured as blocked (%s)", async (note, blocked) => {

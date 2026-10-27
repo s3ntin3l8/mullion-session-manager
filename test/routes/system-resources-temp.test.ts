@@ -63,7 +63,7 @@ describe("/api/storage/temp", () => {
     const first = await app.inject({ method: "GET", url: "/api/storage/temp" });
     // Waits out the probe's short grace period, never the walk itself.
     expect(Date.now() - started).toBeLessThan(5_000);
-    expect(first.json()).toEqual({ state: "measuring", measuredAt: null });
+    expect(first.json()).toMatchObject({ state: "measuring", measuredAt: null });
 
     // A poll and a Refresh click while it is still running share that one walk.
     await app.inject({ method: "GET", url: "/api/storage/temp" });
