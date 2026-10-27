@@ -220,14 +220,16 @@
   width: 100%;
   max-width: 100%;
   min-width: 0;
-  text-overflow: ellipsis;
 }
 .settings-models-cell .settings-numberfield {
   min-width: 0;
 }
 /* Visible only in the stacked card. The select's accessible name already
-   includes the CLI and the role, so this caption is not announced. */
-.settings-models-role {
+   includes the CLI and the role, so the short caption is not announced.
+   The sentence under it is announced: it is the only place the card says
+   what an empty Reviewer or Small means, once the column header is hidden. */
+.settings-models-role,
+.settings-models-role-desc {
   display: none;
 }
 .settings-models-empty {
@@ -270,19 +272,36 @@
   .settings-models-row {
     display: flex;
     flex-direction: column;
+    /* The shared grid rule above is `align-items: start`. On a flex column
+       that sizes each cell to its widest option instead of the card, so the
+       select stops being full width. Stretch is what the grid got for free. */
+    align-items: stretch;
     gap: 10px;
   }
   .settings-models-name {
     padding-top: 0;
   }
+  .settings-models-cell {
+    width: 100%;
+  }
   .settings-models-role {
     display: block;
-    margin-bottom: 4px;
+    margin-bottom: 2px;
     font-size: 0.6875rem;
     font-weight: 700;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: var(--dim);
+  }
+  .settings-models-role-desc {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 0.75rem;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+    color: var(--muted);
+    line-height: 1.4;
   }
   .settings-models-cell-empty {
     display: none;

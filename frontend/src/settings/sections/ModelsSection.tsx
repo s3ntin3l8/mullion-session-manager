@@ -45,6 +45,17 @@ const MODEL_CLIS = AGENT_OPTIONS.flatMap((option) => {
   return layout ? [{ ...option, ...layout }] : [];
 });
 
+// Same sentences in the desktop column header and in each stacked card.
+// The card hides the header, so the sentence has to travel with the cell.
+const ROLE_COPY = {
+  implementer: { label: "Implementer", desc: "New sessions and workers." },
+  reviewer: {
+    label: "Reviewer",
+    desc: "Review sessions. Empty follows the implementer, except opencode.",
+  },
+  small: { label: "Small", desc: "Background work. Only Claude Code and opencode." },
+} as const;
+
 type AgentProbe =
   { status: "loading" } | { status: "error" } | { status: "ready"; available: ReadonlySet<string> };
 
@@ -371,22 +382,12 @@ export function ModelsSection() {
       <div className="settings-models-grid">
         <div className="settings-models-head">
           <span />
-          <span>
-            <span className="settings-models-col">Implementer</span>
-            <span className="settings-models-col-desc">New sessions and workers.</span>
-          </span>
-          <span>
-            <span className="settings-models-col">Reviewer</span>
-            <span className="settings-models-col-desc">
-              Review sessions. Empty follows the implementer, except opencode.
+          {(["implementer", "reviewer", "small"] as const).map((role) => (
+            <span key={role}>
+              <span className="settings-models-col">{ROLE_COPY[role].label}</span>
+              <span className="settings-models-col-desc">{ROLE_COPY[role].desc}</span>
             </span>
-          </span>
-          <span>
-            <span className="settings-models-col">Small</span>
-            <span className="settings-models-col-desc">
-              Background work. Only Claude Code and opencode.
-            </span>
-          </span>
+          ))}
         </div>
         {MODEL_CLIS.filter(
           (cli) => showAll || showRest || isPrimary(settings, cli.value, probe),
@@ -408,20 +409,27 @@ export function ModelsSection() {
               </div>
               {implementer && (
                 <RoleCell
-                  label="Implementer"
+                  label={ROLE_COPY.implementer.label}
+                  desc={ROLE_COPY.implementer.desc}
                   ariaLabel={ariaName(cli.label, "implementer")}
                   {...implementer}
                 />
               )}
               {reviewer && (
                 <RoleCell
-                  label="Reviewer"
+                  label={ROLE_COPY.reviewer.label}
+                  desc={ROLE_COPY.reviewer.desc}
                   ariaLabel={ariaName(cli.label, "reviewer")}
                   {...reviewer}
                 />
               )}
               {small ? (
-                <RoleCell label="Small" ariaLabel={ariaName(cli.label, "small")} {...small} />
+                <RoleCell
+                  label={ROLE_COPY.small.label}
+                  desc={ROLE_COPY.small.desc}
+                  ariaLabel={ariaName(cli.label, "small")}
+                  {...small}
+                />
               ) : (
                 <div className="settings-models-cell settings-models-cell-empty">
                   <span className="settings-models-role" aria-hidden="true">
@@ -466,6 +474,7 @@ export function ModelsSection() {
 
 function RoleCell({
   label,
+  desc,
   ariaLabel,
   value,
   options,
@@ -474,6 +483,7 @@ function RoleCell({
   onChange,
 }: {
   label: string;
+  desc: string;
   ariaLabel: string;
   value: string | null;
   options: ModelOption[];
@@ -486,6 +496,7 @@ function RoleCell({
       <span className="settings-models-role" aria-hidden="true">
         {label}
       </span>
+      <span className="settings-models-role-desc">{desc}</span>
       <ModelSelect
         stretch
         ariaLabel={ariaLabel}

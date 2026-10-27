@@ -789,4 +789,15 @@ describe("Settings -> Models", () => {
       expect(screen.queryByRole("button", { name: /more CLIs|Hide \d/ })).toBeNull();
     });
   });
+
+  it("repeats each role's explanation on the card, not only in the column header", () => {
+    // The phone card hides the header, so the sentence has to be in the cell
+    // too. Header plus one per visible CLI that has the role.
+    render(<ModelsSection />);
+    expect(screen.getAllByText("New sessions and workers.")).toHaveLength(6);
+    expect(
+      screen.getAllByText("Review sessions. Empty follows the implementer, except opencode."),
+    ).toHaveLength(6);
+    expect(screen.getAllByText("Background work. Only Claude Code and opencode.")).toHaveLength(3);
+  });
 });
