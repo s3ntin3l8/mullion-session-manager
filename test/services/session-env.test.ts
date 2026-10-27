@@ -141,29 +141,38 @@ describe("session-env", () => {
 
     // #2102 — the task-push block, against real git.
     describe("task-push block (#2102)", () => {
-      const run = (cwd: string, args: string[], env: NodeJS.ProcessEnv) =>
-        execFileSync("git", args, { cwd, env, stdio: "pipe" });
+      // The backend's own git view (gitEnv() scrubs GIT_CONFIG*) plus whatever
+      // the case adds on top; identity comes from env, never from repo config.
+      const IDENTITY = {
+        GIT_AUTHOR_NAME: "t",
+        GIT_AUTHOR_EMAIL: "t@t",
+        GIT_COMMITTER_NAME: "t",
+        GIT_COMMITTER_EMAIL: "t@t",
+      };
+      const run = (cwd: string, args: string[], extra: NodeJS.ProcessEnv = {}) =>
+        execFileSync("git", args, {
+          cwd,
+          env: { ...gitEnv(), ...IDENTITY, ...extra },
+          stdio: "pipe",
+        });
       const setup = () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-push-block-"));
         const remote = path.join(root, "remote.git");
         const work = path.join(root, "work");
         fs.mkdirSync(remote);
-        run(remote, ["init", "--bare", "-b", "main"], process.env);
-        run(root, ["clone", remote, "work"], process.env);
-        run(work, ["config", "user.email", "t@t"], process.env);
-        run(work, ["config", "user.name", "t"], process.env);
+        run(remote, ["init", "--bare", "-b", "main"]);
+        run(root, ["clone", remote, "work"]);
         fs.writeFileSync(path.join(work, "a.txt"), "a\n");
-        run(work, ["add", "-A"], process.env);
-        run(work, ["commit", "-m", "x", "--no-verify"], process.env);
+        run(work, ["add", "-A"]);
+        run(work, ["commit", "-m", "x", "--no-verify"]);
         return { root, work };
       };
 
       it("makes a session's own `git push origin` fail, naming the sentinel", () => {
         const { root, work } = setup();
-        const sessionEnv = { ...process.env, ...GIT_CONFIG_TASK_PUSH_BLOCK_ENV };
         let stderr = "";
         try {
-          run(work, ["push", "origin", "main"], sessionEnv);
+          run(work, ["push", "origin", "main"], { ...GIT_CONFIG_TASK_PUSH_BLOCK_ENV });
         } catch (err) {
           stderr = String((err as { stderr?: Buffer }).stderr ?? "");
         }
@@ -181,7 +190,7 @@ describe("session-env", () => {
         };
         Object.assign(process.env, GIT_CONFIG_TASK_PUSH_BLOCK_ENV);
         try {
-          expect(() => run(work, ["push", "origin", "main"], gitEnv())).not.toThrow();
+          expect(() => run(work, ["push", "origin", "main"])).not.toThrow();
         } finally {
           for (const [key, value] of [
             ["GIT_CONFIG_COUNT", prior.c],
