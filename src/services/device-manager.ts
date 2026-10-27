@@ -271,6 +271,15 @@ export interface DeviceInfo {
 /** Runs an adb-server call, rewording a refused connection into something an
  * operator can act on: the bare ECONNREFUSED names neither adb nor the port
  * Mullion expected it on (issue #2115). Everything else passes through. */
+const ADB_STDERR_LIMIT = 2000;
+
+/** Trims adb's captured stderr to ADB_STDERR_LIMIT, marking a cut one so a
+ * truncated diagnostic never reads as a complete message. */
+function clipStderr(stderr: string): string {
+  const text = stderr.trim();
+  return text.length > ADB_STDERR_LIMIT ? `${text.slice(0, ADB_STDERR_LIMIT)}…` : text;
+}
+
 async function adbCall<T>(port: number, call: () => Promise<T>): Promise<T> {
   try {
     return await call();
@@ -1089,7 +1098,7 @@ export class DeviceManager {
       });
       let stderr = "";
       child.stderr?.on("data", (chunk: Buffer) => {
-        if (stderr.length < 2000) stderr += chunk.toString();
+        if (stderr.length <= ADB_STDERR_LIMIT) stderr += chunk.toString();
       });
       let reported = false;
       const report = (result: Parameters<NonNullable<typeof opts.onAdbServerStart>>[0]): void => {
@@ -1099,7 +1108,7 @@ export class DeviceManager {
         reported = true;
         opts.onAdbServerStart?.(result);
       };
-      child.on("error", (error) => report({ ok: false, error, stderr: stderr.trim() }));
+      child.on("error", (error) => report({ ok: false, error, stderr: clipStderr(stderr) }));
       child.on("exit", (code, signal) =>
         report(
           code === 0
@@ -1107,7 +1116,7 @@ export class DeviceManager {
             : {
                 ok: false,
                 error: new Error(`adb start-server exited with ${code ?? `signal ${signal}`}`),
-                stderr: stderr.trim(),
+                stderr: clipStderr(stderr),
               },
         ),
       );

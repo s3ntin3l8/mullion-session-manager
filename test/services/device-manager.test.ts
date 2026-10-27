@@ -680,6 +680,58 @@ describe("DeviceManager", () => {
       );
     });
 
+    it("rewords a refused connect() on a physical device", async () => {
+      mockWirelessConnectError = Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:5137"), {
+        code: "ECONNREFUSED",
+      });
+      const manager = new DeviceManager(baseOpts({ adbServerPort: 5137 }));
+      await manager.getOrCreate({
+        id: "3",
+        kind: "physical" as const,
+        avdName: null,
+        serial: ADDRESS,
+        label: null,
+        port: null,
+      });
+      await waitForStatus(manager, "3", "error");
+      expect(manager.get("3")?.toInfo().error).toMatch(
+        /adb server is not running on 127\.0\.0\.1:5137/,
+      );
+    });
+
+    it("rewords a refused getDevices() while waiting for a device to appear", async () => {
+      mockServerClient.getDevices.mockRejectedValueOnce(
+        Object.assign(new Error("connect ECONNREFUSED 127.0.0.1:5037"), { code: "ECONNREFUSED" }),
+      );
+      const manager = new DeviceManager(baseOpts());
+      await manager.getOrCreate({
+        id: "4",
+        kind: "physical" as const,
+        avdName: null,
+        serial: ADDRESS,
+        label: null,
+        port: null,
+      });
+      await waitForStatus(manager, "4", "error");
+      expect(manager.get("4")?.toInfo().error).toMatch(
+        /adb server is not running on 127\.0\.0\.1:5037/,
+      );
+    });
+
+    it("caps adb's stderr and marks a cut one", async () => {
+      const results: Array<{ ok: boolean; stderr?: string }> = [];
+      fakeAdbStart((ee) => {
+        (ee as unknown as { stderr: EventEmitter }).stderr.emit(
+          "data",
+          Buffer.from("x".repeat(5000)),
+        );
+        ee.emit("exit", 1, null);
+      });
+      new DeviceManager(baseOpts({ onAdbServerStart: (r) => results.push(r) }));
+      await vi.waitFor(() => expect(results).toHaveLength(1));
+      expect(results[0].stderr).toBe(`${"x".repeat(2000)}…`);
+    });
+
     it("leaves other adb errors untouched", async () => {
       mockWirelessPair.mockRejectedValueOnce(new Error("pairing code rejected"));
       const manager = new DeviceManager(baseOpts());
