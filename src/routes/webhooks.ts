@@ -6,6 +6,7 @@ import { getWebhookSecret } from "../services/github-webhook.js";
 import { resolveRepoRef } from "../services/host-git.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { projects, tasks } from "../db/schema.js";
+import { endReviewingOnPrState } from "../services/task-review-end.js";
 import { invalidateMergedPrs } from "../services/github-merged-prs.js";
 import { invalidatePrDetail } from "../services/github-pr-detail.js";
 import { listBlockingIssues } from "../services/github-write.js";
@@ -276,8 +277,8 @@ export async function webhookRoutes(app: FastifyInstance) {
                 // archivedAt is auto-set only when the task is ALREADY
                 // `done` at merge time (the common case — approve runs
                 // before a human merges the PR). A PR merged early, while
-                // the task still sits in reviewing, only gets mergedAt here
-                // — an accepted gap, not worth a poller for.
+                // the task still sits in reviewing, only gets mergedAt here;
+                // the reviewing-task ending just below moves it to done.
                 app.db
                   .update(tasks)
                   .set(
@@ -287,6 +288,40 @@ export async function webhookRoutes(app: FastifyInstance) {
                   )
                   .where(eq(tasks.id, matchedTask.id))
                   .run();
+              }
+            }
+            // #2103 — a PR closed under a REVIEWING task (merged by hand, or
+            // closed without merging) is the end of that task. Not awaited:
+            // it may read the worktree's diff, and a webhook must answer fast.
+            if (prAction === "closed" && typeof pr === "object" && "number" in pr) {
+              const prNumber = pr.number;
+              const reviewing =
+                typeof prNumber === "number"
+                  ? app.db
+                      .select()
+                      .from(tasks)
+                      .where(
+                        and(
+                          eq(tasks.projectId, projectId),
+                          eq(tasks.prNumber, prNumber),
+                          eq(tasks.status, "reviewing"),
+                        ),
+                      )
+                      .get()
+                  : undefined;
+              const taskProject = reviewing
+                ? app.db.select().from(projects).where(eq(projects.id, projectId)).get()
+                : undefined;
+              if (reviewing && taskProject) {
+                void endReviewingOnPrState(app, reviewing, taskProject, {
+                  state: "closed",
+                  merged: "merged" in pr && pr.merged === true,
+                }).catch((err) =>
+                  app.log.warn(
+                    { err, taskId: reviewing.id, prNumber },
+                    "webhook: ending a reviewing task from its closed PR failed",
+                  ),
+                );
               }
             }
             break;
