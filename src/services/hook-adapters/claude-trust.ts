@@ -11,7 +11,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveClaudeConfigDir } from "./claude-code.js";
+import { resolveClaudeConfigDir } from "./claude-config-dir.js";
 import { GIT_NO_AUTO_GC, gitEnv } from "../git-env.js";
 
 // Issue #2091 — Claude Code's "Do you trust this folder?" dialog is a SEPARATE
@@ -40,17 +40,19 @@ const LOCK_STALE_MS = 10_000;
 
 // The shape Claude gives a project entry it creates itself. It reads an
 // existing entry as-is rather than merging defaults, so a new one carries all
-// of it.
-const DEFAULT_PROJECT_ENTRY = {
-  allowedTools: [],
-  mcpContextUris: [],
-  mcpServers: {},
-  enabledMcpjsonServers: [],
-  disabledMcpjsonServers: [],
-  hasTrustDialogAccepted: false,
-  hasClaudeMdExternalIncludesApproved: false,
-  hasClaudeMdExternalIncludesWarningShown: false,
-};
+// of it. A function, so no call shares an array/object with another.
+function defaultProjectEntry() {
+  return {
+    allowedTools: [],
+    mcpContextUris: [],
+    mcpServers: {},
+    enabledMcpjsonServers: [],
+    disabledMcpjsonServers: [],
+    hasTrustDialogAccepted: false,
+    hasClaudeMdExternalIncludesApproved: false,
+    hasClaudeMdExternalIncludesWarningShown: false,
+  };
+}
 
 interface ClaudeGlobalConfig {
   projects?: Record<string, { hasTrustDialogAccepted?: boolean; [key: string]: unknown }>;
@@ -74,9 +76,13 @@ export function resolveClaudeGlobalConfigPath(): string {
   return path.join(process.env.CLAUDE_CONFIG_DIR || os.homedir(), `.claude${suffix}.json`);
 }
 
+// Claude compares project keys as the filesystem returns them: it does NOT
+// Unicode-normalise them (verified against 2.1.310 with an NFD directory on
+// disk — an NFD key suppresses the dialog, the NFC spelling of the same name
+// does not). So the key is exactly what realpath gives, never `.normalize()`d.
+// Only Windows separators are rewritten, as Claude does.
 function normalizeKey(p: string): string {
-  const n = p.normalize("NFC");
-  return process.platform === "win32" ? n.replaceAll("\\", "/") : n;
+  return process.platform === "win32" ? p.replaceAll("\\", "/") : p;
 }
 
 function realOrResolved(p: string): string {
@@ -88,8 +94,15 @@ function realOrResolved(p: string): string {
 }
 
 /** The directory Claude keys trust by for `cwd`: its git repo's main
- * checkout (a worktree resolves to the checkout it was cut from), or null
- * when `cwd` is not inside a git repo. */
+ * checkout, or null when `cwd` is not inside a git repo. Both a worktree and
+ * a plain subdirectory of the checkout resolve to it (each verified against
+ * the real binary: an entry for the checkout suppresses the dialog for a
+ * session started in either).
+ *
+ * This is a synchronous git spawn on the server's main thread, once per
+ * launch, with a 1 s cap — deliberate: it has to finish before the child
+ * reads its config (see mergeClaudeTrustedPath), and a cold git on a slow
+ * mount can hold the event loop for up to that second. */
 function gitCheckoutRoot(cwd: string): string | null {
   try {
     const common = execFileSync(
@@ -225,7 +238,7 @@ export function mergeClaudeTrustedPath(
       projects: {
         ...projects,
         [key]: {
-          ...DEFAULT_PROJECT_ENTRY,
+          ...defaultProjectEntry(),
           ...(typeof existing === "object" && existing !== null && !Array.isArray(existing)
             ? existing
             : {}),
@@ -233,6 +246,9 @@ export function mergeClaudeTrustedPath(
         },
       },
     };
+    // Atomic on POSIX. On Windows a rename over a file a live Claude has open
+    // can fail (EPERM/EBUSY) instead of replacing it; that throws below, the
+    // temp file is removed, and the dialog appears as before.
     const mode = statSync(realConfig).mode & 0o777;
     const tmp = `${realConfig}.tmp-${process.pid}`;
     try {

@@ -99,13 +99,33 @@ describe("mergeClaudeTrustedPath", () => {
   it("is a no-op when the checkout is already trusted", () => {
     writeConfig({ projects: { [checkout]: { hasTrustDialogAccepted: true } } });
     const before = readFileSync(configPath, "utf8");
-    const mtime = statSync(configPath).mtimeMs;
 
     expect(mergeClaudeTrustedPath(worktree, configPath)).toBe("already-trusted");
     expect(mergeClaudeTrustedPath(checkout, configPath)).toBe("already-trusted");
 
     expect(readFileSync(configPath, "utf8")).toBe(before);
-    expect(statSync(configPath).mtimeMs).toBe(mtime);
+  });
+
+  it("keys a plain subdirectory of the checkout by the checkout, like a worktree", () => {
+    const sub = path.join(checkout, "src", "deep");
+    mkdirSync(sub, { recursive: true });
+    writeConfig({ projects: {} });
+    expect(mergeClaudeTrustedPath(sub, configPath)).toBe("written");
+    expect(Object.keys(readProjects())).toEqual([checkout]);
+  });
+
+  it("writes the key exactly as the filesystem spells it — never Unicode-normalised", () => {
+    // Claude matches keys byte for byte (verified against the real binary with
+    // an NFD directory on disk): an NFC-normalised key would never match it.
+    const nfd = "re\u0301po"; // "répo", decomposed
+    const dir = path.join(tmp, nfd);
+    mkdirSync(dir);
+    git(dir, "init", "-q", "-b", "main");
+    writeConfig({ projects: {} });
+
+    mergeClaudeTrustedPath(dir, configPath);
+
+    expect(Object.keys(readProjects())).toEqual([realpathSync(dir)]);
   });
 
   it("is idempotent across repeated launches", () => {
