@@ -140,7 +140,7 @@ else
   TAG_URL="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null || true)"
   TAG="${TAG_URL##*/tag/}"
 fi
-if [ -z "$TAG" ] || [ "$TAG" = "$TAG_URL" ] && [ -z "${MULLION_INSTALL_TAG:-}" ]; then
+if { [ -z "$TAG" ] || [ "$TAG" = "$TAG_URL" ]; } && [ -z "${MULLION_INSTALL_TAG:-}" ]; then
   echo "mullion-install: could not resolve the latest release of $REPO (got: '${TAG_URL:-no response}')." >&2
   echo "mullion-install: check that the repository exists and has a published release." >&2
   exit 1

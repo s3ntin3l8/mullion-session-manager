@@ -110,10 +110,20 @@ function Fail([int]$Code, [string]$Step, [string]$Message) {
   exit $Code
 }
 
+# Every exit emits a final line under -Json: a terminating error anywhere below
+# (a held directory, an unreadable install.json) ends up here.
+trap {
+  Fail 1 'unexpected' ($_.Exception.Message)
+}
+
 # --- helpers -----------------------------------------------------------------
 
 function Get-FullPath([string]$Path) {
-  return [IO.Path]::GetFullPath($Path).TrimEnd('\')
+  $full = [IO.Path]::GetFullPath($Path)
+  # A drive root keeps its separator: "C:" alone means "the current directory
+  # on C:", and an uninstall would then enumerate and delete that.
+  if ($full -ne [IO.Path]::GetPathRoot($full)) { $full = $full.TrimEnd('\') }
+  return $full
 }
 
 # The version of a node.exe as a major number, or 0 if it cannot be asked.
@@ -174,7 +184,7 @@ function Test-ProcessesUnder([string]$Root) {
       $prefixes += ($form.TrimEnd('\', '/').ToLowerInvariant() + '\')
     }
   } catch { }
-  $all = @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)
+  $all = @(Get-CimInstance Win32_Process -ErrorAction Stop)
   $skip = @{}
   $cursor = $PID
   while ($cursor -and -not $skip.ContainsKey([int]$cursor)) {
@@ -215,6 +225,9 @@ if (-not $InstallRoot) {
   $InstallRoot = Join-Path $env:LOCALAPPDATA 'Mullion'
 }
 $InstallRoot = Get-FullPath $InstallRoot
+if ($InstallRoot -eq [IO.Path]::GetPathRoot($InstallRoot)) {
+  Fail 2 'platform' "the install root must be a folder, not the drive root $InstallRoot"
+}
 $RuntimeDir = Join-Path $InstallRoot 'runtime'
 Emit 'platform' 'ok' "x64, install root $InstallRoot"
 
@@ -236,13 +249,10 @@ if ($Uninstall) {
   }
 
   # Stop the supervisor first, so it cannot restart the server while the
-  # sessions are being looked at.
+  # sessions are being looked at. It is only unregistered once the uninstall is
+  # going ahead: a refusal leaves the host as it was (the task is started again).
   $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-  if ($task) {
-    Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
-    Emit 'uninstall' 'ok' "removed the scheduled task $taskName"
-  }
+  if ($task) { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue }
 
   # Stopping the task ends the launcher and the server, but not instantly.
   $running = @(Test-ProcessesUnder $InstallRoot)
@@ -251,9 +261,13 @@ if ($Uninstall) {
     $running = @(Test-ProcessesUnder $InstallRoot)
   }
   if ($running.Count -gt 0 -and -not $Force) {
-    # The task is already gone, so re-registering is the way back; say so.
+    if ($task) { Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue }
     Fail 5 'uninstall' ("$($running.Count) process(es) still run from $InstallRoot (sessions survive a stop by design). " +
       'End them from Mullion, or re-run with -Force to end them now.')
+  }
+  if ($task) {
+    Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
+    Emit 'uninstall' 'ok' "removed the scheduled task $taskName"
   }
   foreach ($p in $running) {
     Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
@@ -436,8 +450,8 @@ $psi.FileName = $bash
 $psi.UseShellExecute = $false
 $psi.RedirectStandardOutput = $true
 $psi.CreateNoWindow = $true
-# Positional install root (mixed form: C:/..., which Git Bash accepts), then
-# the role. No secret on this command line. The script runs under a bash that
+# The role, then the positional install root (mixed form: C:/..., which Git
+# Bash accepts). No secret on this command line. The script runs under a bash that
 # folds its stderr into its stdout, so one ordered stream is relayed line by
 # line (a second pipe would need an event handler, and those arrive after the
 # process has already been seen to exit).
@@ -479,8 +493,11 @@ if ($installExit -ne 0) {
 $infoFile = Join-Path $InstallRoot 'install.json'
 $extra = @{}
 if (Test-Path -LiteralPath $infoFile) {
-  $j = Get-Content -LiteralPath $infoFile -Raw | ConvertFrom-Json
-  foreach ($prop in $j.PSObject.Properties) { $extra[$prop.Name] = $prop.Value }
+  # The install succeeded; an unreadable install.json must not turn that into a failure.
+  try {
+    $j = Get-Content -LiteralPath $infoFile -Raw | ConvertFrom-Json
+    foreach ($prop in $j.PSObject.Properties) { $extra[$prop.Name] = $prop.Value }
+  } catch { }
 }
 $extra['gitBash'] = $bash
 Emit 'done' 'ok' "Mullion is installed in $InstallRoot" $extra

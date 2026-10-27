@@ -452,6 +452,52 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
       expect(fs.existsSync(root)).toBe(false);
     }, 120_000);
 
+    it("refuses a drive root as the install root, before touching anything", async () => {
+      for (const extra of [[], ["-Uninstall"]]) {
+        const res = await bootstrap(["-Json", ...extra, "-InstallRoot", "C:\\"]);
+        expect(res.code).toBe(2);
+        expect(res.events.at(-1)).toMatchObject({ step: "platform", status: "fail", exitCode: 2 });
+      }
+    }, 120_000);
+
+    it("ends a -Json run with a fail line even on an unexpected error", async () => {
+      const res = await bootstrap(["-Json", "-Uninstall", "-InstallRoot", "C:\\bad|path"]);
+      expect(res.code).toBe(1);
+      expect(res.events.at(-1)).toMatchObject({ step: "unexpected", status: "fail", exitCode: 1 });
+    }, 120_000);
+
+    it("leaves the scheduled task registered when it refuses", async () => {
+      const { root } = installed();
+      const taskName = `MullionBootstrapTest-${process.pid}`;
+      fs.writeFileSync(path.join(root, "install.json"), JSON.stringify({ taskName }));
+      await run(
+        "schtasks",
+        ["/Create", "/TN", taskName, "/TR", "cmd /c exit", "/SC", "ONCE", "/ST", "23:59", "/F"],
+        {
+          windowsHide: true,
+        },
+      );
+      try {
+        const script = path.join(root, "data", "sessions", "master.js");
+        fs.writeFileSync(script, "setInterval(() => {}, 1000);\n");
+        const master = spawn(process.execPath, [script], { stdio: "ignore", windowsHide: true });
+        children.push(master);
+        await new Promise((r) => setTimeout(r, 500));
+
+        const refused = await bootstrap(["-Json", "-Uninstall", "-InstallRoot", root]);
+        expect(refused.code).toBe(5);
+        // Nothing was half-done: no "removed the scheduled task", and it is still there.
+        expect(refused.events.some((e) => e.detail.includes("removed the scheduled task"))).toBe(
+          false,
+        );
+        await run("schtasks", ["/Query", "/TN", taskName], { windowsHide: true });
+      } finally {
+        await run("schtasks", ["/Delete", "/TN", taskName, "/F"], { windowsHide: true }).catch(
+          () => {},
+        );
+      }
+    }, 180_000);
+
     it("has nothing to do for a root that does not exist", async () => {
       const res = await bootstrap(["-Json", "-Uninstall", "-InstallRoot", installRoot()]);
       expect(res.code).toBe(0);
