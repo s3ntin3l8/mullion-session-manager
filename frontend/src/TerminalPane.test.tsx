@@ -44,8 +44,10 @@ vi.mock("./terminalInputRegistry.js", () => ({
 // program sending an OSC query/set payload without a real xterm.js parser.
 // Declared via vi.hoisted so the vi.mock("@xterm/xterm", ...) factory below
 // (itself hoisted above this file's imports) can close over it safely.
-const { oscHandlers } = vi.hoisted(() => ({
+const { oscHandlers, csiHandlers } = vi.hoisted(() => ({
   oscHandlers: new Map<number, (data: string) => boolean>(),
+  // Keyed by "<prefix><intermediates><final>", e.g. "n", "?n", ">c", "$p".
+  csiHandlers: new Map<string, () => boolean>(),
 }));
 
 // Issue #676's frontend follow-up (TerminalPane defers its first connect()
@@ -251,6 +253,12 @@ vi.mock("@xterm/xterm", () => {
           oscHandlers.set(ident, cb);
           return createDisposable();
         }),
+        registerCsiHandler: vi.fn(
+          (id: { prefix?: string; intermediates?: string; final: string }, cb: () => boolean) => {
+            csiHandlers.set(`${id.prefix ?? ""}${id.intermediates ?? ""}${id.final}`, cb);
+            return createDisposable();
+          },
+        ),
       },
     };
   });
@@ -459,6 +467,7 @@ function getLatestSearchAddonInstance() {
 
 beforeEach(() => {
   oscHandlers.clear();
+  csiHandlers.clear();
   localStorage.clear();
   mockInitialTermSize.cols = 80;
   mockInitialTermSize.rows = 24;
@@ -1589,6 +1598,14 @@ describe("TerminalPane OSC push", () => {
 });
 
 describe("TerminalPane OSC 10/11/12 query responder (issue #91)", () => {
+  function sendGeometryFrame(): void {
+    for (const handler of fakeSocket._messageHandlers) {
+      handler({
+        data: JSON.stringify({ type: "geometry", cols: 80, rows: 24, minCols: 40, minRows: 10 }),
+      });
+    }
+  }
+
   // Every send is a raw byte payload here (unlike decodedOscSends() above,
   // which filters for the `#rrggbb` SET-push format) — decode all of them.
   function decodedSends(): string[] {
@@ -1602,6 +1619,7 @@ describe("TerminalPane OSC 10/11/12 query responder (issue #91)", () => {
     stubFakeWebSocket(true);
     renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    sendGeometryFrame();
     fakeWsSend.mockClear();
 
     const handled = oscHandlers.get(11)!("?");
@@ -1615,6 +1633,7 @@ describe("TerminalPane OSC 10/11/12 query responder (issue #91)", () => {
     stubFakeWebSocket(true);
     renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    sendGeometryFrame();
     fakeWsSend.mockClear();
 
     oscHandlers.get(10)!("?");
@@ -1629,6 +1648,7 @@ describe("TerminalPane OSC 10/11/12 query responder (issue #91)", () => {
     stubFakeWebSocket(true);
     renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    sendGeometryFrame();
     fakeWsSend.mockClear();
 
     const handled = oscHandlers.get(11)!("#112233");
@@ -1645,6 +1665,70 @@ describe("TerminalPane OSC 10/11/12 query responder (issue #91)", () => {
 
     expect(handled).toBe(true);
     expect(fakeWsSend).not.toHaveBeenCalled();
+  });
+
+  it("does not answer an OSC 11 query replayed from the backlog (before the first geometry frame)", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    fakeWsSend.mockClear();
+
+    const handled = oscHandlers.get(11)!("?");
+
+    expect(handled).toBe(true);
+    expect(decodedSends()).toEqual([]);
+  });
+});
+
+describe("TerminalPane terminal query replies during scrollback replay", () => {
+  function sendGeometryFrame(): void {
+    for (const handler of fakeSocket._messageHandlers) {
+      handler({
+        data: JSON.stringify({ type: "geometry", cols: 80, rows: 24, minCols: 40, minRows: 10 }),
+      });
+    }
+  }
+
+  const QUERY_KEYS = ["n", "?n", "c", ">c", "$p", "?$p"];
+
+  it("registers a handler for every query family xterm answers", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    for (const key of QUERY_KEYS) expect(csiHandlers.has(key)).toBe(true);
+  });
+
+  it("swallows CPR/DSR/DA/DECRQM queries replayed before the first geometry frame", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    for (const key of QUERY_KEYS) expect(csiHandlers.get(key)!()).toBe(true);
+  });
+
+  it("lets xterm answer the same queries once replay is complete (live output)", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    sendGeometryFrame();
+
+    for (const key of QUERY_KEYS) expect(csiHandlers.get(key)!()).toBe(false);
+  });
+
+  it("re-arms the guard when the server resyncs with a fresh replay", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    sendGeometryFrame();
+    expect(csiHandlers.get("n")!()).toBe(false);
+
+    for (const handler of fakeSocket._messageHandlers) {
+      handler({ data: JSON.stringify({ type: "resync" }) });
+    }
+
+    expect(csiHandlers.get("n")!()).toBe(true);
   });
 });
 
