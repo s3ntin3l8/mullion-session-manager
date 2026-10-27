@@ -1282,12 +1282,13 @@ export function stripMaximizedNode(serialized: SerializedDockview): SerializedDo
 // doesn't re-export the GroupPanelViewState/SerializedGridObject names its
 // own SerializedDockview type is built from, so this walks the tree with a
 // minimal structural type rather than importing them by name.
-interface GridTreeNode {
-  type: "leaf" | "branch";
-  data: unknown;
-  size?: number;
-  visible?: boolean;
-}
+// One shape for the serialized grid tree, parameterized on what a leaf carries
+// (`balanceSiblingsOf` below reads the group id; this one only needs the blob).
+type SerializedGridNode<Leaf> =
+  | { type: "leaf"; data: Leaf; size?: number; visible?: boolean }
+  | { type: "branch"; data: SerializedGridNode<Leaf>[]; size?: number; visible?: boolean };
+
+type GridTreeNode = SerializedGridNode<unknown>;
 
 function stripHiddenHeadersNode(node: GridTreeNode): GridTreeNode {
   if (node.type === "branch" && Array.isArray(node.data)) {
@@ -1295,7 +1296,7 @@ function stripHiddenHeadersNode(node: GridTreeNode): GridTreeNode {
   }
   if (node.data && typeof node.data === "object" && "hideHeader" in node.data) {
     const { hideHeader: _hideHeader, ...rest } = node.data as Record<string, unknown>;
-    return { ...node, data: rest };
+    return { ...node, data: rest } as GridTreeNode;
   }
   return node;
 }
@@ -1602,9 +1603,10 @@ export function restoreTiledGroupWidths(
 // participants: a group dockview hid (a popout's reference group, say) takes no
 // space, so counting it would hand its share to nobody — 4 slots for 3 visible
 // panes, i.e. 25/25/50 where 33/33/33 was asked for.
-type GridNode =
-  | { type: "leaf"; data: { id: string }; visible?: boolean }
-  | { type: "branch"; data: GridNode[]; visible?: boolean };
+//
+// A hidden *target* is likewise dropped from its own sibling list, so balancing
+// from a hidden pane resizes just the visible ones — intended, not an accident.
+type GridNode = SerializedGridNode<{ id: string }>;
 
 const isShown = (node: GridNode): boolean => node.visible !== false;
 
