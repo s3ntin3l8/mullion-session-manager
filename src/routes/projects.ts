@@ -236,6 +236,9 @@ interface UpdateProjectBody {
   // see schema.ts's own doc comment on these two columns.
   mergeOnApprove?: boolean | null;
   autoApprove?: boolean | null;
+  // Issue #2110 — this project's sessions may spawn children in other
+  // projects. Per-project, `null`/`false` = off (the default).
+  allowCrossProjectSpawn?: boolean | null;
   // #756 — per-project override of the resolved auto-return round cap.
   // `null` clears it (falls back to the install-wide
   // taskMaster.maxAutoReturnRounds setting via resolveMaxAutoReturnRounds in
@@ -357,6 +360,7 @@ const updateProjectSchema = {
       defaultReviewAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
       mergeOnApprove: { type: ["boolean", "null"] },
       autoApprove: { type: ["boolean", "null"] },
+      allowCrossProjectSpawn: { type: ["boolean", "null"] },
       maxAutoReturnRounds: { type: ["integer", "null"], minimum: 0 },
       conventionalCommitTitles: { type: ["boolean", "null"] },
       autoTagRelease: { type: ["boolean", "null"] },
@@ -4750,6 +4754,7 @@ export async function projectsRoute(app: FastifyInstance) {
         placement,
         mergeOnApprove,
         autoApprove,
+        allowCrossProjectSpawn,
         maxAutoReturnRounds,
         conventionalCommitTitles,
         autoTagRelease,
@@ -4817,6 +4822,7 @@ export async function projectsRoute(app: FastifyInstance) {
         hostCwds === undefined &&
         mergeOnApprove === undefined &&
         autoApprove === undefined &&
+        allowCrossProjectSpawn === undefined &&
         maxAutoReturnRounds === undefined &&
         conventionalCommitTitles === undefined &&
         autoTagRelease === undefined &&
@@ -4826,7 +4832,7 @@ export async function projectsRoute(app: FastifyInstance) {
         suppressConventionsInjectionAfterScaffold === undefined
       ) {
         return reply.badRequest(
-          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, placement, hostCwds, mergeOnApprove, autoApprove, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
+          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, placement, hostCwds, mergeOnApprove, autoApprove, allowCrossProjectSpawn, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
         );
       }
 
@@ -4886,6 +4892,7 @@ export async function projectsRoute(app: FastifyInstance) {
           ...(hostCwds !== undefined ? { hostCwds: serializeHostCwds(hostCwds) } : {}),
           ...(mergeOnApprove !== undefined ? { mergeOnApprove } : {}),
           ...(autoApprove !== undefined ? { autoApprove } : {}),
+          ...(allowCrossProjectSpawn !== undefined ? { allowCrossProjectSpawn } : {}),
           ...(maxAutoReturnRounds !== undefined ? { maxAutoReturnRounds } : {}),
           // A human PATCHing this field — on, or explicitly back off — is a
           // deliberate decision that must permanently outrank the

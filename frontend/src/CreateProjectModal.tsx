@@ -48,6 +48,9 @@ interface CreateProjectModalProps {
     // `false` both mean off; the modal always sends a plain boolean.
     mergeOnApprove?: boolean | null;
     autoApprove?: boolean | null;
+    // #2110 — a "coordinator" project: its sessions may start child sessions
+    // in other projects. Per-project, edit-mode only, off by default.
+    allowCrossProjectSpawn?: boolean | null;
     // #756 — per-project override of the auto-return round cap. `null`
     // means "use the install default" — the modal sends `null` when the
     // field is left blank, never `0` (the API rejects a cap below 1).
@@ -103,6 +106,7 @@ interface CreateProjectModalProps {
   initialDefaultReviewAgent?: string | null;
   initialMergeOnApprove?: boolean | null;
   initialAutoApprove?: boolean | null;
+  initialAllowCrossProjectSpawn?: boolean | null;
   initialMaxAutoReturnRounds?: number | null;
   initialConventionalCommitTitles?: boolean | null;
   initialAutoTagRelease?: boolean | null;
@@ -161,6 +165,7 @@ export function CreateProjectModal({
   initialDefaultReviewAgent = null,
   initialMergeOnApprove = null,
   initialAutoApprove = null,
+  initialAllowCrossProjectSpawn = null,
   initialMaxAutoReturnRounds = null,
   initialConventionalCommitTitles = null,
   initialAutoTagRelease = null,
@@ -188,6 +193,9 @@ export function CreateProjectModal({
   );
   const [mergeOnApprove, setMergeOnApprove] = useState(initialMergeOnApprove ?? false);
   const [autoApprove, setAutoApprove] = useState(initialAutoApprove ?? false);
+  const [allowCrossProjectSpawn, setAllowCrossProjectSpawn] = useState(
+    initialAllowCrossProjectSpawn ?? false,
+  );
   // String state, not number — an empty field means "use the install
   // default" (sent as `null`, never `0`/NaN), and a controlled number
   // input can't natively represent "no value typed yet" the way a string
@@ -409,6 +417,7 @@ export function CreateProjectModal({
           : undefined,
         mergeOnApprove: isEdit ? mergeOnApprove : undefined,
         autoApprove: isEdit ? autoApprove : undefined,
+        allowCrossProjectSpawn: isEdit ? allowCrossProjectSpawn : undefined,
         maxAutoReturnRounds: isEdit
           ? unlimitedRounds
             ? 0
@@ -836,6 +845,25 @@ export function CreateProjectModal({
             Needs a review agent configured above — no review agent means no verdict, so a task
             never auto-approves. Combined with merge on approve, a task can go from claimed to
             merged with no human click.
+          </span>
+        </label>
+      )}
+
+      {isEdit && (
+        <label className="create-modal-field">
+          <span className="create-modal-field-label">Coordinator</span>
+          <label className="create-modal-dir-confirm-checkbox">
+            <input
+              type="checkbox"
+              checked={allowCrossProjectSpawn}
+              onChange={(e) => setAllowCrossProjectSpawn(e.target.checked)}
+            />
+            This project coordinates: its sessions may start child sessions in other projects
+          </label>
+          <span className="create-modal-field-hint">
+            Off by default. A child runs in the target project's repo (on that project's host) and
+            inherits this session's unattended posture, so only turn it on for a project whose
+            sessions you trust to drive your other projects.
           </span>
         </label>
       )}

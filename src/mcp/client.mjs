@@ -423,6 +423,7 @@ export class MullionClient {
   async spawnChildSession({
     command,
     name,
+    project,
     cwd,
     host,
     platform,
@@ -437,6 +438,10 @@ export class MullionClient {
   } = {}) {
     const body = { command };
     if (name !== undefined) body.name = name;
+    // Issue #2110 — spawn in another project (the caller's project must be a
+    // coordinator; the server enforces it). Sent as `project`, which the
+    // socket op resolves — NOT `projectId`, which it deliberately ignores.
+    if (project !== undefined) body.project = project;
     if (cwd !== undefined) body.cwd = cwd;
     // Issue #1951 — `host`/`platform` are the agent-facing names; the wire
     // fields (POST /api/sessions) are `targetHostId`/`targetPlatform`.
@@ -472,6 +477,28 @@ export class MullionClient {
       }
       return this.controlRequest("sessions.spawn_child", {
         ...body,
+        parentSessionId: this.ownSessionId,
+      });
+    }
+  }
+
+  /** Issue #2110 — the projects the calling session (or `sessionId`, at full
+   * scope) may spawn a child in. Same own-session fallback as
+   * listChildSessions below. */
+  async listSpawnTargets(sessionId) {
+    if (sessionId !== undefined) {
+      return this.controlRequest("projects.spawn_targets", { parentSessionId: sessionId });
+    }
+    try {
+      return await this.controlRequest("projects.spawn_targets", {});
+    } catch (err) {
+      if (
+        !isMissingIdError(err, "'parentSessionId' is required") ||
+        this.ownSessionId === undefined
+      ) {
+        throw err;
+      }
+      return this.controlRequest("projects.spawn_targets", {
         parentSessionId: this.ownSessionId,
       });
     }

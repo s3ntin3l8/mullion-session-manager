@@ -22,7 +22,7 @@ import { SocketChannel, WRITE_HARD_CEILING_BYTES } from "../services/socket-chan
 import { reclaimSocketPath } from "../services/unix-socket.js";
 import { isPipePath } from "../cli/ipc-path.mjs";
 import { eq } from "drizzle-orm";
-import { sessions } from "../db/schema.js";
+import { projects, sessions } from "../db/schema.js";
 import type { SessionSeverity, SessionStatus } from "../shared/types.js";
 import { compileOutputMatcher } from "../services/output-wait.js";
 import {
@@ -196,6 +196,49 @@ const SESSION_SPAWN_CHILD_FIELDS: readonly string[] = [
   "targetPlatform",
   "isolate",
 ];
+
+/**
+ * Issue #2110 — resolves the `project` a coordinator named for a cross-project
+ * spawn: a project id (a number, or a string of digits) or an EXACT project
+ * name. Unknown -> 404; a name that matches more than one project -> 409, asking
+ * for the id (project names are not unique).
+ */
+function resolveSpawnTarget(
+  app: FastifyInstance,
+  ref: unknown,
+): { ok: true; id: number } | { ok: false; reply: ReplyPayload } {
+  const bad = (status: number, error: string) => ({
+    ok: false as const,
+    reply: { ok: false as const, status, error },
+  });
+  if (typeof ref === "number" || (typeof ref === "string" && /^\d+$/.test(ref.trim()))) {
+    const id = Number(ref);
+    const [row] = app.db.select().from(projects).where(eq(projects.id, id)).all();
+    return row ? { ok: true, id: row.id } : bad(404, `unknown project ${id}`);
+  }
+  if (typeof ref !== "string" || ref.trim() === "") {
+    return bad(400, "'project' must be a project id or an exact project name");
+  }
+  const rows = app.db.select().from(projects).where(eq(projects.name, ref)).all();
+  if (rows.length === 0) return bad(404, `unknown project "${ref}"`);
+  if (rows.length > 1) {
+    return bad(
+      409,
+      `more than one project is named "${ref}" (ids ${rows.map((r) => r.id).join(", ")}); pass the id`,
+    );
+  }
+  return { ok: true, id: rows[0]!.id };
+}
+
+const CROSS_PROJECT_DISABLED =
+  "this session's project is not allowed to spawn children in other projects " +
+  "(turn on 'This project coordinates' in Edit project)";
+
+/** Whether `projectId` is a coordinator project (projects.allowCrossProjectSpawn). */
+function projectCoordinates(app: FastifyInstance, projectId: number): boolean {
+  const [row] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+  return row?.allowCrossProjectSpawn === true;
+}
 
 function send(socket: net.Socket, message: { id: number | null } & Record<string, unknown>): void {
   if (!socket.writable) return;
@@ -1377,7 +1420,8 @@ export const OPS: Record<string, OpSpec> = {
   // sessions.create's full-scope-only restriction above ("an agent inside a
   // session has no business spawning an UNRELATED one" — a same-project
   // child of the caller's own session is precisely the case that leaves
-  // open). Same-project and one-level-of-nesting are enforced in
+  // open). Same-project (unless the parent's project is a coordinator, #2110)
+  // and one-level-of-nesting are enforced in
   // createSessionRecord (services/session-lifecycle.ts), not here — this handler's
   // only job is resolving WHICH session is the parent, deriving that
   // parent's own project via a real GET (never trusting a body-supplied
@@ -1420,10 +1464,43 @@ export const OPS: Record<string, OpSpec> = {
         sessionId: _sessionId,
         parentSessionId: _parentSessionId,
         projectId: _projectId,
+        // Issue #2110 — read below; never forwarded (the forwarded projectId is
+        // the resolved target, set explicitly).
+        project: projectRef,
         worktree: _worktree,
         worktreeRefresh: _worktreeRefresh,
         ...fullRest
       } = body ?? {};
+      // Issue #2110 — a coordinator names the project to spawn into. Staying
+      // in the parent's own project needs no permission; any OTHER project
+      // needs the parent's project to be a coordinator. createSessionRecord's
+      // validateParent enforces the same rule again for every caller.
+      let childProjectId = parentProjectId;
+      if (projectRef !== undefined && projectRef !== null) {
+        if (!projectCoordinates(app, parentProjectId)) {
+          // Not a coordinator. The only `project` accepted is the parent's OWN
+          // id (a no-op); anything else is the same 403 whether or not such a
+          // project exists, decided BEFORE any lookup, so a session without the
+          // setting cannot use the 404/403/409 difference to probe which
+          // projects and names exist.
+          const ownRef =
+            typeof projectRef === "number" ||
+            (typeof projectRef === "string" && /^\d+$/.test(projectRef.trim()))
+              ? Number(projectRef)
+              : Number.NaN;
+          if (ownRef !== parentProjectId) {
+            reply({ ok: false, status: 403, error: CROSS_PROJECT_DISABLED });
+            return;
+          }
+        } else {
+          const target = resolveSpawnTarget(app, projectRef);
+          if (!target.ok) {
+            reply(target.reply);
+            return;
+          }
+          childProjectId = target.id;
+        }
+      }
       // Session scope forwards an explicit ALLOWLIST (#1518), not a denylist:
       // a field newly added to POST /api/sessions' schema (as `env` once was)
       // must not silently widen what a session-scoped caller can set.
@@ -1474,11 +1551,16 @@ export const OPS: Record<string, OpSpec> = {
           : fullRest;
       const payload = {
         ...rest,
-        projectId: parentProjectId,
+        projectId: childProjectId,
         parentSessionId: Number(parent.id),
       };
       app.log.info(
-        { parentSessionId: parent.id, projectId: parentProjectId, scope: conn.scope },
+        {
+          parentSessionId: parent.id,
+          projectId: childProjectId,
+          crossProject: childProjectId !== parentProjectId,
+          scope: conn.scope,
+        },
         "sessions.spawn_child",
       );
       reply(
@@ -2005,6 +2087,45 @@ export const OPS: Record<string, OpSpec> = {
     ["full", "session"],
     onProject((id) => ({ method: "GET", url: `/api/projects/${enc(id)}/actions` })),
   ),
+  // Issue #2110 — the projects a coordinator session may spawn a child in:
+  // `{ id, name, hostId }` for every OTHER project, so it can name one in
+  // `sessions.spawn_child`'s `project`. Only for a session whose own project is
+  // a coordinator (403 otherwise) — `projects.list` stays full-scope, and a
+  // session that cannot spawn elsewhere has no use for the list. The caller's
+  // own project is left out (spawning there needs no `project`).
+  "projects.spawn_targets": {
+    scopes: ["full", "session"],
+    handler: async ({ app, conn, body, reply }) => {
+      const caller = resolveParentSessionId(conn, body);
+      if (!caller.ok) {
+        reply(caller.reply);
+        return;
+      }
+      if (conn.scope === "session" && !sessionRowIsActive(app, caller.id)) {
+        reply({ ok: false, status: 403, error: "the session is no longer active" });
+        return;
+      }
+      const own = app.db
+        .select({ projectId: sessions.projectId })
+        .from(sessions)
+        .where(eq(sessions.id, Number(caller.id)))
+        .get();
+      if (!own) {
+        reply({ ok: false, status: 404, error: `unknown session ${caller.id}` });
+        return;
+      }
+      if (own.projectId === null || !projectCoordinates(app, own.projectId)) {
+        reply({ ok: false, status: 403, error: CROSS_PROJECT_DISABLED });
+        return;
+      }
+      const targets = app.db
+        .select({ id: projects.id, name: projects.name, hostId: projects.hostId })
+        .from(projects)
+        .all()
+        .filter((p) => p.id !== own.projectId);
+      reply({ ok: true, status: 200, result: targets });
+    },
+  },
   // Full scope only, per the plan's per-scope allowlist — unlike
   // projects.actions above, dock controls are an operator-facing concept
   // (persistent monitors toggled from the dashboard), not something an

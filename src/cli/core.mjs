@@ -677,11 +677,14 @@ const SESSION_CREATE_SPEC = {
   kind: "string",
   "skip-permissions": "boolean",
 };
-// Phase 5 (Track B, issue #193 5.3b) — no `--project` flag, unlike
-// SESSION_CREATE_SPEC: sessions.spawn_child always derives the project from
-// the parent session (either the pinned connection or `--parent`), never
-// from a caller-supplied id.
+// Phase 5 (Track B, issue #193 5.3b) — sessions.spawn_child derives the
+// project from the parent session (either the pinned connection or
+// `--parent`), never from a caller-supplied `projectId`. Issue #2110 adds an
+// explicit `--project <id|name>` for a COORDINATOR project's sessions: the
+// server refuses it unless the parent's project allows cross-project spawns,
+// so the flag grants nothing by itself.
 const SESSION_SPAWN_CHILD_SPEC = {
+  project: "string",
   open: "string",
   parent: "string",
   command: "string",
@@ -933,10 +936,11 @@ const sessionCommands = {
     const result = await client.request("sessions.kill", body);
     return { json: result };
   },
-  // Phase 5 (Track B, issue #193 5.3b) — no --project flag (see
-  // SESSION_SPAWN_CHILD_SPEC's own comment): the project is always derived
-  // from the parent session. --parent defaults to the current --session
-  // when omitted, matching sessions.spawn_child's own session-scope default.
+  // Phase 5 (Track B, issue #193 5.3b) — the project is derived from the
+  // parent session unless --project names another one (issue #2110, see
+  // SESSION_SPAWN_CHILD_SPEC's own comment). --parent defaults to the current
+  // --session when omitted, matching sessions.spawn_child's own session-scope
+  // default.
   "spawn-child": async (client, args, opts, io) => {
     const { flags } = extractFlags(args, SESSION_SPAWN_CHILD_SPEC);
     if (flags.command === undefined) throw new CliUsageError("--command is required");
@@ -944,6 +948,7 @@ const sessionCommands = {
     const parentId = flags.parent ?? opts.session;
     if (parentId !== undefined) body.parentSessionId = parentId;
     if (flags.name !== undefined) body.name = flags.name;
+    if (flags.project !== undefined) body.project = flags.project;
     if (flags.cwd !== undefined) body.cwd = flags.cwd;
     if (flags.host !== undefined) body.targetHostId = flags.host;
     if (flags.platform !== undefined) body.targetPlatform = flags.platform;
@@ -1070,6 +1075,28 @@ const projectCommands = {
   async actions(client, args) {
     const body = args[0] !== undefined ? { projectId: args[0] } : {};
     const result = await client.request("projects.actions", body);
+    return { json: result };
+  },
+  // Issue #2110 — the projects this session may pass to `session spawn-child
+  // --project`. Only a coordinator project's sessions get an answer. The
+  // session defaults to the current --session, then to MULLION_SESSION_ID
+  // (same fallback as spawn-child).
+  async targets(client, args, opts, io) {
+    const parentId = args[0] ?? opts.session;
+    if (parentId !== undefined) {
+      const result = await client.request("projects.spawn_targets", {
+        parentSessionId: parentId,
+      });
+      return { json: result };
+    }
+    const result = await requestOwnSessionFallback(
+      client,
+      "projects.spawn_targets",
+      {},
+      io,
+      "'parentSessionId' is required",
+      (ownId) => ({ parentSessionId: ownId }),
+    );
     return { json: result };
   },
   async dock(client, args) {
@@ -1884,7 +1911,7 @@ Commands:
   browser navigate|click|fill|type|press|select|check|uncheck|hover|
           scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors|
           download
-  project list|actions|dock|tooling
+  project list|actions|targets|dock|tooling
   preview create|get|delete|list
   dock start|stop|list
   device list|create|pair|pair-and-connect|discovered|connect|start|stop|delete|screenshot|tap|swipe|text|key|logcat|clipboard

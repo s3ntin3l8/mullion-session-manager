@@ -625,6 +625,7 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       defaultReviewAgent: null,
       mergeOnApprove: false,
       autoApprove: false,
+      allowCrossProjectSpawn: false,
       maxAutoReturnRounds: null,
       conventionalCommitTitles: false,
       autoTagRelease: false,
@@ -666,6 +667,7 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       defaultReviewAgent: null,
       mergeOnApprove: false,
       autoApprove: false,
+      allowCrossProjectSpawn: false,
       maxAutoReturnRounds: null,
       conventionalCommitTitles: true,
       autoTagRelease: false,
@@ -707,6 +709,7 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       defaultReviewAgent: null,
       mergeOnApprove: false,
       autoApprove: false,
+      allowCrossProjectSpawn: false,
       maxAutoReturnRounds: null,
       conventionalCommitTitles: false,
       autoTagRelease: true,
@@ -749,6 +752,7 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       defaultReviewAgent: null,
       mergeOnApprove: true,
       autoApprove: true,
+      allowCrossProjectSpawn: false,
       maxAutoReturnRounds: null,
       conventionalCommitTitles: false,
       autoTagRelease: false,
@@ -832,6 +836,59 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
     expect(screen.getByRole("checkbox", { name: "Unlimited" })).toBeChecked();
     await user.click(screen.getByRole("button", { name: "Save changes" }));
     expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ maxAutoReturnRounds: 0 }));
+  });
+
+  // Issue #2110 — the coordinator checkbox: edit mode only, off by default.
+  it("passes allowCrossProjectSpawn through to onCreate, toggled on (#2110)", async () => {
+    vi.mocked(api.listProjectActions).mockResolvedValue([]);
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    const user = userEvent.setup();
+
+    render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        projectId={1}
+        onClose={vi.fn()}
+        onCreate={onCreate}
+      />,
+    );
+
+    const box = screen.getByRole("checkbox", { name: /This project coordinates/ });
+    expect(box).not.toBeChecked();
+    await user.click(box);
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    expect(onCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ allowCrossProjectSpawn: true }),
+    );
+  });
+
+  it("pre-fills the coordinator checkbox from the project, and hides it when creating (#2110)", () => {
+    vi.mocked(api.listProjectActions).mockResolvedValue([]);
+    const { unmount } = render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        projectId={1}
+        initialAllowCrossProjectSpawn={true}
+        onClose={vi.fn()}
+        onCreate={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+    expect(screen.getByRole("checkbox", { name: /This project coordinates/ })).toBeChecked();
+    unmount();
+
+    render(
+      <CreateProjectModal
+        mode="create"
+        onClose={vi.fn()}
+        onCreate={vi.fn().mockResolvedValue(undefined)}
+      />,
+    );
+    expect(screen.queryByRole("checkbox", { name: /This project coordinates/ })).toBeNull();
   });
 
   it("pre-fills mergeOnApprove/autoApprove from the project's current values", () => {
@@ -1134,6 +1191,7 @@ describe("CreateProjectModal — confirm-first directory creation and error hand
       defaultReviewAgent: null,
       mergeOnApprove: false,
       autoApprove: false,
+      allowCrossProjectSpawn: false,
       maxAutoReturnRounds: null,
       conventionalCommitTitles: false,
       autoTagRelease: false,

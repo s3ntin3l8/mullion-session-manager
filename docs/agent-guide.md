@@ -276,14 +276,28 @@ apply — you're at full scope like everything else in that mode.
 Unlike a dock control or `session create`, `spawn_child_session` (MCP) /
 `mullion session spawn-child --command <cmd>` (CLI) **is** reachable at
 session scope — it spawns a real child session (its own PTY, own terminal)
-of the session you're running inside, in the same project. You never need to
-name a project or your own session id; both are derived automatically. A
+of the session you're running inside, in the same project by default. You never
+need to name your own session id, and normally not a project either; both are
+derived automatically. (A coordinator project's sessions can name another project
+with `--project`; see the paragraph below.) A
 hard cap on how many live children you can have open at once applies
 (ask a human to raise `settings.sessions.maxChildSessionsPerParent` in
 Settings → Sessions if you hit it); `cwd`, if you override it, must stay
 inside the project directory — or be another registered git worktree of the
 project's own repo (`git worktree list`), e.g. a sibling `repo-pr408` checkout.
-Any other outside path is rejected (400 `cwd-outside-project`). A spawned child's panel does not open on its
+Any other outside path is rejected (400 `cwd-outside-project`).
+
+**Spawning in another project (a coordinator).** If your project is a _coordinator_ —
+a human turned on "This project coordinates" in Edit project, off by default — you may
+start a child in a different project: `mullion project targets` (MCP
+`list_spawn_targets`) lists the projects you can name, and `mullion session
+spawn-child --project <id|name> ...` (MCP `spawn_child_session` with `project`)
+spawns there. A name shared by several projects is a 409 (pass the id), an unknown
+one a 404, and a project that is not a coordinator gets a 403 naming the setting.
+`cwd`, `isolate` and `--host`/`--platform` then refer to the _target_ project (its
+directory, its checkouts on other hosts), the child is still your child (`children`,
+`wait`, `prompt`, `kill` work), and it inherits your unattended posture exactly as a
+same-project child does. A spawned child's panel does not open on its
 own unless the spawn carries `open: "right"|"below"` (CLI `--open`; only a hint —
 dropped if your panel isn't open in the human's current workspace within about a minute) or a human has separately turned on "Auto-open child session panels"
 (`settings.sessions.autoOpenChildPanels`, Settings → Sessions, default off) —

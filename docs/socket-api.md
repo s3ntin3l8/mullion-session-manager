@@ -454,9 +454,23 @@ OF ITSELF (never of an unrelated session) by calling
 `parentSessionId` at all — it defaults to, and can never be overridden away
 from, the connection's own pinned session. Full scope must instead pass
 `body.parentSessionId` explicitly (there's no pinned session to default to).
-`body.projectId` is never read from the caller in either scope — it's always
+`body.projectId` is never read from the caller in either scope — it's
 derived server-side from the resolved parent session's own project, via a
-real `GET /api/sessions/:id`, never trusted from the request. `body.open` (`"right"` | `"below"`, issue #1624) is stored as the child row's advisory `openHint`: the frontend opens the child's panel beside its parent's (even with the auto-open-child-panels setting off) the first time it sees the child; the backend never touches `workspaces.layout`. The rest of
+real `GET /api/sessions/:id`, never trusted from the request. The ONE way to put
+the child in another project is `body.project` (issue #2110): a project id or an
+exact project name, honoured only when the parent's project is a **coordinator**
+(`projects.allowCrossProjectSpawn`, the "This project coordinates" checkbox in Edit
+project; off by default) — otherwise `403` naming the setting. An unknown id or name
+is `404`, a name shared by several projects is `409` listing the ids, a blank or
+non-string/number value `400`. A value made only of digits is always read as an id, so a project
+named "2024" can be addressed by its id only. A session whose project is NOT a coordinator gets
+the same `403` for any other project, existing or not (decided before any lookup, so it cannot
+be used to probe which projects exist). Naming the parent's own project needs no permission.
+The resolved id is what is forwarded as `projectId`, and `cwd`, `isolate` and
+`targetHostId`/`targetPlatform` are then evaluated against that **target** project.
+The `projects.spawn_targets` op (session or full scope; full scope names the session in
+`body.parentSessionId`) lists `{id, name, hostId}` of every other project for a
+coordinator's session and is `403` for any other. `body.open` (`"right"` | `"below"`, issue #1624) is stored as the child row's advisory `openHint`: the frontend opens the child's panel beside its parent's (even with the auto-open-child-panels setting off) the first time it sees the child; the backend never touches `workspaces.layout`. The rest of
 `body` (`command` required; optional `name`/`cwd`/`kind`/`skipPermissions`/
 `env`/`seedPrompt`/`model`/`smallModel`/`targetHostId`/`targetPlatform`/`isolate`) maps onto `POST /api/sessions`; the last three (issue #1951) run the child on a chosen host id or platform and, with `isolate`, in a server-chosen worktree on that host — `POST /api/sessions` answers 409 when no eligible host matches and 400 for `isolate` with `cwd`/`worktree` or both targets, and all three are forwarded at session scope;
 `worktree`/`worktreeRefresh` are stripped even if present, since a child
@@ -488,8 +502,9 @@ session has, which is what made stripping it necessary in the first place
 (PR #426). The cap is applied server-side in the `sessions.spawn_child`
 handler, where the connection's scope and the parent's row are both in hand.
 Server-side validation (not just this op's own scope check) additionally
-enforces: the parent must be in the target project (always true here,
-since the project IS derived from the parent), the parent must not itself
+enforces: the parent must be in the target project — or the parent's project
+must be a coordinator (#2110; checked here too, so a direct full-scope
+`POST /api/sessions` with `parentSessionId` is bound by the same rule) — the parent must not itself
 be a child (one level of nesting only), `cwd` must resolve inside the
 project directory **or be a directory that's itself a registered git
 worktree of the project's own repository** (`isSiblingWorktreeCwd`, issue

@@ -4891,6 +4891,79 @@ describe("sessions route", () => {
       await app.close();
     });
 
+    // Issue #2110 — the one exception to "same project": a parent whose project
+    // is a coordinator (projects.allowCrossProjectSpawn). The rule lives in the
+    // lifecycle, so a direct POST /api/sessions is bound by it too.
+    it("accepts a parentSessionId from a different project when that project is a coordinator (#2110)", async () => {
+      const app = await buildApp();
+      const coordinator = await createProject(app);
+      const target = await createProject(app);
+      const parent = await createActiveSession(app, coordinator);
+      const patch = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${coordinator}`,
+        payload: { allowCrossProjectSpawn: true },
+      });
+      expect(patch.statusCode).toBe(200);
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: target, command: "bash", parentSessionId: parent },
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.json()).toMatchObject({ projectId: target, parentSessionId: parent });
+
+      await app.close();
+    });
+
+    it("the coordinator flag belongs to the PARENT's project, not the target's (#2110)", async () => {
+      const app = await buildApp();
+      const coordinator = await createProject(app);
+      const target = await createProject(app);
+      const parentInTarget = await createActiveSession(app, target);
+      await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${coordinator}`,
+        payload: { allowCrossProjectSpawn: true },
+      });
+
+      // The flag is on `coordinator`, but the parent lives in `target`.
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: coordinator, command: "bash", parentSessionId: parentInTarget },
+      });
+
+      expect(res.statusCode).toBe(400);
+
+      await app.close();
+    });
+
+    it("still 400s a cross-project parent that is itself a child, even for a coordinator (#2110)", async () => {
+      const app = await buildApp();
+      const coordinator = await createProject(app);
+      const target = await createProject(app);
+      const grandparent = await createActiveSession(app, coordinator);
+      const parent = await createActiveSession(app, coordinator, { parentSessionId: grandparent });
+      await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${coordinator}`,
+        payload: { allowCrossProjectSpawn: true },
+      });
+
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId: target, command: "bash", parentSessionId: parent },
+      });
+
+      expect(res.statusCode).toBe(400);
+
+      await app.close();
+    });
+
     it("400s spawning a child of a session that is ITSELF a child — one level of nesting only", async () => {
       const app = await buildApp();
       const projectId = await createProject(app);

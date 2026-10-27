@@ -43,6 +43,7 @@ function makeProject(overrides: Partial<Project>): Project {
     defaultReviewAgent: null,
     mergeOnApprove: null,
     autoApprove: null,
+    allowCrossProjectSpawn: null,
     maxAutoReturnRounds: null,
     conventionalCommitTitles: null,
     autoTagRelease: null,

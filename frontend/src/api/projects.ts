@@ -76,6 +76,7 @@ export const projectsApi = {
         | "defaultReviewAgent"
         | "mergeOnApprove"
         | "autoApprove"
+        | "allowCrossProjectSpawn"
         | "maxAutoReturnRounds"
         | "conventionalCommitTitles"
         | "autoTagRelease"

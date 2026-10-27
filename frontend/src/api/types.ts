@@ -325,6 +325,9 @@ export interface Project {
   // Needs a review agent configured (defaultReviewAgent above) to ever
   // produce a verdict at all. Mirrors projects.autoApprove.
   autoApprove: boolean | null;
+  // #2110 — a "coordinator" project: its sessions may spawn child sessions in
+  // other projects. Null/false = off. Mirrors projects.allowCrossProjectSpawn.
+  allowCrossProjectSpawn: boolean | null;
   // #756 — per-project override of the auto-return round cap. Null means
   // "use the install-wide taskMaster.maxAutoReturnRounds" (default 10); 0
   // means unlimited. Mirrors projects.maxAutoReturnRounds.

@@ -1115,6 +1115,43 @@ describe("projects route", () => {
       await app.close();
     });
 
+    // Issue #2110 — the coordinator flag: per-project, default off, settable
+    // and clearable through PATCH, and valid as the ONLY field in a PATCH.
+    it("sets, then clears, allowCrossProjectSpawn — off by default (#2110)", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "coordinator-flag", cwd: "/tmp/coordinator-flag" },
+      });
+      const { id } = created.json();
+      expect(created.json().allowCrossProjectSpawn).toBeNull();
+
+      const set = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { allowCrossProjectSpawn: true },
+      });
+      expect(set.statusCode).toBe(200);
+      expect(set.json().allowCrossProjectSpawn).toBe(true);
+
+      const cleared = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { allowCrossProjectSpawn: false },
+      });
+      expect(cleared.json().allowCrossProjectSpawn).toBe(false);
+
+      const bad = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { allowCrossProjectSpawn: "yes" },
+      });
+      expect(bad.statusCode).toBe(400);
+
+      await app.close();
+    });
+
     // Regression guard for the "nothing maps to a column" 400 check
     // (routes/projects.ts) — a PATCH carrying ONLY one of these two new
     // fields must not fall through to `.update(projects).set({})`, which
