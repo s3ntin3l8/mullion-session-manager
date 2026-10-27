@@ -10,6 +10,7 @@ import type {
   CreateProjectPlacementOptions,
   CreateProjectResult,
   DiscoveredProject,
+  HostCheckoutSuggestion,
   PlacementPreview,
   ProjectUrl,
   AgentRuleTarget,
@@ -102,6 +103,11 @@ export const projectsApi = {
     request<DiscoveredProject[]>(
       `/api/projects/discover${hostId ? `?hostId=${encodeURIComponent(hostId)}` : ""}`,
     ),
+
+  // Issue #2090 — where this project already has a clone on other hosts. Read
+  // only: it suggests, nothing is written (the dialog's "Detected: <path> · Use").
+  getHostSuggestions: (projectId: number) =>
+    request<{ hosts: HostCheckoutSuggestion[] }>(`/api/projects/${projectId}/host-suggestions`),
 
   listProjectActions: (projectId: number) =>
     request<Launcher[]>(`/api/projects/${projectId}/actions`),

@@ -222,6 +222,16 @@ The project's own origin is read from its checkout (or, for a project on a remot
 from that host's discovery), so a project whose path is outside its host's project
 roots has no origin to match and gets name matches only.
 
+**In the UI.** Open **Edit project**: a host row with no path shows "Detected on `<host>`:
+`<path>`" as a one-click button (or several, when more than one clone matches; a
+name-only match is labelled "same name only"). Clicking it fills the field; nothing is saved
+until you save the dialog. A path Mullion filled in on its own carries an **auto-detected**
+badge until you save the dialog, which keeps it. Settings → Projects & discovery has the
+**Auto-detect checkouts on other hosts** switch and a **Detect** button that runs the sweep
+on every host now, one host at a time. If the server rate-limits it (that route allows 10 calls a
+minute), it stops, says how many hosts it did not ask and how long to wait, and does not count
+them as unreachable.
+
 **Auto-fill (opt-in).** `settings.autoDetectHostCheckouts` (off by default; Settings →
 Projects & discovery) lets Mullion fill the map in for you: when a host comes online
 (first contact or after being unreachable — an enrolled agent is picked up by the next

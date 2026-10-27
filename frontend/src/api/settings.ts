@@ -144,6 +144,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   tabletPaneCap: 2,
   balancePanesOnDrop: true,
   projectRoots: [],
+  autoDetectHostCheckouts: false,
   externalReadRoots: ["~/.claude/plans", "~/.minimax/v2/sessions"],
   diskCleanup: { cacheDirs: [] },
   launchers: {

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useDashboardStore } from "../../store/index.js";
-import { api } from "../../api/index.js";
-import type { ServerInfo } from "../../api/index.js";
+import { api, RateLimitedError } from "../../api/index.js";
+import type { DetectCheckoutsResult, ServerInfo } from "../../api/index.js";
 import { CloseIcon, FolderIcon, PlusIcon, RefreshIcon } from "../../ui/icons.js";
 import {
   GroupHeading,
@@ -10,10 +10,11 @@ import {
   Row,
   SecondaryButton,
   StyledList,
+  Toggle,
 } from "../../ui/primitives.js";
 
 export function ProjectsSection() {
-  const { settings, updateSettings, projects } = useDashboardStore();
+  const { settings, updateSettings, projects, hosts, refreshProjects } = useDashboardStore();
   const [info, setInfo] = useState<ServerInfo | null>(null);
   const [rescanStatus, setRescanStatus] = useState<string | null>(null);
   const [rescanning, setRescanning] = useState(false);
@@ -24,6 +25,64 @@ export function ProjectsSection() {
       .then(setInfo)
       .catch(() => setInfo(null));
   }, []);
+
+  // Issue #2090 — "Detect now": run the auto-detect sweep on every host.
+  const [detectStatus, setDetectStatus] = useState<string | null>(null);
+  const [detecting, setDetecting] = useState(false);
+
+  const detectNow = async () => {
+    setDetecting(true);
+    setDetectStatus(null);
+    try {
+      // One host at a time. The route's rate limit is ONE shared bucket (10 a
+      // minute) for every host, so a fan-out would trip it on a larger fleet,
+      // and a throttled host is not an unreachable one: say which it was.
+      const results: Array<DetectCheckoutsResult | null> = [];
+      let retryAfterSeconds: number | null = null;
+      for (const h of hosts) {
+        try {
+          results.push(await api.detectHostCheckouts(h.id));
+        } catch (err) {
+          if (err instanceof RateLimitedError) {
+            // The server says how long the bucket takes to refill (and the
+            // window is operator-tunable), so quote that, not a guess.
+            retryAfterSeconds = Math.max(1, Math.ceil(err.retryAfterMs / 1000));
+            break;
+          }
+          results.push(null);
+        }
+      }
+      const throttled = retryAfterSeconds !== null;
+      const notAsked = hosts.length - results.length;
+      const throttledNote = throttled
+        ? `throttled: ${notAsked} host${notAsked === 1 ? "" : "s"} not asked, try again in ${retryAfterSeconds}s`
+        : null;
+      const answered = results.filter((r) => r !== null);
+      if (answered.length === 0) {
+        setDetectStatus(
+          throttled ? `Throttled, try again in ${retryAfterSeconds}s` : "No host answered",
+        );
+      } else if (answered.every((r) => !r.enabled)) {
+        setDetectStatus("Turn on auto-detect first");
+      } else {
+        const added = answered.reduce((n, r) => n + r.added.length, 0);
+        // A host that did not answer, or was offline/parked, must not read as
+        // "nothing to find there".
+        const failed =
+          results.length - answered.length + answered.filter((r) => r.skipped !== undefined).length;
+        const base =
+          added === 0 ? "Nothing new found" : `${added} mapping${added === 1 ? "" : "s"} added`;
+        const notes = [
+          failed === 0 ? null : `${failed} host${failed === 1 ? "" : "s"} unreachable`,
+          throttledNote,
+        ].filter((n) => n !== null);
+        setDetectStatus(notes.length === 0 ? base : `${base} (${notes.join("; ")})`);
+        if (added > 0) void refreshProjects();
+      }
+    } finally {
+      setDetecting(false);
+    }
+  };
 
   const roots = settings.projectRoots;
   const [addingRoot, setAddingRoot] = useState(false);
@@ -188,6 +247,33 @@ export function ProjectsSection() {
           )}
           <SecondaryButton onClick={rescan} disabled={rescanning} icon={<RefreshIcon size={13} />}>
             Rescan
+          </SecondaryButton>
+        </div>
+      </Row>
+
+      <Row
+        label="Auto-detect checkouts on other hosts"
+        desc="When a host comes online, record where each project lives on it, if the host has exactly one clone with the same origin remote. It never overwrites a path you set or a host whose path you removed. Off by default: these paths also decide where a session's children may be sent."
+      >
+        <Toggle
+          on={settings.autoDetectHostCheckouts}
+          onChange={(v) => updateSettings({ autoDetectHostCheckouts: v })}
+        />
+      </Row>
+      <Row
+        label="Detect checkouts now"
+        desc="Look for each project's clone on every online host now (needs the setting above)."
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {detectStatus && (
+            <span style={{ fontSize: "0.71875rem", color: "var(--dim)" }}>{detectStatus}</span>
+          )}
+          <SecondaryButton
+            onClick={() => void detectNow()}
+            disabled={detecting}
+            icon={<RefreshIcon size={13} />}
+          >
+            Detect
           </SecondaryButton>
         </div>
       </Row>
