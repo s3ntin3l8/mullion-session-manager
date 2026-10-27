@@ -436,6 +436,8 @@ describe("DeviceManager", () => {
       });
       // Let the fire-and-forget connect settle so nothing leaks into later tests.
       await waitForStatus(manager, "2", "streaming");
+      // Physical devices have nothing to boot — they skip the boot wait.
+      expect(mockGetprop).not.toHaveBeenCalled();
       await manager.killAll();
     });
 
@@ -1145,12 +1147,15 @@ describe("DeviceManager", () => {
         port: null,
       });
       await waitForStatus(manager, "1", "streaming");
+      const second = vi.fn();
       device.onExit(() => {
         throw new Error("listener blew up");
       });
+      device.onExit(second);
       resolveExit();
       await new Promise((r) => setTimeout(r, 50));
       expect(unhandled).toEqual([]);
+      expect(second).toHaveBeenCalled();
       expect(device.toInfo().error).toMatch(/listener blew up/);
     } finally {
       process.off("unhandledRejection", onUnhandled);
@@ -1172,6 +1177,33 @@ describe("DeviceManager", () => {
     await waitForStatus(manager, "1", "streaming", 8000);
     expect(mockGetprop).toHaveBeenCalledTimes(4);
     expect(mockGetprop).toHaveBeenCalledWith(["getprop", "sys.boot_completed"]);
+  });
+
+  it("the boot timeout names why getprop kept failing (#2127)", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    mockBootReplies = [new Error("device unauthorized")];
+    const real = Date.now;
+    let skew = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => real() + skew);
+    try {
+      const manager = new DeviceManager(baseOpts());
+      await manager.getOrCreate({
+        id: "1",
+        kind: "emulator" as const,
+        avdName: "dev35",
+        serial: null,
+        label: null,
+        port: null,
+      });
+      await vi.waitFor(() => expect(mockGetprop).toHaveBeenCalled());
+      skew = 10 * 60_000;
+      await waitForStatus(manager, "1", "error");
+      expect(manager.get("1")?.toInfo().error).toMatch(
+        /did not finish booting.*device unauthorized/,
+      );
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("spawn() fails with a boot timeout when the emulator never finishes booting (#2127)", async () => {

@@ -768,14 +768,24 @@ export class Device {
     scopeExit?: { error: Error | null },
   ): Promise<void> {
     const deadline = Date.now() + timeoutMs;
+    let lastProbeError: unknown;
     for (;;) {
       if (scopeExit?.error) throw scopeExit.error;
-      const out = await adb.subprocess.noneProtocol
-        .spawnWaitText(["getprop", "sys.boot_completed"])
-        .catch(() => "");
+      let out = "";
+      try {
+        out = await adb.subprocess.noneProtocol.spawnWaitText(["getprop", "sys.boot_completed"]);
+        lastProbeError = undefined;
+      } catch (err) {
+        lastProbeError = err;
+      }
       if (out.trim() === "1") return;
       if (Date.now() > deadline) {
-        throw new Error(`device ${this.serial} did not finish booting within ${timeoutMs}ms`);
+        // Surface why the probe kept failing (offline/unauthorized), not just "timed out".
+        const why =
+          lastProbeError === undefined
+            ? ""
+            : `: ${lastProbeError instanceof Error ? lastProbeError.message : String(lastProbeError)}`;
+        throw new Error(`device ${this.serial} did not finish booting within ${timeoutMs}ms${why}`);
       }
       await sleep(BOOT_POLL_INTERVAL_MS);
     }
@@ -917,7 +927,14 @@ export class Device {
 
   private handleExit(): void {
     this.status = "exited";
-    for (const listener of this.exitListeners) listener();
+    for (const listener of this.exitListeners) {
+      // One throwing listener must not starve the rest (same as pumpClipboard).
+      try {
+        listener();
+      } catch (err) {
+        this.lastError = err instanceof Error ? err.message : String(err);
+      }
+    }
     // Best-effort — an unexpected scrcpy exit (the emulator crashed, adb
     // dropped the connection) must still release the scope/marker/port the
     // same way a deliberate kill() does, or this device id is stuck the
