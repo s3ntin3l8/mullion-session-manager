@@ -55,6 +55,11 @@ export function parseWorkflowChange(raw: string | null): WorkflowChange | null {
   return null;
 }
 
+/** Start of every `unverified` detail, so a later hold can recognise (and
+ * drop) a banner this gate wrote without touching other sync errors. */
+export const WORKFLOW_UNVERIFIED_PREFIX =
+  "Could not verify whether this branch changes .github/workflows/";
+
 /** Why the changed files could not be read. */
 type WorkflowFilesUnknown = "no-base" | "host";
 
@@ -81,8 +86,12 @@ async function listWorkflowFiles(
       { fresh: true },
     );
     // Same rule as the local branch: an unresolvable base made the host diff
-    // `HEAD`, whose empty result must not read as "no workflow changes".
+    // `HEAD`, whose empty result must not read as "no workflow changes". The
+    // flag must be positively `true`: a host agent that predates it omits the
+    // key, and that skew reads as unknown (retried, with "update the host
+    // agent"), never as resolved.
     if (baseResolved === false) return "no-base";
+    if (baseResolved !== true) return "host";
     return stats?.workflowFiles ?? "host";
   } catch {
     return "host";
@@ -117,15 +126,13 @@ export async function evaluateWorkflowGate(
   if (files === "no-base") {
     return {
       kind: "unverified",
-      detail:
-        "Could not verify whether this branch changes .github/workflows/ — the repository has no origin/main or origin/master ref to diff against (fetch the remote; retrying)",
+      detail: `${WORKFLOW_UNVERIFIED_PREFIX} — the repository has no origin/main or origin/master ref to diff against (fetch the remote; retrying)`,
     };
   }
   if (files === "host") {
     return {
       kind: "unverified",
-      detail:
-        "Could not verify whether this branch changes .github/workflows/ — the diff could not be read on its host (retrying; update the host agent if this persists)",
+      detail: `${WORKFLOW_UNVERIFIED_PREFIX} — the diff could not be read on its host (retrying; update the host agent if this persists)`,
     };
   }
   if (files.length === 0) return { kind: "clear" };

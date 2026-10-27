@@ -77,6 +77,7 @@ import {
   evaluateWorkflowGate,
   recordWorkflowHold,
   clearWorkflowHold,
+  WORKFLOW_UNVERIFIED_PREFIX,
   type WorkflowChange,
   type WorkflowGate,
 } from "./task-workflow-gate.js";
@@ -112,9 +113,11 @@ function holdWorkflowChange(
 ): PromoteFailure {
   recordWorkflowHold(app, task.id, change);
   // Not a sync error: this is an expected operator gate, shown by its own
-  // panel from `tasks.workflowChange`. Drop a stale banner from an earlier
-  // unverified attempt so the two do not contradict each other.
-  clearGithubSyncError(app, task.id);
+  // panel from `tasks.workflowChange`. Drop only a banner this gate wrote
+  // itself (an earlier unverified attempt), never an unrelated sync failure.
+  if (task.githubSyncError?.startsWith(WORKFLOW_UNVERIFIED_PREFIX)) {
+    clearGithubSyncError(app, task.id);
+  }
   const detail = `This branch changes ${change.files.join(", ")} — approve the workflow change to push it`;
   return { ok: false, reason: "workflow-approval-required", detail };
 }

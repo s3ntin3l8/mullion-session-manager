@@ -34,6 +34,14 @@ describe("evaluateWorkflowGate on a remote host", () => {
     expect((gate as { detail: string }).detail).toContain("origin/main");
   });
 
+  it("reads a host agent that predates baseResolved as unknown, never clear", async () => {
+    // An old agent omits the key; its unresolved AUTO diffs `HEAD` and reports [].
+    mockResolveGitDiffStats.mockResolvedValue({ isRepo: true, stats: { workflowFiles: [] } });
+    const gate = await evaluateWorkflowGate({} as never, task, "remote-1");
+    expect(gate.kind).toBe("unverified");
+    expect((gate as { detail: string }).detail).toContain("update the host agent");
+  });
+
   it("is clear when the base resolved and no workflow file changed", async () => {
     mockResolveGitDiffStats.mockResolvedValue({
       isRepo: true,
