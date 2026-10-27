@@ -143,6 +143,12 @@ export interface AppSettings {
   // this lets a fresh deploy keep working from its env config until someone
   // actually edits roots from the UI, at which point the DB value wins.
   projectRoots: string[];
+  // Issue #2090 — OPT-IN (default off): when a host comes online, map each
+  // project onto it automatically if the host has exactly ONE clone whose
+  // `origin` matches the project's (never overwriting an entry, never a host
+  // the operator declined). Off by default because `hostCwds` is also where
+  // session-scoped children may be sent. Settings -> Projects & discovery.
+  autoDetectHostCheckouts: boolean;
   // Folders OUTSIDE any project the file viewer may open read-only (an agent
   // CLI's plan/artifact dirs, e.g. ~/.claude/plans). Absolute or `~/`-prefixed
   // directory prefixes; keep them narrow — never a whole CLI dot-dir, which
@@ -739,6 +745,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   tabletPaneCap: 2,
   balancePanesOnDrop: true,
   projectRoots: [],
+  autoDetectHostCheckouts: false,
   externalReadRoots: ["~/.claude/plans", "~/.minimax/v2/sessions"],
   diskCleanup: { cacheDirs: [] },
   launchers: {

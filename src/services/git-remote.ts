@@ -55,6 +55,19 @@ function parseRemoteUrl(url: string): GitHubRepoRef | null {
  * "no GitHub repo here" as a missing one.
  */
 export function parseGitRemote(cwd: string): GitHubRepoRef | null {
+  const url = readOriginUrl(cwd);
+  return url === null ? null : parseRemoteUrl(url);
+}
+
+/**
+ * Reads `<cwd>/.git/config` and returns `[remote "origin"]`'s raw `url`, or
+ * `null` for a missing config, no `origin` remote, or an unreadable file.
+ * Never throws. Unlike parseGitRemote this keeps ANY host (GitLab, GHE, ssh://,
+ * a self-hosted forge) — issue #2090 matches a project's checkout on another
+ * host by comparing normalised origins. A worktree or submodule (`.git` is a
+ * FILE) has no `.git/config` here and reads as null.
+ */
+export function readOriginUrl(cwd: string): string | null {
   // `cwd` here is always meant to be an already-resolved absolute directory
   // (a project's own `cwd` column, or an agent-side value already passed
   // through resolveWithinRoots — see routes/projects.ts and
@@ -84,6 +97,54 @@ export function parseGitRemote(cwd: string): GitHubRepoRef | null {
   if (!sectionMatch) return null;
   const urlMatch = sectionMatch[1].match(/^\s*url\s*=\s*(.+)$/m);
   if (!urlMatch) return null;
+  const url = urlMatch[1].trim();
+  return url === "" ? null : url;
+}
 
-  return parseRemoteUrl(urlMatch[1].trim());
+// scp-like `[user@]host:path` (not `host://…`), as `git@github.com:o/r.git`.
+const SCP_REMOTE = /^(?:[^@/\s]+@)?([^:/\s]+):(?!\/\/)(.+)$/;
+
+/**
+ * Normalises a git remote URL to `host/path` so the SAME repository compares
+ * equal however it is spelled: `git@github.com:o/r.git`,
+ * `https://user@GitHub.com/o/r`, `ssh://git@github.com:22/o/r.git/` all
+ * become `github.com/o/r`. Host and path are lower-cased (a forge that treats
+ * two repos differing only by case as distinct is not worth the false
+ * negatives), userinfo, port, a trailing `.git` and slashes are dropped.
+ * Returns null for anything that is not a network remote with an `owner/repo`
+ * style path — a local path, `file://`, an empty or unparseable value — since
+ * those cannot identify the same repository on another host.
+ */
+export function normalizeGitRemote(raw: string): string | null {
+  const url = raw.trim();
+  if (url === "") return null;
+
+  let host: string;
+  let pathPart: string;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return null;
+    }
+    if (parsed.protocol === "file:") return null;
+    host = parsed.hostname;
+    pathPart = decodeURIComponent(parsed.pathname);
+  } else {
+    const scp = url.match(SCP_REMOTE);
+    // A one-letter "host" is a Windows drive (`C:\repo`), not a remote.
+    if (!scp || scp[1].length < 2) return null;
+    host = scp[1];
+    pathPart = scp[2];
+  }
+
+  const cleaned = pathPart
+    .replace(/\\/g, "/")
+    .replace(/\/{2,}/g, "/")
+    .replace(/^\/+|\/+$/g, "")
+    .replace(/\.git$/i, "")
+    .replace(/\/+$/g, "");
+  if (host === "" || cleaned === "") return null;
+  return `${host.toLowerCase()}/${cleaned.toLowerCase()}`;
 }

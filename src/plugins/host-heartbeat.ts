@@ -1,6 +1,7 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import { startHostHeartbeat } from "../services/host-heartbeat.js";
+import { autoFillHostCwds } from "../services/host-checkout-detect.js";
 
 // Primary-only, same role gate as githubPRPollerPlugin/gitFetcherPlugin —
 // an agent has no `hosts` table to sweep (see src/app.ts's agent branch).
@@ -34,8 +35,17 @@ export const hostHeartbeatPlugin = fp(async (app: FastifyInstance) => {
     app.reconfigureSshAgentFanout?.({ forceReconnect: [hostId] });
   }
 
+  // Issue #2090 — a host coming online is when the opt-in "map projects onto
+  // this host's matching clones" sweep runs. Fire-and-forget: it is
+  // best-effort bookkeeping and must never hold up (or fail) the heartbeat.
+  function onHostOnline(hostId: string): void {
+    void autoFillHostCwds(app, { hostId }).catch((err: unknown) => {
+      app.log.warn({ err, hostId }, "[host-heartbeat] auto-detecting checkouts failed");
+    });
+  }
+
   app.addHook("onReady", () => {
-    cleanup = startHostHeartbeat(app, undefined, undefined, onHostRecovered);
+    cleanup = startHostHeartbeat(app, undefined, undefined, onHostRecovered, onHostOnline);
   });
 
   app.addHook("onClose", () => {

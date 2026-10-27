@@ -6,12 +6,18 @@ import { projects, sessions, tasks, webhookRegistrations } from "../db/schema.js
 import {
   discoverCandidates,
   expandHome,
-  parseProjectsRootsEnv,
   resolveProjectActions,
   resolveProjectDock,
   type DiscoveredCandidate,
 } from "../services/project-config.js";
 import { getStoredSettings } from "../services/settings.js";
+import { resolveProjectRoots } from "../services/project-roots.js";
+import {
+  metaAfterOperatorSave,
+  parseHostCwdsMeta,
+  serializeHostCwdsMeta,
+} from "../services/host-cwds-meta.js";
+import { detectCheckouts } from "../services/host-checkout-detect.js";
 import { KNOWN_AGENTS } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { LOCAL_HOST_ID, getHostRow } from "../services/host-registry.js";
@@ -441,23 +447,6 @@ function parseDevServerTarget(value: string): { port: number; scheme: "http" | "
 // which patches this same column via the same validation rule.
 export function isValidDevServerUrl(value: string): boolean {
   return parseDevServerTarget(value) !== null;
-}
-
-/**
- * Resolve the effective set of scan roots: settings.projectRoots (edited
- * from Settings -> Projects & discovery) wins when non-empty; an empty
- * settings array falls back to the deploy-time PROJECTS_ROOTS env var, so a
- * fresh install keeps working from its env config until someone actually
- * edits roots from the UI. DB-backed, so only meaningful on the primary —
- * an "agent" role (issue #26) has no settings and always uses
- * parseProjectsRootsEnv(app.config.PROJECTS_ROOTS) directly instead (see
- * routes/internal.ts).
- */
-function resolveProjectRoots(app: FastifyInstance): string[] {
-  const projectRoots = getStoredSettings(app.db).projectRoots;
-  if (projectRoots.length > 0) return projectRoots.map(expandHome);
-
-  return parseProjectsRootsEnv(app.config.PROJECTS_ROOTS);
 }
 
 /** Shared by every `?ids=`/`?sessionIds=` batch query param below (git-
@@ -1179,6 +1168,9 @@ export async function projectsRoute(app: FastifyInstance) {
           // accepts, so the client never has to know the column's
           // encoding).
           hostCwds: { ...parseHostCwds(row.hostCwds) },
+          // Issue #2090 — which entries were auto-detected, which hosts the
+          // operator declined: an OBJECT on the way out, like hostCwds.
+          hostCwdsMeta: parseHostCwdsMeta(row.hostCwdsMeta),
           currentBranch,
           ruleFiles,
           conventionsDrifted,
@@ -1243,6 +1235,22 @@ export async function projectsRoute(app: FastifyInstance) {
         isRegistered: registeredCwds.has(c.cwd),
       }));
       return discovered;
+    },
+  );
+
+  // Issue #2090 — where does THIS project already have a clone on other hosts?
+  // Read-only: it only suggests (the Edit project dialog's "Detected: <path>
+  // · Use"); nothing is written. Asks each eligible host's discovery once, so
+  // it shares the discover route's tight rate limit.
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/host-suggestions",
+    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!project) return reply.notFound();
+      return { hosts: await detectCheckouts(app, project) };
     },
   );
 
@@ -4724,6 +4732,7 @@ export async function projectsRoute(app: FastifyInstance) {
       const response = {
         ...withReleasePleaseDefault,
         hostCwds: { ...parseHostCwds(withReleasePleaseDefault.hostCwds) },
+        hostCwdsMeta: parseHostCwdsMeta(withReleasePleaseDefault.hostCwdsMeta),
       };
       return createDir ? { ...response, dirCreated, gitInitialized } : response;
     },
@@ -4889,7 +4898,20 @@ export async function projectsRoute(app: FastifyInstance) {
           // Issue #1723 / roadmap 8.9 — the placement opt-in.
           ...(placement !== undefined ? { placement } : {}),
           // Issue #1724 — the per-host cwd map. `null` clears it.
-          ...(hostCwds !== undefined ? { hostCwds: serializeHostCwds(hostCwds) } : {}),
+          ...(hostCwds !== undefined
+            ? {
+                hostCwds: serializeHostCwds(hostCwds),
+                // Issue #2090 — saving the map is the operator's decision: a
+                // removed host is declined (auto-detect never re-adds it),
+                // every kept one stops being "auto-detected".
+                hostCwdsMeta: serializeHostCwdsMeta(
+                  metaAfterOperatorSave(
+                    { hostCwds: existing.hostCwds, meta: existing.hostCwdsMeta },
+                    hostCwds ?? {},
+                  ),
+                ),
+              }
+            : {}),
           ...(mergeOnApprove !== undefined ? { mergeOnApprove } : {}),
           ...(autoApprove !== undefined ? { autoApprove } : {}),
           ...(allowCrossProjectSpawn !== undefined ? { allowCrossProjectSpawn } : {}),
@@ -4926,7 +4948,11 @@ export async function projectsRoute(app: FastifyInstance) {
       if (cwd !== undefined) await maybeRegisterProjectWebhook(app, updated[0]);
       // Issue #1724 — the per-host cwd map, as an OBJECT (see the create
       // handler's own comment).
-      const response = { ...updated[0], hostCwds: { ...parseHostCwds(updated[0].hostCwds) } };
+      const response = {
+        ...updated[0],
+        hostCwds: { ...parseHostCwds(updated[0].hostCwds) },
+        hostCwdsMeta: parseHostCwdsMeta(updated[0].hostCwdsMeta),
+      };
       return createDir ? { ...response, dirCreated, gitInitialized } : response;
     },
   );

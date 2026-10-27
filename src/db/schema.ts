@@ -195,6 +195,17 @@ export const projects = sqliteTable("projects", {
   // host and nowhere else" — which is every project as of this migration, so
   // nothing changes until an operator fills it in.
   hostCwds: text("host_cwds"),
+  // Issue #2090 — bookkeeping for the DETECTED (not hand-entered) side of
+  // `hostCwds`: a JSON object `{ "auto": ["<hostId>", ...], "declined":
+  // ["<hostId>", ...] }`.
+  //   - `auto`: hosts whose entry was filled in by the opt-in auto-detect
+  //     sweep and not yet saved by an operator (drives the "auto-detected"
+  //     badge in Edit project).
+  //   - `declined`: hosts the operator removed an entry for — auto-detect
+  //     never re-adds those (the one-click suggestion still shows them).
+  // Nullable; null/absent means "no auto-filled and no declined hosts", which
+  // is every project as of this migration.
+  hostCwdsMeta: text("host_cwds_meta"),
   // Where this project's dev server listens — issue #28. A bare port
   // ("5173") or a full "scheme://host:port" URL; the preview proxy
   // (src/plugins/preview-proxy.ts) parses this to find the upstream.

@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 // Launcher/LauncherKind/DockControl now physically live in
@@ -12,6 +12,7 @@ import path from "node:path";
 import type { Launcher, LauncherKind, DockControl } from "../shared/types.js";
 import { isValidPort } from "./port-probe.js";
 import { isReservedSessionEnvKey } from "./session-env-keys.js";
+import { readOriginUrl } from "./git-remote.js";
 
 export type { Launcher, LauncherKind, DockControl };
 
@@ -89,6 +90,20 @@ export interface DiscoveredCandidate {
   name: string;
   cwd: string;
   isGitRepo: boolean;
+  /**
+   * Issue #2090 — the checkout's raw `origin` URL (`null`: a git repo with no
+   * origin, or not a repo). OPTIONAL on the type because an agent build that
+   * predates the field simply omits it: `undefined` means "this host cannot
+   * say", which is not the same as `null` ("it has no origin") — the matcher
+   * never auto-fills on an unknown origin.
+   */
+  origin?: string | null;
+  /**
+   * Issue #2090 — `.git` is a FILE (a linked worktree or a submodule), not a
+   * clone of its own. Such a directory is never matched as "the project's
+   * checkout" on another host.
+   */
+  isWorktree?: boolean;
 }
 
 /**
@@ -98,6 +113,14 @@ export interface DiscoveredCandidate {
  * the primary, routes/internal.ts on an "agent") to flag against whatever it
  * already knows is registered.
  */
+function isDirectory(p: string): boolean {
+  try {
+    return statSync(p).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 export function discoverCandidates(roots: string[]): DiscoveredCandidate[] {
   const candidates = new Map<string, DiscoveredCandidate>();
 
@@ -113,10 +136,16 @@ export function discoverCandidates(roots: string[]): DiscoveredCandidate[] {
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       const cwd = path.join(root, entry.name);
+      const gitPath = path.join(cwd, ".git");
+      const isGitRepo = existsSync(gitPath);
+      // `.git` as a file = linked worktree/submodule (issue #2090).
+      const isWorktree = isGitRepo && !isDirectory(gitPath);
       candidates.set(cwd, {
         name: entry.name,
         cwd,
-        isGitRepo: existsSync(path.join(cwd, ".git")),
+        isGitRepo,
+        origin: isGitRepo && !isWorktree ? readOriginUrl(cwd) : null,
+        isWorktree,
       });
     }
   }
