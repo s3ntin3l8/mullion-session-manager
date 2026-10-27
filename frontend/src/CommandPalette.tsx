@@ -1,4 +1,5 @@
 import type { SettingsSection } from "./settings/settingsSections.js";
+import type { LayoutTier } from "./lib/layoutTierTypes.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { api, normalizeAgentId } from "./api/index.js";
@@ -25,7 +26,7 @@ import { resolveActiveProjectId } from "./panelUtils.js";
 import { WorktreeOptions } from "./command-palette/WorktreeOptions.js";
 import { useFocusTrap, isVisible } from "./hooks/useFocusTrap.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
-import { useDockUnavailableReason } from "./lib/useDockUnavailableReason.js";
+import { dockUnavailableReason } from "./lib/dockAvailability.js";
 import {
   ACTIVE_TERMINAL_FOCUS_SELECTOR,
   WORKSPACE_FOCUS_FALLBACK_SELECTOR,
@@ -150,6 +151,7 @@ function CommandRow({ command, selected, showBreadcrumb, onClick, onMouseEnter }
 }
 
 interface CommandPaletteProps {
+  layoutTier?: LayoutTier;
   scope: "global" | "project";
   projectId: number | null;
   onClose: () => void;
@@ -168,9 +170,6 @@ interface CommandPaletteProps {
   // (App.tsx owns both dockviewApi and the Settings modal, neither of
   // which this component has direct access to).
   onOpenGitHub: (projectId: number) => void;
-  // Issue #76: same section, opening the (GitHub-independent) local git
-  // status panel — branch, ahead/behind, and changed files.
-  onOpenGit: (projectId: number) => void;
   // Issue #431: same section, opening the CLAUDE.md/AGENTS.md/GEMINI.md
   // editor for this project.
   onOpenAgentRules: (projectId: number) => void;
@@ -232,13 +231,13 @@ interface CommandPaletteProps {
 // there's no "reset on open" effect to write (and no
 // react-hooks/set-state-in-effect violation from one).
 export function CommandPalette({
+  layoutTier = "desktop",
   scope,
   projectId: initialProjectId,
   onClose,
   onLaunched,
   onOpenSession,
   onOpenGitHub,
-  onOpenGit,
   onOpenAgentRules,
   onOpenFileEditor,
   onOpenExternalFile,
@@ -530,6 +529,7 @@ export function CommandPalette({
   const activeSession =
     sessions.find((s) => activePanelId === `session-${s.id}` && s.status !== "killed") ?? null;
   const commands = buildPaletteCommands({
+    layoutTier,
     projectId: effectiveProjectId,
     projectName: projects.find((p) => p.id === effectiveProjectId)?.name ?? null,
     favoriteUrls:
@@ -540,13 +540,12 @@ export function CommandPalette({
     // mobile.css's phone-tier block — so the shared predicate asks about
     // both, and a phone-tier window with a fine pointer is not a case where
     // the Dock is available (issue #1881).
-    dockUnavailable: useDockUnavailableReason(),
+    dockUnavailable: dockUnavailableReason(layoutTier, isCoarsePointer),
     activeSession,
     prs: projectPrs?.map((pr) => ({ number: pr.number, title: pr.title })),
     branches: projectBranches?.map((b) => b.name),
     open: {
       github: onOpenGitHub,
-      git: onOpenGit,
       agentRules: onOpenAgentRules,
       fileEditor: onOpenFileEditor,
       externalFile: onOpenExternalFile,

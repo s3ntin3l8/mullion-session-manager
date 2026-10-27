@@ -1986,6 +1986,7 @@ export function App() {
       {paletteOpen && (
         <CommandPalette
           scope={paletteScope}
+          layoutTier={layoutTier}
           projectId={paletteProjectId}
           onClose={() => {
             setPalette((p) => ({ ...p, open: false }));
@@ -1994,7 +1995,6 @@ export function App() {
           onLaunched={handleLaunched}
           onOpenSession={onOpenSession}
           onOpenGitHub={onOpenGitHub}
-          onOpenGit={onOpenGit}
           onOpenAgentRules={onOpenAgentRules}
           onOpenFileEditor={onOpenFilesFromPalette}
           onOpenExternalFile={onOpenExternalFile}

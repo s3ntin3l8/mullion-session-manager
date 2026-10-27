@@ -101,7 +101,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
+
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -152,7 +152,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
+
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -207,7 +207,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
+
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -258,7 +258,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
+
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -305,7 +305,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
+
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -342,7 +342,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
+
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -385,7 +385,7 @@ describe("CommandPalette -> WorktreeOptions -> P9 silent failures", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
+
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
