@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { buildTestApp } from "../helpers/app.js";
 import { dispatch, type ConnectionState } from "../../src/plugins/control-socket.js";
 import { projects, sessions } from "../../src/db/schema.js";
@@ -77,5 +77,41 @@ describe("dispatch over a socket-less connection (#1656)", () => {
     const { conn, frames } = sinkConn("session", "999999");
     await dispatch(app, conn, { id: 6, op: "projects.actions" });
     expect(frames[0]).toMatchObject({ id: 6, ok: false, status: 400 });
+  });
+
+  it("aborts a pending sessions.wait when the connection closes, and unsubscribes", async () => {
+    const app = await buildTestApp();
+    await app.ready();
+    const projectId = Number(
+      app.db.insert(projects).values({ name: "waiter", cwd: "/tmp/waiter" }).run().lastInsertRowid,
+    );
+    const parent = Number(
+      app.db.insert(sessions).values({ projectId, command: "bash", cwd: "/tmp/waiter" }).run()
+        .lastInsertRowid,
+    );
+    const child = Number(
+      app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", cwd: "/tmp/waiter", parentSessionId: parent })
+        .run().lastInsertRowid,
+    );
+    const { conn, frames } = sinkConn("session", String(parent));
+    let fire: (() => void) | undefined;
+    let unsubscribed = 0;
+    conn.onClose = (listener) => {
+      fire = listener;
+      return () => void unsubscribed++;
+    };
+    const pending = dispatch(app, conn, {
+      id: 8,
+      op: "sessions.wait",
+      body: { sessionId: String(child), until: ["working"], timeoutMs: 60_000 },
+    });
+    await vi.waitFor(() => expect(fire).toBeDefined());
+    fire!();
+    await pending;
+    expect(unsubscribed).toBe(1);
+    expect(conn.activeWaits).toBe(0);
+    expect(frames).toEqual([]);
   });
 });

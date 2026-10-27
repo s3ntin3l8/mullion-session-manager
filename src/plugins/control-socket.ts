@@ -1744,6 +1744,10 @@ export const OPS: Record<string, OpSpec> = {
   "sessions.attach": {
     scopes: ["full", "session"],
     handler: ({ app, conn, id, body, reply }) => {
+      if (conn.socket === null) {
+        reply(STREAM_UNAVAILABLE);
+        return;
+      }
       const target = resolveTargetSessionId(conn, body);
       if (!target.ok) {
         reply(target.reply);
@@ -1771,10 +1775,6 @@ export const OPS: Record<string, OpSpec> = {
       // session has actually produced any real output yet — it IS the
       // success signal, matching the wire protocol's own documented shape
       // (docs/socket-api.md): only a failure gets a `reply()`.
-      if (conn.socket === null) {
-        reply(STREAM_UNAVAILABLE);
-        return;
-      }
       const channel = new SocketChannel(conn.socket, id);
       const result = resolveAndAttach(app, channel, { sessionId: Number(target.id), cols, rows });
       if (!result.ok) {
