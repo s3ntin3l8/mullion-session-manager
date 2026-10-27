@@ -1,5 +1,7 @@
 import type React from "react";
 import {
+  CheckIcon,
+  ClockIcon,
   AccountIcon,
   AppearanceIcon,
   BellIcon,
@@ -187,14 +189,14 @@ export const SECTIONS: Array<{
     group: "Connections",
     title: "Review relay",
     desc: "Hermes connection, review and triage prompts, and review policy.",
-    icon: (size) => <BotIcon size={size} />,
+    icon: (size) => <CheckIcon size={size} />,
   },
   {
     id: "runway",
     group: "Connections",
     title: "Runway",
     desc: "Quota tracking, provider mapping, and Runway connection.",
-    icon: (size) => <GlobeIcon size={size} />,
+    icon: (size) => <ClockIcon size={size} />,
   },
   {
     id: "storage",

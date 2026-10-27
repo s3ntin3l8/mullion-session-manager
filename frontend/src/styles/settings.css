@@ -407,8 +407,8 @@
 }
 
 .settings-form .settings-row-control > div:has(> .settings-dropdown) {
-  width: 100% !important;
-  min-width: 0 !important;
+  width: 100%;
+  min-width: 0;
 }
 .settings-form .settings-numberfield {
   box-sizing: border-box;
@@ -426,4 +426,8 @@
   .settings-form .settings-numberfield input[type="number"] {
     min-height: 42px;
   }
+}
+.settings-form .settings-numberfield:not(:has(input[type="text"], input[type="password"])) {
+  width: fit-content;
+  max-width: 100%;
 }

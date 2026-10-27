@@ -274,7 +274,7 @@ write`, a permission none of the other sets grants, so it is its own set
   response, `review status` and Settings → Review relay → Recent reviews carry
   a `marker` with a reason (`app-not-configured`, `not-installed`,
   `permission-not-granted`, `mint-failed` or `write-failed`), and Settings →
-  Integrations → GitHub App shows the last failure. To fix it on the App
+  GitHub → GitHub App shows the last failure. To fix it on the App
   itself: Settings → Developer settings → GitHub Apps → Permissions & events →
   Repository permissions → Checks: Read & write, then accept the update on the
   installation. (Reading check runs, which the relay does to continue a PR's

@@ -15,7 +15,7 @@ import {
 import { ConfirmButton } from "../../ui/ConfirmButton.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { GitHubPollingSettings } from "../RuntimeSettings.js";
-import { SettingsForm } from "../SettingsForm.js";
+import { SettingsForm, SettingsGroup } from "../SettingsForm.js";
 
 // One credential for the whole install (issue #27), not per-project — see
 // src/services/github-integration.ts. Manages its own fetch rather than
@@ -82,11 +82,10 @@ export function GitHubSection() {
 
   return (
     <SettingsForm>
-      <section className="settings-form-group">
-        <GroupHeading
-          title="Account"
-          desc="Connect a GitHub account to see each project's issues, pull requests, and CI status."
-        />
+      <SettingsGroup
+        title="Account"
+        desc="Connect a GitHub account to see each project's issues, pull requests, and CI status."
+      >
         <StyledList>
           <ListRow
             testId="github-integration-row"
@@ -179,7 +178,7 @@ export function GitHubSection() {
             }}
           />
         )}
-      </section>
+      </SettingsGroup>
       <WebhooksSection integration={integration} />
 
       <GitHubAppSection

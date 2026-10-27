@@ -321,7 +321,6 @@ export function ReviewRelaySection() {
       ) : (
         <>
           <SettingsGroup title="Connection">
-            {" "}
             <StyledList>
               <ListRow
                 testId="review-relay-row"
@@ -380,7 +379,6 @@ export function ReviewRelaySection() {
             {error && <ErrorText style={{ marginTop: 8 }}>{error}</ErrorText>}
           </SettingsGroup>
           <SettingsGroup title="Review prompts">
-            {" "}
             <TextSettingRow
               label="Prompt repository"
               desc="Optional. Public owner/repo holding a custom review prompt; leave empty for Mullion's built-in prompt."
@@ -398,7 +396,6 @@ export function ReviewRelaySection() {
             />
           </SettingsGroup>
           <SettingsGroup title="Triage prompts">
-            {" "}
             <TextSettingRow
               label="Triage prompt repository"
               desc="Optional. Public owner/repo holding a custom issue-triage prompt; leave empty for Mullion's built-in triage prompt."
@@ -416,7 +413,6 @@ export function ReviewRelaySection() {
             />
           </SettingsGroup>
           <SettingsGroup title="Review policy">
-            {" "}
             <ModelPicker
               label="Model"
               ariaLabel="Review relay model"

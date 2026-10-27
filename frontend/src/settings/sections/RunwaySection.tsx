@@ -235,7 +235,6 @@ export function RunwaySection() {
         desc="Runway is a separate AI-usage tracker. Mullion polls it to learn each provider's remaining quota and will not claim a task onto an agent whose provider is out of quota. Agents never see the API key."
       />
       <SettingsGroup title="Connection">
-        {" "}
         <StyledList>
           <ListRow
             testId="runway-row"
@@ -289,7 +288,6 @@ export function RunwaySection() {
         </Row>
       </SettingsGroup>
       <SettingsGroup title="Quota polling">
-        {" "}
         <Row
           label="Poll interval (seconds)"
           desc="How often Mullion asks Runway for fresh quota readings."
@@ -302,7 +300,6 @@ export function RunwaySection() {
         </Row>
       </SettingsGroup>
       <SettingsGroup title="Provider mapping">
-        {" "}
         <Row
           label="Provider map"
           desc={

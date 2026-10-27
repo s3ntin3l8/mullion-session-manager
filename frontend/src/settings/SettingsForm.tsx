@@ -6,10 +6,18 @@ export function SettingsForm({ children }: { children: ReactNode }) {
   return <div className="settings-form">{children}</div>;
 }
 
-export function SettingsGroup({ title, children }: { title: string; children: ReactNode }) {
+export function SettingsGroup({
+  title,
+  desc,
+  children,
+}: {
+  title: string;
+  desc?: ReactNode;
+  children: ReactNode;
+}) {
   return (
     <section className="settings-form-group" aria-label={title}>
-      <GroupHeading title={title} />
+      <GroupHeading title={title} desc={desc} />
       {children}
     </section>
   );
