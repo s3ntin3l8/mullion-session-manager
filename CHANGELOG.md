@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.3.50](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.49...v0.3.50) (2026-10-27)
+
+
+### Features
+
+* **devices:** a macOS device scope, so the Android emulator panel works on macOS ([#2118](https://github.com/s3ntin3l8/mullion-session-manager/issues/2118)) ([8c62220](https://github.com/s3ntin3l8/mullion-session-manager/commit/8c62220fd95f859699c8a0d37d560d05195845dc))
+* **devices:** enable physical Android devices on macOS ([#2114](https://github.com/s3ntin3l8/mullion-session-manager/issues/2114)) ([f1ce6c2](https://github.com/s3ntin3l8/mullion-session-manager/commit/f1ce6c2a30c19deccd8b247db079e9fd7d6c68fc))
+* **projects:** detect a project's checkout on other hosts, opt-in auto-fill of hostCwds ([#2090](https://github.com/s3ntin3l8/mullion-session-manager/issues/2090)) ([#2130](https://github.com/s3ntin3l8/mullion-session-manager/issues/2130)) ([c777df7](https://github.com/s3ntin3l8/mullion-session-manager/commit/c777df7905a1b8fc8049b3f0773f003ea2af86d1))
+* **projects:** suggest and badge detected checkouts in Edit project, add the auto-detect setting ([#2090](https://github.com/s3ntin3l8/mullion-session-manager/issues/2090)) ([#2136](https://github.com/s3ntin3l8/mullion-session-manager/issues/2136)) ([9d5fba9](https://github.com/s3ntin3l8/mullion-session-manager/commit/9d5fba90ab6f23b8936a95c0ea346d3f5a55ab54))
+* **sessions:** let a coordinator project spawn children in other projects ([#2110](https://github.com/s3ntin3l8/mullion-session-manager/issues/2110)) ([#2113](https://github.com/s3ntin3l8/mullion-session-manager/issues/2113)) ([0646569](https://github.com/s3ntin3l8/mullion-session-manager/commit/0646569a60f9b15bc7ca9d3922a8ecadf1abce43))
+* **settings:** lay out Models as a CLI x role grid ([#2109](https://github.com/s3ntin3l8/mullion-session-manager/issues/2109)) ([b7148cc](https://github.com/s3ntin3l8/mullion-session-manager/commit/b7148ccd3d3756cab8967f305c1b6fe004193000))
+* **tasks:** operator approval gate for workflow-file changes ([#2106](https://github.com/s3ntin3l8/mullion-session-manager/issues/2106)) ([f7e0395](https://github.com/s3ntin3l8/mullion-session-manager/commit/f7e0395a147946842f57add96aabf58c453f37a2))
+* **tasks:** task workers push through Mullion's gated push, not their own credentials ([#2145](https://github.com/s3ntin3l8/mullion-session-manager/issues/2145)) ([de0dbd8](https://github.com/s3ntin3l8/mullion-session-manager/commit/de0dbd866e04c9b95724ebe0b36be34821db8a3e))
+* **uiux:** show a held workflow approval on the board and notify once per head ([#2150](https://github.com/s3ntin3l8/mullion-session-manager/issues/2150)) ([9f3c055](https://github.com/s3ntin3l8/mullion-session-manager/commit/9f3c055d5612421c9c7cc11aab361b11894d148e))
+* **windows:** restrict Mullion's named pipes to the current user ([#2133](https://github.com/s3ntin3l8/mullion-session-manager/issues/2133)) ([d0da3e4](https://github.com/s3ntin3l8/mullion-session-manager/commit/d0da3e4bae7c3a655810079dd7215fe294a30727))
+* **windows:** serve the ssh-agent bridge as an MSYS socket for Git Bash sessions ([#2147](https://github.com/s3ntin3l8/mullion-session-manager/issues/2147)) ([ebf7734](https://github.com/s3ntin3l8/mullion-session-manager/commit/ebf773403fafe0b4dc5bda62beec40df692af5bc))
+
+
+### Bug Fixes
+
+* **devices:** an early scrcpy failure no longer crashes the whole backend ([#2144](https://github.com/s3ntin3l8/mullion-session-manager/issues/2144)) ([2419cb9](https://github.com/s3ntin3l8/mullion-session-manager/commit/2419cb989d5804c02816ef526352ad287c57bd54))
+* **devices:** screenshot action returns a bare PNG on multi-display devices ([#2142](https://github.com/s3ntin3l8/mullion-session-manager/issues/2142)) ([a09098a](https://github.com/s3ntin3l8/mullion-session-manager/commit/a09098af6023c9e3a801381165ce12e7e16f6547))
+* **dock:** Reset pane sizes ignores hidden groups ([#2119](https://github.com/s3ntin3l8/mullion-session-manager/issues/2119)) ([7dbf75d](https://github.com/s3ntin3l8/mullion-session-manager/commit/7dbf75d2e6548a892285d811d603543299ea3f1d))
+* **github:** classify a permanent push 403 and show which App permissions are missing ([#2141](https://github.com/s3ntin3l8/mullion-session-manager/issues/2141)) ([f861459](https://github.com/s3ntin3l8/mullion-session-manager/commit/f8614597c4f74c64887c565f0b7045d2e9fd4b31))
+* **github:** release PR handling in the GitHub panel ([#2101](https://github.com/s3ntin3l8/mullion-session-manager/issues/2101)) ([86ddf6d](https://github.com/s3ntin3l8/mullion-session-manager/commit/86ddf6d0efaab3d42fee2bdcecd9bd8abf1133de))
+* **storage:** find the real opencode holder, count all Docker build cache, add more caches and a space report ([#2097](https://github.com/s3ntin3l8/mullion-session-manager/issues/2097)) ([7f73217](https://github.com/s3ntin3l8/mullion-session-manager/commit/7f73217478be2d3c43ecb297102f2ff0bae04f20))
+* **tasks:** end reviewing tasks whose PR closed or whose rebase emptied the branch ([#2138](https://github.com/s3ntin3l8/mullion-session-manager/issues/2138)) ([2403967](https://github.com/s3ntin3l8/mullion-session-manager/commit/2403967ab10b507873e0ed8a38d507aeb51f835e))
+* **windows:** install better-sqlite3 from its prebuild, no C++ build tools ([#2128](https://github.com/s3ntin3l8/mullion-session-manager/issues/2128)) ([2130908](https://github.com/s3ntin3l8/mullion-session-manager/commit/2130908498db3c343dae4f744867736369982d71))
+
 ## [0.3.49](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.48...v0.3.49) (2026-10-27)
 
 
