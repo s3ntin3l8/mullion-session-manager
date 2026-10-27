@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
@@ -113,10 +113,11 @@ function readStaleBusyMs(app: FastifyInstance): number {
 const DEV_SERVER_DETECT_INTERVAL_MS = 10_000;
 
 // Issue #404 — the DB-side half of the plain-session dev-server-detection
-// feature: finds every session eligible for a rescan (kind !== "dock" — a
-// dock session's own devServerUrl pre-fill is the existing, separate
-// GET /api/projects-driven feature in dev-server-detect.ts/routes/
-// projects.ts — active, and whose project (a) is on this same local host
+// feature: finds every session eligible for a rescan (a terminal or a dock
+// control — a dock control's banner also feeds the passive
+// GET /api/projects detectedDevServerPort in dev-server-detect.ts/routes/
+// projects.ts, but only this sweep raises the proactive offer — active, and
+// whose project (a) is on this same local host
 // (app.pty, and therefore Session.getScrollback(), only ever tracks a
 // session this process itself spawned/attached — see dev-server-detect.ts's
 // own scoping comment) and (b) has no devServerUrl set yet. Returns a
@@ -139,7 +140,7 @@ export function findEligibleDevServerSessions(app: FastifyInstance): Map<string,
     .innerJoin(projects, eq(sessions.projectId, projects.id))
     .where(
       and(
-        eq(sessions.kind, "terminal"),
+        inArray(sessions.kind, ["terminal", "dock"]),
         eq(sessions.status, "active"),
         sql`coalesce(${sessions.hostId}, ${projects.hostId}) = ${LOCAL_HOST_ID}`,
         isNull(projects.devServerUrl),

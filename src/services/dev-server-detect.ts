@@ -108,15 +108,14 @@ export function detectDevServerPortForSessionIds(
 }
 
 /**
- * Issue #404 — the plain-(non-dock)-session counterpart to
+ * Issue #404 — the per-session counterpart to
  * detectDevServerPortForSessionIds above: a project's dev server started by
- * hand in an ordinary "+ Session" terminal (not a dock control) prints the
- * exact same startup banner, so the same parseDevServerPort scan applies
- * unchanged — this is purely a thin, testable entry point around it, kept
- * separate from the dock-session function above because the two have
- * different callers with different eligibility rules (see
- * PtyManager.sweepDevServerDetection's own doc comment for the plain-session
- * side: kind !== "dock" and the project has no devServerUrl set yet).
+ * hand in an ordinary "+ Session" terminal prints the exact same startup
+ * banner, so the same parseDevServerPort scan applies unchanged — this is
+ * purely a thin, testable entry point around it, used by the proactive
+ * sweep (PtyManager.sweepDevServerDetection), which now covers dock
+ * controls too; the function above stays the passive, project-wide read
+ * behind GET /api/projects.
  * Local-host only, same scoping as detectDevServerPortForSessionIds: a
  * Session object only ever exists in `app.pty` for a session this process
  * itself spawned/attached, i.e. a local-hosted project's session.

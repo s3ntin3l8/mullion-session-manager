@@ -2627,7 +2627,7 @@ export class Session {
    * already offered/dismissed this session's in-process lifetime is found,
    * latches it as `pendingDevServerPort` and emits a `dev_server_detected`
    * event carrying it. Callers are expected to only call this for a session
-   * already confirmed eligible (kind !== "dock", project has no
+   * already confirmed eligible (terminal or dock kind, project has no
    * devServerUrl set yet) — see PtyManager.sweepDevServerDetection's own doc
    * comment for where that DB-derived eligibility check actually lives
    * (Session itself has no DB access, same as every other in-memory field
@@ -4321,7 +4321,7 @@ export class PtyManager {
   /**
    * Issue #404 — the DB-aware entry point src/plugins/pty.ts's dedicated
    * dev-server-detection timer calls: `eligible` is a sessionId -> projectId
-   * map the caller has ALREADY filtered down to plain (kind !== "dock"),
+   * map the caller has ALREADY filtered down to terminal or dock,
    * active sessions whose project has no devServerUrl set yet (a DB join
    * only the caller can do — see Session.detectDevServerPort's own doc
    * comment for why that filtering can't live here or on Session itself).
