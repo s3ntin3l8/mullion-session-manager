@@ -49,6 +49,10 @@ let gitDiffStats: Record<number, GitDiffStats | null>;
 let gitBranchesByProject: Record<number, GitBranchesResult | undefined>;
 let prsByProject: Record<number, GitHubPRsStatus | undefined>;
 let hideEndedSessions: boolean;
+let pendingOpenTaskId: number | null = null;
+const setPendingOpenTaskId = vi.fn((id: number | null) => {
+  pendingOpenTaskId = id;
+});
 
 const setKanbanColumnOrder = vi.fn((columnId: string, order: number[]) => {
   kanbanOrder = { ...kanbanOrder, [columnId]: order };
@@ -71,6 +75,8 @@ function storeState() {
     setKanbanColumnOrder,
     deleteSession,
     setViewMode,
+    pendingOpenTaskId,
+    setPendingOpenTaskId,
     hideEndedSessions,
     refreshTasks,
     updateTask,
@@ -178,6 +184,8 @@ beforeEach(() => {
   hideEndedSessions = false;
   setKanbanColumnOrder.mockClear();
   setViewMode.mockClear();
+  setPendingOpenTaskId.mockClear();
+  pendingOpenTaskId = null;
   deleteSession.mockClear();
   refreshTasks.mockClear();
   updateTask.mockClear();
@@ -348,6 +356,23 @@ describe("UnifiedBoard task drag-and-drop", () => {
 // board actually wiring it up — persistence, rendering, and that a drag
 // inside a filtered column produces the same updateTask calls dragging the
 // same two cards with no filter active would.
+describe("UnifiedBoard pending task id (task notification click)", () => {
+  it("opens the drawer for a pending id on mount and clears it", async () => {
+    tasks = [makeTask({ id: 9, status: "ready", title: "needs approval" })];
+    pendingOpenTaskId = 9;
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect((await screen.findByTestId("task-detail-stub")).getAttribute("data-task-id")).toBe("9");
+    expect(setPendingOpenTaskId).toHaveBeenCalledWith(null);
+  });
+
+  it("leaves the drawer closed with no pending id", () => {
+    tasks = [makeTask({ id: 9, status: "ready" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(screen.queryByTestId("task-detail-stub")).toBeNull();
+    expect(setPendingOpenTaskId).not.toHaveBeenCalled();
+  });
+});
+
 describe("UnifiedBoard project filter", () => {
   it("shows no filter bar with a single project", () => {
     projects = [makeProject({ id: 1, name: "demo" })];

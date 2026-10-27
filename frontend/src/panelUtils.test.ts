@@ -49,6 +49,7 @@ import {
   canLaunchTerminal,
   resolveActiveProjectId,
   parseDeepLinkSessionId,
+  parseDeepLinkTaskId,
   handleGlobalEscape,
   shouldShowCodexHookTrustBanner,
   sessionIdFromPanelId,
@@ -1213,6 +1214,19 @@ describe("buildSessionWorkspaceIndex", () => {
     const workspaces = [claiming(1, 7), claiming(2, 7)];
     const index = buildSessionWorkspaceIndex(workspaces);
     expect(index.get(7)).toEqual(findSessionWorkspaces(7, workspaces));
+  });
+});
+
+describe("parseDeepLinkTaskId (#2149)", () => {
+  it("parses a valid positive integer", () => {
+    expect(parseDeepLinkTaskId("?task=42")).toBe(42);
+  });
+
+  it("rejects absent, non-decimal and zero values, and ignores ?session=", () => {
+    expect(parseDeepLinkTaskId("")).toBeNull();
+    expect(parseDeepLinkTaskId("?task=0x2A")).toBeNull();
+    expect(parseDeepLinkTaskId("?task=0")).toBeNull();
+    expect(parseDeepLinkTaskId("?session=5")).toBeNull();
   });
 });
 

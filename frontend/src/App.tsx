@@ -59,6 +59,7 @@ import { attachSidebarSwipeGesture } from "./lib/sidebarSwipeGesture.js";
 import { MobileSessionBar } from "./MobileSessionBar.js";
 import { useSessionDeepLink } from "./hooks/useSessionDeepLink.js";
 import { useOpenSessionRequest } from "./hooks/useOpenSessionRequest.js";
+import { useTaskNotificationOpen } from "./hooks/useTaskNotificationOpen.js";
 import { useOpenTaskRequest } from "./hooks/useOpenTaskRequest.js";
 import { useOpenPreviewRequest } from "./hooks/useOpenPreviewRequest.js";
 import { useLayoutPresentation } from "./hooks/useLayoutPresentation.js";
@@ -1066,6 +1067,9 @@ export function App() {
     restoringRef,
     restoredWorkspaceIdRef,
   });
+
+  // #2149 — a task push notification click opens the Tasks board drawer.
+  useTaskNotificationOpen();
 
   // Issue #2020 — resolves requestOpenTask (a sidebar task chip has no
   // dockview API of its own). Same ordering contract as the hook above.

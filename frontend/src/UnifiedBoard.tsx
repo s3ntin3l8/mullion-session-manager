@@ -429,6 +429,21 @@ export function UnifiedBoard({
     [setDetailTaskId],
   );
 
+  // A task notification click (hooks/useTaskNotificationOpen.ts) leaves the
+  // task id in the store; this board may mount after it was set (cold start,
+  // or Tasks was not showing), so consume it on mount and whenever it changes.
+  const pendingOpenTaskId = useDashboardStore((s) => s.pendingOpenTaskId);
+  useEffect(() => {
+    if (pendingOpenTaskId === null) return;
+    // Deferred: react-hooks/set-state-in-effect disallows a synchronous
+    // setState from an effect body (same pattern as useSessionDeepLink).
+    const timer = setTimeout(() => {
+      useDashboardStore.getState().setPendingOpenTaskId(null);
+      openDetail(pendingOpenTaskId);
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [pendingOpenTaskId, openDetail]);
+
   usePhoneBackStack(phone && detailTaskId !== null, () => setDetailTaskId(null));
 
   useEffect(() => {

@@ -86,12 +86,12 @@ async function handlePush(event) {
 }
 
 self.addEventListener("notificationclick", (event) => {
-  const sessionId = event.notification.data && event.notification.data.sessionId;
+  const data = event.notification.data || {};
   event.notification.close();
-  event.waitUntil(handleNotificationClick(sessionId));
+  event.waitUntil(handleNotificationClick(data.sessionId, data.taskId));
 });
 
-async function handleNotificationClick(sessionId) {
+async function handleNotificationClick(sessionId, taskId) {
   const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
   // clients[0] with multiple Mullion tabs open isn't a standardized
   // "most-recently-focused" guarantee — Chrome orders it that way in
@@ -104,10 +104,16 @@ async function handleNotificationClick(sessionId) {
     // tab would tear down every open xterm WebSocket. App.tsx listens for
     // this message and opens the session panel in-place.
     await existing.focus();
-    existing.postMessage({ type: "mullion-open-session", sessionId });
+    // #2149 — a task notification (no sessionId) opens the task's drawer.
+    if (sessionId == null && taskId != null) {
+      existing.postMessage({ type: "mullion-open-task", taskId });
+    } else {
+      existing.postMessage({ type: "mullion-open-session", sessionId });
+    }
     return;
   }
-  const url = sessionId != null ? `/?session=${sessionId}` : "/";
+  const url =
+    sessionId != null ? `/?session=${sessionId}` : taskId != null ? `/?task=${taskId}` : "/";
   await self.clients.openWindow(url);
 }
 
