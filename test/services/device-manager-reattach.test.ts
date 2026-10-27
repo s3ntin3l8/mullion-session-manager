@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
+import { SystemdDeviceScopeBackend } from "../../src/services/scope/device-systemd.js";
 import type { DeviceManagerOptions as DeviceManagerOptionsType } from "../../src/services/device-manager.js";
 
 // Covers DeviceManager.getOrCreate()'s reattach path (issue #1325's own
@@ -160,6 +161,10 @@ function buildManager(
     emulatorPath: "/opt/android/emulator/emulator",
     scrcpyServerPath: "/dev/null",
     sessionsDir: SESSIONS_DIR,
+    // Pinned: this suite fakes systemctl/systemd-run, so it must exercise the
+    // systemd device backend on every host, not whichever one the platform picks
+    // (the macOS one would read the marker files these tests write).
+    scopeBackend: new SystemdDeviceScopeBackend({ sessionsDir: SESSIONS_DIR }),
     onSpawnError: vi.fn(),
     onPortAssigned: overrides.onPortAssigned,
     initialPorts: overrides.initialPorts,
@@ -375,29 +380,27 @@ describe("DeviceManager.getOrCreate() — normal spawn path is unaffected", () =
     await vi.waitFor(() => expect(device.toInfo().status).toBe("error"));
   });
 
-  it("still allocates a fresh port and bootstraps via systemd-run when the list-units query itself fails — 'unknown' liveness must not collapse to 'alive'", async () => {
+  it("refuses to spawn when the list-units query itself fails — 'unknown' liveness is neither 'alive' nor 'dead' (#1854)", async () => {
     listUnitsShouldError = true; // systemctl itself errors (e.g. ENOENT), not just "no matching scope"
     const onPortAssigned = vi.fn();
     const manager = buildManager({ onPortAssigned });
 
-    const device = await manager.getOrCreate({
-      id: "9",
-      kind: "emulator",
-      serial: null,
-      avdName: "dev35",
-      label: null,
-      port: null,
-    });
-    expect(device.toInfo().status).toBe("starting");
-    // isScopeAlive() must have treated the failed liveness check as "not
-    // alive" (isDeviceAliveStateBatch maps a failed listing to "unknown",
-    // and isScopeAlive() only returns true for "alive") rather than
-    // throwing one of the reattach-path errors above or hanging — falls
-    // through to a normal spawn exactly like the no-surviving-scope case.
-    expect(systemdRunCalls).toHaveLength(1);
-    expect(onPortAssigned).toHaveBeenCalledWith("9", expect.any(Number));
-
-    await vi.waitFor(() => expect(device.toInfo().status).toBe("error"));
+    // Before #1854 this fell through to a fresh spawn, which would start a second
+    // emulator over a possibly-live one. An unconfirmable scope must be reported,
+    // not guessed at in either direction.
+    await expect(
+      manager.getOrCreate({
+        id: "9",
+        kind: "emulator",
+        serial: null,
+        avdName: "dev35",
+        label: null,
+        port: null,
+      }),
+    ).rejects.toThrow(/can't verify whether device 9's emulator scope is still running/);
+    expect(systemdRunCalls).toHaveLength(0);
+    expect(onPortAssigned).not.toHaveBeenCalled();
+    expect(manager.get("9")).toBeUndefined();
   });
 
   it("throws when manager is disabled", async () => {

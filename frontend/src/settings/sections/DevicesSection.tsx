@@ -500,7 +500,7 @@ export function DevicesSection() {
   const [reconnectError, setReconnectError] = useState<Record<number, string>>({});
   const discoveryOn = Boolean(serverInfo?.features.devices && serverInfo.features.deviceDiscovery);
   // Emulators are hidden only when the server positively lists its kinds and
-  // "emulator" is not among them (#1854: macOS is physical-only). An older
+  // "emulator" is not among them (#1854: a physical-only platform). An older
   // server, or one with the panel off (empty list), keeps today's UI.
   const deviceKinds = serverInfo?.features.deviceKinds;
   const emulatorOn = !deviceKinds?.length || deviceKinds.includes("emulator");

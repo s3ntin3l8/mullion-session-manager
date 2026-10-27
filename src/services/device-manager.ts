@@ -10,15 +10,15 @@ import type {
   ReadableStream as YumeReadableStream,
 } from "@yume-chan/stream-extra";
 import { ReadableStream as NodeWebReadableStream } from "node:stream/web";
-import { createReadStream } from "node:fs";
+import { createReadStream, existsSync } from "node:fs";
 import {
-  buildDeviceLaunchPlan,
   deriveInstanceId,
-  isDeviceAliveState,
+  deviceMarkerPath,
   removeDeviceMarker,
-  stopDeviceScope,
   touchDeviceMarker,
 } from "./device-process.js";
+import { getDeviceScopeBackend } from "./scope/index.js";
+import type { ScopeBackend, ScopeLiveness } from "./scope/types.js";
 import {
   DEFAULT_DEVICE_EMULATOR_GPU,
   DEFAULT_DEVICE_VIDEO_BIT_RATE,
@@ -45,15 +45,13 @@ import {
  * What the device panel can do on each platform — a capability per device
  * KIND, not a single on/off per platform (issue #1854).
  *
- * **Why the emulator is Linux-only (for now).** An emulator's scope is
- * load-bearing at all three points of its life, and all three go through
- * systemd: `buildDeviceLaunchPlan` (device-process.ts) launches it with
- * `systemd-run --user --scope`, `isDeviceAliveState` reads the scope's
- * liveness, and `stopDeviceScope` tears it down. macOS has no equivalent —
- * and the darwin `ScopeBackend` cannot stand in, because it is socket-keyed
- * to a SESSION's dtach socket, which an emulator has no analogue of. A macOS
- * device scope (a detached, launchd-reparented process tracked by pid +
- * marker file) is tracked separately in #1854.
+ * **Emulators need a platform device scope.** An emulator's scope is
+ * load-bearing at all three points of its life — launch, liveness, teardown —
+ * and each platform supplies one behind `ScopeBackend`
+ * (`getDeviceScopeBackend`, scope/index.ts): a `systemd-run --user --scope`
+ * unit on Linux, a detached launchd-reparented process tracked by pid + start
+ * time in the device's marker file on macOS (issue #1854). Windows has none,
+ * so it has no emulator capability.
  *
  * **Why "physical" is everywhere.** The PHYSICAL half — an Android phone
  * over adb wireless debugging — needs no scope at all:
@@ -71,7 +69,7 @@ export const DEVICE_PLATFORM_CAPABILITIES: Readonly<
   Partial<Record<NodeJS.Platform, readonly DeviceCapability[]>>
 > = {
   linux: ["physical", "emulator"],
-  darwin: ["physical"],
+  darwin: ["physical", "emulator"],
 };
 
 /** The capabilities the device panel has on `platform` (empty when none). */
@@ -166,6 +164,9 @@ export interface DeviceManagerOptions {
    * than read from app.config directly so this manager always agrees with
    * PtyManager on the actual (possibly sun_path-redirected) directory. */
   sessionsDir: string;
+  /** The scope backend emulators run under (issue #1854). Absent means the one for
+   *  THIS host's platform (`getDeviceScopeBackend`); tests inject a fake. */
+  scopeBackend?: ScopeBackend;
   /** Issue #1770 — every dir this instance may own device SCOPES in, not just
    *  the one the markers live in: the current sessions dir plus every
    *  fallback root an earlier release shipped for the same configured path.
@@ -285,6 +286,61 @@ function sleep(ms: number): Promise<void> {
     // posture as armKillEscalation's timers (session-process.ts).
     setTimeout(resolve, ms).unref();
   });
+}
+
+const scopeBackends = new WeakMap<DeviceManagerOptions, ScopeBackend>();
+
+/** The emulator scope backend for a manager's options, built on first use (so the
+ * platform is read when an emulator is first touched, not at import time). */
+function scopeFor(opts: DeviceManagerOptions): ScopeBackend {
+  let backend = scopeBackends.get(opts);
+  if (!backend) {
+    backend =
+      opts.scopeBackend ??
+      getDeviceScopeBackend({
+        sessionsDir: opts.sessionsDir,
+        ownedDirs: new Set([...(opts.ownedDirs ?? []), opts.sessionsDir]),
+      });
+    scopeBackends.set(opts, backend);
+  }
+  return backend;
+}
+
+/** Stops a device's scope, then — only if that stop succeeded — forgets its marker.
+ * The macOS marker is the sole record of a possibly-live emulator, so a stop that
+ * could not be confirmed (it throws) must leave it in place; on Linux `stop()`
+ * never rejects and the marker is just a file. */
+async function stopScopeAndForget(opts: DeviceManagerOptions, id: string): Promise<void> {
+  await scopeFor(opts).stop(id);
+  // Every root this instance may own markers in (issue #1770), not just the current
+  // one: a marker found in a fallback root must not outlive its own successful stop.
+  const [current, ...fallbacks] = deviceMarkerDirs(opts);
+  removeDeviceMarker(current, id);
+  for (const dir of fallbacks) {
+    try {
+      removeDeviceMarker(dir, id);
+    } catch {
+      // Best-effort: an unreadable stale root (another uid's /tmp/ms-<hash>, say)
+      // must not turn a CONFIRMED stop into a failure that keeps the port reserved.
+    }
+  }
+}
+
+/** The sessions dir plus every fallback root an earlier release shipped, current first. */
+function deviceMarkerDirs(opts: DeviceManagerOptions): string[] {
+  return [...new Set([opts.sessionsDir, ...(opts.ownedDirs ?? [])])];
+}
+
+/** How an operator stops a scope Mullion can't (or must not) reach itself — worded
+ * for the platform's own mechanism. */
+function manualStopHint(opts: DeviceManagerOptions, id: string): string {
+  if (scopeFor(opts).kind === "systemd-device") {
+    return `systemctl --user stop crs-device-${deriveInstanceId(opts.sessionsDir)}-${id}.scope`;
+  }
+  // Name the marker that actually exists (it may live in a fallback root).
+  const candidates = deviceMarkerDirs(opts).map((dir) => deviceMarkerPath(dir, id));
+  const marker = candidates.find((candidate) => existsSync(candidate)) ?? candidates[0];
+  return `if its emulator is still running, quit it (its pid is recorded in ${marker}); otherwise delete that file`;
 }
 
 export class Device {
@@ -410,23 +466,20 @@ export class Device {
         gpu: this.manager.emulatorGpu ?? DEFAULT_DEVICE_EMULATOR_GPU,
       };
       const gpu = launch.gpu || this.manager.emulatorGpu || DEFAULT_DEVICE_EMULATOR_GPU;
-      const plan = buildDeviceLaunchPlan({
-        id: this.id,
-        sessionsDir: this.manager.sessionsDir,
-        emulatorPath: this.manager.emulatorPath,
+      const program = [
+        this.manager.emulatorPath,
+        "-avd",
         avdName,
-        extraArgs: [
-          "-port",
-          String(port),
-          // A host window is opt-in. Headless is the default because the
-          // panel already shows the guest through scrcpy, and `-no-window`
-          // is what lets a display-less service boot at all.
-          ...(launch.headless ? ["-no-window"] : []),
-          "-no-audio",
-          "-gpu",
-          gpu,
-        ],
-      });
+        "-port",
+        String(port),
+        // A host window is opt-in. Headless is the default because the
+        // panel already shows the guest through scrcpy, and `-no-window`
+        // is what lets a display-less service boot at all.
+        ...(launch.headless ? ["-no-window"] : []),
+        "-no-audio",
+        "-gpu",
+        gpu,
+      ];
 
       // Populated by the post-settle exit handler if the scope exits non-zero
       // *after* setImmediate has already resolved the bootstrap promise (the
@@ -467,63 +520,31 @@ export class Device {
         bootstrapFailReject?.(error);
       };
 
-      await new Promise<void>((resolve, reject) => {
-        const child = spawnChild("systemd-run", plan.argv, { stdio: "ignore" });
-        let settled = false;
-
-        child.on("error", (err) => {
-          if (!settled) {
-            settled = true;
-            reject(err);
-          } else {
-            // Same defect class as the exit branch below: a post-settle error
-            // means the scope is gone while spawn() may still be waiting on
-            // adb — record it so the boot path aborts instead of timing out.
-            recordScopeExit(err instanceof Error ? err : new Error(String(err)));
-            this.handleExit();
-          }
-        });
-
-        child.on("exit", (code) => {
-          if (!settled) {
-            if (code !== 0) {
-              settled = true;
-              reject(
-                new Error(`device bootstrap exited with code ${code} (unit ${plan.unitName})`),
-              );
-              return;
-            }
-            // An exit code 0 during the bootstrap window (e.g. from test mocks)
-            // indicates successful scope launch.
-            settled = true;
-            resolve();
-          } else {
-            // Already past the bootstrap promise. If the scope dies during the
-            // boot window (before streaming), surface it immediately via
-            // bootstrapFailed rather than waiting for the full adb timeout —
-            // and, once the race below has already settled, via scopeExit so
-            // spawn()'s own post-race checks catch it (see scopeExit's comment).
-            // Exit code 0 (graceful emulator shutdown mid-boot) also counts as
-            // a scope failure; once streaming it becomes a normal handleExit().
-            recordScopeExit(
+      // The scope backend (issue #1854) resolves once the emulator is launched and
+      // reports a later exit through onExit — systemd-run's own exit on Linux, the
+      // detached process's on macOS. A failure BEFORE that rejects start() and is
+      // thrown out of this try like any spawn failure. An exit AFTER it, during the
+      // boot window (before streaming), surfaces immediately via bootstrapFailed
+      // rather than waiting for the full adb timeout — and, once the race below has
+      // already settled, via scopeExit so spawn()'s own post-race checks catch it.
+      // An exit code 0 (graceful emulator shutdown mid-boot) also counts as a scope
+      // failure; once streaming it becomes a normal handleExit().
+      await scopeFor(this.manager).start({
+        id: this.id,
+        argv: program,
+        cwd: process.cwd(),
+        env: process.env,
+        timeoutMs: BOOT_TIMEOUT_MS,
+        label: "device bootstrap",
+        onExit: (exit) => {
+          recordScopeExit(
+            exit.error ??
               new Error(
-                `device scope exited during boot with code ${code ?? "null"} (unit ${plan.unitName})`,
+                `device scope exited during boot with code ${exit.code ?? "null"} (scope ${exit.scopeName})`,
               ),
-            );
-            this.handleExit();
-          }
-        });
-
-        // In production, `systemd-run --scope` runs the emulator in the foreground
-        // and stays alive for the emulator's full lifespan. Once spawned without an
-        // immediate error or non-zero exit, proceed to boot monitoring while the
-        // exit listener remains attached for process lifecycle tracking.
-        setImmediate(() => {
-          if (!settled) {
-            settled = true;
-            resolve();
-          }
-        });
+          );
+          this.handleExit();
+        },
       });
 
       this.status = "booting";
@@ -736,16 +757,10 @@ export class Device {
       // Same best-effort posture.
     }
     if (this.kind === "emulator") {
-      await stopDeviceScope(
-        // Issue #1770 — the ownership set (the current dir plus every
-        // fallback root an earlier release shipped). `manager` here is the
-        // OPTIONS object, so the fallback is spelled out rather than
-        // delegated to DeviceManager's own accessor.
-        new Set([...(this.manager.ownedDirs ?? []), this.manager.sessionsDir]),
-        deriveInstanceId(this.manager.sessionsDir),
-        this.id,
-      );
-      removeDeviceMarker(this.manager.sessionsDir, this.id);
+      // Throws (leaving the marker AND the port allocated) when the scope could not
+      // be confirmed gone — a freed port would let a second emulator collide with a
+      // live one.
+      await stopScopeAndForget(this.manager, this.id);
     }
     if (this.allocatedPort !== null) {
       this.releasePort(this.allocatedPort);
@@ -1077,13 +1092,21 @@ export class DeviceManager {
       return device;
     }
 
-    if (await this.isScopeAlive(opts.id)) {
+    const scopeState = await this.scopeState(opts.id);
+    if (scopeState === "unknown") {
+      // Issue #1854 — could not confirm either way (the supervisor didn't answer, or
+      // the scope isn't verifiably this instance's own). Spawning now would start a
+      // second emulator over a possibly-live one; reporting "dead" would orphan it.
+      throw new Error(
+        `can't verify whether device ${opts.id}'s emulator scope is still running — retry, or ` +
+          `stop it manually: ${manualStopHint(this.opts, opts.id)}`,
+      );
+    }
+    if (scopeState === "alive") {
       if (opts.port === null) {
-        const instanceId = deriveInstanceId(this.opts.sessionsDir);
         throw new Error(
-          `device ${opts.id} has a systemd scope left running from before a restart, with no ` +
-            `persisted port to reattach with — stop it manually: systemctl --user stop ` +
-            `crs-device-${instanceId}-${opts.id}.scope`,
+          `device ${opts.id} has a scope left running from before a restart, with no ` +
+            `persisted port to reattach with — stop it manually: ${manualStopHint(this.opts, opts.id)}`,
         );
       }
       const port = opts.port;
@@ -1111,9 +1134,7 @@ export class DeviceManager {
         // unit name), to fully tear down: nothing here is actually still
         // running. Nothing was ever reserved/constructed for this attempt,
         // so there's nothing else to release.
-        const instanceId = deriveInstanceId(this.opts.sessionsDir);
-        await stopDeviceScope(this.ownedDirs, instanceId, opts.id).catch(() => {});
-        removeDeviceMarker(this.opts.sessionsDir, opts.id);
+        await stopScopeAndForget(this.opts, opts.id).catch(() => {});
         // `port` may be reserved with nothing ever having called
         // reservePort() for THIS attempt — DeviceManagerOptions.initialPorts
         // pre-seeds it at construction from every persisted `active` row,
@@ -1205,8 +1226,7 @@ export class DeviceManager {
       return;
     }
     if (kind === "physical") return;
-    await stopDeviceScope(this.ownedDirs, deriveInstanceId(this.opts.sessionsDir), id);
-    removeDeviceMarker(this.opts.sessionsDir, id);
+    await stopScopeAndForget(this.opts, id);
   }
 
   /** kill() plus dropping this manager's own reference — the in-memory-map
@@ -1252,11 +1272,14 @@ export class DeviceManager {
    * only the scope's liveness can be confirmed here. getOrCreate() is what
    * turns "alive" into an actual resumed stream, via Device.attach(). */
   async isScopeAlive(id: string): Promise<boolean> {
-    const state = await isDeviceAliveState(
-      this.ownedDirs,
-      deriveInstanceId(this.opts.sessionsDir),
-      id,
-    );
-    return state === "alive";
+    return (await this.scopeState(id)) === "alive";
+  }
+
+  /** The scope's liveness with its trust rule intact: "unknown" (the backend could
+   * not confirm either way) is NOT "dead" — a caller about to spawn a second
+   * emulator over a possibly-live one must tell the two apart. */
+  async scopeState(id: string): Promise<ScopeLiveness> {
+    const states = await scopeFor(this.opts).isAliveBatch([id]);
+    return states[id] ?? "unknown";
   }
 }

@@ -180,9 +180,12 @@ How this repo applies the conventions above — facts and commands, not rules.
   call `systemd-run`/`systemctl` itself. The backend is chosen **on the host
   that owns the scope**, from that host's own `process.platform` — never
   negotiated between hosts. `src/services/session-process.ts` remains the
-  systemd implementation's home, and `src/services/device-process.ts` (the
-  Android device scopes) is a second consumer of the same shape that has
-  **not** been migrated yet.
+  systemd implementation's home. `src/services/device-process.ts` (the Android
+  emulator scopes) is a second consumer of the same shape, migrated in #1854:
+  `pty-manager.ts` and `device-manager.ts` each go through their own factory
+  (`getScopeBackend` / `getDeviceScopeBackend`), and the two are deliberately
+  separate classes — a session's identity is its dtach socket, an emulator's is
+  its marker file (systemd `Description` on Linux, pid + start time on macOS).
 - **`sessions.command` and `workspaces.layout` are opaque blobs.** The
   backend never parses a shell command line or a dockview layout — it just
   stores and replays what it's given. **The exception** is
