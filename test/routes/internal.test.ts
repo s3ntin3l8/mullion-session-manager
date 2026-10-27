@@ -4682,6 +4682,35 @@ describe("internal routes (agent role, issue #26)", () => {
       await app.close();
     });
 
+    it("?mode=rendered answers plain text rendered on this agent, empty for an untracked id (issue #2112)", async () => {
+      const app = await buildApp();
+      const before = fakePtyChildren.length;
+      await app.inject({
+        method: "POST",
+        url: "/internal/sessions",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { id: "602", cwd: "/tmp", command: "bash", cols: 80, rows: 24 },
+      });
+      await waitUntil(() => fakePtyChildren.length > before);
+
+      const tracked = await app.inject({
+        method: "GET",
+        url: "/internal/sessions/602/scrollback?mode=rendered",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(tracked.statusCode).toBe(200);
+      expect(typeof tracked.json().text).toBe("string");
+      expect(tracked.json()).not.toHaveProperty("b64");
+
+      const untracked = await app.inject({
+        method: "GET",
+        url: "/internal/sessions/never-spawned/scrollback?mode=rendered",
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(untracked.json()).toEqual({ text: "" });
+      await app.close();
+    });
+
     it("returns an empty b64 for a session id this agent has never tracked", async () => {
       const app = await buildApp();
       const res = await app.inject({

@@ -2983,6 +2983,18 @@ export class Session {
   }
 
   /**
+   * The whole ring, WITHOUT the terminal-mode preamble getScrollback() prepends.
+   * For rendering through an emulator (issue #2112): while a session sits on the
+   * alternate screen the preamble opens with `ESC[?1049h`, which would put the
+   * entire replay into the alternate buffer — and that buffer has no scrollback,
+   * so everything before the last screen (including the pre-TUI output) would be
+   * lost. The stream's own escapes switch screens at the right points instead.
+   */
+  getRenderableScrollback(): Buffer {
+    return this.scrollbackBuffer.toBuffer(Buffer.alloc(0));
+  }
+
+  /**
    * Perf audit finding B8(1) — the LAST `maxBytes` of buffered output, no
    * mode preamble (unlike getScrollback() above, this isn't replayed to a
    * reattaching terminal — it only ever feeds a text scan, e.g.

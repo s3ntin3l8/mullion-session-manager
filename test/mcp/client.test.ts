@@ -356,6 +356,20 @@ describe("MullionClient (issue #271)", () => {
       expect(await client.getScrollback(undefined)).toEqual({ b64: "" });
     });
 
+    it('getScrollback sends mode "rendered" only when asked (issue #2112)', async () => {
+      const bodies: unknown[] = [];
+      const socketPath = await startControlServer((msg, socket) => {
+        bodies.push(msg.body);
+        socket.write(
+          `${JSON.stringify({ id: msg.id, ok: true, status: 200, result: { text: "screen" } })}\n`,
+        );
+      });
+      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      expect(await client.getScrollback("7", "rendered")).toEqual({ text: "screen" });
+      await client.getScrollback("7", "raw");
+      expect(bodies).toEqual([{ sessionId: "7", mode: "rendered" }, { sessionId: "7" }]);
+    });
+
     it("listChildSessions sends sessions.children, with the given parent id when supplied", async () => {
       const socketPath = await startControlServer((msg, socket) => {
         expect(msg.op).toBe("sessions.children");

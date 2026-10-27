@@ -1144,6 +1144,22 @@ describe("controlSocketPlugin (issue #185)", () => {
     });
 
     describe("sessions.scrollback", () => {
+      it("mode:rendered returns the screen as plain text instead of base64 (issue #2112)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "sessions.scrollback", body: { sessionId, mode: "rendered" } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(true);
+        const result = reply.result as { text?: string; b64?: string };
+        expect(result.b64).toBeUndefined();
+        expect(result.text).toContain(`scrollback-marker-${sessionId}`);
+        socket.destroy();
+      });
+
       it("full scope: returns a base64 scrollback buffer for an explicit sessionId, containing that session's own output", async () => {
         app = await buildApp();
         await app.ready();

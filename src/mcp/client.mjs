@@ -575,17 +575,22 @@ export class MullionClient {
   /** Issue #1291 (Hermes review, PR #1292) — same "try direct, retry only
    * on the specific no-pin 400" shape as listActions/spawnChildSession
    * above; see ownSessionId's own doc comment for why. */
-  async getScrollback(sessionId) {
+  async getScrollback(sessionId, mode) {
+    // `mode: "rendered"` (issue #2112) asks for the screen as plain text.
+    const extra = mode === "rendered" ? { mode } : {};
     if (sessionId !== undefined) {
-      return this.controlRequest("sessions.scrollback", { sessionId });
+      return this.controlRequest("sessions.scrollback", { sessionId, ...extra });
     }
     try {
-      return await this.controlRequest("sessions.scrollback", {});
+      return await this.controlRequest("sessions.scrollback", { ...extra });
     } catch (err) {
       if (!isMissingIdError(err, "'sessionId' is required") || this.ownSessionId === undefined) {
         throw err;
       }
-      return this.controlRequest("sessions.scrollback", { sessionId: this.ownSessionId });
+      return this.controlRequest("sessions.scrollback", {
+        sessionId: this.ownSessionId,
+        ...extra,
+      });
     }
   }
 

@@ -48,8 +48,10 @@ only a hint: dropped if your panel isn't open in their current workspace within 
 Once spawned, you can supervise your children without full scope:
 `mullion session children` / `list_child_sessions` shows each child's derived
 status (`working`, `finished`, `awaiting_permission`, `exited`, ...);
-`mullion session logs <childId>` / `get_scrollback` (with `sessionId`) reads
-its output; `mullion session kill <childId>` / `kill_child_session` stops it.
+`mullion session logs <childId> --text` / `get_scrollback` (with `sessionId`)
+reads its output as plain text — the terminal replayed through an emulator, so a
+full-screen agent CLI reads as its final screen rather than as cursor-movement
+escapes (`mode: "raw"` / no `--text` gives the raw byte stream); `mullion session kill <childId>` / `kill_child_session` stops it.
 
 To block until a child needs you — instead of polling — use
 `mullion session wait <childId>` / `wait_for_session`: it returns when the

@@ -998,8 +998,20 @@ const sessionCommands = {
     return { json: result };
   },
   async logs(client, args, opts, io) {
-    const id = args[0] ?? opts.session;
+    // `--text` (issue #2112): the terminal replayed through an emulator and
+    // printed as plain text — what a full-screen agent CLI actually showed —
+    // instead of the raw byte stream.
+    const { flags, rest } = extractFlags(args, { text: "boolean" });
+    const id = rest[0] ?? opts.session;
     if (id === undefined) throw new CliUsageError("session id is required");
+    if (flags.text === true) {
+      const rendered = await client.request("sessions.scrollback", {
+        sessionId: id,
+        mode: "rendered",
+      });
+      if (rendered.text) io.stdout.write(`${rendered.text}\n`);
+      return { streamed: true };
+    }
     const result = await client.request("sessions.scrollback", { sessionId: id });
     io.stdout.write(Buffer.from(result.b64, "base64"));
     return { streamed: true };

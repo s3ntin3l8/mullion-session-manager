@@ -1,3 +1,4 @@
+import { renderScrollback } from "./scrollback-render.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -508,6 +509,11 @@ export interface AgentConfig {
   // bridge-backed agent on that build.
   sshAuthSock?: { path: string; present: boolean; source?: SshAuthSockSource } | null;
 }
+
+/** The run of private-mode set/reset sequences (`ESC[?<n>[;<n>…]h|l`) that
+ * Session.getScrollback() prepends to the ring. */
+// eslint-disable-next-line no-control-regex -- the escape byte is the point
+const LEADING_PRIVATE_MODES = /^(?:\x1b\[\?\d+(?:;\d+)*[hl])+/;
 
 export class RemoteHostClient {
   private readonly baseUrl: string;
@@ -1907,6 +1913,37 @@ export class RemoteHostClient {
       `/internal/sessions/${encodeURIComponent(id)}/scrollback`,
     );
     return Buffer.from(result.b64, "base64");
+  }
+
+  /** The session's scrollback rendered as plain text (issue #2112) — rendered
+   * ON the agent, where the PTY's real size is known, so only text crosses. */
+  async resolveRenderedScrollback(id: string): Promise<string> {
+    const result = await this.request<{ text?: string; b64?: string }>(
+      `/internal/sessions/${encodeURIComponent(id)}/scrollback?mode=rendered`,
+    );
+    if (typeof result.text === "string") return result.text;
+    // An agent build that predates this mode ignores `?mode=` and answers the raw
+    // `{b64}`; an empty string there would read as "no output". Render the bytes
+    // here instead, so a mixed-version fleet stays readable.
+    //
+    // That `b64` is `getScrollback()`: the terminal-mode preamble (alt-screen
+    // enter/exit, mouse and bracketed-paste modes) followed by the ring. A leading
+    // `ESC[?1049h` would put the whole replay into the alternate buffer, which has
+    // no scrollback, so the leading run of private-mode sequences is dropped — the
+    // ring's own escapes switch screens where they happened. The match is greedy,
+    // so a private-mode run that begins the ring itself and abuts the preamble
+    // (e.g. `ESC[?25l` then the TUI's own `ESC[?1049h`) goes too: the content then
+    // lands in the normal buffer, which has scrollback, and only the
+    // `--- alternate screen ---` marker is lost — benign.
+    //
+    // The size is a fixed 120x40: an older agent cannot tell us the real one, so a
+    // session that ran at another width is re-wrapped. Accepted for a skew path.
+    if (typeof result.b64 === "string" && result.b64.length > 0) {
+      const bytes = Buffer.from(result.b64, "base64").toString("latin1");
+      const ring = bytes.replace(LEADING_PRIVATE_MODES, "");
+      return renderScrollback(Buffer.from(ring, "latin1"), { cols: 120, rows: 40 });
+    }
+    return "";
   }
 
   /** Stashes a seed prompt (issue #271) on this agent's own PtyManager, for

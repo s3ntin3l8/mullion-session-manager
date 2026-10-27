@@ -684,10 +684,14 @@ const killChildSession = {
 const getScrollback = {
   name: "get_scrollback",
   description:
-    "Get a session's terminal scrollback, decoded as text. Omit sessionId to get the calling " +
-    "session's own scrollback; a child session the caller spawned (see list_child_sessions) can " +
-    "be named too, from inside a normal agent session. Any other session's id requires full " +
-    "scope (MULLION_AUTH_TOKEN).",
+    'Get a session\'s terminal output as readable text. By default (mode "rendered") the ' +
+    "terminal stream is replayed through a terminal emulator, so a full-screen agent CLI " +
+    "(Claude Code, Codex, opencode...) comes back as what was on screen — scrolled-off lines, " +
+    "then the visible screen — instead of cursor-movement escapes and spinner frames. Pass " +
+    'mode "raw" for the undecoded byte stream (escape sequences included). Omit sessionId to ' +
+    "get the calling session's own scrollback; a child session the caller spawned (see " +
+    "list_child_sessions) can be named too, from inside a normal agent session. Any other " +
+    "session's id requires full scope (MULLION_AUTH_TOKEN).",
   inputSchema: {
     type: "object",
     properties: {
@@ -695,16 +699,27 @@ const getScrollback = {
         type: "string",
         description: "The session id to read. Defaults to the calling session.",
       },
+      mode: {
+        type: "string",
+        enum: ["rendered", "raw"],
+        description: "rendered (default): the screen as plain text. raw: the byte stream.",
+      },
     },
   },
   async handler(args, client) {
-    // sessions.scrollback's result is `{ b64 }` (control-socket.ts) — decode
-    // it here rather than returning the raw base64, the same
-    // Buffer.from(result.b64, "base64") step `mullion session logs`
-    // (src/cli/core.mjs) does before ever showing it to anything.
-    const result = await client.getScrollback(args?.sessionId);
-    const b64 = typeof result?.b64 === "string" ? result.b64 : "";
-    return Buffer.from(b64, "base64").toString("utf8");
+    if (args?.mode !== undefined && args.mode !== "rendered" && args.mode !== "raw") {
+      throw new Error('mode must be "rendered" or "raw"');
+    }
+    if (args?.mode === "raw") {
+      // sessions.scrollback's raw result is `{ b64 }` (control-socket.ts) —
+      // decode it here, the same Buffer.from(result.b64, "base64") step
+      // `mullion session logs` (src/cli/core.mjs) does.
+      const result = await client.getScrollback(args?.sessionId);
+      const b64 = typeof result?.b64 === "string" ? result.b64 : "";
+      return Buffer.from(b64, "base64").toString("utf8");
+    }
+    const result = await client.getScrollback(args?.sessionId, "rendered");
+    return typeof result?.text === "string" ? result.text : "";
   },
 };
 

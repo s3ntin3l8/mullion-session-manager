@@ -1697,7 +1697,12 @@ export const OPS: Record<string, OpSpec> = {
   // Reachable at session scope — same target-id shape as sessions.get.
   "sessions.scrollback": routeOp(
     ["full", "session"],
-    onOwnedSession((id) => ({ method: "GET", url: `/api/sessions/${enc(id)}/scrollback` })),
+    onOwnedSession((id, ctx) => ({
+      method: "GET",
+      // mode:"rendered" asks for the terminal screen as plain text (issue
+      // #2112) instead of the raw byte stream; anything else stays raw.
+      url: `/api/sessions/${enc(id)}/scrollback${ctx.body?.mode === "rendered" ? "?mode=rendered" : ""}`,
+    })),
   ),
   // Phase 4 (#186) — opens a multiplexed PTY I/O stream on this connection,
   // keyed by this request's own `id`: attachSocketToSession/
