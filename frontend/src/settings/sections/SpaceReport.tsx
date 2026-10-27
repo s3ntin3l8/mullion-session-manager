@@ -79,8 +79,9 @@ export function SpaceReport({
       )}
       {probe.truncated && (
         <div className="settings-footer-note">
-          This is a very large folder tree, so the scan stopped early: every figure below is at
-          least that much.
+          This is a very large folder tree, so the scan stopped early: the sizes of the folders
+          below are at least that much (the line for what is outside your home folder is an upper
+          bound, since it includes what was not scanned).
         </div>
       )}
       {probe.state === "error" && <ErrorText>Could not refresh: {probe.error}</ErrorText>}
@@ -96,8 +97,9 @@ export function SpaceReport({
         <div className="space-row space-outside">
           <span className="space-row-name">
             Outside your home folder
+            {probe.truncated ? ", or not scanned" : ""}
             {probe.unreadableEntries > 0
-              ? ` or not readable (${String(probe.unreadableEntries)} folders)`
+              ? `${probe.truncated ? "," : ""} or not readable (${String(probe.unreadableEntries)} folders)`
               : ""}
           </span>
           <span className="space-row-size">{formatBytes(probe.outsideBytes)}</span>

@@ -227,10 +227,19 @@ export async function systemResourcesRoute(app: FastifyInstance) {
       })),
     ),
   ];
-  const space = createMeasuredProbe(() => inspectSpaceReport({ covered: spaceCovered() }), {
-    ttlMs: SLOW_INSPECT_CACHE_MS,
-    onRun: logRun("space"),
-  });
+  const space = createMeasuredProbe(
+    async () => {
+      const report = await inspectSpaceReport({ covered: spaceCovered() });
+      if (report.truncated) {
+        app.log.warn(
+          { probe: "space", root: report.root },
+          "space report stopped at its entry cap",
+        );
+      }
+      return report;
+    },
+    { ttlMs: SLOW_INSPECT_CACHE_MS, onRun: logRun("space") },
+  );
 
   const probeRoutes = [
     ["docker", docker],

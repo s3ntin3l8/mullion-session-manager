@@ -71,8 +71,11 @@ describe("space report", () => {
     for (let i = 0; i < 30; i++) await put(`d${String(i)}/f`, 8);
     const capped = await inspectSpaceReport({ root, entryCap: 10 });
     expect(capped).toMatchObject({ available: true, truncated: true });
-    expect(capped.scannedBytes).toBeLessThan((await inspectSpaceReport({ root })).scannedBytes);
-    expect((await inspectSpaceReport({ root })).truncated).toBe(false);
+    const full = await inspectSpaceReport({ root });
+    expect(capped.scannedBytes).toBeLessThan(full.scannedBytes);
+    // What the walk never reached lands in the "outside" figure, an upper bound.
+    expect(capped.outsideBytes).toBeGreaterThan(full.outsideBytes);
+    expect(full.truncated).toBe(false);
   });
 
   it("doesn't follow symlinks out of the tree", async () => {

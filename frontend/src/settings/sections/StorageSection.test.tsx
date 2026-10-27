@@ -1018,6 +1018,8 @@ describe("Settings -> Storage: progress and where the space is", () => {
       setup({ space: { ...report, truncated: true } });
       render(<StorageSection />);
       expect(await screen.findByText(/scan stopped early/)).toBeInTheDocument();
+      // What was never scanned lands in "outside", so it is labelled as such.
+      expect(screen.getByText(/Outside your home folder, or not scanned/)).toBeInTheDocument();
     });
 
     it("accounts for the space outside the home folder, noting unreadable folders", async () => {

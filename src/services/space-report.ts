@@ -41,7 +41,7 @@ export interface SpaceReport {
   scannedBytes: number;
   /** Used space on `root`'s filesystem, from statfs. */
   filesystemUsedBytes: number;
-  /** Used space the walk didn't account for: outside `root`, or unreadable. */
+  /** Used space the walk didn't account for: outside `root`, unreadable, or past the entry cap. */
   outsideBytes: number;
   /** Directories that couldn't be read; their contents are in `outsideBytes`. */
   unreadableEntries: number;
