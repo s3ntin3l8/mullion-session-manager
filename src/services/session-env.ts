@@ -157,6 +157,27 @@ export const GIT_CONFIG_NO_AUTO_GC_ENV = {
 } as const;
 
 /**
+ * #2102 — what a Task Master worker/reviewer session adds on top of
+ * GIT_CONFIG_NO_AUTO_GC_ENV so its own `git push origin ...` fails loudly
+ * ("Unable to find remote helper for 'use-mullion-task-push'") instead of
+ * pushing with the operator's ambient credentials past the workflow-change
+ * approval gate and as the human. A task's branch is pushed by Mullion
+ * (`mullion task push` / the `push_task_branch` tool).
+ *
+ * Environment-only, never written to `.git/config`: Mullion's own pushes run
+ * in the backend (or host agent) process with `gitEnv()`, which strips every
+ * GIT_CONFIG*, so they never see this. It stops an agent that follows its
+ * prompt; an agent running as the operator can still defeat it (`git push
+ * <url>`, `env -u GIT_CONFIG_COUNT`), so the credentials, not this, are the
+ * real boundary.
+ */
+export const GIT_CONFIG_TASK_PUSH_BLOCK_ENV = {
+  GIT_CONFIG_COUNT: "2",
+  GIT_CONFIG_KEY_1: "remote.origin.pushurl",
+  GIT_CONFIG_VALUE_1: "use-mullion-task-push://blocked",
+} as const;
+
+/**
  * Returns a copy of `base` (defaults to `process.env`) with every
  * Mullion-owned config key in {@link SERVER_ENV_KEYS} and every
  * {@link HOST_DISPLAY_ENV_KEYS} entry removed, `COLORTERM`

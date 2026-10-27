@@ -7,6 +7,7 @@ import {
   buildReviewFeedbackPrompt,
   buildSuggestionsPrompt,
   buildCiFailurePrompt,
+  buildRebasePrompt,
   deriveVerdict,
   isApprovingVerdict,
   taskRereviewRequestPath,
@@ -1411,6 +1412,37 @@ describe("buildCiFailurePrompt", () => {
     });
     expect(out).toContain("already reviewed and approved");
     expect(out).toContain("/sessions/task-1.rereview.9");
+  });
+
+  it("tells the worker to commit and finish, never to git push (#2102)", () => {
+    const out = buildCiFailurePrompt(base);
+    expect(out).toContain("commit and finish again");
+    expect(out).toContain("do not `git push`");
+    expect(out).not.toMatch(/then push and finish/);
+  });
+});
+
+describe("buildRebasePrompt (#2102)", () => {
+  const out = buildRebasePrompt({
+    task: TASK,
+    branchName: "mullion/task-1",
+    worktreePath: BASE.worktreePath,
+    budgetMinutes: 60,
+    agentCommand: "claude",
+    baseRef: "main",
+  });
+
+  it("pushes through Mullion's own command, not with git push", () => {
+    expect(out).toContain("`mullion task push`");
+    expect(out).toContain("push_task_branch");
+    expect(out).not.toContain("git push --force-with-lease");
+    expect(out).toContain("A plain `git push` from this session is refused");
+  });
+
+  it("says what to do per outcome: retry a stale lease, stop on an operator-only problem", () => {
+    expect(out).toContain("fetch, rebase again");
+    expect(out).toContain("needs the operator's approval");
+    expect(out).toContain("end your turn and say so");
   });
 });
 

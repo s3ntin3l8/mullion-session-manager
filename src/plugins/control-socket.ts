@@ -1619,6 +1619,15 @@ export const OPS: Record<string, OpSpec> = {
       payload: json(relayTargetFields(body, ["prNumber", "repo", "branch", "force"])),
     })),
   ),
+  // #2102 — a Task Master worker pushes its branch through Mullion (gated,
+  // bot identity) instead of with its own git credentials. Pinned to the
+  // caller's OWN session, so a session can only push its own task; the route
+  // (routes/task-push.ts) further requires that session to be a task's worker.
+  // Approving a workflow change is deliberately NOT an op.
+  "tasks.push": routeOp(
+    ["full", "session"],
+    onSession((id) => ({ method: "POST", url: `/api/sessions/${enc(id)}/task-push` })),
+  ),
   // Status of the latest review run for the caller's PR, and stopping a run the
   // caller's own session dispatched (routes/review-relay.ts enforces that).
   "reviews.status": routeOp(

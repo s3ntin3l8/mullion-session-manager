@@ -1,8 +1,14 @@
 import { describe, it, expect } from "vitest";
+import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { gitEnv } from "../../src/services/git-env.js";
 import { schema } from "../../src/plugins/env.js";
 import { isReservedSessionEnvKey } from "../../src/services/session-env-keys.js";
 import {
   GIT_CONFIG_NO_AUTO_GC_ENV,
+  GIT_CONFIG_TASK_PUSH_BLOCK_ENV,
   HOST_DISPLAY_ENV_KEYS,
   SERVER_ENV_KEYS,
   SESSION_ENV_PASSTHROUGH_KEYS,
@@ -131,6 +137,68 @@ describe("session-env", () => {
       expect(result.GIT_CONFIG_COUNT).toBe("1");
       expect(result.GIT_CONFIG_KEY_0).toBe("gc.auto");
       expect(result.GIT_CONFIG_VALUE_0).toBe("0");
+    });
+
+    // #2102 — the task-push block, against real git.
+    describe("task-push block (#2102)", () => {
+      const run = (cwd: string, args: string[], env: NodeJS.ProcessEnv) =>
+        execFileSync("git", args, { cwd, env, stdio: "pipe" });
+      const setup = () => {
+        const root = fs.mkdtempSync(path.join(os.tmpdir(), "task-push-block-"));
+        const remote = path.join(root, "remote.git");
+        const work = path.join(root, "work");
+        fs.mkdirSync(remote);
+        run(remote, ["init", "--bare", "-b", "main"], process.env);
+        run(root, ["clone", remote, "work"], process.env);
+        run(work, ["config", "user.email", "t@t"], process.env);
+        run(work, ["config", "user.name", "t"], process.env);
+        fs.writeFileSync(path.join(work, "a.txt"), "a\n");
+        run(work, ["add", "-A"], process.env);
+        run(work, ["commit", "-m", "x", "--no-verify"], process.env);
+        return { root, work };
+      };
+
+      it("makes a session's own `git push origin` fail, naming the sentinel", () => {
+        const { root, work } = setup();
+        const sessionEnv = { ...process.env, ...GIT_CONFIG_TASK_PUSH_BLOCK_ENV };
+        let stderr = "";
+        try {
+          run(work, ["push", "origin", "main"], sessionEnv);
+        } catch (err) {
+          stderr = String((err as { stderr?: Buffer }).stderr ?? "");
+        }
+        expect(stderr).toContain("use-mullion-task-push");
+        fs.rmSync(root, { recursive: true, force: true });
+      });
+
+      it("does not affect Mullion's own pushes: gitEnv() strips it", () => {
+        const { root, work } = setup();
+        // The same environment a session has, seen by the backend's own git.
+        const prior = {
+          c: process.env.GIT_CONFIG_COUNT,
+          k: process.env.GIT_CONFIG_KEY_1,
+          v: process.env.GIT_CONFIG_VALUE_1,
+        };
+        Object.assign(process.env, GIT_CONFIG_TASK_PUSH_BLOCK_ENV);
+        try {
+          expect(() => run(work, ["push", "origin", "main"], gitEnv())).not.toThrow();
+        } finally {
+          for (const [key, value] of [
+            ["GIT_CONFIG_COUNT", prior.c],
+            ["GIT_CONFIG_KEY_1", prior.k],
+            ["GIT_CONFIG_VALUE_1", prior.v],
+          ] as const) {
+            if (value === undefined) delete process.env[key];
+            else process.env[key] = value;
+          }
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      });
+
+      it("reserves its keys so a session's own env cannot overwrite them", () => {
+        expect(isReservedSessionEnvKey("GIT_CONFIG_KEY_1")).toBe(true);
+        expect(isReservedSessionEnvKey("GIT_CONFIG_VALUE_1")).toBe(true);
+      });
     });
 
     it("keeps the override when a session's own env is applied on top (issue #1851)", () => {

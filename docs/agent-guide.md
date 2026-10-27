@@ -393,6 +393,23 @@ polling GitHub. Delivery is best effort and edge-triggered (one event per
 transition, at the poll cadence): treat a missing event as "no change", not
 as an error.
 
+## Pushing a Task Master branch
+
+If you are working a Task Master task, do not `git push`: a plain `git push
+origin` from a task session is refused. When your instructions tell you to push
+(an auto-rebase, for example), run `mullion task push` (or the
+`push_task_branch` MCP tool) once your work is committed. Mullion pushes the
+branch with its own bot identity, holds a change to `.github/workflows/` until
+the operator approves it, and tells you the outcome:
+
+- a stale lease or other rejection: fetch, rebase again, re-run the gate, and
+  call it again;
+- a workflow change waiting for approval, or refused credentials: only the
+  operator can fix that, so end your turn and say so.
+
+It needs the task to have a pull request already; Mullion opens the first
+draft PR itself when you finish your turn.
+
 ## Asking for a review
 
 Mullion can ask the review bot to review your pull request. Ask for it with

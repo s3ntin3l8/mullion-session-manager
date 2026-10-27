@@ -706,6 +706,24 @@ const getScrollback = {
   },
 };
 
+const pushTaskBranch = {
+  name: "push_task_branch",
+  description:
+    "Push this Task Master task's branch through Mullion. Use it instead of `git push` when " +
+    "your prompt tells you to push (an auto-rebase, a CI fix): Mullion pushes with its own bot " +
+    "identity and holds a change to .github/workflows/ until the operator approves it, and a " +
+    "plain `git push` from this session is refused. Only the task's worker session can call it, " +
+    "and only once the task has a pull request. Commit first (a dirty worktree is refused). " +
+    "Returns the PR url on success. A failure carries the reason and what to do: if the remote " +
+    "moved (stale lease / non-fast-forward), fetch, rebase again, re-run the gate and call it " +
+    "again; if it needs workflow approval or the credentials are refused, only the operator can " +
+    "fix that, so end your turn instead of trying another way to push.",
+  inputSchema: { type: "object", properties: {} },
+  async handler(_args, client) {
+    return JSON.stringify(await client.pushTaskBranch());
+  },
+};
+
 const requestReview = {
   name: "request_review",
   description:
@@ -1263,6 +1281,7 @@ export const TOOLS = [
   killChildSession,
   stopDockSession,
   getScrollback,
+  pushTaskBranch,
   requestReview,
   reviewStatus,
   stopReview,

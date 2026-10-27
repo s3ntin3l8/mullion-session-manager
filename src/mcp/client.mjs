@@ -603,6 +603,12 @@ export class MullionClient {
     }
   }
 
+  /** Pushes this session's Task Master branch through Mullion (gated, bot
+   * identity) instead of with the session's own git credentials (#2102). */
+  async pushTaskBranch() {
+    return this.reviewOp("tasks.push", {});
+  }
+
   /** Asks the Mullion server to relay a Hermes review request for this
    * session's PR. `prNumber` is optional — the server resolves the PR from
    * the session's branch when omitted. */
