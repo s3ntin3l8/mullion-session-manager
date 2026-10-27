@@ -17,7 +17,12 @@ function fakeSession() {
     eventSeqHead: 7,
     writeAgentInput: vi.fn((data: string) => {
       writes.push(data);
-      offset += data.length + 50; // the echo
+      // A real PTY echoes on a LATER tick, not inside the write: the echo of the
+      // typed body lands during deliverPrompt's submit-delay wait, which is
+      // exactly the race the offset must come out the right side of.
+      setTimeout(() => {
+        offset += data.length + 50;
+      }, 5);
       return true;
     }),
     beginAgentTurn: vi.fn(),
@@ -36,7 +41,10 @@ describe("deliverPrompt outputOffset (issue #2112)", () => {
     });
     expect(res).toMatchObject({ ok: true });
     expect(writes.length).toBe(2); // body, then Enter
-    if (res.ok) expect(res.outputOffset).toBe(offsetNow());
+    // The body's echo landed during the submit delay, so the offset (taken after
+    // the Enter) already includes it: nothing of the typed text is left to match.
+    if (res.ok) expect(res.outputOffset).toBe(100 + "hello MARKER".length + 50);
+    expect(offsetNow()).toBeGreaterThanOrEqual(100 + "hello MARKER".length + 50);
     expect(session.beginAgentTurn).toHaveBeenCalled();
   });
 

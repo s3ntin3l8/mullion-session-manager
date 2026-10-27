@@ -138,8 +138,9 @@ export async function deliverPrompt(
     // text back, so an offset taken before the write puts the prompt's own
     // words inside the wait window and a marker the prompt contains matches at
     // once (issue #2112). When the prompt is submitted this is re-taken after
-    // the submit write (below); when it is only typed, nothing is "provoked"
-    // yet and the pre-write offset stays.
+    // the submit write (below). When it is only typed (`submit: false`),
+    // nothing is "provoked" yet and the pre-write offset stays — so on that
+    // path the typed echo IS inside a following wait window.
     let outputOffset = session.outputOffset;
     if (!session.writeAgentInput(framing.body)) {
       return refuse({

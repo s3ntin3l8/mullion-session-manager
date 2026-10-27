@@ -315,6 +315,15 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
         ok: false,
         transient: false,
       });
+      // A combined target names the HOST, so the reason is about that host — not
+      // the fleet-wide "no host has reported platform" (issue #2112).
+      const combined = (await refusal({ hostId, platform: "win32" }, projectId)) as {
+        detail?: string;
+      };
+      expect(combined.detail).toContain("the named host reports platform linux, not win32");
+      expect(combined.detail).not.toContain("no host has reported");
+      const unknown = (await refusal({ hostId: "no-such-host" }, projectId)) as { detail?: string };
+      expect(unknown.detail).toContain("no such host");
 
       // The matching host exists but the project has no path on it.
       app.db.update(projects).set({ hostCwds: null }).where(eq(projects.id, projectId)).run();
@@ -349,6 +358,27 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
       transient: true,
       unreadable: true,
     });
+
+    // The host reports no capacity yet (issue #2112): named as such, host-id free.
+    // (the host row carries the platform, since the capacity reading that
+    // normally supplies it is the thing that is missing)
+    app.db.update(hosts).set({ platform: "darwin" }).run();
+    const noCapacity = vi.spyOn(app.hostCapacityTracker!, "get").mockReturnValue(undefined);
+    const resNoCapacity = resolveTargetHost(app, {
+      project: {
+        hostId: project.hostId,
+        placement: project.placement,
+        cwd: project.cwd,
+        hostCwds: project.hostCwds,
+      },
+      target: { platform: "darwin" },
+      unattended: false,
+    });
+    noCapacity.mockRestore();
+    expect(resNoCapacity).toMatchObject({ ok: false });
+    if (!resNoCapacity.ok) {
+      expect(resNoCapacity.detail).toContain("a matching host has no capacity reading yet");
+    }
   });
 
   describe("isolate", () => {

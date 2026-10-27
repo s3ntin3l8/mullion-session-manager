@@ -521,7 +521,7 @@ async function resolveReviewTarget(
         reply.notFound(
           fromCaller
             ? `No open PR found for branch ${branch}`
-            : `No open PR found for branch ${branch} (the branch of this session's working directory — an agent that works in another worktree should pass prNumber or branch)`,
+            : `No open PR found for branch ${branch} (the branch of this session's launch directory — an agent that works in another worktree should pass prNumber or branch)`,
         );
         return null;
       }

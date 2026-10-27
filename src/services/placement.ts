@@ -632,6 +632,7 @@ function refusalReasons(
   localCapacity: HostCapacity | null,
   all: PlacementCandidate[],
   wantedPlatform: string | undefined,
+  wantedHost: string | null,
 ): string[] {
   const why = new Set<string>();
   for (const candidate of matching) {
@@ -643,13 +644,22 @@ function refusalReasons(
     if (candidate.projectCwd === null) why.add("the project has no checkout on a matching host");
   }
   if (matching.length === 0) {
-    why.add(
-      wantedPlatform === undefined
-        ? "no such host"
-        : `no host has reported platform ${wantedPlatform}`,
-    );
-    if (wantedPlatform !== undefined && all.some((c) => (c.platform ?? "") === "")) {
-      why.add("a host that has not reported its platform yet may match once it is online");
+    const named = wantedHost === null ? undefined : all.find((c) => c.hostId === wantedHost);
+    if (wantedHost !== null && named === undefined) {
+      why.add("no such host");
+    } else if (wantedHost !== null && wantedPlatform !== undefined) {
+      // The caller named this host, so saying what it reports leaks nothing — and
+      // the fleet-wide claim below would be untrue when another host has `p`.
+      why.add(
+        (named?.platform ?? "") === ""
+          ? `the named host has not reported its platform yet, so it cannot be confirmed as ${wantedPlatform}`
+          : `the named host reports platform ${named?.platform}, not ${wantedPlatform}`,
+      );
+    } else if (wantedPlatform !== undefined) {
+      why.add(`no host has reported platform ${wantedPlatform}`);
+      if (all.some((c) => (c.platform ?? "") === "")) {
+        why.add("a host that has not reported its platform yet may match once it is online");
+      }
     }
   }
   return [...why];
@@ -722,7 +732,13 @@ export function resolveTargetHost(
     return refusal(
       mightMatch,
       false,
-      refusalReasons(matching, collected.localCapacity, collected.candidates, wantedPlatform),
+      refusalReasons(
+        matching,
+        collected.localCapacity,
+        collected.candidates,
+        wantedPlatform,
+        wantedHost,
+      ),
     );
   }
 

@@ -545,7 +545,7 @@ const waitForOutput = {
     "regex:true (then no backreferences/lookarounds or nested quantifiers; max 256 chars). It " +
     "matches ANSI-stripped output (last 16 KiB window). To catch output a prompt_session just " +
     "provoked, pass that call's outputOffset as afterOffset (taken after the prompt was typed and " +
-    "submitted, so the typed echo is excluded) — otherwise only output from now on counts. A TUI " +
+    "submitted, so the typed echo is excluded; with submit:false the echo is still inside the window) — otherwise only output from now on counts. A TUI " +
     "may redraw the submitted prompt into its transcript, so do not use a marker the prompt " +
     "itself contains (ask for e.g. 'print the word DONE reversed', then match the reversed form). Default timeout 50s: on timedOut:true just call it again. Session scope may only " +
     "wait on its own children.",

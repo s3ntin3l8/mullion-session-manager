@@ -64,7 +64,8 @@ it to emit) use `mullion session wait-output <childId> "<text>"` /
 printed from now on — so to catch what a prompt just provoked, pass the
 `outputOffset` that `session prompt` / `prompt_session` returned as
 `--after-offset` / `afterOffset` (it is taken after the prompt was typed and
-submitted, so the typed echo is excluded). A TUI child may still redraw the
+submitted, so the typed echo is excluded; a prompt sent with `submit: false` is
+not yet submitted, so its echo is still inside the window). A TUI child may still redraw the
 submitted prompt into its transcript, so never wait on text the prompt itself
 contains: ask for a derived marker (e.g. "print DONE reversed") and match that.
 `--regex` / `regex: true` is available but
