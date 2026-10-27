@@ -449,25 +449,47 @@ export async function sessionsRoute(app: FastifyInstance) {
   // new, scrollback-specific error signal; an operator who needs to tell
   // them apart has `app.log.warn` below and, separately, `alive`/
   // `sessionStatus` from GET /api/sessions/:id.
-  app.get<{ Params: { id: string } }>("/api/sessions/:id/scrollback", async (request, reply) => {
-    const sessionId = Number(request.params.id);
-    if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+  //
+  // `?mode=rendered` (issue #2112) answers `{ text }` — the terminal screen and
+  // scrolled-off lines as plain text, resolved through a headless emulator on the
+  // host that owns the session — instead of `{ b64 }`, the raw repaint stream a
+  // full-screen TUI makes unreadable. The same empty-on-failure posture applies.
+  app.get<{ Params: { id: string }; Querystring: { mode?: string } }>(
+    "/api/sessions/:id/scrollback",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          properties: { mode: { type: "string", enum: ["raw", "rendered"] } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const sessionId = Number(request.params.id);
+      if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
 
-    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
-    if (!row) return reply.notFound();
+      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      if (!row) return reply.notFound();
 
-    // Issue #1722 / roadmap 8.8 — the SESSION's host, not its
-    // project's: a session may live on a host of its own (placement),
-    // and this operation is about the session.
-    const hostId = resolveSessionHostId(app, row);
-    try {
-      const buffer = await resolveBackend(app, hostId).getScrollback(String(sessionId));
-      return { b64: buffer.toString("base64") };
-    } catch (err) {
-      app.log.warn({ err, sessionId, hostId }, "host unreachable, reporting empty scrollback");
-      return { b64: "" };
-    }
-  });
+      // Issue #1722 / roadmap 8.8 — the SESSION's host, not its
+      // project's: a session may live on a host of its own (placement),
+      // and this operation is about the session.
+      const hostId = resolveSessionHostId(app, row);
+      const rendered = request.query.mode === "rendered";
+      try {
+        if (rendered) {
+          return {
+            text: await resolveBackend(app, hostId).getRenderedScrollback(String(sessionId)),
+          };
+        }
+        const buffer = await resolveBackend(app, hostId).getScrollback(String(sessionId));
+        return { b64: buffer.toString("base64") };
+      } catch (err) {
+        app.log.warn({ err, sessionId, hostId }, "host unreachable, reporting empty scrollback");
+        return rendered ? { text: "" } : { b64: "" };
+      }
+    },
+  );
 
   // Icebox item filed during Phase 5 (#230) planning — the genuine OS
   // subprocesses running inside this session's systemd scope/cgroup (MCP

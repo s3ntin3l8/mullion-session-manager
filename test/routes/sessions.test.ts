@@ -137,6 +137,7 @@ function fakeSessionBackend(overrides: Partial<SessionBackend>): SessionBackend 
     liveness: vi.fn().mockResolvedValue({}),
     terminate: vi.fn().mockResolvedValue(undefined),
     getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
+    getRenderedScrollback: vi.fn().mockResolvedValue(""),
     listSessionProcesses: vi.fn().mockResolvedValue([]),
     uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload.png" }),
     uploadFile: vi.fn().mockResolvedValue({ path: "/remote/upload.bin" }),
@@ -1327,6 +1328,59 @@ describe("sessions route", () => {
       expect(typeof b64).toBe("string");
       expect(Buffer.from(b64, "base64").toString("utf8")).toContain(marker);
 
+      await app.close();
+    });
+
+    it("?mode=rendered returns the screen as plain text, with repaints resolved (issue #2112)", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const sessionId = created.json().id;
+      await waitUntil(async () => {
+        const list = await app.inject({
+          method: "GET",
+          url: `/api/sessions?projectId=${projectId}`,
+        });
+        return list.json()[0]?.alive === true;
+      });
+      const pty = ptyMock.spawnedPtys[ptyMock.spawnedPtys.length - 1];
+      pty.emitData("\r\x1b[2K| thinking");
+      pty.emitData("\r\x1b[2K/ thinking");
+      pty.emitData("\r\x1b[2Kfinal answer\r\n");
+
+      const res = await app.inject({
+        method: "GET",
+        url: `/api/sessions/${sessionId}/scrollback?mode=rendered`,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toEqual({ text: "final answer" });
+
+      await app.close();
+    });
+
+    it("?mode=rendered answers an empty text for an untracked session, and 400s an unknown mode", async () => {
+      const app = await buildApp();
+      const { sessions } = await import("../../src/db/schema.js");
+      const projectId = await createProject(app);
+      const [row] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash" })
+        .returning()
+        .all();
+      const rendered = await app.inject({
+        method: "GET",
+        url: `/api/sessions/${row.id}/scrollback?mode=rendered`,
+      });
+      expect(rendered.json()).toEqual({ text: "" });
+      const bad = await app.inject({
+        method: "GET",
+        url: `/api/sessions/${row.id}/scrollback?mode=pretty`,
+      });
+      expect(bad.statusCode).toBe(400);
       await app.close();
     });
 
@@ -5505,6 +5559,7 @@ describe("sessions route", () => {
       const spy = vi.spyOn(sessionBackendModule, "resolveBackend");
       spy.mockReturnValue({
         getScrollback: vi.fn().mockResolvedValue(Buffer.from("remote")),
+        getRenderedScrollback: vi.fn().mockResolvedValue(""),
       } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
 
       const res = await app.inject({
@@ -5535,6 +5590,7 @@ describe("sessions route", () => {
       const spy = vi.spyOn(sessionBackendModule, "resolveBackend");
       spy.mockReturnValue({
         getScrollback: vi.fn().mockResolvedValue(Buffer.from("local")),
+        getRenderedScrollback: vi.fn().mockResolvedValue(""),
       } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
 
       const res = await app.inject({

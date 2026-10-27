@@ -2532,6 +2532,21 @@ describe("runCommand", () => {
       expect(code).toBe(0);
       expect(io.written.map((b) => b.toString()).join("")).toBe("hello\n");
     });
+
+    it("session logs --text asks for the rendered screen and prints it as text (issue #2112)", async () => {
+      const request = vi.fn(async () => ({ text: "the final answer" }));
+      const io = fakeIo();
+      const code = await runCommand(["logs", "1", "--text"], {
+        client: fakeClient({ request }),
+        io,
+      });
+      expect(code).toBe(0);
+      expect(request).toHaveBeenCalledWith("sessions.scrollback", {
+        sessionId: "1",
+        mode: "rendered",
+      });
+      expect(io.written.map((b) => b.toString()).join("")).toBe("the final answer\n");
+    });
   });
 
   describe("project/preview/dock commands", () => {

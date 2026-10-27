@@ -1,3 +1,4 @@
+import { renderScrollback } from "./scrollback-render.js";
 import type { FastifyInstance } from "fastify";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import type { SessionInfo } from "./pty-manager.js";
@@ -169,6 +170,11 @@ export interface SessionBackend {
   // null-safe posture) — returns an empty buffer instead, since that's a
   // legitimate "no history yet" state, not a host/session error.
   getScrollback(id: string): Promise<Buffer>;
+  // The same history as plain text (issue #2112): the terminal replayed through
+  // a headless emulator at the session's own size, so a full-screen TUI's
+  // repaints resolve to what was on screen. Empty when the session isn't
+  // tracked, like getScrollback.
+  getRenderedScrollback(id: string): Promise<string>;
   // Icebox item filed during Phase 5 (#230) planning — the genuine OS
   // subprocesses running inside a session's cgroup (MCP servers,
   // `Bash run_in_background` jobs, nested CLIs), not to be confused with
@@ -459,6 +465,12 @@ class LocalBackend implements SessionBackend {
     return this.app.pty.get(id)?.getScrollback() ?? Buffer.alloc(0);
   }
 
+  async getRenderedScrollback(id: string): Promise<string> {
+    const session = this.app.pty.get(id);
+    if (!session) return "";
+    return renderScrollback(session.getScrollback(), session.size);
+  }
+
   listSessionProcesses(id: string): Promise<CgroupProcess[]> {
     return this.app.pty.listSessionProcesses(id);
   }
@@ -714,6 +726,10 @@ class RemoteBackend implements SessionBackend {
 
   getScrollback(id: string): Promise<Buffer> {
     return this.client.resolveScrollback(id);
+  }
+
+  getRenderedScrollback(id: string): Promise<string> {
+    return this.client.resolveRenderedScrollback(id);
   }
 
   listSessionProcesses(_id: string): Promise<CgroupProcess[]> {

@@ -1354,6 +1354,17 @@ describe("RemoteHostClient", () => {
     );
   });
 
+  it("resolveRenderedScrollback asks the agent for mode=rendered and returns its text (issue #2112)", async () => {
+    fetchMock.mockResolvedValue(jsonResponse(200, { text: "the screen" }));
+    expect(await client().resolveRenderedScrollback("42")).toBe("the screen");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/sessions/42/scrollback?mode=rendered",
+      expect.anything(),
+    );
+    fetchMock.mockResolvedValue(jsonResponse(200, {}));
+    expect(await client().resolveRenderedScrollback("never-spawned")).toBe("");
+  });
+
   it("resolves an empty Buffer for a session id the agent has never tracked", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, { b64: "" }));
     const result = await client().resolveScrollback("never-spawned");

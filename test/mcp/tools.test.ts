@@ -291,14 +291,33 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     expect(JSON.parse(text)).toEqual({ ok: true });
   });
 
-  it("get_scrollback calls client.getScrollback and decodes the b64 result to text", async () => {
+  it("get_scrollback defaults to the rendered screen text (issue #2112)", async () => {
+    const tool = TOOLS.find((t) => t.name === "get_scrollback")!;
+    const getScrollback = vi.fn().mockResolvedValue({ text: "the final answer" });
+    const text = await tool.handler({}, { getScrollback });
+    expect(getScrollback).toHaveBeenCalledWith(undefined, "rendered");
+    expect(text).toBe("the final answer");
+    await tool.handler({ sessionId: "4", mode: "rendered" }, { getScrollback });
+    expect(getScrollback).toHaveBeenLastCalledWith("4", "rendered");
+  });
+
+  it('get_scrollback mode "raw" calls client.getScrollback and decodes the b64 result', async () => {
     const tool = TOOLS.find((t) => t.name === "get_scrollback")!;
     const getScrollback = vi
       .fn()
       .mockResolvedValue({ b64: Buffer.from("hello world").toString("base64") });
-    const text = await tool.handler({}, { getScrollback });
+    const text = await tool.handler({ mode: "raw" }, { getScrollback });
     expect(getScrollback).toHaveBeenCalledWith(undefined);
     expect(text).toBe("hello world");
+  });
+
+  it("get_scrollback rejects an unknown mode and tolerates an empty result", async () => {
+    const tool = TOOLS.find((t) => t.name === "get_scrollback")!;
+    await expect(tool.handler({ mode: "pretty" }, { getScrollback: vi.fn() })).rejects.toThrow(
+      /mode must be/,
+    );
+    const empty = vi.fn().mockResolvedValue({});
+    expect(await tool.handler({}, { getScrollback: empty })).toBe("");
   });
 
   it("list_child_sessions calls client.listChildSessions and returns its JSON", async () => {

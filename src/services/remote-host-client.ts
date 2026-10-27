@@ -1909,6 +1909,15 @@ export class RemoteHostClient {
     return Buffer.from(result.b64, "base64");
   }
 
+  /** The session's scrollback rendered as plain text (issue #2112) — rendered
+   * ON the agent, where the PTY's real size is known, so only text crosses. */
+  async resolveRenderedScrollback(id: string): Promise<string> {
+    const result = await this.request<{ text?: string }>(
+      `/internal/sessions/${encodeURIComponent(id)}/scrollback?mode=rendered`,
+    );
+    return typeof result.text === "string" ? result.text : "";
+  }
+
   /** Stashes a seed prompt (issue #271) on this agent's own PtyManager, for
    * a NEW session's SessionStart hook to pick up once it fires. */
   async resolveStashSeed(id: string, seed: string): Promise<void> {

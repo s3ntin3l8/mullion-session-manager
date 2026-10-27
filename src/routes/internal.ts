@@ -1,3 +1,4 @@
+import { renderScrollback } from "../services/scrollback-render.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import path from "node:path";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
@@ -2613,16 +2614,27 @@ export async function internalRoutes(app: FastifyInstance) {
   // route (sessions.ts) already treats a thrown/unreachable call as
   // "report empty," so an untracked-but-reachable id must resolve the same
   // way, not as a 404 the primary would have to special-case differently.
-  app.get<{ Params: { id: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { mode?: string } }>(
     "/internal/sessions/:id/scrollback",
     {
       ...INTERNAL_RATE_LIMIT,
       schema: {
         params: SESSION_ID_PARAMS_SCHEMA,
+        querystring: {
+          type: "object",
+          properties: { mode: { type: "string", enum: ["raw", "rendered"] } },
+        },
       },
     },
     async (request) => {
       const session = app.pty.get(request.params.id);
+      // Issue #2112 — `mode=rendered`: the screen as plain text, rendered here
+      // where the PTY's real size is known.
+      if (request.query.mode === "rendered") {
+        return {
+          text: session ? await renderScrollback(session.getScrollback(), session.size) : "",
+        };
+      }
       return { b64: session ? session.getScrollback().toString("base64") : "" };
     },
   );
