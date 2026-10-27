@@ -359,3 +359,16 @@ jobs:
           test/services/scope-windows.test.ts
           test/services/msys-socket.test.ts
           test/services/ssh-agent-msys-gitbash.test.ts
+      # A separate run, not more files in the one above: the ConPTY tests spawn
+      # real terminals, and node-pty's console helper intermittently dies with
+      # "AttachConsole failed" under load, taking a vitest worker down with it
+      # (an unhandled "Worker exited unexpectedly" in pty-host-client.test.ts
+      # failed this job once the install tests ran alongside them, though every
+      # test passed). The install tests spawn PowerShell, Git Bash and node
+      # children of their own, so they get their own process pool (#2160).
+      - name: Windows install tests
+        run: >-
+          npx vitest run
+          test/scripts/portable-links.test.ts
+          test/scripts/windows-launcher.test.ts
+          test/scripts/windows-register-task.test.ts
