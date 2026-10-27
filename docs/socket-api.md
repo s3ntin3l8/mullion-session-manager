@@ -348,7 +348,10 @@ checked one last time first).
   starts is ignored. To also count output a prompt just provoked, pass the
   `outputOffset` that `sessions.prompt` returned as `afterOffset`: output
   produced since then (as much as the scrollback ring still holds) is checked
-  first, so there is no prompt → wait race. An `afterOffset` from before a
+  first, so a fast reply is not missed. The offset is taken after the prompt was
+  typed and submitted, so the typed echo is excluded — but a TUI may redraw the
+  submitted prompt into its transcript, so do not wait on text the prompt itself
+  contains. An `afterOffset` from before a
   server restart is ahead of the counter and simply contributes nothing.
 - **Regex is opt-in and guarded**: Node regexes have no timeout, so with
   `regex: true` the pattern must be <= 256 chars, contain no backreferences or

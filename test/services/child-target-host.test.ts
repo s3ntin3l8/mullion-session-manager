@@ -181,7 +181,9 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
     if (res.ok) return;
     expect(res.reason).toBe("no-target-host");
     if (res.reason !== "no-target-host") return;
-    expect(res.detail).toBe("no eligible host matches platform win32");
+    expect(res.detail).toBe(
+      "no eligible host matches platform win32 (no host has reported platform win32)",
+    );
     // A session-scoped caller must not learn the fleet through the refusal.
     expect(res.detail).not.toContain(hostId);
     expect(app.db.select().from(sessions).all()).toHaveLength(0);
@@ -197,6 +199,10 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.reason).toBe("no-target-host");
+    // The reason is named without naming the host (issue #2112).
+    if (res.reason === "no-target-host") {
+      expect(res.detail).toContain("the project has no checkout on a matching host");
+    }
   });
 
   it("refuses a drained host", async () => {
@@ -210,6 +216,8 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
     expect(res.ok).toBe(false);
     if (res.ok) return;
     expect(res.reason).toBe("no-target-host");
+    // Says WHY, about the host the caller asked for only (issue #2112).
+    if (res.reason === "no-target-host") expect(res.detail).toContain("parked/drained");
   });
 
   it("refuses an offline host", async () => {
@@ -223,6 +231,8 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
       target: { hostId },
     });
     expect(res.ok).toBe(false);
+    if (res.ok || res.reason !== "no-target-host") return;
+    expect(res.detail).toContain("a matching host is offline");
   });
 
   it("falls back to the host's cached capacity platform when the host row has none", async () => {
@@ -305,6 +315,15 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
         ok: false,
         transient: false,
       });
+      // A combined target names the HOST, so the reason is about that host — not
+      // the fleet-wide "no host has reported platform" (issue #2112).
+      const combined = (await refusal({ hostId, platform: "win32" }, projectId)) as {
+        detail?: string;
+      };
+      expect(combined.detail).toContain("the named host reports platform linux, not win32");
+      expect(combined.detail).not.toContain("no host has reported");
+      const unknown = (await refusal({ hostId: "no-such-host" }, projectId)) as { detail?: string };
+      expect(unknown.detail).toContain("no such host");
 
       // The matching host exists but the project has no path on it.
       app.db.update(projects).set({ hostCwds: null }).where(eq(projects.id, projectId)).run();
@@ -334,11 +353,32 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
     spy.mockRestore();
     expect(res).toEqual({
       ok: false,
-      detail: "no eligible host matches platform darwin",
+      detail: "no eligible host matches platform darwin (the host list could not be read)",
       // Could not read the fleet at all: nothing says waiting would not help.
       transient: true,
       unreadable: true,
     });
+
+    // The host reports no capacity yet (issue #2112): named as such, host-id free.
+    // (the host row carries the platform, since the capacity reading that
+    // normally supplies it is the thing that is missing)
+    app.db.update(hosts).set({ platform: "darwin" }).run();
+    const noCapacity = vi.spyOn(app.hostCapacityTracker!, "get").mockReturnValue(undefined);
+    const resNoCapacity = resolveTargetHost(app, {
+      project: {
+        hostId: project.hostId,
+        placement: project.placement,
+        cwd: project.cwd,
+        hostCwds: project.hostCwds,
+      },
+      target: { platform: "darwin" },
+      unattended: false,
+    });
+    noCapacity.mockRestore();
+    expect(resNoCapacity).toMatchObject({ ok: false });
+    if (!resNoCapacity.ok) {
+      expect(resNoCapacity.detail).toContain("a matching host has no capacity reading yet");
+    }
   });
 
   describe("isolate", () => {
@@ -590,7 +630,9 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
         payload: { projectId, command: "bash", targetPlatform: "win32" },
       });
       expect(res.statusCode).toBe(409);
-      expect(res.json().message).toBe("no eligible host matches platform win32");
+      expect(res.json().message).toBe(
+        "no eligible host matches platform win32 (no host has reported platform win32)",
+      );
     });
 
     it("creates the session on the targeted host and reads its status from THAT host", async () => {

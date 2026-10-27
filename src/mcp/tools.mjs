@@ -544,8 +544,10 @@ const waitForOutput = {
     "{matched:false, gone:true} (the child exited). `match` is a literal substring unless " +
     "regex:true (then no backreferences/lookarounds or nested quantifiers; max 256 chars). It " +
     "matches ANSI-stripped output (last 16 KiB window). To catch output a prompt_session just " +
-    "provoked, pass that call's outputOffset as afterOffset — otherwise only output from now on " +
-    "counts. Default timeout 50s: on timedOut:true just call it again. Session scope may only " +
+    "provoked, pass that call's outputOffset as afterOffset (taken after the prompt was typed and " +
+    "submitted, so the typed echo is excluded; with submit:false the echo is still inside the window) — otherwise only output from now on counts. A TUI " +
+    "may redraw the submitted prompt into its transcript, so do not use a marker the prompt " +
+    "itself contains (ask for e.g. 'print the word DONE reversed', then match the reversed form). Default timeout 50s: on timedOut:true just call it again. Session scope may only " +
     "wait on its own children.",
   inputSchema: {
     type: "object",
@@ -732,7 +734,9 @@ const requestReview = {
     "dispatched asynchronously and posts to the PR as the review bot within a few minutes; " +
     "the result carries a runId. " +
     REVIEW_PROTOCOL_NOTE +
-    " Omit pr_number to use the open PR for the session's current branch. " +
+    " Omit pr_number to use the open PR for the branch of the session's launch directory " +
+    "(an agent that works in another worktree, e.g. .wt/<branch>, must pass pr_number or " +
+    "branch — the tool cannot see where the agent cd'ed to). " +
     REVIEW_REPO_NOTE +
     " Fails with a clear " +
     "message if the relay isn't configured in Mullion's Settings → Integrations or no PR " +

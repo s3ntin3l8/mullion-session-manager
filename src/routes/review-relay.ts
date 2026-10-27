@@ -507,6 +507,7 @@ async function resolveReviewTarget(
     if (prNumber === undefined) {
       // A branch the caller reports (the CLI reads it from its own cwd, which
       // is where the agent actually is) beats the session's launch cwd.
+      const fromCaller = requested.branch !== undefined;
       const branch = requested.branch ?? (await resolveSessionBranch(app, project, session));
       if (!branch || branch === "(detached)" || isDetachedBranch(branch)) {
         reply.notFound("Could not determine this session's branch — pass prNumber");
@@ -514,7 +515,14 @@ async function resolveReviewTarget(
       }
       const pr = await findPullRequestByHead(token, owner, repo, `${owner}:${branch}`);
       if (!pr) {
-        reply.notFound(`No open PR found for branch ${branch}`);
+        // Say where the branch came from: a session rooted at the main checkout
+        // resolves to its launch directory's branch, not the worktree an agent
+        // `cd`ed into, and "branch main" alone never explains that (issue #2112).
+        reply.notFound(
+          fromCaller
+            ? `No open PR found for branch ${branch}`
+            : `No open PR found for branch ${branch} (the branch of this session's launch directory — an agent that works in another worktree should pass prNumber or branch)`,
+        );
         return null;
       }
       prNumber = pr.number;

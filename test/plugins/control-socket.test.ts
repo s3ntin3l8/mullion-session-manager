@@ -1688,8 +1688,58 @@ describe("controlSocketPlugin (issue #185)", () => {
           // capped by the parent's own value server-side, so forwarding it
           // can only narrow. `kind` does NOT join — see the "silently strips
           // kind" test below.
-          ["command", "name", "parentSessionId", "projectId", "skipPermissions"].sort(),
+          // `nameLocked` is derived server-side from a supplied `name` (#2112),
+          // never taken from the caller's own `nameLocked: true` above.
+          [
+            "command",
+            "name",
+            "nameLocked",
+            "parentSessionId",
+            "projectId",
+            "skipPermissions",
+          ].sort(),
         );
+        socket.destroy();
+      });
+
+      it("pins a supplied name (nameLocked) so the agent's auto-title can't replace it (#2112)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const injectSpy = vi.spyOn(app, "inject");
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: { command: "bash", name: "1854 mac probe", nameLocked: false },
+          })}\n`,
+        );
+        await waitForReply(socket);
+        const post = injectedOptions(injectSpy).find(
+          (o) => o.method === "POST" && o.url === "/api/sessions",
+        )!;
+        expect(JSON.parse(String(post.payload)).nameLocked).toBe(true);
+        socket.destroy();
+      });
+
+      it("leaves nameLocked unset when no name (or a blank one) is supplied (#2112)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const injectSpy = vi.spyOn(app, "inject");
+        const socket = await sessionScopeSocket(hookToken);
+        for (const body of [{ command: "bash" }, { command: "bash", name: "   " }]) {
+          socket.write(`${JSON.stringify({ id: 1, op: "sessions.spawn_child", body })}\n`);
+          await waitForReply(socket);
+        }
+        const posts = injectedOptions(injectSpy).filter(
+          (o) => o.method === "POST" && o.url === "/api/sessions",
+        );
+        expect(posts.length).toBeGreaterThanOrEqual(2);
+        for (const post of posts) {
+          expect(JSON.parse(String(post.payload))).not.toHaveProperty("nameLocked");
+        }
         socket.destroy();
       });
 

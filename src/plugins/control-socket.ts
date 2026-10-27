@@ -1178,9 +1178,11 @@ export const OPS: Record<string, OpSpec> = {
   // chars; a literal substring unless `regex: true`, in which case it must
   // have no backreferences/lookarounds and star height <= 1 — see
   // services/output-wait.ts), `timeoutMs` (default 10 min, clamped to 1 h) and
-  // `afterOffset` (a `sessions.prompt` reply's `outputOffset`: output printed
-  // since then still counts, so there is no prompt -> wait race; omitted means
-  // only output from now on). Matches against the last 16 KiB of ANSI-stripped
+  // `afterOffset` (a `sessions.prompt` reply's `outputOffset`, taken after the
+  // prompt was typed and submitted: output printed since then still counts, so a
+  // fast reply is not missed — but a TUI may redraw the submitted prompt into its
+  // transcript, so do not match on text the prompt contains; omitted means only
+  // output from now on). Matches against the last 16 KiB of ANSI-stripped
   // output. A child on another host is waited on THERE, in bounded chunks
   // (SessionBackend.waitOutput, #1951); 409 only when it has no live process.
   // Resolves `{matched, text, line}`, `{timedOut:true}` or `{gone:true}`.
@@ -1550,8 +1552,15 @@ export const OPS: Record<string, OpSpec> = {
               return forwarded;
             })()
           : fullRest;
+      // A name the spawner chose is pinned: unlocked, the agent's own terminal
+      // title replaces it in the sidebar within seconds (issue #2112). A
+      // full-scope caller that sends an explicit `nameLocked` keeps its value;
+      // session scope can't send one (SESSION_SPAWN_CHILD_FIELDS).
+      const pinName =
+        typeof rest.name === "string" && rest.name.trim() !== "" && rest.nameLocked === undefined;
       const payload = {
         ...rest,
+        ...(pinName ? { nameLocked: true } : {}),
         projectId: childProjectId,
         parentSessionId: Number(parent.id),
       };

@@ -134,9 +134,14 @@ export async function deliverPrompt(
         error: "prompt delivery is not supported for this session's agent",
       });
     }
-    // Captured BEFORE writing, so a following wait_for_output can cover
-    // everything the child printed in response (the prompt -> wait gap).
-    const outputOffset = session.outputOffset;
+    // Where a following wait_for_output starts counting. A TUI echoes the typed
+    // text back, so an offset taken before the write puts the prompt's own
+    // words inside the wait window and a marker the prompt contains matches at
+    // once (issue #2112). When the prompt is submitted this is re-taken after
+    // the submit write (below). When it is only typed (`submit: false`),
+    // nothing is "provoked" yet and the pre-write offset stays — so on that
+    // path the typed echo IS inside a following wait window.
+    let outputOffset = session.outputOffset;
     if (!session.writeAgentInput(framing.body)) {
       return refuse({
         status: 503,
@@ -163,6 +168,11 @@ export async function deliverPrompt(
         });
       }
       session.beginAgentTurn();
+      // After the typed body and the Enter, so their echo is not part of
+      // what the child "printed in response". The TUI may still redraw the
+      // submitted prompt into its transcript after this point, so a marker
+      // should not be phrased so that the prompt itself contains it.
+      outputOffset = session.outputOffset;
     }
     // Armed AFTER beginAgentTurn(): its own agent_prompt event must not
     // count as "the child started a turn" — only a later, real event
