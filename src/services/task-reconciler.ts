@@ -39,6 +39,7 @@ import {
   postReviewFindingsComment,
 } from "./task-github-sync.js";
 import { recordTaskTransition } from "./task-state.js";
+import { endIfRebaseEmptied, endReviewingOnPrState } from "./task-review-end.js";
 import { HostUnreachableError } from "./remote-host-client.js";
 import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
 import {
@@ -467,6 +468,11 @@ async function fetchCurrentCiStatus(
   baseRef: string;
   mergeable: boolean | null;
   mergeableState: string;
+  // #2103 — the PR's own lifecycle state, already in the payload: a closed or
+  // merged PR is the end of a reviewing task, not something to keep polling.
+  prState: "open" | "closed";
+  merged: boolean;
+  mergedAt: string | null;
 } | null> {
   if (task.prNumber === null) return null;
   const repoRef = await resolveRepoRef(app, project);
@@ -491,6 +497,9 @@ async function fetchCurrentCiStatus(
     baseRef: pr.baseRef,
     mergeable: pr.mergeable,
     mergeableState: pr.mergeableState,
+    prState: pr.state,
+    merged: pr.merged,
+    mergedAt: pr.mergedAt,
   };
 }
 
@@ -2913,6 +2922,113 @@ const MAX_PR_COMMENT_CAP_COMMENTED_ENTRIES = 500;
 const prCommentCapCommentedRounds = new Map<number, number>();
 
 /**
+ * #2103 — just the PR's lifecycle (state, merged, merge time): one REST call,
+ * unlike `fetchCurrentCiStatus`, which also reads the Actions runs. For the
+ * slow sweep, which only needs to know whether the PR ended.
+ */
+async function fetchPrLifecycle(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+): Promise<{ prState: "open" | "closed"; merged: boolean; mergedAt: string | null } | null> {
+  if (task.prNumber === null) return null;
+  const repoRef = await resolveRepoRef(app, project);
+  if (!repoRef) return null;
+  const token = await resolveGitHubToken(app, repoRef, "read");
+  if (!token) return null;
+  const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
+  return { prState: pr.state, merged: pr.merged, mergedAt: pr.mergedAt };
+}
+
+/**
+ * #2103 — ends a reviewing task whose PR is merged/closed, then forgets its
+ * retry bookkeeping. `current` is what `fetchCurrentCiStatus` already read.
+ */
+async function endReviewingFromPr(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+  current: { prState: "open" | "closed"; merged: boolean; mergedAt: string | null },
+): Promise<boolean> {
+  const ended = await endReviewingOnPrState(app, task, project, {
+    state: current.prState,
+    merged: current.merged,
+    mergedAt: current.mergedAt,
+  });
+  if (ended) {
+    autoApproveRetryState.delete(task.id);
+    mergeRetryState.delete(task.id);
+  }
+  return ended;
+}
+
+// #2103 — how often the all-projects reviewing sweep re-reads one task's PR.
+// Projects with autoApprove already read it every tick; this is the slow
+// safety net for the rest, so a closed PR is noticed within minutes without a
+// per-tick GitHub call per reviewing task.
+const REVIEWING_PR_STATE_INTERVAL_MS = 10 * 60_000;
+const MAX_REVIEWING_PR_STATE_CHECKS_PER_SWEEP = 10;
+const reviewingPrStateCheckedAt = new Map<number, number>();
+
+/**
+ * #2103 — ends reviewing tasks whose PR was merged or closed without merging,
+ * and tasks whose auto-rebase left nothing to merge, in projects that don't
+ * run `autoApprove` (those are covered per tick by attemptAutoApprove).
+ */
+async function processReviewingPrState(app: FastifyInstance): Promise<void> {
+  if (!resolveTaskMasterConfig(app).enabled) return;
+  if (skipSweepIfGitHubRateLimited(app, "processReviewingPrState")) return;
+
+  const rows = app.db
+    .select({ task: tasks, project: projects })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(
+      and(
+        eq(tasks.status, "reviewing"),
+        // `auto_approve` is nullable with no default, so a freshly created
+        // project holds NULL: that is "off" too, and `= false` alone skips it.
+        or(eq(projects.autoApprove, false), isNull(projects.autoApprove)),
+        isNotNull(tasks.prNumber),
+      ),
+    )
+    .all();
+
+  // Forget tasks that left `reviewing` by any path (approve/reject/give-up
+  // included), so the throttle map never outlives the tasks it describes.
+  const live = new Set(rows.map((r) => r.task.id));
+  for (const id of reviewingPrStateCheckedAt.keys()) {
+    if (!live.has(id)) reviewingPrStateCheckedAt.delete(id);
+  }
+
+  const now = Date.now();
+  let checked = 0;
+  for (const { task, project } of rows) {
+    if (checked >= MAX_REVIEWING_PR_STATE_CHECKS_PER_SWEEP) return;
+    if (isGitHubRateLimited()) return;
+    const last = reviewingPrStateCheckedAt.get(task.id);
+    if (last !== undefined && now - last < REVIEWING_PR_STATE_INTERVAL_MS) continue;
+    checked++;
+    reviewingPrStateCheckedAt.set(task.id, now);
+    try {
+      const current = await fetchPrLifecycle(app, task, project);
+      if (current && (await endReviewingFromPr(app, task, project, current))) {
+        reviewingPrStateCheckedAt.delete(task.id);
+        continue;
+      }
+      if (await endIfRebaseEmptied(app, task, project, now, REBASE_ATTEMPT_STALE_MS)) {
+        reviewingPrStateCheckedAt.delete(task.id);
+      }
+    } catch (err) {
+      app.log.warn(
+        { err, taskId: task.id, prNumber: task.prNumber },
+        "task reconcile: reviewing PR-state check failed — retrying later",
+      );
+    }
+  }
+}
+
+/**
  * #757 — new GitHub PR review comments (unresolved threads, excluding
  * Mullion's own review posts) send a "reviewing" task back to its worker
  * for one automatic round, same mechanism as a "changes-requested" review
@@ -3176,6 +3292,21 @@ async function attemptAutoApprove(
     );
   }
 
+  // #2103 — a PR that was merged or closed is the end of this task; without
+  // this the sweep polled it forever (and kept resetting its own backoff).
+  if (current && (await endReviewingFromPr(app, task, project, current))) return;
+  // The branch a rebase emptied (the change landed on the base another way)
+  // keeps an OPEN PR with nothing in it; this is where autoApprove projects,
+  // the only ones that auto-rebase, notice it once the window has ended.
+  if (
+    current &&
+    (await endIfRebaseEmptied(app, task, project, Date.now(), REBASE_ATTEMPT_STALE_MS))
+  ) {
+    autoApproveRetryState.delete(task.id);
+    mergeRetryState.delete(task.id);
+    return;
+  }
+
   if (current && (await attemptReturnRedCiToWorker(app, task, project, current))) return;
   if (await attemptReturnPrCommentsToWorker(app, task, project)) return;
   if (!current) return;
@@ -3366,7 +3497,13 @@ async function processAutoApprovals(app: FastifyInstance): Promise<void> {
     // polls is bounded by isGitHubRateLimited() (line above). The single
     // reset inside attemptAutoApprove's clearing block (mergeable===true path)
     // handles the post-conflict immediate-attempt case.
-    if (task.rebaseStartedAt !== null) {
+    // #2103 — only while the attempt is inside its window. A stale
+    // `rebaseStartedAt` (its worker is long gone) used to keep resetting the
+    // backoff here, so the task was re-polled on every tick forever.
+    if (
+      task.rebaseStartedAt !== null &&
+      now - task.rebaseStartedAt.getTime() < REBASE_ATTEMPT_STALE_MS
+    ) {
       resetAutoApproveBackoff(task.id);
     }
 
@@ -4739,6 +4876,9 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // the DB, so a verdict ingested earlier in this pass is already visible
   // and can be acted on immediately, not deferred to the next tick.
   await processAutoApprovals(app);
+  // #2103 — the slow, all-projects safety net for a PR merged/closed under a
+  // reviewing task (projects without autoApprove never reach the call above).
+  await processReviewingPrState(app);
   // Same independence reasoning — a stranded "reviewing" task with no PR
   // needs to keep being retried regardless of whether anything is currently
   // claimed/in_progress.

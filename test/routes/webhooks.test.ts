@@ -1453,7 +1453,7 @@ describe("webhook routes", () => {
       fs.rmSync(cwd, { recursive: true, force: true });
     });
 
-    it("sets mergedAt only (not archivedAt) when the task hasn't reached done yet", async () => {
+    it("ends a REVIEWING task as done and archived when its PR merges (#2103)", async () => {
       const cwd = createMatchingGitRepo("acme", "widgets-merge-signal-early");
       const app = await buildApp();
       const [project] = app.db
@@ -1485,8 +1485,62 @@ describe("webhook routes", () => {
       });
 
       const [updated] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(updated.status).toBe("done");
       expect(updated.mergedAt).not.toBeNull();
-      expect(updated.archivedAt).toBeNull();
+      expect(updated.archivedAt).not.toBeNull();
+
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
+    it("fails a REVIEWING task whose PR is closed without merging (#2103)", async () => {
+      const cwd = createMatchingGitRepo("acme", "widgets-closed-reviewing");
+      const app = await buildApp();
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "webhook-closed-reviewing-p", cwd })
+        .returning()
+        .all();
+      const [task] = app.db
+        .insert(tasks)
+        .values({
+          projectId: project.id,
+          title: "abandoned",
+          status: "reviewing",
+          prNumber: 81,
+          rebaseStartedAt: new Date(),
+          mergeError: "Conflicts with main — an auto-rebase attempt is in progress",
+        })
+        .returning()
+        .all();
+
+      const payload = JSON.stringify({
+        action: "closed",
+        pull_request: { number: 81, merged: false },
+        repository: { full_name: "acme/widgets-closed-reviewing" },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+          "x-github-event": "pull_request",
+        },
+        payload,
+      });
+      expect(res.statusCode).toBe(200);
+
+      // The ending reads the worktree's diff first, so it lands asynchronously.
+      await vi.waitFor(() => {
+        const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+        expect(row.status).toBe("failed");
+      });
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(row.failureReason).toBe("PR closed without merging");
+      expect(row.rebaseStartedAt).toBeNull();
+      expect(row.mergeError).toBeNull();
+      expect(row.mergedAt).toBeNull();
 
       await app.close();
       fs.rmSync(cwd, { recursive: true, force: true });
