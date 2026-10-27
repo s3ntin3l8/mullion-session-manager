@@ -702,6 +702,12 @@ export class Session {
   });
   private dataListeners = new Set<DataListener>();
   private exitListeners = new Set<ExitListener>();
+  /**
+   * Set when the last attach ended because the session's pty-host master speaks
+   * a protocol this build cannot (issue #2168) � its program is still running,
+   * it just cannot be attached. Cleared by the next attach.
+   */
+  private incompatibleMaster: { masterVersion: number; minClient: number } | null = null;
   private eventListeners = new Set<EventListener>();
   // This session's own notification-event ring buffer (issue #166) — same
   // FIFO-eviction shape as scrollback above, capped by count (EVENTS_MAX)
@@ -1877,6 +1883,12 @@ export class Session {
       console.log(
         `[pty-manager] session ${this.id} attach client exited (code=${e.exitCode}, signal=${signalName}, retired=${this.retired})`,
       );
+      this.incompatibleMaster = e.incompatible ?? null;
+      if (e.incompatible) {
+        console.warn(
+          `[pty-manager] session ${this.id} cannot be attached: its pty-host master speaks protocol v${e.incompatible.masterVersion} (serves clients >= v${e.incompatible.minClient}), this build is incompatible; the session's process is still running`,
+        );
+      }
       this.ptyProcess = null;
       // Cancels any nudge timer still pending against this now-dead client —
       // not just for suppressingOutput tidiness, but because a stale
@@ -1918,7 +1930,9 @@ export class Session {
       // an explicit detach (kill()) or the program genuinely exiting on its
       // own — same "attach-client death is treated uniformly" posture, kept
       // consistent here rather than trying to discriminate the two causes.
-      this.emitEvent("status_change", { reason: "exited" });
+      this.emitEvent("status_change", {
+        reason: e.incompatible ? "incompatible" : "exited",
+      });
       for (const listener of this.exitListeners) {
         try {
           listener();
@@ -3506,6 +3520,11 @@ export class Session {
   onData(listener: DataListener): () => void {
     this.dataListeners.add(listener);
     return () => this.dataListeners.delete(listener);
+  }
+
+  /** Whether the last attach failed on a pty-host protocol mismatch (issue #2168). */
+  get attachIncompatible(): boolean {
+    return this.incompatibleMaster !== null;
   }
 
   onExit(listener: ExitListener): () => void {

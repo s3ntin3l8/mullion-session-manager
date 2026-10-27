@@ -3498,6 +3498,39 @@ describe("TerminalPane reconnect vs. session-ended (P13)", () => {
     expect(screen.getByText("Session ended")).toBeInTheDocument();
   });
 
+  // Issue #2168 - a live session whose pty-host protocol this build cannot
+  // attach to must not read as the program having exited.
+  it('explains an {type:"exited",reason:"incompatible"} message in the terminal', () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    const term = getLatestTermInstance() as unknown as { write: ReturnType<typeof vi.fn> };
+    term.write.mockClear();
+
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({ data: JSON.stringify({ type: "exited", reason: "incompatible" }) });
+      }
+    });
+
+    expect(term.write).toHaveBeenCalledWith(expect.stringContaining("can't be re-attached"));
+    expect(screen.getByText("Session ended")).toBeInTheDocument();
+  });
+
+  it('writes nothing extra for an ordinary {type:"exited"} message', () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    const term = getLatestTermInstance() as unknown as { write: ReturnType<typeof vi.fn> };
+    term.write.mockClear();
+
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({ data: JSON.stringify({ type: "exited" }) });
+      }
+    });
+
+    expect(term.write).not.toHaveBeenCalled();
+  });
+
   // Issue #1520 — a {type:"resync"} frame means the server dropped output
   // under backpressure; xterm must be reset before the fresh replay lands.
   it('resets xterm on a {type:"resync"} message and keeps the session live', () => {

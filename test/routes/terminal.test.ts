@@ -17,7 +17,9 @@ const fakePtyChildren: FakePty[] = [];
 
 class FakePty {
   dataListeners: Array<(data: string) => void> = [];
-  exitListeners: Array<() => void> = [];
+  exitListeners: Array<
+    (e: { exitCode: number; incompatible?: { masterVersion: number; minClient: number } }) => void
+  > = [];
   writeSpy = vi.fn();
   resizeSpy = vi.fn();
 
@@ -26,7 +28,7 @@ class FakePty {
     return { dispose: () => {} };
   }
 
-  onExit(cb: () => void) {
+  onExit(cb: FakePty["exitListeners"][number]) {
     this.exitListeners.push(cb);
     return { dispose: () => {} };
   }
@@ -43,6 +45,10 @@ class FakePty {
 
   emitData(chunk: string) {
     for (const cb of this.dataListeners) cb(chunk);
+  }
+
+  emitExit(e: { exitCode: number; incompatible?: { masterVersion: number; minClient: number } }) {
+    for (const cb of this.exitListeners) cb(e);
   }
 }
 
@@ -378,6 +384,37 @@ describe("terminal route (/ws/terminal)", () => {
 
     ws.close();
     await app.close();
+  });
+
+  // Issue #2168 - a live session whose pty-host master this build cannot
+  // attach to is reported as such, not as the program having exited.
+  it.each([
+    ["an ordinary exit", { exitCode: 3 }, { type: "exited" }],
+    [
+      "a protocol-incompatible master",
+      { exitCode: 1, incompatible: { masterVersion: 9, minClient: 9 } },
+      { type: "exited", reason: "incompatible" },
+    ],
+  ])("sends the browser an exited message for %s", async (_label, exit, expected) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const { app, port } = await buildAndListen();
+    const { sessionId, pty } = await createProjectAndSession(app);
+
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/ws/terminal?sessionId=${sessionId}&cols=80&rows=24`,
+    );
+    ws.binaryType = "arraybuffer";
+    const messages = collectMessages(ws);
+    await waitForOpenOrClose(ws);
+    await waitUntil(() => messages.length > 1);
+
+    pty.emitExit(exit);
+    await waitUntil(() => messages.length > 2);
+    expect(JSON.parse(messages[2].toString("utf8"))).toEqual(expected);
+
+    ws.close();
+    await app.close();
+    warn.mockRestore();
   });
 
   it("forwards a resize control message to the pty", async () => {

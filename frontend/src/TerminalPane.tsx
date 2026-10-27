@@ -1753,6 +1753,14 @@ export function TerminalPane(props: {
           return;
         }
         if ((parsed as { type?: unknown } | null)?.type === "exited") {
+          // Issue #2168: a live session this build cannot attach to (started
+          // by a release with an incompatible pty-host protocol) - say so,
+          // rather than letting it read as the program having exited.
+          if ((parsed as { reason?: unknown }).reason === "incompatible") {
+            term.write(
+              "\r\n\x1b[33m[This session was started by an older Mullion release and can't be re-attached after the update. Its process is still running - end the session to clean it up.]\x1b[0m\r\n",
+            );
+          }
           sessionExited = true;
           if (reconnectTimer) clearTimeout(reconnectTimer);
           setStatus("ended");

@@ -4,13 +4,21 @@ import {
   FRAME_EXIT,
   FRAME_HELLO,
   FRAME_RESIZE,
+  FRAME_VERSION,
   MAX_FRAME_BYTES,
+  MIN_CLIENT_VERSION,
+  MIN_MASTER_VERSION,
+  PROTOCOL_VERSION,
   createDeframer,
   encodeExit,
   encodeFrame,
   encodeHello,
   encodeResize,
+  decodeVersion,
+  encodeVersion,
+  masterCompatibility,
 } from "../../src/pty-host/protocol.mjs";
+import golden from "../fixtures/pty-host-protocol-v1.json";
 
 function collect() {
   const frames: Array<{ type: number; payload: Buffer }> = [];
@@ -79,5 +87,44 @@ describe("pty-host protocol", () => {
     header.writeUInt8(FRAME_DATA, 0);
     header.writeUInt32BE(MAX_FRAME_BYTES + 1, 1);
     expect(() => feed(header)).toThrow(/exceeds/);
+  });
+
+  // Issue #2168: masters outlive the release that started them, so an existing
+  // encoding may never change - only new frames may be added. These bytes are
+  // what v1 masters and clients already speak.
+  it("keeps every existing frame encoding byte-for-byte (additive-only rule)", () => {
+    const hex = (b: Buffer) => b.toString("hex");
+    expect(hex(encodeFrame(FRAME_DATA, Buffer.from("hi")))).toBe(golden.frames.data_hi);
+    expect(hex(encodeResize(120, 40))).toBe(golden.frames.resize_120x40);
+    expect(hex(encodeExit(3))).toBe(golden.frames.exit_3);
+    expect(hex(encodeExit(-1))).toBe(golden.frames.exit_minus1);
+    expect(hex(encodeHello("tok"))).toBe(golden.frames.hello_tok);
+    expect(hex(encodeVersion(2, 1))).toBe(golden.added.version_2_1);
+  });
+
+  it("round-trips a VERSION frame and rejects a short payload", () => {
+    const { frames, feed } = collect();
+    feed(encodeVersion());
+    expect(frames[0].type).toBe(FRAME_VERSION);
+    expect(decodeVersion(frames[0].payload)).toEqual({
+      version: PROTOCOL_VERSION,
+      minClient: MIN_CLIENT_VERSION,
+    });
+    expect(decodeVersion(Buffer.alloc(3))).toBeNull();
+  });
+
+  it("treats a master with no VERSION frame as v1, compatible while the minimum is 1", () => {
+    expect(masterCompatibility(null)).toEqual({ compatible: true, masterVersion: 1, minClient: 1 });
+    expect(MIN_MASTER_VERSION).toBe(1);
+  });
+
+  it("reports a master that needs a newer client as incompatible", () => {
+    const verdict = masterCompatibility({ version: 9, minClient: PROTOCOL_VERSION + 1 });
+    expect(verdict).toEqual({
+      compatible: false,
+      masterVersion: 9,
+      minClient: PROTOCOL_VERSION + 1,
+    });
+    expect(masterCompatibility({ version: 9, minClient: PROTOCOL_VERSION }).compatible).toBe(true);
   });
 });

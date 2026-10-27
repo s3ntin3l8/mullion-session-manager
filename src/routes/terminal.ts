@@ -220,7 +220,9 @@ export function attachSocketToSession(
 
   const unsubscribeExit = session.onExit(() => {
     if (socket.readyState === socket.OPEN) {
-      const exitedMessage: ExitedMessage = { type: "exited" };
+      const exitedMessage: ExitedMessage = session.attachIncompatible
+        ? { type: "exited", reason: "incompatible" }
+        : { type: "exited" };
       socket.send(JSON.stringify(exitedMessage));
     }
   });

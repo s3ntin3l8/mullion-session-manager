@@ -14,6 +14,30 @@
 // travel on the same connection as the keystrokes without either one ever
 // being mistaken for the other — dtach gets that from a fixed-size packet
 // struct; a length prefix is the same guarantee without the size cap.
+//
+// ## Compatibility rule (issue #2168)
+//
+// A master outlives the release that started it: sessions survive a backend
+// update by design, so a NEW backend routinely attaches to an OLD master (and,
+// during a rollback, the reverse). The protocol therefore changes ADDITIVELY
+// ONLY:
+//
+//   - never change an existing frame's type, payload layout or meaning;
+//   - a new frame type is fine � both sides ignore types they do not know;
+//   - the first byte of the HELLO payload onwards is the token, verbatim (an
+//     old master compares the WHOLE payload to its token, so adding a field
+//     there would lock every new client out of every existing master).
+//
+// A deliberate break is the exception, and is announced rather than silent:
+// the master sends a VERSION frame right after it accepts a HELLO, carrying
+// its own PROTOCOL_VERSION and the oldest client it still serves. A master
+// that predates VERSION never sends one, which a client reads as version 1.
+// To break compatibility, bump PROTOCOL_VERSION and raise MIN_CLIENT_VERSION
+// (new masters refuse old clients) and/or MIN_MASTER_VERSION (new clients
+// refuse old masters), and give the client a grace period for "no VERSION
+// frame yet" before treating silence as v1 (not needed while the minimum is 1).
+// test/fixtures/pty-host-protocol-v1.json pins every encoding; changing an
+// existing one fails test/pty-host/protocol.test.ts.
 
 /** Terminal bytes: program output (master -> client) or input (client -> master). */
 export const FRAME_DATA = 0;
@@ -29,6 +53,20 @@ export const FRAME_EXIT = 2;
  * the hook and control sockets' handshake tokens (see master.mjs).
  */
 export const FRAME_HELLO = 3;
+/**
+ * The master's protocol announcement, master -> client, sent once right after
+ * a HELLO is accepted and before any DATA: version u16be, then the oldest
+ * client version it serves u16be. Absent from masters that predate it (read
+ * as version 1); clients that predate it ignore it as an unknown frame type.
+ */
+export const FRAME_VERSION = 4;
+
+/** This build's protocol version. v1 is the original, unannounced protocol. */
+export const PROTOCOL_VERSION = 2;
+/** The oldest client a master of this build still serves. */
+export const MIN_CLIENT_VERSION = 1;
+/** The oldest master a client of this build still attaches to. */
+export const MIN_MASTER_VERSION = 1;
 
 /** The environment variable a master reads its session token from. */
 export const TOKEN_ENV = "MULLION_PTY_HOST_TOKEN";
@@ -69,6 +107,34 @@ export function encodeExit(code) {
   const payload = Buffer.alloc(4);
   payload.writeInt32BE(code, 0);
   return encodeFrame(FRAME_EXIT, payload);
+}
+
+/** A VERSION frame announcing this build's version and the oldest client it serves. */
+export function encodeVersion(version = PROTOCOL_VERSION, minClient = MIN_CLIENT_VERSION) {
+  const payload = Buffer.alloc(4);
+  payload.writeUInt16BE(version, 0);
+  payload.writeUInt16BE(minClient, 2);
+  return encodeFrame(FRAME_VERSION, payload);
+}
+
+/** Parses a VERSION payload, or null if it is too short to be one. */
+export function decodeVersion(payload) {
+  if (payload.length < 4) return null;
+  return { version: payload.readUInt16BE(0), minClient: payload.readUInt16BE(2) };
+}
+
+/**
+ * Whether a client of `clientVersion` can talk to a master that announced
+ * `announced` (null = no VERSION frame = a v1 master).
+ */
+export function masterCompatibility(announced, clientVersion = PROTOCOL_VERSION) {
+  const masterVersion = announced?.version ?? 1;
+  const minClient = announced?.minClient ?? 1;
+  return {
+    compatible: clientVersion >= minClient && masterVersion >= MIN_MASTER_VERSION,
+    masterVersion,
+    minClient,
+  };
 }
 
 /**

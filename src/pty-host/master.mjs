@@ -17,6 +17,7 @@ import {
   createDeframer,
   encodeExit,
   encodeFrame,
+  encodeVersion,
 } from "./protocol.mjs";
 
 const require = createRequire(import.meta.url);
@@ -198,6 +199,7 @@ export function serve(endpoint, program, args, opts) {
           authed = true;
           clearTimeout(authTimer);
           clients.add(socket);
+          socket.write(encodeVersion());
         } else {
           socket.destroy();
         }
