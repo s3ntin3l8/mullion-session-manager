@@ -1,7 +1,7 @@
 # CI/CD
 
 Workflows are **callers** of `s3ntin3l8/.github/.github/workflows/*.yml@main`
-— every one of them tracks `@main` (no SHA pins), so a fix in the shared
+— every one of them tracks `@main` (no SHA pins on these reusable refs; third-party actions are still pinned, see _Action pinning_), so a fix in the shared
 repo is live on the next run:
 
 - `ci-cd.yml` (test-node + test-frontend + test-e2e — no Docker image is built)
