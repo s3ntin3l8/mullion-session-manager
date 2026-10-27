@@ -661,6 +661,10 @@ function refusalReasons(
         why.add("a host that has not reported its platform yet may match once it is online");
       }
     }
+    // A host-only target with an existing host always lands in `matching`, so
+    // nothing above applies to it today; never leave a refusal without a reason
+    // if `matching` ever narrows further.
+    if (why.size === 0) why.add("no matching host is available");
   }
   return [...why];
 }
