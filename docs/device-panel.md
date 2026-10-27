@@ -18,7 +18,7 @@ default — see [`configuration.md`](configuration.md)). See the
 server listens on — only worth changing if something else on the host
 already holds `5037`.
 
-**Physical devices everywhere, emulators on Linux only** (issues
+**Linux and macOS** (issues
 [#1720](https://github.com/s3ntin3l8/mullion-session-manager/issues/1720) and
 [#1854](https://github.com/s3ntin3l8/mullion-session-manager/issues/1854),
 roadmap 8.6). What the panel can do is a capability per platform _and_ device
@@ -27,28 +27,51 @@ kind (`DEVICE_PLATFORM_CAPABILITIES` in `src/services/device-manager.ts`):
 | Platform | Physical (adb wireless) | Emulator |
 | -------- | ----------------------- | -------- |
 | Linux    | yes                     | yes      |
-| macOS    | yes                     | no       |
+| macOS    | yes                     | yes      |
 | Windows  | no                      | no       |
 
 A **physical** device needs no scope at all — Mullion talks to the adb server
 over TCP and pushes the scrcpy server jar, so it only needs `adb` on the host.
-An **emulator** runs in a `systemd --user` scope — `systemd-run` starts it,
-`systemctl` reads its liveness and tears it down — and macOS has no
-equivalent yet: the darwin scope backend is keyed to a _session's_ dtach
-socket, which an emulator has no analogue of. A macOS device scope is tracked
-in [#1854](https://github.com/s3ntin3l8/mullion-session-manager/issues/1854).
+An **emulator** runs in a _device scope_, supplied per platform behind the
+`ScopeBackend` seam (`getDeviceScopeBackend`, `src/services/scope/`):
 
-On macOS, then, `POST /api/devices` with `kind: "physical"`, pairing and
-discovery work with `DEVICE_ENABLED=true`, while every emulator route
-(`POST /api/devices` for an emulator, starting an emulator row, the AVD and
-system-image routes) answers **400 "Emulator devices are not supported on
-darwin — only physical devices are."** rather than a raw `spawn systemctl
-ENOENT`. `GET /api/server-info` reports the kinds a host can run as
-`features.deviceKinds` (`["physical"]` on macOS), and the Settings → Devices
-page hides the emulator controls when `"emulator"` is not listed. The
-`/api/devices` reads and the teardown routes (`POST /api/devices/:id/stop`,
-`DELETE /api/devices/:id`) stay open on purpose — an operator must be able to
-stop a device even where the panel cannot create one.
+- **Linux** — a `systemd --user` scope: `systemd-run` starts the emulator,
+  `systemctl` reads its liveness and tears it down; the scope's `Description`
+  carries the marker-file path that identifies it as this instance's own.
+- **macOS** — a detached, launchd-reparented process: Node spawns the emulator
+  with `detached: true` (its own process group, adopted by launchd when Mullion
+  exits, so it survives a restart the way a dtach master does) and records
+  **`{pid, lstart}`** — the pid and its start time, read under `TZ=UTC
+LC_ALL=C` — as JSON in the device's marker file (`<sessionsDir>/<id>.device`).
+  A later Mullion trusts that pid only while the start time still matches and
+  the command is an emulator binary (`emulator` or `qemu-system-*`; the
+  launcher `exec`s into qemu in the same pid, so only the latter is normally
+  seen). Teardown signals the process group (`SIGTERM`, then `SIGKILL` after
+  10 s) and only ever for an identity it has just re-confirmed.
+
+Both backends share one trust rule: a scope whose ownership can't be confirmed
+is **"unknown"** — never "dead" (which would make the manager mark a live
+device exited and tear it down) and never "not ours". `getOrCreate()` reports
+an unknown scope as an error rather than spawning a second emulator over a
+possibly-live one. On macOS "unknown" covers an unreadable `ps`, a marker with
+no recorded launch, and a pid whose start time changed but is still an
+emulator; "dead" is only an absent marker, a pid gone from the process table,
+or a pid now running some other program.
+
+On a platform without a capability, the routes that **add, start or change**
+such a device answer **400** with the platform named ("Emulator devices are not
+supported on `<platform>` …") rather than a raw spawn error. `GET
+/api/server-info` reports the kinds a host can run as `features.deviceKinds`,
+and the Settings → Devices page hides the emulator controls when `"emulator"` is
+not listed. The `/api/devices` reads and the teardown routes (`POST
+/api/devices/:id/stop`, `DELETE /api/devices/:id`) stay open on purpose — an
+operator must be able to stop a device even where the panel cannot create one.
+
+On macOS the emulator binary is `~/Library/Android/sdk/emulator/emulator`
+(not on `PATH` by default) — set `DEVICE_EMULATOR_PATH` to it. Creating an AVD
+or installing a system image additionally needs the SDK's command-line tools
+(`avdmanager`, `sdkmanager`); without them those routes report so and existing
+AVDs still run.
 
 ### Stream tuning
 
@@ -136,8 +159,8 @@ deliberately a **separate** implementation from `PtyManager`/
   per-instance namespacing as a session's `crs-session-*` scope) — the
   underlying process does survive a Mullion redeploy, and Mullion
   **reattaches** to it: the `devices.port` DB column persists the adb port
-  `Device.spawn()` allocated (written immediately, before `systemd-run` even
-  runs, via `DeviceManagerOptions.onPortAssigned` — see that field's own
+  `Device.spawn()` allocated (written immediately, before the scope is even
+  launched, via `DeviceManagerOptions.onPortAssigned` — see that field's own
   comment on why immediately rather than after boot succeeds). When
   `getOrCreate()` finds a scope still running (`isScopeAlive()`) with no
   in-memory `Device` to represent it, it reconstructs the `emulator-<port>`

@@ -1,4 +1,6 @@
 import { DetachedScopeBackend } from "./detached.js";
+import { MarkerDeviceScopeBackend } from "./device-marker.js";
+import { SystemdDeviceScopeBackend, type DeviceScopeBackendOptions } from "./device-systemd.js";
 import { SystemdScopeBackend } from "./systemd.js";
 import { WindowsScopeBackend } from "./windows.js";
 import type { ScopeBackend } from "./types.js";
@@ -7,6 +9,9 @@ export type { ScopeBackend, ScopeConstraints, ScopeLaunchSpec, ScopeLiveness } f
 export { DetachedScopeBackend } from "./detached.js";
 export { SystemdScopeBackend } from "./systemd.js";
 export { WindowsScopeBackend } from "./windows.js";
+export { MarkerDeviceScopeBackend } from "./device-marker.js";
+export { SystemdDeviceScopeBackend } from "./device-systemd.js";
+export type { DeviceScopeBackendOptions } from "./device-systemd.js";
 
 export interface ScopeBackendOptions {
   /** This instance's absolute, resolved sessions dir. */
@@ -71,4 +76,22 @@ export function getScopeBackend(opts: ScopeBackendOptions): ScopeBackend {
     );
   }
   return new SystemdScopeBackend(opts);
+}
+
+/**
+ * The backend that owns an Android EMULATOR's scope on THIS host (issue #1854).
+ *
+ * A separate factory from `getScopeBackend` on purpose: a session's scope is
+ * identified by its dtach socket, a device's by its marker file, and the two
+ * must not share an implementation (the session teardown is the macOS
+ * primary's, and stays untouched). Same rules otherwise — chosen on the host
+ * that owns the scope, from its own platform, and it throws on a platform
+ * that cannot run an emulator at all (Windows has no device panel).
+ */
+export function getDeviceScopeBackend(opts: DeviceScopeBackendOptions): ScopeBackend {
+  if (process.platform === "darwin") return new MarkerDeviceScopeBackend(opts);
+  if (process.platform === "linux") return new SystemdDeviceScopeBackend(opts);
+  throw new Error(
+    `no device scope backend for platform "${process.platform}": emulator devices run on Linux and macOS.`,
+  );
 }

@@ -301,17 +301,14 @@ export interface DeviceLaunchPlan {
   argv: string[];
 }
 
-/** Builds the `systemd-run` argv for a device's emulator scope — the device
- * analogue of launch-plan.ts's buildLaunchPlan(), much simpler since there's
- * no shell/hook-adapter/env-injection complexity to compose: just
- * `emulator -avd <avdName> <extraArgs...>` under a scope whose Description
- * carries this module's own ownership marker (see the header comment). */
-export function buildDeviceLaunchPlan(opts: {
+/** The `systemd-run` argv that puts `program` in a device's scope, whose
+ * Description carries this module's ownership marker (see the header comment).
+ * Shared by buildDeviceLaunchPlan and the ScopeBackend implementation
+ * (scope/device-systemd.ts) so the two cannot drift. */
+export function buildDeviceScopeArgv(opts: {
   id: string;
   sessionsDir: string;
-  emulatorPath: string;
-  avdName: string;
-  extraArgs?: string[];
+  program: string[];
 }): DeviceLaunchPlan {
   const instanceId = deriveInstanceId(opts.sessionsDir);
   const unitName = deviceScopeUnitName(instanceId, opts.id);
@@ -327,10 +324,26 @@ export function buildDeviceLaunchPlan(opts: {
       "--description",
       `mullion-device -m ${marker}`,
       "--",
-      opts.emulatorPath,
-      "-avd",
-      opts.avdName,
-      ...(opts.extraArgs ?? []),
+      ...opts.program,
     ],
   };
+}
+
+/** Builds the `systemd-run` argv for a device's emulator scope — the device
+ * analogue of launch-plan.ts's buildLaunchPlan(), much simpler since there's
+ * no shell/hook-adapter/env-injection complexity to compose: just
+ * `emulator -avd <avdName> <extraArgs...>` under a scope whose Description
+ * carries this module's own ownership marker (see the header comment). */
+export function buildDeviceLaunchPlan(opts: {
+  id: string;
+  sessionsDir: string;
+  emulatorPath: string;
+  avdName: string;
+  extraArgs?: string[];
+}): DeviceLaunchPlan {
+  return buildDeviceScopeArgv({
+    id: opts.id,
+    sessionsDir: opts.sessionsDir,
+    program: [opts.emulatorPath, "-avd", opts.avdName, ...(opts.extraArgs ?? [])],
+  });
 }

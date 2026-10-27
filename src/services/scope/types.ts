@@ -39,6 +39,18 @@ export interface ScopeConstraints {
 }
 
 /**
+ * How a supervised program ended, as reported to `ScopeLaunchSpec.onExit`.
+ * `error` is set when the supervisor could not be run or signalled at all
+ * (as opposed to the program simply exiting).
+ */
+export interface ScopeExit {
+  code: number | null;
+  error?: Error;
+  /** The backend's own name for the scope (a systemd unit, a marker file) — for diagnostics. */
+  scopeName: string;
+}
+
+/**
  * Everything a backend needs to launch one detached program under a scope.
  *
  * Deliberately free of any supervisor-specific concept: the caller describes
@@ -78,6 +90,16 @@ export interface ScopeLaunchSpec {
   label: string;
   /** Optional resource constraints; backends that cannot honor them ignore them. */
   constraints?: ScopeConstraints;
+  /**
+   * Issue #1854 — for a program that stays in the FOREGROUND of its supervisor
+   * (an Android emulator under `systemd-run --scope`, or a bare detached
+   * process): `start()` resolves once it is launched rather than when it
+   * ends, and this fires if the program later exits while this process still
+   * holds its handle. Not called for a program that outlives this process —
+   * that case is `isAliveBatch()`'s job. Backends that daemonize (dtach) never
+   * call it.
+   */
+  onExit?: (exit: ScopeExit) => void;
 }
 
 /**
@@ -99,8 +121,12 @@ export interface ScopeLaunchSpec {
  * "crs-<kind>-<instanceId>-<id>" naming and ownership discipline
  * (see device-process.ts's own header comment, which calls itself "a
  * deliberately separate module rather than a generalization of this high-risk
- * one"). It has NOT been migrated here — that is a separate change, once a
- * second backend implementation exists to migrate it TO.
+ * one"). Issue #1854 migrated it: `getDeviceScopeBackend()` (scope/index.ts)
+ * returns a `ScopeBackend` for emulators — systemd on Linux
+ * (scope/device-systemd.ts), a pid + start-time marker on macOS
+ * (scope/device-marker.ts). They are separate classes from the session
+ * backends on purpose: a session's identity is its dtach socket, a device's is
+ * its marker file, and the session teardown must stay untouched.
  *
  * **Where the backend is chosen.** On the host that OWNS the scope, from that
  * host's own platform — never negotiated between hosts. A primary and its
