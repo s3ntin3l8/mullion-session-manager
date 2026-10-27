@@ -751,6 +751,12 @@ export interface RunwayAgentQuota {
   exhausted: boolean;
   /** The agent is quarantined — Mullion will not claim a task onto it. */
   quarantined: boolean;
+  /**
+   * The claim gate can match this agent (a resolved CLI name or
+   * `opencode/<provider>`). False for a typo or a display name like
+   * `claude-code`: the usage figure is real but nothing is ever held.
+   */
+  enforceable: boolean;
 }
 
 /**
