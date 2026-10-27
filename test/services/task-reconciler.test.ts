@@ -1962,6 +1962,41 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    it("a 403 push (push-forbidden) logs at warn and waits the full ceiling before the next attempt (#2104)", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const app = await buildApp();
+        await createReviewingTaskWithNoPR(app);
+        mockOpenDraftPRForTask.mockReset().mockResolvedValue({
+          ok: false,
+          reason: "push-forbidden",
+          detail: "GitHub refused the push (403)",
+        });
+        const warnSpy = vi.spyOn(app.log, "warn");
+
+        await reconcileTasks(app);
+        expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(1);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ detail: "GitHub refused the push (403)" }),
+          expect.stringContaining("the GitHub App cannot push"),
+        );
+
+        // Well past the first 5-minute step of the ordinary ramp, still inside the ceiling.
+        vi.setSystemTime(Date.now() + 30 * 60_000);
+        await reconcileTasks(app);
+        expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(1);
+
+        // Past the 60-minute ceiling it tries again.
+        vi.setSystemTime(Date.now() + 40 * 60_000);
+        await reconcileTasks(app);
+        expect(mockOpenDraftPRForTask).toHaveBeenCalledTimes(2);
+
+        await app.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("does not record a draft PR that opened after the task already left 'reviewing' (independent review, PR #725)", async () => {
       const app = await buildApp();
       const { taskId } = await createReviewingTaskWithNoPR(app);
@@ -5335,6 +5370,43 @@ describe("reconcileTasks", () => {
       );
 
       await app.close();
+    });
+
+    it("a 403 push (push-forbidden) warns once and skips straight to the slowest retry cadence (#2104)", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const app = await buildApp();
+        const { taskId } = await createAutoApproveCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockPromoteTaskToPR.mockReset().mockResolvedValue({
+          ok: false,
+          reason: "push-forbidden",
+          detail: "GitHub refused the push (403)",
+        });
+        const warnSpy = vi.spyOn(app.log, "warn");
+
+        await reconcileTasks(app);
+        expect(mockPromoteTaskToPR).toHaveBeenCalledTimes(1);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ taskId }),
+          expect.stringContaining("auto-approve push refused (403)"),
+        );
+        expect((await getTask(app, taskId)).status).toBe("reviewing");
+
+        // The ordinary ramp would retry after a minute or two; the ceiling is 30 minutes.
+        vi.setSystemTime(Date.now() + 10 * 60_000);
+        await reconcileTasks(app);
+        expect(mockPromoteTaskToPR).toHaveBeenCalledTimes(1);
+
+        vi.setSystemTime(Date.now() + 25 * 60_000);
+        await reconcileTasks(app);
+        expect(mockPromoteTaskToPR).toHaveBeenCalledTimes(2);
+
+        await app.close();
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("#759 — does not attempt an auto-approve while the install-wide GitHub rate-limit budget is in effect", async () => {

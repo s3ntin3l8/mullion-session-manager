@@ -99,11 +99,21 @@ export type PromoteOutcome =
         | "remote-not-supported"
         // The branch edits `.github/workflows/` and the operator has not
         // approved its current head (task-workflow-gate.ts). Nothing was pushed.
-        | "workflow-approval-required";
+        | "workflow-approval-required"
+        // GitHub answered the push with a 403 (`Permission to o/r denied to
+        // <app>[bot]`): the App installation lacks access or Contents: write.
+        // Permanent until the operator changes the installation, so callers
+        // retry at their slowest cadence instead of stepping up to it.
+        | "push-forbidden";
       detail?: string;
     };
 
 type PromoteFailure = PromoteOutcome & { ok: false };
+
+// git's stderr for a push GitHub answered with a 403 (also the form a missing
+// installation grant takes). The workflows-permission refusal is a different
+// message and is matched separately.
+const FORBIDDEN_PUSH_PATTERN = /Permission to \S+ denied to |requested URL returned error: 403/i;
 
 /** Records the hold on the task row and builds the outcome that stops a push. */
 function holdWorkflowChange(
@@ -388,6 +398,11 @@ async function pushForPromotion(
   // Backstop for a host whose agent cannot report workflow paths: GitHub
   // refuses a workflow edit pushed without `workflows` permission, so say
   // what that means instead of leaving the raw git stderr.
+  if (FORBIDDEN_PUSH_PATTERN.test(value.detail ?? "")) {
+    const forbidden = `GitHub refused the push (403): the GitHub App cannot write to this repository. Give the installation access to it with Contents: write (Settings → Integrations → GitHub shows what the App is missing)`;
+    recordGithubSyncError(app, task.id, forbidden);
+    return { ok: false, reason: "push-forbidden", detail: forbidden };
+  }
   const detail = /without `?workflows?`? (permission|scope)/.test(value.detail ?? "")
     ? "This branch changes .github/workflows/ and this host cannot report workflow changes for approval — push it manually, or update the host agent"
     : (value.detail ?? "Failed to push the task's branch");

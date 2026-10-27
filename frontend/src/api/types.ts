@@ -666,6 +666,22 @@ export interface GitHubAppStatus {
   // #1790 — the outcome of the last Hermes in-flight marker write through this
   // App since the server started. Absent before the first review request.
   checksMarker?: { state: string; owner: string; repo: string; at: number };
+  // #2104 — the last token-mint result per scope that did NOT come back clean:
+  // which App permission is missing and whether the operation fell back to the
+  // operator's PAT. Absent when every scope minted fine.
+  mintOutcomes?: MintOutcome[];
+}
+
+export interface MintOutcome {
+  scope: string;
+  /** The GitHub permission that scope needs, in the App settings' wording. */
+  permission: string;
+  state: "ok" | "denied" | "not-installed";
+  status?: number;
+  owner: string;
+  repo: string;
+  fellBackToPat: boolean;
+  at: number;
 }
 
 /** Whether a Hermes review's in-flight marker was written, and why not (#1790). */

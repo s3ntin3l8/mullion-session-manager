@@ -7,6 +7,7 @@ import type * as GithubAppModule from "../../src/services/github-app.js";
 
 const mockGetInstallationToken = vi.hoisted(() => vi.fn());
 const mockClearInstallationTokenCacheForApp = vi.hoisted(() => vi.fn());
+const mockMintWorkflowWriteToken = vi.hoisted(() => vi.fn());
 // Hermes review, PR #504 (round 7): keeps every OTHER real export
 // (`GitHubAppError` in particular — `resolveGitHubToken`'s narrowed catch
 // does `err instanceof GitHubAppError`, which needs the real class, not a
@@ -18,6 +19,7 @@ vi.mock("../../src/services/github-app.js", async (importOriginal) => {
     ...actual,
     getInstallationToken: mockGetInstallationToken,
     clearInstallationTokenCacheForApp: mockClearInstallationTokenCacheForApp,
+    mintWorkflowWriteToken: mockMintWorkflowWriteToken,
   };
 });
 
@@ -43,6 +45,8 @@ import {
   resolveMarkerTokens,
   markerUnavailableMessage,
   clearChecksMarkerOutcomesForTests,
+  clearMintOutcomesForTests,
+  resolveWorkflowWriteToken,
   resolveMullionReviewLogins,
   verifyAppCredentials,
   GITHUB_PROVIDER,
@@ -952,6 +956,102 @@ describe("github-integration service", () => {
       );
       expect(markerUnavailableMessage("mint-failed", "acme")).toContain("could not be minted");
       expect(markerUnavailableMessage("write-failed", "acme", "HTTP 403")).toContain("HTTP 403");
+    });
+  });
+
+  describe("mint outcomes in the App status (#2104)", () => {
+    beforeEach(() => {
+      clearMintOutcomesForTests();
+    });
+
+    it("reports a denied scope that fell back to the PAT, and omits a scope that minted fine", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      setGitHubApp(app, "555", REAL_APP_PRIVATE_KEY);
+      // From here the only GitHub call is the status's installation count.
+      fetchMock.mockResolvedValue(jsonResponse(200, [{ id: 1, account: { login: "acme" } }]));
+      const repo = { owner: "acme", repo: "widgets" };
+
+      mockGetInstallationToken.mockRejectedValueOnce(new GitHubAppError("no actions", 422));
+      expect(await resolveGitHubToken(app, repo, "dispatch")).toBe("ghp_shared");
+      mockGetInstallationToken.mockResolvedValueOnce({
+        token: "ghs_ok",
+        installationsChecked: null,
+      });
+      expect(await resolveGitHubToken(app, repo, "write")).toBe("ghs_ok");
+
+      const status = await getGitHubAppStatus(app);
+      expect(status.mintOutcomes).toEqual([
+        expect.objectContaining({
+          scope: "dispatch",
+          permission: "Actions: write",
+          state: "denied",
+          status: 422,
+          owner: "acme",
+          repo: "widgets",
+          fellBackToPat: true,
+        }),
+      ]);
+      await app.close();
+    });
+
+    it("records 'not-installed' and a negative-cached denial, and clears when a later mint succeeds", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      setGitHubApp(app, "555", REAL_APP_PRIVATE_KEY);
+      // From here the only GitHub call is the status's installation count.
+      fetchMock.mockResolvedValue(jsonResponse(200, [{ id: 1, account: { login: "acme" } }]));
+      const repo = { owner: "other", repo: "repo" };
+
+      mockGetInstallationToken.mockResolvedValueOnce({ token: null, installationsChecked: 3 });
+      await resolveGitHubToken(app, repo, "write");
+      expect((await getGitHubAppStatus(app)).mintOutcomes).toEqual([
+        expect.objectContaining({ scope: "write", state: "not-installed", fellBackToPat: true }),
+      ]);
+
+      mockGetInstallationToken.mockResolvedValueOnce({
+        token: null,
+        installationsChecked: null,
+        failureStatus: 403,
+      });
+      await resolveGitHubToken(app, repo, "write");
+      expect((await getGitHubAppStatus(app)).mintOutcomes).toEqual([
+        expect.objectContaining({ scope: "write", state: "denied", status: 403 }),
+      ]);
+
+      mockGetInstallationToken.mockResolvedValueOnce({
+        token: "ghs_ok",
+        installationsChecked: null,
+      });
+      await resolveGitHubToken(app, repo, "write");
+      expect((await getGitHubAppStatus(app)).mintOutcomes).toBeUndefined();
+      await app.close();
+    });
+
+    it("records the workflows scope (no PAT fallback) when its mint is refused", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "555", REAL_APP_PRIVATE_KEY);
+      fetchMock.mockResolvedValue(jsonResponse(200, [{ id: 1, account: { login: "acme" } }]));
+      mockMintWorkflowWriteToken.mockResolvedValueOnce({ ok: false, status: 422, detail: "nope" });
+
+      const result = await resolveWorkflowWriteToken(app, { owner: "acme", repo: "widgets" });
+
+      expect(result.ok).toBe(false);
+      expect((await getGitHubAppStatus(app)).mintOutcomes).toEqual([
+        expect.objectContaining({
+          scope: "workflows",
+          permission: "Workflows: write",
+          status: 422,
+          fellBackToPat: false,
+        }),
+      ]);
+
+      mockMintWorkflowWriteToken.mockResolvedValueOnce({ ok: true, token: "ghs_wf" });
+      await resolveWorkflowWriteToken(app, { owner: "acme", repo: "widgets" });
+      expect((await getGitHubAppStatus(app)).mintOutcomes).toBeUndefined();
+      await app.close();
     });
   });
 

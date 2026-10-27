@@ -319,6 +319,10 @@ export interface GitHubAppStatus {
   // App, when one has been attempted since the server started. Absent before
   // the first review request.
   checksMarker?: ChecksMarkerOutcome;
+  // #2104 — the last token-mint result per scope, only the ones that did not
+  // come back clean, so Settings can say which App permission is missing and
+  // which operations are running under the operator's PAT instead.
+  mintOutcomes?: MintOutcome[];
 }
 
 /**
@@ -367,7 +371,13 @@ export async function getGitHubAppStatus(
   // of that write rides along so Settings can say why it is not happening.
   const marker =
     provider === GITHUB_PROVIDER && status.appId ? checksOutcomes.get(status.appId) : undefined;
-  return marker ? { ...status, checksMarker: marker } : status;
+  const mints =
+    provider === GITHUB_PROVIDER && status.appId ? failedMintOutcomes(status.appId) : [];
+  return {
+    ...status,
+    ...(marker ? { checksMarker: marker } : {}),
+    ...(mints.length > 0 ? { mintOutcomes: mints } : {}),
+  };
 }
 
 async function readGitHubAppStatus(
@@ -502,7 +512,17 @@ export async function resolveGitHubToken(
         repo.repo,
         scope,
       );
-      if (result.token) return result.token;
+      if (result.token) {
+        recordMintOutcome(appCreds.appId, scope, repo, { state: "ok", fellBackToPat: false });
+        return result.token;
+      }
+      recordMintOutcome(appCreds.appId, scope, repo, {
+        // A negative-cached failure (installationsChecked null) is a denied
+        // mint that already happened; otherwise the App is just not installed.
+        state: result.installationsChecked === null ? "denied" : "not-installed",
+        status: result.failureStatus,
+        fellBackToPat: true,
+      });
       // Hermes review, PR #504: distinct from the catch below — the App
       // is configured and reachable, it's just not installed on this
       // particular owner. Logged separately (debug, not warn) so an
@@ -542,6 +562,14 @@ export async function resolveGitHubToken(
       err instanceof GitHubApiError
     )) {
       throw err;
+    }
+    const failedAppId = getConfiguredAppId(app);
+    if (failedAppId) {
+      recordMintOutcome(failedAppId, scope, repo, {
+        state: "denied",
+        status: err instanceof GitHubAppError ? err.status : undefined,
+        fellBackToPat: true,
+      });
     }
     app.log.warn(
       { err, owner: repo.owner, repo: repo.repo },
@@ -656,6 +684,61 @@ export function clearChecksMarkerOutcomesForTests(): void {
   checksOutcomes.clear();
 }
 
+/** The GitHub App permission each token scope needs, for the Settings list. */
+const SCOPE_PERMISSION: Record<string, string> = {
+  write: "Contents, Issues and Pull requests: write",
+  read: "Actions and Pull requests: read",
+  issues: "Issues and Pull requests: read",
+  dispatch: "Actions: write",
+  review: "Pull requests: write",
+  workflows: "Workflows: write",
+};
+
+/** #2104 — the last mint result for one token scope. */
+export interface MintOutcome {
+  scope: string;
+  /** The GitHub permission that scope needs, in the App settings' wording. */
+  permission: string;
+  state: "ok" | "denied" | "not-installed";
+  /** HTTP status GitHub answered the mint with, when it did. */
+  status?: number;
+  owner: string;
+  repo: string;
+  /** True when the operation went on under the shared PAT/OAuth token. */
+  fellBackToPat: boolean;
+  at: number;
+}
+
+const mintOutcomes = new Map<string, MintOutcome>();
+
+function recordMintOutcome(
+  appId: string,
+  scope: string,
+  repo: { owner: string; repo: string },
+  result: Pick<MintOutcome, "state" | "status" | "fellBackToPat">,
+): void {
+  mintOutcomes.set(`${appId}:${scope}`, {
+    scope,
+    permission: SCOPE_PERMISSION[scope] ?? scope,
+    owner: repo.owner,
+    repo: repo.repo,
+    at: Date.now(),
+    ...result,
+  });
+}
+
+function failedMintOutcomes(appId: string): MintOutcome[] {
+  return [...mintOutcomes.entries()]
+    .filter(([key, o]) => key.startsWith(`${appId}:`) && o.state !== "ok")
+    .map(([, o]) => o)
+    .sort((a, b) => a.scope.localeCompare(b.scope));
+}
+
+/** Test-only reset. */
+export function clearMintOutcomesForTests(): void {
+  mintOutcomes.clear();
+}
+
 /**
  * The App token that may push `.github/workflows/` changes, or the reason it
  * could not be minted. Unlike `resolveGitHubToken` there is NO PAT/OAuth
@@ -679,7 +762,15 @@ export async function resolveWorkflowWriteToken(
       repo.owner,
       repo.repo,
     );
-    if (result.ok) return { ok: true, token: result.token };
+    if (result.ok) {
+      recordMintOutcome(appCreds.appId, "workflows", repo, { state: "ok", fellBackToPat: false });
+      return { ok: true, token: result.token };
+    }
+    recordMintOutcome(appCreds.appId, "workflows", repo, {
+      state: "denied",
+      status: result.status,
+      fellBackToPat: false,
+    });
     return {
       ok: false,
       detail:
