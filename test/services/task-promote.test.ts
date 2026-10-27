@@ -7,6 +7,7 @@ import { gitEnv } from "../../src/services/git-env.js";
 import { GitHubApiError } from "../../src/services/github.js";
 import type * as GithubWrite from "../../src/services/github-write.js";
 import type * as HostGit from "../../src/services/host-git.js";
+import type * as WorkflowGate from "../../src/services/task-workflow-gate.js";
 import type { tasks, projects } from "../../src/db/schema.js";
 
 const mockGetToken = vi.fn();
@@ -32,12 +33,17 @@ vi.mock("../../src/services/github-integration.js", () => ({
 // The gate reads the worktree's diff and head and writes the task row; mocked
 // like every other collaborator here (its own behavior is covered in
 // task-workflow-gate.test.ts). Defaults to "clear" in beforeEach.
-vi.mock("../../src/services/task-workflow-gate.js", () => ({
-  evaluateWorkflowGate: mockEvaluateWorkflowGate,
-  recordWorkflowHold: mockRecordWorkflowHold,
-  clearWorkflowHold: mockClearWorkflowHold,
-  WORKFLOW_UNVERIFIED_PREFIX: "Could not verify whether this branch changes .github/workflows/",
-}));
+vi.mock("../../src/services/task-workflow-gate.js", async (importOriginal) => {
+  // Only the functions are swapped; the real WORKFLOW_UNVERIFIED_PREFIX stays,
+  // so the banner-clearing contract is pinned to the production constant.
+  const actual = await importOriginal<typeof WorkflowGate>();
+  return {
+    ...actual,
+    evaluateWorkflowGate: mockEvaluateWorkflowGate,
+    recordWorkflowHold: mockRecordWorkflowHold,
+    clearWorkflowHold: mockClearWorkflowHold,
+  };
+});
 vi.mock("../../src/services/github-write.js", async (importOriginal) => {
   const actual = await importOriginal<typeof GithubWrite>();
   return {
@@ -101,6 +107,7 @@ vi.mock("../../src/services/remote-host-client.js", () => ({
 
 const { promoteTaskToPR, openDraftPRForTask, closeDraftPRForTask } =
   await import("../../src/services/task-promote.js");
+const { WORKFLOW_UNVERIFIED_PREFIX } = await import("../../src/services/task-workflow-gate.js");
 const { pushHostBranch } = await import("../../src/services/host-git.js");
 const spiedPushHostBranch = vi.mocked(pushHostBranch);
 const { HostRequestError, HostUnreachableError } =
@@ -451,8 +458,7 @@ describe("promoteTaskToPR", () => {
           id: 7,
           worktreePath: cwd,
           branchName: "mullion/task-1",
-          githubSyncError:
-            "Could not verify whether this branch changes .github/workflows/ — the diff could not be read",
+          githubSyncError: `${WORKFLOW_UNVERIFIED_PREFIX} — the diff could not be read`,
         }),
         baseProject({ cwd }),
       );

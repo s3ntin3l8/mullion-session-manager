@@ -42,6 +42,17 @@ describe("evaluateWorkflowGate on a remote host", () => {
     expect((gate as { detail: string }).detail).toContain("update the host agent");
   });
 
+  it("still holds an agent's non-empty workflow list when the flag is missing", async () => {
+    mockResolveGitDiffStats.mockResolvedValue({
+      isRepo: true,
+      stats: { workflowFiles: [".github/workflows/ci.yml"] },
+    });
+    expect(await evaluateWorkflowGate({} as never, task, "remote-1")).toMatchObject({
+      kind: "held",
+      change: { files: [".github/workflows/ci.yml"] },
+    });
+  });
+
   it("is clear when the base resolved and no workflow file changed", async () => {
     mockResolveGitDiffStats.mockResolvedValue({
       isRepo: true,

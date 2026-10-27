@@ -86,12 +86,14 @@ async function listWorkflowFiles(
       { fresh: true },
     );
     // Same rule as the local branch: an unresolvable base made the host diff
-    // `HEAD`, whose empty result must not read as "no workflow changes". The
-    // flag must be positively `true`: a host agent that predates it omits the
-    // key, and that skew reads as unknown (retried, with "update the host
-    // agent"), never as resolved.
-    if (baseResolved === false) return "no-base";
-    if (baseResolved !== true) return "host";
+    // `HEAD`, whose EMPTY result must not read as "no workflow changes". A
+    // non-empty list is a real workflow edit whatever the base, so it still
+    // holds (and shows the Approve panel). The flag must be positively `true`
+    // for an empty list to count: a host agent that predates it omits the key,
+    // and that skew reads as unknown (retried, with "update the host agent").
+    if (baseResolved !== true && !stats?.workflowFiles?.length) {
+      return baseResolved === false ? "no-base" : "host";
+    }
     return stats?.workflowFiles ?? "host";
   } catch {
     return "host";
