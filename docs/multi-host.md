@@ -674,9 +674,16 @@ What is specific to them:
   [#2077](https://github.com/s3ntin3l8/mullion-session-manager/pull/2077)
   (`src/pty-host/`) — so sessions survive the agent process restarting, as
   on Linux and macOS.
+- **Local endpoints are named pipes**, each narrowed to the user Mullion
+  runs as and SYSTEM once it is listening
+  ([#2065](https://github.com/s3ntin3l8/mullion-session-manager/issues/2065))
+  — the counterpart of the `0600` unix sockets elsewhere. A Mullion running
+  under a different (service) account is
+  [#2132](https://github.com/s3ntin3l8/mullion-session-manager/issues/2132).
 - **Not yet:** self-update (reinstall a new release instead), the Android
-  device panel, and the ssh-agent bridge socket (until
-  [#2065](https://github.com/s3ntin3l8/mullion-session-manager/issues/2065)).
+  device panel, and the ssh-agent bridge socket
+  ([#2131](https://github.com/s3ntin3l8/mullion-session-manager/issues/2131):
+  Git Bash's `ssh` cannot use a named pipe as `SSH_AUTH_SOCK`).
   Project setup's symlinks need Windows' **Developer Mode** (or an
   administrator); without it, applying a setup that writes a symlink fails
   with an error saying so.

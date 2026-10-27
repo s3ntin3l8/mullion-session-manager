@@ -3,6 +3,7 @@ import path from "node:path";
 import { chmodSync } from "node:fs";
 import { reclaimSocketPath } from "./unix-socket.js";
 import { ipcPath, isPipePath } from "../cli/ipc-path.mjs";
+import { restrictPipeToCurrentUser } from "../cli/pipe-acl.mjs";
 import {
   DEFAULT_MAX_CHANNELS,
   PONG_TIMEOUT_MS,
@@ -102,12 +103,16 @@ export async function materializeSshAgentSocket(
   // whatever connects to it — filesystem perms are the only gate (there's
   // no protocol-level auth on a unix socket the way the bridge WS itself
   // has a pairing/session credential), same posture as hooks.sock. A named
-  // pipe has no mode bits, and its DEFAULT access lets every local user open
-  // it read-only (#2065) — with no token behind it, unlike hooks.sock and
-  // mullion.sock. That is why materializesBridgeSocket() never materializes
-  // this socket on Windows until #2065 restricts the pipe; the guard here
-  // only keeps the chmod from throwing on a pipe path.
+  // pipe has no mode bits; restrictPipeToCurrentUser narrows its ACL to this
+  // user and SYSTEM instead (#2065), but with no token behind it a failure
+  // to do so would leave nothing — which is one reason
+  // materializesBridgeSocket() still never materializes this socket on
+  // Windows (the other: Git Bash's MSYS ssh cannot use a named pipe as
+  // SSH_AUTH_SOCK). The pipe branches here keep it correct if that changes.
   if (!isPipePath(opts.socketPath)) chmodSync(opts.socketPath, 0o600);
+  await restrictPipeToCurrentUser(opts.socketPath, {
+    log: (msg) => opts.log?.warn({ socketPath: opts.socketPath }, `ssh-agent-socket: ${msg}`),
+  });
 
   return {
     socketPath: opts.socketPath,
@@ -142,11 +147,13 @@ export function sshAgentSocketPath(sessionsDir: string): string {
 // `true`, to keep that a documented decision rather than an accident of
 // there being only two roles.
 //
-// Never on Windows (issue #1728): there the socket is a named pipe whose
-// default access lets any local user connect, and this socket has no
-// protocol-level auth to fall back on — so it stays off until #2065
-// restricts the pipe to the current user. Sessions there keep whatever
-// SSH_AUTH_SOCK they inherit (resolveSshAuthSock's ambient tier).
+// Never on Windows (issue #1728): there the socket is a named pipe, and Git
+// Bash's ssh (MSYS OpenSSH, the session shell's) speaks only its own
+// emulated unix sockets, not a named pipe, as SSH_AUTH_SOCK. #2065 has since
+// restricted every Mullion pipe to the current user, which removes the
+// other reason (this socket has no protocol-level auth); enabling it is
+// #2131. Sessions there keep whatever SSH_AUTH_SOCK they
+// inherit (resolveSshAuthSock's ambient tier).
 export function materializesBridgeSocket(
   role: string,
   platform: NodeJS.Platform = process.platform,

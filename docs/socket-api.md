@@ -71,8 +71,9 @@ Two accepted credentials, each resolved via a constant-time comparison:
 
 When in-process auth is disabled entirely (no `MULLION_AUTH_TOKEN` and no
 OIDC configured), **every** handshake is accepted at **full scope** — not
-just an empty one — the socket's `0600` filesystem permissions are the only
-gate in that mode, the same posture the HTTP API already takes when auth is
+just an empty one — the socket's `0600` filesystem permissions (on Windows,
+the named pipe's access list, narrowed to the user Mullion runs as and
+SYSTEM — see Security notes below) are the only gate in that mode, the same posture the HTTP API already takes when auth is
 off (a Bearer header presented when `MULLION_AUTH_TOKEN` is unset isn't
 rejected either; the whole gate is simply absent). This is checked before
 any token comparison, so a stale or forged token in this mode is never
@@ -886,6 +887,15 @@ has no wrapper for either, even though `src/mcp/client.mjs` carries a
   coverage) in
   [`test/e2e/control-socket.e2e.test.ts`](../test/e2e/control-socket.e2e.test.ts)
   (`make test-e2e`, opt-in — see [`test/e2e/README.md`](../test/e2e/README.md)).
+- On Windows the socket is a named pipe (`src/cli/ipc-path.mjs`), which has
+  no mode bits. A pipe's default access list lets Everyone and anonymous
+  users open it for reading, so once it is listening Mullion replaces that
+  list with one granting only the user Mullion runs as and SYSTEM
+  (`src/cli/pipe-acl.mjs`, #2065; verified against a real pipe in
+  [`test/cli/pipe-acl.test.ts`](../test/cli/pipe-acl.test.ts), which runs in
+  CI's `test-windows` job). If that fails, Mullion logs a warning and keeps
+  serving with the default list; with auth disabled, that leaves other local
+  users able to open the pipe for reading but not to write a handshake.
 - `MULLION_SOCKET_PATH` is injected into every spawned session, the same
   env-leak class documented for the hook socket in
   [`docs/agent-hooks.md`](agent-hooks.md). This is exactly why session-scoped

@@ -21,6 +21,7 @@ import { attachAggregatedEventsSocket, attachLocalEventsSocket } from "../routes
 import { SocketChannel, WRITE_HARD_CEILING_BYTES } from "../services/socket-channel.js";
 import { reclaimSocketPath } from "../services/unix-socket.js";
 import { isPipePath } from "../cli/ipc-path.mjs";
+import { restrictPipeToCurrentUser } from "../cli/pipe-acl.mjs";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import type { SessionSeverity, SessionStatus } from "../shared/types.js";
@@ -2572,8 +2573,11 @@ export const controlSocketPlugin = fp(async (app: FastifyInstance) => {
   }
   // 0600: filesystem perms are the first line of defense alongside the
   // handshake token above, same posture as hooks.ts's own hook socket
-  // (including its named-pipe exception).
+  // (including its named pipe, narrowed to this user and SYSTEM — #2065).
   if (!isPipePath(socketPath)) chmodSync(socketPath, 0o600);
+  await restrictPipeToCurrentUser(socketPath, {
+    log: (msg) => app.log.warn(`control-socket: ${msg}`),
+  });
 
   app.decorate("controlServer", server);
 
