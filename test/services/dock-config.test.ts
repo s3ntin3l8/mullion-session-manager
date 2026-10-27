@@ -53,6 +53,7 @@ describe("dock-config service", () => {
             height: 300,
             env: { CUSTOM_VAR: "development" },
             worktreeRefresh: true,
+            preview: true,
           },
         ],
       });
@@ -64,6 +65,7 @@ describe("dock-config service", () => {
         height: 300,
         env: { CUSTOM_VAR: "development" },
         worktreeRefresh: true,
+        preview: true,
       });
     });
 
@@ -171,6 +173,14 @@ describe("dock-config service", () => {
           controls: [{ id: "x", title: "X", command: "echo x", worktreeRefresh: "yes" }],
         }),
       ).toThrow(/worktreeRefresh must be a boolean/);
+    });
+
+    it("rejects a non-boolean preview", () => {
+      expect(() =>
+        validateDockConfig({
+          controls: [{ id: "x", title: "X", command: "echo x", preview: "yes" }],
+        }),
+      ).toThrow(/preview must be a boolean/);
     });
 
     it("rejects a non-array raw entry (e.g. an array passed as a control)", () => {

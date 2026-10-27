@@ -24,11 +24,8 @@ import {
   StatusChip,
   TaskChip,
 } from "../ui/sidebar/index.js";
-import {
-  isTaskBranch,
-  type MullionLinkEntry,
-  type MullionLinks,
-} from "../hooks/useMullionLinks.js";
+import { isTaskBranch, type MullionLinks } from "../hooks/useMullionLinks.js";
+import { useBranchPreview } from "../hooks/useBranchPreview.js";
 import { groupBranches, isPrunable, mergeChip } from "./branchGroups.js";
 import { rebaseNotice, runBranchOp } from "./branchOps.js";
 import { FORCEABLE_REASONS, isDefaultBranchName, reasonMessage } from "./gitReasons.js";
@@ -177,17 +174,7 @@ export function BranchesSection({
     }
   };
 
-  const preview = async (entry: MullionLinkEntry | undefined, name: string) => {
-    try {
-      const p = entry?.preview ?? (await api.createProjectPreview(projectId));
-      window.open(`/api/previews/${encodeURIComponent(p.slug)}/open`, "_blank", "noopener");
-    } catch (err) {
-      pushToast({
-        message: `Could not open the preview of ${name}: ${describeError(err, "failed")}`,
-        kind: "error",
-      });
-    }
-  };
+  const branchPreview = useBranchPreview(projectId);
 
   const total = branches.length;
   const prunableCount = groups.find((g) => g.id === "prunable")?.branches.length ?? 0;
@@ -267,7 +254,6 @@ export function BranchesSection({
                   : taskOwned
                     ? `Owned by task${entry?.task ? ` #${entry.task.id}` : ""} — can't be deleted here`
                     : null;
-            const canPreview = b.isCurrent || entry?.preview != null;
             return (
               <SidebarRow
                 key={b.name}
@@ -383,14 +369,18 @@ export function BranchesSection({
                     >
                       <PlayTriangleIcon size={13} />
                     </IconButton>
-                    {canPreview && (
-                      <IconButton
-                        label="Preview this branch"
-                        onClick={() => void preview(entry, b.name)}
-                      >
-                        <GlobeIcon size={13} />
-                      </IconButton>
-                    )}
+                    <IconButton
+                      label={entry?.preview ? "Open preview" : "Preview this branch"}
+                      onClick={() =>
+                        void branchPreview.open(
+                          { kind: "branch", branch: b.name, isCurrent: b.isCurrent },
+                          entry?.preview,
+                        )
+                      }
+                      disabled={branchPreview.starting.has(`branch:${b.name}`)}
+                    >
+                      <GlobeIcon size={13} />
+                    </IconButton>
                     <IconButton
                       label="View in History"
                       onClick={() => openRightSidebarHistory(projectId, `branch:${b.name}`)}

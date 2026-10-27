@@ -220,6 +220,8 @@ describe("getPrDetail", () => {
     );
     const partial = await getPrDetail("tok", "o", "r", 5);
     expect(partial).toMatchObject({ partial: true, state: "MERGED", mergeable: "CONFLICTING" });
+    // No head repo (a deleted fork) is never this repo's branch (#2018).
+    expect(partial.isCrossRepository).toBe(true);
 
     // Not cached: a later healthy answer replaces it, and the aged copy then
     // backs a later outage.

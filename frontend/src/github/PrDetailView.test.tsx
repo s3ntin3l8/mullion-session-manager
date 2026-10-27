@@ -777,6 +777,58 @@ describe("PrDetailView", () => {
       useDashboardStore.setState({ prsByProject: {} });
     });
 
+    it("starts the PR's preview from the Mullion card, and re-asks for a known one (#2018)", async () => {
+      const fetchMock = stub(PR, (url, init) =>
+        /\/github\/prs\/12\/preview$/.test(url) && init?.method === "POST"
+          ? jsonResponse(201, { slug: "pr12", branch: "feat-thing" })
+          : null,
+      );
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 1 })],
+        previews: [],
+        openPreviewRequest: null,
+      });
+      const { unmount } = render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const mullion = await screen.findByRole("region", { name: "Mullion" });
+      await userEvent.click(within(mullion).getByRole("button", { name: "Preview PR" }));
+      await waitFor(() =>
+        expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({
+          projectId: 1,
+          slug: "pr12",
+          branch: "feat-thing",
+        }),
+      );
+      unmount();
+
+      // Known: the label says so, and the (idempotent) route is still asked,
+      // so a preview whose session died is restarted.
+      fetchMock.mockClear();
+      useDashboardStore.setState({
+        openPreviewRequest: null,
+        previews: [
+          {
+            slug: "pr12",
+            kind: "project",
+            projectId: 1,
+            externalUrl: null,
+            createdAt: "",
+            branch: "feat-thing",
+            upstreamPort: 4000,
+          },
+        ],
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const card = await screen.findByRole("region", { name: "Mullion" });
+      await userEvent.click(within(card).getByRole("button", { name: "Open preview" }));
+      await waitFor(() =>
+        expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({ slug: "pr12" }),
+      );
+      expect(
+        fetchMock.mock.calls.some(([u, i]) => /\/preview$/.test(String(u)) && i?.method === "POST"),
+      ).toBe(true);
+      useDashboardStore.setState({ previews: [], openPreviewRequest: null });
+    });
+
     it("offers Open existing session when a session already works the PR", async () => {
       stub(PR);
       const requestOpenSession = vi.fn();

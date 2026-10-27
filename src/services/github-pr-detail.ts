@@ -77,6 +77,10 @@ export interface PrDetail {
   baseBranch: string;
   headBranch: string;
   headSha: string;
+  /** The head branch lives in a fork, not this repo (issue #2018: a fork's
+   * branch can't be previewed from `origin`). Optional: absent on a cached
+   * detail from before the field existed. */
+  isCrossRepository?: boolean;
   createdAt: string;
   updatedAt: string;
   additions: number;
@@ -124,6 +128,7 @@ interface GqlPr {
   baseRefName: string;
   headRefName: string;
   headRefOid: string;
+  isCrossRepository: boolean;
   additions: number;
   deletions: number;
   changedFiles: number;
@@ -198,6 +203,7 @@ const QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
       number title url bodyHTML state isDraft baseRefName headRefName headRefOid
+      isCrossRepository
       additions deletions changedFiles createdAt updatedAt
       author { login }
       mergeable mergeStateStatus reviewDecision
@@ -279,7 +285,7 @@ interface RestPr {
   draft?: boolean;
   user: { login: string } | null;
   base: { ref: string };
-  head: { ref: string; sha: string };
+  head: { ref: string; sha: string; repo?: { full_name: string } | null };
   created_at: string;
   updated_at: string;
   additions?: number;
@@ -329,6 +335,9 @@ async function partialDetail(
     baseBranch: rest.base.ref,
     headBranch: rest.head.ref,
     headSha: rest.head.sha,
+    // A deleted fork reports no repo — still not this repo's branch.
+    isCrossRepository:
+      rest.head.repo?.full_name?.toLowerCase() !== `${owner}/${repo}`.toLowerCase(),
     createdAt: rest.created_at,
     updatedAt: rest.updated_at,
     additions: rest.additions ?? 0,
@@ -408,6 +417,7 @@ export async function getPrDetail(
     baseBranch: pr.baseRefName,
     headBranch: pr.headRefName,
     headSha: pr.headRefOid,
+    isCrossRepository: pr.isCrossRepository,
     createdAt: pr.createdAt,
     updatedAt: pr.updatedAt,
     additions: pr.additions,

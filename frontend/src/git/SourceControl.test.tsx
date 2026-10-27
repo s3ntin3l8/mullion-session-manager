@@ -40,6 +40,8 @@ vi.mock("../api/index.js", async (importOriginal) => {
       postProjectGitRepair: vi.fn(),
       listProjectActions: vi.fn(),
       createProjectPreview: vi.fn(),
+      createBranchPreview: vi.fn(),
+      getServerInfo: vi.fn().mockResolvedValue({ previewsEnabled: false }),
     },
   };
 });
@@ -116,6 +118,8 @@ const detail = (over: Partial<GitBranchDetail> = {}): GitBranchDetail => ({
 
 function seed(over: Record<string, unknown> = {}) {
   useDashboardStore.setState({
+    previews: [],
+    openPreviewRequest: null,
     projects: [makeProject({ id: 1, name: "proj", cwd: "/repo" })],
     sessions: [],
     tasks: [],
@@ -526,8 +530,8 @@ describe("Branches", () => {
     });
   });
 
-  it("previews the current branch's project", async () => {
-    const open = vi.spyOn(window, "open").mockReturnValue(null);
+  it("previews the current branch through the project's checkout preview", async () => {
+    seed({ projects: [makeProject({ id: 1, name: "proj", cwd: "/repo", devServerUrl: "5173" })] });
     m.createProjectPreview.mockResolvedValue({ slug: "s1" } as never);
     renderView();
     await ready();
@@ -535,9 +539,100 @@ describe("Branches", () => {
       within(rowOf("main")).getByRole("button", { name: "Preview this branch" }),
     );
     await waitFor(() =>
-      expect(open).toHaveBeenCalledWith("/api/previews/s1/open", "_blank", "noopener"),
+      expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({
+        projectId: 1,
+        slug: "s1",
+        branch: "main",
+      }),
     );
-    open.mockRestore();
+    expect(m.createBranchPreview).not.toHaveBeenCalled();
+  });
+
+  it("starts a branch preview for any other branch, and opens an existing one (#2016)", async () => {
+    m.createBranchPreview.mockResolvedValue({ slug: "b1", branch: "feat/open" } as never);
+    renderView();
+    await ready();
+    await userEvent.click(
+      within(rowOf("feat/open")).getByRole("button", { name: "Preview this branch" }),
+    );
+    await waitFor(() => expect(m.createBranchPreview).toHaveBeenCalledWith(1, "feat/open"));
+    await waitFor(() =>
+      expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({ slug: "b1" }),
+    );
+
+    // A known branch preview is asked for again (the call restarts a dead
+    // one); a checkout preview that serves the branch just opens.
+    act(() =>
+      useDashboardStore.setState({
+        previews: [
+          {
+            slug: "b1",
+            kind: "project",
+            projectId: 1,
+            externalUrl: null,
+            createdAt: "",
+            branch: "feat/open",
+            upstreamPort: 4000,
+          },
+        ],
+        openPreviewRequest: null,
+      }),
+    );
+    await userEvent.click(within(rowOf("feat/open")).getByRole("button", { name: "Open preview" }));
+    await waitFor(() => expect(m.createBranchPreview).toHaveBeenCalledTimes(2));
+    await waitFor(() =>
+      expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({ slug: "b1" }),
+    );
+
+    act(() =>
+      useDashboardStore.setState({
+        previews: [
+          {
+            slug: "checkout",
+            kind: "project",
+            projectId: 1,
+            externalUrl: null,
+            createdAt: "",
+            branch: "feat/open",
+            upstreamPort: null,
+          },
+        ],
+      }),
+    );
+    // Without a dev server the checkout row would only proxy to a 503: start
+    // a branch preview instead.
+    await userEvent.click(within(rowOf("feat/open")).getByRole("button", { name: "Open preview" }));
+    await waitFor(() => expect(m.createBranchPreview).toHaveBeenCalledTimes(3));
+
+    act(() =>
+      useDashboardStore.setState({
+        projects: [
+          makeProject({ id: 1, name: "proj", cwd: "/repo", devServerUrl: "http://localhost:5173" }),
+        ],
+        openPreviewRequest: null,
+      }),
+    );
+    await userEvent.click(within(rowOf("feat/open")).getByRole("button", { name: "Open preview" }));
+    expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({ slug: "checkout" });
+    expect(m.createBranchPreview).toHaveBeenCalledTimes(3);
+  });
+
+  it("explains a refused branch preview", async () => {
+    const { ApiError } = await import("../api/client.js");
+    m.createBranchPreview.mockRejectedValue(new ApiError("no control", 409, "no_preview_control"));
+    renderView();
+    await ready();
+    await userEvent.click(
+      within(rowOf("feat/open")).getByRole("button", { name: "Preview this branch" }),
+    );
+    await waitFor(() =>
+      expect(
+        useDashboardStore
+          .getState()
+          .toasts.map((t) => t.message)
+          .join(" "),
+      ).toMatch(/mark one in Dock config/),
+    );
   });
 });
 

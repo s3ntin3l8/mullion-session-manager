@@ -1736,6 +1736,8 @@ export interface Preview {
   externalUrl: string | null;
   /** Session serving this preview (issue #2007); null when unbound. */
   sessionId?: number | null;
+  /** A branch preview's dev-server port (issues #2016/#2018); null otherwise. */
+  upstreamPort?: number | null;
   createdAt: string;
   /** Branch the preview serves: the serving session's, else the project checkout's; null for external or unreadable. */
   branch?: string | null;

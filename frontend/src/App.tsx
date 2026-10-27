@@ -60,6 +60,7 @@ import { MobileSessionBar } from "./MobileSessionBar.js";
 import { useSessionDeepLink } from "./hooks/useSessionDeepLink.js";
 import { useOpenSessionRequest } from "./hooks/useOpenSessionRequest.js";
 import { useOpenTaskRequest } from "./hooks/useOpenTaskRequest.js";
+import { useOpenPreviewRequest } from "./hooks/useOpenPreviewRequest.js";
 import { useLayoutPresentation } from "./hooks/useLayoutPresentation.js";
 import { useBalanceOnDrop } from "./hooks/useBalanceOnDrop.js";
 import { useDockviewDrop } from "./hooks/useDockviewDrop.js";
@@ -910,6 +911,7 @@ export function App() {
     onOpenTask,
     onOpenBrowserUrl,
     onOpenBlankBrowser,
+    onOpenPreview,
     onOpenDevice,
   } = usePanelOpener({
     dockviewApi,
@@ -1071,6 +1073,14 @@ export function App() {
     dockviewApi,
     activeWorkspaceId,
     onOpenTask,
+    restoringRef,
+    restoredWorkspaceIdRef,
+  });
+  // Issues #2016/#2018 — resolves requestOpenPreview, same contract again.
+  useOpenPreviewRequest({
+    dockviewApi,
+    activeWorkspaceId,
+    onOpenPreview,
     restoringRef,
     restoredWorkspaceIdRef,
   });

@@ -6,7 +6,8 @@ import { eq } from "drizzle-orm";
 import type { Duplex } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
-import { projects } from "../db/schema.js";
+import { projects, sessions } from "../db/schema.js";
+import { resolveSessionHostId } from "../services/session-live-info.js";
 import { getPreviewBySlug } from "../services/preview-registry.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
@@ -226,6 +227,28 @@ function resolvePreviewTarget(app: FastifyInstance, slug: string): PreviewResolu
   if (preview.projectId === null) return { ok: false, status: 404 };
   const [project] = app.db.select().from(projects).where(eq(projects.id, preview.projectId)).all();
   if (!project) return { ok: false, status: 404 };
+  // Issues #2016/#2018 — a branch preview targets the port its own dock
+  // session was told to bind, on that session's host, never the project's
+  // devServerUrl (which serves the checkout).
+  if (preview.upstreamPort !== null) {
+    const [session] =
+      preview.sessionId === null
+        ? []
+        : app.db
+            .select({ projectId: sessions.projectId, hostId: sessions.hostId })
+            .from(sessions)
+            .where(eq(sessions.id, preview.sessionId))
+            .all();
+    return {
+      ok: true,
+      target: {
+        kind: "project",
+        devServerUrl: String(preview.upstreamPort),
+        projectId: project.id,
+        hostId: session ? resolveSessionHostId(app, session) : project.hostId,
+      },
+    };
+  }
   if (!project.devServerUrl) {
     app.log.warn(
       { slug, projectId: project.id },

@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import type { GitHubPROrWithChecks, Task } from "../api/types.js";
 import type { MullionLinkEntry } from "../hooks/useMullionLinks.js";
+import { useBranchPreview } from "../hooks/useBranchPreview.js";
 import { useRunJobs } from "../hooks/useGitHubData.js";
 import { useDashboardStore } from "../store/index.js";
-import { ThreadIcon } from "../ui/icons.js";
+import { GlobeIcon, ThreadIcon } from "../ui/icons.js";
 import {
   Button,
   ReviewGateChip,
+  IconButton,
   SessionPills,
   SidebarRow,
   StatusChip,
@@ -71,6 +73,7 @@ export function PrRow({
   const requested = pr.reviewSummary?.requested ?? pr.requestedReviewers ?? [];
   const threads = pr.unresolvedThreads ?? 0;
 
+  const branchPreview = useBranchPreview(projectId);
   const sessions = links?.sessions ?? [];
   const showLinks = sessions.length > 0 || !!task || !!run;
   const gated = gatedSessions(sessions);
@@ -105,6 +108,20 @@ export function PrRow({
           ) : undefined
         }
         onClick={() => onOpen(pr.number)}
+        actions={
+          <IconButton
+            label={links?.preview ? "Open preview" : "Preview this PR"}
+            onClick={() =>
+              void branchPreview.open(
+                { kind: "pr", number: pr.number, branch: pr.headBranch },
+                links?.preview,
+              )
+            }
+            disabled={branchPreview.starting.has(`pr:${pr.number}`)}
+          >
+            <GlobeIcon size={13} />
+          </IconButton>
+        }
         extra={
           <>
             <StatusTriad items={prTriadItems(statuses, toggle)} openKey={openKey} />

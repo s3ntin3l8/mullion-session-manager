@@ -435,9 +435,7 @@ export async function checkoutBranchWorktree(
   const baseDir = path.join(projectRoot, ".mullion-worktrees");
   if (!isSafeAbsolutePath(baseDir)) return null;
 
-  const hash = shortHash(branch);
-  const dirName = `${DOCK_PREVIEW_PREFIX}${sanitizeRefComponent(branch)}-${hash}`;
-  const worktreePath = path.join(baseDir, dirName);
+  const worktreePath = dockPreviewWorktreePath(projectRoot, branch);
 
   ensureExcluded(projectRoot, baseDir);
 
@@ -445,6 +443,47 @@ export async function checkoutBranchWorktree(
   const result = await runGit(projectRoot, ["worktree", "add", "--detach", worktreePath, branch]);
   if (result.code !== 0) return null;
   return { path: worktreePath, branch };
+}
+
+/** Where `checkoutBranchWorktree` puts `branch`'s preview worktree for the
+ * repo at `projectRoot` — a pure function of the two, which is what lets a
+ * branch preview (services/branch-preview.ts) find a worktree a previous,
+ * now-dead preview session left behind. */
+export function dockPreviewWorktreePath(projectRoot: string, branch: string): string {
+  const dirName = `${DOCK_PREVIEW_PREFIX}${sanitizeRefComponent(branch)}-${shortHash(branch)}`;
+  return path.join(projectRoot, ".mullion-worktrees", dirName);
+}
+
+/**
+ * Issues #2016/#2018 — makes `refs/heads/<branch>` exist in the repo at
+ * `cwd`, fetching it from `origin` when it doesn't (a PR's head branch the
+ * user never checked out). A local ref, not a remote-tracking one, because
+ * both `checkoutBranchWorktree`'s `worktree add --detach <path> <branch>` and
+ * `syncWorktree`'s `reset --hard refs/heads/<branch>` resolve the bare name
+ * against local heads. An existing local branch is left as it is unless
+ * `fastForward` (a PR's head, which should show the PR's code): then it is
+ * fast-forwarded from origin, best effort — never forced, so a branch with
+ * local commits, or one checked out somewhere, just stays as it is. False
+ * when the name is not a valid branch name or neither this repo nor `origin`
+ * has the branch.
+ */
+export async function ensureLocalBranch(
+  cwd: string,
+  branch: string,
+  opts: { fastForward?: boolean } = {},
+): Promise<boolean> {
+  if (branch.length === 0 || branch.startsWith("-")) return false;
+  const valid = await runGit(cwd, ["check-ref-format", "--branch", branch]);
+  if (valid.code !== 0) return false;
+  const local = await runGit(cwd, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]);
+  if (local.code === 0 && !opts.fastForward) return true;
+  const fetched = await runGit(cwd, [
+    "fetch",
+    "--quiet",
+    "origin",
+    `refs/heads/${branch}:refs/heads/${branch}`,
+  ]);
+  return fetched.code === 0 || local.code === 0;
 }
 
 // ── Per-path serialization ────────────────────────────────────────────────

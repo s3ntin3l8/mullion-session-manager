@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api/index.js";
 import { usePrDetail, usePrList, useRunJobs } from "../hooks/useGitHubData.js";
 import { useMullionLinks, type SessionLink } from "../hooks/useMullionLinks.js";
+import { useBranchPreview } from "../hooks/useBranchPreview.js";
 import { useStartSessionFrom } from "../hooks/useStartSessionFrom.js";
 import type {
   GitHubPrDetail,
@@ -254,6 +255,7 @@ export function PrDetailView({
   // The same PR list the panel joins on, so the row and the detail agree on
   // linked sessions before the WS push has filled the store.
   const links = useMullionLinks(projectId, { prs: usePrList(projectId)?.prs });
+  const branchPreview = useBranchPreview(projectId);
   const events = useDashboardStore((s) => s.events);
   const requestOpenSession = useDashboardStore((s) => s.requestOpenSession);
   const reload = () => {
@@ -591,7 +593,23 @@ export function PrDetailView({
         ))}
 
         <div className="pr-card" role="region" aria-label="Mullion">
-          <div className="pr-card-h">Mullion</div>
+          <div className="pr-card-h">
+            <span>Mullion</span>
+            <span className="pr-card-sp" />
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={branchPreview.starting.has(`pr:${pr.number}`)}
+              onClick={() =>
+                void branchPreview.open(
+                  { kind: "pr", number: pr.number, branch: pr.headBranch },
+                  entry?.preview,
+                )
+              }
+            >
+              {entry?.preview ? "Open preview" : "Preview PR"}
+            </Button>
+          </div>
           <div className="pr-card-b">
             {entry && entry.sessions.length > 0 && <SessionPills links={entry.sessions} />}
             <ReviewGateActions sessions={gatedSessions(entry?.sessions)} />

@@ -966,3 +966,36 @@ describe("usePanelOpener — onOpenDevice", () => {
     expect(api.addPanel).toHaveBeenCalledWith(expect.objectContaining({ id: "device-1" }));
   });
 });
+
+describe("usePanelOpener — onOpenPreview (#2016)", () => {
+  it("opens one browser pane per preview slug, focusing it on a second open", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+
+    result.current.onOpenPreview(1, "s1", "feat/x");
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "browser-preview-s1",
+        component: "browser",
+        title: "Preview · feat/x",
+        params: { projectId: 1, previewSlug: "s1" },
+      }),
+    );
+    const panel = api.getPanel("browser-preview-s1")!;
+    result.current.onOpenPreview(1, "s1", "feat/x");
+    expect(api.addPanel).toHaveBeenCalledTimes(1);
+    expect(panel.api.setActive).toHaveBeenCalled();
+
+    result.current.onOpenPreview(1, "s2", null);
+    expect((api.addPanel as ReturnType<typeof vi.fn>).mock.calls[1][0].title).toBe("Preview");
+  });
+
+  it("no-ops without a dockview api and maximizes on a phone", () => {
+    const { result } = setup({ dockviewApi: null });
+    expect(() => result.current.onOpenPreview(1, "s1", "x")).not.toThrow();
+    const api = mockDockviewApi();
+    const phone = setup({ dockviewApi: api, layout: PHONE_LAYOUT });
+    phone.result.current.onOpenPreview(1, "s1", "x");
+    expect(api.maximizeGroup).toHaveBeenCalledTimes(1);
+  });
+});

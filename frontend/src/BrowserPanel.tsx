@@ -14,6 +14,10 @@ export interface BrowserPanelParams {
   kind?: "external";
   url?: string;
   slug?: string;
+  /** Issues #2016/#2018 — a pane opened on one branch preview. Kept apart
+   * from `slug`, which the params write-back below rewrites from whatever
+   * the pane last loaded (and clears while it loads). */
+  previewSlug?: string;
   activeSavedUrlId?: number | null;
   activeSavedUrlLabel?: string | null;
 }
@@ -94,6 +98,13 @@ async function mintPreviewTokenIfRequired(
 // several distinct proxy-side conditions and the probe itself can't tell
 // which (see isPreviewProxyError's own comment on why the frontend never
 // gets a real status code to distinguish 404 from 401 from 429).
+// A branch preview (issues #2016/#2018) runs its own dev server, freshly
+// started on the first open, so an unreachable proxy most likely means it
+// hasn't bound its port yet.
+const BRANCH_PREVIEW_STARTING_MESSAGE =
+  "This branch's preview isn't reachable yet — its dev server may still be starting. " +
+  "Reload in a moment.";
+
 const PREVIEW_PROXY_ERROR_MESSAGE =
   "This preview isn't reachable through the proxy right now (it may be misconfigured, " +
   "require authentication, or be rate-limited). Try again in a moment.";
@@ -163,6 +174,10 @@ export function BrowserPanel({
   const projectId = project?.id;
   const devServerUrl = project?.devServerUrl;
   const detectedDevServerPort = project?.detectedDevServerPort;
+  // Issues #2016/#2018 — a pane opened on one branch preview carries its
+  // slug. The proxy resolves that slug to the preview's own dock session, so
+  // the project's devServerUrl (the checkout's dev server) plays no part.
+  const previewSlug = isExternal ? undefined : params.previewSlug;
 
   const initialUrl = params.url ? normalizeUrl(params.url) : "";
   const [fetchState, setFetchState] = useState<BrowserPanelState>({ status: "loading" });
@@ -278,6 +293,49 @@ export function BrowserPanel({
         };
       }
 
+      if (previewSlug) {
+        void (async () => {
+          try {
+            const info = await api.getServerInfo();
+            if (cancelled) return;
+            if (!info.previewsEnabled || !info.previewBaseHost) {
+              setFetchState({
+                status: "unavailable",
+                message: "Previews are not enabled on this server.",
+                retryable: false,
+              });
+              return;
+            }
+            const token = await mintPreviewTokenIfRequired(info, previewSlug);
+            if (cancelled) return;
+            setPreviewViaProxy(true);
+            const src = buildPreviewSrc(
+              window.location.protocol,
+              previewSlug,
+              info.previewBaseHost,
+              token,
+            );
+            if (await isPreviewProxyError(src)) {
+              if (cancelled) return;
+              // Most often the branch's dev server is still starting.
+              setFetchState({ status: "unavailable", message: BRANCH_PREVIEW_STARTING_MESSAGE });
+              return;
+            }
+            if (cancelled) return;
+            setFetchState({ status: "ready", src });
+          } catch (err: unknown) {
+            if (cancelled) return;
+            setFetchState({
+              status: "unavailable",
+              message: err instanceof ApiError ? err.message : "Couldn't open this preview.",
+            });
+          }
+        })();
+        return () => {
+          cancelled = true;
+        };
+      }
+
       if (!devServerUrl) return;
       void (async () => {
         try {
@@ -340,7 +398,16 @@ export function BrowserPanel({
         cancelled = true;
       };
     }
-  }, [isExternal, currentUrl, projectId, devServerUrl, reloadKey, activeSavedUrlId, savedUrls]);
+  }, [
+    isExternal,
+    currentUrl,
+    projectId,
+    devServerUrl,
+    previewSlug,
+    reloadKey,
+    activeSavedUrlId,
+    savedUrls,
+  ]);
 
   // Update dockview parameters so layout saves/restores the current URL/slug correctly.
   useEffect(() => {
@@ -435,7 +502,10 @@ export function BrowserPanel({
         });
     },
     5000,
-    { enabled: !isExternal && !!projectId && !!devServerUrl, deps: [isExternal, projectId] },
+    {
+      enabled: !isExternal && !!projectId && !!devServerUrl && !previewSlug,
+      deps: [isExternal, projectId],
+    },
   );
 
   const navigateToSavedUrl = (id: number, url: string, label: string) => {
@@ -487,12 +557,13 @@ export function BrowserPanel({
     !isExternal &&
     activeSavedUrlId === null &&
     !!devServerUrl &&
+    !previewSlug &&
     previewViaProxy &&
     devServerOnline === false &&
     !frameLoaded;
 
   const state: BrowserPanelState =
-    !isExternal && activeSavedUrlId === null && !devServerUrl
+    !isExternal && activeSavedUrlId === null && !devServerUrl && !previewSlug
       ? {
           status: "unavailable",
           message: detectedDevServerPort

@@ -3006,6 +3006,63 @@ describe("projects route", () => {
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 
+      it("PR preview starts the head branch's preview, refusing forks and previews-off (#2018)", async () => {
+        const branchPreview = await import("../../src/services/branch-preview.js");
+        const start = vi.spyOn(branchPreview, "getOrCreateBranchPreview").mockResolvedValue({
+          slug: "s1",
+          kind: "project",
+          projectId: 1,
+          externalUrl: null,
+          sessionId: 9,
+          upstreamPort: 4321,
+          createdAt: new Date(0),
+          branch: "feat",
+        });
+        mockGithub(gqlPr(61));
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const url = `/api/projects/${id}/github/prs/61/preview`;
+
+        app.config.PREVIEW_BASE_HOST = "";
+        expect((await app.inject({ method: "POST", url })).statusCode).toBe(404);
+
+        app.config.PREVIEW_BASE_HOST = "preview.example.com";
+        const bad = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/x/preview`,
+        });
+        expect(bad.statusCode).toBe(400);
+        const ok = await app.inject({ method: "POST", url });
+        expect(ok.statusCode).toBe(201);
+        expect(ok.json()).toMatchObject({ slug: "s1", branch: "feat" });
+        expect(start.mock.calls[0].slice(1)).toEqual([id, "feat", { fastForward: true }]);
+
+        start.mockRejectedValueOnce(
+          new branchPreview.BranchPreviewError("no_preview_control", "configure one"),
+        );
+        const refused = await app.inject({ method: "POST", url });
+        expect(refused.statusCode).toBe(409);
+        expect(refused.json()).toMatchObject({ code: "no_preview_control" });
+
+        mockGithub(gqlPr(62, { isCrossRepository: true }));
+        const fork = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/62/preview`,
+        });
+        expect(fork.statusCode).toBe(409);
+        expect(fork.json()).toMatchObject({ code: "fork_unsupported" });
+        expect(start).toHaveBeenCalledTimes(2);
+
+        mockGithub(null as unknown as Record<string, unknown>);
+        const missing = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/404/preview`,
+        });
+        expect(missing.statusCode).toBe(404);
+        start.mockRestore();
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
       it("merge: refuses a stale head, an unready PR, and merges a ready one", async () => {
         let merged: unknown = null;
         mockGithub(gqlPr(43), (url, init) => {

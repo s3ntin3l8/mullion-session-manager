@@ -3,6 +3,7 @@ import { LOCAL_HOST_ID } from "../../../src/shared/constants.js";
 import { api } from "../api/index.js";
 import type { GitBranchDetail } from "../api/types.js";
 import type { MullionLinkEntry } from "../hooks/useMullionLinks.js";
+import { useBranchPreview } from "../hooks/useBranchPreview.js";
 import { describeError } from "../lib/describeError.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { useDashboardStore } from "../store/index.js";
@@ -161,14 +162,7 @@ export function BranchDetail({
     }
   };
 
-  const preview = async () => {
-    try {
-      const p = entry?.preview ?? (await api.createProjectPreview(projectId));
-      window.open(`/api/previews/${encodeURIComponent(p.slug)}/open`, "_blank", "noopener");
-    } catch (err) {
-      setActionError({ message: describeError(err, "Could not open the preview.") });
-    }
-  };
+  const branchPreview = useBranchPreview(projectId);
 
   const merge = detail?.mergeState ? mergeChip(detail.mergeState, detail.pr) : null;
 
@@ -378,11 +372,17 @@ export function BranchDetail({
         <Button variant="primary" onClick={() => void openSession()} disabled={starting}>
           <PlayTriangleIcon size={12} /> Open session
         </Button>
-        {(entry?.preview || detail?.isCurrent) && (
-          <Button onClick={() => void preview()}>
-            <GlobeIcon size={12} /> Preview
-          </Button>
-        )}
+        <Button
+          onClick={() =>
+            void branchPreview.open(
+              { kind: "branch", branch: name, isCurrent: detail?.isCurrent },
+              entry?.preview,
+            )
+          }
+          disabled={branchPreview.starting.has(`branch:${name}`)}
+        >
+          <GlobeIcon size={12} /> {entry?.preview ? "Open preview" : "Preview"}
+        </Button>
         <Button onClick={() => openRightSidebarHistory(projectId, `branch:${name}`)}>
           <HistoryIcon size={12} /> History
         </Button>

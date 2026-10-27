@@ -30,6 +30,7 @@ import { createHostsSlice } from "./slices/hosts.js";
 import { createDevicesSlice } from "./slices/devices.js";
 import { createUiSlice } from "./slices/ui.js";
 import { createToastsSlice } from "./slices/toasts.js";
+import { createPreviewsSlice } from "./slices/previews.js";
 
 export const useDashboardStore = create<DashboardState>()((...a) => ({
   ...createProjectsSlice(...a),
@@ -43,6 +44,7 @@ export const useDashboardStore = create<DashboardState>()((...a) => ({
   ...createDevicesSlice(...a),
   ...createUiSlice(...a),
   ...createToastsSlice(...a),
+  ...createPreviewsSlice(...a),
 }));
 
 // --- Public re-exports -----------------------------------------------
