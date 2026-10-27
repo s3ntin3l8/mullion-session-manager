@@ -44,6 +44,12 @@ set -euo pipefail
 # this script (see the build-tarball job in
 # .github/workflows/release-please.yml), so it is always right here.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Where this script physically lives (junctions and symlinks resolved), taken
+# NOW, before `current` moves: SCRIPT_DIR is reached through `current`, so once
+# it is flipped SCRIPT_DIR points into the NEW release. This is the release the
+# running updater belongs to.
+RUNNING_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+RUNNING_RELEASE="$(dirname "$RUNNING_SCRIPTS_DIR")"
 # shellcheck source=scripts/portable.sh
 . "$SCRIPT_DIR/portable.sh"
 
@@ -88,7 +94,10 @@ NPM_CI_TIMEOUT_SECONDS=600
 
 # Declared and assigned separately (shellcheck SC2155) so a failure inside
 # the command substitution can't be masked by `export`'s own exit status.
-NODE_EXEC_DIR="$(dirname "$NODE_EXEC_PATH")"
+#
+# posix_path: on Windows node's path arrives as C:/Program Files/nodejs/node.exe,
+# and a C:/... entry in a colon-separated PATH splits at the drive letter.
+NODE_EXEC_DIR="$(posix_path "$(dirname "$NODE_EXEC_PATH")")"
 export PATH="$NODE_EXEC_DIR:$PATH"
 
 RELEASES_DIR="$MULLION_HOME/releases"
@@ -178,6 +187,54 @@ fail() {
   exit 1
 }
 
+# --- Windows helpers (issue #2161, part of #1728) ---------------------------
+#
+# Runs one of deploy/windows/*.ps1 under Windows PowerShell. PSModulePath is
+# dropped: one inherited from PowerShell 7 points Windows PowerShell 5.1 at
+# modules it cannot load, and the ScheduledTasks module is one of them. The
+# script is the NEW release's copy when it has one — its logic is the newest —
+# and the copy in the release this updater is running from otherwise (its
+# physical directory, RUNNING_SCRIPTS_DIR: SCRIPT_DIR would, after the flip,
+# point into the new release).
+windows_ps_script() {
+  local name="$1"
+  shift
+  local script="$RELEASE_DIR/deploy/windows/$name"
+  [ -f "$script" ] || script="$RUNNING_SCRIPTS_DIR/../deploy/windows/$name"
+  [ -f "$script" ] || return 127
+  env -u PSModulePath powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
+    -File "$(cygpath -w "$script")" "$@"
+}
+
+# The restart. This process is the updater, spawned DETACHED by the server
+# (src/services/update-apply.ts), so it is not in the scheduled task's process
+# tree: re-registering the task stops the old run — the launcher and, with it,
+# the server; the pty-host session masters are detached too and keep running —
+# replaces the task definition, and starts it again, now on the new `current`.
+# That is what deploy/windows/register-task.ps1 -Start does, so there is no
+# separate restart script, and a release that changes the task definition
+# takes effect on its own update.
+#
+# Only an existing task is restarted: re-registering from nothing would start a
+# SECOND agent beside one the operator runs by hand, and the two would fight
+# over the port.
+windows_restart_task() {
+  local task="$UNIT_NAME"
+  case "$task" in
+    "" | *[!A-Za-z0-9._-]*) fail "refusing to restart a scheduled task named '$task'" ;;
+  esac
+  if ! schtasks //Query //TN "$task" >/dev/null 2>&1; then
+    fail "no scheduled task named $task is registered, so there is nothing to restart — the update is installed ($RELEASE_DIR is current); restart the agent by hand, or re-run the installer"
+  fi
+  windows_ps_script register-task.ps1 \
+    -TaskName "$task" \
+    -NodePath "$(cygpath -w "$NODE_EXEC_PATH")" \
+    -LauncherPath "$(cygpath -w "$CURRENT_LINK/scripts/windows-launcher.mjs")" \
+    -MullionHome "$(cygpath -w "$MULLION_HOME")" \
+    -Start ||
+    fail "could not re-register and start the scheduled task $task — the agent may be stopped: start it with 'schtasks /Run /TN $task', or re-run the installer ($RELEASE_DIR is current)"
+}
+
 # --- downloading ---
 write_status "downloading"
 TARBALL_NAME="mullion-$VERSION.tgz"
@@ -225,6 +282,14 @@ if [ ! -f "$RELEASE_DIR/dist/server.js" ]; then
   rm -rf "$RELEASE_DIR"
   fail "dist/server.js missing from installed release"
 fi
+# On Windows the task runs <release>/scripts/windows-launcher.mjs: a release
+# that predates the Windows install does not have it, and flipping `current` to
+# one would leave a task that cannot start. Checked here, while `current` is
+# still untouched.
+if is_windows && [ ! -f "$RELEASE_DIR/scripts/windows-launcher.mjs" ]; then
+  rm -rf "$RELEASE_DIR"
+  fail "scripts/windows-launcher.mjs missing from installed release — it predates the Windows install"
+fi
 # Native modules: node-pty is compiled by npm ci above against *this host's*
 # Node ABI; better-sqlite3 loads the N-API prebuild it ships (package.json's
 # allowScripts denies its install script, #2066). Confirm both actually load
@@ -255,9 +320,17 @@ write_status "restarting"
 # Atomic symlink flip: build the new link next to the old one, then rename
 # over it — readers (including a systemd unit mid-restart) never observe a
 # missing/half-written `current`.
-rm -f "$MULLION_HOME/current.tmp"
-ln -s "$RELEASE_DIR" "$MULLION_HOME/current.tmp"
-replace_symlink "$MULLION_HOME/current.tmp" "$CURRENT_LINK"
+#
+# On Windows the "symlink" is a directory junction (scripts/portable.sh) — a
+# real symlink needs Developer Mode or administrator rights — and there is no
+# atomic replace over it, so `current` is absent for the instant between
+# removing the old link and moving the new one into place. The running server
+# resolves its own files from its real release directory, not through
+# `current`, so it does not notice.
+remove_dir_link "$MULLION_HOME/current.tmp"
+make_dir_link "$RELEASE_DIR" "$MULLION_HOME/current.tmp"
+replace_symlink "$MULLION_HOME/current.tmp" "$CURRENT_LINK" ||
+  fail "could not move current to the new release — it is unchanged"
 # Phase 4 (#134, PR7) — (re)links ~/.local/bin/mullion here too, not just in
 # install.sh: every host already provisioned before this CLI existed ran
 # install.sh long before this step existed and only ever updates via THIS
@@ -269,9 +342,16 @@ replace_symlink "$MULLION_HOME/current.tmp" "$CURRENT_LINK"
 # #403). Points at $CURRENT_LINK, not $RELEASE_DIR, so this same check
 # never needs to run again on a future update once the target exists.
 if [ -f "$CURRENT_LINK/dist/cli/mullion.mjs" ]; then
-  mkdir -p ~/.local/bin
-  rm -f ~/.local/bin/mullion
-  ln -s "$CURRENT_LINK/dist/cli/mullion.mjs" ~/.local/bin/mullion
+  if is_windows; then
+    # ~/bin, where Git Bash's login shell looks, and a launcher script rather
+    # than a symlink — the same as deploy/install.sh writes (issue #2160).
+    mkdir -p ~/bin
+    write_windows_cli_launcher "$NODE_EXEC_PATH" "$MULLION_HOME" ~/bin/mullion
+  else
+    mkdir -p ~/.local/bin
+    rm -f ~/.local/bin/mullion
+    ln -s "$CURRENT_LINK/dist/cli/mullion.mjs" ~/.local/bin/mullion
+  fi
 fi
 # Sessions survive: dtach masters run in their own transient systemd --user
 # scopes (pty-manager.ts's bootstrapMaster), outside this unit's cgroup, so
@@ -293,6 +373,8 @@ if is_darwin; then
   # "Update now" would be refused as in-progress.
   launchctl kickstart -k "$(launchd_gui_domain)/$UNIT_NAME" ||
     fail "launchctl kickstart -k $(launchd_gui_domain)/$UNIT_NAME failed"
+elif is_windows; then
+  windows_restart_task
 else
   # Reload the systemd user manager in case the unit on disk was updated or marked dirty.
   systemctl --user daemon-reload 2>/dev/null || true
@@ -304,13 +386,35 @@ fi
 # top of the newest-3 rule, so an out-of-order manual rollback never gets
 # pruned out from under itself.
 KEEP_DIR="$(readlink_target "$CURRENT_LINK" || echo "$CURRENT_LINK")"
+# Compared against the candidates below as the same kind of path: on Windows
+# `readlink` on a junction answers /d/.../releases/1.2.3 while the candidates
+# are D:/.../releases/1.2.3, and a mismatch would silently stop `current` being
+# protected. (native_path is the identity elsewhere.)
+KEEP_DIR="$(native_path "$KEEP_DIR")"
 # Oldest first (the order the prune below expects). `find -printf` and
 # `sort -V` are GNU-only, and `mapfile` is bash 4 — the portable spellings
 # are dir_names/sort_versions (GNU-free) and a plain read loop (bash 3.2-safe).
 ALL_RELEASES="$(dir_names "$RELEASES_DIR" | sort_versions)"
 KEEP_COUNT=3
+# Windows: the releases a running process still uses (a session's pty-host
+# master stays in the release it was started in, across updates). Deleting one
+# there removes whatever the OS has not locked and leaves a half-deleted
+# release under a live session, so those are skipped — they still count
+# toward the three kept, so more than three can remain while old sessions
+# live. If the list cannot be had, nothing is pruned: leaving old releases is
+# safe, deleting a used one is not.
+IN_USE_RELEASES=""
+SKIP_PRUNE=false
+if is_windows; then
+  if IN_USE_RELEASES="$(windows_ps_script releases-in-use.ps1 -ReleasesDir "$(cygpath -w "$RELEASES_DIR")" | tr -d '\r')"; then
+    :
+  else
+    echo "warning: could not tell which releases are in use — not pruning old releases" >&2
+    SKIP_PRUNE=true
+  fi
+fi
 TOTAL="$(printf '%s\n' "$ALL_RELEASES" | grep -c . || true)"
-if [ "$TOTAL" -gt "$KEEP_COUNT" ]; then
+if [ "$SKIP_PRUNE" = false ] && [ "$TOTAL" -gt "$KEEP_COUNT" ]; then
   PRUNE_UPTO=$((TOTAL - KEEP_COUNT))
   INDEX=0
   while IFS= read -r release_name; do
@@ -319,8 +423,21 @@ if [ "$TOTAL" -gt "$KEEP_COUNT" ]; then
       break
     fi
     candidate="$RELEASES_DIR/$release_name"
-    if [ "$candidate" != "$KEEP_DIR" ]; then
-      rm -rf "$candidate"
+    # Never what `current` points at, and on Windows never the release this
+    # updater is itself running from either (deleting a script under a running
+    # bash is not something to try). Compared case-insensitively there.
+    if ! same_native_path "$candidate" "$KEEP_DIR" &&
+      ! { is_windows && same_native_path "$candidate" "$RUNNING_RELEASE"; }; then
+      if printf '%s\n' "$IN_USE_RELEASES" | grep -qxF "$release_name"; then
+        echo "keeping release $release_name: a running process still uses it" >&2
+      elif is_windows; then
+        # A file Windows has locked cannot be deleted; that must not turn a
+        # finished update into a failed one. The rest is retried by the next.
+        rm -rf "$candidate" ||
+          echo "warning: could not remove release $release_name completely (a file is locked?) — leaving it for the next update" >&2
+      else
+        rm -rf "$candidate"
+      fi
     fi
     INDEX=$((INDEX + 1))
   done <<EOF

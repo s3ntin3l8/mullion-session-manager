@@ -9,6 +9,7 @@ import { spawn as spawnChild } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveServiceUnit } from "./service-unit.js";
+import { NoSessionShellError, sessionShell } from "./session-shell.js";
 
 // In-flight phases self-update.sh writes to $MULLION_HOME/.update-status.json
 // while an update is running — see scripts/self-update.sh's write_status().
@@ -93,7 +94,8 @@ export type SpawnSelfUpdateResult =
  * bootstraps a dtach master: outside this process's own service, so it
  * survives the restart its own last step triggers. On Linux that is a
  * transient `systemd-run --user --scope`; on macOS it is a one-shot launchd
- * job (issue #1718) — see launchOneShotUpdateJob below.
+ * job (issue #1718) — see launchOneShotUpdateJob below; on Windows it is a
+ * detached Git Bash (issue #2161) — see launchWindowsUpdater below.
  *
  * Shared by both /api/updates/apply (primary) and
  * /internal/updates/apply (agent, issue #647) — see this module's own
@@ -103,19 +105,6 @@ export async function spawnSelfUpdate(
   app: FastifyInstance,
   body: ApplyUpdateBody,
 ): Promise<SpawnSelfUpdateResult> {
-  // Windows has neither of the detached runners below (systemd-run,
-  // launchd), and a running session master holds node-pty's DLL open, which
-  // an in-place update could not replace anyway — so refuse plainly rather
-  // than report a 202 for an update that cannot start (issue #1728).
-  if (process.platform === "win32") {
-    return {
-      ok: false,
-      status: 400,
-      message:
-        "self-update is not supported on Windows yet (issue #1728) — update this host by " +
-        "reinstalling the new release",
-    };
-  }
   const mullionHome = app.config.MULLION_HOME;
   if (mullionHome.trim() === "") {
     return {
@@ -213,6 +202,26 @@ export async function spawnSelfUpdate(
     return { ok: true, status: 202, body: { phase: "downloading", version } };
   }
 
+  if (process.platform === "win32") {
+    // Forward slashes for the arguments that are paths: Git Bash takes a
+    // Windows path in that spelling as it is, where a backslash is an escape.
+    // The version, the URLs and the task name are not paths.
+    const slashed = (p: string): string => p.replaceAll("\\", "/");
+    const launched = launchWindowsUpdater(app, mullionHome, version, [
+      slashed(scriptPath),
+      version,
+      assetUrl,
+      checksumUrl,
+      slashed(mullionHome),
+      slashed(process.execPath),
+      serviceUnit,
+    ]);
+    if (!launched.ok) {
+      return { ok: false, status: 500, message: launched.message };
+    }
+    return { ok: true, status: 202, body: { phase: "downloading", version } };
+  }
+
   const wrapperUnitName = `mullion-update-${version}`;
   const child = spawnChild(
     "systemd-run",
@@ -225,6 +234,111 @@ export async function spawnSelfUpdate(
   child.unref();
 
   return { ok: true, status: 202, body: { phase: "downloading", version } };
+}
+
+/** Best-effort: the status file self-update.sh would have written, for an updater that never started. */
+function writeFailedStatus(mullionHome: string, version: string, error: string): void {
+  try {
+    const status: UpdateStatus = {
+      phase: "failed",
+      version,
+      updatedAt: Math.floor(Date.now() / 1000),
+      error,
+    };
+    fs.writeFileSync(statusFilePath(mullionHome), JSON.stringify(status, null, 2), "utf8");
+  } catch {
+    // Nothing more can be done; the error is in the app's log.
+  }
+}
+
+/**
+ * Opens the log the Windows updater's stdout and stderr go to, and returns the
+ * descriptor to hand to spawn.
+ *
+ * NOT an append-mode handle (`"a"`). Git Bash writes NOTHING through one — a
+ * handle that grants only append access: measured, a plain `echo` to such a
+ * handle vanishes, silently, and a script running under `set -e` (as
+ * self-update.sh does) simply ends on its first write, leaving the status
+ * stuck at "downloading" and the log empty. A handle opened for writing works.
+ * So the file is opened for writing, and a log an earlier attempt at the same
+ * version left behind is kept as `<log>.1` instead of being appended to.
+ */
+export function openUpdateLog(logPath: string): number {
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  try {
+    fs.renameSync(logPath, `${logPath}.1`);
+  } catch {
+    // No earlier log (the usual case), or one that cannot be moved: either way
+    // the open below still gives this attempt a log.
+  }
+  return fs.openSync(logPath, "w");
+}
+
+/**
+ * The Windows counterpart of the transient `systemd-run --user --scope`
+ * (issue #2161, part of #1728): the updater is spawned DETACHED, with the same
+ * options the pty-host master gets (src/pty-host/master.mjs), and that is
+ * enough. The agent runs as a scheduled task, and stopping the task kills its
+ * whole process tree — the launcher and the server — except processes that
+ * were spawned detached. So the updater outlives the restart its last step
+ * triggers, and needs no job of its own. Measured on Windows 11, not assumed:
+ * a detached `bash -l` updater, started by a task-run process, ran
+ * register-task.ps1 (which stops the task and starts it again) and finished.
+ *
+ * It runs in Git for Windows' bash — `-l`, so that /usr/bin is on PATH, as it
+ * is for a session — because self-update.sh is a bash script, and its output
+ * goes to logs/update-<version>.log: a detached process has no console.
+ */
+function launchWindowsUpdater(
+  app: FastifyInstance,
+  mullionHome: string,
+  version: string,
+  scriptArgs: string[],
+): { ok: true } | { ok: false; message: string } {
+  let bash: string;
+  try {
+    bash = sessionShell();
+  } catch (err) {
+    if (err instanceof NoSessionShellError) return { ok: false, message: err.message };
+    throw err;
+  }
+
+  const logPath = path.join(mullionHome, "logs", `update-${version}.log`);
+  let logFd: number;
+  try {
+    logFd = openUpdateLog(logPath);
+  } catch (err) {
+    const message = `could not open the update log at ${logPath}: ${err instanceof Error ? err.message : String(err)}`;
+    app.log.error({ err, logPath }, "failed to prepare the Windows update");
+    return { ok: false, message };
+  }
+
+  try {
+    const child = spawnChild(bash, ["-l", ...scriptArgs], {
+      cwd: mullionHome,
+      env: process.env,
+      detached: true,
+      windowsHide: true,
+      stdio: ["ignore", logFd, logFd],
+    });
+    child.on("error", (err) => {
+      app.log.error({ err, bash, logPath }, "failed to launch self-update.sh");
+      // The caller has already been told 202, and the updater that would have
+      // written the status never ran: say so there, or the UI waits on an
+      // update that is not happening.
+      writeFailedStatus(mullionHome, version, `could not start the updater: ${err.message}`);
+    });
+    child.unref();
+  } catch (err) {
+    const message = `could not start the updater: ${err instanceof Error ? err.message : String(err)}`;
+    app.log.error({ err, bash }, "failed to launch self-update.sh");
+    return { ok: false, message };
+  } finally {
+    // The child has its own copy of the handle.
+    fs.closeSync(logFd);
+  }
+  app.log.info({ bash, logPath }, "launched the Windows update");
+  return { ok: true };
 }
 
 /**

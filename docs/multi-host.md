@@ -768,9 +768,13 @@ What is specific to them:
   account has not been tried — see the deploy README). The task runs `scripts/windows-launcher.mjs`, which reads the
   install's `.env`, restarts the server if it fails and logs to
   `logs/mullion.log`. Stopping the task ends the server but not the sessions.
-- **Not yet:** self-update (reinstall a new release instead,
-  [#2161](https://github.com/s3ntin3l8/mullion-session-manager/issues/2161)),
-  running before logon or as a service
+- **Self-update** (the primary's "Update now" for a Windows agent, or
+  `POST /internal/updates/apply`, [#2161](https://github.com/s3ntin3l8/mullion-session-manager/issues/2161)):
+  the same `scripts/self-update.sh`, run in Git Bash and started detached so it
+  outlives the task it restarts. The restart re-registers the task; sessions
+  keep running, and a release a live session still uses is not pruned. See the
+  [deploy README](../deploy/README.md#windows-the-scheduled-task-deployment-issue-2160--1728).
+- **Not yet:** running before logon or as a service
   ([#2162](https://github.com/s3ntin3l8/mullion-session-manager/issues/2162)),
   a Windows primary, and the Android device panel.
   Project setup's symlinks need Windows' **Developer Mode** (or an

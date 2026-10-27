@@ -40,6 +40,48 @@ native_path() {
   fi
 }
 
+# Whether two paths name the same place: compared as native paths, and on
+# Windows case-insensitively — NTFS is, and `D:/x` and `d:/x` (as `readlink`
+# and a script's arguments may each spell it) are one directory. Used where a
+# mismatch is dangerous: protecting what `current` points at from a prune.
+same_native_path() {
+  local a b
+  a="$(native_path "$1")"
+  b="$(native_path "$2")"
+  if is_windows; then
+    a="$(printf '%s' "$a" | tr 'A-Z' 'a-z')"
+    b="$(printf '%s' "$b" | tr 'A-Z' 'a-z')"
+  fi
+  [ "$a" = "$b" ]
+}
+
+# The other direction: a path in the form Git Bash's own tools take
+# (/c/Users/me) for a Windows-style one (C:/Users/me, C:\Users\me). Needed
+# wherever a path goes INTO a colon-separated list — `export PATH="$dir:$PATH"`
+# with a C:/... entry splits at the drive letter's colon. Unchanged anywhere
+# but Windows.
+posix_path() {
+  if is_windows; then
+    cygpath -u "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
+# Writes the `mullion` CLI launcher on Windows (issue #2160): Git Bash's
+# `ln -s` makes a COPY without Developer Mode, which would freeze the CLI at
+# one release, so it is a two-line script that follows `current` instead.
+# It has to name node itself — a session's PATH is not guaranteed to have it.
+# Shared by the installer and the updater, so the text exists once.
+#
+# write_windows_cli_launcher NODE MULLION_HOME FILE
+write_windows_cli_launcher() {
+  local node="$1" mullion_home="$2" target="$3"
+  printf '#!/bin/sh\nexec "%s" "%s/current/dist/cli/mullion.mjs" "$@"\n' \
+    "$(posix_path "$node")" "$mullion_home" > "$target"
+  chmod 755 "$target"
+}
+
 # The launchd domain a per-user agent lives in (`gui/$UID`). launchd's own
 # tooling wants the numeric uid, not the user name.
 launchd_gui_domain() {
@@ -200,10 +242,22 @@ replace_symlink() {
     # No atomic replace over a junction: remove the old link (never what it
     # points at), then move the new one into place. `current` is briefly
     # absent in between; the callers hold the updater's lock.
+    #
+    # If the move fails (a virus scanner or an indexer holding the new link),
+    # the old link is put back before reporting it, so that `current` is never
+    # left missing — the next logon's task would point at a launcher that does
+    # not exist. The caller turns the non-zero status into a failed update.
+    local previous=""
     if [ -e "$destination" ] || [ -L "$destination" ]; then
+      previous="$(readlink_target "$destination" || true)"
       remove_dir_link "$destination"
     fi
-    mv "$source" "$destination"
+    if ! mv "$source" "$destination"; then
+      if [ -n "$previous" ]; then
+        make_dir_link "$previous" "$destination" 2>/dev/null || true
+      fi
+      return 1
+    fi
     return 0
   fi
   if mv -T "$source" "$destination" 2>/dev/null; then

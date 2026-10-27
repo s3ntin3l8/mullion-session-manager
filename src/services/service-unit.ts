@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 
 // The service this process runs as: a systemd --user unit on Linux, a
-// launchd agent on macOS (issue #1718, roadmap 8.4). Renamed from
+// launchd agent on macOS (issue #1718, roadmap 8.4), a per-user scheduled task
+// on Windows (issue #2161). Renamed from
 // systemd-unit.ts because it is no longer systemd-only — the resolution
 // below branches on the platform, and the update path's restart step does
 // the same.
@@ -29,6 +30,17 @@ export const DEFAULT_LAUNCHD_LABEL = "com.mullion.primary";
  */
 export function launchdLabelForRole(role: string): string {
   return role === "agent" ? "com.mullion.agent" : DEFAULT_LAUNCHD_LABEL;
+}
+
+/**
+ * The Windows scheduled task for a role (issue #2161, part of #1728) — the
+ * counterpart of the unit names and launchd labels above, and the name
+ * deploy/install.sh registers. The launcher exports it as MULLION_SERVICE_UNIT
+ * (scripts/windows-launcher.mjs), so the override normally carries it; this is
+ * the fallback for a server started some other way.
+ */
+export function windowsTaskNameForRole(role: string): string {
+  return role === "agent" ? "Mullion-agent" : "Mullion-primary";
 }
 
 // A systemd --user cgroup v2 path looks like:
@@ -95,6 +107,11 @@ export function resolveServiceUnit(options: ResolveServiceUnitOptions = {}): str
     // MULLION_SERVICE_UNIT (the installer writes it into the plist), or
     // from the role.
     return launchdLabelForRole(options.role ?? "primary");
+  }
+  if (platform === "win32") {
+    // No cgroups either, and a systemd unit name would be a task that does
+    // not exist: the task is named for the role.
+    return windowsTaskNameForRole(options.role ?? "primary");
   }
 
   const cgroupPath = options.cgroupPath ?? "/proc/self/cgroup";

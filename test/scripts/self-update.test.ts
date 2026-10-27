@@ -15,10 +15,10 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { buildFakeRelease } from "../helpers/fake-release.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -91,57 +91,6 @@ exit 0
   fs.chmodSync(path.join(binDir, "node"), 0o755);
 }
 
-// Builds a minimal, real .tgz release the script can actually extract and
-// verify: dist/server.js (existence-only gate), dist/app.js (a real,
-// side-effect-free ESM module — the script `await import()`s it for real
-// under the real Node running this test), and fake but real-enough
-// node_modules/{better-sqlite3,node-pty} packages so `require()` resolves
-// without needing the real native addons.
-async function buildFakeRelease(
-  version: string,
-  opts: { includeServerJs?: boolean } = {},
-): Promise<{ tarballPath: string; checksumPath: string }> {
-  const { includeServerJs = true } = opts;
-  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "self-update-release-src-"));
-  try {
-    fs.mkdirSync(path.join(workDir, "dist"), { recursive: true });
-    if (includeServerJs) {
-      fs.writeFileSync(path.join(workDir, "dist", "server.js"), "// fake server\n");
-    }
-    fs.writeFileSync(path.join(workDir, "dist", "app.js"), "export const ok = true;\n");
-    for (const pkg of ["better-sqlite3", "node-pty"]) {
-      const pkgDir = path.join(workDir, "node_modules", pkg);
-      fs.mkdirSync(pkgDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(pkgDir, "package.json"),
-        JSON.stringify({ name: pkg, main: "index.js" }),
-      );
-      // self-update.sh's smoke check opens an in-memory better-sqlite3 DB
-      // (its binding only loads in the constructor, #2066), so that stub must
-      // be constructible and closable; node-pty's is only require()d.
-      fs.writeFileSync(
-        path.join(pkgDir, "index.js"),
-        pkg === "better-sqlite3"
-          ? "module.exports = class Database { close() {} };\n"
-          : "module.exports = {};\n",
-      );
-    }
-
-    const tarballDir = fs.mkdtempSync(path.join(os.tmpdir(), "self-update-tarballs-"));
-    const tarballName = `mullion-${version}.tgz`;
-    const tarballPath = path.join(tarballDir, tarballName);
-    await execFileAsync("tar", ["-czf", tarballPath, "-C", workDir, "."]);
-
-    const hash = crypto.createHash("sha256").update(fs.readFileSync(tarballPath)).digest("hex");
-    const checksumPath = path.join(tarballDir, `${tarballName}.sha256`);
-    fs.writeFileSync(checksumPath, `${hash}  ${tarballName}\n`);
-
-    return { tarballPath, checksumPath };
-  } finally {
-    fs.rmSync(workDir, { recursive: true, force: true });
-  }
-}
-
 describeOnLinux("scripts/self-update.sh", () => {
   let mullionHome: string;
   let binDir: string;
@@ -178,6 +127,7 @@ describeOnLinux("scripts/self-update.sh", () => {
     assetUrl: string;
     checksumUrl: string;
     unitName?: string;
+    env?: Record<string, string>;
   }) {
     return execFileAsync(
       "bash",
@@ -192,7 +142,7 @@ describeOnLinux("scripts/self-update.sh", () => {
       ],
       {
         cwd: mullionHome,
-        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, ...opts.env },
         timeout: 20_000,
       },
     );
@@ -262,6 +212,275 @@ if [ "$1" = "-s" ]; then echo Darwin; else echo Linux; fi
     // the LAST thing it did: the release prune and this status write are both
     // after it.
     expect(readStatus().phase).toBe("done");
+  });
+
+  // The Windows branch (issue #2161, part of #1728). Git for Windows' bash
+  // reports MINGW64_NT-… from `uname -s`, so a shimmed `uname` runs it on a
+  // Linux runner, with cygpath / schtasks / powershell.exe shimmed (and the
+  // junction `current` becoming a plain symlink, which is all `node -e
+  // fs.symlinkSync(…, "junction")` makes here). What this proves is the
+  // script's own logic: the gate, the flip, the restart, the prune.
+  // test/scripts/self-update-windows.test.ts runs the real thing on Windows.
+  describe("Windows branch", () => {
+    let fakeHome: string;
+
+    // Everything a Windows release has to carry for the script's own gates.
+    const windowsFiles = {
+      "scripts/windows-launcher.mjs": "// launcher\n",
+      "deploy/windows/register-task.ps1": "# register\n",
+      "deploy/windows/releases-in-use.ps1": "# in use\n",
+    };
+
+    beforeEach(() => {
+      fakeHome = fs.mkdtempSync(path.join(os.tmpdir(), "self-update-test-fakehome-"));
+      writeShim(
+        binDir,
+        "uname",
+        `#!/usr/bin/env bash
+if [ "$1" = "-s" ]; then echo MINGW64_NT-10.0-26200; else echo Windows; fi
+`,
+      );
+      // cygpath: the paths are already native here.
+      writeShim(
+        binDir,
+        "cygpath",
+        `#!/usr/bin/env bash
+for last in "$@"; do P="$last"; done
+printf '%s\\n' "$P"
+`,
+      );
+      // schtasks: `//Query //TN NAME` answers from a one-name-per-line registry.
+      writeShim(
+        binDir,
+        "schtasks",
+        `#!/usr/bin/env bash
+DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+NAME=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    //TN) NAME="$2"; shift ;;
+  esac
+  shift
+done
+grep -qxF "$NAME" "$DIR/schtasks.registered" 2>/dev/null
+`,
+      );
+      // powershell.exe: records the call; the in-use script answers from
+      // powershell.inuse (one release name per line), or fails on demand.
+      writeShim(
+        binDir,
+        "powershell.exe",
+        `#!/usr/bin/env bash
+DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+echo "$*" >> "$DIR/powershell.log"
+echo "PSModulePath=\${PSModulePath-unset}" >> "$DIR/powershell.env"
+case "$*" in
+  *releases-in-use.ps1*)
+    if [ -n "\${INUSE_FAIL:-}" ]; then echo "releases-in-use: boom" >&2; exit 1; fi
+    [ -f "$DIR/powershell.inuse" ] && cat "$DIR/powershell.inuse"
+    exit 0
+    ;;
+esac
+exit 0
+`,
+      );
+    });
+
+    afterEach(() => {
+      fs.rmSync(fakeHome, { recursive: true, force: true });
+    });
+
+    const registerTask = (name = "Mullion-agent") =>
+      fs.appendFileSync(path.join(binDir, "schtasks.registered"), `${name}\n`);
+    const readLog = (name: string): string[] => {
+      const p = path.join(binDir, name);
+      if (!fs.existsSync(p)) return [];
+      return fs.readFileSync(p, "utf8").trim().split("\n").filter(Boolean);
+    };
+    const update = async (
+      opts: { files?: Record<string, string>; env?: Record<string, string>; unit?: string } = {},
+    ) => {
+      const { tarballPath, checksumPath } = await buildFakeRelease("9.9.9", {
+        extraFiles: opts.files ?? windowsFiles,
+      });
+      return runScript({
+        version: "9.9.9",
+        assetUrl: `file://${tarballPath}`,
+        checksumUrl: `file://${checksumPath}`,
+        unitName: opts.unit ?? "Mullion-agent",
+        env: { HOME: fakeHome, ...opts.env },
+      });
+    };
+
+    it("flips current, restarts the task by re-registering it, and never touches systemctl or launchctl", async () => {
+      registerTask();
+      await update();
+
+      expect(readStatus()).toMatchObject({ phase: "done", version: "9.9.9" });
+      const release = path.join(mullionHome, "releases", "9.9.9");
+      expect(fs.realpathSync(path.join(mullionHome, "current"))).toBe(fs.realpathSync(release));
+
+      // The restart: the NEW release's register-task.ps1, with -Start, naming
+      // the task, node, the launcher under `current` and the install root.
+      const register = readLog("powershell.log").filter((l) => l.includes("register-task.ps1"));
+      expect(register).toHaveLength(1);
+      expect(register[0]).toContain("-NoProfile -NonInteractive -ExecutionPolicy Bypass -File");
+      expect(register[0]).toContain(path.join(release, "deploy", "windows", "register-task.ps1"));
+      expect(register[0]).toContain("-TaskName Mullion-agent");
+      expect(register[0]).toContain(`-NodePath ${path.join(binDir, "node")}`);
+      expect(register[0]).toContain(
+        `-LauncherPath ${path.join(mullionHome, "current", "scripts", "windows-launcher.mjs")}`,
+      );
+      expect(register[0]).toContain(`-MullionHome ${mullionHome}`);
+      expect(register[0].trim().endsWith("-Start")).toBe(true);
+
+      expect(readSystemctlLog()).toEqual([]);
+      expect(readLaunchctlLog()).toEqual([]);
+      // PowerShell 7's PSModulePath would break the ScheduledTasks module.
+      expect(new Set(readLog("powershell.env"))).toEqual(new Set(["PSModulePath=unset"]));
+    });
+
+    it("falls back to the running release's register-task.ps1 when the new one has none", async () => {
+      registerTask();
+      await update({ files: { "scripts/windows-launcher.mjs": "// launcher\n" } });
+      const register = readLog("powershell.log").filter((l) => l.includes("register-task.ps1"));
+      expect(register).toHaveLength(1);
+      // $RUNNING_SCRIPTS_DIR/../deploy/windows — the copy in the release the
+      // updater runs from, by its PHYSICAL directory (SCRIPT_DIR, reached
+      // through `current`, would point into the new release after the flip),
+      // spelled the way the script builds it (path.join would collapse the `..`).
+      expect(register[0]).toContain(
+        `${fs.realpathSync(path.dirname(SELF_UPDATE_SCRIPT))}/../deploy/windows/register-task.ps1`,
+      );
+      expect(register[0]).not.toContain(path.join("releases", "9.9.9", "deploy"));
+    });
+
+    it("puts the old current back, and fails, when the new link cannot be moved into place", async () => {
+      // A virus scanner or an indexer holding current.tmp makes the move fail
+      // AFTER the old link has been removed. `current` must not be left missing
+      // (the next logon's task would point at a launcher that is not there),
+      // and the update must say it failed rather than die under `set -e`.
+      registerTask();
+      const running = path.join(mullionHome, "releases", "1.0.0");
+      fs.mkdirSync(running, { recursive: true });
+      fs.symlinkSync(running, path.join(mullionHome, "current"));
+      writeShim(
+        binDir,
+        "mv",
+        `#!/usr/bin/env bash
+case "$*" in
+  *current.tmp*) echo "mv: cannot move: Device or resource busy" >&2; exit 1 ;;
+esac
+exec /bin/mv "$@"
+`,
+      );
+      await expect(update()).rejects.toThrow();
+      expect(readStatus()).toMatchObject({ phase: "failed" });
+      expect(readStatus().error).toMatch(
+        /could not move current to the new release — it is unchanged/,
+      );
+      expect(fs.realpathSync(path.join(mullionHome, "current"))).toBe(fs.realpathSync(running));
+      // Nothing was restarted onto a release `current` does not point at.
+      expect(readLog("powershell.log").filter((l) => l.includes("register-task"))).toEqual([]);
+    });
+
+    it("refuses a release without the Windows launcher, before current moves", async () => {
+      registerTask();
+      await expect(update({ files: {} })).rejects.toThrow();
+      expect(readStatus()).toMatchObject({ phase: "failed" });
+      expect(readStatus().error).toMatch(/windows-launcher\.mjs missing/);
+      expect(fs.existsSync(path.join(mullionHome, "current"))).toBe(false);
+      expect(fs.existsSync(path.join(mullionHome, "releases", "9.9.9"))).toBe(false);
+      expect(readLog("powershell.log").filter((l) => l.includes("register-task"))).toEqual([]);
+    });
+
+    it("does not start a second agent when no task is registered: it says so and fails", async () => {
+      // Re-registering from nothing would run a new agent beside one the
+      // operator started by hand, both wanting the same port.
+      await expect(update()).rejects.toThrow();
+      expect(readStatus()).toMatchObject({ phase: "failed" });
+      expect(readStatus().error).toMatch(/no scheduled task named Mullion-agent is registered/);
+      expect(readLog("powershell.log").filter((l) => l.includes("register-task"))).toEqual([]);
+      // The update itself is in place, as the message says.
+      expect(fs.realpathSync(path.join(mullionHome, "current"))).toBe(
+        fs.realpathSync(path.join(mullionHome, "releases", "9.9.9")),
+      );
+    });
+
+    it("refuses a task name that is not a plain name", async () => {
+      await expect(update({ unit: "bad name; calc" })).rejects.toThrow();
+      expect(readStatus().error).toMatch(/refusing to restart a scheduled task named/);
+      expect(readLog("powershell.log").filter((l) => l.includes("register-task"))).toEqual([]);
+    });
+
+    it("writes the mullion launcher script in ~/bin, not a symlink in ~/.local/bin", async () => {
+      registerTask();
+      await update({
+        files: { ...windowsFiles, "dist/cli/mullion.mjs": "// cli\n" },
+      });
+      const cli = path.join(fakeHome, "bin", "mullion");
+      const body = fs.readFileSync(cli, "utf8");
+      expect(fs.lstatSync(cli).isSymbolicLink()).toBe(false);
+      expect(body).toMatch(/^#!\/bin\/sh\nexec /);
+      expect(body).toContain(path.join(binDir, "node"));
+      expect(body).toContain(`${mullionHome}/current/dist/cli/mullion.mjs`);
+      expect(fs.existsSync(path.join(fakeHome, ".local", "bin", "mullion"))).toBe(false);
+    });
+
+    describe("pruning", () => {
+      const seed = (...names: string[]) => {
+        for (const name of names) {
+          fs.mkdirSync(path.join(mullionHome, "releases", name), { recursive: true });
+          fs.writeFileSync(path.join(mullionHome, "releases", name, "marker"), name);
+        }
+      };
+      const remaining = () => fs.readdirSync(path.join(mullionHome, "releases")).sort();
+
+      it("removes the oldest release when none is in use", async () => {
+        registerTask();
+        seed("1.0.0", "1.0.1", "1.0.2");
+        await update();
+        expect(remaining()).toEqual(["1.0.1", "1.0.2", "9.9.9"]);
+      });
+
+      it("keeps a release a running process still uses, even the oldest", async () => {
+        registerTask();
+        seed("1.0.0", "1.0.1", "1.0.2");
+        fs.writeFileSync(path.join(binDir, "powershell.inuse"), "1.0.0\n");
+        const { stderr } = await update();
+        expect(remaining()).toEqual(["1.0.0", "1.0.1", "1.0.2", "9.9.9"]);
+        expect(stderr).toContain("keeping release 1.0.0: a running process still uses it");
+        expect(readStatus().phase).toBe("done");
+      });
+
+      it("prunes nothing when it cannot tell what is in use", async () => {
+        registerTask();
+        seed("1.0.0", "1.0.1", "1.0.2");
+        const { stderr } = await update({ env: { INUSE_FAIL: "1" } });
+        expect(remaining()).toEqual(["1.0.0", "1.0.1", "1.0.2", "9.9.9"]);
+        expect(stderr).toContain("could not tell which releases are in use — not pruning");
+        expect(readStatus().phase).toBe("done");
+      });
+
+      it("treats a release it cannot delete (a locked file) as a warning, not a failed update", async () => {
+        registerTask();
+        seed("1.0.0", "1.0.1", "1.0.2");
+        writeShim(
+          binDir,
+          "rm",
+          `#!/usr/bin/env bash
+case "$*" in
+  *releases/1.0.0*) echo "rm: cannot remove: Device or resource busy" >&2; exit 1 ;;
+esac
+exec /bin/rm "$@"
+`,
+        );
+        const { stderr } = await update();
+        expect(stderr).toContain("could not remove release 1.0.0 completely");
+        expect(readStatus().phase).toBe("done");
+        expect(fs.existsSync(path.join(mullionHome, "releases", "1.0.0"))).toBe(true);
+      });
+    });
   });
 
   it("downloads, verifies, installs, and flips current on a successful update", async () => {

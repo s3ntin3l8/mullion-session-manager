@@ -3,6 +3,7 @@ import {
   resolveServiceUnitFromCgroup,
   resolveServiceUnit,
   launchdLabelForRole,
+  windowsTaskNameForRole,
   DEFAULT_SERVICE_UNIT,
   DEFAULT_LAUNCHD_LABEL,
 } from "../../src/services/service-unit.js";
@@ -48,6 +49,7 @@ describe("resolveServiceUnit", () => {
 
   it("ignores an empty/whitespace override and falls through to detection", () => {
     const unit = resolveServiceUnit({
+      platform: "linux",
       override: "   ",
       readCgroup: () => "0::/user.slice/user@1000.service/app.slice/mullion.service",
     });
@@ -56,6 +58,7 @@ describe("resolveServiceUnit", () => {
 
   it("falls back to cgroup autodetection when no override is set", () => {
     const unit = resolveServiceUnit({
+      platform: "linux",
       readCgroup: () => "0::/user.slice/user@1000.service/app.slice/mullion.service",
     });
     expect(unit).toBe("mullion.service");
@@ -63,6 +66,7 @@ describe("resolveServiceUnit", () => {
 
   it("falls back to the default when the cgroup read throws", () => {
     const unit = resolveServiceUnit({
+      platform: "linux",
       readCgroup: () => {
         throw new Error("ENOENT: no such file");
       },
@@ -72,6 +76,7 @@ describe("resolveServiceUnit", () => {
 
   it("falls back to the default when the cgroup leaf isn't a .service", () => {
     const unit = resolveServiceUnit({
+      platform: "linux",
       readCgroup: () => "0::/user.slice/user@1000.service/app.slice/some.scope",
     });
     expect(unit).toBe(DEFAULT_SERVICE_UNIT);
@@ -119,6 +124,41 @@ describe("resolveServiceUnit on macOS (issue #1718)", () => {
         readCgroup: () => "0::/user.slice/mullion.service\n",
       }),
     ).toBe("mullion.service");
+  });
+});
+
+describe("resolveServiceUnit on win32 (#2161)", () => {
+  it("is the scheduled task the installer registers for the role — not a systemd unit name", () => {
+    expect(resolveServiceUnit({ platform: "win32", role: "agent" })).toBe("Mullion-agent");
+    expect(resolveServiceUnit({ platform: "win32", role: "primary" })).toBe("Mullion-primary");
+    expect(resolveServiceUnit({ platform: "win32" })).toBe("Mullion-primary");
+  });
+
+  it("lets the launcher's MULLION_SERVICE_UNIT win, as everywhere else", () => {
+    expect(resolveServiceUnit({ platform: "win32", role: "agent", override: "Custom-task" })).toBe(
+      "Custom-task",
+    );
+  });
+
+  it("never reads a cgroup there: there is none", () => {
+    let read = false;
+    resolveServiceUnit({
+      platform: "win32",
+      role: "agent",
+      readCgroup: () => {
+        read = true;
+        return "0::/user.slice/mullion.service";
+      },
+    });
+    expect(read).toBe(false);
+  });
+});
+
+describe("windowsTaskNameForRole", () => {
+  it("maps the two roles to their task names, and anything else to the primary's", () => {
+    expect(windowsTaskNameForRole("agent")).toBe("Mullion-agent");
+    expect(windowsTaskNameForRole("primary")).toBe("Mullion-primary");
+    expect(windowsTaskNameForRole("")).toBe("Mullion-primary");
   });
 });
 
