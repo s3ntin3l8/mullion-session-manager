@@ -87,6 +87,9 @@ jobs:
           # the working directory first so the asset's NAME is exactly
           # "mullion-install.sh" rather than whatever gh infers from a path.
           cp deploy/mullion-install.sh mullion-install.sh
+          # The Windows counterpart: it makes sure Git Bash and Node exist,
+          # then runs the script above (deploy/windows/mullion-install.ps1).
+          cp deploy/windows/mullion-install.ps1 mullion-install.ps1
           gh release upload "${{ needs.release-please.outputs.tag_name }}" \
             "mullion-${version}.tgz" "mullion-${version}.tgz.sha256" \
-            "mullion-install.sh"
+            "mullion-install.sh" "mullion-install.ps1"

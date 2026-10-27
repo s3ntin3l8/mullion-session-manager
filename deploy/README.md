@@ -745,9 +745,11 @@ Linux or macOS; `install.sh --role primary` refuses on Windows). Sessions run
 in Git Bash, and survive the agent restarting the same way they do elsewhere —
 through a detached pty-host master per session instead of `dtach`.
 
-**You need:** Windows 10 or 11 on x64, [Node 26](https://nodejs.org/), and
-[Git for Windows](https://gitforwindows.org/). No C++ build tools, no
-Developer Mode, and no elevation (no "Run as administrator", no UAC prompt).
+**You need:** Windows 10 or 11 on x64. Nothing else installed beforehand: the
+bootstrap below uses the [Node 26](https://nodejs.org/) and [Git for
+Windows](https://gitforwindows.org/) it finds, and otherwise downloads its own
+copies for you. No C++ build tools, no Developer Mode, and no elevation (no
+"Run as administrator", no UAC prompt).
 
 **Which accounts that was checked with.** Registering the task was run, for
 real, from a **non-elevated Administrators-group account** — the default on a
@@ -760,8 +762,64 @@ non-administrator account has not been tried**. If a policy forbids creating
 tasks, the installer says so after the install is already in place and prints
 the command that runs the agent by hand.
 
-**Install**, from **Git Bash** (the installer is a bash script, and Git Bash
-is what the sessions use anyway):
+**Install, in one command**, from PowerShell (read the script first — it is
+linked below; it is the same file the release carries):
+
+```powershell
+& ([scriptblock]::Create((irm https://github.com/s3ntin3l8/mullion-session-manager/releases/latest/download/mullion-install.ps1))) `
+  -PrimaryUrl https://mullion.example.com -ProjectsRoots "C:/Users/me/code"
+```
+
+or save [`windows/mullion-install.ps1`](windows/mullion-install.ps1) and run
+`powershell -ExecutionPolicy Bypass -File mullion-install.ps1 …`. It makes sure
+Git Bash and Node 26 exist, then runs `mullion-install.sh` (below) with them,
+so the release's own `install.sh` stays the one installer. Nothing is installed
+system-wide:
+
+- a Git Bash and Node that are already installed are **used as they are**
+  (Node must be 26 or newer; an older one is ignored, not changed);
+- otherwise a **pinned, checksummed** copy is downloaded into
+  `<install root>\runtime` — Node from nodejs.org, a portable Git for Windows
+  from GitHub, about 90 MB together — and a download whose SHA-256 differs from
+  the pin is deleted and the install stops (there is no switch to skip that).
+  The pins are refreshed by `scripts/update-windows-prereqs.mjs`. A private Git
+  Bash is recorded as `CLAUDE_CODE_GIT_BASH_PATH` in the `.env`, and the private
+  Node's folder is put on the server's `PATH`, so sessions find both;
+- re-running it is safe: it reuses what is there and re-runs the installer.
+
+| Parameter                                            | Meaning                                                                                                                                    |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `-InstallRoot`                                       | where it goes (default `%LOCALAPPDATA%\Mullion`)                                                                                           |
+| `-PrimaryUrl`, `-AgentName`                          | the primary this agent registers with, and the name it registers under                                                                     |
+| `-ProjectsRoots`                                     | comma-separated folders to look for projects in (forward slashes)                                                                          |
+| `-AdvertiseUrl`                                      | the URL the primary should use to reach this agent (see below)                                                                             |
+| `-Version`                                           | install this release instead of the latest (`0.3.51`)                                                                                      |
+| `MULLION_AGENT_ENROLLMENT_TOKEN` / `-TokenFromStdin` | the enrollment token: an environment variable, or the first line of stdin — never a parameter, which every process on the machine can read |
+| `-Uninstall` `[-Purge]` `[-Force]`                   | see below                                                                                                                                  |
+| `-Json`                                              | machine-readable output (below)                                                                                                            |
+
+**For a program driving it** (a tray app's install button, a provisioning
+script): there is no prompt, ever, and with `-Json` stdout is one JSON object
+per line and nothing else —
+`{"step":"…","status":"start|ok|skip|log|fail","detail":"…"}`, for the steps
+`platform`, `git-bash`, `node`, `fetch`, `install` (its output arrives as `log`
+lines) and `done`. The last line is either `done`/`ok` carrying the contents of
+`install.json` (plus `gitBash`) or a `fail` line with `exitCode`. Exit status:
+`0` done; `1` unexpected failure; `2` unsupported platform or arguments; `3` a
+download or its checksum failed; `4` the release's installer failed; `5` an
+uninstall was refused because sessions are still running.
+
+**Reaching the agent.** The agent listens on `127.0.0.1` by default, so the
+primary cannot dial it from another machine as it is. To let it connect, bind a
+LAN address (set `HOST` in the `.env`) and give the primary a URL for that
+address with `-AdvertiseUrl`. The first time the agent listens on a non-loopback
+address, Windows shows a **Windows Defender Firewall prompt** for `node.exe`;
+it has to be allowed for the network type you are on. That is a click for you
+to make — the installer, which runs without administrator rights, cannot add
+the rule itself.
+
+**Install with Git Bash instead** (what the bootstrap runs underneath; use it
+if you already have Node 26 and Git for Windows and prefer a shell):
 
 ```bash
 curl -fsSL -o mullion-install.sh \
@@ -824,13 +882,19 @@ processes, sessions included — as it does for anything you start.
 
 **Remove it:**
 
-```bash
-powershell.exe -NoProfile -ExecutionPolicy Bypass \
-  -File "<install root>/current/deploy/windows/register-task.ps1" -TaskName Mullion-agent -Remove
+```powershell
+powershell -ExecutionPolicy Bypass -File mullion-install.ps1 -Uninstall      # add -Purge to remove everything
 ```
 
-then delete the install root. (Stop your sessions first: a running session's
-pty-host holds files in its release open.)
+This removes the scheduled task, the `mullion` launcher, the `current`
+junction (as a link: it never follows it) and the releases and logs. It
+**keeps `data\`, the `.env` and `runtime\`** — your sessions' data, your
+settings and the downloaded Node/Git — unless you add `-Purge`. It refuses
+while a session is still running from the install root (sessions survive a
+stop by design, and each holds files of its release open); end them from
+Mullion, or add `-Force` to end them. To do it by hand: remove the task with
+`register-task.ps1 -TaskName Mullion-agent -Remove` (in
+`current/deploy/windows/`) and delete the install root.
 
 **Updating** works as it does elsewhere: the primary's "Update now" for this
 host (or `POST /internal/updates/apply`) runs `scripts/self-update.sh`, which

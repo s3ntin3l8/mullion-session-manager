@@ -209,6 +209,21 @@ fi
 NODE_PATH="$(command -v node)"
 echo "    node: $NODE_PATH ($("$NODE_PATH" --version))"
 
+# package.json's engines.node is >=26 and nothing else enforces it before
+# `npm ci` fails obscurely (or a native module is built for the wrong ABI).
+# Checked on Windows, where a Node is easy to have installed long ago and
+# forgotten; the bootstrap (deploy/windows/mullion-install.ps1) supplies a
+# private one when none is good enough.
+if [ "$PLATFORM_KIND" = "windows" ]; then
+  NODE_MAJOR="$("$NODE_PATH" -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)"
+  if [ "${NODE_MAJOR:-0}" -lt 26 ] 2>/dev/null; then
+    echo "Mullion needs Node 26 or newer, but $NODE_PATH is $("$NODE_PATH" --version)." >&2
+    echo "Install Node 26+ (https://nodejs.org/), or use deploy/windows/mullion-install.ps1," >&2
+    echo "which downloads a private copy for Mullion; then run this again." >&2
+    exit 1
+  fi
+fi
+
 # Matches self-update.sh's own NPM_CI_TIMEOUT_SECONDS.
 NPM_CI_TIMEOUT_SECONDS=600
 
@@ -279,21 +294,35 @@ fi
 
 mkdir -p "$MULLION_HOME/releases" "$MULLION_HOME/data/sessions" "$MULLION_HOME/data/browsers" "$MULLION_HOME/browsers"
 
-echo "==> Looking up the latest release of $REPO"
-RELEASE_JSON="$(curl -fsSL -H "Accept: application/vnd.github+json" \
-  "https://api.github.com/repos/$REPO/releases/latest")"
-VERSION="$(printf '%s' "$RELEASE_JSON" | "$NODE_PATH" -e \
-  'const d=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write((d.tag_name||"").replace(/^v/,""))')"
-ASSET_URL="$(printf '%s' "$RELEASE_JSON" | "$NODE_PATH" -e \
-  'const d=JSON.parse(require("fs").readFileSync(0,"utf8"));const a=(d.assets||[]).find(x=>x.name.endsWith(".tgz"));process.stdout.write(a?a.browser_download_url:"")')"
-CHECKSUM_URL="$(printf '%s' "$RELEASE_JSON" | "$NODE_PATH" -e \
-  'const d=JSON.parse(require("fs").readFileSync(0,"utf8"));const a=(d.assets||[]).find(x=>x.name.endsWith(".sha256"));process.stdout.write(a?a.browser_download_url:"")')"
-if [ -z "$VERSION" ] || [ -z "$ASSET_URL" ] || [ -z "$CHECKSUM_URL" ]; then
-  echo "Could not find a .tgz release asset (and its .sha256 checksum) for $REPO's latest release." >&2
-  echo "Has the release-please.yml build-tarball job run yet?" >&2
-  exit 1
+if [ -n "${MULLION_INSTALL_TAG:-}" ]; then
+  # A pinned release (the Windows bootstrap's -Version, deploy/windows/
+  # mullion-install.ps1), optionally from a release-shaped directory instead of
+  # GitHub (MULLION_INSTALL_BASE_URL: <tarball> and <tarball>.sha256 under it;
+  # curl accepts a file:// URL) — which is how a release is installed before it
+  # is published, or in a test. The checksum is verified below exactly as for
+  # a looked-up one.
+  VERSION="${MULLION_INSTALL_TAG#v}"
+  _release_base="${MULLION_INSTALL_BASE_URL:-https://github.com/$REPO/releases/download/$MULLION_INSTALL_TAG}"
+  ASSET_URL="${_release_base%/}/mullion-$VERSION.tgz"
+  CHECKSUM_URL="$ASSET_URL.sha256"
+  echo "==> Installing the pinned release $VERSION of $REPO"
+else
+  echo "==> Looking up the latest release of $REPO"
+  RELEASE_JSON="$(curl -fsSL -H "Accept: application/vnd.github+json" \
+    "https://api.github.com/repos/$REPO/releases/latest")"
+  VERSION="$(printf '%s' "$RELEASE_JSON" | "$NODE_PATH" -e \
+    'const d=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write((d.tag_name||"").replace(/^v/,""))')"
+  ASSET_URL="$(printf '%s' "$RELEASE_JSON" | "$NODE_PATH" -e \
+    'const d=JSON.parse(require("fs").readFileSync(0,"utf8"));const a=(d.assets||[]).find(x=>x.name.endsWith(".tgz"));process.stdout.write(a?a.browser_download_url:"")')"
+  CHECKSUM_URL="$(printf '%s' "$RELEASE_JSON" | "$NODE_PATH" -e \
+    'const d=JSON.parse(require("fs").readFileSync(0,"utf8"));const a=(d.assets||[]).find(x=>x.name.endsWith(".sha256"));process.stdout.write(a?a.browser_download_url:"")')"
+  if [ -z "$VERSION" ] || [ -z "$ASSET_URL" ] || [ -z "$CHECKSUM_URL" ]; then
+    echo "Could not find a .tgz release asset (and its .sha256 checksum) for $REPO's latest release." >&2
+    echo "Has the release-please.yml build-tarball job run yet?" >&2
+    exit 1
+  fi
+  echo "    latest release: $VERSION"
 fi
-echo "    latest release: $VERSION"
 
 RELEASE_DIR="$MULLION_HOME/releases/$VERSION"
 if [ -d "$RELEASE_DIR" ]; then
@@ -558,6 +587,13 @@ EOF
 # primary's Settings -> Hosts -> Add host. Set this INSTEAD of Path 1 above.
 EOF
     printf 'MULLION_AGENT_TOKEN=%s\n' "${MULLION_AGENT_TOKEN:-}" >>"$MULLION_HOME/.env"
+    # A private Git Bash (the Windows bootstrap's download) is not on any
+    # PATH, so sessions are told where it is. src/services/session-shell.ts
+    # reads this first — it is also Claude Code's own setting for the same.
+    if [ "$PLATFORM_KIND" = "windows" ] && [ -n "${MULLION_INSTALL_GIT_BASH:-}" ]; then
+      printf '\n# Set by the Windows bootstrap: the Git Bash sessions run in.\n' >>"$MULLION_HOME/.env"
+      printf 'CLAUDE_CODE_GIT_BASH_PATH=%s\n' "$(native_path "$MULLION_INSTALL_GIT_BASH")" >>"$MULLION_HOME/.env"
+    fi
   )
   if [ -z "${MULLION_AGENT_PROJECTS_ROOTS:-}" ]; then
     # Hermes review, PR #529: nothing in src/app.ts's fail-closed check

@@ -144,10 +144,14 @@ launchd_wait_label_gone() {
 # status is the signal's, not the command's — exactly like `timeout`).
 #
 # The watchdog is a background subshell, so it must NOT be waited on: a
-# subshell blocked in `sleep` does not act on a SIGTERM until that sleep
-# ends, so waiting for it would block for the whole budget. It is killed
-# instead, and the marker file keeps a late watchdog from signalling a pid
-# that has since been recycled by an unrelated process.
+# subshell blocked in a long `sleep` does not act on a SIGTERM until that
+# sleep ends, so waiting for it would block for the whole budget. It sleeps in
+# one-second steps instead and looks at the marker each time, so it ends by
+# itself within a second of the command finishing — which matters where
+# `pkill` does not exist (Git for Windows ships none, and a single long
+# `sleep` was left running for the whole budget, one per `npm ci`, holding
+# files of the Git it ran from). The marker file also keeps a late watchdog
+# from signalling a pid that has since been recycled by an unrelated process.
 #
 # Its output goes to /dev/null: the watchdog outlives the command, and a
 # lingering `sleep` holding the caller's stdout pipe would keep that pipe
@@ -161,7 +165,11 @@ run_with_timeout() {
   "$@" &
   local pid=$!
   (
-    sleep "$seconds"
+    waited=0
+    while [ "$waited" -lt "$seconds" ] && [ -e "$marker" ]; do
+      sleep 1
+      waited=$((waited + 1))
+    done
     if [ -e "$marker" ] && kill -0 "$pid" 2>/dev/null; then
       kill -TERM "$pid" 2>/dev/null || true
     fi
@@ -175,9 +183,8 @@ run_with_timeout() {
   # update for no good reason. A leftover marker only means the watchdog's
   # kill check stays armed — it also checks that the pid is still alive.
   rm -f "$marker" 2>/dev/null || true
-  # Killing the subshell alone orphans its `sleep` (reparented to init, alive
-  # for the whole budget — a leaked `sleep 600` per npm ci), so reap the
-  # subshell's children first.
+  # Killing the subshell alone would orphan the `sleep` it is in (a second at
+  # most now), so reap the subshell's children first where pkill exists.
   pkill -P "$watchdog" 2>/dev/null || true
   kill "$watchdog" 2>/dev/null || true
   return "$status"

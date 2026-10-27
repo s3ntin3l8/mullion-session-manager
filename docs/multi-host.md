@@ -768,6 +768,11 @@ What is specific to them:
   account has not been tried — see the deploy README). The task runs `scripts/windows-launcher.mjs`, which reads the
   install's `.env`, restarts the server if it fails and logs to
   `logs/mullion.log`. Stopping the task ends the server but not the sessions.
+- **Install** needs nothing installed beforehand: `mullion-install.ps1` (a
+  release asset, also `deploy/windows/`) uses the Node 26 and Git Bash it
+  finds, downloads pinned, checksummed per-user copies of whichever is missing,
+  then runs the usual `install.sh`. It can be driven by a program (`-Json`
+  output, exit codes) and has an `-Uninstall`; see the deploy README.
 - **Self-update** (the primary's "Update now" for a Windows agent, or
   `POST /internal/updates/apply`, [#2161](https://github.com/s3ntin3l8/mullion-session-manager/issues/2161)):
   the same `scripts/self-update.sh`, run in Git Bash and started detached so it

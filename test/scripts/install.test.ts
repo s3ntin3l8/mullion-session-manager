@@ -554,6 +554,43 @@ describeOnLinux("deploy/install.sh", () => {
     });
   });
 
+  describe("a pinned release (MULLION_INSTALL_TAG)", () => {
+    it("installs the named release without looking up the latest one", async () => {
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      // With no release.json the curl shim fails the GitHub lookup, so a script
+      // that still did one would die here.
+      fs.rmSync(path.join(binDir, "release.json"));
+      const { stdout } = await runScript(["--role", "agent", mullionHome], {
+        env: { MULLION_INSTALL_TAG: "v9.9.9" },
+      });
+      expect(stdout).toContain("Installing the pinned release 9.9.9");
+      expect(stdout).not.toContain("Looking up the latest release");
+      expect(fs.readlinkSync(path.join(mullionHome, "current"))).toMatch(/releases\/9\.9\.9$/);
+    });
+
+    it("downloads the tarball and its checksum from MULLION_INSTALL_BASE_URL", async () => {
+      const mullionHome = freshMullionHome();
+      // No releases/9.9.9: the download branch runs, and the curl shim refuses
+      // any URL but the one the base resolves to.
+      const calls = path.join(binDir, "curl.calls");
+      writeShim(
+        binDir,
+        "curl",
+        `#!/usr/bin/env bash\necho "$*" >> "${calls}"\necho "stop here" >&2\nexit 1\n`,
+      );
+      await expect(
+        runScript(["--role", "agent", "--no-systemd", mullionHome], {
+          env: {
+            MULLION_INSTALL_TAG: "v9.9.9",
+            MULLION_INSTALL_BASE_URL: "file:///srv/release/",
+          },
+        }),
+      ).rejects.toBeTruthy();
+      expect(fs.readFileSync(calls, "utf8")).toContain("file:///srv/release/mullion-9.9.9.tgz");
+    });
+  });
+
   describe("agent .env generation", () => {
     it("warns about an empty PROJECTS_ROOTS and no complete credential path", async () => {
       const mullionHome = freshMullionHome();
