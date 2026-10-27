@@ -75,6 +75,7 @@ export function BranchesSection({
   const prs = useDashboardStore((s) => s.prsByProject[projectId]?.prs);
   const openRightSidebarHistory = useDashboardStore((s) => s.openRightSidebarHistory);
   const openRightSidebarPr = useDashboardStore((s) => s.openRightSidebarPr);
+  const pushToast = useDashboardStore((s) => s.pushToast);
   const [filter, setFilter] = useState("");
   // So a double click can't make two sessions racing the worktree the first creates.
   const [opening, setOpening] = useState<ReadonlySet<string>>(new Set());
