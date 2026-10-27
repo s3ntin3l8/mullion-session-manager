@@ -790,14 +790,22 @@ describe("Settings -> Models", () => {
     });
   });
 
-  it("repeats each role's explanation on the card, not only in the column header", () => {
-    // The phone card hides the header, so the sentence has to be in the cell
-    // too. Header plus one per visible CLI that has the role.
+  it("keeps the card explanations on the row, and the column sentences in the header only", () => {
     render(<ModelsSection />);
-    expect(screen.getAllByText("New sessions and workers.")).toHaveLength(6);
+
+    expect(screen.getAllByText("New sessions and workers.")).toHaveLength(1);
     expect(
       screen.getAllByText("Review sessions. Empty follows the implementer, except opencode."),
-    ).toHaveLength(6);
-    expect(screen.getAllByText("Background work. Only Claude Code and opencode.")).toHaveLength(3);
+    ).toHaveLength(1);
+    expect(screen.getAllByText("Background work. Only Claude Code and opencode.")).toHaveLength(1);
+
+    const claude = within(screen.getByTestId("models-row-claude"));
+    expect(claude.getByText("Empty follows the implementer.")).toBeInTheDocument();
+    expect(claude.getByText("Background work.")).toBeInTheDocument();
+    expect(claude.queryByText("New sessions and workers.")).toBeNull();
+
+    const opencode = within(screen.getByTestId("models-row-opencode"));
+    expect(opencode.getByText("Empty stays on opencode's own default.")).toBeInTheDocument();
+    expect(opencode.queryByText(/except opencode/)).toBeNull();
   });
 });

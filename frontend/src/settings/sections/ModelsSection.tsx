@@ -45,8 +45,10 @@ const MODEL_CLIS = AGENT_OPTIONS.flatMap((option) => {
   return layout ? [{ ...option, ...layout }] : [];
 });
 
-// Same sentences in the desktop column header and in each stacked card.
-// The card hides the header, so the sentence has to travel with the cell.
+// Column header copy. The phone card hides that header, but it does not
+// repeat these sentences: the legend already covers new sessions, and an
+// empty Small cell is simply absent. The card only keeps the bit the empty
+// control does not say itself.
 const ROLE_COPY = {
   implementer: { label: "Implementer", desc: "New sessions and workers." },
   reviewer: {
@@ -55,6 +57,18 @@ const ROLE_COPY = {
   },
   small: { label: "Small", desc: "Background work. Only Claude Code and opencode." },
 } as const;
+
+function cardDesc(cli: string, role: "implementer" | "reviewer" | "small"): string | null {
+  if (role === "reviewer") {
+    // opencode's empty reviewer is its own default, not the implementer, so
+    // the shared "except opencode" clause would be talking about this row.
+    return cli === "opencode"
+      ? "Empty stays on opencode's own default."
+      : "Empty follows the implementer.";
+  }
+  if (role === "small") return "Background work.";
+  return null;
+}
 
 type AgentProbe =
   { status: "loading" } | { status: "error" } | { status: "ready"; available: ReadonlySet<string> };
@@ -410,7 +424,7 @@ export function ModelsSection() {
               {implementer && (
                 <RoleCell
                   label={ROLE_COPY.implementer.label}
-                  desc={ROLE_COPY.implementer.desc}
+                  desc={cardDesc(cli.value, "implementer")}
                   ariaLabel={ariaName(cli.label, "implementer")}
                   {...implementer}
                 />
@@ -418,7 +432,7 @@ export function ModelsSection() {
               {reviewer && (
                 <RoleCell
                   label={ROLE_COPY.reviewer.label}
-                  desc={ROLE_COPY.reviewer.desc}
+                  desc={cardDesc(cli.value, "reviewer")}
                   ariaLabel={ariaName(cli.label, "reviewer")}
                   {...reviewer}
                 />
@@ -426,7 +440,7 @@ export function ModelsSection() {
               {small ? (
                 <RoleCell
                   label={ROLE_COPY.small.label}
-                  desc={ROLE_COPY.small.desc}
+                  desc={cardDesc(cli.value, "small")}
                   ariaLabel={ariaName(cli.label, "small")}
                   {...small}
                 />
@@ -483,7 +497,7 @@ function RoleCell({
   onChange,
 }: {
   label: string;
-  desc: string;
+  desc: string | null;
   ariaLabel: string;
   value: string | null;
   options: ModelOption[];
@@ -496,7 +510,7 @@ function RoleCell({
       <span className="settings-models-role" aria-hidden="true">
         {label}
       </span>
-      <span className="settings-models-role-desc">{desc}</span>
+      {desc && <span className="settings-models-role-desc">{desc}</span>}
       <ModelSelect
         stretch
         ariaLabel={ariaLabel}
