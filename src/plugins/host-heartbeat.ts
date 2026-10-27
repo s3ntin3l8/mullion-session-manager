@@ -38,10 +38,17 @@ export const hostHeartbeatPlugin = fp(async (app: FastifyInstance) => {
   // Issue #2090 — a host coming online is when the opt-in "map projects onto
   // this host's matching clones" sweep runs. Fire-and-forget: it is
   // best-effort bookkeeping and must never hold up (or fail) the heartbeat.
+  const detecting = new Set<string>();
   function onHostOnline(hostId: string): void {
-    void autoFillHostCwds(app, { hostId }).catch((err: unknown) => {
-      app.log.warn({ err, hostId }, "[host-heartbeat] auto-detecting checkouts failed");
-    });
+    // One run per host at a time: a run that outlasts the sweep interval must
+    // not be stacked on by the next "came online".
+    if (detecting.has(hostId)) return;
+    detecting.add(hostId);
+    void autoFillHostCwds(app, { hostId })
+      .catch((err: unknown) => {
+        app.log.warn({ err, hostId }, "[host-heartbeat] auto-detecting checkouts failed");
+      })
+      .finally(() => detecting.delete(hostId));
   }
 
   app.addHook("onReady", () => {

@@ -236,6 +236,14 @@ default because `hostCwds` is also where session-scoped children may be sent. Ru
   project (or clearing the map over the API) records the host as declined, and a later
   save that sets it again un-declines it. A declined host is still shown as a
   suggestion.
+- It trusts what an agent reports about its own clones (including `origin`): the most a
+  compromised agent can obtain is an entry for **its own** host, which you already
+  registered. Replies are validated (a list of well-formed entries, bounded in number and
+  length) and a stored path must be absolute POSIX with no control characters or `..`.
+- The Edit project save replaces the whole map, so an entry the sweep added **after the
+  dialog was opened** is missing from what the dialog posts and reads as a removal: that
+  host is then declined. Re-open the dialog (it loads the project fresh) and set the
+  path again to undo it.
 - Each addition is logged (`[host-checkout-detect] auto-filled hostCwds`) and recorded
   in the project's `hostCwdsMeta.auto` (the API returns `hostCwdsMeta: { auto,
 declined }`), until an operator saves the map, which acknowledges it.

@@ -253,6 +253,21 @@ describe("startHostHeartbeat: onHostOnline", () => {
     cleanup();
   });
 
+  it("does not fire for a single dropped ping (online -> degraded -> online is no rescan)", async () => {
+    pingMock.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    pingMock.mockResolvedValue(true);
+    const onHostOnline = vi.fn();
+
+    const cleanup = startHostHeartbeat(fakeApp(), undefined, undefined, undefined, onHostOnline);
+    await waitForAssertion(() => expect(onHostOnline).toHaveBeenCalledTimes(1)); // first contact
+    await vi.advanceTimersByTimeAsync(30_000); // one miss
+    await vi.advanceTimersByTimeAsync(30_000); // back
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(onHostOnline).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
+
   it("does not fire for a host that does not answer", async () => {
     pingMock.mockResolvedValue(false);
     const onHostOnline = vi.fn();

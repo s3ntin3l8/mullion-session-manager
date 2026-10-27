@@ -87,6 +87,8 @@ describe("host-checkout-detect", () => {
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "checkout-detect-"));
     app = await buildTestApp();
     await app.ready();
+    // The DB is shared across this file's tests: start each one from the default.
+    applySettingsPatch(app, { autoDetectHostCheckouts: false });
     const tracker = new HostHeartbeatTracker();
     app.hostHeartbeatTracker = tracker;
     macId = createHost(app, { name: "mac", baseUrl: "http://mac.test", token: "t" }).id;
@@ -216,6 +218,87 @@ describe("host-checkout-detect", () => {
 
       expect(found.map((s) => s.hostId)).toEqual([macId]);
       expect(found[0].candidates[0].match).toBe("origin");
+    });
+  });
+
+  describe("untrusted discovery replies", () => {
+    it("treats a reply that is not a list as 'nothing here', and keeps going for other hosts", async () => {
+      const project = localProject("app");
+      discovery.set(macId, { not: "a list" } as unknown as DiscoveredCandidate[]);
+      discovery.set(boxId, [repo("app", { cwd: "/srv/app" })]);
+
+      const found = await detectCheckouts(app, project);
+
+      expect(found.map((s) => s.hostId)).toEqual([boxId]);
+    });
+
+    it("drops malformed entries one by one instead of failing the host", async () => {
+      const project = localProject("app");
+      const junk = [
+        null,
+        42,
+        "x",
+        { name: 1, cwd: "/a", isGitRepo: true },
+        { name: "app", cwd: null, isGitRepo: true },
+        { name: "app", cwd: "/a", isGitRepo: "yes" },
+        { name: "x".repeat(5000), cwd: "/a", isGitRepo: true },
+        // a non-string origin reads as "no origin", so this one is a name match
+        { name: "app", cwd: "/Users/x/app", isGitRepo: true, origin: 7 },
+      ] as unknown as DiscoveredCandidate[];
+      discovery.set(macId, junk);
+
+      const [s] = await detectCheckouts(app, project);
+
+      expect(s.candidates).toEqual([{ cwd: "/Users/x/app", match: "name" }]);
+    });
+
+    it("never auto-fills a path that is not safe to store", async () => {
+      enable(true);
+      const cases = ["/ok/../etc", "/line\nbreak", `/${"a".repeat(5000)}`];
+      for (const [i, cwd] of cases.entries()) {
+        const project = localProject(`unsafe${i}`, `git@github.com:acme/unsafe${i}.git`);
+        discovery.set(macId, [
+          repo(`unsafe${i}`, { cwd, origin: `https://github.com/acme/unsafe${i}.git` }),
+        ]);
+
+        expect((await autoFillHostCwds(app, { hostId: macId })).added, cwd.slice(0, 20)).toEqual(
+          [],
+        );
+        expect(row(project.id).hostCwds).toBeNull();
+      }
+    });
+
+    it("caps how many entries it reads from one host", async () => {
+      const project = localProject("app");
+      const many: DiscoveredCandidate[] = Array.from({ length: 3000 }, (_, i) => ({
+        name: `r${i}`,
+        cwd: `/Users/x/r${i}`,
+        isGitRepo: true,
+        isWorktree: false,
+        origin: null,
+      }));
+      // The real clone sits past the cap, so it is (deliberately) not seen.
+      many.push(repo("app"));
+      discovery.set(macId, many);
+
+      expect(await detectCheckouts(app, project)).toEqual([]);
+    });
+  });
+
+  describe("auto-fill limits", () => {
+    it("does not add a 33rd host to a full hostCwds map", async () => {
+      enable(true);
+      const project = localProject("app");
+      const full = Object.fromEntries(Array.from({ length: 32 }, (_, i) => [`h${i}`, `/p/${i}`]));
+      app.db
+        .update(projects)
+        .set({ hostCwds: JSON.stringify(full) })
+        .where(eq(projects.id, project.id))
+        .run();
+      discovery.set(macId, [repo("app")]);
+
+      expect((await autoFillHostCwds(app)).added).toEqual([]);
+      expect(Object.keys(parseHostCwds(row(project.id).hostCwds))).toHaveLength(32);
     });
   });
 

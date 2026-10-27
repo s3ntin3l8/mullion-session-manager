@@ -153,6 +153,14 @@ describe("normalizeGitRemote", () => {
     );
   });
 
+  it("never throws on a malformed percent escape, and does not decode %2F into a path separator", () => {
+    expect(() => normalizeGitRemote("https://github.com/o/%zz")).not.toThrow();
+    expect(normalizeGitRemote("https://github.com/o/%zz")).toBe("github.com/o/%zz");
+    expect(normalizeGitRemote("https://github.com/o%2Fr")).not.toBe(
+      normalizeGitRemote("https://github.com/o/r"),
+    );
+  });
+
   it("is null for anything that cannot identify a repository on another host", () => {
     for (const bad of [
       "",

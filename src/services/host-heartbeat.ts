@@ -189,8 +189,10 @@ async function sweepHost(
 ): Promise<{ recovered: boolean; cameOnline: boolean }> {
   let reachable = false;
   // Issue #2090 — "came online" is broader than "recovered": it is also true
-  // for a FIRST contact (pending -> online), which a recovery never is.
-  const wasOnline = tracker.getHealth(hostId).status === "online";
+  // for a FIRST contact (pending -> online), which a recovery never is. A
+  // single dropped ping (online -> degraded -> online) is neither: that is not
+  // worth a fleet-wide rescan.
+  const wasPending = tracker.getHealth(hostId).status === "pending";
   // Whether this contact is a RECOVERY — the host had been unreachable for
   // at least two consecutive pings and is reachable again (see
   // HostHeartbeatTracker.recordSuccess). The caller acts on it.
@@ -208,7 +210,7 @@ async function sweepHost(
   }
 
   if (!reachable) return { recovered: false, cameOnline: false };
-  const cameOnline = !wasOnline;
+  const cameOnline = wasPending || recovered;
 
   try {
     const report = await getRemoteHostClient(app, hostId).resolveCapacity();

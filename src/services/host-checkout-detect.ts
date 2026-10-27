@@ -26,6 +26,12 @@ export const MAX_AUTOFILL_PER_RUN = 20;
 /** The API's own cap on `hostCwds` entries (routes/projects.ts). */
 const MAX_HOST_CWDS = 32;
 
+/** Bounds on what a host's discovery reply may contain. The reply comes from a
+ * REMOTE agent, so it is untrusted input: anything outside these is dropped,
+ * never stored and never allowed to throw into a whole run. */
+const MAX_DISCOVERED = 2000;
+const MAX_FIELD_LENGTH = 4096;
+
 export type CheckoutMatch = "origin" | "name";
 
 export interface CheckoutCandidate {
@@ -59,6 +65,44 @@ function isOnline(app: FastifyInstance, host: HostSummary): boolean {
   return app.hostHeartbeatTracker?.getHealth(host.id)?.status === "online";
 }
 
+/**
+ * Keeps only the well-formed candidates of a discovery reply. `null` means the
+ * reply was not a list at all (a misbehaving or non-Mullion service). A
+ * candidate with a field of the wrong type, or an oversized one, is skipped on
+ * its own; an `origin` that is not a string reads as "no origin" and a missing
+ * one (an older agent) stays missing.
+ */
+function sanitizeCandidates(raw: unknown): DiscoveredCandidate[] | null {
+  if (!Array.isArray(raw)) return null;
+  const out: DiscoveredCandidate[] = [];
+  for (const entry of raw.slice(0, MAX_DISCOVERED)) {
+    if (typeof entry !== "object" || entry === null) continue;
+    const c = entry as Record<string, unknown>;
+    if (typeof c.name !== "string" || typeof c.cwd !== "string") continue;
+    if (typeof c.isGitRepo !== "boolean") continue;
+    if (c.name.length > MAX_FIELD_LENGTH || c.cwd.length > MAX_FIELD_LENGTH) continue;
+    const candidate: DiscoveredCandidate = { name: c.name, cwd: c.cwd, isGitRepo: c.isGitRepo };
+    if (c.origin !== undefined) {
+      candidate.origin =
+        typeof c.origin === "string" && c.origin.length <= MAX_FIELD_LENGTH ? c.origin : null;
+    }
+    if (typeof c.isWorktree === "boolean") candidate.isWorktree = c.isWorktree;
+    out.push(candidate);
+  }
+  return out;
+}
+
+/** A path that is safe to store in `hostCwds`: absolute POSIX, bounded, no
+ * control characters and no `..` segment (the API itself only checks `^/`). */
+function isStorablePath(cwd: string): boolean {
+  return (
+    cwd.startsWith("/") &&
+    cwd.length <= MAX_FIELD_LENGTH &&
+    !/[\0\r\n]/.test(cwd) &&
+    !cwd.split("/").includes("..")
+  );
+}
+
 function discoverOnHost(
   app: FastifyInstance,
   hostId: string,
@@ -68,8 +112,15 @@ function discoverOnHost(
   if (!pending) {
     pending = (async () => {
       try {
-        if (hostId === LOCAL_HOST_ID) return discoverCandidates(resolveProjectRoots(app));
-        return await getRemoteHostClient(app, hostId).discover();
+        const raw =
+          hostId === LOCAL_HOST_ID
+            ? discoverCandidates(resolveProjectRoots(app))
+            : await getRemoteHostClient(app, hostId).discover();
+        const list = sanitizeCandidates(raw);
+        if (list === null) {
+          app.log.warn({ hostId }, "[host-checkout-detect] discovery did not return a list");
+        }
+        return list;
       } catch (err) {
         // An unreachable host, or an agent too old to have the route, is
         // "nothing to suggest here", not a failure of the whole detection.
@@ -199,6 +250,13 @@ function commitAutoFill(
  * a host that has exactly ONE clone with the project's origin. `hostId`
  * restricts it to one host (the host-came-online trigger and "Detect now").
  * Returns `enabled: false` without touching anything while the setting is off.
+ *
+ * Trust model: a host's discovery answer, `origin` included, is self-reported by
+ * that host's agent. A compromised agent can therefore claim to hold a clone of
+ * any project, and the most that buys it is a `hostCwds` entry for ITS OWN host
+ * (which the operator already registered) — bounded by the per-run cap, the
+ * ambiguity rule and the path checks above, and visible in the log, the
+ * `auto` flag and the Edit project badge.
  */
 export async function autoFillHostCwds(
   app: FastifyInstance,
@@ -214,8 +272,8 @@ export async function autoFillHostCwds(
     for (const s of suggestions) {
       if (s.declined || s.ambiguous) continue;
       const exact = s.candidates.filter((c) => c.match === "origin");
-      // Exactly one origin match, and an absolute path the API would accept.
-      if (exact.length !== 1 || !exact[0].cwd.startsWith("/")) continue;
+      // Exactly one origin match, and a path that is safe to store.
+      if (exact.length !== 1 || !isStorablePath(exact[0].cwd)) continue;
       if (added.length >= MAX_AUTOFILL_PER_RUN) break;
       if (commitAutoFill(app, project.id, s.hostId, exact[0].cwd)) {
         added.push({ projectId: project.id, hostId: s.hostId, cwd: exact[0].cwd });

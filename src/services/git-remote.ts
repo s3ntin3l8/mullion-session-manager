@@ -130,7 +130,9 @@ export function normalizeGitRemote(raw: string): string | null {
     }
     if (parsed.protocol === "file:") return null;
     host = parsed.hostname;
-    pathPart = decodeURIComponent(parsed.pathname);
+    // Not percent-decoded: decoding can throw on a malformed escape and would
+    // make `o%2Fr` equal `o/r`; both spellings of one repo are compared raw.
+    pathPart = parsed.pathname;
   } else {
     const scp = url.match(SCP_REMOTE);
     // A one-letter "host" is a Windows drive (`C:\repo`), not a remote.
