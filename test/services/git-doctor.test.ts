@@ -84,6 +84,15 @@ function damage(sha: string) {
 }
 
 /**
+ * What `git fsck` says about the emptied tree. Older gits report the cache-tree
+ * pointer ("invalid sha1 pointer in cache-tree of .git/index"); newer ones (2.55)
+ * report the empty object file first ("object file .git/objects/xx/... is empty").
+ * Both are the same damage, so the tests accept either rather than pinning a
+ * sentence git is free to reword.
+ */
+const FSCK_DAMAGE = /invalid sha1 pointer|object file \S+ is empty/;
+
+/**
  * Builds the scenario from the issue: a tree that exists only as a loose
  * object and is named by the index's cache-tree. Emptying it reproduces
  * "invalid sha1 pointer in cache-tree of .git/index" exactly.
@@ -163,7 +172,7 @@ describe("git-doctor — the read-only inspection", () => {
     expect(health.zeroByteObjects).toHaveLength(1);
     expect(health.zeroByteObjects[0]).toContain(tree.slice(0, 2));
     expect(health.fsckErrors.length).toBeGreaterThan(0);
-    expect(health.fsckErrors.join("\n")).toContain("invalid sha1 pointer");
+    expect(health.fsckErrors.join("\n")).toMatch(FSCK_DAMAGE);
     // Read-only: the damage is still there.
     expect(zeroByteObjects()).toHaveLength(1);
   });
@@ -326,12 +335,12 @@ describe("git-doctor — the report", () => {
     const tree = damageTheStagedTree();
 
     // The symptom, reproduced exactly as #1836 recorded it.
-    expect(fsckOutput()).toContain("invalid sha1 pointer in cache-tree");
+    expect(fsckOutput()).toMatch(FSCK_DAMAGE);
 
     const result = await doctor();
     expect(result.status).toBe(1);
     expect(result.stdout).toContain(tree);
-    expect(result.stdout).toContain("invalid sha1 pointer");
+    expect(result.stdout).toMatch(FSCK_DAMAGE);
     // Report mode never mutates.
     expect(zeroByteObjects()).toHaveLength(1);
   });
