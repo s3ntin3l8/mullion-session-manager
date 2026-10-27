@@ -156,7 +156,7 @@ without `brew install coreutils`.
 
 **On Windows** (agent hosts only, issue #2160) none of that applies: no
 `systemd`, no `dtach` (the detached pty-host replaces it), no C++ build tools
-and no administrator rights. It needs **Node 26** and **Git for Windows**, and
+and no elevation. It needs **Node 26** and **Git for Windows**, and
 `install.sh` is run from Git Bash. See the
 [Windows section](#windows-the-scheduled-task-deployment-issue-2160--1728).
 
@@ -747,7 +747,18 @@ through a detached pty-host master per session instead of `dtach`.
 
 **You need:** Windows 10 or 11 on x64, [Node 26](https://nodejs.org/), and
 [Git for Windows](https://gitforwindows.org/). No C++ build tools, no
-Developer Mode and no administrator rights.
+Developer Mode, and no elevation (no "Run as administrator", no UAC prompt).
+
+**Which accounts that was checked with.** Registering the task was run, for
+real, from a **non-elevated Administrators-group account** — the default on a
+personal Windows machine, whose token carries the `Administrators` SID as
+deny-only. That is the account type on which `schtasks /Create` is refused
+("Access is denied", #871); the installer uses the `ScheduledTasks` cmdlets
+for the user's own task instead, which that account may do. CI cannot vouch
+for this (its runner is an elevated administrator), and a **standard,
+non-administrator account has not been tried**. If a policy forbids creating
+tasks, the installer says so after the install is already in place and prints
+the command that runs the agent by hand.
 
 **Install**, from **Git Bash** (the installer is a bash script, and Git Bash
 is what the sessions use anyway):

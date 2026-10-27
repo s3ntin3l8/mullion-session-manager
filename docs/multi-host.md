@@ -763,8 +763,9 @@ What is specific to them:
   [#2160](https://github.com/s3ntin3l8/mullion-session-manager/issues/2160)):
   the agent runs as a **per-user scheduled task** started at logon, not as a
   Windows service, because the agent CLIs, their logins and Git Bash are per
-  user. It needs no administrator rights, no Developer Mode and no C++ build
-  tools. The task runs `scripts/windows-launcher.mjs`, which reads the
+  user. It needs no elevation, no Developer Mode and no C++ build tools
+  (checked from a non-elevated Administrators-group account; a standard
+  account has not been tried — see the deploy README). The task runs `scripts/windows-launcher.mjs`, which reads the
   install's `.env`, restarts the server if it fails and logs to
   `logs/mullion.log`. Stopping the task ends the server but not the sessions.
 - **Not yet:** self-update (reinstall a new release instead,

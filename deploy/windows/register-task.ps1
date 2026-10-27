@@ -13,7 +13,9 @@
 # git credentials and Git Bash are per user, so the agent has to run as the
 # user, in the user's session -- which also keeps the named pipes' access list
 # (current user + SYSTEM) correct as it is. It starts when the user logs on and
-# needs no administrator rights. (An opt-in service for headless hosts is a
+# needs no elevation: it uses the ScheduledTasks cmdlets for the user's own
+# task, not `schtasks /Create`, which a non-elevated Administrators-group
+# account is refused (#871). (An opt-in service for headless hosts is a
 # separate issue.)
 #
 # The task runs scripts/windows-launcher.mjs, which supervises the server: Task
@@ -63,9 +65,18 @@ try {
   foreach ($pair in @(@('NodePath', $NodePath), @('LauncherPath', $LauncherPath), @('MullionHome', $MullionHome))) {
     if ([string]::IsNullOrWhiteSpace($pair[1])) { Fail "-$($pair[0]) is required" }
   }
-  $node = [System.IO.Path]::GetFullPath($NodePath)
-  $launcher = [System.IO.Path]::GetFullPath($LauncherPath)
-  $home_ = [System.IO.Path]::GetFullPath($MullionHome)
+  # GetFullPath keeps a trailing backslash, and in a command line a backslash
+  # before a quote escapes the quote: "C:\Mullion\" "Mullion-agent" would reach
+  # the launcher as ONE argument, with the task name swallowed. A drive root
+  # (C:\) keeps its backslash, since "C:" alone is a different place.
+  function Trim-Backslash([string]$path) {
+    $trimmed = $path.TrimEnd('\')
+    if ($trimmed.EndsWith(':')) { return $path }
+    return $trimmed
+  }
+  $node = Trim-Backslash ([System.IO.Path]::GetFullPath($NodePath))
+  $launcher = Trim-Backslash ([System.IO.Path]::GetFullPath($LauncherPath))
+  $home_ = Trim-Backslash ([System.IO.Path]::GetFullPath($MullionHome))
   if (-not (Test-Path -LiteralPath $node -PathType Leaf)) { Fail "node was not found at $node" }
   if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) { Fail "the launcher was not found at $launcher" }
   if (-not (Test-Path -LiteralPath $home_ -PathType Container)) { Fail "the install root was not found at $home_" }

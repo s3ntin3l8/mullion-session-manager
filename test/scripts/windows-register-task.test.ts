@@ -107,6 +107,28 @@ describeOnWindows("deploy/windows/register-task.ps1", () => {
     expect(xml).toContain(`<WorkingDirectory>${home}</WorkingDirectory>`);
   }, 90_000);
 
+  it("does not let a trailing backslash on the install root swallow the task name", async () => {
+    // "C:\...\Mullion home\" followed by a quote: the backslash escapes the
+    // quote, and the launcher would see the root and the task name as one
+    // argument.
+    const f = fixture();
+    const result = await powershell([
+      "-TaskName",
+      name,
+      "-NodePath",
+      process.execPath,
+      "-LauncherPath",
+      f.launcher,
+      "-MullionHome",
+      `${f.home}\\`,
+    ]);
+    expect(result.code, result.stderr).toBe(0);
+    const xml = (await taskXml(name))!;
+    const home = fs.realpathSync.native(f.home);
+    expect(xml).toContain(`"${home}" "${name}"</Arguments>`);
+    expect(xml).toContain(`<WorkingDirectory>${home}</WorkingDirectory>`);
+  }, 90_000);
+
   it("replaces an existing registration instead of failing or duplicating it", async () => {
     const f = fixture();
     expect((await register(f)).code).toBe(0);

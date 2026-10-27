@@ -248,6 +248,11 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+# POWERSHELL_TEST_DENY=1: registering is refused, as an account policy can
+if [ -n "\${POWERSHELL_TEST_DENY:-}" ] && [ "$REMOVE" != true ]; then
+  echo "register-task: Access is denied." >&2
+  exit 1
+fi
 REG="$DIR/schtasks.registered"
 if [ -n "$NAME" ]; then
   touch "$REG"
@@ -1407,6 +1412,28 @@ if [ "$1" = "-s" ]; then echo MINGW64_NT-10.0-26200; else echo Windows; fi
       expect(stdout).toMatch(/Removing Mullion-primary/);
       expect(stdout).not.toMatch(/Leaving Mullion-primary/);
       fs.rmSync(mullionHome, { recursive: true, force: true });
+    });
+
+    it("says the install is complete, and how to carry on, when the task cannot be registered", async () => {
+      // An account policy can forbid creating tasks. By then `current` is
+      // flipped and the .env written, so the failure must not read as a
+      // half-installed host.
+      writeWindowsShim();
+      const mullionHome = freshMullionHome();
+      const releaseDir = skipDownload(mullionHome);
+      const failure = await runScript(["--role", "agent", mullionHome], {
+        env: { POWERSHELL_TEST_DENY: "1" },
+      }).catch((err: { stderr: string }) => err);
+      const stderr = (failure as { stderr: string }).stderr;
+      expect(stderr).toMatch(/could not register the scheduled task Mullion-agent/);
+      expect(stderr).toMatch(/The install itself is complete/);
+      expect(stderr).toContain(
+        `${path.join(binDir, "node")}" "${fs.realpathSync(mullionHome)}/current/scripts/windows-launcher.mjs"`,
+      );
+      expect(fs.realpathSync(path.join(mullionHome, "current"))).toBe(fs.realpathSync(releaseDir));
+      expect(fs.existsSync(path.join(mullionHome, ".env"))).toBe(true);
+      // No install.json for a task that does not exist.
+      expect(fs.existsSync(path.join(mullionHome, "install.json"))).toBe(false);
     });
 
     it("removes nothing when the other role has no task", async () => {

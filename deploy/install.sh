@@ -41,7 +41,8 @@
 # On Windows (issue #2160, part of #1728) run it from Git for Windows' bash —
 # deploy/mullion-install.sh fetches and runs it, as elsewhere. The job is a
 # per-user scheduled task started at logon (deploy/windows/register-task.ps1),
-# the role must be `agent`, and no administrator rights are needed. Pass the
+# the role must be `agent`, and no elevation is needed (see deploy/README.md
+# for the account types that was checked with). Pass the
 # install root as a Windows-style path, e.g. ~/AppData/Local/Mullion. See
 # deploy/README.md's Windows section.
 
@@ -947,12 +948,24 @@ elif [ "$PLATFORM_KIND" = "windows" ]; then
 
   # -Start runs it now; re-running this installer re-registers (replacing the
   # definition, which stops the old run first).
-  windows_register_task \
+  #
+  # By here the install itself is done — `current` points at the release and
+  # the .env is written — so a refusal (an account policy that forbids tasks,
+  # a locked-down machine) is said as such, with how to carry on, instead of
+  # leaving only PowerShell's own error behind.
+  if ! windows_register_task \
     -TaskName "$TASK_NAME" \
     -NodePath "$(cygpath -w "$NODE_PATH")" \
     -LauncherPath "$(cygpath -w "$MULLION_HOME/current/scripts/windows-launcher.mjs")" \
     -MullionHome "$(cygpath -w "$MULLION_HOME")" \
-    -Start
+    -Start; then
+    echo "ERROR: could not register the scheduled task $TASK_NAME (see above)." >&2
+    echo "       The install itself is complete: $MULLION_HOME/current points at $VERSION and the .env is written." >&2
+    echo "       To run the agent without the task, from Git Bash:" >&2
+    echo "         \"$NODE_PATH\" \"$MULLION_HOME/current/scripts/windows-launcher.mjs\" \"$MULLION_HOME\"" >&2
+    echo "       or fix the cause and re-run this installer." >&2
+    exit 1
+  fi
 
   # install.json: how a program (a tray app, a script) finds this install
   # without reimplementing the layout — which role, which task, where the
