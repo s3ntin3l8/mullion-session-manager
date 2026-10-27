@@ -157,6 +157,31 @@ describe("previews route (issue #28)", () => {
     });
   });
 
+  it("rate-limits creating previews like the PR preview route (30/min)", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app);
+    vi.spyOn(branchPreviewModule, "getOrCreateBranchPreview").mockResolvedValue({
+      slug: "b1",
+      kind: "project",
+      projectId,
+      externalUrl: null,
+      sessionId: 3,
+      upstreamPort: 4000,
+      createdAt: new Date(0),
+      branch: "feat/x",
+    } as never);
+    const post = () =>
+      app.inject({
+        method: "POST",
+        url: "/api/previews",
+        payload: { kind: "project", projectId, branch: "feat/x" },
+      });
+    for (let i = 0; i < 30; i++) expect((await post()).statusCode).toBe(201);
+    expect((await post()).statusCode).toBe(429);
+    vi.restoreAllMocks();
+    await app.close();
+  });
+
   it("404s creating a preview for an unknown projectId", async () => {
     const app = await buildApp();
     const res = await app.inject({
