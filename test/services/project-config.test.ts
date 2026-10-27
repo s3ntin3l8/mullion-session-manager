@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import {
+  discoverCandidates,
   expandHome,
   resolveProjectActions,
   resolveGlobalActions,
@@ -256,5 +257,40 @@ describe("dock control port (issue #2069)", () => {
     expect(controls.find((c) => c.id === "a")?.port).toBe(5173);
     expect(controls.find((c) => c.id === "b")?.port).toBeUndefined();
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// Issue #2090 — discovery now carries each git clone's origin and flags linked
+// worktrees, so a project can be matched to its checkout on another host.
+describe("discoverCandidates (origin and worktree flags)", () => {
+  let root: string | undefined;
+
+  afterEach(() => {
+    if (root) fs.rmSync(root, { recursive: true, force: true });
+    root = undefined;
+  });
+
+  it("reports a clone's origin, a worktree as such, and a plain folder as neither", () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "discover-origin-"));
+    fs.mkdirSync(path.join(root, "clone", ".git"), { recursive: true });
+    fs.writeFileSync(
+      path.join(root, "clone", ".git", "config"),
+      '[remote "origin"]\n\turl = git@github.com:o/clone.git\n',
+    );
+    fs.mkdirSync(path.join(root, "no-origin", ".git"), { recursive: true });
+    fs.mkdirSync(path.join(root, "linked"));
+    fs.writeFileSync(path.join(root, "linked", ".git"), "gitdir: /x/.git/worktrees/linked\n");
+    fs.mkdirSync(path.join(root, "plain"));
+
+    const byName = Object.fromEntries(discoverCandidates([root]).map((c) => [c.name, c]));
+
+    expect(byName.clone).toMatchObject({
+      isGitRepo: true,
+      isWorktree: false,
+      origin: "git@github.com:o/clone.git",
+    });
+    expect(byName["no-origin"]).toMatchObject({ isGitRepo: true, isWorktree: false, origin: null });
+    expect(byName.linked).toMatchObject({ isGitRepo: true, isWorktree: true, origin: null });
+    expect(byName.plain).toMatchObject({ isGitRepo: false, isWorktree: false, origin: null });
   });
 });

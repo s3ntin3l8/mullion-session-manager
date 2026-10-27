@@ -196,6 +196,107 @@ describe("startHostHeartbeat: onHostRecovered", () => {
   });
 });
 
+// Issue #2090 — "came online" is BROADER than "recovered": it also fires for a
+// host's first contact (pending -> online), which is when "where does each
+// project live on this machine?" is worth asking.
+describe("startHostHeartbeat: onHostOnline", () => {
+  const fakeApp = () =>
+    ({
+      db: {},
+      log: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+      config: { HOST_HEARTBEAT_INTERVAL_SECONDS: 30 },
+    }) as unknown as FastifyInstance;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListHosts.mockReset();
+    pingMock.mockReset();
+    mockListHosts.mockReturnValue([fakeHost("h1")]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("fires once for a first contact, not again while the host stays online", async () => {
+    pingMock.mockResolvedValue(true);
+    const onHostRecovered = vi.fn();
+    const onHostOnline = vi.fn();
+
+    const cleanup = startHostHeartbeat(
+      fakeApp(),
+      undefined,
+      undefined,
+      onHostRecovered,
+      onHostOnline,
+    );
+    await waitForAssertion(() => expect(onHostOnline).toHaveBeenCalledWith("h1"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    await waitForAssertion(() => expect(onHostOnline).toHaveBeenCalledTimes(1));
+
+    // A first contact is not a recovery.
+    expect(onHostRecovered).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it("fires again when the host comes back from being unreachable", async () => {
+    pingMock.mockResolvedValueOnce(true).mockResolvedValueOnce(false).mockResolvedValueOnce(false);
+    pingMock.mockResolvedValue(true);
+    const onHostOnline = vi.fn();
+
+    const cleanup = startHostHeartbeat(fakeApp(), undefined, undefined, undefined, onHostOnline);
+    await waitForAssertion(() => expect(onHostOnline).toHaveBeenCalledTimes(1)); // first contact
+    await vi.advanceTimersByTimeAsync(30_000); // miss 1
+    await vi.advanceTimersByTimeAsync(30_000); // miss 2
+    await vi.advanceTimersByTimeAsync(30_000); // back
+    await waitForAssertion(() => expect(onHostOnline).toHaveBeenCalledTimes(2));
+    cleanup();
+  });
+
+  it("does not fire for a single dropped ping (online -> degraded -> online is no rescan)", async () => {
+    pingMock.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    pingMock.mockResolvedValue(true);
+    const onHostOnline = vi.fn();
+
+    const cleanup = startHostHeartbeat(fakeApp(), undefined, undefined, undefined, onHostOnline);
+    await waitForAssertion(() => expect(onHostOnline).toHaveBeenCalledTimes(1)); // first contact
+    await vi.advanceTimersByTimeAsync(30_000); // one miss
+    await vi.advanceTimersByTimeAsync(30_000); // back
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(onHostOnline).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
+
+  it("does not fire for a host that does not answer", async () => {
+    pingMock.mockResolvedValue(false);
+    const onHostOnline = vi.fn();
+
+    const cleanup = startHostHeartbeat(fakeApp(), undefined, undefined, undefined, onHostOnline);
+    await vi.advanceTimersByTimeAsync(90_000);
+
+    expect(onHostOnline).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it("keeps notifying the other hosts when one handler throws", async () => {
+    mockListHosts.mockReturnValue([fakeHost("h1"), fakeHost("h2")]);
+    pingMock.mockResolvedValue(true);
+    const onHostOnline = vi.fn((hostId: string) => {
+      if (hostId === "h1") throw new Error("handler exploded");
+    });
+    const app = fakeApp();
+
+    const cleanup = startHostHeartbeat(app, undefined, undefined, undefined, onHostOnline);
+    await waitForAssertion(() => {
+      expect(onHostOnline).toHaveBeenCalledWith("h1");
+      expect(onHostOnline).toHaveBeenCalledWith("h2");
+    });
+    expect(app.log.error).toHaveBeenCalled();
+    cleanup();
+  });
+});
+
 describe("hostHeartbeatPlugin: force-reconnect on recovery", () => {
   beforeEach(() => {
     vi.useFakeTimers();

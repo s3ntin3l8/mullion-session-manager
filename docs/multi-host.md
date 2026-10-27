@@ -203,6 +203,60 @@ project's **own** host is not in it — `projects.cwd` _is_ its path there, and
 the project, so it is never a candidate and the session stays where it
 would have been.
 
+**Detecting the checkout (#2090).** You do not have to find and type those paths.
+`GET /api/projects/:id/host-suggestions` asks every other host that is online and not
+parked (and that the project has no entry for) which of its clones look like this
+project, and the answer is only ever a **suggestion**; nothing is written:
+
+- A clone is an **`origin` match** when its `origin` remote and the project's are the
+  same repository once normalised: `git@github.com:o/r.git`, `https://github.com/o/r`
+  and `ssh://git@github.com:22/o/r/` all compare equal, on any forge, and the host and
+  path are compared case-insensitively. A fork or an unrelated repo that merely shares
+  the directory name is **not** suggested.
+- A clone with no `origin` (or from an agent too old to report one) whose directory
+  name equals the project's is a weaker **name match**: suggested, never auto-filled.
+- A linked worktree or submodule (`.git` is a file) is never offered, and two clones
+  with the project's origin on one host are flagged **ambiguous**.
+
+The project's own origin is read from its checkout (or, for a project on a remote host,
+from that host's discovery), so a project whose path is outside its host's project
+roots has no origin to match and gets name matches only.
+
+**Auto-fill (opt-in).** `settings.autoDetectHostCheckouts` (off by default; Settings →
+Projects & discovery) lets Mullion fill the map in for you: when a host comes online
+(first contact or after being unreachable — an enrolled agent is picked up by the next
+heartbeat sweep) and on `POST /api/hosts/:id/detect-checkouts` ("Detect now"), each
+project with **exactly one** origin-matching clone there gets that path. It is off by
+default because `hostCwds` is also where session-scoped children may be sent. Rules:
+
+- It **never overwrites** an entry, re-reading the row in the same transaction that
+  writes it, and adds at most 20 mappings per run.
+- It never fills an ambiguous host, a name-only match, a path that is not an absolute
+  POSIX path, or a host the **operator declined**: removing a host's path in Edit
+  project (or clearing the map over the API) records the host as declined, and a later
+  save that sets it again un-declines it. A declined host is still shown as a
+  suggestion.
+- It trusts what an agent reports about its own clones (including `origin`), and that
+  is not free: a `hostCwds` entry is what makes a host a **placement and spawn
+  candidate** for the project, so a host that lies about its `origin` can get that
+  project's sessions, and the code they check out, sent to it. The host is one you
+  registered, and turning the setting on is your only gate; the single-match rule, the
+  per-run cap, the validation below and the badge and log line bound and expose it.
+  Replies are validated (a list of well-formed entries, bounded in number and length),
+  and a path is only suggested or stored when it is absolute POSIX with no control
+  characters or `..`.
+- A project's declined hosts are forgotten when the host is deleted and capped at 64.
+- Saving replaces the whole map. The Edit project dialog therefore re-reads the project
+  when you save and keeps a host the sweep added while it was open; a script that PATCHes
+  `hostCwds` should read the project first and send the map back whole, or an entry
+  added in between reads as a removal and that host is declined.
+- Each addition is logged (`[host-checkout-detect] auto-filled hostCwds`) and recorded
+  in the project's `hostCwdsMeta.auto` (the API returns `hostCwdsMeta` with `auto` and
+  `declined` lists), until an operator saves the map, which acknowledges it.
+- `POST /api/hosts/:id/detect-checkouts` answers `{ enabled, added }`, plus
+  `skipped: "offline" | "drained"` when the host could not be asked, so "Detect now" can say
+  that instead of "nothing found".
+
 The worktree follows the session: it is cut from the project root **on the
 host the session runs on**, so the agent's working directory always exists
 where the agent is. So is the base ref the branch is cut from: it is resolved

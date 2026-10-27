@@ -186,8 +186,13 @@ async function sweepHost(
   hostId: string,
   tracker: HostHeartbeatTracker,
   capacityTracker: HostCapacityTracker,
-): Promise<boolean> {
+): Promise<{ recovered: boolean; cameOnline: boolean }> {
   let reachable = false;
+  // Issue #2090 — "came online" is broader than "recovered": it is also true
+  // for a FIRST contact (pending -> online), which a recovery never is. A
+  // single dropped ping (online -> degraded -> online) is neither: that is not
+  // worth a fleet-wide rescan.
+  const wasPending = tracker.getHealth(hostId).status === "pending";
   // Whether this contact is a RECOVERY — the host had been unreachable for
   // at least two consecutive pings and is reachable again (see
   // HostHeartbeatTracker.recordSuccess). The caller acts on it.
@@ -204,7 +209,8 @@ async function sweepHost(
     tracker.recordFailure(hostId);
   }
 
-  if (!reachable) return false;
+  if (!reachable) return { recovered: false, cameOnline: false };
+  const cameOnline = wasPending || recovered;
 
   try {
     const report = await getRemoteHostClient(app, hostId).resolveCapacity();
@@ -216,7 +222,7 @@ async function sweepHost(
         { hostId },
         "[host-heartbeat] the agent does not report capacity (no /internal/capacity route)",
       );
-      return recovered;
+      return { recovered, cameOnline };
     }
     // The report comes from a REMOTE host, so its sampledAt is untrusted
     // input: a body without a parseable timestamp (a non-Mullion service
@@ -236,7 +242,7 @@ async function sweepHost(
     );
   }
 
-  return recovered;
+  return { recovered, cameOnline };
 }
 
 async function sweep(
@@ -244,6 +250,7 @@ async function sweep(
   tracker: HostHeartbeatTracker,
   capacityTracker: HostCapacityTracker,
   onHostRecovered?: (hostId: string) => void,
+  onHostOnline?: (hostId: string) => void,
 ): Promise<void> {
   const allHosts = listHosts(app).filter((h) => h.id !== LOCAL_HOST_ID);
   const hostIds = new Set(allHosts.map((h) => h.id));
@@ -255,11 +262,28 @@ async function sweep(
   // render every pending row "offline" every cycle instead of "pending".
   const remoteHosts = allHosts.filter((h) => h.baseUrl !== null);
   const recovered: string[] = [];
+  const cameOnline: string[] = [];
   await Promise.all(
     remoteHosts.map(async (host) => {
-      if (await sweepHost(app, host.id, tracker, capacityTracker)) recovered.push(host.id);
+      const result = await sweepHost(app, host.id, tracker, capacityTracker);
+      if (result.recovered) recovered.push(host.id);
+      if (result.cameOnline) cameOnline.push(host.id);
     }),
   );
+
+  // Issue #2090 — a host that came ONLINE (first contact or a recovery) is
+  // when "where does each project live on this machine?" is worth asking.
+  // Reported after the whole sweep, like the recovery callback, and each call
+  // isolated: it is best-effort work and must never break the heartbeat.
+  if (onHostOnline) {
+    for (const hostId of cameOnline) {
+      try {
+        onHostOnline(hostId);
+      } catch (err) {
+        app.log.error({ err, hostId }, "[host-heartbeat] failed to handle a host coming online");
+      }
+    }
+  }
 
   // Issue #1719 (roadmap 8.5) — report the recovery AFTER the sweep, so the
   // host is confirmed reachable before anything is torn down and rebuilt.
@@ -284,13 +308,15 @@ async function sweep(
  * `onHostRecovered` is called with each host id that comes back from being
  * unreachable (at least two consecutive missed pings) to reachable — see
  * HostHeartbeatTracker.recordSuccess's own doc comment for why that
- * transition matters (issue #1719).
+ * transition matters (issue #1719). `onHostOnline` is broader: it also fires
+ * for a first contact (issue #2090).
  */
 export function startHostHeartbeat(
   app: FastifyInstance,
   tracker?: HostHeartbeatTracker,
   capacityTracker?: HostCapacityTracker,
   onHostRecovered?: (hostId: string) => void,
+  onHostOnline?: (hostId: string) => void,
 ): () => void {
   const hostHeartbeatTracker = tracker ?? new HostHeartbeatTracker();
   app.hostHeartbeatTracker = hostHeartbeatTracker;
@@ -325,7 +351,7 @@ export function startHostHeartbeat(
   function runSweep() {
     if (sweepInFlight) return;
     sweepInFlight = true;
-    sweep(app, hostHeartbeatTracker, hostCapacityTracker, onHostRecovered)
+    sweep(app, hostHeartbeatTracker, hostCapacityTracker, onHostRecovered, onHostOnline)
       .catch((err) => {
         app.log.error({ err }, "[host-heartbeat] sweep failed");
       })

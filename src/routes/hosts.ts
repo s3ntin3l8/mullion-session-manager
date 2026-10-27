@@ -15,6 +15,7 @@ import { resolveBackend } from "../services/session-backend.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { isAllowedHttpUrl } from "../services/url-guard.js";
 import { measureHostCapacity } from "../services/host-capacity.js";
+import { autoFillHostCwds } from "../services/host-checkout-detect.js";
 import { forwardHostRequestError } from "../services/host-error-reply.js";
 import { MAX_PROJECTS_ROOTS } from "../services/agent-projects-roots.js";
 import { buildAgentConfig } from "./internal.js";
@@ -248,6 +249,21 @@ export async function hostsRoute(app: FastifyInstance) {
     const online = await getRemoteHostClient(app, id).ping();
     return { online };
   });
+
+  // Issue #2090 — "Detect now": run the auto-detect sweep for this host on
+  // demand (Settings -> Projects & discovery). It applies the same rules as the
+  // host-came-online trigger and does NOTHING while
+  // `settings.autoDetectHostCheckouts` is off — the response says so
+  // (`enabled: false`) rather than failing, so the button can explain itself.
+  app.post<{ Params: { id: string } }>(
+    "/api/hosts/:id/detect-checkouts",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const { id } = request.params;
+      if (id !== LOCAL_HOST_ID && !getHostRow(app, id)) return reply.notFound();
+      return autoFillHostCwds(app, { hostId: id });
+    },
+  );
 
   // Issue #247 / roadmap 7.4 — per-agent effective-config visibility for the
   // Settings host-detail panel. `local` has no /internal/config to call

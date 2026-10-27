@@ -458,8 +458,17 @@ describe("internal routes (agent role, issue #26)", () => {
       headers: { authorization: `Bearer ${TOKEN}` },
     });
     expect(res.statusCode).toBe(200);
+    // Issue #2090 — each candidate also carries its raw origin and whether it
+    // is a linked worktree, so the primary can match a project to its clone on
+    // this host (the fixture's repo has an origin remote).
     expect(res.json()).toEqual([
-      { name: "git-repo", cwd: path.join(projectsRoot, "git-repo"), isGitRepo: true },
+      {
+        name: "git-repo",
+        cwd: path.join(projectsRoot, "git-repo"),
+        isGitRepo: true,
+        origin: "git@github.com:s3ntin3l8/mullion-session-manager.git",
+        isWorktree: false,
+      },
     ]);
     await app.close();
   });
@@ -4909,7 +4918,13 @@ describe("internal routes (agent role, issue #26)", () => {
       // The discover scan and the path barrier both read the new roots at once.
       const discovered = await get(app, "/internal/discover");
       expect(discovered.json()).toEqual([
-        { name: "other-repo", cwd: path.join(newRoot, "other-repo"), isGitRepo: true },
+        {
+          name: "other-repo",
+          cwd: path.join(newRoot, "other-repo"),
+          isGitRepo: true,
+          origin: null,
+          isWorktree: false,
+        },
       ]);
       const inside = await get(app, `/internal/actions?cwd=${encodeURIComponent(newRoot)}`);
       expect(inside.statusCode).not.toBe(400);
