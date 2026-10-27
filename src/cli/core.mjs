@@ -21,7 +21,11 @@ import {
   statusHookMessages,
   statusTruncationNote,
 } from "./client.mjs";
-import { REVIEW_REQUEST_TIMEOUT_MS, REVIEW_PROTOCOL_NOTE } from "./review-protocol.mjs";
+import {
+  REVIEW_REQUEST_TIMEOUT_MS,
+  REVIEW_PROTOCOL_NOTE,
+  TASK_PUSH_REQUEST_TIMEOUT_MS,
+} from "./review-protocol.mjs";
 
 /** Reads a whole stream (io.stdin in production, a fake in tests) as UTF-8. */
 function readAll(stream) {
@@ -1462,8 +1466,8 @@ const taskCommands = {
   async push(client, _args, opts) {
     const body = {};
     if (opts.session !== undefined) body.sessionId = opts.session;
-    // A push can take as long as the git remote and the workflow gate's diff.
-    client.requestTimeoutMs = REVIEW_REQUEST_TIMEOUT_MS;
+    // A push can take as long as the git remote (plus the lease pre-fetch).
+    client.requestTimeoutMs = TASK_PUSH_REQUEST_TIMEOUT_MS;
     const result = await client.request("tasks.push", body);
     return { json: result, text: `pushed; pull request: ${result.prUrl}` };
   },

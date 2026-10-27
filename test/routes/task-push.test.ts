@@ -124,6 +124,19 @@ describe("POST /api/sessions/:id/task-push (#2102)", () => {
     }
   });
 
+  it("tells the agent a permission-denied push failure is the operator's, and a lost worktree too", async () => {
+    const sessionId = newSession();
+    newTask({ sessionId });
+    mockOpenDraftPRForTask.mockResolvedValue({
+      ok: false,
+      reason: "push-failed",
+      detail: "Permission to o/r.git denied to the-bot",
+    });
+    expect((await push(sessionId)).json().guidance).toContain("permission denied or 403");
+    mockOpenDraftPRForTask.mockResolvedValue({ ok: false, reason: "no-worktree" });
+    expect((await push(sessionId)).json().guidance).toContain("cannot find this task's worktree");
+  });
+
   it("falls back to generic guidance for an unlisted reason", async () => {
     const sessionId = newSession();
     newTask({ sessionId });

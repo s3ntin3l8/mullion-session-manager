@@ -627,11 +627,12 @@ describe("MullionClient (issue #271)", () => {
     // that the already-working (real session-scope) case takes no extra
     // round trip at all.
     describe("pushTaskBranch (#2102)", () => {
-      it("sends tasks.push with no body fields, with the review-length timeout", async () => {
+      it("sends tasks.push with no body fields, with a budget that outlasts a real git push", async () => {
         const client = new MullionClient({ MULLION_SOCKET_PATH: "/nonexistent.sock" });
         const spy = vi.spyOn(client, "controlRequest").mockResolvedValue({ ok: true, prUrl: "u" });
         expect(await client.pushTaskBranch()).toEqual({ ok: true, prUrl: "u" });
-        expect(spy).toHaveBeenCalledWith("tasks.push", {}, 60_000);
+        // 120s git timeout + 30s lease pre-fetch server-side: the client must outwait both.
+        expect(spy).toHaveBeenCalledWith("tasks.push", {}, 180_000);
       });
     });
 

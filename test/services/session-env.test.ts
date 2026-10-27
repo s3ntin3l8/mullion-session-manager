@@ -204,6 +204,15 @@ describe("session-env", () => {
         }
       });
 
+      it("declares its whole git-config list: COUNT equals the number of KEY_n entries", () => {
+        const keys = Object.keys(GIT_CONFIG_TASK_PUSH_BLOCK_ENV).filter((k) =>
+          /^GIT_CONFIG_KEY_\d+$/.test(k),
+        );
+        expect(GIT_CONFIG_TASK_PUSH_BLOCK_ENV.GIT_CONFIG_COUNT).toBe(String(keys.length));
+        // Index 0 stays the gc.auto override, so a lone application keeps it.
+        expect(GIT_CONFIG_TASK_PUSH_BLOCK_ENV.GIT_CONFIG_KEY_0).toBe("gc.auto");
+      });
+
       it("reserves its keys so a session's own env cannot overwrite them", () => {
         expect(isReservedSessionEnvKey("GIT_CONFIG_KEY_1")).toBe(true);
         expect(isReservedSessionEnvKey("GIT_CONFIG_VALUE_1")).toBe(true);

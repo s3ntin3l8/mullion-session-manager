@@ -8,7 +8,10 @@ import {
   sendHookMessage,
   statusHookMessages,
 } from "../cli/client.mjs";
-import { REVIEW_REQUEST_TIMEOUT_MS } from "../cli/review-protocol.mjs";
+import {
+  REVIEW_REQUEST_TIMEOUT_MS,
+  TASK_PUSH_REQUEST_TIMEOUT_MS,
+} from "../cli/review-protocol.mjs";
 
 // Issue #271 — the transport half of the `mullion mcp` server (issue #134's
 // eventual CLI/MCP surface starts here): a thin client wrapping however a
@@ -588,25 +591,21 @@ export class MullionClient {
 
   /** Runs a session-pinned `reviews.*` op. Same "try direct, retry only on the
    * specific no-pin 400" shape as getScrollback above. */
-  async reviewOp(op, body) {
+  async reviewOp(op, body, timeoutMs = REVIEW_REQUEST_TIMEOUT_MS) {
     try {
-      return await this.controlRequest(op, body, REVIEW_REQUEST_TIMEOUT_MS);
+      return await this.controlRequest(op, body, timeoutMs);
     } catch (err) {
       if (!isMissingIdError(err, "'sessionId' is required") || this.ownSessionId === undefined) {
         throw err;
       }
-      return this.controlRequest(
-        op,
-        { ...body, sessionId: this.ownSessionId },
-        REVIEW_REQUEST_TIMEOUT_MS,
-      );
+      return this.controlRequest(op, { ...body, sessionId: this.ownSessionId }, timeoutMs);
     }
   }
 
   /** Pushes this session's Task Master branch through Mullion (gated, bot
    * identity) instead of with the session's own git credentials (#2102). */
   async pushTaskBranch() {
-    return this.reviewOp("tasks.push", {});
+    return this.reviewOp("tasks.push", {}, TASK_PUSH_REQUEST_TIMEOUT_MS);
   }
 
   /** Asks the Mullion server to relay a Hermes review request for this

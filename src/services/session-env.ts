@@ -172,6 +172,10 @@ export const GIT_CONFIG_NO_AUTO_GC_ENV = {
  * real boundary.
  */
 export const GIT_CONFIG_TASK_PUSH_BLOCK_ENV = {
+  // The whole list (index 0 is the gc.auto override), not just the new entry:
+  // git reads indices 0..COUNT-1, so COUNT, KEY_0 and KEY_1 must always be
+  // written together or an entry silently drops.
+  ...GIT_CONFIG_NO_AUTO_GC_ENV,
   GIT_CONFIG_COUNT: "2",
   GIT_CONFIG_KEY_1: "remote.origin.pushurl",
   GIT_CONFIG_VALUE_1: "use-mullion-task-push://blocked",
