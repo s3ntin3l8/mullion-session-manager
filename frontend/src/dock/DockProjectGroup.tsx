@@ -902,6 +902,26 @@ export function DockProjectGroup({
       </div>
       {!collapsed && (
         <div className="dock-group-rows">
+          {/* Passive detection (GET /api/projects) of a dev server a dock
+              control started — shown whether or not the group has controls,
+              unlike the empty-state below. Accepting goes through the same
+              updateProject store action the Edit Project modal uses. */}
+          {!project?.devServerUrl && project?.detectedDevServerPort && (
+            <button
+              className="dock-group-empty dock-detected-devserver"
+              onClick={() =>
+                void useDashboardStore
+                  .getState()
+                  .updateProject(projectId, { devServerUrl: project.detectedDevServerPort })
+              }
+              type="button"
+            >
+              <GlobeIcon size={11} />
+              <span className="dock-monitor-url-text">
+                Detected dev server on :{project.detectedDevServerPort} — use it?
+              </span>
+            </button>
+          )}
           {configuredControls.length === 0 &&
             dockerStackGroups.length === 0 &&
             ungroupedDockerControls.length === 0 &&

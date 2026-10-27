@@ -53,14 +53,19 @@ describe("findEligibleDevServerSessions — the session's own host decides eligi
     return row.id;
   }
 
-  function seedSession(projectId: number, hostId?: string): number {
+  function seedSession(
+    projectId: number,
+    hostId?: string,
+    kind: "terminal" | "dock" = "terminal",
+    status: "active" | "exited" = "active",
+  ): number {
     const [row] = app.db
       .insert(sessions)
       .values({
         projectId,
         command: "bash",
-        kind: "terminal",
-        status: "active",
+        kind,
+        status,
         ...(hostId === undefined ? {} : { hostId }),
       })
       .returning({ id: sessions.id })
@@ -90,5 +95,38 @@ describe("findEligibleDevServerSessions — the session's own host decides eligi
     const projectId = seedProject("local");
     const sessionId = seedSession(projectId);
     expect(findEligibleDevServerSessions(app).get(String(sessionId))).toBe(projectId);
+  });
+
+  it("offers an active DOCK control's session too", () => {
+    const projectId = seedProject("local");
+    const sessionId = seedSession(projectId, undefined, "dock");
+    expect(findEligibleDevServerSessions(app).get(String(sessionId))).toBe(projectId);
+  });
+
+  it("does NOT offer a dock session once it is no longer active", () => {
+    const projectId = seedProject("local");
+    const sessionId = seedSession(projectId, undefined, "dock", "exited");
+    expect(findEligibleDevServerSessions(app).has(String(sessionId))).toBe(false);
+  });
+
+  it("does NOT offer a dock session placed on a remote host", () => {
+    app.db
+      .insert(hosts)
+      .values({ id: "remote-b", name: "remote-b", baseUrl: "http://remote-b.example" })
+      .run();
+    const projectId = seedProject("local");
+    const sessionId = seedSession(projectId, "remote-b", "dock");
+    expect(findEligibleDevServerSessions(app).has(String(sessionId))).toBe(false);
+  });
+
+  it("does NOT offer a dock session when the project already has a devServerUrl", () => {
+    const projectId = seedProject("local");
+    app.db
+      .update(projects)
+      .set({ devServerUrl: "3000" })
+      .where(sql`id = ${projectId}`)
+      .run();
+    const sessionId = seedSession(projectId, undefined, "dock");
+    expect(findEligibleDevServerSessions(app).has(String(sessionId))).toBe(false);
   });
 });
