@@ -314,7 +314,16 @@ async function stopScopeAndForget(opts: DeviceManagerOptions, id: string): Promi
   await scopeFor(opts).stop(id);
   // Every root this instance may own markers in (issue #1770), not just the current
   // one: a marker found in a fallback root must not outlive its own successful stop.
-  for (const dir of deviceMarkerDirs(opts)) removeDeviceMarker(dir, id);
+  const [current, ...fallbacks] = deviceMarkerDirs(opts);
+  removeDeviceMarker(current, id);
+  for (const dir of fallbacks) {
+    try {
+      removeDeviceMarker(dir, id);
+    } catch {
+      // Best-effort: an unreadable stale root (another uid's /tmp/ms-<hash>, say)
+      // must not turn a CONFIRMED stop into a failure that keeps the port reserved.
+    }
+  }
 }
 
 /** The sessions dir plus every fallback root an earlier release shipped, current first. */

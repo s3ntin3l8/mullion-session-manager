@@ -530,6 +530,23 @@ describe("DeviceManager", () => {
       }
     });
 
+    it("a fallback root whose marker can't be removed does not fail a confirmed stop", async () => {
+      const old = fs.mkdtempSync(path.join(os.tmpdir(), "device-manager-old-"));
+      try {
+        // A directory squatting on the marker name makes unlink fail with EISDIR/EPERM,
+        // not ENOENT — the shape of an unremovable stale marker.
+        fs.mkdirSync(deviceMarkerPath(old, "59"));
+        const backend = fakeBackend();
+        const manager = new DeviceManager(
+          baseOpts({ scopeBackend: backend as never, ownedDirs: new Set([old]) }),
+        );
+        await expect(manager.kill("59", "emulator")).resolves.toBeUndefined();
+        expect(backend.stop).toHaveBeenCalledWith("59");
+      } finally {
+        fs.rmSync(old, { recursive: true, force: true });
+      }
+    });
+
     it("kill() removes the marker once the backend confirms the stop", async () => {
       const marker = deviceMarkerPath(SESSIONS_DIR, "56");
       fs.writeFileSync(marker, "");
