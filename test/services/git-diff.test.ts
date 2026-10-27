@@ -55,7 +55,7 @@ describe("getDiffStats", () => {
     commitAll(tmpDir, "initial");
 
     const stats = await getDiffStats(tmpDir);
-    expect(stats).toEqual({ filesChanged: 0, insertions: 0, deletions: 0 });
+    expect(stats).toEqual({ filesChanged: 0, insertions: 0, deletions: 0, workflowFiles: [] });
   });
 
   it("counts insertions/deletions for a modified tracked file (unstaged)", async () => {
@@ -69,7 +69,7 @@ describe("getDiffStats", () => {
     const stats = await getDiffStats(tmpDir);
     // "two" -> "TWO" is a 1-line delete + 1-line insert; "four" is a pure
     // insert — numstat totals: 2 insertions, 1 deletion, 1 file.
-    expect(stats).toEqual({ filesChanged: 1, insertions: 2, deletions: 1 });
+    expect(stats).toEqual({ filesChanged: 1, insertions: 2, deletions: 1, workflowFiles: [] });
   });
 
   it("counts a staged-but-uncommitted change too (git diff HEAD spans both)", async () => {
@@ -82,7 +82,7 @@ describe("getDiffStats", () => {
     clearGitDiffStatsCacheForTests();
 
     const stats = await getDiffStats(tmpDir);
-    expect(stats).toEqual({ filesChanged: 1, insertions: 1, deletions: 0 });
+    expect(stats).toEqual({ filesChanged: 1, insertions: 1, deletions: 0, workflowFiles: [] });
   });
 
   it("counts changes across multiple files", async () => {
@@ -96,7 +96,7 @@ describe("getDiffStats", () => {
     clearGitDiffStatsCacheForTests();
 
     const stats = await getDiffStats(tmpDir);
-    expect(stats).toEqual({ filesChanged: 2, insertions: 1, deletions: 1 });
+    expect(stats).toEqual({ filesChanged: 2, insertions: 1, deletions: 1, workflowFiles: [] });
   });
 
   it("returns null when there are no commits yet (unborn HEAD)", async () => {
@@ -117,7 +117,7 @@ describe("getDiffStats", () => {
     // result should still be served.
     const second = await getDiffStats(tmpDir);
     expect(second).toEqual(first);
-    expect(second).toEqual({ filesChanged: 0, insertions: 0, deletions: 0 });
+    expect(second).toEqual({ filesChanged: 0, insertions: 0, deletions: 0, workflowFiles: [] });
   });
 
   it("counts branch-wide changes when baseRef is set (issue #262)", async () => {
@@ -136,6 +136,7 @@ describe("getDiffStats", () => {
       filesChanged: 0,
       insertions: 0,
       deletions: 0,
+      workflowFiles: [],
     });
 
     // With baseRef=main, the diff against the merge-base shows the
@@ -144,7 +145,41 @@ describe("getDiffStats", () => {
       filesChanged: 1,
       insertions: 3,
       deletions: 0,
+      workflowFiles: [],
     });
+  });
+
+  it("lists changed files under .github/workflows/ so the push gate can see them", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a\n");
+    commitAll(tmpDir, "initial");
+    git(tmpDir, ["checkout", "-b", "feature"]);
+    fs.mkdirSync(path.join(tmpDir, ".github", "workflows"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, ".github", "workflows", "ci.yml"), "name: ci\n");
+    fs.writeFileSync(path.join(tmpDir, ".github", "dependabot.yml"), "version: 2\n");
+    commitAll(tmpDir, "touch ci");
+
+    const stats = await getDiffStats(tmpDir, "main");
+    expect(stats?.filesChanged).toBe(2);
+    expect(stats?.workflowFiles).toEqual([".github/workflows/ci.yml"]);
+  });
+
+  it("fresh bypasses the TTL cache so a just-committed workflow edit is seen", async () => {
+    initRepo(tmpDir);
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "a\n");
+    commitAll(tmpDir, "initial");
+    git(tmpDir, ["checkout", "-b", "feature"]);
+    expect((await getDiffStats(tmpDir, "main"))?.workflowFiles).toEqual([]);
+
+    fs.mkdirSync(path.join(tmpDir, ".github", "workflows"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, ".github", "workflows", "ci.yml"), "name: ci\n");
+    commitAll(tmpDir, "touch ci");
+
+    // Within the TTL the default read still serves the stale, workflow-free result.
+    expect((await getDiffStats(tmpDir, "main"))?.workflowFiles).toEqual([]);
+    expect((await getDiffStats(tmpDir, "main", { fresh: true }))?.workflowFiles).toEqual([
+      ".github/workflows/ci.yml",
+    ]);
   });
 
   it("every git shell-out goes through gitEnv() — no GIT_DIR leakage (issue #205)", async () => {
@@ -168,7 +203,7 @@ describe("getDiffStats", () => {
     try {
       clearGitDiffStatsCacheForTests();
       const stats = await getDiffStats(tmpDir);
-      expect(stats).toEqual({ filesChanged: 0, insertions: 0, deletions: 0 });
+      expect(stats).toEqual({ filesChanged: 0, insertions: 0, deletions: 0, workflowFiles: [] });
     } finally {
       if (savedGitDir === undefined) delete process.env.GIT_DIR;
       else process.env.GIT_DIR = savedGitDir;

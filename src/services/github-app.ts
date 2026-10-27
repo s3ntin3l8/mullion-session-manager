@@ -308,8 +308,18 @@ export const CHECKS_READ_PERMISSIONS = {
   statuses: "read",
 } as const;
 
+// Workflow-file pushes: WRITE_PERMISSIONS plus `workflows: write`. Never
+// handed out by getInstallationToken's cache or resolveGitHubToken's PAT
+// fallback — see resolveWorkflowWriteToken (github-integration.ts), which
+// mints one fresh per operator-approved push so the elevated scope cannot be
+// reused for anything the operator did not approve.
+export const WORKFLOW_WRITE_PERMISSIONS = {
+  ...WRITE_PERMISSIONS,
+  workflows: "write",
+} as const;
+
 export type InstallationTokenScope =
-  "write" | "read" | "issues" | "dispatch" | "review" | "checks" | "checks-read";
+  "write" | "read" | "issues" | "dispatch" | "review" | "checks" | "checks-read" | "workflows";
 
 function permissionsForScope(scope: InstallationTokenScope): Record<string, string> {
   switch (scope) {
@@ -327,6 +337,8 @@ function permissionsForScope(scope: InstallationTokenScope): Record<string, stri
       return CHECKS_PERMISSIONS;
     case "checks-read":
       return CHECKS_READ_PERMISSIONS;
+    case "workflows":
+      return WORKFLOW_WRITE_PERMISSIONS;
   }
 }
 
@@ -622,6 +634,37 @@ export async function getInstallationToken(
         expiresAt: Date.now() + TOKEN_FAILURE_CACHE_TTL_MS,
         status,
       });
+    }
+    throw err;
+  }
+}
+
+/**
+ * Mints a fresh `workflows: write` installation token for one repository,
+ * deliberately bypassing `tokenCache`: an elevated token must exist only for
+ * the single operator-approved push it is minted for, never be served to a
+ * later call that was not approved. A failed mint (typically a 422 because
+ * the installation has not been granted Workflows: write) is returned as
+ * `{ ok: false, status }` rather than thrown, so the caller can tell the
+ * operator what to grant instead of falling back to another credential.
+ */
+export async function mintWorkflowWriteToken(
+  appId: string,
+  privateKeyPem: string,
+  owner: string,
+  repo: string,
+): Promise<{ ok: true; token: string } | { ok: false; status?: number; detail: string }> {
+  const appJwt = signAppJwt(appId, privateKeyPem);
+  const { installationId } = await resolveInstallationIdCached(appJwt, appId, owner);
+  if (installationId === null) {
+    return { ok: false, detail: `the GitHub App is not installed on ${owner}` };
+  }
+  try {
+    const minted = await mintInstallationToken(appJwt, installationId, owner, repo, "workflows");
+    return { ok: true, token: minted.token };
+  } catch (err) {
+    if (err instanceof GitHubAppError) {
+      return { ok: false, status: err.status, detail: err.message };
     }
     throw err;
   }

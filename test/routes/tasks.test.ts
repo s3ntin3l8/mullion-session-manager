@@ -1115,6 +1115,105 @@ describe("tasks route", () => {
       await app.close();
     });
 
+    it("POST /api/tasks/:id/approve maps a held workflow change to a 409 with a machine-readable code", async () => {
+      const app = await buildApp();
+      const task = await createProjectAndReviewingTask(app);
+      mockPromoteTaskToPR.mockResolvedValue({
+        ok: false,
+        reason: "workflow-approval-required",
+        detail:
+          "This branch changes .github/workflows/ci.yml — approve the workflow change to push it",
+      });
+
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve` });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({
+        code: "workflow-approval-required",
+        message: expect.stringContaining("ci.yml"),
+      });
+      const check = await app.inject({ method: "GET", url: `/api/tasks/${task.id}` });
+      expect(check.json().status).toBe("reviewing");
+
+      await app.close();
+    });
+
+    describe("POST /api/tasks/:id/approve-workflow-change", () => {
+      const SHA = "a".repeat(40);
+      const post = (app: Awaited<ReturnType<typeof buildApp>>, id: number, body: unknown) =>
+        app.inject({
+          method: "POST",
+          url: `/api/tasks/${id}/approve-workflow-change`,
+          payload: body as object,
+        });
+
+      it("rejects a body whose sha is not a full commit id", async () => {
+        const app = await buildApp();
+        const task = await createProjectAndReviewingTask(app);
+        expect((await post(app, task.id, { sha: "abc" })).statusCode).toBe(400);
+        expect((await post(app, task.id, {})).statusCode).toBe(400);
+        await app.close();
+      });
+
+      it("404s for an unknown task", async () => {
+        const app = await buildApp();
+        expect((await post(app, 999999, { sha: SHA })).statusCode).toBe(404);
+        await app.close();
+      });
+
+      it("409s when no workflow change is waiting", async () => {
+        const app = await buildApp();
+        const task = await createProjectAndReviewingTask(app);
+        const res = await post(app, task.id, { sha: SHA });
+        expect(res.statusCode).toBe(409);
+        expect(res.json().message).toContain("No workflow change");
+        await app.close();
+      });
+
+      it("approves the head commit the operator was shown, and refuses once the branch moves", async () => {
+        const app = await buildApp();
+        const task = await createProjectAndReviewingTask(app);
+        const { tasks } = await import("../../src/db/schema.js");
+        const { eq } = await import("drizzle-orm");
+
+        const wt = fs.mkdtempSync(path.join(os.tmpdir(), "approve-wf-wt-"));
+        git(wt, ["init", "-b", "main"]);
+        fs.writeFileSync(path.join(wt, "a.txt"), "a\n");
+        git(wt, ["add", "-A"]);
+        git(wt, ["commit", "-m", "initial", "--no-verify"]);
+        git(wt, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
+        git(wt, ["checkout", "-b", "mullion/task-wf"]);
+        fs.mkdirSync(path.join(wt, ".github", "workflows"), { recursive: true });
+        fs.writeFileSync(path.join(wt, ".github", "workflows", "ci.yml"), "name: ci\n");
+        git(wt, ["add", "-A"]);
+        git(wt, ["commit", "-m", "touch ci", "--no-verify"]);
+        const head = gitOutput(wt, ["rev-parse", "HEAD"]).trim();
+
+        app.db
+          .update(tasks)
+          .set({
+            worktreePath: wt,
+            workflowChange: JSON.stringify({ sha: head, files: [".github/workflows/ci.yml"] }),
+          })
+          .where(eq(tasks.id, task.id))
+          .run();
+
+        // A sha other than the current head is refused as stale.
+        const stale = await post(app, task.id, { sha: SHA });
+        expect(stale.statusCode).toBe(409);
+        expect(stale.json()).toMatchObject({ code: "workflow-change-stale" });
+
+        const ok = await post(app, task.id, { sha: head });
+        expect(ok.statusCode).toBe(200);
+        expect(ok.json()).toEqual({ ok: true, sha: head });
+        const row = app.db.select().from(tasks).where(eq(tasks.id, task.id)).get()!;
+        expect(row.workflowApprovedSha).toBe(head);
+        expect(row.workflowChange).toBeNull();
+
+        fs.rmSync(wt, { recursive: true, force: true });
+        await app.close();
+      });
+    });
+
     it("POST /api/tasks/:id/approve maps push-failed to a 502, task stays reviewing", async () => {
       const app = await buildApp();
       const task = await createProjectAndReviewingTask(app);

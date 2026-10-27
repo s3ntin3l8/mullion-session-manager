@@ -1348,6 +1348,15 @@ export const tasks = sqliteTable(
     // auto-claim pacing (a held task is waiting for a HOST, not a slot), the
     // give-up's worktree clear, and dropping a stale hold.
     dispatchHeld: integer("dispatch_held", { mode: "boolean" }).notNull().default(false),
+    // Workflow-change approval gate: a task whose branch edits
+    // `.github/workflows/` is not pushed under the App's ordinary token.
+    // `workflowChange` is JSON `{ sha, files }` — the head commit and the
+    // workflow files that changed — set while the push is held for the
+    // operator; null when nothing is waiting. `workflowApprovedSha` is the
+    // head commit the operator approved, and the only one the elevated
+    // `workflows: write` token may be minted for: any new commit voids it.
+    workflowChange: text("workflow_change"),
+    workflowApprovedSha: text("workflow_approved_sha"),
     // Stamped at DISPATCH (the reservation transaction that flips
     // "claimed" -> "in_progress"), not at claim/retry/enqueue time — see
     // queuedAt above. Null while a task sits queued with no session yet.

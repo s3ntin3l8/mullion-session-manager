@@ -104,14 +104,16 @@ function parseNumstat(output: string): GitDiffStats {
   let filesChanged = 0;
   let insertions = 0;
   let deletions = 0;
+  const workflowFiles: string[] = [];
   for (const line of output.split("\n")) {
     if (line.trim() === "") continue;
-    const [added, removed] = line.split("\t");
+    const [added, removed, path] = line.split("\t");
     filesChanged++;
+    if (path?.includes(".github/workflows/")) workflowFiles.push(path);
     if (added !== "-") insertions += Number(added) || 0;
     if (removed !== "-") deletions += Number(removed) || 0;
   }
-  return { filesChanged, insertions, deletions };
+  return { filesChanged, insertions, deletions, workflowFiles };
 }
 
 /** Resolve the default base ref for a git working tree: the remote's HEAD
@@ -174,17 +176,26 @@ const fileDiffInFlight = new Map<string, Promise<string | null>>();
  * `(cwd, baseRef)` — the cache differentiates between base and no-base
  * lookups, preventing cross-contamination.
  */
-export async function getDiffStats(cwd: string, baseRef?: string): Promise<GitDiffStats | null> {
+export async function getDiffStats(
+  cwd: string,
+  baseRef?: string,
+  // The workflow-change approval gate decides whether a push may go out, so
+  // it must not read a result up to CACHE_TTL_MS old (or join an in-flight
+  // run that started before the latest commit).
+  opts: { fresh?: boolean } = {},
+): Promise<GitDiffStats | null> {
   if (!isGitRepo(cwd)) return null;
 
   const cacheKey = baseRef ? `${cwd}\0${baseRef}` : cwd;
 
-  const cached = cache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
-    return cached.result;
+  if (!opts.fresh) {
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+      return cached.result;
+    }
+    const pending = inFlight.get(cacheKey);
+    if (pending) return pending;
   }
-  const pending = inFlight.get(cacheKey);
-  if (pending) return pending;
 
   const promise = runGitDiffNumstat(cwd, baseRef)
     .then((output) => {

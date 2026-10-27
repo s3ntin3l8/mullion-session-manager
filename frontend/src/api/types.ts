@@ -2050,6 +2050,10 @@ export interface Task {
   // next time any sync for this task succeeds. Null means no known problem,
   // not "never synced."
   githubSyncError: string | null;
+  // Workflow-change approval gate — JSON `{ sha, files }` while the task's
+  // push is held because the branch edits `.github/workflows/`; null when
+  // nothing is waiting. Parse with `parseWorkflowChange`.
+  workflowChange: string | null;
   // #667 — dependency-aware claiming. dependencyCount is GitHub's own
   // total_blocked_by snapshot (null = never observed). blockedState is the
   // server-computed dependencyGate() result (task-dependencies.ts) — NOT

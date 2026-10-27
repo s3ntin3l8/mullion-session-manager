@@ -4,6 +4,9 @@ import {
   signAppJwt,
   listInstallations,
   mintInstallationToken,
+  mintWorkflowWriteToken,
+  WORKFLOW_WRITE_PERMISSIONS,
+  WRITE_PERMISSIONS,
   resolveInstallationId,
   getInstallationToken,
   getAuthenticatedApp,
@@ -325,6 +328,61 @@ describe("github-app (#489)", () => {
         checks: "read",
         statuses: "read",
       });
+    });
+  });
+
+  describe("mintWorkflowWriteToken", () => {
+    function installFetch(mint: () => Response) {
+      const fetchMock = vi.fn().mockImplementation((url: string) => {
+        if (url.includes("/app/installations") && !url.includes("access_tokens")) {
+          return Promise.resolve(jsonResponse(200, [{ id: 9, account: { login: "acme" } }]));
+        }
+        return Promise.resolve(mint());
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+    const mintCalls = (m: ReturnType<typeof vi.fn>) =>
+      m.mock.calls.filter(([u]) => String(u).includes("access_tokens"));
+
+    it("requests the ordinary write permissions plus workflows, narrowed to one repo", async () => {
+      const fetchMock = installFetch(() =>
+        jsonResponse(200, { token: "ghs_wf", expires_at: "2099-01-01T01:00:00Z" }),
+      );
+      const result = await mintWorkflowWriteToken("123", privateKey, "acme", "widgets");
+      expect(result).toEqual({ ok: true, token: "ghs_wf" });
+      const body = JSON.parse(mintCalls(fetchMock)[0][1].body as string);
+      expect(body.repositories).toEqual(["widgets"]);
+      expect(body.permissions).toEqual({ ...WRITE_PERMISSIONS, workflows: "write" });
+      expect(body.permissions).toEqual(WORKFLOW_WRITE_PERMISSIONS);
+    });
+
+    it("never serves a cached token: every call mints a fresh one", async () => {
+      const fetchMock = installFetch(() =>
+        jsonResponse(200, { token: "ghs_wf", expires_at: "2099-01-01T01:00:00Z" }),
+      );
+      await mintWorkflowWriteToken("123", privateKey, "acme", "widgets");
+      await mintWorkflowWriteToken("123", privateKey, "acme", "widgets");
+      expect(mintCalls(fetchMock)).toHaveLength(2);
+      expect(getInstallationCacheSizesForTests().tokens).toBe(0);
+    });
+
+    it("reports the status instead of throwing when the installation lacks Workflows: write", async () => {
+      installFetch(() => jsonResponse(422, {}));
+      const result = await mintWorkflowWriteToken("123", privateKey, "acme", "widgets");
+      expect(result).toMatchObject({ ok: false, status: 422 });
+    });
+
+    it("reports a missing installation", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn()
+          .mockResolvedValue(jsonResponse(200, [{ id: 9, account: { login: "someone-else" } }])),
+      );
+      const result = await mintWorkflowWriteToken("123", privateKey, "acme", "widgets");
+      expect(result).toMatchObject({ ok: false });
+      expect((result as { detail: string }).detail).toContain("not installed on acme");
     });
   });
 

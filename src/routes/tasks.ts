@@ -20,7 +20,13 @@ import { deriveTaskBranchName } from "../services/git-worktree.js";
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
 import { closeDraftPRForTask } from "../services/task-promote.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "../services/task-approve.js";
-import { resetMergeBackoff, resolveMaxAutoReturnRounds } from "../services/task-reconciler.js";
+import {
+  resetAutoApproveBackoff,
+  resetMergeBackoff,
+  resolveMaxAutoReturnRounds,
+} from "../services/task-reconciler.js";
+import { approveWorkflowChange } from "../services/task-workflow-gate.js";
+import { resolveTaskWorkerHost } from "../services/session-live-info.js";
 import { reseedTaskIfSessionExited } from "../services/task-reseed.js";
 import { resolveBackend, resolveSessionsDirWithFallback } from "../services/session-backend.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
@@ -265,6 +271,11 @@ const TASK_ROW_COLUMNS = {
   // Issue #1997 — since when a queued task has been failing to dispatch.
   dispatchFailingSince: tasks.dispatchFailingSince,
   githubSyncError: tasks.githubSyncError,
+  // Workflow-change approval gate — raw `{ sha, files }` JSON while a push is
+  // held for the operator (parsed client-side; the approved sha is
+  // deliberately NOT exposed). Listed here because this projection silently
+  // drops any column it doesn't name.
+  workflowChange: tasks.workflowChange,
   dependencyCount: tasks.dependencyCount,
   blockedBy: tasks.blockedBy,
   // #701 — already in their final display shape (unlike blockedBy), no
@@ -1334,6 +1345,55 @@ export async function tasksRoute(app: FastifyInstance) {
   // succeeded, so there's nothing to fire-and-forget here. A failure
   // leaves the task in "reviewing", untouched and safely retryable —
   // never half-promoted.
+  // Operator approval for a held workflow-file change (task-workflow-gate.ts).
+  // The body's `sha` is the head commit the operator was shown; the service
+  // refuses a stale one, so an approval can never cover commits made after the
+  // file list was displayed. Browser-authenticated REST only — there is no
+  // control-socket op for this, so a hosted agent cannot approve its own
+  // workflow edit.
+  app.post<{ Params: { id: string }; Body: { sha?: unknown } }>(
+    "/api/tasks/:id/approve-workflow-change",
+    async (request, reply) => {
+      if (!resolveTaskMasterConfig(app).enabled) {
+        return reply.forbidden(
+          "Task Master is disabled (deploy-time default or a Settings → Task Master override)",
+        );
+      }
+      const taskId = Number(request.params.id);
+      if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
+      const sha = request.body?.sha;
+      if (typeof sha !== "string" || !/^[0-9a-f]{40}$/.test(sha)) {
+        return reply.badRequest("sha must be the 40-character head commit shown for approval");
+      }
+      const existing = getLocalTaskOr404(taskId);
+      if (!existing) return reply.notFound();
+      const project = getProjectOr404(existing.projectId);
+      if (!project) return reply.notFound("Project not found");
+
+      const hostId = resolveTaskWorkerHost(app, existing, project);
+      const result = await approveWorkflowChange(app, existing, hostId, sha);
+      if (!result.ok) {
+        if (result.reason === "nothing-held") {
+          return reply.conflict("No workflow change is waiting for approval on this task");
+        }
+        if (result.reason === "stale") {
+          return reply.code(409).send({
+            statusCode: 409,
+            error: "Conflict",
+            message: "The branch changed since this approval was requested — review it again",
+            code: "workflow-change-stale",
+            change: result.change,
+          });
+        }
+        return reply.badGateway("Could not read the task's head commit on its host");
+      }
+      // Let the reconciler's retry push right away instead of waiting out its
+      // backoff — the operator is watching for this to go through.
+      resetAutoApproveBackoff(taskId);
+      return { ok: true, sha: result.sha };
+    },
+  );
+
   app.post<{ Params: { id: string } }>("/api/tasks/:id/approve", async (request, reply) => {
     // Same resolved-enabled gate as claim (independent review, PR #480) —
     // approve triggers promoteTaskToPR (a branch push, a PR, closing the
@@ -1408,6 +1468,13 @@ export async function tasksRoute(app: FastifyInstance) {
           return reply.badGateway(outcome.detail ?? "Failed to create the pull request");
         case "remote-not-supported":
           return reply.code(501).send({ error: "remote-not-supported", message: outcome.detail });
+        case "workflow-approval-required":
+          return reply.code(409).send({
+            statusCode: 409,
+            error: "Conflict",
+            message: outcome.detail,
+            code: "workflow-approval-required",
+          });
         case "cas-lost":
           // Promotion already succeeded (branch pushed, PR opened) but the
           // task moved out of "reviewing" before the CAS write could land —

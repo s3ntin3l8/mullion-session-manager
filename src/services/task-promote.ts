@@ -53,7 +53,7 @@
 // this module already does for every reason that deserves one.
 import type { FastifyInstance } from "fastify";
 import type { tasks, projects } from "../db/schema.js";
-import { resolveGitHubToken } from "./github-integration.js";
+import { resolveGitHubToken, resolveWorkflowWriteToken } from "./github-integration.js";
 import type { GitHubRepoRef } from "./git-remote.js";
 import {
   createPullRequest,
@@ -73,6 +73,11 @@ import {
 } from "./host-git.js";
 import { recordGithubSyncError, clearGithubSyncError } from "./task-github-sync.js";
 import { resolvePrTitle } from "./task-prompt.js";
+import {
+  evaluateWorkflowGate,
+  recordWorkflowHold,
+  clearWorkflowHold,
+} from "./task-workflow-gate.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;
@@ -88,7 +93,10 @@ export type PromoteOutcome =
         | "no-repo"
         | "push-failed"
         | "pr-create-failed"
-        | "remote-not-supported";
+        | "remote-not-supported"
+        // The branch edits `.github/workflows/` and the operator has not
+        // approved its current head (task-workflow-gate.ts). Nothing was pushed.
+        | "workflow-approval-required";
       detail?: string;
     };
 
@@ -224,6 +232,35 @@ async function preparePromotion(
       },
     };
   }
+  // A branch that edits `.github/workflows/` is held for the operator rather
+  // than pushed under the ordinary token — see task-workflow-gate.ts. Checked
+  // after the dirty-tree gate (a half-committed tree has no meaningful head)
+  // and before any token is resolved, so a held task never reaches the remote.
+  const gate = await evaluateWorkflowGate(app, task, worktreeHostId);
+  if (gate.kind === "held") {
+    recordWorkflowHold(app, task.id, gate.change);
+    const detail = `This branch changes ${gate.change.files.join(", ")} — approve the workflow change to push it`;
+    recordGithubSyncError(app, task.id, detail);
+    return {
+      ok: false,
+      outcome: { ok: false, reason: "workflow-approval-required", detail },
+    };
+  }
+  if (gate.kind === "approved") {
+    // No PAT/OAuth fallback: a workflow edit must never go out under the
+    // operator's own broad credential. A failed mint says what to grant.
+    const elevated = await resolveWorkflowWriteToken(app, repoRef);
+    if (!elevated.ok) {
+      recordGithubSyncError(app, task.id, elevated.detail);
+      return {
+        ok: false,
+        outcome: { ok: false, reason: "no-token", detail: elevated.detail },
+      };
+    }
+    return { ok: true, repoRef, token: elevated.token };
+  }
+  clearWorkflowHold(app, task);
+
   // #489 — repo-scoped (App installation token when configured, falling
   // back to the shared PAT/OAuth token) rather than the plain getToken this
   // used before.
@@ -298,8 +335,14 @@ async function pushForPromotion(
   }
   const { value } = pushResult;
   if (value.ok) return null;
-  recordGithubSyncError(app, task.id, value.detail ?? "Failed to push the task's branch");
-  return { ok: false, reason: "push-failed", detail: value.detail };
+  // Backstop for a host whose agent cannot report workflow paths: GitHub
+  // refuses a workflow edit pushed without `workflows` permission, so say
+  // what that means instead of leaving the raw git stderr.
+  const detail = /without `?workflows`? permission/.test(value.detail ?? "")
+    ? "This branch changes .github/workflows/ and this host cannot report workflow changes for approval — push it manually, or update the host agent"
+    : (value.detail ?? "Failed to push the task's branch");
+  recordGithubSyncError(app, task.id, detail);
+  return { ok: false, reason: "push-failed", detail };
 }
 
 /**

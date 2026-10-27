@@ -20,6 +20,7 @@ let taskMasterEnv: ServerInfo["taskMasterEnv"] | null = null;
 const claimTask = vi.fn(async () => makeSession({ id: 99 }));
 const approveTask = vi.fn(async () => makeTask({}));
 const mergeTask = vi.fn(async () => makeTask({}));
+const approveWorkflowChange = vi.fn(async () => {});
 const rejectTask = vi.fn(async () => makeTask({}));
 const retryTask = vi.fn(async () => makeSession({ id: 100 }));
 const giveUpTask = vi.fn(async () => makeTask({}));
@@ -41,6 +42,7 @@ function storeState() {
     claimTask,
     approveTask,
     mergeTask,
+    approveWorkflowChange,
     rejectTask,
     retryTask,
     giveUpTask,
@@ -115,6 +117,7 @@ function makeTask(overrides: Partial<Task>): Task {
     failureReason: null,
     dispatchFailingSince: null,
     githubSyncError: null,
+    workflowChange: null,
     baseSha: null,
     dependencyCount: null,
     blockedState: "clear",
@@ -212,6 +215,8 @@ beforeEach(() => {
   claimTask.mockClear();
   approveTask.mockClear();
   mergeTask.mockClear();
+  approveWorkflowChange.mockReset();
+  approveWorkflowChange.mockResolvedValue(undefined);
   rejectTask.mockClear();
   retryTask.mockClear();
   giveUpTask.mockClear();
@@ -1861,5 +1866,71 @@ describe("TaskDetail delete action", () => {
       expect(screen.getByText("Agent: codex")).toBeInTheDocument();
       expect(screen.getByText("Review agent: agy")).toBeInTheDocument();
     });
+  });
+});
+
+describe("TaskDetail workflow-change approval", () => {
+  const change = JSON.stringify({
+    sha: "a".repeat(40),
+    files: [".github/workflows/ci.yml", ".github/workflows/release.yml"],
+  });
+
+  it("shows nothing when no workflow change is waiting", () => {
+    tasks = [makeTask({ id: 1, status: "reviewing", workflowChange: null })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByRole("group", { name: "Workflow change" })).toBeNull();
+  });
+
+  it("lists the changed workflow files and approves the exact head commit shown", async () => {
+    tasks = [makeTask({ id: 1, status: "reviewing", workflowChange: change })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    expect(screen.getByText(".github/workflows/ci.yml")).toBeInTheDocument();
+    expect(screen.getByText(".github/workflows/release.yml")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Approve workflow change" }));
+    expect(approveWorkflowChange).toHaveBeenCalledWith(1, "a".repeat(40));
+  });
+
+  it("surfaces the server's message when the approval is refused (e.g. the branch moved)", async () => {
+    approveWorkflowChange.mockRejectedValueOnce(
+      new ApiError("The branch changed since this approval was requested — review it again", 409),
+    );
+    tasks = [makeTask({ id: 1, status: "reviewing", workflowChange: change })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Approve workflow change" }));
+    expect(screen.getByText(/The branch changed since this approval/)).toBeInTheDocument();
+  });
+
+  it("shows a generic error for a non-API failure", async () => {
+    approveWorkflowChange.mockRejectedValueOnce(new Error("network down"));
+    tasks = [makeTask({ id: 1, status: "reviewing", workflowChange: change })];
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Approve workflow change" }));
+    expect(screen.getByText("Failed to approve the workflow change")).toBeInTheDocument();
+  });
+
+  it("disables approval when Task Master is disabled", () => {
+    taskMasterEnabled = false;
+    tasks = [makeTask({ id: 1, status: "reviewing", workflowChange: change })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Approve workflow change" })).toBeDisabled();
+  });
+
+  it("cannot approve a hold whose head commit could not be read", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        workflowChange: JSON.stringify({ sha: "", files: [".github/workflows/ci.yml"] }),
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Approve workflow change" })).toBeDisabled();
+    expect(screen.getByText(/head commit could not be read/)).toBeInTheDocument();
   });
 });

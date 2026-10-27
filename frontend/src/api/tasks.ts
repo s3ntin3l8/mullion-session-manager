@@ -109,6 +109,15 @@ export const tasksApi = {
   // processMergeRequests for what actually lands it.
   mergeTask: (id: number) => request<Task>(`/api/tasks/${id}/merge`, { method: "POST" }),
 
+  // Operator approval for a held `.github/workflows/` change. `sha` is the
+  // head commit the drawer showed; the server refuses (409
+  // `workflow-change-stale`) if the branch has moved since.
+  approveWorkflowChange: (id: number, sha: string) =>
+    request<{ ok: true; sha: string }>(`/api/tasks/${id}/approve-workflow-change`, {
+      method: "POST",
+      body: JSON.stringify({ sha }),
+    }),
+
   // reviewing -> in_progress: posts optional feedback, re-seeds a fresh
   // session in the same worktree if the worker's own session already exited.
   rejectTask: (id: number, feedback?: string) =>
