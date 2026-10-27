@@ -21,6 +21,10 @@ import type { PlacementMode } from "../../../src/shared/constants.js";
 export const projectsApi = {
   listProjects: () => request<Project[]>("/api/projects"),
 
+  // Issue #2148 — one project, the same shape as a row of listProjects(),
+  // without the list's per-project work across every other project.
+  getProject: (id: number) => request<Project>(`/api/projects/${id}`),
+
   // Issue #1726 / roadmap 8.12 — the placement PREVIEW: "where would a new
   // session land right now, and why?". The server runs the SAME decision
   // function the spawn path uses, so the answer cannot drift from what

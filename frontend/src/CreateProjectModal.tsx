@@ -449,7 +449,7 @@ export function CreateProjectModal({
         : undefined;
       if (hostCwdsToSend && projectId !== undefined) {
         try {
-          const latest = (await api.listProjects()).find((p) => p.id === projectId);
+          const latest = await api.getProject(projectId);
           for (const [hostKey, latestPath] of Object.entries(latest?.hostCwds ?? {})) {
             if (
               latestPath &&

@@ -20,6 +20,7 @@ vi.mock("./api/index.js", async (importOriginal) => {
       previewPlacement: vi.fn(),
       getHostSuggestions: vi.fn(),
       listProjects: vi.fn(),
+      getProject: vi.fn(),
     },
   };
 });
@@ -45,6 +46,7 @@ beforeEach(() => {
   vi.mocked(api.previewPlacement).mockReset();
   vi.mocked(api.getHostSuggestions).mockReset();
   vi.mocked(api.listProjects).mockReset();
+  vi.mocked(api.getProject).mockReset();
   // Default answers, so a test that renders the modal without caring about
   // one of these fetches still has a promise to await (the hook calls
   // .then() on whatever the fetcher returns).
@@ -385,12 +387,12 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
     // The map is sent whole, so a host the sweep added AFTER the dialog opened
     // would read as removed (and be declined) unless the dialog re-reads first.
     it("keeps a host the server gained since the dialog opened, instead of removing it on save", async () => {
-      vi.mocked(api.listProjects).mockResolvedValue([
+      vi.mocked(api.getProject).mockResolvedValue(
         makeProject({
           id: 1,
           hostCwds: { "mac-1": "/Users/x/mullion", "box-2": "/srv/found-meanwhile" },
         }),
-      ]);
+      );
       const user = userEvent.setup();
       const onCreate = renderEdit({
         initialHostCwds: { "mac-1": "/Users/x/mullion" },
@@ -399,6 +401,8 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
 
       await user.click(screen.getByRole("button", { name: "Save changes" }));
 
+      expect(api.getProject).toHaveBeenCalledWith(1);
+      expect(api.listProjects).not.toHaveBeenCalled();
       expect(onCreate).toHaveBeenCalledWith(
         expect.objectContaining({
           hostCwds: { "mac-1": "/Users/x/mullion", "box-2": "/srv/found-meanwhile" },
@@ -407,12 +411,12 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
     });
 
     it("does not override a host the user set themselves, and still removes one they cleared", async () => {
-      vi.mocked(api.listProjects).mockResolvedValue([
+      vi.mocked(api.getProject).mockResolvedValue(
         makeProject({
           id: 1,
           hostCwds: { "mac-1": "/Users/x/mullion", "box-2": "/srv/found-meanwhile" },
         }),
-      ]);
+      );
       const user = userEvent.setup();
       const onCreate = renderEdit({
         initialHostCwds: { "mac-1": "/Users/x/mullion" },
@@ -429,7 +433,7 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
     });
 
     it("falls back to its own map when the project cannot be re-read", async () => {
-      vi.mocked(api.listProjects).mockRejectedValue(new Error("offline"));
+      vi.mocked(api.getProject).mockRejectedValue(new Error("offline"));
       const user = userEvent.setup();
       const onCreate = renderEdit({
         initialHostCwds: { "mac-1": "/Users/x/mullion" },
