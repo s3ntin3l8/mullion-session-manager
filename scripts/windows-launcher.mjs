@@ -50,6 +50,9 @@ export const LOG_MAX_BYTES = 10 * 1024 * 1024;
 export const RESTART_BASE_MS = 2_000;
 export const RESTART_MAX_MS = 30_000;
 
+/** How long after the server exits its output pipes are given to drain. */
+export const STDIO_DRAIN_MS = 2_000;
+
 /** A server that stayed up this long was healthy: its next failure restarts quickly again. */
 export const HEALTHY_UPTIME_MS = 60_000;
 
@@ -126,32 +129,63 @@ export class RotatingLog {
     this.file = file;
     this.maxBytes = maxBytes;
     mkdirSync(path.dirname(file), { recursive: true });
-    this.fd = openSync(file, "a");
-    this.size = statSync(file).size;
+    this.fd = -1;
+    this.size = 0;
+    this.open();
   }
 
-  /** @param {Buffer | string} chunk */
-  write(chunk) {
-    const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
-    if (this.size > 0 && this.size + data.length > this.maxBytes) this.rotate();
-    writeSync(this.fd, data);
-    this.size += data.length;
-  }
-
-  rotate() {
-    closeSync(this.fd);
-    try {
-      renameSync(this.file, `${this.file}.1`);
-    } catch {
-      // Another reader holds the old file open: keep appending to it rather
-      // than lose the server's output.
-    }
+  open() {
     this.fd = openSync(this.file, "a");
     this.size = statSync(this.file).size;
   }
 
-  close() {
+  /**
+   * Never throws. A log that cannot be written (a full disk, a file another
+   * program has locked) loses that line; it must not take the supervisor
+   * down with it — the writes happen inside stream handlers, where a throw
+   * is an uncaught exception, and the launcher dying would leave the server
+   * unsupervised.
+   *
+   * @param {Buffer | string} chunk
+   */
+  write(chunk) {
+    try {
+      const data = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
+      if (this.fd < 0) this.open();
+      if (this.size > 0 && this.size + data.length > this.maxBytes) this.rotate();
+      writeSync(this.fd, data);
+      this.size += data.length;
+    } catch {
+      // Dropped.
+    }
+  }
+
+  rotate() {
     closeSync(this.fd);
+    this.fd = -1;
+    let renamed = true;
+    try {
+      renameSync(this.file, `${this.file}.1`);
+    } catch {
+      // The old generation cannot be replaced (something has it open): keep
+      // appending to the current file rather than lose the server's output.
+      renamed = false;
+    }
+    this.fd = openSync(this.file, "a");
+    // After a failed rename the file is still the big one; counting from zero
+    // again means the next attempt comes after another `maxBytes`, not on
+    // every write.
+    this.size = renamed ? statSync(this.file).size : 0;
+  }
+
+  close() {
+    if (this.fd < 0) return;
+    try {
+      closeSync(this.fd);
+    } catch {
+      // Already closed.
+    }
+    this.fd = -1;
   }
 }
 
@@ -213,10 +247,29 @@ export function supervise({
  * @param {string} options.taskName
  * @param {NodeJS.ProcessEnv} options.baseEnv
  * @param {string} options.envFileText
+ * @param {boolean} [options.caseInsensitive] Windows' environment is: a `.env`
+ *   `PATH=` replaces the inherited `Path` rather than sitting beside it.
+ *   Defaults to the platform.
  * @returns {NodeJS.ProcessEnv}
  */
-export function serverEnv({ home, taskName, baseEnv, envFileText }) {
-  const env = { ...baseEnv, ...parseEnvFile(envFileText) };
+export function serverEnv({
+  home,
+  taskName,
+  baseEnv,
+  envFileText,
+  caseInsensitive = process.platform === "win32",
+}) {
+  /** @type {NodeJS.ProcessEnv} */
+  const env = { ...baseEnv };
+  for (const [key, value] of Object.entries(parseEnvFile(envFileText))) {
+    if (caseInsensitive) {
+      const lower = key.toLowerCase();
+      for (const existing of Object.keys(env)) {
+        if (existing !== key && existing.toLowerCase() === lower) delete env[existing];
+      }
+    }
+    env[key] = value;
+  }
   if (!env.MULLION_HOME) env.MULLION_HOME = home;
   if (taskName && !env.MULLION_SERVICE_UNIT) env.MULLION_SERVICE_UNIT = taskName;
   return env;
@@ -229,9 +282,12 @@ const stamp = () => new Date().toISOString();
  *
  * @param {string[]} [argv]
  * @param {NodeJS.ProcessEnv} [baseEnv]
+ * @param {Pick<NodeJS.EventEmitter, "on" | "off">} [signals] where the
+ *   shutdown signals arrive; the process, but injectable so a test can
+ *   deliver one without signalling the test runner
  * @returns {Promise<number>}
  */
-export async function main(argv = process.argv, baseEnv = process.env) {
+export async function main(argv = process.argv, baseEnv = process.env, signals = process) {
   const home = argv[2];
   const taskName = argv[3] ?? "";
   if (!home) {
@@ -268,7 +324,17 @@ export async function main(argv = process.argv, baseEnv = process.env) {
         note(`could not start the server: ${err.message}`);
         resolve({ code: 1, signal: null });
       });
-      child.once("exit", (code, signal) => resolve({ code, signal }));
+      // 'close' comes after the output pipes have drained, so a crash's last
+      // lines (usually the stack trace) are in the log before the restart
+      // note. 'exit' alone can come first. But a long-lived grandchild that
+      // inherited the pipes would hold 'close' off forever and leave the
+      // supervisor waiting instead of restarting, so 'exit' also settles it
+      // after a short grace period.
+      child.once("exit", (code, signal) => {
+        const timer = setTimeout(() => resolve({ code, signal }), STDIO_DRAIN_MS);
+        timer.unref?.();
+      });
+      child.once("close", (code, signal) => resolve({ code, signal }));
     });
 
   const supervisor = supervise({ runServer, log: note });
@@ -279,13 +345,13 @@ export async function main(argv = process.argv, baseEnv = process.env) {
   };
   const handlers = ["SIGINT", "SIGTERM", "SIGBREAK", "SIGHUP"].map((signal) => {
     const handler = () => shutdown(signal);
-    process.on(signal, handler);
+    signals.on(signal, handler);
     return [signal, handler];
   });
 
   note(`starting the server (pid ${process.pid}) from ${current}`);
   const code = await supervisor.done;
-  for (const [signal, handler] of handlers) process.off(signal, handler);
+  for (const [signal, handler] of handlers) signals.off(signal, handler);
   note(`exiting with code ${code}`);
   log.close();
   return code;

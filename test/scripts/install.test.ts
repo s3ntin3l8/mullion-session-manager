@@ -1392,6 +1392,21 @@ if [ "$1" = "-s" ]; then echo MINGW64_NT-10.0-26200; else echo Windows; fi
       expect(calls[0]).not.toContain("-Remove");
     });
 
+    it("reads the other role's install root from the task's XML with its entities unescaped", async () => {
+      // schtasks escapes the path in XML: a folder named `a&b` comes back as `a&amp;b`.
+      writeWindowsShim();
+      const mullionHome = fs.mkdtempSync(path.join(os.tmpdir(), "install-test-a&b-"));
+      skipDownload(mullionHome);
+      const homeReal = fs.realpathSync(mullionHome);
+      // The shim answers with the registered text as is, so register it escaped.
+      seedTask("Mullion-primary", homeReal.replace(/&/g, "&amp;"));
+      const { stdout } = await runScript(["--role", "agent", mullionHome]);
+      // Same root once unescaped: removed, not "left alone".
+      expect(stdout).toMatch(/Removing Mullion-primary/);
+      expect(stdout).not.toMatch(/Leaving Mullion-primary/);
+      fs.rmSync(mullionHome, { recursive: true, force: true });
+    });
+
     it("removes nothing when the other role has no task", async () => {
       writeWindowsShim();
       const mullionHome = freshMullionHome();

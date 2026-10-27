@@ -4,6 +4,7 @@
 // supervise loop (against a fake server), and main() against a real child.
 import { describe, it, expect, afterEach } from "vitest";
 import { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,6 +15,7 @@ import {
   LOG_MAX_BYTES,
   RESTART_BASE_MS,
   RESTART_MAX_MS,
+  STDIO_DRAIN_MS,
   RotatingLog,
   main,
   nextRestartDelay,
@@ -145,6 +147,33 @@ describe("RotatingLog", () => {
     expect(fs.readFileSync(file, "utf8")).toBe("a line longer than the limit\n");
   });
 
+  it("never throws: a log that cannot be written loses the line, not the supervisor", () => {
+    const file = path.join(tmpDir(), "mullion.log");
+    const log = new RotatingLog(file, 1000);
+    log.write("before\n");
+    log.close();
+    // fd closed under it: the old code threw EBADF here, inside a stream handler.
+    expect(() => log.write("after close\n")).not.toThrow();
+    // ...and a later write recovers by reopening.
+    log.write("recovered\n");
+    log.close();
+    expect(fs.readFileSync(file, "utf8")).toContain("recovered");
+  });
+
+  it("keeps appending, and does not rotate on every write, when the old generation cannot be replaced", () => {
+    const file = path.join(tmpDir(), "mullion.log");
+    // A non-empty directory at <file>.1 makes the rename fail.
+    fs.mkdirSync(`${file}.1`);
+    fs.writeFileSync(path.join(`${file}.1`, "occupied"), "x");
+    const log = new RotatingLog(file, 25);
+    const lines = ["aaaaaaaa\n", "bbbbbbbb\n", "cccccccc\n", "dddddddd\n", "eeeeeeee\n"];
+    for (const line of lines) log.write(line);
+    log.close();
+    // Nothing lost, nothing thrown, and the occupant is untouched.
+    expect(fs.readFileSync(file, "utf8")).toBe(lines.join(""));
+    expect(fs.readFileSync(path.join(`${file}.1`, "occupied"), "utf8")).toBe("x");
+  });
+
   it("defaults to a 10 MiB limit", () => {
     expect(LOG_MAX_BYTES).toBe(10 * 1024 * 1024);
   });
@@ -176,6 +205,30 @@ describe("serverEnv", () => {
     });
     expect(env.MULLION_HOME).toBe("D:/elsewhere");
     expect(env.MULLION_SERVICE_UNIT).toBe("custom");
+  });
+
+  it("on Windows a .env PATH replaces the inherited Path instead of sitting beside it", () => {
+    const env = serverEnv({
+      home: "h",
+      taskName: "",
+      baseEnv: { Path: "C:\\inherited", Other: "1" },
+      envFileText: "PATH=C:\\from-env\n",
+      caseInsensitive: true,
+    });
+    expect(Object.keys(env).filter((k) => k.toLowerCase() === "path")).toEqual(["PATH"]);
+    expect(env.PATH).toBe("C:\\from-env");
+    expect(env.Other).toBe("1");
+  });
+
+  it("elsewhere keeps keys that differ only by case — the environment is case-sensitive there", () => {
+    const env = serverEnv({
+      home: "h",
+      taskName: "",
+      baseEnv: { Path: "a" },
+      envFileText: "PATH=b\n",
+      caseInsensitive: false,
+    });
+    expect(env).toMatchObject({ Path: "a", PATH: "b" });
   });
 
   it("sets no service unit when it was given no task name", () => {
@@ -352,6 +405,56 @@ describe("main", () => {
     expect(await main(["node", "launcher", home], {})).toBe(0);
     expect(readLog(home)).toContain("second=yes");
   }, 15_000);
+
+  it("stops the server and exits when it is told to — and does not restart it", async () => {
+    const home = fakeInstall('console.log("up"); setInterval(() => {}, 1000);');
+    const signals = new EventEmitter();
+    const done = main(["node", "launcher", home], {}, signals);
+    const deadline = Date.now() + 10_000;
+    while (
+      !fs.existsSync(path.join(home, "logs", "mullion.log")) ||
+      !readLog(home).includes("up")
+    ) {
+      if (Date.now() > deadline) throw new Error("the server never came up");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    signals.emit("SIGTERM");
+    expect(typeof (await done)).toBe("number");
+    const log = readLog(home);
+    expect(log).toContain("received SIGTERM; stopping the server");
+    expect(log).not.toContain("restarting in");
+    // The handlers are gone: nothing is left listening on the injected source.
+    expect(signals.listenerCount("SIGTERM")).toBe(0);
+  }, 20_000);
+
+  it("gets the server's last words into the log even when it exits straight after writing them", async () => {
+    // 'exit' can come before the output pipes drain; the last lines of a crash
+    // are the ones that matter.
+    const home = fakeInstall(
+      'for (let i = 0; i < 300; i++) console.error("line-" + i + " " + "x".repeat(200)); console.error("final-words");',
+    );
+    expect(await main(["node", "launcher", home], {})).toBe(0);
+    const log = readLog(home);
+    expect(log).toContain("line-0 ");
+    expect(log).toContain("line-299 ");
+    expect(log).toContain("final-words");
+  });
+
+  it("does not wait for a grandchild that kept the output pipes open after the server exited", async () => {
+    // A long-lived grandchild that inherited the pipes holds 'close' off; the
+    // supervisor must still see the server's exit and not hang.
+    const home = fakeInstall(
+      [
+        'const { spawn } = require("node:child_process");',
+        'spawn(process.execPath, ["-e", "setTimeout(() => {}, 6000)"], { stdio: "inherit" }).unref();',
+        'console.log("server done");',
+      ].join("\n"),
+    );
+    const started = Date.now();
+    expect(await main(["node", "launcher", home], {})).toBe(0);
+    expect(Date.now() - started).toBeLessThan(STDIO_DRAIN_MS + 2_500);
+    expect(readLog(home)).toContain("server done");
+  }, 20_000);
 
   it("needs an install root", async () => {
     expect(await main(["node", "launcher"], {})).toBe(2);

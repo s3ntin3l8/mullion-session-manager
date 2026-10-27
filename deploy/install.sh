@@ -803,6 +803,9 @@ windows_task_home() {
   xml="$(schtasks //Query //TN "$1" //XML 2>/dev/null)" || return 0
   dir="$(printf '%s' "$xml" | tr -d '\r' | sed -n 's|.*<WorkingDirectory>\(.*\)</WorkingDirectory>.*|\1|p' | head -1)"
   [ -n "$dir" ] || return 0
+  # The XML escapes what a path may contain (`&` in a folder name is `&amp;`);
+  # `&amp;` last, so `&amp;lt;` is not unescaped twice.
+  dir="$(printf '%s' "$dir" | sed -e 's/&lt;/</g' -e 's/&gt;/>/g' -e 's/&quot;/"/g' -e "s/&apos;/'/g" -e 's/&amp;/\&/g')"
   cygpath -m "$dir"
 }
 
