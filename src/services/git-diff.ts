@@ -40,13 +40,17 @@ const KILL_ESCALATION_MS = 2_000;
  * case — a repo with no commits yet has nothing to diff against), spawn
  * error, or timeout — "git failed" and "nothing to diff" are both just
  * "nothing to show" here, same posture as git-status.ts's runGitStatus. */
-function runGitDiffNumstat(cwd: string, baseRef?: string): Promise<string | null> {
+function runGitDiffNumstat(
+  cwd: string,
+  baseRef?: string,
+  flags: string[] = ["--numstat"],
+): Promise<string | null> {
   return new Promise((resolve) => {
     let stdout = "";
     let settled = false;
     const args = baseRef
-      ? ["-C", cwd, "diff", `${baseRef}...HEAD`, "--numstat"]
-      : ["-C", cwd, "diff", "HEAD", "--numstat"];
+      ? ["-C", cwd, "diff", `${baseRef}...HEAD`, ...flags]
+      : ["-C", cwd, "diff", "HEAD", ...flags];
     const child = spawnChild("git", [...GIT_NO_AUTO_GC, ...args], {
       stdio: ["ignore", "pipe", "ignore"],
       env: gitEnv(),
@@ -114,6 +118,18 @@ function parseNumstat(output: string): GitDiffStats {
   return { filesChanged, insertions, deletions };
 }
 
+const WORKFLOW_DIR = ".github/workflows/";
+
+/** Changed paths under `.github/workflows/` from `--name-only -z --no-renames`
+ * output. Not derived from `--numstat`: that prints a rename that shares a
+ * leading directory in brace form (`.github/{foo => workflows}/ci.yml`), whose
+ * text contains no `.github/workflows/` at all, so a `git mv` into the
+ * directory would read as no workflow change. `--no-renames` reports a rename
+ * as a delete plus an add with both full paths, and `-z` avoids C-quoting. */
+function parseWorkflowFiles(output: string): string[] {
+  return output.split("\0").filter((p) => p.startsWith(WORKFLOW_DIR));
+}
+
 /** Resolve the default base ref for a git working tree: the remote's HEAD
  * branch (`origin/main`, `origin/master`, etc), or `null` when no remote
  * tracking refs exist yet (unfetched repo, no origin remote). Never throws.
@@ -174,22 +190,38 @@ const fileDiffInFlight = new Map<string, Promise<string | null>>();
  * `(cwd, baseRef)` — the cache differentiates between base and no-base
  * lookups, preventing cross-contamination.
  */
-export async function getDiffStats(cwd: string, baseRef?: string): Promise<GitDiffStats | null> {
+export async function getDiffStats(
+  cwd: string,
+  baseRef?: string,
+  // The workflow-change approval gate decides whether a push may go out, so
+  // it must not read a result up to CACHE_TTL_MS old (or join an in-flight
+  // run that started before the latest commit).
+  opts: { fresh?: boolean } = {},
+): Promise<GitDiffStats | null> {
   if (!isGitRepo(cwd)) return null;
 
   const cacheKey = baseRef ? `${cwd}\0${baseRef}` : cwd;
 
-  const cached = cache.get(cacheKey);
-  if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
-    return cached.result;
+  if (!opts.fresh) {
+    const cached = cache.get(cacheKey);
+    if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+      return cached.result;
+    }
+    const pending = inFlight.get(cacheKey);
+    if (pending) return pending;
   }
-  const pending = inFlight.get(cacheKey);
-  if (pending) return pending;
 
+  // Sequential, not parallel: stats are polled for every session, so a second
+  // concurrent git process per poll is real load, and when numstat already
+  // failed there is nothing to attach paths to.
   const promise = runGitDiffNumstat(cwd, baseRef)
-    .then((output) => {
+    .then(async (output) => {
       if (output === null) return null;
       const result = parseNumstat(output);
+      // Left absent, not [], when the name listing fails: absent means
+      // "unknown" to the workflow-change gate, [] means "none".
+      const names = await runGitDiffNumstat(cwd, baseRef, ["--name-only", "-z", "--no-renames"]);
+      if (names !== null) result.workflowFiles = parseWorkflowFiles(names);
       cache.set(cacheKey, { ts: Date.now(), result });
       return result;
     })

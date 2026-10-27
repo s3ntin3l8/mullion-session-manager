@@ -1324,6 +1324,20 @@ describe("RemoteHostClient", () => {
     );
   });
 
+  it("asks /internal/git-diff for a fresh read when the workflow-change gate needs one", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, {
+        isRepo: true,
+        stats: { filesChanged: 0, insertions: 0, deletions: 0, workflowFiles: [] },
+      }),
+    );
+    await client().resolveGitDiffStats("/x/y", "AUTO", { fresh: true });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/git-diff?cwd=%2Fx%2Fy&base=AUTO&fresh=1",
+      expect.anything(),
+    );
+  });
+
   it("resolves a remote session's scrollback via /internal/sessions/:id/scrollback, decoding base64 back to a Buffer (Phase 4, #187)", async () => {
     const original = "hello scrollback";
     fetchMock.mockResolvedValue(

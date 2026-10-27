@@ -23,6 +23,9 @@ import { GIT_CONFIG_NO_AUTO_GC_ENV } from "../../src/services/session-env.js";
 /** Enough files that the loose objects clear git's auto-gc threshold. */
 const FILE_COUNT = 300;
 
+/** Files added per round while topping up objects/17 (see makeClone). */
+const FILL_BATCH = 100;
+
 let root: string;
 
 // The commit identity comes from the environment, never from `git config
@@ -44,6 +47,15 @@ const git = (cwd: string, ...args: string[]) =>
 /** Loose object count — what the auto-gc takes away when it packs. */
 const looseCount = (cwd: string) =>
   Number(/^count: (\d+)/m.exec(git(cwd, "count-objects", "-v"))![1]);
+
+/** Loose objects in objects/17 — the one directory git's auto check samples. */
+const sampledLooseCount = (cwd: string) => {
+  try {
+    return fs.readdirSync(path.join(cwd, ".git", "objects", "17")).length;
+  } catch {
+    return 0;
+  }
+};
 
 /** Pack count — what the auto-gc leaves behind. */
 const packCount = (cwd: string) =>
@@ -87,9 +99,28 @@ function makeClone(name: string): string {
     fs.writeFileSync(path.join(clone, "many", `f${i}.txt`), `content ${i}\n`);
   }
   git(clone, "add", "-A");
+  // git does not COUNT loose objects for its auto check: it samples one
+  // fan-out directory, objects/17, and scales it by 256. With a threshold
+  // of 1 that needs at least two objects in objects/17, and which hashes land
+  // there depends only on the file contents — so add files until it holds
+  // enough, rather than trusting FILE_COUNT to happen to put them there.
+  // A batch per `git add`, not a spawn per file: each object lands in
+  // objects/17 with odds of 1 in 256.
+  for (let next = FILE_COUNT + 1; sampledLooseCount(clone) < 2; next += FILL_BATCH) {
+    if (next > FILE_COUNT * 10) throw new Error("could not fill objects/17");
+    for (let i = next; i < next + FILL_BATCH; i++) {
+      fs.writeFileSync(path.join(clone, "many", `f${i}.txt`), `content ${i}\n`);
+    }
+    git(clone, "add", "-A");
+  }
   git(clone, "commit", "-q", "-m", "many");
-  // Now let the auto-gc run again, so the NEXT fetch's has work to do.
+  // Now let the auto-maintenance run again, so the NEXT fetch's has work to
+  // do. gc.auto > 0 is what turns it back on; since git 2.56 the repack it
+  // runs by default (the geometric strategy) has its OWN loose-object
+  // threshold, maintenance.geometric-repack.auto (default 6700), so that one
+  // is lowered too. An older git ignores the key.
   git(clone, "config", "gc.auto", "1");
+  git(clone, "config", "maintenance.geometric-repack.auto", "1");
   fs.rmSync(path.join(clone, ".git", "gc.log"), { force: true });
 
   return clone;

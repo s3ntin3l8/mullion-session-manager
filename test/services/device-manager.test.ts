@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 // exactly like PtyManager's own bootstrapMaster()/stopScope() — a test must
 // never let a real one fire (AGENTS.md, issue #1137's mocking invariant).
 import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
+import { SystemdDeviceScopeBackend } from "../../src/services/scope/device-systemd.js";
 import { EventEmitter } from "node:events";
 import { spawn as spawnChildProcess, type SpawnOptions } from "node:child_process";
 import { AdbScrcpyOptionsLatest } from "@yume-chan/adb-scrcpy";
@@ -294,6 +295,10 @@ function baseOpts(overrides: Partial<ConstructorParameters<typeof DeviceManager>
     emulatorPath: "/opt/android/emulator/emulator",
     scrcpyServerPath: SCRCPY_SERVER_FIXTURE,
     sessionsDir: SESSIONS_DIR,
+    // Pinned: this suite fakes systemctl/systemd-run, so it must exercise the
+    // systemd device backend on every host (the platform's own pick on macOS reads
+    // the marker files these tests write). Individual tests override it.
+    scopeBackend: new SystemdDeviceScopeBackend({ sessionsDir: SESSIONS_DIR }),
     ...overrides,
   };
 }
@@ -426,6 +431,168 @@ describe("DeviceManager", () => {
       const emulatorError = await manager.getOrCreate(emulatorSpawn).catch((e: Error) => e.message);
       expect(emulatorError).toMatch(/Emulator devices are not supported/);
       expect(emulatorError).not.toMatch(/only physical/);
+    });
+  });
+
+  describe("through an injected scope backend (the macOS shape, issue #1854)", () => {
+    type Fake = {
+      start: ReturnType<typeof vi.fn>;
+      isAliveBatch: ReturnType<typeof vi.fn>;
+      stop: ReturnType<typeof vi.fn>;
+      listProcesses: ReturnType<typeof vi.fn>;
+      kind: string;
+    };
+    const fakeBackend = (over: Partial<Fake> = {}): Fake => ({
+      kind: "fake",
+      start: vi.fn(async () => {}),
+      isAliveBatch: vi.fn(async (ids: string[]) =>
+        Object.fromEntries(ids.map((id) => [id, "dead"])),
+      ),
+      stop: vi.fn(async () => {}),
+      listProcesses: vi.fn(async () => []),
+      ...over,
+    });
+    const spawnEmulator = (id = "1") => ({
+      id,
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
+
+    it("launches the emulator through backend.start with the AVD, port and headless flags", async () => {
+      mockDeviceList = [{ serial: "emulator-5554" }];
+      const backend = fakeBackend();
+      const manager = new DeviceManager(baseOpts({ scopeBackend: backend as never }));
+      await manager.getOrCreate(spawnEmulator());
+      await waitForStatus(manager, "1", "streaming");
+      const spec = backend.start.mock.calls[0][0];
+      expect(spec.id).toBe("1");
+      expect(spec.argv.slice(0, 3)).toEqual(["/opt/android/emulator/emulator", "-avd", "dev35"]);
+      expect(spec.argv).toContain("-port");
+      expect(spec.argv).toContain("-no-audio");
+      expect(spec.label).toBe("device bootstrap");
+      await manager.killAll();
+    });
+
+    it("turns a backend onExit during boot into the specific 'scope exited during boot' error", async () => {
+      mockDeviceList = []; // never appears on adb
+      const backend = fakeBackend({
+        start: vi.fn(async (spec: { onExit: (e: unknown) => void }) => {
+          setImmediate(() => spec.onExit({ code: 3, scopeName: "marker-7" }));
+        }),
+      });
+      const manager = new DeviceManager(baseOpts({ scopeBackend: backend as never }));
+      const device = await manager.getOrCreate(spawnEmulator());
+      await vi.waitFor(() => expect(device.toInfo().status).toBe("error"));
+      expect(device.toInfo().error).toMatch(
+        /device scope exited during boot with code 3 \(scope marker-7\)/,
+      );
+    });
+
+    it("kill() keeps the marker when the backend could not confirm the stop — it is the only record of a live emulator", async () => {
+      const marker = deviceMarkerPath(SESSIONS_DIR, "55");
+      fs.writeFileSync(marker, "");
+      const backend = fakeBackend({
+        stop: vi.fn(async () => {
+          throw new Error("could not confirm");
+        }),
+      });
+      const manager = new DeviceManager(baseOpts({ scopeBackend: backend as never }));
+      await expect(manager.kill("55", "emulator")).rejects.toThrow(/could not confirm/);
+      expect(fs.existsSync(marker)).toBe(true);
+      fs.rmSync(marker, { force: true });
+    });
+
+    it("kill() also removes a marker left in a fallback root (#1770) and names it in the hint", async () => {
+      const old = fs.mkdtempSync(path.join(os.tmpdir(), "device-manager-old-"));
+      try {
+        const marker = deviceMarkerPath(old, "58");
+        fs.writeFileSync(marker, "");
+        const unknownBackend = fakeBackend({
+          isAliveBatch: vi.fn(async () => ({ "58": "unknown" })),
+        });
+        const opts = baseOpts({ scopeBackend: unknownBackend as never, ownedDirs: new Set([old]) });
+        // The hint names the marker that exists, not the (absent) current-dir path.
+        await expect(new DeviceManager(opts).getOrCreate(spawnEmulator("58"))).rejects.toThrow(
+          new RegExp(marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+        );
+        const okBackend = fakeBackend();
+        await new DeviceManager({ ...opts, scopeBackend: okBackend as never }).kill(
+          "58",
+          "emulator",
+        );
+        expect(okBackend.stop).toHaveBeenCalledWith("58");
+        expect(fs.existsSync(marker)).toBe(false);
+      } finally {
+        fs.rmSync(old, { recursive: true, force: true });
+      }
+    });
+
+    it("a fallback root whose marker can't be removed does not fail a confirmed stop", async () => {
+      const old = fs.mkdtempSync(path.join(os.tmpdir(), "device-manager-old-"));
+      try {
+        // A directory squatting on the marker name makes unlink fail with EISDIR/EPERM,
+        // not ENOENT — the shape of an unremovable stale marker.
+        fs.mkdirSync(deviceMarkerPath(old, "59"));
+        const backend = fakeBackend();
+        const manager = new DeviceManager(
+          baseOpts({ scopeBackend: backend as never, ownedDirs: new Set([old]) }),
+        );
+        await expect(manager.kill("59", "emulator")).resolves.toBeUndefined();
+        expect(backend.stop).toHaveBeenCalledWith("59");
+      } finally {
+        fs.rmSync(old, { recursive: true, force: true });
+      }
+    });
+
+    it("kill() removes the marker once the backend confirms the stop", async () => {
+      const marker = deviceMarkerPath(SESSIONS_DIR, "56");
+      fs.writeFileSync(marker, "");
+      const backend = fakeBackend();
+      const manager = new DeviceManager(baseOpts({ scopeBackend: backend as never }));
+      await manager.kill("56", "emulator");
+      expect(backend.stop).toHaveBeenCalledWith("56");
+      expect(fs.existsSync(marker)).toBe(false);
+    });
+
+    it("a failed teardown keeps the marker AND the port allocated, so a second emulator cannot collide with a live one", async () => {
+      const marker = deviceMarkerPath(SESSIONS_DIR, "57");
+      mockDeviceList = [{ serial: "emulator-5554" }];
+      const backend = fakeBackend({
+        start: vi.fn(async () => {
+          fs.writeFileSync(marker, "");
+        }),
+        stop: vi.fn(async () => {
+          throw new Error("could not confirm");
+        }),
+      });
+      const manager = new DeviceManager(baseOpts({ scopeBackend: backend as never }));
+      const device = await manager.getOrCreate(spawnEmulator("57"));
+      await waitForStatus(manager, "57", "streaming");
+      const port = Number(String(device.toInfo().serial).split("-")[1]);
+      const taken = () =>
+        (manager as unknown as { allocatedPorts: Set<number> }).allocatedPorts.has(port);
+      expect(taken()).toBe(true);
+      await expect(device.kill()).rejects.toThrow(/could not confirm/);
+      expect(fs.existsSync(marker)).toBe(true);
+      // Still reserved: freeing it would let a second emulator collide with the live one.
+      expect(taken()).toBe(true);
+      fs.rmSync(marker, { force: true });
+    });
+
+    it("refuses to spawn over a scope the backend can't verify, and says how to clear it", async () => {
+      const backend = fakeBackend({
+        isAliveBatch: vi.fn(async (ids: string[]) =>
+          Object.fromEntries(ids.map((id) => [id, "unknown"])),
+        ),
+      });
+      const manager = new DeviceManager(baseOpts({ scopeBackend: backend as never }));
+      await expect(manager.getOrCreate(spawnEmulator("9"))).rejects.toThrow(
+        /can't verify whether device 9's emulator scope is still running/,
+      );
+      expect(backend.start).not.toHaveBeenCalled();
     });
   });
 

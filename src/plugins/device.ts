@@ -46,16 +46,15 @@ export const devicePlugin = fp(async (app: FastifyInstance) => {
   // Issues #1720 / #1854 (roadmap 8.6) — what the device panel can do is a
   // capability per platform × device kind, and this is the one place that
   // decides it. Physical (adb) devices need no scope and work wherever the
-  // panel does; an EMULATOR's scope needs `systemd-run --user --scope` to
-  // start, to read liveness from, and to tear down (device-process.ts), and
-  // macOS has no equivalent yet — the darwin ScopeBackend is keyed to a
-  // SESSION's dtach socket.
+  // panel does; an EMULATOR needs a platform device scope to start, to read
+  // liveness from, and to tear down — `getDeviceScopeBackend()`
+  // (scope/index.ts) supplies one on Linux (a systemd --user scope) and macOS (a
+  // detached process tracked by pid + start time), and none elsewhere.
   //
   // So each kind is gated OFF on a platform that cannot support it, and the
   // gate says WHY: every route that ADDS, STARTS or CHANGES such a device
-  // answers 400 with "Emulator devices are not supported on darwin …"
-  // instead of the raw `spawn systemctl ENOENT` a macOS
-  // operator would otherwise hit. The /api/devices READS and the TEARDOWN
+  // answers 400 with "Emulator devices are not supported on <platform> …"
+  // instead of a raw spawn error the operator would otherwise hit. The /api/devices READS and the TEARDOWN
   // routes stay open on purpose — they were never gated on DEVICE_ENABLED
   // either, and an operator must be able to stop a device even where the
   // panel cannot create one.

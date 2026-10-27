@@ -635,25 +635,25 @@ topology: the `hosts` table's `local` row simply becomes the Mac, and
 up in the primary's list under the **agent's** host id, and the terminal
 attach proxies to whichever host the session actually lives on.
 
-#### The Android device panel on macOS: physical devices only
+#### The Android device panel on macOS
 
-The device panel ([`device-panel.md`](device-panel.md)) works on macOS for
-**physical** devices — an Android phone over adb wireless debugging, which
-needs no scope (`adb` is the only binary used) — with `DEVICE_ENABLED=true`,
-including the mDNS scanner that finds pairable phones.
+The device panel ([`device-panel.md`](device-panel.md)) works on macOS with
+`DEVICE_ENABLED=true`, for both kinds of device:
 
-**Emulators are Linux-only for now**: the emulator runs in a `systemd --user`
-scope (`systemd-run` starts it, `systemctl` reads its liveness and tears it
-down), and macOS has no equivalent — the darwin scope backend is keyed to a
-_session's_ dtach socket, which an emulator has no analogue of. So on macOS
-every route that **adds, starts or changes** an emulator answers **400
-"Emulator devices are not supported on darwin — only physical devices are."**
-— a legible reason rather than a raw `spawn systemctl ENOENT`. The app boots
-either way, and the `/api/devices` reads and the teardown routes stay open.
+- **Physical** devices — an Android phone over adb wireless debugging — need no
+  scope (`adb` is the only binary used), including the mDNS scanner that finds
+  pairable phones.
+- **Emulators** run as a detached, launchd-reparented process tracked by pid and
+  start time in the device's marker file, so they survive a Mullion restart the
+  way a session's dtach master does and are recovered on the next start. The
+  scope is chosen on the host that owns the emulator, from its own platform
+  (`getDeviceScopeBackend`), like the session scope.
 
-A macOS emulator scope (a detached, launchd-reparented process tracked by pid
-and marker file) is real work and is tracked in
-[#1854](https://github.com/s3ntin3l8/mullion-session-manager/issues/1854).
+The Linux scope is a `systemd --user` unit; macOS has no equivalent, which is why
+the macOS one is process-based. See
+[`device-panel.md`](device-panel.md) for the identity and teardown rules, and
+[#1854](https://github.com/s3ntin3l8/mullion-session-manager/issues/1854) for
+the history.
 
 ### Windows agents (preview)
 

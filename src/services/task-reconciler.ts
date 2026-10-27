@@ -3298,6 +3298,15 @@ async function attemptAutoApprove(
         "task reconcile: auto-approve not supported for this task's host",
       );
       return;
+    case "workflow-approval-required":
+      // Waiting on the operator, not failing: nothing was pushed and the
+      // hold is on the task row (task-workflow-gate.ts). The ordinary
+      // backoff retry picks the push up once the change is approved.
+      app.log.info(
+        { taskId: task.id },
+        "task reconcile: auto-approve held — workflow change needs operator approval",
+      );
+      return;
     case "no-worktree":
     case "no-repo":
     case "no-token":

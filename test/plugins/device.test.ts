@@ -15,6 +15,7 @@ import { buildTestApp, warmSqliteBinding } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { devices } from "../../src/db/schema.js";
 import {
+  DEVICE_PLATFORM_CAPABILITIES,
   deviceCapabilities,
   isDeviceKindSupported,
   isDevicePanelSupported,
@@ -77,11 +78,11 @@ describe("device panel platform gate (issue #1720, roadmap 8.6)", () => {
       expect(isDeviceKindSupported("emulator", "linux")).toBe(true);
     });
 
-    it("darwin is physical-only — an emulator needs a device scope it does not have yet", () => {
+    it("darwin runs both kinds — its emulator has a pid + start-time device scope (#1854)", () => {
       expect(isDevicePanelSupported("darwin")).toBe(true);
       expect(isDeviceKindSupported("physical", "darwin")).toBe(true);
-      expect(isDeviceKindSupported("emulator", "darwin")).toBe(false);
-      expect([...deviceCapabilities("darwin")]).toEqual(["physical"]);
+      expect(isDeviceKindSupported("emulator", "darwin")).toBe(true);
+      expect([...deviceCapabilities("darwin")]).toEqual(["physical", "emulator"]);
     });
 
     it("windows has no capability at all — the whole panel is off", () => {
@@ -90,7 +91,19 @@ describe("device panel platform gate (issue #1720, roadmap 8.6)", () => {
     });
   });
 
-  describe("on a platform with physical devices only (darwin)", () => {
+  // No shipped platform is physical-only any more (macOS gained its emulator scope), but
+  // the per-kind gating is still the contract any future physical-only platform relies
+  // on — so it is exercised by narrowing darwin's table entry for the duration.
+  describe("on a platform with physical devices only (narrowed darwin table)", () => {
+    const original = DEVICE_PLATFORM_CAPABILITIES.darwin;
+    beforeEach(() => {
+      (DEVICE_PLATFORM_CAPABILITIES as Record<string, readonly string[]>).darwin = ["physical"];
+    });
+    afterEach(() => {
+      (DEVICE_PLATFORM_CAPABILITIES as Record<string, readonly string[] | undefined>).darwin =
+        original;
+    });
+
     it("turns the panel on with DEVICE_ENABLED=true but keeps emulators off, and says WHY", async () => {
       await withPlatform("darwin", async () => {
         process.env.DEVICE_ENABLED = "true";
@@ -236,6 +249,25 @@ describe("device panel platform gate (issue #1720, roadmap 8.6)", () => {
           expect(res.statusCode).toBe(200);
           expect(res.json().features.devices).toBe(true);
           expect(res.json().features.deviceKinds).toEqual(["physical"]);
+        } finally {
+          await app.close();
+        }
+      });
+    });
+  });
+
+  describe("on darwin as shipped (physical + emulator)", () => {
+    it("offers both kinds and does not refuse an emulator on platform grounds", async () => {
+      await withPlatform("darwin", async () => {
+        process.env.DEVICE_ENABLED = "true";
+        const app = await buildTestApp();
+        try {
+          await app.ready();
+          expect(app.deviceEmulatorSupported).toBe(true);
+          expect(app.deviceEmulatorEnabled).toBe(true);
+          expect(app.deviceKinds).toEqual(["physical", "emulator"]);
+          const res = await app.inject({ method: "GET", url: "/api/server-info" });
+          expect(res.json().features.deviceKinds).toEqual(["physical", "emulator"]);
         } finally {
           await app.close();
         }
