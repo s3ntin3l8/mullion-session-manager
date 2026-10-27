@@ -1,3 +1,4 @@
+import type { PathLike, Stats, StatsFs } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 
@@ -24,8 +25,10 @@ export interface StatsDependencies {
   loadavg: typeof os.loadavg;
   totalmem: typeof os.totalmem;
   freemem: typeof os.freemem;
-  stat: typeof fs.stat;
-  statfs: typeof fs.statfs;
+  // Only the one-argument forms the sampler calls — not the overloaded Node
+  // APIs, which no single-signature test double could satisfy.
+  stat: (path: PathLike) => Promise<Stats>;
+  statfs: (path: PathLike) => Promise<StatsFs>;
   now: () => Date;
 }
 
