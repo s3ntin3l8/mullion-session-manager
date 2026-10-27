@@ -683,9 +683,7 @@ describe("DeviceManager", () => {
     it("leaves other adb errors untouched", async () => {
       mockWirelessPair.mockRejectedValueOnce(new Error("pairing code rejected"));
       const manager = new DeviceManager(baseOpts());
-      await expect(manager.pair(ADDRESS, "123456")).rejects.toThrow(
-        "pairing code rejected",
-      );
+      await expect(manager.pair(ADDRESS, "123456")).rejects.toThrow("pairing code rejected");
     });
   });
 
