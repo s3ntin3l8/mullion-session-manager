@@ -8,6 +8,7 @@ import { timingSafeEqual } from "node:crypto";
 import { existsSync, unlinkSync } from "node:fs";
 import { createRequire } from "node:module";
 import { isPipePath } from "../cli/ipc-path.mjs";
+import { restrictPipeToCurrentUser } from "../cli/pipe-acl.mjs";
 import {
   FRAME_DATA,
   FRAME_HELLO,
@@ -153,8 +154,9 @@ function tokenMatches(offered, token) {
  * protocol.mjs). Until it has, it receives nothing and its frames are not
  * applied; a wrong token, any other first frame, or no HELLO within
  * AUTH_TIMEOUT_MS closes the connection. The endpoint's OS access control is
- * the first gate — on Windows a named pipe's DEFAULT access lets other local
- * users connect (#2065) — and the token is the second, the same posture as
+ * the first gate — a unix socket's mode, or on Windows the pipe's ACL,
+ * narrowed to this user and SYSTEM once listening (#2065) — and the token is
+ * the second, the same posture as
  * the hook and control sockets' handshake tokens. The token is the session
  * backend's (scope/windows.ts writes it where only this user can read it);
  * it is removed from the program's environment, so nothing the session runs
@@ -230,6 +232,11 @@ export function serve(endpoint, program, args, opts) {
     // The token is the master's alone: nothing the session runs inherits it.
     const env = { ...process.env };
     delete env[TOKEN_ENV];
+    // A pipe's DEFAULT access lets every local user open it read-only:
+    // narrow it to this user and SYSTEM (#2065; a no-op for a unix socket).
+    // Not awaited — the program starts alongside; until the ACL lands, the
+    // token gate above is what stands between another user and the session.
+    void restrictPipeToCurrentUser(endpoint, { env, log: (msg) => log(`pty-host: ${msg}`) });
     try {
       const pty = require("node-pty");
       term = pty.spawn(program, args, {

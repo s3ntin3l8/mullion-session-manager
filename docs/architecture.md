@@ -139,7 +139,12 @@ PR).
   session's token (`pty-host-token.ts`, a file in the sessions dir, handed to
   the master in its environment and removed from the program's) — the
   second gate behind the pipe's OS access control, as the hook and control
-  sockets' handshake tokens are for theirs.
+  sockets' handshake tokens are for theirs. That access control is narrowed
+  once the pipe is listening: a pipe's default access list lets Everyone and
+  anonymous users open it for reading, so `src/cli/pipe-acl.mjs` replaces it
+  with one granting only the user Mullion runs as and SYSTEM (#2065). The
+  same applies to the hook and control sockets, and to the ssh-agent socket
+  once Windows materializes one (#2131).
 - _Liveness_ is the same `probeSocket()` as macOS, on the pipe (a missing
   pipe is ENOENT → `dead`). _Teardown_ and the _process inventory_ find the
   `--serve <endpoint>` master in the CIM process table

@@ -590,8 +590,9 @@ project), and `get_project_tooling` (same default, and full-scope-only only
 for its write counterpart `set_project_tooling`) are reachable at session
 scope and work normally from inside a session regardless. **When
 authentication is
-disabled** (`isAuthEnabled(app.config)` false — the `0600` socket mode is the
-only gate in that mode, same posture plain HTTP already takes), every
+disabled** (`isAuthEnabled(app.config)` false — the `0600` socket mode, or
+on Windows the named pipe's access list once narrowed, is the only gate in
+that mode, same posture plain HTTP already takes), every
 handshake resolves to full scope, so all of the above are reachable from
 inside a session too — this isn't new to these tools, it's the existing
 socket-wide posture from `docs/socket-api.md`.

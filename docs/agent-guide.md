@@ -142,7 +142,9 @@ project-level.
 authentication is disabled entirely (no `MULLION_AUTH_TOKEN`/OIDC
 configured on the host), the socket accepts **every** handshake at **full
 scope** — including yours. In that mode the scope table above doesn't apply
-at all; the socket's `0600` file permission is the only gate left. Don't
+at all; the socket's `0600` file permission (on Windows, its named pipe's
+access list, once narrowed to the user Mullion runs as and SYSTEM) is the
+only gate left. Don't
 assume you're scope-limited just because you're "inside a session" — check
 with `mullion config` (below) if it matters to what you're about to do.
 

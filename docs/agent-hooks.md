@@ -1587,7 +1587,14 @@ touch.
 ## Security notes
 
 - The socket file is created with `0600` permissions — only the user
-  Mullion runs as can connect at all.
+  Mullion runs as can connect at all. On Windows the "socket" is a named
+  pipe (`src/cli/ipc-path.mjs`), which has no mode bits: once it is
+  listening, Mullion replaces the pipe's default access list (which lets
+  Everyone and anonymous users open it for reading) with one granting only
+  the user Mullion runs as and SYSTEM (`src/cli/pipe-acl.mjs`, #2065).
+  Until that lands (the second or so a Windows PowerShell takes to start),
+  or for good if it fails (Mullion logs a warning and keeps serving), the
+  default list applies, and the per-session token below is the gate.
 - The per-session token is a defense against a **different** session's hook
   messages being forged on this shared socket, not against that session's
   own child processes (which legitimately inherit `$MULLION_HOOK_TOKEN`, the

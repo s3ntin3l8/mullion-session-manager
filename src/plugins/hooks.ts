@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { chmodSync, unlinkSync } from "node:fs";
 import { parseHookMessage } from "../services/hook-protocol.js";
 import { isPipePath } from "../cli/ipc-path.mjs";
+import { restrictPipeToCurrentUser } from "../cli/pipe-acl.mjs";
 import type {
   ReviewGateHookMessage,
   BrowserActionHookMessage,
@@ -806,9 +807,11 @@ export const hooksPlugin = fp(async (app: FastifyInstance) => {
   // review-gate decisions, issue #178) — filesystem perms are the first
   // line of defense alongside the per-session handshake token above. See
   // the roadmap's "Security & trust" design note. A named pipe (Windows,
-  // cli/ipc-path.mjs) has no mode bits — its access is an ACL, and the
-  // handshake token is the gate there (issue #1728).
+  // cli/ipc-path.mjs) has no mode bits — its access is an ACL, which
+  // restrictPipeToCurrentUser narrows to this user and SYSTEM (#2065; a
+  // no-op for a unix socket), with the handshake token still behind it.
   if (!isPipePath(socketPath)) chmodSync(socketPath, 0o600);
+  await restrictPipeToCurrentUser(socketPath, { log: (msg) => app.log.warn(`hooks: ${msg}`) });
 
   app.decorate("hookServer", server);
 
