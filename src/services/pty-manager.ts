@@ -704,8 +704,8 @@ export class Session {
   private exitListeners = new Set<ExitListener>();
   /**
    * Set when the last attach ended because the session's pty-host master speaks
-   * a protocol this build cannot (issue #2168) � its program is still running,
-   * it just cannot be attached. Cleared by the next attach.
+   * a protocol this build cannot (issue #2168) - its program is still running,
+   * it just cannot be attached. Reset when the next attach client is wired.
    */
   private incompatibleMaster: { masterVersion: number; minClient: number } | null = null;
   private eventListeners = new Set<EventListener>();
@@ -1659,6 +1659,7 @@ export class Session {
 
   /** Routes an attach client's output and exit into this session. */
   private wireAttachClient(ptyProcess: AttachClient): void {
+    this.incompatibleMaster = null;
     ptyProcess.onData((data) => {
       const chunk = Buffer.from(data, "utf8");
       // Skipped during a redraw-nudge repaint window — see

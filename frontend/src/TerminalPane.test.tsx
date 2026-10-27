@@ -3500,11 +3500,9 @@ describe("TerminalPane reconnect vs. session-ended (P13)", () => {
 
   // Issue #2168 - a live session whose pty-host protocol this build cannot
   // attach to must not read as the program having exited.
-  it('explains an {type:"exited",reason:"incompatible"} message in the terminal', () => {
+  it('says the process is still running on an {type:"exited",reason:"incompatible"} message', () => {
     stubFakeWebSocket(true);
     renderPane();
-    const term = getLatestTermInstance() as unknown as { write: ReturnType<typeof vi.fn> };
-    term.write.mockClear();
 
     act(() => {
       for (const handler of fakeSocket._messageHandlers) {
@@ -3512,23 +3510,9 @@ describe("TerminalPane reconnect vs. session-ended (P13)", () => {
       }
     });
 
-    expect(term.write).toHaveBeenCalledWith(expect.stringContaining("can't be re-attached"));
-    expect(screen.getByText("Session ended")).toBeInTheDocument();
-  });
-
-  it('writes nothing extra for an ordinary {type:"exited"} message', () => {
-    stubFakeWebSocket(true);
-    renderPane();
-    const term = getLatestTermInstance() as unknown as { write: ReturnType<typeof vi.fn> };
-    term.write.mockClear();
-
-    act(() => {
-      for (const handler of fakeSocket._messageHandlers) {
-        handler({ data: JSON.stringify({ type: "exited" }) });
-      }
-    });
-
-    expect(term.write).not.toHaveBeenCalled();
+    expect(screen.getByText("Can't reconnect after the update")).toBeInTheDocument();
+    expect(screen.getByText(/Its process is still running/)).toBeInTheDocument();
+    expect(screen.queryByText("Session ended")).not.toBeInTheDocument();
   });
 
   // Issue #1520 — a {type:"resync"} frame means the server dropped output

@@ -23,19 +23,28 @@
 // ONLY:
 //
 //   - never change an existing frame's type, payload layout or meaning;
-//   - a new frame type is fine � both sides ignore types they do not know;
+//   - a new frame type is fine - both sides ignore types they do not know;
 //   - the first byte of the HELLO payload onwards is the token, verbatim (an
 //     old master compares the WHOLE payload to its token, so adding a field
 //     there would lock every new client out of every existing master).
 //
 // A deliberate break is the exception, and is announced rather than silent:
 // the master sends a VERSION frame right after it accepts a HELLO, carrying
-// its own PROTOCOL_VERSION and the oldest client it still serves. A master
-// that predates VERSION never sends one, which a client reads as version 1.
-// To break compatibility, bump PROTOCOL_VERSION and raise MIN_CLIENT_VERSION
-// (new masters refuse old clients) and/or MIN_MASTER_VERSION (new clients
-// refuse old masters), and give the client a grace period for "no VERSION
-// frame yet" before treating silence as v1 (not needed while the minimum is 1).
+// its own PROTOCOL_VERSION and the oldest client version it still serves.
+//
+// Two limits worth knowing before relying on it:
+//
+//   - MIN_CLIENT_VERSION is a DECLARATION, honoured by clients that understand
+//     VERSION (this build's masterCompatibility()). The master never reads a
+//     client's version, and a client that predates VERSION ignores the frame -
+//     so raising it cannot exclude old clients. A break that must keep an old
+//     client out needs the master to reject by what the client sends (HELLO),
+//     and that is a change to the handshake of its own.
+//   - A master that predates VERSION sends none, and "no VERSION frame" is NOT
+//     judged yet: the client only evaluates a frame that arrives. That is fine
+//     while MIN_MASTER_VERSION is 1; before raising it, give the client a short
+//     grace period after HELLO and treat silence as v1.
+//
 // test/fixtures/pty-host-protocol-v1.json pins every encoding; changing an
 // existing one fails test/pty-host/protocol.test.ts.
 
@@ -56,8 +65,9 @@ export const FRAME_HELLO = 3;
 /**
  * The master's protocol announcement, master -> client, sent once right after
  * a HELLO is accepted and before any DATA: version u16be, then the oldest
- * client version it serves u16be. Absent from masters that predate it (read
- * as version 1); clients that predate it ignore it as an unknown frame type.
+ * client version it serves u16be. Absent from masters that predate it (version
+ * 1 - see the header for how silence is, and is not, evaluated); clients that
+ * predate it ignore it as an unknown frame type.
  */
 export const FRAME_VERSION = 4;
 

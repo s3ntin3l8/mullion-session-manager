@@ -29,7 +29,7 @@ export type AttachClient = Pick<IPty, "onData" | "write" | "resize" | "kill"> & 
 /**
  * How an attach client ended. `incompatible` is set when the master speaks a
  * protocol this build cannot (issue #2168): the session's program is still
- * running, it just cannot be attached � which the caller must not present as
+ * running, it just cannot be attached - which the caller must not present as
  * the program having exited.
  */
 export interface AttachExit {

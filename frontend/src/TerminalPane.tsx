@@ -269,6 +269,10 @@ export function TerminalPane(props: {
     title: string;
   } | null>(null);
   const [status, setStatus] = useState<ConnectionStatus>("connecting");
+  // Issue #2168: the session ended because its pty-host speaks a protocol this
+  // build cannot attach to - its process is still running, which the "ended"
+  // overlay must not claim otherwise.
+  const [attachIncompatible, setAttachIncompatible] = useState(false);
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [copied, setCopied] = useState(false);
   // Bumped on every successful copy so the "Copied" toast below remounts
@@ -1756,11 +1760,7 @@ export function TerminalPane(props: {
           // Issue #2168: a live session this build cannot attach to (started
           // by a release with an incompatible pty-host protocol) - say so,
           // rather than letting it read as the program having exited.
-          if ((parsed as { reason?: unknown }).reason === "incompatible") {
-            term.write(
-              "\r\n\x1b[33m[This session was started by an older Mullion release and can't be re-attached after the update. Its process is still running - end the session to clean it up.]\x1b[0m\r\n",
-            );
-          }
+          setAttachIncompatible((parsed as { reason?: unknown }).reason === "incompatible");
           sessionExited = true;
           if (reconnectTimer) clearTimeout(reconnectTimer);
           setStatus("ended");
@@ -2604,7 +2604,17 @@ export function TerminalPane(props: {
             // which would otherwise burn through backoff against a session
             // that's provably never coming back.
           }
-          {status === "ended" && (
+          {status === "ended" && attachIncompatible && (
+            <>
+              <WifiOffIcon size={22} style={{ color: "var(--muted)" }} />
+              <span className="terminal-status-text">Can&apos;t reconnect after the update</span>
+              <span className="terminal-status-subtext">
+                This session was started by an older Mullion release. Its process is still running
+                &mdash; end the session from the sidebar to clean it up
+              </span>
+            </>
+          )}
+          {status === "ended" && !attachIncompatible && (
             <>
               <KillIcon size={22} style={{ color: "var(--muted)" }} />
               <span className="terminal-status-text">Session ended</span>

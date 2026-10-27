@@ -141,8 +141,11 @@ PR).
   (`test/fixtures/pty-host-protocol-v1.json` pins them), and unknown frame
   types are ignored. A deliberate break is announced: the master sends a
   VERSION frame after accepting HELLO (its version and the oldest client it
-  serves; silence means v1), and a client that cannot talk to it ends the
-  attach with `incompatible` set. `Session` reports that as
+  serves), and a client that cannot talk to it ends the attach with
+  `incompatible` set. Two limits (see `protocol.mjs`): the announced minimum
+  only binds clients that understand VERSION, and a master that sends none is
+  not judged yet - that needs a grace period before `MIN_MASTER_VERSION` is
+  ever raised above 1. `Session` reports that as
   `status_change {reason: "incompatible"}` and the terminal route as
   `{type: "exited", reason: "incompatible"}` — the session's process is still
   running, so the UI says so instead of showing it as exited.
