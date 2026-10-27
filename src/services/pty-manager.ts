@@ -38,7 +38,7 @@ import { buildSessionEnv } from "./session-env.js";
 import type { HookMessageKind, HookMessage } from "./hook-protocol.js";
 import { filterOutstandingBackgroundTasks } from "./background-tasks.js";
 import { getAdapterEmits } from "./hook-adapters/index.js";
-import { detectDevServerPortForPlainSession } from "./dev-server-detect.js";
+import { detectDevServerPortForPlainSession, portInUseReason } from "./dev-server-detect.js";
 import { lastMeaningfulLine, collapseAndTruncate } from "./terminal-text.js";
 import { ScrollbackBuffer } from "./scrollback-buffer.js";
 import { SessionStateFile, stateFilePath, type StoredSessionState } from "./session-state-file.js";
@@ -384,6 +384,10 @@ function assertValidSessionId(id: string): void {
     throw new Error(`Session id must be numeric, got: ${JSON.stringify(id)}`);
   }
 }
+
+// Issue #2069 — a bind failure is printed right before the process dies, so
+// the tail of the output is all the scan needs.
+const PORT_IN_USE_SCAN_TAIL_BYTES = 16 * 1024;
 
 export class Session {
   readonly id: string;
@@ -794,6 +798,10 @@ export class Session {
   private errorState: "idle" | "api_error" | "tool_failure" = "idle";
   private errorAt: number | null = null;
   private endedReason: string | null = null;
+  // Issue #2069 — "port N in use", derived once from the output of a session
+  // whose process has ended without a hook-reported reason. undefined = not
+  // scanned yet (a live session is never scanned: its output isn't final).
+  private portInUseEndedReason: string | null | undefined = undefined;
   private exitCode: number | null = null;
   private _liveBranch: string | null = null;
   // Issue #271 follow-up — see SessionInfo.agentSessionId's own doc comment.
@@ -3605,6 +3613,16 @@ export class Session {
     );
   }
 
+  private derivePortInUseEndedReason(): string | null {
+    if (this.isAlive) return null;
+    if (this.portInUseEndedReason === undefined) {
+      this.portInUseEndedReason = portInUseReason(
+        this.getScrollbackTail(PORT_IN_USE_SCAN_TAIL_BYTES).toString("utf8"),
+      );
+    }
+    return this.portInUseEndedReason;
+  }
+
   toInfo(idleThresholdMs: number = IDLE_THRESHOLD_MS): SessionInfo {
     const titleSignal = classifyActivityFromTitle(this.lastTitle, this.command);
     let activity: "working" | "idle";
@@ -3654,7 +3672,7 @@ export class Session {
       planAt: this.planAt,
       errorState: this.errorState,
       errorAt: this.errorAt,
-      endedReason: this.endedReason,
+      endedReason: this.endedReason ?? this.derivePortInUseEndedReason(),
       exitCode: this.exitCode,
       liveBranch: this.liveBranch,
       agentSessionId: this._agentSessionId,

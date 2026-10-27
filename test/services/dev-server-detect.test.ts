@@ -3,7 +3,11 @@ import {
   parseDevServerPort,
   detectDevServerPortForSessionIds,
   detectDevServerPortForPlainSession,
+  parsePortInUse,
+  portInUseReason,
+  findSessionHoldingPort,
 } from "../../src/services/dev-server-detect.js";
+import type { FastifyInstance } from "fastify";
 import type { Session } from "../../src/services/pty-manager.js";
 
 // Captured (lightly trimmed) real startup banners — see dev-server-detect.ts's
@@ -165,5 +169,58 @@ describe("detectDevServerPortForPlainSession", () => {
     // (a startup banner is virtually always near the most recent output).
     const output = `${VITE_BANNER}${"noise\n".repeat(20_000)}`;
     expect(detectDevServerPortForPlainSession(fakeSession(output) as Session)).toBeNull();
+  });
+});
+
+describe("parsePortInUse / portInUseReason (issue #2069)", () => {
+  it.each([
+    ["Error: listen EADDRINUSE: address already in use :::3000", "3000"],
+    ["listen tcp 127.0.0.1:8080: bind: address already in use", "8080"],
+    ["Error: Port 5173 is already in use", "5173"],
+    ["Port 4321 is in use", "4321"],
+    ["\u001b[31mError: listen EADDRINUSE: address already in use 127.0.0.1:9000\u001b[39m", "9000"],
+  ])("matches %j", (text, port) => {
+    expect(parsePortInUse(text)).toBe(port);
+  });
+
+  it("ignores Vite's non-fatal fallback line and unrelated output", () => {
+    expect(parsePortInUse("Port 5173 is in use, trying another one...")).toBeNull();
+    expect(parsePortInUse("Local: http://localhost:5173/")).toBeNull();
+  });
+
+  it("takes the last failure and rejects out-of-range ports", () => {
+    expect(parsePortInUse("EADDRINUSE :3000\nEADDRINUSE :3001")).toBe("3001");
+    expect(parsePortInUse("EADDRINUSE :99999")).toBeNull();
+  });
+
+  it("formats the ended detail", () => {
+    expect(portInUseReason("EADDRINUSE :::3000")).toBe("port 3000 in use");
+    expect(portInUseReason("all good")).toBeNull();
+  });
+});
+
+describe("findSessionHoldingPort (issue #2069)", () => {
+  const app = (sessions: Record<string, { isAlive: boolean; out: string }>) =>
+    ({
+      pty: {
+        get: (id: string) =>
+          sessions[id] && {
+            isAlive: sessions[id].isAlive,
+            getScrollbackTail: () => Buffer.from(sessions[id].out),
+          },
+      },
+    }) as unknown as FastifyInstance;
+
+  it("returns the live session whose banner announces the port", () => {
+    const a = app({
+      "1": { isAlive: true, out: "Local: http://localhost:3000/" },
+      "2": { isAlive: true, out: VITE_BANNER },
+    });
+    expect(findSessionHoldingPort(a, ["1", "2", "9"], 5173)).toBe("2");
+  });
+
+  it("skips dead sessions and returns null when nothing matches", () => {
+    const a = app({ "1": { isAlive: false, out: VITE_BANNER } });
+    expect(findSessionHoldingPort(a, ["1"], 5173)).toBeNull();
   });
 });

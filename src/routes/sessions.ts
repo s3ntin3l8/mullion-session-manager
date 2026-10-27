@@ -14,6 +14,7 @@ import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { parseHostCwds, projectCwdOnHost } from "../services/placement.js";
 import type { SessionInfo } from "../services/pty-manager.js";
 import { isValidDevServerUrl } from "./projects.js";
+import { checkDockPortConflict } from "../services/dock-port-check.js";
 import { getOrCreateProjectPreview } from "../services/preview-registry.js";
 import {
   MAX_UPLOAD_BYTES,
@@ -643,6 +644,27 @@ export async function sessionsRoute(app: FastifyInstance) {
       // full reasoning (never send both `initialPrompt` and `seedPrompt` to
       // createSessionRecord; a resumed/transferred session isn't a concept
       // here, unlike promote, so there's no third branch to consider).
+      // Issue #2069 — refuse a dock session whose control's port is already
+      // taken, rather than spawning one that dies on EADDRINUSE inside its PTY.
+      if (
+        body.kind === "dock" &&
+        body.targetHostId === undefined &&
+        body.targetPlatform === undefined
+      ) {
+        const conflict = await checkDockPortConflict(app, body.projectId, body.command);
+        if (conflict) {
+          return reply.code(409).send({
+            statusCode: 409,
+            error: "Conflict",
+            code: "port_in_use",
+            message: conflict.message,
+            port: conflict.port,
+            ...(conflict.holderSessionId !== undefined
+              ? { holderSessionId: conflict.holderSessionId }
+              : {}),
+          });
+        }
+      }
       const { seedPrompt: rawSeedPrompt, targetHostId, targetPlatform, ...restBody } = body;
       // Hermes review, PR #1333 — trim before the emptiness check: an
       // untrimmed `"   "` has length > 0, so without this a whitespace-only

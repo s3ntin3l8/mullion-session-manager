@@ -442,3 +442,18 @@ describe("dock-config service", () => {
     });
   });
 });
+
+describe("dock control port (issue #2069)", () => {
+  it("accepts an integer port 1–65535 and keeps it", () => {
+    const [c] = validateDockConfig({
+      controls: [{ id: "a", title: "A", command: "x", port: 5173 }],
+    });
+    expect(c.port).toBe(5173);
+  });
+
+  it.each([0, 65536, 80.5, "80"])("rejects port %j", (port) => {
+    expect(() =>
+      validateDockConfig({ controls: [{ id: "a", title: "A", command: "x", port }] }),
+    ).toThrow(/port must be an integer between 1 and 65535/);
+  });
+});

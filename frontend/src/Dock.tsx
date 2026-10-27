@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useDashboardStore } from "./store/index.js";
+import type { Session } from "./api/index.js";
 import { ChevronDownIcon, DockIcon } from "./ui/icons.js";
 import { useDragResize } from "./hooks/useDragResize.js";
 import {
@@ -157,6 +158,7 @@ export function Dock({
   workspaceProjectIds,
   onOpenGitHub,
   onOpenBrowser,
+  onOpenSession,
 }: {
   // null: the scope is not knowable yet (cold start) or this is the phone
   // tier, which has no workspaces. Same value the sidebar receives. Unscoped
@@ -168,6 +170,8 @@ export function Dock({
   // configured (see the row below) rather than a fetched status, since
   // there's no server round-trip needed to know whether it's applicable.
   onOpenBrowser: (projectId: number) => void;
+  // Issue #2069 — "Open holder" on a port-in-use row.
+  onOpenSession?: (session: Session) => void;
 }) {
   // P1 perf fix — individual selectors, not a whole-store subscription, so
   // this only re-renders when one of THESE fields changes identity.
@@ -602,6 +606,7 @@ export function Dock({
                   onUnpin={() => setPinned(null)}
                   onOpenGitHub={onOpenGitHub}
                   onOpenBrowser={onOpenBrowser}
+                  onOpenSession={onOpenSession}
                   onRemove={manualOnly(id) ? () => removeColumn(id) : undefined}
                 />
               ))}

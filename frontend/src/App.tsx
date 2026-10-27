@@ -1948,6 +1948,7 @@ export function App() {
               workspaceProjectIds={scopedWorkspaceProjectIds}
               onOpenGitHub={onOpenGitHub}
               onOpenBrowser={onOpenBrowser}
+              onOpenSession={onOpenSession}
             />
             {/* Mobile UI/UX overhaul, item C.2 — last child of
                 .grid-area-body (a flex column), so it sits at the bottom of

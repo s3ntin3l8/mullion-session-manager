@@ -10,6 +10,7 @@ import path from "node:path";
 // literal here) — no back-compat re-export needed for a name nothing ever
 // imported.
 import type { Launcher, LauncherKind, DockControl } from "../shared/types.js";
+import { isValidPort } from "./port-probe.js";
 import { isReservedSessionEnvKey } from "./session-env-keys.js";
 
 export type { Launcher, LauncherKind, DockControl };
@@ -282,6 +283,7 @@ function normalizeRawControl(raw: unknown, source: string): DockControl | null {
     ...(typeof c.height === "number" ? { height: c.height } : {}),
     ...(typeof c.worktreeRefresh === "boolean" ? { worktreeRefresh: c.worktreeRefresh } : {}),
     ...(typeof c.preview === "boolean" ? { preview: c.preview } : {}),
+    ...(isValidPort(c.port) ? { port: c.port } : {}),
     ...(c.env && typeof c.env === "object"
       ? {
           // Issue #822 — drops non-string values (pre-existing) AND
