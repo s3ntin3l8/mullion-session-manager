@@ -211,15 +211,16 @@ export async function getDiffStats(
     if (pending) return pending;
   }
 
-  const promise = Promise.all([
-    runGitDiffNumstat(cwd, baseRef),
-    runGitDiffNumstat(cwd, baseRef, ["--name-only", "-z", "--no-renames"]),
-  ])
-    .then(([output, names]) => {
+  // Sequential, not parallel: stats are polled for every session, so a second
+  // concurrent git process per poll is real load, and when numstat already
+  // failed there is nothing to attach paths to.
+  const promise = runGitDiffNumstat(cwd, baseRef)
+    .then(async (output) => {
       if (output === null) return null;
       const result = parseNumstat(output);
-      // Left absent, not [], when the name listing failed: absent means
+      // Left absent, not [], when the name listing fails: absent means
       // "unknown" to the workflow-change gate, [] means "none".
+      const names = await runGitDiffNumstat(cwd, baseRef, ["--name-only", "-z", "--no-renames"]);
       if (names !== null) result.workflowFiles = parseWorkflowFiles(names);
       cache.set(cacheKey, { ts: Date.now(), result });
       return result;
