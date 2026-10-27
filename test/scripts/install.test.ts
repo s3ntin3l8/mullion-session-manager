@@ -1354,8 +1354,10 @@ if [ "$1" = "-s" ]; then echo MINGW64_NT-10.0-26200; else echo Windows; fi
       // ~/bin, not ~/.local/bin: Git Bash's profile puts ~/bin on PATH.
       const cli = path.join(fakeHome, "bin", "mullion");
       expect(fs.existsSync(path.join(fakeHome, ".local", "bin", "mullion"))).toBe(false);
-      expect(fs.lstatSync(cli).isSymbolicLink()).toBe(false);
+      // Read first, then ask what it is: a check followed by a use of the same
+      // path is a file-system race as far as CodeQL is concerned.
       const body = fs.readFileSync(cli, "utf8");
+      expect(fs.lstatSync(cli).isSymbolicLink()).toBe(false);
       expect(body).toMatch(/^#!\/bin\/sh\nexec /);
       expect(body).toContain(path.join(binDir, "node"));
       expect(body).toContain(`${fs.realpathSync(mullionHome)}/current/dist/cli/mullion.mjs`);

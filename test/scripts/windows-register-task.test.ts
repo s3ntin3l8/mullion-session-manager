@@ -97,9 +97,14 @@ describeOnWindows("deploy/windows/register-task.ps1", () => {
     expect(xml).toContain("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>");
     expect(xml).toContain("<MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>");
     expect(xml).toContain("<StartWhenAvailable>true</StartWhenAvailable>");
+    // Task Scheduler stores the long form of a path: on a CI runner the temp
+    // directory is the 8.3 short form (C:\Users\RUNNER~1\...), and the XML
+    // has C:\Users\runneradmin\... for it.
+    const launcher = fs.realpathSync.native(f.launcher);
+    const home = fs.realpathSync.native(f.home);
     expect(xml).toContain(`<Command>${process.execPath}</Command>`);
-    expect(xml).toContain(`<Arguments>"${f.launcher}" "${f.home}" "${name}"</Arguments>`);
-    expect(xml).toContain(`<WorkingDirectory>${f.home}</WorkingDirectory>`);
+    expect(xml).toContain(`<Arguments>"${launcher}" "${home}" "${name}"</Arguments>`);
+    expect(xml).toContain(`<WorkingDirectory>${home}</WorkingDirectory>`);
   }, 90_000);
 
   it("replaces an existing registration instead of failing or duplicating it", async () => {
@@ -121,7 +126,10 @@ describeOnWindows("deploy/windows/register-task.ps1", () => {
       while (!fs.existsSync(f.marker) && Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 250));
       }
-      expect(JSON.parse(fs.readFileSync(f.marker, "utf8"))).toEqual([f.home, name]);
+      expect(JSON.parse(fs.readFileSync(f.marker, "utf8"))).toEqual([
+        fs.realpathSync.native(f.home),
+        name,
+      ]);
     },
     90_000,
   );
