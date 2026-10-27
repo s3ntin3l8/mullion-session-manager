@@ -400,7 +400,14 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     closeRightSidebar: () => {
       if (!get().rightSidebarOpen) return;
       writeBool(STORAGE_KEYS.rightSidebarOpen, false);
-      set({ rightSidebarOpen: false });
+      // A GitHub drill-in is transient: closing the drawer ends it, so a
+      // reopen (possibly after a workspace/project switch) lands on the list
+      // rather than a PR or issue left open by an earlier visit.
+      const leavingGithub = get().rightSidebarView === "github";
+      set({
+        rightSidebarOpen: false,
+        ...(leavingGithub ? { githubOpenPrByProject: {}, githubOpenIssueByProject: {} } : {}),
+      });
     },
 
     setRightSidebarPinned: (value) => {

@@ -142,4 +142,20 @@ describe("GitHubSidebarView", () => {
     unmount();
     expect(unsubscribe).toHaveBeenCalledWith(4);
   });
+
+  it("closing the sidebar ends the PR drill-in, so a reopen under another project shows its list", async () => {
+    useDashboardStore.setState({
+      rightSidebarOpen: true,
+      rightSidebarView: "github",
+      githubOpenPrByProject: { 4: 1 },
+      githubOpenIssueByProject: { 4: 2 },
+    });
+    useDashboardStore.getState().closeRightSidebar();
+
+    expect(useDashboardStore.getState().githubOpenPrByProject).toEqual({});
+    expect(useDashboardStore.getState().githubOpenIssueByProject).toEqual({});
+    renderView();
+    expect(await screen.findByText("PR title 1")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /back/i })).toBeNull();
+  });
 });
