@@ -327,15 +327,15 @@ comes first. If the file is locked by a running Claude at that instant, or is
 not valid JSON, nothing is written and the dialog appears, as before. Codex
 and agy children are pre-trusted the same way, each in its own settings.
 
-That trust is recorded on the **checkout** and **persists**: it is not scoped to the
+Claude Code's trust is recorded on the **checkout** and **persists**: it is not scoped to the
 unattended session that triggered it. It is the same decision as answering "Yes, I trust
 this folder" once, so afterwards an interactive launch in the checkout, any of its
 worktrees or any subdirectory also skips the dialog, and the repository's own
 `.claude/settings.json`, hooks and MCP servers are trusted for them. A branch a child
 checks out can change those files, so only enable unattended Claude children on
 projects whose repository you would trust that far. Entries are one per checkout (not
-one per worktree) and are never pruned; Claude Code does not prune its `projects`
-entries either.
+one per worktree) and are never pruned; as of Claude Code 2.1.x it does not prune its
+`projects` entries either.
 
 Supervising a remote child from the coordinator works with `session wait`,
 `session children` (each row carries its `hostId` and `placementReason`),
