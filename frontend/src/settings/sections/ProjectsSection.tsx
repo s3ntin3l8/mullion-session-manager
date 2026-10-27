@@ -38,25 +38,30 @@ export function ProjectsSection() {
       // minute) for every host, so a fan-out would trip it on a larger fleet,
       // and a throttled host is not an unreachable one: say which it was.
       const results: Array<DetectCheckoutsResult | null> = [];
-      let throttled = false;
+      let retryAfterSeconds: number | null = null;
       for (const h of hosts) {
         try {
           results.push(await api.detectHostCheckouts(h.id));
         } catch (err) {
           if (err instanceof RateLimitedError) {
-            throttled = true;
+            // The server says how long the bucket takes to refill (and the
+            // window is operator-tunable), so quote that, not a guess.
+            retryAfterSeconds = Math.max(1, Math.ceil(err.retryAfterMs / 1000));
             break;
           }
           results.push(null);
         }
       }
+      const throttled = retryAfterSeconds !== null;
       const notAsked = hosts.length - results.length;
       const throttledNote = throttled
-        ? `throttled: ${notAsked} host${notAsked === 1 ? "" : "s"} not asked, try again in a minute`
+        ? `throttled: ${notAsked} host${notAsked === 1 ? "" : "s"} not asked, try again in ${retryAfterSeconds}s`
         : null;
       const answered = results.filter((r) => r !== null);
       if (answered.length === 0) {
-        setDetectStatus(throttled ? "Throttled, try again in a minute" : "No host answered");
+        setDetectStatus(
+          throttled ? `Throttled, try again in ${retryAfterSeconds}s` : "No host answered",
+        );
       } else if (answered.every((r) => !r.enabled)) {
         setDetectStatus("Turn on auto-detect first");
       } else {

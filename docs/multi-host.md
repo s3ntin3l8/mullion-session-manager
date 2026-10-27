@@ -228,7 +228,9 @@ name-only match is labelled "same name only"). Clicking it fills the field; noth
 until you save the dialog. A path Mullion filled in on its own carries an **auto-detected**
 badge until you save the dialog, which keeps it. Settings → Projects & discovery has the
 **Auto-detect checkouts on other hosts** switch and a **Detect** button that runs the sweep
-on every host now.
+on every host now, one host at a time. If the server rate-limits it (that route allows 10 calls a
+minute), it stops, says how many hosts it did not ask and how long to wait, and does not count
+them as unreachable.
 
 **Auto-fill (opt-in).** `settings.autoDetectHostCheckouts` (off by default; Settings →
 Projects & discovery) lets Mullion fill the map in for you: when a host comes online

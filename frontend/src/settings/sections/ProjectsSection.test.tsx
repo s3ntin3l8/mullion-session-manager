@@ -172,10 +172,22 @@ describe("ProjectsSection: auto-detect checkouts", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByText("Nothing new found (throttled: 1 host not asked, try again in a minute)"),
+        screen.getByText("Nothing new found (throttled: 1 host not asked, try again in 60s)"),
       ).toBeInTheDocument(),
     );
     expect(screen.queryByText(/unreachable/)).toBeNull();
+  });
+
+  it("quotes the wait the server asked for, rounded up, rather than a fixed minute", async () => {
+    vi.mocked(api.detectHostCheckouts).mockRejectedValue(new RateLimitedError(429, 12_300));
+    const user = userEvent.setup();
+    render(<ProjectsSection />);
+
+    await user.click(screen.getByRole("button", { name: "Detect" }));
+
+    await waitFor(() =>
+      expect(screen.getByText("Throttled, try again in 13s")).toBeInTheDocument(),
+    );
   });
 
   it("when the very first call is throttled it says so instead of 'no host answered'", async () => {
@@ -186,7 +198,7 @@ describe("ProjectsSection: auto-detect checkouts", () => {
     await user.click(screen.getByRole("button", { name: "Detect" }));
 
     await waitFor(() =>
-      expect(screen.getByText("Throttled, try again in a minute")).toBeInTheDocument(),
+      expect(screen.getByText("Throttled, try again in 60s")).toBeInTheDocument(),
     );
     expect(vi.mocked(api.detectHostCheckouts)).toHaveBeenCalledTimes(1);
   });
