@@ -566,7 +566,17 @@ describe("devices routes", () => {
         const id = created.json().id;
         const device = app.device.get(String(id))!;
 
-        const spawnWait = vi.fn().mockResolvedValue(Buffer.from("fake-png"));
+        // A real multi-display device prefixes the PNG with a screencap warning.
+        const FAKE_PNG = Buffer.concat([
+          Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+          Buffer.from("fake-png-body"),
+          Buffer.from("IEND\0\0\0\0", "latin1"),
+        ]);
+        const spawnWait = vi
+          .fn()
+          .mockResolvedValue(
+            Buffer.concat([Buffer.from("[Warning] Multiple displays were found\n"), FAKE_PNG]),
+          );
         const spawnWaitText = vi.fn().mockResolvedValue("log output");
         (device as unknown as { adb: unknown }).adb = {
           subprocess: {
@@ -591,8 +601,20 @@ describe("devices routes", () => {
           payload: { action: "screenshot" },
         });
         expect(rScreen.statusCode).toBe(200);
-        expect(rScreen.json().screenshot).toBe(Buffer.from("fake-png").toString("base64"));
+        expect(rScreen.json().screenshot).toBe(Buffer.from(FAKE_PNG).toString("base64"));
         expect(spawnWait).toHaveBeenCalledWith(["'screencap'", "'-p'"]);
+
+        // No PNG in the output at all → 502 carrying the head of the output.
+        spawnWait.mockResolvedValueOnce(Buffer.from("screencap: not allowed\x00"));
+        const rNoPng = await app.inject({
+          method: "POST",
+          url: `/api/devices/${id}/action`,
+          payload: { action: "screenshot" },
+        });
+        expect(rNoPng.statusCode).toBe(502);
+        expect(rNoPng.json().message).toBe(
+          "screencap did not return a PNG: screencap: not allowed?",
+        );
 
         // Tap
         const rTap = await app.inject({
