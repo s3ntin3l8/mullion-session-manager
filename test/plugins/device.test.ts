@@ -102,6 +102,7 @@ describe("device panel platform gate (issue #1720, roadmap 8.6)", () => {
           expect(app.deviceEmulatorEnabled).toBe(false);
           expect(app.deviceKinds).toEqual(["physical"]);
           expect(app.deviceEmulatorUnavailableMessage).toMatch(/not supported on darwin/);
+          expect(app.deviceEmulatorUnavailableMessage).toMatch(/only physical devices are/);
           // The platform reason DOMINATES: telling the operator to set
           // DEVICE_ENABLED=true would send them off to change a .env and
           // restart for nothing.

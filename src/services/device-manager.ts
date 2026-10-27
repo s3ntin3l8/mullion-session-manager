@@ -100,12 +100,17 @@ export function isDeviceKindSupported(
  * for the routes and `DeviceManager.assertEnabled`, so the same condition
  * never reads two ways.
  */
-export function unsupportedKindMessage(kind: DeviceCapability, platform: string): string {
+export function unsupportedKindMessage(
+  kind: DeviceCapability,
+  platform: NodeJS.Platform,
+  // The capabilities actually in force (a manager may be handed a narrower set than
+  // the platform's own table), so the wording never contradicts the gate that fired.
+  capabilities: ReadonlySet<DeviceCapability> = deviceCapabilities(platform),
+): string {
   // "only physical devices are" is only true where physical devices exist — on a
   // platform with no capability at all (win32) it would contradict the panel's own
   // "not supported" answer for a physical create.
-  const physicalExists = isDeviceKindSupported("physical", platform as NodeJS.Platform);
-  if (kind === "emulator" && physicalExists) {
+  if (kind === "emulator" && capabilities.has("physical")) {
     return `Emulator devices are not supported on ${platform} — only physical devices are.`;
   }
   return kind === "emulator"
@@ -975,7 +980,7 @@ export class DeviceManager {
     // of device, telling the operator to set DEVICE_ENABLED=true would be a
     // lie that sends them off to change a .env and restart for nothing.
     if (this.opts.capabilities && !this.opts.capabilities.has(kind)) {
-      throw new Error(unsupportedKindMessage(kind, process.platform));
+      throw new Error(unsupportedKindMessage(kind, process.platform, this.opts.capabilities));
     }
     if (!this.opts.enabled) {
       throw new Error("device panel is disabled (set DEVICE_ENABLED=true)");

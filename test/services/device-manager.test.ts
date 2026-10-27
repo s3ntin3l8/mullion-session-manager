@@ -417,12 +417,15 @@ describe("DeviceManager", () => {
       await manager.killAll();
     });
 
-    it("refuses everything when the platform has no capability at all", async () => {
+    it("refuses everything when the platform has no capability at all, without claiming physical devices exist", async () => {
       const manager = new DeviceManager(baseOpts({ capabilities: new Set() }));
       await expect(manager.pair(PHYSICAL_ADDRESS, "123456")).rejects.toThrow(
         /Physical devices are not supported/,
       );
-      await expect(manager.getOrCreate(emulatorSpawn)).rejects.toThrow(/not supported/);
+      // The injected (empty) set drives the wording, not this host's platform table.
+      const emulatorError = await manager.getOrCreate(emulatorSpawn).catch((e: Error) => e.message);
+      expect(emulatorError).toMatch(/Emulator devices are not supported/);
+      expect(emulatorError).not.toMatch(/only physical/);
     });
   });
 
