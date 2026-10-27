@@ -510,6 +510,11 @@ export interface AgentConfig {
   sshAuthSock?: { path: string; present: boolean; source?: SshAuthSockSource } | null;
 }
 
+/** The run of private-mode set/reset sequences (`ESC[?<n>[;<n>…]h|l`) that
+ * Session.getScrollback() prepends to the ring. */
+// eslint-disable-next-line no-control-regex -- the escape byte is the point
+const LEADING_PRIVATE_MODES = /^(?:\x1b\[\?\d+(?:;\d+)*[hl])+/;
+
 export class RemoteHostClient {
   private readonly baseUrl: string;
   private readonly wsBaseUrl: string;
@@ -1919,10 +1924,20 @@ export class RemoteHostClient {
     if (typeof result.text === "string") return result.text;
     // An agent build that predates this mode ignores `?mode=` and answers the raw
     // `{b64}`; an empty string there would read as "no output". Render the bytes
-    // here instead, at a default size (that older agent cannot tell us the real
-    // one), so a mixed-version fleet stays readable.
+    // here instead, so a mixed-version fleet stays readable.
+    //
+    // That `b64` is `getScrollback()`: the terminal-mode preamble (alt-screen
+    // enter/exit, mouse and bracketed-paste modes) followed by the ring. A leading
+    // `ESC[?1049h` would put the whole replay into the alternate buffer, which has
+    // no scrollback, so the leading run of private-mode sequences is dropped — the
+    // ring's own escapes switch screens where they happened.
+    //
+    // The size is a fixed 120x40: an older agent cannot tell us the real one, so a
+    // session that ran at another width is re-wrapped. Accepted for a skew path.
     if (typeof result.b64 === "string" && result.b64.length > 0) {
-      return renderScrollback(Buffer.from(result.b64, "base64"), { cols: 120, rows: 40 });
+      const bytes = Buffer.from(result.b64, "base64").toString("latin1");
+      const ring = bytes.replace(LEADING_PRIVATE_MODES, "");
+      return renderScrollback(Buffer.from(ring, "latin1"), { cols: 120, rows: 40 });
     }
     return "";
   }

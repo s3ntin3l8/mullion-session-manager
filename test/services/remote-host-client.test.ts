@@ -1374,6 +1374,22 @@ describe("RemoteHostClient", () => {
     expect(await client().resolveRenderedScrollback("42")).toBe("final answer");
   });
 
+  it("the old-agent fallback drops the leading terminal-mode preamble, so a live alt-screen session keeps its history (issue #2112)", async () => {
+    // Exactly what a pre-#2112 agent's getScrollback() sends for a session that is
+    // on the alternate screen with mouse tracking and bracketed paste on: the
+    // preamble, then the ring (shell output, then the TUI entering the alt screen).
+    const preamble = "\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?2004h";
+    const shell = Array.from({ length: 60 }, (_, i) => `shell line ${i}`).join("\r\n");
+    const ring = `${shell}\r\n\x1b[?1049h\x1b[HTUI screen\r\n`;
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, { b64: Buffer.from(preamble + ring, "utf8").toString("base64") }),
+    );
+    const text = await client().resolveRenderedScrollback("42");
+    expect(text).toContain("shell line 0");
+    expect(text).toContain("shell line 59");
+    expect(text.endsWith("TUI screen")).toBe(true);
+  });
+
   it("resolves an empty Buffer for a session id the agent has never tracked", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, { b64: "" }));
     const result = await client().resolveScrollback("never-spawned");
