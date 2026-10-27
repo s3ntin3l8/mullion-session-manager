@@ -19,7 +19,10 @@ import { windowsPowerShellEnv } from "../../src/cli/pipe-acl.mjs";
 const run = promisify(execFile);
 const SCRIPT = fileURLToPath(new URL("../../deploy/windows/releases-in-use.ps1", import.meta.url));
 const ADDON = fileURLToPath(
-  new URL("../../node_modules/better-sqlite3/prebuilds/win32-x64.node", import.meta.url),
+  new URL(
+    `../../node_modules/better-sqlite3/prebuilds/win32-${process.arch}.node`,
+    import.meta.url,
+  ),
 );
 const describeOnWindows = process.platform === "win32" ? describe : describe.skip;
 
@@ -88,14 +91,62 @@ describeOnWindows("deploy/windows/releases-in-use.ps1", () => {
     });
   }
 
-  it("reports the release a process has a native module loaded from — how a pty-host master shows up", async () => {
-    const dir = releases("1.0.0", "2.0.0", "3.0.0");
-    const addon = path.join(dir, "2.0.0", "addon.node");
+  // A native module of this host's architecture to load from the fake release.
+  const withAddon = it.runIf(fs.existsSync(ADDON));
+
+  /** Starts a node process that has the addon loaded from `<releases>/<name>`. */
+  async function holdAddon(dir: string, name: string): Promise<void> {
+    const addon = path.join(dir, name, "addon.node");
     fs.copyFileSync(ADDON, addon);
     await start([
       "-e",
       `process.dlopen({ exports: {} }, ${JSON.stringify(addon)}); console.log("ready"); setInterval(() => {}, 1000)`,
     ]);
+  }
+
+  withAddon(
+    "reports the release a process has a native module loaded from — how a pty-host master shows up",
+    async () => {
+      const dir = releases("1.0.0", "2.0.0", "3.0.0");
+      await holdAddon(dir, "2.0.0");
+      expect(await inUse(dir)).toEqual(["2.0.0"]);
+    },
+    60_000,
+  );
+
+  // The releases directory is resolved to its REAL path first. A junction (or a
+  // short 8.3 name, or a substituted drive) in the path the updater was given
+  // would otherwise make every loaded module look like it lives elsewhere, and
+  // every release look unused — which is a release deleted under a live session.
+  withAddon(
+    "finds a release in use when the releases directory is reached through a junction",
+    async () => {
+      const dir = releases("1.0.0", "2.0.0");
+      await holdAddon(dir, "1.0.0");
+      const viaJunction = path.join(path.dirname(dir), "..", "via-junction");
+      dirs.push(viaJunction);
+      fs.symlinkSync(path.dirname(dir), viaJunction, "junction");
+      expect(await inUse(path.join(viaJunction, "releases"))).toEqual(["1.0.0"]);
+      // The link goes first: removing it must never reach into what it points at.
+      fs.rmdirSync(viaJunction);
+    },
+    60_000,
+  );
+
+  it("matches a release by its whole name: 1.0.0 is not 1.0.00", async () => {
+    const dir = releases("1.0.0", "1.0.00");
+    const script = path.join(dir, "1.0.00", "hold.js");
+    fs.writeFileSync(script, 'console.log("ready"); setInterval(() => {}, 1000);');
+    await start([script]);
+    expect(await inUse(dir)).toEqual(["1.0.00"]);
+  }, 60_000);
+
+  it("reports a release named as a whole argument — a working directory, not a script path", async () => {
+    const dir = releases("1.0.0", "2.0.0");
+    const release = path.join(dir, "2.0.0");
+    const script = path.join(dir, "..", "hold.js");
+    fs.writeFileSync(script, 'console.log("ready"); setInterval(() => {}, 1000);');
+    await start([script, "--cwd", release]);
     expect(await inUse(dir)).toEqual(["2.0.0"]);
   }, 60_000);
 

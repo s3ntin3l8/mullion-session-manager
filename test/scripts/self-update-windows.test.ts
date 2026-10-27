@@ -11,7 +11,7 @@
 // (the same reason windows-register-task.test.ts skips its -Start test there).
 // The Linux suite (self-update.test.ts, "Windows branch") covers the script's
 // logic under shims on every push; this is the check that the shims are right.
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from "vitest";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -54,6 +54,22 @@ describeIt("scripts/self-update.sh on Windows", () => {
       { env: windowsPowerShellEnv(process.env), windowsHide: true, timeout: 60_000 },
     );
   }
+
+  // These tests register REAL tasks (with a logon trigger). A run that was
+  // killed outright never reached its afterEach, and would leave one behind to
+  // start at every logon — so any left by an earlier run are removed first.
+  beforeAll(async () => {
+    await run(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "Get-ScheduledTask -TaskName 'MullionUpdTest-*' -ErrorAction SilentlyContinue | Unregister-ScheduledTask -Confirm:$false",
+      ],
+      { env: windowsPowerShellEnv(process.env), windowsHide: true, timeout: 60_000 },
+    );
+  });
 
   beforeEach(async () => {
     counter += 1;

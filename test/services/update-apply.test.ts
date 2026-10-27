@@ -33,6 +33,10 @@ const spawnCalls: Array<{ command: string; args: string[]; options?: Record<stri
   [];
 /** What the faked session-shell lookup answers: a path, or null for "no Git Bash". */
 let gitBash: string | null = "C:/Program Files/Git/bin/bash.exe";
+/** The fake child the last spawn returned, so a test can make it fail the way a real one can. */
+let lastChild: EventEmitter | null = null;
+/** When set, spawn throws this instead of returning a child. */
+let spawnThrows: Error | null = null;
 
 // The Windows updater runs in Git Bash, found through session-shell.ts — faked,
 // so these tests do not depend on whether the machine they run on has one.
@@ -71,12 +75,14 @@ vi.mock("node:child_process", async (importOriginal) => {
     ...actual,
     spawn: (command: string, args: string[], options?: Record<string, unknown>) => {
       spawnCalls.push({ command, args, options });
+      if (spawnThrows) throw spawnThrows;
       const child = new EventEmitter() as EventEmitter & {
         stdout: EventEmitter;
         stderr: EventEmitter;
         unref: () => void;
         kill: (signal?: NodeJS.Signals) => boolean;
       };
+      lastChild = child;
       child.stdout = new EventEmitter();
       child.stderr = new EventEmitter();
       child.unref = () => undefined;
@@ -173,6 +179,8 @@ describe("spawnSelfUpdate", async () => {
     launchctlPrintStillRegisteredTimes = 0;
     launchctlPrintNeverGoes = false;
     gitBash = "C:/Program Files/Git/bin/bash.exe";
+    lastChild = null;
+    spawnThrows = null;
   });
 
   afterEach(() => {
@@ -293,6 +301,36 @@ describe("spawnSelfUpdate", async () => {
         expect(result).toMatchObject({ ok: false, status: 500 });
         expect(asFailure(result).message).toMatch(/could not open the update log/);
         expect(spawnCalls).toEqual([]);
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it("writes a failed status when bash cannot be started, since the caller was already told 202", async () => {
+      setPlatform("win32");
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-windows-"));
+      try {
+        stubSelfUpdateScript(home);
+        expect(await apply(home)).toMatchObject({ ok: true, status: 202 });
+        // The failure arrives asynchronously, as a real spawn's does.
+        lastChild!.emit("error", new Error("spawn bash.exe ENOENT"));
+        const status = JSON.parse(fs.readFileSync(path.join(home, ".update-status.json"), "utf8"));
+        expect(status).toMatchObject({ phase: "failed", version: "1.2.3" });
+        expect(status.error).toMatch(/could not start the updater: spawn bash\.exe ENOENT/);
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it("reports a spawn that throws as a failed launch, not an unhandled error", async () => {
+      setPlatform("win32");
+      spawnThrows = new Error("EPERM: operation not permitted");
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-windows-"));
+      try {
+        stubSelfUpdateScript(home);
+        const result = await apply(home);
+        expect(result).toMatchObject({ ok: false, status: 500 });
+        expect(asFailure(result).message).toMatch(/could not start the updater: EPERM/);
       } finally {
         fs.rmSync(home, { recursive: true, force: true });
       }

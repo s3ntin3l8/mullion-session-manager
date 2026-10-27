@@ -236,21 +236,21 @@ export async function spawnSelfUpdate(
   return { ok: true, status: 202, body: { phase: "downloading", version } };
 }
 
-/**
- * The Windows counterpart of the transient `systemd-run --user --scope`
- * (issue #2161, part of #1728): the updater is spawned DETACHED, with the same
- * options the pty-host master gets (src/pty-host/master.mjs), and that is
- * enough. The agent runs as a scheduled task, and stopping the task kills its
- * whole process tree — the launcher and the server — except processes that
- * were spawned detached. So the updater outlives the restart its last step
- * triggers, and needs no job of its own. Measured on Windows 11, not assumed:
- * a detached `bash -l` updater, started by a task-run process, ran
- * register-task.ps1 (which stops the task and starts it again) and finished.
- *
- * It runs in Git for Windows' bash — `-l`, so that /usr/bin is on PATH, as it
- * is for a session — because self-update.sh is a bash script, and its output
- * goes to logs/update-<version>.log: a detached process has no console.
- */
+/** Best-effort: the status file self-update.sh would have written, for an updater that never started. */
+function writeFailedStatus(mullionHome: string, version: string, error: string): void {
+  try {
+    const status: UpdateStatus = {
+      phase: "failed",
+      version,
+      updatedAt: Math.floor(Date.now() / 1000),
+      error,
+    };
+    fs.writeFileSync(statusFilePath(mullionHome), JSON.stringify(status, null, 2), "utf8");
+  } catch {
+    // Nothing more can be done; the error is in the app's log.
+  }
+}
+
 /**
  * Opens the log the Windows updater's stdout and stderr go to, and returns the
  * descriptor to hand to spawn.
@@ -274,6 +274,21 @@ export function openUpdateLog(logPath: string): number {
   return fs.openSync(logPath, "w");
 }
 
+/**
+ * The Windows counterpart of the transient `systemd-run --user --scope`
+ * (issue #2161, part of #1728): the updater is spawned DETACHED, with the same
+ * options the pty-host master gets (src/pty-host/master.mjs), and that is
+ * enough. The agent runs as a scheduled task, and stopping the task kills its
+ * whole process tree — the launcher and the server — except processes that
+ * were spawned detached. So the updater outlives the restart its last step
+ * triggers, and needs no job of its own. Measured on Windows 11, not assumed:
+ * a detached `bash -l` updater, started by a task-run process, ran
+ * register-task.ps1 (which stops the task and starts it again) and finished.
+ *
+ * It runs in Git for Windows' bash — `-l`, so that /usr/bin is on PATH, as it
+ * is for a session — because self-update.sh is a bash script, and its output
+ * goes to logs/update-<version>.log: a detached process has no console.
+ */
 function launchWindowsUpdater(
   app: FastifyInstance,
   mullionHome: string,
@@ -308,8 +323,16 @@ function launchWindowsUpdater(
     });
     child.on("error", (err) => {
       app.log.error({ err, bash, logPath }, "failed to launch self-update.sh");
+      // The caller has already been told 202, and the updater that would have
+      // written the status never ran: say so there, or the UI waits on an
+      // update that is not happening.
+      writeFailedStatus(mullionHome, version, `could not start the updater: ${err.message}`);
     });
     child.unref();
+  } catch (err) {
+    const message = `could not start the updater: ${err instanceof Error ? err.message : String(err)}`;
+    app.log.error({ err, bash }, "failed to launch self-update.sh");
+    return { ok: false, message };
   } finally {
     // The child has its own copy of the handle.
     fs.closeSync(logFd);

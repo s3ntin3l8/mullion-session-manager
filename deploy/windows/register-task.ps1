@@ -81,11 +81,15 @@ try {
   if (-not (Test-Path -LiteralPath $launcher -PathType Leaf)) { Fail "the launcher was not found at $launcher" }
   if (-not (Test-Path -LiteralPath $home_ -PathType Container)) { Fail "the install root was not found at $home_" }
 
+  # Re-registering replaces the definition IN PLACE (-Force below), rather than
+  # unregistering first: a registration that then fails leaves the old task
+  # registered, not a host with no task at all (the updater restarts the agent
+  # this way, and a failure there must not leave it gone). The old run is
+  # stopped first, so the new definition is what starts next.
+  $wasRunning = $false
   if ($existing) {
-    # Re-registering replaces the definition; stop the old run first so the
-    # new definition is what starts next.
+    $wasRunning = ($existing.State -eq 'Running')
     Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
-    Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
   }
 
   $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -100,8 +104,18 @@ try {
     -DontStopIfGoingOnBatteries `
     -StartWhenAvailable `
     -MultipleInstances IgnoreNew
-  Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal `
-    -Settings $settings -Description 'Mullion (per-user; started at logon by scripts/windows-launcher.mjs)' | Out-Null
+  try {
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal `
+      -Settings $settings -Description 'Mullion (per-user; started at logon by scripts/windows-launcher.mjs)' -Force | Out-Null
+  } catch {
+    if ($wasRunning) {
+      # -Force replaces only on success, so the old definition is intact: bring
+      # the agent back rather than leave it stopped.
+      Start-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+      Fail "$($_.Exception.Message) -- the previous task definition is unchanged, and was started again"
+    }
+    throw
+  }
   Write-Output "registered task $TaskName for $user"
 
   if ($Start) {

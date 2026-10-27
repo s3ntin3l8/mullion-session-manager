@@ -137,6 +137,21 @@ describeOnWindows("deploy/windows/register-task.ps1", () => {
     expect(await taskXml(name)).not.toBeNull();
   }, 90_000);
 
+  it("replaces the DEFINITION in place — what the updater relies on to move the task onto a new release", async () => {
+    // The first registration points at one launcher; the second, at another.
+    // Afterwards only the second is there (not both, and not a leftover of the
+    // first), and the task never had to be removed to get there.
+    const first = fixture();
+    const second = fixture();
+    expect((await register(first)).code).toBe(0);
+    const again = await register(second);
+    expect(again.code, again.stderr).toBe(0);
+    const xml = (await taskXml(name))!;
+    expect(xml).toContain(fs.realpathSync.native(second.launcher));
+    expect(xml).not.toContain(fs.realpathSync.native(first.launcher));
+    expect((xml.match(/<Exec>/g) ?? []).length).toBe(1);
+  }, 90_000);
+
   it.runIf(canStartTask)(
     "starts the task, passing the launcher the install root and the task name",
     async () => {

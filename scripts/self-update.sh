@@ -44,6 +44,12 @@ set -euo pipefail
 # this script (see the build-tarball job in
 # .github/workflows/release-please.yml), so it is always right here.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Where this script physically lives (junctions and symlinks resolved), taken
+# NOW, before `current` moves: SCRIPT_DIR is reached through `current`, so once
+# it is flipped SCRIPT_DIR points into the NEW release. This is the release the
+# running updater belongs to.
+RUNNING_SCRIPTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+RUNNING_RELEASE="$(dirname "$RUNNING_SCRIPTS_DIR")"
 # shellcheck source=scripts/portable.sh
 . "$SCRIPT_DIR/portable.sh"
 
@@ -187,12 +193,14 @@ fail() {
 # dropped: one inherited from PowerShell 7 points Windows PowerShell 5.1 at
 # modules it cannot load, and the ScheduledTasks module is one of them. The
 # script is the NEW release's copy when it has one — its logic is the newest —
-# and this running release's otherwise.
+# and the copy in the release this updater is running from otherwise (its
+# physical directory, RUNNING_SCRIPTS_DIR: SCRIPT_DIR would, after the flip,
+# point into the new release).
 windows_ps_script() {
   local name="$1"
   shift
   local script="$RELEASE_DIR/deploy/windows/$name"
-  [ -f "$script" ] || script="$SCRIPT_DIR/../deploy/windows/$name"
+  [ -f "$script" ] || script="$RUNNING_SCRIPTS_DIR/../deploy/windows/$name"
   [ -f "$script" ] || return 127
   env -u PSModulePath powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass \
     -File "$(cygpath -w "$script")" "$@"
@@ -223,7 +231,8 @@ windows_restart_task() {
     -NodePath "$(cygpath -w "$NODE_EXEC_PATH")" \
     -LauncherPath "$(cygpath -w "$CURRENT_LINK/scripts/windows-launcher.mjs")" \
     -MullionHome "$(cygpath -w "$MULLION_HOME")" \
-    -Start || fail "could not re-register and start the scheduled task $task"
+    -Start ||
+    fail "could not re-register and start the scheduled task $task — the agent may be stopped: start it with 'schtasks /Run /TN $task', or re-run the installer ($RELEASE_DIR is current)"
 }
 
 # --- downloading ---
@@ -320,7 +329,8 @@ write_status "restarting"
 # `current`, so it does not notice.
 remove_dir_link "$MULLION_HOME/current.tmp"
 make_dir_link "$RELEASE_DIR" "$MULLION_HOME/current.tmp"
-replace_symlink "$MULLION_HOME/current.tmp" "$CURRENT_LINK"
+replace_symlink "$MULLION_HOME/current.tmp" "$CURRENT_LINK" ||
+  fail "could not move current to the new release — it is unchanged"
 # Phase 4 (#134, PR7) — (re)links ~/.local/bin/mullion here too, not just in
 # install.sh: every host already provisioned before this CLI existed ran
 # install.sh long before this step existed and only ever updates via THIS
@@ -413,7 +423,11 @@ if [ "$SKIP_PRUNE" = false ] && [ "$TOTAL" -gt "$KEEP_COUNT" ]; then
       break
     fi
     candidate="$RELEASES_DIR/$release_name"
-    if [ "$(native_path "$candidate")" != "$KEEP_DIR" ]; then
+    # Never what `current` points at, and on Windows never the release this
+    # updater is itself running from either (deleting a script under a running
+    # bash is not something to try). Compared case-insensitively there.
+    if ! same_native_path "$candidate" "$KEEP_DIR" &&
+      ! { is_windows && same_native_path "$candidate" "$RUNNING_RELEASE"; }; then
       if printf '%s\n' "$IN_USE_RELEASES" | grep -qxF "$release_name"; then
         echo "keeping release $release_name: a running process still uses it" >&2
       elif is_windows; then

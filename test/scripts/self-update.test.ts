@@ -345,12 +345,43 @@ exit 0
       await update({ files: { "scripts/windows-launcher.mjs": "// launcher\n" } });
       const register = readLog("powershell.log").filter((l) => l.includes("register-task.ps1"));
       expect(register).toHaveLength(1);
-      // $SCRIPT_DIR/../deploy/windows — this checkout's own copy, spelled the
-      // way the script builds it (path.join would collapse the `..`).
+      // $RUNNING_SCRIPTS_DIR/../deploy/windows — the copy in the release the
+      // updater runs from, by its PHYSICAL directory (SCRIPT_DIR, reached
+      // through `current`, would point into the new release after the flip),
+      // spelled the way the script builds it (path.join would collapse the `..`).
       expect(register[0]).toContain(
-        `${path.dirname(SELF_UPDATE_SCRIPT)}/../deploy/windows/register-task.ps1`,
+        `${fs.realpathSync(path.dirname(SELF_UPDATE_SCRIPT))}/../deploy/windows/register-task.ps1`,
       );
       expect(register[0]).not.toContain(path.join("releases", "9.9.9", "deploy"));
+    });
+
+    it("puts the old current back, and fails, when the new link cannot be moved into place", async () => {
+      // A virus scanner or an indexer holding current.tmp makes the move fail
+      // AFTER the old link has been removed. `current` must not be left missing
+      // (the next logon's task would point at a launcher that is not there),
+      // and the update must say it failed rather than die under `set -e`.
+      registerTask();
+      const running = path.join(mullionHome, "releases", "1.0.0");
+      fs.mkdirSync(running, { recursive: true });
+      fs.symlinkSync(running, path.join(mullionHome, "current"));
+      writeShim(
+        binDir,
+        "mv",
+        `#!/usr/bin/env bash
+case "$*" in
+  *current.tmp*) echo "mv: cannot move: Device or resource busy" >&2; exit 1 ;;
+esac
+exec /bin/mv "$@"
+`,
+      );
+      await expect(update()).rejects.toThrow();
+      expect(readStatus()).toMatchObject({ phase: "failed" });
+      expect(readStatus().error).toMatch(
+        /could not move current to the new release — it is unchanged/,
+      );
+      expect(fs.realpathSync(path.join(mullionHome, "current"))).toBe(fs.realpathSync(running));
+      // Nothing was restarted onto a release `current` does not point at.
+      expect(readLog("powershell.log").filter((l) => l.includes("register-task"))).toEqual([]);
     });
 
     it("refuses a release without the Windows launcher, before current moves", async () => {
