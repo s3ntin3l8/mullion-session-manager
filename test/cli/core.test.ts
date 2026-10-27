@@ -2102,6 +2102,38 @@ describe("runCommand", () => {
         });
       });
 
+      it("session spawn-child sends --project as `project` (#2110)", async () => {
+        const request = vi.fn(async () => ({ id: 5 }));
+        const code = await runCommand(
+          ["session", "spawn-child", "--command", "claude", "--parent", "3", "--project", "runway"],
+          { client: fakeClient({ request }), io: fakeIo() },
+        );
+        expect(code).toBe(0);
+        expect(request).toHaveBeenCalledWith("sessions.spawn_child", {
+          command: "claude",
+          parentSessionId: "3",
+          project: "runway",
+        });
+      });
+
+      it("project targets asks projects.spawn_targets for the named or current session (#2110)", async () => {
+        const request = vi.fn(async () => ({ ok: true, result: [] }));
+        await runCommand(["project", "targets", "7"], {
+          client: fakeClient({ request }),
+          io: fakeIo(),
+        });
+        expect(request).toHaveBeenLastCalledWith("projects.spawn_targets", {
+          parentSessionId: "7",
+        });
+        await runCommand(["--session", "12", "project", "targets"], {
+          client: fakeClient({ request }),
+          io: fakeIo(),
+        });
+        expect(request).toHaveBeenLastCalledWith("projects.spawn_targets", {
+          parentSessionId: "12",
+        });
+      });
+
       it("session spawn-child sends --open and rejects other values (#1624)", async () => {
         const request = vi.fn(async () => ({ id: 5 }));
         const code = await runCommand(

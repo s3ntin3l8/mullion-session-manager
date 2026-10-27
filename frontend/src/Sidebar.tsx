@@ -1375,6 +1375,7 @@ function ProjectHeader({
               initialDefaultReviewAgent={project.defaultReviewAgent}
               initialMergeOnApprove={project.mergeOnApprove}
               initialAutoApprove={project.autoApprove}
+              initialAllowCrossProjectSpawn={project.allowCrossProjectSpawn}
               initialMaxAutoReturnRounds={project.maxAutoReturnRounds}
               initialConventionalCommitTitles={project.conventionalCommitTitles}
               initialAutoTagRelease={project.autoTagRelease}
@@ -1395,6 +1396,7 @@ function ProjectHeader({
                 defaultReviewAgent,
                 mergeOnApprove,
                 autoApprove,
+                allowCrossProjectSpawn,
                 maxAutoReturnRounds,
                 conventionalCommitTitles,
                 autoTagRelease,
@@ -1411,6 +1413,7 @@ function ProjectHeader({
                   defaultReviewAgent,
                   mergeOnApprove,
                   autoApprove,
+                  allowCrossProjectSpawn,
                   maxAutoReturnRounds,
                   conventionalCommitTitles,
                   autoTagRelease,

@@ -1239,7 +1239,8 @@ async function createSessionRecordInner(
 // Phase 5 (Track B, issue #193 5.3b) — validated here, not just in the
 // sessions.spawn_child socket op, so a direct full-scope POST /api/sessions
 // call carrying parentSessionId is bound by the exact same rules (same
-// project, one level of nesting only, a live-child cap). One level of
+// project unless the parent's project is a coordinator — #2110 — one level of
+// nesting only, a live-child cap). One level of
 // nesting: rejecting a parent that is ITSELF a child means a child can
 // never itself become a parent, so cascade-kill (killSession, below)
 // never needs to recurse past one level.
@@ -1254,7 +1255,18 @@ function validateParent(
     .where(eq(sessions.id, params.parentSessionId))
     .all();
   if (!parentRow) return fail("unknown-parent");
-  if (parentRow.projectId !== params.projectId) return fail("parent-wrong-project");
+  if (parentRow.projectId !== params.projectId) {
+    // Issue #2110 — a child normally lives in its parent's project. The one
+    // exception is an operator's explicit opt-in: a parent whose project is a
+    // "coordinator" (projects.allowCrossProjectSpawn) may have a child in
+    // another project. Checked HERE, not just in the socket op, so a direct
+    // full-scope POST /api/sessions is bound by the same rule.
+    const [parentProject] =
+      parentRow.projectId === null
+        ? []
+        : app.db.select().from(projects).where(eq(projects.id, parentRow.projectId)).all();
+    if (parentProject?.allowCrossProjectSpawn !== true) return fail("parent-wrong-project");
+  }
   if (parentRow.parentSessionId !== null) return fail("parent-is-child");
   return { ok: true, parentId: params.parentSessionId };
 }

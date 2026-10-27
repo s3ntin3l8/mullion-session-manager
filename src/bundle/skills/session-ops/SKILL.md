@@ -13,12 +13,21 @@ unset, you're not inside a Mullion-hosted session and none of this applies.
 `spawn_child_session` (MCP) / `mullion session spawn-child --command <cmd>`
 (CLI) is reachable at session scope — it spawns a real child session (its
 own PTY, own terminal) of the session you're running inside, in the same
-project. You never need to name a project or your own session id; both are
-derived automatically. A hard cap on live children applies (ask a human to
+project by default. You never need to name your own session id, and normally
+not a project either; both are derived automatically. A hard cap on live children applies (ask a human to
 raise `settings.sessions.maxChildSessionsPerParent` if you hit it); `cwd`,
 if overridden, must stay inside the project directory or be another registered
 git worktree of the project's repo (`git worktree list`, e.g. a sibling
 `repo-pr408` checkout); any other outside path is rejected.
+
+To spawn in a **different project**, your own project has to be a coordinator
+(a human turns on "This project coordinates" in Edit project; it is off by
+default). Then `mullion project targets` (MCP `list_spawn_targets`) lists the
+projects you may name, and `--project <id|name>` (MCP `project`) spawns the
+child there. `cwd`, `isolate` and `host`/`platform` then refer to that project
+and its checkouts, the child still counts as your child (`session children`,
+`wait`, `prompt`, `kill`), and your unattended posture still caps the child's.
+Without the coordinator setting you get a 403 that names it.
 To run the child on a **different machine** — e.g. a Mac for Xcode/iOS work or a
 macOS-only spike — pass `host: "<hostId>"` or `platform: "darwin"` (CLI
 `--host`/`--platform`) and usually `isolate: true` (`--isolate`): the child

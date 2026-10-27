@@ -55,6 +55,7 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "list_sessions",
       "start_dock_session",
       "spawn_child_session",
+      "list_spawn_targets",
       "list_child_sessions",
       "wait_for_session",
       "wait_for_output",
@@ -208,6 +209,25 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
       skipPermissions: true,
     });
     expect(JSON.parse(text)).toEqual({ id: 7, parentSessionId: 3 });
+  });
+
+  // Issue #2110 — name another project (a coordinator's session only; the
+  // server enforces that, the tool just forwards).
+  it("spawn_child_session forwards `project` (#2110)", async () => {
+    const tool = TOOLS.find((t) => t.name === "spawn_child_session")!;
+    const spawnChildSession = vi.fn().mockResolvedValue({ id: 7 });
+    await tool.handler({ command: "claude", project: "runway" }, { spawnChildSession });
+    expect(spawnChildSession).toHaveBeenCalledWith(expect.objectContaining({ project: "runway" }));
+  });
+
+  it("list_spawn_targets calls client.listSpawnTargets, defaulting to the calling session (#2110)", async () => {
+    const tool = TOOLS.find((t) => t.name === "list_spawn_targets")!;
+    const listSpawnTargets = vi.fn().mockResolvedValue({ ok: true, result: [{ id: 2 }] });
+    const text = await tool.handler({}, { listSpawnTargets });
+    expect(listSpawnTargets).toHaveBeenCalledWith(undefined);
+    expect(JSON.parse(text)).toEqual({ ok: true, result: [{ id: 2 }] });
+    await tool.handler({ sessionId: "9" }, { listSpawnTargets });
+    expect(listSpawnTargets).toHaveBeenLastCalledWith("9");
   });
 
   // Issue #1951 — aim the child at a host/platform, in its own worktree.

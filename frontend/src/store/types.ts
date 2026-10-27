@@ -112,6 +112,7 @@ export interface ProjectsSlice {
         | "defaultReviewAgent"
         | "mergeOnApprove"
         | "autoApprove"
+        | "allowCrossProjectSpawn"
         | "maxAutoReturnRounds"
         | "conventionalCommitTitles"
         | "autoTagRelease"

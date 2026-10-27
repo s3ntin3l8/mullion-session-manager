@@ -301,6 +301,13 @@ reason on the session row (`worktreeKeptReason`) and retried every half hour,
 so telling the child to commit and push `-u` before it finishes is all it takes.
 See [Isolated session worktrees](disk-cleanup.md#isolated-session-worktrees).
 
+**Across projects** (#2110). A coordinator project's sessions can aim the child at a
+_different project_ with `--project <id|name>` (**Edit project → This project coordinates**,
+off by default). `--host`/`--platform`, `--isolate` and the worktree then follow the
+**target** project: only hosts in _its_ `hostCwds` are candidates, and the worktree is cut
+from _its_ checkout on the chosen host. So a coordinator in one project can hand
+macOS-only work in another project to the Mac, provided that project has a path there.
+
 **No folder-trust stop for an unattended Claude child** (#2091). Claude Code
 asks "Do you trust this folder?" the first time it opens a directory, and
 `--dangerously-skip-permissions` does not cover that question, so a fresh

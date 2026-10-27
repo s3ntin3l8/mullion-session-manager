@@ -38,6 +38,7 @@ const PROJECT_1: Project = {
   defaultReviewAgent: null,
   mergeOnApprove: null,
   autoApprove: null,
+  allowCrossProjectSpawn: null,
   maxAutoReturnRounds: null,
   conventionalCommitTitles: null,
   autoTagRelease: null,

@@ -229,7 +229,9 @@ const spawnChildSession = {
   name: "spawn_child_session",
   description:
     "Spawn a real child session (its own terminal, own PTY) of the calling session, in the " +
-    "same project. Unlike start_dock_session/stop_dock_session, this works from inside a " +
+    "same project by default — or in another project with 'project', when the calling " +
+    "session's project is a coordinator (list_spawn_targets). Unlike " +
+    "start_dock_session/stop_dock_session, this works from inside a " +
     "normal agent session (session scope) — it does not require full scope. A hard cap on " +
     "live children per parent applies (settings.sessions.maxChildSessionsPerParent).",
   inputSchema: {
@@ -245,6 +247,17 @@ const spawnChildSession = {
           "fail to launch if you append prompt text here.",
       },
       name: { type: "string", description: "Optional cosmetic label for the new session." },
+      project: {
+        type: "string",
+        description:
+          "Spawn the child in this OTHER project (a project id, or an exact project name) " +
+          "instead of the calling session's own. Refused (403) unless the calling session's " +
+          "project is a coordinator ('This project coordinates' in Edit project); an unknown " +
+          "name is a 404 and a name shared by several projects a 409 (pass the id). " +
+          "'cwd', 'isolate', 'host' and 'platform' then refer to THAT project (its directory, " +
+          "its checkouts on other hosts). The child is still your child: children, wait, " +
+          "prompt and kill work on it as for any other.",
+      },
       cwd: {
         type: "string",
         description:
@@ -361,6 +374,7 @@ const spawnChildSession = {
     const result = await client.spawnChildSession({
       command: args?.command,
       name: args?.name,
+      project: args?.project,
       cwd: args?.cwd,
       host: args?.host,
       platform: args?.platform,
@@ -373,6 +387,33 @@ const spawnChildSession = {
       smallModel: args?.smallModel,
       open: args?.open,
     });
+    return JSON.stringify(result);
+  },
+};
+
+// Issue #2110 — the discovery half of a cross-project spawn: a coordinator
+// cannot call list_projects (full scope only), so this returns just the
+// projects it may name in spawn_child_session's 'project'.
+const listSpawnTargets = {
+  name: "list_spawn_targets",
+  description:
+    "List the other projects this session may spawn a child in (id, name, host). Only " +
+    "available when the calling session's project is a coordinator ('This project " +
+    "coordinates' in Edit project) — otherwise it is refused (403). Pass an id or name " +
+    "from here as spawn_child_session's 'project'.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      sessionId: {
+        type: "string",
+        description:
+          "Session whose project's targets to list. Defaults to the calling session — " +
+          "normally leave this unset.",
+      },
+    },
+  },
+  async handler(args, client) {
+    const result = await client.listSpawnTargets(args?.sessionId);
     return JSON.stringify(result);
   },
 };
@@ -1214,6 +1255,7 @@ export const TOOLS = [
   listSessions,
   startDockSession,
   spawnChildSession,
+  listSpawnTargets,
   listChildSessions,
   waitForSession,
   waitForOutput,

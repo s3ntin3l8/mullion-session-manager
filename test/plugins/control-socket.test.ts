@@ -2156,10 +2156,332 @@ describe("controlSocketPlugin (issue #185)", () => {
         expect(reply.ok).toBe(true);
         const projectId = (reply.result as { projectId: number }).projectId;
         expect(logInfoSpy).toHaveBeenCalledWith(
-          { parentSessionId: String(parentId), projectId, scope: "session" },
+          { parentSessionId: String(parentId), projectId, crossProject: false, scope: "session" },
           "sessions.spawn_child",
         );
         socket.destroy();
+      });
+    });
+
+    // Issue #2110 — a coordinator project's sessions may spawn children in
+    // OTHER projects. The permission is the parent's project's
+    // allowCrossProjectSpawn flag (default off); `project` only names the target.
+    describe("sessions.spawn_child across projects (#2110)", () => {
+      const authHeaders = { authorization: `Bearer ${TEST_TOKEN}` };
+
+      async function parentProjectId(parentId: number): Promise<number> {
+        const res = await app!.inject({
+          method: "GET",
+          url: `/api/sessions/${parentId}`,
+          headers: authHeaders,
+        });
+        return (res.json() as { projectId: number }).projectId;
+      }
+
+      async function makeProject(name: string): Promise<number> {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "xproj-"));
+        const res = await app!.inject({
+          method: "POST",
+          url: "/api/projects",
+          headers: authHeaders,
+          payload: { name, cwd: dir },
+        });
+        expect(res.statusCode).toBe(201);
+        return (res.json() as { id: number }).id;
+      }
+
+      async function setCoordinator(projectId: number, on: boolean): Promise<void> {
+        const res = await app!.inject({
+          method: "PATCH",
+          url: `/api/projects/${projectId}`,
+          headers: authHeaders,
+          payload: { allowCrossProjectSpawn: on },
+        });
+        expect(res.statusCode).toBe(200);
+      }
+
+      async function spawn(hookToken: string, body: Record<string, unknown>) {
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "sessions.spawn_child", body: { command: "bash", ...body } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        socket.destroy();
+        return reply;
+      }
+
+      it("refuses naming another project while the parent's project is not a coordinator", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const other = await makeProject("other");
+        const injectSpy = vi.spyOn(app, "inject");
+
+        const reply = await spawn(hookToken, { project: other });
+
+        expect(reply.ok).toBe(false);
+        expect(reply.status).toBe(403);
+        expect(String(reply.error)).toMatch(/This project coordinates/);
+        // Nothing reached POST /api/sessions.
+        expect(
+          injectedOptions(injectSpy).filter(
+            (o) => o.method === "POST" && o.url === "/api/sessions",
+          ),
+        ).toEqual([]);
+      });
+
+      it("spawns in the named project (by id) once the parent's project is a coordinator", async () => {
+        app = await buildApp();
+        await app.ready();
+        const logInfoSpy = vi.spyOn(app.log, "info");
+        const { sessionId: parentId, hookToken } = await createRealSession();
+        const other = await makeProject("other");
+        await setCoordinator(await parentProjectId(parentId), true);
+
+        const reply = await spawn(hookToken, { project: other });
+
+        expect(reply.ok).toBe(true);
+        expect(reply.status).toBe(201);
+        expect(reply.result).toMatchObject({ projectId: other, parentSessionId: parentId });
+        expect(logInfoSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ projectId: other, crossProject: true, scope: "session" }),
+          "sessions.spawn_child",
+        );
+      });
+
+      it("accepts an id spelled as a string, and an exact project name", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId, hookToken } = await createRealSession();
+        const other = await makeProject("runway-byname");
+        await setCoordinator(await parentProjectId(parentId), true);
+
+        const byString = await spawn(hookToken, { project: String(other) });
+        const byName = await spawn(hookToken, { project: "runway-byname" });
+
+        expect((byString.result as { projectId: number }).projectId).toBe(other);
+        expect((byName.result as { projectId: number }).projectId).toBe(other);
+      });
+
+      it("404s an unknown id or name, and 409s a name shared by several projects", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId, hookToken } = await createRealSession();
+        const first = await makeProject("twin");
+        const second = await makeProject("twin");
+        await setCoordinator(await parentProjectId(parentId), true);
+
+        expect((await spawn(hookToken, { project: 999_999 })).status).toBe(404);
+        expect((await spawn(hookToken, { project: "nope" })).status).toBe(404);
+        const ambiguous = await spawn(hookToken, { project: "twin" });
+        expect(ambiguous.status).toBe(409);
+        expect(String(ambiguous.error)).toContain(`${first}`);
+        expect(String(ambiguous.error)).toContain(`${second}`);
+        // A blank or non-string/number value is a 400, not a guess.
+        expect((await spawn(hookToken, { project: " " })).status).toBe(400);
+        expect((await spawn(hookToken, { project: { id: 1 } })).status).toBe(400);
+      });
+
+      it("a non-coordinator gets the SAME 403 whether or not the named project exists (no probing)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const existing = await makeProject("exists");
+        await makeProject("twin-a");
+        await makeProject("twin-a");
+
+        const replies = [
+          await spawn(hookToken, { project: existing }),
+          await spawn(hookToken, { project: 999_999 }),
+          await spawn(hookToken, { project: "exists" }),
+          await spawn(hookToken, { project: "no-such-project" }),
+          await spawn(hookToken, { project: "twin-a" }),
+        ];
+
+        for (const reply of replies) {
+          expect(reply.status).toBe(403);
+          expect(reply.error).toBe(replies[0].error);
+        }
+      });
+
+      it("cwd containment follows the TARGET project, not the coordinator's", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId, hookToken } = await createRealSession();
+        const other = await makeProject("cwd-target");
+        await setCoordinator(await parentProjectId(parentId), true);
+        const targetDir = (
+          await app.inject({ method: "GET", url: `/api/projects/${other}`, headers: authHeaders })
+        ).json() as { cwd: string };
+
+        const inside = await spawn(hookToken, { project: other, cwd: targetDir.cwd });
+        // "/tmp" is the COORDINATOR's directory, which is outside the target's.
+        const outside = await spawn(hookToken, { project: other, cwd: "/tmp" });
+
+        expect(inside.status).toBe(201);
+        expect((inside.result as { projectId: number }).projectId).toBe(other);
+        expect(outside.status).toBe(400);
+      });
+
+      it("the coordinator still lists, and can kill, its cross-project child", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId, hookToken } = await createRealSession();
+        const other = await makeProject("kid-project");
+        await setCoordinator(await parentProjectId(parentId), true);
+        const child = (await spawn(hookToken, { project: other })).result as { id: number };
+
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "sessions.children", body: {} })}\n`);
+        const listed = await waitForReply(socket);
+        socket.write(
+          `${JSON.stringify({ id: 2, op: "sessions.kill", body: { sessionId: String(child.id) } })}\n`,
+        );
+        const killed = await waitForReply(socket);
+        socket.destroy();
+
+        expect(listed.ok).toBe(true);
+        expect(
+          (listed.result as Array<{ id: number; projectId: number }>).map((c) => c.id),
+        ).toContain(child.id);
+        expect(killed.ok).toBe(true);
+      });
+
+      it("naming the parent's OWN project needs no permission", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId, hookToken } = await createRealSession();
+        const own = await parentProjectId(parentId);
+
+        const reply = await spawn(hookToken, { project: own });
+        const byString = await spawn(hookToken, { project: String(own) });
+
+        expect(reply.ok).toBe(true);
+        expect((reply.result as { projectId: number }).projectId).toBe(own);
+        expect((byString.result as { projectId: number }).projectId).toBe(own);
+      });
+
+      it("still ignores a raw projectId, even for a coordinator", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId, hookToken } = await createRealSession();
+        const other = await makeProject("other");
+        const own = await parentProjectId(parentId);
+        await setCoordinator(own, true);
+
+        const reply = await spawn(hookToken, { projectId: other });
+
+        expect((reply.result as { projectId: number }).projectId).toBe(own);
+      });
+
+      it("keeps the skipPermissions cap: a prompting coordinator cannot produce an unattended child", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId, hookToken } = await createRealSession({
+          skipPermissions: false,
+        });
+        const other = await makeProject("other");
+        await setCoordinator(await parentProjectId(parentId), true);
+
+        const reply = await spawn(hookToken, { project: other, skipPermissions: true });
+
+        expect(reply.ok).toBe(true);
+        expect((reply.result as { skipPermissions: boolean }).skipPermissions).toBe(false);
+      });
+
+      it("full scope: `project` is resolved the same way, and the lifecycle rule still applies", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId } = await createRealSession();
+        const other = await makeProject("other");
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.spawn_child",
+            body: { command: "bash", parentSessionId: String(parentId), project: other },
+          })}\n`,
+        );
+
+        const reply = await waitForReply(socket);
+        socket.destroy();
+
+        // Full scope has no special pass: the parent's project must coordinate.
+        expect(reply.status).toBe(403);
+      });
+    });
+
+    describe("projects.spawn_targets (#2110)", () => {
+      const authHeaders = { authorization: `Bearer ${TEST_TOKEN}` };
+
+      async function ownProject(sessionId: number): Promise<number> {
+        const res = await app!.inject({
+          method: "GET",
+          url: `/api/sessions/${sessionId}`,
+          headers: authHeaders,
+        });
+        return (res.json() as { projectId: number }).projectId;
+      }
+
+      async function targets(hookToken: string) {
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "projects.spawn_targets" })}\n`);
+        const reply = await waitForReply(socket);
+        socket.destroy();
+        return reply;
+      }
+
+      it("refuses a session whose project is not a coordinator", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+
+        const reply = await targets(hookToken);
+
+        expect(reply.ok).toBe(false);
+        expect(reply.status).toBe(403);
+      });
+
+      it("lists the OTHER projects for a coordinator's session, never its own", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId, hookToken } = await createRealSession();
+        const own = await ownProject(sessionId);
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), "xproj-"));
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          headers: authHeaders,
+          payload: { name: "runway-targets", cwd: dir },
+        });
+        const otherId = (created.json() as { id: number }).id;
+        await app.inject({
+          method: "PATCH",
+          url: `/api/projects/${own}`,
+          headers: authHeaders,
+          payload: { allowCrossProjectSpawn: true },
+        });
+
+        const reply = await targets(hookToken);
+
+        expect(reply.ok).toBe(true);
+        // (The DB is shared across this file's tests, so assert on the entries
+        // that matter rather than the whole list.)
+        const list = reply.result as Array<{ id: number; name: string; hostId: string }>;
+        expect(list).toContainEqual({ id: otherId, name: "runway-targets", hostId: "local" });
+        expect(list.some((p) => p.id === own)).toBe(false);
+      });
+
+      it("full scope must name the session (no implicit self)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        socket.write(`${JSON.stringify({ id: 1, op: "projects.spawn_targets" })}\n`);
+
+        const reply = await waitForReply(socket);
+        socket.destroy();
+
+        expect(reply.status).toBe(400);
       });
     });
 

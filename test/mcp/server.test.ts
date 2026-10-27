@@ -150,6 +150,7 @@ describe("mcp/server.mjs (issue #271)", () => {
       "list_sessions",
       "start_dock_session",
       "spawn_child_session",
+      "list_spawn_targets",
       "list_child_sessions",
       "wait_for_session",
       "wait_for_output",

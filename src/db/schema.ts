@@ -281,6 +281,15 @@ export const projects = sqliteTable("projects", {
   // "reviewing" task on its own once its review agent's last verdict is
   // approving (approved or approved-with-suggestions) AND CI on the PR head is green — see tasks.lastReviewVerdict.
   autoApprove: integer("auto_approve", { mode: "boolean" }),
+  // Issue #2110 — "coordinator" project. When on, this project's sessions may
+  // spawn child sessions in OTHER projects (`spawn_child_session` with a
+  // `project`). Per-project only and default-off (null/false), for the same
+  // reason as mergeOnApprove above: it is the operator's explicit opt-in,
+  // the way mapping a host under `hostCwds` is the opt-in for host targeting.
+  // Every subprocess of a session inherits its token, so without this gate
+  // one compromised or confused session could launch (unattended, with
+  // `skipPermissions` inherited) agents in every registered repo.
+  allowCrossProjectSpawn: integer("allow_cross_project_spawn", { mode: "boolean" }),
   // #772's roadmap follow-up — the per-project override of how many
   // automatic "reviewing -> in_progress" rounds a task may spend across its
   // lifecycle (tasks.autoReturnRounds/lastAutoReturnReason). Null means

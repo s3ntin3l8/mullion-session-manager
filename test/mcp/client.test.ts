@@ -546,6 +546,41 @@ describe("MullionClient (issue #271)", () => {
       });
     });
 
+    // Issue #2110 — `project` goes over the wire as `project` (the socket op
+    // resolves it), never as `projectId`, which the op deliberately ignores.
+    it("spawnChildSession sends `project` as `project` (#2110)", async () => {
+      const socketPath = await startControlServer((msg, socket) => {
+        expect(msg.op).toBe("sessions.spawn_child");
+        expect(msg.body).toEqual({ command: "claude", project: "runway" });
+        socket.write(`${JSON.stringify({ id: msg.id, ok: true, status: 201 })}\n`);
+      });
+      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      await client.spawnChildSession({ command: "claude", project: "runway" });
+    });
+
+    it("listSpawnTargets names an explicit session as parentSessionId, and falls back to its own", async () => {
+      const bodies: unknown[] = [];
+      const socketPath = await startControlServer((msg, socket) => {
+        expect(msg.op).toBe("projects.spawn_targets");
+        bodies.push(msg.body);
+        const missing = Object.keys(msg.body as object).length === 0;
+        socket.write(
+          `${JSON.stringify(
+            missing
+              ? { id: msg.id, ok: false, status: 400, error: "'parentSessionId' is required" }
+              : { id: msg.id, ok: true, status: 200, result: [{ id: 2 }] },
+          )}\n`,
+        );
+      });
+      const client = new MullionClient({
+        MULLION_SOCKET_PATH: socketPath,
+        MULLION_SESSION_ID: "42",
+      });
+      expect(await client.listSpawnTargets("9")).toEqual([{ id: 2 }]);
+      expect(await client.listSpawnTargets()).toEqual([{ id: 2 }]);
+      expect(bodies).toEqual([{ parentSessionId: "9" }, {}, { parentSessionId: "42" }]);
+    });
+
     // Issue #1951 — `host`/`platform` are the agent-facing names; the wire
     // fields (POST /api/sessions) are `targetHostId`/`targetPlatform`.
     it("spawnChildSession sends host/platform/isolate as targetHostId/targetPlatform/isolate", async () => {
