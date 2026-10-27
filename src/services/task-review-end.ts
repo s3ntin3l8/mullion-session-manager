@@ -10,8 +10,8 @@ import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { tasks, type projects } from "../db/schema.js";
 import { getDiffStats, getDefaultBaseRef } from "./git-diff.js";
+import { resolveCommitSha } from "./git-refs.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
-import { getRemoteHostClient } from "./remote-host-client.js";
 import { resolveTaskWorkerHost } from "./session-live-info.js";
 import { cleanupTaskSessions, cleanupTaskWorktree } from "./task-approve.js";
 import { syncTaskTransition } from "./task-github-sync.js";
@@ -33,32 +33,53 @@ export const CLOSED_WITHOUT_MERGE_REASON = "PR closed without merging";
 
 /**
  * True only when the task's branch is verifiably identical to the repo's
- * default base (zero changed files). Anything unreadable — no worktree, no
- * base ref, an unreachable host, an agent build that omits the base flag — is
- * `false`: "superseded" ends a task as `done`, so it needs positive evidence.
+ * default base (zero changed files). "Superseded" ends a task as `done`, so it
+ * needs positive evidence; anything unreadable is `false`:
+ *  - no worktree/branch, no base ref, or a host the diff cannot be read on;
+ *  - a worktree whose HEAD is not the task branch's tip. A rebase stopped on a
+ *    conflict leaves HEAD detached at the new base, where the diff is empty
+ *    although the worker's commits only survive on the branch ref.
+ * A remote-hosted worktree is not checked (no route reports the branch tip),
+ * so it reads as "not superseded": a closed PR there ends `failed`, the safe
+ * direction.
  */
 export async function branchHasNothingToMerge(
   app: FastifyInstance,
   task: TaskRow,
 ): Promise<boolean> {
-  if (!task.worktreePath) return false;
-  const hostId = resolveTaskWorkerHost(app, task);
+  if (!task.worktreePath || !task.branchName) return false;
+  if (resolveTaskWorkerHost(app, task) !== LOCAL_HOST_ID) return false;
   try {
-    if (hostId === LOCAL_HOST_ID) {
-      const base = getDefaultBaseRef(task.worktreePath);
-      if (base === null) return false;
-      const stats = await getDiffStats(task.worktreePath, base, { fresh: true });
-      return stats !== null && stats.filesChanged === 0;
-    }
-    const { stats, baseResolved } = await getRemoteHostClient(app, hostId).resolveGitDiffStats(
-      task.worktreePath,
-      "AUTO",
-      { fresh: true },
-    );
-    return baseResolved === true && stats !== null && stats.filesChanged === 0;
+    const base = getDefaultBaseRef(task.worktreePath);
+    if (base === null) return false;
+    const [head, tip] = await Promise.all([
+      resolveCommitSha(task.worktreePath, "HEAD"),
+      resolveCommitSha(task.worktreePath, `refs/heads/${task.branchName}`),
+    ]);
+    if (head === null || head !== tip) return false;
+    const stats = await getDiffStats(task.worktreePath, base, { fresh: true });
+    return stats !== null && stats.filesChanged === 0;
   } catch {
     return false;
   }
+}
+
+/**
+ * An auto-rebase window that ended with the branch identical to its base: the
+ * same change landed another way, so nothing is left to review or merge.
+ */
+export async function endIfRebaseEmptied(
+  app: FastifyInstance,
+  task: TaskRow,
+  project: ProjectRow,
+  now: number,
+  staleMs: number,
+): Promise<boolean> {
+  if (task.rebaseStartedAt === null || now - task.rebaseStartedAt.getTime() < staleMs) {
+    return false;
+  }
+  if (!(await branchHasNothingToMerge(app, task))) return false;
+  return endReviewingTask(app, task, project, "superseded");
 }
 
 /**

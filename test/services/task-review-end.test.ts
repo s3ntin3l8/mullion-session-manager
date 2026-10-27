@@ -10,7 +10,7 @@ import { clearGitDiffStatsCacheForTests } from "../../src/services/git-diff.js";
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { tasks, projects } = await import("../../src/db/schema.js");
-const { branchHasNothingToMerge, endReviewingTask, endReviewingOnPrState } =
+const { branchHasNothingToMerge, endIfRebaseEmptied, endReviewingTask, endReviewingOnPrState } =
   await import("../../src/services/task-review-end.js");
 
 function git(cwd: string, args: string[]): string {
@@ -86,11 +86,53 @@ describe("task-review-end (#2103)", () => {
       expect(await branchHasNothingToMerge(app, insertTask())).toBe(false);
     });
 
+    it("is false for a worktree stopped mid-rebase: detached HEAD at the base reads empty but the commits live only on the branch", async () => {
+      fs.writeFileSync(path.join(worktree, "b.txt"), "b\n");
+      git(worktree, ["add", "-A"]);
+      git(worktree, ["commit", "-m", "worker commit", "--no-verify"]);
+      git(worktree, ["checkout", "--detach", "refs/remotes/origin/main"]);
+      clearGitDiffStatsCacheForTests();
+      expect(await branchHasNothingToMerge(app, insertTask())).toBe(false);
+    });
+
     it("is false, never true, when it cannot tell (no worktree, no base ref)", async () => {
       expect(await branchHasNothingToMerge(app, insertTask({ worktreePath: null }))).toBe(false);
       git(worktree, ["update-ref", "-d", "refs/remotes/origin/main"]);
       clearGitDiffStatsCacheForTests();
       expect(await branchHasNothingToMerge(app, insertTask())).toBe(false);
+    });
+  });
+
+  describe("endIfRebaseEmptied", () => {
+    const STALE = 30 * 60_000;
+
+    it("does nothing while the rebase attempt is still inside its window", async () => {
+      const task = insertTask({ rebaseStartedAt: new Date() });
+      expect(await endIfRebaseEmptied(app, task, project, Date.now(), STALE)).toBe(false);
+      expect(reload(task.id).status).toBe("reviewing");
+    });
+
+    it("does nothing for a task with no rebase attempt", async () => {
+      const task = insertTask({ rebaseStartedAt: null });
+      expect(await endIfRebaseEmptied(app, task, project, Date.now(), STALE)).toBe(false);
+    });
+
+    it("ends done (superseded) once the window ended and the branch holds nothing", async () => {
+      const task = insertTask({ rebaseStartedAt: new Date(Date.now() - 2 * STALE) });
+      expect(await endIfRebaseEmptied(app, task, project, Date.now(), STALE)).toBe(true);
+      const row = reload(task.id);
+      expect(row.status).toBe("done");
+      expect(row.rebaseStartedAt).toBeNull();
+    });
+
+    it("leaves a stale attempt alone while the branch still has changes", async () => {
+      fs.writeFileSync(path.join(worktree, "b.txt"), "b\n");
+      git(worktree, ["add", "-A"]);
+      git(worktree, ["commit", "-m", "more", "--no-verify"]);
+      clearGitDiffStatsCacheForTests();
+      const task = insertTask({ rebaseStartedAt: new Date(Date.now() - 2 * STALE) });
+      expect(await endIfRebaseEmptied(app, task, project, Date.now(), STALE)).toBe(false);
+      expect(reload(task.id).status).toBe("reviewing");
     });
   });
 

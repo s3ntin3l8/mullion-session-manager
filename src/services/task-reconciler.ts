@@ -39,11 +39,7 @@ import {
   postReviewFindingsComment,
 } from "./task-github-sync.js";
 import { recordTaskTransition } from "./task-state.js";
-import {
-  branchHasNothingToMerge,
-  endReviewingOnPrState,
-  endReviewingTask,
-} from "./task-review-end.js";
+import { endIfRebaseEmptied, endReviewingOnPrState } from "./task-review-end.js";
 import { HostUnreachableError } from "./remote-host-client.js";
 import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
 import {
@@ -2989,16 +2985,8 @@ async function processReviewingPrState(app: FastifyInstance): Promise<void> {
         reviewingPrStateCheckedAt.delete(task.id);
         continue;
       }
-      // An auto-rebase window that ended with the branch identical to base:
-      // the fix landed another way, nothing is left to review or merge.
-      if (
-        task.rebaseStartedAt !== null &&
-        now - task.rebaseStartedAt.getTime() >= REBASE_ATTEMPT_STALE_MS &&
-        (await branchHasNothingToMerge(app, task))
-      ) {
-        if (await endReviewingTask(app, task, project, "superseded")) {
-          reviewingPrStateCheckedAt.delete(task.id);
-        }
+      if (await endIfRebaseEmptied(app, task, project, now, REBASE_ATTEMPT_STALE_MS)) {
+        reviewingPrStateCheckedAt.delete(task.id);
       }
     } catch (err) {
       app.log.warn(
@@ -3276,6 +3264,17 @@ async function attemptAutoApprove(
   // #2103 — a PR that was merged or closed is the end of this task; without
   // this the sweep polled it forever (and kept resetting its own backoff).
   if (current && (await endReviewingFromPr(app, task, project, current))) return;
+  // The branch a rebase emptied (the change landed on the base another way)
+  // keeps an OPEN PR with nothing in it; this is where autoApprove projects,
+  // the only ones that auto-rebase, notice it once the window has ended.
+  if (
+    current &&
+    (await endIfRebaseEmptied(app, task, project, Date.now(), REBASE_ATTEMPT_STALE_MS))
+  ) {
+    autoApproveRetryState.delete(task.id);
+    mergeRetryState.delete(task.id);
+    return;
+  }
 
   if (current && (await attemptReturnRedCiToWorker(app, task, project, current))) return;
   if (await attemptReturnPrCommentsToWorker(app, task, project)) return;
