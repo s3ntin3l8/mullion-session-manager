@@ -374,3 +374,4 @@ jobs:
           test/scripts/windows-register-task.test.ts
           test/scripts/windows-releases-in-use.test.ts
           test/scripts/self-update-windows.test.ts
+          test/services/update-apply-windows.test.ts

@@ -251,6 +251,29 @@ export async function spawnSelfUpdate(
  * is for a session — because self-update.sh is a bash script, and its output
  * goes to logs/update-<version>.log: a detached process has no console.
  */
+/**
+ * Opens the log the Windows updater's stdout and stderr go to, and returns the
+ * descriptor to hand to spawn.
+ *
+ * NOT an append-mode handle (`"a"`). Git Bash writes NOTHING through one — a
+ * handle that grants only append access: measured, a plain `echo` to such a
+ * handle vanishes, silently, and a script running under `set -e` (as
+ * self-update.sh does) simply ends on its first write, leaving the status
+ * stuck at "downloading" and the log empty. A handle opened for writing works.
+ * So the file is opened for writing, and a log an earlier attempt at the same
+ * version left behind is kept as `<log>.1` instead of being appended to.
+ */
+export function openUpdateLog(logPath: string): number {
+  fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  try {
+    fs.renameSync(logPath, `${logPath}.1`);
+  } catch {
+    // No earlier log (the usual case), or one that cannot be moved: either way
+    // the open below still gives this attempt a log.
+  }
+  return fs.openSync(logPath, "w");
+}
+
 function launchWindowsUpdater(
   app: FastifyInstance,
   mullionHome: string,
@@ -268,8 +291,7 @@ function launchWindowsUpdater(
   const logPath = path.join(mullionHome, "logs", `update-${version}.log`);
   let logFd: number;
   try {
-    fs.mkdirSync(path.dirname(logPath), { recursive: true });
-    logFd = fs.openSync(logPath, "a");
+    logFd = openUpdateLog(logPath);
   } catch (err) {
     const message = `could not open the update log at ${logPath}: ${err instanceof Error ? err.message : String(err)}`;
     app.log.error({ err, logPath }, "failed to prepare the Windows update");
