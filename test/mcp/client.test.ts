@@ -631,8 +631,8 @@ describe("MullionClient (issue #271)", () => {
         const client = new MullionClient({ MULLION_SOCKET_PATH: "/nonexistent.sock" });
         const spy = vi.spyOn(client, "controlRequest").mockResolvedValue({ ok: true, prUrl: "u" });
         expect(await client.pushTaskBranch()).toEqual({ ok: true, prUrl: "u" });
-        // 120s git timeout + 30s lease pre-fetch server-side: the client must outwait both.
-        expect(spy).toHaveBeenCalledWith("tasks.push", {}, 180_000);
+        // slowest server-side path (remote RPC 140s + status check + title sync): the client must outwait it.
+        expect(spy).toHaveBeenCalledWith("tasks.push", {}, 240_000);
       });
     });
 

@@ -32,7 +32,7 @@ const GUIDANCE: Record<string, string> = {
   "dirty-tree":
     "Your worktree has uncommitted changes. Commit them (or remove stray files), then call this again.",
   "push-failed":
-    "Read the detail. If the remote moved (stale lease / non-fast-forward), fetch, rebase onto the base branch again, re-run the gate, then call this again. If it says permission denied or 403, only the operator can fix that: end your turn. If it is not something you can fix, end your turn.",
+    "Read the detail. If the remote moved (stale lease / non-fast-forward), fetch, rebase onto the base branch again, re-run the gate, then call this again. If it says permission denied or 403 (Mullion normally reports that as its own reason; this is a backstop), only the operator can fix it. Anything else you cannot fix: end your turn.",
   "no-worktree":
     "Mullion cannot find this task's worktree. If it was removed or reclaimed, only the operator can restore it: end your turn and say so.",
   "workflow-approval-required":

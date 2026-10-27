@@ -2674,8 +2674,8 @@ describe("runCommand", () => {
       const io = fakeIo();
       await runCommand(["task", "push"], { client, io });
       expect(client.request).toHaveBeenCalledWith("tasks.push", {});
-      // Outlasts the server's 120s git timeout plus the 30s lease pre-fetch.
-      expect((client as { requestTimeoutMs?: number }).requestTimeoutMs).toBe(180_000);
+      // Outlasts the slowest server-side push path.
+      expect((client as { requestTimeoutMs?: number }).requestTimeoutMs).toBe(240_000);
     });
 
     it("targets an explicit --session", async () => {
