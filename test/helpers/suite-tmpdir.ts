@@ -86,12 +86,19 @@ const MKDTEMP_SUFFIX_BYTES = 6;
  * when the resulting path is short enough, otherwise a short directory under
  * `fallbackRoot` (/tmp). mkdtemp creates it 0700, so the world-writable
  * fallback root is not a hijack risk.
+ *
+ * On Windows `base` is always used: every endpoint there is a named pipe
+ * whose name is a fixed-length hash of the path (src/cli/ipc-path.mjs), so
+ * there is no sun_path budget to keep — and the default %TEMP% is longer
+ * than the budget while `/tmp` does not exist (#2066).
  */
 export function createSuiteTmpDir(
   base: string = os.tmpdir(),
   prefix: string = "mullion-test-suite-",
   fallbackRoot: string = "/tmp",
+  platform: NodeJS.Platform = process.platform,
 ): string {
+  if (platform === "win32") return fs.mkdtempSync(path.join(base, prefix));
   const projected = Buffer.byteLength(path.join(base, prefix), "utf8") + MKDTEMP_SUFFIX_BYTES;
   if (projected <= SUITE_TMP_MAX_BYTES) return fs.mkdtempSync(path.join(base, prefix));
   return fs.mkdtempSync(path.join(fallbackRoot, "mst-"));

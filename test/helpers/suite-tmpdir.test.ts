@@ -32,6 +32,15 @@ describe("createSuiteTmpDir", () => {
     expect(fs.statSync(dir).mode & 0o777).toBe(0o700);
   });
 
+  it("on win32 stays under the given base however long it is (pipes have no sun_path budget)", () => {
+    const longBase = path.join(os.tmpdir(), "x".repeat(80));
+    fs.mkdirSync(longBase, { recursive: true });
+    made.push(longBase);
+    const dir = createSuiteTmpDir(longBase, undefined, undefined, "win32");
+    made.push(dir);
+    expect(path.dirname(dir)).toBe(longBase);
+  });
+
   it("stays under the given base when it is short enough", () => {
     const shortBase = fs.mkdtempSync(path.join(os.tmpdir(), "b-"));
     made.push(shortBase);

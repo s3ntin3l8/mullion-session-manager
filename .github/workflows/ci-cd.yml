@@ -350,16 +350,6 @@ jobs:
       - name: Native module smoke check
         run: node scripts/smoke-native.mjs
       - name: Windows host tests
-        # The suite's temp root (test/helpers/suite-tmpdir.ts) must stay short
-        # enough for macOS's sun_path budget, and falls back to `/tmp` when
-        # os.tmpdir() is longer. The runner's default temp dir
-        # (C:\Users\runneradmin\AppData\Local\Temp) is, and `\tmp` does not
-        # exist on the checkout drive, so globalSetup would throw before any
-        # test ran. runner.temp is short (and `runner` is only available to
-        # step-level env, not job-level).
-        env:
-          TEMP: ${{ runner.temp }}
-          TMP: ${{ runner.temp }}
         run: >-
           npx vitest run
           test/cli/ipc-path.test.ts
