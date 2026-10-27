@@ -63,6 +63,16 @@ describe("createMeasuredProbe", () => {
     expect(outcomes.map((o) => o.error)).toEqual([undefined, "boom"]);
   });
 
+  it("isn't failed by an onRun callback that throws", async () => {
+    const probe = createMeasuredProbe(async () => ({ bytes: 5 }), {
+      ttlMs: 1000,
+      onRun: () => {
+        throw new Error("logger down");
+      },
+    });
+    expect(await probe.read()).toMatchObject({ bytes: 5, state: "ready" });
+  });
+
   it("returns the value, flat, once the run finishes inside the wait", async () => {
     const probe = createMeasuredProbe(async () => ({ bytes: 7 }), {
       ttlMs: 1000,

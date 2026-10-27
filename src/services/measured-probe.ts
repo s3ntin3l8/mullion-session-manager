@@ -86,10 +86,14 @@ export function createMeasuredProbe<T extends object>(
         return;
       }
       held = next;
-      options.onRun?.({
-        durationMs: now() - began,
-        ...(next.error === undefined ? {} : { error: next.error }),
-      });
+      try {
+        options.onRun?.({
+          durationMs: now() - began,
+          ...(next.error === undefined ? {} : { error: next.error }),
+        });
+      } catch {
+        // Logging must never fail a measurement that has already landed.
+      }
     };
     // `new Promise` so a run that throws before returning a promise is a
     // failed measurement like any other, not an exception out of read().

@@ -116,6 +116,28 @@ describe("cache-storage", () => {
     expect(result.reclaimedBytes).toBeGreaterThanOrEqual(3000);
   });
 
+  it("removes a symlink inside the Go module cache without touching what it points at", async () => {
+    const outside = path.join(base, "outside");
+    await fs.mkdir(outside);
+    await fs.writeFile(path.join(outside, "precious"), "p");
+    await fs.chmod(outside, 0o555);
+    const mod = path.join(base, "go/pkg/mod");
+    await fs.mkdir(path.join(mod, "locked"), { recursive: true });
+    await fs.writeFile(path.join(mod, "locked", "f"), "x");
+    await fs.chmod(path.join(mod, "locked"), 0o555);
+    await fs.symlink(outside, path.join(mod, "link"));
+    try {
+      const result = await pruneCacheStorage(["go-mod"], { cacheRoot: root, homeDir: base });
+      expect(result.error).toBeUndefined();
+      expect(await fs.readdir(mod)).toEqual([]);
+      expect(await exists(path.join(outside, "precious"))).toBe(true);
+      // Its mode was never changed either: only real directories are made writable.
+      expect((await fs.stat(outside)).mode & 0o777).toBe(0o555);
+    } finally {
+      await fs.chmod(outside, 0o755);
+    }
+  });
+
   it("does nothing when no caches are selected or a selected one is missing", async () => {
     await fill("pip", { f: "x" });
     expect(await pruneCacheStorage([], { cacheRoot: root, homeDir: base })).toMatchObject({

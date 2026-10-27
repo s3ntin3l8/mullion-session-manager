@@ -244,8 +244,9 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     );
   }
 
-  // Not under test: a boot-time measurement would walk the real disk.
-  if (app.config.NODE_ENV !== "test") {
+  // Production only: under test, or `make dev`'s restarts, a boot-time
+  // measurement would walk the real disk each time.
+  if (app.config.NODE_ENV === "production") {
     let warmUp: NodeJS.Timeout | undefined;
     app.addHook("onReady", async () => {
       warmUp = setTimeout(() => {
@@ -280,6 +281,8 @@ export async function systemResourcesRoute(app: FastifyInstance) {
         throw new Error(PRUNE_ERRORS[message] ?? message, { cause: error });
       } finally {
         probe.invalidate();
+        // The report spans every source, so any cleanup makes it stale.
+        space.invalidate();
       }
     };
   };

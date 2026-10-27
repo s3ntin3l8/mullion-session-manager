@@ -170,6 +170,17 @@ describe("opencode-storage", () => {
       expect(scan.unknown).toMatch(/cannot read .*no-proc \(ENOENT\)/);
     });
 
+    it("names the holder by binary and bare flags, leaving out values and paths", async () => {
+      await holdOpen(42, dbPath);
+      await fs.writeFile(
+        path.join(procDir, "42", "cmdline"),
+        "/opt/bin/opencode.exe\0serve\0--token\0s3cret\0--password=hunter2\0--service\0/data/x",
+      );
+      expect((await findHolders(dbPath, procDir)).holders).toEqual([
+        { pid: 42, command: "opencode.exe serve --token --service" },
+      ]);
+    });
+
     it("names the holder by its command line, truncated", async () => {
       await holdOpen(41, dbPath);
       await fs.writeFile(
