@@ -521,14 +521,15 @@ export async function resolveGitHubToken(
       }
       // A negative-cached failure (installationsChecked null) is a mint that
       // already failed; otherwise the App is just not installed here.
-      pendingOutcome = {
-        appId: appCreds.appId,
-        state:
-          result.installationsChecked === null
-            ? mintFailureState(result.failureStatus)
-            : "not-installed",
-        status: result.failureStatus,
-      };
+      // Not installed here, or a 404 installation/repo mismatch: an App
+      // deliberately scoped to some repos, so not a failure to list.
+      if (result.installationsChecked === null && result.failureStatus !== 404) {
+        pendingOutcome = {
+          appId: appCreds.appId,
+          state: mintFailureState(result.failureStatus),
+          status: result.failureStatus,
+        };
+      }
       // Hermes review, PR #504: distinct from the catch below — the App
       // is configured and reachable, it's just not installed on this
       // particular owner. Logged separately (debug, not warn) so an
@@ -572,11 +573,13 @@ export async function resolveGitHubToken(
     const failedAppId = getConfiguredAppId(app);
     if (failedAppId) {
       const failedStatus = err instanceof GitHubAppError ? err.status : undefined;
-      pendingOutcome = {
-        appId: failedAppId,
-        state: mintFailureState(failedStatus),
-        status: failedStatus,
-      };
+      if (failedStatus !== 404) {
+        pendingOutcome = {
+          appId: failedAppId,
+          state: mintFailureState(failedStatus),
+          status: failedStatus,
+        };
+      }
     }
     app.log.warn(
       { err, owner: repo.owner, repo: repo.repo },
@@ -715,8 +718,10 @@ export interface MintOutcome {
   /** The GitHub permission that scope needs, in the App settings' wording. */
   permission: string;
   /** `denied`: GitHub refused the permission; `error`: the mint failed for
-   * another reason (a bad key, a network error, a 5xx) — not a missing grant. */
-  state: "ok" | "denied" | "not-installed" | "error";
+   * another reason (a bad key, a network error, a 5xx) — not a missing grant.
+   * An App that simply does not cover this repo (not installed, or a 404
+   * installation/repo mismatch) is a supported steady state, not recorded. */
+  state: "ok" | "denied" | "error";
   /** HTTP status GitHub answered the mint with, when it did. */
   status?: number;
   owner: string;
@@ -732,7 +737,7 @@ const MAX_MINT_OUTCOMES = 200;
 
 /** Whether a failed mint means "GitHub refused the permission" (vs. an outage or bad key). */
 function mintFailureState(status: number | undefined): "denied" | "error" {
-  return status === 403 || status === 404 || status === 422 ? "denied" : "error";
+  return status === 403 || status === 422 ? "denied" : "error";
 }
 
 function recordMintOutcome(
@@ -742,6 +747,12 @@ function recordMintOutcome(
   result: Pick<MintOutcome, "state" | "status" | "fellBackToPat">,
 ): void {
   const key = `${appId}:${scope}:${repo.owner}/${repo.repo}`;
+  // A clean mint just clears any earlier failure for this scope and repo; it
+  // takes no slot, so healthy entries can never push a real failure out.
+  if (result.state === "ok") {
+    mintOutcomes.delete(key);
+    return;
+  }
   if (!mintOutcomes.has(key) && mintOutcomes.size >= MAX_MINT_OUTCOMES) {
     const oldest = mintOutcomes.keys().next().value;
     if (oldest !== undefined) mintOutcomes.delete(oldest);
@@ -758,7 +769,7 @@ function recordMintOutcome(
 
 function failedMintOutcomes(appId: string): MintOutcome[] {
   return [...mintOutcomes.entries()]
-    .filter(([key, o]) => key.startsWith(`${appId}:`) && o.state !== "ok")
+    .filter(([key]) => key.startsWith(`${appId}:`))
     .map(([, o]) => o)
     .sort((a, b) => a.scope.localeCompare(b.scope) || a.at - b.at);
 }

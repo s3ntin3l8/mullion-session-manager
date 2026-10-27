@@ -358,15 +358,6 @@ describe("Settings -> Integrations", () => {
               fellBackToPat: true,
               at: Date.now(),
             },
-            {
-              scope: "write",
-              permission: "Contents, Issues and Pull requests: write",
-              state: "not-installed",
-              owner: "other",
-              repo: "repo",
-              fellBackToPat: true,
-              at: Date.now(),
-            },
           ],
         },
       };
@@ -377,9 +368,6 @@ describe("Settings -> Integrations", () => {
       ).toBeInTheDocument();
       expect(
         within(list).getByText(/workflows: App lacks Workflows: write.*no PAT fallback/),
-      ).toBeInTheDocument();
-      expect(
-        within(list).getByText(/write: App is not installed on other — using your PAT/),
       ).toBeInTheDocument();
     });
 

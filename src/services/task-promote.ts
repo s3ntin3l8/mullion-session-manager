@@ -116,7 +116,7 @@ type PromoteFailure = PromoteOutcome & { ok: false };
 // matched: a secondary rate limit, an SSO/IP-allowlist block or a grant that
 // has not propagated yet are recoverable and stay ordinary `push-failed`.
 // The workflows-permission refusal is a different message, matched separately.
-const FORBIDDEN_PUSH_PATTERN = /Permission to (\S+?)(?:\.git)? denied to (\S+?)\.?(?:\s|$)/;
+const FORBIDDEN_PUSH_PATTERN = /Permission to (\S+?)(?:\.git)? denied to (.+?)\.?\s*$/m;
 
 /** Records the hold on the task row and builds the outcome that stops a push. */
 function holdWorkflowChange(

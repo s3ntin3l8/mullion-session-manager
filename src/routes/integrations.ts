@@ -252,6 +252,10 @@ export async function integrationsRoute(app: FastifyInstance) {
     // what was actually a successful configure.
     const keyFingerprint = computeKeyFingerprint(privateKey);
     setGitHubApp(app, appId, privateKey, provider);
+    // Only after the credential was actually saved (every rejection above
+    // returns before here), and only for the App that pushes: a re-saved
+    // primary App may fix a permanent push 403 (#2104).
+    if (provider === GITHUB_PROVIDER) retryPermanentPushFailuresNow();
     if (verification.status === "verified") {
       return { verified: true, appSlug: verification.appSlug, keyFingerprint };
     }
@@ -264,20 +268,16 @@ export async function integrationsRoute(app: FastifyInstance) {
   app.put<{ Body: SetGitHubAppBody }>(
     "/api/integrations/github/app",
     { schema: setGitHubAppSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
-    async (request, reply) => {
+    async (request, reply) =>
       // Hermes review, PR #826: the same-appId guard is symmetric — this
       // side used to not check at all, so configuring the reviewer App
       // FIRST and then re-pointing the primary at that same id sailed
       // through here, silently reintroducing the 422 at review time
       // instead of at config time.
-      const saved = await putGitHubAppLike(GITHUB_PROVIDER, request.body, reply, {
+      putGitHubAppLike(GITHUB_PROVIDER, request.body, reply, {
         provider: GITHUB_REVIEWER_PROVIDER,
         label: "the reviewer App",
-      });
-      // A re-saved App credential may fix a permanent push 403 (#2104).
-      retryPermanentPushFailuresNow();
-      return saved;
-    },
+      }),
   );
 
   app.delete("/api/integrations/github/app", async (_request, reply) => {

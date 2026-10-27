@@ -692,6 +692,32 @@ describe("promoteTaskToPR", () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
+  it("names a multi-word identity in full (an SSH deploy key) in the 403 detail (#2104)", async () => {
+    const remote = createBareRemote();
+    const cwd = createGitRepoWithRemote(remote);
+    git(cwd, ["checkout", "-b", "mullion/task-1"]);
+    fs.writeFileSync(path.join(cwd, "b.txt"), "b");
+    git(cwd, ["add", "-A"]);
+    git(cwd, ["commit", "-m", "work", "--no-verify"]);
+    const hook = path.join(remote, "hooks", "pre-receive");
+    fs.writeFileSync(
+      hook,
+      "#!/bin/sh\necho 'ERROR: Permission to acme/widgets.git denied to deploy key.' >&2\nexit 1\n",
+    );
+    fs.chmodSync(hook, 0o755);
+
+    const task = baseTask({ id: 7, worktreePath: cwd, branchName: "mullion/task-1" });
+    const result = await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: "push-forbidden",
+      detail: expect.stringContaining("deploy key has no write access to acme/widgets"),
+    });
+    fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
   it("keeps a bare HTTP 403 (rate limit, SSO block) as an ordinary push-failed, not permanent (#2104)", async () => {
     const remote = createBareRemote();
     const cwd = createGitRepoWithRemote(remote);

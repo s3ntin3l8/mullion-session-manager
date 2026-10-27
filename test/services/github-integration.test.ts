@@ -996,20 +996,27 @@ describe("github-integration service", () => {
       await app.close();
     });
 
-    it("records 'not-installed' and a negative-cached denial, and clears when a later mint succeeds", async () => {
+    it("does not list an App that simply does not cover a repo (not installed, or a 404 mismatch), but does list a negative-cached refusal, and clears on a later success", async () => {
       fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
       const app = await buildApp();
       await setPat(app, "ghp_shared");
       setGitHubApp(app, "555", REAL_APP_PRIVATE_KEY);
-      // From here the only GitHub call is the status's installation count.
       fetchMock.mockResolvedValue(jsonResponse(200, [{ id: 1, account: { login: "acme" } }]));
       const repo = { owner: "other", repo: "repo" };
 
+      // Deliberately scoped App: not installed here -> a supported steady state.
       mockGetInstallationToken.mockResolvedValueOnce({ token: null, installationsChecked: 3 });
       await resolveGitHubToken(app, repo, "write");
-      expect((await getGitHubAppStatus(app)).mintOutcomes).toEqual([
-        expect.objectContaining({ scope: "write", state: "not-installed", fellBackToPat: true }),
-      ]);
+      // A 404 installation/repo mismatch is the same thing.
+      mockGetInstallationToken.mockResolvedValueOnce({
+        token: null,
+        installationsChecked: null,
+        failureStatus: 404,
+      });
+      await resolveGitHubToken(app, repo, "write");
+      mockGetInstallationToken.mockRejectedValueOnce(new GitHubAppError("gone", 404));
+      await resolveGitHubToken(app, repo, "write");
+      expect((await getGitHubAppStatus(app)).mintOutcomes).toBeUndefined();
 
       mockGetInstallationToken.mockResolvedValueOnce({
         token: null,
@@ -1027,6 +1034,29 @@ describe("github-integration service", () => {
       });
       await resolveGitHubToken(app, repo, "write");
       expect((await getGitHubAppStatus(app)).mintOutcomes).toBeUndefined();
+      await app.close();
+    });
+
+    it("healthy mints take no slot, so they can never push a real failure out of the map", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      setGitHubApp(app, "555", REAL_APP_PRIVATE_KEY);
+      fetchMock.mockResolvedValue(jsonResponse(200, [{ id: 1, account: { login: "acme" } }]));
+
+      mockGetInstallationToken.mockRejectedValueOnce(new GitHubAppError("denied", 422));
+      await resolveGitHubToken(app, { owner: "acme", repo: "broken" }, "dispatch");
+      for (let i = 0; i < 250; i++) {
+        mockGetInstallationToken.mockResolvedValueOnce({
+          token: "ghs_ok",
+          installationsChecked: null,
+        });
+        await resolveGitHubToken(app, { owner: "acme", repo: `healthy-${i}` }, "write");
+      }
+
+      expect((await getGitHubAppStatus(app)).mintOutcomes).toEqual([
+        expect.objectContaining({ scope: "dispatch", repo: "broken", state: "denied" }),
+      ]);
       await app.close();
     });
 
