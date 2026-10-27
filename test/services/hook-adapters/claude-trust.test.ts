@@ -16,6 +16,7 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { gitEnv } from "../../../src/services/git-env.js";
 import {
   mergeClaudeTrustedPath,
   resolveClaudeGlobalConfigPath,
@@ -27,10 +28,10 @@ import {
 // real ~/.claude.json: every call passes an explicit config path, and the
 // resolver tests stub CLAUDE_CONFIG_DIR/homedir.
 
+// Commit identity comes from test/setup.ts's GIT_AUTHOR_*/GIT_COMMITTER_* env,
+// and gitEnv() scrubs a GIT_DIR leaked from an outer hook (git-env-guard.test.ts).
 const git = (cwd: string, ...args: string[]) =>
-  execFileSync("git", ["-C", cwd, "-c", "user.email=t@t", "-c", "user.name=t", ...args], {
-    stdio: "ignore",
-  });
+  execFileSync("git", ["-C", cwd, ...args], { env: gitEnv(), stdio: "ignore" });
 
 let tmp: string;
 let configPath: string;

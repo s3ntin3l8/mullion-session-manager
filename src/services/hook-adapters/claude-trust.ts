@@ -12,6 +12,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { resolveClaudeConfigDir } from "./claude-code.js";
+import { GIT_NO_AUTO_GC, gitEnv } from "../git-env.js";
 
 // Issue #2091 — Claude Code's "Do you trust this folder?" dialog is a SEPARATE
 // gate from the tool-permission prompts `--dangerously-skip-permissions`
@@ -91,11 +92,18 @@ function realOrResolved(p: string): string {
  * when `cwd` is not inside a git repo. */
 function gitCheckoutRoot(cwd: string): string | null {
   try {
-    const common = execFileSync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], {
-      encoding: "utf8",
-      timeout: 1000,
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
+    const common = execFileSync(
+      "git",
+      [...GIT_NO_AUTO_GC, "-C", cwd, "rev-parse", "--git-common-dir"],
+      {
+        encoding: "utf8",
+        timeout: 1000,
+        // Scrubbed: this runs inside the server and, in tests, inside a git
+        // hook, where a leaked GIT_DIR would answer for the wrong repo.
+        env: gitEnv(),
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    ).trim();
     const commonDir = path.resolve(cwd, common);
     // A bare repo or a separate git dir has no `.git` to take the parent of;
     // treat it as "not a checkout" (the cwd itself is then what gets trusted,
