@@ -744,10 +744,12 @@ What is specific to them:
   — the counterpart of the `0600` unix sockets elsewhere. A Mullion running
   under a different (service) account is
   [#2132](https://github.com/s3ntin3l8/mullion-session-manager/issues/2132).
-- **Not yet:** self-update (reinstall a new release instead), the Android
-  device panel, and the ssh-agent bridge socket
-  ([#2131](https://github.com/s3ntin3l8/mullion-session-manager/issues/2131):
-  Git Bash's `ssh` cannot use a named pipe as `SSH_AUTH_SOCK`).
+- **The ssh-agent bridge socket** is an MSYS-emulated unix socket rather
+  than a pipe, because Git Bash's `ssh` cannot open a pipe
+  ([#2131](https://github.com/s3ntin3l8/mullion-session-manager/issues/2131);
+  see [`ssh-agent.md`](ssh-agent.md#on-a-windows-agent-host)).
+- **Not yet:** self-update (reinstall a new release instead) and the Android
+  device panel.
   Project setup's symlinks need Windows' **Developer Mode** (or an
   administrator); without it, applying a setup that writes a symlink fails
   with an error saying so.

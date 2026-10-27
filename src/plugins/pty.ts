@@ -19,6 +19,11 @@ import {
   sshAgentSocketPath,
 } from "../services/ssh-agent-socket.js";
 import { probeSocket } from "../services/unix-socket.js";
+import {
+  fitsMsysSunPath,
+  MSYS_SOCKET_MAX_PATH_BYTES,
+  probeMsysSocket,
+} from "../services/msys-socket.js";
 import { recordSessionsDir } from "../services/sessions-dir-history.js";
 import { reconcileExitedSessions } from "../services/session-reconciler.js";
 import { detectCodexRateLimits } from "../services/codex-rate-limit.js";
@@ -594,7 +599,23 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     // milliseconds at process startup, not the live-instance case that
     // function actually defends against.
     const preflightBridgePath = sshAgentSocketPath(sessionsDir);
-    const probe = await probeSocket(preflightBridgePath);
+    // Issue #2131 — on Windows the bridge is an MSYS socket file
+    // (msys-socket.ts), probed through the port it names; and a path too long
+    // for MSYS's sun_path could never be connected to, so it is no bridge.
+    const win32 = process.platform === "win32";
+    if (win32 && !fitsMsysSunPath(preflightBridgePath)) {
+      willMaterializeBridgeSocket = false;
+      app.log.warn(
+        { bridgePath: preflightBridgePath, maxBytes: MSYS_SOCKET_MAX_PATH_BYTES },
+        "not offering a bridge-backed SSH_AUTH_SOCK to sessions on this host — the " +
+          "ssh-agent bridge socket path is too long for Git Bash's ssh; use a shorter SESSIONS_DIR",
+      );
+    }
+    const probe = !willMaterializeBridgeSocket
+      ? "dead"
+      : win32
+        ? await probeMsysSocket(preflightBridgePath)
+        : await probeSocket(preflightBridgePath);
     if (probe !== "dead") {
       willMaterializeBridgeSocket = false;
       app.log.error(

@@ -58,16 +58,21 @@ export const PIPE_ACL_SCRIPT = [
 ].join("\n");
 
 /**
- * The child's environment: ours, minus PSModulePath, plus the pipe name. A
- * PSModulePath inherited from PowerShell 7 points Windows PowerShell 5.1 at
+ * An environment for a Windows PowerShell 5.1 child: `env` plus `extra`,
+ * minus PSModulePath. A PSModulePath inherited from PowerShell 7 points 5.1 at
  * modules it cannot load; without it, 5.1 uses its own defaults.
  */
-export function pipeAclEnv(pipeName, env = process.env) {
-  const out = { ...env, [PIPE_NAME_ENV]: pipeName };
+export function windowsPowerShellEnv(env = process.env, extra = {}) {
+  const out = { ...env, ...extra };
   for (const key of Object.keys(out)) {
     if (key.toLowerCase() === "psmodulepath") delete out[key];
   }
   return out;
+}
+
+/** The child's environment: ours (see windowsPowerShellEnv), plus the pipe name. */
+export function pipeAclEnv(pipeName, env = process.env) {
+  return windowsPowerShellEnv(env, { [PIPE_NAME_ENV]: pipeName });
 }
 
 /**

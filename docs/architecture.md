@@ -143,8 +143,9 @@ PR).
   once the pipe is listening: a pipe's default access list lets Everyone and
   anonymous users open it for reading, so `src/cli/pipe-acl.mjs` replaces it
   with one granting only the user Mullion runs as and SYSTEM (#2065). The
-  same applies to the hook and control sockets, and to the ssh-agent socket
-  once Windows materializes one (#2131).
+  same applies to the hook and control sockets. The ssh-agent bridge socket
+  is no pipe on Windows: it is an MSYS-emulated unix socket whose file is
+  created readable only by that user and SYSTEM (`msys-socket.ts`, #2131).
 - _Liveness_ is the same `probeSocket()` as macOS, on the pipe (a missing
   pipe is ENOENT → `dead`). _Teardown_ and the _process inventory_ find the
   `--serve <endpoint>` master in the CIM process table

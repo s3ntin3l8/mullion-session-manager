@@ -6,6 +6,10 @@ import type { execFile } from "node:child_process";
 export const PIPE_ACL_TIMEOUT_MS: number;
 export const PIPE_NAME_ENV: string;
 export const PIPE_ACL_SCRIPT: string;
+export function windowsPowerShellEnv(
+  env?: NodeJS.ProcessEnv,
+  extra?: Record<string, string>,
+): NodeJS.ProcessEnv;
 export function pipeAclEnv(pipeName: string, env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 export function restrictPipeToCurrentUser(
   endpoint: string,

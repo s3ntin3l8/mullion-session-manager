@@ -221,6 +221,33 @@ carries bridge traffic only, and an agent's resolved socket reaches the
 primary as diagnostics alone. To let the primary use the Mac's keys, use the
 [manual tunnel](#manual-tunnel-ssh--r) below.
 
+### On a Windows agent host
+
+Sessions on a Windows host run in Git Bash, whose `ssh`, `ssh-add` and `git`
+are MSYS builds. They cannot open a named pipe, so the bridge socket there is
+not one: it is an **MSYS-emulated unix socket** (`msys-socket.ts`,
+[#2131](https://github.com/s3ntin3l8/mullion-session-manager/issues/2131)) —
+a file at `<SESSIONS_DIR>/ssh-agent.sock` naming a port on `127.0.0.1` and a
+128-bit secret. Git Bash's tools connect to it with no configuration;
+`SSH_AUTH_SOCK` holds the file's plain Windows path, which MSYS accepts.
+
+- **The secret is the gate**, since every local user can reach a loopback
+  port. Mullion creates the file with a protected access list — the user it
+  runs as and SYSTEM, nothing inherited — in the same call that creates it,
+  so the secret is never readable by another account, even under a
+  `SESSIONS_DIR` on a drive where every authenticated user can read.
+- **The path must fit 107 bytes** (MSYS's `sun_path`). A longer
+  `SESSIONS_DIR` disables the bridge tier with a boot warning saying so.
+- **Native Windows tools do not see it.** `C:\Windows\System32\OpenSSH\ssh.exe`
+  and an IDE's git cannot read an MSYS socket; that is
+  [#2146](https://github.com/s3ntin3l8/mullion-session-manager/issues/2146).
+- **A user-level `SSH_AUTH_SOCK` wins.** Windows' own OpenSSH agent is
+  often configured with a user environment variable
+  (`SSH_AUTH_SOCK=\\.\pipe\openssh-ssh-agent`). That is tier 2 above, so
+  the bridge is shadowed (the boot warning says so) — and Git Bash's `ssh`
+  cannot use that pipe either. Remove the variable for the Mullion process to
+  use the bridge.
+
 ## Troubleshooting
 
 - `ssh-add -l` reports no agent: start a new session after connecting the
