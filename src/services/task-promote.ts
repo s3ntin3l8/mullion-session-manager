@@ -72,6 +72,8 @@ import {
   resolveRepoRef,
 } from "./host-git.js";
 import { recordGithubSyncError, clearGithubSyncError } from "./task-github-sync.js";
+import { broadcastTaskEvent } from "./task-events.js";
+import { notifyTaskNeedsAttention } from "./push-delivery.js";
 import { resolvePrTitle } from "./task-prompt.js";
 import {
   evaluateWorkflowGate,
@@ -118,13 +120,37 @@ type PromoteFailure = PromoteOutcome & { ok: false };
 // The workflows-permission refusal is a different message, matched separately.
 const FORBIDDEN_PUSH_PATTERN = /Permission to (\S+?)(?:\.git)? denied to (.+?)\.?\s*$/m;
 
+/**
+ * #2108 — a NEW hold (a head commit not seen held before) is worth telling the
+ * operator about: ring the board's doorbell so the "needs workflow approval"
+ * chip shows now, and push a notification. Once per head: the retry sweeps
+ * call this path every tick, and `recordWorkflowHold` only reports a hold as
+ * new the first time it sees that sha.
+ */
+function announceWorkflowHold(app: FastifyInstance, task: TaskRow): void {
+  broadcastTaskEvent({
+    taskId: task.id,
+    projectId: task.projectId,
+    kind: "workflow-hold",
+    ts: Date.now(),
+  });
+  void notifyTaskNeedsAttention(
+    app,
+    task.id,
+    `Task #${task.id}: a workflow change needs your approval`,
+  ).catch((err) =>
+    app.log.warn({ err, taskId: task.id }, "task promote: workflow-hold notification failed"),
+  );
+}
+
 /** Records the hold on the task row and builds the outcome that stops a push. */
 function holdWorkflowChange(
   app: FastifyInstance,
   task: TaskRow,
   change: WorkflowChange,
 ): PromoteFailure {
-  recordWorkflowHold(app, task.id, change);
+  const isNewHold = recordWorkflowHold(app, task.id, change);
+  if (isNewHold) announceWorkflowHold(app, task);
   // Not a sync error: this is an expected operator gate, shown by its own
   // panel from `tasks.workflowChange`. Drop only a banner this gate wrote
   // itself (an earlier unverified attempt), never an unrelated sync failure.

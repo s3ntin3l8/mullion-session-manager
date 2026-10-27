@@ -161,6 +161,18 @@ describe("task-workflow-gate", () => {
       expect(reload(task.id).workflowChange).toBeNull();
     });
 
+    it("reports a hold as new only for a head commit not already recorded (#2108)", () => {
+      const task = insertTask();
+      const change = { sha: "a".repeat(40), files: ["w.yml"] };
+      expect(recordWorkflowHold(app, task.id, change)).toBe(true);
+      // The retry sweeps re-record the same head every tick: not new.
+      expect(recordWorkflowHold(app, task.id, change)).toBe(false);
+      // A new commit is a new hold, and so is the same sha after the hold was cleared.
+      expect(recordWorkflowHold(app, task.id, { ...change, sha: "b".repeat(40) })).toBe(true);
+      clearWorkflowHold(app, reload(task.id));
+      expect(recordWorkflowHold(app, task.id, { ...change, sha: "b".repeat(40) })).toBe(true);
+    });
+
     it("clearing a task with no hold does not write", () => {
       const task = insertTask();
       const before = reload(task.id).updatedAt;

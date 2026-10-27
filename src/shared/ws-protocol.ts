@@ -189,4 +189,9 @@ export type TaskEvent =
   // transition: the reason it is not dispatching was recorded, changed, or
   // cleared (task-claim.ts's holdClaim). Same "doorbell" shape: the frontend
   // refetches, the payload carries nothing.
-  | { taskId: number; projectId: number; kind: "dispatch"; ts: number };
+  | { taskId: number; projectId: number; kind: "dispatch"; ts: number }
+  // #2108 — a task's push was just held for operator approval of a workflow
+  // change (task-workflow-gate.ts's recordWorkflowHold): same doorbell shape,
+  // so the board shows the "needs approval" chip without waiting for some
+  // unrelated event to trigger a refetch.
+  | { taskId: number; projectId: number; kind: "workflow-hold"; ts: number };

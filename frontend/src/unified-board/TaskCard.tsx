@@ -11,6 +11,7 @@ import { rowClassNameForSeverity } from "../sessionStatus.js";
 import { BlockedIcon, BotIcon, ClockIcon, GitHubIcon, WarningTriangleIcon } from "../ui/icons.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { needsHumanText } from "../needsHuman.js";
+import { parseWorkflowChange } from "../workflowChange.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { TaskSessionSlot } from "./TaskSessionSlot.js";
 
@@ -187,6 +188,16 @@ export function TaskCard({
   // has actually landed on the PR (autoReturnCapAnnouncedAt non-null). Below
   // that point it's still working, same bucket as reviewInFlight below.
   const capAnnounced = task.autoReturnCapAnnouncedAt !== null;
+
+  // #2108 — the push is held until the operator approves a change to
+  // .github/workflows/. The approval control lives in the task drawer, so this
+  // strip only says WHAT is needed; a click anywhere on the card (the strip
+  // included) opens that drawer.
+  const workflowHold = parseWorkflowChange(task.workflowChange);
+  // (The strip below is role="status", not this card's usual role="img" +
+  // aria-label badge: it has real visible text, and a polite live-region
+  // announcement when a hold first appears is deliberate — it is the one badge
+  // on this card asking for the operator's action.)
 
   return (
     <div
@@ -386,6 +397,16 @@ export function TaskCard({
               {task.blockers.length > 1 && ` +${task.blockers.length - 1}`}
             </span>
           )}
+        </div>
+      )}
+      {workflowHold && (
+        <div
+          className="task-card-workflow-hold"
+          role="status"
+          title={`Changes ${workflowHold.files.join(", ")} — open the task to approve`}
+        >
+          <WarningTriangleIcon size={11} aria-hidden="true" />
+          <span>Needs workflow approval</span>
         </div>
       )}
       {/* D5 — a Failed column of several identical-looking cards conveys

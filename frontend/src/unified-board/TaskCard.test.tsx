@@ -523,6 +523,43 @@ describe("UnifiedBoard task columns", () => {
     vi.useRealTimers();
   });
 
+  describe("a push held for workflow approval (#2108)", () => {
+    const hold = JSON.stringify({ sha: "a".repeat(40), files: [".github/workflows/ci.yml"] });
+
+    it("shows a 'Needs workflow approval' strip, naming the files in its tooltip", () => {
+      tasks = [makeTask({ id: 1, status: "reviewing", workflowChange: hold })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      const strip = screen.getByRole("status");
+      expect(strip).toHaveTextContent("Needs workflow approval");
+      expect(strip).toHaveAttribute("title", expect.stringContaining(".github/workflows/ci.yml"));
+    });
+
+    it("is absent when nothing is held, and for a corrupt value", () => {
+      tasks = [
+        makeTask({ id: 1, status: "reviewing", workflowChange: null }),
+        makeTask({ id: 2, status: "reviewing", workflowChange: "{not json" }),
+      ];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.queryByText("Needs workflow approval")).toBeNull();
+    });
+
+    it("is separate from the generic sync-error triangle", () => {
+      tasks = [makeTask({ id: 1, status: "reviewing", workflowChange: hold })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(document.querySelector(".task-card-sync-error")).toBeNull();
+    });
+
+    it("clicking the strip opens the task drawer, where the approval control lives", async () => {
+      const user = userEvent.setup();
+      tasks = [makeTask({ id: 9, status: "reviewing", workflowChange: hold })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+      await user.click(screen.getByText("Needs workflow approval"));
+
+      expect(screen.getByTestId("task-detail-stub")).toBeInTheDocument();
+    });
+  });
+
   it("also renders the sync error as (aria-hidden) text so phone CSS can show it without a hover tooltip", () => {
     tasks = [makeTask({ id: 1, githubSyncError: "401 Unauthorized" })];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);

@@ -25,6 +25,8 @@ const mockResolveWorkflowWriteToken = vi.fn();
 const mockEvaluateWorkflowGate = vi.fn();
 const mockRecordWorkflowHold = vi.fn();
 const mockClearWorkflowHold = vi.fn();
+const mockBroadcastTaskEvent = vi.fn();
+const mockNotifyTaskNeedsAttention = vi.fn();
 
 vi.mock("../../src/services/github-integration.js", () => ({
   resolveGitHubToken: mockGetToken,
@@ -44,6 +46,12 @@ vi.mock("../../src/services/task-workflow-gate.js", async (importOriginal) => {
     clearWorkflowHold: mockClearWorkflowHold,
   };
 });
+vi.mock("../../src/services/task-events.js", () => ({
+  broadcastTaskEvent: mockBroadcastTaskEvent,
+}));
+vi.mock("../../src/services/push-delivery.js", () => ({
+  notifyTaskNeedsAttention: mockNotifyTaskNeedsAttention,
+}));
 vi.mock("../../src/services/github-write.js", async (importOriginal) => {
   const actual = await importOriginal<typeof GithubWrite>();
   return {
@@ -463,6 +471,62 @@ describe("promoteTaskToPR", () => {
         baseProject({ cwd }),
       );
       expect(mockClearGithubSyncError).toHaveBeenCalledWith(expect.anything(), 7);
+      cleanup(remote, cwd);
+    });
+
+    it("announces a NEW hold once: doorbell plus one notification, and nothing for a repeat of the same head (#2108)", async () => {
+      const { remote, cwd } = workflowRepo();
+      const change = { sha: "a".repeat(40), files: [".github/workflows/ci.yml"] };
+      mockEvaluateWorkflowGate.mockResolvedValue({ kind: "held", change });
+      mockNotifyTaskNeedsAttention.mockReset().mockResolvedValue(undefined);
+      mockBroadcastTaskEvent.mockClear();
+      const task = baseTask({
+        id: 7,
+        projectId: 3,
+        worktreePath: cwd,
+        branchName: "mullion/task-1",
+      });
+
+      // First sighting of this head: recordWorkflowHold says it is new.
+      mockRecordWorkflowHold.mockReturnValueOnce(true);
+      await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+      expect(mockBroadcastTaskEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ taskId: 7, projectId: 3, kind: "workflow-hold" }),
+      );
+      expect(mockNotifyTaskNeedsAttention).toHaveBeenCalledTimes(1);
+      expect(mockNotifyTaskNeedsAttention).toHaveBeenCalledWith(
+        expect.anything(),
+        7,
+        expect.stringContaining("workflow change needs your approval"),
+      );
+
+      // The retry sweep re-holds the same head: no second ring, no second push.
+      mockRecordWorkflowHold.mockReturnValueOnce(false);
+      await promoteTaskToPR({ config: {} } as never, task, baseProject({ cwd }));
+      expect(mockBroadcastTaskEvent).toHaveBeenCalledTimes(1);
+      expect(mockNotifyTaskNeedsAttention).toHaveBeenCalledTimes(1);
+      cleanup(remote, cwd);
+    });
+
+    it("a failed notification does not fail the hold", async () => {
+      const { remote, cwd } = workflowRepo();
+      mockEvaluateWorkflowGate.mockResolvedValue({
+        kind: "held",
+        change: { sha: "c".repeat(40), files: [".github/workflows/ci.yml"] },
+      });
+      mockRecordWorkflowHold.mockReturnValueOnce(true);
+      mockNotifyTaskNeedsAttention.mockReset().mockRejectedValue(new Error("push service down"));
+      const warn = vi.fn();
+      const task = baseTask({ id: 8, worktreePath: cwd, branchName: "mullion/task-1" });
+
+      const result = await promoteTaskToPR(
+        { config: {}, log: { warn } } as never,
+        task,
+        baseProject({ cwd }),
+      );
+
+      expect(result).toMatchObject({ ok: false, reason: "workflow-approval-required" });
+      await vi.waitFor(() => expect(warn).toHaveBeenCalled());
       cleanup(remote, cwd);
     });
 
