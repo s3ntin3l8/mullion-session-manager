@@ -84,13 +84,32 @@ function damage(sha: string) {
 }
 
 /**
- * What `git fsck` says about the emptied tree. Older gits report the cache-tree
- * pointer ("invalid sha1 pointer in cache-tree of .git/index"); newer ones (2.55)
- * report the empty object file first ("object file .git/objects/xx/... is empty").
- * Both are the same damage, so the tests accept either rather than pinning a
- * sentence git is free to reword.
+ * What `git fsck` says about the emptied tree. Depending on which check it reaches
+ * first, it reports either the cache-tree pointer ("invalid sha1 pointer in
+ * cache-tree of .git/index") or just the empty object file ("object file
+ * .git/objects/xx/… is empty"). The same git version has been seen to print each
+ * (CI runners on git 2.56.0 passed one run and failed the next), so this is not a
+ * version difference. Both are the same damage; the tests accept either rather than
+ * pinning a sentence git may or may not reach.
  */
 const FSCK_DAMAGE = /invalid sha1 pointer|object file \S+ is empty/;
+
+describe("FSCK_DAMAGE", () => {
+  // Pins both alternatives without depending on which line the host git emits.
+  it("matches the cache-tree line", () => {
+    expect("error: invalid sha1 pointer in cache-tree of .git/index").toMatch(FSCK_DAMAGE);
+  });
+
+  it("matches the empty-object line", () => {
+    expect(
+      "error: object file .git/objects/64/bce7b8449e3dccaef34b8ff972276034dbe98a is empty",
+    ).toMatch(FSCK_DAMAGE);
+  });
+
+  it("does not match unrelated fsck output", () => {
+    expect("Checking object directories: 100% (256/256), done.").not.toMatch(FSCK_DAMAGE);
+  });
+});
 
 /**
  * Builds the scenario from the issue: a tree that exists only as a loose
