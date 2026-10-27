@@ -26,7 +26,9 @@ function fakeExecFile(result: { err?: Error; stderr?: string } = {}) {
   return { fn: fn as unknown as typeof execFile, calls };
 }
 
-const PIPE = `${PIPE_PREFIX}mullion-0123456789abcdef-hooks`;
+// Low-entropy on purpose: a realistic hex hash here trips detect-secrets.
+const PIPE_NAME = "mullion-0000000000000000-hooks";
+const PIPE = `${PIPE_PREFIX}${PIPE_NAME}`;
 
 describe("restrictPipeToCurrentUser", () => {
   it.each(["linux", "darwin"] as const)("is a no-op on %s", async (platform) => {
@@ -58,10 +60,10 @@ describe("restrictPipeToCurrentUser", () => {
     const [{ file, args, opts }] = exec.calls;
     expect(file).toBe("powershell.exe");
     expect(args).toEqual(["-NoProfile", "-NonInteractive", "-Command", PIPE_ACL_SCRIPT]);
-    expect(args.join(" ")).not.toContain("mullion-0123456789abcdef");
+    expect(args.join(" ")).not.toContain(PIPE_NAME);
     expect(opts).toMatchObject({ timeout: PIPE_ACL_TIMEOUT_MS, windowsHide: true });
     const env = opts.env as NodeJS.ProcessEnv;
-    expect(env[PIPE_NAME_ENV]).toBe("mullion-0123456789abcdef-hooks");
+    expect(env[PIPE_NAME_ENV]).toBe(PIPE_NAME);
     expect(env.PATH).toBe("x");
     expect(env).not.toHaveProperty("PSModulePath");
   });
