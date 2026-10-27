@@ -2,10 +2,14 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { parseMsysSocketFile } from "../../src/services/msys-socket.js";
+import { SocketAlreadyListeningError } from "../../src/services/unix-socket.js";
 import {
   describeBridgeShadowing,
   materializeSshAgentSocket,
   materializesBridgeSocket,
+  preflightBridgeSocket,
   resolveSshAuthSock,
   sshAgentSocketPath,
 } from "../../src/services/ssh-agent-socket.js";
@@ -331,27 +335,134 @@ describe("ssh-agent-socket", () => {
   });
 });
 
+describe("ssh-agent-socket on win32 (an MSYS socket, #2131)", () => {
+  it("serves the bridge through an MSYS socket file: handshake, then the channel, then the file is gone on close", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "ssh-agent-msys-"));
+    const socketPath = path.join(dir, "ssh-agent.sock");
+    const channel = new FakeChannel();
+    const handle = await materializeSshAgentSocket({
+      socketPath,
+      openChannel: () => Promise.resolve(channel),
+      platform: "win32",
+      writeMsysSocketFile: (p, contents) => {
+        writeFileSync(p, contents);
+        return Promise.resolve();
+      },
+    });
+    try {
+      const cookie = parseMsysSocketFile(readFileSync(socketPath, "latin1"))!;
+      const client = net.createConnection({ host: "127.0.0.1", port: cookie.port });
+      await new Promise<void>((resolve) => client.once("connect", () => resolve()));
+      client.write(Buffer.concat([cookie.secret, Buffer.alloc(12), Buffer.from("request")]));
+      await waitUntil(() => channel.sent.length > 0);
+      expect(Buffer.concat(channel.sent).toString()).toBe("request");
+      client.destroy();
+    } finally {
+      await handle.close();
+      expect(existsSync(socketPath)).toBe(false);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("ssh-agent-socket on win32: collisions", () => {
+  it("refuses to take over a live MSYS socket at the path — the error plugins/ssh-agent.ts crashes on", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "ssh-agent-msys-"));
+    const socketPath = path.join(dir, "ssh-agent.sock");
+    const writer = (p: string, contents: string) => {
+      writeFileSync(p, contents);
+      return Promise.resolve();
+    };
+    const first = await materializeSshAgentSocket({
+      socketPath,
+      openChannel: () => Promise.resolve(null),
+      platform: "win32",
+      writeMsysSocketFile: writer,
+    });
+    try {
+      await expect(
+        materializeSshAgentSocket({
+          socketPath,
+          openChannel: () => Promise.resolve(null),
+          platform: "win32",
+          writeMsysSocketFile: writer,
+        }),
+      ).rejects.toBeInstanceOf(SocketAlreadyListeningError);
+    } finally {
+      await first.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("preflightBridgeSocket", () => {
+  it("passes a free path, on win32 and elsewhere", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "preflight-"));
+    try {
+      const free = path.join(dir, "ssh-agent.sock");
+      expect(await preflightBridgeSocket(free, "win32")).toEqual({ ok: true });
+      expect(await preflightBridgeSocket(free, "linux")).toEqual({ ok: true });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a win32 path past MSYS's sun_path (#2131), but not the same path elsewhere", async () => {
+    const long = path.join(os.tmpdir(), "x".repeat(120), "ssh-agent.sock");
+    expect(await preflightBridgeSocket(long, "win32")).toEqual({ ok: false, reason: "too-long" });
+    expect((await preflightBridgeSocket(long, "linux")).ok).toBe(true);
+  });
+
+  it("refuses a path a live MSYS socket already holds on win32", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "preflight-"));
+    const socketPath = path.join(dir, "ssh-agent.sock");
+    const live = await materializeSshAgentSocket({
+      socketPath,
+      openChannel: () => Promise.resolve(null),
+      platform: "win32",
+      writeMsysSocketFile: (p, contents) => {
+        writeFileSync(p, contents);
+        return Promise.resolve();
+      },
+    });
+    try {
+      expect(await preflightBridgeSocket(socketPath, "win32")).toEqual({
+        ok: false,
+        reason: "occupied",
+        probe: "live",
+      });
+    } finally {
+      await live.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("sshAgentSocketPath", () => {
   it("is deterministic given the same sessionsDir — the one name every caller must agree on", () => {
     expect(sshAgentSocketPath("/var/lib/mullion/sessions")).toBe(
-      "/var/lib/mullion/sessions/ssh-agent.sock",
+      path.join("/var/lib/mullion/sessions", "ssh-agent.sock"),
+    );
+  });
+
+  it("is a file path, not a named pipe, on Windows too — it names the MSYS socket file (#2131)", () => {
+    expect(sshAgentSocketPath("D:/mullion/sessions")).toBe(
+      path.join("D:/mullion/sessions", "ssh-agent.sock"),
     );
   });
 });
 
 describe("materializesBridgeSocket", () => {
   it("is true for the agent role", () => {
-    expect(materializesBridgeSocket("agent", "linux")).toBe(true);
+    expect(materializesBridgeSocket("agent")).toBe(true);
   });
 
   it("is true for the primary role too (#873 PR-B — sshAgentPlugin now registers for both roles)", () => {
-    expect(materializesBridgeSocket("primary", "linux")).toBe(true);
-    expect(materializesBridgeSocket("primary", "darwin")).toBe(true);
+    expect(materializesBridgeSocket("primary")).toBe(true);
   });
 
-  it("is false for every role on Windows until the pipe is restricted to the user (#2065)", () => {
-    expect(materializesBridgeSocket("agent", "win32")).toBe(false);
-    expect(materializesBridgeSocket("primary", "win32")).toBe(false);
+  it("is false for a role that does not serve sessions", () => {
+    expect(materializesBridgeSocket("viewer")).toBe(false);
   });
 });
 

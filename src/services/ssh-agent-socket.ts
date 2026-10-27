@@ -1,9 +1,15 @@
 import net from "node:net";
 import path from "node:path";
 import { chmodSync } from "node:fs";
-import { reclaimSocketPath } from "./unix-socket.js";
-import { ipcPath, isPipePath } from "../cli/ipc-path.mjs";
-import { restrictPipeToCurrentUser } from "../cli/pipe-acl.mjs";
+import { probeSocket, reclaimSocketPath, type SocketProbeResult } from "./unix-socket.js";
+import { fitsMsysSunPath } from "../cli/sun-path.mjs";
+import {
+  listenMsysSocket,
+  probeMsysSocket,
+  reclaimMsysSocket,
+  type MsysSocketFileWriter,
+  type MsysSocketServer,
+} from "./msys-socket.js";
 import {
   DEFAULT_MAX_CHANNELS,
   PONG_TIMEOUT_MS,
@@ -54,6 +60,11 @@ export interface SshAgentSocketOptions {
    * `warn` (it means a client-visible stall actually happened). Omitting
    * this is safe; every log site checks for it first. */
   log?: SshAgentSocketLogger;
+  /** Which socket to serve: an MSYS-emulated one on win32 (msys-socket.ts —
+   * the only kind Git Bash's ssh can use), a real unix socket elsewhere. */
+  platform?: NodeJS.Platform;
+  /** Tests only: creates the MSYS socket file instead of Windows PowerShell. */
+  writeMsysSocketFile?: MsysSocketFileWriter;
 }
 
 export interface SshAgentSocketHandle {
@@ -64,10 +75,9 @@ export interface SshAgentSocketHandle {
 export async function materializeSshAgentSocket(
   opts: SshAgentSocketOptions,
 ): Promise<SshAgentSocketHandle> {
-  await reclaimSocketPath(opts.socketPath);
-
+  const platform = opts.platform ?? process.platform;
   const openSockets = new Set<net.Socket>();
-  const server = net.createServer((socket) => {
+  const onConnection = (socket: net.Socket) => {
     // Issue #1051 — bound openSockets so a sustained burst of SSH client
     // connections, each awaiting an openChannel() that may never resolve
     // (no bridge reachable), can't grow without bound and exhaust FDs.
@@ -90,8 +100,29 @@ export async function materializeSshAgentSocket(
     socket.once("close", () => openSockets.delete(socket));
     opts.log?.debug({ socketPath: opts.socketPath }, "ssh-agent-socket: accepted connection");
     void handleConnection(socket, opts.openChannel, opts.log);
-  });
+  };
 
+  if (platform === "win32") {
+    // Issue #2131 — Git Bash's ssh speaks only MSYS's emulated unix sockets,
+    // never a named pipe; see msys-socket.ts for the scheme and why the
+    // socket file's secret, not the loopback port, is the gate.
+    await reclaimMsysSocket(opts.socketPath);
+    const msys: MsysSocketServer = await listenMsysSocket({
+      socketPath: opts.socketPath,
+      onConnection,
+      writeSocketFile: opts.writeMsysSocketFile,
+    });
+    return {
+      socketPath: opts.socketPath,
+      close: async () => {
+        for (const socket of openSockets) socket.destroy();
+        await msys.close();
+      },
+    };
+  }
+
+  await reclaimSocketPath(opts.socketPath);
+  const server = net.createServer(onConnection);
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(opts.socketPath, () => {
@@ -102,17 +133,8 @@ export async function materializeSshAgentSocket(
   // 0600: this socket hands out a live SSH-agent-protocol channel to
   // whatever connects to it — filesystem perms are the only gate (there's
   // no protocol-level auth on a unix socket the way the bridge WS itself
-  // has a pairing/session credential), same posture as hooks.sock. A named
-  // pipe has no mode bits; restrictPipeToCurrentUser narrows its ACL to this
-  // user and SYSTEM instead (#2065), but with no token behind it a failure
-  // to do so would leave nothing — which is one reason
-  // materializesBridgeSocket() still never materializes this socket on
-  // Windows (the other: Git Bash's MSYS ssh cannot use a named pipe as
-  // SSH_AUTH_SOCK). The pipe branches here keep it correct if that changes.
-  if (!isPipePath(opts.socketPath)) chmodSync(opts.socketPath, 0o600);
-  await restrictPipeToCurrentUser(opts.socketPath, {
-    log: (msg) => opts.log?.warn({ socketPath: opts.socketPath }, `ssh-agent-socket: ${msg}`),
-  });
+  // has a pairing/session credential), same posture as hooks.sock.
+  chmodSync(opts.socketPath, 0o600);
 
   return {
     socketPath: opts.socketPath,
@@ -130,8 +152,12 @@ export async function materializeSshAgentSocket(
 // effective SSH_AUTH_SOCK) so no caller re-derives or hardcodes the
 // filename and risks drifting from where materializeSshAgentSocket above
 // actually listens.
+//
+// A plain file path on every platform, Windows included: there it names the
+// MSYS socket file (msys-socket.ts), not a named pipe — Git Bash's ssh, the
+// only client this socket serves there, cannot open a pipe (issue #2131).
 export function sshAgentSocketPath(sessionsDir: string): string {
-  return ipcPath(path.join(sessionsDir, "ssh-agent.sock"));
+  return path.join(sessionsDir, "ssh-agent.sock");
 }
 
 // Issue #820 (Hermes review, PR #865; updated #873 PR-B) — mirrors
@@ -147,19 +173,34 @@ export function sshAgentSocketPath(sessionsDir: string): string {
 // `true`, to keep that a documented decision rather than an accident of
 // there being only two roles.
 //
-// Never on Windows (issue #1728): there the socket is a named pipe, and Git
-// Bash's ssh (MSYS OpenSSH, the session shell's) speaks only its own
-// emulated unix sockets, not a named pipe, as SSH_AUTH_SOCK. #2065 has since
-// restricted every Mullion pipe to the current user, which removes the
-// other reason (this socket has no protocol-level auth); enabling it is
-// #2131. Sessions there keep whatever SSH_AUTH_SOCK they
-// inherit (resolveSshAuthSock's ambient tier).
-export function materializesBridgeSocket(
-  role: string,
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  if (platform === "win32") return false;
+// Windows too (issue #2131): there the socket is an MSYS-emulated one whose
+// file only the current user can read (msys-socket.ts), so a session's Git
+// Bash ssh can use it and no other local user can.
+export function materializesBridgeSocket(role: string): boolean {
   return role === "agent" || role === "primary";
+}
+
+/**
+ * plugins/pty.ts's boot-time check of the bridge socket path, before
+ * PtyManager freezes the bridge tier into every session (see that caller
+ * for why it cannot wait for the bind). `ok` only when the path is free:
+ *   - "too-long": on win32 the socket is an MSYS one (#2131), and a path
+ *     past MSYS's sun_path could never be connected to;
+ *   - "occupied": something answers there, or the probe could not tell
+ *     ("live" and "unknown" alike, as reclaimSocketPath treats them).
+ */
+export async function preflightBridgeSocket(
+  socketPath: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<
+  | { ok: true }
+  | { ok: false; reason: "too-long" }
+  | { ok: false; reason: "occupied"; probe: SocketProbeResult }
+> {
+  const win32 = platform === "win32";
+  if (win32 && !fitsMsysSunPath(socketPath)) return { ok: false, reason: "too-long" };
+  const probe = win32 ? await probeMsysSocket(socketPath) : await probeSocket(socketPath);
+  return probe === "dead" ? { ok: true } : { ok: false, reason: "occupied", probe };
 }
 
 /** Which of resolveSshAuthSock's three tiers (or genuine absence) produced
@@ -187,8 +228,7 @@ export type SshAuthSockSource = "configured" | "ambient" | "bridge" | "none";
  * 3. Only when neither is present do we fall back to the bridge-
  *    materialized socket — and only when the caller says this process
  *    actually materializes one (`materializesBridgeSocket`; see
- *    plugins/ssh-agent.ts — both roles as of #873 PR-B, on every platform
- *    except Windows until #2065; see that function for the platform rule).
+ *    plugins/ssh-agent.ts — both roles as of #873 PR-B, on every platform).
  *
  * Deliberately NOT gated on whether a bridge is *currently* connected: the
  * bridge socket is a stable path (materializeSshAgentSocket binds it

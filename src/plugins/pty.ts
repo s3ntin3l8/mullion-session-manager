@@ -17,8 +17,8 @@ import {
   materializesBridgeSocket,
   describeBridgeShadowing,
   sshAgentSocketPath,
+  preflightBridgeSocket,
 } from "../services/ssh-agent-socket.js";
-import { probeSocket } from "../services/unix-socket.js";
 import { recordSessionsDir } from "../services/sessions-dir-history.js";
 import { reconcileExitedSessions } from "../services/session-reconciler.js";
 import { detectCodexRateLimits } from "../services/codex-rate-limit.js";
@@ -594,15 +594,27 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     // milliseconds at process startup, not the live-instance case that
     // function actually defends against.
     const preflightBridgePath = sshAgentSocketPath(sessionsDir);
-    const probe = await probeSocket(preflightBridgePath);
-    if (probe !== "dead") {
+    // Issue #2131 — on Windows the bridge is an MSYS socket file, probed
+    // through the port it names, and a path too long for MSYS's sun_path is
+    // no bridge at all (preflightBridgeSocket).
+    const preflight = await preflightBridgeSocket(preflightBridgePath);
+    if (!preflight.ok) {
       willMaterializeBridgeSocket = false;
-      app.log.error(
-        { bridgePath: preflightBridgePath, probe },
-        "refusing to offer a bridge-backed SSH_AUTH_SOCK to sessions on this host — " +
-          "something is already at the ssh-agent bridge socket path and this process " +
-          "cannot confirm it's safe to reclaim (see reclaimSocketPath)",
-      );
+      if (preflight.reason === "too-long") {
+        app.log.warn(
+          { bridgePath: preflightBridgePath },
+          "not offering a bridge-backed SSH_AUTH_SOCK to sessions on this host — the " +
+            "ssh-agent bridge socket path is too long for Git Bash's ssh (MSYS sun_path); " +
+            "use a shorter SESSIONS_DIR",
+        );
+      } else {
+        app.log.error(
+          { bridgePath: preflightBridgePath, probe: preflight.probe },
+          "refusing to offer a bridge-backed SSH_AUTH_SOCK to sessions on this host — " +
+            "something is already at the ssh-agent bridge socket path and this process " +
+            "cannot confirm it's safe to reclaim (see reclaimSocketPath)",
+        );
+      }
     }
   }
   // Self-review (mullion-reviewer, PR #877) — sshAgentPlugin (registered

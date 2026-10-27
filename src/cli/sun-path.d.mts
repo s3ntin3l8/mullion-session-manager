@@ -8,4 +8,5 @@ export const DEFAULT_SUN_PATH_BYTES: number;
 export function maxSunPathBytes(platform?: NodeJS.Platform): number;
 export const SESSIONS_DIR_SOCKET_NAMES: readonly string[];
 export function longestSocketPath(dir: string): number;
+export function fitsMsysSunPath(socketPath: string): boolean;
 export function fitsSunPath(dir: string, platform?: NodeJS.Platform): boolean;
