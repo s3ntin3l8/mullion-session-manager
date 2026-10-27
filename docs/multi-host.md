@@ -236,17 +236,26 @@ default because `hostCwds` is also where session-scoped children may be sent. Ru
   project (or clearing the map over the API) records the host as declined, and a later
   save that sets it again un-declines it. A declined host is still shown as a
   suggestion.
-- It trusts what an agent reports about its own clones (including `origin`): the most a
-  compromised agent can obtain is an entry for **its own** host, which you already
-  registered. Replies are validated (a list of well-formed entries, bounded in number and
-  length) and a stored path must be absolute POSIX with no control characters or `..`.
-- The Edit project save replaces the whole map, so an entry the sweep added **after the
-  dialog was opened** is missing from what the dialog posts and reads as a removal: that
-  host is then declined. Re-open the dialog (it loads the project fresh) and set the
-  path again to undo it.
+- It trusts what an agent reports about its own clones (including `origin`), and that
+  is not free: a `hostCwds` entry is what makes a host a **placement and spawn
+  candidate** for the project, so a host that lies about its `origin` can get that
+  project's sessions, and the code they check out, sent to it. The host is one you
+  registered, and turning the setting on is your only gate; the single-match rule, the
+  per-run cap, the validation below and the badge and log line bound and expose it.
+  Replies are validated (a list of well-formed entries, bounded in number and length),
+  and a path is only suggested or stored when it is absolute POSIX with no control
+  characters or `..`.
+- A project's declined hosts are forgotten when the host is deleted and capped at 64.
+- Saving replaces the whole map. The Edit project dialog therefore re-reads the project
+  when you save and keeps a host the sweep added while it was open; a script that PATCHes
+  `hostCwds` should read the project first and send the map back whole, or an entry
+  added in between reads as a removal and that host is declined.
 - Each addition is logged (`[host-checkout-detect] auto-filled hostCwds`) and recorded
-  in the project's `hostCwdsMeta.auto` (the API returns `hostCwdsMeta: { auto,
-declined }`), until an operator saves the map, which acknowledges it.
+  in the project's `hostCwdsMeta.auto` (the API returns `hostCwdsMeta` with `auto` and
+  `declined` lists), until an operator saves the map, which acknowledges it.
+- `POST /api/hosts/:id/detect-checkouts` answers `{ enabled, added }`, plus
+  `skipped: "offline" | "drained"` when the host could not be asked, so "Detect now" can say
+  that instead of "nothing found".
 
 The worktree follows the session: it is cut from the project root **on the
 host the session runs on**, so the agent's working directory always exists

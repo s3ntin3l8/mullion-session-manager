@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  MAX_DECLINED_HOSTS,
   metaAfterOperatorSave,
   parseHostCwdsMeta,
   serializeHostCwdsMeta,
@@ -53,6 +54,25 @@ describe("metaAfterOperatorSave", () => {
       "box",
       "mac",
     ]);
+  });
+
+  it("forgets a declined host that no longer exists, and caps how many it remembers", () => {
+    const before = {
+      hostCwds: null,
+      meta: JSON.stringify({ auto: [], declined: ["gone", "mac"] }),
+    };
+    expect(
+      metaAfterOperatorSave(before, {}, new Set(["mac"])).declined,
+      "an unknown host's decline is dropped",
+    ).toEqual(["mac"]);
+
+    const many = Array.from({ length: MAX_DECLINED_HOSTS + 10 }, (_, i) => `h${i}`);
+    const full = { hostCwds: null, meta: JSON.stringify({ auto: [], declined: many }) };
+    const after = metaAfterOperatorSave(full, {}).declined;
+    expect(after).toHaveLength(MAX_DECLINED_HOSTS);
+    // The OLDEST are forgotten first.
+    expect(after[after.length - 1]).toBe(`h${MAX_DECLINED_HOSTS + 9}`);
+    expect(after).not.toContain("h0");
   });
 
   it("an auto-filled entry that is removed becomes a decline, not a lingering auto flag", () => {

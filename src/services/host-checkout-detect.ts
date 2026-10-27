@@ -2,7 +2,7 @@ import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects } from "../db/schema.js";
-import { LOCAL_HOST_ID } from "../shared/constants.js";
+import { LOCAL_HOST_ID, MAX_HOST_CWDS } from "../shared/constants.js";
 import { normalizeGitRemote, readOriginUrl } from "./git-remote.js";
 import { parseHostCwdsMeta, serializeHostCwdsMeta } from "./host-cwds-meta.js";
 import { listHosts, type HostSummary } from "./host-registry.js";
@@ -23,8 +23,6 @@ import { getStoredSettings } from "./settings.js";
 /** Most mappings one auto-fill run adds, so a first run over a big fleet
  * cannot rewrite the whole project list in one go. */
 export const MAX_AUTOFILL_PER_RUN = 20;
-/** The API's own cap on `hostCwds` entries (routes/projects.ts). */
-const MAX_HOST_CWDS = 32;
 
 /** Bounds on what a host's discovery reply may contain. The reply comes from a
  * REMOTE agent, so it is untrusted input: anything outside these is dropped,
@@ -94,7 +92,7 @@ function sanitizeCandidates(raw: unknown): DiscoveredCandidate[] | null {
 
 /** A path that is safe to store in `hostCwds`: absolute POSIX, bounded, no
  * control characters and no `..` segment (the API itself only checks `^/`). */
-function isStorablePath(cwd: string): boolean {
+export function isStorablePath(cwd: string): boolean {
   return (
     cwd.startsWith("/") &&
     cwd.length <= MAX_FIELD_LENGTH &&
@@ -176,8 +174,10 @@ export async function detectCheckouts(
 
     const list = await discoverOnHost(app, host.id, cache);
     if (list === null) continue;
-    // A linked worktree/submodule is not a clone of its own.
-    const repos = list.filter((c) => c.isGitRepo && c.isWorktree !== true);
+    // A linked worktree/submodule is not a clone of its own, and a path the
+    // sweep would refuse to store is not offered as a suggestion either (the
+    // dialog's "Use" button would otherwise seed it).
+    const repos = list.filter((c) => c.isGitRepo && c.isWorktree !== true && isStorablePath(c.cwd));
 
     const normalized = (c: DiscoveredCandidate): string | null =>
       typeof c.origin === "string" ? normalizeGitRemote(c.origin) : null;
@@ -253,16 +253,34 @@ function commitAutoFill(
  *
  * Trust model: a host's discovery answer, `origin` included, is self-reported by
  * that host's agent. A compromised agent can therefore claim to hold a clone of
- * any project, and the most that buys it is a `hostCwds` entry for ITS OWN host
- * (which the operator already registered) — bounded by the per-run cap, the
- * ambiguity rule and the path checks above, and visible in the log, the
- * `auto` flag and the Edit project badge.
+ * any project. What that buys it is real: a `hostCwds` entry is what makes its
+ * host a placement and spawn candidate for the project (placement.ts
+ * `projectCwdOnHost`, task-claim.ts), so a spoofed `origin` can get that
+ * project's sessions, and the code they check out, sent to that host. The host
+ * is one the operator registered, and turning this setting on is the operator's
+ * only gate; the per-run cap, the ambiguity rule and the path checks bound the
+ * blast radius, and every addition is logged, flagged `auto`, and shown with a
+ * badge in Edit project.
  */
+export interface AutoFillResult {
+  enabled: boolean;
+  added: AutoFilledMapping[];
+  /** Set when the run was for ONE host that cannot be asked right now, so a
+   * caller can say "host offline" instead of "nothing found". */
+  skipped?: "offline" | "drained";
+}
+
 export async function autoFillHostCwds(
   app: FastifyInstance,
   opts: { hostId?: string } = {},
-): Promise<{ enabled: boolean; added: AutoFilledMapping[] }> {
+): Promise<AutoFillResult> {
   if (!getStoredSettings(app.db).autoDetectHostCheckouts) return { enabled: false, added: [] };
+
+  if (opts.hostId !== undefined) {
+    const host = listHosts(app).find((h) => h.id === opts.hostId);
+    if (host?.drained) return { enabled: true, added: [], skipped: "drained" };
+    if (host && !isOnline(app, host)) return { enabled: true, added: [], skipped: "offline" };
+  }
 
   const cache: HostCandidateCache = new Map();
   const added: AutoFilledMapping[] = [];

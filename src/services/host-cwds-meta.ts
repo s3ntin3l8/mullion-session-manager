@@ -7,6 +7,9 @@ import { parseHostCwds } from "./placement.js";
 // state in a TEXT column, and a malformed one must read as "empty", never
 // throw into a request.
 
+/** Most declined hosts remembered per project; the oldest are forgotten first. */
+export const MAX_DECLINED_HOSTS = 64;
+
 export interface HostCwdsMeta {
   auto: string[];
   declined: string[];
@@ -46,6 +49,8 @@ export function serializeHostCwdsMeta(meta: HostCwdsMeta): string | null {
  *   auto-detect must never put it back.
  * - A host whose entry is set (new or kept) leaves `declined`: the operator
  *   chose it.
+ * - A decline for a host that no longer exists is dropped (`knownHostIds`), and
+ *   the list is capped at MAX_DECLINED_HOSTS, so it cannot grow without bound.
  * - `auto` ends EMPTY: every entry is now operator-saved (so no longer
  *   "auto-detected"), and an auto-filled one that was removed is just gone.
  *
@@ -56,6 +61,7 @@ export function serializeHostCwdsMeta(meta: HostCwdsMeta): string | null {
 export function metaAfterOperatorSave(
   before: { hostCwds: string | null; meta: string | null },
   afterMap: Record<string, string>,
+  knownHostIds?: ReadonlySet<string>,
 ): HostCwdsMeta {
   const prev = parseHostCwdsMeta(before.meta);
   const beforeMap = parseHostCwds(before.hostCwds);
@@ -65,5 +71,6 @@ export function metaAfterOperatorSave(
     if (!after.has(hostId)) declined.add(hostId);
   }
   for (const hostId of after) declined.delete(hostId);
-  return { auto: [], declined: [...declined] };
+  const kept = [...declined].filter((hostId) => !knownHostIds || knownHostIds.has(hostId));
+  return { auto: [], declined: kept.slice(-MAX_DECLINED_HOSTS) };
 }

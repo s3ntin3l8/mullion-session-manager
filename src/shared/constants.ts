@@ -50,6 +50,12 @@ export type TaskStatus = (typeof TASK_STATUSES)[number];
 // RemoteHostClient.
 export const LOCAL_HOST_ID = "local";
 
+/** Most entries a project's `hostCwds` map may hold. One number for the create
+ * and update schemas (routes/projects.ts), the auto-detect sweep
+ * (services/host-checkout-detect.ts) and the Edit project dialog, so they
+ * cannot drift apart (issue #2090). */
+export const MAX_HOST_CWDS = 32;
+
 // ---------------------------------------------------------------------------
 // services/pty-manager.ts / frontend/src/lib/terminalGridSize.ts —
 // MAX_TERMINAL_COLS / MAX_TERMINAL_ROWS

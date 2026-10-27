@@ -268,6 +268,20 @@ describe("host-checkout-detect", () => {
       }
     });
 
+    it("does not even suggest a path the sweep would refuse to store", async () => {
+      const project = localProject("app");
+      discovery.set(macId, [
+        repo("app", { cwd: "relative/app" }),
+        repo("app", { cwd: "/ok/../etc/app" }),
+        repo("app", { cwd: "/with\nnewline/app" }),
+      ]);
+
+      expect(await detectCheckouts(app, project)).toEqual([]);
+
+      discovery.set(macId, [repo("app", { cwd: "/Users/x/app" })]);
+      expect((await detectCheckouts(app, project))[0].candidates[0].cwd).toBe("/Users/x/app");
+    });
+
     it("caps how many entries it reads from one host", async () => {
       const project = localProject("app");
       const many: DiscoveredCandidate[] = Array.from({ length: 3000 }, (_, i) => ({
@@ -396,6 +410,30 @@ describe("host-checkout-detect", () => {
 
       expect((await autoFillHostCwds(app)).added).toEqual([]);
       expect(row(project.id).hostCwds).toBeNull();
+    });
+
+    it("says WHY a one-host run found nothing: the host is offline, or parked", async () => {
+      enable(true);
+      localProject("app");
+      const down = createHost(app, { name: "down", baseUrl: "http://down.test", token: "t" });
+      const parked = createHost(app, { name: "parked", baseUrl: "http://p.test", token: "t" });
+      app.hostHeartbeatTracker!.recordSuccess(parked.id);
+      app.db.update(hosts).set({ drained: true }).where(eq(hosts.id, parked.id)).run();
+
+      expect(await autoFillHostCwds(app, { hostId: down.id })).toEqual({
+        enabled: true,
+        added: [],
+        skipped: "offline",
+      });
+      expect(await autoFillHostCwds(app, { hostId: parked.id })).toEqual({
+        enabled: true,
+        added: [],
+        skipped: "drained",
+      });
+      // An online host with nothing to find is NOT "skipped".
+      discovery.set(macId, []);
+      expect(await autoFillHostCwds(app, { hostId: macId })).toEqual({ enabled: true, added: [] });
+      expect(discoverCalls).not.toContain(down.id);
     });
 
     it("restricts a run to one host when asked", async () => {

@@ -23,6 +23,7 @@ import { resolveGlobalPresets } from "./actions.js";
 import { LOCAL_HOST_ID, getHostRow } from "../services/host-registry.js";
 import {
   DOCKER_STACK_SESSION_NAME_PREFIX,
+  MAX_HOST_CWDS,
   PLACEMENT_MODES,
   type PlacementMode,
 } from "../shared/constants.js";
@@ -335,7 +336,7 @@ const createProjectSchema = {
       hostCwds: {
         type: ["object", "null"],
         additionalProperties: { type: "string", minLength: 1, pattern: "^/" },
-        maxProperties: 32,
+        maxProperties: MAX_HOST_CWDS,
       },
       createDir: { type: "boolean" },
       gitInit: { type: "boolean" },
@@ -358,7 +359,7 @@ const updateProjectSchema = {
       hostCwds: {
         type: ["object", "null"],
         additionalProperties: { type: "string", minLength: 1, pattern: "^/" },
-        maxProperties: 32,
+        maxProperties: MAX_HOST_CWDS,
       },
       devServerUrl: { type: ["string", "null"], minLength: 1 },
       autoFetch: { type: ["boolean", "null"] },
@@ -4908,6 +4909,7 @@ export async function projectsRoute(app: FastifyInstance) {
                   metaAfterOperatorSave(
                     { hostCwds: existing.hostCwds, meta: existing.hostCwdsMeta },
                     hostCwds ?? {},
+                    new Set(listHosts(app).map((h) => h.id)),
                   ),
                 ),
               }
