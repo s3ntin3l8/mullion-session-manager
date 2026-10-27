@@ -90,42 +90,71 @@ async function getText(url, headers = {}) {
   return res.text();
 }
 
-async function main() {
-  const check = process.argv.includes("--check");
-  const engines = JSON.parse(
-    readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
-  ).engines.node;
+/**
+ * Refreshes (or, with `check`, verifies) the pins in the script. Everything it
+ * touches is a parameter, so a test can run it without the network or the disk.
+ *
+ * @param {{
+ *   check?: boolean,
+ *   engines: string,
+ *   fetchText?: (url: string, headers?: Record<string, string>) => Promise<string>,
+ *   readScript?: () => string,
+ *   writeScript?: (text: string) => void,
+ *   log?: (message: string) => void,
+ *   logError?: (message: string) => void,
+ * }} options
+ * @returns {Promise<number>} the exit status
+ */
+export async function run({
+  check = false,
+  engines,
+  fetchText = getText,
+  readScript = () => readFileSync(SCRIPT, "utf8"),
+  writeScript = (text) => writeFileSync(SCRIPT, text),
+  log = console.log,
+  logError = console.error,
+}) {
   const major = /(\d+)/.exec(engines)?.[1] ?? "";
   // Only digits go into the URL below: the value comes from a file.
   if (!/^\d{1,3}$/.test(major))
     throw new Error(`cannot read a Node major from engines.node "${engines}"`);
 
   const node = parseNodeShasums(
-    await getText(`https://nodejs.org/dist/latest-v${encodeURIComponent(major)}.x/SHASUMS256.txt`),
+    await fetchText(
+      `https://nodejs.org/dist/latest-v${encodeURIComponent(major)}.x/SHASUMS256.txt`,
+    ),
     major,
   );
   const release = JSON.parse(
-    await getText("https://api.github.com/repos/git-for-windows/git/releases/latest", {
+    await fetchText("https://api.github.com/repos/git-for-windows/git/releases/latest", {
       accept: "application/vnd.github+json",
       "user-agent": "mullion-update-windows-prereqs",
     }),
   );
   const pins = { ...node, ...pickPortableGit(release) };
 
-  const current = readFileSync(SCRIPT, "utf8");
+  const current = readScript();
   const updated = applyPins(current, pins);
   if (updated === current) {
-    console.log(`pins are current: Node ${pins.nodeVersion}, Git ${pins.gitVersion}`);
-    return;
+    log(`pins are current: Node ${pins.nodeVersion}, Git ${pins.gitVersion}`);
+    return 0;
   }
   if (check) {
-    console.error(
+    logError(
       `the pins in deploy/windows/mullion-install.ps1 are stale (latest: Node ${pins.nodeVersion}, Git ${pins.gitVersion}); run node scripts/update-windows-prereqs.mjs`,
     );
-    process.exit(1);
+    return 1;
   }
-  writeFileSync(SCRIPT, updated);
-  console.log(`updated the pins: Node ${pins.nodeVersion}, Git ${pins.gitVersion}`);
+  writeScript(updated);
+  log(`updated the pins: Node ${pins.nodeVersion}, Git ${pins.gitVersion}`);
+  return 0;
+}
+
+async function main() {
+  const engines = JSON.parse(
+    readFileSync(fileURLToPath(new URL("../package.json", import.meta.url)), "utf8"),
+  ).engines.node;
+  process.exit(await run({ check: process.argv.includes("--check"), engines }));
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

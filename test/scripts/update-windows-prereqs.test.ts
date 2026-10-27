@@ -8,6 +8,7 @@ import {
   parseNodeShasums,
   pickPortableGit,
   renderPins,
+  run,
 } from "../../scripts/update-windows-prereqs.mjs";
 
 const hash = (c: string) => c.repeat(64);
@@ -87,5 +88,92 @@ describe("update-windows-prereqs", () => {
 
   it("refuses a script without the markers", () => {
     expect(() => applyPins("no markers", {})).toThrow(/markers are missing/);
+  });
+
+  describe("run", () => {
+    const script = fs.readFileSync(
+      fileURLToPath(new URL("../../deploy/windows/mullion-install.ps1", import.meta.url)),
+      "utf8",
+    );
+    const fetchText =
+      (calls: string[] = []) =>
+      async (url: string) => {
+        calls.push(url);
+        return url.includes("nodejs.org") ? SHASUMS : JSON.stringify(RELEASE);
+      };
+    // Never the real script: a run that gets as far as writing must not touch it.
+    const quiet = {
+      log: () => {},
+      logError: () => {},
+      writeScript: () => {
+        throw new Error("this test must not write the script");
+      },
+    };
+
+    it("fetches the listing for the required major only, and rewrites a stale script", async () => {
+      const calls: string[] = [];
+      const written: string[] = [];
+      const logs: string[] = [];
+      const code = await run({
+        engines: ">=26",
+        fetchText: fetchText(calls),
+        readScript: () => script,
+        writeScript: (t) => written.push(t),
+        log: (m) => logs.push(m),
+        logError: () => {},
+      });
+      expect(code).toBe(0);
+      expect(calls[0]).toBe("https://nodejs.org/dist/latest-v26.x/SHASUMS256.txt");
+      expect(calls[1]).toBe("https://api.github.com/repos/git-for-windows/git/releases/latest");
+      expect(written).toHaveLength(1);
+      expect(written[0]).toContain(`$PinNodeSha256 = '${hash("c")}'`);
+      expect(logs[0]).toMatch(/^updated the pins: Node 26\.12\.1, Git 2\.56\.0\.4$/);
+    });
+
+    it("writes nothing when the pins are already current", async () => {
+      let updated = "";
+      await run({
+        ...quiet,
+        engines: ">=26",
+        fetchText: fetchText(),
+        readScript: () => script,
+        writeScript: (t) => (updated = t),
+      });
+      const written: string[] = [];
+      const code = await run({
+        ...quiet,
+        engines: ">=26",
+        fetchText: fetchText(),
+        readScript: () => updated,
+        writeScript: (t) => written.push(t),
+      });
+      expect(code).toBe(0);
+      expect(written).toEqual([]);
+    });
+
+    it("--check reports stale pins with status 1 and writes nothing", async () => {
+      const written: string[] = [];
+      const errors: string[] = [];
+      const code = await run({
+        check: true,
+        engines: ">=26",
+        fetchText: fetchText(),
+        readScript: () => script,
+        writeScript: (t) => written.push(t),
+        log: () => {},
+        logError: (m) => errors.push(m),
+      });
+      expect(code).toBe(1);
+      expect(written).toEqual([]);
+      expect(errors[0]).toMatch(/are stale/);
+    });
+
+    it("refuses an engines value it cannot read a major from, before any request", async () => {
+      const calls: string[] = [];
+      await expect(
+        run({ engines: "latest", fetchText: fetchText(calls), readScript: () => script, ...quiet }),
+      ).rejects.toThrow(/cannot read a Node major/);
+      expect(calls).toEqual([]);
+    });
   });
 });
