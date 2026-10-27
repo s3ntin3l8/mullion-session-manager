@@ -4,6 +4,7 @@ import { execFile } from "node:child_process";
 import { readFile, unlink } from "node:fs/promises";
 import { SocketAlreadyListeningError, type SocketProbeResult } from "./unix-socket.js";
 import { windowsPowerShellEnv } from "../cli/pipe-acl.mjs";
+import { fitsMsysSunPath } from "../cli/sun-path.mjs";
 
 // Issue #2131 — a unix socket that Git Bash's own tools can connect to, on
 // Windows. Sessions there run in Git Bash, whose `ssh`, `ssh-add` and `git`
@@ -22,16 +23,14 @@ import { windowsPowerShellEnv } from "../cli/pipe-acl.mjs";
 // Measured against Git for Windows' msys-runtime 3.6.3 and OpenSSH 10.0
 // (`ssh-add -l`): a file without the System attribute is refused (EBADF),
 // and the Windows (`D:\x`, `D:/x`) and MSYS (`/d/x`) spellings of the path
-// all work as SSH_AUTH_SOCK. The path must fit MSYS's 108-byte sun_path.
+// all work as SSH_AUTH_SOCK. The path must fit MSYS's 108-byte sun_path
+// (fitsMsysSunPath, src/cli/sun-path.mjs).
 //
 // The loopback port is reachable by every local user; the SECRET is the
 // gate. So the file is created with a protected DACL — the current user and
 // SYSTEM only — in the same call that creates it, never written first and
 // narrowed after: a cwd-relative SESSIONS_DIR on a data drive typically
 // inherits read access for every authenticated user.
-
-/** MSYS's sun_path is 108 bytes including the terminating NUL. */
-export const MSYS_SOCKET_MAX_PATH_BYTES = 107;
 
 /** How long a client may take to finish the handshake before it is dropped. */
 export const MSYS_HANDSHAKE_TIMEOUT_MS = 5_000;
@@ -106,11 +105,6 @@ export function parseMsysSocketFile(text: string): MsysSocketCookie | null {
   const secret = Buffer.alloc(SECRET_BYTES);
   for (let i = 0; i < 4; i++) secret.writeUInt32LE(parseInt(match[i + 2], 16), i * 4);
   return { port, secret };
-}
-
-/** Whether `socketPath` fits the sun_path an MSYS client can connect through. */
-export function fitsMsysSunPath(socketPath: string): boolean {
-  return Buffer.byteLength(socketPath) <= MSYS_SOCKET_MAX_PATH_BYTES;
 }
 
 export type MsysSocketFileWriter = (socketPath: string, contents: string) => Promise<void>;
@@ -289,9 +283,7 @@ export interface MsysSocketServer {
  */
 export async function listenMsysSocket(opts: MsysSocketServerOptions): Promise<MsysSocketServer> {
   if (!fitsMsysSunPath(opts.socketPath)) {
-    throw new Error(
-      `${opts.socketPath} is longer than the ${MSYS_SOCKET_MAX_PATH_BYTES} bytes an MSYS socket path may have`,
-    );
+    throw new Error(`${opts.socketPath} is too long for an MSYS socket path (see fitsMsysSunPath)`);
   }
   const secret = randomBytes(SECRET_BYTES);
   // Connections still in the handshake belong to no caller yet; close() ends them.
@@ -328,6 +320,14 @@ export async function listenMsysSocket(opts: MsysSocketServerOptions): Promise<M
     await write(opts.socketPath, formatMsysSocketFile(port, secret));
   } catch (err) {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    // A write that failed after CreateNew made the file (a full disk, the
+    // timeout killing PowerShell) leaves one with no readable cookie, which
+    // probeMsysSocket can only call "unknown" — so reclaim would refuse it on
+    // every later boot. Remove it. Not after a collision, though: that file
+    // is another instance's.
+    if (!(err instanceof SocketAlreadyListeningError)) {
+      await unlink(opts.socketPath).catch(() => undefined);
+    }
     throw err;
   }
   return {

@@ -6,13 +6,11 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from "no
 import type { execFile } from "node:child_process";
 import {
   acceptMsysHandshake,
-  fitsMsysSunPath,
   formatMsysSocketFile,
   listenMsysSocket,
   MSYS_SOCKET_COOKIE_ENV,
   MSYS_SOCKET_FILE_EXISTS_EXIT,
   MSYS_SOCKET_FILE_SCRIPT,
-  MSYS_SOCKET_MAX_PATH_BYTES,
   MSYS_SOCKET_PATH_ENV,
   parseMsysSocketFile,
   probeMsysSocket,
@@ -21,6 +19,10 @@ import {
   type MsysSocketServer,
 } from "../../src/services/msys-socket.js";
 import { SocketAlreadyListeningError } from "../../src/services/unix-socket.js";
+import { fitsMsysSunPath } from "../../src/cli/sun-path.mjs";
+
+/** MSYS's sun_path: 108 bytes, NUL included. */
+const MSYS_SOCKET_MAX_PATH_BYTES = 107;
 
 // A fixed, low-entropy secret: the file format is what is under test.
 const SECRET = Buffer.from("00112233445566778899aabbccddeeff", "hex");
@@ -297,6 +299,34 @@ describe("listenMsysSocket", () => {
     expect(refused).toBe("ECONNREFUSED");
   });
 
+  it("removes a socket file a failed write left behind — reclaim could never tell it is stale", async () => {
+    const socketPath = tmpSocket();
+    await expect(
+      listenMsysSocket({
+        socketPath,
+        onConnection: () => undefined,
+        writeSocketFile: (p) => {
+          writeFileSync(p, "");
+          return Promise.reject(new Error("disk full"));
+        },
+      }),
+    ).rejects.toThrow("disk full");
+    expect(existsSync(socketPath)).toBe(false);
+  });
+
+  it("leaves the file alone after a collision — it is another instance's", async () => {
+    const socketPath = tmpSocket();
+    writeFileSync(socketPath, "theirs");
+    await expect(
+      listenMsysSocket({
+        socketPath,
+        onConnection: () => undefined,
+        writeSocketFile: (p) => Promise.reject(new SocketAlreadyListeningError(p, "unknown")),
+      }),
+    ).rejects.toBeInstanceOf(SocketAlreadyListeningError);
+    expect(readFileSync(socketPath, "utf8")).toBe("theirs");
+  });
+
   it("refuses a path too long for MSYS", async () => {
     await expect(
       listenMsysSocket({
@@ -304,7 +334,7 @@ describe("listenMsysSocket", () => {
         writeSocketFile: plainWriter,
         onConnection: () => undefined,
       }),
-    ).rejects.toThrow(/longer than/);
+    ).rejects.toThrow(/too long for an MSYS socket path/);
   });
 });
 

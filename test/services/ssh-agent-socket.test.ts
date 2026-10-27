@@ -9,6 +9,7 @@ import {
   describeBridgeShadowing,
   materializeSshAgentSocket,
   materializesBridgeSocket,
+  preflightBridgeSocket,
   resolveSshAuthSock,
   sshAgentSocketPath,
 } from "../../src/services/ssh-agent-socket.js";
@@ -389,6 +390,49 @@ describe("ssh-agent-socket on win32: collisions", () => {
       ).rejects.toBeInstanceOf(SocketAlreadyListeningError);
     } finally {
       await first.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("preflightBridgeSocket", () => {
+  it("passes a free path, on win32 and elsewhere", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "preflight-"));
+    try {
+      const free = path.join(dir, "ssh-agent.sock");
+      expect(await preflightBridgeSocket(free, "win32")).toEqual({ ok: true });
+      expect(await preflightBridgeSocket(free, "linux")).toEqual({ ok: true });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a win32 path past MSYS's sun_path (#2131), but not the same path elsewhere", async () => {
+    const long = path.join(os.tmpdir(), "x".repeat(120), "ssh-agent.sock");
+    expect(await preflightBridgeSocket(long, "win32")).toEqual({ ok: false, reason: "too-long" });
+    expect((await preflightBridgeSocket(long, "linux")).ok).toBe(true);
+  });
+
+  it("refuses a path a live MSYS socket already holds on win32", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "preflight-"));
+    const socketPath = path.join(dir, "ssh-agent.sock");
+    const live = await materializeSshAgentSocket({
+      socketPath,
+      openChannel: () => Promise.resolve(null),
+      platform: "win32",
+      writeMsysSocketFile: (p, contents) => {
+        writeFileSync(p, contents);
+        return Promise.resolve();
+      },
+    });
+    try {
+      expect(await preflightBridgeSocket(socketPath, "win32")).toEqual({
+        ok: false,
+        reason: "occupied",
+        probe: "live",
+      });
+    } finally {
+      await live.close();
       rmSync(dir, { recursive: true, force: true });
     }
   });

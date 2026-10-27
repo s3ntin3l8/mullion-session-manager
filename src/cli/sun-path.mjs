@@ -70,6 +70,18 @@ export function longestSocketPath(dir) {
 }
 
 /**
+ * Whether `socketPath` fits the `sun_path` of an MSYS/Cygwin client (Git
+ * Bash's ssh on Windows, issue #2131). Windows itself has no sun_path — its
+ * endpoints are named pipes — but MSYS emulates unix sockets with the
+ * default 108-byte `sockaddr_un`, NUL included, so an emulated socket's file
+ * path is held to that. Unlike fitsSunPath this takes the socket's own path:
+ * the one MSYS socket Mullion serves is the ssh-agent bridge's.
+ */
+export function fitsMsysSunPath(socketPath) {
+  return Buffer.byteLength(socketPath, "utf8") <= DEFAULT_SUN_PATH_BYTES - 1;
+}
+
+/**
  * Whether a directory can hold a socket on this platform.
  *
  * The limit counts the NUL terminator, so the usable path is one byte

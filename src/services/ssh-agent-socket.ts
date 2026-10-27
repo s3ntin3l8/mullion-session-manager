@@ -1,9 +1,11 @@
 import net from "node:net";
 import path from "node:path";
 import { chmodSync } from "node:fs";
-import { reclaimSocketPath } from "./unix-socket.js";
+import { probeSocket, reclaimSocketPath, type SocketProbeResult } from "./unix-socket.js";
+import { fitsMsysSunPath } from "../cli/sun-path.mjs";
 import {
   listenMsysSocket,
+  probeMsysSocket,
   reclaimMsysSocket,
   type MsysSocketFileWriter,
   type MsysSocketServer,
@@ -176,6 +178,29 @@ export function sshAgentSocketPath(sessionsDir: string): string {
 // Bash ssh can use it and no other local user can.
 export function materializesBridgeSocket(role: string): boolean {
   return role === "agent" || role === "primary";
+}
+
+/**
+ * plugins/pty.ts's boot-time check of the bridge socket path, before
+ * PtyManager freezes the bridge tier into every session (see that caller
+ * for why it cannot wait for the bind). `ok` only when the path is free:
+ *   - "too-long": on win32 the socket is an MSYS one (#2131), and a path
+ *     past MSYS's sun_path could never be connected to;
+ *   - "occupied": something answers there, or the probe could not tell
+ *     ("live" and "unknown" alike, as reclaimSocketPath treats them).
+ */
+export async function preflightBridgeSocket(
+  socketPath: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<
+  | { ok: true }
+  | { ok: false; reason: "too-long" }
+  | { ok: false; reason: "occupied"; probe: SocketProbeResult }
+> {
+  const win32 = platform === "win32";
+  if (win32 && !fitsMsysSunPath(socketPath)) return { ok: false, reason: "too-long" };
+  const probe = win32 ? await probeMsysSocket(socketPath) : await probeSocket(socketPath);
+  return probe === "dead" ? { ok: true } : { ok: false, reason: "occupied", probe };
 }
 
 /** Which of resolveSshAuthSock's three tiers (or genuine absence) produced
