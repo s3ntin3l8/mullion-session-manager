@@ -83,6 +83,25 @@ describe("PrRow preview action (#2018)", () => {
     expect(api.createPrPreview).toHaveBeenCalledWith(1, 42);
   });
 
+  it("opens the checkout preview of a checked-out PR head instead of starting another", async () => {
+    useDashboardStore.setState({
+      projects: [makeProject({ id: 1, devServerUrl: "http://localhost:5173" })],
+    });
+    const checkout = {
+      slug: "checkout",
+      kind: "project" as const,
+      projectId: 1,
+      externalUrl: null,
+      createdAt: "",
+      branch: "fix-attention",
+      upstreamPort: null,
+    };
+    render(<PrRow pr={PR} projectId={1} links={entry(checkout)} onOpen={vi.fn()} />);
+    await userEvent.click(screen.getByRole("button", { name: "Open preview" }));
+    expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({ slug: "checkout" });
+    expect(api.createPrPreview).not.toHaveBeenCalled();
+  });
+
   it("says why a fork's PR can't be previewed", async () => {
     const { ApiError } = await import("../api/client.js");
     vi.mocked(api.createPrPreview).mockRejectedValue(new ApiError("fork", 409, "fork_unsupported"));

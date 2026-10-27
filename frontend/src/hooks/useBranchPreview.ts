@@ -9,12 +9,14 @@ import { useDashboardStore } from "../store/index.js";
  * branch detail, PR row and PR detail.
  *
  * An existing checkout preview (the links index's `entry.preview`, no
- * `upstreamPort`) just opens, and so does the current branch with a
- * configured dev server — the checkout already serves it. Anything else asks
+ * `upstreamPort`) just opens while the project has a dev server to serve it —
+ * a PR whose head is the checked-out branch included — and so does the
+ * current branch with a configured dev server. Without one, a checkout row
+ * would only proxy to a 503, so a branch preview is started. Anything else asks
  * the backend for the branch preview: that call is idempotent and returns a
  * live one unchanged, but also restarts one whose dock session has died, so
- * it is made even when the links index already knows the preview. A PR
- * always goes through its own route, which also refuses a fork's head.
+ * it is made even when the links index already knows the preview. A PR's
+ * start always goes through its own route, which also refuses a fork's head.
  * Every path lands in the dock's browser pane through the store intent, so a
  * standalone GitHub panel works the same as the sidebar.
  */
@@ -56,7 +58,7 @@ export function useBranchPreview(projectId: number) {
   const open = useCallback(
     async (target: PreviewTarget, existing: Preview | null | undefined) => {
       const { requestOpenPreview, refreshPreviews, reportError } = useDashboardStore.getState();
-      if (target.kind === "branch" && existing && existing.upstreamPort == null) {
+      if (existing && existing.upstreamPort == null && hasDevServer) {
         requestOpenPreview({ projectId, slug: existing.slug, branch: target.branch });
         return;
       }

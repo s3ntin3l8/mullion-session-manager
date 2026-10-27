@@ -119,11 +119,16 @@ preview worktree of that branch — the control flagged `"preview": true`, or
 the project's only control. Several branches can be previewed at once, so
 each gets its own port: Mullion allocates a free one and passes it as
 **`PORT`** in the session's environment, and proxies the branch's preview to
-it. A preview control must therefore listen on `$PORT` rather than a fixed
-port:
+it on `127.0.0.1`. A preview control must therefore listen on `$PORT` rather
+than a fixed port, on IPv4 loopback (a bare `localhost` can bind `::1` only):
 
 ```json
-{ "id": "web", "title": "Web", "command": "npx vite --port $PORT --strictPort", "preview": true }
+{
+  "id": "web",
+  "title": "Web",
+  "command": "npx vite --host 127.0.0.1 --port $PORT --strictPort",
+  "preview": true
+}
 ```
 
 The control's own `env` is kept, with `PORT` set on top. See

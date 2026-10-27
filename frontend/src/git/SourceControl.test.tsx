@@ -599,9 +599,22 @@ describe("Branches", () => {
         ],
       }),
     );
+    // Without a dev server the checkout row would only proxy to a 503: start
+    // a branch preview instead.
+    await userEvent.click(within(rowOf("feat/open")).getByRole("button", { name: "Open preview" }));
+    await waitFor(() => expect(m.createBranchPreview).toHaveBeenCalledTimes(3));
+
+    act(() =>
+      useDashboardStore.setState({
+        projects: [
+          makeProject({ id: 1, name: "proj", cwd: "/repo", devServerUrl: "http://localhost:5173" }),
+        ],
+        openPreviewRequest: null,
+      }),
+    );
     await userEvent.click(within(rowOf("feat/open")).getByRole("button", { name: "Open preview" }));
     expect(useDashboardStore.getState().openPreviewRequest).toMatchObject({ slug: "checkout" });
-    expect(m.createBranchPreview).toHaveBeenCalledTimes(2);
+    expect(m.createBranchPreview).toHaveBeenCalledTimes(3);
   });
 
   it("explains a refused branch preview", async () => {

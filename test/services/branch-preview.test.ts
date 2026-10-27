@@ -229,6 +229,39 @@ describe("branch previews (issues #2016/#2018)", () => {
     expect(listUpstreamPorts(app).has(preview.upstreamPort!)).toBe(true);
   });
 
+  it("never hands a port still held by an unbound create to a concurrent one", async () => {
+    const { cwd } = repo();
+    writeDock(cwd, [{ id: "dev", title: "Dev", command: "npm run dev" }]);
+    const projectId = insertProject(app, cwd);
+    // The OS offers the same port twice in a row, then another.
+    const offers = [41_000, 41_000, 41_001];
+    vi.spyOn(net, "createServer").mockImplementation(() => {
+      const port = offers.shift();
+      const server = {
+        once: () => server,
+        listen: (_p: number, _h: string, cb: () => void) => cb(),
+        address: () => ({ port }),
+        close: (cb: () => void) => cb(),
+      };
+      return server as unknown as net.Server;
+    });
+    const create = fakeCreate(app);
+    let second: Promise<{ upstreamPort?: number | null }> | undefined;
+    const real = create.getMockImplementation()!;
+    create.mockImplementation(async (a, params) => {
+      // While feat/x's row is still unbound, main's preview is created.
+      if (!second) {
+        second = getOrCreateBranchPreview(app, projectId, "main");
+        await second;
+      }
+      return real(a, params);
+    });
+
+    const first = await getOrCreateBranchPreview(app, projectId, "feat/x");
+    expect(first.upstreamPort).toBe(41_000);
+    expect((await second!).upstreamPort).toBe(41_001);
+  });
+
   it("reuses a live bound session and restarts a dead one under the same slug", async () => {
     const { cwd } = repo();
     writeDock(cwd, [{ id: "dev", title: "Dev", command: "npm run dev" }]);

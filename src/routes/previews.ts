@@ -149,7 +149,9 @@ export async function previewsRoute(app: FastifyInstance) {
 
   app.post<{ Body: CreatePreviewBody }>(
     "/api/previews",
-    { schema: createPreviewSchema },
+    // A branch preview cuts a worktree and spawns a dock session per new
+    // branch (the in-flight dedupe is per branch): same budget as the PR route.
+    { schema: createPreviewSchema, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const { kind } = request.body;
 

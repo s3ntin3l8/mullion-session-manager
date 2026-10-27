@@ -297,7 +297,7 @@ Starting one:
 3. Allocates a free loopback port and starts the control as a dock session
    in a `.mullion-worktrees/dock-preview-*` worktree of the branch, with
    `PORT=<port>` in its environment. **The control's command must listen on
-   `$PORT`** (e.g. `vite --port $PORT --strictPort`); see
+   `$PORT`** (e.g. `vite --host 127.0.0.1 --port $PORT --strictPort`); see
    [`dock.md`](dock.md)'s `PORT` convention.
 4. Binds the `(project, branch)` preview row to that session and port. The
    proxy forwards that preview's slug to the port, not to `devServerUrl`.

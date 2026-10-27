@@ -209,6 +209,9 @@ async function clearStaleWorktree(
   }
 }
 
+// Ports handed out to a create that hasn't bound its row yet.
+const reservedPorts = new Set<number>();
+
 // Concurrent requests for the same (project, branch) share one create: the
 // row upsert alone would keep the table consistent, but both callers would
 // still each allocate a port and spawn a dev server.
@@ -277,7 +280,25 @@ async function createBranchPreview(
     dockPreviewWorktreePath(project.cwd, branch),
   );
 
-  const port = await allocatePreviewPort(listUpstreamPorts(app));
+  // Held from allocation until the row is bound: concurrent creates for
+  // different branches don't share the inflight entry, and would otherwise
+  // only see each other's ports once bound.
+  const port = await allocatePreviewPort(new Set([...listUpstreamPorts(app), ...reservedPorts]));
+  reservedPorts.add(port);
+  try {
+    return await startOnPort(app, projectId, branch, control, port);
+  } finally {
+    reservedPorts.delete(port);
+  }
+}
+
+async function startOnPort(
+  app: FastifyInstance,
+  projectId: number,
+  branch: string,
+  control: DockControl,
+  port: number,
+): Promise<PreviewSummary> {
   const result = await createSessionRecord(app, {
     projectId,
     command: control.command,
