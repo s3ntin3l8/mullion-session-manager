@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterAll } from "vitest";
 // exactly like PtyManager's own bootstrapMaster()/stopScope() — a test must
 // never let a real one fire (AGENTS.md, issue #1137's mocking invariant).
 import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
+import { SystemdDeviceScopeBackend } from "../../src/services/scope/device-systemd.js";
 import { EventEmitter } from "node:events";
 import { spawn as spawnChildProcess, type SpawnOptions } from "node:child_process";
 import { AdbScrcpyOptionsLatest } from "@yume-chan/adb-scrcpy";
@@ -294,6 +295,10 @@ function baseOpts(overrides: Partial<ConstructorParameters<typeof DeviceManager>
     emulatorPath: "/opt/android/emulator/emulator",
     scrcpyServerPath: SCRCPY_SERVER_FIXTURE,
     sessionsDir: SESSIONS_DIR,
+    // Pinned: this suite fakes systemctl/systemd-run, so it must exercise the
+    // systemd device backend on every host (the platform's own pick on macOS reads
+    // the marker files these tests write). Individual tests override it.
+    scopeBackend: new SystemdDeviceScopeBackend({ sessionsDir: SESSIONS_DIR }),
     ...overrides,
   };
 }

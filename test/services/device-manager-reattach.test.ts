@@ -6,6 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { ScrcpyMediaStreamPacket } from "@yume-chan/scrcpy";
+import { SystemdDeviceScopeBackend } from "../../src/services/scope/device-systemd.js";
 import type { DeviceManagerOptions as DeviceManagerOptionsType } from "../../src/services/device-manager.js";
 
 // Covers DeviceManager.getOrCreate()'s reattach path (issue #1325's own
@@ -160,6 +161,10 @@ function buildManager(
     emulatorPath: "/opt/android/emulator/emulator",
     scrcpyServerPath: "/dev/null",
     sessionsDir: SESSIONS_DIR,
+    // Pinned: this suite fakes systemctl/systemd-run, so it must exercise the
+    // systemd device backend on every host, not whichever one the platform picks
+    // (the macOS one would read the marker files these tests write).
+    scopeBackend: new SystemdDeviceScopeBackend({ sessionsDir: SESSIONS_DIR }),
     onSpawnError: vi.fn(),
     onPortAssigned: overrides.onPortAssigned,
     initialPorts: overrides.initialPorts,

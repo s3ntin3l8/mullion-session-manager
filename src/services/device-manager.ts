@@ -318,7 +318,7 @@ async function stopScopeAndForget(opts: DeviceManagerOptions, id: string): Promi
 /** How an operator stops a scope Mullion can't (or must not) reach itself — worded
  * for the platform's own mechanism. */
 function manualStopHint(opts: DeviceManagerOptions, id: string): string {
-  if (process.platform === "linux") {
+  if (scopeFor(opts).kind === "systemd-device") {
     return `systemctl --user stop crs-device-${deriveInstanceId(opts.sessionsDir)}-${id}.scope`;
   }
   const marker = deviceMarkerPath(opts.sessionsDir, id);
