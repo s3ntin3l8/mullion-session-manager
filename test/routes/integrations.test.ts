@@ -152,6 +152,7 @@ describe("integrations route (issue #27)", () => {
     });
 
     it("a saved primary App wakes them; a rejected one does not", async () => {
+      stubGithubFetch({ appId: "123" });
       const app = await buildApp();
       const rejected = await app.inject({
         method: "PUT",
@@ -159,6 +160,27 @@ describe("integrations route (issue #27)", () => {
         payload: { appId: "not-a-number", privateKey: FAKE_APP_PRIVATE_KEY },
       });
       expect(rejected.statusCode).toBe(400);
+      expect(mockRetryPermanentPushFailuresNow).not.toHaveBeenCalled();
+
+      const saved = await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/app",
+        payload: { appId: "123", privateKey: FAKE_APP_PRIVATE_KEY },
+      });
+      expect(saved.statusCode).toBe(200);
+      expect(mockRetryPermanentPushFailuresNow).toHaveBeenCalledTimes(1);
+      await app.close();
+    });
+
+    it("a saved reviewer App does not: it never pushes", async () => {
+      stubGithubFetch({ appId: "222", appSlug: "test-reviewer-app" });
+      const app = await buildApp();
+      const saved = await app.inject({
+        method: "PUT",
+        url: "/api/integrations/github/reviewer-app",
+        payload: { appId: "222", privateKey: FAKE_APP_PRIVATE_KEY },
+      });
+      expect(saved.statusCode).toBe(200);
       expect(mockRetryPermanentPushFailuresNow).not.toHaveBeenCalled();
       await app.close();
     });
