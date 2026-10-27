@@ -4,14 +4,16 @@ Workflows are **callers** of `s3ntin3l8/.github/.github/workflows/*.yml@main`
 — every one of them tracks `@main` (no SHA pins on these reusable refs; third-party actions are still pinned, see _Action pinning_), so a fix in the shared
 repo is live on the next run:
 
-- `ci-cd.yml` (test-node + test-frontend + test-e2e — no Docker image is built)
+- `ci-cd.yml` (test-node + test-frontend + test-e2e + test-windows — no Docker image is built)
 - `codeql.yml`, `dependency-review.yml`, `release-please.yml`
 - **Exceptions (custom multi-step jobs, no upstream reusable workflow exists):**
   `build-tarball` in `release-please.yml`, which assembles/uploads the
   versioned-release tarball; and `test-e2e` in `ci-cd.yml`, which needs to
   `npx playwright install` a real Chromium (and install a pinned, integrity-
   checked `opencode` binary — see "test-e2e" below) before its test step —
-  something `ci-node.yml` has no hook for.
+  something `ci-node.yml` has no hook for; and `test-windows` in `ci-cd.yml`,
+  which needs a `windows-latest` runner (`ci-node.yml` is Ubuntu-only) — see
+  "test-windows" below.
 - **`claude-code.yml` and `hermes.yml`** are two more callers, not exceptions —
   both invoke `s3ntin3l8/.github`'s own reusable workflows
   (`claude-code.yml`/`hermes-review.yml`) rather than running custom steps.
@@ -129,6 +131,16 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
   uncovered lines become `::warning` annotations. It runs alongside
   `codecov/patch` so the two numbers can be compared before Codecov is opted
   out of (#1920).
+- **`test-windows` (advisory)**: a custom `ci-cd.yml` job on `windows-latest`
+  for the Windows agent host (#1728). It runs a plain `npm ci`, fails if
+  `better-sqlite3` was compiled from source (the runner image has Visual
+  Studio, so a green install alone would prove nothing — `package.json`'s
+  `allowScripts` denies that package's install script so it loads its
+  shipped N-API prebuild, #2066), loads both native modules for real
+  (`scripts/smoke-native.mjs`), and runs the tests that exercise the Windows
+  host code paths (named pipes, the pty-host over ConPTY, the Windows scope
+  backend). It is `continue-on-error` and not a required check until it has
+  a track record.
 - **Test sharding**:
   - Node tests shard into 4×`test-shard` → `test-merge`. Frontend tests
     shard into 2×`test-shard` → `test-merge`.

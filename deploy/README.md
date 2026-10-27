@@ -130,9 +130,10 @@ config-management run); every update after that can go through the button.
 ## Host prerequisites
 
 Beyond `systemd --user` itself: **Node 26**, **`dtach`**, and — needed only
-at install/update time, to compile `better-sqlite3`/`node-pty`'s native
-bindings against this host's exact Node build — a C build toolchain
-(`python3 make g++`). `install.sh` checks for `node`, `npm`, `dtach`,
+at install/update time, to compile `node-pty`'s native binding against this
+host's exact Node build — a C build toolchain (`python3 make g++`).
+(`better-sqlite3` needs none: it loads the N-API prebuild it ships, because
+`package.json`'s `allowScripts` denies its install script — #2066.) `install.sh` checks for `node`, `npm`, `dtach`,
 `systemd-run`, `systemctl`, `curl`, and `tar` up front and fails fast with a
 clear message if any are missing.
 
