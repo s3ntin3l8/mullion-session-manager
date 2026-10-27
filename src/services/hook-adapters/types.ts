@@ -105,9 +105,10 @@ export interface HookAdapterContext {
    * same reason `cwd` is: the other adapters' tests construct ctx literals
    * without it. */
   tmpDir?: string;
-  /** This session's working directory. Optional — only agy's and codex's
-   * adapters read it today (to pre-trust a fresh worktree, see agy.ts's
-   * mergeAgyTrustedWorkspace and codex.ts's buildCodexTrustFlag), so it's
+  /** This session's working directory. Optional — only agy's, codex's and
+   * claude-code's adapters read it today (to pre-trust a fresh worktree, see
+   * agy.ts's mergeAgyTrustedWorkspace, codex.ts's buildCodexTrustFlag and
+   * claude-trust.ts's mergeClaudeTrustedPath), so it's
    * not required on every ctx literal the other two adapters' tests already
    * construct. */
   cwd?: string;
@@ -115,7 +116,7 @@ export interface HookAdapterContext {
    * flag pty-manager.ts uses to decide whether to append
    * `--dangerously-skip-permissions`/`--auto`/etc — see
    * getSkipPermissionFlag()). Optional for the same reason as `cwd` above.
-   * agy's and codex's adapters use this to decide whether pre-trusting
+   * agy's, codex's and claude-code's adapters use this to decide whether pre-trusting
    * `cwd` is in scope: a caller that already asked to skip every
    * tool-permission prompt has opted into "unattended, don't stop me,"
    * which is exactly the posture a pre-trusted folder matches — a manual

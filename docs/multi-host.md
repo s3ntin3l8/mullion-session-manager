@@ -301,6 +301,25 @@ reason on the session row (`worktreeKeptReason`) and retried every half hour,
 so telling the child to commit and push `-u` before it finishes is all it takes.
 See [Isolated session worktrees](disk-cleanup.md#isolated-session-worktrees).
 
+**No folder-trust stop for an unattended Claude child** (#2091). Claude Code
+asks "Do you trust this folder?" the first time it opens a directory, and
+`--dangerously-skip-permissions` does not cover that question, so a fresh
+worktree on a host that has never trusted the project would otherwise sit at
+it until someone answered in the dashboard. When a Claude Code session is
+launched with permissions skipped (which a child spawned by an unattended
+coordinator is), the agent on the child's host records the trust for it first:
+in that host's own `~/.claude.json` (or `$CLAUDE_CONFIG_DIR/.claude.json`),
+under the project's **main checkout** — the entry Claude itself writes for a
+worktree — so it covers every worktree cut from that checkout and the next
+spawn finds it already trusted. The write takes the same lock Claude holds on
+that file and keeps every other entry as it was (the file is re-saved with
+2-space indentation). A launch **without**
+skipped permissions still gets the dialog, and a host where Claude Code has
+never run (no `~/.claude.json` yet) is left alone: its first-run onboarding
+comes first. If the file is locked by a running Claude at that instant, or is
+not valid JSON, nothing is written and the dialog appears, as before. Codex
+and agy children are pre-trusted the same way, each in its own settings.
+
 Supervising a remote child from the coordinator works with `session wait`,
 `session children` (each row carries its `hostId` and `placementReason`),
 `session logs` and `session kill`. `session prompt` and `session wait-output`

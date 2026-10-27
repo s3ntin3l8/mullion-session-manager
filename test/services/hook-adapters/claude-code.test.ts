@@ -32,6 +32,14 @@ vi.mock("../../../src/services/bundle-sync.js", () => ({
     mockRemoveBundleContentForCli(cli),
 }));
 
+// Issue #2091 — the trust write itself is claude-trust.test.ts's job (real
+// fs, real git); here only the adapter's gate around it is under test, so it
+// is replaced and never touches the real ~/.claude.json.
+const mockMergeClaudeTrustedPath = vi.fn((_cwd: string): string => "written");
+vi.mock("../../../src/services/hook-adapters/claude-trust.js", () => ({
+  mergeClaudeTrustedPath: (cwd: string) => mockMergeClaudeTrustedPath(cwd),
+}));
+
 const {
   buildClaudeHookSettings,
   claudeCodeAdapter,
@@ -268,6 +276,7 @@ describe("claudeCodeAdapter.prepareLaunch — managedInstall bundle removal (iss
 
   beforeEach(() => {
     mockRemoveBundleContentForCli.mockClear();
+    mockMergeClaudeTrustedPath.mockClear();
   });
 
   it("sets managedInstall when injectMullionBundle is off, and it calls removeBundleContentForCli('claude-code')", async () => {
@@ -282,6 +291,65 @@ describe("claudeCodeAdapter.prepareLaunch — managedInstall bundle removal (iss
     const plan = claudeCodeAdapter.prepareLaunch({ ...ctx, injectMullionBundle: true });
     expect(plan.managedInstall).toBeUndefined();
     expect(mockRemoveBundleContentForCli).not.toHaveBeenCalled();
+  });
+
+  // Issue #2091 — folder-trust pre-approval, gated like agy's and codex's.
+  describe("folder-trust pre-approval (issue #2091)", () => {
+    const unattended = { ...ctx, injectMullionBundle: true, skipPermissions: true, cwd: "/wt/a" };
+
+    it("trusts the cwd when skipPermissions and cwd are set, even with the bundle setting on", async () => {
+      const plan = claudeCodeAdapter.prepareLaunch(unattended);
+      expect(plan.managedInstall).toBeInstanceOf(Function);
+      await plan.managedInstall?.();
+      expect(mockMergeClaudeTrustedPath).toHaveBeenCalledWith("/wt/a");
+      expect(mockRemoveBundleContentForCli).not.toHaveBeenCalled();
+    });
+
+    it("does the trust write synchronously, before managedInstall's first await", () => {
+      const plan = claudeCodeAdapter.prepareLaunch(unattended);
+      void plan.managedInstall?.();
+      expect(mockMergeClaudeTrustedPath).toHaveBeenCalledTimes(1);
+    });
+
+    it("never trusts without skipPermissions, or without a cwd", async () => {
+      for (const c of [
+        { ...unattended, skipPermissions: false },
+        { ...unattended, skipPermissions: undefined },
+        { ...unattended, cwd: undefined },
+      ]) {
+        const plan = claudeCodeAdapter.prepareLaunch(c);
+        expect(plan.managedInstall).toBeUndefined();
+      }
+      const off = claudeCodeAdapter.prepareLaunch({
+        ...unattended,
+        skipPermissions: false,
+        injectMullionBundle: false,
+      });
+      await off.managedInstall?.();
+      expect(mockMergeClaudeTrustedPath).not.toHaveBeenCalled();
+    });
+
+    it("still removes the bundle content when the trust write fails, then rethrows", async () => {
+      const err = new Error("config unparseable");
+      mockMergeClaudeTrustedPath.mockImplementationOnce(() => {
+        throw err;
+      });
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const plan = claudeCodeAdapter.prepareLaunch({ ...unattended, injectMullionBundle: false });
+      await expect(plan.managedInstall?.()).rejects.toBe(err);
+      expect(mockRemoveBundleContentForCli).toHaveBeenCalledWith("claude-code");
+      spy.mockRestore();
+    });
+
+    it("still trusts the cwd when the bundle removal fails, then rethrows", async () => {
+      const err = new Error("disk");
+      mockRemoveBundleContentForCli.mockRejectedValueOnce(err);
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const plan = claudeCodeAdapter.prepareLaunch({ ...unattended, injectMullionBundle: false });
+      await expect(plan.managedInstall?.()).rejects.toBe(err);
+      expect(mockMergeClaudeTrustedPath).toHaveBeenCalledWith("/wt/a");
+      spy.mockRestore();
+    });
   });
 });
 

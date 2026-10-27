@@ -1,4 +1,3 @@
-import os from "node:os";
 import path from "node:path";
 import type { HookAdapterContext, HookAgentAdapter, HookLaunchPlan } from "./types.js";
 import {
@@ -12,29 +11,13 @@ import {
 } from "./shared.js";
 import { resolveMullionBundleDir, composeClaudeSessionBundle } from "./mullion-bundle.js";
 import { isBundleSyncedFor, removeBundleContentForCli } from "../bundle-sync.js";
+import { mergeClaudeTrustedPath } from "./claude-trust.js";
+import { resolveClaudeConfigDir } from "./claude-config-dir.js";
 
-// Issue #470 — Claude Code's own bundle (2.1.220, verified statically by
-// locating `Akl()`/`fn()` and their callers in the installed binary) resolves
-// its ENTIRE user-scope config tree off `CLAUDE_CONFIG_DIR`, falling back to
-// `~/.claude` only when that's unset — the exact same bug class #470 fixed
-// for opencode's `resolveOpenCodeConfigHome()`. agent-rules.ts, skills.ts, and
-// claude-code-skills.ts all read/write paths under this root; every one of
-// them must go through this resolver rather than hardcoding `~/.claude`, or a
-// `CLAUDE_CONFIG_DIR` host silently reads/writes a file Claude Code never
-// touches.
-//
-// `||`, not Claude Code's own `??`: Claude Code resolves `CLAUDE_CONFIG_DIR=""`
-// to the empty string, making every subsequent join cwd-relative — mirroring
-// that exactly would have Mullion write into whatever directory the server
-// process happens to be running in. Treat empty as unset instead, matching
-// `resolveCodexHome()`'s existing `||` in codex.ts.
-//
-// `.normalize("NFC")` is kept because Claude Code itself applies it — the
-// point of this resolver is a byte-identical path to the agent's own, and
-// skills.ts merges discovery rows by exact path string.
-export function resolveClaudeConfigDir(): string {
-  return (process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".claude")).normalize("NFC");
-}
+// Issue #470 — the resolver itself lives in claude-config-dir.ts (issue #2091:
+// claude-trust.ts needs it too, and importing it from here made the two modules
+// import each other). Re-exported so every existing import keeps working.
+export { resolveClaudeConfigDir };
 
 // Claude Code's plugin cache dir has its own, narrower override
 // (`CLAUDE_CODE_PLUGIN_CACHE_DIR`) ahead of the config dir — verified in the
@@ -512,11 +495,37 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     // scoped to Claude Code's own two roots only (removeBundleContentForCli's
     // own doc comment — never the whole-host removeBundleContent()). A
     // no-op call when nothing was ever synced for this CLI.
-    managedInstall: ctx.injectMullionBundle
-      ? undefined
-      : async () => {
-          await removeBundleContentForCli("claude-code");
-        },
+    //
+    // Issue #2091 — the same fire-and-forget channel also pre-trusts the
+    // session's folder (see claude-trust.ts) when the caller asked to skip
+    // permissions, the same gate agy's and codex's trust writes use. It
+    // goes FIRST and is fully synchronous: this runs as a microtask right
+    // after the spawn, so nothing may be awaited before it. Each step is
+    // logged per-step and the first error rethrown, as agy's managedInstall
+    // does, so a failed trust write never skips the bundle removal.
+    managedInstall:
+      ctx.injectMullionBundle && !(ctx.skipPermissions && ctx.cwd)
+        ? undefined
+        : async () => {
+            let firstError: unknown;
+            if (ctx.skipPermissions && ctx.cwd) {
+              try {
+                mergeClaudeTrustedPath(ctx.cwd);
+              } catch (err) {
+                console.error('[claude-code] managedInstall step "trustWorkspace" failed:', err);
+                firstError ??= err;
+              }
+            }
+            if (!ctx.injectMullionBundle) {
+              try {
+                await removeBundleContentForCli("claude-code");
+              } catch (err) {
+                console.error('[claude-code] managedInstall step "removeBundle" failed:', err);
+                firstError ??= err;
+              }
+            }
+            if (firstError !== undefined) throw firstError;
+          },
   };
 }
 
