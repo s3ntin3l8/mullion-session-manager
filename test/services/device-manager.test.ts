@@ -59,7 +59,10 @@ const mockServerClient = {
   createAdb: vi.fn(async () => {
     mockCreateAdbHook?.();
     if (mockCreateAdbShouldFail) throw new Error("createAdb failed");
-    return { close: mockAdbClose };
+    return {
+      close: mockAdbClose,
+      subprocess: { noneProtocol: { spawnWaitText: mockGetprop } },
+    };
   }),
   wireless: {
     pair: mockWirelessPair,
@@ -91,6 +94,16 @@ vi.mock("@yume-chan/adb-server-node-tcp", () => ({
 
 let mockPushServerShouldFail = false;
 let mockStartShouldFail = false;
+// What `getprop sys.boot_completed` answers, one entry per poll (the last
+// repeats); an Error entry makes that poll throw.
+let mockBootReplies: Array<string | Error> = ["1\n"];
+const mockGetprop = vi.fn(async () => {
+  const reply = mockBootReplies.length > 1 ? mockBootReplies.shift()! : mockBootReplies[0];
+  if (reply instanceof Error) throw reply;
+  return reply;
+});
+// Set to make `scrcpyClient.videoStream` reject, like an early scrcpy death.
+let mockVideoStreamError: Error | null = null;
 const mockScrcpyClose = vi.fn(async () => {});
 // Assigned per-test like mockVideoPackets; undefined = the pre-clipboard
 // scrcpy client shape (no `clipboard` getter at all).
@@ -133,6 +146,7 @@ const mockScrcpyClient = {
     return mockController;
   },
   get videoStream() {
+    if (mockVideoStreamError) return Promise.reject(mockVideoStreamError);
     return Promise.resolve(makeMockVideoStream());
   },
   get exited() {
@@ -310,6 +324,9 @@ beforeEach(() => {
   mockPushServerShouldFail = false;
   mockPushServerHook = null;
   mockStartShouldFail = false;
+  mockBootReplies = ["1\n"];
+  mockGetprop.mockClear();
+  mockVideoStreamError = null;
   mockExited = new Promise(() => {});
   mockVideoPackets = [{ type: "configuration", data: new Uint8Array([1, 2, 3]) }];
   mockClipboardStream = undefined;
@@ -1076,6 +1093,110 @@ describe("DeviceManager", () => {
       () => !fs.existsSync(deviceMarkerPath(SESSIONS_DIR, "1")),
       "device 1's marker file to be removed",
     );
+  });
+
+  it("an early scrcpy video-stream failure fails spawn() cleanly instead of crashing the process (#2127)", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    const err = new Error("ExactReadable ended");
+    err.name = "ExactReadableEndedError";
+    mockVideoStreamError = err;
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const manager = new DeviceManager(baseOpts());
+      await manager.getOrCreate({
+        id: "1",
+        kind: "emulator" as const,
+        avdName: "dev35",
+        serial: null,
+        label: null,
+        port: null,
+      });
+      await waitForStatus(manager, "1", "error");
+      expect(manager.get("1")?.toInfo().error).toMatch(/ExactReadable ended/);
+      expect(mockScrcpyClose).toHaveBeenCalled();
+      await waitForCondition(
+        () => !fs.existsSync(deviceMarkerPath(SESSIONS_DIR, "1")),
+        "device 1's marker file to be removed",
+      );
+      await new Promise((r) => setTimeout(r, 20));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("a throwing exit listener is not an unhandled rejection (#2127)", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    let resolveExit!: () => void;
+    mockExited = new Promise<void>((r) => (resolveExit = r));
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const manager = new DeviceManager(baseOpts());
+      const device = await manager.getOrCreate({
+        id: "1",
+        kind: "emulator" as const,
+        avdName: "dev35",
+        serial: null,
+        label: null,
+        port: null,
+      });
+      await waitForStatus(manager, "1", "streaming");
+      device.onExit(() => {
+        throw new Error("listener blew up");
+      });
+      resolveExit();
+      await new Promise((r) => setTimeout(r, 50));
+      expect(unhandled).toEqual([]);
+      expect(device.toInfo().error).toMatch(/listener blew up/);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+  });
+
+  it("spawn() waits for sys.boot_completed before starting scrcpy, tolerating a failing getprop (#2127)", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    mockBootReplies = ["", new Error("device offline"), "0\n", "1\n"];
+    const manager = new DeviceManager(baseOpts());
+    await manager.getOrCreate({
+      id: "1",
+      kind: "emulator" as const,
+      avdName: "dev35",
+      serial: null,
+      label: null,
+      port: null,
+    });
+    await waitForStatus(manager, "1", "streaming", 8000);
+    expect(mockGetprop).toHaveBeenCalledTimes(4);
+    expect(mockGetprop).toHaveBeenCalledWith(["getprop", "sys.boot_completed"]);
+  });
+
+  it("spawn() fails with a boot timeout when the emulator never finishes booting (#2127)", async () => {
+    mockDeviceList = [{ serial: "emulator-5554" }];
+    mockBootReplies = ["0\n"];
+    const real = Date.now;
+    let skew = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => real() + skew);
+    try {
+      const manager = new DeviceManager(baseOpts());
+      await manager.getOrCreate({
+        id: "1",
+        kind: "emulator" as const,
+        avdName: "dev35",
+        serial: null,
+        label: null,
+        port: null,
+      });
+      await vi.waitFor(() => expect(mockGetprop).toHaveBeenCalled());
+      skew = 10 * 60_000;
+      await waitForStatus(manager, "1", "error");
+      expect(manager.get("1")?.toInfo().error).toMatch(/did not finish booting/);
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 
   it("spawn() failure when starting the scrcpy server rejects tears down cleanly (CodeQL: exercises mockStartShouldFail)", async () => {

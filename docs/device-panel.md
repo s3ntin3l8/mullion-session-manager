@@ -156,6 +156,11 @@ deliberately a **separate** implementation from `PtyManager`/
   row does **not** disconnect the phone from the host's adb server — that
   connection table is shared with the user's own adb tooling, outside
   Mullion's ownership.
+- **Boot wait before scrcpy.** An emulator's serial shows up on `adb devices`
+  well before Android finishes booting, so `spawn()` (and `attach()`) poll
+  `getprop sys.boot_completed` until it reads `1` before starting the scrcpy
+  server (issue #2127). A scrcpy failure after that is a normal `error` status
+  on the device, never an unhandled rejection.
 - **`DeviceManager`** (`src/services/device-manager.ts`) — an in-memory
   `Map<string, Device>`. Starting a device runs the emulator inside a
   transient `systemd --user` scope (`crs-device-<instanceId>-<id>`, same
