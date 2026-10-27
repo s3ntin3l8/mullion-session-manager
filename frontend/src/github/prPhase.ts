@@ -230,10 +230,19 @@ export function checksStatus(input: PrStatusInput, jobsByRun?: Record<number, Ru
     };
   }
   if (n.pending > 0) {
+    const awaiting = input.actionsRuns.filter(
+      (r) => r.status === "completed" && r.conclusion === "action_required",
+    ).length;
+    const running = n.pending - awaiting;
     return {
       tone: "warn",
       glyph: "⋯",
-      text: `${n.pending} in progress`,
+      text: [
+        awaiting > 0 ? `${awaiting} awaiting approval` : "",
+        running > 0 ? `${running} in progress` : "",
+      ]
+        .filter(Boolean)
+        .join(", "),
       label: parts.join(" "),
       short: `${n.passed}/${n.passed + n.pending}`,
     };

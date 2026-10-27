@@ -385,6 +385,9 @@ export interface ReleaseWorkflowInfo {
   id: number;
   name: string;
   path: string;
+  // Whether the workflow file declares `workflow_dispatch:` (GitHub 422s a
+  // manual run without it). null = the file couldn't be read.
+  dispatchable: boolean | null;
 }
 
 // A repo not configured for release-please, and a token that can't even

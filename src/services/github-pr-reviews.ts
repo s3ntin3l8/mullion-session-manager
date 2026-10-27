@@ -300,7 +300,10 @@ export async function enrichPrsWithReviewState(
     pr.checksRollup = normalizeRollupState(
       node.commits?.nodes?.[0]?.commit.statusCheckRollup?.state,
     );
-    pr.ciStatus = combineCiStatus(computeCiStatus(pr.actionsRuns), pr.checksRollup);
+    pr.ciStatus = combineCiStatus(
+      computeCiStatus(pr.actionsRuns, { approvalPending: true }),
+      pr.checksRollup,
+    );
     pr.requestedReviewers = (node.reviewRequests?.nodes ?? [])
       .map((n) => n?.requestedReviewer?.login ?? n?.requestedReviewer?.name ?? null)
       .filter((v): v is string => v !== null);

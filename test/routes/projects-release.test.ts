@@ -36,6 +36,8 @@ const RELEASE_WORKFLOW = {
   name: "Release Please",
   path: ".github/workflows/release-please.yml",
 };
+const DISPATCHABLE_BODY = "on:\n  push:\n  workflow_dispatch:\n";
+const UNDISPATCHABLE_BODY = "on:\n  push:\n";
 const CI_WORKFLOW = { id: 1, name: "CI/CD", path: ".github/workflows/ci-cd.yml" };
 const RELEASE_HEAD_REF = "release-please--branches--main--components--widgets";
 
@@ -166,6 +168,9 @@ describe("release-please routes (#744)", () => {
     // posture as releasePrsAll above, so every existing test in this file
     // that doesn't care about the warning gets a stable false.
     contents?: () => Response;
+    // The release workflow file's own body (detectReleaseWorkflow reads it to
+    // tell whether `workflow_dispatch:` is declared). Defaults to one that is.
+    workflowBody?: () => string;
   }) {
     return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -213,6 +218,15 @@ describe("release-please routes (#744)", () => {
       if (url === "https://api.github.com/repos/acme/widgets/actions/workflows/2/dispatches") {
         return Promise.resolve(
           (overrides.dispatch ?? (() => new Response(null, { status: 204 })))(),
+        );
+      }
+      if (
+        url ===
+        "https://api.github.com/repos/acme/widgets/contents/.github/workflows/release-please.yml"
+      ) {
+        const body = (overrides.workflowBody ?? (() => DISPATCHABLE_BODY))();
+        return Promise.resolve(
+          jsonResponse(200, { content: Buffer.from(body).toString("base64"), encoding: "base64" }),
         );
       }
       if (url === "https://api.github.com/repos/acme/widgets/contents") {
@@ -302,7 +316,7 @@ describe("release-please routes (#744)", () => {
       const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({
-        detection: { kind: "found", workflow: RELEASE_WORKFLOW },
+        detection: { kind: "found", workflow: { ...RELEASE_WORKFLOW, dispatchable: true } },
         pr: {
           number: 12,
           htmlUrl: "https://github.com/acme/widgets/pull/12",
@@ -332,9 +346,22 @@ describe("release-please routes (#744)", () => {
       const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toEqual({
-        detection: { kind: "found", workflow: RELEASE_WORKFLOW },
+        detection: { kind: "found", workflow: { ...RELEASE_WORKFLOW, dispatchable: true } },
         pr: null,
         conventionalTitlesWarning: false,
+      });
+    });
+
+    it("reports dispatchable: false when the workflow has no workflow_dispatch trigger", async () => {
+      fetchMock.mockImplementation(githubApiRouter({ workflowBody: () => UNDISPATCHABLE_BODY }));
+      const app = await makeApp();
+      const { projectId } = await createConnectedProject(app);
+
+      const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().detection).toEqual({
+        kind: "found",
+        workflow: { ...RELEASE_WORKFLOW, dispatchable: false },
       });
     });
 
@@ -510,6 +537,28 @@ describe("release-please routes (#744)", () => {
       });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toMatchObject({ dispatched: false, reason: "no-dispatch-trigger" });
+    });
+
+    it("drops the cached detection on a 422, so the next read re-checks the workflow file", async () => {
+      let body = DISPATCHABLE_BODY;
+      fetchMock.mockImplementation(
+        githubApiRouter({
+          workflowBody: () => body,
+          dispatch: () =>
+            new Response("Workflow does not have 'workflow_dispatch' trigger", { status: 422 }),
+        }),
+      );
+      const app = await makeApp();
+      const { projectId } = await createConnectedProject(app);
+      const read = async () =>
+        (await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` })).json()
+          .detection.workflow.dispatchable;
+
+      expect(await read()).toBe(true);
+      body = UNDISPATCHABLE_BODY;
+      expect(await read()).toBe(true); // still cached
+      await app.inject({ method: "POST", url: `/api/projects/${projectId}/release/run` });
+      expect(await read()).toBe(false);
     });
 
     it("refuses with reason: dispatch-failed on any other dispatch error", async () => {

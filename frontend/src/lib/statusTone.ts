@@ -42,6 +42,9 @@ export function statusTone(input: ToneInput): Tone {
   if (input.status !== "completed") return "warn";
   if (input.conclusion === "success") return "success";
   if (input.conclusion != null && SKIPPED_CONCLUSIONS.has(input.conclusion)) return "neutral";
+  // GitHub holds the run until a maintainer approves it (a bot-opened PR, a
+  // first-time contributor): nothing has run, so nothing has failed.
+  if (input.conclusion === "action_required") return "warn";
   return "danger";
 }
 
@@ -80,5 +83,6 @@ export function legacyPillClass(tone: Tone): "bad" | "warn" | "good" | "dim" {
 
 /** The words for a check/run state: its conclusion once finished, else its status. */
 export function runStatusText(status: string, conclusion: string | null): string {
-  return status === "completed" ? (conclusion ?? "unknown") : status;
+  if (status !== "completed") return status;
+  return conclusion === "action_required" ? "awaiting approval" : (conclusion ?? "unknown");
 }

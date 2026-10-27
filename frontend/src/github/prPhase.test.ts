@@ -174,6 +174,37 @@ describe("checksStatus", () => {
   });
 });
 
+describe("checksStatus — runs awaiting approval", () => {
+  it("shows runs held at action_required as pending, not failing", () => {
+    const held = checksStatus(
+      base({
+        actionsRuns: [
+          run("action_required", "completed", 1),
+          run("action_required", "completed", 2),
+          run("action_required", "completed", 3),
+        ],
+      }),
+    );
+    expect(held).toMatchObject({ tone: "warn", label: "⋯3", text: "3 awaiting approval" });
+  });
+
+  it("splits awaiting approval from running", () => {
+    const mixed = checksStatus(
+      base({ actionsRuns: [run("action_required", "completed", 1), run(null, "in_progress", 2)] }),
+    );
+    expect(mixed.text).toBe("1 awaiting approval, 1 in progress");
+  });
+
+  it("still reports a genuine failure next to a held run", () => {
+    const failing = checksStatus(
+      base({
+        actionsRuns: [run("action_required", "completed", 1), run("failure", "completed", 2)],
+      }),
+    );
+    expect(failing).toMatchObject({ tone: "danger", short: "✗1" });
+  });
+});
+
 describe("reviewStatus", () => {
   const sum = (over: Record<string, unknown>) => ({
     decision: null,

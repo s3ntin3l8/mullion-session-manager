@@ -966,6 +966,7 @@ describe("GitHubPanel", () => {
       id: 2,
       name: "Release Please",
       path: ".github/workflows/release-please.yml",
+      dispatchable: true as boolean | null,
     };
     const RELEASE_NO_PR: ProjectReleaseStatus = {
       detection: { kind: "found", workflow: RELEASE_WORKFLOW },
@@ -992,12 +993,16 @@ describe("GitHubPanel", () => {
 
     function mockFetchRelease(opts: {
       release: ProjectReleaseStatus;
+      prs?: GitHubPRsStatus;
+      status?: GitHubStatus;
       run?: () => Response;
       merge?: () => Response;
     }) {
       return vi.fn((url: string, init?: RequestInit) => {
         const method = init?.method ?? "GET";
-        if (url.endsWith("/github/prs")) return Promise.resolve(jsonResponse(200, PRS_EMPTY));
+        if (url.endsWith("/github/prs")) {
+          return Promise.resolve(jsonResponse(200, opts.prs ?? PRS_EMPTY));
+        }
         if (url.endsWith("/release/run") && method === "POST") {
           return Promise.resolve((opts.run ?? (() => jsonResponse(200, { dispatched: true })))());
         }
@@ -1008,9 +1013,85 @@ describe("GitHubPanel", () => {
         if (url.includes("/github/issues")) {
           return Promise.resolve(jsonResponse(200, issuesResponse(STATUS)));
         }
-        return Promise.resolve(jsonResponse(200, STATUS));
+        return Promise.resolve(jsonResponse(200, opts.status ?? STATUS));
       });
     }
+
+    it("lists the release PR under Release only, not again under Pull requests", async () => {
+      const release: ProjectReleaseStatus = {
+        ...RELEASE_NO_PR,
+        pr: releasePrFixture({ number: 42, title: "chore(main): release 0.2.46" }),
+      };
+      const prs: GitHubPRsStatus = {
+        ...PRS_LOADED,
+        prs: [{ ...PRS_LOADED.prs[0], title: "chore(main): release 0.2.46" }],
+      };
+      vi.stubGlobal("fetch", mockFetchRelease({ release, prs }));
+      render(<GitHubPanel params={{ projectId: 20 }} />);
+      await screen.findByText("chore(main): release 0.2.46");
+      await screen.findByText("No open pull requests");
+      expect(screen.getAllByText("chore(main): release 0.2.46")).toHaveLength(1);
+    });
+
+    it("keeps other PRs in the list next to the release PR", async () => {
+      const release: ProjectReleaseStatus = {
+        ...RELEASE_NO_PR,
+        pr: releasePrFixture({ number: 12 }),
+      };
+      vi.stubGlobal("fetch", mockFetchRelease({ release, prs: PRS_LOADED }));
+      render(<GitHubPanel params={{ projectId: 20 }} />);
+      await screen.findByText("Fix attention race");
+      expect(screen.getByText("chore(main): release 0.2.46")).toBeInTheDocument();
+    });
+
+    it("also hides the release PR from the fallback list when the PR poller has no data", async () => {
+      const release: ProjectReleaseStatus = {
+        ...RELEASE_NO_PR,
+        pr: releasePrFixture({ number: 42, title: "Fix attention race" }),
+      };
+      vi.stubGlobal("fetch", mockFetchRelease({ release }));
+      render(<GitHubPanel params={{ projectId: 20 }} />);
+      await screen.findByText("Fix attention race");
+      expect(screen.getAllByText("Fix attention race")).toHaveLength(1);
+    });
+
+    it("disables Run, naming the workflow file, when it has no workflow_dispatch trigger", async () => {
+      const release: ProjectReleaseStatus = {
+        ...RELEASE_NO_PR,
+        detection: {
+          kind: "found",
+          workflow: { ...RELEASE_WORKFLOW, dispatchable: false },
+        },
+      };
+      vi.stubGlobal("fetch", mockFetchRelease({ release }));
+      render(<GitHubPanel params={{ projectId: 20 }} />);
+      const run = await screen.findByRole("button", { name: /Run/ });
+      expect(run).toBeDisabled();
+      expect(run).toHaveAttribute("title", expect.stringContaining("release-please.yml"));
+    });
+
+    it("keeps Run enabled when the workflow file couldn't be read (dispatchable: null)", async () => {
+      const release: ProjectReleaseStatus = {
+        ...RELEASE_NO_PR,
+        detection: { kind: "found", workflow: { ...RELEASE_WORKFLOW, dispatchable: null } },
+      };
+      vi.stubGlobal("fetch", mockFetchRelease({ release }));
+      render(<GitHubPanel params={{ projectId: 20 }} />);
+      expect(await screen.findByRole("button", { name: /Run/ })).toBeEnabled();
+    });
+
+    it("opens the PR detail view when the release row is clicked, but not from its GitHub link", async () => {
+      useDashboardStore.setState({ githubOpenPrByProject: {} });
+      const release: ProjectReleaseStatus = { ...RELEASE_NO_PR, pr: releasePrFixture() };
+      vi.stubGlobal("fetch", mockFetchRelease({ release }));
+      render(<GitHubPanel params={{ projectId: 20 }} />);
+      const link = await screen.findByRole("link", { name: "#12" });
+      fireEvent.click(link);
+      expect(useDashboardStore.getState().githubOpenPrByProject[20] ?? null).toBeNull();
+      fireEvent.click(screen.getByText("chore(main): release 0.2.46"));
+      expect(useDashboardStore.getState().githubOpenPrByProject[20]).toBe(12);
+      useDashboardStore.setState({ githubOpenPrByProject: {} });
+    });
 
     it("renders nothing when the repo has no release-please workflow", async () => {
       vi.stubGlobal("fetch", mockFetchRelease({ release: RELEASE_NOT_CONFIGURED }));

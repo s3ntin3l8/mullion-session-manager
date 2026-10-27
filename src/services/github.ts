@@ -256,7 +256,15 @@ interface GitHubWorkflowRunApiItem {
 // Exported for task-reconciler.ts's review-spawn CI gate (#738 follow-up) —
 // same aggregation the Dock widget's repo-level CI dot and the per-PR status
 // already use, reused rather than reimplemented for a task's own PR head.
-export function computeCiStatus(runs: GitHubActionsRun[]): GitHubCiStatus {
+//
+// `approvalPending` is for the display paths (PR list/detail): a run GitHub
+// holds at `action_required` (a bot-opened PR, a first-time contributor)
+// hasn't run yet and nothing has failed, so it reads as still pending. The
+// default keeps the gate semantics the Task Master reconciler relies on.
+export function computeCiStatus(
+  runs: GitHubActionsRun[],
+  opts: { approvalPending?: boolean } = {},
+): GitHubCiStatus {
   if (runs.length === 0) return null;
   if (runs.some((r) => r.status !== "completed")) return "in_progress";
   // `skipped`/`cancelled` aren't a pass or a fail — excluding them from the
@@ -265,6 +273,13 @@ export function computeCiStatus(runs: GitHubActionsRun[]): GitHubCiStatus {
   // there's no real signal at all — same as no runs existing.
   const meaningful = runs.filter((r) => r.conclusion !== "skipped" && r.conclusion !== "cancelled");
   if (meaningful.length === 0) return null;
+  if (opts.approvalPending) {
+    // Held runs haven't run, so they're pending — unless something else
+    // genuinely failed, which still wins.
+    const real = meaningful.filter((r) => r.conclusion !== "action_required");
+    if (real.some((r) => r.conclusion !== "success")) return "failure";
+    return real.length < meaningful.length ? "in_progress" : "success";
+  }
   return meaningful.every((r) => r.conclusion === "success") ? "success" : "failure";
 }
 
@@ -1410,7 +1425,7 @@ export async function getRepoPRsStatus(
     const result = runsResults[i];
     if (result.status === "fulfilled") {
       prs[i].actionsRuns = result.value.runs;
-      prs[i].ciStatus = computeCiStatus(result.value.runs);
+      prs[i].ciStatus = computeCiStatus(result.value.runs, { approvalPending: true });
       // Only a real answer counts: a 403/429/network failure also yields no
       // runs, but means "couldn't ask", not "no CI".
       prs[i].ciFetched = result.value.ok;

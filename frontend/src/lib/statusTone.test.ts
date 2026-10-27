@@ -30,6 +30,8 @@ describe("statusTone", () => {
     expect(statusTone({ status: "completed", conclusion: "skipped" })).toBe("neutral");
     expect(statusTone({ status: "completed", conclusion: "cancelled" })).toBe("neutral");
     expect(statusTone({ status: "completed", conclusion: "failure" })).toBe("danger");
+    // Held until a maintainer approves it: nothing ran, so nothing failed.
+    expect(statusTone({ status: "completed", conclusion: "action_required" })).toBe("warn");
     expect(statusTone({ status: "completed", conclusion: null })).toBe("danger");
   });
 
@@ -47,6 +49,7 @@ describe("statusTone", () => {
   it("words a run's state", () => {
     expect(runStatusText("completed", "failure")).toBe("failure");
     expect(runStatusText("completed", null)).toBe("unknown");
+    expect(runStatusText("completed", "action_required")).toBe("awaiting approval");
     expect(runStatusText("queued", null)).toBe("queued");
   });
 });
