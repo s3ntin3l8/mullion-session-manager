@@ -14,6 +14,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type * as ChildProcess from "node:child_process";
+import type * as SessionShell from "../../src/services/session-shell.js";
 import type { SpawnSelfUpdateResult } from "../../src/services/update-apply.js";
 
 /**
@@ -28,7 +29,23 @@ function asFailure(result: SpawnSelfUpdateResult): Extract<SpawnSelfUpdateResult
   return result;
 }
 
-const spawnCalls: Array<{ command: string; args: string[] }> = [];
+const spawnCalls: Array<{ command: string; args: string[]; options?: Record<string, unknown> }> =
+  [];
+/** What the faked session-shell lookup answers: a path, or null for "no Git Bash". */
+let gitBash: string | null = "C:/Program Files/Git/bin/bash.exe";
+
+// The Windows updater runs in Git Bash, found through session-shell.ts — faked,
+// so these tests do not depend on whether the machine they run on has one.
+vi.mock("../../src/services/session-shell.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof SessionShell>();
+  return {
+    ...actual,
+    sessionShell: () => {
+      if (gitBash === null) throw new actual.NoSessionShellError();
+      return gitBash;
+    },
+  };
+});
 /** The exit status the fake launchctl reports (0 = success). */
 let launchctlExitCode = 0;
 /** Which launchctl calls, if any, never exit — a hung launchctl. */
@@ -52,8 +69,8 @@ vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   return {
     ...actual,
-    spawn: (command: string, args: string[]) => {
-      spawnCalls.push({ command, args });
+    spawn: (command: string, args: string[], options?: Record<string, unknown>) => {
+      spawnCalls.push({ command, args, options });
       const child = new EventEmitter() as EventEmitter & {
         stdout: EventEmitter;
         stderr: EventEmitter;
@@ -155,6 +172,7 @@ describe("spawnSelfUpdate", async () => {
     launchctlDelaysMs = {};
     launchctlPrintStillRegisteredTimes = 0;
     launchctlPrintNeverGoes = false;
+    gitBash = "C:/Program Files/Git/bin/bash.exe";
   });
 
   afterEach(() => {
@@ -165,22 +183,141 @@ describe("spawnSelfUpdate", async () => {
     Object.defineProperty(process, "platform", { value: platform, configurable: true });
   }
 
-  it("refuses on Windows rather than accepting an update that cannot start (#1728)", async () => {
-    setPlatform("win32");
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-windows-"));
-    try {
-      stubSelfUpdateScript(home);
-      const result = await spawnSelfUpdate(fakeApp({ MULLION_HOME: home }), {
+  // The Windows path (issue #2161, part of #1728): the updater is Git Bash
+  // running self-update.sh, spawned DETACHED — which is what lets it outlive
+  // the scheduled task being stopped by its own last step — with its output
+  // in logs/update-<version>.log.
+  describe("on Windows", () => {
+    const apply = (home: string, config: Partial<Parameters<typeof fakeApp>[0]> = {}) =>
+      spawnSelfUpdate(fakeApp({ MULLION_HOME: home, ...config }), {
         version: "1.2.3",
-        assetUrl: "https://example.invalid/a.tar.gz",
-        checksumUrl: "https://example.invalid/a.sha256",
+        assetUrl: "https://github.com/o/r/releases/download/v1.2.3/mullion-1.2.3.tgz",
+        checksumUrl: "https://github.com/o/r/releases/download/v1.2.3/mullion-1.2.3.tgz.sha256",
       });
-      expect(result).toMatchObject({ ok: false, status: 400 });
-      expect(!result.ok && result.message).toMatch(/not supported on Windows/);
-      expect(spawnCalls).toEqual([]);
-    } finally {
-      fs.rmSync(home, { recursive: true, force: true });
-    }
+    const slashed = (p: string) => p.replaceAll("\\", "/");
+
+    it("starts the update in a detached Git Bash, logging to logs/update-<version>.log", async () => {
+      setPlatform("win32");
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-windows-"));
+      try {
+        stubSelfUpdateScript(home);
+        const result = await apply(home, { MULLION_ROLE: "agent" });
+        expect(result).toEqual({
+          ok: true,
+          status: 202,
+          body: { phase: "downloading", version: "1.2.3" },
+        });
+
+        expect(spawnCalls).toHaveLength(1);
+        const call = spawnCalls[0]!;
+        expect(call.command).toBe("C:/Program Files/Git/bin/bash.exe");
+        // -l: a login shell, so /usr/bin is on PATH as it is for a session.
+        expect(call.args).toEqual([
+          "-l",
+          slashed(path.join(home, "current", "scripts", "self-update.sh")),
+          "1.2.3",
+          "https://github.com/o/r/releases/download/v1.2.3/mullion-1.2.3.tgz",
+          "https://github.com/o/r/releases/download/v1.2.3/mullion-1.2.3.tgz.sha256",
+          slashed(home),
+          slashed(process.execPath),
+          "Mullion-agent",
+        ]);
+        // Detached, like the pty-host master: outside the task's process
+        // tree, so stopping the task does not stop the updater.
+        expect(call.options).toMatchObject({ detached: true, windowsHide: true, cwd: home });
+        const stdio = call.options!.stdio as unknown[];
+        expect(stdio[0]).toBe("ignore");
+        expect(typeof stdio[1]).toBe("number");
+        expect(stdio[2]).toBe(stdio[1]);
+        expect(fs.existsSync(path.join(home, "logs", "update-1.2.3.log"))).toBe(true);
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it("uses neither systemd-run nor launchctl", async () => {
+      setPlatform("win32");
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-windows-"));
+      try {
+        stubSelfUpdateScript(home);
+        await apply(home);
+        expect(spawnCalls.map((c) => c.command)).not.toContain("systemd-run");
+        expect(spawnCalls.map((c) => c.command)).not.toContain("launchctl");
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it("restarts the task the launcher named, and falls back to the role's task", async () => {
+      setPlatform("win32");
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-windows-"));
+      try {
+        stubSelfUpdateScript(home);
+        await apply(home, { MULLION_SERVICE_UNIT: "My-Task", MULLION_ROLE: "agent" });
+        expect(spawnCalls[0]!.args.at(-1)).toBe("My-Task");
+        spawnCalls.length = 0;
+        await apply(home, { MULLION_ROLE: "agent" });
+        expect(spawnCalls[0]!.args.at(-1)).toBe("Mullion-agent");
+        spawnCalls.length = 0;
+        // Not a systemd unit name, which names no task on Windows.
+        await apply(home, { MULLION_ROLE: "primary" });
+        expect(spawnCalls[0]!.args.at(-1)).toBe("Mullion-primary");
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it("says so, and starts nothing, when there is no Git Bash to run the updater in", async () => {
+      setPlatform("win32");
+      gitBash = null;
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-windows-"));
+      try {
+        stubSelfUpdateScript(home);
+        const result = await apply(home);
+        expect(result).toMatchObject({ ok: false, status: 500 });
+        expect(asFailure(result).message).toMatch(/no Git Bash found/);
+        expect(spawnCalls).toEqual([]);
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it("does not claim the update started when its log cannot be opened", async () => {
+      setPlatform("win32");
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-windows-"));
+      try {
+        stubSelfUpdateScript(home);
+        // A file where the logs directory has to be.
+        fs.writeFileSync(path.join(home, "logs"), "in the way");
+        const result = await apply(home);
+        expect(result).toMatchObject({ ok: false, status: 500 });
+        expect(asFailure(result).message).toMatch(/could not open the update log/);
+        expect(spawnCalls).toEqual([]);
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
+
+    it("still refuses a second update while one is in flight", async () => {
+      setPlatform("win32");
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), "update-apply-windows-"));
+      try {
+        stubSelfUpdateScript(home);
+        fs.writeFileSync(
+          path.join(home, ".update-status.json"),
+          JSON.stringify({
+            phase: "installing",
+            version: "1.2.3",
+            updatedAt: Math.floor(Date.now() / 1000),
+          }),
+        );
+        const result = await apply(home);
+        expect(result).toMatchObject({ ok: false, status: 409 });
+        expect(spawnCalls).toEqual([]);
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    });
   });
 
   it("bootstraps a one-shot launchd job on macOS", async () => {

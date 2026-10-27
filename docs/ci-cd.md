@@ -143,7 +143,13 @@ gate). This repo's own `.secrets.baseline` is verified clean, so
   (#2160): the launcher, the directory-junction helpers in
   `scripts/portable.sh` run under the runner's real Git Bash, and
   `deploy/windows/register-task.ps1` registering and removing a real
-  scheduled task. It is `continue-on-error` and not a required check until it
+  scheduled task) and the Windows self-update (#2161): which releases a running
+  process still uses (`deploy/windows/releases-in-use.ps1`, against real
+  processes). `self-update-windows.test.ts` runs the real `self-update.sh` in
+  Git Bash against a real task, but skips itself in CI — restarting the task
+  starts it, which needs an interactive logon session a runner does not
+  reliably have — so it is the check that the Linux suite's shims are right,
+  run locally. It is `continue-on-error` and not a required check until it
   has a track record (#2129).
 - **Test sharding**:
   - Node tests shard into 4×`test-shard` → `test-merge`. Frontend tests

@@ -832,10 +832,34 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass \
 then delete the install root. (Stop your sessions first: a running session's
 pty-host holds files in its release open.)
 
-**Not yet:** self-update — "Update now" answers that this host should be
-updated by reinstalling, which is re-running the installer above
-([#2161](https://github.com/s3ntin3l8/mullion-session-manager/issues/2161));
-a Windows primary; and running before logon
+**Updating** works as it does elsewhere: the primary's "Update now" for this
+host (or `POST /internal/updates/apply`) runs `scripts/self-update.sh`, which
+downloads the release, verifies its checksum, installs it into
+`releases/<version>`, checks that the native modules load, moves `current` to
+it and restarts the agent. On Windows:
+
+- the updater runs in **Git Bash**, started detached, so it outlives the task
+  it restarts; its output is `logs/update-<version>.log`, and the phase is in
+  `.update-status.json`;
+- the restart **re-registers the task** (`register-task.ps1 -Start`, the new
+  release's copy), which stops the old run, replaces the definition and starts
+  it on the new `current`. It only restarts a task that is registered: an
+  agent you run by hand is updated, and the update then says there is nothing
+  to restart, rather than starting a second agent on the same port;
+- **sessions keep running**, as on a plain restart: each is in a detached
+  pty-host master that stays in the release it was started in. An old release
+  that a running process still uses is **not pruned** (so more than the usual
+  three can stay while old sessions live), and one that cannot be fully deleted
+  is left for the next update;
+- `current` is briefly absent between removing the old junction and moving the
+  new one in, because Windows has no atomic replace; the running server uses
+  its own release's files and does not notice.
+
+A release that predates the Windows install (no `scripts/windows-launcher.mjs`)
+is refused before `current` moves, so an update can never leave a task that
+cannot start.
+
+**Not yet:** a Windows primary, and running before logon
 ([#2162](https://github.com/s3ntin3l8/mullion-session-manager/issues/2162)).
 
 ## Automating agent deploys (issue #245 / roadmap 7.1 + 7.7)

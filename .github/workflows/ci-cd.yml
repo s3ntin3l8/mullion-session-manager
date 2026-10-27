@@ -372,3 +372,5 @@ jobs:
           test/scripts/portable-links.test.ts
           test/scripts/windows-launcher.test.ts
           test/scripts/windows-register-task.test.ts
+          test/scripts/windows-releases-in-use.test.ts
+          test/scripts/self-update-windows.test.ts

@@ -40,6 +40,33 @@ native_path() {
   fi
 }
 
+# The other direction: a path in the form Git Bash's own tools take
+# (/c/Users/me) for a Windows-style one (C:/Users/me, C:\Users\me). Needed
+# wherever a path goes INTO a colon-separated list — `export PATH="$dir:$PATH"`
+# with a C:/... entry splits at the drive letter's colon. Unchanged anywhere
+# but Windows.
+posix_path() {
+  if is_windows; then
+    cygpath -u "$1"
+  else
+    printf '%s\n' "$1"
+  fi
+}
+
+# Writes the `mullion` CLI launcher on Windows (issue #2160): Git Bash's
+# `ln -s` makes a COPY without Developer Mode, which would freeze the CLI at
+# one release, so it is a two-line script that follows `current` instead.
+# It has to name node itself — a session's PATH is not guaranteed to have it.
+# Shared by the installer and the updater, so the text exists once.
+#
+# write_windows_cli_launcher NODE MULLION_HOME FILE
+write_windows_cli_launcher() {
+  local node="$1" mullion_home="$2" target="$3"
+  printf '#!/bin/sh\nexec "%s" "%s/current/dist/cli/mullion.mjs" "$@"\n' \
+    "$(posix_path "$node")" "$mullion_home" > "$target"
+  chmod 755 "$target"
+}
+
 # The launchd domain a per-user agent lives in (`gui/$UID`). launchd's own
 # tooling wants the numeric uid, not the user name.
 launchd_gui_domain() {

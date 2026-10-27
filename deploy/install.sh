@@ -375,14 +375,11 @@ if [ -f "$MULLION_HOME/current/dist/cli/mullion.mjs" ]; then
   mkdir -p ~/"$CLI_BIN_DIR"
   rm -f ~/"$CLI_BIN_DIR"/mullion 2>/dev/null || true
   if [ "$PLATFORM_KIND" = "windows" ]; then
-    # Git Bash's `ln -s` makes a COPY without Developer Mode, which would
-    # freeze the CLI at this release. A two-line launcher script follows
-    # `current` instead, and is what a Git Bash session (where the agents
-    # run `mullion`) finds on PATH. It has to name node itself: a session's
-    # PATH is not guaranteed to have it.
-    printf '#!/bin/sh\nexec "%s" "%s/current/dist/cli/mullion.mjs" "$@"\n' \
-      "$NODE_PATH" "$MULLION_HOME" > ~/"$CLI_BIN_DIR"/mullion
-    chmod 755 ~/"$CLI_BIN_DIR"/mullion
+    # A launcher script that follows `current` instead of a symlink (which
+    # Git Bash would make a copy of) — see write_windows_cli_launcher in
+    # scripts/portable.sh. It is what a Git Bash session, where the agents
+    # run `mullion`, finds on PATH.
+    write_windows_cli_launcher "$NODE_PATH" "$MULLION_HOME" ~/"$CLI_BIN_DIR"/mullion
   else
     ln -s "$MULLION_HOME/current/dist/cli/mullion.mjs" ~/"$CLI_BIN_DIR"/mullion
   fi
