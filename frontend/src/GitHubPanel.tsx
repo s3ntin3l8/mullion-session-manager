@@ -323,8 +323,8 @@ export function GitHubPanel({
   if (status === null && effectivePrs === null) {
     return (
       <EmptyStateNote>
-        No GitHub status available for this project. Connect an account in Settings → Integrations,
-        and make sure this project's <code>origin</code> remote points at github.com.
+        No GitHub status available for this project. Connect an account in Settings → GitHub, and
+        make sure this project's <code>origin</code> remote points at github.com.
       </EmptyStateNote>
     );
   }

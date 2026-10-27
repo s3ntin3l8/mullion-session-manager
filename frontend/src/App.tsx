@@ -1990,7 +1990,7 @@ export function App() {
           onOpenDockConfig={onOpenDockConfig}
           onOpenSkills={onOpenSkills}
           onOpenBrowser={onOpenBrowser}
-          onOpenIntegrationsSettings={() => openSettings("integrations")}
+          onOpenSettingsSection={(section) => openSettings(section)}
           onOpenDevices={() => openSettings("devices")}
           onOpenHosts={() => openSettings("hosts")}
           onOpenSettings={() => openSettings()}

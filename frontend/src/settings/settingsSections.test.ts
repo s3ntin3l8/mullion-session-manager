@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { SECTIONS, filterSettingsSections, phoneSections } from "./settingsSections.js";
+import {
+  SECTIONS,
+  filterSettingsSections,
+  phoneSections,
+  resolveSettingsSection,
+} from "./settingsSections.js";
 
 // Issue #1880 — the settings filter, shared by the desktop nav rail
 // (Settings.tsx) and the phone's navigator list (PhoneNavigator.tsx).
@@ -11,6 +16,21 @@ import { SECTIONS, filterSettingsSections, phoneSections } from "./settingsSecti
 
 describe("filterSettingsSections", () => {
   const ids = (sections: typeof SECTIONS) => sections.map((s) => s.id);
+
+  it("finds the independent Connections pages on desktop and phone", () => {
+    for (const sections of [SECTIONS, phoneSections()]) {
+      for (const [query, expected] of [
+        ["hermes", "review-relay"],
+        ["review relay", "review-relay"],
+        ["runway", "runway"],
+        ["personal access token", "github"],
+      ]) {
+        expect(ids(filterSettingsSections(sections, query))).toEqual([expected]);
+      }
+      expect(ids(filterSettingsSections(sections, "quota"))).toContain("runway");
+    }
+    expect(resolveSettingsSection("integrations")).toBe("github");
+  });
 
   it("returns everything for an empty query", () => {
     expect(ids(filterSettingsSections(SECTIONS, ""))).toEqual(ids(SECTIONS));

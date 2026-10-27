@@ -15,8 +15,7 @@ import {
 import { ConfirmButton } from "../../ui/ConfirmButton.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { GitHubPollingSettings } from "../RuntimeSettings.js";
-import { ReviewRelaySection } from "./ReviewRelaySection.js";
-import { RunwaySection } from "./RunwaySection.js";
+import { SettingsForm, SettingsGroup } from "../SettingsForm.js";
 
 // One credential for the whole install (issue #27), not per-project — see
 // src/services/github-integration.ts. Manages its own fetch rather than
@@ -25,7 +24,7 @@ import { RunwaySection } from "./RunwaySection.js";
 // body is write-only), so there's nothing here that belongs in the
 // settings-patch debounce/merge machinery HostsSection also skips for the
 // same reason.
-export function IntegrationsSection() {
+export function GitHubSection() {
   const [integration, setIntegration] = useState<GitHubIntegration | null>(null);
   const [loading, setLoading] = useState(true);
   // Disconnecting revokes the stored credential on the server. Until this
@@ -82,101 +81,104 @@ export function IntegrationsSection() {
   };
 
   return (
-    <>
-      <GroupHeading
-        title="GitHub"
+    <SettingsForm>
+      <SettingsGroup
+        title="Account"
         desc="Connect a GitHub account to see each project's issues, pull requests, and CI status."
-      />
-      <StyledList>
-        <ListRow
-          testId="github-integration-row"
-          icon={<GitHubIcon size={16} />}
-          dot={integration?.connected ? "on" : "off"}
-          title={loading ? "Checking…" : (integration?.login ?? "Not connected")}
-          subtitle={
-            integration?.connected
-              ? integration.tokenType === "oauth"
-                ? "Connected via device flow"
-                : "Connected via personal access token"
-              : "No account connected"
-          }
-          trailing={
-            integration?.connected ? (
-              // Two clicks, not one: this revokes the credential on the
-              // server, and there is no undo. The title says so, the same
-              // way the bridge revoke and the device delete do (see
-              // BridgesSection.tsx and DevicesSection.tsx).
-              <ConfirmButton
-                title="Disconnect this GitHub account. Issues, pull requests and CI status stop being shown until you connect again."
-                onConfirm={disconnect}
-                disabled={disconnecting}
-              >
-                Disconnect
-              </ConfirmButton>
-            ) : undefined
-          }
-        />
-      </StyledList>
+      >
+        <StyledList>
+          <ListRow
+            testId="github-integration-row"
+            icon={<GitHubIcon size={16} />}
+            dot={integration?.connected ? "on" : "off"}
+            title={loading ? "Checking…" : (integration?.login ?? "Not connected")}
+            subtitle={
+              integration?.connected
+                ? integration.tokenType === "oauth"
+                  ? "Connected via device flow"
+                  : "Connected via personal access token"
+                : "No account connected"
+            }
+            trailing={
+              integration?.connected ? (
+                // Two clicks, not one: this revokes the credential on the
+                // server, and there is no undo. The title says so, the same
+                // way the bridge revoke and the device delete do (see
+                // BridgesSection.tsx and DevicesSection.tsx).
+                <ConfirmButton
+                  title="Disconnect this GitHub account. Issues, pull requests and CI status stop being shown until you connect again."
+                  onConfirm={disconnect}
+                  disabled={disconnecting}
+                >
+                  Disconnect
+                </ConfirmButton>
+              ) : undefined
+            }
+          />
+        </StyledList>
 
-      {!integration?.connected && integration?.deviceFlowAvailable && (
-        <div style={{ marginTop: 10 }}>
-          <SecondaryButton onClick={() => setDeviceFlowOpen(true)} icon={<GitHubIcon size={13} />}>
-            Connect with GitHub
-          </SecondaryButton>
-        </div>
-      )}
+        {!integration?.connected && integration?.deviceFlowAvailable && (
+          <div style={{ marginTop: 10 }}>
+            <SecondaryButton
+              onClick={() => setDeviceFlowOpen(true)}
+              icon={<GitHubIcon size={13} />}
+            >
+              Connect with GitHub
+            </SecondaryButton>
+          </div>
+        )}
 
-      {!integration?.connected && (
-        <div style={{ marginTop: 10 }}>
-          <Row
-            label="Personal access token"
-            desc="A fine-grained token with read access to Contents, Issues, and Pull requests."
-            align="start"
-          >
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <div className="settings-numberfield" style={{ width: 260 }}>
-                <input
-                  type="password"
-                  autoComplete="off"
-                  style={{ flex: 1, textAlign: "left", width: "auto" }}
-                  placeholder="github_pat_…"
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") connect();
-                  }}
-                />
+        {!integration?.connected && (
+          <div style={{ marginTop: 10 }}>
+            <Row
+              label="Personal access token"
+              desc="A fine-grained token with read access to Contents, Issues, and Pull requests."
+              align="start"
+            >
+              <div className="settings-form-field-actions">
+                <div className="settings-numberfield">
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    style={{ flex: 1, textAlign: "left", width: "auto" }}
+                    placeholder="github_pat_…"
+                    value={token}
+                    onChange={(e) => setToken(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") connect();
+                    }}
+                  />
+                </div>
+                <SecondaryButton onClick={connect} disabled={connecting || !token.trim()}>
+                  {connecting ? "Connecting…" : "Connect"}
+                </SecondaryButton>
               </div>
-              <SecondaryButton onClick={connect} disabled={connecting || !token.trim()}>
-                {connecting ? "Connecting…" : "Connect"}
-              </SecondaryButton>
-            </div>
-          </Row>
-        </div>
-      )}
+            </Row>
+          </div>
+        )}
 
-      {error && <ErrorText style={{ marginTop: 8 }}>{error}</ErrorText>}
+        {error && <ErrorText style={{ marginTop: 8 }}>{error}</ErrorText>}
 
-      {integration && !integration.deviceFlowAvailable && (
-        <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 12 }}>
-          "Connect with GitHub" becomes available once the server administrator configures a GitHub
-          OAuth App.
-        </div>
-      )}
+        {integration && !integration.deviceFlowAvailable && (
+          <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 12 }}>
+            "Connect with GitHub" becomes available once the server administrator configures a
+            GitHub OAuth App.
+          </div>
+        )}
 
-      {deviceFlowOpen && (
-        <GitHubDeviceFlowModal
-          onClose={() => setDeviceFlowOpen(false)}
-          onConnected={() => {
-            api
-              .getGitHubIntegration()
-              .then(setIntegration)
-              .catch(() => {});
-            setDeviceFlowOpen(false);
-          }}
-        />
-      )}
-
+        {deviceFlowOpen && (
+          <GitHubDeviceFlowModal
+            onClose={() => setDeviceFlowOpen(false)}
+            onConnected={() => {
+              api
+                .getGitHubIntegration()
+                .then(setIntegration)
+                .catch(() => {});
+              setDeviceFlowOpen(false);
+            }}
+          />
+        )}
+      </SettingsGroup>
       <WebhooksSection integration={integration} />
 
       <GitHubAppSection
@@ -221,11 +223,7 @@ export function IntegrationsSection() {
       />
 
       <GitHubPollingSettings />
-
-      <ReviewRelaySection />
-
-      <RunwaySection />
-    </>
+    </SettingsForm>
   );
 }
 
@@ -343,7 +341,7 @@ function GitHubAppSection({
   };
 
   return (
-    <div data-testid={testId} style={{ marginTop: 24 }}>
+    <div data-testid={testId} className="settings-form-group">
       <GroupHeading title={title} desc={desc} />
       <StyledList>
         <ListRow
@@ -429,7 +427,7 @@ function GitHubAppSection({
       {formOpen && (
         <div style={{ marginTop: 10 }}>
           <Row label="App ID" desc="The number shown on the App's settings page." align="start">
-            <div className="settings-numberfield" style={{ width: 260 }}>
+            <div className="settings-numberfield">
               <input
                 type="text"
                 autoComplete="off"
@@ -453,7 +451,7 @@ function GitHubAppSection({
             <textarea
               autoComplete="off"
               rows={4}
-              style={{ width: 320, fontFamily: "monospace", fontSize: "0.71875rem" }}
+              className="settings-form-code"
               placeholder="-----BEGIN RSA PRIVATE KEY-----&#10;…&#10;-----END RSA PRIVATE KEY-----" // pragma: allowlist secret
               value={privateKey}
               onChange={(e) => setPrivateKey(e.target.value)}
@@ -540,7 +538,7 @@ function WebhooksSection({ integration }: { integration: GitHubIntegration | nul
 
   return (
     <>
-      <div style={{ marginTop: 24 }}>
+      <div className="settings-form-group">
         <GroupHeading
           title="Webhooks"
           desc="Get pull request and CI updates from GitHub as they happen."

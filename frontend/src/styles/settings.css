@@ -1,6 +1,101 @@
 /* ============================================================ */
 /* Settings modal                                                 */
 /* ============================================================ */
+.settings-form {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+.settings-form-group {
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  padding: 18px;
+  min-width: 0;
+  background: var(--chrome);
+}
+.settings-form .settings-group-heading {
+  padding: 0 0 12px;
+}
+.settings-form .settings-group-title {
+  font-weight: 600;
+}
+.settings-form .settings-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 20rem);
+  gap: 24px;
+  align-items: start;
+  padding: 16px 0;
+}
+.settings-form .settings-row-control {
+  min-width: 0;
+  width: 100%;
+}
+.settings-form
+  .settings-row-control
+  > .settings-numberfield:has(input[type="text"], input[type="password"]),
+.settings-form .settings-form-field-actions > .settings-numberfield,
+.settings-form .settings-form-field-stack,
+.settings-form .settings-dropdown,
+.settings-form .settings-row-control textarea {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+.settings-form .settings-row-control select,
+.settings-form .settings-row-control input,
+.settings-form .settings-row-control textarea {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.settings-form .settings-row-control select,
+.settings-form .settings-row-control input {
+  min-height: 36px;
+}
+.settings-form .settings-row-control select {
+  width: 100%;
+}
+.settings-form .settings-form-field-actions,
+.settings-form .settings-form-field-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+.settings-form .settings-form-field-actions > button {
+  align-self: flex-start;
+}
+.settings-form .settings-form-code {
+  width: 100%;
+  font-family: monospace;
+  min-height: 120px;
+}
+.settings-form-help {
+  margin-top: 6px;
+  overflow-wrap: anywhere;
+}
+.settings-form-help summary {
+  cursor: pointer;
+  color: var(--c);
+  margin-bottom: 4px;
+}
+@container (max-width: 620px) {
+  .settings-form .settings-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+}
+@media (pointer: coarse) {
+  .settings-form .settings-row-control select,
+  .settings-form .settings-row-control input[type="text"],
+  .settings-form .settings-row-control input[type="password"],
+  .settings-form .settings-row-control input[type="number"] {
+    min-height: 44px;
+    font-size: 1rem;
+  }
+}
 .settings-backdrop {
   position: absolute;
   inset: 0;
@@ -309,4 +404,30 @@
   .settings-models-wide {
     grid-column: auto;
   }
+}
+
+.settings-form .settings-row-control > div:has(> .settings-dropdown) {
+  width: 100%;
+  min-width: 0;
+}
+.settings-form .settings-numberfield {
+  box-sizing: border-box;
+  min-height: 36px;
+}
+.settings-form .settings-numberfield input {
+  min-height: 34px;
+}
+@media (pointer: coarse) {
+  .settings-form .settings-numberfield {
+    min-height: 44px;
+  }
+  .settings-form .settings-numberfield input[type="text"],
+  .settings-form .settings-numberfield input[type="password"],
+  .settings-form .settings-numberfield input[type="number"] {
+    min-height: 42px;
+  }
+}
+.settings-form .settings-numberfield:not(:has(input[type="text"], input[type="password"])) {
+  width: fit-content;
+  max-width: 100%;
 }

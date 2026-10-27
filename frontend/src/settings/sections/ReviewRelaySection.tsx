@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+import { SettingsGroup, SettingsHelp } from "../SettingsForm.js";
 import { useEffect, useState } from "react";
 import { api, ApiError } from "../../api/index.js";
 import type { HermesIntegration, HermesModelOptions, ReviewRun } from "../../api/index.js";
@@ -34,14 +36,12 @@ function TextSettingRow({
   desc,
   value,
   placeholder,
-  width = 260,
   onCommit,
 }: {
   label: string;
-  desc: string;
+  desc: ReactNode;
   value: string;
   placeholder?: string;
-  width?: number;
   onCommit: (v: string) => void;
 }) {
   // Call sites pass `key={value}`, so a value changed from outside (e.g. the
@@ -56,7 +56,7 @@ function TextSettingRow({
   };
   return (
     <Row label={label} desc={desc} align="start">
-      <div className="settings-numberfield" style={{ width }}>
+      <div className="settings-numberfield">
         <input
           type="text"
           autoComplete="off"
@@ -132,7 +132,7 @@ function RecentReviews() {
       });
 
   return (
-    <div style={{ marginTop: 16 }} data-testid="review-relay-recent">
+    <div className="settings-form-group" data-testid="review-relay-recent">
       <GroupHeading
         title="Recent reviews"
         desc="Review runs requested from this Mullion since it last started. Stop cancels a run that is stuck or was requested by mistake."
@@ -307,7 +307,7 @@ export function ReviewRelaySection() {
   );
 
   return (
-    <div style={{ marginTop: 24 }} data-testid="review-relay-section">
+    <div className="settings-form" data-testid="review-relay-section">
       <GroupHeading
         title="Review relay"
         desc="Let agents request a pull request review from a reviewer bot with its own GitHub identity, instead of through a GitHub workflow. Agents never see the API key."
@@ -320,149 +320,178 @@ export function ReviewRelaySection() {
         </div>
       ) : (
         <>
-          <StyledList>
-            <ListRow
-              testId="review-relay-row"
-              dot={ready ? "on" : "off"}
-              title={ready ? "Review relay ready" : "Review relay not configured"}
-              subtitle={integration?.hasKey ? "API key set" : "Set the API URL and API key below"}
-              trailing={
-                integration?.hasKey ? (
-                  <SecondaryButton onClick={clearKey}>Clear key</SecondaryButton>
-                ) : undefined
+          <SettingsGroup title="Connection">
+            <StyledList>
+              <ListRow
+                testId="review-relay-row"
+                dot={ready ? "on" : "off"}
+                title={ready ? "Review relay ready" : "Review relay not configured"}
+                subtitle={integration?.hasKey ? "API key set" : "Set the API URL and API key below"}
+                trailing={
+                  integration?.hasKey ? (
+                    <SecondaryButton onClick={clearKey}>Clear key</SecondaryButton>
+                  ) : undefined
+                }
+              />
+            </StyledList>
+            <TextSettingRow
+              label="API URL"
+              desc="Base URL of the Hermes API server (a review-bot profile whose GitHub App can post reviews)."
+              key={`relay-apiUrl:${relay.apiUrl}`}
+              value={relay.apiUrl}
+              placeholder="http://hermes.local:8643"
+              onCommit={(v) => updateSettings({ reviewRelay: { apiUrl: v } })}
+            />
+            <Row
+              label="API key"
+              desc="Stored encrypted on the server; never shown again."
+              align="start"
+            >
+              <div className="settings-form-field-actions">
+                <div className="settings-numberfield">
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    style={{ flex: 1, textAlign: "left", width: "auto" }}
+                    placeholder={integration?.hasKey ? "Replace key…" : "Hermes API key"}
+                    value={key}
+                    onChange={(e) => setKey(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") saveKey();
+                    }}
+                  />
+                </div>
+                <SecondaryButton onClick={saveKey} disabled={saving || !key.trim()}>
+                  {saving ? "Saving…" : "Save key"}
+                </SecondaryButton>
+              </div>
+            </Row>
+            <div style={{ marginTop: 10 }}>
+              <SecondaryButton onClick={test} disabled={testing || relay.apiUrl === ""}>
+                {testing ? "Testing…" : "Test connection"}
+              </SecondaryButton>
+              {testResult && (
+                <span style={{ marginLeft: 10, fontSize: "0.71875rem", color: "var(--dim)" }}>
+                  {testResult}
+                </span>
+              )}
+            </div>
+            {error && <ErrorText style={{ marginTop: 8 }}>{error}</ErrorText>}
+          </SettingsGroup>
+          <SettingsGroup title="Review prompts">
+            <TextSettingRow
+              label="Prompt repository"
+              desc="Optional. Public owner/repo holding a custom review prompt; leave empty for Mullion's built-in prompt."
+              key={`relay-promptRepo:${relay.promptRepo}`}
+              value={relay.promptRepo}
+              placeholder="owner/repo"
+              onCommit={(v) => updateSettings({ reviewRelay: { promptRepo: v } })}
+            />
+            <TextSettingRow
+              label="Prompt path"
+              desc="Path of the review prompt inside that repository."
+              key={`relay-promptPath:${relay.promptPath}`}
+              value={relay.promptPath}
+              onCommit={(v) => updateSettings({ reviewRelay: { promptPath: v } })}
+            />
+          </SettingsGroup>
+          <SettingsGroup title="Triage prompts">
+            <TextSettingRow
+              label="Triage prompt repository"
+              desc="Optional. Public owner/repo holding a custom issue-triage prompt; leave empty for Mullion's built-in triage prompt."
+              key={`relay-triagePromptRepo:${relay.triagePromptRepo}`}
+              value={relay.triagePromptRepo}
+              placeholder="owner/repo"
+              onCommit={(v) => updateSettings({ reviewRelay: { triagePromptRepo: v } })}
+            />
+            <TextSettingRow
+              label="Triage prompt path"
+              desc="Path of the issue-triage prompt inside that repository."
+              key={`relay-triagePromptPath:${relay.triagePromptPath}`}
+              value={relay.triagePromptPath}
+              onCommit={(v) => updateSettings({ reviewRelay: { triagePromptPath: v } })}
+            />
+          </SettingsGroup>
+          <SettingsGroup title="Review policy">
+            <ModelPicker
+              label="Model"
+              ariaLabel="Review relay model"
+              desc="Profile default uses the model priority configured on the Hermes profile. Any other entry overrides that chain for relay runs only."
+              warning={modelHint}
+              value={relayModelValue(relay.model, relay.modelProvider)}
+              options={relayModelOptions(modelProviders)}
+              defaultLabel={`Profile default (${PROFILE_DEFAULT_MODEL})`}
+              allowCustom
+              onChange={(v) =>
+                updateSettings({ reviewRelay: parseRelayModel(v, modelProviders, relay) })
               }
             />
-          </StyledList>
-
-          <TextSettingRow
-            label="API URL"
-            desc="Base URL of the Hermes API server (a review-bot profile whose GitHub App can post reviews)."
-            key={`relay-apiUrl:${relay.apiUrl}`}
-            value={relay.apiUrl}
-            placeholder="http://hermes.local:8643"
-            onCommit={(v) => updateSettings({ reviewRelay: { apiUrl: v } })}
-          />
-          <ModelPicker
-            label="Model"
-            ariaLabel="Review relay model"
-            desc="Profile default uses the model priority configured on the Hermes profile. Any other entry overrides that chain for relay runs only."
-            warning={modelHint}
-            value={relayModelValue(relay.model, relay.modelProvider)}
-            options={relayModelOptions(modelProviders)}
-            defaultLabel={`Profile default (${PROFILE_DEFAULT_MODEL})`}
-            allowCustom
-            onChange={(v) =>
-              updateSettings({ reviewRelay: parseRelayModel(v, modelProviders, relay) })
-            }
-          />
-          <TextSettingRow
-            label="Prompt repository"
-            desc="Optional. Public owner/repo holding a custom review prompt; leave empty for Mullion's built-in prompt."
-            key={`relay-promptRepo:${relay.promptRepo}`}
-            value={relay.promptRepo}
-            placeholder="owner/repo"
-            width={220}
-            onCommit={(v) => updateSettings({ reviewRelay: { promptRepo: v } })}
-          />
-          <TextSettingRow
-            label="Prompt path"
-            desc="Path of the review prompt inside that repository."
-            key={`relay-promptPath:${relay.promptPath}`}
-            value={relay.promptPath}
-            onCommit={(v) => updateSettings({ reviewRelay: { promptPath: v } })}
-          />
-          <TextSettingRow
-            label="Triage prompt repository"
-            desc="Optional. Public owner/repo holding a custom issue-triage prompt; leave empty for Mullion's built-in triage prompt."
-            key={`relay-triagePromptRepo:${relay.triagePromptRepo}`}
-            value={relay.triagePromptRepo}
-            placeholder="owner/repo"
-            width={220}
-            onCommit={(v) => updateSettings({ reviewRelay: { triagePromptRepo: v } })}
-          />
-          <TextSettingRow
-            label="Triage prompt path"
-            desc="Path of the issue-triage prompt inside that repository."
-            key={`relay-triagePromptPath:${relay.triagePromptPath}`}
-            value={relay.triagePromptPath}
-            onCommit={(v) => updateSettings({ reviewRelay: { triagePromptPath: v } })}
-          />
-          <TextSettingRow
-            label="Reviewer bot login"
-            desc="The GitHub login of the bot that posts the review and the triage comment. Only its landed reviews set the base of the next round — the shared Hermes workflow applies the same rule, so the two must agree — and only its comments count as a triage reply. Empty accepts any bot in the status shown here, but then no delta base is derived and every round reviews the whole diff."
-            key={`relay-reviewerBotLogin:${relay.reviewerBotLogin}`}
-            value={relay.reviewerBotLogin}
-            placeholder="name[bot]"
-            width={220}
-            onCommit={(v) => updateSettings({ reviewRelay: { reviewerBotLogin: v } })}
-          />
-          <TextSettingRow
-            label="Ledger check-run name"
-            desc="The check run that records which commit a review round covered. It must match the shared Hermes workflow's hermes-review-ledger-name (default “Hermes review”); leave it empty if the workflow runs with hermes-review-ledger: off. If the two differ, the relay and the workflow derive different bases for the same pull request and silently stop deduplicating (the same range can be reviewed twice); nothing detects it."
-            key={`relay-ledgerName:${relay.ledgerName}`}
-            value={relay.ledgerName}
-            placeholder="Hermes review (empty = off)"
-            width={220}
-            onCommit={(v) => updateSettings({ reviewRelay: { ledgerName: v } })}
-          />
-          <Row
-            label="After an approval"
-            desc="What a review request does once the review bot has approved the pull request. “Refuse” answers 409 so the agent applies the bot's remaining suggestions and pushes without another round (small fixes rarely change the verdict, and re-reviewing them only breeds more nits). “Re-review” reviews every new head commit. An agent can still pass force when its change grew beyond the suggestions or you asked for another look."
-          >
-            <Segmented
-              options={[
-                { value: "refuse", label: "Refuse" },
-                { value: "allow", label: "Re-review" },
-              ]}
-              value={relay.reReviewAfterApproval}
-              onChange={(v) => updateSettings({ reviewRelay: { reReviewAfterApproval: v } })}
+            <TextSettingRow
+              label="Reviewer bot login"
+              desc={
+                <SettingsHelp summary="Match the bot used by your review workflow. Empty disables delta review.">
+                  The GitHub login of the bot that posts the review and the triage comment. Only its
+                  landed reviews set the base of the next round — the shared Hermes workflow applies
+                  the same rule, so the two must agree — and only its comments count as a triage
+                  reply. Empty accepts any bot in the status shown here, but then no delta base is
+                  derived and every round reviews the whole diff.
+                </SettingsHelp>
+              }
+              key={`relay-reviewerBotLogin:${relay.reviewerBotLogin}`}
+              value={relay.reviewerBotLogin}
+              placeholder="name[bot]"
+              onCommit={(v) => updateSettings({ reviewRelay: { reviewerBotLogin: v } })}
             />
-          </Row>
-          <Row
-            label="Cooldown"
-            desc="Minimum time between two requests for the same target — the same commit for a review, the same issue for a triage."
-          >
-            <CooldownField
-              key={relay.cooldownMinutes}
-              value={relay.cooldownMinutes}
-              onCommit={(v) => updateSettings({ reviewRelay: { cooldownMinutes: v } })}
+            <TextSettingRow
+              label="Ledger check-run name"
+              desc={
+                <SettingsHelp summary="Must match the workflow’s ledger name. A mismatch can cause duplicate reviews.">
+                  The check run that records which commit a review round covered. It must match the
+                  shared Hermes workflow's hermes-review-ledger-name (default “Hermes review”);
+                  leave it empty if the workflow runs with hermes-review-ledger: off. If the two
+                  differ, the relay and the workflow derive different bases for the same pull
+                  request and silently stop deduplicating (the same range can be reviewed twice);
+                  nothing detects it.
+                </SettingsHelp>
+              }
+              key={`relay-ledgerName:${relay.ledgerName}`}
+              value={relay.ledgerName}
+              placeholder="Hermes review (empty = off)"
+              onCommit={(v) => updateSettings({ reviewRelay: { ledgerName: v } })}
             />
-          </Row>
-          <Row
-            label="API key"
-            desc="Stored encrypted on the server; never shown again."
-            align="start"
-          >
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <div className="settings-numberfield" style={{ width: 260 }}>
-                <input
-                  type="password"
-                  autoComplete="off"
-                  style={{ flex: 1, textAlign: "left", width: "auto" }}
-                  placeholder={integration?.hasKey ? "Replace key…" : "Hermes API key"}
-                  value={key}
-                  onChange={(e) => setKey(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") saveKey();
-                  }}
-                />
-              </div>
-              <SecondaryButton onClick={saveKey} disabled={saving || !key.trim()}>
-                {saving ? "Saving…" : "Save key"}
-              </SecondaryButton>
-            </div>
-          </Row>
-          <div style={{ marginTop: 10 }}>
-            <SecondaryButton onClick={test} disabled={testing || relay.apiUrl === ""}>
-              {testing ? "Testing…" : "Test connection"}
-            </SecondaryButton>
-            {testResult && (
-              <span style={{ marginLeft: 10, fontSize: "0.71875rem", color: "var(--dim)" }}>
-                {testResult}
-              </span>
-            )}
-          </div>
-          {error && <ErrorText style={{ marginTop: 8 }}>{error}</ErrorText>}
+            <Row
+              label="After an approval"
+              desc={
+                <SettingsHelp summary="Choose whether new commits can be reviewed after approval.">
+                  What a review request does once the review bot has approved the pull request.
+                  “Refuse” answers 409 so the agent applies the bot's remaining suggestions and
+                  pushes without another round (small fixes rarely change the verdict, and
+                  re-reviewing them only breeds more nits). “Re-review” reviews every new head
+                  commit. An agent can still pass force when its change grew beyond the suggestions
+                  or you asked for another look.
+                </SettingsHelp>
+              }
+            >
+              <Segmented
+                options={[
+                  { value: "refuse", label: "Refuse" },
+                  { value: "allow", label: "Re-review" },
+                ]}
+                value={relay.reReviewAfterApproval}
+                onChange={(v) => updateSettings({ reviewRelay: { reReviewAfterApproval: v } })}
+              />
+            </Row>
+            <Row
+              label="Cooldown"
+              desc="Minimum time between two requests for the same target — the same commit for a review, the same issue for a triage."
+            >
+              <CooldownField
+                key={relay.cooldownMinutes}
+                value={relay.cooldownMinutes}
+                onCommit={(v) => updateSettings({ reviewRelay: { cooldownMinutes: v } })}
+              />
+            </Row>
+          </SettingsGroup>
           {ready && <RecentReviews />}
         </>
       )}

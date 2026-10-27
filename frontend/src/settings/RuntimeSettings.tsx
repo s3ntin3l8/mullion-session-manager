@@ -13,7 +13,7 @@ export function GitHubPollingSettings() {
   const env = useServerInfo()?.runtimeEnv ?? FALLBACK_RUNTIME_ENV;
   const g = settings.github;
   return (
-    <div style={{ marginTop: 24 }}>
+    <div className="settings-form-group">
       <GroupHeading
         title="Update checks"
         desc="How often Mullion checks GitHub for pull request and CI changes. Webhooks, when on, deliver changes sooner."

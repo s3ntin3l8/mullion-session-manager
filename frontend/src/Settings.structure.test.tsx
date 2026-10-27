@@ -42,10 +42,23 @@ describe("Settings structure", () => {
   });
 
   it("maps folded-in section ids to their new home", () => {
+    expect(resolveSettingsSection("integrations")).toBe("github");
     expect(resolveSettingsSection("models")).toBe("models");
     expect(resolveSettingsSection("skills")).toBe("agent-context");
     expect(resolveSettingsSection("server")).toBe("server");
   });
+
+  it.each(["github", "review-relay", "runway"] as const)(
+    "opens %s without mounting the other integration pages",
+    (section) => {
+      render(<Settings onClose={vi.fn()} initialSection={section} />);
+      expect(screen.queryByTestId("github-integration-row") !== null).toBe(section === "github");
+      expect(screen.queryByTestId("review-relay-section") !== null).toBe(
+        section === "review-relay",
+      );
+      expect(screen.queryByTestId("runway-section") !== null).toBe(section === "runway");
+    },
+  );
 
   it("renders one group heading per group in the nav", () => {
     render(<Settings onClose={vi.fn()} />);

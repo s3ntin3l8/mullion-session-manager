@@ -185,9 +185,9 @@ See [`github-integration.md`](github-integration.md) for the full design.
 | `GITHUB_OAUTH_CLIENT_ID`      | _(empty)_ | GitHub OAuth App client id; enables the device-flow "Connect with GitHub" button. PAT connect works with no client id at all                                                                                     |
 | `MULLION_WEBHOOK_BASE_URL`    | _(empty)_ | public `https://` base URL GitHub POSTs webhook events to; empty disables webhook support (polling stays active as the fallback)                                                                                 |
 | `MULLION_WEBHOOK_SECRET`      | _(empty)_ | HMAC-SHA256 secret for webhook payload verification. Empty by default; if left empty when webhooks are enabled, one is auto-generated and persisted on first enable rather than requiring you to set it up front |
-| `GITHUB_POLL_INTERVAL_ACTIVE` | `15`      | seconds between adaptive GitHub poller ticks while a repo has open PRs or running CI; Settings-overridable (Settings → Integrations)                                                                             |
-| `GITHUB_POLL_INTERVAL_QUIET`  | `60`      | seconds between adaptive GitHub poller ticks while no repo has open PRs or running CI; Settings-overridable (Settings → Integrations)                                                                            |
-| `GITHUB_POLL_STALE_THRESHOLD` | `300`     | seconds without a webhook delivery before the poller enters stalled mode and syncs at 30s instead; Settings-overridable (Settings → Integrations)                                                                |
+| `GITHUB_POLL_INTERVAL_ACTIVE` | `15`      | seconds between adaptive GitHub poller ticks while a repo has open PRs or running CI; Settings-overridable (Settings → GitHub)                                                                                   |
+| `GITHUB_POLL_INTERVAL_QUIET`  | `60`      | seconds between adaptive GitHub poller ticks while no repo has open PRs or running CI; Settings-overridable (Settings → GitHub)                                                                                  |
+| `GITHUB_POLL_STALE_THRESHOLD` | `300`     | seconds without a webhook delivery before the poller enters stalled mode and syncs at 30s instead; Settings-overridable (Settings → GitHub)                                                                      |
 
 ## Task Master
 

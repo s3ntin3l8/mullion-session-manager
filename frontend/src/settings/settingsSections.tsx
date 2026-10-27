@@ -1,5 +1,7 @@
 import type React from "react";
 import {
+  CheckIcon,
+  ClockIcon,
   AccountIcon,
   AppearanceIcon,
   BellIcon,
@@ -36,7 +38,9 @@ export type SettingsSection =
   | "browser"
   | "devices"
   | "hosts"
-  | "integrations"
+  | "github"
+  | "review-relay"
+  | "runway"
   | "storage"
   | "server";
 
@@ -46,6 +50,7 @@ export type SettingsSection =
 // that content instead of crashing on a missing entry.
 const LEGACY_SECTION_ALIASES = {
   skills: "agent-context",
+  integrations: "github",
 } as const satisfies Record<string, SettingsSection>;
 
 export type SettingsSectionLink = SettingsSection | keyof typeof LEGACY_SECTION_ALIASES;
@@ -173,11 +178,25 @@ export const SECTIONS: Array<{
     icon: (size) => <HostsIcon size={size} />,
   },
   {
-    id: "integrations",
+    id: "github",
     group: "Connections",
-    title: "Integrations",
+    title: "GitHub",
     desc: "GitHub account, webhooks, GitHub Apps, and update checks.",
     icon: (size) => <GitHubIcon size={size} />,
+  },
+  {
+    id: "review-relay",
+    group: "Connections",
+    title: "Review relay",
+    desc: "Hermes connection, review and triage prompts, and review policy.",
+    icon: (size) => <CheckIcon size={size} />,
+  },
+  {
+    id: "runway",
+    group: "Connections",
+    title: "Runway",
+    desc: "Quota tracking, provider mapping, and Runway connection.",
+    icon: (size) => <ClockIcon size={size} />,
   },
   {
     id: "storage",
@@ -322,11 +341,16 @@ export const SEARCH_INDEX: Array<{ section: SettingsSection; text: string }> = [
   { section: "hosts", text: "cascade delete host projects" },
   { section: "hosts", text: "agent update version skew self-update" },
   { section: "hosts", text: "ssh agent bridge pair laptop 1password forward helper revoke" },
-  { section: "integrations", text: "github personal access token pat connect disconnect" },
-  { section: "integrations", text: "issues pull requests actions device flow oauth" },
-  { section: "integrations", text: "webhooks real-time updates" },
-  { section: "integrations", text: "update checks polling interval active quiet webhook silence" },
-  { section: "integrations", text: "github app reviewer app private key rotate installation" },
+  { section: "github", text: "github personal access token pat connect disconnect" },
+  { section: "github", text: "issues pull requests actions device flow oauth" },
+  { section: "github", text: "webhooks real-time updates" },
+  { section: "github", text: "update checks polling interval active quiet webhook silence" },
+  { section: "github", text: "github app reviewer app private key rotate installation" },
+  {
+    section: "review-relay",
+    text: "hermes review relay reviewer api key connection model prompt repository triage ledger cooldown approval",
+  },
+  { section: "runway", text: "runway quota usage provider mapping admin key poll interval" },
   { section: "server", text: "version environment port encryption uptime role primary agent" },
   { section: "server", text: "sessions directory database rate limit cpu ram" },
   { section: "server", text: "log level logging debug trace verbosity" },

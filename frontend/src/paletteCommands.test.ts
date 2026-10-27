@@ -20,7 +20,7 @@ function ctx(over: Partial<PaletteCommandContext> = {}) {
     skills: vi.fn(),
     browser: vi.fn(),
     browserUrl: vi.fn(),
-    integrationsSettings: vi.fn(),
+    settingsSection: vi.fn(),
     blankBrowser: vi.fn(),
     newWorkspace: vi.fn(),
     goToPr: vi.fn(),
@@ -52,7 +52,6 @@ describe("buildPaletteCommands", () => {
     expect(titles("top", commands)).toEqual([
       "Git",
       "GitHub",
-      "Manage integrations…",
       "New preview tab",
       "New workspace",
       "Preview",
@@ -84,7 +83,7 @@ describe("buildPaletteCommands", () => {
     byId["file-editor"].run();
     byId["external-file"].run();
     byId["preview"].run();
-    byId["integrations-settings"].run();
+    byId["settings-github"].run();
     byId["blank-browser"].run();
 
     for (const key of [
@@ -101,7 +100,7 @@ describe("buildPaletteCommands", () => {
     ] as const) {
       expect(open[key]).toHaveBeenCalledWith(5);
     }
-    expect(open.integrationsSettings).toHaveBeenCalledWith();
+    expect(open.settingsSection).toHaveBeenCalledWith("github");
     expect(open.blankBrowser).toHaveBeenCalledWith();
   });
 
@@ -125,9 +124,11 @@ describe("buildPaletteCommands", () => {
   it("offers only the project-independent entries when there is no project", () => {
     const commands = buildPaletteCommands(ctx({ projectId: null, projectName: null }).context);
     expect(commands.map((c) => c.id)).toEqual([
-      "integrations-settings",
+      "settings-github",
       "blank-browser",
       "new-workspace",
+      "settings-review-relay",
+      "settings-runway",
     ]);
   });
 
@@ -160,7 +161,13 @@ describe("buildPaletteCommands", () => {
     const ids = buildPaletteCommands(ctx().context)
       .filter((c) => c.movesFocus)
       .map((c) => c.id);
-    expect(ids).toEqual(["integrations-settings", "blank-browser", "external-file"]);
+    expect(ids).toEqual([
+      "settings-github",
+      "blank-browser",
+      "external-file",
+      "settings-review-relay",
+      "settings-runway",
+    ]);
   });
 
   it("the drill-in row's run is a harmless no-op (the palette handles it)", () => {

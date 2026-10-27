@@ -111,7 +111,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -162,7 +162,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -217,7 +217,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -268,7 +268,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -315,7 +315,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -352,7 +352,7 @@ describe("CommandPalette -> worktree isolation toggle", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
       />,
@@ -395,7 +395,7 @@ describe("CommandPalette -> WorktreeOptions -> P9 silent failures", () => {
         onOpenSkills={vi.fn()}
         onOpenBrowser={vi.fn()}
         onOpenBlankBrowser={vi.fn()}
-        onOpenIntegrationsSettings={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
         onOpenTasks={vi.fn()}
         onOpenBrowserUrl={vi.fn()}
         {...overrides}

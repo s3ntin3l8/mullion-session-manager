@@ -179,7 +179,7 @@ describe("Settings -> Integrations", () => {
 
   it("shows disconnected, connects with a token, then shows the connected login", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+    render(<Settings onClose={vi.fn()} initialSection="github" />);
 
     expect(await screen.findByText("Not connected")).toBeInTheDocument();
 
@@ -196,7 +196,7 @@ describe("Settings -> Integrations", () => {
 
   it("shows an inline error when GitHub rejects the token, without connecting", async () => {
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+    render(<Settings onClose={vi.fn()} initialSection="github" />);
     await screen.findByText("Not connected");
 
     await user.type(screen.getByPlaceholderText("github_pat_…"), "bad-token");
@@ -221,7 +221,7 @@ describe("Settings -> Integrations", () => {
       reviewerApp: { ...NOT_CONFIGURED_APP },
     };
     const user = userEvent.setup();
-    render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+    render(<Settings onClose={vi.fn()} initialSection="github" />);
 
     expect(await screen.findByText("octocat")).toBeInTheDocument();
 
@@ -239,7 +239,7 @@ describe("Settings -> Integrations", () => {
   });
 
   it("hides the device-flow button when deviceFlowAvailable is false", async () => {
-    render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+    render(<Settings onClose={vi.fn()} initialSection="github" />);
     await screen.findByText("Not connected");
     expect(screen.queryByText("Connect with GitHub")).not.toBeInTheDocument();
   });
@@ -247,7 +247,7 @@ describe("Settings -> Integrations", () => {
   it("opens the device-flow modal when deviceFlowAvailable is true", async () => {
     integration = { ...DISCONNECTED, deviceFlowAvailable: true };
     const user = userEvent.setup();
-    const { unmount } = render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+    const { unmount } = render(<Settings onClose={vi.fn()} initialSection="github" />);
 
     await user.click(await screen.findByText("Connect with GitHub"));
     expect(await screen.findByText("ABCD-1234")).toBeInTheDocument();
@@ -272,7 +272,7 @@ describe("Settings -> Integrations", () => {
   describe("GitHub App", () => {
     it("shows 'Not configured' and configures a new App", async () => {
       const user = userEvent.setup();
-      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      render(<Settings onClose={vi.fn()} initialSection="github" />);
 
       expect(await within(section()).findByText("Not configured")).toBeInTheDocument();
 
@@ -310,7 +310,7 @@ describe("Settings -> Integrations", () => {
           },
         },
       };
-      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      render(<Settings onClose={vi.fn()} initialSection="github" />);
       expect(
         await within(section()).findByText(
           /Hermes review marker: permission-not-granted \(acme\/widgets/,
@@ -361,7 +361,7 @@ describe("Settings -> Integrations", () => {
           ],
         },
       };
-      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      render(<Settings onClose={vi.fn()} initialSection="github" />);
       const list = await within(section()).findByRole("list", { name: "GitHub App permissions" });
       expect(
         within(list).getByText(/dispatch: App lacks Actions: write \(HTTP 422\) — using your PAT/),
@@ -382,7 +382,7 @@ describe("Settings -> Integrations", () => {
           keyRotatedAt: "2026-01-01T00:00:00.000Z",
         },
       };
-      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      render(<Settings onClose={vi.fn()} initialSection="github" />);
       await within(section()).findByText("App #555");
       expect(
         within(section()).queryByRole("list", { name: "GitHub App permissions" }),
@@ -390,7 +390,7 @@ describe("Settings -> Integrations", () => {
     });
 
     it("is independent of the PAT/OAuth connection — visible while disconnected", async () => {
-      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      render(<Settings onClose={vi.fn()} initialSection="github" />);
       expect(await screen.findByText("Not connected")).toBeInTheDocument();
       expect(screen.getByText("GitHub App")).toBeInTheDocument();
       expect(within(section()).getByText("Not configured")).toBeInTheDocument();
@@ -408,7 +408,7 @@ describe("Settings -> Integrations", () => {
         },
       };
       const user = userEvent.setup();
-      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      render(<Settings onClose={vi.fn()} initialSection="github" />);
 
       expect(await within(section()).findByText("App #111")).toBeInTheDocument();
       // Two clicks now: the first arms, the second confirms. Clearing
@@ -434,7 +434,7 @@ describe("Settings -> Integrations", () => {
           keyRotatedAt: null,
         },
       };
-      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      render(<Settings onClose={vi.fn()} initialSection="github" />);
 
       expect(await within(section()).findByText("App #222")).toBeInTheDocument();
       expect(within(section()).getByText("Installation count unavailable")).toBeInTheDocument();
@@ -455,7 +455,7 @@ describe("Settings -> Integrations", () => {
         },
       };
       const user = userEvent.setup();
-      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      render(<Settings onClose={vi.fn()} initialSection="github" />);
 
       expect(await within(section()).findByText("App #111")).toBeInTheDocument();
       // The form is unreachable until "Rotate key" is clicked.
@@ -492,7 +492,7 @@ describe("Settings -> Integrations", () => {
         },
       };
       const user = userEvent.setup();
-      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      render(<Settings onClose={vi.fn()} initialSection="github" />);
 
       await within(section()).findByText("App #111");
       await user.click(within(section()).getByRole("button", { name: "Rotate key" }));
@@ -522,7 +522,7 @@ describe("Settings -> Integrations", () => {
         },
       };
       const user = userEvent.setup();
-      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      render(<Settings onClose={vi.fn()} initialSection="github" />);
 
       await within(section()).findByText("App #111");
       await user.click(within(section()).getByRole("button", { name: "Rotate key" }));
@@ -550,7 +550,7 @@ describe("Settings -> Integrations", () => {
 
     it("is independently configurable while the primary App stays unconfigured", async () => {
       const user = userEvent.setup();
-      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      render(<Settings onClose={vi.fn()} initialSection="github" />);
 
       expect(await within(reviewerSection()).findByText("Not configured")).toBeInTheDocument();
 
@@ -589,7 +589,7 @@ describe("Settings -> Integrations", () => {
         },
       };
       const user = userEvent.setup();
-      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      render(<Settings onClose={vi.fn()} initialSection="github" />);
 
       expect(await within(reviewerSection()).findByText("App #222")).toBeInTheDocument();
       // Two clicks now: the first arms, the second confirms.
@@ -621,7 +621,7 @@ describe("Settings -> Integrations", () => {
         },
       };
       const user = userEvent.setup();
-      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      render(<Settings onClose={vi.fn()} initialSection="github" />);
 
       await within(section()).findByText("App #111");
       await user.type(within(reviewerSection()).getByPlaceholderText("123456"), "111");
@@ -659,7 +659,7 @@ describe("Settings -> Integrations", () => {
         reviewerApp: { ...NOT_CONFIGURED_APP },
       };
       const user = userEvent.setup();
-      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      render(<Settings onClose={vi.fn()} initialSection="github" />);
       expect(await screen.findByText("octocat")).toBeInTheDocument();
 
       await user.click(screen.getByRole("button", { name: /^Disconnect/ }));
@@ -684,7 +684,7 @@ describe("Settings -> Integrations", () => {
         },
       };
       const user = userEvent.setup();
-      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      render(<Settings onClose={vi.fn()} initialSection="github" />);
       const section = () => screen.getByTestId("github-app-section");
 
       // The section renders the configured App asynchronously — wait for
@@ -716,7 +716,7 @@ describe("Settings -> Integrations", () => {
         reviewerApp: { ...NOT_CONFIGURED_APP },
       };
       const user = userEvent.setup();
-      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      render(<Settings onClose={vi.fn()} initialSection="github" />);
       await screen.findByText("octocat");
 
       const button = screen.getByRole("button", { name: /^Disconnect/ });
@@ -734,7 +734,7 @@ describe("Settings -> Integrations", () => {
   describe("connect re-entry guard", () => {
     it("does not send the token twice when Enter is pressed twice", async () => {
       const user = userEvent.setup();
-      render(<Settings onClose={vi.fn()} initialSection="integrations" />);
+      render(<Settings onClose={vi.fn()} initialSection="github" />);
       await screen.findByText("Not connected");
 
       const input = screen.getByPlaceholderText("github_pat_…");

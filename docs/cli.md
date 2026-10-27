@@ -414,7 +414,7 @@ browser tab being open. See `src/plugins/event-store.ts`'s own doc comment.
 ### review
 
 - `review [--pr <n>] [--force]` — asks the Mullion server to relay a review request
-  to the configured reviewer (Settings → Integrations → Review relay;
+  to the configured reviewer (Settings → Review relay;
   currently Hermes, a review-bot that posts under its own GitHub App
   identity) for the PR of the session's project (the `reviews.request` op,
   `request_review` over MCP). Without `--pr`, the open PR for the session's
@@ -505,7 +505,7 @@ review`; **empty = the ledger is off**, like `hermes-review-ledger: off`), and
   is `review_status`, and of `review` itself `request_review`.
 - `review stop <runId>` — stops a run **this session** dispatched; another
   session's run is refused (403). Operators can stop any tracked run from
-  Settings → Integrations → Review relay → Recent reviews.
+  Settings → Review relay → Recent reviews.
 
 `review` and `review status` work for local and remote-hosted projects — a
 remote session's branch is resolved on the host that owns it. `review stop`
@@ -514,7 +514,7 @@ takes a run id and does not look at the project.
 ### triage
 
 - `triage --issue <n> [--repo <owner/name>]` — asks the Mullion server to relay an issue triage to
-  the configured reviewer (Settings → Integrations → Review relay; currently
+  the configured reviewer (Settings → Review relay; currently
   Hermes) for an issue in the session's project (the `triage.request` op,
   `request_triage` over MCP). The issue number is required: unlike a pull
   request, there is no "current issue" to infer from the session's branch.
