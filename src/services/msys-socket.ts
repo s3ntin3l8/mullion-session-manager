@@ -277,6 +277,19 @@ export interface MsysSocketServer {
   close(): Promise<void>;
 }
 
+/** Unlinks `socketPath` if it holds no valid cookie, or exactly ours. */
+async function removeIfOurs(socketPath: string, port: number, secret: Buffer): Promise<void> {
+  let text: string;
+  try {
+    text = await readFile(socketPath, "latin1");
+  } catch {
+    return;
+  }
+  const cookie = parseMsysSocketFile(text);
+  if (cookie && !(cookie.port === port && cookie.secret.equals(secret))) return;
+  await unlink(socketPath).catch(() => undefined);
+}
+
 /**
  * Listens on a fresh loopback port and publishes it as an MSYS socket file at
  * `socketPath`. Reclaim the path first (reclaimMsysSocket); this does not.
@@ -323,10 +336,12 @@ export async function listenMsysSocket(opts: MsysSocketServerOptions): Promise<M
     // A write that failed after CreateNew made the file (a full disk, the
     // timeout killing PowerShell) leaves one with no readable cookie, which
     // probeMsysSocket can only call "unknown" — so reclaim would refuse it on
-    // every later boot. Remove it. Not after a collision, though: that file
-    // is another instance's.
+    // every later boot. Remove it — but only when it is ours: empty or
+    // unparsable (our half-written one), or our own complete cookie. A write
+    // that failed before creating anything (no powershell.exe, a collision)
+    // may find another instance's file there, and that one is left alone.
     if (!(err instanceof SocketAlreadyListeningError)) {
-      await unlink(opts.socketPath).catch(() => undefined);
+      await removeIfOurs(opts.socketPath, port, secret);
     }
     throw err;
   }

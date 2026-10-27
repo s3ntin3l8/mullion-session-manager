@@ -314,6 +314,35 @@ describe("listenMsysSocket", () => {
     expect(existsSync(socketPath)).toBe(false);
   });
 
+  it("removes our own complete cookie after a later step failed", async () => {
+    const socketPath = tmpSocket();
+    await expect(
+      listenMsysSocket({
+        socketPath,
+        onConnection: () => undefined,
+        writeSocketFile: (p, contents) => {
+          writeFileSync(p, contents);
+          return Promise.reject(new Error("SetAttributes failed"));
+        },
+      }),
+    ).rejects.toThrow("SetAttributes failed");
+    expect(existsSync(socketPath)).toBe(false);
+  });
+
+  it("leaves another instance's valid file alone when our write failed before creating one", async () => {
+    const socketPath = tmpSocket();
+    const theirs = formatMsysSocketFile(4321, SECRET);
+    writeFileSync(socketPath, theirs);
+    await expect(
+      listenMsysSocket({
+        socketPath,
+        onConnection: () => undefined,
+        writeSocketFile: () => Promise.reject(new Error("spawn powershell.exe ENOENT")),
+      }),
+    ).rejects.toThrow("ENOENT");
+    expect(readFileSync(socketPath, "latin1")).toBe(theirs);
+  });
+
   it("leaves the file alone after a collision — it is another instance's", async () => {
     const socketPath = tmpSocket();
     writeFileSync(socketPath, "theirs");
