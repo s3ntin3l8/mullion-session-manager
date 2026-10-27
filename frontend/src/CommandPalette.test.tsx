@@ -3250,3 +3250,92 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     expect(footer?.textContent).not.toMatch(/Run Project:/);
   });
 });
+
+describe("CommandPalette -> default target follows the active pane", () => {
+  const A: Project = { ...PROJECT, id: 1, name: "alpha-project", cwd: "/home/x/alpha" };
+  const B: Project = { ...PROJECT, id: 2, name: "beta-project", cwd: "/home/x/beta" };
+
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(200, []))),
+    );
+    localStorage.clear();
+    // Last launch was in A.
+    localStorage.setItem("crs.lastLaunchProjectId", "1");
+    useDashboardStore.setState({
+      projects: [A, B],
+      sessions: [makeSession({ id: 9, projectId: 2, status: "active" })],
+      workspaces: [],
+      settings: DEFAULT_SETTINGS,
+      activePanelId: null,
+    });
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useDashboardStore.setState({ activePanelId: null });
+  });
+
+  const renderGlobal = (onOpenBrowser = vi.fn()) =>
+    render(
+      <CommandPalette
+        scope="global"
+        projectId={null}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenGit={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenFileEditor={vi.fn()}
+        onOpenExternalFile={vi.fn()}
+        onOpenProjectBriefing={vi.fn()}
+        onOpenProjectSetup={vi.fn()}
+        onOpenDockConfig={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={onOpenBrowser}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenIntegrationsSettings={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+
+  const target = () => screen.getByRole("button", { name: /Target project:/ });
+
+  it("targets the active session's project over the last-launched one", async () => {
+    useDashboardStore.setState({ activePanelId: "session-9" });
+    renderGlobal();
+    expect(target()).toHaveTextContent("beta-project");
+  });
+
+  it("falls back to the last-launched project with no active pane", async () => {
+    renderGlobal();
+    expect(target()).toHaveTextContent("alpha-project");
+  });
+
+  it("falls back to the last-launched project when the active session is killed", async () => {
+    useDashboardStore.setState({
+      sessions: [makeSession({ id: 9, projectId: 2, status: "killed" })],
+      activePanelId: "session-9",
+    });
+    renderGlobal();
+    expect(target()).toHaveTextContent("alpha-project");
+  });
+
+  it("targets a project-scoped panel's project (github-<id>)", async () => {
+    useDashboardStore.setState({ activePanelId: "github-2" });
+    renderGlobal();
+    expect(target()).toHaveTextContent("beta-project");
+  });
+
+  it("runs the Preview command against the active session's project", async () => {
+    const onOpenBrowser = vi.fn();
+    const user = userEvent.setup();
+    useDashboardStore.setState({ activePanelId: "session-9" });
+    renderGlobal(onOpenBrowser);
+    await user.click(await screen.findByText(/^Preview$/));
+    expect(onOpenBrowser).toHaveBeenCalledWith(2);
+  });
+});

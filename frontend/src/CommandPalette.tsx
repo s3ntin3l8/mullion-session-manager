@@ -20,6 +20,7 @@ import type { PaletteCommand } from "./paletteCommands.js";
 import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
 import { describeError } from "./lib/describeError.js";
 import { openSessionOn } from "./git/sessionLaunch.js";
+import { resolveActiveProjectId } from "./panelUtils.js";
 import { WorktreeOptions } from "./command-palette/WorktreeOptions.js";
 import { useFocusTrap, isVisible } from "./hooks/useFocusTrap.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
@@ -280,6 +281,15 @@ export function CommandPalette({
     );
   const [targetProjectId] = useState<number | null>(() => {
     if (scope === "project") return initialProjectId;
+    // Default to the focused pane's project; a killed session pane doesn't
+    // count, and neither does a stale id no longer in `projects`.
+    const paneProjectId =
+      activePanelId?.startsWith("session-") === true
+        ? (sessions.find((s) => activePanelId === `session-${s.id}` && s.status !== "killed")
+            ?.projectId ?? null)
+        : resolveActiveProjectId(activePanelId, sessions);
+    const pane = projects.find((p) => p.id === paneProjectId);
+    if (pane) return pane.id;
     const stored = readNumber(STORAGE_KEYS.lastLaunchProjectId, 0);
     return (projects.find((p) => p.id === stored) ?? projects[0] ?? null)?.id ?? null;
   });
