@@ -28,8 +28,28 @@ describe("reap-dtach", () => {
     await exited;
   });
 
-  it("returns nothing when procfs is absent", () => {
-    expect(findDtachMasters("/x", "/no-such-proc")).toEqual([]);
+  it("returns nothing when procfs is absent and the process table matches nothing", () => {
+    expect(findDtachMasters("/x", "/no-such-proc", () => "  1  0  1 init\n")).toEqual([]);
+  });
+
+  it("returns nothing when procfs is absent and the process table can't be read", () => {
+    expect(findDtachMasters("/x", "/no-such-proc", () => null)).toEqual([]);
+  });
+
+  it("falls back to the process table when procfs is absent", () => {
+    const ps = "  10  1  10 /usr/bin/dtach -n /x/1.sock zsh\n";
+    expect(findDtachMasters("/x", "/no-such-proc", () => ps)).toEqual(
+      process.platform === "win32" ? [] : [10],
+    );
+  });
+
+  it("reads the process table once per reap", () => {
+    let reads = 0;
+    reapDtachMasters("/x", "/no-such-proc", () => {
+      reads++;
+      return null;
+    });
+    expect(reads).toBe(process.platform === "win32" ? 0 : 1);
   });
 });
 

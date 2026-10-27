@@ -3,6 +3,10 @@
 // test that spawned a real session leaves both behind, reparented to
 // `systemd --user` until the program exits. Reap every master whose socket
 // lives under the given (per-worker, disposable) sessions dir.
+// test/setup.ts imports this module, so keep it free of src/ modules that
+// CAPTURE a spawn binding at load (e.g. src/services/shell-spawn.ts): such a
+// module would bind the real child_process before a test's own vi.mock applies
+// and let real spawns through. Importing node:child_process itself is fine.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 
@@ -63,58 +67,95 @@ export function readPsTable(): string | null {
   }
 }
 
-/** Pids of `dtach` masters whose argv names a socket under `sessionsDir`. */
-export function findDtachMasters(sessionsDir: string, procRoot = "/proc"): number[] {
+/** What a scan found: master pids, plus (ps path only) their direct children. */
+interface DtachScan {
+  masters: number[];
+  psChildren: number[];
+}
+
+type PsReader = () => string | null;
+
+function scanDtach(sessionsDir: string, procRoot: string, ps: PsReader): DtachScan {
   let entries: string[];
   try {
     entries = fs.readdirSync(procRoot);
   } catch {
     // No procfs (macOS): read the process table instead — returning [] here
-    // left every dtach master of a vitest run behind (issue #2112).
-    const ps = readPsTable();
-    return ps ? dtachMastersFromPs(ps, sessionsDir).masters : [];
+    // left every dtach master of a vitest run behind (issue #2112). Windows has
+    // neither procfs nor ps (its sessions are named pipes, no dtach).
+    if (process.platform === "win32") return { masters: [], psChildren: [] };
+    const out = ps();
+    const found = out ? dtachMastersFromPs(out, sessionsDir) : { masters: [], children: [] };
+    return { masters: found.masters, psChildren: found.children };
   }
-  const pids: number[] = [];
+  const masters: number[] = [];
   for (const e of entries) {
     if (!/^\d+$/.test(e)) continue;
     try {
       const argv = fs.readFileSync(`${procRoot}/${e}/cmdline`, "utf8").split("\0");
       if (/(^|\/)dtach$/.test(argv[0] ?? "") && argv.some((a) => a.startsWith(`${sessionsDir}/`))) {
-        pids.push(Number(e));
+        masters.push(Number(e));
       }
     } catch {
       // raced with the process exiting
     }
   }
-  return pids;
+  return { masters, psChildren: [] };
 }
 
-/** SIGTERM each master and its direct children (the program it owns). */
-export function reapDtachMasters(sessionsDir: string, procRoot = "/proc"): number {
-  const masters = findDtachMasters(sessionsDir, procRoot);
-  if (!fs.existsSync(procRoot)) {
-    // macOS: children come from the same process-table read.
-    const ps = readPsTable();
-    for (const pid of ps ? dtachMastersFromPs(ps, sessionsDir).children : []) {
-      try {
-        process.kill(pid, "SIGTERM");
-      } catch {
-        // already gone
-      }
-    }
+/** Pids of `dtach` masters whose argv names a socket under `sessionsDir`. */
+export function findDtachMasters(
+  sessionsDir: string,
+  procRoot = "/proc",
+  ps: PsReader = readPsTable,
+): number[] {
+  return scanDtach(sessionsDir, procRoot, ps).masters;
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
   }
-  for (const pid of masters) {
-    try {
-      const kids = fs.readFileSync(`${procRoot}/${pid}/task/${pid}/children`, "utf8").trim();
-      for (const k of kids ? kids.split(/\s+/) : []) process.kill(Number(k), "SIGTERM");
-    } catch {
-      // no children file / already gone
-    }
+}
+
+/** Blocks (bounded) until every pid is gone, so a caller that checks for
+ * survivors right after a reap doesn't race a process that is still exiting. */
+function waitGone(pids: number[], timeoutMs: number): void {
+  const deadline = Date.now() + timeoutMs;
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  while (Date.now() < deadline && pids.some(isAlive)) Atomics.wait(sleeper, 0, 0, 25);
+}
+
+/** SIGTERM each master and its direct children (the program it owns), then
+ * wait briefly for them to exit. */
+export function reapDtachMasters(
+  sessionsDir: string,
+  procRoot = "/proc",
+  ps: PsReader = readPsTable,
+): number {
+  const { masters, psChildren } = scanDtach(sessionsDir, procRoot, ps);
+  const signalled: number[] = [];
+  const term = (pid: number): void => {
     try {
       process.kill(pid, "SIGTERM");
+      signalled.push(pid);
     } catch {
       // already gone
     }
+  };
+  for (const pid of psChildren) term(pid);
+  for (const pid of masters) {
+    try {
+      const kids = fs.readFileSync(`${procRoot}/${pid}/task/${pid}/children`, "utf8").trim();
+      for (const k of kids ? kids.split(/\s+/) : []) term(Number(k));
+    } catch {
+      // no children file / already gone
+    }
+    term(pid);
   }
+  waitGone(signalled, 1500);
   return masters.length;
 }

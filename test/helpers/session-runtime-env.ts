@@ -4,8 +4,10 @@
 // of these, so test/setup.ts deletes them before any test file runs (issue
 // #2112).
 //
-// No src/ imports on purpose: test/setup.ts imports this, and a setup file that
-// pulls in src/ loads node:child_process before a test's own vi.mock applies.
+// No src/ imports on purpose: test/setup.ts imports this, and a src module that
+// captures a spawn binding at load (e.g. src/services/shell-spawn.ts) would
+// bind the real child_process before a test's own vi.mock applies and let real
+// spawns through (1825 failures when the list was imported from session-env.ts).
 // test/helpers/session-runtime-env.test.ts keeps this list in step with
 // src/services/session-env.ts.
 export const SESSION_RUNTIME_ENV_KEYS: readonly string[] = [

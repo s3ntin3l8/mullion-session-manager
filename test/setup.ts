@@ -110,9 +110,10 @@ for (const key of Object.keys(schema.properties)) {
 // socket/token, MULLION_SESSION_ID, MULLION_WORKTREES_IN_DOT_WT, ...). A suite
 // run from inside a Mullion-hosted session inherits all of them, and a test
 // asserting "no .wt convention" would otherwise fail only there (issue #2112).
-// The list lives in a helper with no src/ imports: a setup file that imports
-// src/ loads node:child_process before a test's own vi.mock can apply, which
-// lets real spawns through.
+// The list lives in a helper with no src/ imports: a src module that captures
+// a spawn binding at load (e.g. shell-spawn.ts) would bind the real
+// child_process before a test's own vi.mock can apply, which lets real spawns
+// through.
 for (const key of SESSION_RUNTIME_ENV_KEYS) {
   delete process.env[key];
 }
