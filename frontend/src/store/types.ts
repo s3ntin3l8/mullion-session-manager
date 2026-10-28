@@ -810,6 +810,11 @@ export interface UiSlice {
   // to open the task's detail panel. Resolved by hooks/useOpenTaskRequest.ts
   // (App.tsx), which owns usePanelOpener's onOpenTask. Same nonce-guarded
   // clear as clearOpenSessionRequest.
+  // A task notification click's target: the Unified Board consumes it when it
+  // mounts (its drawer's detailTaskId is local state) and clears it. Distinct
+  // from openTaskRequest above, which opens a dockview detail panel.
+  pendingOpenTaskId: number | null;
+  setPendingOpenTaskId: (taskId: number | null) => void;
   openTaskRequest: { taskId: number; nonce: number } | null;
   requestOpenTask: (taskId: number) => void;
   clearOpenTaskRequest: (nonce: number) => void;

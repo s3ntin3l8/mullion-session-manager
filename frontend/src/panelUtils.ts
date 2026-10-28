@@ -155,7 +155,18 @@ export function canLaunchTerminal(viewMode: string): boolean {
 // this query param to have App.tsx open a specific session on load. Pure
 // parse, no DOM/location access, so it's unit-testable without mounting App.
 export function parseDeepLinkSessionId(search: string): number | null {
-  const raw = new URLSearchParams(search).get("session");
+  return parseDeepLinkId(search, "session");
+}
+
+// `?task=<id>`: the task-notification twin of `?session=<id>` — push-sw.js
+// opens "/?task=<id>" when no window is open, so the Unified Board's drawer
+// can open from a cold start.
+export function parseDeepLinkTaskId(search: string): number | null {
+  return parseDeepLinkId(search, "task");
+}
+
+function parseDeepLinkId(search: string, param: string): number | null {
+  const raw = new URLSearchParams(search).get(param);
   if (raw === null) return null;
   // Number()'s grammar accepts hex/octal/binary/scientific-notation strings
   // (e.g. "0x2A", "1e2") — restrict to plain decimal digits so a deep link

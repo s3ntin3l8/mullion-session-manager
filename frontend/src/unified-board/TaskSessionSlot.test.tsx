@@ -47,6 +47,8 @@ const createTask = vi.fn(async () => makeTask({}));
 
 function storeState() {
   return {
+    pendingOpenTaskId: null,
+    setPendingOpenTaskId: vi.fn(),
     sessions,
     projects,
     tasks,

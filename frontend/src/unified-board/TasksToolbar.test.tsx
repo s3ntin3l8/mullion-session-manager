@@ -63,6 +63,8 @@ const clearDoneTasks = vi.fn(async (): Promise<ClearDoneResult> => ({
 
 function storeState() {
   return {
+    pendingOpenTaskId: null,
+    setPendingOpenTaskId: vi.fn(),
     sessions,
     projects,
     tasks,
