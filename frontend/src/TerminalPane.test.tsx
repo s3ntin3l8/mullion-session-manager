@@ -1691,7 +1691,7 @@ describe("TerminalPane terminal query replies during scrollback replay", () => {
 
   const QUERY_KEYS = ["n", "?n", ">c", "$p", "?$p"];
 
-  it("registers a handler for every query family xterm answers", async () => {
+  it("registers a handler for every guarded query family", async () => {
     stubFakeWebSocket(true);
     renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));

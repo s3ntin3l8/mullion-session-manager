@@ -1083,7 +1083,7 @@ export function TerminalPane(props: {
 
     // Swallow xterm's own query replies while the backlog replays (see
     // `isReplaying`); live queries fall through (`false`) to xterm's handler.
-    // Primary device attributes (DA1, `CSI c`) is deliberately NOT here: Claude
+    // The primary device attributes query (DA1, `CSI c`) is deliberately NOT here: Claude
     // Code ends its OSC 11 background query with a DA1 and ignores the OSC 11
     // reply unless the DA1 reply follows (measured: with both, a reply even 30 s
     // late sets its palette; OSC 11 alone behaves as if never answered). The
