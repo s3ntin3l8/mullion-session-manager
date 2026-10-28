@@ -990,9 +990,11 @@ export function TerminalPane(props: {
     // genuinely blocked on a query the pane unmounted before answering used to
     // recover on reattach; swallowing leaves it waiting until its own timeout
     // or next keystroke. Narrow, and far rarer than the stray-text case.
-    // The OSC 10/11/12 *color* queries are deliberately NOT guarded: Codex
-    // fixes its palette from the reply it gets shortly after launch, so a
-    // reply on replay is often the only one it ever gets.
+    // The OSC 10/11/12 *color* queries are deliberately NOT guarded, for every
+    // program (the motive is Codex, which fixes its palette from the reply it
+    // gets shortly after launch, so a reply on replay is often the only one it
+    // ever gets; the carve-out itself is not Codex-specific). That is `main`'s
+    // pre-existing behavior for colors, unchanged.
     let connectionGeneration = 0;
     let replayCompleteGeneration = 0;
     const isReplaying = () => replayCompleteGeneration !== connectionGeneration;
@@ -1085,11 +1087,11 @@ export function TerminalPane(props: {
       { intermediates: "$", final: "p" },
       { prefix: "?", intermediates: "$", final: "p" },
     ];
-    const csiQuerySubs = REPLAY_QUERY_CSI.map((id) =>
+    const replayQuerySubs = REPLAY_QUERY_CSI.map((id) =>
       term.parser.registerCsiHandler(id, () => isReplaying()),
     );
     // DECRQSS (`DCS $ q …`, e.g. `$qm` for SGR): xterm replies via onData too.
-    csiQuerySubs.push(
+    replayQuerySubs.push(
       term.parser.registerDcsHandler({ intermediates: "$", final: "q" }, () => isReplaying()),
     );
 
@@ -2037,7 +2039,7 @@ export function TerminalPane(props: {
       dataSub.dispose();
       titleSub.dispose();
       oscColorSubs.forEach((sub) => sub.dispose());
-      csiQuerySubs.forEach((sub) => sub.dispose());
+      replayQuerySubs.forEach((sub) => sub.dispose());
       webglContextLossSub?.dispose();
       // Explicit dispose, unlike FitAddon/Unicode11Addon above (which have
       // no per-instance state and just get swept up by term.dispose()'s
