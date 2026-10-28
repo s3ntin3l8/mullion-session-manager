@@ -503,6 +503,24 @@ describe("reclaiming an ended session's worktree (issue #1964)", () => {
       expect(rowOf(session.id).worktreeKeptReason).toBe("still-running");
     });
 
+    it("keeps an active sibling even if ended-session liveness would fail", async () => {
+      const session = remoteSession();
+      endedSibling();
+      sessionOwning("/srv/proj/.mullion-worktrees/child/live", null, {
+        hostId: REMOTE,
+        status: "active",
+      });
+      const liveness = vi.fn().mockRejectedValue(new Error("host unreachable"));
+      vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue({
+        liveness,
+      } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
+      await expect(reclaimSessionWorktree(app, session.id)).resolves.toEqual({
+        status: "kept",
+        reason: "in-use",
+      });
+      expect(liveness).not.toHaveBeenCalled();
+    });
+
     it("keeps a worktree a just-killed sibling's process is still exiting inside", async () => {
       // A cascade kill marks the children killed while their agents may still be
       // running in the parent's directory.

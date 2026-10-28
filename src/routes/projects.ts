@@ -36,6 +36,7 @@ import { previewPlacement } from "../services/placement.js";
 import { portFromUrl } from "../plugins/preview-proxy.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { resolveSessionHostId } from "../services/session-live-info.js";
+import { forwardHostRequestError } from "../services/host-error-reply.js";
 import {
   claimReclaimSlot,
   recordReclaimed,
@@ -185,7 +186,7 @@ import {
 import { createSessionRecord } from "../services/session-lifecycle.js";
 import { resolveWorkflowConventionsText } from "../services/workflow-conventions.js";
 import { hashWorkflowConventionsSection } from "../services/mullion-scaffold.js";
-import { RESUMABLE_TASK_STATUSES } from "../services/worktree-usage.js";
+import { RESUMABLE_TASK_STATUSES, sessionsUsingWorktree } from "../services/worktree-usage.js";
 import { parseHostCwds, serializeHostCwds } from "../services/placement.js";
 import { listHosts } from "../services/host-registry.js";
 
@@ -643,50 +644,13 @@ function branchClaimedByResumableTask(
   return row?.id ?? null;
 }
 
-/**
- * Session ids (by id) whose effective cwd sits under `worktreePath` — the
- * user-facing worktree-removal route's live-session guard. `sessions.cwd`
- * is nullable, so the `row.cwd ?? project.cwd` fallback is mandatory (same
- * as resolveSessionCwdTargets above). For `LOCAL_HOST_ID` only, merges
- * `app.pty.get(String(id))?.liveCwd` when `isGitRepo(liveCwd)` passes —
- * AGENTS.md's rule that live process state lives only in PtyManager's
- * in-memory map and must be merged, not read from the DB column alone.
- * Also matches `tasks.worktreePath` equality (schema.ts) — a durable
- * reference that survives the worker session's own removal (its `status`
- * flips to killed/exited, but the row and its `sessionId` FK both persist;
- * only a hard row delete would null it out via `onDelete: "set null"`).
- * Scoped to the same `RESUMABLE_TASK_STATUSES` as `branchClaimedByResumable
- * Task` above (independent review on PR #505) — a `done`/`cancelled` task's
- * `worktreePath` is never nulled on that transition either, so without this
- * filter a worktree left behind by an old, finished task would forever
- * report a misleading "active session" for a session that may have exited
- * long ago.
- *
- * Known gap (same one the batch git-status endpoint above already
- * documents): for a remote-hosted project the PTYs live on the agent, so
- * only the DB half of this guard applies here.
- */
-function sessionsUnderWorktree(
+/** Resumable tasks retain a durable reference even after their worker ends. */
+function taskSessionsUnderWorktree(
   app: FastifyInstance,
-  project: { id: number; hostId: string; cwd: string },
+  project: { id: number },
   worktreePath: string,
 ): number[] {
   const matched = new Set<number>();
-
-  const activeRows = app.db
-    .select({ id: sessions.id, cwd: sessions.cwd })
-    .from(sessions)
-    .where(and(eq(sessions.projectId, project.id), eq(sessions.status, "active")))
-    .all();
-  for (const row of activeRows) {
-    let effectiveCwd = row.cwd ?? project.cwd;
-    if (project.hostId === LOCAL_HOST_ID) {
-      const liveCwd = app.pty.get(String(row.id))?.liveCwd;
-      if (liveCwd && isGitRepo(liveCwd)) effectiveCwd = liveCwd;
-    }
-    if (isWithinAnyWorktree(effectiveCwd, [worktreePath])) matched.add(row.id);
-  }
-
   const resolvedTarget = path.resolve(worktreePath);
   const taskRows = app.db
     .select({ sessionId: tasks.sessionId, worktreePath: tasks.worktreePath })
@@ -4548,7 +4512,27 @@ export async function projectsRoute(app: FastifyInstance) {
       // regardless of force), and a force bypass is logged rather than
       // silently skipped.
       if (!isMainWorktreeTarget) {
-        const sessionIds = sessionsUnderWorktree(app, target, worktreePath);
+        let sessionIds: number[];
+        try {
+          const usage = await sessionsUsingWorktree(app, worktreePath, target.hostId, owner?.id);
+          sessionIds = [
+            ...new Set([
+              ...usage.active,
+              ...usage.alive,
+              ...usage.unknown,
+              ...taskSessionsUnderWorktree(app, target, worktreePath),
+            ]),
+          ];
+        } catch (err) {
+          app.log.warn({ hostId: target.hostId, err }, "worktree usage check failed");
+          if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
+          if (err instanceof HostUnreachableError) {
+            return reply.serviceUnavailable(`Host ${target.hostId} is unreachable`);
+          }
+          return reply.serviceUnavailable(
+            "Could not check whether sessions are using this worktree",
+          );
+        }
         if (sessionIds.length > 0) {
           if (!force) {
             const result:
