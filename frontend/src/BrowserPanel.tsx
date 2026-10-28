@@ -36,7 +36,7 @@ type BrowserPanelState =
 // The iframe-src scheme guard below (both call sites) is an anchored
 // allowlist, not a denylist — deliberately fails *closed*.
 //
-// Dismissed in GHAS as alert #304 (js/xss-through-dom, false positive) —
+// Dismissed in GHAS as alerts #304/#435 (js/xss-through-dom, false positive) —
 // same posture as isSymlinkPath's alert #188 in src/services/dock-config.ts:
 // a `codeql[...]` line comment alone would NOT have dismissed this, since
 // this repo's codeql.yml has no dismiss-alerts follow-up step that reads
@@ -169,6 +169,12 @@ export function BrowserPanel({
   params: BrowserPanelParams;
   api?: DockviewPanelApi;
 }) {
+  // Dockview replaces the full params object on write-back. Keep the latest
+  // snapshot without making that write effect depend on its own output.
+  const paramsRef = useRef(params);
+  useEffect(() => {
+    paramsRef.current = params;
+  }, [params]);
   const isExternal = params.kind === "external";
   const { projects, projectUrls, refreshProjectUrls } = useDashboardStore();
   const isCoarsePointer = useCoarsePointer();
@@ -426,6 +432,7 @@ export function BrowserPanel({
         ? fetchState.src.match(/\/\/preview-([^.]+)\./)?.[1] || undefined
         : undefined;
     panelApi.updateParameters({
+      ...paramsRef.current,
       url: currentUrl,
       slug,
       activeSavedUrlId,

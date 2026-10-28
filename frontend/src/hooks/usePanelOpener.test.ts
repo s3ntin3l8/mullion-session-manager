@@ -1012,6 +1012,23 @@ describe("usePanelOpener — onOpenPreview (#2016)", () => {
     expect((api.addPanel as ReturnType<typeof vi.fn>).mock.calls[1][0].title).toBe("Preview");
   });
 
+  it("preserves target identity when reopening a named preview", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+    result.current.onOpenPreview(1, "target-slug", null, "Docker web");
+    const panel = api.getPanel("browser-preview-target-slug")!;
+    result.current.onOpenPreview(1, "target-slug", null, "Docker web");
+    expect(panel.api.updateParameters).toHaveBeenCalledWith(
+      expect.objectContaining({
+        projectId: 1,
+        previewSlug: "target-slug",
+        targetName: "Docker web",
+        targetRev: expect.any(Number),
+      }),
+    );
+    expect(api.addPanel).toHaveBeenCalledTimes(1);
+  });
+
   it("no-ops without a dockview api and maximizes on a phone", () => {
     const { result } = setup({ dockviewApi: null });
     expect(() => result.current.onOpenPreview(1, "s1", "x")).not.toThrow();

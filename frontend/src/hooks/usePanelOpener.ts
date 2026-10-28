@@ -473,7 +473,14 @@ export function usePanelOpener({
       const id = `browser-preview-${slug}`;
       const existing = dockviewApi.getPanel(id);
       if (existing) {
-        if (targetName) existing.api.updateParameters({ targetName, targetRev: Date.now() });
+        if (targetName)
+          existing.api.updateParameters({
+            ...existing.api.getParameters?.(),
+            projectId,
+            previewSlug: slug,
+            targetName,
+            targetRev: Date.now(),
+          });
         existing.api.setActive();
       } else {
         const panel = dockviewApi.addPanel({

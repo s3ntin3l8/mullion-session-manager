@@ -34,6 +34,36 @@ type PreviewRow = typeof previews.$inferSelect;
 /** The `previews.branch` sentinel for the project-checkout preview (schema.ts). */
 export const CHECKOUT_BRANCH = "";
 
+/** Targetless conflict handling supports SQLite's partial project index.
+ * A conflict may also be on the random slug: only accept an existing row
+ * for this project/branch, otherwise retry with a fresh slug. */
+function ensureProjectPreviewRow(
+  app: FastifyInstance,
+  projectId: number,
+  branch: string,
+): PreviewRow {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    app.db
+      .insert(previews)
+      .values({ slug: newSlug(), kind: "project", projectId, branch })
+      .onConflictDoNothing()
+      .run();
+    const row = app.db
+      .select()
+      .from(previews)
+      .where(
+        and(
+          eq(previews.kind, "project"),
+          eq(previews.projectId, projectId),
+          eq(previews.branch, branch),
+        ),
+      )
+      .get();
+    if (row) return row;
+  }
+  throw new Error("Could not allocate a unique preview slug");
+}
+
 function toSummary(row: PreviewRow): PreviewSummary {
   return {
     slug: row.slug,
@@ -78,11 +108,7 @@ export function getOrCreateProjectPreview(
   // (PR #43 review). onConflictDoNothing makes the losing insert a no-op
   // instead, so the select below always finds a row afterward regardless of
   // which side actually created it.
-  app.db
-    .insert(previews)
-    .values({ slug: newSlug(), kind: "project", projectId, branch: CHECKOUT_BRANCH })
-    .onConflictDoNothing()
-    .run();
+  ensureProjectPreviewRow(app, projectId, CHECKOUT_BRANCH);
 
   const where = and(
     eq(previews.kind, "project"),
@@ -136,12 +162,7 @@ export function upsertBranchPreview(
   branch: string,
 ): PreviewSummary {
   if (branch === CHECKOUT_BRANCH) throw new Error("a branch preview needs a branch");
-  app.db
-    .insert(previews)
-    .values({ slug: newSlug(), kind: "project", projectId, branch })
-    .onConflictDoNothing()
-    .run();
-  return findBranchPreview(app, projectId, branch)!;
+  return toSummary(ensureProjectPreviewRow(app, projectId, branch));
 }
 
 export function bindBranchPreview(

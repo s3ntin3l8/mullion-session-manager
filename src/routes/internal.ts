@@ -3069,6 +3069,9 @@ export async function internalRoutes(app: FastifyInstance) {
     (socket) => acceptControlRelayConnection(app, socket),
   );
 
+  // CodeQL alert #434 (request-forgery) dismissed as a false positive:
+  // private/LAN access by the authenticated primary is intentional here.
+  // URL validation + DNS pinning + manual redirects constrain that access.
   // Named project settings explicitly authorize destinations beyond loopback.
   // This is a separate authenticated transport: legacy preview routes retain
   // their literal-loopback contract. The primary resolves a saved target ID;

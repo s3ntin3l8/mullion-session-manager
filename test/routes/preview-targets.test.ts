@@ -1,9 +1,14 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import crypto from "node:crypto";
+import {
+  getOrCreateProjectPreview,
+  upsertBranchPreview,
+} from "../../src/services/preview-registry.js";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { eq } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
-import { projects } from "../../src/db/schema.js";
+import { projects, previews } from "../../src/db/schema.js";
 import { normalizePreviewDestination } from "../../src/services/preview-targets.js";
 
 describe("named project previews", () => {
@@ -44,6 +49,36 @@ describe("named project previews", () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     delete process.env.PREVIEW_BASE_HOST;
   });
+
+  it.each(["", "feature/collision"])(
+    "retries a random slug collision for project branch %s",
+    (branch) => {
+      const id = app.db
+        .insert(projects)
+        .values({ name: "collision", cwd: "/tmp/collision" })
+        .returning()
+        .get().id;
+      const occupied = crypto.randomUUID();
+      const fresh = crypto.randomUUID();
+      app.db
+        .insert(previews)
+        .values({ slug: occupied, kind: "external", externalUrl: "https://example.test" })
+        .run();
+      const random = vi
+        .spyOn(crypto, "randomUUID")
+        .mockReturnValueOnce(occupied)
+        .mockReturnValueOnce(fresh);
+      try {
+        const preview = branch
+          ? upsertBranchPreview(app, id, branch)
+          : getOrCreateProjectPreview(app, id);
+        expect(preview.slug).toBe(fresh);
+        expect(random).toHaveBeenCalledTimes(2);
+      } finally {
+        random.mockRestore();
+      }
+    },
+  );
 
   it.each([
     ["5173", "http://127.0.0.1:5173/"],

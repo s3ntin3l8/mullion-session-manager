@@ -43,6 +43,9 @@ export interface DockConfigPanelParams {
 // target's content.
 export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
   const [showPreviews, setShowPreviews] = useState(params.view === "previews");
+  const [mounted, setMounted] = useState({ previews: showPreviews, monitors: !showPreviews });
+  if (showPreviews && !mounted.previews) setMounted({ ...mounted, previews: true });
+  if (!showPreviews && !mounted.monitors) setMounted({ ...mounted, monitors: true });
   const [lastRev, setLastRev] = useState(params.rev);
   if (lastRev !== params.rev) {
     setLastRev(params.rev);
@@ -59,10 +62,10 @@ export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
         </button>
       </div>
       <div className="dock-settings-view" hidden={!showPreviews}>
-        <PreviewTargetsEditor projectId={params.projectId} />
+        {mounted.previews && <PreviewTargetsEditor projectId={params.projectId} />}
       </div>
       <div className="dock-settings-view" hidden={showPreviews}>
-        <MonitorsEditor params={params} />
+        {mounted.monitors && <MonitorsEditor params={params} />}
       </div>
     </div>
   );

@@ -14,6 +14,7 @@ function usePreviewConfig(projectId: number) {
   );
   const [error, setError] = useState(false);
   useEffect(() => {
+    if (config) return;
     let cancelled = false;
     void refresh(projectId).catch(() => {
       if (!cancelled) setError(true);
@@ -21,7 +22,7 @@ function usePreviewConfig(projectId: number) {
     return () => {
       cancelled = true;
     };
-  }, [projectId, refresh]);
+  }, [projectId, refresh, config]);
   return {
     config: config && {
       ...config,

@@ -53,6 +53,9 @@ export function PreviewTargetsEditor({ projectId }: { projectId: number }) {
       setSaving(false);
     }
   };
+  const incomplete = draft?.targets.some(
+    (target) => !target.name.trim() || !target.destination.trim(),
+  );
   const dirty = !!draft && JSON.stringify(draft) !== saved;
   return (
     <section className="preview-targets-editor" aria-label="Preview destinations">
@@ -67,10 +70,13 @@ export function PreviewTargetsEditor({ projectId }: { projectId: number }) {
         >
           Discard
         </button>
-        <button disabled={!dirty || saving} onClick={() => void save()}>
+        <button disabled={!dirty || saving || incomplete} onClick={() => void save()}>
           {saving ? "Saving…" : "Save previews"}
         </button>
       </div>
+      {incomplete && (
+        <p role="status">Enter a name and destination for every preview target before saving.</p>
+      )}
       <p>Named destinations for this project. Changes apply when you open or reload a preview.</p>
       {error && <ErrorText>{error}</ErrorText>}
       {!draft ? (

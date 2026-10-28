@@ -48,6 +48,8 @@ describe("project preview configuration", () => {
     render(<PreviewTargetsEditor projectId={1} />);
     await screen.findByLabelText("Dev server destination");
     await user.click(screen.getByRole("button", { name: "Add preview target" }));
+    expect(screen.getByRole("button", { name: "Save previews" })).toBeDisabled();
+    expect(screen.getByRole("status")).toHaveTextContent("Enter a name and destination");
     await user.type(screen.getByLabelText("Target 2 name"), "API docs");
     await user.type(screen.getByLabelText("Target 2 destination"), "https://api.example.test/docs");
     expect(screen.getByLabelText("Target 2 connection origin")).toHaveValue("project");
@@ -84,10 +86,26 @@ describe("project preview configuration", () => {
     );
   });
 
+  it("reuses cached menu targets without fetching them again", async () => {
+    useDashboardStore.setState({ projectPreviewConfigs: { 1: initial } });
+    const user = userEvent.setup();
+    render(<ProjectPreviewMenu projectId={1} onOpenDefault={vi.fn()} onManage={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Preview" }));
+    expect(screen.getByRole("menuitem", { name: /Docker web/ })).toBeInTheDocument();
+    expect(api.getProjectPreviewTargets).not.toHaveBeenCalled();
+  });
+
+  it("defers monitor loading when opened directly on Previews", async () => {
+    render(<DockConfigPanel params={{ projectId: 1, view: "previews" }} />);
+    await screen.findByLabelText("Dev server destination");
+    expect(api.getProjectDockConfig).not.toHaveBeenCalled();
+  });
+
   it("preserves preview and monitor drafts when switching between them", async () => {
     const user = userEvent.setup();
     render(<DockConfigPanel params={{ projectId: 1 }} />);
     await user.click(await screen.findByRole("button", { name: "Dev server" }));
+    expect(api.getProjectPreviewTargets).not.toHaveBeenCalled();
     const command = screen.getByDisplayValue("make dev");
     await user.clear(command);
     await user.type(command, "npm run dev");
