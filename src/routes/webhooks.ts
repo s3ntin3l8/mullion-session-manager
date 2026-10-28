@@ -3,7 +3,6 @@ import type { FastifyInstance } from "fastify";
 import { eq, and, isNull } from "drizzle-orm";
 import { broadcastToProject } from "../services/github-ws-broadcast.js";
 import { getWebhookSecret } from "../services/github-webhook.js";
-import { resolveRepoRef } from "../services/host-git.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { projects, tasks } from "../db/schema.js";
 import { endReviewingOnPrState } from "../services/task-review-end.js";
@@ -12,7 +11,7 @@ import { invalidatePrDetail } from "../services/github-pr-detail.js";
 import { listBlockingIssues } from "../services/github-write.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { upsertIssueTask } from "../services/task-watcher.js";
-import { repoKey as repoKeyOf } from "../services/repo-key.js";
+import { pickRepoOwners, repoKey as repoKeyOf, resolveRepoKeys } from "../services/repo-key.js";
 import { syncClosedIssueToLocal, syncUnlabeledIssueToLocal } from "../services/task-github-sync.js";
 import { refreshTaskBlockers } from "../services/task-dependencies.js";
 
@@ -195,10 +194,16 @@ export async function webhookRoutes(app: FastifyInstance) {
         string,
         Array<{ id: number; cwd: string; hostId: string }>
       >();
+      // Same resolver and owner rule as task-watcher's poll (#2233), so both
+      // paths agree on which project imports a repo's issues.
+      const repoKeys = await resolveRepoKeys(
+        app,
+        rows.map((r) => ({ id: r.id, cwd: r.cwd, hostId: r.hostId ?? "local" })),
+      );
+      const repoOwners = pickRepoOwners(rows, repoKeys);
       for (const row of rows) {
-        const repoRef = await resolveRepoRef(app, row);
-        if (!repoRef) continue;
-        const key = repoKeyOf(repoRef);
+        const key = repoKeys.get(row.id);
+        if (!key) continue;
         const entry = { id: row.id, cwd: row.cwd, hostId: row.hostId ?? "local" };
         const existing = projectsByRepoKey.get(key);
         if (existing) existing.push(entry);
@@ -420,7 +425,7 @@ export async function webhookRoutes(app: FastifyInstance) {
                 ) {
                   // #2233 — projects sharing a repo all get the broadcast
                   // above, but only the oldest imports the issue.
-                  if (projectId !== matchedProjects[0]?.id) break;
+                  if (projectId !== repoOwners.get(repoKeyOf({ owner, repo }))) break;
                   upsertIssueTask(app, projectId, {
                     number: issue.number,
                     title: issue.title,

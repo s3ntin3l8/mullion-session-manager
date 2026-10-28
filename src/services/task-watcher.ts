@@ -633,7 +633,7 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
     if (ownerId !== undefined && ownerId !== projectId) {
       app.log.info(
         { projectId, ownerProjectId: ownerId, owner: repoRef.owner, repo: repoRef.repo },
-        "[task-watcher] skipping issue import: another project owns this repo",
+        "[task-watcher] skipping issue import: another project owns (or may own) this repo",
       );
       return;
     }

@@ -55,17 +55,32 @@ export async function resolveRepoKeys(
 /**
  * repoKey → id of the project that owns the repo's issue import: the first of
  * `rows`, which the caller passes oldest-first (createdAt, then id).
+ *
+ * A project missing from `keys` has an unresolvable repo (host unreachable,
+ * nothing remembered). Fails closed: a repo first seen *after* such a project
+ * gets owner 0 (nobody) for this tick, since the unknown older project may be
+ * on the same repo. Ingest resumes once the host answers.
  */
 export function pickRepoOwners(
   rows: Array<{ id: number }>,
   keys: Map<number, string | null>,
 ): Map<string, number> {
   const owners = new Map<string, number>();
+  let unknownSeen = false;
   for (const row of rows) {
+    if (!keys.has(row.id)) {
+      unknownSeen = true;
+      continue;
+    }
     const key = keys.get(row.id);
-    if (key && !owners.has(key)) owners.set(key, row.id);
+    if (key && !owners.has(key)) owners.set(key, unknownSeen ? 0 : row.id);
   }
   return owners;
+}
+
+/** Drop a deleted project's remembered key (ids can be reused by SQLite). */
+export function forgetRepoKey(projectId: number): void {
+  lastKnownKeys.delete(projectId);
 }
 
 /** Test seam: forget remembered keys between tests. */

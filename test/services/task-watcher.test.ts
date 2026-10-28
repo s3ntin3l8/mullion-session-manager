@@ -365,7 +365,7 @@ describe("startTaskWatcher", () => {
     expect(inserted.length).toBeGreaterThan(0);
     expect(app.log.info).toHaveBeenCalledWith(
       expect.objectContaining({ projectId: 2, ownerProjectId: 1 }),
-      expect.stringContaining("another project owns this repo"),
+      expect.stringContaining("another project owns (or may own) this repo"),
     );
 
     cleanup();

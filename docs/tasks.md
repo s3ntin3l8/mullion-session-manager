@@ -830,7 +830,10 @@ extensive design comments.
 - **Projects sharing a repo don't both import its issues (#2233).** Only the
   oldest project on an `owner/repo` creates tasks from its issues; a younger
   project on the same repo shows none of them. Tasks a younger project
-  already had before this rule are kept, not merged.
+  already had before this rule are kept, not merged, and the poll no longer
+  runs close/unlabel read-back for them, so clean up such duplicates by hand.
+  If a project's host is unreachable and nothing is remembered about its
+  repo, import for repos younger than it is deferred until it answers.
 
 - **The reviewer App (`#737`) can't satisfy a CODEOWNERS-based rule.** A
   GitHub App can't be listed in a `CODEOWNERS` file — only a repo's numeric
