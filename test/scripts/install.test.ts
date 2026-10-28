@@ -502,7 +502,8 @@ describeOnLinux("deploy/install.sh", () => {
       expect(filled).toMatch(/^MULLION_AGENT_TOKEN=fixture-new-tok$/m);
       expect(filled.match(/^MULLION_AGENT_TOKEN=/gm)).toHaveLength(1);
 
-      const kept = await run("MULLION_ROLE=agent\nMULLION_AGENT_TOKEN=fixture-old-tok\n", {
+      const withOldToken = "MULLION_ROLE=agent\nMULLION_AGENT_TOKEN=fixture-old-tok\n"; // pragma: allowlist secret
+      const kept = await run(withOldToken, {
         MULLION_AGENT_TOKEN: "fixture-new-tok", // pragma: allowlist secret
       });
       expect(kept).toMatch(/^MULLION_AGENT_TOKEN=fixture-old-tok$/m);
