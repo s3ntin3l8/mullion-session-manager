@@ -54,6 +54,7 @@ import { agentsRoute } from "./routes/agents.js";
 import { bundleSyncRoute } from "./routes/bundle-sync.js";
 import { actionsRoute } from "./routes/actions.js";
 import { serverInfoRoute } from "./routes/server-info.js";
+import { terminalPaletteRoute } from "./routes/terminal-palette.js";
 import { updatesRoute } from "./routes/updates.js";
 import { settingsRoute } from "./routes/settings.js";
 import { workflowConventionsRoute } from "./routes/workflow-conventions.js";
@@ -567,6 +568,7 @@ export async function buildApp() {
   await app.register(bundleSyncRoute);
   await app.register(actionsRoute);
   await app.register(serverInfoRoute);
+  await app.register(terminalPaletteRoute);
   await app.register(systemResourcesRoute);
   await app.register(updatesRoute);
   await app.register(settingsRoute);

@@ -8,6 +8,10 @@ import type * as ChildProcess from "node:child_process";
 import type { HookMessage } from "../../src/services/hook-protocol.js";
 import { buildAgentGuideBlock, sessionAgentGuidePath } from "../../src/services/agent-guide.js";
 import { sessionWorkflowConventionsPath } from "../../src/services/workflow-conventions.js";
+import {
+  resetTerminalPalette,
+  setTerminalPalette,
+} from "../../src/services/terminal-query-reply.js";
 import { resolveMullionBundleDir } from "../../src/services/hook-adapters/mullion-bundle.js";
 import { buildOpenCodeMcpConfig } from "../../src/services/hook-adapters/opencode.js";
 import { buildCodexMcpFlags, buildCodexTrustFlag } from "../../src/services/hook-adapters/codex.js";
@@ -1455,6 +1459,70 @@ describe("PtyManager", () => {
 
     // The stale permission resolution must not clear the newer review gate.
     expect(session.toInfo().attention).toBe(true);
+  });
+
+  describe("startup terminal queries while no browser is attached", () => {
+    const LIGHT = { foreground: "#1d1d1d", background: "#f2f2f2", cursor: "#1d1d1d" };
+    const QUERY = "\x1b]11;?\x07\x1b[c";
+    const REPLY = "\x1b]11;rgb:f2f2/f2f2/f2f2\x07\x1b[?1;2c";
+
+    afterEach(() => resetTerminalPalette());
+
+    async function startSession() {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      return session;
+    }
+
+    it("answers an OSC 11 + DA1 query from the cached palette", async () => {
+      setTerminalPalette(LIGHT);
+      await startSession();
+
+      fakePtyChildren[0].emitData(QUERY);
+
+      expect(fakePtyChildren[0].writeSpy).toHaveBeenCalledWith(REPLY);
+    });
+
+    it("leaves the query to the browser while a pane is attached", async () => {
+      setTerminalPalette(LIGHT);
+      const session = await startSession();
+      const release = session.noteBrowserAttached();
+
+      fakePtyChildren[0].emitData(QUERY);
+      expect(fakePtyChildren[0].writeSpy).not.toHaveBeenCalledWith(REPLY);
+
+      // Idempotent release; once the pane is gone the backend answers again.
+      release();
+      release();
+      fakePtyChildren[0].emitData(QUERY);
+      expect(fakePtyChildren[0].writeSpy).toHaveBeenCalledWith(REPLY);
+    });
+
+    it("only answers during the session's startup window", async () => {
+      setTerminalPalette(LIGHT);
+      await startSession();
+      const realNow = Date.now();
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(realNow + 31_000);
+
+      fakePtyChildren[0].emitData(QUERY);
+      nowSpy.mockRestore();
+
+      expect(fakePtyChildren[0].writeSpy).not.toHaveBeenCalledWith(REPLY);
+    });
+
+    it("answers nothing until a palette has been reported", async () => {
+      await startSession();
+
+      fakePtyChildren[0].emitData(QUERY);
+
+      expect(fakePtyChildren[0].writeSpy).not.toHaveBeenCalled();
+    });
   });
 
   it("writes input to the underlying pty", async () => {

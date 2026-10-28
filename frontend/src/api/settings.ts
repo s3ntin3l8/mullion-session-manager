@@ -18,6 +18,15 @@ import { parseChord, type KeyChord } from "../lib/keyChord.js";
 export const settingsApi = {
   getSettings: () => request<AppSettings>("/api/settings"),
 
+  // Terminal palette the dashboard resolved for the current theme, so the
+  // backend can answer a program's startup color query before any pane is
+  // attached (src/routes/terminal-palette.ts).
+  putTerminalPalette: (palette: { foreground: string; background: string; cursor: string }) =>
+    request<void>("/api/terminal/palette", {
+      method: "PUT",
+      body: JSON.stringify(palette),
+    }),
+
   patchSettings: (patch: SettingsPatch) =>
     request<AppSettings>("/api/settings", {
       method: "PATCH",

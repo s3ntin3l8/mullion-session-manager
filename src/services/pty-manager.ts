@@ -26,6 +26,7 @@ import {
   type AttentionSignal,
 } from "./attention-detect.js";
 import { ProtocolTrace } from "./terminal-protocol-trace.js";
+import { buildStartupQueryReplies } from "./terminal-query-reply.js";
 import { AttentionTracker } from "./attention-tracker.js";
 import { GateRegistry } from "./gate-registry.js";
 import {
@@ -376,6 +377,11 @@ const NO_ATTENTION_SIGNALS: AttentionSignal = Object.freeze({
   notification: false,
   titleChange: null,
 });
+
+// Only a program's STARTUP queries are answered on its behalf while no browser
+// is attached (see terminal-query-reply.ts): a stray `ESC [ c` in output hours
+// later (a `cat`ted capture, say) must not inject bytes into stdin.
+const STARTUP_QUERY_REPLY_WINDOW_MS = 30_000;
 
 const SESSION_ID_RE = /^\d+$/;
 
@@ -1136,6 +1142,22 @@ export class Session {
     return this.dataListeners.size;
   }
 
+  // Browser panes currently attached over the terminal WebSocket. Distinct
+  // from subscriberCount, which also counts transient internal listeners
+  // (wait_for_output, control-socket attach streams).
+  private browserAttachCount = 0;
+
+  /** Called by routes/terminal.ts per WS attach; the returned fn releases it (idempotent). */
+  noteBrowserAttached(): () => void {
+    this.browserAttachCount += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.browserAttachCount -= 1;
+    };
+  }
+
   // --- State file persistence (issue #323) ---
 
   /** Read and apply persisted state from disk. Called once at construction.
@@ -1675,6 +1697,16 @@ export class Session {
     this.incompatibleMaster = null;
     ptyProcess.onData((data) => {
       this.protocolTrace.record("from-pty", data);
+      // No pane is there to answer the program's startup color/DA1 query, and a
+      // late reply from the replay is ignored by Codex (see
+      // terminal-query-reply.ts); answer it from the cached palette instead.
+      if (
+        this.browserAttachCount === 0 &&
+        Date.now() - this.createdAt < STARTUP_QUERY_REPLY_WINDOW_MS
+      ) {
+        const reply = buildStartupQueryReplies(data);
+        if (reply) this.writeToPty(reply, Date.now());
+      }
       const chunk = Buffer.from(data, "utf8");
       // Skipped during a redraw-nudge repaint window — see
       // redrawNudge's docstring above. Listeners below still get it live.
