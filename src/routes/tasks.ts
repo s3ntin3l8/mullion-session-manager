@@ -5,6 +5,7 @@ import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import {
   buildRejectPrompt,
+  isApprovingVerdict,
   taskCommitTitlePath,
   parseCommitTitle,
   resolvePrTitle,
@@ -217,6 +218,8 @@ const TASK_ROW_COLUMNS = {
   // withBlockedState just below. Raw per-project config has no reason to
   // leak into a task response; the frontend only needs the yes/no answer.
   projectMaxAutoReturnRounds: projects.maxAutoReturnRounds,
+  // Read only to derive `approvalState` (withApprovalState strips it).
+  projectAutoApprove: projects.autoApprove,
   worktreePath: tasks.worktreePath,
   branchName: tasks.branchName,
   baseSha: tasks.baseSha,
@@ -360,6 +363,43 @@ function withAutoReturnCapped<
   };
 }
 
+// #2234 — an approving review whose findings are in leaves the task waiting
+// on an approval, with no other signal: the card used to read "returned to
+// worker". `awaiting-human` = a human has to Approve. `auto-pending` = the
+// approve sweep (task-reconciler.ts's processAutoApprovals) will take it, so
+// it applies that sweep's own gates: the project auto-approves, the task has
+// a PR number, and Task Master is enabled. If the project auto-approves but
+// a gate fails (no PR yet, Task Master off) the sweep will never act, so the
+// honest state is `awaiting-human`, not a promise the machine won't keep.
+// Derived here, next to the other board states, so the frontend never
+// re-derives "approving verdict" (task-prompt.ts's isApprovingVerdict is the
+// one definition).
+function withApprovalState<
+  T extends {
+    status: string;
+    prNumber: number | null;
+    reviewSessionId: number | null;
+    reviewFindingsIngestedSessionId: number | null;
+    lastReviewVerdict: string | null;
+    projectAutoApprove: boolean | null;
+  },
+>(
+  row: T,
+  taskMasterEnabled: boolean,
+): Omit<T, "projectAutoApprove"> & { approvalState: "awaiting-human" | "auto-pending" | null } {
+  const { projectAutoApprove, ...rest } = row;
+  const approved =
+    row.status === "reviewing" &&
+    row.reviewSessionId !== null &&
+    row.reviewFindingsIngestedSessionId === row.reviewSessionId &&
+    isApprovingVerdict(row.lastReviewVerdict);
+  const sweepWillApprove = !!projectAutoApprove && row.prNumber !== null && taskMasterEnabled;
+  return {
+    ...rest,
+    approvalState: approved ? (sweepWillApprove ? "auto-pending" : "awaiting-human") : null,
+  };
+}
+
 // The task drawer's surface for the second silent-fallback layer #761 left:
 // even with conventionalCommitTitles on, a worker that skipped or malformed
 // its title file left task-reconciler.ts's ingest with nothing but one
@@ -426,9 +466,16 @@ export async function tasksRoute(app: FastifyInstance) {
         // insertion order (Hermes review, PR #471).
         .orderBy(tasks.status, tasks.boardOrder, tasks.createdAt)
         .all();
-      const installCap = resolveTaskMasterConfig(app).maxAutoReturnRounds;
+      const taskMaster = resolveTaskMasterConfig(app);
+      const installCap = taskMaster.maxAutoReturnRounds;
+      const taskMasterEnabled = taskMaster.enabled;
       return rows.map((row) =>
-        withBlockedState(withAutoReturnCapped(withPrTitleFallback(row), installCap)),
+        withBlockedState(
+          withApprovalState(
+            withAutoReturnCapped(withPrTitleFallback(row), installCap),
+            taskMasterEnabled,
+          ),
+        ),
       );
     },
   );
@@ -445,11 +492,12 @@ export async function tasksRoute(app: FastifyInstance) {
       .innerJoin(projects, eq(tasks.projectId, projects.id))
       .where(eq(tasks.id, taskId))
       .all();
+    const taskMaster = resolveTaskMasterConfig(app);
     return row
       ? withBlockedState(
-          withAutoReturnCapped(
-            withPrTitleFallback(row),
-            resolveTaskMasterConfig(app).maxAutoReturnRounds,
+          withApprovalState(
+            withAutoReturnCapped(withPrTitleFallback(row), taskMaster.maxAutoReturnRounds),
+            taskMaster.enabled,
           ),
         )
       : null;
@@ -650,7 +698,9 @@ export async function tasksRoute(app: FastifyInstance) {
           via: "patch",
         });
       }
-      return updated;
+      // Same wire shape as GET (blocked/approval/cap derivations included),
+      // so a client folding this response in never sees a row that drifts.
+      return selectTaskRow(taskId) ?? updated;
     },
   );
 

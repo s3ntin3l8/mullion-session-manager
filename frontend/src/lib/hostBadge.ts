@@ -74,3 +74,77 @@ export function selectRemoteHost(
   if (!hostId || hostId === LOCAL_HOST_ID) return null;
   return hosts.find((h) => h.id === hostId) ?? null;
 }
+
+/** Whether any host besides this machine is registered. A local-only install
+ * has nothing to say about "where", so callers show no host chip then. */
+export function hasRemoteHosts(hosts: readonly Host[]): boolean {
+  return hosts.some((h) => h.id !== LOCAL_HOST_ID);
+}
+
+export interface TaskHostChip {
+  /** Visible text. */
+  label: string;
+  title: string;
+}
+
+/**
+ * Where a task will run, from data already on the task, its worker session and
+ * its project — never the placement-preview endpoint (per-card calls, and it
+ * ignores the task's `Platform:`/`Host:` requirement). #2236.
+ *
+ * Null on an install with no remote hosts.
+ */
+export function describeTaskHost(
+  task: { placementRequirement: string | null },
+  workerSession: { resolvedHostId: string; placementReason: string | null } | null | undefined,
+  projectHostId: string | null | undefined,
+  hosts: readonly Host[],
+): TaskHostChip | null {
+  if (!hasRemoteHosts(hosts)) return null;
+  const nameOf = (id: string) => hosts.find((h) => h.id === id)?.name ?? id;
+
+  // A session that already exists is the truth, whatever was planned.
+  if (workerSession) {
+    const badge = describeHostBadge(workerSession, () => [...hosts]);
+    // A local worker has no per-session badge (describeHostBadge), but on an
+    // install with remote hosts "it ran here" is worth saying after claim.
+    return badge
+      ? { label: `on ${badge.name}`, title: badge.title }
+      : { label: "on this machine", title: "Runs on this machine" };
+  }
+
+  const req = parseRequirement(task.placementRequirement);
+  if (req) {
+    const parts: string[] = [];
+    if (req.platform) parts.push(req.platform);
+    if (req.hostId) parts.push(nameOf(req.hostId));
+    return {
+      label: `needs ${parts.join(" · ")}`,
+      title: "This task's issue requires this placement (Platform:/Host: line)",
+    };
+  }
+
+  if (projectHostId && projectHostId !== LOCAL_HOST_ID) {
+    return {
+      label: `pinned · ${nameOf(projectHostId)}`,
+      title: `Runs on the project's host, ${nameOf(projectHostId)}`,
+    };
+  }
+  return { label: "auto", title: "Placed automatically when the task is claimed" };
+}
+
+function parseRequirement(raw: string | null): { platform?: string; hostId?: string } | null {
+  if (!raw) return null;
+  try {
+    const v: unknown = JSON.parse(raw);
+    if (typeof v !== "object" || v === null) return null;
+    const { platform, hostId } = v as Record<string, unknown>;
+    const out = {
+      ...(typeof platform === "string" && { platform }),
+      ...(typeof hostId === "string" && { hostId }),
+    };
+    return out.platform || out.hostId ? out : null;
+  } catch {
+    return null;
+  }
+}

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useDashboardStore, LIVE_REFRESH_INTERVAL_MS } from "../../store/index.js";
 import { api, ApiError, LOCAL_HOST_ID } from "../../api/index.js";
+import { hasRemoteHosts } from "../../lib/hostBadge.js";
 import type { Host, HostUpdateStatus } from "../../api/index.js";
 import { CreateHostModal } from "../../CreateHostModal.js";
 import { HostConfigModal } from "../../HostConfigModal.js";
@@ -476,7 +477,7 @@ export function HostsSection() {
         </button>
       </div>
 
-      {hosts.filter((h) => h.id !== LOCAL_HOST_ID).length === 0 && (
+      {!hasRemoteHosts(hosts) && (
         <div style={{ fontSize: "0.71875rem", color: "var(--dim)", marginTop: 10 }}>
           No remote hosts yet. Every project runs on this machine until you add one.
         </div>

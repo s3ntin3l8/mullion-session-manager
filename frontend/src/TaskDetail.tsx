@@ -21,7 +21,9 @@ import { matchSessionPr } from "./github/matchSessionPr.js";
 import { sessionPrDotClass } from "./lib/sidebarStatus.js";
 import { Markdown } from "./ui/Markdown.js";
 import { STATUS_PRESENTATION, formatStatusLabel } from "./sessionStatus.js";
-import { needsHumanText } from "./needsHuman.js";
+import { approvalStateText, needsHumanText } from "./needsHuman.js";
+import { describeTaskHost } from "./lib/hostBadge.js";
+import { parseReviewRounds } from "./lib/reviewRounds.js";
 import { parseWorkflowChange, visibleTaskSyncError } from "./workflowChange.js";
 
 const UNSET_AGENT = "";
@@ -89,6 +91,7 @@ export function TaskDetail({
   const allTasks = useDashboardStore((s) => s.tasks);
   const sessions = useDashboardStore((s) => s.sessions);
   const projects = useDashboardStore((s) => s.projects);
+  const hosts = useDashboardStore((s) => s.hosts);
   const settings = useDashboardStore((s) => s.settings);
   const updateTask = useDashboardStore((s) => s.updateTask);
   const refreshTasks = useDashboardStore((s) => s.refreshTasks);
@@ -120,6 +123,15 @@ export function TaskDetail({
   if (!task) {
     return <EmptyStateNote>Task not found.</EmptyStateNote>;
   }
+
+  // #2236 — from data already on the task/session/project, no placement call.
+  const hostChip = describeTaskHost(
+    task,
+    task.sessionId !== null ? sessions.find((x) => x.id === task.sessionId) : null,
+    projects?.find((p) => p.id === task.projectId)?.hostId,
+    hosts ?? [],
+  );
+  const reviewRounds = parseReviewRounds(task.reviewFindings);
 
   const agentOptions = Array.from(
     new Map(agentLaunchers.map((l) => [normalizeAgentId(l.id), l.title])).entries(),
@@ -266,6 +278,11 @@ export function TaskDetail({
 
       <div className="task-detail-meta">
         <span className="task-detail-meta-row">{task.projectName}</span>
+        {hostChip && (
+          <span className="task-detail-meta-row task-detail-host" title={hostChip.title}>
+            {hostChip.label}
+          </span>
+        )}
         {task.issueNumber !== null && task.htmlUrl && (
           <a
             className="task-detail-meta-row task-detail-link"
@@ -563,15 +580,24 @@ export function TaskDetail({
               old two-state version said "needs a human" through the
               entire final worker run. */}
           <div className="task-detail-review-hint">
-            {task.autoReturnRounds > 0 && capAnnounced
-              ? "The automatic loop has stopped — nothing further happens on its own from here. It still cannot approve, reject, or otherwise transition this task; that's your call above."
-              : task.autoReturnRounds > 0 && task.autoReturnCapped
-                ? "It has spent its last automatic round and a final review is still confirming the outcome — it still cannot approve, reject, or otherwise transition this task; that's your call above, once it stops."
-                : task.autoReturnRounds > 0
-                  ? "Its findings have been sent back to the worker automatically — this is that round's outcome. It still cannot approve, reject, or otherwise transition this task; that's still your call above."
-                  : "It cannot approve, reject, or otherwise transition this task — that's still your call above. Non-empty findings may be sent back to the worker automatically before this task is ready for another look."}
+            {task.approvalState === "awaiting-human"
+              ? "The review approved this task. Nothing happens on its own from here — a human has to Approve it above."
+              : task.approvalState === "auto-pending"
+                ? "The review approved this task. This project auto-approves, so it will be approved automatically once CI is green."
+                : task.autoReturnRounds > 0 && capAnnounced
+                  ? "The automatic loop has stopped — nothing further happens on its own from here. It still cannot approve, reject, or otherwise transition this task; that's your call above."
+                  : task.autoReturnRounds > 0 && task.autoReturnCapped
+                    ? "It has spent its last automatic round and a final review is still confirming the outcome — it still cannot approve, reject, or otherwise transition this task; that's your call above, once it stops."
+                    : task.autoReturnRounds > 0
+                      ? "Its findings have been sent back to the worker automatically — this is that round's outcome. It still cannot approve, reject, or otherwise transition this task; that's still your call above."
+                      : "It cannot approve, reject, or otherwise transition this task — that's still your call above. Non-empty findings may be sent back to the worker automatically before this task is ready for another look."}
           </div>
-          {task.autoReturnRounds > 0 && (
+          {task.approvalState && (
+            <div className="task-detail-review-round" role="status">
+              {approvalStateText(task.approvalState, task.autoReturnRounds)}
+            </div>
+          )}
+          {task.autoReturnRounds > 0 && !task.approvalState && (
             <div
               className={
                 capAnnounced
@@ -592,8 +618,35 @@ export function TaskDetail({
               This agent started with no initial instructions.
             </div>
           )}
-          {task.reviewFindings && (
-            <Markdown text={task.reviewFindings} className="task-detail-review-findings" />
+          {reviewRounds ? (
+            <>
+              <div className="task-detail-review-summary">
+                <span className="task-detail-review-summary-round">
+                  Latest: round {reviewRounds.latest.round}
+                </span>
+                {reviewRounds.latest.verdict && <span>{reviewRounds.latest.verdict}</span>}
+                {reviewRounds.latest.counts && (
+                  <span className="task-detail-review-summary-counts">
+                    {reviewRounds.latest.counts.critical} critical ·{" "}
+                    {reviewRounds.latest.counts.warnings} warnings ·{" "}
+                    {reviewRounds.latest.counts.suggestions} suggestions
+                  </span>
+                )}
+              </div>
+              <Markdown text={reviewRounds.latest.text} className="task-detail-review-findings" />
+              {reviewRounds.earlier.length > 0 && (
+                <details className="task-detail-review-earlier">
+                  <summary>Earlier rounds ({reviewRounds.earlier.length})</summary>
+                  {reviewRounds.earlier.map((block) => (
+                    <Markdown key={block} text={block} className="task-detail-review-findings" />
+                  ))}
+                </details>
+              )}
+            </>
+          ) : (
+            task.reviewFindings && (
+              <Markdown text={task.reviewFindings} className="task-detail-review-findings" />
+            )
           )}
           <SessionTimeline params={{ sessionIds: [task.reviewSessionId] }} />
         </div>

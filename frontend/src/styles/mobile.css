@@ -591,7 +591,8 @@
   }
   /* #2108 — the card is the only surface a phone has (no hover tooltip), so
      the "needs workflow approval" strip gets the same legible size. */
-  .task-card-workflow-hold {
+  .task-card-workflow-hold,
+  .task-card-approval-strip {
     font-size: 0.6875rem;
     width: 100%;
   }

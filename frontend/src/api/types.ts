@@ -2080,6 +2080,12 @@ export interface Task {
   // mid-round) or capped (parked in "reviewing" for a human) — TaskCard/
   // TaskDetail's round badge must distinguish the two.
   autoReturnCapped: boolean;
+  // #2234 — derived server-side (routes/tasks.ts withApprovalState): the last
+  // review approved and its findings are ingested for the current review
+  // session. `awaiting-human` = the project does not auto-approve, so the task
+  // waits on a manual Approve; `auto-pending` = the approve sweep will take it.
+  // `null` for every other task.
+  approvalState: "awaiting-human" | "auto-pending" | null;
   // Issue #1038 — a capped task is NOT yet "parked for a human" the instant
   // autoReturnCapped flips true: autoReturnRounds reaches the cap at the
   // START of the last permitted round, while a worker session is still
@@ -2110,7 +2116,7 @@ export interface Task {
   // #1954 — where the task requires its worker to run, as JSON
   // (`{"platform":"darwin"}`, `{"hostId":"…"}` or both): the issue body's
   // `Platform:` / `Host:` lines, resolved at dispatch. `null` = no requirement.
-  // Not rendered in the UI yet.
+  // Rendered as the card/drawer host chip when the task has no worker session yet.
   placementRequirement: string | null;
   prUrl: string | null;
   // Set alongside prUrl — a draft PR opened at "-> reviewing", or the PR
