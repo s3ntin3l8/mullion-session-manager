@@ -69,6 +69,7 @@ import { integrationsRoute } from "./routes/integrations.js";
 import { webhookRoutes } from "./routes/webhooks.js";
 import { githubWSRoute } from "./routes/ws-github.js";
 import { tasksWSRoute } from "./routes/ws-tasks.js";
+import { previewTargetsRoute } from "./routes/preview-targets.js";
 import { previewsRoute } from "./routes/previews.js";
 import { projectUrlsRoute } from "./routes/project-urls.js";
 import { agentRulesRoute } from "./routes/agent-rules.js";
@@ -587,6 +588,7 @@ export async function buildApp() {
   await app.register(agentBridgeRoute);
   await app.register(integrationsRoute);
   await app.register(webhookRoutes);
+  await app.register(previewTargetsRoute);
   await app.register(previewsRoute);
   await app.register(projectUrlsRoute);
   await app.register(agentRulesRoute);

@@ -6,7 +6,12 @@ import { useDashboardStore } from "../store/index.js";
 export interface UseOpenPreviewRequestParams {
   dockviewApi: DockviewApi | null;
   activeWorkspaceId: number | null;
-  onOpenPreview: (projectId: number, slug: string, branch: string | null) => void;
+  onOpenPreview: (
+    projectId: number,
+    slug: string,
+    branch: string | null,
+    targetName?: string,
+  ) => void;
   restoringRef: MutableRefObject<boolean>;
   restoredWorkspaceIdRef: MutableRefObject<number | null>;
 }
@@ -50,7 +55,8 @@ export function useOpenPreviewRequest({
     const timer = setTimeout(() => {
       resolvedNonceRef.current = nonce;
       useDashboardStore.getState().clearOpenPreviewRequest(nonce);
-      onOpenPreview(projectId, slug, branch);
+      if (request.targetName) onOpenPreview(projectId, slug, branch, request.targetName);
+      else onOpenPreview(projectId, slug, branch);
     }, 0);
     return () => clearTimeout(timer);
   }, [

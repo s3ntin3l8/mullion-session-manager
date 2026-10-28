@@ -1,3 +1,4 @@
+import { PreviewTargetsEditor } from "./PreviewTargetsEditor.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError } from "./api/index.js";
 import type { DockControlInput } from "./api/index.js";
@@ -18,6 +19,8 @@ const isSuggestedScript = (name: string) => scriptRank(name) >= 0;
 
 export interface DockConfigPanelParams {
   projectId: number;
+  view?: "previews";
+  rev?: number;
 }
 
 // U4 (finding U4, .claude/plans/can-we-do-a-moonlit-treasure.md) — a
@@ -39,6 +42,36 @@ export interface DockConfigPanelParams {
 // full already-edited list" contract agent-rules.ts's PUT has for a single
 // target's content.
 export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
+  const [showPreviews, setShowPreviews] = useState(params.view === "previews");
+  const [mounted, setMounted] = useState({ previews: showPreviews, monitors: !showPreviews });
+  if (showPreviews && !mounted.previews) setMounted({ ...mounted, previews: true });
+  if (!showPreviews && !mounted.monitors) setMounted({ ...mounted, monitors: true });
+  const [lastRev, setLastRev] = useState(params.rev);
+  if (lastRev !== params.rev) {
+    setLastRev(params.rev);
+    if (params.view === "previews") setShowPreviews(true);
+  }
+  return (
+    <div className="dock-config-panel">
+      <div className="preview-config-tabs" role="tablist" aria-label="Dock configuration">
+        <button role="tab" aria-selected={!showPreviews} onClick={() => setShowPreviews(false)}>
+          Monitors
+        </button>
+        <button role="tab" aria-selected={showPreviews} onClick={() => setShowPreviews(true)}>
+          Previews
+        </button>
+      </div>
+      <div className="dock-settings-view" hidden={!showPreviews}>
+        {mounted.previews && <PreviewTargetsEditor projectId={params.projectId} />}
+      </div>
+      <div className="dock-settings-view" hidden={showPreviews}>
+        {mounted.monitors && <MonitorsEditor params={params} />}
+      </div>
+    </div>
+  );
+}
+
+function MonitorsEditor({ params }: { params: DockConfigPanelParams }) {
   const [invalid, setInvalid] = useState<{ reason: string | null } | null>(null);
   // Hermes fresh-review nit on PR #586 — this panel otherwise mirrors
   // AgentRulesPanel closely, but its read side had no isSymlink equivalent:
@@ -310,10 +343,10 @@ export function DockConfigPanel({ params }: { params: DockConfigPanelParams }) {
 
       <div className="agent-rules-panel">
         <div className="agent-rules-panel-list cmux-scroll">
-          {controls.length === 0 && (
+          {(controls ?? []).length === 0 && (
             <div className="dock-config-panel-empty-hint">No monitors configured yet.</div>
           )}
-          {controls.map((control, index) => (
+          {(controls ?? []).map((control, index) => (
             <button
               key={index}
               className={`agent-rules-panel-row${index === selectedIndex ? " selected" : ""}`}

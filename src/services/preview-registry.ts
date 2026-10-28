@@ -14,7 +14,8 @@ function newSlug(): string {
 
 export interface PreviewSummary {
   slug: string;
-  kind: "project" | "external";
+  kind: "project" | "external" | "target";
+  targetId?: string | null;
   projectId: number | null;
   externalUrl: string | null;
   /** The session serving this preview (issue #2007); null when unbound. */
@@ -33,10 +34,48 @@ type PreviewRow = typeof previews.$inferSelect;
 /** The `previews.branch` sentinel for the project-checkout preview (schema.ts). */
 export const CHECKOUT_BRANCH = "";
 
+/** Targetless conflict handling supports SQLite's partial project index.
+ * A conflict may also be on the random slug: only accept an existing row
+ * for this project/branch, otherwise retry with a fresh slug. */
+export class PreviewSlugAllocationError extends Error {
+  constructor() {
+    super("Could not allocate a unique preview slug");
+    this.name = "PreviewSlugAllocationError";
+  }
+}
+
+function ensureProjectPreviewRow(
+  app: FastifyInstance,
+  projectId: number,
+  branch: string,
+): PreviewRow {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    app.db
+      .insert(previews)
+      .values({ slug: newSlug(), kind: "project", projectId, branch })
+      .onConflictDoNothing()
+      .run();
+    const row = app.db
+      .select()
+      .from(previews)
+      .where(
+        and(
+          eq(previews.kind, "project"),
+          eq(previews.projectId, projectId),
+          eq(previews.branch, branch),
+        ),
+      )
+      .get();
+    if (row) return row;
+  }
+  throw new PreviewSlugAllocationError();
+}
+
 function toSummary(row: PreviewRow): PreviewSummary {
   return {
     slug: row.slug,
     kind: row.kind,
+    ...(row.kind === "target" ? { targetId: row.targetId } : {}),
     projectId: row.projectId,
     externalUrl: row.externalUrl,
     sessionId: row.sessionId,
@@ -74,19 +113,9 @@ export function getOrCreateProjectPreview(
   // previews_project_id_branch_unique index — select-then-insert lets both sides
   // miss the not-yet-existing row and then have the loser's insert throw
   // (PR #43 review). onConflictDoNothing makes the losing insert a no-op
-  // instead, so the select below always finds a row afterward regardless of
+  // instead, so the helper always finds a row afterward regardless of
   // which side actually created it.
-  app.db
-    .insert(previews)
-    .values({ slug: newSlug(), kind: "project", projectId, branch: CHECKOUT_BRANCH })
-    .onConflictDoNothing({ target: [previews.projectId, previews.branch] })
-    .run();
-
-  const where = and(
-    eq(previews.kind, "project"),
-    eq(previews.projectId, projectId),
-    eq(previews.branch, CHECKOUT_BRANCH),
-  );
+  let row = ensureProjectPreviewRow(app, projectId, CHECKOUT_BRANCH);
 
   // Issue #2007 — bind the session serving this preview. Only a session of
   // THIS project counts; anything else is ignored rather than rejected, since
@@ -99,11 +128,11 @@ export function getOrCreateProjectPreview(
       .where(eq(sessions.id, sessionId))
       .all();
     if (session?.projectId === projectId) {
-      app.db.update(previews).set({ sessionId }).where(where).run();
+      app.db.update(previews).set({ sessionId }).where(eq(previews.slug, row.slug)).run();
+      row = { ...row, sessionId };
     }
   }
 
-  const [row] = app.db.select().from(previews).where(where).all();
   return toSummary(row);
 }
 
@@ -134,12 +163,7 @@ export function upsertBranchPreview(
   branch: string,
 ): PreviewSummary {
   if (branch === CHECKOUT_BRANCH) throw new Error("a branch preview needs a branch");
-  app.db
-    .insert(previews)
-    .values({ slug: newSlug(), kind: "project", projectId, branch })
-    .onConflictDoNothing({ target: [previews.projectId, previews.branch] })
-    .run();
-  return findBranchPreview(app, projectId, branch)!;
+  return toSummary(ensureProjectPreviewRow(app, projectId, branch));
 }
 
 export function bindBranchPreview(
@@ -195,4 +219,19 @@ export function deletePreviewBySlug(app: FastifyInstance, slug: string): boolean
 export function listPreviews(app: FastifyInstance): PreviewSummary[] {
   const rows = app.db.select().from(previews).orderBy(desc(previews.createdAt)).all();
   return rows.map(toSummary);
+}
+
+/** A configured target has its own stable origin, independent of branch slugs. */
+export function getOrCreateTargetPreview(
+  app: FastifyInstance,
+  projectId: number,
+  targetId: string,
+): PreviewSummary {
+  app.db
+    .insert(previews)
+    .values({ slug: newSlug(), kind: "target", projectId, targetId })
+    .onConflictDoNothing({ target: previews.targetId })
+    .run();
+  const [row] = app.db.select().from(previews).where(eq(previews.targetId, targetId)).all();
+  return toSummary(row);
 }

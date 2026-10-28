@@ -1831,7 +1831,8 @@ export interface DockerServiceActionResult {
 // random, never a decodable target.
 export interface Preview {
   slug: string;
-  kind: "project" | "external";
+  kind: "project" | "external" | "target";
+  targetId?: string | null;
   projectId: number | null;
   externalUrl: string | null;
   /** Session serving this preview (issue #2007); null when unbound. */
@@ -2662,4 +2663,15 @@ export interface ProjectSearchResult {
 export interface ProjectSearchListing {
   results: ProjectSearchResult[];
   truncated: boolean;
+}
+
+export interface NamedPreviewTarget {
+  id: string;
+  name: string;
+  destination: string;
+  connectionOrigin: "project" | "primary";
+}
+export interface ProjectPreviewConfig {
+  devServerUrl: string | null;
+  targets: NamedPreviewTarget[];
 }

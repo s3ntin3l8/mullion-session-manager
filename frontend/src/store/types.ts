@@ -1,3 +1,4 @@
+import type { ProjectPreviewConfig } from "../api/types.js";
 import type {
   AppSettings,
   CodexHookTrust,
@@ -870,6 +871,11 @@ export interface ToastsSlice {
 // first generic parameter of every `StateCreator<DashboardState, [], [],
 // XSlice>` in slices/*.ts.
 export interface PreviewsSlice {
+  previewPickerProjectId: number | null;
+  requestPreviewPicker: (projectId: number | null) => void;
+  projectPreviewConfigs: Record<number, ProjectPreviewConfig>;
+  refreshProjectPreviewConfig: (projectId: number) => Promise<void>;
+
   previews: Preview[];
   /** Re-lists previews; throttled unless `force` (after starting one). */
   refreshPreviews: (force?: boolean) => Promise<void>;
@@ -880,9 +886,15 @@ export interface PreviewsSlice {
     projectId: number;
     slug: string;
     branch: string | null;
+    targetName?: string;
     nonce: number;
   } | null;
-  requestOpenPreview: (preview: { projectId: number; slug: string; branch: string | null }) => void;
+  requestOpenPreview: (preview: {
+    projectId: number;
+    slug: string;
+    branch: string | null;
+    targetName?: string;
+  }) => void;
   clearOpenPreviewRequest: (nonce: number) => void;
 }
 

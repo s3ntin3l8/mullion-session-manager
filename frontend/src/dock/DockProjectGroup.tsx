@@ -1,3 +1,4 @@
+import { ProjectPreviewMenu } from "../ProjectPreviewMenu.js";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { api, ApiError } from "../api/index.js";
@@ -107,6 +108,8 @@ export function DockProjectGroup({
   onUnpin,
   onOpenGitHub,
   onOpenBrowser,
+  onOpenBlankBrowser,
+  onManagePreviews,
   onOpenSession,
   onRemove,
 }: {
@@ -142,6 +145,8 @@ export function DockProjectGroup({
   onUnpin: () => void;
   onOpenGitHub: (projectId: number) => void;
   onOpenBrowser: (projectId: number) => void;
+  onOpenBlankBrowser?: () => void;
+  onManagePreviews?: (projectId: number) => void;
   // Issue #2069 — "Open holder" on a port-in-use row.
   onOpenSession?: (session: Session) => void;
   // Present only for a manually-pinned project not also derived from the
@@ -882,8 +887,6 @@ export function DockProjectGroup({
         selectedValue={selectedValue}
         worktreeOptions={allOptions}
         onWorktreeChange={onWorktreeChange}
-        devServerUrl={project?.devServerUrl}
-        onOpenBrowser={() => onOpenBrowser(projectId)}
         updateAvailable={updateAvailable}
         dockerStatus={dockerStatus}
         held={heldMerge.heldIds.has(control.id)}
@@ -946,6 +949,12 @@ export function DockProjectGroup({
             onOpen={() => onOpenGitHub(projectId)}
           />
         )}
+        <ProjectPreviewMenu
+          projectId={projectId}
+          onOpenDefault={() => onOpenBrowser(projectId)}
+          onBlank={onOpenBlankBrowser}
+          onManage={() => onManagePreviews?.(projectId)}
+        />
         {onRemove && (
           <button
             className="dock-column-remove"
@@ -982,20 +991,9 @@ export function DockProjectGroup({
           {configuredControls.length === 0 &&
             dockerStackGroups.length === 0 &&
             ungroupedDockerControls.length === 0 &&
-            orphanControls.length === 0 &&
-            (project?.devServerUrl ? (
-              <button
-                className="dock-group-empty"
-                onClick={() => onOpenBrowser(projectId)}
-                title={`Open preview for ${project.devServerUrl}`}
-                type="button"
-              >
-                <GlobeIcon size={11} />
-                <span className="dock-monitor-url-text">{project.devServerUrl}</span>
-              </button>
-            ) : (
+            orphanControls.length === 0 && (
               <div className="dock-group-empty">No monitors configured</div>
-            ))}
+            )}
           {configuredControls.map(renderMonitor)}
           {ungroupedDockerControls.map(renderMonitor)}
           {standaloneOrphanControls.map(renderMonitor)}

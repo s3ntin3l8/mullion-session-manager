@@ -81,7 +81,7 @@ describe("Dock — detected dev server row", () => {
     });
     renderDock();
 
-    expect(await screen.findByText("3200")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Preview" })).toBeInTheDocument();
     expect(screen.queryByText(/Detected dev server/)).not.toBeInTheDocument();
   });
 

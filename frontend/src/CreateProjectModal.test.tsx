@@ -603,108 +603,6 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
   });
 });
 
-describe("CreateProjectModal — detected dev-server port suggestion (issue #28 phase 7)", () => {
-  it("shows a suggestion when a detected port differs from the current field value", () => {
-    render(
-      <CreateProjectModal
-        mode="edit"
-        initialName="mullion"
-        initialPath="/home/x/mullion"
-        initialDevServerUrl={null}
-        detectedDevServerPort="5173"
-        onClose={vi.fn()}
-        onCreate={vi.fn().mockResolvedValue(undefined)}
-      />,
-    );
-
-    expect(screen.getByText(/detected dev server on port 5173/i)).toBeInTheDocument();
-  });
-
-  it("clicking the suggestion fills the field and the suggestion then disappears", async () => {
-    const user = userEvent.setup();
-    render(
-      <CreateProjectModal
-        mode="edit"
-        initialName="mullion"
-        initialPath="/home/x/mullion"
-        initialDevServerUrl={null}
-        detectedDevServerPort="5173"
-        onClose={vi.fn()}
-        onCreate={vi.fn().mockResolvedValue(undefined)}
-      />,
-    );
-
-    await user.click(screen.getByText(/detected dev server on port 5173/i));
-
-    expect(screen.getByPlaceholderText("5173")).toHaveValue("5173");
-    expect(screen.queryByText(/detected dev server on port 5173/i)).not.toBeInTheDocument();
-  });
-
-  it("never overwrites an already-set value that differs from the detected one — no auto-apply", () => {
-    render(
-      <CreateProjectModal
-        mode="edit"
-        initialName="mullion"
-        initialPath="/home/x/mullion"
-        initialDevServerUrl="3000"
-        detectedDevServerPort="5173"
-        onClose={vi.fn()}
-        onCreate={vi.fn().mockResolvedValue(undefined)}
-      />,
-    );
-
-    // The field keeps the user's own value...
-    expect(screen.getByPlaceholderText("5173")).toHaveValue("3000");
-    // ...and the suggestion is offered, not silently applied.
-    expect(screen.getByText(/detected dev server on port 5173/i)).toBeInTheDocument();
-  });
-
-  it("shows no suggestion when nothing was detected", () => {
-    render(
-      <CreateProjectModal
-        mode="edit"
-        initialName="mullion"
-        initialPath="/home/x/mullion"
-        initialDevServerUrl={null}
-        detectedDevServerPort={null}
-        onClose={vi.fn()}
-        onCreate={vi.fn().mockResolvedValue(undefined)}
-      />,
-    );
-
-    expect(screen.queryByText(/detected dev server on port/i)).not.toBeInTheDocument();
-  });
-
-  it("shows no suggestion when the detected port already matches the current field value", () => {
-    render(
-      <CreateProjectModal
-        mode="edit"
-        initialName="mullion"
-        initialPath="/home/x/mullion"
-        initialDevServerUrl="5173"
-        detectedDevServerPort="5173"
-        onClose={vi.fn()}
-        onCreate={vi.fn().mockResolvedValue(undefined)}
-      />,
-    );
-
-    expect(screen.queryByText(/detected dev server on port/i)).not.toBeInTheDocument();
-  });
-
-  it("never renders the dev-server field (or a suggestion) in create mode", () => {
-    render(
-      <CreateProjectModal
-        mode="create"
-        detectedDevServerPort="5173"
-        onClose={vi.fn()}
-        onCreate={vi.fn().mockResolvedValue(undefined)}
-      />,
-    );
-
-    expect(screen.queryByText(/dev server/i)).not.toBeInTheDocument();
-  });
-});
-
 // Hermes review, PR #477 — Default Agent / Default Review Agent dropdowns
 // (Phase 6 Task Master, 6.5/#218). Both dropdowns share the same detected
 // launchers, so every query below is scoped to one via the fieldSelect
@@ -838,7 +736,6 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       name: "mullion",
       cwd: "/home/x/mullion",
       hostId: undefined,
-      devServerUrl: null,
       defaultAgent: "claude",
       defaultReviewAgent: null,
       mergeOnApprove: false,
@@ -880,7 +777,6 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       name: "mullion",
       cwd: "/home/x/mullion",
       hostId: undefined,
-      devServerUrl: null,
       defaultAgent: null,
       defaultReviewAgent: null,
       mergeOnApprove: false,
@@ -922,7 +818,6 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       name: "mullion",
       cwd: "/home/x/mullion",
       hostId: undefined,
-      devServerUrl: null,
       defaultAgent: null,
       defaultReviewAgent: null,
       mergeOnApprove: false,
@@ -965,7 +860,6 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       name: "mullion",
       cwd: "/home/x/mullion",
       hostId: undefined,
-      devServerUrl: null,
       defaultAgent: null,
       defaultReviewAgent: null,
       mergeOnApprove: true,
@@ -1383,7 +1277,7 @@ describe("CreateProjectModal — confirm-first directory creation and error hand
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
-  it("edit mode still submits name/cwd/devServerUrl unchanged (guards the object refactor)", async () => {
+  it("edit mode submits metadata without overwriting separately managed previews", async () => {
     const onClose = vi.fn();
     const onCreate = vi.fn().mockResolvedValue(undefined);
     const user = userEvent.setup();
@@ -1404,7 +1298,6 @@ describe("CreateProjectModal — confirm-first directory creation and error hand
       name: "mullion",
       cwd: "/home/x/mullion",
       hostId: undefined,
-      devServerUrl: "3000",
       defaultAgent: null,
       defaultReviewAgent: null,
       mergeOnApprove: false,
@@ -1419,68 +1312,16 @@ describe("CreateProjectModal — confirm-first directory creation and error hand
     });
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
-  describe("clearing the Dev server field (issue #2082)", () => {
-    const renderEdit = (extra = {}) => {
-      const onClose = vi.fn();
-      const onCreate = vi.fn().mockResolvedValue(undefined);
-      render(
-        <CreateProjectModal
-          mode="edit"
-          initialName="mullion"
-          initialPath="/home/x/mullion"
-          initialDevServerUrl="3200"
-          onClose={onClose}
-          onCreate={onCreate}
-          {...extra}
-        />,
-      );
-      return { onClose, onCreate };
-    };
-    const field = () => screen.getByPlaceholderText("5173");
-
-    it("saves devServerUrl: null when the field is cleared and Save changes is clicked", async () => {
-      const user = userEvent.setup();
-      const { onClose, onCreate } = renderEdit();
-
-      await user.clear(field());
-      await user.click(screen.getByRole("button", { name: "Save changes" }));
-
-      expect(onCreate).toHaveBeenCalledTimes(1);
-      expect(onCreate.mock.calls[0][0].devServerUrl).toBeNull();
-      await waitFor(() => expect(onClose).toHaveBeenCalled());
-    });
-
-    it("saves devServerUrl: null when Enter is pressed in the cleared field", async () => {
-      const user = userEvent.setup();
-      const { onCreate } = renderEdit();
-
-      await user.clear(field());
-      await user.keyboard("{Enter}");
-
-      await waitFor(() => expect(onCreate).toHaveBeenCalledTimes(1));
-      expect(onCreate.mock.calls[0][0].devServerUrl).toBeNull();
-    });
-
-    it("shows why nothing was saved when the path is empty, and keeps the clear pending", async () => {
-      const user = userEvent.setup();
-      const { onCreate } = renderEdit({ initialPath: "" });
-
-      await user.clear(field());
-      await user.click(screen.getByRole("button", { name: "Save changes" }));
-
-      expect(onCreate).not.toHaveBeenCalled();
-      expect(await screen.findByRole("alert")).toHaveTextContent("Repository path is required.");
-    });
-
-    it("still saves null with a differing detected port offered (the field is not re-filled)", async () => {
-      const user = userEvent.setup();
-      const { onCreate } = renderEdit({ detectedDevServerPort: "5173" });
-
-      await user.clear(field());
-      expect(field()).toHaveValue("");
-      await user.click(screen.getByRole("button", { name: "Save changes" }));
-
-      expect(onCreate.mock.calls[0][0].devServerUrl).toBeNull();
-    });
+  it("does not expose preview configuration in Edit project", () => {
+    render(
+      <CreateProjectModal
+        mode="edit"
+        initialName="mullion"
+        initialPath="/home/x/mullion"
+        onClose={vi.fn()}
+        onCreate={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText("Dev server")).not.toBeInTheDocument();
   });
 });

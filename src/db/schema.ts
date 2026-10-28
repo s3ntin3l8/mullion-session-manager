@@ -432,13 +432,28 @@ export const projects = sqliteTable("projects", {
 // so it only constrains the "project" rows, never "external" ones);
 // `kind: "external"` gets one row per registered URL. See
 // src/routes/previews.ts and src/plugins/preview-proxy.ts.
+// Named destinations are runtime project settings, independent of dock.json.
+export const projectPreviewTargets = sqliteTable("project_preview_targets", {
+  id: text("id").primaryKey(),
+  projectId: integer("project_id")
+    .notNull()
+    .references(() => projects.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  destination: text("destination").notNull(),
+  connectionOrigin: text("connection_origin", { enum: ["project", "primary"] })
+    .notNull()
+    .default("project"),
+  order: integer("order").notNull().default(0),
+});
+
 export const previews = sqliteTable(
   "previews",
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     slug: text("slug").notNull().unique(),
-    kind: text("kind", { enum: ["project", "external"] }).notNull(),
+    kind: text("kind", { enum: ["project", "external", "target"] }).notNull(),
     projectId: integer("project_id").references(() => projects.id, { onDelete: "cascade" }),
+    targetId: text("target_id").references(() => projectPreviewTargets.id, { onDelete: "cascade" }),
     externalUrl: text("external_url"),
     // Issue #2007 — the session whose dev server this project preview is
     // serving, written when that session's detected dev-server port is
@@ -468,7 +483,12 @@ export const previews = sqliteTable(
       .notNull()
       .$defaultFn(() => new Date()),
   },
-  (table) => [uniqueIndex("previews_project_id_branch_unique").on(table.projectId, table.branch)],
+  (table) => [
+    uniqueIndex("previews_project_id_branch_unique")
+      .on(table.projectId, table.branch)
+      .where(sql`${table.kind} = 'project'`),
+    uniqueIndex("previews_target_id_unique").on(table.targetId),
+  ],
 );
 
 // One row per terminal session. `status` records user intent (has this been

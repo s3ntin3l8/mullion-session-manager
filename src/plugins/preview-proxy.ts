@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import type { Duplex } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
-import { projects, sessions } from "../db/schema.js";
+import { projects, projectPreviewTargets, sessions } from "../db/schema.js";
 import { resolveSessionHostId } from "../services/session-live-info.js";
 import { getPreviewBySlug } from "../services/preview-registry.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
@@ -48,10 +48,11 @@ import {
 // are just two ways to obtain that base.
 type PreviewTarget =
   | { kind: "project"; devServerUrl: string; projectId: number; hostId: string }
-  | { kind: "external"; url: string };
+  | { kind: "external"; url: string }
+  | { kind: "target"; url: string; hostId: string };
 
 function resolveUpstreamBase(target: PreviewTarget): URL {
-  if (target.kind === "external") return new URL(target.url);
+  if (target.kind === "external" || target.kind === "target") return new URL(target.url);
   // A bare port ("5173") means "this same machine" — see projects.ts's
   // isValidDevServerUrl. A full URL's host (and path — see
   // buildUpstreamUrl below) is honored as-is for a *local* project (this
@@ -183,12 +184,30 @@ function stripPreviewAuthCookie(headers: Headers): void {
   else headers.set("cookie", stripped);
 }
 
-function buildUpstreamUrl(base: URL, requestUrl: string, stripPreviewToken = false): URL {
+function buildUpstreamUrl(
+  base: URL,
+  requestUrl: string,
+  stripPreviewToken = false,
+  preserveBaseQuery = false,
+): URL {
   const incoming = new URL(requestUrl, "http://placeholder");
   const prefix = base.pathname.endsWith("/") ? base.pathname : `${base.pathname}/`;
   const suffix = incoming.pathname.startsWith("/") ? incoming.pathname.slice(1) : incoming.pathname;
   const search = stripPreviewToken ? stripPreviewTokenParam(incoming.search) : incoming.search;
-  return new URL(prefix + suffix + search, base.origin);
+  // Assign the path on a cloned URL: a configured // path must never be
+  // interpreted as a network-path reference which changes the authority.
+  const result = new URL(base.href);
+  result.pathname = prefix + suffix;
+  result.search = search;
+  if (preserveBaseQuery) {
+    for (const key of new Set(base.searchParams.keys())) {
+      if (stripPreviewToken && key === PREVIEW_TOKEN_QUERY_PARAM) continue;
+      if (!result.searchParams.has(key)) {
+        for (const value of base.searchParams.getAll(key)) result.searchParams.append(key, value);
+      }
+    }
+  }
+  return result;
 }
 
 // Shared by both the HTTP handler (handlePreviewRequest) and the WS upgrade
@@ -219,6 +238,24 @@ function resolvePreviewTarget(app: FastifyInstance, slug: string): PreviewResolu
     return { ok: false, status: 404 };
   }
 
+  if (preview.kind === "target") {
+    const [named] = app.db
+      .select()
+      .from(projectPreviewTargets)
+      .where(eq(projectPreviewTargets.id, preview.targetId ?? ""))
+      .all();
+    if (!named || named.projectId !== preview.projectId) return { ok: false, status: 404 };
+    const [owner] = app.db.select().from(projects).where(eq(projects.id, named.projectId)).all();
+    if (!owner) return { ok: false, status: 404 };
+    return {
+      ok: true,
+      target: {
+        kind: "target",
+        url: named.destination,
+        hostId: named.connectionOrigin === "primary" ? LOCAL_HOST_ID : owner.hostId,
+      },
+    };
+  }
   if (preview.kind === "external") {
     if (!preview.externalUrl) return { ok: false, status: 404 };
     return { ok: true, target: { kind: "external", url: preview.externalUrl } };
@@ -345,6 +382,7 @@ async function handlePreviewRequest(
       upstreamBase,
       request.raw.url ?? "/",
       app.config.PREVIEW_AUTH_REQUIRED,
+      resolution.target.kind === "target",
     );
   } catch (err) {
     app.log.warn({ err, slug }, "preview proxy: preview has an invalid target URL");
@@ -355,6 +393,29 @@ async function handlePreviewRequest(
   const target = resolution.target;
   const body = buildUpstreamRequestBody(request.method, request.headers, request.raw);
 
+  if (target.kind === "target" && target.hostId !== LOCAL_HOST_ID) {
+    const headers = buildUpstreamRequestHeaders(
+      request,
+      upstreamUrl.host,
+      PREVIEW_UPSTREAM_EXCLUDED_HEADERS,
+    );
+    stripPreviewAuthCookie(headers);
+    try {
+      const response = await getRemoteHostClient(app, target.hostId).openConfiguredPreviewHttp(
+        upstreamUrl.href,
+        { method: request.method, headers, ...body },
+      );
+      if (
+        response.status === 404 &&
+        response.headers.get("x-mullion-preview-transport") !== "named"
+      )
+        return reply.badGateway("Update the project host to support named preview targets.");
+      return relayFetchResponse(reply, request.method, response, upstreamBase);
+    } catch {
+      request.raw.resume();
+      return reply.badGateway("Preview target host is unavailable.");
+    }
+  }
   // For a remote-hosted project, only the port and path/query resolved
   // above are ever used — the owning agent forces the actual connection to
   // its own loopback (see resolveUpstreamBase's comment and internal.ts's
@@ -517,6 +578,7 @@ async function handlePreviewWsUpgrade(
       resolveUpstreamBase(resolution.target),
       req.url ?? "/",
       app.config.PREVIEW_AUTH_REQUIRED,
+      resolution.target.kind === "target",
     );
   } catch {
     return rejectUpgrade(socket, "503 Service Unavailable");
@@ -531,7 +593,16 @@ async function handlePreviewWsUpgrade(
   // browser's handshake on an async upstream round-trip.
   previewWss.handleUpgrade(req, socket, head, (browserSocket) => {
     let upstream: NodeWebSocket;
-    if (isRemoteProjectTarget(target)) {
+    if (target.kind === "target" && target.hostId !== LOCAL_HOST_ID) {
+      try {
+        upstream = getRemoteHostClient(app, target.hostId).openConfiguredPreviewWs(
+          upstreamUrl.href,
+        );
+      } catch {
+        browserSocket.close(1011, "Preview target host is unavailable");
+        return;
+      }
+    } else if (isRemoteProjectTarget(target)) {
       try {
         upstream = getRemoteHostClient(app, target.hostId).openPreviewWs(
           portFromUrl(upstreamUrl),

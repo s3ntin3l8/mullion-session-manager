@@ -117,7 +117,7 @@ export interface UsePanelOpenerResult {
   onOpenGit: (projectId: number) => void;
   // Opens (or focuses) a project's tabbed Project panel, optionally on a
   // specific tab (Agent Rules, Briefing, Scaffold, Dock, Skills).
-  onOpenProjectHub: (projectId: number, tab?: ProjectHubTab) => void;
+  onOpenProjectHub: (projectId: number, tab?: ProjectHubTab, dockView?: "previews") => void;
   // Opens (or focuses) a project's agent-rules editor (issue #431) — the
   // Project panel's Agent Rules tab.
   onOpenAgentRules: (projectId: number) => void;
@@ -133,7 +133,7 @@ export interface UsePanelOpenerResult {
   // a PR" setup panel.
   onOpenProjectSetup: (projectId: number) => void;
   // U4 — opens (or focuses) a project's dock-config editor.
-  onOpenDockConfig: (projectId: number) => void;
+  onOpenDockConfig: (projectId: number, view?: "previews") => void;
   // Opens (or focuses) a project's (read-only) skills panel (issue #432).
   onOpenSkills: (projectId: number) => void;
   // Opens (or focuses) a project's dev-server browser preview pane (issue
@@ -155,10 +155,16 @@ export interface UsePanelOpenerResult {
   // Issue #28's general-purpose blank browser tile (CommandPalette's "New
   // browser tab"). Always creates a fresh panel, same as onOpenBrowserUrl.
   onOpenBlankBrowser: () => void;
+  onOpenPreviewTargets: (projectId: number) => void;
   // Issues #2016/#2018 — opens (or focuses) the browser pane for one
   // registered preview, keyed by its slug, so a second click on the same
   // branch's preview lands on the pane already showing it.
-  onOpenPreview: (projectId: number, slug: string, branch: string | null) => void;
+  onOpenPreview: (
+    projectId: number,
+    slug: string,
+    branch: string | null,
+    targetName?: string,
+  ) => void;
   // Issue #1326 — opens (or focuses) an Android device's video/input panel
   // (SidebarDevices.tsx). Host-global like onOpenBlankBrowser above (no
   // projectId), but open-or-focus-by-id like onOpenSession/onOpenGitHub/etc
@@ -321,10 +327,10 @@ export function usePanelOpener({
   );
 
   const onOpenProjectHub = useCallback(
-    (projectId: number, tab?: ProjectHubTab) => {
+    (projectId: number, tab?: ProjectHubTab, dockView?: "previews") => {
       if (!dockviewApi) return;
       leaveTaskView();
-      openProjectHubPanel(dockviewApi, projectId, projects, layout, tab);
+      openProjectHubPanel(dockviewApi, projectId, projects, layout, tab, dockView);
       setSidebarOpen(false);
     },
     [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
@@ -345,7 +351,7 @@ export function usePanelOpener({
     [onOpenProjectHub],
   );
   const onOpenDockConfig = useCallback(
-    (projectId: number) => onOpenProjectHub(projectId, "dock"),
+    (projectId: number, view?: "previews") => onOpenProjectHub(projectId, "dock", view),
     [onOpenProjectHub],
   );
   const onOpenSkills = useCallback(
@@ -442,6 +448,10 @@ export function usePanelOpener({
     [dockviewApi, layout, setSidebarOpen, leaveTaskView],
   );
 
+  const onOpenPreviewTargets = useCallback((projectId: number) => {
+    useDashboardStore.getState().requestPreviewPicker(projectId);
+  }, []);
+
   const onOpenBlankBrowser = useCallback(() => {
     if (!dockviewApi) return;
     leaveTaskView();
@@ -457,19 +467,31 @@ export function usePanelOpener({
   }, [dockviewApi, layout, setSidebarOpen, leaveTaskView]);
 
   const onOpenPreview = useCallback(
-    (projectId: number, slug: string, branch: string | null) => {
+    (projectId: number, slug: string, branch: string | null, targetName?: string) => {
       if (!dockviewApi) return;
       leaveTaskView();
       const id = `browser-preview-${slug}`;
       const existing = dockviewApi.getPanel(id);
       if (existing) {
+        if (targetName)
+          existing.api.updateParameters({
+            ...existing.api.getParameters?.(),
+            projectId,
+            previewSlug: slug,
+            targetName,
+            targetRev: Date.now(),
+          });
         existing.api.setActive();
       } else {
         const panel = dockviewApi.addPanel({
           id,
           component: "browser",
-          title: branch ? `Preview · ${branch}` : "Preview",
-          params: { projectId, previewSlug: slug },
+          title: targetName
+            ? `Preview · ${targetName}`
+            : branch
+              ? `Preview · ${branch}`
+              : "Preview",
+          params: { projectId, previewSlug: slug, targetName },
         });
         // Same guard as onOpenBrowserUrl above — see its own comment.
         if (layout.tier === "phone") maximizeIfTiled(dockviewApi, panel);
@@ -527,6 +549,7 @@ export function usePanelOpener({
     onOpenTask,
     onOpenBrowserUrl,
     onOpenBlankBrowser,
+    onOpenPreviewTargets,
     onOpenPreview,
     onOpenDevice,
   };

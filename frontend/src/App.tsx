@@ -1,3 +1,4 @@
+import { ProjectPreviewPicker } from "./ProjectPreviewMenu.js";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { DockviewReact } from "dockview-react";
@@ -912,6 +913,7 @@ export function App() {
     onOpenTask,
     onOpenBrowserUrl,
     onOpenBlankBrowser,
+    onOpenPreviewTargets,
     onOpenPreview,
     onOpenDevice,
   } = usePanelOpener({
@@ -1952,6 +1954,8 @@ export function App() {
               workspaceProjectIds={scopedWorkspaceProjectIds}
               onOpenGitHub={onOpenGitHub}
               onOpenBrowser={onOpenBrowser}
+              onOpenBlankBrowser={onOpenBlankBrowser}
+              onManagePreviews={(id) => onOpenDockConfig(id, "previews")}
               onOpenSession={onOpenSession}
             />
             {/* Mobile UI/UX overhaul, item C.2 — last child of
@@ -1974,6 +1978,11 @@ export function App() {
           workspaceProjectIds={scopedWorkspaceProjectIds}
         />
       </div>
+      <ProjectPreviewPicker
+        onOpenDefault={onOpenBrowser}
+        onBlank={onOpenBlankBrowser}
+        onManage={(projectId) => onOpenDockConfig(projectId, "previews")}
+      />
       {paletteOpen && (
         <CommandPalette
           scope={paletteScope}
@@ -1993,7 +2002,7 @@ export function App() {
           onOpenProjectSetup={onOpenProjectSetup}
           onOpenDockConfig={onOpenDockConfig}
           onOpenSkills={onOpenSkills}
-          onOpenBrowser={onOpenBrowser}
+          onOpenBrowser={onOpenPreviewTargets}
           onOpenSettingsSection={(section) => openSettings(section)}
           onOpenDevices={() => openSettings("devices")}
           onOpenHosts={() => openSettings("hosts")}

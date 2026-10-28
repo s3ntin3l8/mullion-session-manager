@@ -1,4 +1,9 @@
 import { renderScrollback } from "../services/scrollback-render.js";
+import {
+  normalizePreviewDestination,
+  CONFIGURED_PREVIEW_POLICY,
+} from "../services/preview-targets.js";
+import { getPinnedDispatcher, getPinnedWsAgent } from "../services/pinned-connect.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import path from "node:path";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
@@ -3062,6 +3067,76 @@ export async function internalRoutes(app: FastifyInstance) {
     "/internal/ws/control-relay",
     { websocket: true, config: INTERNAL_RATE_LIMIT.config },
     (socket) => acceptControlRelayConnection(app, socket),
+  );
+
+  // CodeQL alert #434 (request-forgery) dismissed as a false positive:
+  // private/LAN access by the authenticated primary is intentional here.
+  // URL validation + DNS pinning + manual redirects constrain that access.
+  // Named project settings explicitly authorize destinations beyond loopback.
+  // This is a separate authenticated transport: legacy preview routes retain
+  // their literal-loopback contract. The primary resolves a saved target ID;
+  // browser callers cannot supply this URL through the public preview API.
+  await app.register(async (scope) => {
+    scope.removeAllContentTypeParsers();
+    scope.addContentTypeParser("*", (_req, payload, done) => done(null, payload));
+    scope.all<{ Querystring: { url?: string } }>(
+      "/internal/configured-preview",
+      { ...INTERNAL_RATE_LIMIT, bodyLimit: MAX_PREVIEW_BODY_BYTES },
+      async (request, reply) => {
+        reply.header("x-mullion-preview-transport", "named");
+        const destination = normalizePreviewDestination(request.query.url ?? "");
+        if (!destination) return reply.badRequest("Invalid configured preview destination");
+        const upstream = new URL(destination);
+        const headers = buildUpstreamRequestHeaders(request, upstream.host, [
+          "authorization",
+          SIGNATURE_HEADER,
+          TIMESTAMP_HEADER,
+          NONCE_HEADER,
+        ]);
+        const body =
+          request.body instanceof Readable
+            ? {
+                body: Readable.toWeb(request.body) as ReadableStream<Uint8Array>,
+                duplex: "half" as const,
+              }
+            : {};
+        try {
+          const response = await fetch(upstream, {
+            method: request.method,
+            headers,
+            ...body,
+            redirect: "manual",
+            dispatcher: getPinnedDispatcher(CONFIGURED_PREVIEW_POLICY),
+            signal: AbortSignal.timeout(30_000),
+          } as RequestInit & { duplex?: "half" });
+          return relayFetchResponse(reply, request.method, response, null);
+        } catch {
+          request.raw.resume();
+          return reply.badGateway("Configured preview destination is unreachable");
+        }
+      },
+    );
+  });
+  app.get(
+    "/internal/ws/configured-preview",
+    {
+      websocket: true,
+      config: INTERNAL_RATE_LIMIT.config,
+      preValidation: async (request, reply) => {
+        const query = request.query as { url?: string };
+        if (!normalizePreviewDestination(query.url ?? ""))
+          return reply.badRequest("Invalid configured preview destination");
+      },
+    },
+    (socket, request) => {
+      const destination = normalizePreviewDestination((request.query as { url: string }).url)!;
+      const url = toWsUrl(new URL(destination));
+      const upstream = new NodeWebSocket(url, {
+        headers: { host: new URL(destination).host },
+        agent: getPinnedWsAgent(CONFIGURED_PREVIEW_POLICY, url),
+      });
+      pipeWsFrames(app, socket, upstream, { kind: "configured-preview" });
+    },
   );
 
   // The two-hop preview proxy's agent-side half (issue #28 phase 6): the

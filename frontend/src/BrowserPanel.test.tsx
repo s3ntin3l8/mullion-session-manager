@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { useState } from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -253,6 +254,65 @@ describe("BrowserPanel", () => {
     }
     const noDevServer = { ...PROJECT, devServerUrl: null };
 
+    it("labels a named-only target and permits retry after an unreachable endpoint", async () => {
+      mock({ probe: 503 });
+      useDashboardStore.setState({ projects: [noDevServer] });
+      render(
+        <BrowserPanel params={{ projectId: 1, previewSlug: "br1", targetName: "Docker web" }} />,
+      );
+      expect(await screen.findByText(/Check its configured destination/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    });
+
+    it.each([200, 503])(
+      "retains named target identity when Dockview replaces parameters (probe %s)",
+      async (probe) => {
+        mock({ probe });
+        useDashboardStore.setState({ projects: [noDevServer] });
+        function Pane() {
+          const [params, replace] = useState({
+            projectId: 1,
+            previewSlug: "br1",
+            targetName: "Docker web",
+            targetRev: 7,
+          });
+          const [panelApi] = useState(
+            () => ({ updateParameters: replace }) as unknown as DockviewPanelApi,
+          );
+          return <BrowserPanel params={params} api={panelApi} />;
+        }
+        render(<Pane />);
+        if (probe === 503) {
+          expect(await screen.findByText(/Check its configured destination/)).toBeInTheDocument();
+          expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
+        } else {
+          await screen.findByTitle("Preview");
+          expect(screen.getByText("Docker web")).toBeInTheDocument();
+        }
+        expect(screen.queryByRole("button", { name: /Dev server/ })).toBeNull();
+      },
+    );
+
+    it("keeps a named target distinct from the default and refreshes it on a repeated open", async () => {
+      mock();
+      useDashboardStore.setState({ projects: [noDevServer] });
+      const { rerender } = render(
+        <BrowserPanel
+          params={{ projectId: 1, previewSlug: "br1", targetName: "Docker web", targetRev: 1 }}
+        />,
+      );
+      const frame = await screen.findByTitle("Preview");
+      expect(frame).toHaveAttribute("src", branchSrc);
+      expect(screen.getByText("Docker web")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /Dev server/ })).toBeNull();
+      rerender(
+        <BrowserPanel
+          params={{ projectId: 1, previewSlug: "br1", targetName: "Docker web", targetRev: 2 }}
+        />,
+      );
+      await waitFor(() => expect(screen.getByTitle("Preview")).not.toBe(frame));
+    });
+
     it("serves the slug through the proxy without a devServerUrl or a new preview", async () => {
       const fetchMock = mock();
       useDashboardStore.setState({ projects: [noDevServer] });
@@ -265,11 +325,10 @@ describe("BrowserPanel", () => {
       );
       const frame = await screen.findByTitle("Preview");
       expect(frame).toHaveAttribute("src", branchSrc);
-      // The layout write-back never touches the pane's own preview binding
-      // (dockview drops a key written as undefined).
+      // Dockview replaces parameters, so every write must retain the binding.
       expect(updateParameters).toHaveBeenCalled();
       for (const [update] of updateParameters.mock.calls)
-        expect(update).not.toHaveProperty("previewSlug");
+        expect(update).toMatchObject({ projectId: 1, previewSlug: "br1" });
       expect(
         fetchMock.mock.calls.some(
           ([u, i]) => String(u) === "/api/previews" && i?.method === "POST",
