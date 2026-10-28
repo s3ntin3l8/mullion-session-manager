@@ -14,7 +14,6 @@ function sinkConn(
     send: (message) => void frames.push(message),
     onClose: () => () => {},
     socket: null,
-    origin: { relayHostId: "remote-1" },
     scope,
     sessionId,
     openChannels: new Map(),

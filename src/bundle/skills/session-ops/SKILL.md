@@ -41,6 +41,9 @@ has the project you get a 409, not a silent fallback. `session wait`, `children`
 `wait: true` (the wait polls the child's host about once a second). You can also
 send the prompt without `wait`, then `wait_for_output` with its `outputOffset` as
 `afterOffset`.
+These ops also work when YOU run on an agent host (Linux/macOS): the agent relays
+them to the primary at your session scope. Streaming ops (`attach`, `events tail`)
+answer `not-available-over-relay`, and a Windows agent has no relay yet.
 Pass `open: "right"|"below"` (CLI `--open right|below`) to have the dashboard
 open the child's panel beside yours, so the human sees it without hunting —
 only a hint: dropped if your panel isn't open in their current workspace within about a minute of the spawn.

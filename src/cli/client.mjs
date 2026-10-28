@@ -21,8 +21,9 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 // pins these to them) plus the slack added to the SOCKET request timeout so it
 // always outlasts the server-side wait. Shared by the CLI and the MCP client.
 export const CONTROL_UNAVAILABLE_MESSAGE =
-  "control ops are not available from a session on a remote host: parent→child control " +
-  "needs the primary's control socket, which agent-host sessions cannot reach yet (#1627)";
+  "control ops are not available from a session on this remote host: parent→child control " +
+  "needs the primary's control socket, and a Windows agent host has no control relay to it yet " +
+  "(#1627, #1656)";
 export const WAIT_DEFAULT_TIMEOUT_MS = 600_000;
 export const WAIT_MAX_TIMEOUT_MS = 3_600_000;
 export const WAIT_SOCKET_SLACK_MS = 15_000;
@@ -194,6 +195,19 @@ export class MullionSocketClient extends EventEmitter {
 
   _route(msg) {
     const id = msg.id;
+    // `fatal` is the agent's control relay (#1656) refusing the whole
+    // connection — no request can be answered after it, so fail them all with
+    // its reason rather than let each time out. (An id-less 400 from the
+    // control socket itself is one bad line; the connection stays usable.)
+    if (id === null && msg.ok === false && msg.fatal === true) {
+      const err = new MullionSocketError(msg.status, msg.error ?? "connection refused");
+      for (const { reject, timer } of this.pending.values()) {
+        clearTimeout(timer);
+        reject(err);
+      }
+      this.pending.clear();
+      return;
+    }
     const pending = this.pending.get(id);
     if (pending) {
       this.pending.delete(id);

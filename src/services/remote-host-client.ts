@@ -2163,6 +2163,24 @@ export class RemoteHostClient {
   }
 
   /**
+   * Opens this agent's `/internal/ws/control-relay` (issue #1656): the mux
+   * the primary dials so sessions on the agent can reach the primary's
+   * control surface. Same bearer, signing and pinning as every other stream
+   * here; `maxPayload` matches the mux's largest Data frame.
+   */
+  openControlRelayStream(): NodeWebSocket {
+    const requestTarget = "/internal/ws/control-relay";
+    return new NodeWebSocket(`${this.wsBaseUrl}${requestTarget}`, {
+      headers: {
+        authorization: `Bearer ${this.token}`,
+        ...this.signatureHeaders("GET", requestTarget, undefined),
+      },
+      maxPayload: 1024 * 1024,
+      ...this.pinnedWsOptions(),
+    });
+  }
+
+  /**
    * Forwards an HTTP preview request to this agent's own
    * `/internal/preview/:port/*` (issue #28 phase 6) — the agent, not this
    * process, dials the actual dev server, always on its own loopback (see

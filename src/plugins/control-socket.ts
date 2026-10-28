@@ -6,6 +6,8 @@ import { chmodSync, unlinkSync } from "node:fs";
 import {
   parseControlMessage,
   parseControlHandshake,
+  HANDSHAKE_TIMEOUT_MS,
+  MAX_HANDSHAKE_BYTES,
   type ControlMessage,
 } from "../services/control-protocol.js";
 import {
@@ -82,7 +84,7 @@ const MAX_LINE_BYTES = 2 * 1024 * 1024;
 // indefinitely — bound it the same way an HTTP request has an implicit
 // socket timeout. Exported for test/plugins/control-socket.test.ts, same
 // reasoning as hooks.ts's own exported GATE_TIMEOUT_MS/PROMOTE_TIMEOUT_MS.
-export const HANDSHAKE_TIMEOUT_MS = 10_000;
+export { HANDSHAKE_TIMEOUT_MS };
 
 // Issue #1517 — per-connection load bounds. One session-scoped client (the
 // socket path is injected into every spawned session) must not be able to
@@ -106,15 +108,11 @@ export const WRITE_HIGH_WATER_BYTES = 1024 * 1024;
 export { WRITE_HARD_CEILING_BYTES };
 /** Pre-handshake input is just `{"token":"..."}`; nothing legitimate needs
  * more than this before authenticating. */
-export const MAX_HANDSHAKE_BYTES = 4 * 1024;
+export { MAX_HANDSHAKE_BYTES };
 /** Global cap on simultaneously open connections (server.maxConnections). */
 export const MAX_CONNECTIONS = 256;
 
 type Scope = "full" | "session";
-
-/** Where a connection's frames come from: this process's own control socket,
- * or (#1656) a relay carrying a remote host's session. */
-export type ConnectionOrigin = "local" | { relayHostId: string };
 
 export interface ConnectionState {
   /** The reply sink every op writes through (`dispatch`'s `reply` included),
@@ -126,7 +124,6 @@ export interface ConnectionState {
    * through a SocketChannel. Null on a connection with no local socket (a
    * relay), where those ops are refused. */
   readonly socket: net.Socket | null;
-  readonly origin: ConnectionOrigin;
   scope: Scope;
   /** Set only for scope "session" — the connection is pinned to this
    * session id for the lifetime of the connection (see resolveHandshake). */
@@ -2348,10 +2345,35 @@ function resolveHandshake(
   return null;
 }
 
-function handleConnection(
+/** A connection carried by a host's control relay (#1656): already
+ * authenticated by that host's agent, so it skips the handshake and is
+ * pinned, for its lifetime, to `sessionId` as a session-scope connection. */
+export interface RelayBinding {
+  hostId: string;
+  sessionId: string;
+}
+
+/** Why a relayed session may not act right now, or null: its row must still be
+ * active and the session must be hosted by the relaying host — the one fact
+ * that bounds what a compromised agent can claim to be. */
+export function relayedSessionDenied(app: FastifyInstance, relay: RelayBinding): string | null {
+  const row = app.db
+    .select({ projectId: sessions.projectId, hostId: sessions.hostId, status: sessions.status })
+    .from(sessions)
+    .where(eq(sessions.id, Number(relay.sessionId)))
+    .get();
+  if (!row || row.status !== "active") return "this session is no longer active";
+  if (resolveSessionHostId(app, row) !== relay.hostId) {
+    return "this session is not hosted by the relaying host";
+  }
+  return null;
+}
+
+export function handleConnection(
   app: FastifyInstance,
   socket: net.Socket,
   openSockets: Set<net.Socket>,
+  relay?: RelayBinding,
 ): void {
   openSockets.add(socket);
   socket.once("close", () => {
@@ -2378,7 +2400,22 @@ function handleConnection(
   let bufferBytes = 0;
   // Everything before this index has already been searched for "\n".
   let scanFrom = 0;
-  let conn: ConnectionState | null = null;
+  // A relayed connection arrives pre-authenticated (session scope, pinned to
+  // the id the relaying agent validated); a local one waits for its handshake.
+  let conn: ConnectionState | null = relay
+    ? {
+        send: (message) => writeFrame(socket, message),
+        onClose: (listener) => {
+          socket.once("close", listener);
+          return () => socket.off("close", listener);
+        },
+        socket: null,
+        scope: "session",
+        sessionId: relay.sessionId,
+        openChannels: new Map(),
+        activeWaits: 0,
+      }
+    : null;
   let inflight = 0;
   let paused = false;
   // Per-connection decoder, not a fresh Buffer.toString("utf8") per chunk —
@@ -2395,6 +2432,7 @@ function handleConnection(
     socket.destroy();
   }, HANDSHAKE_TIMEOUT_MS);
   handshakeTimer.unref();
+  if (relay) clearTimeout(handshakeTimer);
 
   const overloaded = () =>
     conn !== null &&
@@ -2493,7 +2531,6 @@ function handleConnection(
             return () => socket.off("close", listener);
           },
           socket,
-          origin: "local",
           scope: resolved.scope,
           sessionId: resolved.sessionId,
           openChannels: new Map(),
@@ -2508,6 +2545,15 @@ function handleConnection(
         continue;
       }
 
+      if (relay) {
+        // Per request, not per connection: the row can go inactive and the
+        // session can be re-homed while a long-lived relayed connection idles.
+        const denied = relayedSessionDenied(app, relay);
+        if (denied !== null) {
+          writeFrame(socket, { id: result.message.id, ok: false, status: 403, error: denied });
+          continue;
+        }
+      }
       inflight++;
       dispatch(app, conn, result.message)
         .catch((err) => app.log.error({ err }, "dispatch failed"))

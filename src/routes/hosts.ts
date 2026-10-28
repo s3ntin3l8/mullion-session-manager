@@ -175,6 +175,7 @@ export async function hostsRoute(app: FastifyInstance) {
       // connection yet to force; see the PATCH handler below for the one
       // case where that gap is real.
       app.reconfigureSshAgentFanout();
+      app.reconfigureControlRelayFanout();
       reply.code(201);
       return created;
     },
@@ -233,6 +234,7 @@ export async function hostsRoute(app: FastifyInstance) {
         // whose fan-out connection isn't open yet (no bridge was connected
         // until just now, say).
         app.reconfigureSshAgentFanout();
+        app.reconfigureControlRelayFanout();
       }
       return updated;
     },
@@ -584,6 +586,7 @@ export async function hostsRoute(app: FastifyInstance) {
       // ssh-agent-fanout.ts's own desired set: a deleted host must not
       // keep an open (or reconnecting) fan-out connection around either.
       app.reconfigureSshAgentFanout();
+      app.reconfigureControlRelayFanout();
       reply.code(204);
     },
   );

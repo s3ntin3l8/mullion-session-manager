@@ -39,6 +39,10 @@ Running from a checkout (e.g. during development) instead invokes it directly:
 node src/cli/mullion.mjs <command> [args] [flags]
 ```
 
+On an agent host (Linux/macOS) the CLI reaches the primary through the agent's relay socket at
+session scope (see [`multi-host.md`](multi-host.md#control-from-a-session-on-an-agent-host));
+`session attach` and `events tail` are not available there.
+
 ## Global flags
 
 | Flag              | Meaning                                                                                                                                                                             |

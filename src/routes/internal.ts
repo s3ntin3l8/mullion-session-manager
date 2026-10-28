@@ -133,6 +133,7 @@ import { resolveGlobalPresets } from "./actions.js";
 import { attachSocketToSession } from "./terminal.js";
 import { attachLocalEventsSocket, attachCursorsAndSeenBroadcast } from "./events.js";
 import { createMuxConnection } from "../services/ssh-agent-mux.js";
+import { acceptControlRelayConnection } from "../plugins/control-relay.js";
 import { resolveSshAuthSock } from "../services/ssh-agent-socket.js";
 import type { SessionInfo } from "../services/pty-manager.js";
 import {
@@ -3049,6 +3050,18 @@ export async function internalRoutes(app: FastifyInstance) {
         }
       });
     },
+  );
+
+  // Issue #1656 — the agent half of the control relay's transport: the
+  // primary dials THIS route (an agent never dials out) and the mux it
+  // carries is what relay.sock (plugins/control-relay.ts) opens a channel on
+  // for each session connection. Inside internalRoutes() for the same reason
+  // as /internal/ws/ssh-agent above: it inherits the bearer + signing gate.
+  // Even parity here, odd on the primary's dial (control-relay-fanout.ts).
+  app.get(
+    "/internal/ws/control-relay",
+    { websocket: true, config: INTERNAL_RATE_LIMIT.config },
+    (socket) => acceptControlRelayConnection(app, socket),
   );
 
   // The two-hop preview proxy's agent-side half (issue #28 phase 6): the

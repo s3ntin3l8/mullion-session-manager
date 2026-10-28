@@ -12,6 +12,8 @@ import { devicePlugin } from "./plugins/device.js";
 import { hooksPlugin } from "./plugins/hooks.js";
 import { bundleSyncPlugin } from "./plugins/bundle-sync.js";
 import { sshAgentPlugin } from "./plugins/ssh-agent.js";
+import { controlRelayPlugin } from "./plugins/control-relay.js";
+import { controlRelayFanoutPlugin } from "./plugins/control-relay-fanout.js";
 import { suspendWatcherPlugin } from "./plugins/suspend-watcher.js";
 import { controlSocketPlugin } from "./plugins/control-socket.js";
 import { githubPRPollerPlugin } from "./plugins/github-pr-poller.js";
@@ -414,6 +416,9 @@ export async function buildApp() {
     // app.sshAgentBridgeConnection, which its own `/internal/ws/ssh-agent`
     // route (registered inside internalRoutes) reads/writes.
     await app.register(sshAgentPlugin);
+    // Before internalRoutes: decorates app.controlRelayConnection, which the
+    // /internal/ws/control-relay route reads/writes (#1656).
+    await app.register(controlRelayPlugin);
     await app.register(healthRoute);
     // Before internalRoutes: decorates app.agentSession, which
     // internalRoutes' own onRequest gate additively checks alongside the
@@ -578,6 +583,7 @@ export async function buildApp() {
   // it provides, on every bridge connect/disconnect).
   await app.register(agentBridgePlugin);
   await app.register(sshAgentFanoutPlugin);
+  await app.register(controlRelayFanoutPlugin);
   await app.register(agentBridgeRoute);
   await app.register(integrationsRoute);
   await app.register(webhookRoutes);

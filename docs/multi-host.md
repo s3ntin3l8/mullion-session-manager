@@ -1095,6 +1095,38 @@ laptop-side change needed when you enroll another one later. See
 [`ssh-agent.md`](ssh-agent.md) for setup, the manual per-host `ssh -R`
 alternative, and how the two compose.
 
+## Control from a session on an agent host
+
+A session on an agent host can use the same `mullion session …` CLI and MCP tools as a
+local one (#1656). Its `MULLION_SOCKET_PATH` points at the agent's own `relay.sock`, and the
+agent carries each connection to the primary:
+
+1. The **primary dials** `/internal/ws/control-relay` on every enrolled agent host (an agent never
+   dials out), the same way it dials the SSH-agent bridge, and keeps the connection up with the
+   same reconnect backoff. An agent without the route (404) is probed again only every ten
+   minutes.
+2. A session connects to `relay.sock` and sends the usual `{"token": …}` handshake. **The agent
+   validates the token itself** (only it can resolve its sessions' tokens), opens a mux channel
+   and writes one header line naming the session. The agent refuses a handshake with no live
+   session token; a relayed connection is never full scope, whatever the primary's own auth
+   settings are.
+3. The primary pins the connection to that session id as a **session-scope** connection and runs
+   it through the control socket's own connection handler, so framing limits and overload handling
+   are the local ones. Before the first op and before **every request** it checks that the
+   session's row is still active and that it is **hosted by the relaying host**. A token or
+   session id in a later frame is ignored.
+4. If the connection drops, every relayed client gets a `relay-disconnected` error and is closed
+   (a pending `sessions.wait` fails loudly). If the primary has not connected within five seconds
+   of a request, the client gets `relay-unavailable`.
+
+What it covers: every session-scope request/response op, for the session itself and its children
+(including children placed on another host), with the same permissions as on the primary. What it
+does not: streaming ops (#2125) and Windows agents. Each host is capped at 64 relayed connections.
+
+**Trust boundary.** A compromised agent can already impersonate the sessions it hosts (it mints
+their tokens). The relay adds no authority beyond that: the host binding limits it to sessions
+that the primary itself placed on that host, and none of it reaches full scope.
+
 ## Current limitations
 
 - Self-registration has no admin-approval queue — any holder of
@@ -1106,17 +1138,12 @@ alternative, and how the two compose.
   credential (plus, for a session credential, the signature described above
   in "Request signing"); put it behind the same network/VPN boundary you'd
   use for anything else with shell access.
-- **Parent→child control from a session on an agent host isn't available (#1627).** The control
-  socket (`mullion session …`, the MCP control tools) lives only on the
-  primary. A session running on an agent host gets
-  `MULLION_CONTROL_UNAVAILABLE=remote-host` in its env, and the `mullion` CLI /
-  MCP tools fail immediately with an explanation instead of a connect error.
-  From the primary, a local caller can drive a remote child: `wait`, `get`,
-  scrollback, `kill`, and — since issue #1951 — `prompt` and `wait_for_output`
-  (both run on the child's own host), including `prompt` with `wait` (#1962;
-  needs an agent build that reports its event counter — an older one runs the
-  wait without the "a new turn started" guard). The child calling _back_
-  into the primary is the agent→primary relay, tracked separately (#1656).
+- **Control from a session on a Windows agent host isn't available yet (#1627).** The relay
+  below serves unix-socket agents (Linux, macOS); a Windows agent still sets
+  `MULLION_CONTROL_UNAVAILABLE=remote-host`, and the `mullion` CLI / MCP tools fail immediately
+  with an explanation instead of a connect error. On any agent, `attach`,
+  `events.tail` and `events.subscribe` are not available over the relay (they answer
+  `not-available-over-relay`, [#2125](https://github.com/s3ntin3l8/mullion-session-manager/issues/2125)).
 - Task Master now works end-to-end against a remote-hosted project (`#484`)
   — issue ingest, claim, work, review with a real diff-stat, promotion to a
   PR, and Retry — given an agent build new enough to serve the routes it

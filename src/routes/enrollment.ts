@@ -179,6 +179,7 @@ export async function enrollmentRoute(app: FastifyInstance) {
         // call — a no-op unless this host's fan-out connection isn't open
         // yet, in which case this is what opens it.
         app.reconfigureSshAgentFanout();
+        app.reconfigureControlRelayFanout();
         return respond(renewed);
       }
 
@@ -189,6 +190,7 @@ export async function enrollmentRoute(app: FastifyInstance) {
       if (claimed) {
         app.reconfigureRemoteEventSubscriptions({ forceReconnect: [claimed.hostId] });
         app.reconfigureSshAgentFanout();
+        app.reconfigureControlRelayFanout();
         return respond(claimed);
       }
 
@@ -208,6 +210,7 @@ export async function enrollmentRoute(app: FastifyInstance) {
         const enrolled = enrollHost(app, input);
         app.reconfigureRemoteEventSubscriptions({ forceReconnect: [enrolled.hostId] });
         app.reconfigureSshAgentFanout();
+        app.reconfigureControlRelayFanout();
         return respond(enrolled);
       }
 
