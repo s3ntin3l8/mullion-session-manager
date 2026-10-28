@@ -44,8 +44,12 @@ vi.mock("./terminalInputRegistry.js", () => ({
 // program sending an OSC query/set payload without a real xterm.js parser.
 // Declared via vi.hoisted so the vi.mock("@xterm/xterm", ...) factory below
 // (itself hoisted above this file's imports) can close over it safely.
-const { oscHandlers } = vi.hoisted(() => ({
+const { oscHandlers, csiHandlers, dcsHandlers } = vi.hoisted(() => ({
   oscHandlers: new Map<number, (data: string) => boolean>(),
+  // Keyed by "<prefix><intermediates><final>", e.g. "n", "?n", ">c", "$p".
+  csiHandlers: new Map<string, () => boolean>(),
+  // Keyed by "<intermediates><final>", e.g. "$q" (DECRQSS).
+  dcsHandlers: new Map<string, () => boolean>(),
 }));
 
 // Issue #676's frontend follow-up (TerminalPane defers its first connect()
@@ -251,6 +255,18 @@ vi.mock("@xterm/xterm", () => {
           oscHandlers.set(ident, cb);
           return createDisposable();
         }),
+        registerCsiHandler: vi.fn(
+          (id: { prefix?: string; intermediates?: string; final: string }, cb: () => boolean) => {
+            csiHandlers.set(`${id.prefix ?? ""}${id.intermediates ?? ""}${id.final}`, cb);
+            return createDisposable();
+          },
+        ),
+        registerDcsHandler: vi.fn(
+          (id: { intermediates?: string; final: string }, cb: () => boolean) => {
+            dcsHandlers.set(`${id.intermediates ?? ""}${id.final}`, cb);
+            return createDisposable();
+          },
+        ),
       },
     };
   });
@@ -459,6 +475,8 @@ function getLatestSearchAddonInstance() {
 
 beforeEach(() => {
   oscHandlers.clear();
+  csiHandlers.clear();
+  dcsHandlers.clear();
   localStorage.clear();
   mockInitialTermSize.cols = 80;
   mockInitialTermSize.rows = 24;
@@ -1645,6 +1663,82 @@ describe("TerminalPane OSC 10/11/12 query responder (issue #91)", () => {
 
     expect(handled).toBe(true);
     expect(fakeWsSend).not.toHaveBeenCalled();
+  });
+
+  it("still answers an OSC 11 query during replay (before the first geometry frame)", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    fakeWsSend.mockClear();
+
+    const handled = oscHandlers.get(11)!("?");
+
+    // Codex fixes its palette from the reply it gets shortly after launch, so
+    // a query still in the backlog must not be dropped on the floor.
+    expect(handled).toBe(true);
+    expect(decodedSends()).toContain("\x1b]11;rgb:0d0d/0d0d/0d0d\x07");
+  });
+});
+
+describe("TerminalPane terminal query replies during scrollback replay", () => {
+  function sendGeometryFrame(): void {
+    for (const handler of fakeSocket._messageHandlers) {
+      handler({
+        data: JSON.stringify({ type: "geometry", cols: 80, rows: 24, minCols: 40, minRows: 10 }),
+      });
+    }
+  }
+
+  const QUERY_KEYS = ["n", "?n", "c", ">c", "$p", "?$p"];
+
+  it("registers a handler for every query family xterm answers", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    for (const key of QUERY_KEYS) expect(csiHandlers.has(key)).toBe(true);
+  });
+
+  it("swallows CPR/DSR/DA/DECRQM queries replayed before the first geometry frame", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    for (const key of QUERY_KEYS) expect(csiHandlers.get(key)!()).toBe(true);
+  });
+
+  it("swallows a replayed DECRQSS and lets a live one through", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    expect(dcsHandlers.get("$q")!()).toBe(true);
+    sendGeometryFrame();
+    expect(dcsHandlers.get("$q")!()).toBe(false);
+  });
+
+  it("lets xterm answer the same queries once replay is complete (live output)", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    sendGeometryFrame();
+
+    for (const key of QUERY_KEYS) expect(csiHandlers.get(key)!()).toBe(false);
+  });
+
+  it("re-arms the guard when the server resyncs with a fresh replay", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+    sendGeometryFrame();
+    expect(csiHandlers.get("n")!()).toBe(false);
+
+    for (const handler of fakeSocket._messageHandlers) {
+      handler({ data: JSON.stringify({ type: "resync" }) });
+    }
+
+    expect(csiHandlers.get("n")!()).toBe(true);
   });
 });
 

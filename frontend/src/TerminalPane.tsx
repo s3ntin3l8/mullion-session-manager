@@ -985,8 +985,23 @@ export function TerminalPane(props: {
     // callback's `myGeneration` can never equal the current
     // `connectionGeneration` once a newer connect() has run, so it's
     // harmlessly ignored no matter how late it arrives.
+    //
+    // The same guard covers xterm's own terminal *query replies* (CPR/DSR,
+    // DA, DECRQM, DECRQSS): a query the program sent at startup (Codex probes
+    // `CSI 6n`) is still in the backlog, and xterm would answer it again on
+    // every reattach. Usually the program isn't waiting for that reply, so it
+    // lands in its input as stray text (e.g. `[21;3R`). Tradeoff: a program
+    // genuinely blocked on a query the pane unmounted before answering used to
+    // recover on reattach; swallowing leaves it waiting until its own timeout
+    // or next keystroke. Narrow, and far rarer than the stray-text case.
+    // The OSC 10/11/12 *color* queries are deliberately NOT guarded, for every
+    // program (the motive is Codex, which fixes its palette from the reply it
+    // gets shortly after launch, so a reply on replay is often the only one it
+    // ever gets; the carve-out itself is not Codex-specific). That is `main`'s
+    // pre-existing behavior for colors, unchanged.
     let connectionGeneration = 0;
     let replayCompleteGeneration = 0;
+    const isReplaying = () => replayCompleteGeneration !== connectionGeneration;
 
     // Set around programmatic input (paste, dictation, key-bar keys — all of
     // which xterm reports through onData synchronously) so the key bar's
@@ -1064,6 +1079,24 @@ export function TerminalPane(props: {
         ws.send(new TextEncoder().encode(`\x1b]${ident};rgb:${r}${r}/${g}${g}/${b}${b}\x07`));
         return true;
       }),
+    );
+
+    // Swallow xterm's own query replies while the backlog replays (see
+    // `isReplaying`); live queries fall through (`false`) to xterm's handler.
+    const REPLAY_QUERY_CSI = [
+      { final: "n" },
+      { prefix: "?", final: "n" },
+      { final: "c" },
+      { prefix: ">", final: "c" },
+      { intermediates: "$", final: "p" },
+      { prefix: "?", intermediates: "$", final: "p" },
+    ];
+    const replayQuerySubs = REPLAY_QUERY_CSI.map((id) =>
+      term.parser.registerCsiHandler(id, () => isReplaying()),
+    );
+    // DECRQSS (`DCS $ q …`, e.g. `$qm` for SGR): xterm replies via onData too.
+    replayQuerySubs.push(
+      term.parser.registerDcsHandler({ intermediates: "$", final: "q" }, () => isReplaying()),
     );
 
     let lastCols = term.cols;
@@ -1386,7 +1419,7 @@ export function TerminalPane(props: {
       // "handled" (true), not left for xterm's own no-op default, so a
       // malformed payload during replay doesn't fall through to the `false`
       // branch below and get treated as unrecognized.
-      if (replayCompleteGeneration !== connectionGeneration) return true;
+      if (isReplaying()) return true;
       if (!prefsRef.current.clipboardWrite) return true;
       let text: string;
       try {
@@ -2015,6 +2048,7 @@ export function TerminalPane(props: {
       dataSub.dispose();
       titleSub.dispose();
       oscColorSubs.forEach((sub) => sub.dispose());
+      replayQuerySubs.forEach((sub) => sub.dispose());
       webglContextLossSub?.dispose();
       // Explicit dispose, unlike FitAddon/Unicode11Addon above (which have
       // no per-instance state and just get swept up by term.dispose()'s
