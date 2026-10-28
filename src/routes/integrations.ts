@@ -505,6 +505,7 @@ export async function integrationsRoute(app: FastifyInstance) {
       resetAt: string | null;
       exhausted: boolean;
       quarantined: boolean;
+      enforceable: boolean;
     }> = [];
     // Issue #1841 — the providers Runway reports that the map has no entry
     // for. This is the operator's coverage check: it runs here, where the
@@ -534,6 +535,9 @@ export async function integrationsRoute(app: FastifyInstance) {
           // not claim a task onto <agent>" about a claim the gate allows.
           exhausted: isCardExhausted(card) && !isCardWindowReset(card),
           quarantined: agentQuarantineInfo(app, agent).quarantined,
+          // Whether the gate can ever match this target. When false the
+          // badge keeps the percentage but must not promise a refusal.
+          enforceable: isEnforceableTarget(agent),
         });
       }
     }

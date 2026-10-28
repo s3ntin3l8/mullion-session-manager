@@ -116,7 +116,11 @@ export function QuotaBadge({
     ? `Runway: ${summary.providerId} is out of quota — Mullion will not claim a task onto ${summary.agent}. Reading ${age}.`
     : summary.pctUsed === null
       ? `Runway: no usage percentage reported for ${summary.providerId}. Reading ${age}.`
-      : `Runway: ${Math.round(summary.pctUsed)}% of the ${summary.providerId} quota used. Reading ${age}.`;
+      : `Runway: ${Math.round(summary.pctUsed)}% of the ${summary.providerId} quota used${
+          summary.enforceable
+            ? ""
+            : ` (${summary.agent} is not an agent Mullion's claim gate recognises, so no task is held for it)`
+        }. Reading ${age}.`;
 
   return (
     <span className="session-quota-chip" title={title} data-testid="quota-badge">

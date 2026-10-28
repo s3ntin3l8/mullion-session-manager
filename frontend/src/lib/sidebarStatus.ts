@@ -148,6 +148,9 @@ export interface RunwayQuotaSummary {
   pctUsed: number | null;
   // The provider is out of quota, or the agent is quarantined because of it.
   out: boolean;
+  // The claim gate can act on this agent. False: the percentage is shown but
+  // the chip must not say Mullion will refuse a task (issue #2083).
+  enforceable: boolean;
 }
 
 // Issue #29 — how old a Runway reading is.
@@ -181,11 +184,16 @@ export function summarizeRunwayQuota(
   const entries = agents.filter((entry) => entry.agent === agent);
   if (entries.length === 0) return null;
   const used = entries.map((entry) => entry.pctUsed).filter((pct): pct is number => pct !== null);
+  // `agent` is the one key every entry here shares, so `enforceable` is the
+  // same for all of them. A non-enforceable agent is never "out": the gate
+  // would not act, so "quota out" would imply a refusal that never happens.
+  const enforceable = entries.every((entry) => entry.enforceable);
   return {
     agent,
     providerId: entries[0].providerId,
     pctUsed: used.length === 0 ? null : Math.max(...used),
-    out: entries.some((entry) => entry.exhausted || entry.quarantined),
+    out: enforceable && entries.some((entry) => entry.exhausted || entry.quarantined),
+    enforceable,
   };
 }
 

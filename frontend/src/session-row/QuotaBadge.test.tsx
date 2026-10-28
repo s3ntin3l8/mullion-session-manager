@@ -16,6 +16,7 @@ function agent(over: Partial<RunwayAgentQuota> = {}): RunwayAgentQuota {
     resetAt: null,
     exhausted: false,
     quarantined: false,
+    enforceable: true,
     ...over,
   };
 }
@@ -80,6 +81,24 @@ describe("QuotaBadge", () => {
     const badge = screen.getByTestId("quota-badge");
     expect(badge).toHaveTextContent("quota out");
     expect(badge.querySelector(".github-panel-ci-dot")).toHaveClass("bad");
+  });
+
+  it("keeps the percentage but drops the refusal promise for a non-enforceable mapping", () => {
+    render(
+      <QuotaBadge
+        quota={quota({
+          agents: [
+            agent({ agent: "claude-code", exhausted: true, quarantined: true, enforceable: false }),
+          ],
+        })}
+        command="claude-code"
+      />,
+    );
+    const badge = screen.getByTestId("quota-badge");
+    expect(badge).toHaveTextContent("quota 87%");
+    expect(badge).not.toHaveTextContent("quota out");
+    expect(badge.getAttribute("title")).not.toMatch(/will not claim/);
+    expect(badge.getAttribute("title")).toMatch(/no task is held/);
   });
 
   it("takes the worst reading when Runway reports several cards for one agent", () => {

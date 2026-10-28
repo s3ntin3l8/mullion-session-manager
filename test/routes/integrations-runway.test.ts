@@ -178,6 +178,12 @@ describe("Runway quota integration routes", () => {
       // never matches it, so the provider is not covered even though it has
       // an entry. It still shows in `agents` (the badge looks it up by name).
       expect(body.unmappedProviders).toEqual(["gemini"]);
+      expect(
+        body.agents.map((a: { agent: string; enforceable: boolean }) => [a.agent, a.enforceable]),
+      ).toEqual([
+        ["claude", true],
+        ["claude-code", false],
+      ]);
       expect(body.agents.map((a: { providerId: string }) => a.providerId)).toEqual([
         "anthropic",
         "gemini",
@@ -212,6 +218,13 @@ describe("Runway quota integration routes", () => {
         "xai",
       ]);
       expect(body.unmappedProviders).toEqual(["xai"]);
+      expect(
+        body.agents.map((a: { agent: string; enforceable: boolean }) => [a.agent, a.enforceable]),
+      ).toEqual([
+        ["mcode", true],
+        ["opencode/minimax-coding-plan", true],
+        ["xai", false],
+      ]);
     });
 
     it("lists the providers Runway reports that the map has no entry for (#1841)", async () => {
