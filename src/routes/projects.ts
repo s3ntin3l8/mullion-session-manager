@@ -360,14 +360,24 @@ async function findDuplicateProject(
   return null;
 }
 
+// What the caller can do next, per route: the same 409 reads differently for
+// a create, an edit and an attach.
+const DUPLICATE_HINTS = {
+  create:
+    "Attach this checkout to it, or send allowDuplicate: true to create a separate project anyway.",
+  update: "Send allowDuplicate: true to save this change anyway.",
+  attach: "That path belongs to it already; a path can only belong to one project.",
+} as const;
+
 function duplicateProjectReply(
   reply: FastifyReply,
   existing: { id: number; name: string; hostId: string },
+  context: keyof typeof DUPLICATE_HINTS,
 ) {
   return reply.code(409).send({
     statusCode: 409,
     error: "Conflict",
-    message: `This repository already has a project: ${existing.name}. Attach this checkout to it, or send allowDuplicate: true to create a separate project anyway.`,
+    message: `This repository already has a project: ${existing.name}. ${DUPLICATE_HINTS[context]}`,
     code: "DUPLICATE_PROJECT",
     existingProjectId: existing.id,
     existingName: existing.name,
@@ -4774,7 +4784,7 @@ export async function projectsRoute(app: FastifyInstance) {
           { hostId, cwd: resolvedCwd },
           ...Object.entries(hostCwds ?? {}).map(([h, c]) => ({ hostId: h, cwd: c })),
         ]);
-        if (duplicate) return duplicateProjectReply(reply, duplicate);
+        if (duplicate) return duplicateProjectReply(reply, duplicate, "create");
       }
 
       // Validate (and, if confirmed, create) the directory BEFORE the row
@@ -4874,7 +4884,7 @@ export async function projectsRoute(app: FastifyInstance) {
         .from(projects)
         .all()
         .find((p) => p.id !== projectId && projectHasPath(p, hostId, cwd));
-      if (owner) return duplicateProjectReply(reply, owner);
+      if (owner) return duplicateProjectReply(reply, owner, "attach");
       const result = attachHostCheckout(app, projectId, hostId, cwd);
       if (result === "not-found") return reply.notFound();
       if (result === "own-host") {
@@ -5030,7 +5040,7 @@ export async function projectsRoute(app: FastifyInstance) {
           }
         }
         const duplicate = await findDuplicateProject(app, changed, projectId);
-        if (duplicate) return duplicateProjectReply(reply, duplicate);
+        if (duplicate) return duplicateProjectReply(reply, duplicate, "update");
       }
 
       // Validate/create BEFORE the row is updated — same ordering rationale

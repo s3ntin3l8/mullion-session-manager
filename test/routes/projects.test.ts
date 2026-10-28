@@ -10088,6 +10088,7 @@ describe("projects route", () => {
         payload: { cwd: checkout("c") },
       });
       expect(clash.statusCode).toBe(409);
+      expect(clash.json().message).toContain("save this change anyway");
       expect(clash.json()).toMatchObject({
         code: "DUPLICATE_PROJECT",
         existingProjectId: a.json().id,
