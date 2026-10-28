@@ -2831,7 +2831,9 @@ describe("tasks route", () => {
         expect(res.json().approvalState).toBe("awaiting-human");
         expect(res.json()).not.toHaveProperty("projectAutoApprove");
         const list = await app.inject({ method: "GET", url: "/api/tasks" });
-        expect(list.json()[0].approvalState).toBe("awaiting-human");
+        expect(list.json().find((t: { id: number }) => t.id === taskId).approvalState).toBe(
+          "awaiting-human",
+        );
         await app.close();
       });
 
