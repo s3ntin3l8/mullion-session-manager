@@ -238,6 +238,24 @@ export function supervise({
 }
 
 /**
+ * Puts `dir` first in `env`'s PATH unless it is already an entry. The key keeps
+ * the spelling it has (`Path` on Windows).
+ *
+ * @param {NodeJS.ProcessEnv} env
+ * @param {string} dir
+ * @param {boolean} caseInsensitive
+ */
+function prependToPath(env, dir, caseInsensitive) {
+  const key =
+    Object.keys(env).find((k) => (caseInsensitive ? k.toLowerCase() === "path" : k === "PATH")) ??
+    "PATH";
+  const entries = (env[key] ?? "").split(path.delimiter).filter(Boolean);
+  const same = (a) => (caseInsensitive ? a.toLowerCase() === dir.toLowerCase() : a === dir);
+  if (entries.some(same)) return;
+  env[key] = [dir, ...entries].join(path.delimiter);
+}
+
+/**
  * The environment the server starts with: the launcher's own, overlaid with
  * the .env's (as `EnvironmentFile=` overrides the manager's environment),
  * with MULLION_HOME and MULLION_SERVICE_UNIT defaulted.
@@ -250,6 +268,11 @@ export function supervise({
  * @param {boolean} [options.caseInsensitive] Windows' environment is: a `.env`
  *   `PATH=` replaces the inherited `Path` rather than sitting beside it.
  *   Defaults to the platform.
+ * @param {string} [options.nodeDir] The directory of the Node running the
+ *   server. Put at the front of PATH when it is not already on it, so the
+ *   `node`/`npx` a session runs (an MCP server, a package script) is the same
+ *   Node the server is — a private, downloaded Node (the Windows bootstrap)
+ *   is on no PATH of its own.
  * @returns {NodeJS.ProcessEnv}
  */
 export function serverEnv({
@@ -258,6 +281,7 @@ export function serverEnv({
   baseEnv,
   envFileText,
   caseInsensitive = process.platform === "win32",
+  nodeDir,
 }) {
   /** @type {NodeJS.ProcessEnv} */
   const env = { ...baseEnv };
@@ -270,6 +294,7 @@ export function serverEnv({
     }
     env[key] = value;
   }
+  if (nodeDir) prependToPath(env, nodeDir, caseInsensitive);
   if (!env.MULLION_HOME) env.MULLION_HOME = home;
   if (taskName && !env.MULLION_SERVICE_UNIT) env.MULLION_SERVICE_UNIT = taskName;
   return env;
@@ -314,7 +339,13 @@ export async function main(argv = process.argv, baseEnv = process.env, signals =
       const envFileText = existsSync(envFile) ? readFileSync(envFile, "utf8") : "";
       child = spawn(process.execPath, ["dist/server.js"], {
         cwd: current,
-        env: serverEnv({ home, taskName, baseEnv, envFileText }),
+        env: serverEnv({
+          home,
+          taskName,
+          baseEnv,
+          envFileText,
+          nodeDir: path.dirname(process.execPath),
+        }),
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,
       });

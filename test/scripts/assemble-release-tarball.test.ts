@@ -168,6 +168,25 @@ describe("scripts/assemble-release-tarball.sh", () => {
     }
   });
 
+  it("carries the Windows scripts, so a Windows host installs and updates from the release alone", async () => {
+    await run("bash", [
+      path.join(fixture, "scripts", "assemble-release-tarball.sh"),
+      VERSION,
+      outDir,
+    ]);
+
+    const entries = new Set(tarballEntries());
+    for (const expected of [
+      // The bootstrap (also uploaded as a release asset), the task registration
+      // install.sh runs, and the in-use check the updater prunes by.
+      "./deploy/windows/mullion-install.ps1",
+      "./deploy/windows/register-task.ps1",
+      "./deploy/windows/releases-in-use.ps1",
+    ]) {
+      expect(entries.has(expected)).toBe(true);
+    }
+  });
+
   it("excludes the retired macOS installer leftovers", async () => {
     await run("bash", [
       path.join(fixture, "scripts", "assemble-release-tarball.sh"),

@@ -231,6 +231,51 @@ describe("serverEnv", () => {
     expect(env).toMatchObject({ Path: "a", PATH: "b" });
   });
 
+  describe("nodeDir", () => {
+    const sep = path.delimiter;
+
+    it("goes first on PATH when it is not already there, keeping the key's spelling", () => {
+      const env = serverEnv({
+        home: "h",
+        taskName: "",
+        baseEnv: { Path: `/a${sep}/b` },
+        envFileText: "",
+        caseInsensitive: true,
+        nodeDir: "/runtime/node",
+      });
+      expect(env.Path).toBe(["/runtime/node", "/a", "/b"].join(sep));
+      expect(env).not.toHaveProperty("PATH");
+    });
+
+    it("leaves PATH alone when the directory is already on it (case-insensitively on Windows)", () => {
+      const baseEnv = { Path: `/a${sep}/Runtime/Node` };
+      const env = serverEnv({
+        home: "h",
+        taskName: "",
+        baseEnv,
+        envFileText: "",
+        caseInsensitive: true,
+        nodeDir: "/runtime/node",
+      });
+      expect(env.Path).toBe(baseEnv.Path);
+    });
+
+    it("creates PATH when there is none, and honours a PATH from the .env", () => {
+      expect(
+        serverEnv({ home: "h", taskName: "", baseEnv: {}, envFileText: "", nodeDir: "/n" }).PATH,
+      ).toBe("/n");
+      expect(
+        serverEnv({
+          home: "h",
+          taskName: "",
+          baseEnv: { PATH: "/inherited" },
+          envFileText: "PATH=/from-env\n",
+          nodeDir: "/n",
+        }).PATH,
+      ).toBe(`/n${sep}/from-env`);
+    });
+  });
+
   it("sets no service unit when it was given no task name", () => {
     expect(serverEnv({ home: "h", taskName: "", baseEnv: {}, envFileText: "" })).not.toHaveProperty(
       "MULLION_SERVICE_UNIT",

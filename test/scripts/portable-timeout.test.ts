@@ -3,6 +3,8 @@
 // `sleep 600` per `npm ci` in self-update.sh).
 import { describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const PORTABLE = path.resolve(__dirname, "../../scripts/portable.sh");
@@ -23,6 +25,30 @@ describe("run_with_timeout", () => {
     const budget = 3000 + (process.pid % 500); // unlikely to collide with another process
     execFileSync("bash", ["-c", `. '${PORTABLE}'; run_with_timeout ${budget} true`]);
     expect(sleepersWithBudget(budget)).toBe("");
+  });
+
+  // Git for Windows ships no pkill, so there the subshell's `sleep` cannot be
+  // reaped from outside: the watchdog has to end by itself. The caller's own
+  // job table shows whether it did.
+  it("ends the watchdog by itself when the command finishes first, even without pkill", () => {
+    const shims = fs.mkdtempSync(path.join(os.tmpdir(), "no-pkill-"));
+    try {
+      fs.writeFileSync(path.join(shims, "pkill"), "#!/bin/sh\nexit 127\n", { mode: 0o755 });
+      const out = execFileSync(
+        "bash",
+        [
+          "-c",
+          `. '${PORTABLE}'; run_with_timeout 3000 true; sleep 2.5; if [ -z "$(jobs -r)" ]; then echo clean; else echo watchdog-still-running; fi`,
+        ],
+        {
+          encoding: "utf8",
+          env: { ...process.env, PATH: `${shims}${path.delimiter}${process.env.PATH}` },
+        },
+      );
+      expect(out.trim()).toBe("clean");
+    } finally {
+      fs.rmSync(shims, { recursive: true, force: true });
+    }
   });
 
   it("still kills a command that outlives the budget", () => {

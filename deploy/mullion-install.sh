@@ -127,9 +127,20 @@ fi
 # GitHub redirects /releases/latest to /releases/tag/<tag>; following it with
 # a HEAD request gives the tag without an API token, a jq dependency, or a
 # JSON parser.
-TAG_URL="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null || true)"
-TAG="${TAG_URL##*/tag/}"
-if [ -z "$TAG" ] || [ "$TAG" = "$TAG_URL" ]; then
+#
+# MULLION_INSTALL_TAG pins a release instead (the Windows bootstrap's -Version,
+# deploy/windows/mullion-install.ps1); MULLION_INSTALL_BASE_URL replaces the
+# download location (a release-shaped directory: <tarball> and <tarball>.sha256
+# — curl accepts a file:// URL, which is how the bootstrap's tests and a
+# pre-publication run install from a locally assembled release).
+if [ -n "${MULLION_INSTALL_TAG:-}" ]; then
+  TAG="$MULLION_INSTALL_TAG"
+  TAG_URL="$TAG"
+else
+  TAG_URL="$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/$REPO/releases/latest" 2>/dev/null || true)"
+  TAG="${TAG_URL##*/tag/}"
+fi
+if { [ -z "$TAG" ] || [ "$TAG" = "$TAG_URL" ]; } && [ -z "${MULLION_INSTALL_TAG:-}" ]; then
   echo "mullion-install: could not resolve the latest release of $REPO (got: '${TAG_URL:-no response}')." >&2
   echo "mullion-install: check that the repository exists and has a published release." >&2
   exit 1
@@ -161,7 +172,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 TARBALL_NAME="mullion-$VERSION.tgz"
-BASE_URL="https://github.com/$REPO/releases/download/$TAG"
+BASE_URL="${MULLION_INSTALL_BASE_URL:-https://github.com/$REPO/releases/download/$TAG}"
 
 echo "==> Downloading $TARBALL_NAME"
 curl -fsSL -o "$TMP_DIR/$TARBALL_NAME" "$BASE_URL/$TARBALL_NAME"
