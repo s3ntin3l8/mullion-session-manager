@@ -146,7 +146,7 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
     try {
       // Parameter names stay bare (a quoted -Json is a string, not a switch).
       const quoted = args
-        .map((a) => (/^-[A-Za-z]+$/.test(a) ? a : `'${a.replaceAll("'", "''")}'`))
+        .map((a) => (/^-[A-Za-z][A-Za-z0-9]*$/.test(a) ? a : `'${a.replaceAll("'", "''")}'`))
         .join(" ");
       const psArgs = opts.asScriptBlock
         ? [
