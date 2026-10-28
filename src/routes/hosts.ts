@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import {
@@ -119,6 +119,20 @@ function onHostCredentialsChanged(app: FastifyInstance, id: string): void {
   // until just now, say).
   app.reconfigureSshAgentFanout();
   app.reconfigureControlRelayFanout();
+}
+
+// A manual host added without a Base URL has no address to dial until its
+// agent registers (getRemoteHostClient throws for it, which would surface as
+// a 500). Per-host routes that reach the agent answer 409 instead.
+function pendingHostReply(app: FastifyInstance, id: string, reply: FastifyReply) {
+  const row = getHostRow(app, id);
+  if (!row) return reply.notFound();
+  if (row.baseUrl === null) {
+    return reply.conflict(
+      `${row.name} hasn't registered yet — run its install command on the agent first`,
+    );
+  }
+  return undefined;
 }
 
 export async function hostsRoute(app: FastifyInstance) {
@@ -282,7 +296,8 @@ export async function hostsRoute(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>("/api/hosts/:id/ping", async (request, reply) => {
     const { id } = request.params;
     if (id === LOCAL_HOST_ID) return { online: true };
-    if (!getHostRow(app, id)) return reply.notFound();
+    const pending = pendingHostReply(app, id, reply);
+    if (pending) return pending;
     const online = await getRemoteHostClient(app, id).ping();
     return { online };
   });
@@ -312,7 +327,8 @@ export async function hostsRoute(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>("/api/hosts/:id/config", async (request, reply) => {
     const { id } = request.params;
     if (id === LOCAL_HOST_ID) return buildAgentConfig(app);
-    if (!getHostRow(app, id)) return reply.notFound();
+    const pending = pendingHostReply(app, id, reply);
+    if (pending) return pending;
     try {
       return await getRemoteHostClient(app, id).resolveConfig();
     } catch (err) {
@@ -371,7 +387,8 @@ export async function hostsRoute(app: FastifyInstance) {
           "This machine's project roots are set in Settings → Projects & discovery",
         );
       }
-      if (!getHostRow(app, id)) return reply.notFound();
+      const pending = pendingHostReply(app, id, reply);
+      if (pending) return pending;
       try {
         return await getRemoteHostClient(app, id).resolveSetProjectsRoots(request.body.roots);
       } catch (err) {
@@ -417,7 +434,8 @@ export async function hostsRoute(app: FastifyInstance) {
     if (id === LOCAL_HOST_ID) {
       return reply.badRequest("the local host updates from Settings → Server, not here");
     }
-    if (!getHostRow(app, id)) return reply.notFound();
+    const pending = pendingHostReply(app, id, reply);
+    if (pending) return pending;
     const client = getRemoteHostClient(app, id);
 
     let hostVersion: string;
@@ -511,7 +529,8 @@ export async function hostsRoute(app: FastifyInstance) {
     if (id === LOCAL_HOST_ID) {
       return reply.badRequest("the local host updates from Settings → Server, not here");
     }
-    if (!getHostRow(app, id)) return reply.notFound();
+    const pending = pendingHostReply(app, id, reply);
+    if (pending) return pending;
     const client = getRemoteHostClient(app, id);
 
     // Independent review — the frontend only renders the Update button when

@@ -1511,6 +1511,39 @@ describe("hosts route (issue #26)", () => {
       await app.close();
     });
 
+    it("answers 409, not 500, for agent-bound routes on a host still waiting for its agent", async () => {
+      const app = await buildApp();
+      const created = (
+        await app.inject({ method: "POST", url: "/api/hosts", payload: { name: "waiting" } })
+      ).json();
+      for (const [method, url] of [
+        ["POST", `/api/hosts/${created.id}/ping`],
+        ["GET", `/api/hosts/${created.id}/config`],
+        ["GET", `/api/hosts/${created.id}/update`],
+        ["POST", `/api/hosts/${created.id}/update/apply`],
+      ] as const) {
+        const res = await app.inject({ method, url });
+        expect(res.statusCode, `${method} ${url}`).toBe(409);
+        expect(res.json().message).toMatch(/hasn't registered yet/);
+      }
+      await app.close();
+    });
+
+    it("refuses to create a project on a host still waiting for its agent", async () => {
+      const app = await buildApp();
+      const created = (
+        await app.inject({ method: "POST", url: "/api/hosts", payload: { name: "waiting-2" } })
+      ).json();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "p", cwd: "/tmp/p", hostId: created.id },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().message).toMatch(/hasn't registered yet/);
+      await app.close();
+    });
+
     it("refuses to rotate an enrolled host", async () => {
       const app = await buildApp();
       const enrolled = enrollHost(app, {

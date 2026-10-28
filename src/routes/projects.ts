@@ -4771,8 +4771,14 @@ export async function projectsRoute(app: FastifyInstance) {
         return reply.badRequest(`hostCwds names an unknown host: ${unknownHost}`);
       }
       const hostId = request.body.hostId ?? LOCAL_HOST_ID;
-      if (hostId !== LOCAL_HOST_ID && !getHostRow(app, hostId)) {
+      const targetHost = hostId !== LOCAL_HOST_ID ? getHostRow(app, hostId) : undefined;
+      if (hostId !== LOCAL_HOST_ID && !targetHost) {
         return reply.badRequest(`Unknown hostId ${hostId}`);
+      }
+      // A host added without a Base URL is still waiting for its agent: there
+      // is nowhere to run the project yet.
+      if (targetHost && targetHost.baseUrl === null) {
+        return reply.badRequest(`Host ${targetHost.name} hasn't registered yet`);
       }
       // A remote project's directory lives on the agent's own filesystem,
       // not this process's — validating/creating it here against the

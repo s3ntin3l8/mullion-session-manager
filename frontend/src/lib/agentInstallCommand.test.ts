@@ -30,6 +30,13 @@ describe("windowsInstallCommand", () => {
   });
 });
 
+describe("windowsInstallCommand typographic quotes", () => {
+  it("doubles the curly single quotes PowerShell also treats as delimiters", () => {
+    const cmd = windowsInstallCommand({ ...base, name: "x\u2019; calc; \u2018" });
+    expect(cmd).toContain("-AgentName 'x\u2019\u2019; calc; \u2018\u2018'");
+  });
+});
+
 describe("unixInstallCommand", () => {
   it("passes the variables install.sh reads and installs as an agent", () => {
     const cmd = unixInstallCommand(base);

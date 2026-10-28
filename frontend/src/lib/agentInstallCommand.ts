@@ -18,9 +18,11 @@ export interface AgentInstallParams {
   baseUrl?: string;
 }
 
-// PowerShell single-quoted strings only treat ' as special, and it doubles.
+// PowerShell single-quoted strings end at ' and also at its typographic
+// look-alikes (U+2018, U+2019, U+201A, U+201B); inside the string each one is
+// escaped by doubling it.
 function ps(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
+  return `'${value.replace(/['\u2018\u2019\u201A\u201B]/g, (q) => q + q)}'`;
 }
 
 // POSIX single-quoted strings can't contain ', so close, escape, reopen.
