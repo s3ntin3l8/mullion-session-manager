@@ -158,9 +158,11 @@ function surfaces(theme) {
  *
  * `--accent-solid` is in this list because a lot of the stylesheets use it
  * as a text colour (link and label text in the settings sections), not only
- * as a fill.
+ * as a fill. `--y` is in it because the warning amber is small text too —
+ * blocked-task copy and host status words (#1981) — so a lighter gold that
+ * still works as a 3:1 status dot fails AA the moment it is used as copy.
  */
-const TEXT_ROLE_TOKENS = ["fg", "muted", "dim", "accent-solid"];
+const TEXT_ROLE_TOKENS = ["fg", "muted", "dim", "accent-solid", "y"];
 
 /**
  * Tokens whose value is used as the BACKGROUND of a badge or button that

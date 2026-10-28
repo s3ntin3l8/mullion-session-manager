@@ -128,7 +128,14 @@
   --r: #cf222e;
   --b: #0969da;
   --c: #0e7490;
-  --y: #9a6700;
+  /* #1981 — --y is small warning text (blocked-task copy at 10px, host
+     status words at 9.5px), not only a marker. #9a6700 was 4.42:1 on
+     --sidebar and 4.00:1 on --pane-hd, under AA for that text. #8c5f00 is
+     the same amber, darkened until it clears 4.5:1 on every light text
+     surface (worst is --pane-hd at ~4.60:1; --sidebar is ~5.08:1). The
+     dark theme's --y is unchanged. Lane-3 stays on the old hex so the
+     history graph does not move with this text-role edit. */
+  --y: #8c5f00;
   --p: #8250df;
   --o: #bc5215;
   /* Sidebar kit (B1, #1971). --surface/--surface-hover are the card and
@@ -151,7 +158,7 @@
   --lane-more: #9a9a9a;
   --status-success-fg: #187533; /* darkened from --g for 4.5:1 on its tint */
   --status-danger-fg: #c1202b; /* darkened from --r for 4.5:1 on its tint */
-  --status-warn-fg: #8b5d00; /* darkened from --y for 4.5:1 on its tint */
+  --status-warn-fg: #8a5c00; /* darkened from --y so it stays above 4.5:1 on the warn tint */
   --status-info-fg: #0862cb; /* darkened from --b for 4.5:1 on its tint */
   --status-merged-fg: #7649cb; /* darkened from --p for 4.5:1 on its tint */
   --status-neutral-fg: var(--muted);

@@ -87,6 +87,17 @@ describe.each(Object.entries(themes))("%s theme tokens", (_theme, vars) => {
     expect(contrast(accent, resolve(vars, "--surface"))).toBeGreaterThanOrEqual(4.5);
   });
 
+  // #1981 — --y is 10px/9.5px warning copy, so it has the text-role bar,
+  // not the 3:1 a status dot would get. --pane-hd is the tightest flat
+  // light surface; --sidebar is the one the blocked-task and host-status
+  // copy actually sits on.
+  it("--y warning text clears AA on the surfaces that copy sits on", () => {
+    const y = resolve(vars, "--y");
+    for (const surface of ["--sidebar", "--surface", "--surface-hover", "--pane-hd", "--chrome"]) {
+      expect(contrast(y, resolve(vars, surface)), `--y on ${surface}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   // Kit rows paint on --surface-hover (hover/selected), headers on --pane-hd.
   for (const surface of ["--surface", "--surface-hover", "--pane-hd"]) {
     it(`--muted, --dim and status text clear AA on ${surface}`, () => {
