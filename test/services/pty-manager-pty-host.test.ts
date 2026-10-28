@@ -205,6 +205,18 @@ describe("Session on a named-pipe endpoint (pty-host)", () => {
     warn.mockRestore();
   });
 
+  it("clears the incompatible verdict when a later attach is wired", async () => {
+    const { session } = mkSession("47");
+    await waitUntil(() => clients.length === 1);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    clients[0].emitExit(1, { masterVersion: 9, minClient: 9 });
+    expect(session.attachIncompatible).toBe(true);
+    (session as unknown as { attachClient(): void }).attachClient();
+    await waitUntil(() => clients.length === 2);
+    expect(session.attachIncompatible).toBe(false);
+    warn.mockRestore();
+  });
+
   it("reports an ordinary master exit as exited, not incompatible", async () => {
     const { session } = mkSession("46");
     await waitUntil(() => clients.length === 1);

@@ -1695,6 +1695,7 @@ export function TerminalPane(props: {
       if (destroyed) return;
       setStatus(reconnectAttempt === 0 ? "connecting" : "reconnecting");
       setReconnectAttempt(reconnectAttempt);
+      setAttachIncompatible(false);
       // This connection's own identity for the replay guard above — see
       // connectionGeneration's own comment for why generation comparison
       // (rather than a shared boolean reset at some point in time) is what
