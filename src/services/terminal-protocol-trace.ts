@@ -59,9 +59,21 @@ export interface ProtocolDescription {
 function describeOsc(ident: string, payload: string | undefined): string {
   if (payload === undefined) return `osc${ident}`;
   if (payload === "?") return `osc${ident}?`;
-  // OSC 4's query form is `4;<index>;?` — tag it as a query too, for parity
-  // with 10/11/12 (a report is `4;<index>;rgb:…`).
-  if (ident === "4" && /^\d+;\?$/.test(payload)) return `osc4?${payload.split(";")[0]}`;
+  // OSC 4 carries `index;spec` pairs: it is a query when every spec is `?`
+  // (`4;0;?;1;?` queries entries 0 and 1) and a set/report otherwise. Only
+  // digit indexes make it into the tag, so no payload byte can.
+  if (ident === "4") {
+    const parts = payload.split(";");
+    const indexes = parts.filter((_, n) => n % 2 === 0);
+    const specs = parts.filter((_, n) => n % 2 === 1);
+    if (
+      parts.length % 2 === 0 &&
+      indexes.every((v) => /^\d+$/.test(v)) &&
+      specs.every((v) => v === "?")
+    ) {
+      return `osc4?${indexes.join(",")}`;
+    }
+  }
   return `osc${ident}=${payload.replace(CONTROL_BYTES_RE, "")}`;
 }
 
