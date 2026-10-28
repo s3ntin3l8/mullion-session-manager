@@ -227,7 +227,7 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
         `node "${posix(recorder)}" "${posix(record)}" "$@"`,
         'root="$3"',
         'mkdir -p "$root"',
-        `printf '{"role":"agent","version":"9.9.9","home":"%s","taskName":"Mullion-agent"}' "$root" > "$root/install.json"`,
+        `printf '{"role":"agent","version":"9.9.9","home":"%s","taskName":"MullionTest-stub-${crypto.randomUUID()}"}' "$root" > "$root/install.json"`,
         "",
       ].join("\n"),
     );
@@ -771,7 +771,18 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
       fs.writeFileSync(path.join(root, "install.json"), JSON.stringify({ taskName }));
       await run(
         "schtasks",
-        ["/Create", "/TN", taskName, "/TR", "cmd /c exit", "/SC", "ONCE", "/ST", "23:59", "/F"],
+        [
+          "/Create",
+          "/TN",
+          taskName,
+          "/TR",
+          `cmd /c rem "${path.join(root, "current", "scripts", "launcher.mjs")}"`,
+          "/SC",
+          "ONCE",
+          "/ST",
+          "23:59",
+          "/F",
+        ],
         {
           windowsHide: true,
         },
@@ -790,6 +801,77 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
           false,
         );
         await run("schtasks", ["/Query", "/TN", taskName], { windowsHide: true });
+      } finally {
+        await run("schtasks", ["/Delete", "/TN", taskName, "/F"], { windowsHide: true }).catch(
+          () => {},
+        );
+      }
+    }, 180_000);
+
+    it("leaves a scheduled task alone that does not run from this install root", async () => {
+      // The task name comes from install.json (or the default, Mullion-agent), so
+      // an uninstall of one root must not take down the agent of another.
+      const { root } = installed();
+      const taskName = `MullionBootstrapOther-${process.pid}`;
+      fs.writeFileSync(path.join(root, "install.json"), JSON.stringify({ taskName }));
+      await run(
+        "schtasks",
+        [
+          "/Create",
+          "/TN",
+          taskName,
+          "/TR",
+          'cmd /c rem "C:\\somewhere\\else"',
+          "/SC",
+          "ONCE",
+          "/ST",
+          "23:59",
+          "/F",
+        ],
+        { windowsHide: true },
+      );
+      try {
+        const res = await bootstrap(["-Json", "-Uninstall", "-InstallRoot", root]);
+        expect(res.code).toBe(0);
+        expect(res.events.some((e) => e.detail.includes(`${taskName} does not run from`))).toBe(
+          true,
+        );
+        expect(res.events.some((e) => e.detail.includes("removed the scheduled task"))).toBe(false);
+        await run("schtasks", ["/Query", "/TN", taskName], { windowsHide: true });
+      } finally {
+        await run("schtasks", ["/Delete", "/TN", taskName, "/F"], { windowsHide: true }).catch(
+          () => {},
+        );
+      }
+    }, 180_000);
+
+    it("removes the scheduled task that does run from the install root", async () => {
+      const { root } = installed();
+      const taskName = `MullionBootstrapOwn-${process.pid}`;
+      fs.writeFileSync(path.join(root, "install.json"), JSON.stringify({ taskName }));
+      await run(
+        "schtasks",
+        [
+          "/Create",
+          "/TN",
+          taskName,
+          "/TR",
+          `cmd /c rem "${path.join(root, "current", "scripts", "launcher.mjs")}"`,
+          "/SC",
+          "ONCE",
+          "/ST",
+          "23:59",
+          "/F",
+        ],
+        { windowsHide: true },
+      );
+      try {
+        const res = await bootstrap(["-Json", "-Uninstall", "-InstallRoot", root]);
+        expect(res.code).toBe(0);
+        expect(res.events.some((e) => e.detail.includes("removed the scheduled task"))).toBe(true);
+        await expect(
+          run("schtasks", ["/Query", "/TN", taskName], { windowsHide: true }),
+        ).rejects.toThrow();
       } finally {
         await run("schtasks", ["/Delete", "/TN", taskName, "/F"], { windowsHide: true }).catch(
           () => {},

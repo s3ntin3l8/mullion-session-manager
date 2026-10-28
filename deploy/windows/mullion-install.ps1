@@ -187,14 +187,9 @@ function Get-Verified([string]$Url, [string]$Dest, [string]$Sha256, [string]$Ste
   }
 }
 
-function Test-ProcessesUnder([string]$Root, [string[]]$AlsoRoots = @()) {
-  # Processes running from $Root -- a session's pty-host master, the updater,
-  # the server. Detached masters survive a task stop, so the task being stopped
-  # does not mean nothing is running. A process counts when its image or its
-  # command line names a path INSIDE the root (root + a separator): a command
-  # line that merely mentions the root itself -- this script's own, or its
-  # caller's (-InstallRoot <root>) -- is not a process of the install. This
-  # process and its ancestors are never counted.
+# The spellings of a root that a process's or a task's command line may carry,
+# each lower-case with a trailing backslash.
+function Get-RootPrefixes([string]$Root, [string[]]$AlsoRoots = @()) {
   $prefixes = @()
   # $AlsoRoots: the root as the caller spelled it. GetFullPath expands 8.3 names
   # in Windows PowerShell 5.1, but a process started through a path that is only
@@ -215,6 +210,30 @@ function Test-ProcessesUnder([string]$Root, [string[]]$AlsoRoots = @()) {
       $prefixes += ($form.TrimEnd('\', '/').ToLowerInvariant() + '\')
     }
   } catch { }
+  return $prefixes
+}
+
+# Whether a scheduled task runs something from the install root. An uninstall
+# only stops and removes a task that does: the task's name comes from
+# install.json (or the default, Mullion-agent), so without this a root that is
+# not the one the task runs would take down another install's agent.
+function Test-TaskInRoot($Task, [string]$Root, [string[]]$AlsoRoots = @()) {
+  $text = ((@($Task.Actions) | ForEach-Object { "$($_.Execute) $($_.Arguments) $($_.WorkingDirectory)" }) -join ' ').ToLowerInvariant().Replace('/', '\')
+  foreach ($prefix in (Get-RootPrefixes $Root $AlsoRoots)) {
+    if ($text.Contains($prefix)) { return $true }
+  }
+  return $false
+}
+
+function Test-ProcessesUnder([string]$Root, [string[]]$AlsoRoots = @()) {
+  # Processes running from $Root -- a session's pty-host master, the updater,
+  # the server. Detached masters survive a task stop, so the task being stopped
+  # does not mean nothing is running. A process counts when its image or its
+  # command line names a path INSIDE the root (root + a separator): a command
+  # line that merely mentions the root itself -- this script's own, or its
+  # caller's (-InstallRoot <root>) -- is not a process of the install. This
+  # process and its ancestors are never counted.
+  $prefixes = @(Get-RootPrefixes $Root $AlsoRoots)
   $all = @(Get-CimInstance Win32_Process -ErrorAction Stop)
   $skip = @{}
   $cursor = $PID
@@ -329,6 +348,10 @@ if ($Uninstall) {
   # sessions are being looked at. It is only unregistered once the uninstall is
   # going ahead: a refusal leaves the host as it was (the task is started again).
   $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+  if ($task -and -not (Test-TaskInRoot $task $InstallRoot @($InstallRootAsGiven))) {
+    Emit 'uninstall' 'log' "the scheduled task $taskName does not run from $InstallRoot, so it is left alone"
+    $task = $null
+  }
   if ($task) { Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue }
 
   # Stopping the task ends the launcher and the server, but not instantly.

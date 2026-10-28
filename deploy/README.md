@@ -909,7 +909,9 @@ processes, sessions included — as it does for anything you start.
 powershell -ExecutionPolicy Bypass -File mullion-install.ps1 -Uninstall      # add -Purge to remove everything
 ```
 
-This removes the scheduled task, the `mullion` launcher, the `current`
+This removes the scheduled task (only if it runs something from the install
+root you gave: a task of another install, which the name alone would match, is
+left alone), the `mullion` launcher, the `current`
 junction (as a link: it never follows it) and the releases and logs. It
 **keeps `data\`, the `.env` and `runtime\`** — your sessions' data, your
 settings and the downloaded Node/Git — unless you add `-Purge`. It refuses
