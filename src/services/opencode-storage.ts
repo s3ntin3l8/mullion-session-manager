@@ -104,7 +104,17 @@ export interface OpencodeStorageStatus {
    * so the holder scan is skipped meanwhile rather than reporting opencode.
    */
   compacting: boolean;
+  /** How the last compaction since this server started ended; absent before any. */
+  lastPrune?: OpencodeLastPrune;
   error?: string;
+}
+
+export interface OpencodeLastPrune {
+  output: string;
+  reclaimedBytes: number;
+  error?: string;
+  /** ISO time the compaction finished. */
+  finishedAt: string;
 }
 
 export interface OpencodePruneResult {
@@ -123,6 +133,9 @@ const errnoOf = (error: unknown) => (error as NodeJS.ErrnoException).code ?? "un
 // True while the VACUUM child exists. It has the database open, so a holder
 // scan taken meanwhile would report it as opencode.
 let childRunning = false;
+
+// Kept in memory only, like `childRunning`: a restart forgets it.
+let lastPrune: OpencodeLastPrune | undefined;
 
 const sidecars = (dbPath: string) => [`${dbPath}-wal`, `${dbPath}-shm`];
 
@@ -267,6 +280,7 @@ export async function inspectOpencodeStorage(
         holdersUnknown: scan.unknown !== undefined,
         ...(scan.unknown === undefined ? {} : { holdersUnknownReason: scan.unknown }),
         compacting,
+        ...(lastPrune ? { lastPrune } : {}),
       };
     } finally {
       db.close();
@@ -376,6 +390,12 @@ let pruneRunning = false;
 export async function pruneOpencodeStorage(
   options: OpencodeStorageOptions = {},
 ): Promise<OpencodePruneResult> {
+  const result = await runPrune(options);
+  lastPrune = { ...result, finishedAt: new Date().toISOString() };
+  return result;
+}
+
+async function runPrune(options: OpencodeStorageOptions): Promise<OpencodePruneResult> {
   // Check-and-set with no await between them, as in cache-storage.ts.
   if (pruneRunning) throw new Error("OPENCODE_PRUNE_IN_PROGRESS");
   pruneRunning = true;

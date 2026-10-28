@@ -195,6 +195,9 @@ so it is deliberately narrow:
   defaults to 60 s) cannot cut it off, and a reload just finds the job still
   running. While it runs, the database card shows "being compacted right now"
   (the compaction's own child process is not mistaken for opencode).
+  Once it ends, `GET /api/storage/opencode` carries a `lastPrune` (output,
+  `reclaimedBytes`, `error`, `finishedAt`) until the server restarts, and the
+  card shows it.
 - **Nothing else is changed.** No schema, pragma or row is touched: the
   database stays in WAL mode with `auto_vacuum` off, and the WAL is
   checkpointed and truncated afterwards so the file actually shrinks (if a

@@ -258,6 +258,17 @@ describe("opencode-storage", () => {
       db.close();
     });
 
+    it("remembers the last outcome and exposes it on the status", async () => {
+      makeDb();
+      const result = await pruneOpencodeStorage(opts());
+      const status = await inspectOpencodeStorage(opts());
+      expect(status.lastPrune).toEqual({
+        output: result.output,
+        reclaimedBytes: result.reclaimedBytes,
+        finishedAt: expect.any(String),
+      });
+    });
+
     it("leaves the database alone while another process has it open", async () => {
       makeDb();
       const before = await sizeOnDisk();

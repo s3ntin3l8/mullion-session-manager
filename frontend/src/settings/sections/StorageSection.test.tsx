@@ -884,6 +884,49 @@ describe("Settings -> Storage", () => {
     });
   });
 
+  describe("last opencode compaction", () => {
+    const base: OpencodeStorageStatus = {
+      available: true,
+      path: "/home/me/.local/share/opencode/opencode.db",
+      fileBytes: 2 * GIB,
+      reclaimableBytes: 0,
+      liveBytes: 2 * GIB,
+      inUse: false,
+      holdersUnknown: false,
+      compacting: false,
+    };
+
+    it("reports the last outcome, freed bytes or error", async () => {
+      setup({
+        opencode: {
+          ...base,
+          lastPrune: {
+            output: "Compacted opencode.db.",
+            reclaimedBytes: 15 * GIB,
+            finishedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      });
+      const { unmount } = render(<StorageSection />);
+      expect(await screen.findByText(/Compacted opencode\.db\. Freed 15 GiB/)).toBeInTheDocument();
+      unmount();
+      vi.restoreAllMocks();
+      setup({
+        opencode: {
+          ...base,
+          lastPrune: {
+            output: "",
+            reclaimedBytes: 0,
+            error: "disk full",
+            finishedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      });
+      render(<StorageSection />);
+      expect(await screen.findByText(/failed: disk full/)).toBeInTheDocument();
+    });
+  });
+
   describe("opt-in ~/.cache cleanup (#1606)", () => {
     const caches: CacheStorageStatus = {
       available: true,

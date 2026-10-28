@@ -581,6 +581,19 @@ export function StorageSection() {
                       opencode.holdersUnknownReason ? ` (${opencode.holdersUnknownReason})` : ""
                     }, so this is skipped.`
                   : "It is skipped whenever opencode is running, and takes a minute or so on a large database."}
+            {!opencode.compacting && opencode.lastPrune && (
+              <>
+                {" "}
+                Last compaction ({formatRelativeAge(
+                  Date.parse(opencode.lastPrune.finishedAt),
+                )}):{" "}
+                {opencode.lastPrune.error
+                  ? `failed: ${opencode.lastPrune.error}`
+                  : opencode.lastPrune.reclaimedBytes > 0
+                    ? `${opencode.lastPrune.output} Freed ${formatBytes(opencode.lastPrune.reclaimedBytes)}.`
+                    : opencode.lastPrune.output}
+              </>
+            )}
           </div>
         )}
         {worktrees?.available && removableWorktrees.length > 0 && (
