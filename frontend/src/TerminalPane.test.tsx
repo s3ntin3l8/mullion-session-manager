@@ -3498,6 +3498,23 @@ describe("TerminalPane reconnect vs. session-ended (P13)", () => {
     expect(screen.getByText("Session ended")).toBeInTheDocument();
   });
 
+  // Issue #2168 - a live session whose pty-host protocol this build cannot
+  // attach to must not read as the program having exited.
+  it('says the process is still running on an {type:"exited",reason:"incompatible"} message', () => {
+    stubFakeWebSocket(true);
+    renderPane();
+
+    act(() => {
+      for (const handler of fakeSocket._messageHandlers) {
+        handler({ data: JSON.stringify({ type: "exited", reason: "incompatible" }) });
+      }
+    });
+
+    expect(screen.getByText("Can't reconnect after the update")).toBeInTheDocument();
+    expect(screen.getByText(/Its process is still running/)).toBeInTheDocument();
+    expect(screen.queryByText("Session ended")).not.toBeInTheDocument();
+  });
+
   // Issue #1520 — a {type:"resync"} frame means the server dropped output
   // under backpressure; xterm must be reset before the fresh replay lands.
   it('resets xterm on a {type:"resync"} message and keeps the session live', () => {

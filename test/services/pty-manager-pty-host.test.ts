@@ -51,14 +51,16 @@ interface FakeClient {
   resizes: Array<[number, number]>;
   killed: number;
   emitData: (data: string) => void;
-  emitExit: (code: number) => void;
+  emitExit: (code: number, incompatible?: { masterVersion: number; minClient: number }) => void;
 }
 const clients: FakeClient[] = [];
 
 vi.mock("../../src/services/pty-host-client.js", () => ({
   attachPtyHost: vi.fn((endpoint: string, size: { cols: number; rows: number }, token: string) => {
     const data = new Set<Listener<string>>();
-    const exit = new Set<Listener<{ exitCode: number }>>();
+    const exit = new Set<
+      Listener<{ exitCode: number; incompatible?: { masterVersion: number; minClient: number } }>
+    >();
     const record: FakeClient = {
       endpoint,
       size,
@@ -67,15 +69,20 @@ vi.mock("../../src/services/pty-host-client.js", () => ({
       resizes: [],
       killed: 0,
       emitData: (d) => data.forEach((l) => l(d)),
-      emitExit: (code) => exit.forEach((l) => l({ exitCode: code })),
+      emitExit: (code, incompatible) =>
+        exit.forEach((l) =>
+          l(incompatible ? { exitCode: code, incompatible } : { exitCode: code }),
+        ),
     };
     clients.push(record);
     return {
       onData: (l: Listener<string>) => (data.add(l), { dispose: () => data.delete(l) }),
-      onExit: (l: Listener<{ exitCode: number }>) => (
-        exit.add(l),
-        { dispose: () => exit.delete(l) }
-      ),
+      onExit: (
+        l: Listener<{
+          exitCode: number;
+          incompatible?: { masterVersion: number; minClient: number };
+        }>,
+      ) => (exit.add(l), { dispose: () => exit.delete(l) }),
       write: (input: string) => record.writes.push(input),
       resize: (cols: number, rows: number) => record.resizes.push([cols, rows]),
       kill: () => {
@@ -177,5 +184,48 @@ describe("Session on a named-pipe endpoint (pty-host)", () => {
     clients[0].emitExit(3);
     expect(exited).toBe(1);
     expect(session.isAlive).toBe(false);
+  });
+
+  // Issue #2168 - a master this build cannot talk to is not an exited program.
+  it("reports a protocol-incompatible master distinctly from an exit", async () => {
+    const { session } = mkSession("45");
+    await waitUntil(() => clients.length === 1);
+    const reasons: unknown[] = [];
+    session.onEvent((event: { kind: string; payload: { reason?: string } }) => {
+      if (event.kind === "status_change") reasons.push(event.payload.reason);
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let exited = 0;
+    session.onExit(() => exited++);
+    clients[0].emitExit(1, { masterVersion: 9, minClient: 9 });
+    expect(reasons).toEqual(["incompatible"]);
+    expect(session.attachIncompatible).toBe(true);
+    expect(exited).toBe(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("cannot be attached"));
+    warn.mockRestore();
+  });
+
+  it("clears the incompatible verdict when a later attach is wired", async () => {
+    const { session } = mkSession("47");
+    await waitUntil(() => clients.length === 1);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    clients[0].emitExit(1, { masterVersion: 9, minClient: 9 });
+    expect(session.attachIncompatible).toBe(true);
+    (session as unknown as { attachClient(): void }).attachClient();
+    await waitUntil(() => clients.length === 2);
+    expect(session.attachIncompatible).toBe(false);
+    warn.mockRestore();
+  });
+
+  it("reports an ordinary master exit as exited, not incompatible", async () => {
+    const { session } = mkSession("46");
+    await waitUntil(() => clients.length === 1);
+    const reasons: unknown[] = [];
+    session.onEvent((event: { kind: string; payload: { reason?: string } }) => {
+      if (event.kind === "status_change") reasons.push(event.payload.reason);
+    });
+    clients[0].emitExit(3);
+    expect(reasons).toEqual(["exited"]);
+    expect(session.attachIncompatible).toBe(false);
   });
 });

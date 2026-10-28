@@ -3,10 +3,14 @@ import type { IPty } from "node-pty";
 import {
   FRAME_DATA,
   FRAME_EXIT,
+  FRAME_VERSION,
+  PROTOCOL_VERSION,
   createDeframer,
+  decodeVersion,
   encodeFrame,
   encodeHello,
   encodeResize,
+  masterCompatibility,
 } from "../pty-host/protocol.mjs";
 
 /** How much unsent input may wait for the master before more is dropped. */
@@ -18,7 +22,21 @@ export const MAX_INPUT_BACKLOG_BYTES = 8 * 1024 * 1024;
  * an attach client does not have to BE a pseudo-terminal: on Windows it is a
  * connection to a pty-host master instead (issue #1728).
  */
-export type AttachClient = Pick<IPty, "onData" | "onExit" | "write" | "resize" | "kill">;
+export type AttachClient = Pick<IPty, "onData" | "write" | "resize" | "kill"> & {
+  onExit: (listener: (event: AttachExit) => void) => { dispose(): void };
+};
+
+/**
+ * How an attach client ended. `incompatible` is set when the master speaks a
+ * protocol this build cannot (issue #2168): the session's program is still
+ * running, it just cannot be attached - which the caller must not present as
+ * the program having exited.
+ */
+export interface AttachExit {
+  exitCode: number;
+  signal?: number;
+  incompatible?: { masterVersion: number; minClient: number };
+}
 
 type Listener<T> = (event: T) => void;
 
@@ -71,23 +89,33 @@ export function attachPtyHost(
   token: string,
 ): AttachClient {
   const data = emitter<string>();
-  const exit = emitter<{ exitCode: number; signal?: number }>();
+  const exit = emitter<AttachExit>();
   const socket = net.createConnection(endpoint);
   /** The program's exit code, once the master has reported it. */
   let exitCode: number | null = null;
   let exited = false;
   /** Whether WE ended the connection (kill() — a detach, not a failure). */
   let detached = false;
+  /** Set when the master's VERSION frame says this build cannot talk to it. */
+  let incompatible: AttachExit["incompatible"];
 
   const finish = (code: number) => {
     if (exited) return;
     exited = true;
-    exit.fire({ exitCode: code });
+    exit.fire(incompatible ? { exitCode: code, incompatible } : { exitCode: code });
   };
 
   const onChunk = createDeframer((type, payload) => {
+    if (incompatible) return;
     if (type === FRAME_DATA) data.fire(payload.toString("utf8"));
     else if (type === FRAME_EXIT && payload.length >= 4) exitCode = payload.readInt32BE(0);
+    else if (type === FRAME_VERSION) {
+      const verdict = masterCompatibility(decodeVersion(payload), PROTOCOL_VERSION);
+      if (!verdict.compatible) {
+        incompatible = { masterVersion: verdict.masterVersion, minClient: verdict.minClient };
+        socket.destroy();
+      }
+    }
   });
 
   socket.write(encodeHello(token));

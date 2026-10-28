@@ -1,0 +1,13 @@
+{
+  "comment": "Frozen v1 wire encodings of src/pty-host/protocol.mjs. If a test against this file fails you changed an existing frame: protocol changes must be additive (see the header of protocol.mjs). Only append new entries.",
+  "frames": {
+    "data_hi": "00000000026869",
+    "resize_120x40": "010000000400780028",
+    "exit_3": "020000000400000003",
+    "exit_minus1": "0200000004ffffffff",
+    "hello_tok": "0300000003746f6b"
+  },
+  "added": {
+    "version_2_1": "040000000400020001"
+  }
+}

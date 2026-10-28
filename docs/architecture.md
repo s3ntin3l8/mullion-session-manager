@@ -135,6 +135,20 @@ PR).
   instead of spawning `dtach -a` (a second ConPTY around the first would
   re-render and garble a TUI). The wire format is `src/pty-host/protocol.mjs`:
   length-prefixed DATA/RESIZE/EXIT/HELLO frames.
+- _Compatibility_ (#2168): a master outlives the release that started it, so a
+  new backend attaches to old masters all the time. The protocol therefore
+  changes **additively only** — an existing frame's encoding never changes
+  (`test/fixtures/pty-host-protocol-v1.json` pins them), and unknown frame
+  types are ignored. A deliberate break is announced: the master sends a
+  VERSION frame after accepting HELLO (its version and the oldest client it
+  serves), and a client that cannot talk to it ends the attach with
+  `incompatible` set. Two limits (see `protocol.mjs`): the announced minimum
+  only binds clients that understand VERSION, and a master that sends none is
+  not judged yet - that needs a grace period before `MIN_MASTER_VERSION` is
+  ever raised above 1. `Session` reports that as
+  `status_change {reason: "incompatible"}` and the terminal route as
+  `{type: "exited", reason: "incompatible"}` — the session's process is still
+  running, so the UI says so instead of showing it as exited.
 - _Access_: the master serves only clients whose first frame carries the
   session's token (`pty-host-token.ts`, a file in the sessions dir, handed to
   the master in its environment and removed from the program's) — the

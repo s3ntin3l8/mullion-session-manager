@@ -13,9 +13,11 @@ import {
   FRAME_DATA,
   FRAME_HELLO,
   FRAME_RESIZE,
+  PROTOCOL_VERSION,
   createDeframer,
   encodeExit,
   encodeFrame,
+  encodeVersion,
 } from "../../src/pty-host/protocol.mjs";
 
 const cleanups: Array<() => void> = [];
@@ -160,5 +162,52 @@ describe("attachPtyHost exit codes", () => {
     (await master.connected).destroy();
     await until(() => exits.length > 0);
     expect(exits).toEqual([{ exitCode: 1 }]);
+  });
+
+  // Issue #2168 - a master announces its protocol; a client that cannot talk
+  // to it must say so rather than let it read as the program having exited.
+  describe("master protocol version", () => {
+    async function attachTo(announce: Buffer | null) {
+      const endpoint = tmpEndpoint();
+      const master = await fakeMaster(endpoint);
+      const client = attachPtyHost(endpoint, { cols: 80, rows: 24 }, "tok");
+      const seen = { output: "", exits: [] as unknown[] };
+      client.onData((d) => (seen.output += d));
+      client.onExit((e) => seen.exits.push(e));
+      const socket = await master.connected;
+      // The client may already have dropped this connection (incompatible).
+      socket.on("error", () => {});
+      if (announce) socket.write(announce);
+      socket.write(encodeFrame(FRAME_DATA, Buffer.from("after-version")));
+      return { client, seen };
+    }
+
+    it("attaches normally to a v1 master that never announces a version", async () => {
+      const { client, seen } = await attachTo(null);
+      await until(() => seen.output === "after-version");
+      expect(seen.exits).toEqual([]);
+      client.kill();
+    });
+
+    it("attaches normally to a master that serves this client's version", async () => {
+      const { client, seen } = await attachTo(
+        encodeVersion(PROTOCOL_VERSION + 1, PROTOCOL_VERSION),
+      );
+      await until(() => seen.output === "after-version");
+      expect(seen.exits).toEqual([]);
+      client.kill();
+    });
+
+    it("reports a master that needs a newer client as incompatible, delivering no output", async () => {
+      const { seen } = await attachTo(encodeVersion(PROTOCOL_VERSION + 1, PROTOCOL_VERSION + 1));
+      await until(() => seen.exits.length > 0);
+      expect(seen.exits).toEqual([
+        {
+          exitCode: 1,
+          incompatible: { masterVersion: PROTOCOL_VERSION + 1, minClient: PROTOCOL_VERSION + 1 },
+        },
+      ]);
+      expect(seen.output).toBe("");
+    });
   });
 });

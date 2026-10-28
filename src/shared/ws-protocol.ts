@@ -38,6 +38,12 @@ export interface ResizeMessage {
 
 export interface ExitedMessage {
   type: "exited";
+  /**
+   * "incompatible": the session's process is still running but was started by
+   * a release whose pty-host protocol this build cannot attach to (issue
+   * #2168). Absent for an ordinary exit.
+   */
+  reason?: "incompatible";
 }
 
 // pty-manager.ts's Session floors cols/rows at MIN_TERMINAL_COLS/ROWS

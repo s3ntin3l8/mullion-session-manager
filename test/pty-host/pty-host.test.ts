@@ -26,7 +26,17 @@ import {
   probeEndpoint,
   serve,
 } from "../../src/pty-host/master.mjs";
-import { TOKEN_ENV, encodeFrame, encodeHello, FRAME_DATA } from "../../src/pty-host/protocol.mjs";
+import {
+  TOKEN_ENV,
+  encodeFrame,
+  encodeHello,
+  encodeResize,
+  createDeframer,
+  decodeVersion,
+  FRAME_DATA,
+  FRAME_VERSION,
+  PROTOCOL_VERSION,
+} from "../../src/pty-host/protocol.mjs";
 
 const PTY_HOST = path.resolve(import.meta.dirname, "..", "..", "src", "pty-host", "pty-host.mjs");
 
@@ -446,4 +456,54 @@ describe("probeEndpoint", () => {
       spy.mockRestore();
     }
   });
+});
+
+// Issue #2168 - masters outlive the release that started them.
+describe("serve - protocol compatibility", () => {
+  function startMaster() {
+    const endpoint = tmpEndpoint();
+    const master = serve(endpoint, process.execPath, ECHO_PROGRAM, {
+      token: TOKEN,
+      onExit: () => {},
+      log: () => {},
+    });
+    cleanups.push(() => master.stop());
+    return endpoint;
+  }
+
+  /** A hand-rolled client sending exactly the v1 handshake: HELLO, then RESIZE. */
+  async function v1Client(endpoint: string) {
+    await waitServing(endpoint);
+    const received: Array<{ type: number; payload: Buffer }> = [];
+    const socket = net.createConnection(endpoint);
+    socket.on(
+      "data",
+      createDeframer((type, payload) => received.push({ type, payload })),
+    );
+    socket.write(encodeHello(TOKEN));
+    socket.write(encodeResize(80, 24));
+    cleanups.push(() => void socket.destroy());
+    return { received, socket };
+  }
+
+  it("announces its protocol version right after accepting the token, before any output", async () => {
+    const { received } = await v1Client(startMaster());
+    await until(() => received.length > 0);
+    expect(received[0].type).toBe(FRAME_VERSION);
+    expect(decodeVersion(received[0].payload)).toMatchObject({ version: PROTOCOL_VERSION });
+  }, 30_000);
+
+  it("still serves a v1 client that ignores the VERSION frame", async () => {
+    const { received, socket } = await v1Client(startMaster());
+    const output = () =>
+      received
+        .filter((f) => f.type === FRAME_DATA)
+        .map((f) => f.payload.toString())
+        .join("");
+    for (let attempt = 0; !output().includes("got:ping"); attempt++) {
+      if (attempt > 100) throw new Error("the program never answered a v1 client");
+      socket.write(encodeFrame(FRAME_DATA, Buffer.from("ping\r")));
+      await sleep(100);
+    }
+  }, 30_000);
 });
