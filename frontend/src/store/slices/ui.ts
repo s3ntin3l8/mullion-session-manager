@@ -327,8 +327,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     toggleRightSidebarView: (view) => {
       const { rightSidebarOpen, rightSidebarView } = get();
       if (rightSidebarOpen && rightSidebarView === view) {
-        writeBool(STORAGE_KEYS.rightSidebarOpen, false);
-        set({ rightSidebarOpen: false });
+        get().closeRightSidebar();
         return;
       }
       writeString(STORAGE_KEYS.rightSidebarView, view);
@@ -392,15 +391,25 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     },
 
     toggleRightSidebar: () => {
-      const next = !get().rightSidebarOpen;
-      writeBool(STORAGE_KEYS.rightSidebarOpen, next);
-      set({ rightSidebarOpen: next });
+      if (get().rightSidebarOpen) {
+        get().closeRightSidebar();
+        return;
+      }
+      writeBool(STORAGE_KEYS.rightSidebarOpen, true);
+      set({ rightSidebarOpen: true });
     },
 
     closeRightSidebar: () => {
       if (!get().rightSidebarOpen) return;
       writeBool(STORAGE_KEYS.rightSidebarOpen, false);
-      set({ rightSidebarOpen: false });
+      // A GitHub drill-in is transient: closing the drawer ends it, so a
+      // reopen (possibly after a workspace/project switch) lands on the list
+      // rather than a PR or issue left open by an earlier visit.
+      const leavingGithub = get().rightSidebarView === "github";
+      set({
+        rightSidebarOpen: false,
+        ...(leavingGithub ? { githubOpenPrByProject: {}, githubOpenIssueByProject: {} } : {}),
+      });
     },
 
     setRightSidebarPinned: (value) => {

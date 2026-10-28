@@ -18,7 +18,7 @@ export function GitHubSidebarView({ projectId, actions }: RightSidebarViewProps)
           },
         ]}
       />
-      <GitHubPanel params={{ projectId }} embedded />
+      <GitHubPanel key={projectId} params={{ projectId }} embedded />
     </div>
   );
 }
