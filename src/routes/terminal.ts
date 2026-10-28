@@ -122,6 +122,7 @@ export function attachSocketToSession(
   const wasAlive = app.pty.get(id)?.isAlive ?? false;
   const session = app.pty.getOrCreate({ id, cwd, command, cols, rows, env });
 
+  const releaseBrowserAttach = session.noteBrowserAttached();
   const backlog = session.getScrollback();
   app.log.info(
     { sessionId: id, cwd, command, alreadyAlive: session.isAlive, backlogBytes: backlog.length },
@@ -271,6 +272,7 @@ export function attachSocketToSession(
   socket.on("close", () => {
     stopDrainWatch();
     unsubscribeData();
+    releaseBrowserAttach();
     unsubscribeExit();
     // Deliberately not killing the session — it keeps running on the
     // host until the Node process itself shuts down (ptyPlugin's onClose)

@@ -52,6 +52,7 @@ import {
 } from "./panelUtils.js";
 import { useVisualViewportInset } from "./hooks/useVisualViewportInset.js";
 import { useDragResize } from "./hooks/useDragResize.js";
+import { useReportTerminalPalette } from "./hooks/useReportTerminalPalette.js";
 import { RightSidebar } from "./right-sidebar/RightSidebar.js";
 import { useWorkspacePersistence } from "./hooks/useWorkspacePersistence.js";
 import { isCompactTier, resolveLayoutTier, useCoarsePointer } from "./lib/layoutTier.js";
@@ -632,6 +633,11 @@ export function App() {
   // setting is "System".
   useEffect(() => void useDashboardStore.getState().hydrateSettings(), []);
   useEffect(() => useDashboardStore.getState().startThemeWatch(), []);
+  useReportTerminalPalette({
+    settingsLoaded,
+    colorScheme: settings.terminal.colorScheme,
+    theme,
+  });
 
   // Fires a browser Notification (+ sound) on a notification-worthy
   // /ws/events arrival (issue #170), and keeps the backgrounded-tab
