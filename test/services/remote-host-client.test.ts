@@ -1756,6 +1756,36 @@ describe("RemoteHostClient", () => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
+    it("a slow-but-alive host (answers in 3 s) recovers instead of failing every probe", async () => {
+      vi.useFakeTimers();
+      fetchMock.mockImplementation(refuse);
+      const c = client();
+      await expect(c.bulkLiveStatus(["1"], 1000)).rejects.toBeInstanceOf(HostUnreachableError);
+
+      vi.advanceTimersByTime(10_001);
+      fetchMock.mockImplementation(
+        () =>
+          new Promise<Response>((resolve) => {
+            setTimeout(() => resolve(jsonResponse(200, { "1": null })), 3_000);
+          }),
+      );
+      await expect(c.bulkLiveStatus(["1"], 1000)).rejects.toBeInstanceOf(HostUnreachableError);
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      await expect(c.bulkLiveStatus(["1"], 1000)).resolves.toEqual({ "1": null });
+    });
+
+    it("a successful fresh read clears the down marker", async () => {
+      fetchMock.mockImplementation(refuse);
+      const c = client();
+      await expect(c.bulkLiveStatus(["1"], 1000)).rejects.toBeInstanceOf(HostUnreachableError);
+
+      fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(200, { "1": null })));
+      await c.bulkLiveStatus(["1"], 1000, undefined, { fresh: true });
+
+      await expect(c.bulkLiveStatus(["1"], 1000)).resolves.toEqual({ "1": null });
+    });
+
     it("does not treat a host that answers with an error as down", async () => {
       fetchMock.mockImplementation(() => Promise.resolve(new Response("{}", { status: 429 })));
       const c = client();

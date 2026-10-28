@@ -184,10 +184,10 @@ const LIVE_STATUS_CACHE_TTL_MS = 1_500;
 // (and the pane of a just-created session waited behind two of those). Once a
 // host has failed to answer, its next reads fail immediately with the same
 // error and one background probe per cooldown checks whether it is back, with
-// a shorter timeout than a normal request: the list never waits on a dead host
-// again, at the price of showing a recovered host as unreachable for at most
-// one more cooldown.
-const LIVE_STATUS_PROBE_TIMEOUT_MS = 2_000;
+// the normal request timeout (nothing waits on the probe, so a shorter budget
+// would only turn a slow-but-alive host into a permanently "down" one): the
+// list never waits on a dead host again, at the price of showing a recovered
+// host as unreachable for at most one more cooldown.
 const LIVE_STATUS_DOWN_COOLDOWN_MS = 10_000;
 
 // A preview asset request (issue #28 phase 6) can legitimately take longer
@@ -1740,11 +1740,17 @@ export class RemoteHostClient {
     const key =
       [...ids].sort().join(",") + `|${idleThresholdMs}|${JSON.stringify(sessionProjectIds || {})}`;
     if (opts.fresh === true) {
-      return this.request<Record<string, SessionInfo | null>>("/internal/sessions/live", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ids, idleThresholdMs, sessionProjectIds }),
-      });
+      const result = await this.request<Record<string, SessionInfo | null>>(
+        "/internal/sessions/live",
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ids, idleThresholdMs, sessionProjectIds }),
+        },
+      );
+      // The host just answered: it is not down, whatever the last probe said.
+      this.liveStatusDown = null;
+      return result;
     }
     if (
       this.liveStatusCache &&
@@ -1775,15 +1781,11 @@ export class RemoteHostClient {
     sessionProjectIds: Record<string, number> | undefined,
     key: string,
   ): Promise<Record<string, SessionInfo | null>> {
-    const promise = this.request<Record<string, SessionInfo | null>>(
-      "/internal/sessions/live",
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ids, idleThresholdMs, sessionProjectIds }),
-      },
-      this.liveStatusDown ? LIVE_STATUS_PROBE_TIMEOUT_MS : undefined,
-    )
+    const promise = this.request<Record<string, SessionInfo | null>>("/internal/sessions/live", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ids, idleThresholdMs, sessionProjectIds }),
+    })
       .then((result) => {
         this.liveStatusCache = { key, ts: Date.now(), result };
         this.liveStatusDown = null;
