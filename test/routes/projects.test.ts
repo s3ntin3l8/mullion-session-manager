@@ -7481,6 +7481,34 @@ describe("projects route", () => {
       }
     });
 
+    it("does not retain a live cwd after its PTY exits during the check", async () => {
+      const app = await buildApp();
+      const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+      const { sessions } = await import("../../src/db/schema.js");
+      const sessionId = Number(
+        app.db.insert(sessions).values({ projectId, command: "bash", cwd: projectCwd }).run()
+          .lastInsertRowid,
+      );
+      const spy = vi
+        .spyOn(app.pty, "list")
+        .mockReturnValue([])
+        .mockReturnValueOnce([{ id: String(sessionId), liveCwd: worktreePath }] as ReturnType<
+          typeof app.pty.list
+        >);
+      try {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath },
+        });
+        expect(res.json()).toEqual({ removed: true });
+      } finally {
+        spy.mockRestore();
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      }
+    });
+
     it("does not block for a changed live cwd outside the worktree", async () => {
       const app = await buildApp();
       const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);

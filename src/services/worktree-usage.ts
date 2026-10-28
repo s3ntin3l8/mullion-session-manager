@@ -162,6 +162,7 @@ export async function sessionsUsingWorktree(
       const changed = snapshot.filter(
         ({ id, liveCwd }) => !checkedLive.has(id) || checkedLive.get(id) !== liveCwd,
       );
+      if (round > 0 && changed.length === 0) break;
       for (const { id, liveCwd } of changed) {
         checkedLive.set(id, liveCwd);
         liveState.delete(id);
