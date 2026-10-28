@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { resolveSessionHostId } from "../services/session-live-info.js";
+import { attachParamsFromRow, type AttachSessionParams } from "../services/session-adopt.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { SocketChannel, type SocketLike } from "../services/socket-channel.js";
 import { MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS } from "../services/pty-manager.js";
@@ -60,46 +61,7 @@ export const REMOTE_RESYNC_ACK_TIMEOUT_MS = 3000;
 // Browser->upstream bytes buffered while the upstream is still CONNECTING.
 const REMOTE_INPUT_QUEUE_MAX_BYTES = 64 * 1024;
 
-function envFromRow(
-  raw: string,
-  sessionId: number,
-  log: FastifyInstance["log"],
-): { env?: Record<string, string> } {
-  const env = parseSessionEnv(raw, sessionId, log);
-  return env ? { env } : {};
-}
-
-function parseSessionEnv(
-  raw: string,
-  sessionId: number,
-  log: FastifyInstance["log"],
-): Record<string, string> | undefined {
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-      return parsed as Record<string, string>;
-    }
-  } catch {
-    // fall through to the warning below
-  }
-  log.warn({ sessionId }, "ignoring corrupt sessions.env");
-  return undefined;
-}
-
-export interface AttachSessionParams {
-  id: string;
-  cwd: string;
-  command: string;
-  cols: number;
-  rows: number;
-  // Issue #822 — see sessions.env's own doc comment (schema.ts). Needed
-  // here, not just at spawn time: a re-bootstrap on reattach
-  // (Session.spawnInternal, pty-manager.ts) rebuilds the launch plan from
-  // whatever this function is handed, and getOrCreate() is a no-op on an
-  // already-live session, so this is genuinely only consulted on the
-  // respawn path — never touches an already-running session's env.
-  env?: Record<string, string>;
-}
+export type { AttachSessionParams };
 
 /**
  * Spawn/attach a local PtyManager session and wire a WS socket to it:
@@ -519,17 +481,7 @@ export function resolveAndAttach(
     .where(eq(sessions.id, sessionId))
     .run();
 
-  const attachOpts: AttachSessionParams = {
-    id: String(sessionId),
-    cwd: row.cwd ?? project.cwd,
-    command: row.command,
-    cols,
-    rows,
-    // Issue #822 — row.env is this function's only source for it (this
-    // function has no access to the original create-time opts), same
-    // "read straight off the row" posture as cwd/command above.
-    ...(row.env !== null ? envFromRow(row.env, sessionId, app.log) : {}),
-  };
+  const attachOpts = attachParamsFromRow(app, row, project, { cols, rows });
 
   // Issue #1722 / roadmap 8.8 — the SESSION's host: attaching reaches for
   // the pty this session actually runs under, and a session placed on a

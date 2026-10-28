@@ -81,7 +81,13 @@ function runCli(
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = realSpawn(process.execPath, [MULLION_PATH, ...args], {
-      env: { PATH: process.env.PATH ?? "", MULLION_SOCKET_PATH: socketPath, ...extraEnv },
+      env: {
+        PATH: process.env.PATH ?? "",
+        MULLION_SOCKET_PATH: socketPath,
+        // Fail fast: the default 30 s connect retry (#2271) would outlast the test.
+        MULLION_CONNECT_RETRY_MS: "0",
+        ...extraEnv,
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";

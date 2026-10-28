@@ -189,8 +189,71 @@ describe("MullionSocketClient", () => {
       const client = new MullionSocketClient({
         socketPath: "/nonexistent/path/mullion.sock",
         token: null,
+        connectRetryMs: 0,
       });
       await expect(client.connect()).rejects.toThrow(/cannot connect to control socket/);
+    });
+
+    it("keeps retrying a missing socket until it appears (a Mullion restart, #2271)", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-cli-client-"));
+      socketPath = path.join(dir, "mullion.sock");
+      const client = new MullionSocketClient({ socketPath, token: null, connectRetryMs: 5000 });
+      const connected = client.connect();
+      // The new server comes up a moment after the first attempts failed ENOENT.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      server = await listen(socketPath);
+      server.on("connection", (socket) => socket.resume());
+      await expect(connected).resolves.toBeDefined();
+      client.close();
+    });
+
+    it("gives up with the usual message once the retry window has passed", async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), "mullion-cli-client-"));
+      const client = new MullionSocketClient({
+        socketPath: path.join(dir, "mullion.sock"),
+        token: null,
+        connectRetryMs: 300,
+      });
+      const started = Date.now();
+      await expect(client.connect()).rejects.toThrow(/cannot connect.*Is Mullion running\?/);
+      // At least one backoff sleep happened, and it did not overshoot the window.
+      expect(Date.now() - started).toBeGreaterThanOrEqual(90);
+      expect(Date.now() - started).toBeLessThan(2000);
+    });
+
+    it("reads MULLION_CONNECT_RETRY_MS, ignoring a malformed value", () => {
+      const socketPath = "/x.sock";
+      expect(
+        new MullionSocketClient({ socketPath, env: { MULLION_CONNECT_RETRY_MS: "0" } })
+          .connectRetryMs,
+      ).toBe(0);
+      expect(
+        new MullionSocketClient({ socketPath, env: { MULLION_CONNECT_RETRY_MS: "soon" } })
+          .connectRetryMs,
+      ).toBe(30_000);
+    });
+
+    it("tags the shutdown frame and an unexplained drop with retryable codes", async () => {
+      const client = new MullionSocketClient({ socketPath: "/x.sock" });
+      const restarting = new Promise((resolve) => {
+        client.pending.set(1, {
+          resolve: () => {},
+          reject: resolve,
+          timer: setTimeout(() => {}, 1),
+        });
+      });
+      client._route({ id: null, ok: false, fatal: true, status: 503, error: "server-restarting" });
+      await expect(restarting).resolves.toMatchObject({ status: 503, code: "server-restarting" });
+
+      const dropped = new Promise((resolve) => {
+        client.pending.set(2, {
+          resolve: () => {},
+          reject: resolve,
+          timer: setTimeout(() => {}, 1),
+        });
+      });
+      client._onClose();
+      await expect(dropped).resolves.toMatchObject({ code: "connection-closed" });
     });
 
     it("is idempotent — a second connect() call returns the same in-flight/completed connection", async () => {

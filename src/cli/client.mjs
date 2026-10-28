@@ -16,6 +16,22 @@ import { ipcPath } from "./ipc-path.mjs";
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
+// Issue #2271 — a Mullion restart removes the control socket for a few
+// seconds. A connect that finds it missing (ENOENT) or not yet accepting
+// (ECONNREFUSED) retries for this long before reporting "Is Mullion running?".
+const DEFAULT_CONNECT_RETRY_MS = 30_000;
+const CONNECT_RETRY_MIN_DELAY_MS = 100;
+const CONNECT_RETRY_MAX_DELAY_MS = 1000;
+const RETRYABLE_CONNECT_CODES = new Set(["ENOENT", "ECONNREFUSED"]);
+
+/** `error`/`code` of the fatal frame the server writes to every open
+ * connection while it shuts down. A request that fails with it never ran to
+ * completion on a server that is coming back: retryable. */
+export const SERVER_RESTARTING = "server-restarting";
+/** `code` of the error for a connection that dropped with requests pending
+ * and no explanation — the server may or may not have acted on them. */
+export const CONNECTION_CLOSED = "connection-closed";
+
 // sessions.wait: the server's own default and max (services/session-wait.ts's
 // DEFAULT_WAIT_TIMEOUT_MS / MAX_WAIT_TIMEOUT_MS — test/services/session-wait.test.ts
 // pins these to them) plus the slack added to the SOCKET request timeout so it
@@ -65,10 +81,11 @@ export function resolveToken(env = process.env) {
 }
 
 export class MullionSocketError extends Error {
-  constructor(status, message) {
+  constructor(status, message, code) {
     super(message);
     this.name = "MullionSocketError";
     this.status = status;
+    if (code !== undefined) this.code = code;
   }
 }
 
@@ -117,6 +134,14 @@ export class MullionSocketClient extends EventEmitter {
     this.token = opts.token ?? resolved.token;
     this.tokenSource = opts.token ? "explicit" : resolved.source;
     this.requestTimeoutMs = opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    // MULLION_CONNECT_RETRY_MS=0 restores fail-fast for scripts that probe
+    // whether Mullion is up at all.
+    const envRetryMs = Number(env.MULLION_CONNECT_RETRY_MS);
+    this.connectRetryMs =
+      opts.connectRetryMs ??
+      (env.MULLION_CONNECT_RETRY_MS !== undefined && Number.isFinite(envRetryMs) && envRetryMs >= 0
+        ? envRetryMs
+        : DEFAULT_CONNECT_RETRY_MS);
     // An agent-role host has no control socket (#1627); say so up front.
     this.controlUnavailable = !opts.socketPath && env.MULLION_CONTROL_UNAVAILABLE === "remote-host";
 
@@ -152,14 +177,35 @@ export class MullionSocketClient extends EventEmitter {
       this._connectPromise.catch(() => {});
       return this._connectPromise;
     }
-    this._connectPromise = new Promise((resolve, reject) => {
+    this._connectPromise = this._connectWithRetry();
+    return this._connectPromise;
+  }
+
+  /** Retries only a failure BEFORE the connection exists (nothing was sent,
+   * so nothing can run twice), for up to `connectRetryMs`. */
+  async _connectWithRetry() {
+    const deadline = Date.now() + this.connectRetryMs;
+    let delay = CONNECT_RETRY_MIN_DELAY_MS;
+    for (;;) {
+      try {
+        return await this._connectOnce();
+      } catch (err) {
+        if (!RETRYABLE_CONNECT_CODES.has(err.code) || Date.now() + delay > deadline) throw err;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        delay = Math.min(delay * 2, CONNECT_RETRY_MAX_DELAY_MS);
+      }
+    }
+  }
+
+  _connectOnce() {
+    return new Promise((resolve, reject) => {
       const socket = net.createConnection(this.socketPath);
       const failBeforeConnect = (err) => {
-        reject(
-          new Error(
-            `cannot connect to control socket at ${this.socketPath}: ${err.code ?? err.message}. Is Mullion running?`,
-          ),
+        const failure = new Error(
+          `cannot connect to control socket at ${this.socketPath}: ${err.code ?? err.message}. Is Mullion running?`,
         );
+        if (err.code) failure.code = err.code;
+        reject(failure);
       };
       socket.once("error", failBeforeConnect);
       socket.once("connect", () => {
@@ -172,7 +218,6 @@ export class MullionSocketClient extends EventEmitter {
         resolve(socket);
       });
     });
-    return this._connectPromise;
   }
 
   _onData(chunk) {
@@ -200,7 +245,11 @@ export class MullionSocketClient extends EventEmitter {
     // its reason rather than let each time out. (An id-less 400 from the
     // control socket itself is one bad line; the connection stays usable.)
     if (id === null && msg.ok === false && msg.fatal === true) {
-      const err = new MullionSocketError(msg.status, msg.error ?? "connection refused");
+      const err = new MullionSocketError(
+        msg.status,
+        msg.error ?? "connection refused",
+        msg.error === SERVER_RESTARTING ? SERVER_RESTARTING : undefined,
+      );
       for (const { reject, timer } of this.pending.values()) {
         clearTimeout(timer);
         reject(err);
@@ -227,6 +276,7 @@ export class MullionSocketClient extends EventEmitter {
   _onClose() {
     this._closed = true;
     const err = new Error("control socket connection closed");
+    err.code = CONNECTION_CLOSED;
     for (const { reject, timer } of this.pending.values()) {
       clearTimeout(timer);
       reject(err);

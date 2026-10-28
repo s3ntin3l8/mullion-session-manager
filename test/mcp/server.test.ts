@@ -83,7 +83,8 @@ function spawnServer(env: NodeJS.ProcessEnv = {}): ChildProcessWithoutNullStream
   delete base.MULLION_HOOK_TOKEN;
   delete base.MULLION_SOCKET_PATH;
   return spawn(process.execPath, [SERVER_PATH], {
-    env: { ...base, ...env },
+    // Fail fast: the default 30 s connect retry (#2271) would outlast the test.
+    env: { ...base, MULLION_CONNECT_RETRY_MS: "0", ...env },
     stdio: ["pipe", "pipe", "pipe"],
   });
 }

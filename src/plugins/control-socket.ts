@@ -24,7 +24,7 @@ import { SocketChannel, WRITE_HARD_CEILING_BYTES } from "../services/socket-chan
 import { reclaimSocketPath } from "../services/unix-socket.js";
 import { isPipePath } from "../cli/ipc-path.mjs";
 import { restrictPipeToCurrentUser } from "../cli/pipe-acl.mjs";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import type { SessionSeverity, SessionStatus } from "../shared/types.js";
 import { compileOutputMatcher } from "../services/output-wait.js";
@@ -41,6 +41,7 @@ import {
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { deliverPrompt } from "../services/session-prompt.js";
+import { adoptSurvivingSession } from "../services/session-adopt.js";
 import {
   readSessionLiveInfo,
   resolveSessionHostId,
@@ -518,6 +519,24 @@ function ownAndChildSessionFilter(
  * for it: the session exited, or was never started there. (A child on ANOTHER
  * host is routed to that host — see childHostId — it is not this case.) */
 const NOT_LOCAL_MESSAGE = "the session is not running (it has no live process on its host)";
+
+/** 503 text when a local child's scope could not be checked: not "not running". */
+const UNVERIFIABLE_MESSAGE = "the session's liveness could not be verified, retry shortly";
+
+/**
+ * Issue #2271 — re-adopts a LOCAL child that survived a Mullion restart (its
+ * scope is alive, PtyManager has not been told yet) before an op that needs
+ * its live PTY or its live status. Resolves to a refusal when the scope could
+ * not be checked (503, retryable); null otherwise, including for a dead
+ * session — the op's own gate then answers it (409 "not running") as before.
+ * A child on another host is that host's business.
+ */
+async function adoptLocalChild(app: FastifyInstance, id: string): Promise<ReplyPayload | null> {
+  if (childHostId(app, id) !== LOCAL_HOST_ID) return null;
+  return (await adoptSurvivingSession(app, id)) === "unverifiable"
+    ? bad(503, UNVERIFIABLE_MESSAGE)
+    : null;
+}
 
 /** The host a session runs on: its own (`sessions.hostId`), else its project's.
  * "local" for an id with no row, so a stray id keeps today's local behaviour. */
@@ -1140,7 +1159,15 @@ export const OPS: Record<string, OpSpec> = {
   // running inside that session actually uses.
   "sessions.get": routeOp(
     ["full", "session"],
-    onOwnedSession((id) => ({ method: "GET", url: `/api/sessions/${enc(id)}` })),
+    owned(async ({ app, conn, body }) => {
+      const target = resolveOwnedSessionId(app, conn, body);
+      if (!target.ok) return target.reply;
+      // Reads `alive`/`stateRestored`/`hookEmits` off the live PTY, so a
+      // survivor of a restart must be re-adopted first (#2271). A dead scope
+      // or an unverifiable one still just reads as not alive here.
+      await adoptSurvivingSession(app, target.id).catch(() => undefined);
+      return { method: "GET", url: `/api/sessions/${enc(target.id)}` };
+    }),
   ),
   // The caller's own children (live and exited) with their derived status —
   // the parent→child orchestration listing. Session scope is pinned to its
@@ -1149,7 +1176,7 @@ export const OPS: Record<string, OpSpec> = {
   // (active|killed|exited) rides through.
   "sessions.children": routeOp(
     ["full", "session"],
-    pinned(({ app, conn, body }) => {
+    pinned(async ({ app, conn, body }) => {
       const target = resolveTargetSessionId(conn, body);
       if (!target.ok) return target.reply;
       // Same "caller must still be active" rule as every other op that
@@ -1158,6 +1185,15 @@ export const OPS: Record<string, OpSpec> = {
       if (conn.scope === "session" && !sessionRowIsActive(app, target.id)) {
         return bad(403, "this session is no longer active");
       }
+      // Children that survived a Mullion restart are alive in their scopes
+      // but untracked until something attaches (#2271): re-adopt them so the
+      // listing reports their real status. One failure must not sink the list.
+      const activeChildren = app.db
+        .select({ id: sessions.id })
+        .from(sessions)
+        .where(and(eq(sessions.parentSessionId, Number(target.id)), eq(sessions.status, "active")))
+        .all();
+      await Promise.allSettled(activeChildren.map((c) => adoptSurvivingSession(app, String(c.id))));
       return {
         method: "GET",
         url: buildQueryUrl("/api/sessions", {
@@ -1196,6 +1232,11 @@ export const OPS: Record<string, OpSpec> = {
       const parsed = parseWaitBody(body, { allowAfterSeq: true });
       if (!parsed.ok) {
         reply(parsed.reply);
+        return;
+      }
+      const unverifiable = await adoptLocalChild(app, target.id);
+      if (unverifiable) {
+        reply(unverifiable);
         return;
       }
       // null == the peer hung up mid-wait; there is nobody to reply to.
@@ -1245,6 +1286,11 @@ export const OPS: Record<string, OpSpec> = {
       }
       if ((conn.activeWaits ?? 0) >= MAX_WAITS_PER_CONNECTION) {
         reply(bad(429, "too many pending waits on this connection"));
+        return;
+      }
+      const unverifiable = await adoptLocalChild(app, target.id);
+      if (unverifiable) {
+        reply(unverifiable);
         return;
       }
       const controller = new AbortController();
@@ -1388,6 +1434,11 @@ export const OPS: Record<string, OpSpec> = {
         }
         ({ outputOffset, afterSeq } = outcome);
       } else {
+        const unverifiable = await adoptLocalChild(app, id);
+        if (unverifiable) {
+          reply(unverifiable);
+          return;
+        }
         // One prompt at a time per session, and the typing itself, live in
         // services/session-prompt.ts so a remote child's host runs the SAME
         // code. The two checks are this op's derived-status gate: asked
@@ -2698,7 +2749,18 @@ export const controlSocketPlugin = fp(async (app: FastifyInstance) => {
   app.decorate("controlServer", server);
 
   app.addHook("onClose", async () => {
-    for (const socket of openSockets) socket.destroy();
+    for (const socket of openSockets) {
+      // Issue #2271 — tell the peer WHY it is being dropped: this is the
+      // id-less fatal frame the clients already fail every pending request
+      // from (src/cli/client.mjs), here carrying a retryable reason instead
+      // of a bare "connection closed".
+      // end() flushes the frame before the FIN; destroy() right after write()
+      // could discard it. The timer bounds a peer that never closes its side.
+      socket.end(
+        `${JSON.stringify({ id: null, ok: false, fatal: true, status: 503, error: "server-restarting" })}\n`,
+      );
+      setTimeout(() => socket.destroy(), 250).unref();
+    }
     openSockets.clear();
     await new Promise<void>((resolve) => {
       server.close(() => resolve());

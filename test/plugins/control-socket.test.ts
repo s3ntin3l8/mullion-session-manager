@@ -701,6 +701,10 @@ describe("controlSocketPlugin (issue #185)", () => {
     await app.ready();
     const socket = await connect(app.pty.controlSocketPath);
     socket.write("{}\n");
+    // Drained like a real client: the server now sends a "server-restarting"
+    // frame (#2271) first, and an unread frame would keep this end from ever
+    // reaching EOF.
+    socket.resume();
     // Give the handshake a moment to land so this is a genuinely "open,
     // authenticated" connection at close time, not one mid-handshake.
     await new Promise((resolve) => setImmediate(resolve));
@@ -3001,6 +3005,118 @@ describe("controlSocketPlugin (issue #185)", () => {
           [live, dead].sort(),
         );
         full.destroy();
+      });
+
+      it("tells open connections the server is restarting before it drops them (#2271)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const socket = await fullScopeSocket();
+        const frames = collectFrames(socket);
+        const closing = app.close();
+        app = null;
+        await waitUntil(() => frames.length > 0);
+        expect(frames[0]).toEqual({
+          id: null,
+          ok: false,
+          fatal: true,
+          status: 503,
+          error: "server-restarting",
+        });
+        await closing;
+        socket.destroy();
+      });
+
+      // Issue #2271 — a child's dtach master outlives a Mullion restart, but
+      // PtyManager only tracks it again once something attaches. Dropping it
+      // from PtyManager (kill() detaches without ending the program) is that
+      // state; isMasterAliveState says what its scope is doing.
+      describe("a child that survived a restart (#2271)", () => {
+        afterEach(() => {
+          vi.restoreAllMocks();
+        });
+
+        async function survivor(liveness: "alive" | "dead" | "unknown") {
+          const parent = await createRealSession();
+          const { childId } = await spawnChildOf(parent.hookToken, "claude");
+          app!.pty.kill(String(childId));
+          expect(app!.pty.get(String(childId))).toBeUndefined();
+          vi.spyOn(app!.pty, "isMasterAliveState").mockResolvedValue(liveness);
+          const socket = await sessionScopeSocket(parent.hookToken);
+          return { ...parent, childId, socket };
+        }
+
+        it("sessions.prompt adopts a child whose scope is alive instead of answering 409", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, socket } = await survivor("alive");
+          const reply = await ask(socket, "sessions.prompt", { sessionId: childId, text: "go" });
+          expect(reply).toMatchObject({ ok: true, status: 200, result: { delivered: true } });
+          expect(app.pty.get(String(childId))?.isAlive).toBe(true);
+          socket.destroy();
+        });
+
+        it("sessions.children reports the adopted child as alive, not 'alive: false'", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, socket } = await survivor("alive");
+          const reply = await ask(socket, "sessions.children");
+          const rows = reply.result as Array<{
+            id: number;
+            alive: boolean;
+            stateRestored: boolean;
+          }>;
+          expect(rows.find((r) => r.id === childId)).toMatchObject({
+            alive: true,
+            stateRestored: true,
+          });
+          socket.destroy();
+        });
+
+        it("sessions.get adopts the child it is asked about", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, socket } = await survivor("alive");
+          const reply = await ask(socket, "sessions.get", { sessionId: childId });
+          expect(reply.result).toMatchObject({ id: childId, alive: true });
+          socket.destroy();
+        });
+
+        it("a child whose scope is gone is still 'not running' and is never respawned", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, socket } = await survivor("dead");
+          const getOrCreate = vi.spyOn(app.pty, "getOrCreate");
+          const reply = await ask(socket, "sessions.prompt", { sessionId: childId, text: "go" });
+          expect(reply).toMatchObject({
+            ok: false,
+            status: 409,
+            error: "the session is not running (it has no live process on its host)",
+          });
+          expect(getOrCreate).not.toHaveBeenCalled();
+          const listed = await ask(socket, "sessions.children");
+          expect(
+            (listed.result as Array<{ id: number; alive: boolean }>).find((r) => r.id === childId),
+          ).toMatchObject({ alive: false });
+          socket.destroy();
+        });
+
+        it("a scope that cannot be checked answers a retryable 503, not 'not running'", async () => {
+          app = await buildApp();
+          await app.ready();
+          const { childId, socket } = await survivor("unknown");
+          const getOrCreate = vi.spyOn(app.pty, "getOrCreate");
+          for (const [op, body] of [
+            ["sessions.prompt", { text: "go" }],
+            ["sessions.wait_for_output", { match: "x", timeoutMs: 1000 }],
+            ["sessions.wait", { timeoutMs: 1000 }],
+          ] as const) {
+            const reply = await ask(socket, op, { sessionId: childId, ...body });
+            expect(reply, op).toMatchObject({ ok: false, status: 503 });
+            expect(String(reply.error)).toMatch(/retry/);
+          }
+          expect(getOrCreate).not.toHaveBeenCalled();
+          socket.destroy();
+        });
       });
 
       describe("sessions.wait_for_output", () => {

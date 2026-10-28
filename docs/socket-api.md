@@ -46,6 +46,15 @@ validated on the agent). Streaming ops (`sessions.attach`, `events.subscribe`) a
 `relay-unavailable` or `relay-disconnected`. See
 [`multi-host.md`](multi-host.md#control-from-a-session-on-an-agent-host) (#1656).
 
+**Server restart (#2271).** Before a graceful shutdown drops its open connections, the control
+socket writes one `{"id":null,"ok":false,"fatal":true,"status":503,"error":"server-restarting"}`
+frame to each, so a request in flight (a long `sessions.wait`, say) fails with a reason instead of
+a bare closed connection. The bundled CLI and MCP clients surface it as an error with
+`code: "server-restarting"` and retry the **connect** — only a failure before the connection
+exists, `ENOENT` or `ECONNREFUSED` — for about 30 s while the new process comes up
+(`MULLION_CONNECT_RETRY_MS` overrides the window; `0` fails fast). A request that was already sent
+is never replayed. A connection that drops with no frame reports `code: "connection-closed"`.
+
 ## Wire protocol
 
 Newline-delimited JSON, UTF-8 encoded, 2 MiB max per line (large enough for a
@@ -415,6 +424,14 @@ the prompt _was_ delivered either way).
   live PTY); `413`/`400` for bad text/arguments; `429` if `wait` would exceed
   `MAX_WAITS_PER_CONNECTION`. A session with no live process on its host is
   `409 … not running`.
+  A child that **survived a Mullion restart** (its scope is running, but nothing has attached since
+  the restart) is re-adopted on demand first (#2271): `sessions.prompt`, `sessions.wait`,
+  `sessions.wait_for_output`, `sessions.get` and `sessions.children` all do it, so the child
+  answers instead of reading as not running until a dashboard client attaches. Only a scope that is
+  verifiably alive is adopted; a dead one is still `409 … not running` and is never respawned, and a
+  scope whose liveness cannot be checked answers a retryable `503`. `sessions.kill` and
+  `sessions.scrollback` need no adoption and do not trigger one. A child on another host is that
+  host's business.
 - **A child on another host (issue #1951)** is prompted **on that host**: the
   primary keeps the derived-status gate (`agent_blocked` / `agent_gone` →
   `409`), then proxies the delivery to the agent, which types it under the

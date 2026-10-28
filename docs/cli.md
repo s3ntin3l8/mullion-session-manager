@@ -45,12 +45,12 @@ session scope (see [`multi-host.md`](multi-host.md#control-from-a-session-on-an-
 
 ## Global flags
 
-| Flag              | Meaning                                                                                                                                                                             |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--json`          | Print the raw op response instead of the command's default rendering.                                                                                                               |
-| `--session <id>`  | Target a session explicitly. Omit it when run from inside the session you want to target — it defaults to that session (see [Authentication and scope](#authentication-and-scope)). |
-| `--socket <path>` | Override control-socket discovery (`MULLION_SOCKET_PATH`, then `$SESSIONS_DIR/mullion.sock`, then `~/.local/state/mullion/sessions/mullion.sock`).                                  |
-| `--quiet`         | Suppress stdout on success (exit code still reflects success/failure).                                                                                                              |
+| Flag              | Meaning                                                                                                                                                                                                                                                     |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--json`          | Print the raw op response instead of the command's default rendering.                                                                                                                                                                                       |
+| `--session <id>`  | Target a session explicitly. Omit it when run from inside the session you want to target — it defaults to that session (see [Authentication and scope](#authentication-and-scope)).                                                                         |
+| `--socket <path>` | Override control-socket discovery (`MULLION_SOCKET_PATH`, then `$SESSIONS_DIR/mullion.sock`, then `~/.local/state/mullion/sessions/mullion.sock`). A missing socket is retried for about 30 s (a Mullion restart); `MULLION_CONNECT_RETRY_MS=0` fails fast. |
+| `--quiet`         | Suppress stdout on success (exit code still reflects success/failure).                                                                                                                                                                                      |
 
 These may appear anywhere in the command line, before or after the command
 itself.
