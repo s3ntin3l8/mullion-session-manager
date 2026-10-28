@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.3.51](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.50...v0.3.51) (2026-10-28)
+
+
+### Features
+
+* **agents:** steer agents to Mullion's browser for project UI work ([#2223](https://github.com/s3ntin3l8/mullion-session-manager/issues/2223)) ([76f8ced](https://github.com/s3ntin3l8/mullion-session-manager/commit/76f8ced2e880984c4e69bfd6f09a0b6f01aee17f))
+* **github:** GitHub sidebar issue search by number ([a50ec4f](https://github.com/s3ntin3l8/mullion-session-manager/commit/a50ec4f62b7f3f5a671faa58da4261fcba71247c))
+* **github:** offer Update branch for a behind PR on repos without strict protection ([6cab261](https://github.com/s3ntin3l8/mullion-session-manager/commit/6cab261114bd422e114eb8504854d2e15e4dc6b7))
+* **opencode:** run opencode database compaction as a background job the page polls ([014bf87](https://github.com/s3ntin3l8/mullion-session-manager/commit/014bf8790af605b79410d1b3dc6fbda1c383f3c2))
+* **palette:** keep redundant commands searchable ([#2170](https://github.com/s3ntin3l8/mullion-session-manager/issues/2170)) ([3d35d3c](https://github.com/s3ntin3l8/mullion-session-manager/commit/3d35d3c9f86f1b6b6be32b5eded5a7c4f0b15b9e))
+* **previews:** add named project preview targets ([#2217](https://github.com/s3ntin3l8/mullion-session-manager/issues/2217)) ([400daf1](https://github.com/s3ntin3l8/mullion-session-manager/commit/400daf1353cbdb22230ba19ca7bd6e907de36932))
+* **projects:** GET /api/projects/:id, a single-project read (found in [#2090](https://github.com/s3ntin3l8/mullion-session-manager/issues/2090)) ([6f68539](https://github.com/s3ntin3l8/mullion-session-manager/commit/6f68539fa8ae7fab1751cc047807e00a6d2bd7f3)), closes [#2148](https://github.com/s3ntin3l8/mullion-session-manager/issues/2148)
+* **pty-host:** version the master/client handshake so an update cannot strand sessions ([#2174](https://github.com/s3ntin3l8/mullion-session-manager/issues/2174)) ([88b19af](https://github.com/s3ntin3l8/mullion-session-manager/commit/88b19af6a27423218b29a3a3b7ff1fb364ccaefa))
+* **relay:** control relay so sessions on agent hosts can use the control surface ([#2213](https://github.com/s3ntin3l8/mullion-session-manager/issues/2213)) ([d710705](https://github.com/s3ntin3l8/mullion-session-manager/commit/d710705e0956712ace15fa3f81241b103797b72c))
+* **sessions:** rendered scrollback for get_scrollback and session logs ([#2173](https://github.com/s3ntin3l8/mullion-session-manager/issues/2173)) ([affa8ef](https://github.com/s3ntin3l8/mullion-session-manager/commit/affa8ef0b9b6cc65d9ec163d93c5b249b0f2203b))
+* **sessions:** support prompt_session for agy (HookAgentAdapter.submitPrompt) ([41a0f20](https://github.com/s3ntin3l8/mullion-session-manager/commit/41a0f20297901437fb1b437803255045ff3bd1df))
+* **settings:** split and restyle integration settings ([#2166](https://github.com/s3ntin3l8/mullion-session-manager/issues/2166)) ([a403ffd](https://github.com/s3ntin3l8/mullion-session-manager/commit/a403ffd1bf1f78152baa99f303b90ff6b797f9a9))
+* **skills:** apply the taskmaster-issues skill to every issue an agent files ([#2224](https://github.com/s3ntin3l8/mullion-session-manager/issues/2224)) ([748aab8](https://github.com/s3ntin3l8/mullion-session-manager/commit/748aab8dda3c5e04caa08d3be47a6806f413ad79))
+* **uiux:** open the task drawer from a task notification click ([fa16e3e](https://github.com/s3ntin3l8/mullion-session-manager/commit/fa16e3e03c689ddaf9684a560471c125f319eab3))
+* **windows:** a bootstrap that installs Mullion with nothing installed beforehand ([#2198](https://github.com/s3ntin3l8/mullion-session-manager/issues/2198)) ([62793fd](https://github.com/s3ntin3l8/mullion-session-manager/commit/62793fdd5385c8eb459fe0d4a96d295c0ee78826))
+* **windows:** installer and per-user autostart task for a Windows agent host ([#2165](https://github.com/s3ntin3l8/mullion-session-manager/issues/2165)) ([9316432](https://github.com/s3ntin3l8/mullion-session-manager/commit/9316432b3d51159fbe5237b5752956c70cf6347b))
+* **windows:** self-update for a Windows agent host ([#2169](https://github.com/s3ntin3l8/mullion-session-manager/issues/2169)) ([4d182b0](https://github.com/s3ntin3l8/mullion-session-manager/commit/4d182b035f6fd109d904eeb0025e28e5360691fd))
+
+
+### Bug Fixes
+
+* **devices:** start the adb server on the configured port and log failures ([#2157](https://github.com/s3ntin3l8/mullion-session-manager/issues/2157)) ([c7b3e7b](https://github.com/s3ntin3l8/mullion-session-manager/commit/c7b3e7b5719479166fee8c6b10e4fe675e3e1b68))
+* **github:** GitHub sidebar issue title search only matches the current page ([aacfa11](https://github.com/s3ntin3l8/mullion-session-manager/commit/aacfa11b75706cc13ab039af5d4560bdadd029bb))
+* **github:** GitHub sidebar keeps a previous project's PR detail after a workspace switch ([10cffd2](https://github.com/s3ntin3l8/mullion-session-manager/commit/10cffd2c0e705915d990b87adbdee0fd5ce79828))
+* guard worktree removal against live sessions ([#2158](https://github.com/s3ntin3l8/mullion-session-manager/issues/2158)) ([741f41c](https://github.com/s3ntin3l8/mullion-session-manager/commit/741f41cc208b69f85108d7903a1db3eff78fecf9))
+* **sessions:** child-session supervision fixes ([#2171](https://github.com/s3ntin3l8/mullion-session-manager/issues/2171)) ([781f335](https://github.com/s3ntin3l8/mullion-session-manager/commit/781f33540fb447699874c408b5f196a0c6604cbe))
+* **tasks:** clarify workflow approval actions and warnings ([#2159](https://github.com/s3ntin3l8/mullion-session-manager/issues/2159)) ([d32148e](https://github.com/s3ntin3l8/mullion-session-manager/commit/d32148ed6848aa14994d63852a8d80929c301c31))
+* **tasks:** drop the 'will not claim' badge promise for non-enforceable mappings ([ca0b105](https://github.com/s3ntin3l8/mullion-session-manager/commit/ca0b1052c21c1f3478fda4aaee3eb5e051e7476e))
+* **terminal:** don't answer terminal queries replayed from scrollback ([#2203](https://github.com/s3ntin3l8/mullion-session-manager/issues/2203)) ([77e507c](https://github.com/s3ntin3l8/mullion-session-manager/commit/77e507cbf98198f5d288880339e39d31402251cb))
+* **uiux:** 'Follow active panel' does not persist across workspace switches ([105ae83](https://github.com/s3ntin3l8/mullion-session-manager/commit/105ae83b434a03a9d51b13c1def86d3f1b209065))
+
 ## [0.3.50](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.49...v0.3.50) (2026-10-27)
 
 
