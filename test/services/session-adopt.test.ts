@@ -42,7 +42,7 @@ function stubAdoptable(app: App, liveness: SessionLiveness) {
     id: string;
   }) => {
     tracked.add(opts.id);
-    return {};
+    return { spawnOutcome: async () => {} };
   }) as unknown as typeof app.pty.getOrCreate);
   return { isMasterAliveState, getOrCreate, tracked };
 }
@@ -182,13 +182,39 @@ describe("adoptSurvivingSession (issue #2271)", () => {
     const { id } = seed(app);
     stubAdoptable(app, "alive");
     // getOrCreate "succeeds" but the session never becomes alive.
-    vi.spyOn(app.pty, "getOrCreate").mockReturnValue({} as ReturnType<typeof app.pty.getOrCreate>);
+    vi.spyOn(app.pty, "getOrCreate").mockReturnValue({
+      spawnOutcome: () => new Promise<void>(() => {}),
+    } as unknown as ReturnType<typeof app.pty.getOrCreate>);
     vi.useFakeTimers({ toFake: ["setTimeout", "Date"] });
 
     const outcome = adoptSurvivingSession(app, id);
     await vi.advanceTimersByTimeAsync(6000);
 
     await expect(outcome).resolves.toBe("unverifiable");
+  });
+
+  it("reattaches at the size the session already has, not a guessed one", async () => {
+    const app = await buildTestApp();
+    const { id } = seed(app);
+    const { getOrCreate } = stubAdoptable(app, "alive");
+    vi.spyOn(app.pty, "storedPtySize").mockReturnValue({ cols: 200, rows: 60 });
+
+    await adoptSurvivingSession(app, id);
+
+    expect(getOrCreate).toHaveBeenCalledWith(expect.objectContaining({ cols: 200, rows: 60 }));
+  });
+
+  it("surfaces a genuine spawn failure instead of a retryable 'unverifiable'", async () => {
+    const app = await buildTestApp();
+    const { id } = seed(app);
+    stubAdoptable(app, "alive");
+    vi.spyOn(app.pty, "getOrCreate").mockReturnValue({
+      spawnOutcome: async () => {
+        throw new Error("dtach not found");
+      },
+    } as unknown as ReturnType<typeof app.pty.getOrCreate>);
+
+    await expect(adoptSurvivingSession(app, id)).rejects.toThrow("dtach not found");
   });
 
   it("starts a fresh adoption after the previous one settled", async () => {

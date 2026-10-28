@@ -1295,6 +1295,8 @@ export class Session {
       currentTodo: this.currentTodo,
       backgroundTasks: this.attention.backgroundTasks,
       termModes: this.modes.snapshot(),
+      // Issue #2271 — see StoredStateFields.ptySize.
+      ptySize: { cols: this.cols, rows: this.rows },
       // Issue #1734 — Codex's rollout path, so a codex session that survives
       // a Mullion restart keeps being watched for provider rate limits.
       codexTranscriptPath: this.codexTranscriptPath,
@@ -3527,6 +3529,8 @@ export class Session {
     // reads this.cols/this.rows live (via RedrawNudgeHost.getSize()), so it
     // still lands at the right size either way.
     this.ptyProcess?.resize(clamped.cols, clamped.rows);
+    // Issue #2271 — keep the persisted size current (debounced).
+    this.stateFile.schedule();
   }
 
   /**
@@ -4043,6 +4047,25 @@ export class PtyManager {
       for (const session of this.sessions.values()) session.tick();
     }, ATTENTION_EVAL_INTERVAL_MS);
     this.attentionEvalTimer.unref();
+  }
+
+  /**
+   * Issue #2271 — the pty size `id` last had, from its state file, or null when
+   * none was recorded (no file, or one written before sizes were persisted).
+   * Read straight off disk: this is for a session this manager is not tracking.
+   */
+  storedPtySize(id: string): { cols: number; rows: number } | null {
+    assertValidSessionId(id);
+    const parsed = new SessionStateFile<StoredStateFields>(
+      stateFilePath(this.sessionsDir, id),
+      () => {
+        throw new Error("storedPtySize never writes");
+      },
+    ).read();
+    const size = parsed?.state.ptySize;
+    return size && Number.isInteger(size.cols) && Number.isInteger(size.rows)
+      ? clampTerminalSize(size.cols, size.rows)
+      : null;
   }
 
   private socketPathFor(id: string): string {

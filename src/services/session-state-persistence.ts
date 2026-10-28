@@ -95,6 +95,13 @@ export type StoredStateFields = Pick<
   // the next `progress: done` as an unknown-source turn end and latch it,
   // which is the very mid-loop advance this exists to prevent.
   turnPromptSource?: string | null;
+  // Issue #2271 — the pty size last applied to this session. NOT restored by
+  // applyStoredState (a new Session takes its size from its attach request):
+  // it exists so adoptSurvivingSession can reattach a session that survived a
+  // restart at the size it already has, because dtach hands the attaching
+  // client's window size to the master and a guessed one would reflow the
+  // program. Optional: a file written before this field existed lacks it.
+  ptySize?: { cols: number; rows: number };
 };
 
 /** The plain Session fields applyStoredState assigns through `host.set`. */

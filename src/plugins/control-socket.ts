@@ -832,7 +832,9 @@ const onSession = (fn: (id: string, ctx: OpContext) => Route | ReplyPayload): Re
   });
 
 /** Resolver wrapper: own session or one of its children (resolveOwnedSessionId). */
-const onOwnedSession = (fn: (id: string, ctx: OpContext) => Route | ReplyPayload): Resolver =>
+const onOwnedSession = (
+  fn: (id: string, ctx: OpContext) => Route | ReplyPayload | Promise<Route | ReplyPayload>,
+): Resolver =>
   owned((ctx) => {
     const target = resolveOwnedSessionId(ctx.app, ctx.conn, ctx.body);
     return target.ok ? fn(target.id, ctx) : target.reply;
@@ -1159,14 +1161,13 @@ export const OPS: Record<string, OpSpec> = {
   // running inside that session actually uses.
   "sessions.get": routeOp(
     ["full", "session"],
-    owned(async ({ app, conn, body }) => {
-      const target = resolveOwnedSessionId(app, conn, body);
-      if (!target.ok) return target.reply;
+    onOwnedSession(async (id, { app }) => {
       // Reads `alive`/`stateRestored`/`hookEmits` off the live PTY, so a
-      // survivor of a restart must be re-adopted first (#2271). A dead scope
-      // or an unverifiable one still just reads as not alive here.
-      await adoptSurvivingSession(app, target.id).catch(() => undefined);
-      return { method: "GET", url: `/api/sessions/${enc(target.id)}` };
+      // survivor of a restart must be re-adopted first (#2271). A read stays
+      // usable when that fails: a dead, unverifiable or erroring scope just
+      // reads as not alive, unlike the ops that need the PTY and refuse.
+      await adoptSurvivingSession(app, id).catch(() => undefined);
+      return { method: "GET", url: `/api/sessions/${enc(id)}` };
     }),
   ),
   // The caller's own children (live and exited) with their derived status —
@@ -1193,7 +1194,12 @@ export const OPS: Record<string, OpSpec> = {
         .from(sessions)
         .where(and(eq(sessions.parentSessionId, Number(target.id)), eq(sessions.status, "active")))
         .all();
-      await Promise.allSettled(activeChildren.map((c) => adoptSurvivingSession(app, String(c.id))));
+      // Only untracked ones: a listing must cost what the adoption does.
+      await Promise.allSettled(
+        activeChildren
+          .filter((c) => !app.pty.get(String(c.id))?.isAlive)
+          .map((c) => adoptSurvivingSession(app, String(c.id))),
+      );
       return {
         method: "GET",
         url: buildQueryUrl("/api/sessions", {

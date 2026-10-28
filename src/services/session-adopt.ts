@@ -82,9 +82,13 @@ export type AdoptOutcome =
   /** The scope's liveness could not be verified (or the reattach did not settle): retry. */
   | "unverifiable";
 
-/** How long adoption waits for the reattach to produce a live PTY. */
+/** How long adoption waits for the reattach to settle. */
 const ADOPT_SETTLE_TIMEOUT_MS = 5000;
-const ADOPT_POLL_INTERVAL_MS = 25;
+
+/** Size used only when the session never recorded one (a state file from before
+ * #2271): dtach applies the attaching client's size to the master, so this is a
+ * guess that resizes the program until a real client attaches. */
+const FALLBACK_SIZE = { cols: 80, rows: 24 };
 
 const inFlight = new WeakMap<FastifyInstance, Map<string, Promise<AdoptOutcome>>>();
 
@@ -132,12 +136,27 @@ async function adopt(app: FastifyInstance, id: string): Promise<AdoptOutcome> {
   // A terminal attach may have won the race while liveness was being read.
   if (app.pty.get(id)?.isAlive) return "live";
 
-  app.pty.getOrCreate(attachParamsFromRow(app, row, project, { cols: 80, rows: 24 }));
+  // Reattach at the size the session already has: dtach gives the attaching
+  // client's window size to the master, so a guessed one would reflow it.
+  const session = app.pty.getOrCreate(
+    attachParamsFromRow(app, row, project, app.pty.storedPtySize(id) ?? FALLBACK_SIZE),
+  );
 
-  const deadline = Date.now() + ADOPT_SETTLE_TIMEOUT_MS;
-  while (Date.now() < deadline) {
-    if (app.pty.get(id)?.isAlive) return "adopted";
-    await new Promise((resolve) => setTimeout(resolve, ADOPT_POLL_INTERVAL_MS));
+  // spawnOutcome() is the attach attempt's own result: a genuine failure
+  // (missing dtach, vanished cwd) rejects with its real cause instead of
+  // reading as a retryable "unverifiable" forever.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), ADOPT_SETTLE_TIMEOUT_MS);
+  });
+  try {
+    const settled = await Promise.race([
+      session.spawnOutcome().then(() => "settled" as const),
+      timedOut,
+    ]);
+    if (settled === "timeout") return "unverifiable";
+  } finally {
+    clearTimeout(timer);
   }
-  return "unverifiable";
+  return app.pty.get(id)?.isAlive ? "adopted" : "unverifiable";
 }
