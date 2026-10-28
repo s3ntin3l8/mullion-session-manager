@@ -2208,6 +2208,67 @@ describe("projects route", () => {
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 
+      it("finds an issue by number (123 or #123) beyond the current page", async () => {
+        fetchMock.mockImplementation((input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url === "https://api.github.com/user") {
+            return Promise.resolve(jsonResponse(200, { login: "octocat" }));
+          }
+          if (url.endsWith("/repos/acme/widgets/issues/123")) {
+            return Promise.resolve(jsonResponse(200, rawIssue(123, { state: "open" })));
+          }
+          if (url.includes("/repos/acme/widgets/issues?")) {
+            return Promise.resolve(jsonResponse(200, [rawIssue(1)]));
+          }
+          return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
+        });
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        for (const q of ["123", "%23123"]) {
+          const res = await app.inject({
+            method: "GET",
+            url: `/api/projects/${id}/github/issues?q=${q}`,
+          });
+          expect(res.statusCode).toBe(200);
+          expect(res.json().issues.map((i: { number: number }) => i.number)).toEqual([123]);
+        }
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("does not return a PR, a closed issue or a missing number for a numeric search", async () => {
+        const detail: Record<string, unknown> = {
+          "5": rawIssue(5, { pull_request: {} }),
+          "6": rawIssue(6, { state: "closed" }),
+        };
+        fetchMock.mockImplementation((input: RequestInfo | URL) => {
+          const url = String(input);
+          if (url === "https://api.github.com/user") {
+            return Promise.resolve(jsonResponse(200, { login: "octocat" }));
+          }
+          const m = /\/repos\/acme\/widgets\/issues\/(\d+)$/.exec(url);
+          if (m) {
+            return Promise.resolve(
+              m[1] in detail ? jsonResponse(200, detail[m[1]]) : jsonResponse(404, {}),
+            );
+          }
+          if (url.includes("/repos/acme/widgets/issues?")) {
+            return Promise.resolve(jsonResponse(200, [rawIssue(1)]));
+          }
+          return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
+        });
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        for (const n of [5, 6, 999]) {
+          const res = await app.inject({
+            method: "GET",
+            url: `/api/projects/${id}/github/issues?q=${n}`,
+          });
+          expect(res.statusCode).toBe(200);
+          expect(res.json().issues).toEqual([]);
+        }
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
       it("carries the triage run Mullion dispatched for an issue (A6)", async () => {
         const triageRun = {
           runId: "run_triage_1",

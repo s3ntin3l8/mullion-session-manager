@@ -131,6 +131,22 @@ async function getJson<T>(path: string, token: string, accept?: string): Promise
   return (await res.json()) as T;
 }
 
+/** One issue by number, or null when it is missing, closed or a pull request. */
+async function findOpenIssue(
+  token: string,
+  repoPath: string,
+  number: number,
+): Promise<RawIssue | null> {
+  if (!Number.isSafeInteger(number) || number < 1) return null;
+  try {
+    const issue = await getJson<RawIssue>(`${repoPath}/issues/${number}`, token);
+    return issue.pull_request || issue.state === "closed" ? null : issue;
+  } catch (err) {
+    if (err instanceof GitHubApiError && err.statusCode === 404) return null;
+    throw err;
+  }
+}
+
 export async function listIssues(
   token: string,
   owner: string,
@@ -148,15 +164,20 @@ export async function listIssues(
   if (query.labels) params.set("labels", query.labels);
   if (query.assignee) params.set("assignee", query.assignee);
 
-  const raw = await getJson<RawIssue[]>(
-    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues?${params}`,
-    token,
-  );
+  const repoPath = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  const needle = query.q?.trim().toLowerCase();
+  // `123` / `#123` is an issue number: look it up directly (page 1 only) so
+  // it is found even when it is not on the fetched page.
+  const numberMatch = page === 1 ? /^#?(\d+)$/.exec(needle ?? "") : null;
+  const [raw, byNumber] = await Promise.all([
+    getJson<RawIssue[]>(`${repoPath}/issues?${params}`, token),
+    numberMatch ? findOpenIssue(token, repoPath, Number(numberMatch[1])) : null,
+  ]);
   // `/issues` returns PRs too (they carry a `pull_request` field).
   const rawIssues = raw.filter((i) => !i.pull_request);
-  const needle = query.q?.trim().toLowerCase();
   const pageItems = rawIssues.map(toItem);
   const items = pageItems.filter((i) => !needle || i.title.toLowerCase().includes(needle));
+  if (byNumber && !items.some((i) => i.number === byNumber.number)) items.unshift(toItem(byNumber));
 
   const seen = new Map<string, IssueLabel>();
   for (const item of pageItems) {
