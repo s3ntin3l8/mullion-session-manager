@@ -228,6 +228,44 @@ describe("agent relay socket", () => {
     expect(frame).toMatchObject({ ok: false, fatal: true, status: 503 });
   });
 
+  it("tells the client when the primary closes its channel (a graceful primary shutdown)", async () => {
+    const socketPath = tmpSock();
+    const { agent, primary } = muxPair();
+    primary.onChannel((channel) => {
+      // What the primary's fan-out stop() does: close each channel in turn.
+      // Here after the request line, i.e. once the pipe is attached.
+      channel.onData((chunk) => {
+        if (chunk.toString("utf8").includes('"op"')) channel.close();
+      });
+    });
+    handles.push(
+      await materializeControlRelaySocket({
+        socketPath,
+        resolveToken: () => "7",
+        getMux: () => agent,
+      }),
+    );
+    const [frame] = await talk(socketPath, ['{"token":"t"}', '{"id":1,"op":"x"}']);
+    expect(frame).toMatchObject({ ok: false, fatal: true, status: 503 });
+    expect(String(frame.error)).toContain("relay-disconnected");
+  });
+
+  it("tells the client when the primary closes the channel right after the header", async () => {
+    const socketPath = tmpSock();
+    const { agent, primary } = muxPair();
+    primary.onChannel((channel) => channel.onData(() => channel.close()));
+    handles.push(
+      await materializeControlRelaySocket({
+        socketPath,
+        resolveToken: () => "7",
+        getMux: () => agent,
+      }),
+    );
+    const [frame] = await talk(socketPath, ['{"token":"t"}', '{"id":1,"op":"x"}']);
+    expect(frame).toMatchObject({ ok: false, fatal: true, status: 503 });
+    expect(String(frame.error)).toContain("relay-disconnected");
+  });
+
   it("tells relayed clients the relay dropped", async () => {
     const socketPath = tmpSock();
     const { agent, primary } = muxPair();

@@ -51,6 +51,47 @@ function refuse(socket: net.Socket, status: number, error: string): void {
   else socket.destroy();
 }
 
+/**
+ * The channel as `pipeNetSocketToChannel` sees it, except that when the
+ * PRIMARY closes it while the local client is still connected, the client is
+ * told why before its socket goes. A primary that shuts down gracefully
+ * (a service restart) closes its channels one by one before it closes the
+ * WebSocket, and the pipe destroys the local socket on each channel close, so
+ * the "relay dropped" notice sent on the WebSocket's own close would reach
+ * nobody. The pipe's close handler runs only after the frame is flushed.
+ */
+function notifyOnPeerClose(socket: net.Socket, channel: MuxChannel): MuxChannel {
+  return {
+    get id() {
+      return channel.id;
+    },
+    get sendWindow() {
+      return channel.sendWindow;
+    },
+    get closed() {
+      return channel.closed;
+    },
+    send: (chunk) => channel.send(chunk),
+    eof: () => channel.eof(),
+    close: () => channel.close(),
+    onData: (listener) => channel.onData(listener),
+    onEof: (listener) => channel.onEof(listener),
+    onDrain: (listener) => channel.onDrain(listener),
+    acknowledgeConsumed: (count) => channel.acknowledgeConsumed(count),
+    onClose: (listener) =>
+      channel.onClose(() => {
+        if (socket.destroyed || !socket.writable) {
+          listener();
+          return;
+        }
+        socket.end(
+          relayErrorFrame(503, "relay-disconnected: the primary closed this relay connection"),
+          listener,
+        );
+      }),
+  };
+}
+
 export async function materializeControlRelaySocket(
   opts: ControlRelayAgentOptions,
 ): Promise<ControlRelayAgentHandle> {
@@ -151,9 +192,14 @@ export async function materializeControlRelaySocket(
       refuse(socket, 503, "relay-unavailable: the relay channel closed");
       return;
     }
+    if (channel.closed) {
+      // The primary closed it between the open and the header (a shutdown).
+      refuse(socket, 503, "relay-disconnected: the primary closed this relay connection");
+      return;
+    }
     relayed.add(socket);
     if (rest.length > 0) socket.unshift(rest);
-    pipeNetSocketToChannel(socket, channel);
+    pipeNetSocketToChannel(socket, notifyOnPeerClose(socket, channel));
     socket.resume();
   };
 
