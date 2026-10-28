@@ -1356,6 +1356,8 @@ export interface GitHubPrDetail {
   files: { filename: string; status: string; additions: number; deletions: number }[];
   mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
   mergeStateStatus: string | null;
+  /** Commits the base has that the head lacks; null when unknown. */
+  behindBy?: number | null;
   reviewDecision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
   requestedReviewers: string[];
   reviewers: { login: string; state: string }[];

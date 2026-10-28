@@ -770,7 +770,7 @@ export function PrDetailView({
 
       {pr.state === "OPEN" && (
         <div className="pr-sticky">
-          {pr.mergeStateStatus === "BEHIND" && (
+          {(pr.mergeStateStatus === "BEHIND" || (pr.behindBy ?? 0) > 0) && (
             <Button
               disabled={busy !== null}
               title="Merge the base branch into this pull request's branch"

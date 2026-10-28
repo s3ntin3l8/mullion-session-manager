@@ -81,6 +81,9 @@ describe("getPrDetail", () => {
           }),
         );
       }
+      if (url.includes("/compare/")) {
+        return Promise.resolve(new Response(JSON.stringify({ behind_by: 3 }), { status: 200 }));
+      }
       return Promise.resolve(
         new Response(
           JSON.stringify([{ filename: "a.ts", status: "modified", additions: 10, deletions: 2 }]),
@@ -109,6 +112,46 @@ describe("getPrDetail", () => {
     });
     expect(d.reviews).toHaveLength(1);
     expect(d.commits[0]).toMatchObject({ headline: "feat: thing", author: "Me" });
+  });
+
+  it("reads how far the head is behind the base, only for an open PR", async () => {
+    const d = await getPrDetail("tok", "o", "r", 5);
+    expect(d.behindBy).toBe(3);
+    const compare = fetchMock.mock.calls.find(([u]) => String(u).includes("/compare/"))!;
+    expect(String(compare[0])).toContain("/compare/main...abc123");
+
+    resetPrDetailCacheForTests();
+    fetchMock.mockClear();
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify(
+            url.includes("/graphql")
+              ? { data: { repository: { pullRequest: { ...GQL_PR, state: "MERGED" } } } }
+              : [],
+          ),
+          { status: 200 },
+        ),
+      ),
+    );
+    const merged = await getPrDetail("tok", "o", "r", 5);
+    expect(merged.behindBy).toBeNull();
+    expect(fetchMock.mock.calls.some(([u]) => String(u).includes("/compare/"))).toBe(false);
+  });
+
+  it("leaves behindBy null when the compare read fails", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("/compare/")) return Promise.resolve(new Response("{}", { status: 500 }));
+      return Promise.resolve(
+        new Response(
+          JSON.stringify(
+            url.includes("/graphql") ? { data: { repository: { pullRequest: GQL_PR } } } : [],
+          ),
+          { status: 200 },
+        ),
+      );
+    });
+    expect((await getPrDetail("tok", "o", "r", 5)).behindBy).toBeNull();
   });
 
   it("builds the same ReviewSummary as the list, keeping an empty COMMENTED review that carries threads", async () => {
