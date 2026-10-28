@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { runGitFetch } from "./git-fetch.js";
 import {
   isAncestorOf,
@@ -11,6 +12,11 @@ import {
 import { getGitStatus } from "./git-status.js";
 import { removeListedWorktree } from "./git-worktree.js";
 import { dirSize } from "./temp-storage.js";
+import {
+  assertMountSupport,
+  containsMount,
+  UnsupportedMountPlatformError,
+} from "./mount-boundaries.js";
 import type { GitBranchInfo, GitWorktreeInfo } from "../shared/types.js";
 
 // Developer worktrees (issue #1605): `.wt/<slug>`, this repo's own convention,
@@ -56,10 +62,10 @@ export type DevWorktreeKind = (typeof ROOTS)[number]["kind"];
  * - `in-default`: a hook-created `worktree-*` branch whose tip is already in the
  *   default branch, i.e. nothing was committed on it.
  *
- * And one that is reported but never removed (issue #1979):
+ * And one that is removed only by explicit confirmation (issue #2045):
  * - `orphaned`: a directory under a worktree root that `git worktree list` does
  *   not know (its registration was pruned, or it was never a worktree). Nothing
- *   can tell whether it holds work, so it is left for a person to delete; it is
+ *   can tell whether it holds work, so it is never removed by cleanup; it is
  *   not counted in `totalBytes`.
  */
 export type DevWorktreeReason = "gone" | "merged" | "detached-merged" | "in-default" | "orphaned";
@@ -89,7 +95,7 @@ export interface DevWorktreeCandidate {
 
 export interface DevWorktreeStatus {
   available: boolean;
-  /** Includes the `orphaned` ones, which are listed but never removed. */
+  /** Includes `orphaned` directories, which cleanup never removes. */
   candidates: DevWorktreeCandidate[];
   /** What cleanup can free: every candidate but the `orphaned` ones. */
   totalBytes: number;
@@ -324,6 +330,326 @@ async function findOrphans(
     }
   }
   return orphans;
+}
+
+export interface OrphanRecovery {
+  projectId: number;
+  originalPath: string;
+  recoveryPath: string;
+  mayBePartial: boolean;
+  unverified?: boolean;
+}
+
+/** Recovery records live outside project rows, so project moves/deletions and
+ * server restarts do not hide quarantined work. */
+export async function inspectOrphanRecoveries(
+  registryDir: string,
+): Promise<{ recoveries: OrphanRecovery[]; warnings: string[] }> {
+  let entries: string[];
+  try {
+    entries = await fs.readdir(registryDir);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { recoveries: [], warnings: [] };
+    throw error;
+  }
+  const found: OrphanRecovery[] = [];
+  const warnings: string[] = [];
+  for (const entry of entries) {
+    if (!/^[0-9a-f-]+\.json$/i.test(entry)) continue;
+    try {
+      const record: unknown = JSON.parse(await fs.readFile(path.join(registryDir, entry), "utf8"));
+      if (!record || typeof record !== "object") throw new Error("Invalid record");
+      const data = record as {
+        projectId?: unknown;
+        originalPath?: unknown;
+        recoveryPath?: unknown;
+        phase?: unknown;
+        dev?: unknown;
+        ino?: unknown;
+      };
+      if (
+        typeof data.projectId !== "number" ||
+        !Number.isInteger(data.projectId) ||
+        typeof data.originalPath !== "string" ||
+        path.resolve(data.originalPath) !== data.originalPath ||
+        typeof data.recoveryPath !== "string" ||
+        path.resolve(data.recoveryPath) !== data.recoveryPath ||
+        (data.phase !== "staged" && data.phase !== "deleting") ||
+        typeof data.dev !== "number" ||
+        typeof data.ino !== "number"
+      )
+        throw new Error("Invalid record");
+      const originalPath = data.originalPath;
+      const quarantine = path.dirname(data.recoveryPath);
+      const root = path.dirname(quarantine);
+      if (
+        path.basename(data.recoveryPath) !== "directory" ||
+        !path.basename(quarantine).startsWith(".mullion-orphan-")
+      )
+        throw new Error("Invalid record");
+      const allowed = ROOTS.map(({ dir }) => path.join(root, dir));
+      if (!allowed.some((base) => originalPath.startsWith(base + path.sep)))
+        throw new Error("Invalid record");
+      let recoveryPath = data.recoveryPath;
+      const readStat = async (candidate: string) => {
+        try {
+          return { stat: await fs.lstat(candidate), unavailable: false };
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT")
+            return { stat: null, unavailable: false };
+          return { stat: null, unavailable: true };
+        }
+      };
+      let checked = await readStat(recoveryPath);
+      if (!checked.stat && !checked.unavailable && data.phase === "deleting") {
+        recoveryPath = originalPath;
+        checked = await readStat(originalPath);
+      }
+      if (checked.unavailable) {
+        found.push({
+          projectId: data.projectId,
+          originalPath,
+          recoveryPath,
+          mayBePartial: data.phase === "deleting",
+          unverified: true,
+        });
+        continue;
+      }
+      const stat = checked.stat;
+      if (
+        !stat ||
+        !stat.isDirectory() ||
+        stat.isSymbolicLink() ||
+        (recoveryPath === originalPath && (stat.dev !== data.dev || stat.ino !== data.ino))
+      )
+        continue;
+      found.push({
+        projectId: data.projectId,
+        originalPath,
+        recoveryPath,
+        mayBePartial: data.phase === "deleting",
+      });
+    } catch (error) {
+      // An entry removed concurrently is harmless; unreadable or malformed
+      // records must surface an error rather than hide potential recovery.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+        warnings.push(
+          `Recovery record ${path.join(registryDir, entry)} could not be read or verified. Inspect it and any .mullion-orphan-* directories before clearing it.`,
+        );
+    }
+  }
+  return { recoveries: found, warnings };
+}
+
+export type RemoveOrphanResult =
+  | { removed: true; reclaimedBytes: number }
+  | {
+      removed: false;
+      reason:
+        | "invalid-path"
+        | "not-orphan"
+        | "in-use"
+        | "unsupported-platform"
+        | "cross-device"
+        | "contains-mount"
+        | "unavailable"
+        | "changed"
+        | "remove-failed";
+      recoveryPath?: string;
+    };
+
+/** Remove one freshly verified orphan, never as part of the cleanup sweep. */
+export async function removeOrphanedDevWorktree(
+  project: DevWorktreeProject,
+  requestedPath: string,
+  inUse: (worktreePath: string) => Promise<boolean>,
+  registryDir: string,
+): Promise<RemoveOrphanResult> {
+  if (!path.isAbsolute(requestedPath) || requestedPath.split(/[\\/]/).includes("..")) {
+    return { removed: false, reason: "invalid-path" };
+  }
+  try {
+    assertMountSupport();
+    const projectRoot = await fs.realpath(project.cwd);
+    const initial = await fs.lstat(requestedPath);
+    if (!initial.isDirectory() || initial.isSymbolicLink()) {
+      return { removed: false, reason: "invalid-path" };
+    }
+    const target = await fs.realpath(requestedPath);
+    const allowedRoots = await Promise.all(
+      ROOTS.map(({ dir }) => fs.realpath(path.join(projectRoot, dir)).catch(() => null)),
+    );
+    // A root may alias another approved worktree root, but cannot turn an
+    // unrelated project directory into a deletion root (e.g. .wt -> src).
+    const inside = (child: string, parent: string) => child.startsWith(parent + path.sep);
+    const approved = ROOTS.map(({ dir }) => path.join(projectRoot, dir));
+    if (
+      !allowedRoots.some(
+        (root) =>
+          root &&
+          approved.some((base) => root === base || inside(root, base)) &&
+          inside(target, root),
+      )
+    ) {
+      return { removed: false, reason: "invalid-path" };
+    }
+    const overlapsRegistered = (worktrees: GitWorktreeInfo[]) =>
+      worktrees.some((worktree) => {
+        const registered = path.resolve(worktree.path);
+        // The project's own checkout necessarily contains its worktree roots.
+        if (projectRoot === registered || inside(projectRoot, registered)) return false;
+        return target === registered || inside(target, registered) || inside(registered, target);
+      });
+    const verify = async (): Promise<RemoveOrphanResult | null> => {
+      const worktrees = await listWorktrees(project.cwd);
+      if (!worktrees) return { removed: false, reason: "unavailable" };
+      if (overlapsRegistered(worktrees)) return { removed: false, reason: "not-orphan" };
+      if (!(await findOrphans(project, worktrees)).some((candidate) => candidate.path === target)) {
+        return { removed: false, reason: "not-orphan" };
+      }
+      if (await inUse(target)) return { removed: false, reason: "in-use" };
+      if (await containsMount(target)) return { removed: false, reason: "contains-mount" };
+      const stat = await fs.lstat(requestedPath);
+      if (
+        !stat.isDirectory() ||
+        stat.isSymbolicLink() ||
+        stat.dev !== initial.dev ||
+        stat.ino !== initial.ino ||
+        (await fs.realpath(requestedPath)) !== target
+      )
+        return { removed: false, reason: "changed" };
+      return null;
+    };
+    const first = await verify();
+    if (first) return first;
+    const bytes = await dirSize(target);
+    const again = await verify();
+    if (again) return again;
+    // Atomically move the directory into a private, non-scanned location.
+    // A path swapped after the last check is never deleted: the moved inode
+    // must still be the one the user confirmed. Cross-device renames fail
+    // without changing the original.
+    await fs.mkdir(registryDir, { recursive: true, mode: 0o700 });
+    const quarantine = await fs.mkdtemp(path.join(projectRoot, ".mullion-orphan-"));
+    const staged = path.join(quarantine, "directory");
+    const manifest = path.join(registryDir, `${randomUUID()}.json`);
+    const nextManifest = `${manifest}.next`;
+    const record = (phase: "staged" | "deleting") =>
+      JSON.stringify({
+        projectId: project.id,
+        originalPath: target,
+        recoveryPath: staged,
+        phase,
+        dev: initial.dev,
+        ino: initial.ino,
+      });
+    const cleanQuarantine = async () => {
+      await fs.unlink(manifest).catch(() => undefined);
+      await fs.unlink(nextManifest).catch(() => undefined);
+      await fs.rmdir(quarantine).catch(() => undefined);
+    };
+    let moved = false;
+    const restore = async (
+      reason:
+        | "changed"
+        | "not-orphan"
+        | "in-use"
+        | "contains-mount"
+        | "unavailable"
+        | "remove-failed"
+        | "cross-device",
+    ): Promise<RemoveOrphanResult> => {
+      if (!moved) {
+        await cleanQuarantine();
+        return { removed: false, reason };
+      }
+      try {
+        // Claim the old name exclusively; never overwrite another directory.
+        await fs.mkdir(target);
+        await fs.rename(staged, target);
+        moved = false;
+        if (reason === "remove-failed") {
+          // Keep the manifest so a later page load still warns about the
+          // partially removed tree even after another job has started.
+          return { removed: false, reason, recoveryPath: target };
+        }
+        await cleanQuarantine();
+        return { removed: false, reason };
+      } catch {
+        // Preserve the remaining data when the old name is occupied or
+        // restoration fails. The caller displays this path for recovery.
+        return { removed: false, reason, recoveryPath: staged };
+      }
+    };
+    try {
+      // This record exists before the move, so even a process crash leaves
+      // the original and recovery locations discoverable on the next boot.
+      await fs.writeFile(nextManifest, record("staged"), { flag: "wx", mode: 0o600 });
+      await fs.rename(nextManifest, manifest);
+      try {
+        await fs.rename(target, staged);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EXDEV") return await restore("cross-device");
+        throw error;
+      }
+      moved = true;
+      const stagedStat = await fs.lstat(staged);
+      if (
+        !stagedStat.isDirectory() ||
+        stagedStat.isSymbolicLink() ||
+        stagedStat.dev !== initial.dev ||
+        stagedStat.ino !== initial.ino
+      ) {
+        return await restore("changed");
+      }
+      const worktrees = await listWorktrees(project.cwd);
+      if (!worktrees) return await restore("unavailable");
+      if (overlapsRegistered(worktrees)) return await restore("not-orphan");
+      if ((await inUse(target)) || (await inUse(staged))) return await restore("in-use");
+      if ((await containsMount(target)) || (await containsMount(staged)))
+        return await restore("contains-mount");
+      const finalStat = await fs.lstat(staged);
+      if (
+        !finalStat.isDirectory() ||
+        finalStat.isSymbolicLink() ||
+        finalStat.dev !== initial.dev ||
+        finalStat.ino !== initial.ino
+      ) {
+        return await restore("changed");
+      }
+      // Persist the partial-deletion warning atomically before the first rm.
+      await fs.writeFile(nextManifest, record("deleting"), { flag: "wx", mode: 0o600 });
+      await fs.rename(nextManifest, manifest);
+      if ((await inUse(target)) || (await inUse(staged))) return await restore("in-use");
+      if ((await containsMount(target)) || (await containsMount(staged)))
+        return await restore("contains-mount");
+      const deletionStat = await fs.lstat(staged);
+      if (
+        !deletionStat.isDirectory() ||
+        deletionStat.isSymbolicLink() ||
+        deletionStat.dev !== initial.dev ||
+        deletionStat.ino !== initial.ino
+      ) {
+        return await restore("changed");
+      }
+      try {
+        await fs.rm(staged, { recursive: true });
+      } catch {
+        return await restore("remove-failed");
+      }
+      moved = false;
+      await cleanQuarantine();
+      return { removed: true, reclaimedBytes: bytes };
+    } catch {
+      return await restore("unavailable");
+    }
+  } catch (error) {
+    return {
+      removed: false,
+      reason:
+        error instanceof UnsupportedMountPlatformError ? "unsupported-platform" : "unavailable",
+    };
+  }
 }
 
 /**

@@ -21,6 +21,8 @@ import type {
   SpaceReportStatus,
   Measured,
   DevWorktreeStatus,
+  OrphanRemovalStatus,
+  OrphanRemovalSnapshot,
   CleanupJob,
   CleanupStatus,
 } from "./types.js";
@@ -104,6 +106,14 @@ export const systemApi = {
 
   getDevWorktrees: (refresh?: boolean) =>
     request<Measured<DevWorktreeStatus>>(`/api/storage/worktrees${refresh ? "?refresh=1" : ""}`),
+
+  removeOrphanWorktree: (projectId: number, path: string) =>
+    request<OrphanRemovalStatus>("/api/storage/worktrees/remove-orphan", {
+      method: "POST",
+      body: JSON.stringify({ projectId, path }),
+    }),
+
+  getOrphanRemoval: () => request<OrphanRemovalSnapshot>("/api/storage/worktrees/remove-orphan"),
 
   // Starts a cleanup in the background and returns at once; the server decides
   // which sources take part. Only the ticked cache ids that are ALSO in the

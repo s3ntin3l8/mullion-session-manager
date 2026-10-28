@@ -283,10 +283,29 @@ that `git worktree list` doesn't know is listed too, as **`orphaned`**, with its
 size: a worktree whose registration was pruned (`git worktree prune` after its
 `gitdir` went missing), or a directory that was never a worktree. A directory
 that only holds registered worktrees deeper down (`.wt/feat/` around a
-registered `.wt/feat/x`) is walked into, not reported. Orphans are
-**report-only**: nothing can tell whether one holds work, so cleanup never
-removes them and they are not counted in what it frees. Settings → Storage lists
-them under their own heading; delete one by hand once you've checked it.
+registered `.wt/feat/x`) is walked into, not reported. Orphans are excluded
+from automatic cleanup and its totals because nothing can tell whether they
+hold work. Settings → Storage offers a confirmed **Remove**
+action for one directory at a time. It deletes all files there, including
+uncommitted and ignored work. Before removing it, the server checks that it is
+still an unregistered orphan strictly under a local project's allowed root,
+not a symlink, and not used by a session or resumable task. It repeats the
+checks after measuring its size. The directory is moved to a private temporary
+location and its identity checked again before deletion. If it cannot be moved
+back after a refusal, the remaining files stay there and Storage displays the
+recovery path. A worktree root that resolves outside the approved roots can be
+listed but cannot be removed through this action. Directories containing mount
+points are refused, including Linux bind mounts. Mount detection is implemented
+on Linux and macOS; on Windows the action refuses until #2220 adds a safe check.
+A cross-filesystem move is refused, leaving the original directory in place.
+
+The server runs one orphan removal at a time as a background job. The POST
+returns `202`, and `GET /api/storage/worktrees/remove-orphan` returns its latest
+status and result, so a page reload or disconnected request can find it. The
+last job result is held until the server restarts. Recovery records are stored
+in Mullion's sessions data directory before the move, so they remain visible
+in Storage after a restart or project deletion; they are also logged. Storage
+keeps a recovery notice until it is dismissed in that browser.
 
 Known limits: a worktree outside `.wt/`, `.worktrees/` and `.claude/worktrees/` is never
 considered, orphaned or not (a sibling directory such as `../repo-wt-x` stays
@@ -365,3 +384,5 @@ Known limits: a worktree whose session row was deleted is no longer known to
 Mullion; one created before this existed is not tracked (they carry no
 `worktreeBranch`); and "pushed" is judged from the branch's upstream, not from
 whether some remote branch happens to contain its tip.
+
+During orphan removal a temporary `.mullion-orphan-*` directory can appear as untracked in the project. If restoration fails it remains there with the recovery files; check the recovery notice before moving them.
