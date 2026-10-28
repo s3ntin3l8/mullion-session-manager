@@ -23,7 +23,7 @@ export function approvalStateText(state: ApprovalState, rounds: number): string 
   const what =
     state === "awaiting-human"
       ? "approved, needs your approval"
-      : "approved, merging once CI is green";
+      : "approved, auto-approving once CI is green";
   if (rounds > 0) return `Round ${rounds} · ${what}`;
   return what.charAt(0).toUpperCase() + what.slice(1);
 }

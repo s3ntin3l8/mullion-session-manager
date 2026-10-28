@@ -583,7 +583,7 @@ export function TaskDetail({
             {task.approvalState === "awaiting-human"
               ? "The review approved this task. Nothing happens on its own from here — a human has to Approve it above."
               : task.approvalState === "auto-pending"
-                ? "The review approved this task. This project auto-approves, so it will be approved and merged without further action once CI is green."
+                ? "The review approved this task. This project auto-approves, so it will be approved automatically once CI is green."
                 : task.autoReturnRounds > 0 && capAnnounced
                   ? "The automatic loop has stopped — nothing further happens on its own from here. It still cannot approve, reject, or otherwise transition this task; that's your call above."
                   : task.autoReturnRounds > 0 && task.autoReturnCapped

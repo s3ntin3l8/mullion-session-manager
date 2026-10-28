@@ -560,7 +560,7 @@ describe("UnifiedBoard task columns", () => {
       ];
       render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
       expect(screen.getByRole("status")).toHaveTextContent(
-        "Round 1 · approved, merging once CI is green",
+        "Round 1 · approved, auto-approving once CI is green",
       );
     });
 

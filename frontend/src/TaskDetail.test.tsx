@@ -2061,7 +2061,7 @@ describe("TaskDetail approval state, latest round and host (#2234 #2235 #2236)",
     expect(screen.getByText("Approved, needs your approval")).toBeInTheDocument();
     unmount();
     render(<TaskDetail params={{ taskId: 2 }} onOpenSession={vi.fn()} />);
-    expect(screen.getByText("Approved, merging once CI is green")).toBeInTheDocument();
+    expect(screen.getByText("Approved, auto-approving once CI is green")).toBeInTheDocument();
     expect(screen.getByText(/auto-approves/)).toBeInTheDocument();
   });
 

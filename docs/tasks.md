@@ -366,7 +366,7 @@ the original session board used.
   hosts.
 - A `reviewing` task whose last review **approved** (and whose findings are
   ingested) shows a status strip — "Round N · approved, needs your approval",
-  or "approved, merging once CI is green" when the project auto-approves —
+  or "approved, auto-approving once CI is green" when the project auto-approves —
   instead of "returned to worker". The task row carries it as the derived
   `approvalState` (`awaiting-human` / `auto-pending` / `null`). The drawer's
   Review section leads with the latest round (verdict and finding counts) and
