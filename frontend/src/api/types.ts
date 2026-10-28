@@ -223,6 +223,13 @@ export interface OpencodeStorageStatus {
   holdersUnknownReason?: string;
   /** A compaction is running right now (it can take minutes). */
   compacting: boolean;
+  /** How the last compaction since the server started ended. */
+  lastPrune?: {
+    output: string;
+    reclaimedBytes: number;
+    error?: string;
+    finishedAt: string;
+  };
   error?: string;
 }
 
