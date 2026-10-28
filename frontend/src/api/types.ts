@@ -445,6 +445,9 @@ export interface Host {
   isLocal: boolean;
   hasToken: boolean;
   createdAt: string;
+  // "enrolled" = created by an agent registering with the fleet secret;
+  // "manual" = added in Settings (including every pre-#245 row).
+  origin?: "manual" | "enrolled";
   health: HostHealthStatus;
   // Not currently rendered anywhere — kept for a future "last seen Nm ago"
   // affordance (would make a "degraded" host more actionable than a bare

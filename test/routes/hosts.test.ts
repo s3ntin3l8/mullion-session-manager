@@ -6,6 +6,7 @@ import http from "node:http";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { appVersion } from "../../src/routes/server-info.js";
+import { enrollHost } from "../../src/services/host-registry.js";
 import { clearUpdateCheckCacheForTests } from "../../src/services/update-checker.js";
 
 const tmpDb = path.join(os.tmpdir(), `hosts-test-${process.pid}.db`);
@@ -1410,6 +1411,128 @@ describe("hosts route (issue #26)", () => {
     expect(localHost).toMatchObject({ health: "online", lastSeenAt: null, lastCheckedAt: null });
 
     await app.close();
+  });
+
+  describe("generated tokens, optional baseUrl and rotation", () => {
+    it("mints a token when none is given, returns it once, and never lists it", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "minted" },
+      });
+      expect(res.statusCode).toBe(201);
+      const body = res.json();
+      expect(body.token).toMatch(/^[0-9a-f]{64}$/);
+      // No baseUrl given: the host waits for its agent.
+      expect(body.baseUrl).toBeNull();
+      expect(body.hasToken).toBe(true);
+
+      const listed = await app.inject({ method: "GET", url: "/api/hosts" });
+      expect(listed.body).not.toContain(body.token);
+      const row = (listed.json() as Array<{ id: string; health: string }>).find(
+        (h) => h.id === body.id,
+      );
+      expect(row?.health).toBe("pending");
+      await app.close();
+    });
+
+    it("keeps a caller-supplied token and baseUrl exactly as given, without echoing the token", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "manual", baseUrl: "http://127.0.0.1:1", token: "my-own-token" },
+      });
+      expect(res.statusCode).toBe(201);
+      expect(res.json().baseUrl).toBe("http://127.0.0.1:1");
+      expect(res.body).not.toContain("my-own-token");
+      expect(res.json()).not.toHaveProperty("token");
+      await app.close();
+    });
+
+    it("still rejects an invalid baseUrl when one is given", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "bad", baseUrl: "not a url" },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("lets the minted token claim the host, which fills in the baseUrl", async () => {
+      const app = await buildApp();
+      const created = (
+        await app.inject({ method: "POST", url: "/api/hosts", payload: { name: "claimable" } })
+      ).json();
+      const reg = await app.inject({
+        method: "POST",
+        url: "/api/internal/register",
+        payload: { token: created.token, baseUrl: "http://10.0.0.9:4000", hostname: "box-9" },
+      });
+      expect(reg.statusCode).toBe(200);
+      expect(reg.json().host_id).toBe(created.id);
+      const listed = (await app.inject({ method: "GET", url: "/api/hosts" })).json() as Array<{
+        id: string;
+        baseUrl: string | null;
+      }>;
+      expect(listed.find((h) => h.id === created.id)?.baseUrl).toBe("http://10.0.0.9:4000");
+      await app.close();
+    });
+
+    it("rotates a token: the old one stops claiming, the new one claims", async () => {
+      const app = await buildApp();
+      const created = (
+        await app.inject({ method: "POST", url: "/api/hosts", payload: { name: "rotating" } })
+      ).json();
+      const rotated = await app.inject({
+        method: "POST",
+        url: `/api/hosts/${created.id}/rotate-token`,
+      });
+      expect(rotated.statusCode).toBe(200);
+      const { token } = rotated.json();
+      expect(token).toMatch(/^[0-9a-f]{64}$/);
+      expect(token).not.toBe(created.token);
+
+      const oldClaim = await app.inject({
+        method: "POST",
+        url: "/api/internal/register",
+        payload: { token: created.token, baseUrl: "http://10.0.0.9:4000", hostname: "box-9" },
+      });
+      expect(oldClaim.statusCode).toBe(401);
+      const newClaim = await app.inject({
+        method: "POST",
+        url: "/api/internal/register",
+        payload: { token, baseUrl: "http://10.0.0.9:4000", hostname: "box-9" },
+      });
+      expect(newClaim.statusCode).toBe(200);
+      await app.close();
+    });
+
+    it("refuses to rotate an enrolled host", async () => {
+      const app = await buildApp();
+      const enrolled = enrollHost(app, {
+        baseUrl: "http://10.0.0.7:4000",
+        hostname: "box-7",
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/hosts/${enrolled.hostId}/rotate-token`,
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("refuses to rotate the local host and 404s an unknown one", async () => {
+      const app = await buildApp();
+      const local = await app.inject({ method: "POST", url: "/api/hosts/local/rotate-token" });
+      expect(local.statusCode).toBe(400);
+      const unknown = await app.inject({ method: "POST", url: "/api/hosts/nope/rotate-token" });
+      expect(unknown.statusCode).toBe(404);
+      await app.close();
+    });
   });
 
   it("does not register a heartbeat tracker on the agent role", async () => {

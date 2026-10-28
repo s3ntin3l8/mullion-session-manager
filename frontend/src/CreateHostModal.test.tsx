@@ -12,30 +12,49 @@ import { CreateHostModal } from "./CreateHostModal.js";
 // test files).
 
 describe("CreateHostModal", () => {
-  it("shows an inline error instead of silently doing nothing when name/baseUrl are blank", async () => {
+  it("shows an inline error instead of silently doing nothing when the name is blank", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn();
     render(<CreateHostModal onClose={vi.fn()} onSave={onSave} />);
 
     await user.click(screen.getByRole("button", { name: "Add host" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Name and base URL are both required.",
-    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("A name is required.");
     expect(onSave).not.toHaveBeenCalled();
   });
 
-  it("requires a token in create mode but not in edit mode", async () => {
+  it("requires a token only when bringing your own", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockResolvedValue(undefined);
     render(<CreateHostModal onClose={vi.fn()} onSave={onSave} />);
 
     await user.type(screen.getByLabelText("Name"), "home-server");
-    await user.type(screen.getByLabelText(/^Base URL/), "http://192.168.1.20:4000");
+    await user.click(screen.getByLabelText("Use my own token"));
     await user.click(screen.getByRole("button", { name: "Add host" }));
 
-    expect(await screen.findByText(/A shared secret token is required/)).toBeInTheDocument();
+    expect(await screen.findByText(/Enter the token/)).toBeInTheDocument();
     expect(onSave).not.toHaveBeenCalled();
+  });
+
+  it("asks the primary to mint a token when none is brought, and shows the install step", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn().mockResolvedValue({ id: "h1", token: "minted-secret" });
+    const onClose = vi.fn();
+    render(<CreateHostModal onClose={onClose} onSave={onSave} />);
+
+    await user.type(screen.getByLabelText("Name"), "win-pc");
+    await user.clear(screen.getByLabelText(/^Primary URL/));
+    await user.type(screen.getByLabelText(/^Primary URL/), "http://dev-01:3100");
+    await user.click(screen.getByRole("button", { name: "Add host" }));
+
+    // Base URL and token are left empty so the backend omits them.
+    await waitFor(() => expect(onSave).toHaveBeenCalledWith("win-pc", "", ""));
+    expect(await screen.findByText("minted-secret")).toBeInTheDocument();
+    expect(screen.getByText(/-PrimaryUrl 'http:\/\/dev-01:3100'/)).toBeInTheDocument();
+    // The modal stays open on the install step until the user is done.
+    expect(onClose).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Done" }));
+    expect(onClose).toHaveBeenCalled();
   });
 
   it("submits trimmed values and closes on success", async () => {
@@ -46,6 +65,7 @@ describe("CreateHostModal", () => {
 
     await user.type(screen.getByLabelText("Name"), "  home-server  ");
     await user.type(screen.getByLabelText(/^Base URL/), "  http://192.168.1.20:4000  ");
+    await user.click(screen.getByLabelText("Use my own token"));
     await user.type(screen.getByLabelText(/^Token/), "  secret  ");
     await user.click(screen.getByRole("button", { name: "Add host" }));
 
@@ -89,6 +109,7 @@ describe("CreateHostModal", () => {
 
     await user.type(screen.getByLabelText("Name"), "home-server");
     await user.type(screen.getByLabelText(/^Base URL/), "http://192.168.1.20:4000");
+    await user.click(screen.getByLabelText("Use my own token"));
     await user.type(screen.getByLabelText(/^Token/), "secret");
     await user.click(screen.getByRole("button", { name: "Add host" }));
 
@@ -118,6 +139,7 @@ describe("re-entry guard (audit finding 18)", () => {
 
     await user.type(screen.getByLabelText("Name"), "home-server");
     await user.type(screen.getByLabelText(/^Base URL/), "http://192.168.1.20:4000");
+    await user.click(screen.getByLabelText("Use my own token"));
     await user.type(screen.getByLabelText(/^Token/), "secret");
 
     const submit = screen.getByRole("button", { name: "Add host" });
@@ -137,6 +159,7 @@ describe("re-entry guard (audit finding 18)", () => {
 
     await user.type(screen.getByLabelText("Name"), "home-server");
     await user.type(screen.getByLabelText(/^Base URL/), "http://192.168.1.20:4000");
+    await user.click(screen.getByLabelText("Use my own token"));
     await user.type(screen.getByLabelText(/^Token/), "secret{Enter}");
     await user.type(screen.getByLabelText(/^Token/), "{Enter}");
 
@@ -150,6 +173,7 @@ describe("re-entry guard (audit finding 18)", () => {
 
     await user.type(screen.getByLabelText("Name"), "home-server");
     await user.type(screen.getByLabelText(/^Base URL/), "http://192.168.1.20:4000");
+    await user.click(screen.getByLabelText("Use my own token"));
     await user.type(screen.getByLabelText(/^Token/), "secret");
     await user.click(screen.getByRole("button", { name: "Add host" }));
 

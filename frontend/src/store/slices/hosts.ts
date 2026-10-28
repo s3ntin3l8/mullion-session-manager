@@ -15,6 +15,12 @@ export const createHostsSlice: StateCreator<DashboardState, [], [], HostsSlice> 
     return host;
   },
 
+  rotateHostToken: async (id) => {
+    const { token } = await api.rotateHostToken(id);
+    await get().refreshHosts();
+    return token;
+  },
+
   updateHost: async (id, patch) => {
     await api.updateHost(id, patch);
     await get().refreshHosts();

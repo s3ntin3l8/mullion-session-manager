@@ -556,7 +556,13 @@ export interface HostsSlice {
   // not just Settings -> Hosts.
   hosts: Host[];
   refreshHosts: () => Promise<void>;
-  createHost: (name: string, baseUrl: string, token: string) => Promise<Host>;
+  createHost: (
+    name: string,
+    baseUrl?: string,
+    token?: string,
+  ) => Promise<Host & { token?: string }>;
+  /** Mints a new token for a remote host and returns it (shown once). */
+  rotateHostToken: (id: string) => Promise<string>;
   updateHost: (
     id: string,
     // Issue #1725 / roadmap 8.11 — `drained` parks the host (it takes no

@@ -783,7 +783,10 @@ export function CreateProjectModal({
               onChange={setHostId}
               options={[
                 { value: LOCAL_HOST_ID, label: "This machine" },
-                ...remoteHosts.map((h) => ({ value: h.id, label: h.name })),
+                ...remoteHosts.map((h) => ({
+                  value: h.id,
+                  label: h.baseUrl === null ? `${h.name} (not connected yet)` : h.name,
+                })),
               ]}
             />
           </span>
