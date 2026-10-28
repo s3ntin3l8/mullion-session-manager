@@ -122,8 +122,9 @@ export function attachSocketToSession(
   const wasAlive = app.pty.get(id)?.isAlive ?? false;
   const session = app.pty.getOrCreate({ id, cwd, command, cols, rows, env });
 
+  const backlog = session.getScrollback();
   app.log.info(
-    { sessionId: id, cwd, command, alreadyAlive: session.isAlive },
+    { sessionId: id, cwd, command, alreadyAlive: session.isAlive, backlogBytes: backlog.length },
     "terminal ws attached",
   );
 
@@ -157,7 +158,6 @@ export function attachSocketToSession(
   // case (browser tab closed, Node process never restarted) this alone
   // reconstructs the screen correctly, with no dtach-level reattach
   // involved at all — see pty-manager.ts.
-  const backlog = session.getScrollback();
   if (backlog.length > 0) socket.send(backlog);
   sendGeometry();
 
