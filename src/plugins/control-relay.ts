@@ -5,7 +5,8 @@ import {
   materializeControlRelaySocket,
   type ControlRelayAgentHandle,
 } from "../services/control-relay-agent.js";
-import type { MuxConnection } from "../services/ssh-agent-mux.js";
+import type { WebSocket } from "ws";
+import { createMuxConnection, type MuxConnection } from "../services/ssh-agent-mux.js";
 
 // Issue #1656 — agent role only. Serves the local `relay.sock` the sessions on
 // this host reach the primary's control surface through; the primary's
@@ -20,17 +21,55 @@ export interface ControlRelayHolder {
   handle: ControlRelayAgentHandle | null;
 }
 
+/**
+ * Adopts the primary's dial-in as THE relay connection (superseding any
+ * earlier one). Relayed clients are told the relay dropped from the raw
+ * socket's own "close", registered before the mux's: the mux's teardown closes
+ * every channel first, which destroys the local sockets, so by the time
+ * `mux.onClose` fires there is no one left to tell.
+ */
+export function acceptControlRelayConnection(
+  app: Pick<FastifyInstance, "controlRelayConnection" | "log">,
+  socket: WebSocket,
+): void {
+  const holder = app.controlRelayConnection;
+  // Superseding, not accumulating: a reconnect that lands before the old
+  // connection notices it is dead must not leave its channels orphaned.
+  holder.current?.close();
+  let mux: MuxConnection | null = null;
+  socket.on("close", () => {
+    if (mux !== null && holder.current === mux) holder.handle?.relayDown("connection closed");
+  });
+  mux = createMuxConnection(socket, { channelIdParity: "even" });
+  holder.current = mux;
+  app.log.debug({}, "control-relay: primary<->agent connection established");
+  const accepted = mux;
+  accepted.onClose((reason) => {
+    // A newer connection may already have superseded this one.
+    if (holder.current !== accepted) return;
+    holder.current = null;
+    app.log.debug({ reason }, "control-relay: primary<->agent connection closed");
+  });
+}
+
 export const controlRelayPlugin = fp(async (app: FastifyInstance) => {
   const holder: ControlRelayHolder = { current: null, handle: null };
   app.decorate("controlRelayConnection", holder);
   if (!app.controlRelayExpected) return;
 
-  holder.handle = await materializeControlRelaySocket({
-    socketPath: controlRelaySocketPath(app.pty.sessionsDir),
-    resolveToken: (token) => app.pty.resolveToken(token),
-    getMux: () => holder.current,
-    log: app.log,
-  });
+  const socketPath = controlRelaySocketPath(app.pty.sessionsDir);
+  try {
+    holder.handle = await materializeControlRelaySocket({
+      socketPath,
+      resolveToken: (token) => app.pty.resolveToken(token),
+      getMux: () => holder.current,
+      log: app.log,
+    });
+  } catch (err) {
+    // Optional feature: the agent keeps serving its sessions; they just cannot
+    // reach the primary's control surface until this is fixed.
+    app.log.error({ err, socketPath }, "failed to serve the control relay socket");
+  }
   app.addHook("onClose", async () => {
     await holder.handle?.close();
   });

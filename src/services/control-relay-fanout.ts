@@ -38,6 +38,8 @@ const FAILURE_RELOG_INTERVAL = 5;
 const CONNECT_TIMEOUT_MS = 10_000;
 /** An agent that answered the upgrade with 404 predates the relay: probe it
  * again this rarely, so an upgraded agent is picked up without a restart. */
+/** How long a denied channel may linger before the primary closes it. */
+const DENIED_CHANNEL_LINGER_MS = 5_000;
 const UNSUPPORTED_RETRY_MS = 10 * 60_000;
 
 interface HostFanout {
@@ -68,6 +70,9 @@ function deny(channel: MuxChannel, status: number, error: string): void {
   if (!channel.closed) {
     channel.send(relayErrorFrame(status, error));
     channel.eof();
+    // The agent closes its end once its client is done; this is the backstop
+    // for one that never does, so a denied channel cannot hold its slot.
+    setTimeout(() => channel.close(), DENIED_CHANNEL_LINGER_MS).unref();
   }
 }
 

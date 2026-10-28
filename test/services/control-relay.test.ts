@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +16,10 @@ import {
   materializeControlRelaySocket,
   type ControlRelayAgentHandle,
 } from "../../src/services/control-relay-agent.js";
+import {
+  acceptControlRelayConnection,
+  type ControlRelayHolder,
+} from "../../src/plugins/control-relay.js";
 import { serveRelayChannel } from "../../src/services/control-relay-fanout.js";
 import { createMuxConnection, type MuxConnection } from "../../src/services/ssh-agent-mux.js";
 
@@ -115,6 +119,7 @@ describe("relay header", () => {
       '{"relay":1,"sessionId":"0"}',
       '{"relay":1,"sessionId":"1; drop"}',
       '{"relay":1}',
+      '{"relay":1,"sessionId":"1234567890123456"}',
     ]) {
       expect(parseRelayHeader(bad)).toBeNull();
     }
@@ -144,6 +149,17 @@ describe("createDuplexPair", () => {
     a.destroy();
     await closed;
     expect(b.destroyed).toBe(true);
+  });
+
+  it("delivers a large write in socket-sized pieces", async () => {
+    const [a, b] = createDuplexPair();
+    const sizes: number[] = [];
+    b.on("data", (c: Buffer) => sizes.push(c.length));
+    a.write(Buffer.alloc(600 * 1024));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(sizes.reduce((x, y) => x + y, 0)).toBe(600 * 1024);
+    expect(Math.max(...sizes)).toBeLessThanOrEqual(64 * 1024);
+    a.destroy();
   });
 
   it("holds a write until the reader drains (backpressure)", async () => {
@@ -353,5 +369,34 @@ describe("serveRelayChannel header handling", () => {
     const got = new Promise<Buffer>((r) => channel.onData(r));
     channel.send(encodeRelayHeader("1"));
     expect(JSON.parse((await got).toString("utf8"))).toMatchObject({ ok: false, status: 503 });
+  });
+});
+
+describe("acceptControlRelayConnection", () => {
+  const holderOf = () => {
+    const relayDown = vi.fn();
+    return {
+      holder: { current: null, handle: { relayDown } } as unknown as ControlRelayHolder,
+      relayDown,
+    };
+  };
+  const log = { debug: vi.fn() } as never;
+
+  it("adopts the connection, supersedes an earlier one, and tells clients when it drops", () => {
+    const { holder, relayDown } = holderOf();
+    const app = { controlRelayConnection: holder, log };
+    const first = new FakeSocket();
+    acceptControlRelayConnection(app, first as never);
+    const firstMux = holder.current;
+    expect(firstMux).not.toBeNull();
+    const second = new FakeSocket();
+    acceptControlRelayConnection(app, second as never);
+    expect(holder.current).not.toBe(firstMux);
+    // The superseded connection closing must not clear its replacement.
+    expect(holder.current).not.toBeNull();
+    const before = relayDown.mock.calls.length;
+    second.close();
+    expect(relayDown.mock.calls.length).toBe(before + 1);
+    expect(holder.current).toBeNull();
   });
 });

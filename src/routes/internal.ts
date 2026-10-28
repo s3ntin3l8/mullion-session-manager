@@ -133,6 +133,7 @@ import { resolveGlobalPresets } from "./actions.js";
 import { attachSocketToSession } from "./terminal.js";
 import { attachLocalEventsSocket, attachCursorsAndSeenBroadcast } from "./events.js";
 import { createMuxConnection } from "../services/ssh-agent-mux.js";
+import { acceptControlRelayConnection } from "../plugins/control-relay.js";
 import { resolveSshAuthSock } from "../services/ssh-agent-socket.js";
 import type { SessionInfo } from "../services/pty-manager.js";
 import {
@@ -3060,22 +3061,7 @@ export async function internalRoutes(app: FastifyInstance) {
   app.get(
     "/internal/ws/control-relay",
     { websocket: true, config: INTERNAL_RATE_LIMIT.config },
-    (socket) => {
-      const holder = app.controlRelayConnection;
-      // Superseding, not accumulating: a reconnect that lands before the old
-      // connection notices it is dead must not leave its channels orphaned.
-      holder.current?.close();
-      const mux = createMuxConnection(socket, { channelIdParity: "even" });
-      holder.current = mux;
-      app.log.debug({}, "control-relay: primary<->agent connection established");
-      mux.onClose((reason) => {
-        // A newer connection may already have superseded this one.
-        if (holder.current !== mux) return;
-        holder.current = null;
-        holder.handle?.relayDown(reason);
-        app.log.debug({ reason }, "control-relay: primary<->agent connection closed");
-      });
-    },
+    (socket) => acceptControlRelayConnection(app, socket),
   );
 
   // The two-hop preview proxy's agent-side half (issue #28 phase 6): the

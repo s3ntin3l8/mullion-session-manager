@@ -43,7 +43,7 @@ export function parseRelayHeader(line: string): { sessionId: string } | null {
   if (typeof value !== "object" || value === null) return null;
   const { relay, sessionId } = value as { relay?: unknown; sessionId?: unknown };
   if (relay !== RELAY_VERSION) return null;
-  if (typeof sessionId !== "string" || !/^[1-9]\d{0,15}$/.test(sessionId)) return null;
+  if (typeof sessionId !== "string" || !/^[1-9]\d{0,14}$/.test(sessionId)) return null;
   return { sessionId };
 }
 
@@ -52,6 +52,8 @@ export function parseRelayHeader(line: string): { sessionId: string } | null {
 export function relayErrorFrame(status: number, error: string): Buffer {
   return Buffer.from(`${JSON.stringify({ id: null, ok: false, status, error })}\n`, "utf8");
 }
+
+const MAX_PAIR_CHUNK_BYTES = 64 * 1024;
 
 class PairedHalf extends Duplex {
   peer!: PairedHalf;
@@ -69,7 +71,14 @@ class PairedHalf extends Duplex {
     _encoding: BufferEncoding,
     cb: (err?: Error | null) => void,
   ): void {
-    if (this.peer.push(chunk)) cb();
+    // Delivered in socket-sized pieces: pipeNetSocketToChannel assumes a real
+    // socket's chunks (<= 64 KiB) and can never send one larger than the mux
+    // window, so a whole 2 MiB reply frame as one chunk would stall forever.
+    let ok = true;
+    for (let at = 0; at < chunk.length; at += MAX_PAIR_CHUNK_BYTES) {
+      ok = this.peer.push(chunk.subarray(at, at + MAX_PAIR_CHUNK_BYTES)) && ok;
+    }
+    if (ok) cb();
     else this.held = () => cb();
   }
 
