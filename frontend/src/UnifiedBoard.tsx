@@ -434,7 +434,7 @@ export function UnifiedBoard({
   // or Tasks was not showing), so consume it on mount and whenever it changes.
   const pendingOpenTaskId = useDashboardStore((s) => s.pendingOpenTaskId);
   useEffect(() => {
-    if (pendingOpenTaskId === null) return;
+    if (pendingOpenTaskId == null) return;
     // Deferred: react-hooks/set-state-in-effect disallows a synchronous
     // setState from an effect body (same pattern as useSessionDeepLink).
     const timer = setTimeout(() => {
