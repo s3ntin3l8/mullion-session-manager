@@ -52,7 +52,8 @@ export function useOrphanRemoval(
         if (request !== latest.current) return null;
         setError(null);
         recoveriesRef.current(snapshot.recoveries);
-        setWarnings(snapshot.warnings ?? []);
+        // Running snapshots omit the index; retain the last known warnings.
+        if (snapshot.warnings) setWarnings(snapshot.warnings);
         apply(snapshot.job);
         return snapshot.job;
       },

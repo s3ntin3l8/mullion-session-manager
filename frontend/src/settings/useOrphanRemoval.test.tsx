@@ -53,3 +53,30 @@ it("does not lose an accepted removal when an older focus poll finishes late", a
   });
   expect(result.current.job.state).toBe("running");
 });
+
+it("keeps recovery warnings while the server omits the index during a job", async () => {
+  const get = vi
+    .spyOn(api, "getOrphanRemoval")
+    .mockResolvedValueOnce({ job: { state: "idle" }, recoveries: [], warnings: ["Broken record"] })
+    .mockResolvedValue({
+      job: {
+        id: "warning-job",
+        projectId: 1,
+        path: "/p/.wt/x",
+        state: "running",
+        startedAt: new Date().toISOString(),
+      },
+      recoveries: [],
+    });
+  const { result } = renderHook(() =>
+    useOrphanRemoval(
+      () => {},
+      () => {},
+    ),
+  );
+  await waitFor(() => expect(result.current.warnings).toEqual(["Broken record"]));
+  act(() => window.dispatchEvent(new Event("focus")));
+  await waitFor(() => expect(get).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(result.current.job.state).toBe("running"));
+  expect(result.current.warnings).toEqual(["Broken record"]);
+});

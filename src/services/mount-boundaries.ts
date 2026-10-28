@@ -42,8 +42,15 @@ export function parseDarwinMounts(value: string): string[] {
 
 export class UnsupportedMountPlatformError extends Error {}
 
+export function assertMountSupport(): void {
+  if (process.platform !== "linux" && process.platform !== "darwin") {
+    throw new UnsupportedMountPlatformError("Mount detection is unavailable on this platform");
+  }
+}
+
 /** True when a mount lies at or under this path. Unknown mount tables throw. */
 export async function containsMount(target: string): Promise<boolean> {
+  assertMountSupport();
   let mounts: string[];
   if (process.platform === "linux") {
     mounts = parseLinuxMountInfo(await fs.readFile("/proc/self/mountinfo", "utf8"));

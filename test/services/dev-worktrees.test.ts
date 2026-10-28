@@ -703,9 +703,9 @@ describe("dev-worktrees", () => {
 
     it("reports unsupported mount detection without touching the directory", async () => {
       const dir = orphan();
-      const check = vi
-        .spyOn(mountBoundaries, "containsMount")
-        .mockRejectedValueOnce(new mountBoundaries.UnsupportedMountPlatformError());
+      const check = vi.spyOn(mountBoundaries, "assertMountSupport").mockImplementationOnce(() => {
+        throw new mountBoundaries.UnsupportedMountPlatformError();
+      });
       try {
         await expect(removeOrphan(project, dir, unused)).resolves.toEqual({
           removed: false,

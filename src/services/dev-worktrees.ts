@@ -12,7 +12,11 @@ import {
 import { getGitStatus } from "./git-status.js";
 import { removeListedWorktree } from "./git-worktree.js";
 import { dirSize } from "./temp-storage.js";
-import { containsMount, UnsupportedMountPlatformError } from "./mount-boundaries.js";
+import {
+  assertMountSupport,
+  containsMount,
+  UnsupportedMountPlatformError,
+} from "./mount-boundaries.js";
 import type { GitBranchInfo, GitWorktreeInfo } from "../shared/types.js";
 
 // Developer worktrees (issue #1605): `.wt/<slug>`, this repo's own convention,
@@ -465,6 +469,7 @@ export async function removeOrphanedDevWorktree(
     return { removed: false, reason: "invalid-path" };
   }
   try {
+    assertMountSupport();
     const projectRoot = await fs.realpath(project.cwd);
     const initial = await fs.lstat(requestedPath);
     if (!initial.isDirectory() || initial.isSymbolicLink()) {
