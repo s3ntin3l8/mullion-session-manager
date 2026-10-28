@@ -982,11 +982,17 @@ export function TerminalPane(props: {
     // `connectionGeneration` once a newer connect() has run, so it's
     // harmlessly ignored no matter how late it arrives.
     //
-    // The same guard covers terminal *query replies* (CPR/DSR, DA, DECRQM,
-    // OSC 10/11/12): a query the program sent at startup (Codex probes
-    // `CSI 6n` and the colors) is still in the backlog, and xterm would
-    // answer it again on every reattach. The program isn't waiting for that
-    // reply, so it lands in its input as stray text (e.g. `[21;3R`).
+    // The same guard covers xterm's own terminal *query replies* (CPR/DSR,
+    // DA, DECRQM, DECRQSS): a query the program sent at startup (Codex probes
+    // `CSI 6n`) is still in the backlog, and xterm would answer it again on
+    // every reattach. Usually the program isn't waiting for that reply, so it
+    // lands in its input as stray text (e.g. `[21;3R`). Tradeoff: a program
+    // genuinely blocked on a query the pane unmounted before answering used to
+    // recover on reattach; swallowing leaves it waiting until its own timeout
+    // or next keystroke. Narrow, and far rarer than the stray-text case.
+    // The OSC 10/11/12 *color* queries are deliberately NOT guarded: Codex
+    // fixes its palette from the reply it gets shortly after launch, so a
+    // reply on replay is often the only one it ever gets.
     let connectionGeneration = 0;
     let replayCompleteGeneration = 0;
     const isReplaying = () => replayCompleteGeneration !== connectionGeneration;
@@ -1056,7 +1062,7 @@ export function TerminalPane(props: {
     const oscColorSubs = OSC_COLOR_IDENTS.map(([ident, key]) =>
       term.parser.registerOscHandler(ident, (data) => {
         if (data !== "?") return false;
-        if (isReplaying() || ws?.readyState !== WebSocket.OPEN) return true;
+        if (ws?.readyState !== WebSocket.OPEN) return true;
         const hex = term.options.theme?.[key];
         if (typeof hex !== "string") return true;
         const clean = hex.replace("#", "");
@@ -1081,6 +1087,10 @@ export function TerminalPane(props: {
     ];
     const csiQuerySubs = REPLAY_QUERY_CSI.map((id) =>
       term.parser.registerCsiHandler(id, () => isReplaying()),
+    );
+    // DECRQSS (`DCS $ q …`, e.g. `$qm` for SGR): xterm replies via onData too.
+    csiQuerySubs.push(
+      term.parser.registerDcsHandler({ intermediates: "$", final: "q" }, () => isReplaying()),
     );
 
     let lastCols = term.cols;
