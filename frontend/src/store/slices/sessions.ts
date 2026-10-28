@@ -1,5 +1,6 @@
 import type { StateCreator } from "zustand";
 import { api, AuthExpiredError, RateLimitedError } from "../../api/index.js";
+import type { Session } from "../../api/index.js";
 import { BACKEND_UNREACHABLE_THRESHOLD, LIVE_REFRESH_INTERVAL_MS } from "../constants.js";
 import { pruneDismissedEventKeys, pruneSessionKeyedRecord } from "../helpers.js";
 import { writeDismissedEventKeys } from "../../lib/persistedState.js";
@@ -65,9 +66,35 @@ export function __resetSessionRefreshBlockForTests(): void {
 let refreshSessionsActiveRun: Promise<void> | null = null;
 let refreshSessionsQueuedRun: Promise<void> | null = null;
 
+// Issue #2255 — sessions createSession() put into the store from the POST's
+// own response, before any list fetch has seen them. A list fetch that was
+// already in flight (and holds a pre-POST snapshot) must not wipe such a row
+// when it lands: it is re-added until a fetch contains it, or for at most
+// PENDING_CREATED_TTL_MS (a row the server never lists is gone, not pending).
+const PENDING_CREATED_TTL_MS = 30_000;
+const pendingCreatedSessions = new Map<number, { session: Session; at: number }>();
+
+function withPendingCreated(fetched: Session[]): Session[] {
+  if (pendingCreatedSessions.size === 0) return fetched;
+  const listed = new Set(fetched.map((s) => s.id));
+  const now = Date.now();
+  const missing: Session[] = [];
+  for (const [id, entry] of pendingCreatedSessions) {
+    if (listed.has(id) || now - entry.at > PENDING_CREATED_TTL_MS) {
+      pendingCreatedSessions.delete(id);
+    } else {
+      missing.push(entry.session);
+    }
+  }
+  // Appended (not sorted in): a new session sits last until a fetch lists it,
+  // then the server's own order applies. Deliberate and short-lived.
+  return missing.length > 0 ? [...fetched, ...missing] : fetched;
+}
+
 export function __resetRefreshSessionsInFlightForTests(): void {
   refreshSessionsActiveRun = null;
   refreshSessionsQueuedRun = null;
+  pendingCreatedSessions.clear();
 }
 
 export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsSlice> = (
@@ -82,7 +109,7 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
   refreshSessions: () => {
     const runOnce = async (): Promise<void> => {
       try {
-        const sessions = await api.listSessions();
+        const sessions = withPendingCreated(await api.listSessions());
         // Prune the three per-session-id maps down to only currently-live
         // session ids — see pruneSessionKeyedRecord's own doc comment
         // (store/helpers.ts) for the exact boundary (gone-from-the-API-
@@ -197,7 +224,23 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
 
   createSession: async (projectId, command, opts) => {
     const session = await api.createSession(projectId, command, opts);
-    await get().refreshSessions();
+    // Issue #2255 — the caller opens the session's pane as soon as this
+    // resolves, and the list refresh can take seconds (it waits on every
+    // remote host, and queues behind an in-flight poll). A program that asks
+    // the terminal for its colors at startup needs that pane quickly, so the
+    // POST's own row goes into the store now and the list reconciles it in
+    // the background.
+    pendingCreatedSessions.set(session.id, { session, at: Date.now() });
+    set((state) => ({
+      sessions: state.sessions.some((s) => s.id === session.id)
+        ? state.sessions.map((s) => (s.id === session.id ? session : s))
+        : [...state.sessions, session],
+    }));
+    // A failed background refresh is the poll loop's business (it has its own
+    // failure bookkeeping); it must not surface as an unhandled rejection.
+    get()
+      .refreshSessions()
+      .catch(() => {});
     return session;
   },
 
@@ -259,6 +302,7 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
 
   deleteSession: async (id) => {
     await api.deleteSession(id);
+    pendingCreatedSessions.delete(id);
     // Same reason as renameSession above: the delete already happened on
     // the server, so a failed re-sync must not be reported as a failed
     // kill. Without this, a 429 on the follow-up GET turned a successful

@@ -214,3 +214,105 @@ describe("store.refreshSessions in-flight coalescing (issue #1008)", () => {
     expect(useDashboardStore.getState().sessionExpired).toBe(true);
   });
 });
+
+describe("store.createSession does not wait on the list refresh (issue #2255)", () => {
+  beforeEach(() => {
+    __resetRefreshSessionsInFlightForTests();
+    useDashboardStore.setState({ sessions: [], sessionsLoaded: false, backendReachable: true });
+    vi.restoreAllMocks();
+  });
+
+  it("resolves with the new session in the store while the list fetch is still pending", async () => {
+    const created = session(7);
+    vi.spyOn(api, "createSession").mockResolvedValue(created);
+    // A list fetch that never settles, as with a host that does not answer.
+    const listSessions = vi
+      .spyOn(api, "listSessions")
+      .mockImplementation(() => new Promise(() => {}));
+
+    await expect(useDashboardStore.getState().createSession(1, "claude")).resolves.toBe(created);
+
+    expect(useDashboardStore.getState().sessions).toEqual([created]);
+    // ...and the list is still reconciled in the background.
+    expect(listSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the new row when a list fetch that started before the POST lands, until a fetch lists it", async () => {
+    const created = session(7);
+    let resolveStale: ((s: Session[]) => void) | undefined;
+    // Started before the POST: its snapshot does not contain the new session.
+    vi.spyOn(api, "listSessions")
+      .mockImplementationOnce(
+        () =>
+          new Promise<Session[]>((resolve) => {
+            resolveStale = resolve;
+          }),
+      )
+      .mockResolvedValueOnce([session(1), created]);
+    vi.spyOn(api, "createSession").mockResolvedValue(created);
+
+    const stalePoll = useDashboardStore.getState().refreshSessions();
+    await useDashboardStore.getState().createSession(1, "claude");
+    resolveStale!([session(1)]);
+    await stalePoll;
+
+    // The stale snapshot did not wipe the row the POST returned...
+    expect(useDashboardStore.getState().sessions.map((s) => s.id)).toEqual([1, 7]);
+
+    // ...and once a fetch lists it, the list is authoritative again.
+    await useDashboardStore.getState().refreshSessions();
+    expect(useDashboardStore.getState().sessions.map((s) => s.id)).toEqual([1, 7]);
+    vi.spyOn(api, "listSessions").mockResolvedValue([session(1)]);
+    await useDashboardStore.getState().refreshSessions();
+    expect(useDashboardStore.getState().sessions.map((s) => s.id)).toEqual([1]);
+  });
+
+  it("does not re-add a created session that was deleted before any list fetch listed it", async () => {
+    const created = session(7);
+    vi.spyOn(api, "createSession").mockResolvedValue(created);
+    vi.spyOn(api, "deleteSession").mockResolvedValue(undefined as never);
+    // Neither refresh lists the session (it is gone server-side).
+    vi.spyOn(api, "listSessions").mockResolvedValue([session(1)]);
+
+    await useDashboardStore.getState().createSession(1, "claude");
+    await useDashboardStore.getState().deleteSession(7);
+    await useDashboardStore.getState().refreshSessions();
+
+    expect(useDashboardStore.getState().sessions.map((s) => s.id)).toEqual([1]);
+  });
+
+  it("does not report a failed background refresh as an unhandled rejection", async () => {
+    vi.spyOn(api, "createSession").mockResolvedValue(session(7));
+    vi.spyOn(api, "listSessions").mockRejectedValue(new Error("down"));
+    // Node's process object exists under vitest; the frontend tsconfig just
+    // has no node types, so it is reached through globalThis.
+    const proc = (
+      globalThis as unknown as {
+        process: {
+          on: (e: string, f: () => void) => void;
+          off: (e: string, f: () => void) => void;
+        };
+      }
+    ).process;
+    const unhandled = vi.fn();
+    proc.on("unhandledRejection", unhandled);
+
+    await useDashboardStore.getState().createSession(1, "claude");
+    await new Promise((r) => setTimeout(r, 10));
+    proc.off("unhandledRejection", unhandled);
+
+    expect(unhandled).not.toHaveBeenCalled();
+  });
+
+  it("replaces a row the list already delivered instead of duplicating it", async () => {
+    const stale = session(7, { name: "stale" });
+    const created = session(7, { name: "fresh" });
+    useDashboardStore.setState({ sessions: [stale] });
+    vi.spyOn(api, "createSession").mockResolvedValue(created);
+    vi.spyOn(api, "listSessions").mockImplementation(() => new Promise(() => {}));
+
+    await useDashboardStore.getState().createSession(1, "claude");
+
+    expect(useDashboardStore.getState().sessions).toEqual([created]);
+  });
+});
