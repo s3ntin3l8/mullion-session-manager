@@ -1704,6 +1704,67 @@ describe("RemoteHostClient", () => {
     expect(r2).toEqual({ "1": null, "2": null });
   });
 
+  describe("bulkLiveStatus against a host that does not answer (#2255)", () => {
+    afterEach(() => vi.useRealTimers());
+
+    const refuse = () => Promise.reject(new TypeError("fetch failed"));
+
+    it("fails immediately, without another request, while the host is down", async () => {
+      fetchMock.mockImplementation(refuse);
+      const c = client();
+      await expect(c.bulkLiveStatus(["1"], 1000)).rejects.toBeInstanceOf(HostUnreachableError);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      await expect(c.bulkLiveStatus(["1"], 1000)).rejects.toBeInstanceOf(HostUnreachableError);
+      await expect(c.bulkLiveStatus(["2"], 1000)).rejects.toBeInstanceOf(HostUnreachableError);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("probes once in the background per cooldown and recovers when the host answers", async () => {
+      vi.useFakeTimers();
+      fetchMock.mockImplementation(refuse);
+      const c = client();
+      await expect(c.bulkLiveStatus(["1"], 1000)).rejects.toBeInstanceOf(HostUnreachableError);
+
+      // Cooldown over: the read still fails fast, but one probe goes out. Two
+      // reads in the same tick must not fire two probes.
+      vi.advanceTimersByTime(10_001);
+      fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(200, { "1": null })));
+      const first = c.bulkLiveStatus(["1"], 1000);
+      const second = c.bulkLiveStatus(["1"], 1000);
+      await expect(first).rejects.toBeInstanceOf(HostUnreachableError);
+      await expect(second).rejects.toBeInstanceOf(HostUnreachableError);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+
+      // The probe succeeded, so the next read is served normally.
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(c.bulkLiveStatus(["1"], 1000)).resolves.toEqual({ "1": null });
+    });
+
+    it("stays down, and waits another cooldown, when the probe fails too", async () => {
+      vi.useFakeTimers();
+      fetchMock.mockImplementation(refuse);
+      const c = client();
+      await expect(c.bulkLiveStatus(["1"], 1000)).rejects.toBeInstanceOf(HostUnreachableError);
+
+      vi.advanceTimersByTime(10_001);
+      await expect(c.bulkLiveStatus(["1"], 1000)).rejects.toBeInstanceOf(HostUnreachableError);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+
+      await expect(c.bulkLiveStatus(["1"], 1000)).rejects.toBeInstanceOf(HostUnreachableError);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not treat a host that answers with an error as down", async () => {
+      fetchMock.mockImplementation(() => Promise.resolve(new Response("{}", { status: 429 })));
+      const c = client();
+      await expect(c.bulkLiveStatus(["1"], 1000)).rejects.toBeInstanceOf(HostRequestError);
+      await expect(c.bulkLiveStatus(["1"], 1000)).rejects.toBeInstanceOf(HostRequestError);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("bypasses the cache for a fresh bulkLiveStatus, and leaves the cache alone (#1962)", async () => {
     let n = 0;
     fetchMock.mockImplementation(() =>

@@ -214,3 +214,38 @@ describe("store.refreshSessions in-flight coalescing (issue #1008)", () => {
     expect(useDashboardStore.getState().sessionExpired).toBe(true);
   });
 });
+
+describe("store.createSession does not wait on the list refresh (issue #2255)", () => {
+  beforeEach(() => {
+    __resetRefreshSessionsInFlightForTests();
+    useDashboardStore.setState({ sessions: [], sessionsLoaded: false, backendReachable: true });
+    vi.restoreAllMocks();
+  });
+
+  it("resolves with the new session in the store while the list fetch is still pending", async () => {
+    const created = session(7);
+    vi.spyOn(api, "createSession").mockResolvedValue(created);
+    // A list fetch that never settles, as with a host that does not answer.
+    const listSessions = vi
+      .spyOn(api, "listSessions")
+      .mockImplementation(() => new Promise(() => {}));
+
+    await expect(useDashboardStore.getState().createSession(1, "claude")).resolves.toBe(created);
+
+    expect(useDashboardStore.getState().sessions).toEqual([created]);
+    // ...and the list is still reconciled in the background.
+    expect(listSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces a row the list already delivered instead of duplicating it", async () => {
+    const stale = session(7, { name: "stale" });
+    const created = session(7, { name: "fresh" });
+    useDashboardStore.setState({ sessions: [stale] });
+    vi.spyOn(api, "createSession").mockResolvedValue(created);
+    vi.spyOn(api, "listSessions").mockImplementation(() => new Promise(() => {}));
+
+    await useDashboardStore.getState().createSession(1, "claude");
+
+    expect(useDashboardStore.getState().sessions).toEqual([created]);
+  });
+});

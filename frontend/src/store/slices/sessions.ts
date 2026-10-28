@@ -197,7 +197,18 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
 
   createSession: async (projectId, command, opts) => {
     const session = await api.createSession(projectId, command, opts);
-    await get().refreshSessions();
+    // Issue #2255 — the caller opens the session's pane as soon as this
+    // resolves, and the list refresh can take seconds (it waits on every
+    // remote host, and queues behind an in-flight poll). A program that asks
+    // the terminal for its colors at startup needs that pane quickly, so the
+    // POST's own row goes into the store now and the list reconciles it in
+    // the background.
+    set((state) => ({
+      sessions: state.sessions.some((s) => s.id === session.id)
+        ? state.sessions.map((s) => (s.id === session.id ? session : s))
+        : [...state.sessions, session],
+    }));
+    void get().refreshSessions();
     return session;
   },
 

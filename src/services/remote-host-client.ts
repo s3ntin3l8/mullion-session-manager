@@ -179,6 +179,17 @@ export function overrideDefaultRequestTimeoutForTests(ms: number): () => void {
 // host its own HTTP round trip.
 const LIVE_STATUS_CACHE_TTL_MS = 1_500;
 
+// Issue #2255 — GET /api/sessions awaits every host's bulk live status, and a
+// host that does not answer cost it the full request timeout on EVERY poll
+// (and the pane of a just-created session waited behind two of those). Once a
+// host has failed to answer, its next reads fail immediately with the same
+// error and one background probe per cooldown checks whether it is back, with
+// a shorter timeout than a normal request: the list never waits on a dead host
+// again, at the price of showing a recovered host as unreachable for at most
+// one more cooldown.
+const LIVE_STATUS_PROBE_TIMEOUT_MS = 2_000;
+const LIVE_STATUS_DOWN_COOLDOWN_MS = 10_000;
+
 // A preview asset request (issue #28 phase 6) can legitimately take longer
 // than REQUEST_TIMEOUT_MS's 5s — a dev server compiling a route on first
 // request (Vite/webpack's on-demand compilation) is a real, non-error delay
@@ -555,6 +566,12 @@ export class RemoteHostClient {
   // requests landing in the same tick, before either has populated
   // liveStatusCache) share one HTTP call instead of each firing their own.
   private liveStatusInFlight = new Map<string, Promise<Record<string, SessionInfo | null>>>();
+  // Set while the host is not answering live-status calls (#2255).
+  private liveStatusDown: {
+    error: HostUnreachableError;
+    checkedAt: number;
+    probing: boolean;
+  } | null = null;
 
   constructor(opts: {
     hostId: string;
@@ -1736,17 +1753,50 @@ export class RemoteHostClient {
     ) {
       return this.liveStatusCache.result;
     }
+    const down = this.liveStatusDown;
+    if (down) {
+      if (!down.probing && Date.now() - down.checkedAt >= LIVE_STATUS_DOWN_COOLDOWN_MS) {
+        down.probing = true;
+        this.fetchLiveStatus(ids, idleThresholdMs, sessionProjectIds, key).then(
+          () => {},
+          () => {},
+        );
+      }
+      throw down.error;
+    }
     const inFlight = this.liveStatusInFlight.get(key);
     if (inFlight) return inFlight;
+    return this.fetchLiveStatus(ids, idleThresholdMs, sessionProjectIds, key);
+  }
 
-    const promise = this.request<Record<string, SessionInfo | null>>("/internal/sessions/live", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ids, idleThresholdMs, sessionProjectIds }),
-    })
+  private fetchLiveStatus(
+    ids: string[],
+    idleThresholdMs: number,
+    sessionProjectIds: Record<string, number> | undefined,
+    key: string,
+  ): Promise<Record<string, SessionInfo | null>> {
+    const promise = this.request<Record<string, SessionInfo | null>>(
+      "/internal/sessions/live",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ ids, idleThresholdMs, sessionProjectIds }),
+      },
+      this.liveStatusDown ? LIVE_STATUS_PROBE_TIMEOUT_MS : undefined,
+    )
       .then((result) => {
         this.liveStatusCache = { key, ts: Date.now(), result };
+        this.liveStatusDown = null;
         return result;
+      })
+      .catch((err: unknown) => {
+        // Only "did not answer" counts as down; a host that answered with an
+        // error (HostRequestError) is up and keeps being asked.
+        this.liveStatusDown =
+          err instanceof HostUnreachableError
+            ? { error: err, checkedAt: Date.now(), probing: false }
+            : null;
+        throw err;
       })
       .finally(() => {
         this.liveStatusInFlight.delete(key);
