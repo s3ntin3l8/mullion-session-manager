@@ -998,6 +998,38 @@ describe("hooksPlugin (issue #172)", () => {
       }
     });
 
+    it("adds the browser routing line only when BROWSER_ENABLED is on", async () => {
+      process.env.BROWSER_ENABLED = "true";
+      try {
+        app = await buildApp();
+        await app.ready();
+        const session = app.pty.getOrCreate({
+          id: "1",
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+        });
+
+        const socket = await connect(app.pty.hookSocketPath);
+        socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
+        const replyPromise = waitForLine(socket);
+        socket.write(`${JSON.stringify({ kind: "session_start" })}\n`);
+
+        const guidePath = sessionAgentGuidePath(path.dirname(app.pty.hookSocketPath), "1");
+        const reply = JSON.parse(await replyPromise);
+        // Pins that hooks.ts forwards the flag: with it unset the expected
+        // block above (no third argument) would match whether or not it did.
+        expect(reply).toEqual({
+          additionalContext: buildAgentGuideBlock(guidePath, false, true),
+        });
+        expect(reply.additionalContext).toContain("use_browser");
+        socket.destroy();
+      } finally {
+        delete process.env.BROWSER_ENABLED;
+      }
+    });
+
     it("omits the guide pointer entirely when sessions.injectAgentGuide is disabled", async () => {
       app = await buildApp();
       await app.ready();

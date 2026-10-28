@@ -70,12 +70,24 @@ export const SERVER_INSTRUCTIONS =
   "Mullion's tools act on the Mullion session hosting you. For any browser task on this " +
   "project's own app (localhost, a dev server, a preview, verifying a UI change) use " +
   "`use_browser` rather than another browser integration: it launches on demand and the " +
-  "human watches it in the dashboard pane. Other browser tools (e.g. Claude in Chrome) are for " +
+  "human can watch it in the dashboard pane. Other browser tools (e.g. Claude in Chrome) are for " +
   "the human's own logged-in third-party sites. A `ref` is invalidated by the next " +
   "navigate/snapshot/find, so re-snapshot before reusing one.";
 
+/**
+ * The `instructions` for the initialize reply, or undefined when the host has
+ * Mullion's browser turned off. The hook adapters write
+ * MULLION_BROWSER_ENABLED=1 into this server's env only when
+ * app.config.BROWSER_ENABLED is on (HookAdapterContext.browserEnabled); without
+ * the gate a default install (feature off) would tell every agent to use a
+ * browser that answers "Browser feature is disabled".
+ */
+export function serverInstructions(env = process.env) {
+  return env.MULLION_BROWSER_ENABLED === "1" ? SERVER_INSTRUCTIONS : undefined;
+}
+
 const BROWSER_ROUTING_NOTE =
-  "Drives this session's Mullion browser pane (launched on demand, visible to the human in the dashboard) — the default browser for the project's own app: localhost, dev servers, previews, UI checks. ";
+  "Drives this session's Mullion browser pane (launched on demand; the human can open it in the dashboard) — the default browser for the project's own app: localhost, dev servers, previews, UI checks. ";
 
 const useBrowser = {
   name: "use_browser",

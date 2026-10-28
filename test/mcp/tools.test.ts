@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { SERVER_INSTRUCTIONS, TOOLS as INFERRED_TOOLS } from "../../src/mcp/tools.mjs";
+import {
+  SERVER_INSTRUCTIONS,
+  TOOLS as INFERRED_TOOLS,
+  serverInstructions,
+} from "../../src/mcp/tools.mjs";
 
 /**
  * tools.mjs is plain JS, so the registry is typed by INFERENCE: `TOOLS` is
@@ -157,6 +161,12 @@ describe("use_browser and browser_action handlers (Feature 3.7)", () => {
     expect(SERVER_INSTRUCTIONS).toContain("Claude in Chrome");
     // Rides in context every turn — guard against quiet growth.
     expect(SERVER_INSTRUCTIONS.length).toBeLessThan(800);
+  });
+
+  it("serverInstructions is gated on MULLION_BROWSER_ENABLED=1", () => {
+    expect(serverInstructions({ MULLION_BROWSER_ENABLED: "1" })).toBe(SERVER_INSTRUCTIONS);
+    expect(serverInstructions({})).toBeUndefined();
+    expect(serverInstructions({ MULLION_BROWSER_ENABLED: "0" })).toBeUndefined();
   });
 
   it("use_browser's description says when to pick it, not just what it does", () => {

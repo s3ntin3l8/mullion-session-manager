@@ -21,8 +21,10 @@
 // Protocol notes (verified against modelcontextprotocol.io/specification):
 // - Transport: newline-delimited JSON-RPC 2.0, one message per line.
 //   stdout carries ONLY protocol messages — all logging goes to stderr.
-// - `initialize` -> `{protocolVersion, capabilities, serverInfo}`, followed
-//   by the client's `notifications/initialized` (no response expected).
+// - `initialize` -> `{protocolVersion, capabilities, serverInfo, instructions?}`
+//   (`instructions` only when MULLION_BROWSER_ENABLED=1 — tools.mjs's
+//   serverInstructions), followed by the client's `notifications/initialized`
+//   (no response expected).
 // - `tools/list` -> `{tools: [{name, description, inputSchema}]}`.
 // - `tools/call` -> `{name, arguments}` in, `{content: [{type:"text",
 //   text}], isError?}` out — a thrown handler error becomes `isError: true`
@@ -31,7 +33,7 @@
 //   malformed request).
 
 import { MullionClient } from "./client.mjs";
-import { SERVER_INSTRUCTIONS, TOOLS } from "./tools.mjs";
+import { TOOLS, serverInstructions } from "./tools.mjs";
 
 const PROTOCOL_VERSION = "2025-11-25";
 const SERVER_INFO = { name: "mullion", version: "0.1.0" };
@@ -79,11 +81,12 @@ async function handleMessage(message) {
   switch (method) {
     case "initialize":
       if (!isNotification) {
+        const instructions = serverInstructions();
         respond(id, {
           protocolVersion: PROTOCOL_VERSION,
           capabilities: { tools: {} },
           serverInfo: SERVER_INFO,
-          instructions: SERVER_INSTRUCTIONS,
+          ...(instructions ? { instructions } : {}),
         });
       }
       return;

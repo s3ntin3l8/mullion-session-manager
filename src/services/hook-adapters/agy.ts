@@ -350,6 +350,9 @@ function mergeAgyMcpConfig(
           // comment: session-scoped hook token doubles as the control-socket
           // credential too, so this deliberately never carries MULLION_AUTH_TOKEN.
           MULLION_SOCKET_PATH: ctx.controlSocketPath,
+          // Gates the MCP server's `instructions` — see
+          // HookAdapterContext.browserEnabled.
+          ...(ctx.browserEnabled ? { MULLION_BROWSER_ENABLED: "1" } : {}),
         },
       },
     },

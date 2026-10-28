@@ -12,7 +12,7 @@ isn't available.
 ## Which browser
 
 - **Mullion's browser (this skill)** — the project's own app: localhost, dev
-  servers, previews, UI checks. It launches on demand and the human watches
+  servers, previews, UI checks. It launches on demand and the human can watch
   it in the dashboard pane.
 - **Claude in Chrome / other browser MCPs** — only for the human's logged-in
   third-party sites (GitHub UI, Gmail, admin consoles).

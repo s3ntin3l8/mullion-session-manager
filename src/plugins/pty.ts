@@ -700,6 +700,10 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     // across a restart, since MULLION_AUTH_TOKEN/OIDC config are env-var-
     // derived, not DB-backed settings).
     authEnabled: isAuthEnabled(app.config),
+    // BROWSER_ENABLED is likewise an env-derived boot constant; it gates the
+    // agent-facing "use Mullion's browser" steering text so a host with the
+    // feature off never tells an agent to use a browser that will refuse it.
+    browserEnabled: app.config.BROWSER_ENABLED,
     // An agent's sessions reach the primary through the local relay socket
     // (#1656); the primary's own control socket is not served on this host.
     controlSocketPath: controlRelayExpected

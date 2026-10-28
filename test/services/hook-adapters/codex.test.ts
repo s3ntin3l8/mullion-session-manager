@@ -52,6 +52,14 @@ describe("buildCodexMcpFlags (issue #880)", () => {
     );
   });
 
+  it("adds a constant MULLION_BROWSER_ENABLED env override only when browserEnabled is on", () => {
+    expect(buildCodexMcpFlags("/srv.mjs", "/usr/bin/node")).not.toContain("BROWSER");
+    const flags = buildCodexMcpFlags("/srv.mjs", "/usr/bin/node", true);
+    expect(flags).toContain(`-c 'mcp_servers.mullion.env.MULLION_BROWSER_ENABLED="1"'`);
+    // Still the three forwarded names — the flag rides alongside, not instead.
+    expect(flags).toContain("env_vars=");
+  });
+
   it("escapes a mcpServerPath containing a double quote and a backslash — a real install path is arbitrary text", () => {
     const path_ = '/opt/mull"ion\\dist/server.mjs';
     const flags = buildCodexMcpFlags(path_, "/usr/bin/node");

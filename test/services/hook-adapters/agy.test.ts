@@ -389,6 +389,14 @@ describe("mergeAgyMcpConfig (issue #253, issue #271)", () => {
     });
   });
 
+  it("sets MULLION_BROWSER_ENABLED on the mullion entry's env only when ctx.browserEnabled is on", () => {
+    mergeAgyMcpConfig({ ...ctx(), browserEnabled: true }, mcpConfigPath);
+    expect(readMcpConfig().mcpServers.mullion.env.MULLION_BROWSER_ENABLED).toBe("1");
+
+    mergeAgyMcpConfig(ctx(), mcpConfigPath);
+    expect(readMcpConfig().mcpServers.mullion.env).not.toHaveProperty("MULLION_BROWSER_ENABLED");
+  });
+
   it("preserves existing non-Mullion MCP servers", () => {
     const flatPath = path.join(dir, "mcp_config.json");
     writeFileSync(

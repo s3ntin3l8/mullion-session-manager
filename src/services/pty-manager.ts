@@ -467,6 +467,11 @@ export class Session {
   // comment (hook-adapters/types.ts) for why only that one adapter reads
   // it.
   private readonly authEnabled: boolean;
+  // Mirrors app.config.BROWSER_ENABLED, passed down from PtyManager with the
+  // same boot-constant posture as authEnabled above. bootstrapMaster() hands
+  // it to buildLaunchPlan() as LaunchPlanSession.browserEnabled, which puts it
+  // on every adapter's ctx — see HookAdapterContext.browserEnabled.
+  private readonly browserEnabled: boolean;
   // Issue #437c, revised by issue #884 — the resolved value of
   // sessions.injectAgentGuide AT THIS SESSION'S CREATION
   // (PtyManager.getOrCreate() passes `opts.injectAgentGuide` when the
@@ -985,6 +990,7 @@ export class Session {
     scope: ScopeBackend;
     sshAuthSock?: string;
     authEnabled?: boolean;
+    browserEnabled?: boolean;
     injectAgentGuide?: boolean;
     injectProjectBriefing?: boolean;
     injectMullionBundle?: boolean;
@@ -1025,6 +1031,7 @@ export class Session {
     this.scope = opts.scope;
     this.sshAuthSock = opts.sshAuthSock ?? "";
     this.authEnabled = opts.authEnabled ?? true;
+    this.browserEnabled = opts.browserEnabled ?? false;
     this.injectAgentGuide = opts.injectAgentGuide ?? true;
     this.injectProjectBriefing = opts.injectProjectBriefing ?? true;
     this.injectMullionBundle = opts.injectMullionBundle ?? true;
@@ -1567,6 +1574,7 @@ export class Session {
       sessionsDir: this.sessionsDir,
       sshAuthSock: this.sshAuthSock,
       authEnabled: this.authEnabled,
+      browserEnabled: this.browserEnabled,
       injectAgentGuide: this.injectAgentGuide,
       injectProjectBriefing: this.injectProjectBriefing,
       injectMullionBundle: this.injectMullionBundle,
@@ -3901,6 +3909,8 @@ export class PtyManager {
   // `new PtyManager({ sessionsDir })` call sites (tests, mainly) keep
   // compiling unchanged.
   private readonly authEnabled: boolean;
+  // See Session.browserEnabled — app.config.BROWSER_ENABLED, a boot constant.
+  private readonly browserEnabled: boolean;
   // Issue #437c — a live accessor, not a cached boolean: unlike
   // sshAuthSock above (a boot-time app.config constant),
   // sessions.injectAgentGuide is DB-backed and can be toggled at runtime via
@@ -3943,6 +3953,7 @@ export class PtyManager {
     ownedSessionsDirs?: ReadonlySet<string>;
     sshAuthSock?: string;
     authEnabled?: boolean;
+    browserEnabled?: boolean;
     controlSocketPath?: string;
     controlUnavailable?: boolean;
     getInjectAgentGuide?: () => boolean;
@@ -4013,6 +4024,7 @@ export class PtyManager {
     // this feature depends on.
     this.sshAuthSock = opts.sshAuthSock ? path.resolve(opts.sshAuthSock) : "";
     this.authEnabled = opts.authEnabled ?? true;
+    this.browserEnabled = opts.browserEnabled ?? false;
     this.getInjectAgentGuide = opts.getInjectAgentGuide ?? (() => true);
     this.getInjectProjectBriefing = opts.getInjectProjectBriefing ?? (() => true);
     this.getInjectMullionBundle = opts.getInjectMullionBundle ?? (() => true);
@@ -4082,6 +4094,7 @@ export class PtyManager {
         scope: this.scope,
         sshAuthSock: this.sshAuthSock,
         authEnabled: this.authEnabled,
+        browserEnabled: this.browserEnabled,
         // Called now, at this session's own creation — see getInjectAgentGuide's
         // own doc comment for why this must be a fresh call, not a value
         // cached at PtyManager-construction/boot time. Issue #884 — an
