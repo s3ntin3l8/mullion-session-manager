@@ -93,6 +93,8 @@ export function derivePrPhase(pr: PrPhaseInput): PrPhase {
   // asked, or branch protection still reports the PR as blocked.
   if (pr.reviewDecision === null && pr.requestedReviewers.length > 0) return waiting();
   if (pr.mergeStateStatus === "BLOCKED" && pr.ciStatus !== "in_progress") {
+    // null = the thread lookup did not answer: nothing says what blocks it.
+    if (pr.unresolvedThreads === null) return "unknown";
     if ((pr.unresolvedThreads ?? 0) === 0) return waiting();
     // Open conversations are the likely blocker — unless CI was never read, when
     // a required check that did not report may be, which `unknown` below says.

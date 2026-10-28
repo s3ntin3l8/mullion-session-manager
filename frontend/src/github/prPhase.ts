@@ -366,9 +366,7 @@ export function reviewStatus(
   if (sum.changesRequested.length > 0 || sum.decision === "CHANGES_REQUESTED") {
     // A block on a superseded commit still blocks; saying so separates "still
     // blocked" from "re-review asked".
-    const stale = new Set(
-      sum.latest.filter((e) => e.state === "CHANGES_REQUESTED" && e.stale).map((e) => e.author),
-    );
+    const stale = new Set(sum.changesRequestedStale ?? []);
     const names = joinNames(
       sum.changesRequested.map((n) => (stale.has(n) ? `${n} (older commit)` : n)),
     );

@@ -120,6 +120,14 @@ describe("derivePrPhase", () => {
     );
   });
 
+  it("says unknown, not waiting, when the thread lookup did not answer", () => {
+    const blocked = { ...base, mergeStateStatus: "BLOCKED" };
+    expect(derivePrPhase({ ...blocked, unresolvedThreads: null })).toBe("unknown");
+    // A caller that does not track threads at all keeps its behaviour.
+    expect(derivePrPhase({ ...blocked })).toBe("review_pending");
+    expect(derivePrPhase({ ...blocked, unresolvedThreads: 0 })).toBe("review_pending");
+  });
+
   it("does not blame conversations when CI was never read", () => {
     const blocked = { ...base, mergeStateStatus: "BLOCKED", unresolvedThreads: 2 };
     expect(derivePrPhase({ ...blocked, ciStatus: null, ciFetched: false })).toBe("unknown");

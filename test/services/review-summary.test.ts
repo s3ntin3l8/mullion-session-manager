@@ -105,6 +105,27 @@ describe("buildReviewSummary", () => {
     expect(standingReviews([], [{ author: { login: "a" }, state: "APPROVED" }])).toHaveLength(1);
   });
 
+  it("marks each change-requester whose review is of an older commit", () => {
+    const s = buildReviewSummary({
+      ...base,
+      opinionated: [
+        { author: { login: "bob" }, state: "CHANGES_REQUESTED", commit: { oid: "old000" } },
+        { author: { login: "eve" }, state: "CHANGES_REQUESTED", commit: { oid: "aaa111" } },
+        { author: { login: "kim" }, state: "CHANGES_REQUESTED" },
+      ],
+      reviews: [
+        {
+          author: { login: "hermes", __typename: "Bot" },
+          state: "CHANGES_REQUESTED",
+          commit: { oid: "old000" },
+        },
+      ],
+    });
+    // Per reviewer, not just the two with a readable body; unknown commit is not stale.
+    expect(s.changesRequested).toEqual(["bob", "eve", "kim", "hermes"]);
+    expect(s.changesRequestedStale).toEqual(["bob", "hermes"]);
+  });
+
   it("flags only the recovered reviewers", () => {
     const rs = standingReviewers(
       [{ author: { login: "bob" }, state: "APPROVED" }],

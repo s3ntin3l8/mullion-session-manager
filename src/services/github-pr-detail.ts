@@ -101,7 +101,7 @@ export interface PrDetail {
   reviewDecision: PrReviewDecision;
   requestedReviewers: string[];
   /** Latest opinionated review per reviewer — what merge gating reads. */
-  reviewers: { login: string; state: string }[];
+  reviewers: { login: string; state: string; recovered?: boolean }[];
   /** The same server-computed status the PR list carries (epic #1965, A2). */
   reviewSummary: ReviewSummary;
   reviews: PrDetailReview[];

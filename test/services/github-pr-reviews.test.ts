@@ -202,6 +202,44 @@ describe("enrichPrsWithReviewState", () => {
     });
   });
 
+  it("a bot's change-request that the opinionated list dropped blocks, whatever GitHub's decision says", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        listResponse([
+          gqlNode(1, {
+            reviewDecision: "APPROVED",
+            mergeStateStatus: "CLEAN",
+            reviewRequests: { nodes: [] },
+            latestOpinionatedReviews: { nodes: [] },
+            latestReviews: {
+              nodes: [
+                {
+                  author: { login: "s3ntin3l8-hermes", __typename: "Bot" },
+                  state: "CHANGES_REQUESTED",
+                  body: "",
+                  submittedAt: "2026-10-18T09:00:00Z",
+                  commit: { oid: "old-sha" },
+                },
+              ],
+            },
+          }),
+        ]),
+      )
+      .mockResolvedValueOnce(threadsResponse({ 1: 0 }));
+    const prs = [pr(1, { ciFetched: true })];
+    await enrichPrsWithReviewState("tok", "o", "r", prs);
+
+    // The flag survives onto the PR, where the phase reads it.
+    expect(prs[0].reviewers).toEqual([
+      { login: "s3ntin3l8-hermes", state: "CHANGES_REQUESTED", recovered: true },
+    ]);
+    expect(prs[0].prPhase).toBe("changes_requested");
+    expect(prs[0].reviewSummary).toMatchObject({
+      changesRequested: ["s3ntin3l8-hermes"],
+      changesRequestedStale: ["s3ntin3l8-hermes"],
+    });
+  });
+
   it("a later COMMENTED review does not erase CHANGES_REQUESTED (merge gating stays blocked)", async () => {
     fetchMock
       .mockResolvedValueOnce(

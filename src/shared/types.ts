@@ -689,6 +689,8 @@ export interface ReviewSummary {
   decision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | "COMMENTED" | null;
   approved: string[];
   changesRequested: string[];
+  /** The `changesRequested` reviewers whose review is of an older commit than the head. */
+  changesRequestedStale?: string[];
   commented: string[];
   requested: string[];
   relay: { state: "requested" | "landed"; reviewer: string | null; url: string | null } | null;
