@@ -59,6 +59,13 @@ function contrast(a: Rgb, b: Rgb): number {
   return (hi + 0.05) / (lo + 0.05);
 }
 
+// `color-mix(in srgb, A P%, B)` the same way resolve() reads a token.
+// A transparent tint over a surface composites to this mix.
+function tint(color: Rgb, surface: Rgb, percent: number): Rgb {
+  const t = percent / 100;
+  return color.map((c, i) => c * t + surface[i] * (1 - t)) as Rgb;
+}
+
 const TONES = ["success", "danger", "warn", "info", "neutral", "merged"] as const;
 
 const themes = {
@@ -88,13 +95,27 @@ describe.each(Object.entries(themes))("%s theme tokens", (_theme, vars) => {
   });
 
   // #1981 — --y is 10px/9.5px warning copy, so it has the text-role bar,
-  // not the 3:1 a status dot would get. --pane-hd is the tightest flat
-  // light surface; --sidebar is the one the blocked-task and host-status
-  // copy actually sits on.
-  it("--y warning text clears AA on the surfaces that copy sits on", () => {
+  // not the 3:1 a status dot would get. Flat surfaces only; the self-tint
+  // case below is separate because neither this list nor the lint guard
+  // can see a color-mix composite.
+  it("--y warning text clears AA on the flat surfaces that copy sits on", () => {
     const y = resolve(vars, "--y");
     for (const surface of ["--sidebar", "--surface", "--surface-hover", "--pane-hd", "--chrome"]) {
       expect(contrast(y, resolve(vars, surface)), `--y on ${surface}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  // Badges paint `color-mix(in srgb, var(--y) N%, transparent)` over the
+  // sidebar: in-progress/reviewing at 16%, the blocked-column count at 14%.
+  // That composite is darker than the flat sidebar, so it is the tight case.
+  it("--y warning text clears AA on its own tint over the sidebar", () => {
+    const y = resolve(vars, "--y");
+    const sidebar = resolve(vars, "--sidebar");
+    for (const percent of [16, 14]) {
+      expect(
+        contrast(y, tint(y, sidebar, percent)),
+        `--y on color-mix(in srgb, var(--y) ${percent}%, var(--sidebar))`,
+      ).toBeGreaterThanOrEqual(4.5);
     }
   });
 
