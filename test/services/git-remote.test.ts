@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import {
+  gitRemoteGateKey,
   normalizeGitRemote,
   parseGitRemote,
   readOriginUrl,
@@ -174,6 +175,35 @@ describe("normalizeGitRemote", () => {
       "https://github.com/",
     ]) {
       expect(normalizeGitRemote(bad), bad).toBeNull();
+    }
+  });
+});
+
+describe("gitRemoteGateKey", () => {
+  it("keeps a non-default port so different self-hosted repos stay distinct", () => {
+    expect(gitRemoteGateKey("ssh://git@gitea.local:2222/team/app.git")).toBe(
+      "gitea.local:2222/team/app",
+    );
+    expect(gitRemoteGateKey("ssh://git@gitea.local:2223/team/app.git")).toBe(
+      "gitea.local:2223/team/app",
+    );
+  });
+
+  it("drops a scheme's default port so one repo's spellings still match", () => {
+    for (const form of [
+      "git@github.com:Owner/Repo.git",
+      "ssh://git@github.com:22/owner/repo",
+      "https://github.com:443/owner/repo/",
+      "https://user@GitHub.com/owner/repo.git",
+      "git://github.com:9418/owner/repo",
+    ]) {
+      expect(gitRemoteGateKey(form), form).toBe("github.com/owner/repo");
+    }
+  });
+
+  it("is null for what normalizeGitRemote rejects", () => {
+    for (const bad of ["", "   ", "/srv/git/repo", "file:///srv/git/repo", "C:\\repo"]) {
+      expect(gitRemoteGateKey(bad), bad).toBeNull();
     }
   });
 });

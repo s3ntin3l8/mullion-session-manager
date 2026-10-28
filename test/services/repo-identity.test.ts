@@ -19,7 +19,8 @@ import { serializeHostCwds } from "../../src/services/placement.js";
 // Issue #2231 — finding the project a checkout already belongs to. Real DB and
 // real local git configs; only a remote host's discovery is faked.
 
-const discovery = new Map<string, DiscoveredCandidate[] | Error>();
+const discovery = new Map<string, DiscoveredCandidate[] | Error | "hang">();
+const discoverCalls: string[] = [];
 
 vi.mock("../../src/services/remote-host-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof RemoteHostClientModule>();
@@ -27,7 +28,9 @@ vi.mock("../../src/services/remote-host-client.js", async (importOriginal) => {
     ...actual,
     getRemoteHostClient: (_app: unknown, hostId: string) => ({
       discover: async () => {
+        discoverCalls.push(hostId);
         const value = discovery.get(hostId);
+        if (value === "hang") return new Promise(() => {});
         if (value instanceof Error) throw value;
         return value ?? [];
       },
@@ -53,6 +56,7 @@ describe("repo-identity", () => {
 
   beforeEach(async () => {
     discovery.clear();
+    discoverCalls.length = 0;
     tmp = fs.mkdtempSync(path.join(os.tmpdir(), "repo-identity-"));
     app = await buildTestApp();
     await app.ready();
@@ -121,6 +125,68 @@ describe("repo-identity", () => {
     expect(
       await findProjectByRepoIdentity(app, { hostId: macId, cwd: "/x", origin: null }),
     ).toBeNull();
+  });
+
+  it("keeps a non-default port in the gate key: two repos on one forge are not duplicates", async () => {
+    localProject("a", "ssh://git@gitea.local:2222/team/app.git");
+    const other = await findProjectByRepoIdentity(app, {
+      hostId: macId,
+      cwd: "/x",
+      origin: "ssh://git@gitea.local:2223/team/app.git",
+    });
+    expect(other).toBeNull();
+    const same = await findProjectByRepoIdentity(app, {
+      hostId: macId,
+      cwd: "/x",
+      origin: "ssh://git@gitea.local:2222/team/app",
+    });
+    expect(same?.reason).toBe("origin");
+  });
+
+  it("localOnly never asks a remote host: no discovery call for the candidate or for remote projects", async () => {
+    localProject("app");
+    const remote = app.db
+      .insert(projects)
+      .values({ name: "remote", cwd: "/Users/x/other", hostId: macId })
+      .returning()
+      .get();
+    discovery.set(macId, [
+      { name: "other", cwd: "/Users/x/other", isGitRepo: true, origin: ORIGIN },
+    ]);
+    const match = await findProjectByRepoIdentity(app, {
+      hostId: macId,
+      cwd: "/Users/x/app",
+      localOnly: true,
+    });
+    expect(match).toBeNull();
+    expect(discoverCalls).toEqual([]);
+    const index = await buildOriginIndex(app, { localOnly: true });
+    expect(index.has(remote.id)).toBe(false);
+    expect(discoverCalls).toEqual([]);
+  });
+
+  it("uses the rows it is given instead of re-reading the table", async () => {
+    const p = localProject("app", null);
+    const match = await findProjectByRepoIdentity(app, {
+      hostId: "local",
+      cwd: p.cwd,
+      projects: [],
+    });
+    expect(match).toBeNull();
+  });
+
+  it("bounds an unresponsive host: its projects get no origin, the others still do", async () => {
+    const local = localProject("app");
+    const remote = app.db
+      .insert(projects)
+      .values({ name: "remote", cwd: "/Users/x/app", hostId: macId })
+      .returning()
+      .get();
+    discovery.set(macId, "hang");
+    const index = await buildOriginIndex(app, { timeoutMs: 30 });
+    expect(index.get(local.id)).toBe("github.com/acme/app");
+    expect(index.get(remote.id)).toBeNull();
+    expect(discoverCalls).toEqual([macId]);
   });
 
   it("excludes the project being edited", async () => {

@@ -237,21 +237,36 @@ repository that already has a project attaches it instead:
 
 - `GET /api/projects/discover?hostId=…` marks a candidate `isRegistered` when its path is
   a project's `cwd` on that host **or an entry in any project's `hostCwds`**, and adds
-  `matchedProject: { id, name, reason }` when its path (`"path"`) or normalised `origin`
-  (`"origin"`, any forge) belongs to an existing project. Sidebar → Discover projects then
-  offers **Add as checkout of `<project>`**, with **Create a separate project anyway** as the
-  secondary action. The origin lookup is best-effort: a host that cannot be reached is
-  matched by path only, never an error.
+  `matchedProject: { id, name, hostId, reason }` when its path (`"path"`) or `origin`
+  (`"origin"`, any forge) belongs to an existing project (`hostId` is that project's own
+  host). Sidebar → Discover projects then offers **Add as checkout of `<project>`** (not for
+  a second clone on the project's own host), with **Create a separate project anyway** as the
+  secondary action. The origin lookup is best-effort: projects are read in parallel, each
+  host gets a few seconds to answer, and a host that cannot be reached is matched by path
+  only, never an error.
+- **What counts as "the same origin"** for this check is stricter than the suggestions above:
+  host, path **and a non-default port** (`gitea.local:2222/team/app` and
+  `gitea.local:2223/team/app` are different repos). A scheme's default port (ssh 22, https 443) is ignored, and so is the transport: `git@host:o/r` and `https://host/o/r` match. A
+  repo cloned over two transports on a custom port is therefore not caught — it just
+  gets no 409.
 - `POST /api/projects/:id/host-checkouts { hostId, cwd }` is what the first action calls: it
   writes the path into that project's `hostCwds` (marked as set by the operator, not
-  auto-detected). It refuses the project's own host (400): a second checkout on the same
-  host is a deliberate separate project.
+  auto-detected). It answers:
+  - **400** for an unregistered host, a path that is not absolute (or has a `..`), the
+    project's **own** host (a second checkout on the same host is a deliberate separate
+    project), or a project that already maps `MAX_HOST_CWDS` hosts;
+  - **409** `HOST_PATH_ALREADY_MAPPED` when the project already has a **different** path on that
+    host (it is never replaced here; edit it in Edit project);
+  - **409** `DUPLICATE_PROJECT` when the path already belongs to **another** project.
 - `POST /api/projects` answers **409** `{ code: "DUPLICATE_PROJECT", existingProjectId,
-existingName }` when the new `cwd` (or a `hostCwds` entry) is already a project's, or has
-  its origin, and does so **before** any directory is created. The Add project dialog then
-  offers the same two choices. Send `allowDuplicate: true` to create the project anyway.
+existingName, existingHostId }` when the new `cwd` (or a `hostCwds` entry) is already a
+  project's, or has its origin, and does so **before** any directory is created. The Add
+  project dialog then offers the same two choices (attach is hidden when `existingHostId` is
+  the host you are adding to). Send `allowDuplicate: true` to create the project anyway.
   `PATCH /api/projects/:id` runs the same check when `cwd` or `hostCwds` changes (the project
-  itself is excluded); `allowDuplicate` is not by itself a field to update.
+  itself is excluded); `allowDuplicate` is not by itself a field to update. Saving never
+  waits on another host: this check compares only with projects on **this** machine's
+  origins, and a path match works for every host.
 
 **Auto-fill (opt-in).** `settings.autoDetectHostCheckouts` (off by default; Settings →
 Projects & discovery) lets Mullion fill the map in for you: when a host comes online

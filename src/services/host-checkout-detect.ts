@@ -140,13 +140,21 @@ export async function projectOrigin(
   project: { hostId: string; cwd: string },
   cache: HostCandidateCache = new Map(),
 ): Promise<string | null> {
-  if (project.hostId === LOCAL_HOST_ID) {
-    const raw = readOriginUrl(project.cwd);
-    return raw === null ? null : normalizeGitRemote(raw);
-  }
+  const raw = await projectRemoteUrl(app, project, cache);
+  return raw === null ? null : normalizeGitRemote(raw);
+}
+
+/** The checkout's raw `origin` URL (not normalised), with the same null cases
+ * as `projectOrigin`. The duplicate gate keys it its own way (port kept). */
+export async function projectRemoteUrl(
+  app: FastifyInstance,
+  project: { hostId: string; cwd: string },
+  cache: HostCandidateCache = new Map(),
+): Promise<string | null> {
+  if (project.hostId === LOCAL_HOST_ID) return readOriginUrl(project.cwd);
   const list = await discoverOnHost(app, project.hostId, cache);
   const own = list?.find((c) => c.cwd === project.cwd);
-  return typeof own?.origin === "string" ? normalizeGitRemote(own.origin) : null;
+  return typeof own?.origin === "string" ? own.origin : null;
 }
 
 /**
@@ -269,11 +277,17 @@ export function attachHostCheckout(
     const meta = parseHostCwdsMeta(row.hostCwdsMeta);
     // A different path already mapped for this host is the operator's, and is
     // not silently replaced: they edit it in Edit project.
-    if (map[hostId] !== undefined && map[hostId] !== cwd) return "mapped";
-    if (map[hostId] === undefined && Object.keys(map).length >= MAX_HOST_CWDS) return "limit";
+    if (Object.hasOwn(map, hostId) && map[hostId] !== cwd) return "mapped";
+    if (!Object.hasOwn(map, hostId) && Object.keys(map).length >= MAX_HOST_CWDS) return "limit";
+    // `hostId` came from a request: the written map has a null prototype, so no
+    // key can reach the prototype chain (the route has also checked the host
+    // is registered).
+    const next: Record<string, string> = Object.assign(Object.create(null), map, {
+      [hostId]: cwd,
+    });
     tx.update(projects)
       .set({
-        hostCwds: serializeHostCwds({ ...map, [hostId]: cwd }),
+        hostCwds: serializeHostCwds(next),
         hostCwdsMeta: serializeHostCwdsMeta({
           auto: meta.auto.filter((h) => h !== hostId),
           declined: meta.declined.filter((h) => h !== hostId),

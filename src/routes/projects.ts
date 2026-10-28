@@ -346,9 +346,11 @@ async function findDuplicateProject(
   excludeProjectId?: number,
 ) {
   const originIndexRef = {};
+  const rows = app.db.select().from(projects).all();
   for (const c of checkouts) {
     const match = await findProjectByRepoIdentity(app, {
       ...c,
+      projects: rows,
       excludeProjectId,
       originIndexRef,
       localOnly: true,
@@ -365,7 +367,7 @@ function duplicateProjectReply(
   return reply.code(409).send({
     statusCode: 409,
     error: "Conflict",
-    message: `This repository already has a project: ${existing.name}.`,
+    message: `This repository already has a project: ${existing.name}. Attach this checkout to it, or send allowDuplicate: true to create a separate project anyway.`,
     code: "DUPLICATE_PROJECT",
     existingProjectId: existing.id,
     existingName: existing.name,
@@ -1297,6 +1299,7 @@ export async function projectsRoute(app: FastifyInstance) {
           cwd: c.cwd,
           origin: c.origin ?? null,
           originIndexRef,
+          projects: allProjects,
         });
         discovered.push({
           ...c,
@@ -4857,7 +4860,8 @@ export async function projectsRoute(app: FastifyInstance) {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
       const { hostId, cwd } = request.body;
-      if (unknownHostInCwds(app, { [hostId]: cwd }) !== null) {
+      // Positively validate the request's host before anything is keyed by it.
+      if (hostId !== LOCAL_HOST_ID && !getHostRow(app, hostId)) {
         return reply.badRequest(`Unknown hostId ${hostId}`);
       }
       if (!isStorablePath(cwd)) {

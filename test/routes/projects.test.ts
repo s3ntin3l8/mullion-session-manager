@@ -9969,6 +9969,57 @@ describe("projects route", () => {
       await app.close();
     });
 
+    it("POST does not treat two repos on one forge with different ports as duplicates", async () => {
+      const app = await buildApp();
+      const first = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          name: "gitea-a",
+          cwd: checkout("ga", "ssh://git@gitea.local:2222/team/app.git"),
+        },
+      });
+      const second = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          name: "gitea-b",
+          cwd: checkout("gb", "ssh://git@gitea.local:2223/team/app.git"),
+        },
+      });
+      expect([first.statusCode, second.statusCode]).toEqual([201, 201]);
+      // The same port is the same repo, and the 409 names the override.
+      const third = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "gitea-c", cwd: checkout("gc", "ssh://git@gitea.local:2222/team/app") },
+      });
+      expect(third.statusCode).toBe(409);
+      expect(third.json().message).toContain("allowDuplicate");
+      expect(third.json().existingHostId).toBe("local");
+      await app.close();
+    });
+
+    it("POST create for a remote hostId makes no discovery call (the check is local-only)", async () => {
+      const app = await buildApp();
+      const hostId = await addHost(app, "box-nonet");
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+      try {
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "remote-nonet", cwd: "/srv/nonet", hostId },
+        });
+        expect(res.statusCode).toBe(201);
+        expect(
+          fetchSpy.mock.calls.filter((c) => String(c[0]).includes("/internal/discover")),
+        ).toEqual([]);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+      await app.close();
+    });
+
     it("POST with allowDuplicate:true creates the second project", async () => {
       const app = await buildApp();
       await app.inject({
