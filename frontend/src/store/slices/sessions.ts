@@ -86,6 +86,8 @@ function withPendingCreated(fetched: Session[]): Session[] {
       missing.push(entry.session);
     }
   }
+  // Appended (not sorted in): a new session sits last until a fetch lists it,
+  // then the server's own order applies. Deliberate and short-lived.
   return missing.length > 0 ? [...fetched, ...missing] : fetched;
 }
 

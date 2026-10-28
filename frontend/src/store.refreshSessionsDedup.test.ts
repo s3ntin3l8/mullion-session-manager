@@ -267,6 +267,20 @@ describe("store.createSession does not wait on the list refresh (issue #2255)", 
     expect(useDashboardStore.getState().sessions.map((s) => s.id)).toEqual([1]);
   });
 
+  it("does not re-add a created session that was deleted before any list fetch listed it", async () => {
+    const created = session(7);
+    vi.spyOn(api, "createSession").mockResolvedValue(created);
+    vi.spyOn(api, "deleteSession").mockResolvedValue(undefined as never);
+    // Neither refresh lists the session (it is gone server-side).
+    vi.spyOn(api, "listSessions").mockResolvedValue([session(1)]);
+
+    await useDashboardStore.getState().createSession(1, "claude");
+    await useDashboardStore.getState().deleteSession(7);
+    await useDashboardStore.getState().refreshSessions();
+
+    expect(useDashboardStore.getState().sessions.map((s) => s.id)).toEqual([1]);
+  });
+
   it("does not report a failed background refresh as an unhandled rejection", async () => {
     vi.spyOn(api, "createSession").mockResolvedValue(session(7));
     vi.spyOn(api, "listSessions").mockRejectedValue(new Error("down"));
