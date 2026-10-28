@@ -327,8 +327,7 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     toggleRightSidebarView: (view) => {
       const { rightSidebarOpen, rightSidebarView } = get();
       if (rightSidebarOpen && rightSidebarView === view) {
-        writeBool(STORAGE_KEYS.rightSidebarOpen, false);
-        set({ rightSidebarOpen: false });
+        get().closeRightSidebar();
         return;
       }
       writeString(STORAGE_KEYS.rightSidebarView, view);
@@ -392,9 +391,12 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
     },
 
     toggleRightSidebar: () => {
-      const next = !get().rightSidebarOpen;
-      writeBool(STORAGE_KEYS.rightSidebarOpen, next);
-      set({ rightSidebarOpen: next });
+      if (get().rightSidebarOpen) {
+        get().closeRightSidebar();
+        return;
+      }
+      writeBool(STORAGE_KEYS.rightSidebarOpen, true);
+      set({ rightSidebarOpen: true });
     },
 
     closeRightSidebar: () => {

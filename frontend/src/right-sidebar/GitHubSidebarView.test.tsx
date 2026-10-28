@@ -75,7 +75,8 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-const renderView = () => render(<GitHubSidebarView projectId={4} actions={actions} />);
+const renderView = (projectId = 4) =>
+  render(<GitHubSidebarView projectId={projectId} actions={actions} />);
 
 describe("GitHubSidebarView", () => {
   it("embeds the real GitHub panel: repo, PR cards and issues", async () => {
@@ -143,19 +144,30 @@ describe("GitHubSidebarView", () => {
     expect(unsubscribe).toHaveBeenCalledWith(4);
   });
 
-  it("closing the sidebar ends the PR drill-in, so a reopen under another project shows its list", async () => {
-    useDashboardStore.setState({
-      rightSidebarOpen: true,
-      rightSidebarView: "github",
-      githubOpenPrByProject: { 4: 1 },
-      githubOpenIssueByProject: { 4: 2 },
-    });
-    useDashboardStore.getState().closeRightSidebar();
+  it.each([
+    ["the rail button", () => useDashboardStore.getState().toggleRightSidebarView("github")],
+    ["the sidebar toggle", () => useDashboardStore.getState().toggleRightSidebar()],
+    ["the close button", () => useDashboardStore.getState().closeRightSidebar()],
+  ])(
+    "closing the sidebar via %s ends the PR drill-in, so a reopen under project 5 shows its list",
+    async (_gesture, close) => {
+      useDashboardStore.setState({
+        rightSidebarOpen: true,
+        rightSidebarView: "github",
+        githubOpenPrByProject: { 4: 1 },
+        githubOpenIssueByProject: { 4: 2 },
+      });
+      close();
 
-    expect(useDashboardStore.getState().githubOpenPrByProject).toEqual({});
-    expect(useDashboardStore.getState().githubOpenIssueByProject).toEqual({});
-    renderView();
-    expect(await screen.findByText("PR title 1")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /back/i })).toBeNull();
-  });
+      expect(useDashboardStore.getState().rightSidebarOpen).toBe(false);
+      expect(useDashboardStore.getState().githubOpenPrByProject).toEqual({});
+      expect(useDashboardStore.getState().githubOpenIssueByProject).toEqual({});
+
+      // Workspace switch: the sidebar is now rendered for project 5.
+      useDashboardStore.getState().openRightSidebarView("github", 5);
+      renderView(5);
+      expect(await screen.findByText("PR title 1")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /back/i })).toBeNull();
+    },
+  );
 });
