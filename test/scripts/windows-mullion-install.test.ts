@@ -34,15 +34,50 @@ interface Result {
   events: Event[];
   stdout: string;
   stderr: string;
+  /** The registry key this run was told to use for its Settings -> Apps entry. */
+  appsKey: string;
 }
 
 describeOnWindows("deploy/windows/mullion-install.ps1", () => {
   const dirs: string[] = [];
   const children: ChildProcess[] = [];
-  afterEach(() => {
+  // Every run gets its own Settings -> Apps key, so the suite never touches the
+  // real entry of an installed Mullion.
+  const appsKeys: string[] = [];
+  const psEnv = () => windowsPowerShellEnv(process.env);
+  afterEach(async () => {
     for (const child of children.splice(0)) child.kill();
     for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+    for (const key of appsKeys.splice(0)) {
+      await run(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          `try { Remove-Item -LiteralPath '${key}' -Recurse -Force -ErrorAction Stop } catch { }; exit 0`,
+        ],
+        { env: psEnv(), windowsHide: true, timeout: 60_000 },
+      );
+    }
   });
+
+  /** The values of an Apps entry as an object, or null when there is none. */
+  async function readAppsEntry(key: string): Promise<Record<string, unknown> | null> {
+    const { stdout } = await run(
+      "powershell.exe",
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `if (Test-Path -LiteralPath '${key}') { Get-ItemProperty -LiteralPath '${key}' | ` +
+          "Select-Object DisplayName,DisplayVersion,Publisher,InstallLocation,UninstallString | " +
+          "ConvertTo-Json -Compress } else { 'null' }",
+      ],
+      { env: psEnv(), windowsHide: true, timeout: 60_000 },
+    );
+    return JSON.parse(stdout.trim()) as Record<string, unknown> | null;
+  }
 
   const tmp = (prefix: string) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -62,7 +97,12 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
    */
   async function bootstrap(
     args: string[],
-    opts: { env?: Record<string, string>; hideTools?: boolean; input?: string } = {},
+    opts: {
+      env?: Record<string, string>;
+      hideTools?: boolean;
+      input?: string;
+      script?: string;
+    } = {},
   ): Promise<Result> {
     const env: NodeJS.ProcessEnv = { ...windowsPowerShellEnv(process.env), ...opts.env };
     if (opts.hideTools) {
@@ -81,17 +121,30 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
         PATH: [system32, path.join(system32, "WindowsPowerShell", "v1.0")].join(path.delimiter),
       });
     }
+    let appsKey = `HKCU:\\Software\\MullionTest-${crypto.randomUUID()}`;
+    const given = args.indexOf("-UninstallRegistryKey");
+    if (given >= 0) appsKey = args[given + 1]!;
+    else args = [...args, "-UninstallRegistryKey", appsKey];
+    appsKeys.push(appsKey);
     try {
       const child = run(
         "powershell.exe",
-        ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", SCRIPT, ...args],
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          opts.script ?? SCRIPT,
+          ...args,
+        ],
         { env, windowsHide: true, timeout: 180_000 },
       );
       if (opts.input !== undefined) {
         child.child.stdin?.end(opts.input);
       }
       const { stdout, stderr } = await child;
-      return { code: 0, ...parse(stdout), stdout, stderr };
+      return { code: 0, ...parse(stdout), stdout, stderr, appsKey };
     } catch (err) {
       const e = err as { code?: number; stdout?: string; stderr?: string };
       return {
@@ -99,6 +152,7 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
         ...parse(e.stdout ?? ""),
         stdout: e.stdout ?? "",
         stderr: e.stderr ?? "",
+        appsKey,
       };
     }
   }
@@ -134,6 +188,9 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
         "  projects: e.MULLION_AGENT_PROJECTS_ROOTS || null,",
         "  advertise: e.MULLION_AGENT_ADVERTISE_URL || null,",
         "  token: e.MULLION_AGENT_ENROLLMENT_TOKEN || null,",
+        "  agentToken: e.MULLION_AGENT_TOKEN || null,",
+        "  host: e.MULLION_AGENT_HOST || null,",
+        "  port: e.MULLION_AGENT_PORT || null,",
         "  gitBash: e.MULLION_INSTALL_GIT_BASH || null,",
         "  nodeExe: process.execPath,",
         "}));",
@@ -247,6 +304,163 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
         expect(JSON.parse(fs.readFileSync(release.record, "utf8")).token).toBe("from-stdin");
       },
       180_000,
+    );
+
+    it.skipIf(!gitBash || !hasNode26)(
+      "generates a per-agent token on a fresh install and reports it exactly once",
+      async () => {
+        const release = fakeRelease();
+        const root = installRoot();
+        const res = await bootstrap(
+          [
+            "-Json",
+            "-InstallRoot",
+            root,
+            "-ReleaseBaseUrl",
+            release.url,
+            "-BindHost",
+            "10.0.0.5",
+            "-Port",
+            "4000",
+          ],
+          { env: { CLAUDE_CODE_GIT_BASH_PATH: gitBash! } },
+        );
+        expect(res.code).toBe(0);
+        const done = res.events.at(-1)!;
+        const token = String(done.agentToken);
+        expect(token).toMatch(/^[0-9a-f]{64}$/);
+
+        const rec = JSON.parse(fs.readFileSync(release.record, "utf8"));
+        // The installer got it through its environment, with the bind address,
+        // and never on its command line.
+        expect(rec).toMatchObject({
+          agentToken: token,
+          host: "10.0.0.5",
+          port: "4000",
+          token: null,
+        });
+        expect(JSON.stringify(rec.args)).not.toContain(token);
+        // Reported once: the final line, and nowhere else in what is printed.
+        expect(res.stdout.split(token)).toHaveLength(2);
+      },
+      180_000,
+    );
+
+    it.skipIf(!gitBash || !hasNode26)(
+      "prints a generated token once as text without -Json",
+      async () => {
+        const release = fakeRelease();
+        const res = await bootstrap(
+          ["-InstallRoot", installRoot(), "-ReleaseBaseUrl", release.url],
+          {
+            env: { CLAUDE_CODE_GIT_BASH_PATH: gitBash! },
+          },
+        );
+        expect(res.code).toBe(0);
+        const token = JSON.parse(fs.readFileSync(release.record, "utf8")).agentToken as string;
+        expect(token).toMatch(/^[0-9a-f]{64}$/);
+        expect(res.stdout.split(token)).toHaveLength(2);
+      },
+      180_000,
+    );
+
+    it.skipIf(!gitBash || !hasNode26)(
+      "generates nothing when a token, an enrollment path or an existing .env is there",
+      async () => {
+        const cases: Array<{
+          name: string;
+          args: string[];
+          env: Record<string, string>;
+          env0?: boolean;
+        }> = [
+          { name: "agent token", args: [], env: { MULLION_AGENT_TOKEN: "given-by-caller" } },
+          {
+            name: "enrollment token",
+            args: [],
+            env: { MULLION_AGENT_ENROLLMENT_TOKEN: "enroll-tok" },
+          },
+          { name: "primary url", args: ["-PrimaryUrl", "https://primary.example"], env: {} },
+          { name: "existing .env", args: [], env: {}, env0: true },
+        ];
+        for (const c of cases) {
+          const release = fakeRelease();
+          const root = installRoot();
+          if (c.env0) {
+            fs.mkdirSync(root, { recursive: true });
+            fs.writeFileSync(path.join(root, ".env"), "MULLION_ROLE=agent\n");
+          }
+          const res = await bootstrap(
+            ["-Json", "-InstallRoot", root, "-ReleaseBaseUrl", release.url, ...c.args],
+            { env: { CLAUDE_CODE_GIT_BASH_PATH: gitBash!, ...c.env } },
+          );
+          expect(res.code, c.name).toBe(0);
+          expect(res.events.at(-1)!.agentToken, c.name).toBeUndefined();
+          const rec = JSON.parse(fs.readFileSync(release.record, "utf8"));
+          expect(rec.agentToken, c.name).toBe(c.env.MULLION_AGENT_TOKEN ?? null);
+        }
+      },
+      240_000,
+    );
+
+    it.skipIf(!gitBash || !hasNode26)(
+      "warns when the advertise URL has no bind address behind it",
+      async () => {
+        const release = fakeRelease();
+        const res = await bootstrap(
+          [
+            "-Json",
+            "-InstallRoot",
+            installRoot(),
+            "-ReleaseBaseUrl",
+            release.url,
+            "-AdvertiseUrl",
+            "http://192.168.1.20:4000",
+          ],
+          { env: { CLAUDE_CODE_GIT_BASH_PATH: gitBash! } },
+        );
+        expect(res.code).toBe(0);
+        expect(
+          res.events.some(
+            (e) => e.status === "log" && e.detail.startsWith("warning: -AdvertiseUrl"),
+          ),
+        ).toBe(true);
+      },
+      180_000,
+    );
+
+    it.skipIf(!gitBash || !hasNode26)(
+      "adds a Settings -> Apps entry that points at a kept copy of the script, and -Uninstall removes it",
+      async () => {
+        const release = fakeRelease();
+        const root = installRoot();
+        const res = await bootstrap(
+          ["-Json", "-InstallRoot", root, "-ReleaseBaseUrl", release.url],
+          { env: { CLAUDE_CODE_GIT_BASH_PATH: gitBash! } },
+        );
+        expect(res.code).toBe(0);
+
+        const entry = await readAppsEntry(res.appsKey);
+        expect(entry).toMatchObject({
+          DisplayName: "Mullion agent",
+          DisplayVersion: "9.9.9",
+          Publisher: "Mullion",
+        });
+        expect(realPath(String(entry!.InstallLocation))).toBe(realPath(root));
+        const copy = path.join(root, "mullion-install.ps1");
+        expect(fs.existsSync(copy)).toBe(true);
+        expect(String(entry!.UninstallString)).toContain("-Uninstall");
+        expect(String(entry!.UninstallString)).toContain("mullion-install.ps1");
+
+        // What Settings -> Apps runs: the kept copy, not the original script.
+        const gone = await bootstrap(
+          ["-Json", "-Uninstall", "-InstallRoot", root, "-UninstallRegistryKey", res.appsKey],
+          { script: copy },
+        );
+        expect(gone.code).toBe(0);
+        expect(await readAppsEntry(res.appsKey)).toBeNull();
+        expect(fs.existsSync(copy)).toBe(false);
+      },
+      240_000,
     );
 
     it.skipIf(!gitBash || !hasNode26)(

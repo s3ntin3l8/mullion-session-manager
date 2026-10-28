@@ -5,7 +5,7 @@
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File mullion-install.ps1
 #       [-InstallRoot C:\...\Mullion] [-PrimaryUrl https://...] [-AgentName name]
 #       [-ProjectsRoots C:/src,D:/work] [-AdvertiseUrl http://...] [-Version 0.3.51]
-#       [-TokenFromStdin] [-Json]
+#       [-BindHost 192.168.1.20] [-Port 4000] [-TokenFromStdin] [-Json]
 #   powershell.exe ... -File mullion-install.ps1 -Uninstall [-Purge] [-Force] [-Json]
 #
 # Or without saving it first (the usual PowerShell idiom; read it first):
@@ -27,6 +27,11 @@
 #   - the enrollment token is read from MULLION_AGENT_ENROLLMENT_TOKEN, or from
 #     the first line of stdin with -TokenFromStdin -- NEVER a parameter, which
 #     any process on the machine can read from the process list;
+#   - a FRESH install given no token at all (no MULLION_AGENT_TOKEN, no
+#     enrollment token, no -PrimaryUrl) generates a per-agent token for manual
+#     registration (Settings -> Hosts -> Add host on the primary), keeps it in
+#     the .env and reports it ONCE: as "agentToken" on the final -Json line, or
+#     as one line of text. A re-run leaves the .env alone and reports none;
 #   - with -Json, stdout is one JSON object per line, nothing else:
 #       {"step":"<name>","status":"start|ok|skip|log|fail","detail":"...", ...}
 #     steps, in order: platform, git-bash, node, fetch, install, done (an
@@ -53,6 +58,10 @@ param(
   [string]$ProjectsRoots,
   [string]$AgentName,
   [string]$AdvertiseUrl,
+  # The address and port the agent listens on (default: 127.0.0.1:3000, which
+  # nothing outside this PC can reach). Written to the .env as HOST and PORT.
+  [string]$BindHost,
+  [int]$Port,
   [string]$Version,
   [string]$Repo = 's3ntin3l8/mullion-session-manager',
   [switch]$TokenFromStdin,
@@ -66,7 +75,10 @@ param(
   [string]$NodeZipUrl,
   [string]$NodeZipSha256,
   [string]$GitUrl,
-  [string]$GitSha256
+  [string]$GitSha256,
+  # Where the Windows "Apps & features" entry is written; a test points it
+  # elsewhere so it never touches the real one.
+  [string]$UninstallRegistryKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Mullion'
 )
 
 # BEGIN PINS (refreshed by scripts/update-windows-prereqs.mjs)
@@ -79,6 +91,10 @@ $PinGitSha256 = 'b1f3e52216e2ed6882d1bebfd4d3fdf319bec40d2edbbf9fd26ec4fd3fce7ed
 # END PINS
 
 $ErrorActionPreference = 'Stop'
+# This script's own text, for the copy kept in the install root when it was run
+# from a one-liner (no file on disk).
+$SelfText = $null
+try { $SelfText = $MyInvocation.MyCommand.ScriptBlock.ToString() } catch { }
 $MinNodeMajor = 26
 
 # Windows PowerShell 5.1 negotiates TLS 1.0/1.1 by default, which github.com
@@ -216,6 +232,38 @@ function Test-ProcessesUnder([string]$Root, [string[]]$AlsoRoots = @()) {
   return $found
 }
 
+# The per-user entry in Settings -> Apps -> Installed apps. It is only a way to
+# start this script's own -Uninstall, so it points at a copy of the script kept
+# in the install root (the script may have come from a one-liner, and a file in a
+# temp folder would not outlive the install).
+function Remove-AppsEntry {
+  try {
+    if (Test-Path -LiteralPath $UninstallRegistryKey) { Remove-Item -LiteralPath $UninstallRegistryKey -Recurse -Force }
+  } catch {
+    Emit 'uninstall' 'log' "could not remove the Apps entry: $($_.Exception.Message)"
+  }
+}
+
+function Add-AppsEntry([string]$Root, [string]$Version) {
+  $copy = Join-Path $Root 'mullion-install.ps1'
+  if ($PSCommandPath -and (Test-Path -LiteralPath $PSCommandPath)) {
+    if ((Get-FullPath $PSCommandPath) -ne (Get-FullPath $copy)) { Copy-Item -LiteralPath $PSCommandPath -Destination $copy -Force }
+  } else {
+    [IO.File]::WriteAllText($copy, $script:SelfText, (New-Object Text.UTF8Encoding($false)))
+  }
+  $uninstall = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' + $copy + '" -Uninstall -InstallRoot "' + $Root + '"'
+  New-Item -Path $UninstallRegistryKey -Force | Out-Null
+  $values = @{
+    DisplayName     = 'Mullion agent'
+    Publisher       = 'Mullion'
+    InstallLocation = $Root
+    UninstallString = $uninstall
+  }
+  if ($Version) { $values['DisplayVersion'] = $Version }
+  foreach ($k in $values.Keys) { New-ItemProperty -Path $UninstallRegistryKey -Name $k -Value $values[$k] -PropertyType String -Force | Out-Null }
+  foreach ($k in @('NoModify', 'NoRepair')) { New-ItemProperty -Path $UninstallRegistryKey -Name $k -Value 1 -PropertyType DWord -Force | Out-Null }
+}
+
 # --- platform ----------------------------------------------------------------
 
 Emit 'platform' 'start' 'checking this machine'
@@ -255,6 +303,7 @@ Emit 'platform' 'ok' "x64, install root $InstallRoot"
 if ($Uninstall) {
   Emit 'uninstall' 'start' "removing Mullion from $InstallRoot"
   if (-not (Test-Path -LiteralPath $InstallRoot)) {
+    Remove-AppsEntry
     Emit 'done' 'ok' 'nothing to uninstall'
     exit 0
   }
@@ -288,6 +337,7 @@ if ($Uninstall) {
     Unregister-ScheduledTask -TaskName $taskName -Confirm:$false
     Emit 'uninstall' 'ok' "removed the scheduled task $taskName"
   }
+  Remove-AppsEntry
   foreach ($p in $running) {
     Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
   }
@@ -456,6 +506,24 @@ Emit 'fetch' 'ok' "$base/mullion-install.sh"
 $token = $env:MULLION_AGENT_ENROLLMENT_TOKEN
 if ($TokenFromStdin) { $token = [Console]::In.ReadLine() }
 
+# No credential at all on a fresh install: generate the per-agent token for
+# manual registration. An existing .env is left as it is by the installer, so
+# a token generated now would not be the one in it.
+$agentToken = $env:MULLION_AGENT_TOKEN
+$generatedToken = $null
+if (-not $agentToken -and -not $token -and -not $PrimaryUrl -and -not (Test-Path -LiteralPath (Join-Path $InstallRoot '.env'))) {
+  $bytes = New-Object byte[] 32
+  $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+  $rng.GetBytes($bytes)
+  $rng.Dispose()
+  $generatedToken = ([BitConverter]::ToString($bytes) -replace '-', '').ToLowerInvariant()
+  $agentToken = $generatedToken
+}
+if ($AdvertiseUrl -and -not $BindHost) {
+  Emit 'install' 'log' ('warning: -AdvertiseUrl is set but -BindHost is not; the agent will listen on 127.0.0.1 only, ' +
+    'so the primary cannot reach it at ' + $AdvertiseUrl)
+}
+
 # The installer's environment is this process's: set here, inherited by the
 # child. (ProcessStartInfo.EnvironmentVariables is avoided on purpose -- under
 # Windows PowerShell 5.1 it has come back null in an unusual environment.)
@@ -494,6 +562,9 @@ if ($ProjectsRoots) { Set-ChildEnv 'MULLION_AGENT_PROJECTS_ROOTS' $ProjectsRoots
 if ($AgentName) { Set-ChildEnv 'MULLION_AGENT_NAME' $AgentName }
 if ($AdvertiseUrl) { Set-ChildEnv 'MULLION_AGENT_ADVERTISE_URL' $AdvertiseUrl }
 if ($token) { Set-ChildEnv 'MULLION_AGENT_ENROLLMENT_TOKEN' $token }
+if ($agentToken) { Set-ChildEnv 'MULLION_AGENT_TOKEN' $agentToken }
+if ($BindHost) { Set-ChildEnv 'MULLION_AGENT_HOST' $BindHost }
+if ($Port -gt 0) { Set-ChildEnv 'MULLION_AGENT_PORT' ([string]$Port) }
 
 $proc = New-Object Diagnostics.Process
 $proc.StartInfo = $psi
@@ -519,5 +590,17 @@ if (Test-Path -LiteralPath $infoFile) {
   } catch { }
 }
 $extra['gitBash'] = $bash
+$installedVersion = if ($extra.ContainsKey('version')) { [string]$extra['version'] } else { '' }
+try {
+  Add-AppsEntry $InstallRoot $installedVersion
+} catch {
+  # The install itself worked; only Settings -> Apps lacks the entry.
+  Emit 'install' 'log' "warning: could not add the Settings -> Apps entry: $($_.Exception.Message)"
+}
+if ($generatedToken) { $extra['agentToken'] = $generatedToken }
 Emit 'done' 'ok' "Mullion is installed in $InstallRoot" $extra
+if ($generatedToken -and -not $Json) {
+  [Console]::Out.WriteLine("    Agent token (shown once; it is also in $InstallRoot\.env):")
+  [Console]::Out.WriteLine("    $generatedToken")
+}
 exit 0

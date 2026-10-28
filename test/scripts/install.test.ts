@@ -619,6 +619,32 @@ describeOnLinux("deploy/install.sh", () => {
       expect(stderr).not.toMatch(/WARNING/);
     });
 
+    it("writes HOST and PORT only when the caller picked them", async () => {
+      const picked = freshMullionHome();
+      skipDownload(picked);
+      await runScript(["--role", "agent", picked], {
+        env: {
+          MULLION_AGENT_PROJECTS_ROOTS: "/srv/projects",
+          MULLION_AGENT_TOKEN: "fixture-agent-tok", // pragma: allowlist secret
+          MULLION_AGENT_HOST: "192.168.2.174",
+          MULLION_AGENT_PORT: "4000",
+        },
+      });
+      const env = readEnvFile(picked);
+      expect(env).toMatch(/^HOST=192\.168\.2\.174$/m);
+      expect(env).toMatch(/^PORT=4000$/m);
+
+      const defaults = freshMullionHome();
+      skipDownload(defaults);
+      await runScript(["--role", "agent", defaults], {
+        env: {
+          MULLION_AGENT_PROJECTS_ROOTS: "/srv/projects",
+          MULLION_AGENT_TOKEN: "fixture-agent-tok", // pragma: allowlist secret
+        },
+      });
+      expect(readEnvFile(defaults)).not.toMatch(/^(HOST|PORT)=/m);
+    });
+
     it("writes the self-registration credential path with no warnings", async () => {
       const mullionHome = freshMullionHome();
       skipDownload(mullionHome);

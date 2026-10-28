@@ -793,6 +793,7 @@ system-wide:
 | `-PrimaryUrl`, `-AgentName`                          | the primary this agent registers with, and the name it registers under                                                                     |
 | `-ProjectsRoots`                                     | comma-separated folders to look for projects in (forward slashes)                                                                          |
 | `-AdvertiseUrl`                                      | the URL the primary should use to reach this agent (see below)                                                                             |
+| `-BindHost`, `-Port`                                 | the address and port the agent listens on (written to the `.env` as `HOST` and `PORT`; default `127.0.0.1:3000`, see below)                |
 | `-Version`                                           | install this release instead of the latest (`0.3.51`)                                                                                      |
 | `MULLION_AGENT_ENROLLMENT_TOKEN` / `-TokenFromStdin` | the enrollment token: an environment variable, or the first line of stdin — never a parameter, which every process on the machine can read |
 | `-Uninstall` `[-Purge]` `[-Force]`                   | see below                                                                                                                                  |
@@ -804,17 +805,29 @@ per line and nothing else —
 `{"step":"…","status":"start|ok|skip|log|fail","detail":"…"}`, for the steps
 `platform`, `git-bash`, `node`, `fetch`, `install` (its output arrives as `log`
 lines) and `done` (an uninstall reports `uninstall` and `done`). The last line is
-either `done`/`ok` carrying the contents of `install.json` (plus `gitBash`) or a
-`fail` line with `exitCode`; an unexpected error is a `fail` line whose step is
+either `done`/`ok` carrying the contents of `install.json` (plus `gitBash`, and
+`agentToken` when one was generated, below) or a `fail` line with `exitCode`; an unexpected error is a `fail` line whose step is
 `unexpected`. Exit status:
 `0` done; `1` unexpected failure; `2` unsupported platform or arguments; `3` a
 download or its checksum failed; `4` the release's installer failed; `5` an
 uninstall was refused because sessions are still running.
 
+**Registering the agent on the primary.** Either give the installer the
+primary's `-PrimaryUrl` and an enrollment token (the agent then registers itself
+each time it starts, [docs/multi-host.md](../docs/multi-host.md)), or give it
+neither and register the host by hand. In that second case a **fresh** install
+generates a random per-agent token (`MULLION_AGENT_TOKEN` in the `.env`) and
+shows it **once** — as the last line of the output, or as `agentToken` on the
+final `-Json` line. Paste it into Settings → Hosts → Add host on the primary,
+with the base URL you gave `-AdvertiseUrl`. A re-run leaves the `.env` as it
+is, so it reports no token; read it from the `.env` if you need it again.
+
 **Reaching the agent.** The agent listens on `127.0.0.1` by default, so the
 primary cannot dial it from another machine as it is. To let it connect, bind a
-LAN address (set `HOST` in the `.env`) and give the primary a URL for that
-address with `-AdvertiseUrl`. The first time the agent listens on a non-loopback
+LAN address (`-BindHost`, and `-Port` if not 3000; they are written to the
+`.env` as `HOST` and `PORT`) and give the primary a URL for that address with
+`-AdvertiseUrl`. The installer warns when `-AdvertiseUrl` is set without
+`-BindHost`. The first time the agent listens on a non-loopback
 address, Windows shows a **Windows Defender Firewall prompt** for `node.exe`;
 it has to be allowed for the network type you are on. That is a click for you
 to make — the installer, which runs without administrator rights, cannot add
@@ -850,7 +863,10 @@ re-registers the task and moves `current` to the newest release.
 - a `mullion` launcher script in `~/bin`, which Git Bash's login shell puts on
   `PATH` — so a session finds it (`~/.local/bin`, where the other platforms
   link the CLI, is not on Git Bash's `PATH`);
-- a **per-user scheduled task**, `Mullion-agent`, that runs at logon.
+- a **per-user scheduled task**, `Mullion-agent`, that runs at logon;
+- an entry in **Settings → Apps → Installed apps** ("Mullion agent"), whose
+  uninstall runs the bootstrap's `-Uninstall` from a copy of the script kept in
+  the install root (`mullion-install.ps1`).
 
 **Why a scheduled task and not a Windows service.** The agent CLIs, their
 logins, your git credentials and Git Bash are all per user, so the agent has
@@ -960,6 +976,8 @@ step by pre-creating it):
 | `MULLION_AGENT_PRIMARY_URL`      | yes, for self-registration                                    | the primary's base URL — written to `.env`'s `MULLION_PRIMARY_URL`                                                                                                                                                                                                                       |
 | `MULLION_AGENT_ENROLLMENT_TOKEN` | yes, for self-registration                                    | must match the primary's `MULLION_ENROLLMENT_SECRET` — written to `.env`'s `MULLION_ENROLLMENT_TOKEN`                                                                                                                                                                                    |
 | `MULLION_AGENT_ADVERTISE_URL`    | recommended for self-registration                             | this agent's own reachable base URL; see docs/multi-host.md's note on baseUrl uniqueness across a fleet                                                                                                                                                                                  |
+| `MULLION_AGENT_HOST`             | optional                                                      | the address the agent listens on — written to `.env`'s `HOST`. Unset keeps the server default (`127.0.0.1`), which the primary cannot reach from another machine                                                                                                                         |
+| `MULLION_AGENT_PORT`             | optional                                                      | the port the agent listens on — written to `.env`'s `PORT`. Unset keeps the server default (3000)                                                                                                                                                                                        |
 | `MULLION_AGENT_NAME`             | optional                                                      | human label in the primary's Hosts list; defaults to hostname                                                                                                                                                                                                                            |
 | `MULLION_AGENT_TOKEN`            | yes, for the manual-token path _instead of_ self-registration | a pre-provisioned static token, registered by hand on the primary                                                                                                                                                                                                                        |
 

@@ -568,6 +568,16 @@ BROWSER_DATA_DIR=$MULLION_HOME/data/browsers
 # required for this agent to be useful at all.
 EOF
     printf 'PROJECTS_ROOTS=%s\n' "${MULLION_AGENT_PROJECTS_ROOTS:-}" >>"$MULLION_HOME/.env"
+    # The address and port the agent listens on, when the caller picked them
+    # (the Windows bootstrap's -BindHost/-Port). Left out otherwise, so the
+    # server's own defaults (127.0.0.1:3000) apply; the primary can only
+    # reach an agent that listens on a non-loopback address.
+    if [ -n "${MULLION_AGENT_HOST:-}" ]; then
+      printf '\n# Listen address, so the primary can reach this agent.\nHOST=%s\n' "$MULLION_AGENT_HOST" >>"$MULLION_HOME/.env"
+    fi
+    if [ -n "${MULLION_AGENT_PORT:-}" ]; then
+      printf 'PORT=%s\n' "$MULLION_AGENT_PORT" >>"$MULLION_HOME/.env"
+    fi
     cat >>"$MULLION_HOME/.env" <<'EOF'
 
 # --- Pick ONE of the two credential paths below; src/app.ts refuses to
