@@ -803,8 +803,10 @@ script): there is no prompt, ever, and with `-Json` stdout is one JSON object
 per line and nothing else —
 `{"step":"…","status":"start|ok|skip|log|fail","detail":"…"}`, for the steps
 `platform`, `git-bash`, `node`, `fetch`, `install` (its output arrives as `log`
-lines) and `done`. The last line is either `done`/`ok` carrying the contents of
-`install.json` (plus `gitBash`) or a `fail` line with `exitCode`. Exit status:
+lines) and `done` (an uninstall reports `uninstall` and `done`). The last line is
+either `done`/`ok` carrying the contents of `install.json` (plus `gitBash`) or a
+`fail` line with `exitCode`; an unexpected error is a `fail` line whose step is
+`unexpected`. Exit status:
 `0` done; `1` unexpected failure; `2` unsupported platform or arguments; `3` a
 download or its checksum failed; `4` the release's installer failed; `5` an
 uninstall was refused because sessions are still running.

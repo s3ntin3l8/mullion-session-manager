@@ -29,9 +29,11 @@
 #     any process on the machine can read from the process list;
 #   - with -Json, stdout is one JSON object per line, nothing else:
 #       {"step":"<name>","status":"start|ok|skip|log|fail","detail":"...", ...}
-#     steps, in order: platform, git-bash, node, fetch, install, done. The last
-#     line is either {"step":"done","status":"ok",...install.json fields...} or
-#     a "fail" line carrying "exitCode";
+#     steps, in order: platform, git-bash, node, fetch, install, done (an
+#     uninstall has "uninstall" in place of the middle ones). The last line is
+#     either {"step":"done","status":"ok",...install.json fields...} or a
+#     "fail" line carrying "exitCode"; an unexpected error is a "fail" line
+#     with step "unexpected";
 #   - exit status: 0 success; 1 unexpected failure; 2 unsupported platform or
 #     bad arguments; 3 a download or its checksum failed; 4 the release's
 #     installer failed; 5 an uninstall was refused because sessions are still
@@ -181,7 +183,11 @@ function Test-ProcessesUnder([string]$Root, [string[]]$AlsoRoots = @()) {
   # partly short (C:\Users\RUNNER~1\...\Mullion home) reports that spelling,
   # which is neither the long nor the all-short form.
   foreach ($r in (@($Root) + $AlsoRoots)) {
-    if ($r) { $prefixes += (($r.TrimEnd('\', '/').ToLowerInvariant().Replace('/', '\')) + '\') }
+    if (-not $r) { continue }
+    $candidate = ($r.TrimEnd('\', '/').ToLowerInvariant().Replace('/', '\')) + '\'
+    # Never a drive root or a bare drive ("c:\" would match every process on it).
+    if ($candidate.Length -le 3) { continue }
+    $prefixes += $candidate
   }
   # A process may have been started through the 8.3 short form of the path
   # (C:\Users\RUNNER~1\...) or the long one; WMI reports whichever it was given.
@@ -232,6 +238,11 @@ if (-not $InstallRoot) {
   $InstallRoot = Join-Path $env:LOCALAPPDATA 'Mullion'
 }
 $InstallRootAsGiven = $InstallRoot
+# A full path only: "C:" or a relative spelling would be resolved against a
+# current directory (GetFullPath turns "C:" into wherever this process is).
+if ($InstallRootAsGiven -notmatch '^([A-Za-z]:[\\/]|\\\\)') {
+  Fail 2 'platform' "the install root must be a full path (C:\folder), not '$InstallRootAsGiven'"
+}
 $InstallRoot = Get-FullPath $InstallRoot
 if ($InstallRoot -eq [IO.Path]::GetPathRoot($InstallRoot)) {
   Fail 2 'platform' "the install root must be a folder, not the drive root $InstallRoot"

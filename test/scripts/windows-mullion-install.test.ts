@@ -460,6 +460,14 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
       }
     }, 120_000);
 
+    it("refuses a bare drive or a relative path as the install root", async () => {
+      for (const root of ["C:", "relative\\folder"]) {
+        const res = await bootstrap(["-Json", "-Uninstall", "-InstallRoot", root]);
+        expect(res.code).toBe(2);
+        expect(res.events.at(-1)).toMatchObject({ step: "platform", status: "fail", exitCode: 2 });
+      }
+    }, 120_000);
+
     it("ends a -Json run with a fail line even on an unexpected error", async () => {
       const res = await bootstrap(["-Json", "-Uninstall", "-InstallRoot", "C:\\bad|path"]);
       expect(res.code).toBe(1);
