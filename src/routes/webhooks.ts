@@ -11,6 +11,7 @@ import { invalidatePrDetail } from "../services/github-pr-detail.js";
 import { listBlockingIssues } from "../services/github-write.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { upsertIssueTask } from "../services/task-watcher.js";
+import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { pickRepoOwners, repoKey as repoKeyOf, resolveRepoKeys } from "../services/repo-key.js";
 import { syncClosedIssueToLocal, syncUnlabeledIssueToLocal } from "../services/task-github-sync.js";
 import { refreshTaskBlockers } from "../services/task-dependencies.js";
@@ -196,15 +197,12 @@ export async function webhookRoutes(app: FastifyInstance) {
       >();
       // Same resolver and owner rule as task-watcher's poll (#2233), so both
       // paths agree on which project imports a repo's issues.
-      const repoKeys = await resolveRepoKeys(
-        app,
-        rows.map((r) => ({ id: r.id, cwd: r.cwd, hostId: r.hostId ?? "local" })),
-      );
+      const repoKeys = await resolveRepoKeys(app, rows);
       const repoOwners = pickRepoOwners(rows, repoKeys);
       for (const row of rows) {
-        const key = repoKeys.get(row.id);
+        const key = repoKeys.get(row.id)?.key;
         if (!key) continue;
-        const entry = { id: row.id, cwd: row.cwd, hostId: row.hostId ?? "local" };
+        const entry = { id: row.id, cwd: row.cwd, hostId: row.hostId || LOCAL_HOST_ID };
         const existing = projectsByRepoKey.get(key);
         if (existing) existing.push(entry);
         else projectsByRepoKey.set(key, [entry]);

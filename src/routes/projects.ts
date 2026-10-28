@@ -125,7 +125,7 @@ import {
   type GitHubPRsStatus,
   detectReleasePleaseConfig,
 } from "../services/github.js";
-import { forgetRepoKey, repoKey, resolveRepoKeys } from "../services/repo-key.js";
+import { repoKey, resolveRepoKeys } from "../services/repo-key.js";
 import {
   buildWebhookUrl,
   getWebhookSecret,
@@ -5017,7 +5017,7 @@ export async function projectsRoute(app: FastifyInstance) {
       const keys = await resolveRepoKeys(app, others);
       // Fails closed: a project whose repo can't be resolved right now (host
       // unreachable) may share the hook, so it keeps the hook alive.
-      hookShared = others.some((p) => !keys.has(p.id) || keys.get(p.id) === sharedKey);
+      hookShared = others.some((p) => !keys.has(p.id) || keys.get(p.id)?.key === sharedKey);
       if (hookShared) {
         app.log.info(
           { projectId, owner: registration.owner, repo: registration.repo },
@@ -5044,7 +5044,6 @@ export async function projectsRoute(app: FastifyInstance) {
 
     const deleted = app.db.delete(projects).where(eq(projects.id, projectId)).returning().all();
     if (deleted.length === 0) return reply.notFound();
-    forgetRepoKey(projectId);
     reply.code(204);
   });
 

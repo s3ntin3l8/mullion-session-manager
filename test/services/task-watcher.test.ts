@@ -372,6 +372,50 @@ describe("startTaskWatcher", () => {
     vi.useRealTimers();
   });
 
+  it("#2261 — resolves each project's repo once per startup pass and once per tick", async () => {
+    resetRepoKeyCache();
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
+    const rows = [
+      { id: 1, cwd: "/tmp/a", hostId: "agent-1" },
+      { id: 2, cwd: "/tmp/b", hostId: "agent-1" },
+    ];
+    const app = mockApp(rows, []);
+    vi.useFakeTimers();
+    const cleanup = startTaskWatcher(app);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mockResolveRepoRef).toHaveBeenCalledTimes(2);
+
+    mockResolveRepoRef.mockClear();
+    await vi.advanceTimersByTimeAsync(130_000); // one full tick
+    expect(mockResolveRepoRef).toHaveBeenCalledTimes(2);
+
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("#2260 — a non-owner project still runs the close read-back from the owner's issue set", async () => {
+    resetRepoKeyCache();
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
+    mockListLabeledIssues.mockResolvedValue([]); // issue 5 is gone from the open+labeled set
+    const rows = [
+      { id: 1, cwd: "/tmp/a", hostId: "local" },
+      { id: 2, cwd: "/tmp/b", hostId: "local" },
+    ];
+    const app = mockApp(rows, [], [], [], [{ id: 9, issueNumber: 5, status: "reviewing" }]);
+    vi.useFakeTimers();
+    const cleanup = startTaskWatcher(app);
+
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(mockListLabeledIssues).toHaveBeenCalledTimes(1); // owner only
+    const cwds = mockSyncClosedIssueToLocal.mock.calls.map((c) => c[2].cwd).sort();
+    expect(cwds).toEqual(["/tmp/a", "/tmp/b"]);
+
+    cleanup();
+    vi.useRealTimers();
+  });
+
   it("#2233 — an unreachable older project keeps its remembered ownership", async () => {
     resetRepoKeyCache();
     mockResolveGitHubToken.mockReturnValue("ghp_token");

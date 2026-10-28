@@ -883,12 +883,19 @@ the primary, so there's nothing to skew).
 **Issue import is per repo, not per project (#2233).** `pollOnce` resolves
 every project's repo once per tick (`resolveRepoKeys`, `repo-key.ts`) and
 builds repoKey → owner project id from rows ordered by `createdAt`, `id`.
-`syncProjectTasks` still puts a non-owner in `githubContext` (so claim,
-blocker and read-back passes keep working for its existing tasks) but skips
-`listLabeledIssues`/`upsertIssueTask` and logs once at info. The startup
+`resolveRepoKeys` returns each project's resolved ref too, and
+`syncProjectTasks` reuses it (one resolution per project per tick). It puts
+a non-owner in `githubContext` (so claim and blocker passes keep working for
+its existing tasks), skips `listLabeledIssues`/`upsertIssueTask`, logs once
+at info, and runs the close/unlabel read-back against the owner's per-tick
+`repoKey → Set<issueNumber>` (both sync helpers re-confirm with
+`getIssueState`; no set, because the owner failed, means no read-back). The startup
 stagger and the webhook `issues` handler apply the same rule. An unreachable
 host keeps the project's last resolved key (process-lifetime cache), so it
-never counts as "no repo" and never moves ownership.
+never counts as "no repo" and never moves ownership. A project with no
+remembered key that cannot be resolved defers every younger repo (owner 0)
+for `MAX_UNRESOLVED_MS` (30 min, warn per attempt), then counts as having no
+repo until its host answers.
 
 Best-effort with respect to the local transition: **the local row is the
 hub and is never blocked by GitHub being unreachable.** A sync failure is
