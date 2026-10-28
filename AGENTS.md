@@ -135,9 +135,10 @@ How this repo applies the conventions above — facts and commands, not rules.
   investigation `fix(scope): investigate …`; never `design:`/`decide:`/`idea:`/
   `investigate:`). Scopes are a fixed vocabulary, not free text: `sessions`,
   `tasks`, `uiux`, `github`, `dock`, `previews`, `projects`, `worktrees`,
-  `storage`, `files`, `hooks`, `opencode`, `windows`, `macos`, `hosts`,
+  `storage`, `files`, `git`, `settings`, `hooks`, `opencode`, `windows`, `macos`, `hosts`,
   `devices`, `browser`, `terminal`, `mobile`, `voice`, `review-relay`, `skills`,
-  `deps`, `deploy`, `scaffold`. CI-only work is a bare `ci:`. Open epics carry
+  `deps`, `deploy`, `scaffold`. Older commit history also uses `ui`, `review` and
+  `agents`: write those as `uiux`, `review-relay` and `hooks`. CI-only work is a bare `ci:`. Open epics carry
   the `epic` label (`gh issue list --label epic --state open`); attach every new
   issue to the one that fits as a sub-issue, and set `blocked_by` where one
   issue gates another. The `taskmaster-issues` skill has the commands.

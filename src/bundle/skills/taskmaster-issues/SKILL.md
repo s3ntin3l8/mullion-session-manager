@@ -21,7 +21,7 @@ If the repo uses Conventional Commits for commit and PR titles (its
 same way: `type(scope): summary`. The squash-merged PR usually reuses it.
 
 - **Types are the Conventional Commits set only:** `feat`, `fix`, `docs`,
-  `test`, `ci`, `chore`, `refactor`, `perf`, `build`. A decision or design
+  `test`, `ci`, `chore`, `refactor`, `perf`, `build`, `style`, `revert`. A decision or design
   issue is `docs(scope): decide …`; an investigation into a bug is
   `fix(scope): investigate …`. Don't invent `design:`, `decide:`, `idea:` or
   `investigate:` as types.

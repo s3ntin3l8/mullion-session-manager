@@ -297,7 +297,9 @@ session, and it now also covers the Conventional Commits title and the
 repo's scope vocabulary, attaching the issue to an open epic as a
 sub-issue, and setting `blocked_by` with the REST command. The
 `deferredWork` convention (`workflow-conventions.ts`) carries a portable
-version of the same ask so a session sees it at start-up.
+version of the same ask so a session sees it at start-up once the
+workflow wizard has been re-run (an existing install keeps its stored text
+until then).
 
 ### `Manual: true` is the exception, not the default
 
