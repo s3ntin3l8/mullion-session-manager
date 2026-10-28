@@ -159,9 +159,10 @@ describe("POST /api/storage/worktrees/remove-orphan", () => {
       app.db.insert(projects).values({ name: "alias", cwd: root }).run().lastInsertRowid,
     );
     const rename = fs.promises.rename.bind(fs.promises);
-    const spy = vi.spyOn(fs.promises, "rename").mockImplementationOnce(async (from, to) => {
+    const spy = vi.spyOn(fs.promises, "rename").mockImplementation(async (from, to) => {
       await rename(from, to);
-      app.db.insert(sessions).values({ projectId, command: "bash", cwd: alias }).run();
+      if (from === target)
+        app.db.insert(sessions).values({ projectId, command: "bash", cwd: alias }).run();
     });
     try {
       const result = await postAndWait(app, projectId, target);
@@ -180,7 +181,9 @@ describe("POST /api/storage/worktrees/remove-orphan", () => {
       app.db.insert(projects).values({ name: "race", cwd: "/tmp/race-project" }).run()
         .lastInsertRowid,
     );
-    let releaseScan!: (value: devWorktrees.OrphanRecovery[]) => void;
+    let releaseScan!: (
+      value: Awaited<ReturnType<typeof devWorktrees.inspectOrphanRecoveries>>,
+    ) => void;
     let releaseJob!: (value: devWorktrees.RemoveOrphanResult) => void;
     const scan = vi.spyOn(devWorktrees, "inspectOrphanRecoveries").mockReturnValueOnce(
       new Promise((resolve) => {
@@ -202,14 +205,17 @@ describe("POST /api/storage/worktrees/remove-orphan", () => {
       });
       expect(started.statusCode).toBe(202);
       await vi.waitFor(() => expect(removal).toHaveBeenCalled());
-      releaseScan([
-        {
-          projectId,
-          originalPath: "/tmp/race-project/.wt/x",
-          recoveryPath: "/tmp/race-project/.mullion-orphan-x/directory",
-          mayBePartial: false,
-        },
-      ]);
+      releaseScan({
+        recoveries: [
+          {
+            projectId,
+            originalPath: "/tmp/race-project/.wt/x",
+            recoveryPath: "/tmp/race-project/.mullion-orphan-x/directory",
+            mayBePartial: false,
+          },
+        ],
+        warnings: [],
+      });
       expect((await pending).json()).toMatchObject({ job: { state: "running" }, recoveries: [] });
       releaseJob({ removed: false, reason: "unavailable" });
       await vi.waitFor(async () =>

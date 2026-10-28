@@ -418,7 +418,7 @@ describe("dev-worktrees", () => {
         }),
       );
       fs.renameSync(dir, staged);
-      expect(await inspectOrphanRecoveries(path.join(base, "registry"))).toEqual([
+      expect((await inspectOrphanRecoveries(path.join(base, "registry"))).recoveries).toEqual([
         { projectId: project.id, originalPath: dir, recoveryPath: staged, mayBePartial: false },
       ]);
       fs.writeFileSync(
@@ -432,7 +432,7 @@ describe("dev-worktrees", () => {
           ino: stat.ino,
         }),
       );
-      expect(await inspectOrphanRecoveries(path.join(base, "registry"))).toEqual([
+      expect((await inspectOrphanRecoveries(path.join(base, "registry"))).recoveries).toEqual([
         { projectId: project.id, originalPath: dir, recoveryPath: staged, mayBePartial: true },
       ]);
     });
@@ -463,7 +463,7 @@ describe("dev-worktrees", () => {
         return lstat(candidate, options as never) as Promise<fs.Stats>;
       });
       try {
-        expect(await inspectOrphanRecoveries(registry)).toEqual([
+        expect((await inspectOrphanRecoveries(registry)).recoveries).toEqual([
           {
             projectId: project.id,
             originalPath: dir,
@@ -593,7 +593,8 @@ describe("dev-worktrees", () => {
       const dir = orphan();
       const original = path.join(repo, ".wt", "original");
       const rename = fs.promises.rename.bind(fs.promises);
-      const spy = vi.spyOn(fs.promises, "rename").mockImplementationOnce(async (from, to) => {
+      const spy = vi.spyOn(fs.promises, "rename").mockImplementation(async (from, to) => {
+        if (from !== dir) return rename(from, to);
         await rename(from, original);
         fs.mkdirSync(dir);
         fs.writeFileSync(path.join(dir, "new-work"), "preserve");
@@ -617,7 +618,7 @@ describe("dev-worktrees", () => {
       const rename = fs.promises.rename.bind(fs.promises);
       let calls = 0;
       const spy = vi.spyOn(fs.promises, "rename").mockImplementation(async (from, to) => {
-        if (++calls === 2) {
+        if (++calls === 3) {
           const staged = path.join(
             repo,
             fs.readdirSync(repo).find((name) => name.startsWith(".mullion-orphan-"))!,
@@ -684,18 +685,71 @@ describe("dev-worktrees", () => {
 
     it("leaves the original untouched when a cross-device move fails", async () => {
       const dir = orphan();
-      const spy = vi
-        .spyOn(fs.promises, "rename")
-        .mockRejectedValueOnce(Object.assign(new Error("cross device"), { code: "EXDEV" }));
+      const rename = fs.promises.rename.bind(fs.promises);
+      const spy = vi.spyOn(fs.promises, "rename").mockImplementation(async (from, to) => {
+        if (from === dir) throw Object.assign(new Error("cross device"), { code: "EXDEV" });
+        return rename(from, to);
+      });
+      try {
+        await expect(removeOrphan(project, dir, unused)).resolves.toEqual({
+          removed: false,
+          reason: "cross-device",
+        });
+        expect(exists(path.join(dir, "work.txt"))).toBe(true);
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it("reports unsupported mount detection without touching the directory", async () => {
+      const dir = orphan();
+      const check = vi
+        .spyOn(mountBoundaries, "containsMount")
+        .mockRejectedValueOnce(new mountBoundaries.UnsupportedMountPlatformError());
+      try {
+        await expect(removeOrphan(project, dir, unused)).resolves.toEqual({
+          removed: false,
+          reason: "unsupported-platform",
+        });
+        expect(exists(path.join(dir, "work.txt"))).toBe(true);
+      } finally {
+        check.mockRestore();
+      }
+    });
+
+    it("keeps the original when writing the initial recovery record fails", async () => {
+      const dir = orphan();
+      const write = fs.promises.writeFile.bind(fs.promises);
+      const spy = vi.spyOn(fs.promises, "writeFile").mockImplementationOnce(async (file) => {
+        await write(file, "{");
+        throw new Error("interrupted write");
+      });
       try {
         await expect(removeOrphan(project, dir, unused)).resolves.toEqual({
           removed: false,
           reason: "unavailable",
         });
         expect(exists(path.join(dir, "work.txt"))).toBe(true);
+        expect(await inspectOrphanRecoveries(path.join(base, "registry"))).toEqual({
+          recoveries: [],
+          warnings: [],
+        });
       } finally {
         spy.mockRestore();
       }
+    });
+
+    it("reports corrupt recovery records without preventing inspection", async () => {
+      const registry = path.join(base, "registry");
+      fs.mkdirSync(registry);
+      const corrupt = path.join(registry, "deadbeef.json");
+      fs.writeFileSync(corrupt, "{");
+      expect(await inspectOrphanRecoveries(registry)).toEqual({
+        recoveries: [],
+        warnings: [expect.stringContaining(corrupt)],
+      });
+      const dir = orphan();
+      await expect(removeOrphan(project, dir, unused)).resolves.toMatchObject({ removed: true });
     });
 
     it("refuses a nested mount without touching the directory", async () => {
@@ -727,7 +781,7 @@ describe("dev-worktrees", () => {
         });
         expect(exists(path.join(dir, "work.txt"))).toBe(false);
         expect(exists(path.join(dir, "other.txt"))).toBe(true);
-        expect(await inspectOrphanRecoveries(path.join(base, "registry"))).toEqual([
+        expect((await inspectOrphanRecoveries(path.join(base, "registry"))).recoveries).toEqual([
           { projectId: project.id, originalPath: dir, recoveryPath: dir, mayBePartial: true },
         ]);
       } finally {

@@ -292,9 +292,9 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     for (let attempt = 0; attempt < 3; attempt++) {
       const before = orphanRemoval.status();
       if (before.state === "running") return { job: before, recoveries: [] };
-      const recoveries = await inspectOrphanRecoveries(orphanRegistryDir);
+      const scan = await inspectOrphanRecoveries(orphanRegistryDir);
       const after = orphanRemoval.status();
-      if (before === after) return { job: after, recoveries };
+      if (before === after) return { job: after, ...scan };
     }
     return { job: orphanRemoval.status(), recoveries: [] };
   });

@@ -12,7 +12,7 @@ import {
 import { getGitStatus } from "./git-status.js";
 import { removeListedWorktree } from "./git-worktree.js";
 import { dirSize } from "./temp-storage.js";
-import { containsMount } from "./mount-boundaries.js";
+import { containsMount, UnsupportedMountPlatformError } from "./mount-boundaries.js";
 import type { GitBranchInfo, GitWorktreeInfo } from "../shared/types.js";
 
 // Developer worktrees (issue #1605): `.wt/<slug>`, this repo's own convention,
@@ -338,20 +338,23 @@ export interface OrphanRecovery {
 
 /** Recovery records live outside project rows, so project moves/deletions and
  * server restarts do not hide quarantined work. */
-export async function inspectOrphanRecoveries(registryDir: string): Promise<OrphanRecovery[]> {
+export async function inspectOrphanRecoveries(
+  registryDir: string,
+): Promise<{ recoveries: OrphanRecovery[]; warnings: string[] }> {
   let entries: string[];
   try {
     entries = await fs.readdir(registryDir);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { recoveries: [], warnings: [] };
     throw error;
   }
   const found: OrphanRecovery[] = [];
+  const warnings: string[] = [];
   for (const entry of entries) {
     if (!/^[0-9a-f-]+\.json$/i.test(entry)) continue;
     try {
       const record: unknown = JSON.parse(await fs.readFile(path.join(registryDir, entry), "utf8"));
-      if (!record || typeof record !== "object") continue;
+      if (!record || typeof record !== "object") throw new Error("Invalid record");
       const data = record as {
         projectId?: unknown;
         originalPath?: unknown;
@@ -371,7 +374,7 @@ export async function inspectOrphanRecoveries(registryDir: string): Promise<Orph
         typeof data.dev !== "number" ||
         typeof data.ino !== "number"
       )
-        continue;
+        throw new Error("Invalid record");
       const originalPath = data.originalPath;
       const quarantine = path.dirname(data.recoveryPath);
       const root = path.dirname(quarantine);
@@ -379,9 +382,10 @@ export async function inspectOrphanRecoveries(registryDir: string): Promise<Orph
         path.basename(data.recoveryPath) !== "directory" ||
         !path.basename(quarantine).startsWith(".mullion-orphan-")
       )
-        continue;
+        throw new Error("Invalid record");
       const allowed = ROOTS.map(({ dir }) => path.join(root, dir));
-      if (!allowed.some((base) => originalPath.startsWith(base + path.sep))) continue;
+      if (!allowed.some((base) => originalPath.startsWith(base + path.sep)))
+        throw new Error("Invalid record");
       let recoveryPath = data.recoveryPath;
       const readStat = async (candidate: string) => {
         try {
@@ -424,10 +428,13 @@ export async function inspectOrphanRecoveries(registryDir: string): Promise<Orph
     } catch (error) {
       // An entry removed concurrently is harmless; unreadable or malformed
       // records must surface an error rather than hide potential recovery.
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT")
+        warnings.push(
+          `Recovery record ${path.join(registryDir, entry)} could not be read or verified. Inspect it and any .mullion-orphan-* directories before clearing it.`,
+        );
     }
   }
-  return found;
+  return { recoveries: found, warnings };
 }
 
 export type RemoveOrphanResult =
@@ -438,6 +445,8 @@ export type RemoveOrphanResult =
         | "invalid-path"
         | "not-orphan"
         | "in-use"
+        | "unsupported-platform"
+        | "cross-device"
         | "contains-mount"
         | "unavailable"
         | "changed"
@@ -537,7 +546,13 @@ export async function removeOrphanedDevWorktree(
     let moved = false;
     const restore = async (
       reason:
-        "changed" | "not-orphan" | "in-use" | "contains-mount" | "unavailable" | "remove-failed",
+        | "changed"
+        | "not-orphan"
+        | "in-use"
+        | "contains-mount"
+        | "unavailable"
+        | "remove-failed"
+        | "cross-device",
     ): Promise<RemoveOrphanResult> => {
       if (!moved) {
         await cleanQuarantine();
@@ -564,8 +579,14 @@ export async function removeOrphanedDevWorktree(
     try {
       // This record exists before the move, so even a process crash leaves
       // the original and recovery locations discoverable on the next boot.
-      await fs.writeFile(manifest, record("staged"), { flag: "wx", mode: 0o600 });
-      await fs.rename(target, staged);
+      await fs.writeFile(nextManifest, record("staged"), { flag: "wx", mode: 0o600 });
+      await fs.rename(nextManifest, manifest);
+      try {
+        await fs.rename(target, staged);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "EXDEV") return await restore("cross-device");
+        throw error;
+      }
       moved = true;
       const stagedStat = await fs.lstat(staged);
       if (
@@ -617,8 +638,12 @@ export async function removeOrphanedDevWorktree(
     } catch {
       return await restore("unavailable");
     }
-  } catch {
-    return { removed: false, reason: "unavailable" };
+  } catch (error) {
+    return {
+      removed: false,
+      reason:
+        error instanceof UnsupportedMountPlatformError ? "unsupported-platform" : "unavailable",
+    };
   }
 }
 

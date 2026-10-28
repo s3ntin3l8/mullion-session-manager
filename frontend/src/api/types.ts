@@ -250,6 +250,8 @@ export type RemoveOrphanResult =
         | "invalid-path"
         | "not-orphan"
         | "in-use"
+        | "unsupported-platform"
+        | "cross-device"
         | "contains-mount"
         | "unavailable"
         | "changed"
@@ -280,6 +282,7 @@ export interface OrphanRecoveryInfo {
 export interface OrphanRemovalSnapshot {
   job: OrphanRemovalStatus;
   recoveries: OrphanRecoveryInfo[];
+  warnings?: string[];
 }
 
 export interface DevWorktreeStatus {

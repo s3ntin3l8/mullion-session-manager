@@ -63,6 +63,9 @@ const ORPHAN_REFUSAL: Record<string, string> = {
   "contains-mount":
     "This directory contains a mounted filesystem. Unmount it before removing the directory.",
   unavailable: "Could not verify this directory. Refresh and try again.",
+  "unsupported-platform": "Orphan removal is not supported on this platform yet.",
+  "cross-device":
+    "This directory is on a different filesystem. Check its contents and remove it manually.",
   changed: "The directory changed while it was checked. Refresh and try again.",
   "remove-failed": "Removal failed after starting; some files may already have been deleted.",
 };
@@ -362,7 +365,7 @@ export function StorageSection() {
       mergeRecoveries(items.map((item) => ({ ...item, unverified: item.unverified ?? false }))),
   );
   const orphanResult =
-    orphan.job.state === "done" && orphan.job.result.removed
+    orphan.showSuccess && orphan.job.state === "done" && orphan.job.result.removed
       ? `Removed ${orphan.job.path.split(/[\\/]/).pop() ?? orphan.job.path}; freed approximately ${formatBytes(orphan.job.result.reclaimedBytes)}.`
       : null;
   const now = useNow(busy);
@@ -696,6 +699,10 @@ export function StorageSection() {
             </SecondaryButton>
           </ErrorText>
         ))}
+
+      {orphan.warnings.map((warning) => (
+        <ErrorText key={warning}>{warning}</ErrorText>
+      ))}
 
       {orphanResult && (
         <div className="settings-footer-note" role="status">

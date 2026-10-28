@@ -381,3 +381,5 @@ Known limits: a worktree whose session row was deleted is no longer known to
 Mullion; one created before this existed is not tracked (they carry no
 `worktreeBranch`); and "pushed" is judged from the branch's upstream, not from
 whether some remote branch happens to contain its tip.
+
+During orphan removal a temporary `.mullion-orphan-*` directory can appear as untracked in the project. If restoration fails it remains there with the recovery files; check the recovery notice before moving them.

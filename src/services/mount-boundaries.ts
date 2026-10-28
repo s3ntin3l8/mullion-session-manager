@@ -40,6 +40,8 @@ export function parseDarwinMounts(value: string): string[] {
     });
 }
 
+export class UnsupportedMountPlatformError extends Error {}
+
 /** True when a mount lies at or under this path. Unknown mount tables throw. */
 export async function containsMount(target: string): Promise<boolean> {
   let mounts: string[];
@@ -48,7 +50,7 @@ export async function containsMount(target: string): Promise<boolean> {
   } else if (process.platform === "darwin") {
     mounts = parseDarwinMounts((await run("/sbin/mount", [], { timeout: 10_000 })).stdout);
   } else {
-    throw new Error("Mount detection is unavailable on this platform");
+    throw new UnsupportedMountPlatformError("Mount detection is unavailable on this platform");
   }
   const resolved = path.resolve(target);
   return mounts.some((mount) => mount === resolved || mount.startsWith(resolved + path.sep));

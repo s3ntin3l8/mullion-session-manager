@@ -1018,12 +1018,30 @@ describe("Settings -> Storage", () => {
           },
           recoveries: [],
         });
+      sessionStorage.removeItem("mullion.orphan.lastSuccess");
       const view = render(<StorageSection />);
       expect(await screen.findByText(/You can leave this page and return/)).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Removing…" })).toBeDisabled();
       view.unmount();
-      render(<StorageSection />);
+      const completed = render(<StorageSection />);
       expect(await screen.findByText(/Removed stray; freed approximately/)).toBeInTheDocument();
+      completed.unmount();
+      render(<StorageSection />);
+      await waitFor(() => expect(api.getOrphanRemoval).toHaveBeenCalledTimes(3));
+      expect(screen.queryByText(/Removed stray; freed approximately/)).not.toBeInTheDocument();
+    });
+
+    it("shows a recovery index warning", async () => {
+      setup();
+      vi.mocked(api.getOrphanRemoval).mockResolvedValue({
+        job: { state: "idle" },
+        recoveries: [],
+        warnings: ["Recovery record /registry/broken.json could not be read"],
+      });
+      render(<StorageSection />);
+      expect(
+        await screen.findByText(/Recovery record \/registry\/broken.json/),
+      ).toBeInTheDocument();
     });
 
     it("shows interrupted partial removal even if its original row is gone", async () => {

@@ -10,6 +10,8 @@ export function useOrphanRemoval(
   onRecoveries: (recoveries: OrphanRecoveryInfo[]) => void,
 ) {
   const [job, setJob] = useState<OrphanRemovalStatus>({ state: "idle" });
+  const [warnings, setWarnings] = useState<string[]>([]);
+  const [successId, setSuccessId] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const wasRunning = useRef(false);
@@ -29,6 +31,16 @@ export function useOrphanRemoval(
     }
     if (status.state === "done" && notified.current !== status.id) {
       notified.current = status.id;
+      if (status.result.removed) {
+        let seen = false;
+        try {
+          seen = sessionStorage.getItem("mullion.orphan.lastSuccess") === status.id;
+          sessionStorage.setItem("mullion.orphan.lastSuccess", status.id);
+        } catch {
+          /* The notice remains visible for this mount. */
+        }
+        if (!seen) setSuccessId(status.id);
+      }
       finishedRef.current();
     }
     wasRunning.current = status.state === "running";
@@ -40,6 +52,7 @@ export function useOrphanRemoval(
         if (request !== latest.current) return null;
         setError(null);
         recoveriesRef.current(snapshot.recoveries);
+        setWarnings(snapshot.warnings ?? []);
         apply(snapshot.job);
         return snapshot.job;
       },
@@ -69,6 +82,7 @@ export function useOrphanRemoval(
   const start = async (projectId: number, path: string) => {
     setError(null);
     setStarting(true);
+    setSuccessId(null);
     let previousId: string | null = null;
     let attempted = false;
     try {
@@ -105,5 +119,12 @@ export function useOrphanRemoval(
       setStarting(false);
     }
   };
-  return { job, busy: starting || job.state === "running", error, start };
+  return {
+    job,
+    busy: starting || job.state === "running",
+    error,
+    warnings,
+    showSuccess: job.state === "done" && job.id === successId,
+    start,
+  };
 }
