@@ -785,6 +785,11 @@ system-wide:
   The pins are refreshed by `scripts/update-windows-prereqs.mjs`. A private Git
   Bash is recorded as `CLAUDE_CODE_GIT_BASH_PATH` in the `.env`, and the private
   Node's folder is put on the server's `PATH`, so sessions find both;
+- one more small download, [rcedit](https://github.com/electron/rcedit) (1.3 MB,
+  pinned and checksummed the same way, into `<install root>\runtime\rcedit.exe`),
+  puts the Mullion name and icon on the agent's program (below). It is cosmetic,
+  so unlike the two above a download that fails or does not match its pin is
+  skipped with a note, not an error;
 - re-running it is safe: it reuses what is there and re-runs the installer.
 
 | Parameter                                            | Meaning                                                                                                                                    |
@@ -803,7 +808,7 @@ system-wide:
 script): there is no prompt, ever, and with `-Json` stdout is one JSON object
 per line and nothing else —
 `{"step":"…","status":"start|ok|skip|log|fail","detail":"…"}`, for the steps
-`platform`, `git-bash`, `node`, `fetch`, `install` (its output arrives as `log`
+`platform`, `git-bash`, `node`, `rcedit`, `fetch`, `install` (its output arrives as `log`
 lines) and `done` (an uninstall reports `uninstall` and `done`). The last line is
 either `done`/`ok` carrying the contents of `install.json` (plus `gitBash`, and
 `agentToken` when one was generated, below) or a `fail` line with `exitCode`; an unexpected error is a `fail` line whose step is
@@ -831,8 +836,10 @@ written to the `.env` as `HOST` and `PORT`, and replace those lines in an
 existing `.env` when you re-run) and give the primary a URL for that address with
 `-AdvertiseUrl`. The installer warns when `-AdvertiseUrl` is set without
 `-BindHost`. The first time the agent listens on a non-loopback
-address, Windows shows a **Windows Defender Firewall prompt** for `node.exe`;
-it has to be allowed for the network type you are on. That is a click for you
+address, Windows shows a **Windows Defender Firewall prompt** for the agent's
+program, `<install root>\runtime\mullion-agent.exe`, named "Mullion agent" (it
+says "Node.js JavaScript Runtime" if rcedit was not available); it has to be
+allowed for the network type you are on. That is a click for you
 to make — the installer, which runs without administrator rights, cannot add
 the rule itself.
 
@@ -867,6 +874,17 @@ re-registers the task and moves `current` to the newest release.
   `PATH` — so a session finds it (`~/.local/bin`, where the other platforms
   link the CLI, is not on Git Bash's `PATH`);
 - a **per-user scheduled task**, `Mullion-agent`, that runs at logon;
+- `runtime\mullion-agent.exe`, the program that task runs: a copy of the Node
+  in use, made by `register-task.ps1` and marked as a Windows (GUI) program, so
+  Task Scheduler opens **no console window** (running `node.exe` itself shows
+  one, and closing it stops the agent). With rcedit present its file
+  description, product name and icon say Mullion, which is what the Firewall
+  prompt and Task Manager show. `mullion-agent.exe.json` beside it records the
+  Node it came from; the copy is rebuilt when that Node changes, and left as it
+  is (with a note) while a session started by the previous agent still holds it.
+  If a copy cannot be made the task runs the plain `node.exe`, and `-NoBrand`
+  on `register-task.ps1` asks for that. Sessions still find `node`, `npm` and
+  `npx` from the original Node's folder;
 - an entry in **Settings → Apps → Installed apps** ("Mullion agent"), whose
   uninstall runs the bootstrap's `-Uninstall` from a copy of the script kept in
   the install root (`mullion-install.ps1`). A script that was piped into

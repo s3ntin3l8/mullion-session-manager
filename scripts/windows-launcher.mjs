@@ -303,6 +303,30 @@ export function serverEnv({
 const stamp = () => new Date().toISOString();
 
 /**
+ * The directory of the Node whose `node`, `npx` and `npm` a session should find.
+ * Normally the folder of the Node running this launcher. But the scheduled task
+ * runs mullion-agent.exe, a windowless, branded copy of Node that
+ * deploy/windows/register-task.ps1 makes (so the Windows Firewall prompt and
+ * Task Manager say Mullion, and no console window opens); the copy sits alone
+ * in runtime\, and the Node it was made from is recorded beside it as
+ * mullion-agent.exe.json. The sessions need THAT folder on their PATH.
+ *
+ * @param {string} [execPath] The running Node (injectable for tests).
+ * @returns {string}
+ */
+export function toolNodeDir(execPath = process.execPath) {
+  if (path.basename(execPath).toLowerCase() === "mullion-agent.exe") {
+    try {
+      const { source } = JSON.parse(readFileSync(`${execPath}.json`, "utf8"));
+      if (typeof source === "string" && existsSync(source)) return path.dirname(source);
+    } catch {
+      // No (or an unreadable) stamp: the copy's own folder is the best there is.
+    }
+  }
+  return path.dirname(execPath);
+}
+
+/**
  * The launcher proper. Resolves with the process exit code.
  *
  * @param {string[]} [argv]
@@ -344,7 +368,7 @@ export async function main(argv = process.argv, baseEnv = process.env, signals =
           taskName,
           baseEnv,
           envFileText,
-          nodeDir: path.dirname(process.execPath),
+          nodeDir: toolNodeDir(),
         }),
         stdio: ["ignore", "pipe", "pipe"],
         windowsHide: true,

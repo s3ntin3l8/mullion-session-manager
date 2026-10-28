@@ -79,6 +79,11 @@ describe("update-windows-prereqs", () => {
       renderPins(pins).replace(/\n/g, script.includes("\r\n") ? "\r\n" : "\n"),
     );
     expect(updated).toContain(`$PinNodeSha256 = '${hash("c")}'`);
+    // rcedit is a fixed pin: it comes back unchanged, from the updater's own table.
+    expect(updated).toMatch(
+      /\$PinRceditUrl = 'https:\/\/github\.com\/electron\/rcedit\/releases\/download\/v[\d.]+\/rcedit-x64\.exe'/,
+    );
+    expect(updated).toMatch(/\$PinRceditSha256 = '[0-9a-f]{64}' # pragma: allowlist secret/);
     // Applying the same pins again changes nothing.
     expect(applyPins(updated, pins)).toBe(updated);
     // Everything outside the block is untouched.

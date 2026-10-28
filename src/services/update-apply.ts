@@ -8,6 +8,7 @@ import type { FastifyInstance } from "fastify";
 import { spawn as spawnChild } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { toolNodePath } from "./agent-exe.js";
 import { resolveServiceUnit } from "./service-unit.js";
 import { NoSessionShellError, sessionShell } from "./session-shell.js";
 
@@ -213,7 +214,7 @@ export async function spawnSelfUpdate(
       assetUrl,
       checksumUrl,
       slashed(mullionHome),
-      slashed(process.execPath),
+      slashed(toolNodePath()),
       serviceUnit,
     ]);
     if (!launched.ok) {

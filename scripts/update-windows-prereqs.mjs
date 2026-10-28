@@ -18,6 +18,15 @@ import { fileURLToPath } from "node:url";
 
 const SCRIPT = fileURLToPath(new URL("../deploy/windows/mullion-install.ps1", import.meta.url));
 const BEGIN = "# BEGIN PINS (refreshed by scripts/update-windows-prereqs.mjs)";
+
+// rcedit (sets the Mullion name and icon on the agent's copy of Node) is a
+// fixed pin, not a "latest": the release is from 2023 and the tool is only ever
+// run on a file we just made. Moving it is a deliberate edit, here.
+const RCEDIT = {
+  rceditVersion: "2.0.0",
+  rceditUrl: "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe",
+  rceditSha256: "3e7801db1a5edbec91b49a24a094aad776cb4515488ea5a4ca2289c400eade2a",
+};
 const END = "# END PINS";
 
 /**
@@ -60,7 +69,8 @@ export function pickPortableGit(release) {
 }
 
 /** The pins block, as it appears in the script. */
-export function renderPins(p) {
+export function renderPins(pins) {
+  const p = { ...RCEDIT, ...pins };
   return [
     BEGIN,
     `$PinNodeVersion = '${p.nodeVersion}'`,
@@ -69,6 +79,9 @@ export function renderPins(p) {
     `$PinGitVersion = '${p.gitVersion}'`,
     `$PinGitUrl = '${p.gitUrl}'`,
     `$PinGitSha256 = '${p.gitSha256}' # pragma: allowlist secret`,
+    `$PinRceditVersion = '${p.rceditVersion}'`,
+    `$PinRceditUrl = '${p.rceditUrl}'`,
+    `$PinRceditSha256 = '${p.rceditSha256}' # pragma: allowlist secret`,
     END,
   ].join("\n");
 }

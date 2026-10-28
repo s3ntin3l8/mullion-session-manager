@@ -22,6 +22,7 @@ import {
   parseEnvFile,
   serverEnv,
   supervise,
+  toolNodeDir,
 } from "../../scripts/windows-launcher.mjs";
 
 const LAUNCHER_PATH = fileURLToPath(new URL("../../scripts/windows-launcher.mjs", import.meta.url));
@@ -517,5 +518,49 @@ describe("main", () => {
     });
     expect(result.stderr).toContain("usage: node windows-launcher.mjs <mullion-home>");
     expect(result.status).toBe(2);
+  });
+});
+
+describe("toolNodeDir", () => {
+  /** runtime\\mullion-agent.exe (+ stamp) beside runtime\\node\\node.exe, like an install. */
+  function install(stamp: string | ((source: string) => unknown) | undefined) {
+    const runtime = tmpDir();
+    const source = path.join(runtime, "node", "node.exe");
+    fs.mkdirSync(path.dirname(source), { recursive: true });
+    fs.writeFileSync(source, "");
+    const copy = path.join(runtime, "mullion-agent.exe");
+    fs.writeFileSync(copy, "");
+    if (stamp !== undefined) {
+      fs.writeFileSync(
+        `${copy}.json`,
+        typeof stamp === "string" ? stamp : JSON.stringify(stamp(source)),
+      );
+    }
+    return { runtime, source, copy };
+  }
+
+  it("is the folder of the Node the windowless copy was made from, so sessions find node and npx", () => {
+    const { source, copy } = install((src) => ({ source: src }));
+    expect(toolNodeDir(copy)).toBe(path.dirname(source));
+  });
+
+  it("is the executable's own folder for any other Node", () => {
+    const { source } = install((src) => ({ source: src }));
+    expect(toolNodeDir(source)).toBe(path.dirname(source));
+  });
+
+  it("falls back to the copy's folder with no stamp, a broken one, or a Node that is gone", () => {
+    for (const stamp of [
+      undefined,
+      "{broken",
+      () => ({ source: path.join(os.tmpdir(), "gone.exe") }),
+    ]) {
+      const { runtime, copy } = install(stamp);
+      expect(toolNodeDir(copy)).toBe(runtime);
+    }
+  });
+
+  it("defaults to the running Node's folder", () => {
+    expect(toolNodeDir()).toBe(path.dirname(process.execPath));
   });
 });

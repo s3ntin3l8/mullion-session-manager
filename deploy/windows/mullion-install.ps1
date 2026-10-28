@@ -35,7 +35,7 @@
 #     no credential at all, in which case the new token is filled into it;
 #   - with -Json, stdout is one JSON object per line, nothing else:
 #       {"step":"<name>","status":"start|ok|skip|log|fail","detail":"...", ...}
-#     steps, in order: platform, git-bash, node, fetch, install, done (an
+#     steps, in order: platform, git-bash, node, rcedit, fetch, install, done (an
 #     uninstall has "uninstall" in place of the middle ones). The last line is
 #     either {"step":"done","status":"ok",...install.json fields...} or a
 #     "fail" line carrying "exitCode"; an unexpected error is a "fail" line
@@ -78,6 +78,8 @@ param(
   [string]$NodeZipSha256,
   [string]$GitUrl,
   [string]$GitSha256,
+  [string]$RceditUrl,
+  [string]$RceditSha256,
   # Where the Windows "Apps & features" entry is written; a test points it
   # elsewhere so it never touches the real one.
   [string]$UninstallRegistryKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Mullion'
@@ -90,6 +92,9 @@ $PinNodeSha256 = 'b3efd5c70cba3308ed46e7e699a9b8aac075bbc6b027fcb39c84c31acc25e2
 $PinGitVersion = '2.56.0.4'
 $PinGitUrl = 'https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.4/PortableGit-2.56.0.4-64-bit.7z.exe'
 $PinGitSha256 = 'b1f3e52216e2ed6882d1bebfd4d3fdf319bec40d2edbbf9fd26ec4fd3fce7ed1' # pragma: allowlist secret
+$PinRceditVersion = '2.0.0'
+$PinRceditUrl = 'https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe'
+$PinRceditSha256 = '3e7801db1a5edbec91b49a24a094aad776cb4515488ea5a4ca2289c400eade2a' # pragma: allowlist secret
 # END PINS
 
 $ErrorActionPreference = 'Stop'
@@ -171,20 +176,25 @@ function Get-NodeMajor([string]$Exe) {
 
 # Downloads $Url to $Dest and verifies its SHA-256 (fails closed). file:// works
 # (WebClient), which is how the tests and a pre-publication run feed it.
-function Get-Verified([string]$Url, [string]$Dest, [string]$Sha256, [string]$Step) {
+function Get-Verified([string]$Url, [string]$Dest, [string]$Sha256, [string]$Step, [bool]$Soft = $false) {
   Emit $Step 'log' "downloading $Url"
   try {
     $wc = New-Object Net.WebClient
     $wc.DownloadFile($Url, $Dest)
   } catch {
     if (Test-Path -LiteralPath $Dest) { Remove-Item -LiteralPath $Dest -Force -ErrorAction SilentlyContinue }
-    Fail 3 $Step "could not download ${Url}: $($_.Exception.Message)"
+    $msg = "could not download ${Url}: $($_.Exception.Message)"
+    if ($Soft) { Emit $Step 'log' $msg; return $false }
+    Fail 3 $Step $msg
   }
   $actual = (Get-FileHash -LiteralPath $Dest -Algorithm SHA256).Hash.ToLowerInvariant()
   if ($actual -ne $Sha256.ToLowerInvariant()) {
     Remove-Item -LiteralPath $Dest -Force -ErrorAction SilentlyContinue
-    Fail 3 $Step "checksum mismatch for $Url (expected $Sha256, got $actual); the download was deleted"
+    $msg = "checksum mismatch for $Url (expected $Sha256, got $actual); the download was deleted"
+    if ($Soft) { Emit $Step 'log' $msg; return $false }
+    Fail 3 $Step $msg
   }
+  return $true
 }
 
 # The spellings of a root that a process's or a task's command line may carry,
@@ -450,7 +460,7 @@ if ($bash) {
   $url = if ($GitUrl) { $GitUrl } else { $PinGitUrl }
   $sha = if ($GitSha256) { $GitSha256 } else { $PinGitSha256 }
   $exe = Join-Path $RuntimeDir 'PortableGit.7z.exe'
-  Get-Verified $url $exe $sha 'git-bash'
+  [void](Get-Verified $url $exe $sha 'git-bash')
   Emit 'git-bash' 'log' "extracting Git for Windows $PinGitVersion (portable) into $privateGit"
   if (Test-Path -LiteralPath $privateGit) { Remove-Item -LiteralPath $privateGit -Recurse -Force }
   # The self-extractor is 7-Zip's: -o<dir> (no space) and -y to answer yes.
@@ -487,7 +497,7 @@ if ($node) {
   $url = if ($NodeZipUrl) { $NodeZipUrl } else { $PinNodeUrl }
   $sha = if ($NodeZipSha256) { $NodeZipSha256 } else { $PinNodeSha256 }
   $zip = Join-Path $RuntimeDir 'node.zip'
-  Get-Verified $url $zip $sha 'node'
+  [void](Get-Verified $url $zip $sha 'node')
   Emit 'node' 'log' "extracting Node $PinNodeVersion into $privateNodeDir"
   $stage = Join-Path $RuntimeDir 'node-stage'
   if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
@@ -507,6 +517,29 @@ if ($node) {
   }
   $node = $privateNode
   Emit 'node' 'ok' "installed $node"
+}
+
+# --- rcedit --------------------------------------------------------------------
+
+# The agent runs as mullion-agent.exe, a windowless copy of Node that
+# deploy/windows/register-task.ps1 makes. rcedit puts the Mullion name and icon
+# on it (so the Windows Firewall prompt and Task Manager say "Mullion agent"),
+# and register-task.ps1 uses it only if it finds it at runtime\rcedit.exe. It is
+# cosmetic, so unlike Node and Git a download that fails or does not match its
+# pin is not an error: the file is deleted and the agent runs without the name.
+Emit 'rcedit' 'start' 'looking for the branding tool'
+$rcedit = Join-Path $RuntimeDir 'rcedit.exe'
+if (Test-Path -LiteralPath $rcedit) {
+  Emit 'rcedit' 'skip' "using $rcedit"
+} else {
+  New-Item -ItemType Directory -Force -Path $RuntimeDir | Out-Null
+  $url = if ($RceditUrl) { $RceditUrl } else { $PinRceditUrl }
+  $sha = if ($RceditSha256) { $RceditSha256 } else { $PinRceditSha256 }
+  if (Get-Verified $url $rcedit $sha 'rcedit' $true) {
+    Emit 'rcedit' 'ok' "installed $rcedit"
+  } else {
+    Emit 'rcedit' 'skip' 'not available; the agent will run without the Mullion name and icon in Windows'
+  }
 }
 
 # --- fetch the release's bootstrap ---------------------------------------------

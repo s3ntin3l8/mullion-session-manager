@@ -6,7 +6,7 @@
 #   powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File register-task.ps1
 #       -TaskName Mullion-agent -NodePath C:\...\node.exe
 #       -LauncherPath C:\...\current\scripts\windows-launcher.mjs
-#       -MullionHome C:\...\Mullion [-Start]
+#       -MullionHome C:\...\Mullion [-Start] [-NoBrand]
 #   powershell.exe ... -File register-task.ps1 -TaskName Mullion-agent -Remove
 #
 # Why a per-user task and not a Windows service: the agent CLIs, their logins,
@@ -21,6 +21,20 @@
 # The task runs scripts/windows-launcher.mjs, which supervises the server: Task
 # Scheduler's own restart-on-failure has a one-minute floor.
 #
+# It does not run node.exe itself but <MullionHome>\runtime\mullion-agent.exe, a
+# copy of that Node made here (-NoBrand keeps the plain node.exe):
+#   - its PE header says "Windows GUI" instead of "console", so Task Scheduler
+#     opens no console window (a console node.exe gets a visible one, and
+#     closing it stops the agent);
+#   - when runtime\rcedit.exe is there (the bootstrap downloads it, pinned and
+#     checksummed) its version info and icon say Mullion, so the Windows
+#     Firewall prompt and Task Manager show "Mullion agent" and not "Node.js
+#     JavaScript Runtime".
+# A failure at any step leaves the plain node.exe in use; the agent still runs.
+# mullion-agent.exe.json next to the copy records what it was made from, so the
+# copy is only rebuilt when the Node changes, and so a caller that passes the
+# copy back as -NodePath (the updater passes process.execPath) gets the original.
+#
 # ASCII only on purpose: Windows PowerShell 5.1 reads a BOM-less script in the
 # ANSI code page. Exit status: 0 on success, 1 (with the reason on stderr) on
 # any failure.
@@ -30,7 +44,10 @@ param(
   [string]$LauncherPath,
   [string]$MullionHome,
   [switch]$Start,
-  [switch]$Remove
+  [switch]$Remove,
+  [switch]$NoBrand,
+  [string]$RceditPath,
+  [string]$IconPath
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,6 +61,141 @@ function Fail([string]$message) {
 # MULLION_SERVICE_UNIT, so it is held to a plain set of characters.
 if ($TaskName -notmatch '^[A-Za-z0-9._-]+$') {
   Fail "the task name '$TaskName' may only contain letters, digits, '.', '_' and '-'"
+}
+
+# Bumped when what the copy is made of changes, so existing copies are rebuilt.
+$BrandVersion = 1
+
+# The Node version a program reports, or '' if it cannot be asked. Through
+# System.Diagnostics.Process, not `& $exe`: Windows PowerShell 5.1 returns
+# nothing for a native command when the host gave it no console.
+function Get-ProgramVersion([string]$Exe) {
+  try {
+    $psi = New-Object Diagnostics.ProcessStartInfo
+    $psi.FileName = $Exe
+    $psi.Arguments = '--version'
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $p = [Diagnostics.Process]::Start($psi)
+    $out = $p.StandardOutput.ReadToEnd()
+    [void]$p.StandardError.ReadToEnd()
+    if (-not $p.WaitForExit(20000)) { $p.Kill(); return '' }
+    return $out.Trim()
+  } catch { return '' }
+}
+
+# Marks a PE file as a Windows GUI program (subsystem 2) instead of a console
+# one (3): the Subsystem field is 0x5C bytes after the PE signature.
+function Set-PeSubsystemGui([string]$File) {
+  $fs = [IO.File]::Open($File, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+  try {
+    $br = New-Object IO.BinaryReader($fs)
+    $fs.Position = 0x3C
+    $pe = $br.ReadInt32()
+    $fs.Position = $pe
+    if ($br.ReadUInt32() -ne 0x00004550) { throw "$File is not a PE file" }
+    $fs.Position = $pe + 0x5C
+    $current = $br.ReadUInt16()
+    if ($current -ne 2 -and $current -ne 3) { throw "unexpected PE subsystem $current in $File" }
+    $fs.Position = $pe + 0x5C
+    $bw = New-Object IO.BinaryWriter($fs)
+    $bw.Write([UInt16]2)
+    $bw.Flush()
+  } finally {
+    $fs.Dispose()
+  }
+}
+
+# The program the task should run: the windowless (and, with rcedit, branded)
+# copy of $SourceNode, or $SourceNode itself when a copy cannot be made.
+function Get-AgentExe([string]$SourceNode, [string]$Home_, [string]$Rcedit, [string]$Icon) {
+  $runtime = Join-Path $Home_ 'runtime'
+  $target = Join-Path $runtime 'mullion-agent.exe'
+  $stampFile = $target + '.json'
+  $source = $SourceNode
+  if ((Split-Path -Leaf $source) -ieq 'mullion-agent.exe') {
+    # The copy handed back (the updater passes the running server's own
+    # executable): the Node it was made from is in the stamp.
+    $source = $null
+    try {
+      $old = Get-Content -LiteralPath ($SourceNode + '.json') -Raw | ConvertFrom-Json
+      if ($old.source -and (Test-Path -LiteralPath $old.source -PathType Leaf)) { $source = [string]$old.source }
+    } catch { }
+    if (-not $source) { return $SourceNode }
+  }
+  $item = Get-Item -LiteralPath $source
+  $haveRcedit = [bool]($Rcedit -and (Test-Path -LiteralPath $Rcedit -PathType Leaf))
+  $haveIcon = [bool]($Icon -and (Test-Path -LiteralPath $Icon -PathType Leaf))
+  $want = ConvertTo-Json -Compress -InputObject ([ordered]@{
+      brand = $BrandVersion
+      source = $item.FullName
+      length = $item.Length
+      lastWrite = $item.LastWriteTimeUtc.Ticks
+      rcedit = $haveRcedit
+      icon = $(if ($haveIcon) { (Get-Item -LiteralPath $Icon).Length } else { 0 })
+    })
+  if ((Test-Path -LiteralPath $target) -and (Test-Path -LiteralPath $stampFile)) {
+    if ((Get-Content -LiteralPath $stampFile -Raw).Trim() -eq $want) { return $target }
+  }
+
+  New-Item -ItemType Directory -Force -Path $runtime | Out-Null
+  $sourceVersion = Get-ProgramVersion $source
+  $tmp = $target + '.new'
+  function Build([bool]$withResources) {
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    Copy-Item -LiteralPath $source -Destination $tmp -Force
+    Set-PeSubsystemGui $tmp
+    if ($withResources) {
+      $fileVersion = if ($sourceVersion -match '^v?(\d+)\.(\d+)\.(\d+)') { "$($Matches[1]).$($Matches[2]).$($Matches[3]).0" } else { '1.0.0.0' }
+      $rc = @($tmp,
+        '--set-version-string', 'FileDescription', 'Mullion agent',
+        '--set-version-string', 'ProductName', 'Mullion',
+        '--set-version-string', 'CompanyName', 'Mullion',
+        '--set-version-string', 'InternalName', 'mullion-agent',
+        '--set-version-string', 'OriginalFilename', 'mullion-agent.exe',
+        '--set-file-version', $fileVersion,
+        '--set-product-version', $fileVersion)
+      if ($haveIcon) { $rc += @('--set-icon', $Icon) }
+      & $Rcedit @rc 2>&1 | Out-Null
+      if ($LASTEXITCODE -ne 0) { throw "rcedit exited with status $LASTEXITCODE" }
+    }
+    # The copy has to behave exactly like the Node it came from.
+    $built = Get-ProgramVersion $tmp
+    if (-not $built -or ($sourceVersion -and $built -ne $sourceVersion)) {
+      throw "the copy reports '$built', not '$sourceVersion'"
+    }
+  }
+  $branded = $haveRcedit
+  try {
+    Build $haveRcedit
+  } catch {
+    if (-not $haveRcedit) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue; throw }
+    Write-Output "branding: $($_.Exception.Message); making the windowless copy without the Mullion name and icon"
+    $branded = $false
+    Build $false
+  }
+
+  # The previous run is stopping: its server (and any session master it started,
+  # which survives a restart) may still hold the old copy.
+  $replaced = $false
+  for ($i = 0; $i -lt 20 -and -not $replaced; $i++) {
+    try { Move-Item -LiteralPath $tmp -Destination $target -Force; $replaced = $true } catch { Start-Sleep -Milliseconds 500 }
+  }
+  if (-not $replaced) {
+    Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $target) {
+      Write-Output "branding: $target is in use (a session started by the previous agent is still running); keeping the existing copy"
+      return $target
+    }
+    throw "could not write $target"
+  }
+  # What the stamp records is what was built: if the resources were left out,
+  # the next registration tries again.
+  if (-not $branded -and $haveRcedit) { $want = $want -replace '"rcedit":true', '"rcedit":false' }
+  [IO.File]::WriteAllText($stampFile, $want, (New-Object Text.UTF8Encoding($false)))
+  return $target
 }
 
 try {
@@ -92,10 +244,25 @@ try {
     Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
   }
 
+  # The windowless copy of Node, made after the previous run was stopped (above)
+  # so the old copy is not in use. Anything that goes wrong falls back to the
+  # plain node.exe: the agent runs either way.
+  $exe = $node
+  if (-not $NoBrand) {
+    if (-not $RceditPath) { $RceditPath = Join-Path $home_ 'runtime\rcedit.exe' }
+    if (-not $IconPath) { $IconPath = Join-Path $PSScriptRoot 'mullion.ico' }
+    try {
+      $exe = Get-AgentExe $node $home_ $RceditPath $IconPath
+    } catch {
+      Write-Output "branding skipped: $($_.Exception.Message); the task runs $node"
+      $exe = $node
+    }
+  }
+
   $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
   # Quoted: install roots under a profile can contain spaces.
   $arguments = '"{0}" "{1}" "{2}"' -f $launcher, $home_, $TaskName
-  $action = New-ScheduledTaskAction -Execute $node -Argument $arguments -WorkingDirectory $home_
+  $action = New-ScheduledTaskAction -Execute $exe -Argument $arguments -WorkingDirectory $home_
   $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
   $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
   $settings = New-ScheduledTaskSettingsSet `
