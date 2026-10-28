@@ -2046,9 +2046,29 @@ describe("TaskDetail approval state, latest round and host (#2234 #2235 #2236)",
     ];
     sessions = [makeSession({ id: 5 })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
-    expect(screen.getByText("Round 2 · approved, needs your approval")).toBeInTheDocument();
+    expect(screen.getByText("Round 3 · approved, needs your approval")).toBeInTheDocument();
     expect(screen.getByText(/a human has to Approve it above/)).toBeInTheDocument();
     expect(screen.queryByText(/sent back to the worker/)).toBeNull();
+  });
+
+  it("the approval badge's round agrees with the 'Latest: round N' line", () => {
+    // Two rounds spent, so the approving review is written as `## Round 3`.
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        reviewSessionId: 5,
+        autoReturnRounds: 2,
+        approvalState: "awaiting-human",
+        reviewFindings: `${round(1, "changes requested — a", "- **a.ts:1** — x")}\n\n${round(2, "changes requested — b", "- **a.ts:1** — x")}\n\n${round(3, "approved — ok", "- None")}`,
+      }),
+    ];
+    sessions = [makeSession({ id: 5 })];
+    const { container } = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText("Round 3 · approved, needs your approval")).toBeInTheDocument();
+    expect(container.querySelector(".task-detail-review-summary")).toHaveTextContent(
+      "Latest: round 3",
+    );
   });
 
   it("round 0 awaiting-human and auto-pending wordings", () => {

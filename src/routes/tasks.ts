@@ -363,16 +363,21 @@ function withAutoReturnCapped<
   };
 }
 
-// #2234 — an approving review whose findings are in but whose project does
-// not auto-approve waits on a human's Approve with no other signal: the card
-// used to read "returned to worker". `awaiting-human` is that state;
-// `auto-pending` is the same verdict on a project whose approve sweep will
-// take it from here. Derived here, next to the other board states, so the
-// frontend never re-derives "approving verdict" (task-prompt.ts's
-// isApprovingVerdict is the one definition).
+// #2234 — an approving review whose findings are in leaves the task waiting
+// on an approval, with no other signal: the card used to read "returned to
+// worker". `awaiting-human` = a human has to Approve. `auto-pending` = the
+// approve sweep (task-reconciler.ts's processAutoApprovals) will take it, so
+// it applies that sweep's own gates: the project auto-approves, the task has
+// a PR number, and Task Master is enabled. If the project auto-approves but
+// a gate fails (no PR yet, Task Master off) the sweep will never act, so the
+// honest state is `awaiting-human`, not a promise the machine won't keep.
+// Derived here, next to the other board states, so the frontend never
+// re-derives "approving verdict" (task-prompt.ts's isApprovingVerdict is the
+// one definition).
 function withApprovalState<
   T extends {
     status: string;
+    prNumber: number | null;
     reviewSessionId: number | null;
     reviewFindingsIngestedSessionId: number | null;
     lastReviewVerdict: string | null;
@@ -380,6 +385,7 @@ function withApprovalState<
   },
 >(
   row: T,
+  taskMasterEnabled: boolean,
 ): Omit<T, "projectAutoApprove"> & { approvalState: "awaiting-human" | "auto-pending" | null } {
   const { projectAutoApprove, ...rest } = row;
   const approved =
@@ -387,9 +393,10 @@ function withApprovalState<
     row.reviewSessionId !== null &&
     row.reviewFindingsIngestedSessionId === row.reviewSessionId &&
     isApprovingVerdict(row.lastReviewVerdict);
+  const sweepWillApprove = !!projectAutoApprove && row.prNumber !== null && taskMasterEnabled;
   return {
     ...rest,
-    approvalState: approved ? (projectAutoApprove ? "auto-pending" : "awaiting-human") : null,
+    approvalState: approved ? (sweepWillApprove ? "auto-pending" : "awaiting-human") : null,
   };
 }
 
@@ -459,10 +466,15 @@ export async function tasksRoute(app: FastifyInstance) {
         // insertion order (Hermes review, PR #471).
         .orderBy(tasks.status, tasks.boardOrder, tasks.createdAt)
         .all();
-      const installCap = resolveTaskMasterConfig(app).maxAutoReturnRounds;
+      const taskMaster = resolveTaskMasterConfig(app);
+      const installCap = taskMaster.maxAutoReturnRounds;
+      const taskMasterEnabled = taskMaster.enabled;
       return rows.map((row) =>
         withBlockedState(
-          withApprovalState(withAutoReturnCapped(withPrTitleFallback(row), installCap)),
+          withApprovalState(
+            withAutoReturnCapped(withPrTitleFallback(row), installCap),
+            taskMasterEnabled,
+          ),
         ),
       );
     },
@@ -480,13 +492,12 @@ export async function tasksRoute(app: FastifyInstance) {
       .innerJoin(projects, eq(tasks.projectId, projects.id))
       .where(eq(tasks.id, taskId))
       .all();
+    const taskMaster = resolveTaskMasterConfig(app);
     return row
       ? withBlockedState(
           withApprovalState(
-            withAutoReturnCapped(
-              withPrTitleFallback(row),
-              resolveTaskMasterConfig(app).maxAutoReturnRounds,
-            ),
+            withAutoReturnCapped(withPrTitleFallback(row), taskMaster.maxAutoReturnRounds),
+            taskMaster.enabled,
           ),
         )
       : null;
@@ -687,7 +698,9 @@ export async function tasksRoute(app: FastifyInstance) {
           via: "patch",
         });
       }
-      return updated;
+      // Same wire shape as GET (blocked/approval/cap derivations included),
+      // so a client folding this response in never sees a row that drifts.
+      return selectTaskRow(taskId) ?? updated;
     },
   );
 

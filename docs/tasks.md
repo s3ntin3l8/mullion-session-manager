@@ -360,14 +360,15 @@ the original session board used.
   sits in, not repeated on the card.
 - A **host chip** on the card and in the drawer says where the task will run
   (`pinned · <host>`, `auto`, `needs <platform / host>` from its `Platform:` /
-  `Host:` lines, or `on <host>` once a worker session exists). It is read from
+  `Host:` lines, or `on <host>` / `on this machine` once a worker session exists). It is read from
   data already on the task, its worker session and its project, never from
   the placement-preview endpoint, and is absent on an install with no remote
   hosts.
 - A `reviewing` task whose last review **approved** (and whose findings are
   ingested) shows a status strip — "Round N · approved, needs your approval",
-  or "approved, auto-approving once CI is green" when the project auto-approves —
-  instead of "returned to worker". The task row carries it as the derived
+  or "approved, auto-approving once CI is green" when the project
+  auto-approves, the task has a PR and Task Master is on (the approve sweep's
+  own gates; otherwise a human still has to approve) — instead of "returned to worker". The task row carries it as the derived
   `approvalState` (`awaiting-human` / `auto-pending` / `null`). The drawer's
   Review section leads with the latest round (verdict and finding counts) and
   collapses earlier rounds.

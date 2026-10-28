@@ -121,15 +121,15 @@ describe("hasRemoteHosts / describeTaskHost (#2236)", () => {
     expect(chip?.label).toBe("on Mac mini");
   });
 
-  it("is null for a worker session on the local host", () => {
+  it("says 'on this machine' for a worker session on the local host", () => {
     expect(
       describeTaskHost(
         { placementRequirement: null },
         { resolvedHostId: "local", placementReason: null },
         "local",
         [local, mini],
-      ),
-    ).toBeNull();
+      )?.label,
+    ).toBe("on this machine");
   });
 
   it("describes a combined requirement, falling back to the raw host id", () => {

@@ -92,8 +92,7 @@ export interface TaskHostChip {
  * its project — never the placement-preview endpoint (per-card calls, and it
  * ignores the task's `Platform:`/`Host:` requirement). #2236.
  *
- * Null when nothing remote is involved (a local-only install, or a local
- * project with no requirement and no remote session).
+ * Null on an install with no remote hosts.
  */
 export function describeTaskHost(
   task: { placementRequirement: string | null },
@@ -107,7 +106,11 @@ export function describeTaskHost(
   // A session that already exists is the truth, whatever was planned.
   if (workerSession) {
     const badge = describeHostBadge(workerSession, () => [...hosts]);
-    return badge ? { label: `on ${badge.name}`, title: badge.title } : null;
+    // A local worker has no per-session badge (describeHostBadge), but on an
+    // install with remote hosts "it ran here" is worth saying after claim.
+    return badge
+      ? { label: `on ${badge.name}`, title: badge.title }
+      : { label: "on this machine", title: "Runs on this machine" };
   }
 
   const req = parseRequirement(task.placementRequirement);

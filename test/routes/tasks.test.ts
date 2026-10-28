@@ -2786,7 +2786,12 @@ describe("tasks route", () => {
         verdict: string | null;
         ingested: boolean;
         withReviewSession?: boolean;
+        prNumber?: number | null;
+        taskMasterEnabled?: boolean;
       }) {
+        // resolveTaskMasterConfig reads the env at request time; the describe
+        // block's default is on (top-level beforeAll), so restore it after.
+        if (opts.taskMasterEnabled === false) process.env.MULLION_TASK_MASTER_ENABLED = "false";
         const app = await buildApp();
         const res = await app.inject({
           method: "POST",
@@ -2815,6 +2820,7 @@ describe("tasks route", () => {
             reviewSessionId: withReview ? session.id : null,
             reviewFindingsIngestedSessionId: opts.ingested && withReview ? session.id : null,
             lastReviewVerdict: opts.verdict,
+            prNumber: opts.prNumber === undefined ? 12 : opts.prNumber,
           })
           .returning()
           .all();
@@ -2845,6 +2851,55 @@ describe("tasks route", () => {
         });
         const res = await app.inject({ method: "GET", url: `/api/tasks/${taskId}` });
         expect(res.json().approvalState).toBe("auto-pending");
+        await app.close();
+      });
+
+      it("is awaiting-human, not auto-pending, when the sweep can't act: no PR yet", async () => {
+        const { app, taskId } = await seed({
+          autoApprove: true,
+          verdict: "approved",
+          ingested: true,
+          prNumber: null,
+        });
+        const res = await app.inject({ method: "GET", url: `/api/tasks/${taskId}` });
+        expect(res.json().approvalState).toBe("awaiting-human");
+        await app.close();
+      });
+
+      it("is awaiting-human, not auto-pending, when Task Master is off", async () => {
+        try {
+          const { app, taskId } = await seed({
+            autoApprove: true,
+            verdict: "approved",
+            ingested: true,
+            taskMasterEnabled: false,
+          });
+          const res = await app.inject({ method: "GET", url: `/api/tasks/${taskId}` });
+          expect(res.json().approvalState).toBe("awaiting-human");
+          const list = await app.inject({ method: "GET", url: "/api/tasks" });
+          expect(list.json().find((t: { id: number }) => t.id === taskId).approvalState).toBe(
+            "awaiting-human",
+          );
+          await app.close();
+        } finally {
+          process.env.MULLION_TASK_MASTER_ENABLED = "true";
+        }
+      });
+
+      it("PATCH returns the same derived shape as GET", async () => {
+        const { app, taskId } = await seed({
+          autoApprove: false,
+          verdict: "approved",
+          ingested: true,
+        });
+        const res = await app.inject({
+          method: "PATCH",
+          url: `/api/tasks/${taskId}`,
+          payload: { boardOrder: 3 },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({ approvalState: "awaiting-human", boardOrder: 3 });
+        expect(res.json()).not.toHaveProperty("projectAutoApprove");
         await app.close();
       });
 

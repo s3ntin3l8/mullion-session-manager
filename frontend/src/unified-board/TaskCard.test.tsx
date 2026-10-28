@@ -543,7 +543,7 @@ describe("UnifiedBoard task columns", () => {
       ];
       render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
       expect(screen.getByRole("status")).toHaveTextContent(
-        "Round 2 · approved, needs your approval",
+        "Round 3 · approved, needs your approval",
       );
       expect(screen.queryByText(/returned to worker/)).toBeNull();
     });
@@ -554,13 +554,13 @@ describe("UnifiedBoard task columns", () => {
       expect(screen.getByRole("status")).toHaveTextContent(/^Approved, needs your approval$/);
     });
 
-    it("auto-approve project: says it merges once CI is green", () => {
+    it("auto-approve project: says it auto-approves once CI is green", () => {
       tasks = [
         makeTask({ id: 1, ...approved, autoReturnRounds: 1, approvalState: "auto-pending" }),
       ];
       render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
       expect(screen.getByRole("status")).toHaveTextContent(
-        "Round 1 · approved, auto-approving once CI is green",
+        "Round 2 · approved, auto-approving once CI is green",
       );
     });
 
