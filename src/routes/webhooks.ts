@@ -3,7 +3,6 @@ import type { FastifyInstance } from "fastify";
 import { eq, and, isNull } from "drizzle-orm";
 import { broadcastToProject } from "../services/github-ws-broadcast.js";
 import { getWebhookSecret } from "../services/github-webhook.js";
-import { resolveRepoRef } from "../services/host-git.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { projects, tasks } from "../db/schema.js";
 import { endReviewingOnPrState } from "../services/task-review-end.js";
@@ -12,6 +11,8 @@ import { invalidatePrDetail } from "../services/github-pr-detail.js";
 import { listBlockingIssues } from "../services/github-write.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { upsertIssueTask } from "../services/task-watcher.js";
+import { LOCAL_HOST_ID } from "../services/host-registry.js";
+import { pickRepoOwners, repoKey as repoKeyOf, resolveRepoKeys } from "../services/repo-key.js";
 import { syncClosedIssueToLocal, syncUnlabeledIssueToLocal } from "../services/task-github-sync.js";
 import { refreshTaskBlockers } from "../services/task-dependencies.js";
 
@@ -171,6 +172,8 @@ export async function webhookRoutes(app: FastifyInstance) {
       const rows = app.db
         .select({ id: projects.id, cwd: projects.cwd, hostId: projects.hostId })
         .from(projects)
+        // Oldest first: the first project on a repo owns its issue import (#2233).
+        .orderBy(projects.createdAt, projects.id)
         .all();
 
       // #490 — keeps cwd/hostId alongside id (not just a number[] like
@@ -192,16 +195,19 @@ export async function webhookRoutes(app: FastifyInstance) {
         string,
         Array<{ id: number; cwd: string; hostId: string }>
       >();
+      // Same resolver and owner rule as task-watcher's poll (#2233), so both
+      // paths agree on which project imports a repo's issues.
+      const repoKeys = await resolveRepoKeys(app, rows);
+      const repoOwners = pickRepoOwners(rows, repoKeys);
       for (const row of rows) {
-        const repoRef = await resolveRepoRef(app, row);
-        if (!repoRef) continue;
-        const key = `${repoRef.owner}/${repoRef.repo}`;
-        const entry = { id: row.id, cwd: row.cwd, hostId: row.hostId ?? "local" };
+        const key = repoKeys.get(row.id)?.key;
+        if (!key) continue;
+        const entry = { id: row.id, cwd: row.cwd, hostId: row.hostId || LOCAL_HOST_ID };
         const existing = projectsByRepoKey.get(key);
         if (existing) existing.push(entry);
         else projectsByRepoKey.set(key, [entry]);
       }
-      const matchedProjects = projectsByRepoKey.get(repoKey) ?? [];
+      const matchedProjects = projectsByRepoKey.get(repoKeyOf({ owner, repo })) ?? [];
       const projectIds = matchedProjects.map((p) => p.id);
 
       // Record in ActivityTracker (best-effort, may not be initialized yet).
@@ -415,6 +421,9 @@ export async function webhookRoutes(app: FastifyInstance) {
                   issue.state !== "closed" &&
                   (issue.labels ?? []).some((l) => l.name === taskLabel)
                 ) {
+                  // #2233 — projects sharing a repo all get the broadcast
+                  // above, but only the oldest imports the issue.
+                  if (projectId !== repoOwners.get(repoKeyOf({ owner, repo }))) break;
                   upsertIssueTask(app, projectId, {
                     number: issue.number,
                     title: issue.title,
@@ -583,7 +592,7 @@ export async function webhookRoutes(app: FastifyInstance) {
           if (!token) return;
           const dependents = await listBlockingIssues(token, owner, repo, closedIssueNumber);
           for (const dep of dependents) {
-            const candidateProjects = projectsByRepoKey.get(`${dep.owner}/${dep.repo}`) ?? [];
+            const candidateProjects = projectsByRepoKey.get(repoKeyOf(dep)) ?? [];
             for (const proj of candidateProjects) {
               const [task] = app.db
                 .select({ id: tasks.id, dependencyCount: tasks.dependencyCount })

@@ -53,6 +53,15 @@ title, spec (issue body), and the final PR link.
   `labeled`/`opened` delivery ingests the same way immediately instead of
   waiting for the next poll tick.
 
+  **One project per repo imports.** If several projects resolve to the same
+  `owner/repo` (compared case-insensitively), only the oldest (`createdAt`,
+  then id) imports the repo's issues, on the poll and on webhook delivery
+  alike; the others skip ingest and log one info line per tick. Their
+  existing tasks stay and keep being reconciled, including the close/unlabel
+  read-back, which reuses the owner's issue list from the same tick. A remote project whose
+  host is unreachable keeps the repo it last resolved to, so a host outage
+  never hands the repo to another project.
+
   An issue that loses the `mullion-task` label (or closes) while its task
   is still `backlog`/`ready` is **not** left untouched: the task fails
   rather than sitting in `ready` forever eligible for auto-claim on an
@@ -818,6 +827,18 @@ support uses. See `src/services/git-worktree.ts` and
 extensive design comments.
 
 ## Known limitations
+
+- **Projects sharing a repo don't both import its issues (#2233).** Only the
+  oldest project on an `owner/repo` creates tasks from its issues; a younger
+  project on the same repo shows none of them. Tasks a younger project
+  already had before this rule are kept, not merged.
+  If a project's host is unreachable and nothing is remembered about its
+  repo (for example right after a restart), import for repos younger than it
+  is deferred and a warning naming the project id is logged each time. The
+  deferral lasts at most 30 minutes; after that the project is treated as
+  having no GitHub repo and stops blocking the others. **Recovery:** bring
+  the host back (or remove the dead host and its projects); the project
+  rejoins on its next successful resolve.
 
 - **The reviewer App (`#737`) can't satisfy a CODEOWNERS-based rule.** A
   GitHub App can't be listed in a `CODEOWNERS` file — only a repo's numeric

@@ -125,6 +125,7 @@ import {
   type GitHubPRsStatus,
   detectReleasePleaseConfig,
 } from "../services/github.js";
+import { repoKey, resolveRepoKeys } from "../services/repo-key.js";
 import {
   buildWebhookUrl,
   getWebhookSecret,
@@ -5001,7 +5002,34 @@ export async function projectsRoute(app: FastifyInstance) {
       .from(webhookRegistrations)
       .where(eq(webhookRegistrations.projectId, projectId))
       .get();
+    // #2251 — unregisterHook deletes every Mullion hook on the repo, so it must
+    // not run while another project on the same repo (compared lower-cased)
+    // still relies on it. The deleted project's registration row cascades away
+    // with the project either way.
+    let hookShared = false;
     if (registration?.hookId) {
+      const sharedKey = repoKey(registration);
+      const others = app.db
+        .select({ id: projects.id, cwd: projects.cwd, hostId: projects.hostId })
+        .from(projects)
+        .all()
+        .filter((p) => p.id !== projectId);
+      const keys = await resolveRepoKeys(app, others);
+      // Fails closed: a project whose repo can't be resolved right now (host
+      // unreachable, even past the import deferral window) may share the hook,
+      // so it keeps the hook alive.
+      hookShared = others.some((p) => {
+        const r = keys.get(p.id);
+        return !r || r.unresolved || r.key === sharedKey;
+      });
+      if (hookShared) {
+        app.log.info(
+          { projectId, owner: registration.owner, repo: registration.repo },
+          "project delete: webhook kept, another project uses the same repo",
+        );
+      }
+    }
+    if (registration?.hookId && !hookShared) {
       const token = getToken(app);
       if (token) {
         await unregisterHook(

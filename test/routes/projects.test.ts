@@ -9321,5 +9321,139 @@ describe("projects route", () => {
 
       fs.rmSync(cwd, { recursive: true, force: true });
     });
+
+    it("#2251 — keeps the shared hook when another project on the same repo remains", async () => {
+      const app = await makeApp();
+      await enableWebhooksDirect(app);
+      const cwdA = await githubRepo("acme", "wiring-shared");
+      const cwdB = await githubRepo("Acme", "Wiring-Shared"); // case differs
+
+      const calls: Array<{ url: string; method?: string }> = [];
+      const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        calls.push({ url: String(url), method: init?.method });
+        if (init?.method === "DELETE") return Promise.resolve(new Response(null, { status: 204 }));
+        if (String(url).endsWith("/hooks") && (!init || init.method === undefined)) {
+          return Promise.resolve(
+            jsonRes(200, [
+              {
+                id: 555,
+                active: true,
+                config: { url: "https://hooks.example.com/api/webhooks/github" },
+              },
+            ]),
+          );
+        }
+        return Promise.resolve(jsonRes(201, { id: 555 }));
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const a = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "wiring-shared-a", cwd: cwdA },
+      });
+      const b = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "wiring-shared-b", cwd: cwdB },
+      });
+      const idA = a.json().id as number;
+      const idB = b.json().id as number;
+      calls.length = 0;
+
+      // Deleting one of two projects on the repo leaves the hook alone.
+      const first = await app.inject({ method: "DELETE", url: `/api/projects/${idB}` });
+      expect(first.statusCode).toBe(204);
+      expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
+
+      const { webhookRegistrations } = await import("../../src/db/schema.js");
+      const { eq: eqOp } = await import("drizzle-orm");
+      const survivor = app.db
+        .select()
+        .from(webhookRegistrations)
+        .where(eqOp(webhookRegistrations.projectId, idA))
+        .get();
+      expect(survivor?.hookId).toBe(555);
+
+      // The last project on the repo takes the hook down as before.
+      const second = await app.inject({ method: "DELETE", url: `/api/projects/${idA}` });
+      expect(second.statusCode).toBe(204);
+      expect(calls.some((c) => c.method === "DELETE" && c.url.includes("/hooks/555"))).toBe(true);
+
+      fs.rmSync(cwdA, { recursive: true, force: true });
+      fs.rmSync(cwdB, { recursive: true, force: true });
+    });
+
+    it("#2251 — keeps the hook while another project's host stays unresolvable, even past the import deferral window", async () => {
+      const app = await makeApp();
+      await enableWebhooksDirect(app);
+      const cwdA = await githubRepo("acme", "wiring-ghost-a");
+      const cwdB = await githubRepo("acme", "wiring-ghost-b");
+
+      const calls: Array<{ url: string; method?: string }> = [];
+      globalThis.fetch = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        // The dead remote host never answers.
+        if (String(url).startsWith("http://127.0.0.1:1")) {
+          return Promise.reject(new TypeError("fetch failed"));
+        }
+        calls.push({ url: String(url), method: init?.method });
+        if (init?.method === "DELETE") return Promise.resolve(new Response(null, { status: 204 }));
+        if (String(url).endsWith("/hooks") && (!init || init.method === undefined)) {
+          return Promise.resolve(
+            jsonRes(200, [
+              {
+                id: 600,
+                active: true,
+                config: { url: "https://hooks.example.com/api/webhooks/github" },
+              },
+            ]),
+          );
+        }
+        return Promise.resolve(jsonRes(201, { id: 600 }));
+      }) as unknown as typeof fetch;
+
+      const a = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "wiring-ghost-a", cwd: cwdA },
+      });
+      const b = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "wiring-ghost-b", cwd: cwdB },
+      });
+      // A project on a registered-but-dead remote host: its repo can't be resolved.
+      const { hosts, projects: projectsTable } = await import("../../src/db/schema.js");
+      app.db
+        .insert(hosts)
+        .values({ id: "ghost-host", name: "ghost", baseUrl: "http://127.0.0.1:1" })
+        .run();
+      app.db
+        .insert(projectsTable)
+        .values({ name: "ghost", cwd: "/nonexistent/ghost", hostId: "ghost-host" })
+        .run();
+      calls.length = 0;
+
+      const { MAX_UNRESOLVED_MS, resetRepoKeyCache } =
+        await import("../../src/services/repo-key.js");
+      resetRepoKeyCache();
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        // Inside the window: the unresolvable project may share the hook.
+        const first = await app.inject({ method: "DELETE", url: `/api/projects/${a.json().id}` });
+        expect(first.statusCode).toBe(204);
+        // Past the window the import path stops deferring, but the delete guard must not.
+        vi.setSystemTime(Date.now() + MAX_UNRESOLVED_MS + 60_000);
+        const second = await app.inject({ method: "DELETE", url: `/api/projects/${b.json().id}` });
+        expect(second.statusCode).toBe(204);
+      } finally {
+        vi.useRealTimers();
+      }
+
+      expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
+
+      fs.rmSync(cwdA, { recursive: true, force: true });
+      fs.rmSync(cwdB, { recursive: true, force: true });
+    });
   });
 });

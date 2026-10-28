@@ -547,6 +547,12 @@ per-project registration record the reconciler diffs against.
 
 ### How it works
 
+Projects that resolve to the same `owner/repo` (compared case-insensitively)
+share one GitHub webhook. A delivery is still broadcast to every matching
+project, but only the oldest creates tasks from `issues` events (#2233).
+Deleting one of those projects leaves the hook in place; it is removed only
+when the last project on the repo is deleted (#2251).
+
 When a webhook-enabled event occurs on GitHub (PR, CI run, issue, push,
 etc.), GitHub sends an HTTP POST to
 `MULLION_WEBHOOK_BASE_URL/api/webhooks/github`. The backend verifies the
