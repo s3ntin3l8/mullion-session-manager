@@ -1689,7 +1689,7 @@ describe("TerminalPane terminal query replies during scrollback replay", () => {
     }
   }
 
-  const QUERY_KEYS = ["n", "?n", "$p", "?$p"];
+  const QUERY_KEYS = ["n", "?n", ">c", "$p", "?$p"];
 
   it("registers a handler for every query family xterm answers", async () => {
     stubFakeWebSocket(true);
@@ -1699,16 +1699,16 @@ describe("TerminalPane terminal query replies during scrollback replay", () => {
     for (const key of QUERY_KEYS) expect(csiHandlers.has(key)).toBe(true);
   });
 
-  it("does not guard DA1/DA2: Claude Code ignores a replayed OSC 11 reply unless the DA1 reply follows", async () => {
+  it("leaves DA1 unguarded (so xterm's reply falls through during replay) but guards DA2", async () => {
     stubFakeWebSocket(true);
     renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
 
     expect(csiHandlers.has("c")).toBe(false);
-    expect(csiHandlers.has(">c")).toBe(false);
+    expect(csiHandlers.has(">c")).toBe(true);
   });
 
-  it("swallows CPR/DSR/DECRQM queries replayed before the first geometry frame", async () => {
+  it("swallows CPR/DSR/DA2/DECRQM queries replayed before the first geometry frame", async () => {
     stubFakeWebSocket(true);
     renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
