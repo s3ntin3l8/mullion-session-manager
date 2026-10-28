@@ -6,6 +6,8 @@ import { chmodSync, unlinkSync } from "node:fs";
 import {
   parseControlMessage,
   parseControlHandshake,
+  HANDSHAKE_TIMEOUT_MS,
+  MAX_HANDSHAKE_BYTES,
   type ControlMessage,
 } from "../services/control-protocol.js";
 import {
@@ -82,7 +84,7 @@ const MAX_LINE_BYTES = 2 * 1024 * 1024;
 // indefinitely — bound it the same way an HTTP request has an implicit
 // socket timeout. Exported for test/plugins/control-socket.test.ts, same
 // reasoning as hooks.ts's own exported GATE_TIMEOUT_MS/PROMOTE_TIMEOUT_MS.
-export const HANDSHAKE_TIMEOUT_MS = 10_000;
+export { HANDSHAKE_TIMEOUT_MS };
 
 // Issue #1517 — per-connection load bounds. One session-scoped client (the
 // socket path is injected into every spawned session) must not be able to
@@ -106,15 +108,11 @@ export const WRITE_HIGH_WATER_BYTES = 1024 * 1024;
 export { WRITE_HARD_CEILING_BYTES };
 /** Pre-handshake input is just `{"token":"..."}`; nothing legitimate needs
  * more than this before authenticating. */
-export const MAX_HANDSHAKE_BYTES = 4 * 1024;
+export { MAX_HANDSHAKE_BYTES };
 /** Global cap on simultaneously open connections (server.maxConnections). */
 export const MAX_CONNECTIONS = 256;
 
 type Scope = "full" | "session";
-
-/** Where a connection's frames come from: this process's own control socket,
- * or (#1656) a relay carrying a remote host's session. */
-export type ConnectionOrigin = "local" | { relayHostId: string };
 
 export interface ConnectionState {
   /** The reply sink every op writes through (`dispatch`'s `reply` included),
@@ -126,7 +124,6 @@ export interface ConnectionState {
    * through a SocketChannel. Null on a connection with no local socket (a
    * relay), where those ops are refused. */
   readonly socket: net.Socket | null;
-  readonly origin: ConnectionOrigin;
   scope: Scope;
   /** Set only for scope "session" — the connection is pinned to this
    * session id for the lifetime of the connection (see resolveHandshake). */
@@ -2413,7 +2410,6 @@ export function handleConnection(
           return () => socket.off("close", listener);
         },
         socket: null,
-        origin: { relayHostId: relay.hostId },
         scope: "session",
         sessionId: relay.sessionId,
         openChannels: new Map(),
@@ -2535,7 +2531,6 @@ export function handleConnection(
             return () => socket.off("close", listener);
           },
           socket,
-          origin: "local",
           scope: resolved.scope,
           sessionId: resolved.sessionId,
           openChannels: new Map(),

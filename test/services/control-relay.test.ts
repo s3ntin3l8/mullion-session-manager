@@ -126,6 +126,7 @@ describe("relay header", () => {
     expect(JSON.parse(relayErrorFrame(403, "no").toString("utf8"))).toEqual({
       id: null,
       ok: false,
+      fatal: true,
       status: 403,
       error: "no",
     });
@@ -206,6 +207,25 @@ describe("agent relay socket", () => {
     const [frame] = await talk(socketPath, ['{"token":"t"}']);
     expect(frame).toMatchObject({ ok: false, status: 503 });
     expect(String(frame.error)).toContain("relay-unavailable");
+  });
+
+  it("answers 503 instead of crashing when the channel closed as it was opened", async () => {
+    const socketPath = tmpSock();
+    const closedChannel = {
+      send: () => {
+        throw new Error("send() on closed channel");
+      },
+      close: () => {},
+    };
+    handles.push(
+      await materializeControlRelaySocket({
+        socketPath,
+        resolveToken: () => "7",
+        getMux: () => ({ openChannel: async () => closedChannel }) as never,
+      }),
+    );
+    const [frame] = await talk(socketPath, ['{"token":"t"}']);
+    expect(frame).toMatchObject({ ok: false, fatal: true, status: 503 });
   });
 
   it("tells relayed clients the relay dropped", async () => {

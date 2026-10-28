@@ -42,7 +42,7 @@ connection to the primary at **session scope** (the same wire protocol; the hand
 validated on the agent). Streaming ops (`sessions.attach`, `events.subscribe`) answer
 `501 not-available-over-relay` there. A Windows agent still sets
 `MULLION_CONTROL_UNAVAILABLE=remote-host` and the CLI/MCP client refuse up front. A frame with
-`"id": null` and `"ok": false` is the relay (or server) refusing the whole connection, for example
+`"id": null`, `"ok": false` and `"fatal": true` is the relay refusing the whole connection, for example
 `relay-unavailable` or `relay-disconnected`. See
 [`multi-host.md`](multi-host.md#control-from-a-session-on-an-agent-host) (#1656).
 

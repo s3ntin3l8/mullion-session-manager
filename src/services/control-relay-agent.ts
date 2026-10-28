@@ -1,7 +1,11 @@
 import net from "node:net";
 import { chmodSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
-import { parseControlHandshake } from "./control-protocol.js";
+import {
+  HANDSHAKE_TIMEOUT_MS,
+  MAX_HANDSHAKE_BYTES,
+  parseControlHandshake,
+} from "./control-protocol.js";
 import {
   encodeRelayHeader,
   MAX_RELAYED_CONNECTIONS,
@@ -18,9 +22,6 @@ import { reclaimSocketPath } from "./unix-socket.js";
 // dial-in provides. Never full scope: a handshake without a live session's
 // token is refused, whatever the primary's own auth settings are.
 
-/** The handshake line is just `{"token":"..."}` (control-socket.ts). */
-const MAX_HANDSHAKE_BYTES = 4 * 1024;
-const HANDSHAKE_TIMEOUT_MS = 10_000;
 const MUX_POLL_MS = 100;
 
 export interface ControlRelayAgentOptions {
@@ -142,7 +143,14 @@ export async function materializeControlRelaySocket(
       channel.close();
       return;
     }
-    channel.send(encodeRelayHeader(sessionId));
+    try {
+      channel.send(encodeRelayHeader(sessionId));
+    } catch (err) {
+      // The channel closed in the same tick it was acknowledged.
+      opts.log?.debug({ err }, "control-relay: the relay channel closed before the header");
+      refuse(socket, 503, "relay-unavailable: the relay channel closed");
+      return;
+    }
     relayed.add(socket);
     if (rest.length > 0) socket.unshift(rest);
     pipeNetSocketToChannel(socket, channel);

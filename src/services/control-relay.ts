@@ -48,9 +48,15 @@ export function parseRelayHeader(line: string): { sessionId: string } | null {
 }
 
 /** An error frame in the control socket's own reply shape, so a CLI/MCP client
- * reading the relay sees what it would see from the real socket. */
+ * reading the relay sees what it would see from the real socket. `fatal: true`
+ * marks a refusal of the whole connection (the control socket's own id-less
+ * 400s refuse one line and keep the connection), so a client fails every
+ * pending request with it. */
 export function relayErrorFrame(status: number, error: string): Buffer {
-  return Buffer.from(`${JSON.stringify({ id: null, ok: false, status, error })}\n`, "utf8");
+  return Buffer.from(
+    `${JSON.stringify({ id: null, ok: false, fatal: true, status, error })}\n`,
+    "utf8",
+  );
 }
 
 const MAX_PAIR_CHUNK_BYTES = 64 * 1024;

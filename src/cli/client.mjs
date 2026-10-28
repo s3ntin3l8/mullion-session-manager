@@ -195,10 +195,11 @@ export class MullionSocketClient extends EventEmitter {
 
   _route(msg) {
     const id = msg.id;
-    // A frame with no id is the server (or the agent's control relay, #1656)
-    // refusing the whole connection — no request can be answered after it, so
-    // fail them all with its reason rather than let each time out.
-    if (id === null && msg.ok === false) {
+    // `fatal` is the agent's control relay (#1656) refusing the whole
+    // connection — no request can be answered after it, so fail them all with
+    // its reason rather than let each time out. (An id-less 400 from the
+    // control socket itself is one bad line; the connection stays usable.)
+    if (id === null && msg.ok === false && msg.fatal === true) {
       const err = new MullionSocketError(msg.status, msg.error ?? "connection refused");
       for (const { reject, timer } of this.pending.values()) {
         clearTimeout(timer);

@@ -83,3 +83,10 @@ export function parseControlHandshake(line: string): ControlHandshake | null {
   const token = (parsed as { token?: unknown }).token;
   return { token: typeof token === "string" && token.length > 0 ? token : null };
 }
+
+/** A connection must present its handshake within this long. */
+export const HANDSHAKE_TIMEOUT_MS = 10_000;
+/** Pre-handshake input is just `{"token":"..."}`; nothing legitimate needs
+ * more than this before authenticating. Shared by the control socket and the
+ * agent's relay socket (#1656), which validate the same line. */
+export const MAX_HANDSHAKE_BYTES = 4 * 1024;

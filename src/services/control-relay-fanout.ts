@@ -36,10 +36,10 @@ import {
 const RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 const FAILURE_RELOG_INTERVAL = 5;
 const CONNECT_TIMEOUT_MS = 10_000;
-/** An agent that answered the upgrade with 404 predates the relay: probe it
- * again this rarely, so an upgraded agent is picked up without a restart. */
 /** How long a denied channel may linger before the primary closes it. */
 const DENIED_CHANNEL_LINGER_MS = 5_000;
+/** An agent that answered the upgrade with 404 predates the relay: probe it
+ * again this rarely, so an upgraded agent is picked up without a restart. */
 const UNSUPPORTED_RETRY_MS = 10 * 60_000;
 
 interface HostFanout {
