@@ -25,6 +25,7 @@ import {
   type AttentionSignalKind,
   type AttentionSignal,
 } from "./attention-detect.js";
+import { ProtocolTrace } from "./terminal-protocol-trace.js";
 import { AttentionTracker } from "./attention-tracker.js";
 import { GateRegistry } from "./gate-registry.js";
 import {
@@ -399,6 +400,9 @@ export class Session {
   readonly command: string;
   readonly socketPath: string;
   readonly createdAt: number;
+  // Journal trace of color/query/reply escape sequences crossing the PTY in
+  // either direction — see terminal-protocol-trace.ts.
+  private readonly protocolTrace: ProtocolTrace;
   // Phase 2 (issue #172): a per-session, high-entropy secret disambiguating
   // this session's hook messages on the ONE shared hook socket every session
   // connects to (see PtyManager.hookSocketPath below) — hook authors aren't
@@ -1012,6 +1016,7 @@ export class Session {
     this.cols = initialSize.cols;
     this.rows = initialSize.rows;
     this.createdAt = Date.now();
+    this.protocolTrace = new ProtocolTrace(this.id, this.createdAt);
     this.hookSocketPath = opts.hookSocketPath;
     this.controlSocketPath = opts.controlSocketPath;
     this.controlUnavailable = opts.controlUnavailable === true;
@@ -1654,6 +1659,7 @@ export class Session {
   /** Routes an attach client's output and exit into this session. */
   private wireAttachClient(ptyProcess: AttachClient): void {
     ptyProcess.onData((data) => {
+      this.protocolTrace.record("from-pty", data);
       const chunk = Buffer.from(data, "utf8");
       // Skipped during a redraw-nudge repaint window — see
       // redrawNudge's docstring above. Listeners below still get it live.
@@ -3151,6 +3157,7 @@ export class Session {
     }
     this.pendingWriteBytes += byteLength;
     if (!this.ptyProcess) return false;
+    this.protocolTrace.record("to-pty", data);
     this.ptyProcess.write(data);
     return true;
   }

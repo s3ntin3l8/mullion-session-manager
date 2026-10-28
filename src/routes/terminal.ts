@@ -159,6 +159,7 @@ export function attachSocketToSession(
   // involved at all — see pty-manager.ts.
   const backlog = session.getScrollback();
   if (backlog.length > 0) socket.send(backlog);
+  app.log.info({ sessionId: id, backlogBytes: backlog.length }, "terminal ws backlog replayed");
   sendGeometry();
 
   // A fresh spawn/respawn already nudges via attachClient() (pty-manager.ts).
