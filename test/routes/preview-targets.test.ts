@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import crypto from "node:crypto";
 import {
+  PreviewSlugAllocationError,
   getOrCreateProjectPreview,
   upsertBranchPreview,
 } from "../../src/services/preview-registry.js";
@@ -48,6 +49,26 @@ describe("named project previews", () => {
     await app.close();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     delete process.env.PREVIEW_BASE_HOST;
+  });
+
+  it("reports repeated slug collisions with a typed error", () => {
+    const id = app.db
+      .insert(projects)
+      .values({ name: "collision-limit", cwd: "/tmp/collision-limit" })
+      .returning()
+      .get().id;
+    const occupied = crypto.randomUUID();
+    app.db
+      .insert(previews)
+      .values({ slug: occupied, kind: "external", externalUrl: "https://example.test" })
+      .run();
+    const random = vi.spyOn(crypto, "randomUUID").mockReturnValue(occupied);
+    try {
+      expect(() => getOrCreateProjectPreview(app, id)).toThrow(PreviewSlugAllocationError);
+      expect(random).toHaveBeenCalledTimes(3);
+    } finally {
+      random.mockRestore();
+    }
   });
 
   it.each(["", "feature/collision"])(

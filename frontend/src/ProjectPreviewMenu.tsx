@@ -14,6 +14,8 @@ function usePreviewConfig(projectId: number) {
   );
   const [error, setError] = useState(false);
   useEffect(() => {
+    // Reuse the per-project cache; saves refresh it. Edits in another tab
+    // become visible on reload rather than causing a fetch for every Dock mount.
     if (config) return;
     let cancelled = false;
     void refresh(projectId).catch(() => {

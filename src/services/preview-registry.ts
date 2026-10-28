@@ -37,6 +37,13 @@ export const CHECKOUT_BRANCH = "";
 /** Targetless conflict handling supports SQLite's partial project index.
  * A conflict may also be on the random slug: only accept an existing row
  * for this project/branch, otherwise retry with a fresh slug. */
+export class PreviewSlugAllocationError extends Error {
+  constructor() {
+    super("Could not allocate a unique preview slug");
+    this.name = "PreviewSlugAllocationError";
+  }
+}
+
 function ensureProjectPreviewRow(
   app: FastifyInstance,
   projectId: number,
@@ -61,7 +68,7 @@ function ensureProjectPreviewRow(
       .get();
     if (row) return row;
   }
-  throw new Error("Could not allocate a unique preview slug");
+  throw new PreviewSlugAllocationError();
 }
 
 function toSummary(row: PreviewRow): PreviewSummary {
@@ -106,15 +113,9 @@ export function getOrCreateProjectPreview(
   // previews_project_id_branch_unique index — select-then-insert lets both sides
   // miss the not-yet-existing row and then have the loser's insert throw
   // (PR #43 review). onConflictDoNothing makes the losing insert a no-op
-  // instead, so the select below always finds a row afterward regardless of
+  // instead, so the helper always finds a row afterward regardless of
   // which side actually created it.
-  ensureProjectPreviewRow(app, projectId, CHECKOUT_BRANCH);
-
-  const where = and(
-    eq(previews.kind, "project"),
-    eq(previews.projectId, projectId),
-    eq(previews.branch, CHECKOUT_BRANCH),
-  );
+  let row = ensureProjectPreviewRow(app, projectId, CHECKOUT_BRANCH);
 
   // Issue #2007 — bind the session serving this preview. Only a session of
   // THIS project counts; anything else is ignored rather than rejected, since
@@ -127,11 +128,11 @@ export function getOrCreateProjectPreview(
       .where(eq(sessions.id, sessionId))
       .all();
     if (session?.projectId === projectId) {
-      app.db.update(previews).set({ sessionId }).where(where).run();
+      app.db.update(previews).set({ sessionId }).where(eq(previews.slug, row.slug)).run();
+      row = { ...row, sessionId };
     }
   }
 
-  const [row] = app.db.select().from(previews).where(where).all();
   return toSummary(row);
 }
 
