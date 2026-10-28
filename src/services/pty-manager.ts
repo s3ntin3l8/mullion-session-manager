@@ -4056,12 +4056,9 @@ export class PtyManager {
    */
   storedPtySize(id: string): { cols: number; rows: number } | null {
     assertValidSessionId(id);
-    const parsed = new SessionStateFile<StoredStateFields>(
+    const parsed = SessionStateFile.readStored<StoredStateFields>(
       stateFilePath(this.sessionsDir, id),
-      () => {
-        throw new Error("storedPtySize never writes");
-      },
-    ).read();
+    );
     const size = parsed?.state.ptySize;
     return size && Number.isInteger(size.cols) && Number.isInteger(size.rows)
       ? clampTerminalSize(size.cols, size.rows)

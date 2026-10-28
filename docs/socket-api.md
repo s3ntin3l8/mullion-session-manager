@@ -429,7 +429,11 @@ the prompt _was_ delivered either way).
   `sessions.wait_for_output`, `sessions.get` and `sessions.children` all do it, so the child
   answers instead of reading as not running until a dashboard client attaches. Only a scope that is
   verifiably alive is adopted; a dead one is still `409 … not running` and is never respawned, and a
-  scope whose liveness cannot be checked answers a retryable `503`. `sessions.kill` and
+  scope whose liveness cannot be checked answers a retryable `503`. (The
+  reattach re-probes the dtach socket itself, so a master that exits in the instant between the
+  scope check and that probe can still be respawned by it — the same narrow window the terminal
+  attach has.) The child is reattached at the pty size it last had, which is recorded in its state
+  file; a session that predates that falls back to 80×24 until a client attaches. `sessions.kill` and
   `sessions.scrollback` need no adoption and do not trigger one. A child on another host is that
   host's business.
 - **A child on another host (issue #1951)** is prompted **on that host**: the
