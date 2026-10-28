@@ -415,6 +415,20 @@ describe("PrDetailView", () => {
     expect(screen.queryByRole("button", { name: "Update branch" })).toBeNull();
   });
 
+  it("offers Update branch to a PR behind its base on a repo without strict protection", async () => {
+    stub({ ...PR, mergeStateStatus: "CLEAN", behindBy: 3 });
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    expect(await screen.findByRole("button", { name: "Update branch" })).toBeInTheDocument();
+    expect(screen.getAllByText(/3 behind main/).length).toBeGreaterThan(0);
+  });
+
+  it("offers no Update branch to an up-to-date PR (behindBy 0)", async () => {
+    stub({ ...PR, mergeStateStatus: "CLEAN", behindBy: 0 });
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    await screen.findByRole("button", { name: /Squash and merge/ });
+    expect(screen.queryByRole("button", { name: "Update branch" })).toBeNull();
+  });
+
   it("says when the re-review's in-flight marker could not be written (#1790)", async () => {
     stub(PR, (url) =>
       url.endsWith("/re-review")

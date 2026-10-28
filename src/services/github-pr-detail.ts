@@ -91,6 +91,13 @@ export interface PrDetail {
   files: PrDetailFile[];
   mergeable: PrMergeable;
   mergeStateStatus: string | null;
+  /**
+   * Commits the base has that the head lacks (REST compare `behind_by`).
+   * `mergeStateStatus` only says BEHIND under strict branch protection, so this
+   * is what tells a non-strict repo's PR it has fallen behind. Null when
+   * unknown (compare failed, PR not open, partial answer).
+   */
+  behindBy: number | null;
   reviewDecision: PrReviewDecision;
   requestedReviewers: string[];
   /** Latest opinionated review per reviewer — what merge gating reads. */
@@ -276,6 +283,27 @@ async function fetchFiles(
   return out;
 }
 
+/** How far the head is behind the base; null when GitHub cannot say. */
+async function fetchBehindBy(
+  token: string,
+  owner: string,
+  repo: string,
+  base: string,
+  headSha: string,
+): Promise<number | null> {
+  try {
+    const res = await githubApiFetch(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/compare/${encodeURIComponent(base)}...${encodeURIComponent(headSha)}?per_page=1`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) return null;
+    const raw = (await res.json()) as { behind_by?: unknown };
+    return typeof raw.behind_by === "number" ? raw.behind_by : null;
+  } catch {
+    return null;
+  }
+}
+
 interface RestPr {
   number: number;
   title: string;
@@ -349,6 +377,7 @@ async function partialDetail(
     mergeable:
       rest.mergeable === true ? "MERGEABLE" : rest.mergeable === false ? "CONFLICTING" : null,
     mergeStateStatus: null,
+    behindBy: null,
     reviewDecision: null,
     requestedReviewers: [],
     reviewers: [],
@@ -393,6 +422,12 @@ export async function getPrDetail(
   if (!data) return partialDetail(token, owner, repo, number, key, hit?.data, files);
   if (!pr) throw new GitHubApiError(`${key} not found`, 404);
 
+  // Only an open PR can be updated; cached with the detail, so no per-poll cost.
+  const behindBy =
+    pr.state === "OPEN"
+      ? await fetchBehindBy(token, owner, repo, pr.baseRefName, pr.headRefOid)
+      : null;
+
   const toComment = (c: { author: GqlAuthor | null; bodyHTML: string; createdAt: string }) => ({
     author: c.author?.login ?? null,
     bodyHtml: c.bodyHTML,
@@ -433,6 +468,7 @@ export async function getPrDetail(
     files,
     mergeable: asMergeable(pr.mergeable),
     mergeStateStatus: pr.mergeStateStatus,
+    behindBy,
     reviewDecision: asDecision(pr.reviewDecision),
     requestedReviewers,
     reviewers: reviewersOf(opinionated),

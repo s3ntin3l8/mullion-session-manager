@@ -115,6 +115,9 @@ export interface PrStatusInput {
   prPhase?: GitHubPrPhase;
   isDraft?: boolean;
   state?: "OPEN" | "CLOSED" | "MERGED";
+  /** Detail only: commits the base has that the head lacks. */
+  behindBy?: number | null;
+  baseBranch?: string;
   reviewDecision?: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
   reviewers?: { login: string; state: string }[];
   requestedReviewers?: string[];
@@ -407,6 +410,13 @@ export function reviewStatus(
 
 /** The Merge dimension; `text` is the long form, `label` what the chip says. */
 export function mergeStatus(input: PrStatusInput): DimStatus {
+  const s = mergeStatusBase(input);
+  const behind = input.behindBy ?? 0;
+  if (input.state !== "OPEN" || behind <= 0) return s;
+  return { ...s, text: `${s.text} · ${behind} behind ${input.baseBranch ?? "base"}` };
+}
+
+function mergeStatusBase(input: PrStatusInput): DimStatus {
   if (input.state === "MERGED") {
     return { tone: "merged", glyph: "✓", text: "Merged", label: "Merged", short: "Merged" };
   }
