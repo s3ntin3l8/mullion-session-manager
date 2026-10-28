@@ -584,10 +584,14 @@ export function StorageSection() {
             {!opencode.compacting && opencode.lastPrune && (
               <>
                 {" "}
-                Last compaction ({new Date(opencode.lastPrune.finishedAt).toLocaleString()}):{" "}
+                Last compaction ({formatRelativeAge(
+                  Date.parse(opencode.lastPrune.finishedAt),
+                )}):{" "}
                 {opencode.lastPrune.error
                   ? `failed: ${opencode.lastPrune.error}`
-                  : `${opencode.lastPrune.output} Freed ${formatBytes(opencode.lastPrune.reclaimedBytes)}.`}
+                  : opencode.lastPrune.reclaimedBytes > 0
+                    ? `${opencode.lastPrune.output} Freed ${formatBytes(opencode.lastPrune.reclaimedBytes)}.`
+                    : opencode.lastPrune.output}
               </>
             )}
           </div>
