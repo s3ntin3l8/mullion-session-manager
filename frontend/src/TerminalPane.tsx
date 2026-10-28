@@ -987,7 +987,7 @@ export function TerminalPane(props: {
     // harmlessly ignored no matter how late it arrives.
     //
     // The same guard covers xterm's own terminal *query replies* (CPR/DSR,
-    // DA, DECRQM, DECRQSS): a query the program sent at startup (Codex probes
+    // DA2, DECRQM, DECRQSS): a query the program sent at startup (Codex probes
     // `CSI 6n`) is still in the backlog, and xterm would answer it again on
     // every reattach. Usually the program isn't waiting for that reply, so it
     // lands in its input as stray text (e.g. `[21;3R`). Tradeoff: a program
@@ -1083,10 +1083,18 @@ export function TerminalPane(props: {
 
     // Swallow xterm's own query replies while the backlog replays (see
     // `isReplaying`); live queries fall through (`false`) to xterm's handler.
+    // The primary device attributes query (DA1, `CSI c`) is deliberately NOT here: Claude
+    // Code ends its OSC 11 background query with a DA1 and ignores the OSC 11
+    // reply unless the DA1 reply follows (measured: with both, a reply even 30 s
+    // late sets its palette; OSC 11 alone behaves as if never answered). The
+    // replayed DA1 reply carries a `?` marker, so it is not a key sequence; the
+    // observed stray text came from the cursor-position report. Accepted cost:
+    // another program's replayed DA1 reply may still reach its input (#2203
+    // listed DA among the queries that did). DA2 (`CSI > c`) stays guarded: its
+    // reply has no `?` marker and nothing needs it.
     const REPLAY_QUERY_CSI = [
       { final: "n" },
       { prefix: "?", final: "n" },
-      { final: "c" },
       { prefix: ">", final: "c" },
       { intermediates: "$", final: "p" },
       { prefix: "?", intermediates: "$", final: "p" },

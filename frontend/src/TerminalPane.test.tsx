@@ -1689,9 +1689,9 @@ describe("TerminalPane terminal query replies during scrollback replay", () => {
     }
   }
 
-  const QUERY_KEYS = ["n", "?n", "c", ">c", "$p", "?$p"];
+  const QUERY_KEYS = ["n", "?n", ">c", "$p", "?$p"];
 
-  it("registers a handler for every query family xterm answers", async () => {
+  it("registers a handler for every guarded query family", async () => {
     stubFakeWebSocket(true);
     renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
@@ -1699,7 +1699,16 @@ describe("TerminalPane terminal query replies during scrollback replay", () => {
     for (const key of QUERY_KEYS) expect(csiHandlers.has(key)).toBe(true);
   });
 
-  it("swallows CPR/DSR/DA/DECRQM queries replayed before the first geometry frame", async () => {
+  it("leaves DA1 unguarded (so xterm's reply falls through during replay) but guards DA2", async () => {
+    stubFakeWebSocket(true);
+    renderPane();
+    await waitFor(() => expect(fakeSocket.readyState).toBe(1));
+
+    expect(csiHandlers.has("c")).toBe(false);
+    expect(csiHandlers.has(">c")).toBe(true);
+  });
+
+  it("swallows CPR/DSR/DA2/DECRQM queries replayed before the first geometry frame", async () => {
     stubFakeWebSocket(true);
     renderPane();
     await waitFor(() => expect(fakeSocket.readyState).toBe(1));
