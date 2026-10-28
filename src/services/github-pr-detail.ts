@@ -22,6 +22,7 @@ import {
   latestReviewsSelection,
   OPINIONATED_REVIEWS_SELECTION,
   reviewersOf,
+  standingReviews,
   type GqlLatestReviewNode,
 } from "./review-summary.js";
 import type { ReviewSummary } from "../shared/types.js";
@@ -471,7 +472,7 @@ export async function getPrDetail(
     behindBy,
     reviewDecision: asDecision(pr.reviewDecision),
     requestedReviewers,
-    reviewers: reviewersOf(opinionated),
+    reviewers: reviewersOf(standingReviews(opinionated, latestReviews)),
     reviewSummary: buildReviewSummary({
       reviewDecision: asDecision(pr.reviewDecision),
       reviews: latestReviews,

@@ -345,7 +345,7 @@ describe("GitHubPanel", () => {
     expect(await screen.findByRole("button", { name: /GitHub integration/ })).toBeInTheDocument();
     expect(screen.getByText("#27")).toBeInTheDocument();
 
-    expect(screen.getByText("Issues (1)")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Issues\s*1/ })).toBeInTheDocument();
   });
 
   it("marks a PR whose review was requested, and one whose review landed (#1630)", async () => {
@@ -493,7 +493,7 @@ describe("GitHubPanel", () => {
     );
     render(<GitHubPanel params={{ projectId: 6 }} />);
 
-    expect(await screen.findByText("Issues (47)")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: /Issues\s*47/ })).toBeInTheDocument();
     expect(screen.getByText(/can't list issues/)).toBeInTheDocument();
     expect(screen.queryByText("No open issues")).not.toBeInTheDocument();
   });

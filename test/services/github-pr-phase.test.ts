@@ -109,6 +109,15 @@ describe("derivePrPhase", () => {
     );
   });
 
+  it("names open conversations as the block when nothing else is missing", () => {
+    const blocked = { ...base, mergeStateStatus: "BLOCKED", unresolvedThreads: 2 };
+    expect(derivePrPhase(blocked)).toBe("threads_unresolved");
+    expect(derivePrPhase({ ...blocked, reviewDecision: "REVIEW_REQUIRED" })).toBe("review_pending");
+    expect(derivePrPhase({ ...blocked, ciStatus: "in_progress" })).toBe("ci_pending");
+    expect(derivePrPhase({ ...blocked, unresolvedThreads: 0 })).toBe("review_pending");
+    expect(derivePrPhase({ ...base, unresolvedThreads: 2 })).toBe("ready_to_merge");
+  });
+
   it("claims nothing beyond CI when review state wasn't fetched", () => {
     const unknown = { ...base, reviewStateKnown: false, reviewDecision: null as null };
     expect(derivePrPhase(unknown)).toBe("unknown");

@@ -2411,6 +2411,7 @@ export async function projectsRoute(app: FastifyInstance) {
       requestedReviewers: detail.requestedReviewers,
       reviewers: detail.reviewers,
       hasCommentedReview: detail.reviewSummary.commented.length > 0,
+      unresolvedThreads: detail.reviewSummary.unresolvedThreads,
       ciStatus,
     });
     // Fold the relay's state into the review summary so the Reviews row is the

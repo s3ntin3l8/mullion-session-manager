@@ -18,6 +18,9 @@ export type PrMergeable = "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
  * - `reviewed`: a review landed with comments but no approval, and the PR is
  *   still waiting on one — "someone looked, read what they said". It only ever
  *   replaces `review_pending`; `ready_to_merge` is untouched.
+ * - `threads_unresolved`: nothing is missing a review, but GitHub reports the PR
+ *   blocked while conversations are open (branch protection's "require
+ *   conversation resolution"). Not an attention phase: it needs a click, not a fix.
  * - `ci_pending`: approved (or no review needed) but CI is still running.
  * - `ready_to_merge`: nothing left to wait for.
  * - `unknown`: review state couldn't be fetched (GraphQL failed or backed
@@ -31,6 +34,7 @@ export type PrPhase =
   | "changes_requested"
   | "review_pending"
   | "reviewed"
+  | "threads_unresolved"
   | "ci_pending"
   | "ready_to_merge"
   | "unknown";
@@ -49,6 +53,8 @@ export interface PrPhaseInput {
   /** A COMMENTED review landed (from `ReviewSummary.commented`). Only picks
    *  `reviewed` over `review_pending`; it never affects merge gating. */
   hasCommentedReview?: boolean;
+  /** Open review conversations; null/omitted = not fetched. */
+  unresolvedThreads?: number | null;
   ciStatus: GitHubCiStatus;
   /**
    * True when the PR's head runs were actually fetched. A null `ciStatus`
@@ -83,7 +89,9 @@ export function derivePrPhase(pr: PrPhaseInput): PrPhase {
   // No review requirement configured (decision is null) but someone was
   // asked, or branch protection still reports the PR as blocked.
   if (pr.reviewDecision === null && pr.requestedReviewers.length > 0) return waiting();
-  if (pr.mergeStateStatus === "BLOCKED" && pr.ciStatus !== "in_progress") return waiting();
+  if (pr.mergeStateStatus === "BLOCKED" && pr.ciStatus !== "in_progress") {
+    return (pr.unresolvedThreads ?? 0) > 0 ? "threads_unresolved" : waiting();
+  }
   if (pr.ciStatus === "in_progress") return "ci_pending";
   if (pr.ciFetched === false && pr.mergeStateStatus !== "CLEAN") return "unknown";
   return "ready_to_merge";

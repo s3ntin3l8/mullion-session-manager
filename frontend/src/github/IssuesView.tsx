@@ -13,7 +13,14 @@ import { ErrorText } from "../ui/ErrorText.js";
 import { BoltIcon, MessageIcon, PlayTriangleIcon } from "../ui/icons.js";
 import { Dropdown } from "../ui/primitives.js";
 import { SafeHtml } from "../ui/SafeHtml.js";
-import { Button, DetailHeader, IconButton, SidebarRow, StatusChip } from "../ui/sidebar/index.js";
+import {
+  Button,
+  DetailHeader,
+  IconButton,
+  SidebarRow,
+  SidebarSection,
+  StatusChip,
+} from "../ui/sidebar/index.js";
 import { decideSessionAction, taskTone } from "../ui/sidebar/linkDecisions.js";
 import { SessionPills } from "../ui/sidebar/SessionPills.js";
 import { TaskChip } from "../ui/sidebar/TaskChip.js";
@@ -170,8 +177,7 @@ export function IssuesSection({
   const filtered = selected.length > 0 || unassigned || debouncedQuery !== "";
 
   return (
-    <div className="github-panel-section">
-      <div className="github-panel-section-title">Issues ({openIssues})</div>
+    <SidebarSection title="Issues" count={openIssues} persistKey="github-issues">
       {issuesHidden ? (
         <div className="github-panel-empty-row">
           The GitHub token can't list issues — grant it Issues access
@@ -254,7 +260,7 @@ export function IssuesSection({
           )}
         </>
       )}
-    </div>
+    </SidebarSection>
   );
 }
 

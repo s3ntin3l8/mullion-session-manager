@@ -28,6 +28,7 @@ import {
   latestReviewsSelection,
   OPINIONATED_REVIEWS_SELECTION,
   reviewersOf,
+  standingReviews,
   type GqlLatestReviewNode,
 } from "./review-summary.js";
 
@@ -307,9 +308,11 @@ export async function enrichPrsWithReviewState(
     pr.requestedReviewers = (node.reviewRequests?.nodes ?? [])
       .map((n) => n?.requestedReviewer?.login ?? n?.requestedReviewer?.name ?? null)
       .filter((v): v is string => v !== null);
-    // `reviewers` stays the OPINIONATED list: it is derivePrPhase's input, and a
+    // `reviewers` stays the standing-opinion list: it is derivePrPhase's input, and a
     // later COMMENTED review must not erase someone's CHANGES_REQUESTED.
-    pr.reviewers = reviewersOf(node.latestOpinionatedReviews?.nodes ?? []);
+    pr.reviewers = reviewersOf(
+      standingReviews(node.latestOpinionatedReviews?.nodes ?? [], node.latestReviews?.nodes ?? []),
+    );
 
     const cached = threadCache.get(keyFor(pr.number));
     if (

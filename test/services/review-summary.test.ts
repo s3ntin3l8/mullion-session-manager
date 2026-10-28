@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildReviewSummary,
+  standingReviews,
   reviewersOf,
   withRelay,
   type GqlLatestReviewNode,
@@ -84,6 +85,34 @@ describe("buildReviewSummary", () => {
       decision: "CHANGES_REQUESTED",
     });
     expect(s.latest).toHaveLength(1);
+  });
+
+  it("counts a standing review that latestOpinionatedReviews dropped, on a non-head commit", () => {
+    const s = buildReviewSummary({
+      ...base,
+      opinionated: [],
+      reviews: [
+        {
+          author: { login: "hermes", __typename: "Bot" },
+          state: "CHANGES_REQUESTED",
+          body: "",
+          commit: { oid: "old000" },
+        },
+      ],
+    });
+    expect(s).toMatchObject({ changesRequested: ["hermes"], decision: "CHANGES_REQUESTED" });
+    expect(standingReviews([], [{ author: { login: "a" }, state: "APPROVED" }])).toHaveLength(1);
+  });
+
+  it("lets the opinionated entry win over the same author's latest review", () => {
+    const merged = standingReviews(
+      [{ author: { login: "bob" }, state: "CHANGES_REQUESTED" }],
+      [
+        { author: { login: "bob" }, state: "APPROVED" },
+        { author: { login: "eve" }, state: "COMMENTED" },
+      ],
+    );
+    expect(merged).toEqual([{ author: { login: "bob" }, state: "CHANGES_REQUESTED" }]);
   });
 
   it("prefers GitHub's own decision and derives one otherwise", () => {

@@ -37,6 +37,27 @@ export function latestReviewsSelection(first: number = LATEST_REVIEWS_PAGE): str
 export const OPINIONATED_REVIEWS_SELECTION =
   "latestOpinionatedReviews(first: 10) { nodes { author { login } state } }";
 
+/**
+ * What merge gating should read: the opinionated reviews, plus a standing
+ * APPROVED / CHANGES_REQUESTED in `latestReviews` for an author that
+ * `latestOpinionatedReviews` dropped (observed on a CHANGES_REQUESTED review
+ * of a non-head commit, which left the PR reading "No reviews" and "Ready").
+ * For an author in both lists the opinionated entry wins, so a later COMMENTED
+ * still cannot erase a block.
+ */
+export function standingReviews(
+  opinionated: readonly (GqlLatestReviewNode | null)[],
+  latest: readonly (GqlLatestReviewNode | null)[],
+): GqlLatestReviewNode[] {
+  const out = opinionated.filter((n): n is GqlLatestReviewNode => !!n);
+  const seen = new Set(out.map((n) => n.author?.login));
+  for (const n of latest) {
+    if (!n?.author || seen.has(n.author.login)) continue;
+    if (n.state === "APPROVED" || n.state === "CHANGES_REQUESTED") out.push(n);
+  }
+  return out;
+}
+
 export interface ReviewSummaryInput {
   reviewDecision: PrReviewDecision;
   /** `latestReviews`: every state, one per author — feeds `commented` and `latest`. */
@@ -78,8 +99,8 @@ export function buildReviewSummary(input: ReviewSummaryInput): ReviewSummary {
   const candidates: ReviewSummaryEntry[] = [];
   const unresolved = input.unresolvedThreads ?? 0;
 
-  for (const n of input.opinionated) {
-    if (!n?.author) continue;
+  for (const n of standingReviews(input.opinionated, input.reviews)) {
+    if (!n.author) continue;
     if (n.state === "APPROVED") approved.push(n.author.login);
     else if (n.state === "CHANGES_REQUESTED") changesRequested.push(n.author.login);
   }
