@@ -475,7 +475,12 @@ export function buildCodexMcpFlags(
     `mcp_servers.mullion.env_vars=[${envVarNames}]`,
     // A constant, not forwarded from the session env like the three names
     // above: gates the MCP server's `instructions` — see
-    // HookAdapterContext.browserEnabled.
+    // HookAdapterContext.browserEnabled. The `env.<VAR>` key path is codex's
+    // own documented stdio-server `env` table (`codex mcp add --env`), and
+    // verified against the installed CLI: `codex -c 'mcp_servers.x.command=…'
+    // -c 'mcp_servers.x.env_vars=[…]' -c 'mcp_servers.x.env.VAR="1"' mcp list
+    // --json` (isolated CODEX_HOME) parses cleanly and reports both `env`
+    // and `env_vars` on the server.
     ...(browserEnabled
       ? [`mcp_servers.mullion.env.MULLION_BROWSER_ENABLED=${tomlString("1")}`]
       : []),
