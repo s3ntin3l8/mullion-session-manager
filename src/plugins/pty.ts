@@ -1,3 +1,4 @@
+import { setProtocolTraceEnabled } from "../services/terminal-protocol-trace.js";
 import { createHash } from "node:crypto";
 import { chmodSync, lstatSync, mkdirSync } from "node:fs";
 import os from "node:os";
@@ -677,6 +678,7 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     );
   }
 
+  setProtocolTraceEnabled(app.config.MULLION_PROTOCOL_TRACE);
   const manager = new PtyManager({
     sessionsDir,
     // Issue #1770 — every dir this instance may own scopes in, not just the

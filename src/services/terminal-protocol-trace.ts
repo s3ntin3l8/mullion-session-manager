@@ -15,14 +15,31 @@
 
 export type ProtocolDirection = "to-pty" | "from-pty";
 
-// Lines logged per session regardless of kind, before only color traffic is
-// kept — a program that polls CPR on every frame must not flood the journal.
+// Lines logged per session of any kind. Past it only color traffic is kept —
+// a program that polls CPR on every frame must not flood the journal.
 export const PROTOCOL_TRACE_MAX_LINES = 300;
+// Hard ceiling per session, color traffic included: a program polling the
+// background color on every frame floods the journal just the same.
+export const PROTOCOL_TRACE_MAX_COLOR_LINES = 1000;
+
+let enabled = true;
+
+/** Boot-time switch (`MULLION_PROTOCOL_TRACE`, see plugins/pty.ts). On by default. */
+export function setProtocolTraceEnabled(value: boolean): void {
+  enabled = value;
+}
 
 /* eslint-disable no-control-regex */
-const OSC_COLOR_RE = /\x1b\](1[012]);([^\x07\x1b]{0,64})(?:\x07|\x1b\\)/g;
+// General OSC form (the payload is absent for the reset sequences 104/110-112)
+// filtered by COLOR_OSC_IDENTS below, same shape as attention-detect.ts's.
+const OSC_RE = /\x1b\](\d+)(?:;([^\x07\x1b]{0,64}))?(?:\x07|\x1b\\)/g;
 const CSI_RE = /\x1b\[([?>=<]?)([0-9;:]*)([$!]?)([nRcIOpu])/g;
+const CONTROL_BYTES_RE = /[\x00-\x1f\x7f]/g;
 /* eslint-enable no-control-regex */
+
+// Palette-affecting OSC: 4 (palette entry), 10/11/12 (fg/bg/cursor) and the
+// resets 104/110/111/112 — the most direct cause of a mid-session palette change.
+const COLOR_OSC_IDENTS = new Set(["4", "10", "11", "12", "104", "110", "111", "112"]);
 
 export interface ProtocolDescription {
   tags: string[];
@@ -30,16 +47,23 @@ export interface ProtocolDescription {
   color: boolean;
 }
 
-/** "OSC 11;?" is a query; anything else after the ident is a set or a report. */
-function describeOsc(ident: string, payload: string): string {
-  return payload === "?" ? `osc${ident}?` : `osc${ident}=${payload}`;
+/**
+ * "OSC 11;?" is a query, a bare ident is a reset, anything else after the
+ * ident is a set or a report. Control bytes are stripped from the payload:
+ * from-pty carries agent output, and a newline would forge a journal line.
+ */
+function describeOsc(ident: string, payload: string | undefined): string {
+  if (payload === undefined) return `osc${ident}`;
+  if (payload === "?") return `osc${ident}?`;
+  return `osc${ident}=${payload.replace(CONTROL_BYTES_RE, "")}`;
 }
 
 export function describeTerminalProtocol(data: string): ProtocolDescription {
   const tags: string[] = [];
   let color = false;
-  for (const m of data.matchAll(OSC_COLOR_RE)) {
-    tags.push(describeOsc(m[1]!, m[2]!));
+  for (const m of data.matchAll(OSC_RE)) {
+    if (!COLOR_OSC_IDENTS.has(m[1]!)) continue;
+    tags.push(describeOsc(m[1]!, m[2]));
     color = true;
   }
   for (const m of data.matchAll(CSI_RE)) {
@@ -62,9 +86,10 @@ export class ProtocolTrace {
 
   /** Cheap on the hot path: a chunk with no ESC byte is never inspected. */
   record(direction: ProtocolDirection, data: string): void {
-    if (!data.includes("\x1b")) return;
+    if (!enabled || !data.includes("\x1b")) return;
     const { tags, color } = describeTerminalProtocol(data);
     if (tags.length === 0) return;
+    if (this.lines >= PROTOCOL_TRACE_MAX_COLOR_LINES) return;
     if (this.lines >= PROTOCOL_TRACE_MAX_LINES && !color) return;
     this.lines += 1;
     this.sink(

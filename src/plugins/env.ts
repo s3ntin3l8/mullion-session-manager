@@ -52,6 +52,13 @@ export const schema = {
       default: "info",
       enum: ["fatal", "error", "warn", "info", "debug", "trace"],
     },
+    // Journal trace of color/query escape sequences crossing each local
+    // session's PTY (terminal-protocol-trace.ts). On by default; a plain
+    // boolean — `0` is not a valid value and would fail the boot.
+    MULLION_PROTOCOL_TRACE: {
+      type: "boolean",
+      default: true,
+    },
     DATABASE_URL: {
       type: "string",
       default: "file:./data/app.db",
@@ -1055,6 +1062,7 @@ declare module "fastify" {
       PORT: number;
       HOST: string;
       LOG_LEVEL: "fatal" | "error" | "warn" | "info" | "debug" | "trace";
+      MULLION_PROTOCOL_TRACE: boolean;
       DATABASE_URL: string;
       DB_ENCRYPTION_KEY: string;
       CORS_ORIGIN: string;

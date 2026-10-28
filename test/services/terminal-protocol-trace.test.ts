@@ -1,8 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect } from "vitest";
 import {
   describeTerminalProtocol,
   ProtocolTrace,
   PROTOCOL_TRACE_MAX_LINES,
+  PROTOCOL_TRACE_MAX_COLOR_LINES,
+  setProtocolTraceEnabled,
 } from "../../src/services/terminal-protocol-trace.js";
 
 describe("describeTerminalProtocol", () => {
@@ -12,6 +14,23 @@ describe("describeTerminalProtocol", () => {
       "osc11=rgb:f2f2/f2f2/f2f2",
     ]);
     expect(describeTerminalProtocol("\x1b]10;#0d0d0d\x1b\\").tags).toEqual(["osc10=#0d0d0d"]);
+  });
+
+  it("tags the palette reset family, which carries no payload, and OSC 4", () => {
+    const d = describeTerminalProtocol(
+      "\x1b]110\x07\x1b]111\x1b\\\x1b]112\x07\x1b]104\x07\x1b]4;1;?\x07",
+    );
+    expect(d.tags).toEqual(["osc110", "osc111", "osc112", "osc104", "osc4=1;?"]);
+    expect(d.color).toBe(true);
+  });
+
+  it("ignores non-palette OSC such as titles and hyperlinks", () => {
+    expect(describeTerminalProtocol("\x1b]0;my title\x07\x1b]8;;http://x\x1b\\").tags).toEqual([]);
+  });
+
+  it("strips control bytes from a payload so it cannot forge a journal line", () => {
+    const d = describeTerminalProtocol("\x1b]11;a\nFAKE protocol line\r\x07");
+    expect(d.tags).toEqual(["osc11=aFAKE protocol line"]);
   });
 
   it("flags color traffic, including the DEC 997 notification", () => {
@@ -44,6 +63,8 @@ describe("describeTerminalProtocol", () => {
 });
 
 describe("ProtocolTrace", () => {
+  afterEach(() => setProtocolTraceEnabled(true));
+
   function make() {
     const lines: string[] = [];
     let t = 1_500;
@@ -79,5 +100,20 @@ describe("ProtocolTrace", () => {
 
     trace.record("to-pty", "\x1b]11;rgb:0d0d/0d0d/0d0d\x07");
     expect(lines).toHaveLength(PROTOCOL_TRACE_MAX_LINES + 1);
+  });
+
+  it("bounds color traffic too: a per-frame color query cannot flood the journal", () => {
+    const { trace, lines } = make();
+    for (let i = 0; i < PROTOCOL_TRACE_MAX_COLOR_LINES + 500; i++) {
+      trace.record("from-pty", "\x1b]11;?\x07");
+    }
+    expect(lines).toHaveLength(PROTOCOL_TRACE_MAX_COLOR_LINES);
+  });
+
+  it("logs nothing when switched off (MULLION_PROTOCOL_TRACE=false)", () => {
+    setProtocolTraceEnabled(false);
+    const { trace, lines } = make();
+    trace.record("from-pty", "\x1b]11;?\x07\x1b[6n");
+    expect(lines).toEqual([]);
   });
 });
