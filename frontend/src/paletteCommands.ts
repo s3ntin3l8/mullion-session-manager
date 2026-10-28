@@ -1,4 +1,5 @@
 import type { SettingsSection } from "./settings/settingsSections.js";
+import type { LayoutTier } from "./lib/layoutTierTypes.js";
 import type { ComponentType, CSSProperties } from "react";
 import {
   CheckIcon,
@@ -69,7 +70,6 @@ export interface PaletteCommand {
 
 export interface PaletteCommandOpeners {
   github: (projectId: number) => void;
-  git: (projectId: number) => void;
   agentRules: (projectId: number) => void;
   fileEditor: (projectId: number) => void;
   externalFile: (projectId: number) => void;
@@ -107,6 +107,7 @@ export interface PaletteCommandOpeners {
 }
 
 export interface PaletteCommandContext {
+  layoutTier: LayoutTier;
   projectId: number | null;
   projectName: string | null;
   favoriteUrls: { id: number | string; url: string; label: string }[];
@@ -127,6 +128,7 @@ export interface PaletteCommandContext {
 }
 
 export function buildPaletteCommands({
+  layoutTier,
   projectId,
   projectName,
   favoriteUrls,
@@ -150,15 +152,6 @@ export function buildPaletteCommands({
         keywords: ["github", "issues", "pull requests", "prs", "ci"],
         placement: "top",
         run: () => open.github(id),
-      },
-      {
-        id: "git",
-        title: "Git",
-        subtitle: "Source Control: branch, changes, and worktrees",
-        icon: GitBranchIcon,
-        keywords: ["git", "branch", "changes", "diff"],
-        placement: "top",
-        run: () => open.git(id),
       },
       {
         id: "project",
@@ -256,11 +249,12 @@ export function buildPaletteCommands({
       },
       {
         id: "preview",
+        movesFocus: true,
         title: "Preview",
-        subtitle: "Open this project's dev server",
+        subtitle: "Choose a preview target for this project",
         icon: GlobeIcon,
         keywords: ["preview", "dev server", "browser"],
-        placement: "top",
+        placement: dockUnavailable ? "top" : "search",
         run: () => open.browser(id),
       },
       // Both deep-link into the right sidebar, so they are omitted where
@@ -273,7 +267,7 @@ export function buildPaletteCommands({
               subtitle: "Preview and delete branches already merged",
               icon: GitBranchIcon,
               keywords: ["prune", "merged", "branches", "delete", "cleanup"],
-              placement: "top",
+              placement: "search",
               run: () => open.prune(id),
             } satisfies PaletteCommand,
           ]
@@ -337,7 +331,7 @@ export function buildPaletteCommands({
       subtitle: "Show or hide the right sidebar (Ctrl/Cmd+Alt+B)",
       icon: RightSidebarIcon,
       keywords: ["sidebar", "right", "drawer", "panel"],
-      placement: "top",
+      placement: "search",
       run: toggle,
     });
   }
@@ -370,7 +364,7 @@ export function buildPaletteCommands({
       subtitle: "Embed any external site — type an address directly",
       icon: GlobeIcon,
       keywords: ["preview", "browser", "website"],
-      placement: "top",
+      placement: "search",
       run: () => open.blankBrowser(),
     },
     {
@@ -405,11 +399,12 @@ export function buildPaletteCommands({
     const openDevices = open.devices;
     commands.push({
       id: "devices",
+      movesFocus: true,
       title: "Devices",
       subtitle: "Settings → Devices",
       icon: DeviceIcon,
       keywords: ["devices", "android", "emulator"],
-      placement: "top",
+      placement: "search",
       run: openDevices,
     });
   }
@@ -418,11 +413,12 @@ export function buildPaletteCommands({
     const openHosts = open.hosts;
     commands.push({
       id: "hosts",
+      movesFocus: true,
       title: "Hosts",
       subtitle: "Settings → Hosts",
       icon: HostsIcon,
       keywords: ["hosts", "ssh", "bridge", "remote"],
-      placement: "top",
+      placement: "search",
       run: openHosts,
     });
   }
@@ -431,11 +427,12 @@ export function buildPaletteCommands({
     const openSettings = open.settings;
     commands.push({
       id: "settings",
+      movesFocus: true,
       title: "Settings",
       subtitle: "Open settings",
       icon: GearIcon,
       keywords: ["settings", "preferences"],
-      placement: "top",
+      placement: layoutTier === "phone" ? "top" : "search",
       run: openSettings,
     });
   }
@@ -450,7 +447,7 @@ export function buildPaletteCommands({
       subtitle: label,
       icon: ListIcon,
       keywords: ["timeline", "events", "history", label],
-      placement: "top",
+      placement: "search",
       run: () => openTimeline(session),
     });
   }

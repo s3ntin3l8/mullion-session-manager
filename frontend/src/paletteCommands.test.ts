@@ -10,7 +10,6 @@ import { makeSession } from "./test/fixtures.js";
 function ctx(over: Partial<PaletteCommandContext> = {}) {
   const open = {
     github: vi.fn(),
-    git: vi.fn(),
     agentRules: vi.fn(),
     fileEditor: vi.fn(),
     externalFile: vi.fn(),
@@ -29,6 +28,7 @@ function ctx(over: Partial<PaletteCommandContext> = {}) {
     prune: vi.fn(),
   };
   const context: PaletteCommandContext = {
+    layoutTier: "desktop",
     projectId: 5,
     projectName: "mullion",
     favoriteUrls: [],
@@ -49,14 +49,7 @@ describe("buildPaletteCommands", () => {
   it("lists each placement in title order, with setup entries under the Project drill-in", () => {
     const commands = buildPaletteCommands(ctx().context);
 
-    expect(titles("top", commands)).toEqual([
-      "Git",
-      "GitHub",
-      "New preview tab",
-      "New workspace",
-      "Preview",
-      "Project: mullion",
-    ]);
+    expect(titles("top", commands)).toEqual(["GitHub", "New workspace", "Project: mullion"]);
     expect(titles("project", commands)).toEqual([
       "Agent Rules",
       "Dock",
@@ -74,7 +67,6 @@ describe("buildPaletteCommands", () => {
     const byId = Object.fromEntries(buildPaletteCommands(context).map((c) => [c.id, c]));
 
     byId["github"].run();
-    byId["git"].run();
     byId["agent-rules"].run();
     byId["project-briefing"].run();
     byId["project-setup"].run();
@@ -88,7 +80,6 @@ describe("buildPaletteCommands", () => {
 
     for (const key of [
       "github",
-      "git",
       "agentRules",
       "projectBriefing",
       "projectSetup",
@@ -142,7 +133,7 @@ describe("buildPaletteCommands", () => {
       open: { ...context.open, toggleRightSidebar: toggle },
     });
     const command = withToggle.find((c) => c.id === "toggle-right-sidebar")!;
-    expect(command.placement).toBe("top");
+    expect(command.placement).toBe("search");
     command.run();
     expect(toggle).toHaveBeenCalledTimes(1);
     // Project-independent: still offered with no project.
@@ -156,8 +147,7 @@ describe("buildPaletteCommands", () => {
 
   it("flags only the commands whose openers take focus (#1884)", () => {
     // CommandPalette derives its suppress-restore set from `movesFocus`.
-    // These three autofocus a field; every other command must stay out or
-    // the trap will not restore.
+    // These openers move focus; other commands let the trap restore it.
     const ids = buildPaletteCommands(ctx().context)
       .filter((c) => c.movesFocus)
       .map((c) => c.id);
@@ -165,9 +155,18 @@ describe("buildPaletteCommands", () => {
       "settings-github",
       "blank-browser",
       "external-file",
+      "preview",
       "settings-review-relay",
       "settings-runway",
     ]);
+    const { context } = ctx();
+    const wired = buildPaletteCommands({
+      ...context,
+      open: { ...context.open, settings: vi.fn(), devices: vi.fn(), hosts: vi.fn() },
+    });
+    for (const id of ["settings", "devices", "hosts"]) {
+      expect(wired.find((command) => command.id === id)?.movesFocus).toBe(true);
+    }
   });
 
   it("the drill-in row's run is a harmless no-op (the palette handles it)", () => {
@@ -300,11 +299,11 @@ function sidebarCtx(over: Partial<PaletteCommandContext> = {}) {
 }
 
 describe("git / GitHub deep-link commands", () => {
-  it("lists Prune merged branches on the top level and runs it for the project", () => {
+  it("finds Prune merged branches through search and runs it for the project", () => {
     const { context, open } = sidebarCtx();
     const commands = buildPaletteCommands(context);
     const prune = commands.find((c) => c.id === "prune-merged")!;
-    expect(prune.placement).toBe("top");
+    expect(prune.placement).toBe("search");
     prune.run();
     expect(open.prune).toHaveBeenCalledWith(5);
   });
@@ -352,4 +351,47 @@ describe("git / GitHub deep-link commands", () => {
     expect(ids).not.toContain("prune-merged");
     expect(ids).not.toContain("go-to-pr-1");
   });
+});
+
+describe("tier-specific command placement", () => {
+  it.each(["phone", "tablet", "desktop"] as const)(
+    "keeps only general Settings visible on %s",
+    (layoutTier) => {
+      const { context } = ctx();
+      const commands = buildPaletteCommands({
+        ...context,
+        layoutTier,
+        activeSession: makeSession({ id: 1 }),
+        open: {
+          ...context.open,
+          settings: vi.fn(),
+          devices: vi.fn(),
+          hosts: vi.fn(),
+          toggleRightSidebar: vi.fn(),
+          timeline: vi.fn(),
+        },
+      });
+      const byId = Object.fromEntries(commands.map((command) => [command.id, command]));
+      expect(byId.settings.placement).toBe(layoutTier === "phone" ? "top" : "search");
+      for (const id of [
+        "devices",
+        "hosts",
+        "toggle-right-sidebar",
+        "prune-merged",
+        "session-timeline",
+        "blank-browser",
+      ])
+        expect(byId[id].placement).toBe("search");
+      expect(byId.git).toBeUndefined();
+    },
+  );
+  it.each([null, "phone-tier", "coarse-pointer"] as const)(
+    "offers Preview according to Dock availability %s",
+    (dockUnavailable) => {
+      const commands = buildPaletteCommands(ctx({ dockUnavailable }).context);
+      expect(commands.find((command) => command.id === "preview")?.placement).toBe(
+        dockUnavailable ? "top" : "search",
+      );
+    },
+  );
 });

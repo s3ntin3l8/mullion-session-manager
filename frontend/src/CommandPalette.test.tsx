@@ -67,7 +67,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={onOpenGitHub}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -85,37 +84,7 @@ describe("CommandPalette -> Integrations section", () => {
 
     await user.click(await screen.findByText(/^GitHub$/));
     expect(onOpenGitHub).toHaveBeenCalledWith(PROJECT.id);
-  });
-
-  it("opens the git status panel for the current project (issue #76)", async () => {
-    const onOpenGit = vi.fn();
-    const user = userEvent.setup();
-    render(
-      <CommandPalette
-        scope="project"
-        projectId={PROJECT.id}
-        onClose={vi.fn()}
-        onLaunched={vi.fn()}
-        onOpenSession={vi.fn()}
-        onOpenGitHub={vi.fn()}
-        onOpenGit={onOpenGit}
-        onOpenAgentRules={vi.fn()}
-        onOpenFileEditor={vi.fn()}
-        onOpenExternalFile={vi.fn()}
-        onOpenProjectBriefing={vi.fn()}
-        onOpenProjectSetup={vi.fn()}
-        onOpenDockConfig={vi.fn()}
-        onOpenSkills={vi.fn()}
-        onOpenBrowser={vi.fn()}
-        onOpenBlankBrowser={vi.fn()}
-        onOpenSettingsSection={vi.fn()}
-        onOpenTasks={vi.fn()}
-        onOpenBrowserUrl={vi.fn()}
-      />,
-    );
-
-    await user.click(await screen.findByText(/^Git$/));
-    expect(onOpenGit).toHaveBeenCalledWith(PROJECT.id);
+    expect(screen.queryByText("Git", { exact: true })).toBeNull();
   });
 
   it("opens the agent-rules editor for the current project (issue #431)", async () => {
@@ -129,7 +98,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={onOpenAgentRules}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -162,7 +130,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={onOpenFileEditor}
         onOpenExternalFile={vi.fn()}
@@ -195,7 +162,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -228,7 +194,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -261,7 +226,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -277,6 +241,7 @@ describe("CommandPalette -> Integrations section", () => {
       />,
     );
 
+    await user.type(await screen.findByPlaceholderText(/Launch a session/), "preview");
     await user.click(await screen.findByText(/^Preview$/));
     expect(onOpenBrowser).toHaveBeenCalledWith(PROJECT.id);
   });
@@ -292,7 +257,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -308,6 +272,7 @@ describe("CommandPalette -> Integrations section", () => {
       />,
     );
 
+    await user.type(await screen.findByPlaceholderText(/Launch a session/), "new preview tab");
     await user.click(await screen.findByText("New preview tab"));
     expect(onOpenBlankBrowser).toHaveBeenCalled();
   });
@@ -323,7 +288,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -358,7 +322,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -389,7 +352,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -432,7 +394,6 @@ describe("CommandPalette -> P9 silent failures", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -527,7 +488,6 @@ describe("CommandPalette -> focus management (P11)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -980,6 +940,7 @@ describe("CommandPalette -> focus management (P11)", () => {
 
     const user = userEvent.setup();
     const { unmount } = renderPalette();
+    await user.type(await screen.findByPlaceholderText(/Launch a session/), "new preview tab");
     await user.click(await screen.findByText("New preview tab"));
 
     unmount();
@@ -1092,7 +1053,6 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1123,7 +1083,6 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1158,7 +1117,6 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1193,7 +1151,6 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1243,7 +1200,6 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1281,7 +1237,6 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1320,7 +1275,6 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1430,7 +1384,6 @@ describe("CommandPalette -> per-session model picker (issue #1424)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1718,7 +1671,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={onLaunched}
         onOpenSession={onOpenSession}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1767,7 +1719,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1814,7 +1765,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1863,7 +1813,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1913,7 +1862,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1960,7 +1908,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={onOpenSession}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2020,7 +1967,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={onOpenSession}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2073,7 +2019,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={onOpenSession}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2119,7 +2064,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2166,7 +2110,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2210,7 +2153,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2293,7 +2235,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2333,7 +2274,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2368,7 +2308,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2407,7 +2346,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2443,7 +2381,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onLaunched={onLaunched}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2483,7 +2420,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2523,7 +2459,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2569,7 +2504,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2622,7 +2556,6 @@ describe("CommandPalette -> close affordance (issue: mobile 'esc' chip did nothi
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2692,7 +2625,6 @@ describe("CommandPalette -> close affordance (issue: mobile 'esc' chip did nothi
 describe("CommandPalette -> Project drill-in and command search", () => {
   const openers = () => ({
     onOpenGitHub: vi.fn(),
-    onOpenGit: vi.fn(),
     onOpenAgentRules: vi.fn(),
     onOpenFileEditor: vi.fn(),
     onOpenExternalFile: vi.fn(),
@@ -2741,8 +2673,8 @@ describe("CommandPalette -> Project drill-in and command search", () => {
 
     expect(await screen.findByText("Project: mullion")).toBeTruthy();
     expect(screen.getByText("GitHub")).toBeTruthy();
-    expect(screen.getByText("Git")).toBeTruthy();
-    expect(screen.getByText("Preview")).toBeTruthy();
+    expect(screen.queryByText("Git", { exact: true })).toBeNull();
+    expect(screen.queryByText("Preview", { exact: true })).toBeNull();
     expect(screen.queryByText("GitHub settings")).toBeNull();
     for (const hidden of [
       "Agent Rules",
@@ -2844,7 +2776,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     it("says the Dock is hidden on the phone layout", async () => {
       phoneTier();
       const user = userEvent.setup();
-      renderPalette(openers());
+      renderPalette(openers(), { layoutTier: "phone" });
       await user.click(await screen.findByText("Project: mullion"));
 
       expect(screen.getByText("Not shown here")).toHaveAttribute(
@@ -2935,6 +2867,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     const user = userEvent.setup();
     const { unmount } = renderPalette(openers(), { onToggleRightSidebar });
 
+    await user.type(await screen.findByPlaceholderText(/Launch a session/), "toggle right sidebar");
     await user.click(await screen.findByText("Toggle right sidebar"));
     expect(onToggleRightSidebar).toHaveBeenCalledTimes(1);
     unmount();
@@ -2954,6 +2887,10 @@ describe("CommandPalette -> Project drill-in and command search", () => {
       } as never,
     });
     const { unmount } = renderPalette(openers(), { onToggleRightSidebar: vi.fn() });
+    await user.type(
+      await screen.findByPlaceholderText(/Launch a session/),
+      "prune merged branches",
+    );
     await user.click(await screen.findByText("Prune merged branches"));
     expect(useDashboardStore.getState().rightSidebarPruneRequest?.projectId).toBe(PROJECT.id);
     unmount();
@@ -2988,7 +2925,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
   it("omits Toggle right sidebar when the host provides no opener (phone)", async () => {
     renderPalette(openers());
 
-    expect(await screen.findByText("New preview tab")).toBeTruthy();
+    expect(await screen.findByText("New workspace")).toBeTruthy();
     expect(screen.queryByText("Toggle right sidebar")).toBeNull();
   });
 
@@ -2996,8 +2933,8 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     useDashboardStore.setState({ projects: [] });
     renderPalette(openers(), { scope: "global", projectId: undefined });
 
-    expect(await screen.findByText("New preview tab")).toBeTruthy();
-    expect(screen.getByText("New preview tab")).toBeTruthy();
+    expect(await screen.findByText("New workspace")).toBeTruthy();
+    expect(screen.queryByText("New preview tab")).toBeNull();
     expect(screen.queryByText(/^Project:/)).toBeNull();
     expect(screen.queryByText(/^GitHub:/)).toBeNull();
   });
@@ -3020,13 +2957,19 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     const user = userEvent.setup();
     renderPalette(openers(), { onOpenDevices, onOpenHosts, onOpenSettings, onClose });
 
+    await user.clear(await screen.findByPlaceholderText(/Launch a session/));
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "devices");
     await user.click(await screen.findByText(/^Devices$/));
     expect(onOpenDevices).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(1);
 
+    await user.clear(await screen.findByPlaceholderText(/Launch a session/));
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "hosts");
     await user.click(screen.getByText(/^Hosts$/));
     expect(onOpenHosts).toHaveBeenCalledTimes(1);
 
+    await user.clear(await screen.findByPlaceholderText(/Launch a session/));
+    await user.type(screen.getByPlaceholderText(/Launch a session/), "settings");
     await user.click(screen.getByText(/^Settings$/));
     expect(onOpenSettings).toHaveBeenCalledTimes(1);
     expect(onClose).toHaveBeenCalledTimes(3);
@@ -3069,6 +3012,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
     renderPalette(openers(), { onOpenTimeline, onClose });
+    await user.type(await screen.findByPlaceholderText(/Launch a session/), "session timeline");
     await user.click(await screen.findByText("Session timeline"));
     expect(onOpenTimeline).toHaveBeenCalledWith(expect.objectContaining({ id: 7, name: "hotfix" }));
     expect(onClose).toHaveBeenCalled();
@@ -3207,7 +3151,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
     const onOpenSettings = vi.fn();
     const o = openers();
     const user = userEvent.setup();
-    renderPalette(o, { onOpenSettings });
+    renderPalette(o, { onOpenSettings, layoutTier: "phone" });
 
     // No claude in this list, so the default-agent seed lands on the first
     // launcher. Commands are painted above it; ArrowUp walks into them
@@ -3231,7 +3175,7 @@ describe("CommandPalette -> Project drill-in and command search", () => {
       ),
     );
     const user = userEvent.setup();
-    renderPalette(openers(), { onOpenSettings: vi.fn() });
+    renderPalette(openers(), { onOpenSettings: vi.fn(), layoutTier: "phone" });
 
     // Same walk as the arrow-key test: the default seed is the first
     // launcher, ArrowUp steps into Task board, then Settings.
@@ -3289,7 +3233,6 @@ describe("CommandPalette -> default target follows the active pane", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-        onOpenGit={vi.fn()}
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -3338,6 +3281,7 @@ describe("CommandPalette -> default target follows the active pane", () => {
     const user = userEvent.setup();
     useDashboardStore.setState({ activePanelId: "session-9" });
     renderGlobal(onOpenBrowser);
+    await user.type(await screen.findByPlaceholderText(/Launch a session/), "preview");
     await user.click(await screen.findByText(/^Preview$/));
     expect(onOpenBrowser).toHaveBeenCalledWith(2);
   });
