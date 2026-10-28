@@ -42,6 +42,11 @@ vi.mock("../../src/services/task-dispatch.js", () => ({
 }));
 vi.mock("../../src/services/host-git.js", () => ({
   resolveRepoRef: mockResolveRepoRef,
+  // repo-key.ts resolves ownership through the Result variant (#2233).
+  resolveRepoRefResult: async (...args: unknown[]) => {
+    const value = await mockResolveRepoRef(...args);
+    return value === undefined ? { ok: false, error: "unreachable" } : { ok: true, value };
+  },
 }));
 vi.mock("../../src/services/github-integration.js", async (importOriginal) => {
   const actual = await importOriginal<typeof GitHubIntegrationModule>();
