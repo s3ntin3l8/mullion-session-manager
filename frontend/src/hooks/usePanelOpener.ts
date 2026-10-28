@@ -117,7 +117,7 @@ export interface UsePanelOpenerResult {
   onOpenGit: (projectId: number) => void;
   // Opens (or focuses) a project's tabbed Project panel, optionally on a
   // specific tab (Agent Rules, Briefing, Scaffold, Dock, Skills).
-  onOpenProjectHub: (projectId: number, tab?: ProjectHubTab) => void;
+  onOpenProjectHub: (projectId: number, tab?: ProjectHubTab, dockView?: "previews") => void;
   // Opens (or focuses) a project's agent-rules editor (issue #431) — the
   // Project panel's Agent Rules tab.
   onOpenAgentRules: (projectId: number) => void;
@@ -133,7 +133,7 @@ export interface UsePanelOpenerResult {
   // a PR" setup panel.
   onOpenProjectSetup: (projectId: number) => void;
   // U4 — opens (or focuses) a project's dock-config editor.
-  onOpenDockConfig: (projectId: number) => void;
+  onOpenDockConfig: (projectId: number, view?: "previews") => void;
   // Opens (or focuses) a project's (read-only) skills panel (issue #432).
   onOpenSkills: (projectId: number) => void;
   // Opens (or focuses) a project's dev-server browser preview pane (issue
@@ -327,10 +327,10 @@ export function usePanelOpener({
   );
 
   const onOpenProjectHub = useCallback(
-    (projectId: number, tab?: ProjectHubTab) => {
+    (projectId: number, tab?: ProjectHubTab, dockView?: "previews") => {
       if (!dockviewApi) return;
       leaveTaskView();
-      openProjectHubPanel(dockviewApi, projectId, projects, layout, tab);
+      openProjectHubPanel(dockviewApi, projectId, projects, layout, tab, dockView);
       setSidebarOpen(false);
     },
     [dockviewApi, projects, layout, setSidebarOpen, leaveTaskView],
@@ -351,7 +351,7 @@ export function usePanelOpener({
     [onOpenProjectHub],
   );
   const onOpenDockConfig = useCallback(
-    (projectId: number) => onOpenProjectHub(projectId, "dock"),
+    (projectId: number, view?: "previews") => onOpenProjectHub(projectId, "dock", view),
     [onOpenProjectHub],
   );
   const onOpenSkills = useCallback(

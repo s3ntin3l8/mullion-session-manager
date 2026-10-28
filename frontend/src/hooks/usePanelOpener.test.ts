@@ -17,6 +17,7 @@ const setActiveWorkspaceId = vi.fn();
 const setViewMode = vi.fn();
 const openRightSidebarView = vi.fn();
 const startDevice = vi.fn();
+const requestPreviewPicker = vi.fn();
 
 function storeState() {
   return {
@@ -25,6 +26,7 @@ function storeState() {
     setViewMode,
     openRightSidebarView,
     startDevice,
+    requestPreviewPicker,
   };
 }
 
@@ -495,6 +497,26 @@ describe("usePanelOpener — project-scoped panel kinds", () => {
       }),
     );
     expect(setSidebarOpen).toHaveBeenCalledWith(false);
+  });
+
+  it("opens preview management through the normal navigation path and leaves Task view", () => {
+    const api = mockDockviewApi();
+    const { result } = setup({ dockviewApi: api });
+    result.current.onOpenDockConfig(1, "previews");
+    expect(setViewMode).toHaveBeenCalledWith("list");
+    expect(api.addPanel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: expect.objectContaining({ projectId: 1, tab: "dock", dockView: "previews" }),
+      }),
+    );
+    expect(setSidebarOpen).toHaveBeenCalledWith(false);
+  });
+
+  it("offers preview selection without changing the current task or monitor state", () => {
+    const { result } = setup({ dockviewApi: mockDockviewApi() });
+    result.current.onOpenPreviewTargets(1);
+    expect(requestPreviewPicker).toHaveBeenCalledWith(1);
+    expect(setViewMode).not.toHaveBeenCalled();
   });
 
   it("onOpenProjectHub without a tab opens the panel with no tab preference", () => {

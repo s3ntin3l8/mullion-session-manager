@@ -57,6 +57,13 @@ describe("Dock", () => {
         const respond = githubPrsByProject[Number(params.id)];
         return respond ? respond() : jsonResponse(204);
       },
+      "GET /api/projects/:id/preview-targets": ({ params }) =>
+        jsonResponse(200, {
+          devServerUrl:
+            useDashboardStore.getState().projects.find((p) => p.id === Number(params.id))
+              ?.devServerUrl ?? null,
+          targets: [],
+        }),
       "GET /api/projects/:id/dock": ({ params }) =>
         jsonResponse(200, dockByProject[Number(params.id)] ?? []),
       "GET /api/projects/:id/github": ({ params }) => {
@@ -117,7 +124,7 @@ describe("Dock", () => {
       expect(onOpenGitHub).toHaveBeenCalledWith(1);
     });
 
-    it("shows the dev server URL when the project has a devServerUrl (no monitors), and opens it on click", async () => {
+    it("offers the configured dev server in the project menu without monitors", async () => {
       githubByProject[1] = () => new Response(null, { status: 204 });
       useDashboardStore.setState({
         projects: [{ ...PROJECT, devServerUrl: "5173" }],
@@ -129,32 +136,29 @@ describe("Dock", () => {
         <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={onOpenBrowser} />,
       );
 
-      const row = await screen.findByText("5173");
-      await user.click(row);
+      await user.click(screen.getByRole("button", { name: "Preview" }));
+      await user.click(await screen.findByRole("menuitem", { name: "Dev server — 5173" }));
 
       expect(onOpenBrowser).toHaveBeenCalledWith(1);
     });
 
-    it("shows the dev server URL inside each monitor header when configured", async () => {
+    it("offers one project preview menu instead of repeating the URL in monitor headers", async () => {
       dockByProject[1] = [{ id: "dev", title: "Dev server", command: "npm run dev" }];
       useDashboardStore.setState({
         projects: [{ ...PROJECT, devServerUrl: "5173" }],
         sessions: [],
       });
       const onOpenBrowser = vi.fn();
-      const user = userEvent.setup();
       const { container } = render(
         <Dock workspaceProjectIds={[1]} onOpenGitHub={vi.fn()} onOpenBrowser={onOpenBrowser} />,
       );
 
       await screen.findByText("Dev server");
 
-      const urlBadge = container.querySelector(".dock-monitor-url") as HTMLElement;
-      expect(urlBadge).toBeInTheDocument();
-      expect(urlBadge).toHaveTextContent("5173");
-      expect(urlBadge.closest(".dock-monitor-header")).toBeInTheDocument();
-      await user.click(urlBadge);
-      expect(onOpenBrowser).toHaveBeenCalledWith(1);
+      expect(
+        container.querySelector(".dock-monitor-header .dock-monitor-url"),
+      ).not.toBeInTheDocument();
+      expect(screen.getAllByRole("button", { name: "Preview" })).toHaveLength(1);
     });
 
     it("hides the dev server URL when the project has no devServerUrl", async () => {
