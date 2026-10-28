@@ -9,6 +9,7 @@ import {
   type DockerStorageStatus,
   type SystemStats,
   type DevWorktreeStatus,
+  type RemoveOrphanResult,
   type OpencodeStorageStatus,
   type TempStorageStatus,
   type CacheStorageStatus,
@@ -139,9 +140,42 @@ function setup(
   vi.spyOn(api, "getDevWorktrees").mockResolvedValue(ready(overrides.worktrees ?? noWorktrees));
   vi.spyOn(api, "getSpaceReport").mockResolvedValue(ready(overrides.space ?? noSpace));
   vi.spyOn(api, "getCleanupStatus").mockResolvedValue({ state: "idle" });
+  vi.spyOn(api, "getOrphanRemoval").mockResolvedValue({ job: { state: "idle" }, recoveries: [] });
   vi.spyOn(api, "getSystemStats").mockResolvedValue(stats);
   vi.spyOn(api, "getDockerStorage").mockResolvedValue(ready(overrides.docker ?? docker));
   vi.spyOn(api, "getTempStorage").mockResolvedValue(ready(overrides.temp ?? tempUnavailable));
+}
+
+function mockOrphanRemoval(result: RemoveOrphanResult) {
+  const running = {
+    id: "job-1",
+    projectId: 1,
+    path: "/p/.wt/stray",
+    state: "running" as const,
+    startedAt: new Date().toISOString(),
+  };
+  return vi.spyOn(api, "removeOrphanWorktree").mockImplementation(async () => {
+    vi.mocked(api.getOrphanRemoval).mockResolvedValue({
+      job: {
+        ...running,
+        state: "done",
+        finishedAt: new Date().toISOString(),
+        result,
+      },
+      recoveries:
+        !result.removed && result.recoveryPath
+          ? [
+              {
+                projectId: 1,
+                originalPath: running.path,
+                recoveryPath: result.recoveryPath,
+                mayBePartial: result.reason === "remove-failed",
+              },
+            ]
+          : [],
+    });
+    return running;
+  });
 }
 
 describe("Settings -> Storage", () => {
@@ -816,12 +850,235 @@ describe("Settings -> Storage", () => {
       expect(value).toHaveTextContent("/p/.wt/feat");
       // ...and in a tooltip, since the cell truncates a long path.
       expect(value).toHaveAttribute("title", "/p/.wt/feat");
-      expect(screen.getByText(/git doesn't know \(not removed\)/)).toBeInTheDocument();
-      expect(screen.getByText(/cleanup leaves them alone/)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Directories under a worktree root that git doesn't know/),
+      ).toBeInTheDocument();
+      expect(screen.getByText(/Cleanup leaves these alone/)).toBeInTheDocument();
       expect(
         screen.queryByText("Developer worktrees aggressive cleanup would remove"),
       ).not.toBeInTheDocument();
       expect(screen.queryByText("Developer worktrees")).not.toBeInTheDocument();
+    });
+
+    it("requires confirmation and refreshes after removing one orphan", async () => {
+      const worktrees: DevWorktreeStatus = {
+        available: true,
+        totalBytes: 0,
+        candidates: [
+          {
+            projectId: 1,
+            projectName: "mullion",
+            path: "/p/.wt/stray",
+            slug: "stray",
+            branch: null,
+            kind: "wt",
+            reason: "orphaned",
+            bytes: 1024,
+          },
+        ],
+      };
+      setup({ worktrees });
+      vi.mocked(api.getDevWorktrees)
+        .mockResolvedValueOnce(ready(worktrees))
+        .mockResolvedValue(ready(noWorktrees));
+      const remove = mockOrphanRemoval({ removed: true, reclaimedBytes: 1024 });
+      render(<StorageSection />);
+      const button = await screen.findByRole("button", { name: "Remove" });
+      await userEvent.click(button);
+      expect(remove).not.toHaveBeenCalled();
+      await userEvent.click(screen.getByRole("button", { name: "Confirm removal" }));
+      await waitFor(() => expect(remove).toHaveBeenCalledWith(1, "/p/.wt/stray"));
+      expect(
+        await screen.findByText(/Removed stray; freed approximately/, {}, { timeout: 5000 }),
+      ).toBeInTheDocument();
+      await waitFor(() => expect(api.getDevWorktrees).toHaveBeenCalledWith(true));
+      expect(screen.queryByText("mullion / stray")).not.toBeInTheDocument();
+    });
+
+    it("shows a refusal inline and leaves the orphan visible", async () => {
+      setup({
+        worktrees: {
+          available: true,
+          totalBytes: 0,
+          candidates: [
+            {
+              projectId: 1,
+              projectName: "mullion",
+              path: "/p/.wt/stray",
+              slug: "stray",
+              branch: null,
+              kind: "wt",
+              reason: "orphaned",
+              bytes: 1024,
+            },
+          ],
+        },
+      });
+      mockOrphanRemoval({ removed: false, reason: "in-use" });
+      render(<StorageSection />);
+      await userEvent.click(await screen.findByRole("button", { name: "Remove" }));
+      await userEvent.click(screen.getByRole("button", { name: "Confirm removal" }));
+      expect(
+        await screen.findByText(
+          /A session or resumable task is using this directory/,
+          {},
+          { timeout: 5000 },
+        ),
+      ).toBeInTheDocument();
+      expect(screen.getByText("mullion / stray")).toBeInTheDocument();
+    });
+
+    it("keeps a recovery notice visible after the page is reloaded", async () => {
+      localStorage.removeItem("mullion.orphanRecoveryPaths");
+      setup({
+        worktrees: {
+          available: true,
+          totalBytes: 0,
+          candidates: [
+            {
+              projectId: 1,
+              projectName: "mullion",
+              path: "/p/.wt/stray",
+              slug: "stray",
+              branch: null,
+              kind: "wt",
+              reason: "orphaned",
+              bytes: 1024,
+            },
+          ],
+        },
+      });
+      mockOrphanRemoval({
+        removed: false,
+        reason: "in-use",
+        recoveryPath: "/p/.mullion-orphan-x/directory",
+      });
+      const view = render(<StorageSection />);
+      try {
+        await userEvent.click(await screen.findByRole("button", { name: "Remove" }));
+        await userEvent.click(screen.getByRole("button", { name: "Confirm removal" }));
+        expect(
+          await screen.findByText(
+            "/p/.mullion-orphan-x/directory",
+            { selector: "code" },
+            { timeout: 5000 },
+          ),
+        ).toBeInTheDocument();
+        view.unmount();
+        render(<StorageSection />);
+        expect(
+          await screen.findByText(
+            "/p/.mullion-orphan-x/directory",
+            { selector: "code" },
+            { timeout: 5000 },
+          ),
+        ).toBeInTheDocument();
+        await userEvent.click(screen.getByRole("button", { name: "Dismiss recovery notice" }));
+        expect(
+          screen.queryByText("/p/.mullion-orphan-x/directory", { selector: "code" }),
+        ).not.toBeInTheDocument();
+      } finally {
+        localStorage.removeItem("mullion.orphanRecoveryPaths");
+      }
+    });
+
+    it("finds a running removal after a page reload and shows its result", async () => {
+      const worktrees: DevWorktreeStatus = {
+        available: true,
+        totalBytes: 0,
+        candidates: [
+          {
+            projectId: 1,
+            projectName: "mullion",
+            path: "/p/.wt/stray",
+            slug: "stray",
+            branch: null,
+            kind: "wt",
+            reason: "orphaned",
+            bytes: 1024,
+          },
+        ],
+      };
+      setup({ worktrees });
+      const running = {
+        id: "job-reload",
+        projectId: 1,
+        path: "/p/.wt/stray",
+        state: "running" as const,
+        startedAt: new Date().toISOString(),
+      };
+      vi.mocked(api.getOrphanRemoval)
+        .mockResolvedValueOnce({ job: running, recoveries: [] })
+        .mockResolvedValue({
+          job: {
+            ...running,
+            state: "done",
+            finishedAt: new Date().toISOString(),
+            result: { removed: true, reclaimedBytes: 1024 },
+          },
+          recoveries: [],
+        });
+      const view = render(<StorageSection />);
+      expect(await screen.findByText(/You can leave this page and return/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Removing…" })).toBeDisabled();
+      view.unmount();
+      render(<StorageSection />);
+      expect(await screen.findByText(/Removed stray; freed approximately/)).toBeInTheDocument();
+    });
+
+    it("shows interrupted partial removal even if its original row is gone", async () => {
+      localStorage.removeItem("mullion.orphanRecoveryPaths");
+      setup();
+      vi.mocked(api.getOrphanRemoval).mockResolvedValue({
+        job: { state: "idle" },
+        recoveries: [
+          {
+            projectId: 1,
+            originalPath: "/p/.wt/stray",
+            recoveryPath: "/p/.mullion-orphan-x/directory",
+            mayBePartial: true,
+          },
+        ],
+      });
+      try {
+        render(<StorageSection />);
+        expect(
+          await screen.findByText(/Removal started; some files may already have been deleted/),
+        ).toBeInTheDocument();
+        expect(
+          screen.getByText("/p/.mullion-orphan-x/directory", { selector: "code" }),
+        ).toBeInTheDocument();
+      } finally {
+        localStorage.removeItem("mullion.orphanRecoveryPaths");
+      }
+    });
+
+    it("shows a recovery path that cannot currently be verified", async () => {
+      localStorage.removeItem("mullion.orphanRecoveryPaths");
+      setup();
+      vi.mocked(api.getOrphanRemoval).mockResolvedValue({
+        job: { state: "idle" },
+        recoveries: [
+          {
+            projectId: 1,
+            originalPath: "/p/.wt/stray",
+            recoveryPath: "/p/.mullion-orphan-unavailable/directory",
+            mayBePartial: false,
+            unverified: true,
+          },
+        ],
+      });
+      try {
+        render(<StorageSection />);
+        expect(
+          await screen.findByText(/recovery location could not be verified/),
+        ).toBeInTheDocument();
+        expect(
+          screen.getByText("/p/.mullion-orphan-unavailable/directory", { selector: "code" }),
+        ).toBeInTheDocument();
+      } finally {
+        localStorage.removeItem("mullion.orphanRecoveryPaths");
+      }
     });
 
     it("doesn't wait for the worktree preview before showing the rest", async () => {

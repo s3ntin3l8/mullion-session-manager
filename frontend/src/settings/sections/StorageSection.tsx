@@ -4,6 +4,7 @@ import type {
   CleanupJob,
   CleanupStepState,
   DevWorktreeCandidate,
+  OrphanRemovalStatus,
   Measured,
   ProbeMeta,
   SystemStats,
@@ -18,6 +19,7 @@ import { ConfirmButton } from "../../ui/ConfirmButton.js";
 import { useDashboardStore } from "../../store/index.js";
 import { useStorageProbes } from "../useStorageProbes.js";
 import { useCleanupJob } from "../useCleanupJob.js";
+import { useOrphanRemoval } from "../useOrphanRemoval.js";
 import { summarizeCleanup } from "../cleanupSummary.js";
 import { KeptSessionWorktrees } from "./KeptSessionWorktrees.js";
 import { SpaceReport } from "./SpaceReport.js";
@@ -52,6 +54,63 @@ function useNow(active: boolean): number {
     return () => clearInterval(timer);
   }, [active]);
   return now;
+}
+
+const ORPHAN_REFUSAL: Record<string, string> = {
+  "invalid-path": "This path is outside an allowed worktree root or is not a directory.",
+  "not-orphan": "This directory is no longer an orphan. Refresh the list.",
+  "in-use": "A session or resumable task is using this directory.",
+  "contains-mount":
+    "This directory contains a mounted filesystem. Unmount it before removing the directory.",
+  unavailable: "Could not verify this directory. Refresh and try again.",
+  changed: "The directory changed while it was checked. Refresh and try again.",
+  "remove-failed": "Removal failed after starting; some files may already have been deleted.",
+};
+
+function OrphanWorktreeRow({
+  candidate,
+  zebra,
+  job,
+  busy,
+  measuredAt,
+  onStart,
+}: {
+  candidate: DevWorktreeCandidate;
+  zebra: boolean;
+  job: OrphanRemovalStatus;
+  busy: boolean;
+  measuredAt: string | null;
+  onStart: (projectId: number, path: string) => void;
+}) {
+  const matches =
+    job.state !== "idle" && job.projectId === candidate.projectId && job.path === candidate.path;
+  const done = matches && job.state === "done" ? job : null;
+  if (
+    done?.result.removed &&
+    (!measuredAt || Date.parse(measuredAt) <= Date.parse(done.finishedAt))
+  )
+    return null;
+  const error = done && !done.result.removed ? ORPHAN_REFUSAL[done.result.reason] : null;
+  const removing = matches && job.state === "running";
+  return (
+    <div className={`settings-info-row kept-worktree-row${zebra ? " zebra" : ""}`}>
+      <span className="settings-info-key">
+        {candidate.projectName} / {candidate.slug}
+      </span>
+      <span className="settings-info-value" title={candidate.path}>
+        <code>{candidate.path}</code> · {formatBytes(candidate.bytes)}
+        {error && <ErrorText>{error}</ErrorText>}
+      </span>
+      <ConfirmButton
+        disabled={busy}
+        title="Permanently delete this directory and all its files, including uncommitted and ignored work."
+        armedLabel="Confirm removal"
+        onConfirm={() => onStart(candidate.projectId, candidate.path)}
+      >
+        {removing ? "Removing…" : "Remove"}
+      </ConfirmButton>
+    </div>
+  );
 }
 
 /** One source's line in a tier card. */
@@ -230,16 +289,89 @@ function DiskRow({ filesystem }: { filesystem: SystemStats["filesystems"][number
   );
 }
 
+const RECOVERY_KEY = "mullion.orphanRecoveryPaths";
+type OrphanRecovery = {
+  recoveryPath: string;
+  originalPath: string;
+  mayBePartial?: boolean;
+  unverified?: boolean;
+  dismissed?: boolean;
+};
+function readRecoveries(): OrphanRecovery[] {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(RECOVERY_KEY) ?? "[]");
+    return Array.isArray(value)
+      ? value.filter(
+          (entry): entry is OrphanRecovery =>
+            typeof entry === "object" &&
+            entry !== null &&
+            typeof entry.recoveryPath === "string" &&
+            typeof entry.originalPath === "string",
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 export function StorageSection() {
+  const [recoveries, setRecoveries] = useState<OrphanRecovery[]>(readRecoveries);
+  const saveRecoveries = (next: OrphanRecovery[]) => {
+    setRecoveries(next);
+    try {
+      localStorage.setItem(RECOVERY_KEY, JSON.stringify(next));
+    } catch {
+      /* The visible notice still works. */
+    }
+  };
+  const mergeRecoveries = (incoming: OrphanRecovery[]) => {
+    setRecoveries((current) => {
+      const next = [...current];
+      let changed = false;
+      for (const item of incoming) {
+        const index = next.findIndex((existing) => existing.recoveryPath === item.recoveryPath);
+        if (index < 0) {
+          next.push(item);
+          changed = true;
+        } else if (
+          (item.mayBePartial && !next[index]?.mayBePartial) ||
+          (item.unverified !== undefined && Boolean(next[index]?.unverified) !== item.unverified)
+        ) {
+          next[index] = {
+            ...next[index]!,
+            mayBePartial: next[index]?.mayBePartial || item.mayBePartial,
+            unverified: item.unverified ?? next[index]?.unverified,
+          };
+          changed = true;
+        }
+      }
+      if (!changed) return current;
+      try {
+        localStorage.setItem(RECOVERY_KEY, JSON.stringify(next));
+      } catch {
+        /* The visible notice still works. */
+      }
+      return next;
+    });
+  };
   const probes = useStorageProbes();
   const { stats, statsError, busy, refresh } = probes;
+  const orphan = useOrphanRemoval(
+    () => void refresh(),
+    (items) =>
+      mergeRecoveries(items.map((item) => ({ ...item, unverified: item.unverified ?? false }))),
+  );
+  const orphanResult =
+    orphan.job.state === "done" && orphan.job.result.removed
+      ? `Removed ${orphan.job.path.split(/[\\/]/).pop() ?? orphan.job.path}; freed approximately ${formatBytes(orphan.job.result.reclaimedBytes)}.`
+      : null;
   const now = useNow(busy);
   const docker = hasMeasuredData(probes.docker) ? probes.docker : null;
   const temp = hasMeasuredData(probes.temp) ? probes.temp : null;
   const caches = hasMeasuredData(probes.caches) ? probes.caches : null;
   const opencode = hasMeasuredData(probes.opencode) ? probes.opencode : null;
   const worktrees = hasMeasuredData(probes.worktrees) ? probes.worktrees : null;
-  // Issue #1979 — orphaned directories are reported, never removed.
+  // Orphans are excluded from automatic cleanup, but can be removed individually.
   const removableWorktrees = (worktrees?.candidates ?? []).filter((c) => c.reason !== "orphaned");
   const orphanedWorktrees = (worktrees?.candidates ?? []).filter((c) => c.reason === "orphaned");
 
@@ -498,30 +630,77 @@ export function StorageSection() {
       {worktrees?.available && orphanedWorktrees.length > 0 && (
         <>
           <div className="storage-subhead">
-            Directories under a worktree root that git doesn't know (not removed)
+            Directories under a worktree root that git doesn't know
           </div>
           <div className="settings-info-table">
             {orphanedWorktrees.map((candidate, i) => (
-              <div
-                key={candidate.path}
-                className={`settings-info-row${i % 2 === 0 ? " zebra" : ""}`}
-              >
-                <span className="settings-info-key">
-                  {candidate.projectName} / {candidate.slug}
-                </span>
-                {/* The full path, on screen and in a tooltip (the value cell truncates
-                    with an ellipsis): deleting by hand is the only remedy. */}
-                <span className="settings-info-value" title={candidate.path}>
-                  <code>{candidate.path}</code> · {formatBytes(candidate.bytes)}
-                </span>
-              </div>
+              <OrphanWorktreeRow
+                key={`${candidate.projectId}:${candidate.path}`}
+                candidate={candidate}
+                zebra={i % 2 === 0}
+                job={orphan.job}
+                busy={orphan.busy}
+                measuredAt={probes.worktrees?.measuredAt ?? null}
+                onStart={(projectId, path) => void orphan.start(projectId, path)}
+              />
             ))}
           </div>
           <div className="settings-footer-note">
-            Nothing can tell whether these hold work, so cleanup leaves them alone. Delete one by
-            hand once you've checked it.
+            Cleanup leaves these alone. Check each directory before removing it: it may contain
+            uncommitted or ignored work.
           </div>
         </>
+      )}
+
+      {orphan.error && <ErrorText>{orphan.error}</ErrorText>}
+      {orphan.job.state === "done" &&
+        !orphan.job.result.removed &&
+        orphan.job.result.reason === "remove-failed" && (
+          <ErrorText>
+            Removal of <code>{orphan.job.path}</code> failed; some files may already have been
+            deleted.
+          </ErrorText>
+        )}
+      {orphan.job.state === "running" && (
+        <div className="settings-footer-note" role="status">
+          Removing <code>{orphan.job.path}</code> on the server. You can leave this page and return.
+        </div>
+      )}
+      {recoveries
+        .filter((item) => !item.dismissed)
+        .map(({ recoveryPath, originalPath, mayBePartial, unverified }) => (
+          <ErrorText key={recoveryPath}>
+            {mayBePartial && "Removal started; some files may already have been deleted. "}
+            {unverified &&
+              "The recovery location could not be verified; check it before moving files. "}
+            {unverified ? "Remaining files may be at " : "Remaining files are at "}
+            <code>{recoveryPath}</code>.
+            {recoveryPath === originalPath ? (
+              " Check that directory."
+            ) : (
+              <>
+                {" "}
+                Move them back to <code>{originalPath}</code> after checking that destination.
+              </>
+            )}
+            <SecondaryButton
+              onClick={() =>
+                saveRecoveries(
+                  recoveries.map((item) =>
+                    item.recoveryPath === recoveryPath ? { ...item, dismissed: true } : item,
+                  ),
+                )
+              }
+            >
+              Dismiss recovery notice
+            </SecondaryButton>
+          </ErrorText>
+        ))}
+
+      {orphanResult && (
+        <div className="settings-footer-note" role="status">
+          {orphanResult}
+        </div>
       )}
 
       <KeptSessionWorktrees />

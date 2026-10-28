@@ -235,11 +235,51 @@ export interface DevWorktreeCandidate {
   branch: string | null;
   /** `wt` is a `.wt/` (or `.worktrees/`) developer worktree; `claude-agent` one under `.claude/worktrees/`. */
   kind: "wt" | "claude-agent";
-  /** `orphaned` (issue #1979): a directory git doesn't know as a worktree; listed, never removed. */
+  /** `orphaned`: a directory git does not know; only explicit removal can delete it. */
   reason: "gone" | "merged" | "detached-merged" | "in-default" | "orphaned";
   /** e.g. `#1234` for `merged`. */
   detail?: string;
   bytes: number;
+}
+
+export type RemoveOrphanResult =
+  | { removed: true; reclaimedBytes: number }
+  | {
+      removed: false;
+      reason:
+        | "invalid-path"
+        | "not-orphan"
+        | "in-use"
+        | "contains-mount"
+        | "unavailable"
+        | "changed"
+        | "remove-failed";
+      recoveryPath?: string;
+    };
+
+export type OrphanRemovalStatus =
+  | { state: "idle" }
+  | { id: string; projectId: number; path: string; state: "running"; startedAt: string }
+  | {
+      id: string;
+      projectId: number;
+      path: string;
+      state: "done";
+      startedAt: string;
+      finishedAt: string;
+      result: RemoveOrphanResult;
+    };
+
+export interface OrphanRecoveryInfo {
+  projectId: number;
+  originalPath: string;
+  recoveryPath: string;
+  mayBePartial: boolean;
+  unverified?: boolean;
+}
+export interface OrphanRemovalSnapshot {
+  job: OrphanRemovalStatus;
+  recoveries: OrphanRecoveryInfo[];
 }
 
 export interface DevWorktreeStatus {

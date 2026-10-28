@@ -69,7 +69,7 @@ export function worktreeInUse(app: FastifyInstance, worktreePath: string): boole
 }
 
 /** Resolve an existing ancestor without blocking the event loop. */
-async function canonicalPath(value: string): Promise<string> {
+export async function canonicalWorktreePath(value: string): Promise<string> {
   const resolved = path.resolve(value);
   let prefix = resolved;
   for (;;) {
@@ -81,6 +81,16 @@ async function canonicalPath(value: string): Promise<string> {
       return path.resolve(real, path.relative(prefix, resolved));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      // A dangling symlink is not a missing ordinary path: its target may
+      // have just moved, so its location is unknown rather than lexical.
+      const brokenLink = await fs.lstat(prefix).then(
+        (stat) => stat.isSymbolicLink(),
+        (err: unknown) => {
+          if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+          throw err;
+        },
+      );
+      if (brokenLink) throw error;
       const parent = path.dirname(prefix);
       if (parent === prefix) throw error;
       prefix = parent;
@@ -106,7 +116,7 @@ export async function sessionsUsingWorktree(
   const uncertainPaths = new Set<string | null>();
   const uncertainLive = new Set<number>();
   if (hostId === LOCAL_HOST_ID) {
-    const canonicalTarget = await canonicalPath(resolvedPath);
+    const canonicalTarget = await canonicalWorktreePath(resolvedPath);
     const seen = new Set<string | null>();
     const aliases: string[] = [];
     const readPaths = () =>
@@ -134,7 +144,7 @@ export async function sessionsUsingWorktree(
               continue;
             }
             try {
-              if (isWithin(await canonicalPath(entry.cwd), canonicalTarget)) {
+              if (isWithin(await canonicalWorktreePath(entry.cwd), canonicalTarget)) {
                 aliases.push(entry.cwd);
                 matchedPaths.add(entry.cwd);
               }
@@ -168,7 +178,8 @@ export async function sessionsUsingWorktree(
         liveState.delete(id);
         if (!liveCwd) continue;
         try {
-          if (isWithin(await canonicalPath(liveCwd), canonicalTarget)) liveState.set(id, "inside");
+          if (isWithin(await canonicalWorktreePath(liveCwd), canonicalTarget))
+            liveState.set(id, "inside");
         } catch {
           liveState.set(id, "unknown");
         }

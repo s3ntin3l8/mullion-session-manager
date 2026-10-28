@@ -1,8 +1,8 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, isNotNull } from "drizzle-orm";
+import { and, eq, inArray, isNotNull } from "drizzle-orm";
 import os from "node:os";
 import path from "node:path";
-import { projects, sessions } from "../db/schema.js";
+import { projects, sessions, tasks } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 import { claudeSessionsDirsFor } from "../services/claude-scratch.js";
 import { getStoredSettings } from "../services/settings.js";
@@ -23,16 +23,24 @@ import {
 import {
   DEV_WORKTREE_DIRS,
   inspectDevWorktrees,
+  inspectOrphanRecoveries,
   pruneDevWorktrees,
+  removeOrphanedDevWorktree,
   type DevWorktreeOptions,
 } from "../services/dev-worktrees.js";
 import { findMergedPullRequestByHead } from "../services/github-write.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { resolveRepoRef } from "../services/host-git.js";
-import { worktreeInUse } from "../services/worktree-usage.js";
+import {
+  RESUMABLE_TASK_STATUSES,
+  canonicalWorktreePath,
+  sessionsUsingWorktree,
+  worktreeInUse,
+} from "../services/worktree-usage.js";
 import { sampleSystemStats, type MonitoredPath } from "../services/system-stats.js";
 import { createMeasuredProbe } from "../services/measured-probe.js";
 import { inspectSpaceReport } from "../services/space-report.js";
+import { createOrphanRemovalJob } from "../services/orphan-removal-job.js";
 import {
   CLEANUP_IN_PROGRESS,
   createCleanupRunner,
@@ -273,6 +281,86 @@ export async function systemResourcesRoute(app: FastifyInstance) {
     });
     app.addHook("onClose", async () => clearTimeout(warmUp));
   }
+
+  // The disk walk can outlast a proxy timeout. Keep the job and its result on
+  // the server so another tab or a reloaded page can find it.
+  const orphanRemoval = createOrphanRemovalJob();
+  const orphanRegistryDir = path.join(app.config.SESSIONS_DIR, "orphan-recoveries");
+  app.get("/api/storage/worktrees/remove-orphan", async () => {
+    // Do not expose an in-flight quarantine as a recovery if a job starts
+    // while the persistent index is being read.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const before = orphanRemoval.status();
+      if (before.state === "running") return { job: before, recoveries: [] };
+      const recoveries = await inspectOrphanRecoveries(orphanRegistryDir);
+      const after = orphanRemoval.status();
+      if (before === after) return { job: after, recoveries };
+    }
+    return { job: orphanRemoval.status(), recoveries: [] };
+  });
+  app.post<{ Body: { projectId: number; path: string } }>(
+    "/api/storage/worktrees/remove-orphan",
+    {
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+      schema: {
+        body: {
+          type: "object",
+          required: ["projectId", "path"],
+          additionalProperties: false,
+          properties: {
+            projectId: { type: "integer", minimum: 1 },
+            path: { type: "string", minLength: 1, maxLength: 4096 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const [project] = app.db
+        .select({ id: projects.id, name: projects.name, cwd: projects.cwd })
+        .from(projects)
+        .where(and(eq(projects.id, request.body.projectId), eq(projects.hostId, LOCAL_HOST_ID)))
+        .all();
+      if (!project) return reply.notFound("Local project not found");
+      const job = orphanRemoval.start(project.id, request.body.path, async () => {
+        try {
+          const result = await removeOrphanedDevWorktree(
+            project,
+            request.body.path,
+            async (target) => {
+              if (worktreeInUse(app, target)) return true;
+              const resumable = app.db
+                .select({ worktreePath: tasks.worktreePath })
+                .from(tasks)
+                .where(inArray(tasks.status, RESUMABLE_TASK_STATUSES))
+                .all();
+              for (const task of resumable) {
+                if (!task.worktreePath) continue;
+                // Resolve aliases too; inability to check is not evidence of safety.
+                const taskPath = await canonicalWorktreePath(task.worktreePath);
+                if (taskPath === target || taskPath.startsWith(target + path.sep)) return true;
+              }
+              const usage = await sessionsUsingWorktree(app, target, LOCAL_HOST_ID);
+              return usage.active.length > 0 || usage.alive.length > 0 || usage.unknown.length > 0;
+            },
+            orphanRegistryDir,
+          );
+          if (!result.removed && result.recoveryPath) {
+            app.log.warn(
+              { projectId: project.id, path: request.body.path, recoveryPath: result.recoveryPath },
+              "orphan removal requires manual recovery",
+            );
+          }
+          return result;
+        } finally {
+          worktrees.invalidate();
+          space.invalidate();
+          cached = null;
+        }
+      });
+      if (!job) return reply.conflict("An orphan removal is already running");
+      return reply.code(202).send(job);
+    },
+  );
 
   // A source's own "already running" guard surfaces as a code, not a sentence.
   const PRUNE_ERRORS: Record<string, string> = {
