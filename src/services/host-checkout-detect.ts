@@ -279,12 +279,12 @@ export function attachHostCheckout(
     // not silently replaced: they edit it in Edit project.
     if (Object.hasOwn(map, hostId) && map[hostId] !== cwd) return "mapped";
     if (!Object.hasOwn(map, hostId) && Object.keys(map).length >= MAX_HOST_CWDS) return "limit";
-    // `hostId` came from a request: the written map has a null prototype, so no
-    // key can reach the prototype chain (the route has also checked the host
-    // is registered).
-    const next: Record<string, string> = Object.assign(Object.create(null), map, {
-      [hostId]: cwd,
-    });
+    // `hostId` came from a request (the route has checked the host is
+    // registered): it is set through a Map, never as a computed object key, so
+    // it cannot reach the prototype chain. `fromEntries` defines own properties.
+    const entries = new Map(Object.entries(map));
+    entries.set(hostId, cwd);
+    const next: Record<string, string> = Object.fromEntries(entries);
     tx.update(projects)
       .set({
         hostCwds: serializeHostCwds(next),
