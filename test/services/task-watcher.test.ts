@@ -47,6 +47,12 @@ vi.mock("../../src/services/github-integration.js", () => ({
 // already mocks it at.
 vi.mock("../../src/services/host-git.js", () => ({
   resolveRepoRef: mockResolveRepoRef,
+  // #2233 — repo-key.ts resolves ownership through the Result variant; the
+  // same mock answers both so a test sets one repo value per project.
+  resolveRepoRefResult: async (...args: unknown[]) => {
+    const value = await mockResolveRepoRef(...args);
+    return value === undefined ? { ok: false, error: "unreachable" } : { ok: true, value };
+  },
 }));
 
 vi.mock("../../src/services/settings.js", () => ({
@@ -87,6 +93,7 @@ vi.mock("../../src/services/task-github-sync.js", () => ({
   FAILURE_REASON_ISSUE_CLOSED: "GitHub issue was closed",
 }));
 
+import { resetRepoKeyCache } from "../../src/services/repo-key.js";
 import { startTaskWatcher } from "../../src/services/task-watcher.js";
 
 interface InsertedTaskRow {
@@ -171,6 +178,7 @@ function mockApp(
         return {
           from: () => ({
             all: () => rows,
+            orderBy: () => ({ all: () => rows }),
             where: () => ({
               all: () => (projection === undefined ? trackedNonTerminal : inFlightRows),
               orderBy: () => ({
@@ -223,7 +231,7 @@ function mockApp(
         },
       }),
     },
-    log: { debug: vi.fn(), warn: vi.fn(), error: vi.fn() },
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     config: {
       MULLION_ROLE: "primary",
       MULLION_TASK_LABEL: "mullion-task",
@@ -318,6 +326,83 @@ describe("startTaskWatcher", () => {
       "mullion-task",
     );
     expect(inserted).toHaveLength(1);
+
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("#2233 — two projects on one repo import each issue once, into the oldest", async () => {
+    resetRepoKeyCache();
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
+    // Same repo, different case: the key is lower-cased on both sides.
+    mockResolveRepoRef.mockImplementation(async (_app: unknown, p: { cwd: string }) =>
+      p.cwd === "/tmp/a"
+        ? { owner: "Test-Owner", repo: "test-repo" }
+        : { owner: "test-owner", repo: "Test-Repo" },
+    );
+    mockListLabeledIssues.mockResolvedValue([
+      {
+        number: 7,
+        title: "Shared",
+        body: null,
+        htmlUrl: "https://x/7",
+        authorAssociation: "OWNER",
+      },
+    ]);
+    const rows = [
+      { id: 1, cwd: "/tmp/a", hostId: "local" },
+      { id: 2, cwd: "/tmp/b", hostId: "local" },
+    ];
+    const inserted: InsertedTaskRow[] = [];
+    const app = mockApp(rows, inserted);
+    vi.useFakeTimers();
+    const cleanup = startTaskWatcher(app);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(mockListLabeledIssues).toHaveBeenCalledTimes(1); // startup pass, owner only
+    expect(inserted.every((r) => r.projectId === 1)).toBe(true);
+    expect(inserted.length).toBeGreaterThan(0);
+    expect(app.log.info).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: 2, ownerProjectId: 1 }),
+      expect.stringContaining("another project owns this repo"),
+    );
+
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("#2233 — an unreachable older project keeps its remembered ownership", async () => {
+    resetRepoKeyCache();
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
+    let reachable = true;
+    mockResolveRepoRef.mockImplementation(async (_app: unknown, p: { cwd: string }) =>
+      p.cwd === "/tmp/a" && !reachable ? undefined : { owner: "o", repo: "r" },
+    );
+    mockListLabeledIssues.mockResolvedValue([
+      {
+        number: 7,
+        title: "Shared",
+        body: null,
+        htmlUrl: "https://x/7",
+        authorAssociation: "OWNER",
+      },
+    ]);
+    const rows = [
+      { id: 1, cwd: "/tmp/a", hostId: "agent-1" },
+      { id: 2, cwd: "/tmp/b", hostId: "local" },
+    ];
+    const inserted: InsertedTaskRow[] = [];
+    const app = mockApp(rows, inserted);
+    vi.useFakeTimers();
+    const cleanup = startTaskWatcher(app);
+    await vi.advanceTimersByTimeAsync(1_000); // startup pass learns project 1 owns o/r
+    inserted.length = 0;
+    reachable = false;
+
+    await vi.advanceTimersByTimeAsync(130_000); // first full tick
+    expect(mockListLabeledIssues).toHaveBeenCalledTimes(1); // startup pass only: project 2 still skipped
+    expect(inserted.filter((r) => r.projectId === 2)).toHaveLength(0);
 
     cleanup();
     vi.useRealTimers();
@@ -630,6 +715,11 @@ describe("startTaskWatcher", () => {
     mockListLabeledIssues
       .mockRejectedValueOnce(new GitHubApiError("boom", 500))
       .mockResolvedValueOnce([]);
+    // Distinct repos: projects sharing a repo only import once (#2233).
+    mockResolveRepoRef.mockImplementation(async (_app: unknown, p: { cwd: string }) => ({
+      owner: "test-owner",
+      repo: p.cwd,
+    }));
     const rows = [
       { id: 1, cwd: "/tmp/one", hostId: "local" },
       { id: 2, cwd: "/tmp/two", hostId: "local" },

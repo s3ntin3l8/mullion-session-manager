@@ -9321,5 +9321,67 @@ describe("projects route", () => {
 
       fs.rmSync(cwd, { recursive: true, force: true });
     });
+
+    it("#2251 — keeps the shared hook when another project on the same repo remains", async () => {
+      const app = await makeApp();
+      await enableWebhooksDirect(app);
+      const cwdA = await githubRepo("acme", "wiring-shared");
+      const cwdB = await githubRepo("Acme", "Wiring-Shared"); // case differs
+
+      const calls: Array<{ url: string; method?: string }> = [];
+      const fetchMock = vi.fn().mockImplementation((url: string, init?: RequestInit) => {
+        calls.push({ url: String(url), method: init?.method });
+        if (init?.method === "DELETE") return Promise.resolve(new Response(null, { status: 204 }));
+        if (String(url).endsWith("/hooks") && (!init || init.method === undefined)) {
+          return Promise.resolve(
+            jsonRes(200, [
+              {
+                id: 555,
+                active: true,
+                config: { url: "https://hooks.example.com/api/webhooks/github" },
+              },
+            ]),
+          );
+        }
+        return Promise.resolve(jsonRes(201, { id: 555 }));
+      });
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      const a = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "wiring-shared-a", cwd: cwdA },
+      });
+      const b = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { createDir: true, name: "wiring-shared-b", cwd: cwdB },
+      });
+      const idA = a.json().id as number;
+      const idB = b.json().id as number;
+      calls.length = 0;
+
+      // Deleting one of two projects on the repo leaves the hook alone.
+      const first = await app.inject({ method: "DELETE", url: `/api/projects/${idB}` });
+      expect(first.statusCode).toBe(204);
+      expect(calls.filter((c) => c.method === "DELETE")).toHaveLength(0);
+
+      const { webhookRegistrations } = await import("../../src/db/schema.js");
+      const { eq: eqOp } = await import("drizzle-orm");
+      const survivor = app.db
+        .select()
+        .from(webhookRegistrations)
+        .where(eqOp(webhookRegistrations.projectId, idA))
+        .get();
+      expect(survivor?.hookId).toBe(555);
+
+      // The last project on the repo takes the hook down as before.
+      const second = await app.inject({ method: "DELETE", url: `/api/projects/${idA}` });
+      expect(second.statusCode).toBe(204);
+      expect(calls.some((c) => c.method === "DELETE" && c.url.includes("/hooks/555"))).toBe(true);
+
+      fs.rmSync(cwdA, { recursive: true, force: true });
+      fs.rmSync(cwdB, { recursive: true, force: true });
+    });
   });
 });

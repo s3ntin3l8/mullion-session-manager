@@ -3,6 +3,7 @@ import { and, eq, gt, inArray, isNotNull, isNull, lt, notInArray, or, sql } from
 import { projects, tasks } from "../db/schema.js";
 import { resolveGitHubToken } from "./github-integration.js";
 import { resolveRepoRef } from "./host-git.js";
+import { pickRepoOwners, repoKey, resolveRepoKeys } from "./repo-key.js";
 import { GitHubApiError, listLabeledIssues, type TaskIssue } from "./github.js";
 import { getIssueState, getIssueTitle } from "./github-write.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
@@ -561,11 +562,16 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
   // syncProjectTasks threads hostId through to resolveRepoRef, which needs
   // a real host id string, never a falsy one.
   function pollableProjectRows() {
-    return app.db
-      .select({ id: projects.id, cwd: projects.cwd, hostId: projects.hostId })
-      .from(projects)
-      .all()
-      .map((row) => ({ ...row, hostId: row.hostId || LOCAL_HOST_ID }));
+    return (
+      app.db
+        .select({ id: projects.id, cwd: projects.cwd, hostId: projects.hostId })
+        .from(projects)
+        // Oldest first: the repo-owner rule (#2233) treats the first project on
+        // a repo as the one that imports its issues.
+        .orderBy(projects.createdAt, projects.id)
+        .all()
+        .map((row) => ({ ...row, hostId: row.hostId || LOCAL_HOST_ID }))
+    );
   }
 
   async function syncProjectTasks(
@@ -582,6 +588,10 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
     // credential for a project whose resolution happens to fail on a later
     // tick, for zero benefit (resolveGitHubToken already caches).
     githubContext: Map<number, { owner: string; repo: string; token: string }>,
+    // #2233 — repoKey → id of the one project that imports that repo's issues.
+    // A project that is not the owner still joins `githubContext` (its
+    // existing tasks keep being reconciled) but ingests nothing.
+    repoOwners: Map<string, number>,
   ): Promise<void> {
     const repoRef = await resolveRepoRef(app, { cwd, hostId });
     if (!repoRef) {
@@ -618,6 +628,15 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       return;
     }
     githubContext.set(projectId, { owner: repoRef.owner, repo: repoRef.repo, token });
+
+    const ownerId = repoOwners.get(repoKey(repoRef));
+    if (ownerId !== undefined && ownerId !== projectId) {
+      app.log.info(
+        { projectId, ownerProjectId: ownerId, owner: repoRef.owner, repo: repoRef.repo },
+        "[task-watcher] skipping issue import: another project owns this repo",
+      );
+      return;
+    }
 
     try {
       const issues = await listLabeledIssues(token, repoRef.owner, repoRef.repo, label);
@@ -1260,8 +1279,11 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       // right after — see syncProjectTasks's own param doc for why this
       // isn't hoisted to a longer-lived scope.
       const githubContext = new Map<number, { owner: string; repo: string; token: string }>();
+      // #2233 — resolved once per tick; rows are oldest-first, so the oldest
+      // project on a repo owns its issue import.
+      const repoOwners = pickRepoOwners(rows, await resolveRepoKeys(app, rows));
       for (const row of rows) {
-        await syncProjectTasks(row.id, row.cwd, row.hostId, label, githubContext);
+        await syncProjectTasks(row.id, row.cwd, row.hostId, label, githubContext, repoOwners);
       }
       // Independent of whether a GitHub token is configured (Hermes/
       // independent review posture carried into 6.2): a locally-created
@@ -1325,6 +1347,9 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
   }
 
   const initialTimers: ReturnType<typeof setTimeout>[] = [];
+  // #2233 — same owner rule as pollOnce, resolved lazily on the first
+  // staggered fetch and shared by the rest.
+  let initialOwners: Promise<Map<string, number>> | null = null;
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i];
     const t = setTimeout(async () => {
@@ -1338,12 +1363,14 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
         // Throwaway per-call Map — autoClaimReadyTasks doesn't run on this
         // staggered initial-fetch path, so there's nothing to hand context
         // to; the real pollOnce tick that follows builds its own.
+        initialOwners ??= resolveRepoKeys(app, rows).then((keys) => pickRepoOwners(rows, keys));
         await syncProjectTasks(
           row.id,
           row.cwd,
           row.hostId,
           app.config.MULLION_TASK_LABEL,
           new Map(),
+          await initialOwners,
         );
       } catch (err) {
         app.log.warn({ err, projectId: row.id }, "[task-watcher] initial fetch failed");

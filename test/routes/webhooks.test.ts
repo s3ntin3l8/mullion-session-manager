@@ -488,6 +488,55 @@ describe("webhook routes", () => {
       });
     }
 
+    it("#2233 — two projects on one repo (case-insensitively): only the oldest ingests the issue", async () => {
+      const cwdOld = createMatchingGitRepo("acme", "widgets-shared");
+      const cwdNew = createMatchingGitRepo("Acme", "Widgets-Shared");
+      const app = await buildApp();
+      // Inserted newest-first with explicit createdAt, so id order alone
+      // would pick the wrong owner.
+      const [younger] = app.db
+        .insert(projects)
+        .values({ name: "shared-younger", cwd: cwdNew, createdAt: new Date(2_000_000_000_000) })
+        .returning()
+        .all();
+      const [older] = app.db
+        .insert(projects)
+        .values({ name: "shared-older", cwd: cwdOld, createdAt: new Date(1_000_000_000_000) })
+        .returning()
+        .all();
+
+      const payload = issuesPayload({
+        repository: { full_name: "acme/widgets-shared" },
+        issue: {
+          number: 77,
+          title: "Shared issue",
+          body: null,
+          html_url: "https://github.com/acme/widgets-shared/issues/77",
+          author_association: "OWNER",
+          labels: [{ name: "mullion-task" }],
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+          "x-github-event": "issues",
+        },
+        payload,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const rows = app.db.select().from(tasks).where(eq(tasks.issueNumber, 77)).all();
+      expect(rows.map((r) => r.projectId)).toEqual([older.id]);
+      expect(rows.some((r) => r.projectId === younger.id)).toBe(false);
+
+      await app.close();
+      fs.rmSync(cwdOld, { recursive: true, force: true });
+      fs.rmSync(cwdNew, { recursive: true, force: true });
+    });
+
     it("ingests a labeled issue carrying the task label into a ready task", async () => {
       const cwd = createMatchingGitRepo("acme", "widgets");
       const app = await buildApp();
