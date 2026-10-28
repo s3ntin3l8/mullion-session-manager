@@ -5016,8 +5016,12 @@ export async function projectsRoute(app: FastifyInstance) {
         .filter((p) => p.id !== projectId);
       const keys = await resolveRepoKeys(app, others);
       // Fails closed: a project whose repo can't be resolved right now (host
-      // unreachable) may share the hook, so it keeps the hook alive.
-      hookShared = others.some((p) => !keys.has(p.id) || keys.get(p.id)?.key === sharedKey);
+      // unreachable, even past the import deferral window) may share the hook,
+      // so it keeps the hook alive.
+      hookShared = others.some((p) => {
+        const r = keys.get(p.id);
+        return !r || r.unresolved || r.key === sharedKey;
+      });
       if (hookShared) {
         app.log.info(
           { projectId, owner: registration.owner, repo: registration.repo },

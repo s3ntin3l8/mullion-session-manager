@@ -14,8 +14,11 @@ export function repoKey(ref: { owner: string; repo: string }): string {
 }
 
 /** `ref` is null when the repo is unknown right now (host unreachable, key
- * remembered from an earlier resolve) or the project is not a GitHub repo. */
-export type ResolvedRepo = { ref: GitHubRepoRef | null; key: string | null };
+ * remembered from an earlier resolve) or the project is not a GitHub repo.
+ * `unresolved` marks a project whose deferral window ran out: for issue import
+ * it counts as having no repo, but it may still share a repo, so destructive
+ * callers (the project-delete webhook guard) must keep treating it as unknown. */
+export type ResolvedRepo = { ref: GitHubRepoRef | null; key: string | null; unresolved?: boolean };
 
 type ProjectRef = { id: number; cwd: string; hostId: string | null };
 
@@ -29,6 +32,8 @@ const lastKnownKeys = new Map<number, string>();
 // When each project with no remembered key first failed to resolve. See
 // MAX_UNRESOLVED_MS.
 const unresolvedSince = new Map<number, number>();
+// Projects whose expiry has already been logged at warn.
+const expiryLogged = new Set<number>();
 
 /**
  * How long a project that cannot be resolved and has no remembered key may
@@ -65,6 +70,7 @@ export async function resolveRepoKeys(
         if (key) lastKnownKeys.set(row.id, key);
         else lastKnownKeys.delete(row.id);
         unresolvedSince.delete(row.id);
+        expiryLogged.delete(row.id);
         out.set(row.id, { ref: result.value, key });
         continue;
       }
@@ -73,20 +79,24 @@ export async function resolveRepoKeys(
         out.set(row.id, { ref: null, key: known });
         continue;
       }
+      const first = !unresolvedSince.has(row.id);
       const since = unresolvedSince.get(row.id) ?? Date.now();
       unresolvedSince.set(row.id, since);
       if (Date.now() - since > MAX_UNRESOLVED_MS) {
-        app.log.warn(
-          {
-            projectId: row.id,
-            hostId,
-            unresolvedMinutes: Math.round((Date.now() - since) / 60_000),
-          },
-          "[repo-key] project's repo has been unresolvable too long — treating it as having no GitHub repo so it stops deferring other projects' issue import; it rejoins when its host answers",
+        // Warn once on the transition; this runs on every webhook delivery
+        // and poll tick, so repeats stay at debug (a dead host is not news
+        // every time).
+        const firstExpiry = !expiryLogged.has(row.id);
+        expiryLogged.add(row.id);
+        (firstExpiry ? app.log.warn : app.log.debug).call(
+          app.log,
+          { projectId: row.id, hostId },
+          "[repo-key] project's repo has been unresolvable too long — treating it as having no GitHub repo for issue import so it stops deferring other projects; it rejoins when its host answers",
         );
-        out.set(row.id, { ref: null, key: null });
+        out.set(row.id, { ref: null, key: null, unresolved: true });
       } else {
-        app.log.warn(
+        (first ? app.log.warn : app.log.debug).call(
+          app.log,
           { projectId: row.id, hostId },
           "[repo-key] could not resolve this project's repo (host unreachable?) — issue import for younger repos is deferred until it answers",
         );
@@ -127,4 +137,5 @@ export function pickRepoOwners(
 export function resetRepoKeyCache(): void {
   lastKnownKeys.clear();
   unresolvedSince.clear();
+  expiryLogged.clear();
 }

@@ -602,8 +602,8 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
     if (!repoRef) {
       // #484 — for a remote-hosted project, `null` here is now ambiguous:
       // "not a GitHub repo" (the same durable case a local project's null
-      // means) vs. "couldn't reach this project's host" (resolveRepoRef's
-      // own catch-and-return-null). Logged at debug so a dead agent host
+      // means) vs. "couldn't reach this project's host" (resolveRepoKeys'
+      // own handling of an unreachable host). Logged at debug so a dead agent host
       // doesn't silently look identical to a project that was never on
       // GitHub — matching this sweep's own read-back-cap logging posture
       // elsewhere in this file.

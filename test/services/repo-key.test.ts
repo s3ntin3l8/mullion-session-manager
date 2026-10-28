@@ -13,7 +13,7 @@ import {
   type ResolvedRepo,
 } from "../../src/services/repo-key.js";
 
-const app = { log: { warn: vi.fn() } } as unknown as FastifyInstance;
+const app = { log: { warn: vi.fn(), debug: vi.fn() } } as unknown as FastifyInstance;
 const entry = (key: string | null): ResolvedRepo => ({ ref: null, key });
 
 describe("repoKey / pickRepoOwners", () => {
@@ -67,13 +67,29 @@ describe("resolveRepoKeys", () => {
     expect(out.get(1)).toEqual({ ref: null, key: "a/b" });
   });
 
+  it("warns once per transition, repeats go to debug", async () => {
+    mockResult.mockResolvedValue({ ok: false });
+    vi.mocked(app.log.warn).mockClear();
+    vi.mocked(app.log.debug).mockClear();
+    const rows = [{ id: 1, cwd: "/x", hostId: "h" }];
+    await resolveRepoKeys(app, rows);
+    await resolveRepoKeys(app, rows);
+    expect(app.log.warn).toHaveBeenCalledTimes(1); // newly unresolved
+    expect(app.log.debug).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(MAX_UNRESOLVED_MS + 1);
+    await resolveRepoKeys(app, rows);
+    await resolveRepoKeys(app, rows);
+    expect(app.log.warn).toHaveBeenCalledTimes(2); // newly expired
+    expect(app.log.debug).toHaveBeenCalledTimes(2);
+  });
+
   it("bounds the deferral: unresolved project is omitted, then treated as no repo (warn)", async () => {
     mockResult.mockResolvedValue({ ok: false });
     const rows = [{ id: 1, cwd: "/x", hostId: "h" }];
     expect((await resolveRepoKeys(app, rows)).has(1)).toBe(false);
     vi.advanceTimersByTime(MAX_UNRESOLVED_MS + 1);
     const out = await resolveRepoKeys(app, rows);
-    expect(out.get(1)).toEqual({ ref: null, key: null });
+    expect(out.get(1)).toEqual({ ref: null, key: null, unresolved: true });
     expect(app.log.warn).toHaveBeenCalledWith(
       expect.objectContaining({ projectId: 1 }),
       expect.stringContaining("too long"),

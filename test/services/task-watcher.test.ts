@@ -416,6 +416,27 @@ describe("startTaskWatcher", () => {
     vi.useRealTimers();
   });
 
+  it("#2260 — a non-owner makes no read-back call when the owner's fetch failed this tick", async () => {
+    resetRepoKeyCache();
+    mockResolveGitHubToken.mockReturnValue("ghp_token");
+    mockListLabeledIssues.mockRejectedValue(new Error("boom")); // owner's listLabeledIssues rejects
+    const rows = [
+      { id: 1, cwd: "/tmp/a", hostId: "local" },
+      { id: 2, cwd: "/tmp/b", hostId: "local" },
+    ];
+    const app = mockApp(rows, [], [], [], [{ id: 9, issueNumber: 5, status: "reviewing" }]);
+    vi.useFakeTimers();
+    const cleanup = startTaskWatcher(app);
+
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(mockListLabeledIssues).toHaveBeenCalledTimes(1); // owner only
+    expect(mockSyncClosedIssueToLocal).not.toHaveBeenCalled();
+
+    cleanup();
+    vi.useRealTimers();
+  });
+
   it("#2233 — an unreachable older project keeps its remembered ownership", async () => {
     resetRepoKeyCache();
     mockResolveGitHubToken.mockReturnValue("ghp_token");
