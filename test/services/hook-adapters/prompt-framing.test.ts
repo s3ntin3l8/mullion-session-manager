@@ -70,7 +70,7 @@ describe("standardPromptFraming", () => {
 });
 
 describe("getAdapterPromptFraming", () => {
-  it.each(["claude", "claude --model sonnet", "codex", "opencode"])(
+  it.each(["claude", "claude --model sonnet", "codex", "opencode", "agy"])(
     "frames a prompt for %s",
     (command) => {
       expect(getAdapterPromptFraming(command, "hi", PASTE)).toMatchObject({
@@ -80,8 +80,8 @@ describe("getAdapterPromptFraming", () => {
     },
   );
 
-  it.each(["bash", "zsh", "agy", "gemini", ""])(
-    "has no prompt delivery for %j (shell, agy, or unknown CLI)",
+  it.each(["bash", "zsh", "gemini", ""])(
+    "has no prompt delivery for %j (shell or unknown CLI)",
     (command) => {
       expect(getAdapterPromptFraming(command, "hi", PASTE)).toBeNull();
     },

@@ -79,7 +79,7 @@ guarded (no backreferences, lookarounds or nested quantifiers).
 To give a running child a follow-up, use `mullion session prompt <childId>
 "<text>" --wait` / `prompt_session` (`wait: true`): it types the prompt into the
 child's terminal, submits it, and waits for the turn to end. It works for
-Claude Code, Codex and opencode children. It is refused with `409
+Claude Code, Codex, opencode and agy children. It is refused with `409
 agent_blocked` while the child is stuck on a permission/plan/question dialog
 (typing would answer it — resolve that first, e.g. by telling the human), `409
 agent_busy` if you ask to `wait` while the child is mid-turn (prompt without

@@ -6,6 +6,7 @@ import {
   resolveMcpServerPath,
   shellQuote,
   buildModelFlag,
+  standardPromptFraming,
   SHELL_METACHARACTERS_RE,
 } from "./shared.js";
 import { ensureForwarderShim, forwarderHookCommand } from "./forwarder-shim.js";
@@ -549,6 +550,8 @@ export const agyAdapter: HookAgentAdapter = {
   // could matter if agy is ever invoked non-interactively in the future —
   // but it's not fixing a bug in Task Master's actual spawn shape today.
   initialPromptArgs: (prompt) => `-i=${shellQuote(prompt)}`,
+  // sessions.prompt: paste-then-Enter into the running TUI (see standardPromptFraming).
+  submitPrompt: standardPromptFraming,
 };
 
 /** Exported for tests only — production always uses the real, default
