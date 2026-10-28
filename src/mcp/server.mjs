@@ -31,21 +31,10 @@
 //   malformed request).
 
 import { MullionClient } from "./client.mjs";
-import { TOOLS } from "./tools.mjs";
+import { SERVER_INSTRUCTIONS, TOOLS } from "./tools.mjs";
 
 const PROTOCOL_VERSION = "2025-11-25";
 const SERVER_INFO = { name: "mullion", version: "0.1.0" };
-
-// Surfaced by MCP clients (Claude Code folds it into the system prompt) so the
-// model knows when to pick this server's browser over another browser MCP.
-// Kept to a few sentences on purpose: it rides in context on every turn.
-const SERVER_INSTRUCTIONS =
-  "Mullion's tools act on the Mullion session hosting you. For any browser task on this " +
-  "project's own app (localhost, a dev server, a preview, verifying a UI change) use " +
-  "`use_browser` rather than another browser integration: it launches on demand and the " +
-  "human watches it in the dashboard pane. Other browser tools (e.g. Claude in Chrome) are for " +
-  "the human's own logged-in third-party sites. A `ref` is invalidated by the next " +
-  "navigate/snapshot/find, so re-snapshot before reusing one.";
 
 const client = new MullionClient();
 

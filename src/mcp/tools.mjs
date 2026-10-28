@@ -61,6 +61,19 @@ const promoteToWorktree = {
   },
 };
 
+// Returned as `instructions` from the server's initialize reply (server.mjs).
+// MCP clients (Claude Code) fold it into the system prompt, so the model knows
+// when to pick this server's browser over another browser integration. It lives
+// here, beside the tool descriptions it must stay consistent with. Kept to a
+// few sentences on purpose: it rides in context on every turn.
+export const SERVER_INSTRUCTIONS =
+  "Mullion's tools act on the Mullion session hosting you. For any browser task on this " +
+  "project's own app (localhost, a dev server, a preview, verifying a UI change) use " +
+  "`use_browser` rather than another browser integration: it launches on demand and the " +
+  "human watches it in the dashboard pane. Other browser tools (e.g. Claude in Chrome) are for " +
+  "the human's own logged-in third-party sites. A `ref` is invalidated by the next " +
+  "navigate/snapshot/find, so re-snapshot before reusing one.";
+
 const BROWSER_ROUTING_NOTE =
   "Drives this session's Mullion browser pane (launched on demand, visible to the human in the dashboard) — the default browser for the project's own app: localhost, dev servers, previews, UI checks. ";
 

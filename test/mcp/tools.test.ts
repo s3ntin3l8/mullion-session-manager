@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { TOOLS as INFERRED_TOOLS } from "../../src/mcp/tools.mjs";
+import { SERVER_INSTRUCTIONS, TOOLS as INFERRED_TOOLS } from "../../src/mcp/tools.mjs";
 
 /**
  * tools.mjs is plain JS, so the registry is typed by INFERENCE: `TOOLS` is
@@ -150,6 +150,13 @@ describe("use_browser and browser_action handlers (Feature 3.7)", () => {
     for (const field of ["timeout_ms", "contents", "max_bytes", "clear"]) {
       expect(useBrowserTool.inputSchema.properties).toHaveProperty(field);
     }
+  });
+
+  it("SERVER_INSTRUCTIONS routes project browser work to use_browser and stays short", () => {
+    expect(SERVER_INSTRUCTIONS).toContain("use_browser");
+    expect(SERVER_INSTRUCTIONS).toContain("Claude in Chrome");
+    // Rides in context every turn — guard against quiet growth.
+    expect(SERVER_INSTRUCTIONS.length).toBeLessThan(800);
   });
 
   it("use_browser's description says when to pick it, not just what it does", () => {
