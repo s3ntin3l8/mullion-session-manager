@@ -40,7 +40,9 @@ pulled into context automatically at startup, one way or another (see
 
 Claude Code sessions also get this content as a set of discoverable
 skills — `host`, `browser`, `troubleshooting`, `session-ops`, plus four
-that aren't a copy of anything here: `taskmaster-issues`, `task-worker`
+that aren't a copy of anything here: `taskmaster-issues` (the rule for
+any issue an agent files — title, epic link, `blocked_by` — and for Task Master
+tasks), `task-worker`
 (issue #964), `task-reviewer` (issue #955), and `manual-review-methodology`
 (issue #1113) — shipped as a session-scoped `--plugin-dir` bundle
 (`src/bundle/skills/`, see

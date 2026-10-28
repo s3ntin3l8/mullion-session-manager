@@ -62,6 +62,17 @@ describe("buildWorkflowConventionsText", () => {
     expect(text).not.toContain("Task Master");
   });
 
+  it("the deferredWork fragment asks for a repo-style title, an epic link and blocked_by", () => {
+    // Agents file most of a repo's issues. Without this sentence they invent
+    // title types, coin scope synonyms, and leave issues floating outside
+    // any epic. Portable wording again: GitHub features, no Mullion-only name.
+    const text = buildWorkflowConventionsText({ deferredWork: "tracked-issue" });
+    expect(text).toContain("reusing its existing scope names");
+    expect(text).toContain("sub-issue to the matching open epic");
+    expect(text).toContain("`blocked_by`");
+    expect(text).not.toContain("Task Master");
+  });
+
   it("silently skips a question with no answer, rather than defaulting it", () => {
     const text = buildWorkflowConventionsText({ branching: "branch-pr" });
     // Only one fragment — every other question's own default option prose

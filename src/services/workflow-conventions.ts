@@ -280,7 +280,7 @@ export const WORKFLOW_CONVENTION_QUESTIONS: readonly WorkflowConventionQuestion[
         // the region is rendered from the install's text, and the fragment
         // here is the one place this rule is written down.
         fragment:
-          "File a tracked issue for anything a plan defers, blocks, or descopes, and link it from the PR (using the repository's issue template if it has one) — a footnote in a plan doc is not a durable record. Write each one as a spec an agent can implement on its own (scope, acceptance criteria), not as a note.",
+          "File a tracked issue for anything a plan defers, blocks, or descopes, and link it from the PR (using the repository's issue template if it has one) — a footnote in a plan doc is not a durable record. Write each one as a spec an agent can implement on its own (scope, acceptance criteria), not as a note. Title it the way this repo titles commits and PRs, reusing its existing scope names rather than coining new ones; attach it as a sub-issue to the matching open epic when one exists; and set GitHub's `blocked_by` dependency where one issue cannot start before another closes.",
       },
     ],
   },

@@ -1,16 +1,62 @@
 ---
 name: taskmaster-issues
-description: "How to write a GitHub issue that Mullion's Task Master will autonomously pick up and implement correctly: the mullion-task label, the eight body directives and their exact matching rules, what the worker agent actually receives, and how to size and spec a body a worker can finish in one worktree. Read this before filing an issue meant for autonomous pickup in a Mullion project that has Task Master enabled — irrelevant to a project that doesn't use it."
+description: "Read this before filing ANY GitHub issue from a Mullion-hosted session — a deferred follow-up, a bug you found, a spike, or a Task Master task. Covers the Conventional Commits title and the repo's scope vocabulary, attaching the issue to an existing epic as a sub-issue, and sequencing with blocked_by; and, where Task Master is enabled, the mullion-task label, the eight body directives and their exact matching rules, what the worker agent actually receives, and how to size and spec a body a worker can finish in one worktree."
 ---
 
-# Writing a Task Master issue
+# Filing an issue from a Mullion session
 
-Only relevant to a project where Mullion's Task Master is enabled — if this
-repo doesn't have a background task watcher polling its issues, this skill
-doesn't apply. See
+Applies to every issue you file from a Mullion-hosted session, whether or not
+it is meant for autonomous pickup: the title, epic and dependency sections
+below. The label, directive and worker-spec sections only matter in a project
+where Mullion's Task Master is enabled — if this repo doesn't have a
+background task watcher polling its issues, skip those. See
 [`docs/tasks.md`](https://github.com/s3ntin3l8/mullion-session-manager/blob/main/docs/tasks.md)
 for the full system; this is just the "how do I write the issue" cheat
 sheet.
+
+## The title
+
+If the repo uses Conventional Commits for commit and PR titles (its
+`AGENTS.md` says so, or `git log --oneline` shows it), title the issue the
+same way: `type(scope): summary`. The squash-merged PR usually reuses it.
+
+- **Types are the Conventional Commits set only:** `feat`, `fix`, `docs`,
+  `test`, `ci`, `chore`, `refactor`, `perf`, `build`. A decision or design
+  issue is `docs(scope): decide …`; an investigation into a bug is
+  `fix(scope): investigate …`. Don't invent `design:`, `decide:`, `idea:` or
+  `investigate:` as types.
+- **Reuse the repo's existing scope.** Look for a documented scope list in
+  `AGENTS.md` first. If there isn't one, take the most-used scope for that
+  area from `git log --format=%s -300` and the open issue titles. Never coin a
+  synonym — `task-master` when `tasks` exists, `session` when `sessions`
+  exists. CI-only work is a bare `ci:` with no scope.
+- Correct: `fix(sessions): wait_for_output matches the prompt's redrawn echo`.
+  Incorrect: `investigate: wait_for_output echo` (invented type, no scope).
+
+## Link it to an existing epic
+
+Before filing, list the open epics so the new issue lands in the right group
+instead of floating loose:
+
+    gh issue list --label epic --state open
+
+If the repo has no `epic` label, query for open issues whose
+`subIssuesSummary.total` is above zero instead. Pick the one epic that clearly
+fits, then attach the new issue to it as a sub-issue:
+
+    gh api -X POST repos/{owner}/{repo}/issues/<epic>/sub_issues -F sub_issue_id=<id>
+
+`<id>` is the issue's REST `id` — `gh api repos/{owner}/{repo}/issues/<n> --jq .id` —
+not its issue number. An issue can have only one parent: a 422 "may only have
+one parent" means it is already parented, so leave it as it is.
+
+If no epic clearly fits, leave the issue unparented and say so in your reply
+or PR. Don't create a new epic unprompted.
+
+Linking is worth doing even where nothing is auto-claimed: when a sub-issue is
+picked up, the parent's spec and comments plus the list of sibling sub-issues
+are appended to the worker's prompt as context (see below). It is board
+display only — it gates nothing.
 
 ## What the worker actually gets
 
@@ -74,6 +120,16 @@ Parent/sub-issue nesting does **not** gate anything; it's board display
 only. One caveat: a **human clicking Claim bypasses the dependency gate
 entirely**, so `blocked_by` protects automation, not a person who ignores
 it on purpose.
+
+Set it with the REST API — both ids are REST `id`s, not issue numbers:
+
+    gh api -X POST repos/{owner}/{repo}/issues/<blocked>/dependencies/blocked_by -F issue_id=<blocker id>
+
+Set it only when one issue literally can't start before another closes — not
+for "related to" or "follow-up to", and not by writing "blocked by #N" in
+prose, which nothing reads. A blocker outside the repo (an upstream tracker)
+can't be linked: use the `blocked` label if the repo has one, and paste the
+URL into the body.
 
 **Give it self-contained context.** Name files by path and functions by
 name; quote the two or three lines that actually matter. Never make a bare
@@ -208,6 +264,13 @@ worker's Scope.
 
 ## Common mistakes
 
+- A title with an invented type (`design:`, `decide:`, `idea:`,
+  `investigate:`) or a coined scope (`task-master` when `tasks` exists) —
+  use the Conventional Commits types and the repo's existing scopes.
+- Filing without checking the open epics, so the issue floats loose instead
+  of being attached to the group it belongs to.
+- Describing a blocker in prose ("blocked by #N") instead of setting the
+  `blocked_by` dependency — nothing reads the prose.
 - Missing the `mullion-task` label — the single most common reason an
   issue "never gets picked up."
 - A directive buried in a sentence, or given an uppercase value

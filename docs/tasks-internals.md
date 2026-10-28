@@ -289,6 +289,16 @@ progress. The labeling buys the chip without the auto-claim risk, and
 open sub-issues is an additive safety net (catches the case where the human
 forgot `Manual: true`), not the only path.
 
+### The skill governs every agent-filed issue
+
+`taskmaster-issues` is no longer scoped to "an issue meant for autonomous
+pickup": its description triggers on _any_ issue filed from a Mullion-hosted
+session, and it now also covers the Conventional Commits title and the
+repo's scope vocabulary, attaching the issue to an open epic as a
+sub-issue, and setting `blocked_by` with the REST command. The
+`deferredWork` convention (`workflow-conventions.ts`) carries a portable
+version of the same ask so a session sees it at start-up.
+
 ### `Manual: true` is the exception, not the default
 
 The directive's mechanics are unchanged — a body carrying it is parked in

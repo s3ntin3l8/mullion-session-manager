@@ -294,3 +294,44 @@ describe("taskmaster-issues skill — documented matching rules hold against the
     expect(command).toBe("codex");
   });
 });
+
+describe("taskmaster-issues skill — governs every agent-filed issue, not only autonomous pickup", () => {
+  // The skill used to say "read this before filing an issue meant for
+  // autonomous pickup", so an agent filing a plain deferred follow-up never
+  // loaded it and its titles drifted (`design:`, `idea:`, coined scopes) with
+  // no epic link. These pins keep the broadened trigger and the three
+  // sections that came with it; each is anchored to a heading or to the
+  // skill's own wording so deleting the section turns the test red.
+  it("the frontmatter description triggers on ANY issue filed from a Mullion session", () => {
+    const description = /^description:\s*"(.*)"$/m.exec(skillBody)?.[1] ?? "";
+    expect(description).toMatch(/before filing ANY GitHub issue/);
+    expect(description).toMatch(/Mullion-hosted session/);
+  });
+
+  it("has a title section that names the Conventional Commits types and forbids invented ones", () => {
+    expect(skillBody).toMatch(/^## The title$/m);
+    expect(skillBody).toMatch(/Types are the Conventional Commits set only/);
+    expect(skillBody).toMatch(
+      /Don't invent `design:`, `decide:`, `idea:` or\s+`investigate:` as types/,
+    );
+  });
+
+  it("tells the author to reuse an existing scope rather than coin a synonym", () => {
+    expect(skillBody).toMatch(/Reuse the repo's existing scope/);
+    expect(skillBody).toMatch(/Never coin a\s+synonym/);
+  });
+
+  it("has an epic section with the sub_issues endpoint and the id-not-number caveat", () => {
+    expect(skillBody).toMatch(/^## Link it to an existing epic$/m);
+    expect(skillBody).toContain("/issues/<epic>/sub_issues -F sub_issue_id=<id>");
+    expect(skillBody).toMatch(/REST `id`[^\n]*\n?[^\n]*not its issue number/);
+    expect(skillBody).toMatch(/may only have\s+one parent/);
+  });
+
+  it("documents the blocked_by dependency endpoint, and says to set it rather than write prose", () => {
+    expect(skillBody).toContain(
+      "/issues/<blocked>/dependencies/blocked_by -F issue_id=<blocker id>",
+    );
+    expect(skillBody).toMatch(/not by writing "blocked by #N" in\s+prose/);
+  });
+});

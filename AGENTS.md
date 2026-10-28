@@ -130,6 +130,17 @@ How this repo applies the conventions above — facts and commands, not rules.
   to date with `main`").
 - **Issues:** use the [Issue Blueprint](.github/ISSUE_TEMPLATE/issue-blueprint.md)
   format.
+- **Issue titles & epics.** Title issues `type(scope): summary` with a
+  Conventional Commits type only (a decision is `docs(scope): decide …`, a bug
+  investigation `fix(scope): investigate …`; never `design:`/`decide:`/`idea:`/
+  `investigate:`). Scopes are a fixed vocabulary, not free text: `sessions`,
+  `tasks`, `uiux`, `github`, `dock`, `previews`, `projects`, `worktrees`,
+  `storage`, `files`, `hooks`, `opencode`, `windows`, `macos`, `hosts`,
+  `devices`, `browser`, `terminal`, `mobile`, `voice`, `review-relay`, `skills`,
+  `deps`, `deploy`, `scaffold`. CI-only work is a bare `ci:`. Open epics carry
+  the `epic` label (`gh issue list --label epic --state open`); attach every new
+  issue to the one that fits as a sub-issue, and set `blocked_by` where one
+  issue gates another. The `taskmaster-issues` skill has the commands.
 - **Spikes must be fully isolated from the host's real agent state.** A probe
   that points an agent CLI at a copy/symlink farm of the user's real data
   directory can fence the live runtime and abort the user's other sessions —
