@@ -541,7 +541,11 @@ function handleConnection(
           // presence doesn't).
           const guideBlock =
             effectiveInjectAgentGuide && agentGuideSourceExists()
-              ? buildAgentGuideBlock(guidePath, isAuthEnabled(app.config))
+              ? buildAgentGuideBlock(
+                  guidePath,
+                  isAuthEnabled(app.config),
+                  app.config.BROWSER_ENABLED,
+                )
               : null;
           // Issue #937 — this Mullion install's own workflow-conventions
           // text (settings.sessions.workflowConventionsText), gated by BOTH

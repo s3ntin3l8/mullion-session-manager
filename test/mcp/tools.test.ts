@@ -152,8 +152,14 @@ describe("use_browser and browser_action handlers (Feature 3.7)", () => {
     }
   });
 
-  it("browser_action is a spread of the exact same tool object as use_browser, aside from its name", () => {
-    expect(browserActionTool.description).toBe(useBrowserTool.description);
+  it("use_browser's description says when to pick it, not just what it does", () => {
+    expect(useBrowserTool.description).toMatch(/default browser for the project's own app/);
+  });
+
+  it("browser_action is a spread of the exact same tool object as use_browser, aside from its name and an alias note", () => {
+    expect(browserActionTool.description).toBe(
+      `Alias of use_browser. ${useBrowserTool.description}`,
+    );
     expect(browserActionTool.inputSchema).toBe(useBrowserTool.inputSchema);
     expect(browserActionTool.name).toBe("browser_action");
   });

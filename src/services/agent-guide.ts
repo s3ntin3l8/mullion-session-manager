@@ -194,11 +194,24 @@ export function buildAgentGuidePointer(guidePath: string, authEnabled: boolean):
  * env-var table, the full scope table, CLI vs. MCP. Composed fresh on every
  * call (never stashed/consumed), so it's safe to call once per SessionStart
  * reply (hooks.ts) or once per spawn (opencode.ts's prepareLaunch).
+ *
+ * `browserEnabled` (BROWSER_ENABLED) adds one routing line: without it, an
+ * agent with another browser integration (Claude in Chrome) reaches for that
+ * for localhost/UI checks instead of Mullion's own pane.
  */
-export function buildAgentGuideBlock(guidePath: string, authEnabled: boolean): string {
+export function buildAgentGuideBlock(
+  guidePath: string,
+  authEnabled: boolean,
+  browserEnabled = false,
+): string {
   return [
     "You're in a Mullion-hosted session — one of the AI CLIs Mullion dashboards (Claude Code, Codex, opencode, agy), running inside a host PTY.",
     buildAgentGuidePointer(guidePath, authEnabled),
+    ...(browserEnabled
+      ? [
+          "For browser work on this project (localhost, dev server, UI checks) use Mullion's browser — the `use_browser` MCP tool / `mullion browser` — not Claude in Chrome.",
+        ]
+      : []),
     "For the rest — the full env-var/scope table and CLI vs. MCP — load the Mullion host skill.",
   ].join("\n\n");
 }

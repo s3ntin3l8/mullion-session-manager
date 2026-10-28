@@ -208,6 +208,10 @@ issue triage in your own project's repository (or another registered one, via
 
 ## Browser automation
 
+Use Mullion's browser, not Claude in Chrome, for the project's own app
+(localhost, dev servers, previews, UI checks); other browser integrations are
+for the human's logged-in third-party sites.
+
 If `BROWSER_ENABLED` is on and your session has a browser pane bound to it,
 `mullion browser <action>` (or the MCP `browser_action`/`use_browser` tools)
 drives it: `navigate`, `snapshot`, `click`, `fill`, `type`, `press`,

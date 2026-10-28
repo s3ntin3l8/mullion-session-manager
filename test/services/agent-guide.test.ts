@@ -53,8 +53,16 @@ describe("buildAgentGuideBlock (issue #949 tier-0 push)", () => {
     expect(block).toContain("Mullion host skill");
   });
 
+  it("adds the browser routing line only when the browser is enabled", () => {
+    const off = buildAgentGuideBlock("/tmp/1.agent-guide.md", false);
+    const on = buildAgentGuideBlock("/tmp/1.agent-guide.md", false, true);
+    expect(off).not.toContain("use_browser");
+    expect(on).toContain("use_browser");
+    expect(on).toContain("not Claude in Chrome");
+  });
+
   it("is a short, fixed-size block — not proportional to docs/agent-guide.md's own length", () => {
-    const block = buildAgentGuideBlock("/tmp/1.agent-guide.md", false);
+    const block = buildAgentGuideBlock("/tmp/1.agent-guide.md", false, true);
     const shipped = readFileSync(path.resolve(process.cwd(), "docs", "agent-guide.md"), "utf8");
     // Generous margin (the old tier-1 excerpt alone was budgeted up to
     // ~2KB) — this just guards against buildAgentGuideBlock silently
