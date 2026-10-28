@@ -28,6 +28,7 @@ function ctx(over: Partial<PaletteCommandContext> = {}) {
     prune: vi.fn(),
   };
   const context: PaletteCommandContext = {
+    layoutTier: "desktop",
     projectId: 5,
     projectName: "mullion",
     favoriteUrls: [],
@@ -146,8 +147,7 @@ describe("buildPaletteCommands", () => {
 
   it("flags only the commands whose openers take focus (#1884)", () => {
     // CommandPalette derives its suppress-restore set from `movesFocus`.
-    // These three autofocus a field; every other command must stay out or
-    // the trap will not restore.
+    // These openers move focus; other commands let the trap restore it.
     const ids = buildPaletteCommands(ctx().context)
       .filter((c) => c.movesFocus)
       .map((c) => c.id);
@@ -159,6 +159,14 @@ describe("buildPaletteCommands", () => {
       "settings-review-relay",
       "settings-runway",
     ]);
+    const { context } = ctx();
+    const wired = buildPaletteCommands({
+      ...context,
+      open: { ...context.open, settings: vi.fn(), devices: vi.fn(), hosts: vi.fn() },
+    });
+    for (const id of ["settings", "devices", "hosts"]) {
+      expect(wired.find((command) => command.id === id)?.movesFocus).toBe(true);
+    }
   });
 
   it("the drill-in row's run is a harmless no-op (the palette handles it)", () => {

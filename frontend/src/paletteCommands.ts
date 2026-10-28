@@ -107,7 +107,7 @@ export interface PaletteCommandOpeners {
 }
 
 export interface PaletteCommandContext {
-  layoutTier?: LayoutTier;
+  layoutTier: LayoutTier;
   projectId: number | null;
   projectName: string | null;
   favoriteUrls: { id: number | string; url: string; label: string }[];
@@ -128,7 +128,7 @@ export interface PaletteCommandContext {
 }
 
 export function buildPaletteCommands({
-  layoutTier = "desktop",
+  layoutTier,
   projectId,
   projectName,
   favoriteUrls,

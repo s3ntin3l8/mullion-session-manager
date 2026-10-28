@@ -67,7 +67,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={onOpenGitHub}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -99,7 +98,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={onOpenAgentRules}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -132,7 +130,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={onOpenFileEditor}
         onOpenExternalFile={vi.fn()}
@@ -165,7 +162,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -198,7 +194,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -231,7 +226,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -263,7 +257,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -295,7 +288,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -330,7 +322,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -361,7 +352,6 @@ describe("CommandPalette -> Integrations section", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -404,7 +394,6 @@ describe("CommandPalette -> P9 silent failures", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -499,7 +488,6 @@ describe("CommandPalette -> focus management (P11)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1065,7 +1053,6 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1096,7 +1083,6 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1131,7 +1117,6 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1166,7 +1151,6 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1216,7 +1200,6 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1254,7 +1237,6 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1293,7 +1275,6 @@ describe("CommandPalette -> skip-permissions badge and launch precedence", () =>
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1403,7 +1384,6 @@ describe("CommandPalette -> per-session model picker (issue #1424)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1691,7 +1671,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={onLaunched}
         onOpenSession={onOpenSession}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1740,7 +1719,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1787,7 +1765,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1836,7 +1813,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1886,7 +1862,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1933,7 +1908,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={onOpenSession}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -1993,7 +1967,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={onOpenSession}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2046,7 +2019,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={onOpenSession}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2092,7 +2064,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2139,7 +2110,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2183,7 +2153,6 @@ describe("CommandPalette -> Sessions/Workspaces search (U2)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2266,7 +2235,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2306,7 +2274,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2341,7 +2308,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2380,7 +2346,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2416,7 +2381,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onLaunched={onLaunched}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2456,7 +2420,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2496,7 +2459,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2542,7 +2504,6 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -2595,7 +2556,6 @@ describe("CommandPalette -> close affordance (issue: mobile 'esc' chip did nothi
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
@@ -3273,7 +3233,6 @@ describe("CommandPalette -> default target follows the active pane", () => {
         onLaunched={vi.fn()}
         onOpenSession={vi.fn()}
         onOpenGitHub={vi.fn()}
-
         onOpenAgentRules={vi.fn()}
         onOpenFileEditor={vi.fn()}
         onOpenExternalFile={vi.fn()}
