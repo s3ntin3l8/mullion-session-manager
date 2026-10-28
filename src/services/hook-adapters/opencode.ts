@@ -215,6 +215,7 @@ export function buildOpenCodeMcpConfig(
   hookToken: string,
   controlSocketPath: string,
   execPath: string = process.execPath,
+  browserEnabled = false,
 ) {
   return {
     mullion: {
@@ -230,6 +231,9 @@ export function buildOpenCodeMcpConfig(
         // socket at session scope, so the full-scope-only ops the MCP
         // tools call correctly 403 rather than silently escalating.
         MULLION_SOCKET_PATH: controlSocketPath,
+        // Gates the MCP server's `instructions` — see
+        // HookAdapterContext.browserEnabled.
+        ...(browserEnabled ? { MULLION_BROWSER_ENABLED: "1" } : {}),
       },
       enabled: true,
     },
@@ -279,7 +283,11 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     const tier0Path = opencodeTier0Path(ctx.sessionsDir, ctx.sessionId);
     settingsFiles.push({
       path: tier0Path,
-      contents: buildAgentGuideBlock(guidePath, ctx.authEnabled ?? true),
+      contents: buildAgentGuideBlock(
+        guidePath,
+        ctx.authEnabled ?? true,
+        ctx.browserEnabled ?? false,
+      ),
     });
     instructions.push(tier0Path);
   }
@@ -376,6 +384,8 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     ctx.hookSocketPath,
     ctx.hookToken,
     ctx.controlSocketPath,
+    process.execPath,
+    ctx.browserEnabled,
   );
 
   const configContent: Record<string, unknown> = { mcp: mcpConfig, plugins: [pluginDir] };

@@ -112,6 +112,16 @@ describe("buildOpenCodeMcpConfig (issue #881)", () => {
       },
     });
   });
+
+  it("adds MULLION_BROWSER_ENABLED to the server env only when browserEnabled is on", () => {
+    const args = ["/srv.mjs", "/h.sock", "tok", "/c.sock", "/usr/bin/node"] as const;
+    expect(buildOpenCodeMcpConfig(...args).mullion.environment).not.toHaveProperty(
+      "MULLION_BROWSER_ENABLED",
+    );
+    expect(
+      buildOpenCodeMcpConfig(...args, true).mullion.environment as Record<string, string>,
+    ).toMatchObject({ MULLION_BROWSER_ENABLED: "1" });
+  });
 });
 
 describe("openCodeAdapter.matches (issue #175)", () => {
@@ -369,6 +379,21 @@ describe("openCodeAdapter.prepareLaunch — agent-guide tier-0 push (issue #949,
     expect(tier0File!.contents).toBe(
       buildAgentGuideBlock(sessionAgentGuidePath(sessionsDir, "42"), true),
     );
+  });
+
+  it("adds the browser routing line to the tier-0 file and the MCP env flag when ctx.browserEnabled is on", () => {
+    const plan = openCodeAdapter.prepareLaunch({
+      ...baseCtx,
+      injectAgentGuide: true,
+      browserEnabled: true,
+    });
+    const tier0File = plan.settingsFiles?.find((f) => f.path === tier0Path());
+    expect(tier0File!.contents).toBe(
+      buildAgentGuideBlock(sessionAgentGuidePath(sessionsDir, "42"), true, true),
+    );
+    expect(tier0File!.contents).toContain("use_browser");
+    const config = JSON.parse(plan.envAdditions!.OPENCODE_CONFIG_CONTENT);
+    expect(config.mcp.mullion.environment.MULLION_BROWSER_ENABLED).toBe("1");
   });
 
   it("reflects ctx.authEnabled in the tier-0 file's scope sentence, the same live host state hooks.ts's own SessionStart reply carries", () => {

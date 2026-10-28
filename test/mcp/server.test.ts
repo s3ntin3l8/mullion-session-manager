@@ -118,6 +118,44 @@ describe("mcp/server.mjs (issue #271)", () => {
     });
   });
 
+  it("omits instructions unless MULLION_BROWSER_ENABLED=1 (browser feature on)", async () => {
+    child = spawnServer({ MULLION_BROWSER_ENABLED: "" });
+    const reader = new ResponseReader(child);
+    send(child, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "t", version: "1" },
+      },
+    });
+
+    const response = await reader.waitForId(1);
+    expect(response.result).not.toHaveProperty("instructions");
+  });
+
+  it("returns short instructions that route project browser work to use_browser", async () => {
+    child = spawnServer({ MULLION_BROWSER_ENABLED: "1" });
+    const reader = new ResponseReader(child);
+    send(child, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: {},
+        clientInfo: { name: "t", version: "1" },
+      },
+    });
+
+    const { instructions } = (await reader.waitForId(1)).result as { instructions: string };
+    expect(instructions).toContain("use_browser");
+    // These ride in context every turn — guard against quiet growth.
+    expect(instructions.length).toBeLessThan(800);
+  });
+
   it("sends no response to notifications/initialized (a notification, no id)", async () => {
     child = spawnServer();
     const reader = new ResponseReader(child);

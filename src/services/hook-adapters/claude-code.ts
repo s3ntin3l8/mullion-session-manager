@@ -376,6 +376,7 @@ export function buildClaudeMcpConfig(
   hookToken: string,
   controlSocketPath: string,
   execPath: string = process.execPath,
+  browserEnabled = false,
 ) {
   return {
     mcpServers: {
@@ -397,6 +398,9 @@ export function buildClaudeMcpConfig(
           // ops the new tools call correctly 403 for an in-session agent rather
           // than silently escalating it to the operator's own credential.
           MULLION_SOCKET_PATH: controlSocketPath,
+          // Gates the MCP server's `instructions` (src/mcp/tools.mjs) — see
+          // HookAdapterContext.browserEnabled.
+          ...(browserEnabled ? { MULLION_BROWSER_ENABLED: "1" } : {}),
         },
       },
     },
@@ -416,6 +420,8 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     ctx.hookSocketPath,
     ctx.hookToken,
     ctx.controlSocketPath,
+    process.execPath,
+    ctx.browserEnabled,
   );
   // Only appended when both the setting is on AND the bundle actually
   // shipped (resolveMullionBundleDir()'s own doc comment) — never emit a

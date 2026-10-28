@@ -207,6 +207,14 @@ describe("claudeCodeAdapter.prepareLaunch (issue #174)", () => {
     });
   });
 
+  it("sets MULLION_BROWSER_ENABLED on the MCP server env only when ctx.browserEnabled is on", () => {
+    const mcpEnv = (c: typeof ctx) =>
+      JSON.parse(claudeCodeAdapter.prepareLaunch(c).settingsFiles?.[1].contents ?? "{}").mcpServers
+        .mullion.env;
+    expect(mcpEnv(ctx)).not.toHaveProperty("MULLION_BROWSER_ENABLED");
+    expect(mcpEnv({ ...ctx, browserEnabled: true }).MULLION_BROWSER_ENABLED).toBe("1");
+  });
+
   it("includes exactly one PreToolUse entry, ExitPlanMode, and registers PermissionRequest unconditionally (issue #264)", () => {
     const plan = claudeCodeAdapter.prepareLaunch(ctx);
     const parsed = JSON.parse(plan.settingsFiles?.[0].contents ?? "{}");

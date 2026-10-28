@@ -466,12 +466,24 @@ const CODEX_MCP_ENV_VAR_NAMES = [
 export function buildCodexMcpFlags(
   mcpServerPath: string,
   execPath: string = process.execPath,
+  browserEnabled = false,
 ): string {
   const envVarNames = CODEX_MCP_ENV_VAR_NAMES.map(tomlString).join(", ");
   const overrides = [
     `mcp_servers.mullion.command=${tomlString(execPath)}`,
     `mcp_servers.mullion.args=[${tomlString(mcpServerPath)}]`,
     `mcp_servers.mullion.env_vars=[${envVarNames}]`,
+    // A constant, not forwarded from the session env like the three names
+    // above: gates the MCP server's `instructions` — see
+    // HookAdapterContext.browserEnabled. The `env.<VAR>` key path is codex's
+    // own documented stdio-server `env` table (`codex mcp add --env`), and
+    // verified against the installed CLI: `codex -c 'mcp_servers.x.command=…'
+    // -c 'mcp_servers.x.env_vars=[…]' -c 'mcp_servers.x.env.VAR="1"' mcp list
+    // --json` (isolated CODEX_HOME) parses cleanly and reports both `env`
+    // and `env_vars` on the server.
+    ...(browserEnabled
+      ? [`mcp_servers.mullion.env.MULLION_BROWSER_ENABLED=${tomlString("1")}`]
+      : []),
   ];
   return overrides.map((override) => `-c ${shellQuote(override)}`).join(" ");
 }
@@ -648,7 +660,10 @@ function prepareLaunch(ctx: HookAdapterContext): HookLaunchPlan {
     commandTransform: (command) => {
       const withGitDir = command.includes("--add-dir .git") ? command : `${command} --add-dir .git`;
       if (SHELL_METACHARACTERS_RE.test(command.trim())) return withGitDir;
-      const parts = [withGitDir, buildCodexMcpFlags(resolveMcpServerPath())];
+      const parts = [
+        withGitDir,
+        buildCodexMcpFlags(resolveMcpServerPath(), process.execPath, ctx.browserEnabled),
+      ];
       // ctx.skipPermissions && ctx.cwd — same gate as agy's
       // mergeAgyTrustedWorkspace, see buildCodexTrustFlag's own comment.
       if (ctx.skipPermissions && ctx.cwd) parts.push(buildCodexTrustFlag(ctx.cwd));

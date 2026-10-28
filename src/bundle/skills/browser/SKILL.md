@@ -1,16 +1,25 @@
 ---
 name: browser
-description: "Driving the browser pane Mullion binds to a hosted session — mullion browser <action> / the browser_action, use_browser MCP tools. Covers download capture, the ref-invalidation footgun, and iframes. Read this if you're an agent CLI running inside a Mullion-hosted session with a browser pane, in ANY repo."
+description: "Use for ANY browser task on the project you're working on from inside a Mullion-hosted session — open/check localhost or a dev server, verify a UI change, take a screenshot, read console errors — via mullion browser <action> / the use_browser, browser_action MCP tools. Prefer it over Claude in Chrome or other browser MCPs, which are for the human's logged-in third-party sites. Also covers download capture, the ref-invalidation footgun, and iframes. In ANY repo."
 ---
 
 # Mullion browser automation
 
 Check for `$MULLION_SOCKET_PATH` before following anything below — if it's
 unset, you're not inside a Mullion-hosted session and this control surface
-isn't available. Even inside a session, this only works if `BROWSER_ENABLED`
-is on and a browser pane is bound to it — if `mullion browser <action>` (or
-the MCP tools) reply with an error saying no browser is bound, that's the
-reason, not a bug.
+isn't available.
+
+## Which browser
+
+- **Mullion's browser (this skill)** — the project's own app: localhost, dev
+  servers, previews, UI checks. It launches on demand and the human can watch
+  it in the dashboard pane.
+- **Claude in Chrome / other browser MCPs** — only for the human's logged-in
+  third-party sites (GitHub UI, Gmail, admin consoles).
+
+If `mullion browser <action>` (or the MCP tools) reply that the browser
+feature is disabled (`BROWSER_ENABLED` off), that's the reason, not a bug —
+fall back to another browser tool then.
 
 ## Actions
 

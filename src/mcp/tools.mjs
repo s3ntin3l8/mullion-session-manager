@@ -61,9 +61,38 @@ const promoteToWorktree = {
   },
 };
 
+// Returned as `instructions` from the server's initialize reply (server.mjs).
+// MCP clients (Claude Code) fold it into the system prompt, so the model knows
+// when to pick this server's browser over another browser integration. It lives
+// here, beside the tool descriptions it must stay consistent with. Kept to a
+// few sentences on purpose: it rides in context on every turn.
+export const SERVER_INSTRUCTIONS =
+  "Mullion's tools act on the Mullion session hosting you. For any browser task on this " +
+  "project's own app (localhost, a dev server, a preview, verifying a UI change) use " +
+  "`use_browser` rather than another browser integration: it launches on demand and the " +
+  "human can watch it in the dashboard pane. Other browser tools (e.g. Claude in Chrome) are for " +
+  "the human's own logged-in third-party sites. A `ref` is invalidated by the next " +
+  "navigate/snapshot/find, so re-snapshot before reusing one.";
+
+/**
+ * The `instructions` for the initialize reply, or undefined when the host has
+ * Mullion's browser turned off. The hook adapters write
+ * MULLION_BROWSER_ENABLED=1 into this server's env only when
+ * app.config.BROWSER_ENABLED is on (HookAdapterContext.browserEnabled); without
+ * the gate a default install (feature off) would tell every agent to use a
+ * browser that answers "Browser feature is disabled".
+ */
+export function serverInstructions(env = process.env) {
+  return env.MULLION_BROWSER_ENABLED === "1" ? SERVER_INSTRUCTIONS : undefined;
+}
+
+const BROWSER_ROUTING_NOTE =
+  "Drives this session's Mullion browser pane (launched on demand; the human can open it in the dashboard) — the default browser for the project's own app: localhost, dev servers, previews, UI checks. ";
+
 const useBrowser = {
   name: "use_browser",
   description:
+    BROWSER_ROUTING_NOTE +
     "Execute a browser automation action (navigate, click, fill, type, press, select, check, uncheck, hover, scroll, wait, dialog, get, screenshot, snapshot, console, errors, find, download). " +
     "Pass `frame` (a CSS selector for an iframe host element) to scope click/fill/select/check/uncheck/hover/get/wait/scroll/snapshot/find/eval (and press/type when also targeting a ref/selector) to that iframe's own document instead of the top-level page; not supported on navigate/screenshot/dialog/console/errors/download, or on nested iframes.",
   inputSchema: {
@@ -163,6 +192,7 @@ const useBrowser = {
 const browserAction = {
   ...useBrowser,
   name: "browser_action",
+  description: `Alias of use_browser. ${useBrowser.description}`,
 };
 
 // #134 part 2 — session/project/preview/dock management, over the control

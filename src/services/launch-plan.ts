@@ -134,6 +134,9 @@ export interface LaunchPlanSession {
    * below, the same pass-through posture as injectAgentGuide/
    * injectMullionBundle. */
   readonly authEnabled: boolean;
+  /** See HookAdapterContext.browserEnabled (hook-adapters/types.ts) — passed
+   * through unchanged to that ctx field below. */
+  readonly browserEnabled: boolean;
   /** Issue #822 — extra env vars for this launch, applied FIRST (before
    * the shell-integration setup and every MULLION_ var / SSH_AUTH_SOCK
    * write below), so nothing here can ever override a Mullion-owned var.
@@ -470,6 +473,7 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     injectProjectBriefing: session.injectProjectBriefing,
     injectMullionBundle: session.injectMullionBundle,
     authEnabled: session.authEnabled,
+    browserEnabled: session.browserEnabled,
     tmpDir: effectiveTmpDir,
     cwd: session.cwd,
     skipPermissions: session.skipPermissions,

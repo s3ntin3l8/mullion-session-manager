@@ -133,6 +133,15 @@ export interface HookAdapterContext {
    * this isn't required on every ctx literal the other three adapters' own
    * tests already construct. */
   authEnabled?: boolean;
+  /** Mirrors `app.config.BROWSER_ENABLED`, a boot-time constant like
+   * `authEnabled` above. Gates the "use Mullion's browser, not Claude in
+   * Chrome" steering: opencode's tier-0 push adds its line, and every
+   * adapter's generated `mullion` MCP server entry gets
+   * `MULLION_BROWSER_ENABLED=1` so `mullion mcp` only returns its server
+   * `instructions` when the browser can actually answer. Optional (absent =
+   * off) for the same reason as `authEnabled`: ctx literals in existing
+   * adapter tests don't set it. */
+  browserEnabled?: boolean;
   /** Issue #678 — the promote flow's seed prompt (POST
    * /api/sessions/:id/promote's `seedPrompt` body field), threaded all the
    * way from session-lifecycle.ts's createSessionRecord through spawn() so

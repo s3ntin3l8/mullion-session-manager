@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { TOOLS as INFERRED_TOOLS } from "../../src/mcp/tools.mjs";
+import {
+  SERVER_INSTRUCTIONS,
+  TOOLS as INFERRED_TOOLS,
+  serverInstructions,
+} from "../../src/mcp/tools.mjs";
 
 /**
  * tools.mjs is plain JS, so the registry is typed by INFERENCE: `TOOLS` is
@@ -152,8 +156,27 @@ describe("use_browser and browser_action handlers (Feature 3.7)", () => {
     }
   });
 
-  it("browser_action is a spread of the exact same tool object as use_browser, aside from its name", () => {
-    expect(browserActionTool.description).toBe(useBrowserTool.description);
+  it("SERVER_INSTRUCTIONS routes project browser work to use_browser and stays short", () => {
+    expect(SERVER_INSTRUCTIONS).toContain("use_browser");
+    expect(SERVER_INSTRUCTIONS).toContain("Claude in Chrome");
+    // Rides in context every turn — guard against quiet growth.
+    expect(SERVER_INSTRUCTIONS.length).toBeLessThan(800);
+  });
+
+  it("serverInstructions is gated on MULLION_BROWSER_ENABLED=1", () => {
+    expect(serverInstructions({ MULLION_BROWSER_ENABLED: "1" })).toBe(SERVER_INSTRUCTIONS);
+    expect(serverInstructions({})).toBeUndefined();
+    expect(serverInstructions({ MULLION_BROWSER_ENABLED: "0" })).toBeUndefined();
+  });
+
+  it("use_browser's description says when to pick it, not just what it does", () => {
+    expect(useBrowserTool.description).toMatch(/default browser for the project's own app/);
+  });
+
+  it("browser_action is a spread of the exact same tool object as use_browser, aside from its name and an alias note", () => {
+    expect(browserActionTool.description).toBe(
+      `Alias of use_browser. ${useBrowserTool.description}`,
+    );
     expect(browserActionTool.inputSchema).toBe(useBrowserTool.inputSchema);
     expect(browserActionTool.name).toBe("browser_action");
   });

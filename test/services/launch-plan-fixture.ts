@@ -32,6 +32,7 @@ export function baseSession(overrides: Partial<LaunchPlanSession> = {}): LaunchP
     sessionsDir: "/tmp/sessions",
     sshAuthSock: "",
     authEnabled: false,
+    browserEnabled: false,
     env: {},
     injectAgentGuide: true,
     injectProjectBriefing: true,
