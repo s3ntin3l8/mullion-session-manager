@@ -241,10 +241,14 @@ function ReleaseSection({
 export function GitHubPanel({
   params,
   embedded = false,
+  onExternalLink,
 }: {
   params: GitHubPanelParams;
   // Rendered inside the right sidebar: the drawer owns scrolling and padding.
   embedded?: boolean;
+  // Reports where "open on GitHub" should go for whatever is showing (the
+  // repo, or the open PR / issue), for a host that renders that link itself.
+  onExternalLink?: (link: { url: string; label: string } | null) => void;
 }) {
   const [releaseStatus, setReleaseStatus] = useState<ProjectReleaseStatus | null | undefined>(
     undefined,
@@ -293,6 +297,25 @@ export function GitHubPanel({
     () => setReleaseStatus(null),
     [params.projectId, prsRefreshTrigger, releaseRefreshTrigger],
   );
+
+  const repoUrl = status?.repo.htmlUrl ?? null;
+  const externalUrl =
+    repoUrl === null
+      ? null
+      : openPr !== null
+        ? `${repoUrl}/pull/${openPr}`
+        : openIssue !== null
+          ? `${repoUrl}/issues/${openIssue}`
+          : repoUrl;
+  const externalLabel =
+    openPr !== null
+      ? `Open PR #${openPr} on GitHub`
+      : openIssue !== null
+        ? `Open issue #${openIssue} on GitHub`
+        : "Open repository on GitHub";
+  useEffect(() => {
+    onExternalLink?.(externalUrl === null ? null : { url: externalUrl, label: externalLabel });
+  }, [onExternalLink, externalUrl, externalLabel]);
 
   // Subscribe to real-time GitHub WS updates for this project
   useEffect(() => {

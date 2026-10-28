@@ -482,12 +482,16 @@ export async function getPrDetail(
     }),
     reviews: (pr.reviews?.nodes ?? [])
       .filter(present)
-      // An empty COMMENTED review is just the wrapper of its inline threads —
-      // dropped, unless it carries some: then it is the only record that the
-      // reviewer reviewed, so it stays (the threads are listed with it).
+      // An empty COMMENTED review is just the wrapper of its inline comments
+      // (every thread reply creates one), so it is dropped from the timeline
+      // when those threads are listed below. With no threads to show them in
+      // it is the only record that the reviewer reviewed, so it stays. The
+      // reviewer still appears in the review summary either way.
       .filter(
         (r) =>
-          r.state !== "COMMENTED" || r.bodyHTML.trim() !== "" || (r.comments?.totalCount ?? 0) > 0,
+          r.state !== "COMMENTED" ||
+          r.bodyHTML.trim() !== "" ||
+          ((r.comments?.totalCount ?? 0) > 0 && threads.length === 0),
       )
       .map((r) => ({
         author: r.author?.login ?? null,

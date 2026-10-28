@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { CommentComposer, ReviewComposer, ThreadActions } from "./Composer.js";
+import { CommentComposer, ConversationComposer, ThreadActions } from "./Composer.js";
 
 describe("CommentComposer", () => {
   it("posts the trimmed body and clears the box", async () => {
@@ -42,33 +42,57 @@ describe("CommentComposer", () => {
   });
 });
 
-describe("ReviewComposer", () => {
+describe("ConversationComposer", () => {
+  const box = () => screen.getByRole("textbox", { name: "Comment or review" });
+
   it("approves without a body, but needs one to comment or request changes", async () => {
-    const onSubmit = vi.fn(() => Promise.resolve());
-    render(<ReviewComposer onSubmit={onSubmit} />);
+    const onComment = vi.fn(() => Promise.resolve());
+    const onReview = vi.fn(() => Promise.resolve());
+    const onClose = vi.fn();
+    render(<ConversationComposer onComment={onComment} onReview={onReview} onClose={onClose} />);
     expect(screen.getByRole("button", { name: "Comment" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Request changes" })).toBeDisabled();
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
-    expect(onSubmit).toHaveBeenLastCalledWith("APPROVE", "");
+    expect(onReview).toHaveBeenLastCalledWith("APPROVE", "");
+    expect(onClose).toHaveBeenCalledTimes(1);
 
-    const box = screen.getByRole("textbox", { name: "Review summary" });
-    await userEvent.type(box, "please fix");
+    await userEvent.type(box(), "please fix");
     await userEvent.click(screen.getByRole("button", { name: "Request changes" }));
-    expect(onSubmit).toHaveBeenLastCalledWith("REQUEST_CHANGES", "please fix");
-    expect(box).toHaveValue("");
+    expect(onReview).toHaveBeenLastCalledWith("REQUEST_CHANGES", "please fix");
+    expect(box()).toHaveValue("");
 
-    await userEvent.type(box, "a note");
+    await userEvent.type(box(), "a note");
     await userEvent.click(screen.getByRole("button", { name: "Comment" }));
-    expect(onSubmit).toHaveBeenLastCalledWith("COMMENT", "a note");
+    expect(onComment).toHaveBeenLastCalledWith("a note");
+    expect(onReview).toHaveBeenCalledTimes(2);
+  });
+
+  it("posts only a comment where no review can be submitted", async () => {
+    const onComment = vi.fn(() => Promise.resolve());
+    render(<ConversationComposer onComment={onComment} onClose={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Request changes" })).toBeNull();
+    await userEvent.type(box(), "hi{Control>}{Enter}{/Control}");
+    expect(onComment).toHaveBeenCalledWith("hi");
   });
 
   it("shows GitHub's refusal and keeps the draft", async () => {
-    const onSubmit = vi.fn(() => Promise.reject(new Error("Can not approve your own PR")));
-    render(<ReviewComposer onSubmit={onSubmit} />);
-    await userEvent.type(screen.getByRole("textbox", { name: "Review summary" }), "ok");
+    const onReview = vi.fn(() => Promise.reject(new Error("Can not approve your own PR")));
+    const onClose = vi.fn();
+    render(<ConversationComposer onComment={vi.fn()} onReview={onReview} onClose={onClose} />);
+    await userEvent.type(box(), "ok");
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Can not approve your own PR");
-    expect(screen.getByRole("textbox", { name: "Review summary" })).toHaveValue("ok");
+    expect(box()).toHaveValue("ok");
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("closes on Escape and on Cancel", async () => {
+    const onClose = vi.fn();
+    render(<ConversationComposer onComment={vi.fn()} onClose={onClose} />);
+    await userEvent.type(box(), "{Escape}");
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onClose).toHaveBeenCalledTimes(2);
   });
 });
 

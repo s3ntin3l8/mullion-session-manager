@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/index.js";
 import { usePrDetail, usePrList, useRunJobs } from "../hooks/useGitHubData.js";
 import { useMullionLinks, type SessionLink } from "../hooks/useMullionLinks.js";
@@ -13,10 +13,9 @@ import type {
 import { describeEvent } from "../eventDescriptions.js";
 import { formatRelativeAge } from "../relativeTime.js";
 import { useDashboardStore } from "../store/index.js";
-import { ConfirmButton } from "../ui/ConfirmButton.js";
 import { EmptyStateNote } from "../ui/EmptyState.js";
 import { ErrorText } from "../ui/ErrorText.js";
-import { RefreshIcon, ThreadIcon } from "../ui/icons.js";
+import { ChevronDownIcon, ChevronRightIcon, RefreshIcon, ThreadIcon } from "../ui/icons.js";
 import { SafeHtml } from "../ui/SafeHtml.js";
 import {
   Button,
@@ -30,8 +29,10 @@ import {
   gatedSessions,
 } from "../ui/sidebar/index.js";
 import type { Tone } from "../lib/statusTone.js";
-import { CommentComposer, ReviewComposer, ThreadActions } from "./Composer.js";
-import { ChecksDrill, MergeDrill, ReviewsDrill } from "./PrStatusViews.js";
+import { ConversationComposer, ThreadActions } from "./Composer.js";
+import { MergeConfirmModal, PrActionBar } from "./PrActionBar.js";
+import { nextStep } from "./prNextStep.js";
+import { ChecksDrill, ReviewsDrill } from "./PrStatusViews.js";
 import { prStatuses, reviewerRows, runIdFromUrl, type DimStatus } from "./prPhase.js";
 import { ReviewGateActions } from "./ReviewGateActions.js";
 import { usePrThreadWrites } from "./usePrThreadWrites.js";
@@ -253,6 +254,24 @@ export function PrDetailView({
   const [showBody, setShowBody] = useState(false);
   const [showFiles, setShowFiles] = useState(false);
   const [showCommits, setShowCommits] = useState(false);
+  const [composerOpen, setComposerOpen] = useState(false);
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [resolvedOpen, setResolvedOpen] = useState(false);
+  const [conversationOpen, setConversationOpen] = useState(true);
+  const openThreadsRef = useRef<HTMLDivElement>(null);
+  // The branch line under the title only shows while the view is at the top:
+  // a zero-height-ish sentinel above the sticky header leaves the viewport
+  // as soon as the user scrolls.
+  const topSentinelRef = useRef<HTMLDivElement>(null);
+  const [scrolled, setScrolled] = useState(false);
+  const loaded = pr != null;
+  useEffect(() => {
+    const el = topSentinelRef.current;
+    if (!el || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(([e]) => setScrolled(!e.isIntersecting));
+    io.observe(el);
+    return () => io.disconnect();
+  }, [loaded]);
   // The same PR list the panel joins on, so the row and the detail agree on
   // linked sessions before the WS push has filled the store.
   const links = useMullionLinks(projectId, { prs: usePrList(projectId)?.prs });
@@ -485,39 +504,88 @@ export function PrDetailView({
     });
 
   const toggleStatus = (k: StatusKey) => setOpenStatus((cur) => (cur === k ? null : k));
-  const mergeFix =
-    pr.prPhase === "conflicts" || pr.prPhase === "changes_requested" ? (
-      <Button size="sm" disabled={busy !== null} onClick={handoff}>
-        Hand off to session
-      </Button>
-    ) : pr.prPhase === "ci_failing" ? (
-      <Button size="sm" onClick={() => setOpenStatus("ci")}>
-        Show failing checks
-      </Button>
-    ) : pr.prPhase === "review_pending" || pr.prPhase === "reviewed" ? (
-      <Button size="sm" disabled={busy !== null} onClick={reReview}>
-        Request re-review
-      </Button>
-    ) : null;
+  const step = nextStep(pr.prPhase, unresolved);
+  const runStep = () => {
+    switch (step.kind) {
+      case "merge":
+        setMergeOpen(true);
+        break;
+      case "threads":
+        setConversationOpen(true);
+        requestAnimationFrame(() => openThreadsRef.current?.scrollIntoView?.({ block: "start" }));
+        break;
+      case "handoff":
+        void handoff();
+        break;
+      case "checks":
+        setOpenStatus("ci");
+        break;
+      case "reReview":
+        void reReview();
+        break;
+    }
+  };
 
   return (
     <div className="gh-detail pr-detail">
-      <DetailHeader
-        onBack={onBack}
-        title={
-          <>
-            <span className="mono">#{pr.number}</span> · {pr.title}
-          </>
-        }
-        subtitle={`${pr.baseBranch} ← ${pr.headBranch}`}
-        actions={
-          <IconButton label="Refresh" onClick={() => reload()}>
-            <RefreshIcon size={14} />
-          </IconButton>
-        }
-        externalUrl={pr.htmlUrl}
-        externalLabel={`Open PR #${pr.number} on GitHub`}
-      />
+      <div ref={topSentinelRef} className="pr-top-sentinel" aria-hidden="true" />
+      <div className="pr-detail-top">
+        <DetailHeader
+          onBack={onBack}
+          title={
+            <>
+              <span className="mono">#{pr.number}</span> · {pr.title}
+            </>
+          }
+          subtitle={scrolled ? undefined : `${pr.baseBranch} ← ${pr.headBranch}`}
+          actions={
+            <IconButton label="Refresh" onClick={() => reload()}>
+              <RefreshIcon size={14} />
+            </IconButton>
+          }
+          externalUrl={pr.htmlUrl}
+          externalLabel={`Open PR #${pr.number} on GitHub`}
+        />
+        <PrActionBar
+          open={pr.state === "OPEN"}
+          step={step}
+          busy={busy !== null}
+          sessionLabel={
+            sessionAction.kind === "open-existing" ? "Open existing session" : "Open session"
+          }
+          behind={pr.mergeStateStatus === "BEHIND" || (pr.behindBy ?? 0) > 0}
+          composerOpen={composerOpen}
+          onStep={runStep}
+          onSession={() =>
+            sessionAction.kind === "open-existing"
+              ? requestOpenSession(sessionAction.sessionId)
+              : void handoff()
+          }
+          onReReview={() => void reReview()}
+          onUpdateBranch={() => void updateBranch()}
+          onToggleComposer={() => setComposerOpen((o) => !o)}
+        />
+        {composerOpen && (
+          <div className="pr-detail-composer">
+            <ConversationComposer
+              onComment={postComment}
+              onReview={pr.state === "OPEN" ? postReview : undefined}
+              onClose={() => setComposerOpen(false)}
+            />
+          </div>
+        )}
+      </div>
+      {mergeOpen && pr.state === "OPEN" && (
+        <MergeConfirmModal
+          pr={pr}
+          busy={busy === "merge"}
+          onCancel={() => setMergeOpen(false)}
+          onConfirm={() => {
+            setMergeOpen(false);
+            void merge();
+          }}
+        />
+      )}
       <div className="pr-detail-scroll">
         {error && (
           <div className="pr-detail-pad">
@@ -573,11 +641,8 @@ export function PrDetailView({
             title="Merge"
             open={openStatus === "merge"}
             onToggle={() => toggleStatus("merge")}
-            expandable={mergeFix !== null}
+            expandable={false}
           />
-          {openStatus === "merge" && mergeFix && (
-            <MergeDrill text={`Merge · ${statuses.merge.text}`}>{mergeFix}</MergeDrill>
-          )}
         </div>
 
         {pinned.map((p) => (
@@ -721,11 +786,16 @@ export function PrDetailView({
           </div>
         </SidebarSection>
 
-        <SidebarSection title="Conversation" persistKey="github-pr-conversation">
+        <SidebarSection
+          title="Conversation"
+          open={conversationOpen}
+          onToggle={setConversationOpen}
+          persistKey="github-pr-conversation"
+        >
           <div className="pr-detail-pad">
             {openThreads.length > 0 && (
               <>
-                <div className="gh-detail-meta">
+                <div ref={openThreadsRef} className="gh-detail-meta pr-threads-h">
                   <ThreadIcon size={12} /> Unresolved threads ({openThreads.length})
                 </div>
                 {openThreads.map((t) => (
@@ -734,12 +804,24 @@ export function PrDetailView({
               </>
             )}
             {resolvedThreads.length > 0 && (
-              <details>
-                <summary>Resolved threads ({resolvedThreads.length})</summary>
-                {resolvedThreads.map((t) => (
-                  <Thread key={t.id} {...threadProps(t)} />
-                ))}
-              </details>
+              <div className="pr-resolved">
+                <button
+                  type="button"
+                  className="pr-resolved-toggle"
+                  aria-expanded={resolvedOpen}
+                  onClick={() => setResolvedOpen((o) => !o)}
+                >
+                  {resolvedOpen ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
+                  Resolved threads ({resolvedThreads.length})
+                </button>
+                {resolvedOpen && (
+                  <div className="pr-resolved-body">
+                    {resolvedThreads.map((t) => (
+                      <Thread key={t.id} {...threadProps(t)} />
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
             {timeline.map((e, i) =>
               e.pinned ? (
@@ -762,49 +844,9 @@ export function PrDetailView({
             {openThreads.length === 0 && resolvedThreads.length === 0 && timeline.length === 0 && (
               <div className="github-panel-empty-row">No conversation yet</div>
             )}
-            <CommentComposer label="Comment on this pull request" onSubmit={postComment} />
-            {pr.state === "OPEN" && <ReviewComposer onSubmit={postReview} />}
           </div>
         </SidebarSection>
       </div>
-
-      {pr.state === "OPEN" && (
-        <div className="pr-sticky">
-          {(pr.mergeStateStatus === "BEHIND" || (pr.behindBy ?? 0) > 0) && (
-            <Button
-              disabled={busy !== null}
-              title="Merge the base branch into this pull request's branch"
-              onClick={updateBranch}
-            >
-              {busy === "update" ? "Updating…" : "Update branch"}
-            </Button>
-          )}
-          <ConfirmButton
-            variant="neutral"
-            title="Squash and merge this pull request"
-            armedLabel="Confirm merge"
-            disabled={pr.prPhase !== "ready_to_merge" || busy !== null}
-            onConfirm={merge}
-          >
-            Squash and merge
-          </ConfirmButton>
-          {sessionAction.kind === "open-existing" ? (
-            <Button
-              disabled={busy !== null}
-              onClick={() => requestOpenSession(sessionAction.sessionId)}
-            >
-              Open existing session
-            </Button>
-          ) : (
-            <Button disabled={busy !== null} onClick={handoff}>
-              {busy === "handoff" ? "Starting…" : "Open session"}
-            </Button>
-          )}
-          <Button disabled={busy !== null} onClick={reReview}>
-            {busy === "review" ? "Requesting…" : "Re-review"}
-          </Button>
-        </div>
-      )}
     </div>
   );
 }

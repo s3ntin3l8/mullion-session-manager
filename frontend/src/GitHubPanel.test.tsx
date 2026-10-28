@@ -285,10 +285,8 @@ describe("GitHubPanel", () => {
     // Back on the issue detail, not the list.
     expect(await screen.findByRole("button", { name: "Back" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Back" }));
-    expect(await screen.findByRole("button", { name: "Unassigned" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    await userEvent.click(await screen.findByRole("button", { name: "Filter issues" }));
+    expect(screen.getByRole("checkbox", { name: "Unassigned" })).toBeChecked();
   });
 
   it("shows cached CI jobs again on re-expand without refetching them (#1970)", async () => {

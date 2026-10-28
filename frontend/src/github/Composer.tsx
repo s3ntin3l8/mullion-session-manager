@@ -78,26 +78,36 @@ export function CommentComposer({
 }
 
 /**
- * A PR review: one box, one button per verdict. Comment and Request changes
- * need a body (GitHub refuses them without one); Approve does not.
+ * One box for everything said on a PR from the sidebar: a comment, or — when
+ * `onReview` is given — a review verdict. Comment and Request changes need a
+ * body (GitHub refuses them without one); Approve does not. The box grows with
+ * what is typed. A verdict GitHub refuses (an author reviewing their own PR)
+ * shows the server's reason and keeps the draft.
  */
-export function ReviewComposer({
-  onSubmit,
+export function ConversationComposer({
+  onComment,
+  onReview,
+  onClose,
 }: {
-  onSubmit: (event: GitHubPrReviewEvent, body: string) => Promise<void>;
+  onComment: (body: string) => Promise<void>;
+  /** Omitted where no review can be submitted (a closed or merged PR). */
+  onReview?: (event: GitHubPrReviewEvent, body: string) => Promise<void>;
+  onClose: () => void;
 }) {
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState<GitHubPrReviewEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const blank = body.trim() === "";
 
-  const submit = async (event: GitHubPrReviewEvent) => {
+  const send = async (event: GitHubPrReviewEvent) => {
     if (busy || (blank && event !== "APPROVE")) return;
     setBusy(event);
     setError(null);
     try {
-      await onSubmit(event, body.trim());
+      if (event === "COMMENT" || !onReview) await onComment(body.trim());
+      else await onReview(event, body.trim());
       setBody("");
+      onClose();
     } catch (err) {
       setError(errorText(err));
     } finally {
@@ -106,32 +116,57 @@ export function ReviewComposer({
   };
 
   return (
-    <div className="gh-composer" role="group" aria-label="Review">
-      <div className="gh-detail-meta">Submit a review</div>
+    <div className="gh-composer" role="group" aria-label="Comment or review">
       <textarea
-        className="create-modal-textarea gh-composer-input"
-        aria-label="Review summary"
-        placeholder="Review summary (optional to approve)"
+        className="create-modal-textarea gh-composer-input gh-composer-grow"
+        aria-label="Comment or review"
+        placeholder={onReview ? "Leave a comment, or write a review summary" : "Leave a comment"}
         rows={3}
         value={body}
+        autoFocus
         disabled={busy !== null}
-        onChange={(e) => setBody(e.target.value)}
+        onChange={(e) => {
+          setBody(e.target.value);
+          const el = e.currentTarget;
+          if (el.scrollHeight > 0) {
+            el.style.height = "auto";
+            el.style.height = `${el.scrollHeight}px`;
+          }
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.stopPropagation();
+            onClose();
+          } else if (isSubmitKey(e)) void send("COMMENT");
+        }}
       />
       {error && <ErrorText>{error}</ErrorText>}
       <div className="gh-detail-actions">
-        <Button size="sm" disabled={busy !== null || blank} onClick={() => void submit("COMMENT")}>
-          {busy === "COMMENT" ? "Submitting…" : "Comment"}
-        </Button>
-        <Button size="sm" disabled={busy !== null} onClick={() => void submit("APPROVE")}>
-          {busy === "APPROVE" ? "Submitting…" : "Approve"}
-        </Button>
         <Button
           size="sm"
-          variant="danger"
+          variant="primary"
           disabled={busy !== null || blank}
-          onClick={() => void submit("REQUEST_CHANGES")}
+          onClick={() => void send("COMMENT")}
         >
-          {busy === "REQUEST_CHANGES" ? "Submitting…" : "Request changes"}
+          {busy === "COMMENT" ? "Posting…" : "Comment"}
+        </Button>
+        {onReview && (
+          <>
+            <Button size="sm" disabled={busy !== null} onClick={() => void send("APPROVE")}>
+              {busy === "APPROVE" ? "Submitting…" : "Approve"}
+            </Button>
+            <Button
+              size="sm"
+              variant="danger"
+              disabled={busy !== null || blank}
+              onClick={() => void send("REQUEST_CHANGES")}
+            >
+              {busy === "REQUEST_CHANGES" ? "Submitting…" : "Request changes"}
+            </Button>
+          </>
+        )}
+        <Button size="sm" variant="ghost" disabled={busy !== null} onClick={onClose}>
+          Cancel
         </Button>
       </div>
     </div>

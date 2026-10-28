@@ -78,29 +78,70 @@ describe("IssuesSection", () => {
     expect(screen.getByText("Task: in_progress")).toBeInTheDocument();
     expect(screen.getByTitle("3 comments")).toHaveTextContent("3");
 
-    await userEvent.click(screen.getByRole("button", { name: "docs" }));
+    await userEvent.click(screen.getByRole("button", { name: "Filter issues" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "docs" }));
     await waitFor(() => {
       const urls = fetchMock.mock.calls.map((c) => String((c as unknown[])[0]));
       expect(urls.some((u) => u.includes("labels=docs"))).toBe(true);
     });
+    // The closed button still says a filter is on.
+    expect(screen.getByRole("button", { name: "Filter issues" })).toHaveTextContent("1");
 
     await userEvent.click(screen.getByRole("button", { name: /Crash on start/ }));
     expect(onOpen).toHaveBeenCalledWith(7);
   });
 
-  it("sorts through the app's themed dropdown and refetches with the new sort", async () => {
+  it("sorts through the sort popover and refetches with the new sort", async () => {
     const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, LIST)));
     vi.stubGlobal("fetch", fetchMock);
     render(
       <IssuesSection projectId={1} openIssues={1} issuesHidden={false} onOpenIssue={vi.fn()} />,
     );
-    const sort = await screen.findByLabelText("Sort issues");
-    expect(sort.closest(".settings-dropdown.small")).not.toBeNull();
-    await userEvent.selectOptions(sort, "comments");
+    await userEvent.click(await screen.findByRole("button", { name: "Sort issues" }));
+    expect(screen.getByRole("radio", { name: "Recently updated" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await userEvent.click(screen.getByRole("radio", { name: "Most comments" }));
+    // Choosing closes the popover.
+    expect(screen.queryByRole("radiogroup")).toBeNull();
     await waitFor(() => {
       const urls = fetchMock.mock.calls.map((c) => String((c as unknown[])[0]));
       expect(urls.some((u) => u.includes("sort=comments"))).toBe(true);
     });
+  });
+
+  it("clears every filter at once, and Escape closes the popover", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(200, LIST))),
+    );
+    render(
+      <IssuesSection projectId={1} openIssues={1} issuesHidden={false} onOpenIssue={vi.fn()} />,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Filter issues" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Unassigned" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "docs" }));
+    expect(screen.getByRole("button", { name: "Filter issues" })).toHaveTextContent("2");
+    await userEvent.click(screen.getByRole("button", { name: "Clear filters" }));
+    expect(screen.getByRole("checkbox", { name: "Unassigned" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "docs" })).not.toBeChecked();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "Filter issues" })).toBeNull();
+  });
+
+  it("closes the popover on a click outside it", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(200, LIST))),
+    );
+    render(
+      <IssuesSection projectId={1} openIssues={1} issuesHidden={false} onOpenIssue={vi.fn()} />,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Filter issues" }));
+    expect(screen.getByRole("dialog", { name: "Filter issues" })).toBeInTheDocument();
+    await userEvent.click(screen.getByLabelText("Search issues"));
+    expect(screen.queryByRole("dialog", { name: "Filter issues" })).toBeNull();
   });
 
   it("does not claim 'no matches' while another page may hold them", async () => {
@@ -443,14 +484,21 @@ describe("Issues list ↔ detail round trip", () => {
     );
     render(<Harness />);
     await userEvent.type(await screen.findByLabelText("Search issues"), "crash");
-    await userEvent.click(screen.getByRole("button", { name: "docs" }));
-    await userEvent.selectOptions(screen.getByLabelText("Sort issues"), "comments");
+    await userEvent.click(screen.getByRole("button", { name: "Filter issues" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "docs" }));
+    await userEvent.click(screen.getByRole("button", { name: "Sort issues" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Most comments" }));
     await userEvent.click(await screen.findByRole("button", { name: /Crash on start/ }));
     await userEvent.click(await screen.findByRole("button", { name: "Back" }));
 
     expect(await screen.findByLabelText("Search issues")).toHaveValue("crash");
-    expect(screen.getByRole("button", { name: "docs" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByLabelText("Sort issues")).toHaveValue("comments");
+    await userEvent.click(screen.getByRole("button", { name: "Filter issues" }));
+    expect(screen.getByRole("checkbox", { name: "docs" })).toBeChecked();
+    await userEvent.click(screen.getByRole("button", { name: "Sort issues" }));
+    expect(screen.getByRole("radio", { name: "Most comments" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
   });
 
   it("sends a numeric query (#7) to the server and shows the issue it returns", async () => {

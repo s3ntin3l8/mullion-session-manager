@@ -119,6 +119,22 @@ export function SearchIcon(props: IconProps) {
   );
 }
 
+export function FilterIcon(props: IconProps) {
+  return (
+    <Svg strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M3 5h18l-7 8.5V19l-4 2v-7.5z" />
+    </Svg>
+  );
+}
+
+export function SortIcon(props: IconProps) {
+  return (
+    <Svg strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <path d="M8 4v16M4 16l4 4 4-4M16 20V4M12 8l4-4 4 4" />
+    </Svg>
+  );
+}
+
 export function SunIcon(props: IconProps) {
   return (
     <Svg strokeWidth={1.6} strokeLinecap="round" {...props}>
