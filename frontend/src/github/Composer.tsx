@@ -120,7 +120,11 @@ export function ConversationComposer({
       <textarea
         className="create-modal-textarea gh-composer-input gh-composer-grow"
         aria-label="Comment or review"
-        placeholder={onReview ? "Leave a comment, or write a review summary" : "Leave a comment"}
+        placeholder={
+          onReview
+            ? "Leave a comment, or write a review summary (Ctrl+Enter posts a comment)"
+            : "Leave a comment (Ctrl+Enter posts)"
+        }
         rows={3}
         value={body}
         autoFocus

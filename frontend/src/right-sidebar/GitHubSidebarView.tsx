@@ -32,7 +32,9 @@ export function GitHubSidebarView({ projectId, actions }: RightSidebarViewProps)
         ]}
       />
       <ExternalLinkOwnedContext.Provider value={true}>
-        <GitHubPanel params={{ projectId }} embedded onExternalLink={setLink} />
+        {/* Keyed on the project: the panel's own state (the release row, the open
+            PR) belongs to one repo and must not carry over to the next. */}
+        <GitHubPanel key={projectId} params={{ projectId }} embedded onExternalLink={setLink} />
       </ExternalLinkOwnedContext.Provider>
     </div>
   );

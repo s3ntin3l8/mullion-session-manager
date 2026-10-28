@@ -389,6 +389,38 @@ describe("PrDetailView", () => {
     expect(JSON.parse(String(call[1]?.body))).toEqual({ headSha: "abc" });
   });
 
+  it("keeps the merge dialog up, busy, until the merge settles", async () => {
+    let finish: (r: Response) => void = () => {};
+    const fn = vi.fn((url: string) =>
+      String(url).endsWith("/merge")
+        ? new Promise<Response>((r) => (finish = r))
+        : Promise.resolve(jsonResponse(200, PR)),
+    );
+    vi.stubGlobal("fetch", fn);
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Squash & merge" }));
+    const dialog = screen.getByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Merge" }));
+    expect(await within(dialog).findByRole("button", { name: "Merging…" })).toBeDisabled();
+    await act(async () => finish(jsonResponse(200, { merged: true, sha: "m" })));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(await screen.findByText("Merged (squash)")).toBeInTheDocument();
+  });
+
+  it("opens the Conversation section collapsed when it was left collapsed", async () => {
+    localStorage.setItem(
+      "crs.sidebarKitSections",
+      JSON.stringify({ "github-pr-conversation": false }),
+    );
+    stub(PR);
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    expect(await screen.findByRole("button", { name: /Conversation/ })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    localStorage.removeItem("crs.sidebarKitSections");
+  });
+
   it("does not merge when the confirm dialog is cancelled", async () => {
     const fn = stub(PR);
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);

@@ -186,6 +186,8 @@ interface GqlPr {
     } | null> | null;
   } | null;
   reviewThreads: {
+    /** All of the PR's threads; `nodes` is only the last 50. */
+    totalCount?: number;
     nodes: Array<{
       id: string;
       isResolved: boolean;
@@ -220,7 +222,7 @@ const QUERY = `query($owner: String!, $repo: String!, $number: Int!) {
       ${OPINIONATED_REVIEWS_SELECTION}
       ${latestReviewsSelection()}
       reviews(last: 50) { nodes { author { login } state bodyHTML submittedAt comments { totalCount } } }
-      reviewThreads(last: 50) { nodes { id isResolved isOutdated path line comments(first: 30) { nodes { author { login } bodyHTML createdAt } } } }
+      reviewThreads(last: 50) { totalCount nodes { id isResolved isOutdated path line comments(first: 30) { nodes { author { login } bodyHTML createdAt } } } }
       comments(last: 50) { nodes { author { login } bodyHTML createdAt } }
     }
   }
@@ -438,6 +440,8 @@ export async function getPrDetail(
     .map((n) => n?.requestedReviewer?.login ?? n?.requestedReviewer?.name ?? null)
     .filter(present);
   const threads = (pr.reviewThreads?.nodes ?? []).filter(present);
+  const threadsShownInFull =
+    threads.length > 0 && (pr.reviewThreads?.totalCount ?? threads.length) <= threads.length;
   const latestReviews = pr.latestReviews?.nodes ?? [];
   const opinionated = pr.latestOpinionatedReviews?.nodes ?? [];
 
@@ -484,14 +488,15 @@ export async function getPrDetail(
       .filter(present)
       // An empty COMMENTED review is just the wrapper of its inline comments
       // (every thread reply creates one), so it is dropped from the timeline
-      // when those threads are listed below. With no threads to show them in
-      // it is the only record that the reviewer reviewed, so it stays. The
-      // reviewer still appears in the review summary either way.
+      // when those threads are listed below. With no threads to show them in —
+      // or when the list is cut off, so these comments may be in the part that
+      // is not shown — it is the only record that the reviewer reviewed, so it
+      // stays. The reviewer still appears in the review summary either way.
       .filter(
         (r) =>
           r.state !== "COMMENTED" ||
           r.bodyHTML.trim() !== "" ||
-          ((r.comments?.totalCount ?? 0) > 0 && threads.length === 0),
+          ((r.comments?.totalCount ?? 0) > 0 && !threadsShownInFull),
       )
       .map((r) => ({
         author: r.author?.login ?? null,

@@ -29,6 +29,7 @@ import {
   gatedSessions,
 } from "../ui/sidebar/index.js";
 import type { Tone } from "../lib/statusTone.js";
+import { readPersistedSection } from "../ui/sidebar/sectionState.js";
 import { ConversationComposer, ThreadActions } from "./Composer.js";
 import { MergeConfirmModal, PrActionBar } from "./PrActionBar.js";
 import { nextStep } from "./prNextStep.js";
@@ -257,7 +258,11 @@ export function PrDetailView({
   const [composerOpen, setComposerOpen] = useState(false);
   const [mergeOpen, setMergeOpen] = useState(false);
   const [resolvedOpen, setResolvedOpen] = useState(false);
-  const [conversationOpen, setConversationOpen] = useState(true);
+  // Seeded from the section's stored state: a controlled `open` makes the
+  // section ignore it, and the next-step button needs to open it from outside.
+  const [conversationOpen, setConversationOpen] = useState(() =>
+    readPersistedSection("github-pr-conversation", true),
+  );
   const openThreadsRef = useRef<HTMLDivElement>(null);
   // The branch line under the title only shows while the view is at the top:
   // a zero-height-ish sentinel above the sticky header leaves the viewport
@@ -580,10 +585,9 @@ export function PrDetailView({
           pr={pr}
           busy={busy === "merge"}
           onCancel={() => setMergeOpen(false)}
-          onConfirm={() => {
-            setMergeOpen(false);
-            void merge();
-          }}
+          // Stays up while the merge runs (its label and disabled state are
+          // the progress), and closes either way: a failure shows in the view.
+          onConfirm={() => void merge().then(() => setMergeOpen(false))}
         />
       )}
       <div className="pr-detail-scroll">

@@ -207,6 +207,36 @@ describe("getPrDetail", () => {
     expect(String(fetchMock.mock.calls[0][1].body)).toContain("latestReviews");
   });
 
+  it("keeps the empty wrapper when the thread list is cut off (past 50 threads)", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (!url.includes("/graphql")) return Promise.resolve(new Response("[]", { status: 200 }));
+      const pr = {
+        ...GQL_PR,
+        // Listed: the last 50 of 80 — the wrapper's comments may be in the other 30.
+        reviewThreads: { ...GQL_PR.reviewThreads, totalCount: 80 },
+        reviews: {
+          nodes: [
+            {
+              author: { login: "bob" },
+              state: "COMMENTED",
+              bodyHTML: "",
+              submittedAt: "2026-01-03T00:00:00Z",
+              comments: { totalCount: 2 },
+            },
+          ],
+        },
+      };
+      return Promise.resolve(
+        new Response(JSON.stringify({ data: { repository: { pullRequest: pr } } }), {
+          status: 200,
+        }),
+      );
+    });
+    const d = await getPrDetail("tok", "o", "r", 5);
+    expect(d.threads.length).toBeGreaterThan(0);
+    expect(d.reviews).toHaveLength(1);
+  });
+
   it("keeps an empty COMMENTED review with inline comments when no thread is listed", async () => {
     fetchMock.mockImplementation((url: string) => {
       if (!url.includes("/graphql")) return Promise.resolve(new Response("[]", { status: 200 }));

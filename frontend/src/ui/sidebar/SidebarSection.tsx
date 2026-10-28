@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
-import { STORAGE_KEYS, readJSON, writeJSON } from "../../lib/persistedState.js";
+import { STORAGE_KEYS, writeJSON } from "../../lib/persistedState.js";
+import { readAllSections, readPersistedSection } from "./sectionState.js";
 import { ChevronDownIcon } from "../icons.js";
 
 export interface SidebarSectionProps {
@@ -16,21 +17,6 @@ export interface SidebarSectionProps {
   children: ReactNode;
 }
 
-type Persisted = Record<string, boolean>;
-
-// readJSON casts without validating, so a stored `null`/array/string must not
-// reach the `[key]` lookup.
-function readAll(): Persisted {
-  const all = readJSON<unknown>(STORAGE_KEYS.sidebarKitSections, {});
-  return all && typeof all === "object" && !Array.isArray(all) ? (all as Persisted) : {};
-}
-
-function readPersisted(key: string | undefined, fallback: boolean): boolean {
-  if (!key) return fallback;
-  const stored = readAll()[key];
-  return typeof stored === "boolean" ? stored : fallback;
-}
-
 export function SidebarSection({
   title,
   count,
@@ -41,13 +27,13 @@ export function SidebarSection({
   onToggle,
   children,
 }: SidebarSectionProps) {
-  const [own, setOwn] = useState(() => readPersisted(persistKey, defaultOpen));
+  const [own, setOwn] = useState(() => readPersistedSection(persistKey, defaultOpen));
   const open = controlled ?? own;
   const toggle = () => {
     const next = !open;
     if (controlled === undefined) setOwn(next);
     if (persistKey) {
-      writeJSON(STORAGE_KEYS.sidebarKitSections, { ...readAll(), [persistKey]: next });
+      writeJSON(STORAGE_KEYS.sidebarKitSections, { ...readAllSections(), [persistKey]: next });
     }
     onToggle?.(next);
   };
