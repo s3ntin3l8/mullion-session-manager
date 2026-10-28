@@ -24,6 +24,10 @@ export const PROTOCOL_TRACE_MAX_COLOR_LINES = 1000;
 
 let enabled = true;
 
+export function isProtocolTraceEnabled(): boolean {
+  return enabled;
+}
+
 /** Boot-time switch (`MULLION_PROTOCOL_TRACE`, see plugins/pty.ts). On by default. */
 export function setProtocolTraceEnabled(value: boolean): void {
   enabled = value;
@@ -55,6 +59,9 @@ export interface ProtocolDescription {
 function describeOsc(ident: string, payload: string | undefined): string {
   if (payload === undefined) return `osc${ident}`;
   if (payload === "?") return `osc${ident}?`;
+  // OSC 4's query form is `4;<index>;?` — tag it as a query too, for parity
+  // with 10/11/12 (a report is `4;<index>;rgb:…`).
+  if (ident === "4" && /^\d+;\?$/.test(payload)) return `osc4?${payload.split(";")[0]}`;
   return `osc${ident}=${payload.replace(CONTROL_BYTES_RE, "")}`;
 }
 

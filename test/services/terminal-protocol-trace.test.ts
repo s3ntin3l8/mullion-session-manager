@@ -20,8 +20,15 @@ describe("describeTerminalProtocol", () => {
     const d = describeTerminalProtocol(
       "\x1b]110\x07\x1b]111\x1b\\\x1b]112\x07\x1b]104\x07\x1b]4;1;?\x07",
     );
-    expect(d.tags).toEqual(["osc110", "osc111", "osc112", "osc104", "osc4=1;?"]);
+    expect(d.tags).toEqual(["osc110", "osc111", "osc112", "osc104", "osc4?1"]);
     expect(d.color).toBe(true);
+  });
+
+  it("tags an OSC 4 query by palette index and an OSC 4 report as a set", () => {
+    expect(describeTerminalProtocol("\x1b]4;7;?\x07").tags).toEqual(["osc4?7"]);
+    expect(describeTerminalProtocol("\x1b]4;7;rgb:ffff/0000/0000\x07").tags).toEqual([
+      "osc4=7;rgb:ffff/0000/0000",
+    ]);
   });
 
   it("ignores non-palette OSC such as titles and hyperlinks", () => {
