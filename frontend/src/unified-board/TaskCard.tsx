@@ -10,7 +10,8 @@ import { sessionPrDotClass } from "../lib/sidebarStatus.js";
 import { rowClassNameForSeverity } from "../sessionStatus.js";
 import { BlockedIcon, BotIcon, ClockIcon, GitHubIcon, WarningTriangleIcon } from "../ui/icons.js";
 import { formatRelativeAge } from "../relativeTime.js";
-import { needsHumanText } from "../needsHuman.js";
+import { approvalStateText, needsHumanText } from "../needsHuman.js";
+import { describeTaskHost } from "../lib/hostBadge.js";
 import { parseWorkflowChange, visibleTaskSyncError } from "../workflowChange.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { TaskSessionSlot } from "./TaskSessionSlot.js";
@@ -42,7 +43,7 @@ export function TaskCard({
   onDragFinish,
 }: {
   task: Task;
-  project: { id: number; name: string } | undefined;
+  project: { id: number; name: string; hostId?: string } | undefined;
   // null = task.sessionId/reviewSessionId is null (no session was ever
   // linked); undefined = a session WAS linked but is no longer in
   // store.sessions (killed/reaped) — TaskSessionSlot renders differently
@@ -59,6 +60,8 @@ export function TaskCard({
   onDragFinish: () => void;
 }) {
   const [dropTarget, setDropTarget] = useState(false);
+  const hosts = useDashboardStore((s) => s.hosts);
+  const hostChip = describeTaskHost(task, workerSession, project?.hostId, hosts ?? []);
   const agentName = task.agentCommand ? commandToBinary(task.agentCommand) : null;
 
   // Matched client-side against the project's unfiltered PR list, same
@@ -227,6 +230,11 @@ export function TaskCard({
       </div>
       <div className="task-card-meta">
         {project && <span className="task-card-project">{project.name}</span>}
+        {hostChip && (
+          <span className="task-card-host" title={hostChip.title}>
+            {hostChip.label}
+          </span>
+        )}
         {task.issueNumber !== null &&
           (task.htmlUrl ? (
             // D2 — was a <span> whose only use of htmlUrl was as a tooltip;
@@ -411,6 +419,21 @@ export function TaskCard({
           <span>Needs workflow approval{syncError ? " · GitHub sync error" : ""}</span>
         </div>
       )}
+      {/* #2234 — the last review approved and nothing else is going to move
+          this task unless a human approves it. role="status", like the
+          workflow-hold strip above, so its appearance is announced. */}
+      {task.approvalState && (
+        <div
+          className={
+            task.approvalState === "awaiting-human"
+              ? "task-card-approval-strip"
+              : "task-card-approval-strip task-card-approval-strip-auto"
+          }
+          role="status"
+        >
+          <span>{approvalStateText(task.approvalState, task.autoReturnRounds)}</span>
+        </div>
+      )}
       {/* D5 — a Failed column of several identical-looking cards conveys
           nothing on its own; the reason is the one thing worth a glance. */}
       {task.status === "failed" && task.failureReason && (
@@ -442,7 +465,7 @@ export function TaskCard({
           reads as in-progress (a worker session or the confirming review may
           still be running), not "needs a human" — that wording is reserved
           for capAnnounced, the actual "the machine stopped" signal. */}
-      {task.status === "reviewing" && task.autoReturnRounds > 0 && (
+      {task.status === "reviewing" && task.autoReturnRounds > 0 && !task.approvalState && (
         <div
           className={
             capAnnounced

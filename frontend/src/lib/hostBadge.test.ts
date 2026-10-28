@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { describeHostBadge } from "./hostBadge.js";
+import { describeHostBadge, describeTaskHost, hasRemoteHosts } from "./hostBadge.js";
 import { makeHost } from "../test/fixtures.js";
 
 // Issue #1852 — the per-session host badge and its tooltip. The two
@@ -92,5 +92,70 @@ describe("describeHostBadge (issue #1852)", () => {
       () => HOSTS,
     );
     expect(badge?.title).toBe("pinned to the project's host mac-mini");
+  });
+});
+
+describe("hasRemoteHosts / describeTaskHost (#2236)", () => {
+  const local = makeHost({ id: "local", name: "local" });
+  const mini = makeHost({ id: "mac-mini", name: "Mac mini" });
+
+  it("hasRemoteHosts is false for only the local host", () => {
+    expect(hasRemoteHosts([])).toBe(false);
+    expect(hasRemoteHosts([local])).toBe(false);
+    expect(hasRemoteHosts([local, mini])).toBe(true);
+  });
+
+  it("is null on a local-only install, whatever the task says", () => {
+    expect(
+      describeTaskHost({ placementRequirement: '{"platform":"darwin"}' }, null, "x", [local]),
+    ).toBeNull();
+  });
+
+  it("prefers the worker session's host", () => {
+    const chip = describeTaskHost(
+      { placementRequirement: '{"platform":"darwin"}' },
+      { resolvedHostId: "mac-mini", placementReason: null },
+      "local",
+      [local, mini],
+    );
+    expect(chip?.label).toBe("on Mac mini");
+  });
+
+  it("is null for a worker session on the local host", () => {
+    expect(
+      describeTaskHost(
+        { placementRequirement: null },
+        { resolvedHostId: "local", placementReason: null },
+        "local",
+        [local, mini],
+      ),
+    ).toBeNull();
+  });
+
+  it("describes a combined requirement, falling back to the raw host id", () => {
+    const chip = describeTaskHost(
+      { placementRequirement: '{"hostId":"gone","platform":"linux"}' },
+      null,
+      "local",
+      [local, mini],
+    );
+    expect(chip?.label).toBe("needs linux · gone");
+  });
+
+  it("ignores a corrupt or empty requirement", () => {
+    for (const raw of ["{nope", "[]", '"x"', "{}", "null"]) {
+      expect(
+        describeTaskHost({ placementRequirement: raw }, null, "local", [local, mini])?.label,
+      ).toBe("auto");
+    }
+  });
+
+  it("pins to a remote project host, else auto", () => {
+    expect(
+      describeTaskHost({ placementRequirement: null }, null, "mac-mini", [local, mini])?.label,
+    ).toBe("pinned · Mac mini");
+    expect(
+      describeTaskHost({ placementRequirement: null }, null, undefined, [local, mini])?.label,
+    ).toBe("auto");
   });
 });

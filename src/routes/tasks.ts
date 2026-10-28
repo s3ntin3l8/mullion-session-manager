@@ -5,6 +5,7 @@ import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import {
   buildRejectPrompt,
+  isApprovingVerdict,
   taskCommitTitlePath,
   parseCommitTitle,
   resolvePrTitle,
@@ -217,6 +218,8 @@ const TASK_ROW_COLUMNS = {
   // withBlockedState just below. Raw per-project config has no reason to
   // leak into a task response; the frontend only needs the yes/no answer.
   projectMaxAutoReturnRounds: projects.maxAutoReturnRounds,
+  // Read only to derive `approvalState` (withApprovalState strips it).
+  projectAutoApprove: projects.autoApprove,
   worktreePath: tasks.worktreePath,
   branchName: tasks.branchName,
   baseSha: tasks.baseSha,
@@ -360,6 +363,36 @@ function withAutoReturnCapped<
   };
 }
 
+// #2234 — an approving review whose findings are in but whose project does
+// not auto-approve waits on a human's Approve with no other signal: the card
+// used to read "returned to worker". `awaiting-human` is that state;
+// `auto-pending` is the same verdict on a project whose approve sweep will
+// take it from here. Derived here, next to the other board states, so the
+// frontend never re-derives "approving verdict" (task-prompt.ts's
+// isApprovingVerdict is the one definition).
+function withApprovalState<
+  T extends {
+    status: string;
+    reviewSessionId: number | null;
+    reviewFindingsIngestedSessionId: number | null;
+    lastReviewVerdict: string | null;
+    projectAutoApprove: boolean | null;
+  },
+>(
+  row: T,
+): Omit<T, "projectAutoApprove"> & { approvalState: "awaiting-human" | "auto-pending" | null } {
+  const { projectAutoApprove, ...rest } = row;
+  const approved =
+    row.status === "reviewing" &&
+    row.reviewSessionId !== null &&
+    row.reviewFindingsIngestedSessionId === row.reviewSessionId &&
+    isApprovingVerdict(row.lastReviewVerdict);
+  return {
+    ...rest,
+    approvalState: approved ? (projectAutoApprove ? "auto-pending" : "awaiting-human") : null,
+  };
+}
+
 // The task drawer's surface for the second silent-fallback layer #761 left:
 // even with conventionalCommitTitles on, a worker that skipped or malformed
 // its title file left task-reconciler.ts's ingest with nothing but one
@@ -428,7 +461,9 @@ export async function tasksRoute(app: FastifyInstance) {
         .all();
       const installCap = resolveTaskMasterConfig(app).maxAutoReturnRounds;
       return rows.map((row) =>
-        withBlockedState(withAutoReturnCapped(withPrTitleFallback(row), installCap)),
+        withBlockedState(
+          withApprovalState(withAutoReturnCapped(withPrTitleFallback(row), installCap)),
+        ),
       );
     },
   );
@@ -447,9 +482,11 @@ export async function tasksRoute(app: FastifyInstance) {
       .all();
     return row
       ? withBlockedState(
-          withAutoReturnCapped(
-            withPrTitleFallback(row),
-            resolveTaskMasterConfig(app).maxAutoReturnRounds,
+          withApprovalState(
+            withAutoReturnCapped(
+              withPrTitleFallback(row),
+              resolveTaskMasterConfig(app).maxAutoReturnRounds,
+            ),
           ),
         )
       : null;

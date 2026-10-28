@@ -13,3 +13,17 @@ export function needsHumanText(reason: NeedsHumanReason | null | undefined): str
       return "round cap reached";
   }
 }
+
+// #2234 — a task whose last review approved and is waiting on its approval.
+// Shared by the board card and the task drawer so the two can't drift.
+export type ApprovalState = "awaiting-human" | "auto-pending";
+
+/** The round-badge / strip text. `rounds` is `task.autoReturnRounds`. */
+export function approvalStateText(state: ApprovalState, rounds: number): string {
+  const what =
+    state === "awaiting-human"
+      ? "approved, needs your approval"
+      : "approved, merging once CI is green";
+  if (rounds > 0) return `Round ${rounds} · ${what}`;
+  return what.charAt(0).toUpperCase() + what.slice(1);
+}

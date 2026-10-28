@@ -2777,6 +2777,98 @@ describe("tasks route", () => {
       await app.close();
     });
 
+    // #2234 — withApprovalState (routes/tasks.ts): an approving verdict whose
+    // findings are ingested, waiting on a human (or on the auto-approve sweep).
+    describe("approvalState", () => {
+      async function seed(opts: {
+        autoApprove: boolean;
+        status?: "reviewing" | "in_progress";
+        verdict: string | null;
+        ingested: boolean;
+        withReviewSession?: boolean;
+      }) {
+        const app = await buildApp();
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: "approval-state", cwd: "/tmp/approval-state" },
+        });
+        const projectId = res.json().id as number;
+        await app.inject({
+          method: "PATCH",
+          url: `/api/projects/${projectId}`,
+          payload: { autoApprove: opts.autoApprove },
+        });
+        const { tasks, sessions } = await import("../../src/db/schema.js");
+        const [session] = app.db
+          .insert(sessions)
+          .values({ projectId, command: "claude", status: "exited" })
+          .returning()
+          .all();
+        const withReview = opts.withReviewSession !== false;
+        const [row] = app.db
+          .insert(tasks)
+          .values({
+            projectId,
+            title: "t",
+            status: opts.status ?? "reviewing",
+            reviewSessionId: withReview ? session.id : null,
+            reviewFindingsIngestedSessionId: opts.ingested && withReview ? session.id : null,
+            lastReviewVerdict: opts.verdict,
+          })
+          .returning()
+          .all();
+        return { app, taskId: row.id };
+      }
+
+      it("is awaiting-human for an ingested approving verdict on a manual-approve project", async () => {
+        const { app, taskId } = await seed({
+          autoApprove: false,
+          verdict: "approved-with-suggestions",
+          ingested: true,
+        });
+        const res = await app.inject({ method: "GET", url: `/api/tasks/${taskId}` });
+        expect(res.json().approvalState).toBe("awaiting-human");
+        expect(res.json()).not.toHaveProperty("projectAutoApprove");
+        const list = await app.inject({ method: "GET", url: "/api/tasks" });
+        expect(list.json()[0].approvalState).toBe("awaiting-human");
+        await app.close();
+      });
+
+      it("is auto-pending when the project auto-approves", async () => {
+        const { app, taskId } = await seed({
+          autoApprove: true,
+          verdict: "approved",
+          ingested: true,
+        });
+        const res = await app.inject({ method: "GET", url: `/api/tasks/${taskId}` });
+        expect(res.json().approvalState).toBe("auto-pending");
+        await app.close();
+      });
+
+      it.each([
+        ["changes-requested", true, "reviewing", true],
+        [null, true, "reviewing", true],
+        ["approved", false, "reviewing", true],
+        ["approved", true, "in_progress", true],
+        ["approved", true, "reviewing", false],
+      ] as const)(
+        "is null for verdict=%s ingested=%s status=%s reviewSession=%s",
+        async (verdict, ingested, status, withReviewSession) => {
+          const { app, taskId } = await seed({
+            autoApprove: false,
+            verdict,
+            ingested,
+            status,
+            withReviewSession,
+          });
+          const res = await app.inject({ method: "GET", url: `/api/tasks/${taskId}` });
+          expect(res.json().approvalState).toBeNull();
+          await app.close();
+        },
+      );
+    });
+
     // withPrTitleFallback (routes/tasks.ts) — the actual "should a human
     // look at this" signal, deliberately NOT the same as `prTitle === null`
     // (see that function's own doc comment): only true when the project

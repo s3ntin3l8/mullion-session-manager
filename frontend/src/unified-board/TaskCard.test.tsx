@@ -18,13 +18,15 @@ import type {
   GitHubPRsStatus,
   GitStatus,
   NotificationEvent,
+  Host,
   Project,
   Session,
   Task,
 } from "../api/index.js";
-import { makeProject, makeTask } from "../test/fixtures.js";
+import { makeHost, makeProject, makeSession, makeTask } from "../test/fixtures.js";
 
 let sessions: Session[];
+let hosts: Host[];
 let projects: Project[];
 let tasks: Task[];
 let tasksLoaded: boolean;
@@ -51,6 +53,7 @@ function storeState() {
     pendingOpenTaskId: null,
     setPendingOpenTaskId: vi.fn(),
     sessions,
+    hosts,
     projects,
     tasks,
     tasksLoaded,
@@ -133,6 +136,7 @@ function createDragEvent(type: string, dataTransfer: DataTransfer): DragEvent {
 
 beforeEach(() => {
   sessions = [];
+  hosts = [];
   projects = [makeProject({ id: 1, name: "demo" }), makeProject({ id: 2, name: "other" })];
   tasks = [];
   tasksLoaded = true;
@@ -523,6 +527,112 @@ describe("UnifiedBoard task columns", () => {
     expect(screen.getByText("21d ago")).toBeInTheDocument();
     expect(screen.queryByText("created 21d ago")).toBeNull();
     vi.useRealTimers();
+  });
+
+  describe("an approved task waiting on a human (#2234)", () => {
+    const approved = {
+      status: "reviewing" as const,
+      reviewSessionId: 9,
+      reviewFindingsIngestedSessionId: 9,
+      lastReviewVerdict: "approved" as const,
+    };
+
+    it("round N: says approved and needs your approval, not 'returned to worker'", () => {
+      tasks = [
+        makeTask({ id: 1, ...approved, autoReturnRounds: 2, approvalState: "awaiting-human" }),
+      ];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Round 2 · approved, needs your approval",
+      );
+      expect(screen.queryByText(/returned to worker/)).toBeNull();
+    });
+
+    it("round 0: drops the round prefix", () => {
+      tasks = [makeTask({ id: 1, ...approved, approvalState: "awaiting-human" })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.getByRole("status")).toHaveTextContent(/^Approved, needs your approval$/);
+    });
+
+    it("auto-approve project: says it merges once CI is green", () => {
+      tasks = [
+        makeTask({ id: 1, ...approved, autoReturnRounds: 1, approvalState: "auto-pending" }),
+      ];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Round 1 · approved, merging once CI is green",
+      );
+    });
+
+    it("capped but approved: the approval wins over the cap wording", () => {
+      tasks = [
+        makeTask({
+          id: 1,
+          ...approved,
+          autoReturnRounds: 2,
+          autoReturnCapped: true,
+          autoReturnCapAnnouncedAt: "2026-01-01T00:00:00.000Z",
+          approvalState: "awaiting-human",
+        }),
+      ];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.getByRole("status")).toHaveTextContent("approved, needs your approval");
+      expect(screen.queryByText(/round cap reached/)).toBeNull();
+    });
+
+    it("no strip when approvalState is null", () => {
+      tasks = [makeTask({ id: 1, status: "reviewing", autoReturnRounds: 1 })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.queryByRole("status")).toBeNull();
+      expect(screen.getByText(/returned to worker/)).toBeInTheDocument();
+    });
+  });
+
+  describe("where the task will run (#2236)", () => {
+    const hostChip = () => document.querySelector(".task-card-host");
+
+    it("shows no chip on a local-only install", () => {
+      hosts = [makeHost({ id: "local", name: "local" })];
+      tasks = [makeTask({ id: 1, status: "ready" })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(hostChip()).toBeNull();
+    });
+
+    it("shows 'pinned · <host>' for a project on a remote host", () => {
+      hosts = [makeHost({ id: "local", name: "local" }), makeHost({ id: "h1", name: "mac-mini" })];
+      projects = [makeProject({ id: 1, name: "demo", hostId: "h1" })];
+      tasks = [makeTask({ id: 1, status: "ready" })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(hostChip()).toHaveTextContent("pinned · mac-mini");
+    });
+
+    it("shows 'auto' for a local project with remote hosts available", () => {
+      hosts = [makeHost({ id: "local", name: "local" }), makeHost({ id: "h1", name: "mac-mini" })];
+      tasks = [makeTask({ id: 1, status: "ready" })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(hostChip()).toHaveTextContent("auto");
+    });
+
+    it("shows the Platform:/Host: requirement", () => {
+      hosts = [makeHost({ id: "local", name: "local" }), makeHost({ id: "h1", name: "mac-mini" })];
+      tasks = [
+        makeTask({ id: 1, status: "ready", placementRequirement: '{"platform":"darwin"}' }),
+        makeTask({ id: 2, status: "ready", placementRequirement: '{"hostId":"h1"}' }),
+      ];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      const chips = Array.from(document.querySelectorAll(".task-card-host")).map(
+        (e) => e.textContent,
+      );
+      expect(chips).toEqual(["needs darwin", "needs mac-mini"]);
+    });
+
+    it("shows the worker session's actual host once it exists", () => {
+      hosts = [makeHost({ id: "local", name: "local" }), makeHost({ id: "h1", name: "mac-mini" })];
+      sessions = [makeSession({ id: 50, resolvedHostId: "h1", placementReason: null })];
+      tasks = [makeTask({ id: 1, status: "in_progress", sessionId: 50 })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(hostChip()).toHaveTextContent("on mac-mini");
+    });
   });
 
   describe("a push held for workflow approval (#2108)", () => {

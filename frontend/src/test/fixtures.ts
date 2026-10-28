@@ -139,6 +139,7 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     autoReturnRounds: 0,
     lastAutoReturnReason: null,
     autoReturnCapped: false,
+    approvalState: null,
     autoReturnCapAnnouncedAt: null,
     needsHumanReason: null,
     worktreePath: null,

@@ -3,12 +3,23 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TaskDetail } from "./TaskDetail.js";
+import { makeHost, makeProject } from "./test/fixtures.js";
 import type * as ApiModule from "./api/index.js";
 import { ApiError } from "./api/index.js";
-import type { GitHubPRsStatus, NotificationEvent, ServerInfo, Session, Task } from "./api/index.js";
+import type {
+  GitHubPRsStatus,
+  Host,
+  NotificationEvent,
+  Project,
+  ServerInfo,
+  Session,
+  Task,
+} from "./api/index.js";
 
 let tasks: Task[];
 let sessions: Session[];
+let hosts: Host[];
+let projects: Project[];
 let events: Record<number, NotificationEvent[]>;
 let taskMasterEnabled: boolean;
 let prsByProject: Record<number, GitHubPRsStatus | undefined>;
@@ -36,6 +47,8 @@ function storeState() {
     openRightSidebarPr,
     tasks,
     sessions,
+    hosts,
+    projects,
     events,
     taskMasterEnabled,
     taskMasterEnv,
@@ -96,6 +109,7 @@ function makeTask(overrides: Partial<Task>): Task {
     autoReturnRounds: 0,
     lastAutoReturnReason: null,
     autoReturnCapped: false,
+    approvalState: null,
     autoReturnCapAnnouncedAt: null,
     needsHumanReason: null,
     worktreePath: null,
@@ -208,6 +222,8 @@ function makeSession(overrides: Partial<Session>): Session {
 
 beforeEach(() => {
   sessions = [];
+  hosts = [];
+  projects = [];
   events = {};
   taskMasterEnabled = true;
   taskMasterEnv = null;
@@ -2011,5 +2027,108 @@ describe("TaskDetail workflow-change approval", () => {
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.getByRole("button", { name: "Approve workflow change" })).toBeDisabled();
     expect(screen.getByText(/head commit could not be read/)).toBeInTheDocument();
+  });
+});
+
+describe("TaskDetail approval state, latest round and host (#2234 #2235 #2236)", () => {
+  const round = (n: number, verdict: string, critical: string) =>
+    `## Round ${n}\n\n**Verdict:** ${verdict}\n\n### Critical\n${critical}\n\n### Warnings\n- None\n\n### Suggestions\n- None`;
+
+  it("awaiting-human: says a human has to Approve, not 'sent back to the worker'", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        reviewSessionId: 5,
+        autoReturnRounds: 2,
+        approvalState: "awaiting-human",
+      }),
+    ];
+    sessions = [makeSession({ id: 5 })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText("Round 2 · approved, needs your approval")).toBeInTheDocument();
+    expect(screen.getByText(/a human has to Approve it above/)).toBeInTheDocument();
+    expect(screen.queryByText(/sent back to the worker/)).toBeNull();
+  });
+
+  it("round 0 awaiting-human and auto-pending wordings", () => {
+    tasks = [
+      makeTask({ id: 1, status: "reviewing", reviewSessionId: 5, approvalState: "awaiting-human" }),
+      makeTask({ id: 2, status: "reviewing", reviewSessionId: 6, approvalState: "auto-pending" }),
+    ];
+    sessions = [makeSession({ id: 5 }), makeSession({ id: 6 })];
+    const { unmount } = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText("Approved, needs your approval")).toBeInTheDocument();
+    unmount();
+    render(<TaskDetail params={{ taskId: 2 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText("Approved, merging once CI is green")).toBeInTheDocument();
+    expect(screen.getByText(/auto-approves/)).toBeInTheDocument();
+  });
+
+  it("leads with the latest round's summary and collapses earlier rounds", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        reviewSessionId: 5,
+        reviewFindings: `${round(1, "changes requested — bad", "- **a.ts:1** — boom")}\n\n${round(2, "approved — ok", "- None")}`,
+      }),
+    ];
+    sessions = [makeSession({ id: 5 })];
+    const { container } = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    const summary = container.querySelector(".task-detail-review-summary");
+    expect(summary).toHaveTextContent("Latest: round 2");
+    expect(summary).toHaveTextContent("approved — ok");
+    expect(summary).toHaveTextContent("0 critical · 0 warnings · 0 suggestions");
+    const earlier = container.querySelector("details.task-detail-review-earlier");
+    expect(earlier).not.toBeNull();
+    expect(earlier).not.toHaveAttribute("open");
+    expect(earlier).toHaveTextContent("Earlier rounds (1)");
+  });
+
+  it("one round: summary with counts and no earlier-rounds section", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        reviewSessionId: 5,
+        reviewFindings: round(1, "changes requested — bad", "- **a.ts:1** — boom"),
+      }),
+    ];
+    sessions = [makeSession({ id: 5 })];
+    const { container } = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(container.querySelector(".task-detail-review-summary")).toHaveTextContent(
+      "1 critical · 0 warnings · 0 suggestions",
+    );
+    expect(container.querySelector("details")).toBeNull();
+  });
+
+  it("a review with no round headings renders as before, without a summary", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        reviewSessionId: 5,
+        reviewFindings: "Looks fine to me.",
+      }),
+    ];
+    sessions = [makeSession({ id: 5 })];
+    const { container } = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText("Looks fine to me.")).toBeInTheDocument();
+    expect(container.querySelector(".task-detail-review-summary")).toBeNull();
+  });
+
+  it("shows the host chip: pinned, and none on a local-only install", () => {
+    tasks = [makeTask({ id: 1, projectId: 3, status: "ready" })];
+    projects = [makeProject({ id: 3, hostId: "h1" })];
+    hosts = [makeHost({ id: "local", name: "local" }), makeHost({ id: "h1", name: "mac-mini" })];
+    const { container, unmount } = render(
+      <TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />,
+    );
+    expect(container.querySelector(".task-detail-host")).toHaveTextContent("pinned · mac-mini");
+    unmount();
+    hosts = [makeHost({ id: "local", name: "local" })];
+    const second = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(second.container.querySelector(".task-detail-host")).toBeNull();
   });
 });
