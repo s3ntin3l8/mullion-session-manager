@@ -36,10 +36,15 @@ alongside the existing hook socket (`<SESSIONS_DIR>/hooks.sock` — see
 `./data/sessions` in a dev checkout and is overridden to an absolute path by
 a versioned install (`deploy/install.sh`).
 
-**Remote-host sessions.** Sessions on an agent host have no reachable control
-socket (it is primary-only); their env carries
-`MULLION_CONTROL_UNAVAILABLE=remote-host` and the CLI/MCP client refuse
-up front. See [`multi-host.md`](multi-host.md#current-limitations) (#1627).
+**Remote-host sessions.** The control socket is primary-only. A session on a Linux or macOS
+agent host gets `MULLION_SOCKET_PATH` pointing at the agent's `relay.sock`, which carries the
+connection to the primary at **session scope** (the same wire protocol; the handshake token is
+validated on the agent). Streaming ops (`sessions.attach`, `events.subscribe`) answer
+`501 not-available-over-relay` there. A Windows agent still sets
+`MULLION_CONTROL_UNAVAILABLE=remote-host` and the CLI/MCP client refuse up front. A frame with
+`"id": null` and `"ok": false` is the relay (or server) refusing the whole connection, for example
+`relay-unavailable` or `relay-disconnected`. See
+[`multi-host.md`](multi-host.md#control-from-a-session-on-an-agent-host) (#1656).
 
 ## Wire protocol
 

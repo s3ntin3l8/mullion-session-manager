@@ -33,6 +33,7 @@ export const hostHeartbeatPlugin = fp(async (app: FastifyInstance) => {
     app.log.info({ hostId }, "[host-heartbeat] host recovered — forcing a reconnect");
     app.reconfigureRemoteEventSubscriptions?.({ forceReconnect: [hostId] });
     app.reconfigureSshAgentFanout?.({ forceReconnect: [hostId] });
+    app.reconfigureControlRelayFanout?.({ forceReconnect: [hostId] });
   }
 
   // Issue #2090 — a host coming online is when the opt-in "map projects onto

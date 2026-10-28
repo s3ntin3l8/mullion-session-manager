@@ -105,6 +105,19 @@ describe("MullionSocketClient on a remote host (#1627)", () => {
     await expect(client.connect()).rejects.toThrow(/#1627/);
   });
 
+  it("an id-less error frame (a refused connection) fails every pending request with its reason", async () => {
+    const client = new MullionSocketClient({ socketPath: "/x.sock" });
+    const rejected = new Promise((resolve) => {
+      client.pending.set(1, { resolve: () => {}, reject: resolve, timer: setTimeout(() => {}, 1) });
+    });
+    client._route({ id: null, ok: false, status: 503, error: "relay-unavailable: nope" });
+    await expect(rejected).resolves.toMatchObject({
+      status: 503,
+      message: expect.stringContaining("relay-unavailable"),
+    });
+    expect(client.pending.size).toBe(0);
+  });
+
   it("an explicit socketPath still connects as before", () => {
     const client = new MullionSocketClient({
       socketPath: "/x.sock",

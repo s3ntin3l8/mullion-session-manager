@@ -78,12 +78,12 @@ scrubbed from any _nested_ Mullion you might start, e.g. `make dev` run from
 inside this very session, so a dev instance never mistakes your session's
 socket/token for its own):
 
-| Variable              | Unlocks                                                                                                                             |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `MULLION_HOOK_SOCKET` | Structured notifications — `mullion notify`, and the hook channel your launcher's adapter already wired up (`docs/agent-hooks.md`). |
-| `MULLION_HOOK_TOKEN`  | Authenticates both the hook socket above AND the control socket below, at **session scope** (see next section).                     |
-| `MULLION_SOCKET_PATH` | Where the control socket lives — lets `mullion`/`mullion mcp`, run with no flags, find it automatically.                            |
-| `MULLION_SESSION_ID`  | Which session you are — lets `mullion`/`mullion mcp`, run with no flags, default every op to yourself.                              |
+| Variable              | Unlocks                                                                                                                                       |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MULLION_HOOK_SOCKET` | Structured notifications — `mullion notify`, and the hook channel your launcher's adapter already wired up (`docs/agent-hooks.md`).           |
+| `MULLION_HOOK_TOKEN`  | Authenticates both the hook socket above AND the control socket below, at **session scope** (see next section).                               |
+| `MULLION_SOCKET_PATH` | Where the control socket lives (on an agent host, its relay socket) — lets `mullion`/`mullion mcp`, run with no flags, find it automatically. |
+| `MULLION_SESSION_ID`  | Which session you are — lets `mullion`/`mullion mcp`, run with no flags, default every op to yourself.                                        |
 
 That's the entire surface you need, and no config file you need to read to
 use any of this — omit `--session`/`sessionId` everywhere below and it

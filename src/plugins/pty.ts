@@ -10,6 +10,7 @@ import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
 import { readAgentBundleDisabled } from "../services/agent-bundle-state.js";
 import { isAuthEnabled } from "../services/auth.js";
+import { controlRelaySocketPath } from "../services/control-relay.js";
 import { startKeepAwake } from "../services/keep-awake.js";
 import { PtyManager } from "../services/pty-manager.js";
 import {
@@ -635,6 +636,10 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   // doesn't own — sshAgentPlugin must crash rather than silently degrade in
   // that specific case. See that plugin's own comment for how it uses this.
   app.decorate("sshAuthSockBridgeExpected", willMaterializeBridgeSocket);
+  // The control relay's socket is a plain unix socket; a Windows agent has no
+  // relay yet (its CLI reaches the control socket by named pipe).
+  const controlRelayExpected = app.config.MULLION_ROLE === "agent" && process.platform !== "win32";
+  app.decorate("controlRelayExpected", controlRelayExpected);
   // Captured once so the shadow-warning log below describes the exact same
   // inputs that produced `resolvedSshAuthSock`, rather than re-reading
   // process.env.SSH_AUTH_SOCK a second time (Hermes review, PR #875) — the
@@ -695,10 +700,14 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     // across a restart, since MULLION_AUTH_TOKEN/OIDC config are env-var-
     // derived, not DB-backed settings).
     authEnabled: isAuthEnabled(app.config),
-    controlSocketPath: app.config.MULLION_SOCKET_PATH || undefined,
-    // The control socket is primary-only (control-socket.ts no-ops here), so
-    // tell the sessions rather than leave them a dead path (#1627).
-    controlUnavailable: app.config.MULLION_ROLE === "agent",
+    // An agent's sessions reach the primary through the local relay socket
+    // (#1656); the primary's own control socket is not served on this host.
+    controlSocketPath: controlRelayExpected
+      ? controlRelaySocketPath(sessionsDir)
+      : app.config.MULLION_SOCKET_PATH || undefined,
+    // Without a relay (Windows agents) nothing listens, so tell the sessions
+    // rather than leave them a dead path (#1627).
+    controlUnavailable: app.config.MULLION_ROLE === "agent" && !controlRelayExpected,
     getInjectAgentGuide: () => readInjectAgentGuide(app),
     getInjectProjectBriefing: () => readInjectProjectBriefing(app),
     getInjectMullionBundle: () => readInjectMullionBundle(app),
@@ -948,5 +957,8 @@ declare module "fastify" {
      * path is harmless (this is `false`) or a genuine race requiring a
      * crash rather than a silent degrade (this is `true`). */
     sshAuthSockBridgeExpected: boolean;
+    /** True on an agent host that serves the control relay's `relay.sock`
+     * (plugins/control-relay.ts) and points its sessions at it (#1656). */
+    controlRelayExpected: boolean;
   }
 }

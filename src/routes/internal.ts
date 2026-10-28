@@ -3051,6 +3051,33 @@ export async function internalRoutes(app: FastifyInstance) {
     },
   );
 
+  // Issue #1656 — the agent half of the control relay's transport: the
+  // primary dials THIS route (an agent never dials out) and the mux it
+  // carries is what relay.sock (plugins/control-relay.ts) opens a channel on
+  // for each session connection. Inside internalRoutes() for the same reason
+  // as /internal/ws/ssh-agent above: it inherits the bearer + signing gate.
+  // Even parity here, odd on the primary's dial (control-relay-fanout.ts).
+  app.get(
+    "/internal/ws/control-relay",
+    { websocket: true, config: INTERNAL_RATE_LIMIT.config },
+    (socket) => {
+      const holder = app.controlRelayConnection;
+      // Superseding, not accumulating: a reconnect that lands before the old
+      // connection notices it is dead must not leave its channels orphaned.
+      holder.current?.close();
+      const mux = createMuxConnection(socket, { channelIdParity: "even" });
+      holder.current = mux;
+      app.log.debug({}, "control-relay: primary<->agent connection established");
+      mux.onClose((reason) => {
+        // A newer connection may already have superseded this one.
+        if (holder.current !== mux) return;
+        holder.current = null;
+        holder.handle?.relayDown(reason);
+        app.log.debug({ reason }, "control-relay: primary<->agent connection closed");
+      });
+    },
+  );
+
   // The two-hop preview proxy's agent-side half (issue #28 phase 6): the
   // primary's own preview-proxy.ts forwards a browser's preview request
   // here instead of dialing a remote-hosted project's dev server directly

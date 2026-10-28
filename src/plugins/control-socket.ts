@@ -2348,10 +2348,35 @@ function resolveHandshake(
   return null;
 }
 
-function handleConnection(
+/** A connection carried by a host's control relay (#1656): already
+ * authenticated by that host's agent, so it skips the handshake and is
+ * pinned, for its lifetime, to `sessionId` as a session-scope connection. */
+export interface RelayBinding {
+  hostId: string;
+  sessionId: string;
+}
+
+/** Why a relayed session may not act right now, or null: its row must still be
+ * active and the session must be hosted by the relaying host — the one fact
+ * that bounds what a compromised agent can claim to be. */
+export function relayedSessionDenied(app: FastifyInstance, relay: RelayBinding): string | null {
+  const row = app.db
+    .select({ projectId: sessions.projectId, hostId: sessions.hostId, status: sessions.status })
+    .from(sessions)
+    .where(eq(sessions.id, Number(relay.sessionId)))
+    .get();
+  if (!row || row.status !== "active") return "this session is no longer active";
+  if (resolveSessionHostId(app, row) !== relay.hostId) {
+    return "this session is not hosted by the relaying host";
+  }
+  return null;
+}
+
+export function handleConnection(
   app: FastifyInstance,
   socket: net.Socket,
   openSockets: Set<net.Socket>,
+  relay?: RelayBinding,
 ): void {
   openSockets.add(socket);
   socket.once("close", () => {
@@ -2378,7 +2403,23 @@ function handleConnection(
   let bufferBytes = 0;
   // Everything before this index has already been searched for "\n".
   let scanFrom = 0;
-  let conn: ConnectionState | null = null;
+  // A relayed connection arrives pre-authenticated (session scope, pinned to
+  // the id the relaying agent validated); a local one waits for its handshake.
+  let conn: ConnectionState | null = relay
+    ? {
+        send: (message) => writeFrame(socket, message),
+        onClose: (listener) => {
+          socket.once("close", listener);
+          return () => socket.off("close", listener);
+        },
+        socket: null,
+        origin: { relayHostId: relay.hostId },
+        scope: "session",
+        sessionId: relay.sessionId,
+        openChannels: new Map(),
+        activeWaits: 0,
+      }
+    : null;
   let inflight = 0;
   let paused = false;
   // Per-connection decoder, not a fresh Buffer.toString("utf8") per chunk —
@@ -2395,6 +2436,7 @@ function handleConnection(
     socket.destroy();
   }, HANDSHAKE_TIMEOUT_MS);
   handshakeTimer.unref();
+  if (relay) clearTimeout(handshakeTimer);
 
   const overloaded = () =>
     conn !== null &&
@@ -2508,6 +2550,15 @@ function handleConnection(
         continue;
       }
 
+      if (relay) {
+        // Per request, not per connection: the row can go inactive and the
+        // session can be re-homed while a long-lived relayed connection idles.
+        const denied = relayedSessionDenied(app, relay);
+        if (denied !== null) {
+          writeFrame(socket, { id: result.message.id, ok: false, status: 403, error: denied });
+          continue;
+        }
+      }
       inflight++;
       dispatch(app, conn, result.message)
         .catch((err) => app.log.error({ err }, "dispatch failed"))
