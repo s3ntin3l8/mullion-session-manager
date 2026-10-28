@@ -31,7 +31,8 @@
 #     enrollment token, no -PrimaryUrl) generates a per-agent token for manual
 #     registration (Settings -> Hosts -> Add host on the primary), keeps it in
 #     the .env and reports it ONCE: as "agentToken" on the final -Json line, or
-#     as one line of text. A re-run leaves the .env alone and reports none;
+#     as one line of text. A re-run reports none, unless the existing .env has
+#     no credential at all, in which case the new token is filled into it;
 #   - with -Json, stdout is one JSON object per line, nothing else:
 #       {"step":"<name>","status":"start|ok|skip|log|fail","detail":"...", ...}
 #     steps, in order: platform, git-bash, node, fetch, install, done (an
@@ -59,7 +60,8 @@ param(
   [string]$AgentName,
   [string]$AdvertiseUrl,
   # The address and port the agent listens on (default: 127.0.0.1:3000, which
-  # nothing outside this PC can reach). Written to the .env as HOST and PORT.
+  # nothing outside this PC can reach). Written to the .env as HOST and PORT,
+  # also into an existing one. -Port must be 1..65535.
   [string]$BindHost,
   [int]$Port,
   [string]$Version,
@@ -248,8 +250,12 @@ function Add-AppsEntry([string]$Root, [string]$Version) {
   $copy = Join-Path $Root 'mullion-install.ps1'
   if ($PSCommandPath -and (Test-Path -LiteralPath $PSCommandPath)) {
     if ((Get-FullPath $PSCommandPath) -ne (Get-FullPath $copy)) { Copy-Item -LiteralPath $PSCommandPath -Destination $copy -Force }
+  } elseif ($SelfText) {
+    [IO.File]::WriteAllText($copy, $SelfText, (New-Object Text.UTF8Encoding($false)))
   } else {
-    [IO.File]::WriteAllText($copy, $script:SelfText, (New-Object Text.UTF8Encoding($false)))
+    # Piped in (irm | iex): there is no file and no script block to keep, and an
+    # empty file would make Settings -> Apps "uninstall" by running nothing.
+    throw 'this script was piped in, so there is nothing to keep a copy of; save it and run it with -File (or as a script block) to get the entry'
   }
   $uninstall = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' + $copy + '" -Uninstall -InstallRoot "' + $Root + '"'
   New-Item -Path $UninstallRegistryKey -Force | Out-Null
@@ -294,6 +300,9 @@ if ($InstallRootAsGiven -notmatch '^([A-Za-z]:[\\/]|\\\\)') {
 $InstallRoot = Get-FullPath $InstallRoot
 if ($InstallRoot -eq [IO.Path]::GetPathRoot($InstallRoot)) {
   Fail 2 'platform' "the install root must be a folder, not the drive root $InstallRoot"
+}
+if ($PSBoundParameters.ContainsKey('Port') -and ($Port -lt 1 -or $Port -gt 65535)) {
+  Fail 2 'platform' "-Port must be between 1 and 65535, not $Port"
 }
 $RuntimeDir = Join-Path $InstallRoot 'runtime'
 Emit 'platform' 'ok' "x64, install root $InstallRoot"
@@ -506,12 +515,26 @@ Emit 'fetch' 'ok' "$base/mullion-install.sh"
 $token = $env:MULLION_AGENT_ENROLLMENT_TOKEN
 if ($TokenFromStdin) { $token = [Console]::In.ReadLine() }
 
-# No credential at all on a fresh install: generate the per-agent token for
-# manual registration. An existing .env is left as it is by the installer, so
-# a token generated now would not be the one in it.
+# No credential at all: generate the per-agent token for manual registration.
+# An existing .env is left as it is by the installer except that a caller's
+# token is filled in when the file has no credential, so a token is generated
+# only when there is no .env, or the one there has no credential (a first run
+# that failed halfway, say). One that has a credential is never touched.
+function Test-EnvCredential([string]$EnvFile) {
+  # What src/app.ts needs: a non-blank MULLION_AGENT_TOKEN, or both a primary
+  # URL and an enrollment token.
+  $vals = @{}
+  foreach ($line in @(Get-Content -LiteralPath $EnvFile -ErrorAction SilentlyContinue)) {
+    if ($line -match '^\s*([A-Za-z_]+)=(.*)$') { $vals[$Matches[1]] = $Matches[2].Trim() }
+  }
+  if ($vals['MULLION_AGENT_TOKEN']) { return $true }
+  return [bool]($vals['MULLION_PRIMARY_URL'] -and $vals['MULLION_ENROLLMENT_TOKEN'])
+}
+$envFile = Join-Path $InstallRoot '.env'
+$hasCredential = (Test-Path -LiteralPath $envFile) -and (Test-EnvCredential $envFile)
 $agentToken = $env:MULLION_AGENT_TOKEN
 $generatedToken = $null
-if (-not $agentToken -and -not $token -and -not $PrimaryUrl -and -not (Test-Path -LiteralPath (Join-Path $InstallRoot '.env'))) {
+if (-not $agentToken -and -not $token -and -not $PrimaryUrl -and -not $hasCredential) {
   $bytes = New-Object byte[] 32
   $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
   $rng.GetBytes($bytes)

@@ -819,13 +819,16 @@ neither and register the host by hand. In that second case a **fresh** install
 generates a random per-agent token (`MULLION_AGENT_TOKEN` in the `.env`) and
 shows it **once** — as the last line of the output, or as `agentToken` on the
 final `-Json` line. Paste it into Settings → Hosts → Add host on the primary,
-with the base URL you gave `-AdvertiseUrl`. A re-run leaves the `.env` as it
-is, so it reports no token; read it from the `.env` if you need it again.
+with the base URL you gave `-AdvertiseUrl`. A re-run leaves an existing `.env`
+alone, so it reports no token (read it from the `.env` if you need it again) —
+except that an `.env` with no credential at all, such as one left by a first run
+that failed halfway, gets the new token filled in.
 
 **Reaching the agent.** The agent listens on `127.0.0.1` by default, so the
 primary cannot dial it from another machine as it is. To let it connect, bind a
-LAN address (`-BindHost`, and `-Port` if not 3000; they are written to the
-`.env` as `HOST` and `PORT`) and give the primary a URL for that address with
+LAN address (`-BindHost`, and `-Port` if not 3000, 1 to 65535; they are
+written to the `.env` as `HOST` and `PORT`, and replace those lines in an
+existing `.env` when you re-run) and give the primary a URL for that address with
 `-AdvertiseUrl`. The installer warns when `-AdvertiseUrl` is set without
 `-BindHost`. The first time the agent listens on a non-loopback
 address, Windows shows a **Windows Defender Firewall prompt** for `node.exe`;
@@ -866,7 +869,9 @@ re-registers the task and moves `current` to the newest release.
 - a **per-user scheduled task**, `Mullion-agent`, that runs at logon;
 - an entry in **Settings → Apps → Installed apps** ("Mullion agent"), whose
   uninstall runs the bootstrap's `-Uninstall` from a copy of the script kept in
-  the install root (`mullion-install.ps1`).
+  the install root (`mullion-install.ps1`). A script that was piped into
+  `iex` has nothing to keep a copy of, so it gets no entry; save it, or run it as
+  a script block as in the command above.
 
 **Why a scheduled task and not a Windows service.** The agent CLIs, their
 logins, your git credentials and Git Bash are all per user, so the agent has

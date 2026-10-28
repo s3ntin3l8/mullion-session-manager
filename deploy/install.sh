@@ -430,10 +430,38 @@ is_blank() {
   [ -z "$v" ]
 }
 
+# env_value KEY — the last value of KEY in $MULLION_HOME/.env (empty when absent).
+env_value() {
+  grep -E "^$1=" "$MULLION_HOME/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r' || true
+}
+
+# set_env_value KEY VALUE — replace KEY's line in $MULLION_HOME/.env, or append
+# it. The file is rewritten through a 0600 temp file in the same directory, so
+# it is never readable by others, even briefly.
+set_env_value() {
+  local key="$1" val="$2" f="$MULLION_HOME/.env" tmp
+  tmp="$(umask 077 && mktemp "$f.XXXXXX")"
+  { grep -v "^${key}=" "$f" || true; printf '%s=%s\n' "$key" "$val"; } >"$tmp"
+  mv -f "$tmp" "$f"
+}
+
 if [ -f "$MULLION_HOME/.env" ]; then
   # Role-mismatch already checked and enforced right after $MULLION_HOME
   # was resolved, above — before any expensive/mutating step ran.
   echo "==> $MULLION_HOME/.env already exists, leaving it as-is"
+  if [ "$ROLE" = "agent" ]; then
+    # The one exception: values the caller passed on THIS run for what an
+    # install is asked to fix up (the Windows bootstrap's -BindHost/-Port, and
+    # the per-agent token it generates for an .env that has no credential), so
+    # re-running the installer with them is not a silent no-op.
+    if [ -n "${MULLION_AGENT_HOST:-}" ]; then set_env_value HOST "$MULLION_AGENT_HOST"; echo "==> set HOST in $MULLION_HOME/.env"; fi
+    if [ -n "${MULLION_AGENT_PORT:-}" ]; then set_env_value PORT "$MULLION_AGENT_PORT"; echo "==> set PORT in $MULLION_HOME/.env"; fi
+    if [ -n "${MULLION_AGENT_TOKEN:-}" ] && is_blank "$(env_value MULLION_AGENT_TOKEN)" &&
+      { is_blank "$(env_value MULLION_PRIMARY_URL)" || is_blank "$(env_value MULLION_ENROLLMENT_TOKEN)"; }; then
+      set_env_value MULLION_AGENT_TOKEN "$MULLION_AGENT_TOKEN"
+      echo "==> set MULLION_AGENT_TOKEN in $MULLION_HOME/.env (it had no credential)"
+    fi
+  fi
   # Hermes review, PR #529: content untouched, but permissions still
   # tightened — a legacy .env written at the ambient umask (644), or one
   # an operator hand-templated per this section's own docs, can hold

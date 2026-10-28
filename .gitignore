@@ -31,3 +31,7 @@ ui-verify-report.json
 # and are not worth permanent history weight. The report is the durable artifact; it never
 # links into this folder.
 docs/audit/assets/
+
+# Windows PowerShell writes its module-analysis cache here when LOCALAPPDATA
+# does not resolve (a test run with a blanked environment).
+/Microsoft/
