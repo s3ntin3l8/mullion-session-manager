@@ -67,7 +67,7 @@ describe("POST /api/sessions — dock port conflict", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: `p-${Math.random()}`, cwd },
+      payload: { allowDuplicate: true, name: `p-${Math.random()}`, cwd },
     });
     const id = res.json().id as number;
     if (devServerUrl) {

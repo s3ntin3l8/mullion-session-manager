@@ -145,7 +145,7 @@ describe("release-please routes (#744)", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "release-widgets", cwd: projectCwd },
+      payload: { allowDuplicate: true, createDir: true, name: "release-widgets", cwd: projectCwd },
     });
     return { projectId: created.json().id as number, projectCwd };
   }
@@ -267,7 +267,7 @@ describe("release-please routes (#744)", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "no-token", cwd: projectCwd },
+        payload: { allowDuplicate: true, createDir: true, name: "no-token", cwd: projectCwd },
       });
       const res = await app.inject({
         method: "GET",

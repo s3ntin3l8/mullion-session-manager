@@ -50,7 +50,7 @@ describe("task-review-end (#2103)", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "review-end-project", cwd },
+      payload: { allowDuplicate: true, createDir: true, name: "review-end-project", cwd },
     });
     project = app.db.select().from(projects).where(eq(projects.id, res.json().id)).get()!;
   });

@@ -58,7 +58,7 @@ describe("event-history service", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "history-a", cwd: "/tmp/history-a" },
+      payload: { allowDuplicate: true, createDir: true, name: "history-a", cwd: "/tmp/history-a" },
     });
     const projectId = created.json().id as number;
     const [session] = app.db
@@ -119,7 +119,12 @@ describe("event-history service", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "history-dedupe-a", cwd: "/tmp/history-dedupe-a" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "history-dedupe-a",
+          cwd: "/tmp/history-dedupe-a",
+        },
       });
       const projectId = created.json().id as number;
       const [session] = app.db
@@ -146,7 +151,12 @@ describe("event-history service", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "history-dedupe-b", cwd: "/tmp/history-dedupe-b" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "history-dedupe-b",
+          cwd: "/tmp/history-dedupe-b",
+        },
       });
       const projectId = created.json().id as number;
       const [session] = app.db
@@ -202,7 +212,12 @@ describe("event-history service", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "history-b", cwd: "/tmp/history-b" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "history-b",
+          cwd: "/tmp/history-b",
+        },
       });
       const projectId = created.json().id as number;
       const [s1, s2] = app.db
@@ -250,7 +265,12 @@ describe("event-history service", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "history-c", cwd: "/tmp/history-c" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "history-c",
+          cwd: "/tmp/history-c",
+        },
       });
       const projectId = created.json().id as number;
       const [session] = app.db
@@ -288,7 +308,12 @@ describe("event-history service", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "history-d", cwd: "/tmp/history-d" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "history-d",
+          cwd: "/tmp/history-d",
+        },
       });
       const projectId = created.json().id as number;
       const [session] = app.db
@@ -316,7 +341,12 @@ describe("event-history service", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "history-e", cwd: "/tmp/history-e" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "history-e",
+          cwd: "/tmp/history-e",
+        },
       });
       const projectId = created.json().id as number;
       const [session] = app.db
@@ -349,7 +379,12 @@ describe("event-history service", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "history-f", cwd: "/tmp/history-f" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "history-f",
+          cwd: "/tmp/history-f",
+        },
       });
       const projectId = created.json().id as number;
       const [session] = app.db
@@ -371,7 +406,12 @@ describe("event-history service", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "history-g", cwd: "/tmp/history-g" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "history-g",
+          cwd: "/tmp/history-g",
+        },
       });
       const projectId = created.json().id as number;
       const [session] = app.db
@@ -407,7 +447,12 @@ describe("event-history service", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "history-h", cwd: "/tmp/history-h" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "history-h",
+          cwd: "/tmp/history-h",
+        },
       });
       const projectId = created.json().id as number;
       const [session] = app.db
@@ -431,7 +476,12 @@ describe("event-history service", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "history-i", cwd: "/tmp/history-i" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "history-i",
+          cwd: "/tmp/history-i",
+        },
       });
       const projectId = created.json().id as number;
       const [session] = app.db
@@ -502,7 +552,12 @@ describe("event-history service", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "history-cap-a", cwd: "/tmp/history-cap-a" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "history-cap-a",
+          cwd: "/tmp/history-cap-a",
+        },
       });
       const projectId = created.json().id as number;
       const [session] = app.db
@@ -534,7 +589,12 @@ describe("event-history service", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "history-cap-f", cwd: "/tmp/history-cap-f" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "history-cap-f",
+          cwd: "/tmp/history-cap-f",
+        },
       });
       const projectId = created.json().id as number;
       const [session] = app.db
@@ -574,7 +634,12 @@ describe("event-history service", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "history-cap-b", cwd: "/tmp/history-cap-b" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "history-cap-b",
+          cwd: "/tmp/history-cap-b",
+        },
       });
       const projectId = created.json().id as number;
       const [session] = app.db
@@ -603,7 +668,12 @@ describe("event-history service", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "history-cap-c", cwd: "/tmp/history-cap-c" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "history-cap-c",
+          cwd: "/tmp/history-cap-c",
+        },
       });
       const projectId = created.json().id as number;
       const [session] = app.db
@@ -647,7 +717,12 @@ describe("event-history service", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "history-cap-e", cwd: "/tmp/history-cap-e" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "history-cap-e",
+          cwd: "/tmp/history-cap-e",
+        },
       });
       const projectId = created.json().id as number;
       const [session] = app.db
@@ -696,7 +771,12 @@ describe("event-history service", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "history-cap-d", cwd: "/tmp/history-cap-d" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "history-cap-d",
+          cwd: "/tmp/history-cap-d",
+        },
       });
       const projectId = created.json().id as number;
       const [sessionA, sessionB] = app.db

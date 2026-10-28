@@ -274,7 +274,7 @@ describe("browser route (/ws/browser/:sessionId)", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "p", cwd: "/tmp" },
+      payload: { allowDuplicate: true, createDir: true, name: "p", cwd: "/tmp" },
     });
     const projectId = project.json().id as number;
 

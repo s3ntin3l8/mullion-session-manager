@@ -238,7 +238,7 @@ describe("multi-host proxy (issue #26)", () => {
     const projectRes = await primary.app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "remote", cwd: "/tmp/remote-project", hostId },
+      payload: { allowDuplicate: true, name: "remote", cwd: "/tmp/remote-project", hostId },
     });
     projectId = projectRes.json().id;
 
@@ -698,6 +698,7 @@ describe("multi-host proxy (issue #26)", () => {
           method: "POST",
           url: "/api/projects",
           payload: {
+            allowDuplicate: true,
             name: "dev-server-status-dead-project",
             cwd: "/x",
             hostId: deadPortHost.json().id,
@@ -745,7 +746,12 @@ describe("multi-host proxy (issue #26)", () => {
     const deadProject = await primary.app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "dead-project", cwd: "/x", hostId: deadPortHost.json().id },
+      payload: {
+        allowDuplicate: true,
+        name: "dead-project",
+        cwd: "/x",
+        hostId: deadPortHost.json().id,
+      },
     });
     const { sessions } = await import("../../src/db/schema.js");
     const [orphan] = primary.app.db
@@ -824,7 +830,7 @@ describe("multi-host dock-preview worktrees (issue #345)", () => {
     const projectRes = await primary.app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "dock-preview-remote", cwd, hostId },
+      payload: { allowDuplicate: true, name: "dock-preview-remote", cwd, hostId },
     });
     projectId = projectRes.json().id;
   });
@@ -1217,7 +1223,12 @@ describe("agent-initiated registration (issue #245 / roadmap 7.1)", () => {
       const projectRes = await primary.app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "ws-attach-session-host", cwd: "/tmp/remote-ws-project", hostId },
+        payload: {
+          allowDuplicate: true,
+          name: "ws-attach-session-host",
+          cwd: "/tmp/remote-ws-project",
+          hostId,
+        },
       });
       expect(projectRes.statusCode).toBe(201);
       const projectId = projectRes.json().id as number;
@@ -1413,7 +1424,7 @@ describe("graceful agent deregistration (issue #248 / roadmap 7.3)", () => {
     const created = await primary.app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "survives-deregister", cwd: os.tmpdir(), hostId },
+      payload: { allowDuplicate: true, name: "survives-deregister", cwd: os.tmpdir(), hostId },
     });
     expect(created.statusCode).toBe(201);
 

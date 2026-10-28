@@ -1408,7 +1408,7 @@ describe("DiscoverProjects — a candidate that is a checkout of an existing pro
     cwd: "/repos/widgets",
     isGitRepo: true,
     isRegistered: false,
-    matchedProject: { id: 7, name: "Widgets App", reason: "origin" as const },
+    matchedProject: { id: 7, name: "Widgets App", hostId: "mac", reason: "origin" as const },
   };
 
   it("offers 'Add as checkout of <project>' and attaches the path instead of creating a project", async () => {
@@ -1428,6 +1428,19 @@ describe("DiscoverProjects — a candidate that is a checkout of an existing pro
     await waitFor(() =>
       expect(screen.queryByText("Add as checkout of Widgets App")).not.toBeInTheDocument(),
     );
+  });
+
+  it("hides the attach action for a second clone on the project's own host", async () => {
+    const { api } = await import("./api/index.js");
+    vi.mocked(api.discoverProjects).mockResolvedValueOnce([
+      { ...matched, matchedProject: { ...matched.matchedProject, hostId: "local" } },
+    ]);
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await user.click(await screen.findByText("Discover projects"));
+    expect(await screen.findByText("Create a separate project anyway")).toBeInTheDocument();
+    expect(screen.queryByText("Add as checkout of Widgets App")).not.toBeInTheDocument();
   });
 
   it("shows the server's reason when the attach is refused", async () => {

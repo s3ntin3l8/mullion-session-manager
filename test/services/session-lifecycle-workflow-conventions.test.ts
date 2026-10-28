@@ -64,7 +64,7 @@ describe("session-lifecycle.ts — global workflow-conventions injection (issue 
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "workflow-conventions", cwd: projectDir },
+      payload: { allowDuplicate: true, name: "workflow-conventions", cwd: projectDir },
     });
     return res.json().id as number;
   }

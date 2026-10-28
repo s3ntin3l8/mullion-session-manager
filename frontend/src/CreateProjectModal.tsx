@@ -234,6 +234,7 @@ export function CreateProjectModal({
     code?: string;
     existingProjectId?: number;
     existingName?: string;
+    existingHostId?: string;
   } | null>(null);
   // The error block sits right under the path field, far above the Save
   // button on a tall edit form (Dev server and the rest are below it), so a
@@ -527,6 +528,7 @@ export function CreateProjectModal({
           ? {
               existingProjectId: err.body?.existingProjectId as number | undefined,
               existingName: err.body?.existingName as string | undefined,
+              existingHostId: err.body?.existingHostId as string | undefined,
             }
           : {}),
       });
@@ -816,16 +818,18 @@ export function CreateProjectModal({
           <span className="create-modal-field-hint error">{error.message}</span>
           {error.code === DUPLICATE_CODE && (
             <>
-              {!isEdit && error.existingProjectId !== undefined && (
-                <button
-                  type="button"
-                  className="create-modal-dir-confirm-btn"
-                  disabled={submitting}
-                  onClick={() => void attachToExisting()}
-                >
-                  Add as checkout of {error.existingName ?? "the existing project"}
-                </button>
-              )}
+              {!isEdit &&
+                error.existingProjectId !== undefined &&
+                error.existingHostId !== hostId && (
+                  <button
+                    type="button"
+                    className="create-modal-dir-confirm-btn"
+                    disabled={submitting}
+                    onClick={() => void attachToExisting()}
+                  >
+                    Add as checkout of {error.existingName ?? "the existing project"}
+                  </button>
+                )}
               <button
                 type="button"
                 className="create-modal-dir-confirm-btn"

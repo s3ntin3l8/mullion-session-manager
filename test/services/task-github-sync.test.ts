@@ -112,7 +112,7 @@ describe("task-github-sync", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "sync-test-project", cwd },
+      payload: { allowDuplicate: true, createDir: true, name: "sync-test-project", cwd },
     });
     projectId = res.json().id;
   });

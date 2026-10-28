@@ -171,7 +171,7 @@ describe("terminal route (/ws/terminal)", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "p", cwd: "/tmp" },
+      payload: { allowDuplicate: true, createDir: true, name: "p", cwd: "/tmp" },
       headers,
     });
     const projectId = project.json().id as number;

@@ -40,7 +40,7 @@ describe("upsertIssueTask (#490a)", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "ingest-test-project", cwd },
+      payload: { allowDuplicate: true, createDir: true, name: "ingest-test-project", cwd },
     });
     projectId = res.json().id;
   });

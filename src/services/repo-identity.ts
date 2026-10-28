@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { LOCAL_HOST_ID } from "../shared/constants.js";
 import { projects } from "../db/schema.js";
 import { normalizeGitRemote } from "./git-remote.js";
 import { projectOrigin, type HostCandidateCache } from "./host-checkout-detect.js";
@@ -27,6 +28,14 @@ export interface RepoIdentityQuery {
   /** Precomputed `buildOriginIndex` result, so a caller matching many
    * candidates (Discover) reads each project's origin once. */
   originIndex?: OriginIndex;
+  /** A holder shared across calls of one request: the index is built on first
+   * need (never when every candidate matches by path or has no origin) and
+   * reused after, so a request scans each remote host at most once. */
+  originIndexRef?: { current?: OriginIndex };
+  /** Never touch the network: compare against local projects' origins only,
+   * and skip the candidate's own remote lookup. Create/edit use this so saving
+   * a project never waits on (or fails because of) another host. */
+  localOnly?: boolean;
 }
 
 /** projectId -> normalised origin (null when it cannot be told). */
@@ -34,10 +43,14 @@ export type OriginIndex = Map<number, string | null>;
 
 /** Every project's normalised origin, best-effort. Each remote host is asked
  * for its discovery list at most once. */
-export async function buildOriginIndex(app: FastifyInstance): Promise<OriginIndex> {
+export async function buildOriginIndex(
+  app: FastifyInstance,
+  opts: { localOnly?: boolean } = {},
+): Promise<OriginIndex> {
   const cache: HostCandidateCache = new Map();
   const index: OriginIndex = new Map();
   for (const p of app.db.select().from(projects).all()) {
+    if (opts.localOnly && p.hostId !== LOCAL_HOST_ID) continue;
     try {
       index.set(p.id, await projectOrigin(app, p, cache));
     } catch (err) {
@@ -80,7 +93,7 @@ export async function findProjectByRepoIdentity(
   let origin: string | null = null;
   if (query.origin !== undefined && query.origin !== null) {
     origin = normalizeGitRemote(query.origin);
-  } else if (query.origin === undefined) {
+  } else if (query.origin === undefined && !(query.localOnly && query.hostId !== LOCAL_HOST_ID)) {
     try {
       origin = await projectOrigin(app, { hostId: query.hostId, cwd: query.cwd });
     } catch (err) {
@@ -89,7 +102,11 @@ export async function findProjectByRepoIdentity(
   }
   if (origin === null) return null;
 
-  const index = query.originIndex ?? (await buildOriginIndex(app));
+  let index = query.originIndex ?? query.originIndexRef?.current;
+  if (!index) {
+    index = await buildOriginIndex(app, { localOnly: query.localOnly });
+    if (query.originIndexRef) query.originIndexRef.current = index;
+  }
   for (const p of all) {
     if (index.get(p.id) === origin) return { project: p, reason: "origin" };
   }

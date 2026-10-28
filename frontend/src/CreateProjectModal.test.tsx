@@ -1149,6 +1149,21 @@ describe("CreateProjectModal — confirm-first directory creation and error hand
     await waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 
+  it("hides attach when the duplicate lives on the same host", async () => {
+    const onCreate = vi.fn().mockRejectedValue(
+      new ApiError("dup", 409, "DUPLICATE_PROJECT", {
+        existingProjectId: 7,
+        existingName: "Widgets",
+        existingHostId: "local",
+      }),
+    );
+    const user = userEvent.setup();
+    render(<CreateProjectModal onClose={vi.fn()} onCreate={onCreate} initialPath="/repo" />);
+    await user.click(screen.getByRole("button", { name: "Add project" }));
+    await screen.findByRole("button", { name: "Create a separate project anyway" });
+    expect(screen.queryByRole("button", { name: /Add as checkout of/ })).not.toBeInTheDocument();
+  });
+
   it("'Add as checkout of' attaches the path to the existing project and closes", async () => {
     vi.mocked(api.attachHostCheckout).mockResolvedValueOnce(makeProject({ id: 7 }));
     const onClose = vi.fn();

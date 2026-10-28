@@ -53,7 +53,7 @@ describe("resolveTaskIssueContext (#939/#1016)", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "issue-context-test-project", cwd },
+      payload: { allowDuplicate: true, createDir: true, name: "issue-context-test-project", cwd },
     });
     projectId = res.json().id;
   });

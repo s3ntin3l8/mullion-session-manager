@@ -2584,17 +2584,21 @@ function DiscoverProjects({
               {c.isGitRepo && <span className="discover-git-badge">git</span>}
               {c.matchedProject ? (
                 <>
-                  <button
-                    className="discover-add"
-                    title={
-                      c.matchedProject.reason === "origin"
-                        ? "Same git remote as this project"
-                        : "This path is already part of this project"
-                    }
-                    onClick={() => attach(c)}
-                  >
-                    Add as checkout of {c.matchedProject.name}
-                  </button>
+                  {/* A second clone on the project's own host cannot be
+                      attached (only created separately). */}
+                  {c.matchedProject.hostId !== selectedHostId && (
+                    <button
+                      className="discover-add"
+                      title={
+                        c.matchedProject.reason === "origin"
+                          ? "Same git remote as this project"
+                          : "This path is already part of this project"
+                      }
+                      onClick={() => attach(c)}
+                    >
+                      Add as checkout of {c.matchedProject.name}
+                    </button>
+                  )}
                   <button className="discover-add secondary" onClick={() => addAsProject(c, true)}>
                     Create a separate project anyway
                   </button>

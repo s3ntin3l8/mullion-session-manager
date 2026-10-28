@@ -196,7 +196,7 @@ describe("sessions route", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "p", cwd: "/tmp" },
+      payload: { allowDuplicate: true, createDir: true, name: "p", cwd: "/tmp" },
     });
     return res.json().id as number;
   }
@@ -1463,7 +1463,12 @@ describe("sessions route", () => {
       const remoteProject = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-scrollback", cwd: "/x", hostId: badHost.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "remote-scrollback",
+          cwd: "/x",
+          hostId: badHost.json().id,
+        },
       });
       const [orphan] = app.db
         .insert(sessions)
@@ -1565,7 +1570,7 @@ describe("sessions route", () => {
       const res = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "upload-p", cwd },
+        payload: { allowDuplicate: true, createDir: true, name: "upload-p", cwd },
       });
       return res.json().id as number;
     }
@@ -2623,7 +2628,7 @@ describe("sessions route", () => {
       const res = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "worktree-p", cwd },
+        payload: { allowDuplicate: true, createDir: true, name: "worktree-p", cwd },
       });
       return res.json().id as number;
     }
@@ -3747,7 +3752,12 @@ describe("sessions route", () => {
         const project = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { name: "remote-promote-p", cwd: "/remote/project", hostId },
+          payload: {
+            allowDuplicate: true,
+            name: "remote-promote-p",
+            cwd: "/remote/project",
+            hostId,
+          },
         });
         return { projectId: project.json().id as number, hostId };
       }
@@ -3912,7 +3922,12 @@ describe("sessions route", () => {
         const project = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { name: "remote-promote-skew-p", cwd: "/remote/project", hostId },
+          payload: {
+            allowDuplicate: true,
+            name: "remote-promote-skew-p",
+            cwd: "/remote/project",
+            hostId,
+          },
         });
         return { projectId: project.json().id as number, hostId };
       }
@@ -4166,7 +4181,12 @@ describe("sessions route", () => {
           const project = await app.inject({
             method: "POST",
             url: "/api/projects",
-            payload: { name: "remote-preview-p", cwd: "/remote/project", hostId },
+            payload: {
+              allowDuplicate: true,
+              name: "remote-preview-p",
+              cwd: "/remote/project",
+              hostId,
+            },
           });
           return { projectId: project.json().id as number, hostId };
         }
@@ -4513,7 +4533,7 @@ describe("sessions route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-p", cwd: "/remote/path", hostId },
+        payload: { allowDuplicate: true, name: "remote-p", cwd: "/remote/path", hostId },
       });
       return project.json().id as number;
     }
@@ -4554,7 +4574,12 @@ describe("sessions route", () => {
       const remoteProject = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-list", cwd: "/x", hostId: badHost.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "remote-list",
+          cwd: "/x",
+          hostId: badHost.json().id,
+        },
       });
       // Insert a session row directly (bypassing POST /api/sessions' spawn
       // step, which would fail/rollback for this unreachable host — see
@@ -4597,7 +4622,12 @@ describe("sessions route", () => {
       const remoteProject = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-delete", cwd: "/x", hostId: badHost.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "remote-delete",
+          cwd: "/x",
+          hostId: badHost.json().id,
+        },
       });
       const [orphan] = app.db
         .insert(sessions)
@@ -4766,7 +4796,12 @@ describe("sessions route", () => {
         const project = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { name: "remote-attention-ack-p", cwd: "/remote/project", hostId },
+          payload: {
+            allowDuplicate: true,
+            name: "remote-attention-ack-p",
+            cwd: "/remote/project",
+            hostId,
+          },
         });
         const { sessions } = await import("../../src/db/schema.js");
         const [row] = app.db

@@ -532,7 +532,7 @@ describe("the Runway quota quarantine (issue #29)", () => {
       const res = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "runway-p", cwd },
+        payload: { allowDuplicate: true, createDir: true, name: "runway-p", cwd },
       });
       return res.json().id as number;
     }

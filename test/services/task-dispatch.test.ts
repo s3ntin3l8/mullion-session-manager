@@ -101,7 +101,7 @@ describe("task-dispatch (opportunistic hook + dispatchQueuedTasks)", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "dispatch-p", cwd },
+      payload: { allowDuplicate: true, createDir: true, name: "dispatch-p", cwd },
     });
     return res.json().id as number;
   }

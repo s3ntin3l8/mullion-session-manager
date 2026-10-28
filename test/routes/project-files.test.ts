@@ -89,7 +89,12 @@ describe("project-files routes", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "project-files-test", cwd: projectCwd },
+      payload: {
+        allowDuplicate: true,
+        createDir: true,
+        name: "project-files-test",
+        cwd: projectCwd,
+      },
     });
     return { app, projectId: created.json().id as number };
   }
@@ -347,7 +352,7 @@ describe("project-files routes", () => {
       const other = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "other", cwd: otherCwd },
+        payload: { allowDuplicate: true, createDir: true, name: "other", cwd: otherCwd },
       });
       const foreign = addSession(app, other.json().id as number, subDir);
       const res = await app.inject({
@@ -784,7 +789,7 @@ describe("project-files routes", () => {
       const project = await primary.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "pf-remote", cwd, hostId: host.json().id },
+        payload: { allowDuplicate: true, name: "pf-remote", cwd, hostId: host.json().id },
       });
       return { primary, projectId: project.json().id as number };
     }

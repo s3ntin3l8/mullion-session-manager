@@ -56,7 +56,7 @@ describe("session-lifecycle (kill + create)", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: `p-${Math.random()}`, cwd: "/tmp" },
+      payload: { allowDuplicate: true, createDir: true, name: `p-${Math.random()}`, cwd: "/tmp" },
     });
     const projectId = project.json().id as number;
     const backend = {

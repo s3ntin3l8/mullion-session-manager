@@ -127,7 +127,12 @@ describe("fillParentIssueTitles — sub-issue hierarchy (#701)", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: `p-${crypto.randomBytes(4).toString("hex")}`, cwd },
+      payload: {
+        allowDuplicate: true,
+        createDir: true,
+        name: `p-${crypto.randomBytes(4).toString("hex")}`,
+        cwd,
+      },
     });
     return res.json().id as number;
   }
@@ -260,6 +265,7 @@ describe("fillParentIssueTitles — sub-issue hierarchy (#701)", () => {
       method: "POST",
       url: "/api/projects",
       payload: {
+        allowDuplicate: true,
         createDir: true,
         name: `p-${crypto.randomBytes(4).toString("hex")}`,
         cwd: brokenCwd,
@@ -308,7 +314,12 @@ describe("fillParentIssueTitles — sub-issue hierarchy (#701)", () => {
     const bRes = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: `p-${crypto.randomBytes(4).toString("hex")}`, cwd: bCwd },
+      payload: {
+        allowDuplicate: true,
+        createDir: true,
+        name: `p-${crypto.randomBytes(4).toString("hex")}`,
+        cwd: bCwd,
+      },
     });
     const projectBId = bRes.json().id as number;
 

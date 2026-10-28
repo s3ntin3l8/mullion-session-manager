@@ -235,7 +235,7 @@ describe("tasks route", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "demo", cwd: "/tmp/demo" },
+      payload: { allowDuplicate: true, createDir: true, name: "demo", cwd: "/tmp/demo" },
     });
     const projectId = project.json().id;
 
@@ -283,7 +283,12 @@ describe("tasks route", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "demo-hierarchy", cwd: "/tmp/demo-hierarchy" },
+      payload: {
+        allowDuplicate: true,
+        createDir: true,
+        name: "demo-hierarchy",
+        cwd: "/tmp/demo-hierarchy",
+      },
     });
     const projectId = project.json().id;
 
@@ -337,7 +342,12 @@ describe("tasks route", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "demo-model", cwd: "/tmp/demo-model" },
+      payload: {
+        allowDuplicate: true,
+        createDir: true,
+        name: "demo-model",
+        cwd: "/tmp/demo-model",
+      },
     });
     const projectId = project.json().id;
 
@@ -380,7 +390,12 @@ describe("tasks route", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "demo-placement-req", cwd: "/tmp/demo-placement-req" },
+      payload: {
+        allowDuplicate: true,
+        createDir: true,
+        name: "demo-placement-req",
+        cwd: "/tmp/demo-placement-req",
+      },
     });
     const projectId = project.json().id;
 
@@ -419,7 +434,12 @@ describe("tasks route", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "demo-cap-announced", cwd: "/tmp/demo-cap-announced" },
+      payload: {
+        allowDuplicate: true,
+        createDir: true,
+        name: "demo-cap-announced",
+        cwd: "/tmp/demo-cap-announced",
+      },
     });
     const projectId = project.json().id;
 
@@ -454,7 +474,12 @@ describe("tasks route", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "demo-local", cwd: "/tmp/demo-local" },
+      payload: {
+        allowDuplicate: true,
+        createDir: true,
+        name: "demo-local",
+        cwd: "/tmp/demo-local",
+      },
     });
     const projectId = project.json().id;
 
@@ -485,7 +510,12 @@ describe("tasks route", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "demo-multi-local", cwd: "/tmp/demo-multi-local" },
+      payload: {
+        allowDuplicate: true,
+        createDir: true,
+        name: "demo-multi-local",
+        cwd: "/tmp/demo-multi-local",
+      },
     });
     const projectId = project.json().id;
 
@@ -510,7 +540,7 @@ describe("tasks route", () => {
       const res = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "claim-p", cwd },
+        payload: { allowDuplicate: true, createDir: true, name: "claim-p", cwd },
       });
       return res.json().id as number;
     }
@@ -669,7 +699,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-p", cwd: "/tmp/remote", hostId },
+        payload: { allowDuplicate: true, name: "remote-p", cwd: "/tmp/remote", hostId },
       });
       const projectId = project.json().id;
       const task = insertTask(app, projectId, 44);
@@ -868,7 +898,7 @@ describe("tasks route", () => {
       const res = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "retry-p", cwd },
+        payload: { allowDuplicate: true, createDir: true, name: "retry-p", cwd },
       });
       return res.json().id as number;
     }
@@ -1042,7 +1072,12 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "approve-reject-p", cwd: "/tmp/approve-reject" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "approve-reject-p",
+          cwd: "/tmp/approve-reject",
+        },
       });
       const projectId = project.json().id;
       const { tasks } = await import("../../src/db/schema.js");
@@ -1288,7 +1323,12 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "not-reviewing-p", cwd: "/tmp/not-reviewing" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "not-reviewing-p",
+          cwd: "/tmp/not-reviewing",
+        },
       });
       const { tasks } = await import("../../src/db/schema.js");
       const [row] = app.db
@@ -1318,7 +1358,7 @@ describe("tasks route", () => {
         await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { createDir: true, name: "epic-warn-p", cwd },
+          payload: { allowDuplicate: true, createDir: true, name: "epic-warn-p", cwd },
         })
       ).json().id;
       const [task] = app.db
@@ -1370,7 +1410,7 @@ describe("tasks route", () => {
         await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { createDir: true, name: "epic-force-p", cwd },
+          payload: { allowDuplicate: true, createDir: true, name: "epic-force-p", cwd },
         })
       ).json().id;
       const [task] = app.db
@@ -1417,7 +1457,7 @@ describe("tasks route", () => {
         await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { createDir: true, name: "epic-leaf-p", cwd },
+          payload: { allowDuplicate: true, createDir: true, name: "epic-leaf-p", cwd },
         })
       ).json().id;
       const [task] = app.db
@@ -1457,7 +1497,7 @@ describe("tasks route", () => {
         await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { createDir: true, name: "epic-null-p", cwd },
+          payload: { allowDuplicate: true, createDir: true, name: "epic-null-p", cwd },
         })
       ).json().id;
       const [task] = app.db
@@ -1536,7 +1576,12 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "reject-clears-cap-p", cwd: "/tmp" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "reject-clears-cap-p",
+          cwd: "/tmp",
+        },
       });
       const { tasks } = await import("../../src/db/schema.js");
       const [row] = app.db
@@ -1634,7 +1679,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "reject-reseed-p", cwd },
+        payload: { allowDuplicate: true, createDir: true, name: "reject-reseed-p", cwd },
       });
       const projectId = project.json().id;
 
@@ -1690,7 +1735,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "reject-reseed-content-p", cwd },
+        payload: { allowDuplicate: true, createDir: true, name: "reject-reseed-content-p", cwd },
       });
       const projectId = project.json().id;
 
@@ -1765,7 +1810,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "reject-no-reseed-p", cwd },
+        payload: { allowDuplicate: true, createDir: true, name: "reject-no-reseed-p", cwd },
       });
       const projectId = project.json().id;
 
@@ -1819,7 +1864,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "reject-spawn-fail-p", cwd },
+        payload: { allowDuplicate: true, createDir: true, name: "reject-spawn-fail-p", cwd },
       });
       const projectId = project.json().id;
 
@@ -1930,7 +1975,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "reject-skew-p", cwd: "/remote/project", hostId },
+        payload: { allowDuplicate: true, name: "reject-skew-p", cwd: "/remote/project", hostId },
       });
       const projectId = project.json().id;
 
@@ -1999,7 +2044,12 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "approve-cleanup-p", cwd: "/tmp/approve-cleanup" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "approve-cleanup-p",
+          cwd: "/tmp/approve-cleanup",
+        },
       });
       const projectId = project.json().id;
       const [task] = app.db
@@ -2051,7 +2101,12 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: `merge-endpoint-p-${Math.random()}`, cwd: "/tmp" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: `merge-endpoint-p-${Math.random()}`,
+          cwd: "/tmp",
+        },
       });
       const projectId = project.json().id;
       const { tasks } = await import("../../src/db/schema.js");
@@ -2092,7 +2147,12 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "merge-endpoint-not-done", cwd: "/tmp" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "merge-endpoint-not-done",
+          cwd: "/tmp",
+        },
       });
       const { tasks } = await import("../../src/db/schema.js");
       const [row] = app.db
@@ -2152,7 +2212,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "give-up-p", cwd: "/tmp/give-up" },
+        payload: { allowDuplicate: true, createDir: true, name: "give-up-p", cwd: "/tmp/give-up" },
       });
       const projectId = project.json().id;
       const [row] = app.db
@@ -2205,7 +2265,12 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "give-up-not-reviewing-p", cwd: "/tmp/give-up-2" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "give-up-not-reviewing-p",
+          cwd: "/tmp/give-up-2",
+        },
       });
       const [row] = app.db
         .insert(tasks)
@@ -2264,7 +2329,12 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "give-up-cleanup-p", cwd: "/tmp/give-up-cleanup" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "give-up-cleanup-p",
+          cwd: "/tmp/give-up-cleanup",
+        },
       });
       const projectId = project.json().id;
       const [task] = app.db
@@ -2301,7 +2371,12 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "give-up-sessions-p", cwd: "/tmp/give-up-sessions" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "give-up-sessions-p",
+          cwd: "/tmp/give-up-sessions",
+        },
       });
       const projectId = project.json().id;
       const worker = await app.inject({
@@ -2370,7 +2445,12 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: `re-review-p-${Math.random()}`, cwd: "/tmp" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: `re-review-p-${Math.random()}`,
+          cwd: "/tmp",
+        },
       });
       const projectId = project.json().id;
       const reviewSession =
@@ -2606,7 +2686,12 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "filter-status-p", cwd: "/tmp/filter-status" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "filter-status-p",
+          cwd: "/tmp/filter-status",
+        },
       });
       const projectId = project.json().id;
       const { tasks } = await import("../../src/db/schema.js");
@@ -2628,14 +2713,24 @@ describe("tasks route", () => {
         await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { createDir: true, name: "filter-project-a", cwd: "/tmp/filter-project-a" },
+          payload: {
+            allowDuplicate: true,
+            createDir: true,
+            name: "filter-project-a",
+            cwd: "/tmp/filter-project-a",
+          },
         })
       ).json().id;
       const projectB = (
         await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { createDir: true, name: "filter-project-b", cwd: "/tmp/filter-project-b" },
+          payload: {
+            allowDuplicate: true,
+            createDir: true,
+            name: "filter-project-b",
+            cwd: "/tmp/filter-project-b",
+          },
         })
       ).json().id;
       const { tasks } = await import("../../src/db/schema.js");
@@ -2663,7 +2758,7 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "get-one-p", cwd: "/tmp/get-one" },
+        payload: { allowDuplicate: true, createDir: true, name: "get-one-p", cwd: "/tmp/get-one" },
       });
       const created = await app.inject({
         method: "POST",
@@ -2700,7 +2795,12 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "row-columns-p", cwd: "/tmp/row-columns" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "row-columns-p",
+          cwd: "/tmp/row-columns",
+        },
       });
       const { tasks } = await import("../../src/db/schema.js");
       const [row] = app.db
@@ -2751,7 +2851,12 @@ describe("tasks route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "pr-title-p", cwd: "/tmp/pr-title-columns" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "pr-title-p",
+          cwd: "/tmp/pr-title-columns",
+        },
       });
       const { tasks } = await import("../../src/db/schema.js");
       const [row] = app.db
@@ -2940,7 +3045,7 @@ describe("tasks route", () => {
         const res = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { createDir: true, name: cwd, cwd: `/tmp/${cwd}` },
+          payload: { allowDuplicate: true, createDir: true, name: cwd, cwd: `/tmp/${cwd}` },
         });
         const projectId = res.json().id as number;
         await app.inject({
@@ -3068,7 +3173,7 @@ describe("tasks route", () => {
       const res = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "local-crud-p", cwd },
+        payload: { allowDuplicate: true, createDir: true, name: "local-crud-p", cwd },
       });
       return res.json().id as number;
     }

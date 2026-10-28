@@ -122,7 +122,12 @@ describe("GitHub sidebar write routes (#1672)", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: `writes-${cwds.length}`, cwd: projectCwd },
+      payload: {
+        allowDuplicate: true,
+        createDir: true,
+        name: `writes-${cwds.length}`,
+        cwd: projectCwd,
+      },
     });
     return created.json().id as number;
   }

@@ -138,9 +138,12 @@ describe("host-checkout-detect", () => {
         [boxId]: "/srv/app",
       });
       expect(parseHostCwdsMeta(after.hostCwdsMeta)).toEqual({ auto: [], declined: [] });
+      // A different path for a mapped host is never replaced; the same one is a no-op.
+      expect(attachHostCheckout(app, project.id, macId, "/elsewhere")).toBe("mapped");
+      expect(attachHostCheckout(app, project.id, macId, "/Users/x/app")).toBe("attached");
     });
 
-    it("refuses a new host once the map is full, but still updates an existing entry", () => {
+    it("refuses a new host once the map is full, but re-attaching an existing entry still works", () => {
       const project = localProject("app");
       const full = Object.fromEntries(
         Array.from({ length: MAX_HOST_CWDS }, (_, i) => [`h${i}`, `/p${i}`]),
@@ -151,7 +154,7 @@ describe("host-checkout-detect", () => {
         .where(eq(projects.id, project.id))
         .run();
       expect(attachHostCheckout(app, project.id, macId, "/new")).toBe("limit");
-      expect(attachHostCheckout(app, project.id, "h0", "/moved")).toBe("attached");
+      expect(attachHostCheckout(app, project.id, "h0", "/p0")).toBe("attached");
     });
   });
 

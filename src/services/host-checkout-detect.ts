@@ -246,13 +246,13 @@ function commitAutoFill(
   });
 }
 
-export type AttachCheckoutResult = "attached" | "own-host" | "limit" | "not-found";
+export type AttachCheckoutResult = "attached" | "own-host" | "limit" | "not-found" | "mapped";
 
 /**
  * Operator-initiated attach of `hostId -> cwd` to the project's `hostCwds`
  * (issue #2231): same transaction shape as `commitAutoFill`, but the operator
- * chose it, so it overwrites an earlier entry or decline for that host and is
- * NOT flagged `auto`. The project's own host is refused: a second checkout on
+ * chose it, so it clears an earlier decline for that host and is NOT flagged
+ * `auto`. A different path already mapped for the host is never replaced. The project's own host is refused: a second checkout on
  * the same host stays a deliberate `allowDuplicate` project.
  */
 export function attachHostCheckout(
@@ -267,6 +267,9 @@ export function attachHostCheckout(
     if (row.hostId === hostId) return "own-host";
     const map = parseHostCwds(row.hostCwds);
     const meta = parseHostCwdsMeta(row.hostCwdsMeta);
+    // A different path already mapped for this host is the operator's, and is
+    // not silently replaced: they edit it in Edit project.
+    if (map[hostId] !== undefined && map[hostId] !== cwd) return "mapped";
     if (map[hostId] === undefined && Object.keys(map).length >= MAX_HOST_CWDS) return "limit";
     tx.update(projects)
       .set({

@@ -1248,7 +1248,7 @@ export interface DiscoveredProject {
   isRegistered: boolean;
   // Issue #2231 — the existing project this checkout belongs to (same path, or
   // same git origin), so the UI offers "Add as checkout of <project>".
-  matchedProject?: { id: number; name: string; reason: "path" | "origin" };
+  matchedProject?: { id: number; name: string; hostId: string; reason: "path" | "origin" };
 }
 
 // Issue #2090 — mirrors src/services/host-cwds-meta.ts's HostCwdsMeta: which

@@ -17,9 +17,12 @@ import {
   parseHostCwdsMeta,
   serializeHostCwdsMeta,
 } from "../services/host-cwds-meta.js";
-import { attachHostCheckout, detectCheckouts } from "../services/host-checkout-detect.js";
 import {
-  buildOriginIndex,
+  attachHostCheckout,
+  detectCheckouts,
+  isStorablePath,
+} from "../services/host-checkout-detect.js";
+import {
   findProjectByRepoIdentity,
   projectHasPath,
   type RepoMatchReason,
@@ -304,7 +307,9 @@ interface DiscoveredProject extends DiscoveredCandidate {
   isRegistered: boolean;
   // Issue #2231 — the existing project this candidate is a checkout of, when
   // its path or git origin matches one. The UI offers "Add as checkout of".
-  matchedProject?: { id: number; name: string; reason: RepoMatchReason };
+  // `hostId` is the project's own host: a candidate on that host is a second
+  // clone there, which cannot be attached (only created separately).
+  matchedProject?: { id: number; name: string; hostId: string; reason: RepoMatchReason };
 }
 
 /**
@@ -332,21 +337,31 @@ function unknownHostInCwds(
 /**
  * Issue #2231 — the existing project (other than `excludeProjectId`) that a
  * create/edit would duplicate: any of the given (host, path) checkouts is
- * already that project's, or has its git origin.
+ * already that project's, or has its git origin (compared against local
+ * projects only: saving never waits on another host).
  */
 async function findDuplicateProject(
   app: FastifyInstance,
   checkouts: { hostId: string; cwd: string }[],
   excludeProjectId?: number,
 ) {
+  const originIndexRef = {};
   for (const c of checkouts) {
-    const match = await findProjectByRepoIdentity(app, { ...c, excludeProjectId });
+    const match = await findProjectByRepoIdentity(app, {
+      ...c,
+      excludeProjectId,
+      originIndexRef,
+      localOnly: true,
+    });
     if (match) return match.project;
   }
   return null;
 }
 
-function duplicateProjectReply(reply: FastifyReply, existing: { id: number; name: string }) {
+function duplicateProjectReply(
+  reply: FastifyReply,
+  existing: { id: number; name: string; hostId: string },
+) {
   return reply.code(409).send({
     statusCode: 409,
     error: "Conflict",
@@ -354,6 +369,7 @@ function duplicateProjectReply(reply: FastifyReply, existing: { id: number; name
     code: "DUPLICATE_PROJECT",
     existingProjectId: existing.id,
     existingName: existing.name,
+    existingHostId: existing.hostId,
   });
 }
 
@@ -1271,7 +1287,7 @@ export async function projectsRoute(app: FastifyInstance) {
       // registered too, and a candidate whose path or origin matches a project
       // is reported with that project so the UI can attach instead of add.
       const allProjects = app.db.select().from(projects).all();
-      const originIndex = await buildOriginIndex(app);
+      const originIndexRef = {};
 
       const discovered: DiscoveredProject[] = [];
       for (const c of candidates) {
@@ -1280,7 +1296,7 @@ export async function projectsRoute(app: FastifyInstance) {
           hostId,
           cwd: c.cwd,
           origin: c.origin ?? null,
-          originIndex,
+          originIndexRef,
         });
         discovered.push({
           ...c,
@@ -1290,6 +1306,7 @@ export async function projectsRoute(app: FastifyInstance) {
                 matchedProject: {
                   id: match.project.id,
                   name: match.project.name,
+                  hostId: match.project.hostId,
                   reason: match.reason,
                 },
               }
@@ -4843,15 +4860,32 @@ export async function projectsRoute(app: FastifyInstance) {
       if (unknownHostInCwds(app, { [hostId]: cwd }) !== null) {
         return reply.badRequest(`Unknown hostId ${hostId}`);
       }
-      if (cwd.split("/").includes("..") || /[\0\r\n]/.test(cwd)) {
+      if (!isStorablePath(cwd)) {
         return reply.badRequest("cwd must be an absolute path without '..' segments");
       }
+      // The path must not already belong to ANOTHER project: attaching it
+      // would create exactly the duplicate this feature prevents.
+      const owner = app.db
+        .select()
+        .from(projects)
+        .all()
+        .find((p) => p.id !== projectId && projectHasPath(p, hostId, cwd));
+      if (owner) return duplicateProjectReply(reply, owner);
       const result = attachHostCheckout(app, projectId, hostId, cwd);
       if (result === "not-found") return reply.notFound();
       if (result === "own-host") {
         return reply.badRequest(
           "That is the project's own host — create a separate project instead.",
         );
+      }
+      if (result === "mapped") {
+        return reply.code(409).send({
+          statusCode: 409,
+          error: "Conflict",
+          message:
+            "This project already has a different path on that host — edit it in Edit project.",
+          code: "HOST_PATH_ALREADY_MAPPED",
+        });
       }
       if (result === "limit") {
         return reply.badRequest(`A project can map at most ${MAX_HOST_CWDS} hosts.`);

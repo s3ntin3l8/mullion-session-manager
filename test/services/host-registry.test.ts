@@ -131,7 +131,7 @@ describe("host-registry", () => {
     await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "p", cwd: "/x", hostId: summary.id },
+      payload: { allowDuplicate: true, name: "p", cwd: "/x", hostId: summary.id },
     });
     expect(() => deleteHost(app, summary.id)).toThrow(HostHasProjectsError);
     await app.close();

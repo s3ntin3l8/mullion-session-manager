@@ -556,7 +556,12 @@ describe("hosts route (issue #26)", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "local-project", cwd: "/tmp/local-project" },
+      payload: {
+        allowDuplicate: true,
+        createDir: true,
+        name: "local-project",
+        cwd: "/tmp/local-project",
+      },
     });
     const projectId = created.json().id as number;
 
@@ -590,7 +595,7 @@ describe("hosts route (issue #26)", () => {
     await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "on-box-3", cwd: "/remote/path", hostId: id },
+      payload: { allowDuplicate: true, name: "on-box-3", cwd: "/remote/path", hostId: id },
     });
 
     const res = await app.inject({ method: "DELETE", url: `/api/hosts/${id}` });
@@ -612,7 +617,7 @@ describe("hosts route (issue #26)", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "on-box-4", cwd: "/remote/path", hostId },
+      payload: { allowDuplicate: true, name: "on-box-4", cwd: "/remote/path", hostId },
     });
     const projectId = project.json().id as number;
 

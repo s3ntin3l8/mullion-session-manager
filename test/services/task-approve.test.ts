@@ -75,7 +75,12 @@ describe("approveTask", () => {
     const projRes = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: `p-approve-${Math.random()}`, cwd: "/tmp" },
+      payload: {
+        allowDuplicate: true,
+        createDir: true,
+        name: `p-approve-${Math.random()}`,
+        cwd: "/tmp",
+      },
     });
     const projectId = projRes.json().id;
     if (mergeOnApprove) {
