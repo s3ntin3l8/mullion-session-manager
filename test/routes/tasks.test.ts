@@ -2901,7 +2901,12 @@ describe("tasks route", () => {
         const res = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { createDir: true, name: "approval-state", cwd: "/tmp/approval-state" },
+          payload: {
+            allowDuplicate: true,
+            createDir: true,
+            name: "approval-state",
+            cwd: "/tmp/approval-state",
+          },
         });
         const projectId = res.json().id as number;
         await app.inject({

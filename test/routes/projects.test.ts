@@ -9796,12 +9796,12 @@ describe("projects route", () => {
       const a = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "wiring-shared-a", cwd: cwdA },
+        payload: { allowDuplicate: true, createDir: true, name: "wiring-shared-a", cwd: cwdA },
       });
       const b = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "wiring-shared-b", cwd: cwdB },
+        payload: { allowDuplicate: true, createDir: true, name: "wiring-shared-b", cwd: cwdB },
       });
       const idA = a.json().id as number;
       const idB = b.json().id as number;
@@ -9861,12 +9861,12 @@ describe("projects route", () => {
       const a = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "wiring-ghost-a", cwd: cwdA },
+        payload: { allowDuplicate: true, createDir: true, name: "wiring-ghost-a", cwd: cwdA },
       });
       const b = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "wiring-ghost-b", cwd: cwdB },
+        payload: { allowDuplicate: true, createDir: true, name: "wiring-ghost-b", cwd: cwdB },
       });
       // A project on a registered-but-dead remote host: its repo can't be resolved.
       const { hosts, projects: projectsTable } = await import("../../src/db/schema.js");
