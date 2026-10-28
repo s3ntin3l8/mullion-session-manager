@@ -1,7 +1,7 @@
 ---
 name: Issue Blueprint
 about: File an issue following the standard Mullion context and scope blueprint.
-title: "type: short description"
+title: "type(scope): short description"
 labels: ""
 assignees: ""
 ---
