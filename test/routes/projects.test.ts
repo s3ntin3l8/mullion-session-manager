@@ -7384,6 +7384,68 @@ describe("projects route", () => {
       }
     });
 
+    it("reports a host rejection from the session liveness check accurately", async () => {
+      const app = await buildApp();
+      const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+      const { sessions } = await import("../../src/db/schema.js");
+      const { HostRequestError } = await import("../../src/services/remote-host-client.js");
+      app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", cwd: worktreePath, status: "killed" })
+        .run();
+      const spy = vi
+        .spyOn(app.pty, "isMasterAliveStateBatch")
+        .mockRejectedValue(new HostRequestError("local", 401, ""));
+      try {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath },
+        });
+        expect(res.statusCode).toBe(503);
+        expect(res.json().message).toContain("agent token");
+        expect(fs.existsSync(worktreePath)).toBe(true);
+      } finally {
+        spy.mockRestore();
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      }
+    });
+
+    it("treats a changing live cwd as an uncertain session instead of failing the request", async () => {
+      const app = await buildApp();
+      const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+      const { sessions } = await import("../../src/db/schema.js");
+      const sessionId = Number(
+        app.db.insert(sessions).values({ projectId, command: "bash", cwd: projectCwd }).run()
+          .lastInsertRowid,
+      );
+      const spy = vi.spyOn(app.pty, "list");
+      spy
+        .mockReturnValueOnce([])
+        .mockReturnValueOnce([{ id: String(sessionId), liveCwd: worktreePath }] as ReturnType<
+          typeof app.pty.list
+        >);
+      try {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toEqual({
+          removed: false,
+          reason: "sessions-active",
+          detail: String(sessionId),
+        });
+        expect(fs.existsSync(worktreePath)).toBe(true);
+      } finally {
+        spy.mockRestore();
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      }
+    });
+
     it("does not report sessions-active for a done task's stale worktreePath reference (independent review, PR #505)", async () => {
       // sessionsUnderWorktree's task-row match must share the same
       // RESUMABLE_TASK_STATUSES scope branchClaimedByResumableTask already

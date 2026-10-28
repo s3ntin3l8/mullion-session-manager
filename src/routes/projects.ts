@@ -36,6 +36,7 @@ import { previewPlacement } from "../services/placement.js";
 import { portFromUrl } from "../plugins/preview-proxy.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { resolveSessionHostId } from "../services/session-live-info.js";
+import { forwardHostRequestError } from "../services/host-error-reply.js";
 import {
   claimReclaimSlot,
   recordReclaimed,
@@ -4506,11 +4507,14 @@ export async function projectsRoute(app: FastifyInstance) {
             ]),
           ];
         } catch (err) {
-          app.log.warn(
-            { hostId: target.hostId, err },
-            "host unreachable, worktree usage check failed",
+          app.log.warn({ hostId: target.hostId, err }, "worktree usage check failed");
+          if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
+          if (err instanceof HostUnreachableError) {
+            return reply.serviceUnavailable(`Host ${target.hostId} is unreachable`);
+          }
+          return reply.serviceUnavailable(
+            "Could not check whether sessions are using this worktree",
           );
-          return reply.serviceUnavailable(`Host ${target.hostId} is unreachable`);
         }
         if (sessionIds.length > 0) {
           if (!force) {

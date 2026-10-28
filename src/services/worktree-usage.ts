@@ -74,6 +74,9 @@ async function canonicalPath(value: string): Promise<string> {
   let prefix = resolved;
   for (;;) {
     try {
+      // This only resolves directory metadata for the usage guard; it does
+      // not read or modify file content. Registered-worktree membership is
+      // independently checked before removal (CodeQL alert #430).
       const real = await fs.realpath(prefix);
       return path.resolve(real, path.relative(prefix, resolved));
     } catch (error) {
@@ -95,28 +98,27 @@ export async function sessionsUsingWorktree(
   stopOnActive = false,
 ): Promise<{ active: number[]; alive: number[]; unknown: number[] }> {
   const resolvedPath = path.resolve(worktreePath);
-  const effectiveCwd = sql<string>`coalesce(${sessions.cwd}, ${projects.cwd})`;
-  const hostMatch = sql`coalesce(${sessions.hostId}, ${projects.hostId}) = ${hostId}`;
+  const effectiveCwd = sql<string | null>`coalesce(${sessions.cwd}, ${projects.cwd})`;
+  const hostMatch = sql`coalesce(${sessions.hostId}, ${projects.hostId}, ${LOCAL_HOST_ID}) = ${hostId}`;
   let recordedMatch = sql`substr(${effectiveCwd}, 1, ${resolvedPath.length}) = ${resolvedPath}`;
   const liveIds: number[] = [];
-  const matchedPaths = new Set<string>();
-  const checkedPaths = new Set<string>();
-  const uncertainPaths = new Set<string>();
+  const matchedPaths = new Set<string | null>();
+  const uncertainPaths = new Set<string | null>();
   const uncertainLive = new Set<number>();
   if (hostId === LOCAL_HOST_ID) {
     const canonicalTarget = await canonicalPath(resolvedPath);
-    const seen = new Set<string>();
+    const seen = new Set<string | null>();
     const aliases: string[] = [];
     const readPaths = () =>
       app.db
         .selectDistinct({ cwd: effectiveCwd })
         .from(sessions)
-        .innerJoin(projects, eq(sessions.projectId, projects.id))
+        .leftJoin(projects, eq(sessions.projectId, projects.id))
         .where(hostMatch)
         .all()
         .filter(({ cwd }) => !seen.has(cwd));
     // Repeat when sessions appeared while filesystem resolution was in flight.
-    // Bounded retries fail closed if the set of paths keeps changing.
+    // Any remaining new paths become uncertain blockers after bounded retries.
     for (let round = 0; round < 3; round++) {
       const paths = readPaths();
       if (paths.length === 0) break;
@@ -127,7 +129,10 @@ export async function sessionsUsingWorktree(
             const entry = paths[next++];
             if (!entry) return;
             seen.add(entry.cwd);
-            checkedPaths.add(entry.cwd);
+            if (entry.cwd === null) {
+              uncertainPaths.add(null);
+              continue;
+            }
             try {
               if (isWithin(await canonicalPath(entry.cwd), canonicalTarget)) {
                 aliases.push(entry.cwd);
@@ -140,11 +145,7 @@ export async function sessionsUsingWorktree(
           }
         }),
       );
-      if (round === 2 && readPaths().length > 0)
-        throw new Error("Session paths changed during worktree check");
     }
-    // A session appearing after the last scan at a lexical child still blocks.
-    if (aliases.length > 0) recordedMatch = or(recordedMatch, inArray(effectiveCwd, aliases))!;
     const liveSnapshot = app.pty.list();
     for (const session of liveSnapshot) {
       if (!session.liveCwd) continue;
@@ -157,13 +158,22 @@ export async function sessionsUsingWorktree(
         liveIds.push(id);
       }
     }
-    // Live-cwd resolution also yields; do not use a path snapshot that changed
-    // while it was in progress.
-    const liveKey = (sessions: ReturnType<typeof app.pty.list>) =>
-      JSON.stringify(sessions.map(({ id, liveCwd }) => [id, liveCwd]).sort());
-    if (readPaths().length > 0 || liveKey(liveSnapshot) !== liveKey(app.pty.list())) {
-      throw new Error("Session paths changed during worktree check");
+    // Treat paths and live cwd values that appeared during the scan as
+    // uncertain instead of aborting the whole request for unrelated activity.
+    for (const { cwd } of readPaths()) {
+      uncertainPaths.add(cwd);
+      if (cwd !== null) aliases.push(cwd);
     }
+    const previousLive = new Map(liveSnapshot.map(({ id, liveCwd }) => [id, liveCwd]));
+    for (const { id, liveCwd } of app.pty.list()) {
+      if (previousLive.has(id) && previousLive.get(id) === liveCwd) continue;
+      const numericId = Number(id);
+      if (!Number.isInteger(numericId)) continue;
+      uncertainLive.add(numericId);
+      liveIds.push(numericId);
+    }
+    if (aliases.length > 0) recordedMatch = or(recordedMatch, inArray(effectiveCwd, aliases))!;
+    if (uncertainPaths.has(null)) recordedMatch = or(recordedMatch, sql`${effectiveCwd} IS NULL`)!;
   }
   const rows = app.db
     .select({
@@ -173,7 +183,7 @@ export async function sessionsUsingWorktree(
       projectCwd: projects.cwd,
     })
     .from(sessions)
-    .innerJoin(projects, eq(sessions.projectId, projects.id))
+    .leftJoin(projects, eq(sessions.projectId, projects.id))
     .where(
       and(
         hostMatch,
@@ -184,13 +194,8 @@ export async function sessionsUsingWorktree(
   const matching = rows.filter((row) => {
     if (row.id === excludeId) return false;
     const recorded = row.cwd ?? row.projectCwd;
-    if (hostId !== LOCAL_HOST_ID) return isWithin(recorded, resolvedPath);
-    return (
-      !checkedPaths.has(recorded) ||
-      matchedPaths.has(recorded) ||
-      uncertainPaths.has(recorded) ||
-      liveIds.includes(row.id)
-    );
+    if (hostId !== LOCAL_HOST_ID) return recorded !== null && isWithin(recorded, resolvedPath);
+    return matchedPaths.has(recorded) || uncertainPaths.has(recorded) || liveIds.includes(row.id);
   });
   const definitelyInside = (row: (typeof matching)[number]) => {
     const recorded = row.cwd ?? row.projectCwd;

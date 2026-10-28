@@ -339,8 +339,8 @@ tried. Each row says what to do about it:
   (`POST /api/projects/:id/git-worktree-remove`, given the session's
   `sessionId`), so it runs on the session's own host against the repository
   the worktree was cut from. It refuses while a session on the same host is active inside the
-  worktree or an ended session there is not confirmed gone, while the owning
-  session's own process is not confirmed gone, and on
+  worktree, or any session there (including its owner) has not been confirmed
+  gone after ending, and on
   uncommitted changes or conflicts — each of which a second, separately
   confirmed **Force remove** overrides. The branch is kept either way, and the
   row drops off once the directory is gone.
