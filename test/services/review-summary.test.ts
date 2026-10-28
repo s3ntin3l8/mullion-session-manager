@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildReviewSummary,
+  standingReviewers,
   standingReviews,
   reviewersOf,
   withRelay,
@@ -102,6 +103,20 @@ describe("buildReviewSummary", () => {
     });
     expect(s).toMatchObject({ changesRequested: ["hermes"], decision: "CHANGES_REQUESTED" });
     expect(standingReviews([], [{ author: { login: "a" }, state: "APPROVED" }])).toHaveLength(1);
+  });
+
+  it("flags only the recovered reviewers", () => {
+    const rs = standingReviewers(
+      [{ author: { login: "bob" }, state: "APPROVED" }],
+      [
+        { author: { login: "bob" }, state: "COMMENTED" },
+        { author: { login: "hermes" }, state: "CHANGES_REQUESTED" },
+      ],
+    );
+    expect(rs).toEqual([
+      { login: "bob", state: "APPROVED" },
+      { login: "hermes", state: "CHANGES_REQUESTED", recovered: true },
+    ]);
   });
 
   it("lets the opinionated entry win over the same author's latest review", () => {

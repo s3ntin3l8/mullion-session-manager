@@ -38,24 +38,36 @@ export const OPINIONATED_REVIEWS_SELECTION =
   "latestOpinionatedReviews(first: 10) { nodes { author { login } state } }";
 
 /**
- * What merge gating should read: the opinionated reviews, plus a standing
- * APPROVED / CHANGES_REQUESTED in `latestReviews` for an author that
- * `latestOpinionatedReviews` dropped (observed on a CHANGES_REQUESTED review
- * of a non-head commit, which left the PR reading "No reviews" and "Ready").
- * For an author in both lists the opinionated entry wins, so a later COMMENTED
- * still cannot erase a block.
+ * The APPROVED / CHANGES_REQUESTED reviews in `latestReviews` for an author
+ * that `latestOpinionatedReviews` dropped. GitHub's opinionated list omits
+ * Bot-authored reviews (live: runway-ai-usage-tracker #1053 and #1054 both
+ * return `latestOpinionatedReviews: []`, `reviewDecision: null` and the Hermes
+ * bot's review in `latestReviews`), so a bot's block read as "No reviews" and
+ * "Ready". For an author in both lists the opinionated entry wins, so a later
+ * COMMENTED still cannot erase a block.
  */
+export function recoveredReviews(
+  opinionated: readonly (GqlLatestReviewNode | null)[],
+  latest: readonly (GqlLatestReviewNode | null)[],
+): GqlLatestReviewNode[] {
+  const seen = new Set(opinionated.map((n) => n?.author?.login));
+  return latest.filter(
+    (n): n is GqlLatestReviewNode =>
+      !!n?.author &&
+      !seen.has(n.author.login) &&
+      (n.state === "APPROVED" || n.state === "CHANGES_REQUESTED"),
+  );
+}
+
+/** What merge gating should read: the opinionated reviews plus the recovered ones. */
 export function standingReviews(
   opinionated: readonly (GqlLatestReviewNode | null)[],
   latest: readonly (GqlLatestReviewNode | null)[],
 ): GqlLatestReviewNode[] {
-  const out = opinionated.filter((n): n is GqlLatestReviewNode => !!n);
-  const seen = new Set(out.map((n) => n.author?.login));
-  for (const n of latest) {
-    if (!n?.author || seen.has(n.author.login)) continue;
-    if (n.state === "APPROVED" || n.state === "CHANGES_REQUESTED") out.push(n);
-  }
-  return out;
+  return [
+    ...opinionated.filter((n): n is GqlLatestReviewNode => !!n),
+    ...recoveredReviews(opinionated, latest),
+  ];
 }
 
 export interface ReviewSummaryInput {
@@ -81,6 +93,23 @@ export function reviewersOf(
   return nodes
     .filter((n): n is GqlLatestReviewNode & { author: { login: string } } => !!n && !!n.author)
     .map((n) => ({ login: n.author.login, state: n.state }));
+}
+
+/**
+ * `reviewers` with the recovered reviews flagged: GitHub's own `reviewDecision`
+ * does not account for those, so the phase must not let it override them.
+ */
+export function standingReviewers(
+  opinionated: readonly (GqlLatestReviewNode | null)[],
+  latest: readonly (GqlLatestReviewNode | null)[],
+): { login: string; state: string; recovered?: true }[] {
+  return [
+    ...reviewersOf(opinionated),
+    ...reviewersOf(recoveredReviews(opinionated, latest)).map((r) => ({
+      ...r,
+      recovered: true as const,
+    })),
+  ];
 }
 
 function relayOf(relay: RelayReviewState | null | undefined): ReviewSummary["relay"] {

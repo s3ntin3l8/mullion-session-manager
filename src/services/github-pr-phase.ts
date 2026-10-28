@@ -49,7 +49,7 @@ export interface PrPhaseInput {
   requestedReviewers: readonly string[];
   /** Latest OPINIONATED review per reviewer (`reviewDecision` is null on a
    *  repo with no required-review rule even when someone asked for changes). */
-  reviewers: readonly { state: string }[];
+  reviewers: readonly { state: string; recovered?: boolean }[];
   /** A COMMENTED review landed (from `ReviewSummary.commented`). Only picks
    *  `reviewed` over `review_pending`; it never affects merge gating. */
   hasCommentedReview?: boolean;
@@ -81,7 +81,10 @@ export function derivePrPhase(pr: PrPhaseInput): PrPhase {
   if (pr.ciStatus === "failure") return "ci_failing";
   if (
     pr.reviewDecision === "CHANGES_REQUESTED" ||
-    (pr.reviewDecision === null && pr.reviewers.some((r) => r.state === "CHANGES_REQUESTED"))
+    (pr.reviewDecision === null && pr.reviewers.some((r) => r.state === "CHANGES_REQUESTED")) ||
+    // GitHub's decision does not account for a review it left out of the
+    // opinionated list (a bot's), so it cannot vouch against one.
+    pr.reviewers.some((r) => r.recovered === true && r.state === "CHANGES_REQUESTED")
   ) {
     return "changes_requested";
   }
@@ -90,7 +93,10 @@ export function derivePrPhase(pr: PrPhaseInput): PrPhase {
   // asked, or branch protection still reports the PR as blocked.
   if (pr.reviewDecision === null && pr.requestedReviewers.length > 0) return waiting();
   if (pr.mergeStateStatus === "BLOCKED" && pr.ciStatus !== "in_progress") {
-    return (pr.unresolvedThreads ?? 0) > 0 ? "threads_unresolved" : waiting();
+    if ((pr.unresolvedThreads ?? 0) === 0) return waiting();
+    // Open conversations are the likely blocker — unless CI was never read, when
+    // a required check that did not report may be, which `unknown` below says.
+    if (pr.ciFetched !== false) return "threads_unresolved";
   }
   if (pr.ciStatus === "in_progress") return "ci_pending";
   if (pr.ciFetched === false && pr.mergeStateStatus !== "CLEAN") return "unknown";

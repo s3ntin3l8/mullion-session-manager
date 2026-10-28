@@ -27,8 +27,7 @@ import {
   buildReviewSummary,
   latestReviewsSelection,
   OPINIONATED_REVIEWS_SELECTION,
-  reviewersOf,
-  standingReviews,
+  standingReviewers,
   type GqlLatestReviewNode,
 } from "./review-summary.js";
 
@@ -310,8 +309,9 @@ export async function enrichPrsWithReviewState(
       .filter((v): v is string => v !== null);
     // `reviewers` stays the standing-opinion list: it is derivePrPhase's input, and a
     // later COMMENTED review must not erase someone's CHANGES_REQUESTED.
-    pr.reviewers = reviewersOf(
-      standingReviews(node.latestOpinionatedReviews?.nodes ?? [], node.latestReviews?.nodes ?? []),
+    pr.reviewers = standingReviewers(
+      node.latestOpinionatedReviews?.nodes ?? [],
+      node.latestReviews?.nodes ?? [],
     );
 
     const cached = threadCache.get(keyFor(pr.number));
@@ -333,7 +333,7 @@ export async function enrichPrsWithReviewState(
       .filter((n) => Number.isInteger(n))
       .map(
         (n) =>
-          `p${n}: pullRequest(number: ${n}) { reviewThreads(first: ${THREADS_PER_PR}) { nodes { isResolved } } }`,
+          `p${n}: pullRequest(number: ${n}) { reviewThreads(last: ${THREADS_PER_PR}) { nodes { isResolved } } }`,
       )
       .join("\n");
     const threads = await graphql<{

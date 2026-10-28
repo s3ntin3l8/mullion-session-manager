@@ -109,6 +109,25 @@ describe("derivePrPhase", () => {
     );
   });
 
+  it("a recovered block outranks GitHub's decision, which never saw it", () => {
+    const approved = { ...base, reviewDecision: "APPROVED" as const };
+    expect(
+      derivePrPhase({ ...approved, reviewers: [{ state: "CHANGES_REQUESTED", recovered: true }] }),
+    ).toBe("changes_requested");
+    // Whereas GitHub's own word still wins over an opinionated reviewer's.
+    expect(derivePrPhase({ ...approved, reviewers: [{ state: "CHANGES_REQUESTED" }] })).toBe(
+      "ready_to_merge",
+    );
+  });
+
+  it("does not blame conversations when CI was never read", () => {
+    const blocked = { ...base, mergeStateStatus: "BLOCKED", unresolvedThreads: 2 };
+    expect(derivePrPhase({ ...blocked, ciStatus: null, ciFetched: false })).toBe("unknown");
+    expect(derivePrPhase({ ...blocked, ciStatus: null, ciFetched: true })).toBe(
+      "threads_unresolved",
+    );
+  });
+
   it("names open conversations as the block when nothing else is missing", () => {
     const blocked = { ...base, mergeStateStatus: "BLOCKED", unresolvedThreads: 2 };
     expect(derivePrPhase(blocked)).toBe("threads_unresolved");

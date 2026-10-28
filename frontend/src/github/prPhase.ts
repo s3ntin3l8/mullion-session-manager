@@ -364,10 +364,18 @@ export function reviewStatus(
     short = glyph,
   ): ReviewStatus => ({ tone, glyph, text, label, short, relay });
   if (sum.changesRequested.length > 0 || sum.decision === "CHANGES_REQUESTED") {
+    // A block on a superseded commit still blocks; saying so separates "still
+    // blocked" from "re-review asked".
+    const stale = new Set(
+      sum.latest.filter((e) => e.state === "CHANGES_REQUESTED" && e.stale).map((e) => e.author),
+    );
+    const names = joinNames(
+      sum.changesRequested.map((n) => (stale.has(n) ? `${n} (older commit)` : n)),
+    );
     return mk(
       "danger",
       "✎",
-      `Changes requested by ${joinNames(sum.changesRequested) || "a reviewer"}${threads}${relaySuffix}`,
+      `Changes requested by ${names || "a reviewer"}${threads}${relaySuffix}`,
       "Changes requested",
       "Changes",
     );

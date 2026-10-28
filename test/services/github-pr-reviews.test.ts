@@ -10,7 +10,7 @@ import {
   resetGitHubRateLimitForTests,
 } from "../../src/services/github-fetch.js";
 
-function pr(number: number): PROrWithChecks {
+function pr(number: number, over: Partial<PROrWithChecks> = {}): PROrWithChecks {
   return {
     number,
     title: `PR ${number}`,
@@ -33,6 +33,7 @@ function pr(number: number): PROrWithChecks {
     reviewStateKnown: false,
     ciFetched: false,
     prPhase: "unknown",
+    ...over,
   };
 }
 
@@ -143,7 +144,7 @@ describe("enrichPrsWithReviewState", () => {
         ]),
       )
       .mockResolvedValueOnce(threadsResponse({ 1: 1 }));
-    const prs = [pr(1)];
+    const prs = [pr(1, { ciFetched: true })];
     await enrichPrsWithReviewState("tok", "o", "r", prs);
 
     expect(fetchMock.mock.calls[0][1].body).toContain("latestReviews");
@@ -185,7 +186,7 @@ describe("enrichPrsWithReviewState", () => {
         ]),
       )
       .mockResolvedValueOnce(threadsResponse({ 1: 0 }));
-    const prs = [pr(1)];
+    const prs = [pr(1, { ciFetched: true })];
     await enrichPrsWithReviewState("tok", "o", "r", prs);
 
     expect(fetchMock.mock.calls[0][1].body).toContain("latestReviews");

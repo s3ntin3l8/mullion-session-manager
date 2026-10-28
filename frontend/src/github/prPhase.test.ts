@@ -226,6 +226,12 @@ describe("reviewStatus", () => {
       short: "Changes",
       text: "Changes requested by bob · 2 open",
     });
+    expect(
+      of({
+        changesRequested: ["hermes", "bob"],
+        latest: [{ author: "hermes", state: "CHANGES_REQUESTED", stale: true }],
+      }).text,
+    ).toBe("Changes requested by hermes (older commit) and bob");
     expect(of({ decision: "APPROVED", approved: ["a", "b"] })).toMatchObject({
       tone: "success",
       label: "Approved",
