@@ -805,6 +805,81 @@ describe("projects route", () => {
     await app.close();
   });
 
+  describe("GET /api/projects/:id (issue #2148)", () => {
+    it("returns exactly the row GET /api/projects has for that project", async () => {
+      const app = await buildApp();
+      try {
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { createDir: true, name: "single-read", cwd: "/tmp/single-read" },
+        });
+        const { id } = created.json();
+
+        const single = await app.inject({ method: "GET", url: `/api/projects/${id}` });
+        expect(single.statusCode).toBe(200);
+        const list = await app.inject({ method: "GET", url: "/api/projects" });
+        const row = (list.json() as Array<{ id: number }>).find((p) => p.id === id);
+        expect(single.body).toBe(JSON.stringify(row));
+        expect(single.json().hostCwds).toEqual({});
+        expect(single.json().hostCwdsMeta).toBeTypeOf("object");
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("serialises a remote-hosted project like its list row, degrading an unreachable host", async () => {
+      const app = await buildApp();
+      try {
+        const host = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: { name: "single-read-host", baseUrl: "http://127.0.0.1:1", token: "t" },
+        });
+        const created = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "single-read-remote", cwd: "/x", hostId: host.json().id },
+        });
+        const { id } = created.json();
+
+        const single = await app.inject({ method: "GET", url: `/api/projects/${id}` });
+        expect(single.statusCode).toBe(200);
+        expect(single.json()).toMatchObject({
+          id,
+          currentBranch: null,
+          ruleFiles: [],
+          detectedDevServerPort: null,
+        });
+        const list = await app.inject({ method: "GET", url: "/api/projects" });
+        const row = (list.json() as Array<{ id: number }>).find((p) => p.id === id);
+        expect(single.body).toBe(JSON.stringify(row));
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("404s for an unknown id", async () => {
+      const app = await buildApp();
+      try {
+        const res = await app.inject({ method: "GET", url: "/api/projects/987654" });
+        expect(res.statusCode).toBe(404);
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("400s for a malformed id", async () => {
+      const app = await buildApp();
+      try {
+        const res = await app.inject({ method: "GET", url: "/api/projects/abc" });
+        expect(res.statusCode).toBe(400);
+      } finally {
+        await app.close();
+      }
+    });
+  });
+
   describe("PATCH /api/projects/:id", () => {
     it("updates name and cwd", async () => {
       const app = await buildApp();

@@ -245,7 +245,8 @@ PR).
 - `src/routes/` — `health` (`/health`, `/ready`), `auth` (`/api/auth/login`,
   `/logout`, `/me`, and `/oidc/login`, `/oidc/callback` — see
   [`auth.md`](auth.md)), `root` (placeholder `/`, disabled once the
-  frontend build exists — template-inherited), `projects` (CRUD, discovery,
+  frontend build exists — template-inherited), `projects` (CRUD — `GET /api/projects/:id` returns one project in exactly the
+  shape of a `GET /api/projects` row, sharing its serializer — discovery,
   per-project actions/dock, and Source Control's branch/worktree endpoints, see
   [`git-panel.md`](git-panel.md)), `sessions` (durable terminal sessions,
   including `POST /api/sessions/:id/review-gate` — the minimal review

@@ -1033,13 +1033,9 @@ export async function projectsRoute(app: FastifyInstance) {
   // currentBranch to null rather than failing the whole list — the same
   // "widget just doesn't render" posture as the /github and /git-status
   // routes below, just without a status code to express it through here.
-  app.get("/api/projects", async () => {
-    const rows = app.db
-      .select()
-      .from(projects)
-      .orderBy(sql`LOWER(${projects.name})`)
-      .all();
-
+  // Shared by GET /api/projects and GET /api/projects/:id so the two can never
+  // drift: a single-project read is byte-for-byte a list row.
+  async function serializeProjectRows(rows: (typeof projects.$inferSelect)[]) {
     // Phase 3 (drift detection, issue #1205, follow-up to #1201) — this install's own
     // conventions text, read ONCE for the whole list rather than per row:
     // it's install-wide, not per-project, so re-reading settings inside
@@ -1187,6 +1183,27 @@ export async function projectsRoute(app: FastifyInstance) {
         };
       }),
     );
+  }
+
+  app.get("/api/projects", async () => {
+    const rows = app.db
+      .select()
+      .from(projects)
+      .orderBy(sql`LOWER(${projects.name})`)
+      .all();
+    return serializeProjectRows(rows);
+  });
+
+  // One project, same serializer as a GET /api/projects row (issue #2148) — for
+  // callers that need to re-read a single project without the list's per-row
+  // work across every other project.
+  app.get<{ Params: { id: string } }>("/api/projects/:id", async (request, reply) => {
+    const projectId = Number(request.params.id);
+    if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+    const row = app.db.select().from(projects).where(eq(projects.id, projectId)).get();
+    if (!row) return reply.notFound("Project not found");
+    const [serialized] = await serializeProjectRows([row]);
+    return serialized;
   });
 
   // A real filesystem scan (readdirSync + existsSync per candidate), so
