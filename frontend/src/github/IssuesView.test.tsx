@@ -152,6 +152,37 @@ describe("IssuesSection", () => {
     expect(screen.getByText("Crash on start")).toBeInTheDocument();
   });
 
+  it("search returns an issue that was not on the first page", async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL) =>
+      Promise.resolve(
+        String(input).includes("q=deep")
+          ? jsonResponse(200, {
+              ...LIST,
+              issues: [{ ...LIST.issues[0], number: 99, title: "Deep page issue" }],
+            })
+          : jsonResponse(200, { ...LIST, hasMore: true }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    render(
+      <IssuesSection projectId={1} openIssues={80} issuesHidden={false} onOpenIssue={vi.fn()} />,
+    );
+    expect(await screen.findByText("Crash on start")).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText("Search issues"), "deep");
+    expect(await screen.findByText("Deep page issue")).toBeInTheDocument();
+  });
+
+  it("says so when a search stopped early", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(jsonResponse(200, { ...LIST, issues: [], truncated: true })),
+    );
+    render(
+      <IssuesSection projectId={1} openIssues={900} issuesHidden={false} onOpenIssue={vi.fn()} />,
+    );
+    expect(await screen.findByText(/search stopped early/)).toBeInTheDocument();
+  });
+
   it("explains a hidden issue list and makes no request", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);

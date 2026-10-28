@@ -2167,6 +2167,86 @@ describe("projects route", () => {
         ...extra,
       });
 
+      describe("title search across pages", () => {
+        const page = (from: number, count: number, title: (n: number) => string) =>
+          Array.from({ length: count }, (_, i) => rawIssue(from + i, { title: title(from + i) }));
+        const mockPages = (pages: Record<number, unknown[]>) =>
+          fetchMock.mockImplementation((input: RequestInfo | URL) => {
+            const url = String(input);
+            if (url === "https://api.github.com/user") {
+              return Promise.resolve(jsonResponse(200, { login: "octocat" }));
+            }
+            if (url.includes("/repos/acme/widgets/issues?")) {
+              const n = Number(new URL(url).searchParams.get("page"));
+              return Promise.resolve(jsonResponse(200, pages[n] ?? []));
+            }
+            return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
+          });
+
+        it("finds a match on a later page, skipping PRs, and keeps empty q paged", async () => {
+          mockPages({
+            1: page(1, 50, (n) => `other ${n}`),
+            2: [
+              rawIssue(51, { title: "Needle in page two" }),
+              rawIssue(52, { title: "needle PR", pull_request: {} }),
+              ...page(53, 8, (n) => `other ${n}`),
+            ],
+          });
+          const app = await makeApp();
+          const { projectCwd, id } = await connectedProject(app);
+          const res = await app.inject({
+            method: "GET",
+            url: `/api/projects/${id}/github/issues?q=NEEDLE`,
+          });
+          const body = res.json();
+          expect(body.issues.map((i: { number: number }) => i.number)).toEqual([51]);
+          expect(body.hasMore).toBe(false);
+          expect(body.truncated).toBeUndefined();
+
+          fetchMock.mockClear();
+          const plain = await app.inject({
+            method: "GET",
+            url: `/api/projects/${id}/github/issues`,
+          });
+          expect(plain.json().issues).toHaveLength(50);
+          expect(plain.json().hasMore).toBe(true);
+          expect(fetchMock.mock.calls.filter(([u]) => String(u).includes("/issues?"))).toHaveLength(
+            1,
+          );
+          fs.rmSync(projectCwd, { recursive: true, force: true });
+        });
+
+        it("pages the filtered set and flags truncation at the scan cap", async () => {
+          const all: Record<number, unknown[]> = {};
+          for (let p = 1; p <= 20; p++) all[p] = page((p - 1) * 50 + 1, 50, (n) => `hit ${n}`);
+          mockPages(all);
+          const app = await makeApp();
+          const { projectCwd, id } = await connectedProject(app);
+          const p1 = (
+            await app.inject({ method: "GET", url: `/api/projects/${id}/github/issues?q=hit` })
+          ).json();
+          expect(p1.issues).toHaveLength(50);
+          expect(p1.hasMore).toBe(true);
+          const p2 = (
+            await app.inject({
+              method: "GET",
+              url: `/api/projects/${id}/github/issues?q=hit&page=2`,
+            })
+          ).json();
+          expect(p2.issues[0].number).toBe(51);
+          expect(p2.page).toBe(2);
+
+          // Nothing matches and 20 full pages were read: the scan stopped early.
+          const none = (
+            await app.inject({ method: "GET", url: `/api/projects/${id}/github/issues?q=zzz` })
+          ).json();
+          expect(none.issues).toEqual([]);
+          expect(none.hasMore).toBe(false);
+          expect(none.truncated).toBe(true);
+          fs.rmSync(projectCwd, { recursive: true, force: true });
+        });
+      });
+
       it("lists filtered issues (PRs dropped) with labels and forwards the filters", async () => {
         fetchMock.mockImplementation((input: RequestInfo | URL) => {
           const url = String(input);
