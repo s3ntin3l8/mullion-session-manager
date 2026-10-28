@@ -122,7 +122,12 @@ export function attachSocketToSession(
   const wasAlive = app.pty.get(id)?.isAlive ?? false;
   const session = app.pty.getOrCreate({ id, cwd, command, cols, rows, env });
 
+  // Released on close, registered immediately: anything below that throws
+  // before the later handlers are wired must not leave the count raised for
+  // the session's whole life (that would silence the backend's own startup
+  // query answers). The release is idempotent.
   const releaseBrowserAttach = session.noteBrowserAttached();
+  socket.on("close", releaseBrowserAttach);
   const backlog = session.getScrollback();
   app.log.info(
     { sessionId: id, cwd, command, alreadyAlive: session.isAlive, backlogBytes: backlog.length },
@@ -272,7 +277,6 @@ export function attachSocketToSession(
   socket.on("close", () => {
     stopDrainWatch();
     unsubscribeData();
-    releaseBrowserAttach();
     unsubscribeExit();
     // Deliberately not killing the session — it keeps running on the
     // host until the Node process itself shuts down (ptyPlugin's onClose)

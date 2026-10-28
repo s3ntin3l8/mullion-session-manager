@@ -1504,6 +1504,18 @@ describe("PtyManager", () => {
       expect(fakePtyChildren[0].writeSpy).toHaveBeenCalledWith(REPLY);
     });
 
+    it("only answers during the session's startup window", async () => {
+      setTerminalPalette(LIGHT);
+      await startSession();
+      const realNow = Date.now();
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(realNow + 31_000);
+
+      fakePtyChildren[0].emitData(QUERY);
+      nowSpy.mockRestore();
+
+      expect(fakePtyChildren[0].writeSpy).not.toHaveBeenCalledWith(REPLY);
+    });
+
     it("answers nothing until a palette has been reported", async () => {
       await startSession();
 

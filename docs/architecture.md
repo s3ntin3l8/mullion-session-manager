@@ -270,7 +270,7 @@ PR).
   (workspace groups), `agents` (installed shell/AI-CLI detection),
   `actions` (global launcher presets), `server-info`
   (`GET /api/server-info`, read-only diagnostics for Settings → Server
-  info), `terminal` (`/ws/terminal` PTY bridge), `hosts` (remote-host
+  info), `terminal` (`/ws/terminal` PTY bridge), `terminal-palette` (`PUT /api/terminal/palette`: the dashboard's resolved theme colors, which the backend uses to answer a program's startup OSC 10/11/12 + DA1 queries **by writing to the PTY** while no browser pane is attached; first 30 s of a session only), `hosts` (remote-host
   registry for multi-host sessions), `enrollment` (`POST
 /api/internal/register`/`/deregister` — an agent's self-registration
   handshake with the primary, see [`multi-host.md`](multi-host.md)),

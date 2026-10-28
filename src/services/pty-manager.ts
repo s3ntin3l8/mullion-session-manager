@@ -378,6 +378,11 @@ const NO_ATTENTION_SIGNALS: AttentionSignal = Object.freeze({
   titleChange: null,
 });
 
+// Only a program's STARTUP queries are answered on its behalf while no browser
+// is attached (see terminal-query-reply.ts): a stray `ESC [ c` in output hours
+// later (a `cat`ted capture, say) must not inject bytes into stdin.
+const STARTUP_QUERY_REPLY_WINDOW_MS = 30_000;
+
 const SESSION_ID_RE = /^\d+$/;
 
 /** Session ids are DB-issued digit strings; reject anything else before it is used to build a path. */
@@ -1695,7 +1700,10 @@ export class Session {
       // No pane is there to answer the program's startup color/DA1 query, and a
       // late reply from the replay is ignored by Codex (see
       // terminal-query-reply.ts); answer it from the cached palette instead.
-      if (this.browserAttachCount === 0) {
+      if (
+        this.browserAttachCount === 0 &&
+        Date.now() - this.createdAt < STARTUP_QUERY_REPLY_WINDOW_MS
+      ) {
         const reply = buildStartupQueryReplies(data);
         if (reply) this.writeToPty(reply, Date.now());
       }
