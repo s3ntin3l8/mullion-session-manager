@@ -7422,10 +7422,10 @@ describe("projects route", () => {
       );
       const spy = vi.spyOn(app.pty, "list");
       spy
-        .mockReturnValueOnce([])
-        .mockReturnValueOnce([{ id: String(sessionId), liveCwd: worktreePath }] as ReturnType<
+        .mockReturnValue([{ id: String(sessionId), liveCwd: worktreePath }] as ReturnType<
           typeof app.pty.list
-        >);
+        >)
+        .mockReturnValueOnce([]);
       try {
         const res = await app.inject({
           method: "POST",
@@ -7439,6 +7439,69 @@ describe("projects route", () => {
           detail: String(sessionId),
         });
         expect(fs.existsSync(worktreePath)).toBe(true);
+      } finally {
+        spy.mockRestore();
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      }
+    });
+
+    it("treats a live cwd that keeps changing as uncertain", async () => {
+      const app = await buildApp();
+      const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+      const { sessions } = await import("../../src/db/schema.js");
+      const sessionId = Number(
+        app.db.insert(sessions).values({ projectId, command: "bash", cwd: projectCwd }).run()
+          .lastInsertRowid,
+      );
+      let calls = 0;
+      const spy = vi
+        .spyOn(app.pty, "list")
+        .mockImplementation(
+          () =>
+            [
+              { id: String(sessionId), liveCwd: ++calls % 2 ? projectCwd : worktreePath },
+            ] as ReturnType<typeof app.pty.list>,
+        );
+      try {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath },
+        });
+        expect(res.json()).toEqual({
+          removed: false,
+          reason: "sessions-active",
+          detail: String(sessionId),
+        });
+      } finally {
+        spy.mockRestore();
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+        await app.close();
+      }
+    });
+
+    it("does not block for a changed live cwd outside the worktree", async () => {
+      const app = await buildApp();
+      const { projectCwd, worktreePath, projectId } = await makeProjectWithWorktree(app);
+      const { sessions } = await import("../../src/db/schema.js");
+      const sessionId = Number(
+        app.db.insert(sessions).values({ projectId, command: "bash", cwd: projectCwd }).run()
+          .lastInsertRowid,
+      );
+      const spy = vi.spyOn(app.pty, "list");
+      spy
+        .mockReturnValue([{ id: String(sessionId), liveCwd: projectCwd }] as ReturnType<
+          typeof app.pty.list
+        >)
+        .mockReturnValueOnce([]);
+      try {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/git-worktree-remove`,
+          payload: { worktreePath },
+        });
+        expect(res.json(), JSON.stringify(res.json())).toEqual({ removed: true });
       } finally {
         spy.mockRestore();
         fs.rmSync(projectCwd, { recursive: true, force: true });

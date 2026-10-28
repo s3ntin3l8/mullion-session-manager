@@ -146,31 +146,48 @@ export async function sessionsUsingWorktree(
         }),
       );
     }
-    const liveSnapshot = app.pty.list();
-    for (const session of liveSnapshot) {
-      if (!session.liveCwd) continue;
-      const id = Number(session.id);
-      if (!Number.isInteger(id)) continue;
-      try {
-        if (isWithin(await canonicalPath(session.liveCwd), canonicalTarget)) liveIds.push(id);
-      } catch {
-        uncertainLive.add(id);
-        liveIds.push(id);
+    // Re-resolve only PTYs whose cwd changed while a previous snapshot was
+    // being checked. A stable unrelated cwd must not block removal.
+    const checkedLive = new Map<string, string | null>();
+    const liveState = new Map<string, "inside" | "unknown">();
+    for (let round = 0; round < 3; round++) {
+      const snapshot = app.pty.list();
+      const present = new Set(snapshot.map(({ id }) => id));
+      for (const id of checkedLive.keys()) {
+        if (!present.has(id)) {
+          checkedLive.delete(id);
+          liveState.delete(id);
+        }
+      }
+      const changed = snapshot.filter(
+        ({ id, liveCwd }) => !checkedLive.has(id) || checkedLive.get(id) !== liveCwd,
+      );
+      for (const { id, liveCwd } of changed) {
+        checkedLive.set(id, liveCwd);
+        liveState.delete(id);
+        if (!liveCwd) continue;
+        try {
+          if (isWithin(await canonicalPath(liveCwd), canonicalTarget)) liveState.set(id, "inside");
+        } catch {
+          liveState.set(id, "unknown");
+        }
       }
     }
-    // Treat paths and live cwd values that appeared during the scan as
-    // uncertain instead of aborting the whole request for unrelated activity.
+    // Changes that continue past the retry bound cannot be classified safely.
+    for (const { id, liveCwd } of app.pty.list()) {
+      if (!checkedLive.has(id) || checkedLive.get(id) !== liveCwd) liveState.set(id, "unknown");
+    }
+    for (const [id, state] of liveState) {
+      const numericId = Number(id);
+      if (!Number.isInteger(numericId)) continue;
+      if (state === "unknown") uncertainLive.add(numericId);
+      liveIds.push(numericId);
+    }
+    // The live-cwd work above yields; newly recorded paths are conservative
+    // blockers until a later check can resolve them.
     for (const { cwd } of readPaths()) {
       uncertainPaths.add(cwd);
       if (cwd !== null) aliases.push(cwd);
-    }
-    const previousLive = new Map(liveSnapshot.map(({ id, liveCwd }) => [id, liveCwd]));
-    for (const { id, liveCwd } of app.pty.list()) {
-      if (previousLive.has(id) && previousLive.get(id) === liveCwd) continue;
-      const numericId = Number(id);
-      if (!Number.isInteger(numericId)) continue;
-      uncertainLive.add(numericId);
-      liveIds.push(numericId);
     }
     if (aliases.length > 0) recordedMatch = or(recordedMatch, inArray(effectiveCwd, aliases))!;
     if (uncertainPaths.has(null)) recordedMatch = or(recordedMatch, sql`${effectiveCwd} IS NULL`)!;
