@@ -8,15 +8,18 @@ import type * as RemoteHostClientModule from "../../src/services/remote-host-cli
 import { buildTestApp } from "../helpers/app.js";
 import { hosts, projects } from "../../src/db/schema.js";
 import {
+  attachHostCheckout,
   autoFillHostCwds,
   detectCheckouts,
   MAX_AUTOFILL_PER_RUN,
+  projectOrigin,
 } from "../../src/services/host-checkout-detect.js";
 import { HostHeartbeatTracker } from "../../src/services/host-heartbeat.js";
 import { createHost } from "../../src/services/host-registry.js";
 import type { DiscoveredCandidate } from "../../src/services/project-config.js";
 import { parseHostCwds } from "../../src/services/placement.js";
 import { parseHostCwdsMeta } from "../../src/services/host-cwds-meta.js";
+import { MAX_HOST_CWDS } from "../../src/shared/constants.js";
 import { applySettingsPatch } from "../../src/services/settings.js";
 
 // Issue #2090 — matching a project to its clone on other hosts, and the opt-in
@@ -100,6 +103,56 @@ describe("host-checkout-detect", () => {
   afterEach(async () => {
     await app.close();
     fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  describe("projectOrigin", () => {
+    it("reads a local checkout's origin and a remote one through discovery", async () => {
+      const project = localProject("app");
+      expect(await projectOrigin(app, { hostId: "local", cwd: project.cwd })).toBe(
+        "github.com/acme/app",
+      );
+      discovery.set(macId, [repo("app")]);
+      expect(await projectOrigin(app, { hostId: macId, cwd: "/Users/x/app" })).toBe(
+        "github.com/acme/app",
+      );
+      expect(await projectOrigin(app, { hostId: macId, cwd: "/Users/x/missing" })).toBeNull();
+    });
+  });
+
+  describe("attachHostCheckout", () => {
+    it("writes the path, clears auto/declined for the host, and refuses own host, limit and unknown ids", () => {
+      const project = localProject("app");
+      expect(attachHostCheckout(app, 99999, macId, "/Users/x/app")).toBe("not-found");
+      expect(attachHostCheckout(app, project.id, "local", "/x")).toBe("own-host");
+
+      app.db
+        .update(projects)
+        .set({ hostCwdsMeta: JSON.stringify({ auto: [macId], declined: [boxId] }) })
+        .where(eq(projects.id, project.id))
+        .run();
+      expect(attachHostCheckout(app, project.id, macId, "/Users/x/app")).toBe("attached");
+      expect(attachHostCheckout(app, project.id, boxId, "/srv/app")).toBe("attached");
+      const after = row(project.id);
+      expect(parseHostCwds(after.hostCwds)).toEqual({
+        [macId]: "/Users/x/app",
+        [boxId]: "/srv/app",
+      });
+      expect(parseHostCwdsMeta(after.hostCwdsMeta)).toEqual({ auto: [], declined: [] });
+    });
+
+    it("refuses a new host once the map is full, but still updates an existing entry", () => {
+      const project = localProject("app");
+      const full = Object.fromEntries(
+        Array.from({ length: MAX_HOST_CWDS }, (_, i) => [`h${i}`, `/p${i}`]),
+      );
+      app.db
+        .update(projects)
+        .set({ hostCwds: JSON.stringify(full) })
+        .where(eq(projects.id, project.id))
+        .run();
+      expect(attachHostCheckout(app, project.id, macId, "/new")).toBe("limit");
+      expect(attachHostCheckout(app, project.id, "h0", "/moved")).toBe("attached");
+    });
   });
 
   describe("detectCheckouts", () => {

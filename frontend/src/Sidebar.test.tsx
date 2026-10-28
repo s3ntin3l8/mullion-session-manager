@@ -166,7 +166,14 @@ vi.mock("./SourceControlSection.js", () => ({
 // hitting a real fetch() jsdom can't serve.
 vi.mock("./api/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiModule>();
-  return { ...actual, api: { ...actual.api, discoverProjects: vi.fn().mockResolvedValue([]) } };
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      discoverProjects: vi.fn().mockResolvedValue([]),
+      attachHostCheckout: vi.fn(),
+    },
+  };
 });
 
 const PROJECT: Project = makeProject();
@@ -1392,6 +1399,66 @@ describe("DiscoverProjects — a failed Add surfaces an inline error", () => {
     expect(await screen.findByText(/does not exist/i)).toBeInTheDocument();
     // Not marked as added on failure.
     expect(screen.getByText("Add")).toBeInTheDocument();
+  });
+});
+
+describe("DiscoverProjects — a candidate that is a checkout of an existing project (issue #2231)", () => {
+  const matched = {
+    name: "widgets",
+    cwd: "/repos/widgets",
+    isGitRepo: true,
+    isRegistered: false,
+    matchedProject: { id: 7, name: "Widgets App", reason: "origin" as const },
+  };
+
+  it("offers 'Add as checkout of <project>' and attaches the path instead of creating a project", async () => {
+    const { api } = await import("./api/index.js");
+    vi.mocked(api.discoverProjects).mockResolvedValueOnce([matched]);
+    vi.mocked(api.attachHostCheckout).mockResolvedValueOnce(makeProject({ id: 7 }));
+    createProject.mockClear();
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await user.click(await screen.findByText("Discover projects"));
+    await user.click(await screen.findByText("Add as checkout of Widgets App"));
+
+    expect(api.attachHostCheckout).toHaveBeenCalledWith(7, "local", "/repos/widgets");
+    expect(createProject).not.toHaveBeenCalled();
+    // The candidate leaves the list once attached.
+    await waitFor(() =>
+      expect(screen.queryByText("Add as checkout of Widgets App")).not.toBeInTheDocument(),
+    );
+  });
+
+  it("shows the server's reason when the attach is refused", async () => {
+    const { api } = await import("./api/index.js");
+    vi.mocked(api.discoverProjects).mockResolvedValueOnce([matched]);
+    vi.mocked(api.attachHostCheckout).mockRejectedValueOnce(
+      new ApiError("That is the project's own host.", 400),
+    );
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await user.click(await screen.findByText("Discover projects"));
+    await user.click(await screen.findByText("Add as checkout of Widgets App"));
+
+    expect(await screen.findByText("That is the project's own host.")).toBeInTheDocument();
+  });
+
+  it("'Create a separate project anyway' creates with allowDuplicate", async () => {
+    const { api } = await import("./api/index.js");
+    vi.mocked(api.discoverProjects).mockResolvedValueOnce([matched]);
+    createProject.mockClear();
+    createProject.mockResolvedValueOnce(makeProject({ id: 8 }));
+    const user = userEvent.setup();
+    renderSidebar();
+
+    await user.click(await screen.findByText("Discover projects"));
+    await user.click(await screen.findByText("Create a separate project anyway"));
+
+    expect(createProject).toHaveBeenCalledWith("widgets", "/repos/widgets", "local", {
+      allowDuplicate: true,
+    });
   });
 });
 

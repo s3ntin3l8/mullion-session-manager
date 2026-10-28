@@ -9456,4 +9456,266 @@ describe("projects route", () => {
       fs.rmSync(cwdB, { recursive: true, force: true });
     });
   });
+  // Issue #2231 — one project per repo: a checkout of a repo that already has
+  // a project is attached to it instead of becoming a duplicate.
+  describe("same-repo duplicate prevention (#2231)", () => {
+    const ORIGIN = "git@github.com:acme/dup.git";
+    let base: string;
+
+    function checkout(name: string, origin: string | null = ORIGIN): string {
+      const cwd = path.join(base, name);
+      fs.mkdirSync(path.join(cwd, ".git"), { recursive: true });
+      if (origin) {
+        fs.writeFileSync(
+          path.join(cwd, ".git", "config"),
+          `[remote "origin"]\n\turl = ${origin}\n`,
+        );
+      }
+      return cwd;
+    }
+
+    async function addHost(app: Awaited<ReturnType<typeof buildApp>>, name: string) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      return res.json().id as string;
+    }
+
+    beforeEach(() => {
+      base = fs.mkdtempSync(path.join(os.tmpdir(), "projects-dup-"));
+    });
+    afterEach(() => {
+      fs.rmSync(base, { recursive: true, force: true });
+    });
+
+    it("POST answers 409 DUPLICATE_PROJECT for the same origin, before creating any directory", async () => {
+      const app = await buildApp();
+      const first = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "dup", cwd: checkout("one") },
+      });
+      expect(first.statusCode).toBe(201);
+
+      const missing = path.join(base, "not-yet", "x");
+      const again = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "dup-2", cwd: checkout("two") },
+      });
+      expect(again.statusCode).toBe(409);
+      expect(again.json()).toMatchObject({
+        code: "DUPLICATE_PROJECT",
+        existingProjectId: first.json().id,
+        existingName: "dup",
+      });
+
+      // The duplicate check runs before the directory is validated/created.
+      const noDir = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "dup", cwd: checkout("one"), createDir: true },
+      });
+      expect(noDir.statusCode).toBe(409);
+      expect(fs.existsSync(missing)).toBe(false);
+      await app.close();
+    });
+
+    it("POST with allowDuplicate:true creates the second project", async () => {
+      const app = await buildApp();
+      await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "dup", cwd: checkout("one") },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "dup-2", cwd: checkout("two"), allowDuplicate: true },
+      });
+      expect(res.statusCode).toBe(201);
+      await app.close();
+    });
+
+    it("POST 409s when the new cwd is mapped in another project's hostCwds", async () => {
+      const app = await buildApp();
+      const hostId = await addHost(app, "box-dup");
+      const first = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          name: "mapped",
+          cwd: checkout("solo", null),
+          hostCwds: { [hostId]: "/srv/mapped" },
+        },
+      });
+      expect(first.statusCode).toBe(201);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "other", cwd: "/srv/mapped", hostId },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().existingProjectId).toBe(first.json().id);
+      await app.close();
+    });
+
+    it("PATCH 409s when the new cwd duplicates another project, ignores itself, and allowDuplicate overrides", async () => {
+      const app = await buildApp();
+      const a = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "a", cwd: checkout("a") },
+      });
+      const b = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "b", cwd: checkout("b", "git@github.com:acme/other.git") },
+      });
+      expect(b.statusCode).toBe(201);
+      const bId = b.json().id as number;
+
+      // Re-saving its own cwd is not a duplicate of itself.
+      const same = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${bId}`,
+        payload: { name: "b2", cwd: checkout("b", "git@github.com:acme/other.git") },
+      });
+      expect(same.statusCode).toBe(200);
+
+      const clash = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${bId}`,
+        payload: { cwd: checkout("c") },
+      });
+      expect(clash.statusCode).toBe(409);
+      expect(clash.json()).toMatchObject({
+        code: "DUPLICATE_PROJECT",
+        existingProjectId: a.json().id,
+      });
+
+      const forced = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${bId}`,
+        payload: { cwd: checkout("c"), allowDuplicate: true },
+      });
+      expect(forced.statusCode).toBe(200);
+
+      // allowDuplicate alone is not a field to update.
+      const only = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${bId}`,
+        payload: { allowDuplicate: true },
+      });
+      expect(only.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("PATCH 409s when a hostCwds entry is another project's path", async () => {
+      const app = await buildApp();
+      const hostId = await addHost(app, "box-patch");
+      const a = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "a", cwd: checkout("pa", null), hostCwds: { [hostId]: "/srv/pa" } },
+      });
+      const b = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "b", cwd: checkout("pb", null) },
+      });
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${b.json().id}`,
+        payload: { hostCwds: { [hostId]: "/srv/pa" } },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().existingProjectId).toBe(a.json().id);
+      await app.close();
+    });
+
+    it("discover reports matchedProject for an origin match and counts a hostCwds path as registered", async () => {
+      const prev = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = base;
+      const app = await buildApp();
+      const existing = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "dup", cwd: checkout("home") },
+      });
+      checkout("clone"); // same origin, not registered
+      checkout("unrelated", "git@github.com:acme/else.git");
+      const hostId = await addHost(app, "box-disc");
+      await app.inject({
+        method: "POST",
+        url: `/api/projects/${existing.json().id}/host-checkouts`,
+        payload: { hostId, cwd: path.join(base, "unrelated") },
+      });
+
+      const res = await app.inject({ method: "GET", url: "/api/projects/discover" });
+      const byName = Object.fromEntries(res.json().map((c: { name: string }) => [c.name, c]));
+      expect(byName.clone.isRegistered).toBe(false);
+      expect(byName.clone.matchedProject).toEqual({
+        id: existing.json().id,
+        name: "dup",
+        reason: "origin",
+      });
+      expect(byName.home.matchedProject.reason).toBe("path");
+      expect(byName.unrelated.matchedProject).toBeUndefined();
+      await app.close();
+      if (prev === undefined) delete process.env.PROJECTS_ROOTS;
+      else process.env.PROJECTS_ROOTS = prev;
+    });
+
+    it("POST /:id/host-checkouts attaches a path as operator-set and refuses bad input", async () => {
+      const app = await buildApp();
+      const hostId = await addHost(app, "box-attach");
+      const p = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "att", cwd: checkout("att", null) },
+      });
+      const id = p.json().id as number;
+
+      const ok = await app.inject({
+        method: "POST",
+        url: `/api/projects/${id}/host-checkouts`,
+        payload: { hostId, cwd: "/srv/att" },
+      });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json().hostCwds).toEqual({ [hostId]: "/srv/att" });
+      expect(ok.json().hostCwdsMeta.auto).toEqual([]);
+
+      const own = await app.inject({
+        method: "POST",
+        url: `/api/projects/${id}/host-checkouts`,
+        payload: { hostId: "local", cwd: "/x" },
+      });
+      expect(own.statusCode).toBe(400);
+
+      const unknown = await app.inject({
+        method: "POST",
+        url: `/api/projects/${id}/host-checkouts`,
+        payload: { hostId: "nope", cwd: "/x" },
+      });
+      expect(unknown.statusCode).toBe(400);
+
+      const traversal = await app.inject({
+        method: "POST",
+        url: `/api/projects/${id}/host-checkouts`,
+        payload: { hostId, cwd: "/srv/../etc" },
+      });
+      expect(traversal.statusCode).toBe(400);
+
+      const missing = await app.inject({
+        method: "POST",
+        url: "/api/projects/999999/host-checkouts",
+        payload: { hostId, cwd: "/srv/att" },
+      });
+      expect(missing.statusCode).toBe(404);
+      await app.close();
+    });
+  });
 });

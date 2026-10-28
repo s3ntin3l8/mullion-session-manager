@@ -131,13 +131,14 @@ function discoverOnHost(
   return pending;
 }
 
-/** The project's own normalised origin, or null when it cannot be told (no
- * origin, a path outside its host's discovery roots, an agent too old to
- * report one). Null means: no origin-based suggestions for this project. */
-async function projectOrigin(
+/** The normalised origin of the checkout at `cwd` on `hostId`, or null when
+ * it cannot be told (no origin, a path outside the host's discovery roots, an
+ * agent too old to report one, an unreachable host). Null means: no
+ * origin-based matching for this checkout. */
+export async function projectOrigin(
   app: FastifyInstance,
-  project: ProjectRow,
-  cache: HostCandidateCache,
+  project: { hostId: string; cwd: string },
+  cache: HostCandidateCache = new Map(),
 ): Promise<string | null> {
   if (project.hostId === LOCAL_HOST_ID) {
     const raw = readOriginUrl(project.cwd);
@@ -242,6 +243,42 @@ function commitAutoFill(
       .where(eq(projects.id, projectId))
       .run();
     return true;
+  });
+}
+
+export type AttachCheckoutResult = "attached" | "own-host" | "limit" | "not-found";
+
+/**
+ * Operator-initiated attach of `hostId -> cwd` to the project's `hostCwds`
+ * (issue #2231): same transaction shape as `commitAutoFill`, but the operator
+ * chose it, so it overwrites an earlier entry or decline for that host and is
+ * NOT flagged `auto`. The project's own host is refused: a second checkout on
+ * the same host stays a deliberate `allowDuplicate` project.
+ */
+export function attachHostCheckout(
+  app: FastifyInstance,
+  projectId: number,
+  hostId: string,
+  cwd: string,
+): AttachCheckoutResult {
+  return app.db.transaction((tx) => {
+    const [row] = tx.select().from(projects).where(eq(projects.id, projectId)).all();
+    if (!row) return "not-found";
+    if (row.hostId === hostId) return "own-host";
+    const map = parseHostCwds(row.hostCwds);
+    const meta = parseHostCwdsMeta(row.hostCwdsMeta);
+    if (map[hostId] === undefined && Object.keys(map).length >= MAX_HOST_CWDS) return "limit";
+    tx.update(projects)
+      .set({
+        hostCwds: serializeHostCwds({ ...map, [hostId]: cwd }),
+        hostCwdsMeta: serializeHostCwdsMeta({
+          auto: meta.auto.filter((h) => h !== hostId),
+          declined: meta.declined.filter((h) => h !== hostId),
+        }),
+      })
+      .where(eq(projects.id, projectId))
+      .run();
+    return "attached";
   });
 }
 

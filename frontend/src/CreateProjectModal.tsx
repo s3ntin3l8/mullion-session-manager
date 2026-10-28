@@ -27,6 +27,10 @@ const UNSET_AGENT = "";
 // meant to prevent.
 const CREATE_DIR_CODE = "PROJECT_DIR_MISSING";
 
+// Issue #2231 — the repo already has a project (409). Offers attaching this
+// checkout to it, or retrying with `allowDuplicate`.
+const DUPLICATE_CODE = "DUPLICATE_PROJECT";
+
 interface CreateProjectModalProps {
   onClose: () => void;
   // `hostId` is only ever passed to `onCreate` in "create" mode (see the
@@ -73,6 +77,8 @@ interface CreateProjectModalProps {
     // rejection. `gitInit` only has an effect when `createDir` is also set.
     createDir?: boolean;
     gitInit?: boolean;
+    // Issue #2231 — set on the retry after a 409 DUPLICATE_PROJECT.
+    allowDuplicate?: boolean;
     // Issue #1726 / roadmap 8.12 — the placement mode. Sent in BOTH modes:
     // on create it rides the same opts bag as createDir/gitInit, and on
     // edit it is a plain patch field. `undefined` means "not applicable"
@@ -223,7 +229,12 @@ export function CreateProjectModal({
   const [autoTagRelease, setAutoTagRelease] = useState(initialAutoTagRelease ?? false);
   const [agentLaunchers, setAgentLaunchers] = useState<Launcher[]>([]);
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<{ message: string; code?: string } | null>(null);
+  const [error, setError] = useState<{
+    message: string;
+    code?: string;
+    existingProjectId?: number;
+    existingName?: string;
+  } | null>(null);
   // The error block sits right under the path field, far above the Save
   // button on a tall edit form (Dev server and the rest are below it), so a
   // failed save used to look like nothing happened (issue #2082). Bring it
@@ -381,7 +392,7 @@ export function CreateProjectModal({
     }
   };
 
-  const confirm = async (opts?: { createDir?: boolean }) => {
+  const confirm = async (opts?: { createDir?: boolean; allowDuplicate?: boolean }) => {
     if (submitting) return;
     const trimmedPath = path.trim();
     if (!trimmedPath) {
@@ -488,6 +499,7 @@ export function CreateProjectModal({
         placement,
         ...(hostCwdsToSend ? { hostCwds: hostCwdsToSend } : {}),
         ...(opts?.createDir ? { createDir: true, gitInit } : {}),
+        ...(opts?.allowDuplicate ? { allowDuplicate: true } : {}),
       });
       // `gitInitialized: false` alone is ambiguous — it also means "never
       // attempted" (the directory already existed, e.g. a concurrent
@@ -511,7 +523,34 @@ export function CreateProjectModal({
       setError({
         message: err instanceof ApiError ? err.message : "Could not add project",
         code: err instanceof ApiError ? err.code : undefined,
+        ...(err instanceof ApiError && err.code === DUPLICATE_CODE
+          ? {
+              existingProjectId: err.body?.existingProjectId as number | undefined,
+              existingName: err.body?.existingName as string | undefined,
+            }
+          : {}),
       });
+    }
+  };
+
+  // Issue #2231 — "Add as checkout of <project>": record this path under the
+  // existing project's host instead of creating a second project. Create mode
+  // only, and only for a remote-or-other host than the project's own — the
+  // server refuses the project's own host and says so.
+  const attachToExisting = async () => {
+    if (submitting || error?.existingProjectId === undefined) return;
+    setSubmitting(true);
+    try {
+      await api.attachHostCheckout(error.existingProjectId, hostId, path.trim());
+      void useDashboardStore
+        .getState()
+        .refreshProjects()
+        .catch(() => {});
+      setSubmitting(false);
+      onClose();
+    } catch (err) {
+      setSubmitting(false);
+      setError({ message: err instanceof ApiError ? err.message : "Could not add checkout" });
     }
   };
 
@@ -775,6 +814,28 @@ export function CreateProjectModal({
       {error && (
         <div className="create-modal-dir-confirm" ref={errorRef} role="alert">
           <span className="create-modal-field-hint error">{error.message}</span>
+          {error.code === DUPLICATE_CODE && (
+            <>
+              {!isEdit && error.existingProjectId !== undefined && (
+                <button
+                  type="button"
+                  className="create-modal-dir-confirm-btn"
+                  disabled={submitting}
+                  onClick={() => void attachToExisting()}
+                >
+                  Add as checkout of {error.existingName ?? "the existing project"}
+                </button>
+              )}
+              <button
+                type="button"
+                className="create-modal-dir-confirm-btn"
+                disabled={submitting}
+                onClick={() => void confirm({ allowDuplicate: true })}
+              >
+                {isEdit ? "Save anyway" : "Create a separate project anyway"}
+              </button>
+            </>
+          )}
           {error.code === CREATE_DIR_CODE && (
             <>
               <label className="create-modal-dir-confirm-checkbox">

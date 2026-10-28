@@ -232,6 +232,27 @@ on every host now, one host at a time. If the server rate-limits it (that route 
 minute), it stops, says how many hosts it did not ask and how long to wait, and does not count
 them as unreachable.
 
+**Adding a second host's checkout does not create a second project (#2231).** Adding a
+repository that already has a project attaches it instead:
+
+- `GET /api/projects/discover?hostId=…` marks a candidate `isRegistered` when its path is
+  a project's `cwd` on that host **or an entry in any project's `hostCwds`**, and adds
+  `matchedProject: { id, name, reason }` when its path (`"path"`) or normalised `origin`
+  (`"origin"`, any forge) belongs to an existing project. Sidebar → Discover projects then
+  offers **Add as checkout of `<project>`**, with **Create a separate project anyway** as the
+  secondary action. The origin lookup is best-effort: a host that cannot be reached is
+  matched by path only, never an error.
+- `POST /api/projects/:id/host-checkouts { hostId, cwd }` is what the first action calls: it
+  writes the path into that project's `hostCwds` (marked as set by the operator, not
+  auto-detected). It refuses the project's own host (400): a second checkout on the same
+  host is a deliberate separate project.
+- `POST /api/projects` answers **409** `{ code: "DUPLICATE_PROJECT", existingProjectId,
+existingName }` when the new `cwd` (or a `hostCwds` entry) is already a project's, or has
+  its origin, and does so **before** any directory is created. The Add project dialog then
+  offers the same two choices. Send `allowDuplicate: true` to create the project anyway.
+  `PATCH /api/projects/:id` runs the same check when `cwd` or `hostCwds` changes (the project
+  itself is excluded); `allowDuplicate` is not by itself a field to update.
+
 **Auto-fill (opt-in).** `settings.autoDetectHostCheckouts` (off by default; Settings →
 Projects & discovery) lets Mullion fill the map in for you: when a host comes online
 (first contact or after being unreachable — an enrolled agent is picked up by the next

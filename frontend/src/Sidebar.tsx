@@ -849,12 +849,20 @@ export function Sidebar({
               newProjectRef.current = null;
             }
           }}
-          onCreate={async ({ name, cwd, hostId, createDir, gitInit, placement }) => {
+          onCreate={async ({
+            name,
+            cwd,
+            hostId,
+            createDir,
+            gitInit,
+            placement,
+            allowDuplicate,
+          }) => {
             const project = await useDashboardStore
               .getState()
               // Issue #1726 / roadmap 8.12 — the placement mode rides in the
               // same opts bag as createDir/gitInit.
-              .createProject(name, cwd, hostId, { createDir, gitInit, placement });
+              .createProject(name, cwd, hostId, { createDir, gitInit, placement, allowDuplicate });
             newProjectRef.current = { id: project.id, name: project.name };
             return project;
           }}
@@ -1405,6 +1413,7 @@ function ProjectHeader({
                 gitInit,
                 placement,
                 hostCwds,
+                allowDuplicate,
               }) =>
                 useDashboardStore.getState().updateProject(project.id, {
                   name,
@@ -1425,6 +1434,7 @@ function ProjectHeader({
                   // accepts it).
                   placement,
                   hostCwds,
+                  allowDuplicate,
                 })
               }
             />
@@ -2412,6 +2422,59 @@ function DiscoverProjects({
 
   const remaining = candidates.filter((c) => !c.isRegistered && !added.has(c.cwd));
 
+  const clearAddError = (cwd: string) =>
+    setAddErrors((prev) => {
+      if (!prev.has(cwd)) return prev;
+      const next = new Map(prev);
+      next.delete(cwd);
+      return next;
+    });
+
+  // Issue #2231 — a candidate that is a checkout of an existing project is
+  // attached to it (its path goes into that project's hostCwds) rather than
+  // added as a second project.
+  const attach = (c: DiscoveredProject) => {
+    if (!c.matchedProject) return;
+    clearAddError(c.cwd);
+    api
+      .attachHostCheckout(c.matchedProject.id, selectedHostId, c.cwd)
+      .then(() => {
+        setAdded((prev) => new Set(prev).add(c.cwd));
+        void useDashboardStore
+          .getState()
+          .refreshProjects()
+          .catch(() => {});
+      })
+      .catch((err: unknown) => {
+        setAddErrors((prev) =>
+          new Map(prev).set(
+            c.cwd,
+            err instanceof ApiError ? err.message : "Could not add checkout",
+          ),
+        );
+      });
+  };
+
+  const addAsProject = (c: DiscoveredProject, allowDuplicate = false) => {
+    const store = useDashboardStore.getState();
+    clearAddError(c.cwd);
+    store
+      .createProject(c.name, c.cwd, selectedHostId, allowDuplicate ? { allowDuplicate } : undefined)
+      .then(() => {
+        setAdded((prev) => new Set(prev).add(c.cwd));
+        void store.refreshProjects();
+      })
+      .catch((err: unknown) => {
+        // Discover only lists directories a scan already found on disk, so
+        // a missing-directory 400 here is near-impossible — but this used
+        // to be a silent unhandled rejection either way (issue: same bug
+        // as CreateProjectModal's own pre-fix confirm()).
+        setAddErrors((prev) =>
+          new Map(prev).set(c.cwd, err instanceof ApiError ? err.message : "Could not add project"),
+        );
+      });
+  };
+
   // Only rendered once a remote host actually exists — same "no extra UI
   // for a single-host deployment" rule CreateProjectModal's own selector
   // follows.
@@ -2519,39 +2582,28 @@ function DiscoverProjects({
               <FolderIcon size={14} style={{ color: "var(--muted)" }} />
               <span className="discover-item-name">{c.name}</span>
               {c.isGitRepo && <span className="discover-git-badge">git</span>}
-              <button
-                className="discover-add"
-                onClick={() => {
-                  const store = useDashboardStore.getState();
-                  setAddErrors((prev) => {
-                    if (!prev.has(c.cwd)) return prev;
-                    const next = new Map(prev);
-                    next.delete(c.cwd);
-                    return next;
-                  });
-                  store
-                    .createProject(c.name, c.cwd, selectedHostId)
-                    .then(() => {
-                      setAdded((prev) => new Set(prev).add(c.cwd));
-                      void store.refreshProjects();
-                    })
-                    .catch((err: unknown) => {
-                      // Discover only lists directories a scan already
-                      // found on disk, so a missing-directory 400 here is
-                      // near-impossible — but this used to be a silent
-                      // unhandled rejection either way (issue: same bug as
-                      // CreateProjectModal's own pre-fix confirm()).
-                      setAddErrors((prev) =>
-                        new Map(prev).set(
-                          c.cwd,
-                          err instanceof ApiError ? err.message : "Could not add project",
-                        ),
-                      );
-                    });
-                }}
-              >
-                Add
-              </button>
+              {c.matchedProject ? (
+                <>
+                  <button
+                    className="discover-add"
+                    title={
+                      c.matchedProject.reason === "origin"
+                        ? "Same git remote as this project"
+                        : "This path is already part of this project"
+                    }
+                    onClick={() => attach(c)}
+                  >
+                    Add as checkout of {c.matchedProject.name}
+                  </button>
+                  <button className="discover-add secondary" onClick={() => addAsProject(c, true)}>
+                    Create a separate project anyway
+                  </button>
+                </>
+              ) : (
+                <button className="discover-add" onClick={() => addAsProject(c)}>
+                  Add
+                </button>
+              )}
               {addErrors.has(c.cwd) && (
                 <div className="project-row-error" title={addErrors.get(c.cwd)}>
                   {addErrors.get(c.cwd)}

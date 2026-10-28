@@ -21,6 +21,7 @@ vi.mock("./api/index.js", async (importOriginal) => {
       getHostSuggestions: vi.fn(),
       listProjects: vi.fn(),
       getProject: vi.fn(),
+      attachHostCheckout: vi.fn(),
     },
   };
 });
@@ -1121,6 +1122,94 @@ describe("CreateProjectModal — confirm-first directory creation and error hand
     expect(
       await screen.findByRole("button", { name: "Create folder and add project" }),
     ).toBeInTheDocument();
+  });
+
+  it("offers attach and 'Create a separate project anyway' for DUPLICATE_PROJECT (issue #2231)", async () => {
+    const onClose = vi.fn();
+    const onCreate = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new ApiError("This repository already has a project: Widgets.", 409, "DUPLICATE_PROJECT", {
+          existingProjectId: 7,
+          existingName: "Widgets",
+        }),
+      )
+      .mockResolvedValueOnce(undefined);
+    const user = userEvent.setup();
+    render(<CreateProjectModal onClose={onClose} onCreate={onCreate} initialPath="/repo" />);
+
+    await user.click(screen.getByRole("button", { name: "Add project" }));
+    expect(
+      await screen.findByRole("button", { name: "Add as checkout of Widgets" }),
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Create a separate project anyway" }));
+
+    expect(onCreate).toHaveBeenLastCalledWith(expect.objectContaining({ allowDuplicate: true }));
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("'Add as checkout of' attaches the path to the existing project and closes", async () => {
+    vi.mocked(api.attachHostCheckout).mockResolvedValueOnce(makeProject({ id: 7 }));
+    const onClose = vi.fn();
+    const onCreate = vi.fn().mockRejectedValue(
+      new ApiError("This repository already has a project: Widgets.", 409, "DUPLICATE_PROJECT", {
+        existingProjectId: 7,
+        existingName: "Widgets",
+      }),
+    );
+    const user = userEvent.setup();
+    render(<CreateProjectModal onClose={onClose} onCreate={onCreate} initialPath="/repo" />);
+
+    await user.click(screen.getByRole("button", { name: "Add project" }));
+    await user.click(await screen.findByRole("button", { name: "Add as checkout of Widgets" }));
+
+    expect(api.attachHostCheckout).toHaveBeenCalledWith(7, "local", "/repo");
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+  });
+
+  it("shows the server's message when the attach is refused", async () => {
+    vi.mocked(api.attachHostCheckout).mockRejectedValueOnce(
+      new ApiError("That is the project's own host.", 400),
+    );
+    const onCreate = vi.fn().mockRejectedValue(
+      new ApiError("This repository already has a project: Widgets.", 409, "DUPLICATE_PROJECT", {
+        existingProjectId: 7,
+        existingName: "Widgets",
+      }),
+    );
+    const user = userEvent.setup();
+    render(<CreateProjectModal onClose={vi.fn()} onCreate={onCreate} initialPath="/repo" />);
+
+    await user.click(screen.getByRole("button", { name: "Add project" }));
+    await user.click(await screen.findByRole("button", { name: "Add as checkout of Widgets" }));
+
+    expect(await screen.findByText("That is the project's own host.")).toBeInTheDocument();
+  });
+
+  it("in edit mode a DUPLICATE_PROJECT only offers 'Save anyway'", async () => {
+    const onCreate = vi.fn().mockRejectedValue(
+      new ApiError("This repository already has a project: Widgets.", 409, "DUPLICATE_PROJECT", {
+        existingProjectId: 7,
+        existingName: "Widgets",
+      }),
+    );
+    const user = userEvent.setup();
+    render(
+      <CreateProjectModal
+        mode="edit"
+        projectId={3}
+        initialName="x"
+        initialPath="/old"
+        onClose={vi.fn()}
+        onCreate={onCreate}
+      />,
+    );
+
+    await user.click(screen.getByRole("button", { name: /save/i }));
+
+    expect(await screen.findByRole("button", { name: "Save anyway" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Add as checkout of/ })).not.toBeInTheDocument();
   });
 
   it("does not offer Create folder for PROJECT_PARENT_MISSING — the typo case", async () => {

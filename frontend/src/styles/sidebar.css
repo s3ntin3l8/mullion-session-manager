@@ -1764,6 +1764,10 @@ button.discover-header:hover {
 .discover-add:hover {
   text-decoration: underline;
 }
+.discover-add.secondary {
+  color: var(--muted);
+  font-weight: 400;
+}
 
 .dockview-container {
   position: relative;
