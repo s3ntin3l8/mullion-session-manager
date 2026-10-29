@@ -10,6 +10,8 @@ import type {
   CreateProjectPlacementOptions,
   CreateProjectResult,
   DiscoveredProject,
+  DuplicateGroup,
+  MergeCounts,
   HostCheckoutSuggestion,
   PlacementPreview,
   ProjectUrl,
@@ -108,6 +110,15 @@ export const projectsApi = {
     request<Project>(`/api/projects/${projectId}/host-checkouts`, {
       method: "POST",
       body: JSON.stringify({ hostId, cwd }),
+    }),
+
+  // Issue #2232 — groups of projects on one repo, and the merge action.
+  getProjectDuplicates: () => request<{ groups: DuplicateGroup[] }>("/api/projects/duplicates"),
+
+  mergeProject: (id: number, into: number) =>
+    request<{ survivor: Project; counts: MergeCounts }>(`/api/projects/${id}/merge`, {
+      method: "POST",
+      body: JSON.stringify({ into }),
     }),
 
   deleteProject: (id: number) => request<void>(`/api/projects/${id}`, { method: "DELETE" }),

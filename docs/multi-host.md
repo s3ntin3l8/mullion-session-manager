@@ -268,6 +268,35 @@ existingName, existingHostId }` when the new `cwd` (or a `hostCwds` entry) is al
   waits on another host: this check compares only with projects on **this** machine's
   origins, and a path match works for every host.
 
+**Merging a duplicate that already exists** (issue #2232). A project created before the gate above
+(a macbook-pinned project next to the original) is folded into the older one:
+
+- `GET /api/projects/duplicates` groups projects by the same origin key the create gate uses;
+  the **survivor** is the oldest (by `createdAt`, then id). Each duplicate carries what would
+  move (`counts`) and, if it cannot be merged right now, a `refusal`. Settings → Projects shows
+  them as a banner with a confirm that counts the tasks, running sessions and previews.
+- `POST /api/projects/:id/merge { into }` merges `:id` into `into`, in one transaction, and
+  returns the survivor. The survivor gains the duplicate's `hostId` → `cwd` in `hostCwds` (set
+  by the operator; a different path already mapped for that host is never replaced). Its null
+  settings (`autoApprove`, `mergeOnApprove`, the default agents, `maxAutoReturnRounds`,
+  `conventionalCommitTitles`, `autoTagRelease`, the inject flags, `devServerUrl`, `autoFetch`)
+  are filled from the duplicate; a value the survivor already has wins, and `placement` stays
+  the survivor's.
+- Sessions move **including running ones**: a session is identified by its host and dtach
+  socket, and the survivor now maps the duplicate's path, so its cwd keeps resolving. Browser
+  panes, devices, saved URLs, preview targets and previews move too (a preview whose branch the
+  survivor already has is dropped); on a browser-cookie label or project-tooling clash the
+  survivor wins. The duplicate's webhook row is dropped **without** unregistering the hook, which
+  the survivor shares. Tasks: see [`tasks.md`](tasks.md#merging-two-projects).
+- **409 refusals**, nothing changed: `NOT_SAME_REPO` (origins differ or are unreadable),
+  `MERGE_SAME_HOST` (two checkouts on one host stay two projects), `MERGE_HOST_PATH_CONFLICT` (the
+  survivor maps that host to a different path), `MERGE_HOST_CWDS_LIMIT`, and
+  `MERGE_STACK_IDENTITY_CONFLICT` (both have an active docker-stack session).
+- Browser-local state may still name the deleted project (dock pins, the active project, the
+  collapsed flags) and a saved layout may hold its `project-hub-<id>` / `file-editor-<id>` panels.
+  The backend never parses a layout, so the dock ignores unknown ids and the app closes such
+  panels once the project list has loaded.
+
 **Auto-fill (opt-in).** `settings.autoDetectHostCheckouts` (off by default; Settings →
 Projects & discovery) lets Mullion fill the map in for you: when a host comes online
 (first contact or after being unreachable — an enrolled agent is picked up by the next

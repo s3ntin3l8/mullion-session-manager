@@ -3,6 +3,7 @@ import { useDashboardStore } from "../../store/index.js";
 import { api, RateLimitedError } from "../../api/index.js";
 import type { DetectCheckoutsResult, ServerInfo } from "../../api/index.js";
 import { CloseIcon, FolderIcon, PlusIcon, RefreshIcon } from "../../ui/icons.js";
+import { DuplicateProjectsBanner } from "./DuplicateProjectsBanner.js";
 import {
   GroupHeading,
   ListRow,
@@ -125,6 +126,7 @@ export function ProjectsSection() {
 
   return (
     <>
+      <DuplicateProjectsBanner />
       <GroupHeading title="Project roots" desc="Folders Mullion scans for git repositories." />
       <StyledList>
         {roots.map((root) => (

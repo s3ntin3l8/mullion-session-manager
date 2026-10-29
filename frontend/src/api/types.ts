@@ -1277,6 +1277,35 @@ export interface HostCheckoutSuggestion {
   declined: boolean;
 }
 
+// Issue #2232 — projects that share one origin; the oldest is the survivor.
+export interface MergeCounts {
+  tasks: number;
+  liveTasks: number;
+  sessions: number;
+  runningSessions: number;
+  previews: number;
+}
+
+export interface DuplicateProject {
+  id: number;
+  name: string;
+  hostId: string;
+  cwd: string;
+  createdAt: string;
+}
+
+export interface DuplicateProjectEntry extends DuplicateProject {
+  counts: MergeCounts;
+  // Why merging this one into the survivor is refused right now, or null.
+  refusal: { code: string; message: string } | null;
+}
+
+export interface DuplicateGroup {
+  origin: string;
+  survivor: DuplicateProject;
+  duplicates: DuplicateProjectEntry[];
+}
+
 export interface DetectCheckoutsResult {
   // False while settings.autoDetectHostCheckouts is off: nothing was changed.
   enabled: boolean;

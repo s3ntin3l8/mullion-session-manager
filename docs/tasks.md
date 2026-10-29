@@ -509,6 +509,20 @@ non-Abandon-path task) are not gated either way.
   `archivedAt IS NULL`) so a manual Unarchive of an already-merged task
   sticks instead of being silently re-archived on the next run.
 
+### Merging two projects
+
+When a duplicate project is merged into its same-repo survivor (issue #2232, see
+[`multi-host.md`](multi-host.md)), its tasks move with it and the `(projectId, issueNumber)`
+unique index decides what happens on a clash:
+
+- a **live** duplicate task (`claimed`, `in_progress`, `reviewing`) moves and **replaces** the
+  survivor's copy of that issue; the survivor's copy is archived with its `issueNumber` cleared
+  (NULLs do not collide, and its history survives), and `failureReason` notes the replacement;
+- any other duplicate task whose issue the survivor already tracks is archived the same way;
+- tasks with no clash (including local, issue-less ones) just move.
+
+The task board is told with an `ingested` event per moved task, so it refetches.
+
 ## Agent selection
 
 Two independent choices are resolved per task, most-specific tier wins:
