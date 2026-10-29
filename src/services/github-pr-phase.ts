@@ -25,7 +25,9 @@ export type PrMergeable = "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
  *   frontend/src/github/prPhase.ts).
  * - `behind`: strict branch protection ("require branches to be up to date")
  *   and the head has fallen behind its base; GitHub reports BEHIND only then.
- *   Updating the branch is the next step. Not an attention phase.
+ *   Updating the branch is the next step. The frontend counts it last in the
+ *   attention badge (ATTENTION_ORDER, frontend/src/github/prPhase.ts): it needs
+ *   one click and nothing is broken.
  * - `ci_pending`: approved (or no review needed) but CI is still running.
  * - `ready_to_merge`: nothing left to wait for.
  * - `unknown`: review state couldn't be fetched (GraphQL failed or backed
