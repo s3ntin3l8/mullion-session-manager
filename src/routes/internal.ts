@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { compareWorktreePaths } from "../services/worktree-paths.js";
 import { renderScrollback } from "../services/scrollback-render.js";
 import {
+  DEFAULT_LIMIT as DEFAULT_TRANSCRIPT_LIMIT,
+  readSessionTranscript,
+} from "../services/session-transcript.js";
+import {
   normalizePreviewDestination,
   CONFIGURED_PREVIEW_POLICY,
 } from "../services/preview-targets.js";
@@ -2721,6 +2725,37 @@ export async function internalRoutes(app: FastifyInstance) {
       }
       return { b64: session ? session.getScrollback().toString("base64") : "" };
     },
+  );
+
+  // Issue #2268 — the agent-side counterpart of GET /api/sessions/:id/transcript:
+  // the transcript file lives on this host, so this agent reads it. Answers a
+  // TranscriptResult as a 200 either way (`ok: false` carries the status the
+  // primary should report), like /internal/sessions/:id/prompt's refusals.
+  app.get<{
+    Params: { id: string };
+    Querystring: { afterSeq?: number; limit?: number; tools?: string };
+  }>(
+    "/internal/sessions/:id/transcript",
+    {
+      ...INTERNAL_RATE_LIMIT,
+      schema: {
+        params: SESSION_ID_PARAMS_SCHEMA,
+        querystring: {
+          type: "object",
+          properties: {
+            afterSeq: { type: "integer", minimum: 0 },
+            limit: { type: "integer", minimum: 1, maximum: 500 },
+            tools: { type: "string", enum: ["0", "1"] },
+          },
+        },
+      },
+    },
+    async (request) =>
+      readSessionTranscript(app.pty.get(request.params.id), {
+        afterSeq: request.query.afterSeq ?? 0,
+        limit: request.query.limit ?? DEFAULT_TRANSCRIPT_LIMIT,
+        fullTools: request.query.tools === "1",
+      }),
   );
 
   // Issue #271 — the agent-side counterpart of

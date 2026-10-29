@@ -1213,6 +1213,76 @@ describe("controlSocketPlugin (issue #185)", () => {
       });
     });
 
+    describe("sessions.transcript", () => {
+      // The test sessions run `bash`, which has no transcript (not-supported), so
+      // these prove routing, scope and validation; the reading itself is covered
+      // in test/services/session-transcript.test.ts.
+      it("session scope: defaults to its own session and reaches the route (501 for a shell)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "sessions.transcript" })}\n`);
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(false);
+        expect(reply.status).toBe(501);
+        expect(String(reply.error)).toContain("not-supported");
+        socket.destroy();
+      });
+
+      it("full scope: names the session explicitly and passes the cursor options through", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId } = await createRealSession();
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({
+            id: 1,
+            op: "sessions.transcript",
+            body: { sessionId, afterSeq: 3999, limit: 5, tools: true },
+          })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        // Past validation and routing: the shell has no transcript.
+        expect(reply.status).toBe(501);
+        socket.destroy();
+      });
+
+      it("rejects a malformed afterSeq, limit or tools with a 400", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        for (const body of [
+          { afterSeq: -1 },
+          { afterSeq: "x" },
+          { limit: 0 },
+          { limit: 501 },
+          { tools: "yes" },
+        ]) {
+          socket.write(`${JSON.stringify({ id: 1, op: "sessions.transcript", body })}\n`);
+          const reply = await waitForReply(socket);
+          expect(reply.status).toBe(400);
+        }
+        socket.destroy();
+      });
+
+      it("session scope: rejects targeting a different session id", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { hookToken } = await createRealSession();
+        const { sessionId: otherSessionId } = await createRealSession();
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "sessions.transcript", body: { sessionId: otherSessionId } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        expect(reply.ok).toBe(false);
+        expect(reply.status).toBe(403);
+        socket.destroy();
+      });
+    });
+
     // The test project is /tmp (no git remote), so a request that is routed
     // and pinned correctly reaches the real route and stops at its own 412
     // "no GitHub remote" (once a reviewer is configured) — enough to prove scope + pinning without GitHub or

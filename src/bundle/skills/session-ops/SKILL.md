@@ -51,8 +51,13 @@ only a hint: dropped if your panel isn't open in their current workspace within 
 Once spawned, you can supervise your children without full scope:
 `mullion session children` / `list_child_sessions` shows each child's derived
 status (`working`, `finished`, `awaiting_permission`, `exited`, ...);
-`mullion session logs <childId> --text` / `get_scrollback` (with `sessionId`)
-reads its output as plain text — the terminal replayed through an emulator, so a
+`mullion session transcript <childId>` / `get_session_transcript` reads what the
+child actually said — the ordered conversation, user turns, replies and a line per tool
+call — from the agent's own transcript, and `--after <cursor>` (the cursor the previous
+page printed) returns only what came since your last look, so after `prompt` + `wait` you
+read the child's reply and anything earlier you missed. Prefer it over scrollback for
+Claude Code and Codex children. `mullion session logs <childId> --text` / `get_scrollback`
+(with `sessionId`) reads the terminal output as plain text — the terminal replayed through an emulator, so a
 full-screen agent CLI reads as its final screen rather than as cursor-movement
 escapes (`mode: "raw"` / no `--text` gives the raw byte stream); `mullion session kill <childId>` / `kill_child_session` stops it.
 

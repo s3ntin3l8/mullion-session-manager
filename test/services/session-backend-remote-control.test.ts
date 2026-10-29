@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const clientMock = vi.hoisted(() => ({
   resolvePrompt: vi.fn(),
+  resolveTranscript: vi.fn(),
   resolveWaitOutput: vi.fn(),
   bulkLiveStatus: vi.fn(),
   compareWorktreePaths: vi.fn(),
@@ -263,5 +264,34 @@ describe("RemoteBackend.compareWorktreePaths", () => {
     }
     clientMock.compareWorktreePaths.mockReset().mockRejectedValue(new Error("old agent"));
     expect(await backend().compareWorktreePaths("/repo/worktree", entries)).toEqual(["unknown"]);
+  });
+});
+
+// Issue #2268 — `sessions.transcript` against a session on another host.
+describe("RemoteBackend.getTranscript", () => {
+  const query = { afterSeq: 0, limit: 10, fullTools: false };
+  beforeEach(() => clientMock.resolveTranscript.mockReset());
+
+  it("returns the agent's page unchanged, and a refusal as a value", async () => {
+    const page = { ok: true, entries: [], nextSeq: 999, more: false };
+    clientMock.resolveTranscript.mockResolvedValueOnce(page);
+    expect(await backend().getTranscript("5", query)).toEqual(page);
+    expect(clientMock.resolveTranscript).toHaveBeenCalledWith("5", query);
+
+    const refusal = { ok: false, status: 501, error: "not-supported" };
+    clientMock.resolveTranscript.mockResolvedValueOnce(refusal);
+    expect(await backend().getTranscript("5", query)).toEqual(refusal);
+  });
+
+  it("reports an agent that predates the route as not supported", async () => {
+    clientMock.resolveTranscript.mockRejectedValueOnce(new HostRequestError("mac-1", 404, ""));
+    expect(await backend().getTranscript("5", query)).toMatchObject({ ok: false, status: 501 });
+  });
+
+  it("lets an unreachable host propagate", async () => {
+    clientMock.resolveTranscript.mockRejectedValueOnce(
+      new HostUnreachableError("mac-1", new Error("down")),
+    );
+    await expect(backend().getTranscript("5", query)).rejects.toBeInstanceOf(HostUnreachableError);
   });
 });

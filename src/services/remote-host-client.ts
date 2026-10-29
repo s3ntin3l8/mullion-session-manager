@@ -1,5 +1,6 @@
 import { renderScrollback } from "./scrollback-render.js";
 import type { TerminalPalette } from "./terminal-query-reply.js";
+import type { TranscriptQuery, TranscriptResult } from "./session-transcript.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -1993,6 +1994,20 @@ export class RemoteHostClient {
       `/internal/sessions/${encodeURIComponent(id)}/scrollback`,
     );
     return Buffer.from(result.b64, "base64");
+  }
+
+  /** One page of the session's conversation (issue #2268), read ON the agent,
+   * where the transcript file lives. The agent answers a `TranscriptResult`
+   * as JSON with a 200 either way, so a refusal needs no error mapping here. */
+  async resolveTranscript(id: string, query: TranscriptQuery): Promise<TranscriptResult> {
+    const params = new URLSearchParams({
+      afterSeq: String(query.afterSeq),
+      limit: String(query.limit),
+      tools: query.fullTools ? "1" : "0",
+    });
+    return this.request<TranscriptResult>(
+      `/internal/sessions/${encodeURIComponent(id)}/transcript?${params.toString()}`,
+    );
   }
 
   /** The session's scrollback rendered as plain text (issue #2112) — rendered

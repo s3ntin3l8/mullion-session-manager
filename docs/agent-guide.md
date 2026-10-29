@@ -200,7 +200,7 @@ pair-and-connect`, the three ops above with no MCP tool at all.
 `create_preview`/`delete_preview`/`list_previews`/`set_project_tooling`/
 `delete_device`) reply with a scope error, same as the CLI's own** — they're
 there for an operator running `mullion mcp` directly with `MULLION_AUTH_TOKEN`
-set, not for you. `get_scrollback` (defaults to your own session),
+set, not for you. `get_scrollback` and `get_session_transcript` (both default to your own session),
 `list_actions` (defaults to your own project), `get_project_tooling`
 (defaults to your own project), and `request_review` / `review_status` / `stop_review` (your own session's
 PR and runs; pass `repo` for a PR in another registered project's repository)

@@ -571,4 +571,5 @@ export const claudeCodeAdapter: HookAgentAdapter = {
   initialPromptArgs: (prompt) => `-- ${shellQuote(prompt)}`,
   // sessions.prompt: paste-then-Enter into the running TUI (see standardPromptFraming).
   submitPrompt: standardPromptFraming,
+  transcriptFormat: "claude-code",
 };

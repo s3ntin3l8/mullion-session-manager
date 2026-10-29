@@ -4764,6 +4764,107 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  describe("GET /internal/sessions/:id/transcript (issue #2268)", () => {
+    const auth = { authorization: `Bearer ${TOKEN}` };
+
+    it("answers a refusal as a value for an untracked session and for a shell", async () => {
+      const app = await buildApp();
+      const before = fakePtyChildren.length;
+      const missing = await app.inject({
+        method: "GET",
+        url: "/internal/sessions/never-spawned/transcript",
+        headers: auth,
+      });
+      expect(missing.statusCode).toBe(200);
+      expect(missing.json()).toMatchObject({ ok: false, status: 404 });
+
+      await app.inject({
+        method: "POST",
+        url: "/internal/sessions",
+        headers: auth,
+        payload: { id: "611", cwd: "/tmp", command: "bash", cols: 80, rows: 24 },
+      });
+      await waitUntil(() => fakePtyChildren.length > before);
+      const shell = await app.inject({
+        method: "GET",
+        url: "/internal/sessions/611/transcript",
+        headers: auth,
+      });
+      expect(shell.json()).toMatchObject({ ok: false, status: 501 });
+      await app.close();
+    });
+
+    it("reads the Claude transcript a hook reported, inside the config dir only", async () => {
+      const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-claude-cfg-"));
+      const previous = process.env.CLAUDE_CONFIG_DIR;
+      process.env.CLAUDE_CONFIG_DIR = configDir;
+      try {
+        const projects = path.join(configDir, "projects", "-tmp");
+        fs.mkdirSync(projects, { recursive: true });
+        const file = path.join(projects, "s.jsonl");
+        fs.writeFileSync(
+          file,
+          `${JSON.stringify({ type: "user", message: { content: "hello agent" } })}\n`,
+        );
+        const app = await buildApp();
+        const before = fakePtyChildren.length;
+        await app.inject({
+          method: "POST",
+          url: "/internal/sessions",
+          headers: auth,
+          payload: { id: "612", cwd: "/tmp", command: "claude", cols: 80, rows: 24 },
+        });
+        await waitUntil(() => fakePtyChildren.length > before);
+
+        const notYet = await app.inject({
+          method: "GET",
+          url: "/internal/sessions/612/transcript",
+          headers: auth,
+        });
+        expect(notYet.json()).toMatchObject({ ok: false, status: 409 });
+
+        app.pty.emitHookEvent("612", { kind: "cwd_changed", cwd: "/tmp", transcriptPath: file });
+        const res = await app.inject({
+          method: "GET",
+          url: "/internal/sessions/612/transcript?limit=5&tools=0",
+          headers: auth,
+        });
+        expect(res.json()).toMatchObject({
+          ok: true,
+          entries: [{ role: "user", text: "hello agent" }],
+          more: false,
+        });
+
+        // A forged path outside the config dir is refused, not read.
+        const outside = path.join(configDir, "secret.jsonl");
+        fs.writeFileSync(outside, "{}\n");
+        app.pty.emitHookEvent("612", { kind: "cwd_changed", cwd: "/tmp", transcriptPath: outside });
+        const forged = await app.inject({
+          method: "GET",
+          url: "/internal/sessions/612/transcript",
+          headers: auth,
+        });
+        expect(forged.json()).toMatchObject({ ok: false, status: 404 });
+        await app.close();
+      } finally {
+        if (previous === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+        else process.env.CLAUDE_CONFIG_DIR = previous;
+        fs.rmSync(configDir, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects an out-of-range limit", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "GET",
+        url: "/internal/sessions/611/transcript?limit=501",
+        headers: auth,
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+  });
+
   describe("GET /internal/sessions/:id/scrollback (Phase 4, #187)", () => {
     it("returns the base64-encoded scrollback for a tracked session", async () => {
       const app = await buildApp();

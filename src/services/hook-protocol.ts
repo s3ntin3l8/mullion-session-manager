@@ -265,6 +265,13 @@ export interface GitBranchHookMessage {
 export interface CwdChangedHookMessage {
   kind: "cwd_changed";
   cwd: string;
+  /** Claude Code's own `transcript_path` (issue #2268): the JSONL file holding
+   * this session's conversation. Every Claude hook payload carries it, and the
+   * forwarder already piggybacks a `cwd_changed` onto every event, so it rides
+   * on that message rather than adding a kind of its own. Absent for every
+   * other CLI. Untrusted like the rest of the hook channel: the reader only
+   * opens it when it resolves inside the CLI's own config directory. */
+  transcriptPath?: string;
 }
 
 /** Promote-flow full-context carryover (issue #271 follow-up) — opencode's
@@ -909,7 +916,17 @@ function validateCwdChanged(payload: Record<string, unknown>): ParseHookMessageR
   if (!isString(payload.cwd) || payload.cwd.length === 0) {
     return { ok: false, error: "cwd_changed requires a non-empty string 'cwd' field" };
   }
-  return { ok: true, message: { kind: "cwd_changed", cwd: payload.cwd } };
+  if (payload.transcriptPath !== undefined && !isString(payload.transcriptPath)) {
+    return {
+      ok: false,
+      error: "cwd_changed requires 'transcriptPath' to be a string when present",
+    };
+  }
+  const message: CwdChangedHookMessage = { kind: "cwd_changed", cwd: payload.cwd };
+  if (isString(payload.transcriptPath) && payload.transcriptPath.length > 0) {
+    message.transcriptPath = payload.transcriptPath;
+  }
+  return { ok: true, message };
 }
 
 function validateAgentSession(payload: Record<string, unknown>): ParseHookMessageResult {

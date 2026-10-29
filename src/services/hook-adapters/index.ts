@@ -111,6 +111,17 @@ export function getAdapterPromptFraming(
 }
 
 /**
+ * Issue #2268 — the transcript file format of the agent that `command` resolves
+ * to, or `null` when its adapter reports none (or no adapter matches). Pure
+ * lookup, the sanctioned way for session-transcript.ts to branch on the agent
+ * family without parsing `command`.
+ */
+export function getAdapterTranscriptFormat(command: string): "claude-code" | "codex" | null {
+  const adapter = ADAPTERS.find((candidate) => candidate.matches(command));
+  return adapter?.transcriptFormat ?? null;
+}
+
+/**
  * Issue #271 follow-up — returns the argv suffix that resumes the first
  * adapter matching `command` at an existing agent-native session id, or
  * `null` when no adapter matches, or the matched adapter has no

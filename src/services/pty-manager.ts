@@ -40,6 +40,8 @@ import { buildSessionEnv } from "./session-env.js";
 import type { HookMessageKind, HookMessage } from "./hook-protocol.js";
 import { filterOutstandingBackgroundTasks } from "./background-tasks.js";
 import { getAdapterEmits } from "./hook-adapters/index.js";
+import { resolveClaudeConfigDir } from "./hook-adapters/claude-config-dir.js";
+import type { TranscriptSource } from "./session-transcript.js";
 import { detectDevServerPortForPlainSession, portInUseReason } from "./dev-server-detect.js";
 import { lastMeaningfulLine, collapseAndTruncate } from "./terminal-text.js";
 import { ScrollbackBuffer } from "./scrollback-buffer.js";
@@ -828,6 +830,10 @@ export class Session {
   private _liveBranch: string | null = null;
   // Issue #271 follow-up — see SessionInfo.agentSessionId's own doc comment.
   private _agentSessionId: string | null = null;
+  // Issue #2268 — Claude Code's conversation file, reported by the `cwd_changed`
+  // hook. Not persisted: every Claude hook repeats it, so a restarted backend
+  // relearns it on the session's next hook.
+  private _agentTranscriptPath: string | null = null;
   // Rich statuses (issue: extend surfaced session statuses) — see each
   // field's own doc comment on SessionInfo above for what it means; toInfo()
   // reads these straight through (or, for attentionKind, off attentionState
@@ -2174,6 +2180,12 @@ export class Session {
       set agentSessionId(v: string | null) {
         self._agentSessionId = v;
       },
+      get agentTranscriptPath() {
+        return self._agentTranscriptPath;
+      },
+      set agentTranscriptPath(v: string | null) {
+        self._agentTranscriptPath = v;
+      },
       get fileChangeQueue() {
         return self.fileChangeQueue;
       },
@@ -2546,6 +2558,30 @@ export class Session {
   /** Issue #1734 — the rollout file path, or null when there is none. */
   getCodexTranscriptPath(): string | null {
     return this.codexTranscriptPath;
+  }
+
+  /**
+   * Issue #2268 — where this session's agent keeps its conversation, or null
+   * when no hook has reported a path yet. The roots are the directories the file
+   * must resolve inside (the hook-reported path is untrusted): for Claude Code
+   * `<config dir>/projects`, for the session's own `CLAUDE_CONFIG_DIR` and the
+   * backend's default; for Codex its sessions directory.
+   */
+  getTranscriptSource(): TranscriptSource | null {
+    if (this.codexTranscriptPath !== null) {
+      return {
+        format: "codex",
+        path: this.codexTranscriptPath,
+        roots: [path.join(this.codexHome(), "sessions")],
+      };
+    }
+    if (this._agentTranscriptPath !== null) {
+      const own = this.env.CLAUDE_CONFIG_DIR;
+      const roots = [path.join(resolveClaudeConfigDir(), "projects")];
+      if (typeof own === "string" && own.length > 0) roots.unshift(path.join(own, "projects"));
+      return { format: "claude-code", path: this._agentTranscriptPath, roots };
+    }
+    return null;
   }
 
   /**

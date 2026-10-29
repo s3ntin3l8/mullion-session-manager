@@ -1379,6 +1379,18 @@ describe("RemoteHostClient", () => {
     );
   });
 
+  it("resolveTranscript asks the agent for one page and returns its result (issue #2268)", async () => {
+    const page = { ok: true, entries: [], nextSeq: 1999, more: false };
+    fetchMock.mockResolvedValue(jsonResponse(200, page));
+    expect(
+      await client().resolveTranscript("42", { afterSeq: 5, limit: 20, fullTools: true }),
+    ).toEqual(page);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://example.invalid:1234/internal/sessions/42/transcript?afterSeq=5&limit=20&tools=1",
+      expect.anything(),
+    );
+  });
+
   it("resolveRenderedScrollback asks the agent for mode=rendered and returns its text (issue #2112)", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, { text: "the screen" }));
     expect(await client().resolveRenderedScrollback("42")).toBe("the screen");

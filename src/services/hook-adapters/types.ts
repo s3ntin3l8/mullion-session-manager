@@ -357,6 +357,12 @@ export interface HookAgentAdapter {
    * `--prompt <text>` is unambiguously the resumed session's next turn, not
    * a fresh one. */
   resumeSessionArgs?(agentSessionId: string): string;
+  /** Issue #2268 — the transcript file format this CLI writes, when its hooks
+   * report where (Claude Code's `transcript_path`, Codex's rollout). Absent for
+   * a CLI whose conversation Mullion cannot read: `sessions.transcript` then
+   * answers `not-supported` rather than falling back to terminal bytes. Read
+   * through hook-adapters/index.ts's getAdapterTranscriptFormat. */
+  transcriptFormat?: "claude-code" | "codex";
   /**
    * The CLI-specific sentence telling a Task Master worker that it may
    * decompose this task and delegate the mechanical parts to a cheaper

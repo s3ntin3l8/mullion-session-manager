@@ -1,4 +1,8 @@
 import path from "node:path";
+import {
+  DEFAULT_LIMIT as DEFAULT_TRANSCRIPT_LIMIT,
+  MAX_LIMIT as MAX_TRANSCRIPT_LIMIT,
+} from "../services/session-transcript.js";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { and, eq, isNull } from "drizzle-orm";
 // Issue #1255 — only used for the rename route's `instanceof
@@ -488,6 +492,51 @@ export async function sessionsRoute(app: FastifyInstance) {
         app.log.warn({ err, sessionId, hostId }, "host unreachable, reporting empty scrollback");
         return rendered ? { text: "" } : { b64: "" };
       }
+    },
+  );
+
+  // Issue #2268 — one page of the session's conversation as plain text, from the
+  // agent CLI's own transcript on the host that runs it (`?afterSeq=` is an opaque
+  // cursor: pass the last `seq`, or the response's `nextSeq`). Unlike the
+  // scrollback route this reports why it has nothing (not running, not supported,
+  // not reported yet) rather than an empty body: a reader that gets "" cannot tell
+  // an idle agent from a CLI that has no transcript.
+  app.get<{
+    Params: { id: string };
+    Querystring: { afterSeq?: number; limit?: number; tools?: string };
+  }>(
+    "/api/sessions/:id/transcript",
+    {
+      schema: {
+        querystring: {
+          type: "object",
+          properties: {
+            afterSeq: { type: "integer", minimum: 0 },
+            limit: { type: "integer", minimum: 1, maximum: MAX_TRANSCRIPT_LIMIT },
+            tools: { type: "string", enum: ["0", "1"] },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const sessionId = Number(request.params.id);
+      if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+      const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+      if (!row) return reply.notFound();
+      const hostId = resolveSessionHostId(app, row);
+      let result;
+      try {
+        result = await resolveBackend(app, hostId).getTranscript(String(sessionId), {
+          afterSeq: request.query.afterSeq ?? 0,
+          limit: request.query.limit ?? DEFAULT_TRANSCRIPT_LIMIT,
+          fullTools: request.query.tools === "1",
+        });
+      } catch (err) {
+        app.log.warn({ err, sessionId, hostId }, "host unreachable, cannot read the transcript");
+        return reply.code(503).send({ error: "the session's host is unreachable" });
+      }
+      if (!result.ok) return reply.code(result.status).send({ error: result.error });
+      return result;
     },
   );
 

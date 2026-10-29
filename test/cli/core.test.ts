@@ -2548,6 +2548,53 @@ describe("runCommand", () => {
       expect(io.written.map((b) => b.toString()).join("")).toBe("the final answer\n");
     });
 
+    it("session transcript sends the cursor options and prints entries with a resume trailer (issue #2268)", async () => {
+      const request = vi.fn(async () => ({
+        entries: [
+          { seq: 2000, role: "user", text: "run the tests", ts: "2026-10-29T10:00:00Z" },
+          { seq: 3000, role: "assistant", text: "All pass.", ts: null },
+        ],
+        nextSeq: 3999,
+        more: true,
+      }));
+      const io = fakeIo();
+      const code = await runCommand(
+        ["session", "transcript", "7", "--after", "1999", "--limit", "20", "--tools"],
+        { client: fakeClient({ request }), io },
+      );
+      expect(code).toBe(0);
+      expect(request).toHaveBeenCalledWith("sessions.transcript", {
+        sessionId: "7",
+        afterSeq: 1999,
+        limit: 20,
+        tools: true,
+      });
+      const out = io.written.map((b) => b.toString()).join("");
+      expect(out).toContain("[user 2026-10-29T10:00:00Z]\nrun the tests");
+      expect(out).toContain("[assistant]\nAll pass.");
+      expect(out).toContain("-- more entries: mullion session transcript 7 --after 3999");
+    });
+
+    it("session transcript with nothing more says where to poll from, and defaults to --session", async () => {
+      const request = vi.fn(async () => ({ entries: [], nextSeq: 5999, more: false }));
+      const io = fakeIo();
+      const code = await runCommand(["session", "transcript", "--session", "4"], {
+        client: fakeClient({ request }),
+        io,
+      });
+      expect(code).toBe(0);
+      expect(request).toHaveBeenCalledWith("sessions.transcript", { sessionId: "4" });
+      expect(io.written.map((b) => b.toString()).join("")).toContain(
+        "end of transcript so far; read new entries with: mullion session transcript 4 --after 5999",
+      );
+    });
+
+    it("session transcript needs a session id", async () => {
+      expect(
+        await runCommand(["session", "transcript"], { client: fakeClient(), io: fakeIo() }),
+      ).toBe(2);
+    });
+
     it("session logs --text prints nothing for an empty screen (issue #2112)", async () => {
       const io = fakeIo();
       const code = await runCommand(["logs", "1", "--text"], {

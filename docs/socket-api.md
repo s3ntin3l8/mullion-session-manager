@@ -158,6 +158,7 @@ split across two cells.
 | `sessions.kill`            | full, session‡  | `DELETE /api/sessions/:id`                                 | `session kill` (alias `kill`); `dock stop`†                         | `stop_dock_session`†, `kill_child_session` |
 | `sessions.rename`          | full, session   | `PATCH /api/sessions/:id`                                  | `session rename`                                                    | —                                          |
 | `sessions.scrollback`      | full, session   | `GET /api/sessions/:id/scrollback[?mode=rendered]`         | `session logs [--text]` (alias `logs`)                              | `get_scrollback`                           |
+| `sessions.transcript`      | full, session   | `GET /api/sessions/:id/transcript[?afterSeq=&limit=]`      | `session transcript [--after <n>] [--limit <n>] [--tools]`          | `get_session_transcript`                   |
 | `reviews.request`          | full, session   | `POST /api/sessions/:id/review-request`                    | `review [--pr <n>] [--repo <o/n>] [--branch <b>]`                   | `request_review`                           |
 | `reviews.status`           | full, session   | `GET /api/sessions/:id/review-request`                     | `review status [--pr <n>] [--repo <o/n>] [--branch <b>]`            | `review_status`                            |
 | `reviews.stop`             | full, session   | `POST /api/sessions/:id/review-stop`                       | `review stop <runId>`                                               | `stop_review`                              |
@@ -291,7 +292,7 @@ the table), which is also why this op is full-scope only: a session-scoped
 connection listing all previews would leak every external preview's URL to
 whichever session happens to hold a hook token.
 
-**Session-targeted ops** (`sessions.get`/`scrollback`/`rename`) work
+**Session-targeted ops** (`sessions.get`/`scrollback`/`transcript`/`rename`) work
 differently depending on scope:
 
 - **Full scope** must pass `body.sessionId` explicitly — a full-scope
@@ -303,7 +304,7 @@ differently depending on scope:
   _different_ session id gets a `403`, never a silent redirect to its own.
 
 **Children of the caller (parent→child control).** `sessions.get`,
-`sessions.scrollback` and `events.query` at session scope may also name a
+`sessions.scrollback`, `sessions.transcript` and `events.query` at session scope may also name a
 _child_ of the connection's own session (`sessions.parent_session_id` equal to
 the pinned id), not just the session itself — so a parent can watch what it
 spawned. The relationship is read from the DB row, so an exited child stays
@@ -558,6 +559,42 @@ is logged (`app.log.info`) regardless of scope.
 A session-scoped connection invoking an op outside its allowed scopes, or
 naming a session id it isn't pinned to, gets
 `{"ok":false,"status":403,"error":"..."}`. An unrecognized `op` gets a `404`.
+
+### `sessions.transcript`
+
+What the session said, as plain text, read from the agent CLI's own transcript
+file (Claude Code's JSONL, Codex's rollout) rather than the terminal, whose
+bytes are a full-screen TUI's repaints (`sessions.scrollback`). Body:
+`{ sessionId?, afterSeq?, limit?, tools? }`. `afterSeq` is the opaque cursor a
+previous page returned as `nextSeq` (default `0`, from the start); `limit` is
+1-500 (default 50); `tools: true` keeps tool calls and results in full instead of
+a one-line summary. Result:
+
+```json
+{
+  "entries": [
+    { "seq": 2000, "role": "user", "text": "run the tests", "ts": "2026-10-29T10:00:00Z" }
+  ],
+  "nextSeq": 9999,
+  "more": false
+}
+```
+
+`role` is `user`, `assistant` or `tool`. Entries come in transcript order; `seq`
+increases, and one line of the file can yield several entries (so seqs are not
+consecutive). `more: true` means the page ended on a cap (`limit`, or 256 KiB of
+text) and `afterSeq: nextSeq` reads the rest; with `more: false`, `nextSeq` is
+the cursor to poll from. An entry longer than 16 KiB is cut and carries
+`truncated: true`. A subagent's own messages and the harness's injected context
+are left out.
+
+The reader runs on the host that runs the session; the hook-reported path is
+untrusted, so it is opened only when it resolves to a regular file inside the
+CLI's own config directory. Errors: `404` the session is not running or the file
+is unreadable, `409` the session has not reported its transcript yet (it arrives
+with the agent's first hook; a primary restart relearns it on the next hook),
+`501` the agent CLI has no readable transcript (`not-supported`: opencode, agy
+and plain shells). Over the control relay it is an ordinary request/response op.
 
 ## PTY I/O streams (`sessions.attach`/`input`/`resize`/`detach`)
 
