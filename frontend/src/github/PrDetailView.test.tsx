@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { __resetGithubCacheForTests } from "../store/githubCacheReset.js";
 import { PrDetailView } from "./PrDetailView.js";
@@ -407,7 +407,7 @@ describe("PrDetailView", () => {
     expect(await screen.findByText("Merged (squash)")).toBeInTheDocument();
   });
 
-  it("cannot dismiss the merge dialog with Escape while the merge runs", async () => {
+  it("cannot dismiss the merge dialog while the merge runs", async () => {
     let finish: (r: Response) => void = () => {};
     vi.stubGlobal(
       "fetch",
@@ -422,7 +422,13 @@ describe("PrDetailView", () => {
     const dialog = screen.getByRole("dialog");
     await userEvent.click(within(dialog).getByRole("button", { name: "Merge" }));
     await within(dialog).findByRole("button", { name: "Merging…" });
-    await userEvent.keyboard("{Escape}");
+    // The X says so; Escape and the backdrop reach onClose regardless, so they
+    // are driven on the elements that carry them (a disabled button never
+    // delivers a key event, which is why this is not a keyboard() call).
+    expect(within(dialog).getByRole("button", { name: "Close dialog" })).toBeDisabled();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    fireEvent.click(dialog.parentElement!);
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     await act(async () => finish(jsonResponse(200, { merged: true, sha: "m" })));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());

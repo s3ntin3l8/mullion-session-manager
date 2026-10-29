@@ -85,6 +85,10 @@ export interface ModalProps {
   // button) entirely. The caller then owns the close button — including
   // giving it an accessible name, which the default one has.
   headerContent?: ReactNode;
+  // Disables the default header's close button — for a dialog that must not be
+  // dismissed while something is in flight (the caller guards `onClose` too,
+  // since Escape and the backdrop reach it regardless).
+  closeDisabled?: boolean;
 }
 
 export function Modal({
@@ -102,6 +106,7 @@ export function Modal({
   bodyClassName = "create-modal-body",
   footerClassName = "create-modal-footer",
   headerContent,
+  closeDisabled = false,
 }: ModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
   const { onKeyDown: onTrapKeyDown } = useFocusTrap({
@@ -148,7 +153,12 @@ export function Modal({
               <span className="create-modal-title">{title}</span>
               {subtitle && <span className="create-modal-subtitle">{subtitle}</span>}
             </span>
-            <button className="create-modal-close" onClick={onClose} aria-label="Close dialog">
+            <button
+              className="create-modal-close"
+              onClick={onClose}
+              disabled={closeDisabled}
+              aria-label="Close dialog"
+            >
               <CloseIcon size={15} />
             </button>
           </div>

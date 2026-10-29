@@ -106,6 +106,7 @@ export function MergeConfirmModal({
       // Escape, the backdrop and the X cannot dismiss a merge in flight, as
       // the Cancel button cannot.
       onClose={busy ? () => {} : onCancel}
+      closeDisabled={busy}
       title={`Squash and merge #${pr.number}`}
       initialFocusRef={cancelRef}
       footer={
