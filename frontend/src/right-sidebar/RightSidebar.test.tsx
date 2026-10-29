@@ -173,6 +173,14 @@ describe("RightSidebar", () => {
     );
     expect(github().title).toBe("GitHub — 1 PR: ci failing, 1 PR: unresolved conversations");
 
+    // A behind head (strict protection) needs the user's click and reads last.
+    act(() =>
+      useDashboardStore.setState({
+        prsByProject: { 1: withPrs("behind", "threads_unresolved") },
+      }),
+    );
+    expect(github().title).toBe("GitHub — 1 PR: unresolved conversations, 1 PR: behind base");
+
     // Waiting or ready PRs are not attention.
     act(() =>
       useDashboardStore.setState({

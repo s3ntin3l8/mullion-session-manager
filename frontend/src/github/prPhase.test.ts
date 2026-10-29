@@ -41,8 +41,10 @@ describe("sortPrsByAttention", () => {
       { number: 5, prPhase: "ci_failing" as const, updatedAt: "2026-01-01T00:00:00Z" },
       { number: 6, updatedAt: null },
       { number: 7, prPhase: "threads_unresolved" as const, updatedAt: "2026-01-08T00:00:00Z" },
+      { number: 8, prPhase: "behind" as const, updatedAt: "2026-01-10T00:00:00Z" },
     ];
-    expect(sortPrsByAttention(prs).map((p) => p.number)).toEqual([5, 4, 2, 7, 3, 1, 6]);
+    // A behind head reads after open conversations and before quiet phases.
+    expect(sortPrsByAttention(prs).map((p) => p.number)).toEqual([5, 4, 2, 7, 8, 3, 1, 6]);
     // Does not mutate its input.
     expect(prs[0].number).toBe(1);
   });
@@ -71,13 +73,15 @@ describe("attentionSummary", () => {
         { prPhase: "ci_failing" },
         { prPhase: "conflicts" },
         { prPhase: "threads_unresolved" },
-        // Needs a click, but not (yet) the user's attention: behind rides on a
-        // value the list cannot verify.
+        // Strict protection holds it back until the user updates the branch.
         { prPhase: "behind" },
         { prPhase: "ready_to_merge" },
         {},
       ]),
-    ).toEqual({ total: 4, byPhase: { ci_failing: 2, conflicts: 1, threads_unresolved: 1 } });
+    ).toEqual({
+      total: 5,
+      byPhase: { ci_failing: 2, conflicts: 1, threads_unresolved: 1, behind: 1 },
+    });
   });
 });
 
