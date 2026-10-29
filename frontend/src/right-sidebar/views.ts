@@ -69,10 +69,10 @@ function useGitBadge(projectId: number | null): RailBadge | null {
 }
 
 // PRs that want the user (failing CI, requested changes, conflicts, unresolved
-// conversations — by phase, not just red CI) and a red default branch both come straight from the live
-// store (prsByProject from the /ws/github push, defaultBranchCiByProject from
-// the poller via the same refreshGitRefs batch), so the badge costs no extra
-// requests.
+// conversations — by phase, not just red CI) and a red default branch both
+// come straight from the live store (prsByProject from the /ws/github push,
+// defaultBranchCiByProject from the poller via the same refreshGitRefs
+// batch), so the badge costs no extra requests.
 function useGitHubBadge(projectId: number | null): RailBadge | null {
   const prs = useDashboardStore((s) =>
     projectId != null ? s.prsByProject[projectId]?.prs : undefined,
