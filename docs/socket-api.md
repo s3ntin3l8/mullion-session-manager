@@ -39,8 +39,11 @@ a versioned install (`deploy/install.sh`).
 **Remote-host sessions.** The control socket is primary-only. A session on a Linux or macOS
 agent host gets `MULLION_SOCKET_PATH` pointing at the agent's `relay.sock`, which carries the
 connection to the primary at **session scope** (the same wire protocol; the handshake token is
-validated on the agent). Streaming ops (`sessions.attach`, `events.subscribe`) answer
-`501 not-available-over-relay` there. A Windows agent still sets
+validated on the agent). The streaming ops (`sessions.attach`, `events.subscribe`) work there
+too: each runs on its own relayed connection, is re-checked against the session every 30 seconds
+and ends with a `{"id":N,"type":"closed","reason":...}` frame when the session is gone or moved.
+`501 not-available-over-relay` is only what a connection with no socket behind it (a test sink)
+answers. A Windows agent still sets
 `MULLION_CONTROL_UNAVAILABLE=remote-host` and the CLI/MCP client refuse up front. A frame with
 `"id": null`, `"ok": false` and `"fatal": true` is the relay refusing the whole connection, for example
 `relay-unavailable` or `relay-disconnected`. See

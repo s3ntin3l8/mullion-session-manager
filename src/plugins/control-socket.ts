@@ -122,8 +122,9 @@ export interface ConnectionState {
   /** Runs `listener` once if the connection closes; returns the unsubscribe. */
   onClose: (listener: () => void) => () => void;
   /** The raw socket, for the streaming ops (`attach`, `events.*`) that write
-   * through a SocketChannel. Null on a connection with no local socket (a
-   * relay), where those ops are refused. */
+   * through a SocketChannel. A relayed connection carries its in-memory pair's
+   * server half here (#2125). Null only on a connection with no socket at all
+   * (a test sink), where those ops are refused. */
   readonly socket: net.Socket | null;
   scope: Scope;
   /** Set only for scope "session" — the connection is pinned to this
@@ -252,7 +253,8 @@ function projectCoordinates(app: FastifyInstance, projectId: number): boolean {
   return row?.allowCrossProjectSpawn === true;
 }
 
-/** Streaming ops need the raw socket; a relayed connection has none (#2125). */
+/** Streaming ops need a socket to write their frames to; only a connection with
+ * none (a test sink) lacks one now that a relay carries its pair (#2125). */
 const STREAM_UNAVAILABLE: ReplyPayload = {
   ok: false,
   status: 501,
@@ -480,6 +482,16 @@ function sessionRowIsActive(app: FastifyInstance, id: string): boolean {
     .where(eq(sessions.id, Number(id)))
     .get();
   return row?.status === "active";
+}
+
+/** The ids of `parentId`'s children (issue #2125: seeds an event replay). */
+function childSessionIds(app: FastifyInstance, parentId: number): number[] {
+  return app.db
+    .select({ id: sessions.id })
+    .from(sessions)
+    .where(eq(sessions.parentSessionId, parentId))
+    .all()
+    .map((row) => row.id);
 }
 
 /**
@@ -2006,9 +2018,19 @@ export const OPS: Record<string, OpSpec> = {
             sessionFilter: ownAndChildSessionFilter(app, ownId),
             // Receiving a child's events is not writing its read cursor.
             seenFilter: (sessionId) => sessionId === ownId,
+            // Issue #2125 — the session and its children may live on another host.
+            includeRemote: true,
+            remoteReplayIds: [ownId, ...childSessionIds(app, ownId)].filter(
+              (sessionId) => childHostId(app, String(sessionId)) !== LOCAL_HOST_ID,
+            ),
           });
         } else {
-          attachLocalEventsSocket(app, channel, { sessionIdFilter: conn.sessionId! });
+          attachLocalEventsSocket(app, channel, {
+            sessionIdFilter: conn.sessionId!,
+            includeRemote: true,
+            remoteReplayIds:
+              childHostId(app, conn.sessionId!) !== LOCAL_HOST_ID ? [Number(conn.sessionId)] : [],
+          });
         }
       } else {
         attachAggregatedEventsSocket(app, channel);
@@ -2460,6 +2482,32 @@ export function relayedSessionDenied(app: FastifyInstance, relay: RelayBinding):
   return null;
 }
 
+/** How often a relayed connection's open streams re-check their session (#2125). */
+export const RELAY_STREAM_RECHECK_MS = 30_000;
+
+/**
+ * Issue #2125 — a request is re-checked against the session's row each time, but a
+ * stream outlives any one request: a session that is killed, or moved to another
+ * host, while its `events.subscribe` / `sessions.attach` is open must stop being
+ * served. Ends every open stream on `conn` with a `closed` frame carrying the
+ * reason, and reports whether it did.
+ */
+export function closeDeniedRelayStreams(
+  app: FastifyInstance,
+  relay: RelayBinding,
+  conn: ConnectionState,
+): boolean {
+  if (conn.openChannels.size === 0) return false;
+  const denied = relayedSessionDenied(app, relay);
+  if (denied === null) return false;
+  for (const [id, channel] of [...conn.openChannels]) {
+    conn.send({ id, type: "closed", reason: denied });
+    channel.close(false);
+  }
+  conn.openChannels.clear();
+  return true;
+}
+
 export function handleConnection(
   app: FastifyInstance,
   socket: net.Socket,
@@ -2500,13 +2548,22 @@ export function handleConnection(
           socket.once("close", listener);
           return () => socket.off("close", listener);
         },
-        socket: null,
+        // The in-memory pair's server half: streaming ops (#2125) write their frames
+        // to it exactly as to a net.Socket, and the mux carries them back.
+        socket,
         scope: "session",
         sessionId: relay.sessionId,
         openChannels: new Map(),
         activeWaits: 0,
       }
     : null;
+  if (relay) {
+    const recheck = setInterval(() => {
+      if (conn) closeDeniedRelayStreams(app, relay, conn);
+    }, RELAY_STREAM_RECHECK_MS);
+    recheck.unref();
+    socket.once("close", () => clearInterval(recheck));
+  }
   let inflight = 0;
   let paused = false;
   // Per-connection decoder, not a fresh Buffer.toString("utf8") per chunk —

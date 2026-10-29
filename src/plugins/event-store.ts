@@ -1,6 +1,11 @@
 import fp from "fastify-plugin";
+import { RemoteEventBus } from "../services/remote-event-bus.js";
 import type { FastifyInstance } from "fastify";
-import { startEventWriter, startEventRetentionSweep } from "../services/event-store.js";
+import {
+  publishVerifiedRemoteEvent,
+  startEventWriter,
+  startEventRetentionSweep,
+} from "../services/event-store.js";
 import { startRemoteEventSubscriber } from "../services/remote-event-subscriber.js";
 
 // Issue #213 (roadmap 4.7) — persists NotificationEvents (pty-manager.ts) to
@@ -40,6 +45,14 @@ export const eventStorePlugin = fp(async (app: FastifyInstance) => {
   // events are exposed to the primary via its DB-less
   // /internal/ws/events, routes/internal.ts — the far end of the
   // subscription this plugin opens.)
+  // Issue #2125 — the live feed of remote hosts' events for session-scope event
+  // streams. Null on an agent, which has no remote hosts to hear from.
+  // Listeners coming and going open and close the remote upstreams (see
+  // startRemoteEventSubscriber's hasLiveDemand), through this late-bound reference.
+  let reconcileRemote: () => void = () => {};
+  const remoteEventBus =
+    app.config.MULLION_ROLE === "primary" ? new RemoteEventBus(() => reconcileRemote()) : null;
+  app.decorate("remoteEventBus", remoteEventBus);
   if (app.config.MULLION_ROLE !== "primary") return;
 
   const writer = startEventWriter(app);
@@ -50,9 +63,15 @@ export const eventStorePlugin = fp(async (app: FastifyInstance) => {
   // onReady runNow() further down), that safety depended on call-order
   // reasoning a reader would have to re-derive. Declaring in dependency
   // order removes the TDZ entirely (Hermes review, PR #564).
-  const remoteSubscriber = startRemoteEventSubscriber(app, (event, sourceHostId) => {
-    writer.pushEvent(event, sourceHostId);
-  });
+  const remoteSubscriber = startRemoteEventSubscriber(
+    app,
+    (event, sourceHostId) => {
+      writer.pushEvent(event, sourceHostId);
+      publishVerifiedRemoteEvent(app, remoteEventBus, event, sourceHostId);
+    },
+    () => (remoteEventBus?.size ?? 0) > 0,
+  );
+  reconcileRemote = () => remoteSubscriber.reconcile();
   const retention = startEventRetentionSweep(app, {
     // Hazard 5 fallback: reconcile the remote-subscription set on the same
     // fixed cadence the retention sweep already runs on, in case an
@@ -111,5 +130,7 @@ declare module "fastify" {
   interface FastifyInstance {
     reconfigureEventRetention: () => void;
     reconfigureRemoteEventSubscriptions: (opts?: { forceReconnect?: string[] }) => void;
+    /** Live events remote hosts report, for session-scope event streams (#2125). */
+    remoteEventBus: RemoteEventBus | null;
   }
 }

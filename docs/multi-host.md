@@ -1222,7 +1222,20 @@ agent carries each connection to the primary:
 
 What it covers: every session-scope request/response op, for the session itself and its children
 (including children placed on another host), with the same permissions as on the primary. What it
-does not: streaming ops (#2125) and Windows agents. Each host is capped at 64 relayed connections.
+does not: Windows agents. The streaming ops (`sessions.attach`, `events.subscribe` / `events tail`)
+work too (#2125): each is a stream on its own relayed connection, with the mux's per-channel window
+as flow control, so a client that stops reading stalls only its own connection. A relayed stream
+re-checks its session every 30 seconds and ends, with a `closed` frame carrying the reason, once
+the session is gone or hosted elsewhere; a relay drop ends it with the usual `relay-disconnected`.
+`attach` to a session on the agent host goes agent → primary → agent (the primary proxies it back),
+which is fine for a status peek, not for a latency-sensitive terminal. An event stream replays
+what the primary persisted for the session and its children (up to 100 events each; empty unless
+`sessions.eventPersistence` is on), then follows the live feed the primary receives from the
+hosts (it opens its event connections to the hosts while such a stream is open, whatever that
+setting says; nothing is persisted when it is off). Events the primary received a moment before the
+stream opened but has not yet written to its store (up to about 30 seconds) are in neither the
+replay nor the live feed. A remote host's event is only passed on if the session it names really
+lives on that host, the same rule that guards persisting it. Each host is capped at 64 relayed connections and each connection at 16 open streams.
 
 **Trust boundary.** A compromised agent can already impersonate the sessions it hosts (it mints
 their tokens). The relay adds no authority beyond that: the host binding limits it to sessions
@@ -1242,9 +1255,7 @@ that the primary itself placed on that host, and none of it reaches full scope.
 - **Control from a session on a Windows agent host isn't available yet (#1627).** The relay
   below serves unix-socket agents (Linux, macOS); a Windows agent still sets
   `MULLION_CONTROL_UNAVAILABLE=remote-host`, and the `mullion` CLI / MCP tools fail immediately
-  with an explanation instead of a connect error. On any agent, `attach`,
-  `events.tail` and `events.subscribe` are not available over the relay (they answer
-  `not-available-over-relay`, [#2125](https://github.com/s3ntin3l8/mullion-session-manager/issues/2125)).
+  with an explanation instead of a connect error.
 - Task Master now works end-to-end against a remote-hosted project (`#484`)
   — issue ingest, claim, work, review with a real diff-stat, promotion to a
   PR, and Retry — given an agent build new enough to serve the routes it

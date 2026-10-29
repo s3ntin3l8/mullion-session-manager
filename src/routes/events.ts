@@ -30,6 +30,8 @@ export function shouldDropForBackpressure(bufferedAmount: number): boolean {
 // EVENTS_MAX (pty-manager.ts), but a host tracking many sessions could still
 // add up to more than is useful to dump on connect.
 const REPLAY_MAX_EVENTS = 500;
+/** Persisted events replayed per remote session when a relayed stream opens (#2125). */
+const REMOTE_REPLAY_PER_SESSION = 100;
 
 interface SeenMessage {
   type: "seen";
@@ -104,6 +106,17 @@ export interface AttachLocalEventsOptions {
    */
   seenFilter?: (sessionId: number) => boolean;
   /**
+   * Issue #2125 — also deliver events that REMOTE hosts report for sessions that
+   * pass the filter (the primary's `remoteEventBus`), live and, for the sessions
+   * named in `remoteReplayIds`, as a replay of what was persisted. Off for the
+   * browser aggregate, which reaches remote hosts through its own upstream relays
+   * and would otherwise see every remote event twice.
+   */
+  includeRemote?: boolean;
+  /** Session ids whose persisted events (from the DB) seed the replay when
+   * `includeRemote` is set; sessions outside this list start live-only. */
+  remoteReplayIds?: number[];
+  /**
    * Called whenever an incoming "seen" message genuinely advances a
    * session's read cursor (`PtyManager.markEventsSeen`'s own return value) —
    * issue #1427's cross-client read-state sync. Wired by
@@ -164,9 +177,31 @@ export function attachLocalEventsSocket(
     if (!replaySent) buffered.push(event);
     sendEvent(socket, event);
   });
+  // Same subscribe-before-snapshot order as above, for the remote hosts' feed.
+  const unsubscribeRemote = opts?.includeRemote
+    ? app.remoteEventBus?.subscribe((event) => {
+        if (!matchesFilter(event.sessionId)) return;
+        if (!replaySent) buffered.push(event);
+        sendEvent(socket, event);
+      })
+    : undefined;
 
   const seen = new Set<string>();
-  const replay = [...app.pty.listEvents(), ...buffered]
+  const persisted =
+    opts?.includeRemote && app.db
+      ? (opts.remoteReplayIds ?? []).flatMap((sessionId) =>
+          querySessionEvents(app.db, { sessionId, limit: REMOTE_REPLAY_PER_SESSION }).events.map(
+            (row): NotificationEvent => ({
+              sessionId,
+              seq: row.seq,
+              kind: row.kind as NotificationEvent["kind"],
+              ts: row.ts,
+              payload: row.payload ?? {},
+            }),
+          ),
+        )
+      : [];
+  const replay = [...app.pty.listEvents(), ...persisted, ...buffered]
     .filter((event) => matchesFilter(event.sessionId))
     .filter((event) => {
       const key = `${event.sessionId}:${event.seq}`;
@@ -210,6 +245,7 @@ export function attachLocalEventsSocket(
 
   socket.on("close", () => {
     unsubscribe();
+    unsubscribeRemote?.();
   });
 }
 

@@ -362,14 +362,76 @@ describe("loopback relay: agent socket -> mux -> primary handler", () => {
     expect(frame).toMatchObject({ ok: false, status: 403 });
   });
 
-  it("answers streaming ops with not-available-over-relay", async () => {
+  /** A relayed client that keeps its connection open and collects every frame. */
+  function open(socketPath: string): {
+    send: (...lines: string[]) => void;
+    frames: Record<string, unknown>[];
+    waitFor: (predicate: (frame: Record<string, unknown>) => boolean) => Promise<void>;
+    close: () => void;
+  } {
+    const socket = net.connect(socketPath);
+    const frames: Record<string, unknown>[] = [];
+    let buffer = "";
+    socket.on("data", (chunk) => {
+      buffer += chunk.toString("utf8");
+      for (let nl = buffer.indexOf("\n"); nl !== -1; nl = buffer.indexOf("\n")) {
+        frames.push(JSON.parse(buffer.slice(0, nl)));
+        buffer = buffer.slice(nl + 1);
+      }
+    });
+    socket.on("error", () => {});
+    return {
+      send: (...lines) => void socket.write(lines.map((l) => `${l}\n`).join("")),
+      frames,
+      waitFor: async (predicate) => {
+        for (let i = 0; i < 200 && !frames.some(predicate); i++) {
+          await new Promise((r) => setTimeout(r, 10));
+        }
+        expect(frames.some(predicate)).toBe(true);
+      },
+      close: () => socket.destroy(),
+    };
+  }
+
+  it("serves events.subscribe for a session on another host: replay, live, and only its own (#2125)", async () => {
+    const { app, insertSession, tokens, socketPath } = await setup();
+    const mine = insertSession();
+    const other = insertSession();
+    tokens.set("tok", mine);
+    const client = open(socketPath);
+    client.send('{"token":"tok"}', '{"id":3,"op":"events.subscribe","body":{}}');
+    await client.waitFor((f) => f.id === 3 && f.ok === true);
+
+    const at = (sessionId: string, seq: number) => ({
+      sessionId: Number(sessionId),
+      seq,
+      kind: "status_change",
+      ts: Date.now(),
+      payload: {},
+    });
+    app.remoteEventBus!.publish(at(other, 1) as never);
+    app.remoteEventBus!.publish(at(mine, 2) as never);
+    await client.waitFor((f) => f.id === 3 && f.seq === 2);
+    expect(client.frames.some((f) => f.seq === 1)).toBe(false);
+    client.close();
+    // The stream is released with the connection.
+    for (let i = 0; i < 100 && app.remoteEventBus!.size > 0; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(app.remoteEventBus!.size).toBe(0);
+  });
+
+  it("no longer answers sessions.attach with not-available-over-relay (#2125)", async () => {
     const { insertSession, tokens, socketPath } = await setup();
     tokens.set("tok", insertSession());
-    const [frame] = await talk(socketPath, [
-      '{"token":"tok"}',
-      '{"id":3,"op":"events.subscribe","body":{}}',
-    ]);
-    expect(frame).toMatchObject({ id: 3, ok: false, status: 501 });
+    const client = open(socketPath);
+    client.send('{"token":"tok"}', '{"id":4,"op":"sessions.attach","body":{"cols":80,"rows":24}}');
+    // The session's host is not a registered one here, so the attach itself is refused
+    // (a precise error), not short-circuited as "streaming needs a local socket".
+    await client.waitFor((f) => f.id === 4);
+    const reply = client.frames.find((f) => f.id === 4)!;
+    expect(String(reply.error ?? "")).not.toContain("not-available-over-relay");
+    client.close();
   });
 
   it("re-checks the session on every request", async () => {
