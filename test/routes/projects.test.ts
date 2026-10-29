@@ -3539,6 +3539,26 @@ describe("projects route", () => {
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 
+      it("merge lets GitHub arbitrate a strict-BEHIND PR instead of refusing on the phase", async () => {
+        let merged = false;
+        mockGithub(gqlPr(47, { mergeStateStatus: "BEHIND" }), (url) => {
+          if (!url.endsWith("/pulls/47/merge")) return null;
+          merged = true;
+          return jsonResponse(200, { merged: true, sha: "mergesha" });
+        });
+        await warmCiCache(47, "success", true);
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/47/merge`,
+          payload: { headSha: "sha47" },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(merged).toBe(true);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
       it("merge refuses a PR that is not ready (changes requested)", async () => {
         mockGithub(gqlPr(44, { reviewDecision: "CHANGES_REQUESTED" }));
         await warmCiCache(44, "success", true);

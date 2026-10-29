@@ -145,7 +145,7 @@ describe("derivePrPhase", () => {
     expect(derivePrPhase({ ...base, unresolvedThreads: 2 })).toBe("ready_to_merge");
   });
 
-  it("names a strict-protection BEHIND head as the next step, after everything that outranks it", () => {
+  it("names a strict-protection BEHIND head as the next step; only draft, conflicts, CI and review outrank it", () => {
     const behind = { ...base, mergeStateStatus: "BEHIND" };
     expect(derivePrPhase(behind)).toBe("behind");
     expect(derivePrPhase({ ...behind, unresolvedThreads: 2 })).toBe("behind");
@@ -153,8 +153,8 @@ describe("derivePrPhase", () => {
     expect(derivePrPhase({ ...behind, ciStatus: "failure" })).toBe("ci_failing");
     expect(derivePrPhase({ ...behind, ciStatus: "in_progress" })).toBe("ci_pending");
     expect(derivePrPhase({ ...behind, mergeable: "CONFLICTING" })).toBe("conflicts");
-    // Non-strict: a behind PR still reads CLEAN, so nothing changes.
-    expect(derivePrPhase({ ...base, mergeStateStatus: "CLEAN" })).toBe("ready_to_merge");
+    // Non-strict repos never report BEHIND (a behind head reads CLEAN/BLOCKED),
+    // so they cannot reach this phase; ancestry is the UI's optional icon.
   });
 
   it("claims nothing beyond CI when review state wasn't fetched", () => {

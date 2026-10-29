@@ -507,6 +507,13 @@ describe("PrDetailView", () => {
     );
   });
 
+  it("treats BEHIND with a head that is not behind (behindBy 0) as ready to merge", async () => {
+    stub({ ...PR, mergeStateStatus: "BEHIND", prPhase: "behind", behindBy: 0 });
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    expect(await screen.findByRole("button", { name: "Squash & merge" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Update branch" })).toBeNull();
+  });
+
   it("offers no Update branch to a PR that is not behind", async () => {
     stub({ ...PR, mergeStateStatus: "CLEAN" });
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);

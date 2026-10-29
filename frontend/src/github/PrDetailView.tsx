@@ -513,7 +513,12 @@ export function PrDetailView({
     });
 
   const toggleStatus = (k: StatusKey) => setOpenStatus((cur) => (cur === k ? null : k));
-  const step = nextStep(pr.prPhase, unresolved);
+  // BEHIND is GitHub's collapsed state; when ancestry says the head is not
+  // behind, updating would be refused, so the PR is ready.
+  const step = nextStep(
+    pr.prPhase === "behind" && pr.behindBy === 0 ? "ready_to_merge" : pr.prPhase,
+    unresolved,
+  );
   const runStep = () => {
     switch (step.kind) {
       case "merge":
@@ -566,7 +571,9 @@ export function PrDetailView({
             sessionAction.kind === "open-existing" ? "Open existing session" : "Open session"
           }
           behind={
-            (pr.mergeStateStatus === "BEHIND" || (pr.behindBy ?? 0) > 0) && step.kind !== "update"
+            pr.behindBy != null
+              ? pr.behindBy > 0 && step.kind !== "update"
+              : step.kind !== "update" && pr.mergeStateStatus === "BEHIND"
           }
           composerOpen={composerOpen}
           onStep={runStep}
