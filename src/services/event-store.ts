@@ -433,6 +433,9 @@ export function publishVerifiedRemoteEvent(
   try {
     if (filterHostOwnership(app, [{ event, sourceHostId }]).length === 1) bus.publish(event);
   } catch (err) {
-    app.log.error({ err }, "failed to verify a remote event's host for the live feed; dropping it");
+    app.log.error(
+      { err, sourceHostId, sessionId: event.sessionId },
+      "failed to verify a remote event's host for the live feed; dropping it",
+    );
   }
 }
