@@ -137,8 +137,8 @@ specific address.
   token, shows it once, and clears the host's session. The running agent is
   locked out until its `.env` carries the new value and it is restarted —
   re-running the installer does not rewrite an existing `.env`. An agent that
-  registered itself needs `MULLION_PRIMARY_URL`, `MULLION_ENROLLMENT_TOKEN=<new>`
-  and `MULLION_AGENT_TOKEN=` empty; a host added with **Use my own token** needs
+  registered itself needs `MULLION_ENROLLMENT_TOKEN=<new>` and
+  `MULLION_AGENT_TOKEN=` empty (leave its `MULLION_PRIMARY_URL` as installed); a host added with **Use my own token** needs
   `MULLION_AGENT_TOKEN=<new>` instead (it never registers, so clearing it would
   leave the agent with no credential and it would refuse to boot). The dialog
   shows both.

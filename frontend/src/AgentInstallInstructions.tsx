@@ -92,16 +92,17 @@ export function AgentInstallInstructions({
         <>
           <CopyBlock
             label="Agent's .env (installed with the Add host command)"
-            text={envUpdateSnippet(token, primaryUrl)}
+            text={envUpdateSnippet(token)}
           />
           <CopyBlock
             label="Agent's .env (host added with “Use my own token”)"
             text={staticEnvUpdateSnippet(token)}
           />
           <span className="create-modal-field-hint">
-            Use the one that matches how this host was added, then restart the agent. Until you do,
-            it can no longer reach this primary. Re-running the installer would not apply it: the
-            installer never rewrites an existing .env.
+            Use the one that matches how this host was added (keep the primary URL the agent's .env
+            already has), then restart the agent. Until you do, it can no longer reach this primary.
+            Re-running the installer would not apply it: the installer never rewrites an existing
+            .env.
           </span>
         </>
       )}

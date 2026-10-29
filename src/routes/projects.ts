@@ -342,6 +342,14 @@ function unknownHostInCwds(
   return null;
 }
 
+/** The 400 text for a host id `unknownHostInCwds` rejected: pending or unknown. */
+function unknownHostMessage(app: FastifyInstance, hostId: string): string {
+  const row = getHostRow(app, hostId);
+  return row
+    ? `hostCwds names host ${row.name}, which hasn't registered yet`
+    : `hostCwds names an unknown host: ${hostId}`;
+}
+
 /**
  * Issue #2231 — the existing project (other than `excludeProjectId`) that a
  * create/edit would duplicate: any of the given (host, path) checkouts is
@@ -4774,7 +4782,7 @@ export async function projectsRoute(app: FastifyInstance) {
       const { name, cwd, createDir, gitInit, placement, hostCwds, allowDuplicate } = request.body;
       const unknownHost = unknownHostInCwds(app, hostCwds);
       if (unknownHost !== null) {
-        return reply.badRequest(`hostCwds names an unknown host: ${unknownHost}`);
+        return reply.badRequest(unknownHostMessage(app, unknownHost));
       }
       const hostId = request.body.hostId ?? LOCAL_HOST_ID;
       const targetHost = hostId !== LOCAL_HOST_ID ? getHostRow(app, hostId) : undefined;
@@ -5052,7 +5060,7 @@ export async function projectsRoute(app: FastifyInstance) {
       } = request.body;
       const unknownHost = unknownHostInCwds(app, hostCwds);
       if (unknownHost !== null) {
-        return reply.badRequest(`hostCwds names an unknown host: ${unknownHost}`);
+        return reply.badRequest(unknownHostMessage(app, unknownHost));
       }
       if (
         devServerUrl !== undefined &&

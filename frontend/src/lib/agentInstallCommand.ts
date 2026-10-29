@@ -60,16 +60,12 @@ export function unixInstallCommand(p: AgentInstallParams): string {
 /**
  * What an agent that registered itself (installed from the Add host command)
  * changes after a rotate. install.sh never rewrites an existing .env, so
- * re-running the installer would not apply the new token. The primary URL is
- * repeated so the enrollment path is complete before the static token is
- * cleared: an agent with neither path refuses to boot.
+ * re-running the installer would not apply the new token. MULLION_PRIMARY_URL
+ * is deliberately absent: the agent already has the address it was installed
+ * with, and the dashboard's own origin may be a gateway that blocks register.
  */
-export function envUpdateSnippet(token: string, primaryUrl: string): string {
-  return [
-    `MULLION_PRIMARY_URL=${primaryUrl}`,
-    `MULLION_ENROLLMENT_TOKEN=${token}`,
-    `MULLION_AGENT_TOKEN=`,
-  ].join("\n");
+export function envUpdateSnippet(token: string): string {
+  return [`MULLION_ENROLLMENT_TOKEN=${token}`, `MULLION_AGENT_TOKEN=`].join("\n");
 }
 
 /**

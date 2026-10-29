@@ -62,10 +62,8 @@ describe("unixInstallCommand", () => {
 });
 
 describe("envUpdateSnippet", () => {
-  it("sets the primary URL and enrollment token and clears the manual one", () => {
-    expect(envUpdateSnippet("tok", "http://p:3100")).toBe(
-      "MULLION_PRIMARY_URL=http://p:3100\nMULLION_ENROLLMENT_TOKEN=tok\nMULLION_AGENT_TOKEN=",
-    );
+  it("sets the enrollment token, clears the manual one, and leaves the primary URL alone", () => {
+    expect(envUpdateSnippet("tok")).toBe("MULLION_ENROLLMENT_TOKEN=tok\nMULLION_AGENT_TOKEN=");
   });
 });
 

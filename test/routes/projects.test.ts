@@ -381,7 +381,7 @@ describe("projects route", () => {
       },
     });
     expect(rejected.statusCode).toBe(400);
-    expect(rejected.json().message).toMatch(/unknown host/i);
+    expect(rejected.json().message).toMatch(/hasn't registered yet/i);
     await app.close();
     fs.rmSync(cwd, { recursive: true, force: true });
   });
