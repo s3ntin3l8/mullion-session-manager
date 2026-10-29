@@ -5272,6 +5272,20 @@ describe("PtyManager", () => {
       }
     });
 
+    it("cwd_changed: a long cwd that Claude hashes yields no source rather than the whole projects dir (issue #2268)", async () => {
+      const longCwd = `/tmp/${"d".repeat(240)}`;
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: longCwd,
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      session.emitHookEvent({ kind: "cwd_changed", cwd: longCwd, transcriptPath: "/x/s.jsonl" });
+      expect(session.getTranscriptSource()).toBeNull();
+    });
+
     it("cwd_changed: a transcript path is ignored for a CLI that does not write one (issue #2268)", async () => {
       const session = manager.getOrCreate({
         id: "1",

@@ -1451,6 +1451,9 @@ export class Session {
     this.exitCode = null;
     this._liveBranch = null;
     this._agentSessionId = null;
+    // Issue #2268 — the previous process's conversation file; the new one reports
+    // its own with its first hook.
+    this._agentTranscriptPath = null;
     // Rich statuses — same "fresh session identity" reset as the fields
     // just above.
     this.errorDetail = null;
@@ -2589,11 +2592,11 @@ export class Session {
       for (const configDir of configDirs) {
         const projects = path.join(configDir, "projects");
         for (const cwd of cwds) {
-          for (const candidate of claudeProjectDirNames(cwd)) {
-            roots.add(candidate === null ? projects : path.join(projects, candidate));
-          }
+          for (const name of claudeProjectDirNames(cwd)) roots.add(path.join(projects, name));
         }
       }
+      // No root (a cwd whose directory name Claude hashes): not served, never widened.
+      if (roots.size === 0) return null;
       return { format, path: this._agentTranscriptPath, roots: [...roots] };
     }
     return null;

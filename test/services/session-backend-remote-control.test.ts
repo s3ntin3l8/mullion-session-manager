@@ -288,10 +288,20 @@ describe("RemoteBackend.getTranscript", () => {
     expect(await backend().getTranscript("5", query)).toMatchObject({ ok: false, status: 501 });
   });
 
-  it("lets an unreachable host propagate", async () => {
+  it("tells a rejection apart from an unreachable host", async () => {
+    clientMock.resolveTranscript.mockRejectedValueOnce(new HostRequestError("mac-1", 429, "slow"));
+    expect(await backend().getTranscript("5", query)).toMatchObject({
+      ok: false,
+      status: 502,
+      error: expect.stringContaining("HTTP 429"),
+    });
     clientMock.resolveTranscript.mockRejectedValueOnce(
       new HostUnreachableError("mac-1", new Error("down")),
     );
-    await expect(backend().getTranscript("5", query)).rejects.toBeInstanceOf(HostUnreachableError);
+    expect(await backend().getTranscript("5", query)).toMatchObject({
+      ok: false,
+      status: 502,
+      error: expect.stringContaining("unreachable"),
+    });
   });
 });

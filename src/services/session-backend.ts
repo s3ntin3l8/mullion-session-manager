@@ -808,15 +808,9 @@ class RemoteBackend implements SessionBackend {
     try {
       return await this.client.resolveTranscript(id, query);
     } catch (err) {
-      // An agent build that predates the route answers 404.
-      if (err instanceof HostRequestError && err.statusCode === 404) {
-        return {
-          ok: false,
-          status: 501,
-          error: "the host's agent does not support transcripts yet; update it",
-        };
-      }
-      throw err;
+      // A refusal is a value, like prompt/wait: an agent too old for the route
+      // (404), a rejection, or an unreachable host each get their own status.
+      return { ok: false, ...this.remoteRefusal(err, "transcript reads") };
     }
   }
 

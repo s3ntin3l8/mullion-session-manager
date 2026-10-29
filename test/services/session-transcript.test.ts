@@ -368,7 +368,8 @@ describe("readTranscriptFile", () => {
 
   it("names the Claude project directories a cwd is filed under", () => {
     expect(claudeProjectDirNames("/nonexistent/.wt/x y")).toEqual(["-nonexistent--wt-x-y"]);
-    expect(claudeProjectDirNames("/" + "d".repeat(250))).toEqual([null]);
+    // A name Claude would hash is not reproduced: no name, so no root.
+    expect(claudeProjectDirNames("/" + "d".repeat(250))).toEqual([]);
   });
 
   it("reads a Codex rollout", async () => {

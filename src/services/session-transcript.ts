@@ -54,7 +54,7 @@ export type TranscriptResult =
        * a compaction) this changes, and the caller should read again from 0. */
       file: string;
     }
-  | { ok: false; status: 404 | 409 | 501; error: string };
+  | { ok: false; status: number; error: string };
 
 /** What a session knows about where its CLI keeps the conversation. */
 export interface TranscriptSource {
@@ -68,21 +68,20 @@ export interface TranscriptSource {
  * The directory names Claude Code may file a session launched in `cwd` under, inside
  * `<config dir>/projects/`: the path with every non-alphanumeric character replaced by
  * `-` (`/home/u/.wt/x` is `-home-u--wt-x`), for the path as given and as resolved.
- * Claude shortens a very long name with a hash suffix, which cannot be reproduced
- * here, so a name past its 200-character limit yields `null`: the caller then falls
- * back to the whole projects directory for that cwd.
+ * Claude shortens a name past 200 characters with a hash suffix that cannot be
+ * reproduced here; such a cwd yields no name, so its transcript is not served rather
+ * than the whole projects directory being opened up for it.
  */
-export function claudeProjectDirNames(cwd: string): Array<string | null> {
+export function claudeProjectDirNames(cwd: string): string[] {
   const names = new Set<string>([cwd]);
   try {
     names.add(realpathSync(cwd));
   } catch {
     // A cwd that no longer exists has only its literal name.
   }
-  return [...names].map((name) => {
-    const encoded = name.replace(/[^a-zA-Z0-9]/g, "-");
-    return encoded.length > 200 ? null : encoded;
-  });
+  return [...names]
+    .map((name) => name.replace(/[^a-zA-Z0-9]/g, "-"))
+    .filter((encoded) => encoded.length <= 200);
 }
 
 /** The slice of a live session this needs, so tests need no PtyManager. */
