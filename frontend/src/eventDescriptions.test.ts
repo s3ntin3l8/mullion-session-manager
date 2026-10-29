@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  KIND_LABELS,
   describeEvent,
   latestFileContext,
   latestTitleContext,
@@ -1254,5 +1255,28 @@ describe("pr_* events", () => {
 
   it("labels them for the bell and timeline", () => {
     expect(notifyLabel(pr("pr_ci_failed"))).toBe("PR CI");
+  });
+});
+
+describe("message_* events (#2270)", () => {
+  const ev = (kind: "message_sent" | "message_received", payload: Record<string, unknown>) =>
+    makeEvent({ kind, payload });
+
+  it("describes a sent message with its target and outcome, and a received one with its sender", () => {
+    expect(describeEvent(ev("message_sent", { to: 9, status: "delivered" }))).toEqual({
+      text: "Message to session 9: delivered",
+      attention: false,
+    });
+    expect(describeEvent(ev("message_sent", {}))?.text).toBe("Message");
+    expect(describeEvent(ev("message_received", { from: 3 }))).toEqual({
+      text: "Message from session 3 delivered",
+      attention: false,
+    });
+    expect(describeEvent(ev("message_received", {}))?.text).toBe("Message delivered");
+  });
+
+  it("has a label for each kind", () => {
+    expect(KIND_LABELS.message_sent).toBe("Message Sent");
+    expect(KIND_LABELS.message_received).toBe("Message");
   });
 });

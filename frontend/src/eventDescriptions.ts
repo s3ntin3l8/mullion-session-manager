@@ -536,6 +536,16 @@ export function describeEvent(
     case "pr_merged":
     case "pr_conflicts":
       return describePrEvent(event);
+    case "message_sent": {
+      const to = typeof event.payload.to === "number" ? ` to session ${event.payload.to}` : "";
+      const status = typeof event.payload.status === "string" ? `: ${event.payload.status}` : "";
+      return { text: `Message${to}${status}`, attention: false };
+    }
+    case "message_received": {
+      const from =
+        typeof event.payload.from === "number" ? ` from session ${event.payload.from}` : "";
+      return { text: `Message${from} delivered`, attention: false };
+    }
     default:
       return null;
   }
@@ -950,6 +960,9 @@ export const KIND_LABELS: Record<NotificationEvent["kind"], string> = {
   pr_new_comments: "PR Comments",
   pr_merged: "PR Merged",
   pr_conflicts: "PR Conflicts",
+  // Issue #2270 — a message one session sent another.
+  message_sent: "Message Sent",
+  message_received: "Message",
 };
 
 export const ALL_KINDS = Object.keys(KIND_LABELS) as NotificationEvent["kind"][];
