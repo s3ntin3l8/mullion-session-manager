@@ -144,6 +144,18 @@ relay keep the App identity. GitHub also does not let a pull request's author
 approve it or request changes on it, so **Approve** and **Request changes** are
 hidden on a PR you opened; **Comment** always works.
 
+**Whether your token can write here.** The PR and issue detail also say whether
+the connected token can write to the repo, so the box warns before a post fails:
+a classic or OAuth token is judged by its scopes (`repo`, or `public_repo` on a
+public repo) and by `GET /repos/{owner}/{repo}` (a 404 means it cannot see the
+repo; a 403, which may just be a rate limit or SSO, stays unknown). Then the "Posts as" line says the token can't write here, with a pointer to
+Settings → GitHub, and the post buttons are disabled; **Resolve** needs push access
+too, unless you are the PR's author. A fine-grained token carries no scopes and
+its grants cannot be introspected, so `canWrite` stays unknown and posting is not
+disabled (GitHub's refusal still shows if a post fails); its push access is still
+read, so Resolve can be disabled for it. Reconnecting a token clears the answer. The answer is cached for ten
+minutes per repo.
+
 ### Device flow ("Connect with GitHub" button, opt-in)
 
 This requires one-time setup by whoever operates the Mullion instance:

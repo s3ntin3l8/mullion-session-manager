@@ -206,3 +206,85 @@ describe("ThreadActions", () => {
     expect(screen.getByRole("button", { name: "Reply" })).toBeInTheDocument();
   });
 });
+
+describe("a token that can't write (#2285)", () => {
+  const box = () => screen.getByRole("textbox", { name: "Comment or review" });
+  const readOnly = { kind: "user", login: "me", canWrite: false, canPush: false } as const;
+
+  it("warns under the box and disables every post button", async () => {
+    render(
+      <ConversationComposer
+        onComment={vi.fn()}
+        onReview={vi.fn()}
+        identity={readOnly}
+        onClose={vi.fn()}
+        prAuthor="alice"
+      />,
+    );
+    expect(screen.getByText(/this token can't write to this repo/)).toBeInTheDocument();
+    await userEvent.type(box(), "hello");
+    for (const name of ["Comment", "Approve", "Request changes"]) {
+      expect(screen.getByRole("button", { name })).toBeDisabled();
+    }
+  });
+
+  it("does not post a comment from a CommentComposer", async () => {
+    const onSubmit = vi.fn();
+    render(<CommentComposer label="c" identity={readOnly} onSubmit={onSubmit} />);
+    await userEvent.type(screen.getByLabelText("c"), "hi");
+    expect(screen.getByRole("button", { name: "Comment" })).toBeDisabled();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("leaves everything on for an unknown or writable token", async () => {
+    const ok = { kind: "user", login: "me", canWrite: null, canPush: null } as const;
+    render(
+      <ConversationComposer
+        onComment={vi.fn()}
+        onReview={vi.fn()}
+        identity={ok}
+        onClose={vi.fn()}
+        prAuthor="alice"
+      />,
+    );
+    await userEvent.type(box(), "hello");
+    expect(screen.getByRole("button", { name: "Comment" })).toBeEnabled();
+    expect(screen.queryByText(/can't write/)).toBeNull();
+  });
+
+  it("offers Resolve to a pusher or the PR's author, but not to a reader", () => {
+    const noPush = { kind: "user", login: "me", canWrite: true, canPush: false } as const;
+    const { unmount } = render(
+      <ThreadActions
+        resolved={false}
+        identity={noPush}
+        prAuthor="alice"
+        onReply={vi.fn()}
+        onResolve={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Resolve" })).toBeDisabled();
+    unmount();
+    const { unmount: u2 } = render(
+      <ThreadActions
+        resolved={false}
+        identity={noPush}
+        prAuthor="ME"
+        onReply={vi.fn()}
+        onResolve={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Resolve" })).toBeEnabled();
+    u2();
+    render(
+      <ThreadActions
+        resolved={false}
+        identity={{ ...noPush, canPush: true }}
+        prAuthor="alice"
+        onReply={vi.fn()}
+        onResolve={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Resolve" })).toBeEnabled();
+  });
+});

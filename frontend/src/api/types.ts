@@ -1538,6 +1538,10 @@ export interface GitHubIssueComment {
 export interface GitHubWriteIdentity {
   kind: "user" | "app";
   login: string | null;
+  /** The connected token's scope covers this repo; false = posts will be refused, null = unknown. */
+  canWrite?: boolean | null;
+  /** The connected account has push access (resolving a thread needs it); null = unknown. */
+  canPush?: boolean | null;
 }
 
 export interface GitHubIssueDetail extends GitHubIssueListItem {

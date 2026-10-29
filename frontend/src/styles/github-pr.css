@@ -279,6 +279,9 @@ a.pr-dr-row:hover {
   font-size: 0.6875rem;
   color: var(--text-muted);
 }
+.gh-composer-identity.is-warn {
+  color: var(--status-warn-fg);
+}
 .gh-composer-grow {
   resize: vertical;
   max-height: 40vh;

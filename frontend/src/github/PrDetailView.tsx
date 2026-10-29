@@ -208,11 +208,13 @@ function PinnedReview({
 function Thread({
   thread,
   identity,
+  prAuthor,
   onReply,
   onResolve,
 }: {
   thread: GitHubPrDetailThread;
   identity?: GitHubWriteIdentity | null;
+  prAuthor?: string | null;
   onReply: (body: string) => Promise<void>;
   onResolve: () => Promise<void>;
 }) {
@@ -234,6 +236,7 @@ function Thread({
       <ThreadActions
         resolved={thread.isResolved}
         identity={identity}
+        prAuthor={prAuthor}
         onReply={onReply}
         onResolve={onResolve}
       />
@@ -429,6 +432,7 @@ export function PrDetailView({
   const threadProps = (t: GitHubPrDetailThread) => ({
     thread: t,
     identity: pr.writeIdentity,
+    prAuthor: pr.author,
     onReply: (body: string) => threadWrites.reply(t.id, body),
     onResolve: () => threadWrites.resolve(t.id),
   });
