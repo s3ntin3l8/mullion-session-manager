@@ -45,6 +45,7 @@ describe("Settings -> Hosts", () => {
         lastCheckedAt: null,
         // Issue #1725 — the drain flag: every host carries it.
         drained: false,
+        role: "worker",
         hasProjects: true,
       },
     ];
@@ -94,8 +95,11 @@ describe("Settings -> Hosts", () => {
       "PATCH /api/hosts/:id": ({ params, init }) => {
         const host = hostsDb.find((h) => h.id === params.id);
         if (!host) return jsonResponse(404, { message: "not found" });
-        const body = init?.body ? (JSON.parse(init.body as string) as { drained?: boolean }) : {};
+        const body = init?.body
+          ? (JSON.parse(init.body as string) as { drained?: boolean; role?: "worker" | "burst" })
+          : {};
         if (typeof body.drained === "boolean") host.drained = body.drained;
+        if (body.role) host.role = body.role;
         return jsonResponse(200, host);
       },
       "POST /api/hosts/:id/ping": () => jsonResponse(200, { online: false }),
@@ -201,6 +205,16 @@ describe("Settings -> Hosts", () => {
       await user.click(await screen.findByText("Park host (take no new work)"));
 
       await waitFor(() => expect(hostsDb[0].drained).toBe(true));
+    });
+
+    it("sets a remote host to burst from its role select", async () => {
+      const user = userEvent.setup();
+      render(<Settings onClose={vi.fn()} initialSection="hosts" />);
+
+      const row = await screen.findByTestId("host-row-remote-1");
+      await user.selectOptions(within(row).getByRole("combobox", { name: /^Role of/ }), "burst");
+
+      await waitFor(() => expect(hostsDb[0].role).toBe("burst"));
     });
 
     it("surfaces a failed park instead of leaving the row unchanged in silence", async () => {

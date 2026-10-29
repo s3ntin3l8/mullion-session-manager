@@ -2,6 +2,7 @@
 // reading the config of a remote Mullion host. Split out of the former flat
 // frontend/src/api.ts (PR 22 of the refactoring roadmap).
 import { request } from "./client.js";
+import type { HostEditableRole } from "../../../src/shared/constants.js";
 import type {
   DetectCheckoutsResult,
   Host,
@@ -33,7 +34,13 @@ export const hostsApi = {
   // work) or un-parks it. A flag, not an action: nothing is terminated.
   updateHost: (
     id: string,
-    patch: Partial<{ name: string; baseUrl: string; token: string; drained: boolean }>,
+    patch: Partial<{
+      name: string;
+      baseUrl: string;
+      token: string;
+      drained: boolean;
+      role: HostEditableRole;
+    }>,
   ) =>
     request<Host>(`/api/hosts/${encodeURIComponent(id)}`, {
       method: "PATCH",

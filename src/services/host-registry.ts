@@ -8,7 +8,7 @@ import { timingSafeTokenMatch } from "./crypto-utils.js";
 // frontend/src/api.ts's own re-export). Re-exported below so every existing
 // backend importer of this module keeps working unchanged. Runtime VALUE,
 // not type-only, so this is a plain import.
-import { LOCAL_HOST_ID } from "../shared/constants.js";
+import { LOCAL_HOST_ID, type HostRole } from "../shared/constants.js";
 
 export { LOCAL_HOST_ID };
 
@@ -43,6 +43,9 @@ export interface HostSummary {
   // host as of this migration, so nothing changes until an operator parks
   // one.
   drained: boolean;
+  // Issue #2239 — what the host is for: "main" (`local` only), "worker" or
+  // "burst". Burst hosts stay out of automatic placement.
+  role: HostRole;
   // baseUrl is null for "local" and for a "manual" host added without one
   // (Settings -> Add host, token minted by the primary) that is still
   // waiting for its agent: claimHost fills it in from the agent's own
@@ -69,6 +72,8 @@ export interface UpdateHostInput {
    * host stays usable for manual placement.
    */
   drained?: boolean;
+  /** Issue #2239 — "worker" or "burst"; the route refuses "main" and any role change on `local`. */
+  role?: HostRole;
 }
 
 export class UnknownHostError extends Error {
@@ -101,6 +106,7 @@ function toSummary(row: HostRow): HostSummary {
     origin: row.origin === "enrolled" ? "enrolled" : "manual",
     platform: row.platform,
     drained: row.drained,
+    role: row.role,
   };
 }
 
@@ -157,6 +163,7 @@ export function updateHost(
       // Issue #1725 — parking a host changes nothing but the flag: no
       // session is killed, no worktree removed, no agent contacted.
       ...(input.drained !== undefined ? { drained: input.drained } : {}),
+      ...(input.role !== undefined ? { role: input.role } : {}),
       ...(input.token !== undefined
         ? {
             authTokenEnc: app.encryption.encryptString(input.token),

@@ -84,6 +84,45 @@ describe("hosts route (issue #26)", () => {
     await restarted.close();
   });
 
+  it("sets a remote host's role to burst and back; main and local are refused (issue #2239)", async () => {
+    const app = await buildApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "laptop", baseUrl: "http://127.0.0.1:1", token: "t" },
+    });
+    const hostId = created.json().id as string;
+    expect(created.json().role).toBe("worker");
+
+    const burst = await app.inject({
+      method: "PATCH",
+      url: `/api/hosts/${hostId}`,
+      payload: { role: "burst" },
+    });
+    expect(burst.statusCode).toBe(200);
+    expect(burst.json().role).toBe("burst");
+
+    const main = await app.inject({
+      method: "PATCH",
+      url: `/api/hosts/${hostId}`,
+      payload: { role: "main" },
+    });
+    expect(main.statusCode).toBe(400);
+
+    const local = await app.inject({
+      method: "PATCH",
+      url: "/api/hosts/local",
+      payload: { role: "burst" },
+    });
+    expect(local.statusCode).toBe(400);
+
+    const listed = await app.inject({ method: "GET", url: "/api/hosts" });
+    const rows = listed.json() as { id: string; role: string }[];
+    expect(rows.find((h) => h.id === "local")?.role).toBe("main");
+    expect(rows.find((h) => h.id === hostId)?.role).toBe("burst");
+    await app.close();
+  });
+
   it("parks the LOCAL host — parking the primary is how you drain it", async () => {
     // The local host takes no other edits (it has no identity to edit),
     // but the drain flag is a PLACEMENT decision, not an edit of its

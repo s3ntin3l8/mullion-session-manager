@@ -60,6 +60,7 @@ beforeEach(() => {
     hostId: "local",
     reason: "the only eligible host",
     considered: [],
+    excluded: [],
     fellBack: false,
   };
   vi.mocked(api.getPlacementPreview).mockResolvedValue(preview);
@@ -128,6 +129,7 @@ describe("CreateProjectModal — the placement control (issue #1726)", () => {
       hostId: "mac-mini",
       reason: "least loaded of the eligible hosts",
       considered: [],
+      excluded: [{ hostId: "laptop", reason: "burst host (only an explicit target uses it)" }],
       fellBack: false,
     });
 
@@ -152,6 +154,7 @@ describe("CreateProjectModal — the placement control (issue #1726)", () => {
             // Issue #1725 — the field is required on the type, so every
             // fixture carries it.
             drained: false,
+            role: "worker",
           },
         ]}
         onClose={vi.fn()}
@@ -161,6 +164,8 @@ describe("CreateProjectModal — the placement control (issue #1726)", () => {
 
     await waitFor(() => expect(screen.getByText(/mac-mini/)).toBeInTheDocument());
     expect(screen.getByText(/least loaded of the eligible hosts/)).toBeInTheDocument();
+    // Issue #2239 — the hosts left out, with the rule that left them out.
+    expect(screen.getByText(/Not considered: laptop \(burst host/)).toBeInTheDocument();
     // It is a NOW reading, and the UI says so — load moves between the
     // preview and the spawn.
     expect(screen.getByText(/right now/i)).toBeInTheDocument();

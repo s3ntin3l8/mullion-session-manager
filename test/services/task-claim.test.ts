@@ -651,6 +651,7 @@ describe("claimTask", () => {
       hostId: "host-without-the-project",
       reason: "forced for the test",
       considered: [],
+      excluded: [],
       fellBack: false,
     });
 
@@ -1546,6 +1547,7 @@ describe("claimTask", () => {
         hostId: "mac-1",
         reason: "forced for the test",
         considered: [],
+        excluded: [],
         fellBack: false,
       });
     }

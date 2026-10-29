@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { LOCAL_HOST_ID, type PlacementMode } from "../shared/constants.js";
+import { LOCAL_HOST_ID, type HostRole, type PlacementMode } from "../shared/constants.js";
 import { listHosts } from "./host-registry.js";
 import { measureHostCapacity, type HostCapacity } from "./host-capacity.js";
 
@@ -71,6 +71,12 @@ export interface PlacementCandidate {
    * a candidate built without it keeps working.
    */
   platform?: string | null;
+  /**
+   * What the host is for (issue #2239). Only "burst" changes the decision: a
+   * burst host is skipped unless the context allows it. Optional so a
+   * candidate built without it reads as a plain worker.
+   */
+  role?: HostRole;
 }
 
 /** What the caller knows about the session being placed. */
@@ -92,6 +98,13 @@ export interface PlacementContext {
    * than on the candidate.
    */
   localCapacity: HostCapacity | null;
+  /**
+   * Whether a "burst" host may be chosen (issue #2239). False by default:
+   * automatic placement and unattended Task Master leave burst hosts alone.
+   * `resolveTargetHost` sets it, because a caller who NAMED a host or
+   * platform asked for exactly that machine.
+   */
+  allowBurst?: boolean;
 }
 
 /** One eligible host, with the numbers the policy compared. */
@@ -107,6 +120,12 @@ export interface ConsideredHost {
   chosen: boolean;
 }
 
+/** One host the policy filtered out, and the first rule that did it. */
+export interface ExcludedHost {
+  hostId: string;
+  reason: string;
+}
+
 /** The decision, and why. */
 export interface PlacementDecision {
   /** The host the session should run on. Always a host id. */
@@ -115,6 +134,12 @@ export interface PlacementDecision {
   reason: string;
   /** The eligible hosts and their numbers, so a UI can show the table. */
   considered: ConsideredHost[];
+  /**
+   * The hosts that were NOT eligible, each with the reason. For the preview
+   * routes and the decision log only: it names other hosts, so it never goes
+   * into a refusal a session-scoped caller can read.
+   */
+  excluded: ExcludedHost[];
   /** True when the fallback was used (no eligible host at all). */
   fellBack: boolean;
 }
@@ -234,7 +259,10 @@ export function projectCwdOnHost(
  *      capacity reading, AND HAS THE PROJECT (issue #1724: a session runs in
  *      a directory, so a host the project is not on cannot host it). A host
  *      with no reading — or no checkout — is not a candidate: that is not a
- *      failure, it is just not eligible.
+ *      failure, it is just not eligible. A "burst" host (issue #2239) is also
+ *      not eligible unless `context.allowBurst` — only an explicit target
+ *      reaches one. Every host that fails a rule is reported in `excluded`
+ *      with the first rule it failed.
  *   2. NO ELIGIBLE HOST → the project's own host. The fallback is the whole
  *      point: a placement decision is an optimization, never a gate, and the
  *      spawn that follows must succeed either way.
@@ -258,16 +286,11 @@ export function chooseHost(
   // The local host's capacity is not on its candidate — it is measured on
   // demand (issue #1721) and arrives in the context; every other host
   // carries its own reading.
+  const excluded: ExcludedHost[] = [];
   const eligible = candidates.filter((candidate) => {
-    const capacity = candidate.isLocal ? context.localCapacity : candidate.capacity;
-    return (
-      candidate.online &&
-      !candidate.drained &&
-      capacity !== null &&
-      // Issue #1724 — the host must have the project: a session runs in a
-      // directory, and this host's directory does not have it.
-      candidate.projectCwd !== null
-    );
+    const reason = exclusionReason(candidate, context);
+    if (reason !== null) excluded.push({ hostId: candidate.hostId, reason });
+    return reason === null;
   });
 
   if (eligible.length === 0) {
@@ -275,6 +298,7 @@ export function chooseHost(
       hostId: context.pinnedHostId,
       reason: `no eligible host — fell back to the project's host ${context.pinnedHostId}`,
       considered: [],
+      excluded,
       fellBack: true,
     };
   }
@@ -305,6 +329,7 @@ export function chooseHost(
       hostId: local.hostId,
       reason: `local host preferred for an interactive session (terminal latency): ${local.hostId}`,
       considered,
+      excluded,
       fellBack: false,
     };
   }
@@ -329,8 +354,30 @@ export function chooseHost(
       `least loaded: ${best.hostId} at ${bestCapacity.loadAverage1m} load on ` +
       `${bestCapacity.logicalCores} cores (${bestLoad.toFixed(2)} per core)`,
     considered,
+    excluded,
     fellBack: false,
   };
+}
+
+/**
+ * Why a candidate is not eligible — the FIRST rule it fails, or null when it
+ * is eligible. One function, so the filter and the reported reason cannot
+ * disagree.
+ */
+function exclusionReason(candidate: PlacementCandidate, context: PlacementContext): string | null {
+  const capacity = candidate.isLocal ? context.localCapacity : candidate.capacity;
+  // Issue #2239 — checked FIRST: the role is static, while a sleeping laptop
+  // is usually also offline, and "burst host" is the reason worth showing.
+  if (candidate.role === "burst" && context.allowBurst !== true) {
+    return "burst host (only an explicit target uses it)";
+  }
+  if (!candidate.online) return "offline";
+  if (candidate.drained) return "parked";
+  if (capacity === null) return "no capacity reported";
+  // Issue #1724 — the host must have the project: a session runs in a
+  // directory, and this host's directory does not have it.
+  if (candidate.projectCwd === null) return "the project has no path on this host";
+  return null;
 }
 
 function capacityOf(candidate: PlacementCandidate, context: PlacementContext): HostCapacity {
@@ -436,6 +483,8 @@ function collectCandidates(app: FastifyInstance, project: PlacementProject): Col
       // Issue #1724 — where the project lives on THIS host. Null for a
       // host the project is not on, which makes it not a candidate.
       projectCwd: projectCwdOnHost(project, host.id, hostCwds),
+      // Issue #2239 — what the host is for (burst hosts stay out of Auto).
+      role: host.role,
       // Issue #1951 — what a targeted spawn matches `platform` against: the
       // host's self-reported platform, else its cached capacity reading's,
       // else (the local host) this process's own.
@@ -484,6 +533,7 @@ function decide(
       hostId: project.hostId,
       reason: `pinned to the project's host ${project.hostId}`,
       considered: [],
+      excluded: [],
       fellBack: false,
     };
     if (announce) {
@@ -508,6 +558,7 @@ function decide(
       hostId: project.hostId,
       reason: `placement could not be evaluated — fell back to the project's host ${project.hostId}`,
       considered: [],
+      excluded: [],
       fellBack: true,
     };
     // A FAILURE, not an announcement — so it is logged either way. The
@@ -533,6 +584,7 @@ function decide(
         unattended,
         fellBack: decision.fellBack,
         considered: decision.considered,
+        excluded: decision.excluded,
         reason: decision.reason,
       },
       "placement: chose a host",
@@ -714,6 +766,8 @@ export function resolveTargetHost(
     pinnedHostId: opts.project.hostId,
     unattended: opts.unattended,
     localCapacity: collected.localCapacity,
+    // The caller NAMED this host or platform, so a burst host is in scope.
+    allowBurst: true,
   });
   // chooseHost falls back to the pinned host when nothing is eligible; for a
   // target that is exactly the case to refuse.

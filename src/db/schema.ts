@@ -14,7 +14,12 @@ import { sql } from "drizzle-orm";
 // keeps working unchanged.
 // TASK_STATUSES is a runtime VALUE, not type-only, so this is a plain
 // import, not `import type`.
-import { PLACEMENT_MODES, TASK_STATUSES, type TaskStatus } from "../shared/constants.js";
+import {
+  HOST_ROLES,
+  PLACEMENT_MODES,
+  TASK_STATUSES,
+  type TaskStatus,
+} from "../shared/constants.js";
 
 export { TASK_STATUSES, type TaskStatus };
 
@@ -82,6 +87,11 @@ export const hosts = sqliteTable("hosts", {
   // A column, so it survives a primary restart: the operator's decision to
   // park a machine must not quietly expire with the process.
   drained: integer("drained", { mode: "boolean" }).notNull().default(false),
+  // Issue #2239 / epic #2228 — what the host is for: "main" (the primary,
+  // `local` only), "worker" (default) or "burst" (not always on; kept out of
+  // automatic placement, still reachable by an explicit target). The
+  // migration sets `local` to "main".
+  role: text("role", { enum: HOST_ROLES }).notNull().default("worker"),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),

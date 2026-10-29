@@ -1,4 +1,5 @@
 import type { ProjectPreviewConfig } from "../api/types.js";
+import type { HostEditableRole } from "../../../src/shared/constants.js";
 import type {
   AppSettings,
   CodexHookTrust,
@@ -573,7 +574,13 @@ export interface HostsSlice {
     // Issue #1725 / roadmap 8.11 — `drained` parks the host (it takes no
     // new work) or un-parks it. A flag, not an action: nothing is
     // terminated.
-    patch: Partial<{ name: string; baseUrl: string; token: string; drained: boolean }>,
+    patch: Partial<{
+      name: string;
+      baseUrl: string;
+      token: string;
+      drained: boolean;
+      role: HostEditableRole;
+    }>,
   ) => Promise<void>;
   // Rejects with the same conflict Error api.deleteHost throws (still-owns-
   // projects) unless `cascade` is passed — the caller (Settings -> Hosts) is

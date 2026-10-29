@@ -400,3 +400,68 @@ describe("the per-host cwd map (issue #1724)", () => {
     expect(projectCwdOnHost(project, "remote-a", {})).toBeNull();
   });
 });
+
+describe("excluded hosts and host roles (issue #2239)", () => {
+  it("reports each filtered host with the first rule it failed", () => {
+    const decision = chooseHost(
+      [
+        candidate({ hostId: "off", online: false }),
+        candidate({ hostId: "parked", drained: true }),
+        candidate({ hostId: "silent", capacity: null }),
+        candidate({ hostId: "nopath", projectCwd: null }),
+        candidate({ hostId: "laptop", role: "burst" }),
+        candidate({ hostId: "ok" }),
+      ],
+      context(),
+    );
+    expect(decision.hostId).toBe("ok");
+    expect(decision.excluded).toEqual([
+      { hostId: "off", reason: "offline" },
+      { hostId: "parked", reason: "parked" },
+      { hostId: "silent", reason: "no capacity reported" },
+      { hostId: "nopath", reason: "the project has no path on this host" },
+      { hostId: "laptop", reason: "burst host (only an explicit target uses it)" },
+    ]);
+  });
+
+  it("reports a sleeping burst laptop as a burst host, not as offline", () => {
+    const decision = chooseHost(
+      [candidate({ hostId: "laptop", role: "burst", online: false, capacity: null })],
+      context(),
+    );
+    expect(decision.excluded).toEqual([
+      { hostId: "laptop", reason: "burst host (only an explicit target uses it)" },
+    ]);
+  });
+
+  it("keeps excluded on the fallback and empty when nothing is filtered", () => {
+    const fallback = chooseHost([candidate({ online: false })], context());
+    expect(fallback.fellBack).toBe(true);
+    expect(fallback.excluded).toEqual([{ hostId: "remote-a", reason: "offline" }]);
+    expect(chooseHost([candidate()], context()).excluded).toEqual([]);
+  });
+
+  it("leaves a burst host out of Auto even when it is the least loaded", () => {
+    const decision = chooseHost(
+      [
+        candidate({ hostId: "laptop", role: "burst", capacity: capacity(0, 8) }),
+        candidate({ hostId: "server", role: "worker", capacity: capacity(4, 8) }),
+      ],
+      context(),
+    );
+    expect(decision.hostId).toBe("server");
+  });
+
+  it("uses a burst host when the context allows it", () => {
+    const decision = chooseHost(
+      [candidate({ hostId: "laptop", role: "burst", capacity: capacity(0, 8) })],
+      context({ allowBurst: true }),
+    );
+    expect(decision.hostId).toBe("laptop");
+    expect(decision.excluded).toEqual([]);
+  });
+
+  it("treats a candidate with no role as a worker", () => {
+    expect(chooseHost([candidate()], context()).hostId).toBe("remote-a");
+  });
+});

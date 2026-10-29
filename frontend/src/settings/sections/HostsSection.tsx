@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { HostEditableRole } from "../../../../src/shared/constants.js";
 import { useDashboardStore, LIVE_REFRESH_INTERVAL_MS } from "../../store/index.js";
 import { api, ApiError, LOCAL_HOST_ID } from "../../api/index.js";
 import { hasRemoteHosts } from "../../lib/hostBadge.js";
@@ -79,6 +80,13 @@ export function HostsSection() {
     // would otherwise leave the row unchanged with nothing said — the user
     // would think the switch worked.
     void updateHost(host.id, { drained: !host.drained }).catch((err: unknown) => {
+      setDrainError(err instanceof Error ? err.message : String(err));
+    });
+  };
+  // Issue #2239 — worker | burst. Surfaced on failure like toggleDrain.
+  const changeRole = (host: Host, role: HostEditableRole) => {
+    setDrainError(null);
+    void updateHost(host.id, { role }).catch((err: unknown) => {
       setDrainError(err instanceof Error ? err.message : String(err));
     });
   };
@@ -312,6 +320,13 @@ export function HostsSection() {
           trailing={
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <span style={{ fontSize: "0.65625rem", color: "var(--dim)" }}>always online</span>
+              {/* Issue #2239 — the primary's role is fixed. */}
+              <span
+                style={{ fontSize: "0.65625rem", color: "var(--dim)" }}
+                title="The primary is always the main host."
+              >
+                main
+              </span>
               {/* Issue #1725 — the primary can be parked too: parking it is
                   how you drain it. The local host takes no other edits, but
                   this one is a placement decision rather than an edit of
@@ -364,6 +379,18 @@ export function HostsSection() {
                         {display.label}
                       </span>
                     )}
+                    {/* Issue #2239 — a burst host (a laptop that sleeps) stays out
+                        of automatic placement; an explicit target still reaches it. */}
+                    <select
+                      aria-label={`Role of ${host.name}`}
+                      value={host.role}
+                      onChange={(e) => changeRole(host, e.target.value as HostEditableRole)}
+                      title="Worker: eligible for automatic placement. Burst: only used when a session or task names this host."
+                      style={{ fontSize: "0.65625rem" }}
+                    >
+                      <option value="worker">worker</option>
+                      <option value="burst">burst</option>
+                    </select>
                     {/* Issue #1725 — the parked state, visible next to the
                         health: the host is up, it is just taking no new
                         work. */}

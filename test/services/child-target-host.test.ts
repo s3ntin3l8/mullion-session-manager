@@ -266,6 +266,19 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
     expect(res.row.hostId).toBe(hostId);
   });
 
+  it("an explicit target still reaches a burst host (issue #2239)", async () => {
+    const { projectId, hostId } = await setup({ platform: "linux" });
+    app.db.update(hosts).set({ role: "burst" }).where(eq(hosts.id, hostId)).run();
+    const res = await createSessionRecord(app, {
+      projectId,
+      command: "bash",
+      target: { hostId },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.row.hostId).toBe(hostId);
+  });
+
   // Issue #2006 — whether waiting could change a refusal's answer. The detail
   // (and so what a session-scoped caller learns) is the same either way.
   describe("a refusal says whether waiting could help (issue #2006)", () => {
