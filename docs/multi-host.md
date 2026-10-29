@@ -245,7 +245,7 @@ repository that already has a project attaches it instead:
   host gets a few seconds to answer, and a host that cannot be reached is matched by path
   only, never an error.
 - **What counts as "the same origin"** for this check is stricter than the suggestions above:
-  host, path **and a non-default port** (`gitea.local:2222/team/app` and
+  host, path **and a non-default port**, with host and path compared case-insensitively (`gitea.local:2222/team/app` and
   `gitea.local:2223/team/app` are different repos). A scheme's default port (ssh 22, https 443) is ignored, and so is the transport: `git@host:o/r` and `https://host/o/r` match. A
   repo cloned over two transports on a custom port is therefore not caught — it just
   gets no 409.
