@@ -683,6 +683,21 @@ describe("tasks route", () => {
       await app.close();
     });
 
+    it("409s when the task is archived", async () => {
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const projectId = await createProjectWithGitRepo(app, cwd);
+      const task = insertTask(app, projectId, 44);
+      app.db.update(tasks).set({ archivedAt: new Date() }).where(eq(tasks.id, task.id)).run();
+
+      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/claim` });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().message).toContain("archived");
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
     // Task-claim queueing (rate-limit-storm fix) — enqueue never touches the
     // host at all anymore (that's dispatch's job), so a remote-hosted
     // project's claim ALWAYS 202s regardless of reachability; the old "no

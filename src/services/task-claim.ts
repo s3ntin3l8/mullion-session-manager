@@ -215,7 +215,8 @@ export async function enqueueTask(
 
   const reserved = app.db.transaction((tx) => {
     const [current] = tx.select().from(tasks).where(eq(tasks.id, taskId)).all();
-    if (!current || current.status !== "ready" || current.archivedAt) {
+    if (current?.archivedAt) return { reserved: false as const, archived: true as const };
+    if (!current || current.status !== "ready") {
       return { reserved: false as const, currentStatus: current?.status };
     }
     const patch: Partial<typeof tasks.$inferInsert> = {
@@ -240,6 +241,10 @@ export async function enqueueTask(
   });
 
   if (!reserved.reserved) {
+    // Archived between the pre-check above and this transaction.
+    if ("archived" in reserved) {
+      return { ok: false, reason: "archived", detail: "Task is archived and cannot be claimed" };
+    }
     return {
       ok: false,
       reason: "not-ready",
