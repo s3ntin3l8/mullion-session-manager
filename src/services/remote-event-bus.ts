@@ -22,10 +22,19 @@ export class RemoteEventBus {
   subscribe(listener: Listener): () => void {
     const wasEmpty = this.listeners.size === 0;
     this.listeners.add(listener);
-    if (wasEmpty) this.onDemandChange();
+    if (wasEmpty) this.demandChanged();
     return () => {
-      if (this.listeners.delete(listener) && this.listeners.size === 0) this.onDemandChange();
+      if (this.listeners.delete(listener) && this.listeners.size === 0) this.demandChanged();
     };
+  }
+
+  /** Opening or closing upstreams must never break the stream that triggered it. */
+  private demandChanged(): void {
+    try {
+      this.onDemandChange();
+    } catch {
+      // The next retention-sweep tick reconciles the upstream set anyway.
+    }
   }
 
   /** Delivers `event` to every listener. A throwing listener never stops the rest. */

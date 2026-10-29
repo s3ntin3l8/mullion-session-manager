@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import type { RemoteEventBus } from "./remote-event-bus.js";
 import { eq, inArray, sql } from "drizzle-orm";
 import { sessions, projects } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
@@ -411,4 +412,21 @@ export function startEventRetentionSweep(
     stop: () => clearInterval(timer),
     runNow,
   };
+}
+
+/**
+ * Hands a remote host's event to the live listeners (the session-scope event streams of
+ * issue #2125), under the same rule the writer applies before persisting: the event's
+ * session must actually live on the host that reported it. Without that, an enrolled
+ * host could put forged events on another host's session stream. A no-op when nobody
+ * listens, so the ownership query costs nothing in the common case.
+ */
+export function publishVerifiedRemoteEvent(
+  app: FastifyInstance,
+  bus: RemoteEventBus | null,
+  event: NotificationEvent,
+  sourceHostId: string,
+): void {
+  if (!bus || bus.size === 0) return;
+  if (filterHostOwnership(app, [{ event, sourceHostId }]).length === 1) bus.publish(event);
 }

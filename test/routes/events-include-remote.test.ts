@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildTestApp } from "../helpers/app.js";
 import { attachLocalEventsSocket } from "../../src/routes/events.js";
 import { projects, sessionEvents, sessions } from "../../src/db/schema.js";
+import { publishVerifiedRemoteEvent } from "../../src/services/event-store.js";
 import type { SocketLike } from "../../src/services/socket-channel.js";
 import type { NotificationEvent } from "../../src/services/pty-manager.js";
 
@@ -107,5 +108,36 @@ describe("attachLocalEventsSocket with includeRemote (#2125)", () => {
     expect(app.remoteEventBus!.size).toBe(0);
     app.remoteEventBus!.publish(remoteEvent(mine, 9));
     expect(sent).toEqual([]);
+  });
+});
+
+describe("publishVerifiedRemoteEvent (#2125)", () => {
+  it("publishes only what the reporting host owns, and nothing when nobody listens", async () => {
+    const app = await buildTestApp();
+    await app.ready();
+    const projectId = Number(
+      app.db.insert(projects).values({ name: "p", cwd: "/tmp/p" }).run().lastInsertRowid,
+    );
+    const onA = Number(
+      app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", cwd: "/tmp/p", hostId: "host-a" })
+        .run().lastInsertRowid,
+    );
+    const heard: NotificationEvent[] = [];
+    const bus = app.remoteEventBus!;
+    const event = remoteEvent(onA, 1);
+
+    // Nobody listening: no work, no delivery.
+    publishVerifiedRemoteEvent(app, bus, event, "host-a");
+    bus.subscribe((e) => heard.push(e));
+    // The owner reports it: delivered. Another enrolled host claiming the session: dropped.
+    publishVerifiedRemoteEvent(app, bus, remoteEvent(onA, 2), "host-a");
+    publishVerifiedRemoteEvent(app, bus, remoteEvent(onA, 3), "host-b");
+    // A session that does not exist is dropped too.
+    publishVerifiedRemoteEvent(app, bus, remoteEvent(999_999, 1), "host-a");
+    expect(heard.map((e) => e.seq)).toEqual([2]);
+    // The agent role has no bus at all.
+    expect(() => publishVerifiedRemoteEvent(app, null, event, "host-a")).not.toThrow();
   });
 });

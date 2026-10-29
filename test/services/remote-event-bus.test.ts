@@ -34,6 +34,19 @@ describe("RemoteEventBus (#2125)", () => {
     expect(onDemandChange).toHaveBeenCalledTimes(2);
   });
 
+  it("a failing demand callback never breaks subscribe or unsubscribe", () => {
+    const bus = new RemoteEventBus(() => {
+      throw new Error("host list unreadable");
+    });
+    let off: () => void = () => {};
+    expect(() => {
+      off = bus.subscribe(vi.fn());
+    }).not.toThrow();
+    expect(bus.size).toBe(1);
+    expect(() => off()).not.toThrow();
+    expect(bus.size).toBe(0);
+  });
+
   it("a throwing subscriber does not stop the others or the publisher", () => {
     const bus = new RemoteEventBus();
     const after = vi.fn();

@@ -1984,13 +1984,16 @@ export const OPS: Record<string, OpSpec> = {
             seenFilter: (sessionId) => sessionId === ownId,
             // Issue #2125 — the session and its children may live on another host.
             includeRemote: true,
-            remoteReplayIds: [ownId, ...childSessionIds(app, ownId)],
+            remoteReplayIds: [ownId, ...childSessionIds(app, ownId)].filter(
+              (sessionId) => childHostId(app, String(sessionId)) !== LOCAL_HOST_ID,
+            ),
           });
         } else {
           attachLocalEventsSocket(app, channel, {
             sessionIdFilter: conn.sessionId!,
             includeRemote: true,
-            remoteReplayIds: [Number(conn.sessionId)],
+            remoteReplayIds:
+              childHostId(app, conn.sessionId!) !== LOCAL_HOST_ID ? [Number(conn.sessionId)] : [],
           });
         }
       } else {

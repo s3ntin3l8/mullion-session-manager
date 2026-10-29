@@ -1,7 +1,11 @@
 import fp from "fastify-plugin";
 import { RemoteEventBus } from "../services/remote-event-bus.js";
 import type { FastifyInstance } from "fastify";
-import { startEventWriter, startEventRetentionSweep } from "../services/event-store.js";
+import {
+  publishVerifiedRemoteEvent,
+  startEventWriter,
+  startEventRetentionSweep,
+} from "../services/event-store.js";
 import { startRemoteEventSubscriber } from "../services/remote-event-subscriber.js";
 
 // Issue #213 (roadmap 4.7) — persists NotificationEvents (pty-manager.ts) to
@@ -63,7 +67,7 @@ export const eventStorePlugin = fp(async (app: FastifyInstance) => {
     app,
     (event, sourceHostId) => {
       writer.pushEvent(event, sourceHostId);
-      remoteEventBus?.publish(event);
+      publishVerifiedRemoteEvent(app, remoteEventBus, event, sourceHostId);
     },
     () => (remoteEventBus?.size ?? 0) > 0,
   );

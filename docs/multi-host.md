@@ -1232,7 +1232,10 @@ which is fine for a status peek, not for a latency-sensitive terminal. An event 
 what the primary persisted for the session and its children (up to 100 events each; empty unless
 `sessions.eventPersistence` is on), then follows the live feed the primary receives from the
 hosts (it opens its event connections to the hosts while such a stream is open, whatever that
-setting says; nothing is persisted when it is off). Each host is capped at 64 relayed connections and each connection at 16 open streams.
+setting says; nothing is persisted when it is off). Events the primary received a moment before the
+stream opened but has not yet written to its store (up to about 30 seconds) are in neither the
+replay nor the live feed. A remote host's event is only passed on if the session it names really
+lives on that host, the same rule that guards persisting it. Each host is capped at 64 relayed connections and each connection at 16 open streams.
 
 **Trust boundary.** A compromised agent can already impersonate the sessions it hosts (it mints
 their tokens). The relay adds no authority beyond that: the host binding limits it to sessions
