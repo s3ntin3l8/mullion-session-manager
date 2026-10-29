@@ -74,7 +74,7 @@
   cursor: pointer;
   white-space: nowrap;
 }
-.sb-btn:hover:not(:disabled) {
+.sb-btn:hover:not(:disabled):not([aria-disabled="true"]) {
   background: var(--surface-hover);
 }
 .sb-btn:focus-visible {
@@ -90,7 +90,7 @@
   border-color: var(--ring);
   color: #fff;
 }
-.sb-btn--primary:hover:not(:disabled) {
+.sb-btn--primary:hover:not(:disabled):not([aria-disabled="true"]) {
   background: var(--accent-fill);
   filter: brightness(1.12);
 }
@@ -99,7 +99,7 @@
   border-color: var(--status-danger-border);
   background: var(--status-danger-bg);
 }
-.sb-btn--danger:hover:not(:disabled) {
+.sb-btn--danger:hover:not(:disabled):not([aria-disabled="true"]) {
   background: var(--status-danger-bg);
   filter: brightness(1.1);
 }
