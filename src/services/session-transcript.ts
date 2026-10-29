@@ -88,6 +88,9 @@ export function claudeProjectDirNames(cwd: string): string[] {
 export interface TranscriptSession {
   command: string;
   getTranscriptSource(): TranscriptSource | null;
+  /** Why a session that DID report a transcript still has no readable source (as opposed
+   * to not having reported one yet), or null. */
+  transcriptSourceBlocker?(): string | null;
 }
 
 export const SEQ_LINE_STRIDE = 1000;
@@ -427,6 +430,8 @@ export async function readSessionTranscript(
     return { ok: false, status: 409, error: "the reported transcript does not match this agent" };
   }
   if (source === null) {
+    const blocker = session.transcriptSourceBlocker?.() ?? null;
+    if (blocker !== null) return { ok: false, status: 501, error: blocker };
     return {
       ok: false,
       status: 409,

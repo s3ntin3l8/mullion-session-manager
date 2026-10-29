@@ -600,7 +600,9 @@ sessions directory). Errors: `404` the session is not running or the file
 is unreadable, `409` the session has not reported its transcript yet (it arrives
 with the agent's first hook; a primary restart relearns it on the next hook),
 `501` the agent CLI has no readable transcript (`not-supported`: opencode, agy
-and plain shells). Over the control relay it is an ordinary request/response op.
+and plain shells), or a Claude session whose working directory path is over 200 characters
+(Claude hashes that project directory's name in a way Mullion cannot reproduce, so it is not read
+rather than guessed). Over the control relay it is an ordinary request/response op.
 
 ## PTY I/O streams (`sessions.attach`/`input`/`resize`/`detach`)
 

@@ -425,6 +425,22 @@ describe("readSessionTranscript", () => {
     expect(result).toMatchObject({ ok: false, status: 409 });
   });
 
+  it("says a hashed project directory is not supported, rather than 'not reported yet'", async () => {
+    const result = await readSessionTranscript(
+      {
+        command: "claude",
+        getTranscriptSource: () => null,
+        transcriptSourceBlocker: () => "path too long (not-supported)",
+      },
+      query,
+    );
+    expect(result).toMatchObject({
+      ok: false,
+      status: 501,
+      error: "path too long (not-supported)",
+    });
+  });
+
   it("reads once the session has a source", async () => {
     const file = path.join(root, "s.jsonl");
     fs.writeFileSync(file, jsonl(CLAUDE_LINES[1]));

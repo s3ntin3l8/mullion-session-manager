@@ -5282,8 +5282,10 @@ describe("PtyManager", () => {
         rows: 24,
       });
       await waitForSpawn(session);
+      expect(session.transcriptSourceBlocker()).toBeNull(); // nothing reported yet
       session.emitHookEvent({ kind: "cwd_changed", cwd: longCwd, transcriptPath: "/x/s.jsonl" });
       expect(session.getTranscriptSource()).toBeNull();
+      expect(session.transcriptSourceBlocker()).toContain("too long");
     });
 
     it("cwd_changed: a transcript path is ignored for a CLI that does not write one (issue #2268)", async () => {

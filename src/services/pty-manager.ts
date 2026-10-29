@@ -2570,6 +2570,20 @@ export class Session {
    * `<config dir>/projects`, for the session's own `CLAUDE_CONFIG_DIR` and the
    * backend's default; for Codex its sessions directory.
    */
+  /**
+   * Issue #2268 — why a session that reported a transcript has no readable source: a
+   * Claude project directory name past 200 characters is hashed by Claude in a way this
+   * cannot reproduce, so such a cwd's conversation is deliberately not served. Null when
+   * nothing was reported yet (the caller then says "not reported yet") or all is fine.
+   */
+  transcriptSourceBlocker(): string | null {
+    if (this._agentTranscriptPath === null || this.getTranscriptSource() !== null) return null;
+    return (
+      "this session's working directory path is too long for its Claude project directory " +
+      "name to be located (over 200 characters), so its transcript cannot be read (not-supported)"
+    );
+  }
+
   getTranscriptSource(): TranscriptSource | null {
     const format = getAdapterTranscriptFormat(this.command);
     if (format === "codex" && this.codexTranscriptPath !== null) {
