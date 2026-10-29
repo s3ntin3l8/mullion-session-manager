@@ -982,7 +982,11 @@ export interface SidebarWriteAccess {
 
 const accessCache = new Map<string, { access: SidebarWriteAccess; at: number }>();
 
-/** Test seam: forget memoised App logins and write access. */
+/**
+ * Forget memoised App logins and write access. Called when the credential
+ * changes (`storeToken`, `disconnect`) so a stale verdict can't outlive it, and
+ * by tests to start clean.
+ */
 export function resetSidebarIdentityCache(): void {
   appLoginCache.clear();
   accessCache.clear();

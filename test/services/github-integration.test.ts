@@ -1469,7 +1469,7 @@ describe("github-integration service", () => {
         await app.close();
       });
 
-      it("forgets the answer when the credential is re-saved or removed", async () => {
+      it("forgets the answer when the credential is re-saved", async () => {
         const app = await connect("read:org");
         repoReply({ private: true, permissions: { push: true } });
         expect(await describeSidebarWriteIdentity(app, repo)).toMatchObject({ canWrite: false });
