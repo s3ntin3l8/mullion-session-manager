@@ -103,6 +103,10 @@ export interface RemoteEventSubscriberHandle {
 export function startRemoteEventSubscriber(
   app: FastifyInstance,
   onEvent: (event: NotificationEvent, sourceHostId: string) => void,
+  // Issue #2125 — upstreams stay open while somebody is listening live (a
+  // session-scope event stream), even with persistence off: the writer still drops
+  // the batch when persistence is off, so this only feeds the live listeners.
+  hasLiveDemand: () => boolean = () => false,
 ): RemoteEventSubscriberHandle {
   const subscriptions = new Map<string, HostSubscription>();
   let stopped = false;
@@ -249,7 +253,7 @@ export function startRemoteEventSubscriber(
     if (stopped) return;
 
     const persistence = readEventPersistence();
-    if (persistence === false) {
+    if (persistence === false && !hasLiveDemand()) {
       for (const sub of subscriptions.values()) closeSubscription(sub);
       subscriptions.clear();
       return;

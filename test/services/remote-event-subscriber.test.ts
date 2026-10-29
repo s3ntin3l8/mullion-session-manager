@@ -147,6 +147,25 @@ describe("startRemoteEventSubscriber", () => {
     expect(socket.closeSpy).toHaveBeenCalledTimes(1);
   });
 
+  // Issue #2125 — a live listener (a session-scope event stream) keeps the upstreams
+  // open with persistence off; they close again once nobody listens.
+  it("keeps subscriptions open while there is live demand, even with persistence off (#2125)", () => {
+    getStoredSettingsMock.mockReturnValue({ sessions: { eventPersistence: false } });
+    listHostsMock.mockReturnValue([fakeHost("remote-a")]);
+    const socket = new MockSocket();
+    openEventsStreamMock.mockReturnValue(socket);
+    let demand = true;
+
+    const handle = startRemoteEventSubscriber(fakeApp(), vi.fn(), () => demand);
+    handle.reconcile();
+    expect(getRemoteHostClientMock).toHaveBeenCalledTimes(1);
+    expect(socket.closeSpy).not.toHaveBeenCalled();
+
+    demand = false;
+    handle.reconcile();
+    expect(socket.closeSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("refuses to open a NEW subscription when getStoredSettings fails (unconfirmed, not confirmed-off)", () => {
     listHostsMock.mockReturnValue([fakeHost("remote-a")]);
     getStoredSettingsMock.mockImplementation(() => {
