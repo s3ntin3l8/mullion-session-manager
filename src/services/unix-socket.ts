@@ -190,9 +190,11 @@ export async function reclaimSocketPath(
  * The step after `server.listen(endpoint)` that keeps a local IPC endpoint to its
  * owner: a unix socket gets mode 0600, a Windows named pipe (which has no mode
  * bits) gets its access list narrowed to this user and SYSTEM. The handshake token
- * is still behind it either way. The hook socket, the control socket and the
- * control relay's socket all end this way. Resolves false, after logging why,
- * when a pipe's list could not be narrowed; never rejects.
+ * is still behind it either way. The hook socket and the control socket take the
+ * same two steps inline; the control relay's socket goes through this helper.
+ * For a pipe it resolves false, after logging why, when the list could not be
+ * narrowed, and never rejects; the unix branch's chmod can throw (ENOENT, EACCES),
+ * like the inline copies.
  */
 export async function secureIpcEndpoint(
   endpoint: string,
