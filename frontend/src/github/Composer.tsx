@@ -16,9 +16,15 @@ const isSubmitKey = (e: KeyboardEvent) => e.key === "Enter" && (e.metaKey || e.c
 function PostsAs({ identity }: { identity?: GitHubWriteIdentity | null }) {
   if (!identity?.login) return null;
   return (
-    <div className="gh-composer-identity">
+    <div
+      className={
+        identity.canWrite === false ? "gh-composer-identity is-warn" : "gh-composer-identity"
+      }
+    >
       Posts as @{identity.login}
       {identity.kind === "app" ? " (Mullion App; connect your account to post as you)" : ""}
+      {identity.canWrite === false &&
+        " — this token can't write to this repo; reconnect in Settings → GitHub"}
     </div>
   );
 }
@@ -46,9 +52,11 @@ export function CommentComposer({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const blank = body.trim() === "";
+  // The connected token is known not to write here: posting would only be refused.
+  const refused = identity?.canWrite === false;
 
   const submit = async () => {
-    if (blank || busy) return;
+    if (blank || busy || refused) return;
     setBusy(true);
     setError(null);
     try {
@@ -79,7 +87,7 @@ export function CommentComposer({
       <PostsAs identity={identity} />
       {error && <ErrorText>{error}</ErrorText>}
       <div className="gh-detail-actions">
-        <Button size="sm" variant="primary" disabled={blank || busy} onClick={submit}>
+        <Button size="sm" variant="primary" disabled={blank || busy || refused} onClick={submit}>
           {busy ? "Posting…" : submitLabel}
         </Button>
         {onCancel && (
@@ -126,9 +134,11 @@ export function ConversationComposer({
   const [busy, setBusy] = useState<GitHubPrReviewEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const blank = body.trim() === "";
+  // The connected token is known not to write here: posting would only be refused.
+  const refused = identity?.canWrite === false;
 
   const send = async (event: GitHubPrReviewEvent) => {
-    if (busy || (blank && event !== "APPROVE")) return;
+    if (busy || refused || (blank && event !== "APPROVE")) return;
     setBusy(event);
     setError(null);
     try {
@@ -179,20 +189,24 @@ export function ConversationComposer({
         <Button
           size="sm"
           variant="primary"
-          disabled={busy !== null || blank}
+          disabled={busy !== null || blank || refused}
           onClick={() => void send("COMMENT")}
         >
           {busy === "COMMENT" ? "Posting…" : "Comment"}
         </Button>
         {canReview && (
           <>
-            <Button size="sm" disabled={busy !== null} onClick={() => void send("APPROVE")}>
+            <Button
+              size="sm"
+              disabled={busy !== null || refused}
+              onClick={() => void send("APPROVE")}
+            >
               {busy === "APPROVE" ? "Submitting…" : "Approve"}
             </Button>
             <Button
               size="sm"
               variant="danger"
-              disabled={busy !== null || blank}
+              disabled={busy !== null || blank || refused}
               onClick={() => void send("REQUEST_CHANGES")}
             >
               {busy === "REQUEST_CHANGES" ? "Submitting…" : "Request changes"}
@@ -211,12 +225,15 @@ export function ConversationComposer({
 export function ThreadActions({
   resolved,
   identity,
+  prAuthor,
   onReply,
   onResolve,
 }: {
   resolved: boolean;
   /** Who a reply posts as (#2049). */
   identity?: GitHubWriteIdentity | null;
+  /** The PR's author: they can resolve a conversation without push access. */
+  prAuthor?: string | null;
   onReply: (body: string) => Promise<void>;
   onResolve: () => Promise<void>;
 }) {
@@ -235,6 +252,12 @@ export function ThreadActions({
       setResolving(false);
     }
   };
+
+  // Resolving needs push access or authorship (#2285); known-no is not offered.
+  const cannotResolve =
+    identity?.kind === "user" &&
+    (identity.canWrite === false ||
+      (identity.canPush === false && identity.login?.toLowerCase() !== prAuthor?.toLowerCase()));
 
   if (replying) {
     return (
@@ -263,7 +286,8 @@ export function ThreadActions({
           <button
             type="button"
             className="gh-link-button"
-            disabled={resolving}
+            disabled={resolving || cannotResolve}
+            title={cannotResolve ? "Resolving needs write access to this repo" : undefined}
             onClick={() => void resolve()}
           >
             {resolving ? "Resolving…" : "Resolve"}

@@ -524,6 +524,8 @@ describe("GitHub sidebar write routes (#1672)", () => {
       expect(res.json().writeIdentity).toEqual({
         kind: "app",
         login: "mullion-session-manager",
+        canWrite: null,
+        canPush: null,
       });
     });
 

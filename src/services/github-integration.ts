@@ -972,9 +972,75 @@ export interface SidebarWriteIdentity {
 const APP_LOGIN_TTL_MS = 10 * 60 * 1000;
 const appLoginCache = new Map<string, { login: string; at: number }>();
 
-/** Test seam: forget memoised App logins. */
+/** What the connected account can do on a repo; null = could not tell. */
+export interface SidebarWriteAccess {
+  /** A comment or review is accepted: the token's scope covers this repo. */
+  canWrite: boolean | null;
+  /** The account has push access, which resolving a thread needs. */
+  canPush: boolean | null;
+}
+
+const accessCache = new Map<string, { access: SidebarWriteAccess; at: number }>();
+
+/** Test seam: forget memoised App logins and write access. */
 export function resetSidebarIdentityCache(): void {
   appLoginCache.clear();
+  accessCache.clear();
+}
+
+/**
+ * Whether the connected account's token can write to the repo (#2285), so the
+ * composer can say so before a post fails with a 403. A classic/OAuth token is
+ * judged by its scopes (`repo`, or `public_repo` on a public repo); a
+ * fine-grained PAT carries none and cannot be introspected, so it stays
+ * unknown. `GET /repos/{owner}/{repo}` supplies visibility and push access; a
+ * 403/404 means the token cannot see the repo at all. Only a real answer is
+ * memoised; a network blip or rate limit reads as unknown.
+ */
+async function connectedWriteAccess(
+  app: FastifyInstance,
+  repo: { owner: string; repo: string },
+  token: string,
+  login: string | null,
+): Promise<SidebarWriteAccess> {
+  const unknown: SidebarWriteAccess = { canWrite: null, canPush: null };
+  const key = `${repo.owner}/${repo.repo}|${login ?? ""}`;
+  const hit = accessCache.get(key);
+  if (hit && Date.now() - hit.at < APP_LOGIN_TTL_MS) return hit.access;
+  const scopes = getRow(app)?.scopes?.split(",").filter(Boolean) ?? [];
+  let res: Response;
+  try {
+    res = await githubApiFetch(
+      `/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+  } catch (err) {
+    app.log.warn({ err, ...repo }, "[github-integration] sidebar write-access lookup failed");
+    return unknown;
+  }
+  let access: SidebarWriteAccess;
+  if (res.status === 403 || res.status === 404) {
+    access = { canWrite: false, canPush: false };
+  } else if (res.ok) {
+    const body = (await res.json()) as {
+      private?: boolean;
+      permissions?: { push?: boolean; maintain?: boolean; admin?: boolean };
+    };
+    const perms = body.permissions;
+    const canPush = perms ? !!(perms.push || perms.maintain || perms.admin) : null;
+    const scopeOk = scopes.includes("repo")
+      ? true
+      : scopes.includes("public_repo")
+        ? body.private !== true
+        : scopes.length > 0
+          ? false
+          : null;
+    access = { canWrite: scopeOk, canPush };
+  } else {
+    return unknown;
+  }
+  accessCache.set(key, { access, at: Date.now() });
+  return access;
 }
 
 /**
@@ -1032,10 +1098,20 @@ export async function resolveSidebarWriteIdentity(
 export async function describeSidebarWriteIdentity(
   app: FastifyInstance,
   repo: { owner: string; repo: string },
-): Promise<{ kind: "user" | "app"; login: string | null } | null> {
-  if (getToken(app)) return { kind: "user", login: getRow(app)?.login ?? null };
+): Promise<{
+  kind: "user" | "app";
+  login: string | null;
+  canWrite: boolean | null;
+  canPush: boolean | null;
+} | null> {
+  const userToken = getToken(app);
+  if (userToken) {
+    const login = getRow(app)?.login ?? null;
+    return { kind: "user", login, ...(await connectedWriteAccess(app, repo, userToken, login)) };
+  }
   if (!(await resolveGitHubToken(app, repo, "read"))) return null;
-  return { kind: "app", login: await appBotLogin(app, repo, null) };
+  // The App's installation token is minted with the grants a write needs.
+  return { kind: "app", login: await appBotLogin(app, repo, null), canWrite: null, canPush: null };
 }
 
 /**

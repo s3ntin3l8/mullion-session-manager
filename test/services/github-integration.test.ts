@@ -1382,11 +1382,95 @@ describe("github-integration service", () => {
       expect(await describeSidebarWriteIdentity(app, repo)).toEqual({
         kind: "app",
         login: "mullion-session-manager",
+        canWrite: null,
+        canPush: null,
       });
       expect(mockGetInstallationToken.mock.calls.every((c) => c[4] === "read")).toBe(true);
       await setPat(app, "ghp_x");
       expect((await describeSidebarWriteIdentity(app, repo))?.kind).toBe("user");
       await app.close();
+    });
+
+    describe("connected token write access (#2285)", () => {
+      const connect = async (scopes: string | null) => {
+        fetchMock.mockResolvedValue(
+          jsonResponse(200, { login: "octocat" }, scopes ? { "x-oauth-scopes": scopes } : {}),
+        );
+        const app = await buildApp();
+        await setPat(app, "ghp_x");
+        return app;
+      };
+      const repoReply = (body: unknown, status = 200) =>
+        fetchMock.mockImplementation(() => Promise.resolve(jsonResponse(status, body)));
+      const reposCalls = () =>
+        fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/repos/acme/widgets"));
+
+      it("is writable with the repo scope and push access", async () => {
+        const app = await connect("repo, read:org");
+        repoReply({ private: true, permissions: { push: true } });
+        expect(await describeSidebarWriteIdentity(app, repo)).toEqual({
+          kind: "user",
+          login: "octocat",
+          canWrite: true,
+          canPush: true,
+        });
+        await app.close();
+      });
+
+      it("reads public_repo as enough for a public repo only, and no push as canPush false", async () => {
+        const app = await connect("public_repo");
+        repoReply({ private: false, permissions: { push: false } });
+        expect(await describeSidebarWriteIdentity(app, repo)).toMatchObject({
+          canWrite: true,
+          canPush: false,
+        });
+        resetSidebarIdentityCache();
+        repoReply({ private: true, permissions: { push: true } });
+        expect(await describeSidebarWriteIdentity(app, repo)).toMatchObject({ canWrite: false });
+        await app.close();
+      });
+
+      it("is not writable when the scopes name nothing that writes", async () => {
+        const app = await connect("read:org");
+        repoReply({ private: false, permissions: { push: true } });
+        expect(await describeSidebarWriteIdentity(app, repo)).toMatchObject({ canWrite: false });
+        await app.close();
+      });
+
+      it("leaves a fine-grained token (no scopes) unknown", async () => {
+        const app = await connect(null);
+        repoReply({ private: true, permissions: { push: true } });
+        expect(await describeSidebarWriteIdentity(app, repo)).toMatchObject({
+          canWrite: null,
+          canPush: true,
+        });
+        await app.close();
+      });
+
+      it("is not writable when the token cannot see the repo (404)", async () => {
+        const app = await connect("repo");
+        repoReply({ message: "Not Found" }, 404);
+        expect(await describeSidebarWriteIdentity(app, repo)).toMatchObject({
+          canWrite: false,
+          canPush: false,
+        });
+        await app.close();
+      });
+
+      it("memoises an answer but retries after a failure", async () => {
+        const app = await connect("repo");
+        repoReply({}, 500);
+        expect(await describeSidebarWriteIdentity(app, repo)).toMatchObject({
+          canWrite: null,
+          canPush: null,
+        });
+        repoReply({ private: true, permissions: { push: true } });
+        expect(await describeSidebarWriteIdentity(app, repo)).toMatchObject({ canWrite: true });
+        const calls = reposCalls().length;
+        await describeSidebarWriteIdentity(app, repo);
+        expect(reposCalls()).toHaveLength(calls);
+        await app.close();
+      });
     });
 
     it("is null when nothing can write", async () => {
