@@ -37,6 +37,11 @@ vi.mock("../../src/services/settings.js", async (importOriginal) => {
   };
 });
 
+const pushPalette = vi.hoisted(() => vi.fn(async (_app: unknown, _hostId: string) => {}));
+vi.mock("../../src/services/terminal-palette-sync.js", () => ({
+  pushTerminalPaletteToHost: pushPalette,
+}));
+
 import { HostHeartbeatTracker, startHostHeartbeat } from "../../src/services/host-heartbeat.js";
 import { hostHeartbeatPlugin } from "../../src/plugins/host-heartbeat.js";
 
@@ -338,6 +343,28 @@ describe("hostHeartbeatPlugin: force-reconnect on recovery", () => {
       expect(reconfigureEvents).toHaveBeenCalledWith({ forceReconnect: ["h1"] });
       expect(reconfigureFanout).toHaveBeenCalledWith({ forceReconnect: ["h1"] });
     });
+
+    await app.close();
+  });
+
+  it("pushes the terminal palette to a host that comes online and to one that recovers", async () => {
+    pushPalette.mockClear();
+    pingMock.mockResolvedValue(true);
+
+    const app = Fastify();
+    app.decorate("config", { MULLION_ROLE: "primary" } as never);
+    await app.register(hostHeartbeatPlugin);
+    await app.ready();
+
+    await vi.advanceTimersByTimeAsync(0); // first contact: pending -> online
+    await waitForAssertion(() => expect(pushPalette).toHaveBeenCalledWith(app, "h1"));
+
+    pushPalette.mockClear();
+    pingMock.mockResolvedValueOnce(false).mockResolvedValueOnce(false).mockResolvedValue(true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(30_000); // the host is back
+    await waitForAssertion(() => expect(pushPalette).toHaveBeenCalledWith(app, "h1"));
 
     await app.close();
   });

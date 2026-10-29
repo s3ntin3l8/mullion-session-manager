@@ -1,4 +1,5 @@
 import { renderScrollback } from "./scrollback-render.js";
+import type { TerminalPalette } from "./terminal-query-reply.js";
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
 import path from "node:path";
@@ -858,6 +859,16 @@ export class RemoteHostClient {
   // Issue #463 — the client half of the skills enable/disable triple; see
   // routes/internal.ts's PUT /internal/skills. Same body-only
   // {agent, name, enabled} contract as writeAgentRule above.
+  // Forwards the dashboard's resolved terminal palette so this agent can answer
+  // its sessions' startup color queries (see terminal-query-reply.ts).
+  async setTerminalPalette(palette: TerminalPalette): Promise<void> {
+    await this.request<void>("/internal/terminal/palette", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(palette),
+    });
+  }
+
   writeSkillEnabled(
     cwd: string,
     agent: SkillAgent,

@@ -91,6 +91,18 @@ describe("RemoteHostClient", () => {
     }
   });
 
+  describe("setTerminalPalette", () => {
+    it("PUTs the palette to the agent", async () => {
+      fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+      const palette = { foreground: "#111111", background: "#f2f2f2", cursor: "#111111" };
+      await client().setTerminalPalette(palette);
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("http://example.invalid:1234/internal/terminal/palette");
+      expect(init.method).toBe("PUT");
+      expect(JSON.parse(init.body as string)).toEqual(palette);
+    });
+  });
+
   describe("statProjectFile", () => {
     it("posts the path and returns the agent's size and mtime", async () => {
       fetchMock.mockResolvedValue(jsonResponse(200, { path: "a.ts", size: 5, mtimeMs: 123.5 }));

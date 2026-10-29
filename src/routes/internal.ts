@@ -12,6 +12,8 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { Readable } from "node:stream";
 import { WebSocket as NodeWebSocket } from "ws";
 import { pingDevServer } from "./projects.js";
+import { paletteBodySchema } from "./terminal-palette.js";
+import { setTerminalPalette, type TerminalPalette } from "../services/terminal-query-reply.js";
 import { measureHostCapacity } from "../services/host-capacity.js";
 import {
   taskReviewFindingsPath,
@@ -999,6 +1001,19 @@ export async function internalRoutes(app: FastifyInstance) {
         }
         throw err;
       }
+    },
+  );
+
+  // The primary forwards the dashboard's resolved terminal palette here so this
+  // agent's sessions get their startup color queries answered while no pane is
+  // attached (see services/terminal-query-reply.ts).
+  app.put<{ Body: TerminalPalette }>(
+    "/internal/terminal/palette",
+    { ...INTERNAL_RATE_LIMIT, schema: paletteBodySchema },
+    async (request, reply) => {
+      const { foreground, background, cursor } = request.body;
+      setTerminalPalette({ foreground, background, cursor });
+      return reply.code(204).send();
     },
   );
 
