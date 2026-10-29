@@ -28,6 +28,8 @@ export async function fetchBehindBy(
 // A head SHA fixes the answer until the base moves, so a poll must not repeat
 // the call; the TTL picks up a moved base.
 const BEHIND_BY_TTL_MS = 5 * 60_000;
+const behindByKey = (owner: string, repo: string, base: string, headSha: string) =>
+  `${owner}/${repo}|${base}|${headSha}`;
 const behindByCache = new Map<string, { value: number; at: number }>();
 
 /** `fetchBehindBy`, memoised per repo/base/head. Only a real answer is kept. */
@@ -38,7 +40,7 @@ export async function cachedBehindBy(
   base: string,
   headSha: string,
 ): Promise<number | null> {
-  const key = `${owner}/${repo}|${base}|${headSha}`;
+  const key = behindByKey(owner, repo, base, headSha);
   const hit = behindByCache.get(key);
   if (hit && Date.now() - hit.at < BEHIND_BY_TTL_MS) return hit.value;
   const value = await fetchBehindBy(token, owner, repo, base, headSha);
@@ -62,7 +64,7 @@ export function peekBehindBy(
   base: string,
   headSha: string,
 ): number | undefined {
-  const hit = behindByCache.get(`${owner}/${repo}|${base}|${headSha}`);
+  const hit = behindByCache.get(behindByKey(owner, repo, base, headSha));
   return hit && Date.now() - hit.at < BEHIND_BY_TTL_MS ? hit.value : undefined;
 }
 
