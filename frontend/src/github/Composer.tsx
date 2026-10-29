@@ -13,12 +13,12 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : "Could
 const isSubmitKey = (e: KeyboardEvent) => e.key === "Enter" && (e.metaKey || e.ctrlKey);
 
 /** "Posts as @login", under a write box (#2049): the box says who it speaks as. */
-export function PostsAs({ identity }: { identity?: GitHubWriteIdentity | null }) {
+function PostsAs({ identity }: { identity?: GitHubWriteIdentity | null }) {
   if (!identity?.login) return null;
   return (
     <div className="gh-composer-identity">
       Posts as @{identity.login}
-      {identity.kind === "app" ? " (Mullion App; connect your account to review)" : ""}
+      {identity.kind === "app" ? " (Mullion App; connect your account to post as you)" : ""}
     </div>
   );
 }

@@ -169,6 +169,11 @@ describe("GitHub sidebar write routes (#1672)", () => {
         return Promise.resolve(jsonResponse(200, { login: "octocat" }));
       }
       if (url.endsWith("/graphql")) {
+        if (String(body?.query).trim() === "query { viewer { login } }") {
+          return Promise.resolve(
+            jsonResponse(200, { data: { viewer: { login: "mullion-session-manager[bot]" } } }),
+          );
+        }
         if (String(body?.query).trim().startsWith("mutation") && handlers.mutation) {
           return Promise.resolve(handlers.mutation(body));
         }
@@ -480,6 +485,46 @@ describe("GitHub sidebar write routes (#1672)", () => {
       // The App is still minted for reads, but never for this write.
       expect(mockGetInstallationToken.mock.calls.some((c) => c[4] === "write")).toBe(false);
       expect(calls.some((c) => c.url.endsWith("/pulls/7/reviews"))).toBe(true);
+    });
+
+    // #2283 — the issue detail names the identity a comment from its box posts as.
+    it("reports the App, with its login, on the issue detail when no account is connected", async () => {
+      mockGetInstallationToken.mockResolvedValue({ token: "ghs_app", installationsChecked: null });
+      mockGithub({
+        rest: (url) => {
+          if (url.includes("/issues/9/comments")) return jsonResponse(200, []);
+          if (url.endsWith("/issues/9")) {
+            return jsonResponse(200, {
+              number: 9,
+              title: "issue 9",
+              html_url: "https://github.com/acme/widgets/issues/9",
+              user: { login: "a" },
+              labels: [],
+              assignees: [],
+              comments: 0,
+              milestone: null,
+              created_at: "2026-01-01T00:00:00Z",
+              updated_at: "2026-01-02T00:00:00Z",
+              body_html: "<p>b</p>",
+              state: "open",
+            });
+          }
+          return null;
+        },
+      });
+      const app = await makeApp();
+      const { setGitHubApp, resetSidebarIdentityCache } =
+        await import("../../src/services/github-integration.js");
+      resetSidebarIdentityCache();
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      const id = await connectedProject(app);
+      await app.inject({ method: "DELETE", url: "/api/integrations/github" });
+      const res = await app.inject({ method: "GET", url: `/api/projects/${id}/github/issues/9` });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().writeIdentity).toEqual({
+        kind: "app",
+        login: "mullion-session-manager",
+      });
     });
 
     it("lets the App comment but refuses its verdicts when no account is connected", async () => {
