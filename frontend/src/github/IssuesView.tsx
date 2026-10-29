@@ -547,7 +547,11 @@ export function IssueDetailView({
               ))}
             </div>
           )}
-          <CommentComposer label="Comment on this issue" onSubmit={postComment} />
+          <CommentComposer
+            label="Comment on this issue"
+            identity={issue.writeIdentity}
+            onSubmit={postComment}
+          />
         </>
       )}
     </div>

@@ -148,6 +148,27 @@ describe("ConversationComposer", () => {
   });
 });
 
+describe("Posts as (#2049)", () => {
+  it("names the identity under an issue comment box and a thread reply box", async () => {
+    const me = { kind: "user", login: "me" } as const;
+    const { unmount } = render(
+      <CommentComposer label="Comment on this issue" identity={me} onSubmit={vi.fn()} />,
+    );
+    expect(screen.getByText("Posts as @me")).toBeInTheDocument();
+    unmount();
+
+    render(<ThreadActions resolved={false} identity={me} onReply={vi.fn()} onResolve={vi.fn()} />);
+    expect(screen.queryByText("Posts as @me")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Reply" }));
+    expect(screen.getByText("Posts as @me")).toBeInTheDocument();
+  });
+
+  it("says nothing when the identity is unknown", () => {
+    render(<CommentComposer label="Comment" identity={null} onSubmit={vi.fn()} />);
+    expect(screen.queryByText(/Posts as/)).toBeNull();
+  });
+});
+
 describe("ThreadActions", () => {
   it("opens a reply box, posts and closes it", async () => {
     const onReply = vi.fn(() => Promise.resolve());

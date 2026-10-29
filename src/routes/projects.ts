@@ -2418,6 +2418,8 @@ export async function projectsRoute(app: FastifyInstance) {
           ...detail,
           taskStatus: taskRow?.status ?? null,
           triage: issueTriageFor(repoRef.owner, repoRef.repo, number),
+          // #2049 — who a comment from the box posts as.
+          writeIdentity: await describeSidebarWriteIdentity(app, repoRef),
         };
       } catch (err) {
         if (!(err instanceof GitHubApiError)) throw err;

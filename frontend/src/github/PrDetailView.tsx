@@ -7,6 +7,7 @@ import { useStartSessionFrom } from "../hooks/useStartSessionFrom.js";
 import type {
   GitHubPrDetail,
   GitHubPrDetailThread,
+  GitHubWriteIdentity,
   GitHubPrReviewEvent,
   ReviewSummaryEntry,
 } from "../api/types.js";
@@ -206,10 +207,12 @@ function PinnedReview({
 
 function Thread({
   thread,
+  identity,
   onReply,
   onResolve,
 }: {
   thread: GitHubPrDetailThread;
+  identity?: GitHubWriteIdentity | null;
   onReply: (body: string) => Promise<void>;
   onResolve: () => Promise<void>;
 }) {
@@ -228,7 +231,12 @@ function Thread({
           <SafeHtml className="gh-html" html={c.bodyHtml} />
         </div>
       ))}
-      <ThreadActions resolved={thread.isResolved} onReply={onReply} onResolve={onResolve} />
+      <ThreadActions
+        resolved={thread.isResolved}
+        identity={identity}
+        onReply={onReply}
+        onResolve={onResolve}
+      />
     </div>
   );
 }
@@ -420,6 +428,7 @@ export function PrDetailView({
   const resolvedThreads = threads.filter((t) => t.isResolved);
   const threadProps = (t: GitHubPrDetailThread) => ({
     thread: t,
+    identity: pr.writeIdentity,
     onReply: (body: string) => threadWrites.reply(t.id, body),
     onResolve: () => threadWrites.resolve(t.id),
   });

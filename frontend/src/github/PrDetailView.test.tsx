@@ -1323,7 +1323,7 @@ describe("PrDetailView", () => {
     // #1672 — reply / resolve / comment / review from the drill-in.
     it("replies to a thread and shows the reply before the refetch catches up", async () => {
       __resetGithubCacheForTests();
-      const fn = stub(PR, (url) =>
+      const fn = stub({ ...PR, writeIdentity: { kind: "user", login: "reviewer" } }, (url) =>
         url.includes("/threads/T1/reply")
           ? jsonResponse(200, {
               author: "me",
@@ -1336,6 +1336,7 @@ describe("PrDetailView", () => {
       render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
       await screen.findByText("guard null");
       await userEvent.click(screen.getAllByRole("button", { name: "Reply" })[0]);
+      expect(screen.getByText("Posts as @reviewer")).toBeInTheDocument();
       const box = screen.getByRole("textbox", { name: "Reply" });
       await userEvent.type(box, "done now");
       await userEvent.click(

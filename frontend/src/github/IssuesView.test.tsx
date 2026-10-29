@@ -38,6 +38,7 @@ const LIST = {
 const DETAIL = {
   ...LIST.issues[0],
   taskStatus: null,
+  writeIdentity: { kind: "user", login: "octocat" },
   state: "open",
   bodyHtml: '<p>It <b>crashes</b></p><img src=x onerror="boom()">',
   comments: [
@@ -297,6 +298,7 @@ describe("IssueDetailView", () => {
       await screen.findByRole("textbox", { name: "Comment on this issue" }),
       "on it",
     );
+    expect(screen.getByText("Posts as @octocat")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Comment" }));
     expect(await screen.findByText(/Comment posted/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "view on GitHub" })).toHaveAttribute(

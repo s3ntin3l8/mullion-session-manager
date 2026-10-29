@@ -1,5 +1,5 @@
 import { useState, type KeyboardEvent } from "react";
-import type { GitHubPrReviewEvent } from "../api/types.js";
+import type { GitHubPrReviewEvent, GitHubWriteIdentity } from "../api/types.js";
 import { ErrorText } from "../ui/ErrorText.js";
 import { Button } from "../ui/sidebar/index.js";
 
@@ -12,16 +12,30 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : "Could
 /** Ctrl/Cmd+Enter submits, as on github.com. */
 const isSubmitKey = (e: KeyboardEvent) => e.key === "Enter" && (e.metaKey || e.ctrlKey);
 
+/** "Posts as @login", under a write box (#2049): the box says who it speaks as. */
+export function PostsAs({ identity }: { identity?: GitHubWriteIdentity | null }) {
+  if (!identity?.login) return null;
+  return (
+    <div className="gh-composer-identity">
+      Posts as @{identity.login}
+      {identity.kind === "app" ? " (Mullion App; connect your account to review)" : ""}
+    </div>
+  );
+}
+
 export function CommentComposer({
   label,
   placeholder = "Leave a comment",
   submitLabel = "Comment",
   autoFocus,
+  identity,
   onSubmit,
   onCancel,
 }: {
   /** Accessible name of the text box. */
   label: string;
+  /** Who a post comes out as (#2049). */
+  identity?: GitHubWriteIdentity | null;
   placeholder?: string;
   submitLabel?: string;
   autoFocus?: boolean;
@@ -62,6 +76,7 @@ export function CommentComposer({
           if (isSubmitKey(e)) void submit();
         }}
       />
+      <PostsAs identity={identity} />
       {error && <ErrorText>{error}</ErrorText>}
       <div className="gh-detail-actions">
         <Button size="sm" variant="primary" disabled={blank || busy} onClick={submit}>
@@ -95,7 +110,7 @@ export function ConversationComposer({
   /** Omitted where no review can be submitted (a closed or merged PR). */
   onReview?: (event: GitHubPrReviewEvent, body: string) => Promise<void>;
   /** Who a post comes out as (#2049): the connected account, or the App's bot. */
-  identity?: { kind: "user" | "app"; login: string | null } | null;
+  identity?: GitHubWriteIdentity | null;
   /** The PR's author: GitHub does not let an author review their own PR. */
   prAuthor?: string | null;
   onClose: () => void;
@@ -158,12 +173,7 @@ export function ConversationComposer({
           } else if (isSubmitKey(e)) void send("COMMENT");
         }}
       />
-      {identity?.login && (
-        <div className="gh-composer-identity">
-          Posts as @{identity.login}
-          {identity.kind === "app" ? " (Mullion App; connect your account to review)" : ""}
-        </div>
-      )}
+      <PostsAs identity={identity} />
       {error && <ErrorText>{error}</ErrorText>}
       <div className="gh-detail-actions">
         <Button
@@ -200,10 +210,13 @@ export function ConversationComposer({
 /** A review thread's Reply (opens an inline box) and Resolve. */
 export function ThreadActions({
   resolved,
+  identity,
   onReply,
   onResolve,
 }: {
   resolved: boolean;
+  /** Who a reply posts as (#2049). */
+  identity?: GitHubWriteIdentity | null;
   onReply: (body: string) => Promise<void>;
   onResolve: () => Promise<void>;
 }) {
@@ -227,6 +240,7 @@ export function ThreadActions({
     return (
       <CommentComposer
         label="Reply"
+        identity={identity}
         placeholder="Reply…"
         submitLabel="Reply"
         autoFocus
