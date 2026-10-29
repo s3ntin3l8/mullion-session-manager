@@ -13,10 +13,20 @@ import type {
 export const hostsApi = {
   listHosts: () => request<Host[]>("/api/hosts"),
 
-  createHost: (name: string, baseUrl: string, token: string) =>
-    request<Host>("/api/hosts", {
+  // baseUrl and token are optional: without a token the primary mints one and
+  // returns it ONCE on this response; without a baseUrl the host stays pending
+  // until its agent registers and reports its own.
+  createHost: (name: string, baseUrl?: string, token?: string) =>
+    request<Host & { token?: string }>("/api/hosts", {
       method: "POST",
       body: JSON.stringify({ name, baseUrl, token }),
+    }),
+
+  // A fresh token, returned once. The running agent loses access until its
+  // .env carries it (see src/routes/hosts.ts).
+  rotateHostToken: (id: string) =>
+    request<{ token: string }>(`/api/hosts/${encodeURIComponent(id)}/rotate-token`, {
+      method: "POST",
     }),
 
   // Issue #1725 / roadmap 8.11 — `drained` parks the host (it takes no new

@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import {
@@ -9,6 +9,7 @@ import {
   deleteHost,
   getHostRow,
   listHosts,
+  mintHostToken,
   updateHost,
 } from "../services/host-registry.js";
 import { resolveBackend } from "../services/session-backend.js";
@@ -26,8 +27,10 @@ import type { UpdateStatus } from "../services/update-apply.js";
 
 interface CreateHostBody {
   name: string;
-  baseUrl: string;
-  token: string;
+  // Both optional: omit the token and the primary mints one (returned once);
+  // omit the baseUrl and the host stays pending until its agent claims it.
+  baseUrl?: string;
+  token?: string;
 }
 
 interface UpdateHostBody {
@@ -42,7 +45,7 @@ interface UpdateHostBody {
 const createHostSchema = {
   body: {
     type: "object",
-    required: ["name", "baseUrl", "token"],
+    required: ["name"],
     additionalProperties: false,
     properties: {
       name: { type: "string", minLength: 1 },
@@ -87,6 +90,49 @@ const updateHostSchema = {
 // uses the same logic with the opposite allowLoopback/allowPrivate policy.
 function isValidHttpUrl(value: string): boolean {
   return isAllowedHttpUrl(value, { allowLoopback: true, allowPrivate: true });
+}
+
+// A changed baseUrl/token means the old health verdict no longer means
+// anything (it was measured against a different URL/agent). Shared by PATCH
+// and rotate-token so the two cannot drift.
+function onHostCredentialsChanged(app: FastifyInstance, id: string): void {
+  app.hostHeartbeatTracker?.invalidateHost(id);
+  // Issue #1721 — same staleness reasoning for the CAPACITY cache:
+  // numbers measured against the OLD baseUrl describe a different
+  // agent, so they are dropped here rather than lingering for up to a
+  // sweep interval as if they were this host's.
+  app.hostCapacityTracker?.invalidateHost(id);
+  // Same staleness reasoning as invalidateHost above, applied to the
+  // events subscription: an open socket built from the old
+  // baseUrl/token must not be left running until it happens to error
+  // out on its own — force it closed and reopened with the fresh row.
+  app.reconfigureRemoteEventSubscriptions({ forceReconnect: [id] });
+  // Issue #820 — known gap, not silently dropped: unlike the events
+  // subscriber above, ssh-agent-fanout.ts's reconcile() has no
+  // forceReconnect, so an ALREADY-OPEN fan-out connection for this
+  // host keeps running on the OLD baseUrl/token until it happens to
+  // error out on its own (bounded by the same reconnect backoff
+  // every other case here already tolerates). Calling it anyway is
+  // still correct, just not immediate: harmless no-op if this host
+  // has no open fan-out connection, and it's what picks up a host
+  // whose fan-out connection isn't open yet (no bridge was connected
+  // until just now, say).
+  app.reconfigureSshAgentFanout();
+  app.reconfigureControlRelayFanout();
+}
+
+// A manual host added without a Base URL has no address to dial until its
+// agent registers (getRemoteHostClient throws for it, which would surface as
+// a 500). Per-host routes that reach the agent answer 409 instead.
+function pendingHostReply(app: FastifyInstance, id: string, reply: FastifyReply) {
+  const row = getHostRow(app, id);
+  if (!row) return reply.notFound();
+  if (row.baseUrl === null) {
+    return reply.conflict(
+      `${row.name} hasn't registered yet — run its install command on the agent first`,
+    );
+  }
+  return undefined;
 }
 
 export async function hostsRoute(app: FastifyInstance) {
@@ -150,10 +196,15 @@ export async function hostsRoute(app: FastifyInstance) {
     "/api/hosts",
     { schema: createHostSchema },
     async (request, reply) => {
-      const { name, baseUrl, token } = request.body;
-      if (!isValidHttpUrl(baseUrl)) {
+      const { name, baseUrl } = request.body;
+      if (baseUrl !== undefined && !isValidHttpUrl(baseUrl)) {
         return reply.badRequest("baseUrl must be a valid http(s) URL");
       }
+      // A caller-supplied token (manual / ansible-provisioned agent) is
+      // stored as given and never echoed back; a minted one is returned
+      // exactly once, on this response, since the DB only keeps it encrypted.
+      const minted = request.body.token === undefined ? mintHostToken() : undefined;
+      const token = request.body.token ?? minted!;
       const created = createHost(app, { name, baseUrl, token });
       // Issue #213 cross-host capture: opens this host's events
       // subscription immediately rather than waiting up to
@@ -177,7 +228,7 @@ export async function hostsRoute(app: FastifyInstance) {
       app.reconfigureSshAgentFanout();
       app.reconfigureControlRelayFanout();
       reply.code(201);
-      return created;
+      return minted === undefined ? created : { ...created, token: minted };
     },
   );
 
@@ -212,33 +263,31 @@ export async function hostsRoute(app: FastifyInstance) {
       // instead of a stale status lingering for up to
       // HOST_HEARTBEAT_INTERVAL_SECONDS.
       if (request.body.baseUrl !== undefined || request.body.token !== undefined) {
-        app.hostHeartbeatTracker?.invalidateHost(id);
-        // Issue #1721 — same staleness reasoning for the CAPACITY cache:
-        // numbers measured against the OLD baseUrl describe a different
-        // agent, so they are dropped here rather than lingering for up to a
-        // sweep interval as if they were this host's.
-        app.hostCapacityTracker?.invalidateHost(id);
-        // Same staleness reasoning as invalidateHost above, applied to the
-        // events subscription: an open socket built from the old
-        // baseUrl/token must not be left running until it happens to error
-        // out on its own — force it closed and reopened with the fresh row.
-        app.reconfigureRemoteEventSubscriptions({ forceReconnect: [id] });
-        // Issue #820 — known gap, not silently dropped: unlike the events
-        // subscriber above, ssh-agent-fanout.ts's reconcile() has no
-        // forceReconnect, so an ALREADY-OPEN fan-out connection for this
-        // host keeps running on the OLD baseUrl/token until it happens to
-        // error out on its own (bounded by the same reconnect backoff
-        // every other case here already tolerates). Calling it anyway is
-        // still correct, just not immediate: harmless no-op if this host
-        // has no open fan-out connection, and it's what picks up a host
-        // whose fan-out connection isn't open yet (no bridge was connected
-        // until just now, say).
-        app.reconfigureSshAgentFanout();
-        app.reconfigureControlRelayFanout();
+        onHostCredentialsChanged(app, id);
       }
       return updated;
     },
   );
+
+  // Mints a fresh token for a remote host and returns it once. updateHost
+  // clears any session the host had established, so the running agent loses
+  // access until its .env carries the new token (see updateHost's comment).
+  app.post<{ Params: { id: string } }>("/api/hosts/:id/rotate-token", async (request, reply) => {
+    const { id } = request.params;
+    if (id === LOCAL_HOST_ID) return reply.badRequest("the local host has no token to rotate");
+    const row = getHostRow(app, id);
+    if (!row) return reply.notFound();
+    // An enrolled host authenticates with the fleet-wide enrollment secret
+    // every time it re-registers; a per-host token would change nothing.
+    if (row.origin === "enrolled") {
+      return reply.badRequest("an enrolled host has no per-host token; rotate the fleet secret");
+    }
+    const token = mintHostToken();
+    const updated = updateHost(app, id, { token });
+    if (!updated) return reply.notFound();
+    onHostCredentialsChanged(app, id);
+    return { token };
+  });
 
   // Connection-test ping for the Settings hosts panel — `local` is always
   // considered online (it's this same process); a remote host's token/
@@ -247,7 +296,8 @@ export async function hostsRoute(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>("/api/hosts/:id/ping", async (request, reply) => {
     const { id } = request.params;
     if (id === LOCAL_HOST_ID) return { online: true };
-    if (!getHostRow(app, id)) return reply.notFound();
+    const pending = pendingHostReply(app, id, reply);
+    if (pending) return pending;
     const online = await getRemoteHostClient(app, id).ping();
     return { online };
   });
@@ -277,7 +327,8 @@ export async function hostsRoute(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>("/api/hosts/:id/config", async (request, reply) => {
     const { id } = request.params;
     if (id === LOCAL_HOST_ID) return buildAgentConfig(app);
-    if (!getHostRow(app, id)) return reply.notFound();
+    const pending = pendingHostReply(app, id, reply);
+    if (pending) return pending;
     try {
       return await getRemoteHostClient(app, id).resolveConfig();
     } catch (err) {
@@ -336,7 +387,8 @@ export async function hostsRoute(app: FastifyInstance) {
           "This machine's project roots are set in Settings → Projects & discovery",
         );
       }
-      if (!getHostRow(app, id)) return reply.notFound();
+      const pending = pendingHostReply(app, id, reply);
+      if (pending) return pending;
       try {
         return await getRemoteHostClient(app, id).resolveSetProjectsRoots(request.body.roots);
       } catch (err) {
@@ -382,7 +434,8 @@ export async function hostsRoute(app: FastifyInstance) {
     if (id === LOCAL_HOST_ID) {
       return reply.badRequest("the local host updates from Settings → Server, not here");
     }
-    if (!getHostRow(app, id)) return reply.notFound();
+    const pending = pendingHostReply(app, id, reply);
+    if (pending) return pending;
     const client = getRemoteHostClient(app, id);
 
     let hostVersion: string;
@@ -476,7 +529,8 @@ export async function hostsRoute(app: FastifyInstance) {
     if (id === LOCAL_HOST_ID) {
       return reply.badRequest("the local host updates from Settings → Server, not here");
     }
-    if (!getHostRow(app, id)) return reply.notFound();
+    const pending = pendingHostReply(app, id, reply);
+    if (pending) return pending;
     const client = getRemoteHostClient(app, id);
 
     // Independent review — the frontend only renders the Update button when

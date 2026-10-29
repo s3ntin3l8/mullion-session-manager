@@ -24,7 +24,9 @@
 # tray app's "Install Mullion" button, a provisioning script):
 #
 #   - no prompt, ever; every input is a parameter or an environment variable;
-#   - the enrollment token is read from MULLION_AGENT_ENROLLMENT_TOKEN, or from
+#   - the enrollment token (the per-host token from Settings -> Hosts -> Add
+#     host, or the primary's fleet-wide secret) is read from
+#     MULLION_AGENT_ENROLLMENT_TOKEN, or from
 #     the first line of stdin with -TokenFromStdin -- NEVER a parameter, which
 #     any process on the machine can read from the process list;
 #   - a FRESH install given no token at all (no MULLION_AGENT_TOKEN, no

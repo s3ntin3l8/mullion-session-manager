@@ -43,19 +43,18 @@ export interface HostSummary {
   // host as of this migration, so nothing changes until an operator parks
   // one.
   drained: boolean;
-  // baseUrl is only ever null for "local" — enrollHost/claimHost always
-  // set it atomically from the agent's own self-reported registration
-  // call, so an "enrolled" row is never actually created in a
-  // baseUrl-less "pending" state. host-heartbeat.ts's null-baseUrl skip
-  // still exists as a defensive no-op for "local" and any future path
-  // that might introduce one, not because "enrolled" currently produces
-  // one (independent review, PR #528 — this comment previously claimed
-  // otherwise).
+  // baseUrl is null for "local" and for a "manual" host added without one
+  // (Settings -> Add host, token minted by the primary) that is still
+  // waiting for its agent: claimHost fills it in from the agent's own
+  // registration call. An "enrolled" row is never baseUrl-less —
+  // enrollHost sets it atomically. host-heartbeat.ts skips a null
+  // baseUrl, so such a host reads "pending" until the agent claims it.
 }
 
 export interface CreateHostInput {
   name: string;
-  baseUrl: string;
+  /** Omit for a host still waiting on its agent: claimHost fills it in from the agent's own report. */
+  baseUrl?: string;
   token: string;
 }
 
@@ -121,13 +120,22 @@ export function decryptToken(app: FastifyInstance, row: HostRow): string {
   return app.encryption.decryptString(row.authTokenEnc);
 }
 
+/**
+ * A fresh per-host credential: the same 32-random-bytes-as-hex shape as the
+ * session secrets below, so timingSafeTokenMatch's fixed-length assumption
+ * (crypto-utils.ts) holds for tokens the primary mints itself.
+ */
+export function mintHostToken(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
 export function createHost(app: FastifyInstance, input: CreateHostInput): HostSummary {
   const [created] = app.db
     .insert(hosts)
     .values({
       id: crypto.randomUUID(),
       name: input.name,
-      baseUrl: input.baseUrl,
+      baseUrl: input.baseUrl ?? null,
       authTokenEnc: app.encryption.encryptString(input.token),
       origin: "manual",
     })

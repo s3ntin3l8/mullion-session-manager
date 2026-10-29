@@ -4,6 +4,7 @@ import { api, ApiError, LOCAL_HOST_ID } from "../../api/index.js";
 import { hasRemoteHosts } from "../../lib/hostBadge.js";
 import type { Host, HostUpdateStatus } from "../../api/index.js";
 import { CreateHostModal } from "../../CreateHostModal.js";
+import { AgentInstallInstructions } from "../../AgentInstallInstructions.js";
 import { HostConfigModal } from "../../HostConfigModal.js";
 import { deriveHostStatus, type PingState } from "../../hostStatus.js";
 import { formatCapacityAge, formatHostCapacityNow } from "../../hostCapacity.js";
@@ -63,7 +64,8 @@ function HostCapacityLine({ host }: { host: Host }) {
 }
 
 export function HostsSection() {
-  const { hosts, refreshHosts, createHost, updateHost, deleteHost, pingHost } = useDashboardStore();
+  const { hosts, refreshHosts, createHost, updateHost, deleteHost, pingHost, rotateHostToken } =
+    useDashboardStore();
 
   // Issue #1725 / roadmap 8.11 — park a host, or un-park it.
   //
@@ -82,6 +84,9 @@ export function HostsSection() {
   };
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Host | null>(null);
+  // A freshly rotated token, shown once (the DB only keeps it encrypted).
+  const [rotated, setRotated] = useState<{ name: string; token: string } | null>(null);
+  const [rotateError, setRotateError] = useState<string | null>(null);
   const [viewingConfig, setViewingConfig] = useState<{ id: string; name: string } | null>(null);
   const [pingStatus, setPingStatus] = useState<Record<string, PingState>>({});
   // A host that 409s on delete (still owns projects) — offers a cascade
@@ -266,6 +271,15 @@ export function HostsSection() {
     });
   };
 
+  const handleRotate = (host: Host) => {
+    setRotateError(null);
+    rotateHostToken(host.id)
+      .then((token) => setRotated({ name: host.name, token }))
+      .catch((err: unknown) =>
+        setRotateError(err instanceof Error ? err.message : "Could not rotate the token."),
+      );
+  };
+
   const confirmCascadeDelete = () => {
     if (!cascadePrompt) return;
     const { id } = cascadePrompt;
@@ -338,8 +352,8 @@ export function HostsSection() {
                 title={host.name}
                 subtitle={
                   <>
-                    {host.baseUrl ?? ""}
-                    {host.baseUrl ? " · " : ""}
+                    {host.baseUrl ?? "waiting for the agent to register"}
+                    {" · "}
                     <HostCapacityLine host={host} />
                   </>
                 }
@@ -430,6 +444,23 @@ export function HostsSection() {
                           icon: <MoonIcon size={14} style={{ color: "var(--muted)" }} />,
                           onClick: () => toggleDrain(host),
                         },
+                        // An enrolled host re-registers with the fleet secret, so it
+                        // has no per-host token to rotate.
+                        ...(host.origin === "enrolled"
+                          ? []
+                          : [
+                              {
+                                // Replaces the host's token. The running agent is
+                                // locked out until its .env carries the new one,
+                                // hence the arm-then-confirm click.
+                                key: "rotate",
+                                label: "Rotate token",
+                                armLabel: "Click again to rotate",
+                                icon: <GearIcon size={14} style={{ color: "var(--muted)" }} />,
+                                confirm: true,
+                                onClick: () => handleRotate(host),
+                              },
+                            ]),
                         {
                           key: "delete",
                           label: "Delete host",
@@ -460,6 +491,7 @@ export function HostsSection() {
         </div>
       )}
       {drainError && <ErrorText style={{ marginTop: 8 }}>{drainError}</ErrorText>}
+      {rotateError && <ErrorText style={{ marginTop: 8 }}>{rotateError}</ErrorText>}
       {deleteError && !cascadePrompt && (
         <ErrorText style={{ marginTop: 8 }}>{deleteError}</ErrorText>
       )}
@@ -486,7 +518,9 @@ export function HostsSection() {
       {addOpen && (
         <CreateHostModal
           onClose={() => setAddOpen(false)}
-          onSave={(name, baseUrl, token) => createHost(name, baseUrl, token)}
+          onSave={(name, baseUrl, token) =>
+            createHost(name, baseUrl || undefined, token || undefined)
+          }
         />
       )}
       {editing && (
@@ -497,8 +531,21 @@ export function HostsSection() {
           hasToken={editing.hasToken}
           onClose={() => setEditing(null)}
           onSave={(name, baseUrl, token) =>
-            updateHost(editing.id, token ? { name, baseUrl, token } : { name, baseUrl })
+            updateHost(editing.id, {
+              name,
+              ...(baseUrl ? { baseUrl } : {}),
+              ...(token ? { token } : {}),
+            })
           }
+        />
+      )}
+      {rotated && (
+        <AgentInstallInstructions
+          kind="rotate"
+          token={rotated.token}
+          hostName={rotated.name}
+          primaryUrl={window.location.origin}
+          onClose={() => setRotated(null)}
         />
       )}
       {viewingConfig && (

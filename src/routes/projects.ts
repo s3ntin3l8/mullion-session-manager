@@ -329,11 +329,25 @@ function unknownHostInCwds(
   map: Record<string, string> | null | undefined,
 ): string | null {
   if (map === null || map === undefined) return null;
-  const known = new Set(listHosts(app).map((host) => host.id));
+  // A pending host (no baseUrl yet) is not somewhere a session can run, so a
+  // cwd keyed to one is as wrong as a typo.
+  const known = new Set(
+    listHosts(app)
+      .filter((host) => host.id === LOCAL_HOST_ID || host.baseUrl !== null)
+      .map((host) => host.id),
+  );
   for (const hostId of Object.keys(map)) {
     if (!known.has(hostId)) return hostId;
   }
   return null;
+}
+
+/** The 400 text for a host id `unknownHostInCwds` rejected: pending or unknown. */
+function unknownHostMessage(app: FastifyInstance, hostId: string): string {
+  const row = getHostRow(app, hostId);
+  return row
+    ? `hostCwds names host ${row.name}, which hasn't registered yet`
+    : `hostCwds names an unknown host: ${hostId}`;
 }
 
 /**
@@ -4768,11 +4782,17 @@ export async function projectsRoute(app: FastifyInstance) {
       const { name, cwd, createDir, gitInit, placement, hostCwds, allowDuplicate } = request.body;
       const unknownHost = unknownHostInCwds(app, hostCwds);
       if (unknownHost !== null) {
-        return reply.badRequest(`hostCwds names an unknown host: ${unknownHost}`);
+        return reply.badRequest(unknownHostMessage(app, unknownHost));
       }
       const hostId = request.body.hostId ?? LOCAL_HOST_ID;
-      if (hostId !== LOCAL_HOST_ID && !getHostRow(app, hostId)) {
+      const targetHost = hostId !== LOCAL_HOST_ID ? getHostRow(app, hostId) : undefined;
+      if (hostId !== LOCAL_HOST_ID && !targetHost) {
         return reply.badRequest(`Unknown hostId ${hostId}`);
+      }
+      // A host added without a Base URL is still waiting for its agent: there
+      // is nowhere to run the project yet.
+      if (targetHost && targetHost.baseUrl === null) {
+        return reply.badRequest(`Host ${targetHost.name} hasn't registered yet`);
       }
       // A remote project's directory lives on the agent's own filesystem,
       // not this process's — validating/creating it here against the
@@ -5040,7 +5060,7 @@ export async function projectsRoute(app: FastifyInstance) {
       } = request.body;
       const unknownHost = unknownHostInCwds(app, hostCwds);
       if (unknownHost !== null) {
-        return reply.badRequest(`hostCwds names an unknown host: ${unknownHost}`);
+        return reply.badRequest(unknownHostMessage(app, unknownHost));
       }
       if (
         devServerUrl !== undefined &&

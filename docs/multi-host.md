@@ -116,6 +116,35 @@ via self-registration, immediately — this is what makes token rotation a
 real response to a suspected leak rather than a no-op once a host has
 switched to session-based auth.
 
+### Generated token (recommended for a single host)
+
+**Settings → Hosts & SSH bridges → Add a host**, with just a name. The primary
+mints a per-host token, shows it **once**, and prints a ready-to-paste install
+command for Windows (PowerShell) and Linux/macOS with the token, the primary's
+URL and the host's name filled in. The agent runs it, registers itself
+(`POST /api/internal/register` — the token matches this host's row, so it
+needs neither `MULLION_ENROLLMENT_SECRET` on the primary nor
+`MULLION_AGENT_TOKEN` on the agent), and the primary fills in the agent's own
+URL. Until then the host reads **pending** ("waiting for the agent to
+register"); give a Base URL up front if the agent should be dialled at a
+specific address.
+
+- **Primary URL the agent calls.** Defaults to the address the dashboard was
+  opened on. A login gateway in front of the primary (Authentik forwardAuth)
+  blocks `/api/internal/register`, so use the primary's direct address
+  (e.g. `http://dev-01:3100`) if that applies to you.
+- **Rotate token** (the host's `…` menu, click twice to confirm) mints a new
+  token, shows it once, and clears the host's session. The running agent is
+  locked out until its `.env` carries the new value and it is restarted —
+  re-running the installer does not rewrite an existing `.env`. An agent that
+  registered itself needs `MULLION_ENROLLMENT_TOKEN=<new>` and
+  `MULLION_AGENT_TOKEN=` empty (leave its `MULLION_PRIMARY_URL` as installed); a host added with **Use my own token** needs
+  `MULLION_AGENT_TOKEN=<new>` instead (it never registers, so clearing it would
+  leave the agent with no credential and it would refuse to boot). The dialog
+  shows both.
+- Tick **Use my own token** to supply a token yourself instead (the manual
+  flow below).
+
 ### Manual registration (also supported)
 
 A pre-provisioned, per-agent static token, added by hand — the original
