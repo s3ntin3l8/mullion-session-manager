@@ -540,12 +540,17 @@ describe("acceptControlRelayConnection", () => {
 // filesystem-style path). Runs in CI's test-windows job, like pipe-acl.test.ts's real-pipe block.
 describe.runIf(process.platform === "win32")("agent relay endpoint on Windows (#2209)", () => {
   it("serves a named pipe a client can connect to", async () => {
+    const log = { debug: vi.fn(), warn: vi.fn() };
     const handle = await materializeControlRelaySocket({
       socketPath: tmpSock(),
       resolveToken: () => undefined,
       getMux: () => null,
+      log,
     });
     handles.push(handle);
+    // restrictPipeToCurrentUser only logs a failed access-list change, so a connect alone
+    // would pass either way: the narrowing must not have warned.
+    expect(log.warn).not.toHaveBeenCalled();
     expect(handle.socketPath.startsWith("\\\\.\\pipe\\")).toBe(true);
     const [frame] = await talk(handle.socketPath, ["{}"]);
     expect(frame).toMatchObject({ ok: false, status: 401 });
