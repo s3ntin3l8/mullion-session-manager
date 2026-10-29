@@ -866,7 +866,7 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
         blockedByCheckedAt: tasks.blockedByCheckedAt,
       })
       .from(tasks)
-      .where(eq(tasks.status, "ready"))
+      .where(and(eq(tasks.status, "ready"), isNull(tasks.archivedAt)))
       // The missing ORDER BY the issue was filed about — boardOrder is the
       // board's own local render/ordering tier (routes/tasks.ts's own
       // GET /api/tasks uses the same order), id as a stable tiebreak.
@@ -931,7 +931,7 @@ export function startTaskWatcher(app: FastifyInstance): () => void {
       try {
         // enqueueTask never cap-checks (see this loop's own pre-count
         // comment above) — its failure reasons are all genuine problems
-        // with THIS candidate (not-found/not-ready/no-seed-channel), never
+        // with THIS candidate (not-found/not-ready/archived/no-seed-channel), never
         // a capacity signal, so every failure here is warn-worthy and none
         // of them should stop the sweep the way "cap" used to.
         const outcome = await enqueueTask(app, row.id, { auto: true });

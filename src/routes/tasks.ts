@@ -1309,6 +1309,8 @@ export async function tasksRoute(app: FastifyInstance) {
             return reply.notFound();
           case "not-ready":
             return reply.conflict(outcome.detail ?? "Task is not ready");
+          case "archived":
+            return reply.conflict(outcome.detail ?? "Task is archived");
           case "no-seed-channel":
             return reply.badRequest(outcome.detail ?? "Resolved agent can't receive a seed prompt");
         }

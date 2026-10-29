@@ -68,7 +68,7 @@ export type EnqueueTaskOutcome =
   | { ok: true; task: typeof tasks.$inferSelect }
   | {
       ok: false;
-      reason: "not-found" | "not-ready" | "no-seed-channel" | "agent-quarantined";
+      reason: "not-found" | "not-ready" | "archived" | "no-seed-channel" | "agent-quarantined";
       detail?: string;
     };
 
@@ -136,6 +136,12 @@ export async function enqueueTask(
 
   const [project] = app.db.select().from(projects).where(eq(projects.id, task.projectId)).all();
   if (!project) return { ok: false, reason: "not-found" };
+
+  // An archived task is off the board for good (a merged-away project's
+  // superseded copy, say) — claiming it would start a duplicate worker.
+  if (task.archivedAt) {
+    return { ok: false, reason: "archived", detail: "Task is archived and cannot be claimed" };
+  }
 
   const effectiveAgent = opts.agent !== undefined ? opts.agent : task.agent;
 
@@ -209,6 +215,7 @@ export async function enqueueTask(
 
   const reserved = app.db.transaction((tx) => {
     const [current] = tx.select().from(tasks).where(eq(tasks.id, taskId)).all();
+    if (current?.archivedAt) return { reserved: false as const, archived: true as const };
     if (!current || current.status !== "ready") {
       return { reserved: false as const, currentStatus: current?.status };
     }
@@ -228,12 +235,16 @@ export async function enqueueTask(
     if (opts.reviewAgent !== undefined) patch.reviewAgent = opts.reviewAgent;
     tx.update(tasks)
       .set(patch)
-      .where(and(eq(tasks.id, taskId), eq(tasks.status, "ready")))
+      .where(and(eq(tasks.id, taskId), eq(tasks.status, "ready"), isNull(tasks.archivedAt)))
       .run();
     return { reserved: true as const };
   });
 
   if (!reserved.reserved) {
+    // Archived between the pre-check above and this transaction.
+    if ("archived" in reserved) {
+      return { ok: false, reason: "archived", detail: "Task is archived and cannot be claimed" };
+    }
     return {
       ok: false,
       reason: "not-ready",

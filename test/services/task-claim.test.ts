@@ -206,6 +206,25 @@ describe("claimTask", () => {
     return row;
   }
 
+  it("refuses an archived ready task with its own `archived` reason — manual or auto, nothing reserved", async () => {
+    const app = await buildApp();
+    const cwd = createGitRepo();
+    const projectId = await createProject(app, cwd);
+    const task = insertReadyTask(app, projectId, 61);
+    app.db.update(tasks).set({ archivedAt: new Date() }).where(eq(tasks.id, task.id)).run();
+
+    for (const auto of [true, false]) {
+      expect(await enqueueTask(app, task.id, { auto })).toMatchObject({
+        ok: false,
+        reason: "archived",
+      });
+    }
+    expect(getTask(app, task.id)).toMatchObject({ status: "ready", worktreePath: null });
+
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
   it("refuses an auto-claim outright when the resolved agent has no seed-delivery channel — no spawn, no reservation left behind", async () => {
     const app = await buildApp();
     const cwd = createGitRepo();
