@@ -69,6 +69,12 @@ export interface PrPhaseInput {
    * (callers that never track it keep their behaviour).
    */
   ciFetched?: boolean;
+  /**
+   * How far the head is behind its base (REST compare); null/omitted = unknown.
+   * GitHub's `BEHIND` is a collapsed state and can disagree with ancestry
+   * (lazygit#5975: BEHIND with behind_by 0); an answer of exactly 0 overrules it.
+   */
+  behindBy?: number | null;
 }
 
 export function derivePrPhase(pr: PrPhaseInput): PrPhase {
@@ -98,8 +104,17 @@ export function derivePrPhase(pr: PrPhaseInput): PrPhase {
   // No review requirement configured (decision is null) but someone was
   // asked, or branch protection still reports the PR as blocked.
   if (pr.reviewDecision === null && pr.requestedReviewers.length > 0) return waiting();
-  if (pr.mergeStateStatus === "BEHIND" && pr.ciStatus !== "in_progress") return "behind";
-  if (pr.mergeStateStatus === "BLOCKED" && pr.ciStatus !== "in_progress") {
+  // Updating a head the compare says is not behind would be refused, so read it
+  // as no longer BEHIND. An unanswered thread lookup (null) is not "nothing
+  // blocks": it reads as BLOCKED, which the branch below turns into `unknown`.
+  const mergeState =
+    pr.mergeStateStatus === "BEHIND" && pr.behindBy === 0
+      ? pr.unresolvedThreads === null || (pr.unresolvedThreads ?? 0) > 0
+        ? "BLOCKED"
+        : "CLEAN"
+      : pr.mergeStateStatus;
+  if (mergeState === "BEHIND" && pr.ciStatus !== "in_progress") return "behind";
+  if (mergeState === "BLOCKED" && pr.ciStatus !== "in_progress") {
     // null = the thread lookup did not answer: nothing says what blocks it.
     if (pr.unresolvedThreads === null) return "unknown";
     if ((pr.unresolvedThreads ?? 0) === 0) return waiting();
@@ -108,7 +123,7 @@ export function derivePrPhase(pr: PrPhaseInput): PrPhase {
     if (pr.ciFetched !== false) return "threads_unresolved";
   }
   if (pr.ciStatus === "in_progress") return "ci_pending";
-  if (pr.ciFetched === false && pr.mergeStateStatus !== "CLEAN") return "unknown";
+  if (pr.ciFetched === false && mergeState !== "CLEAN") return "unknown";
   return "ready_to_merge";
 }
 

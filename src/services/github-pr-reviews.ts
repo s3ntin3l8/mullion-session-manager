@@ -22,6 +22,7 @@ import {
   type PROrWithChecks,
 } from "./github.js";
 import { isGitHubRateLimited } from "./github-fetch.js";
+import { cachedBehindBy, peekBehindBy } from "./github-compare.js";
 import type { PrMergeable, PrReviewDecision } from "./github-pr-phase.js";
 import {
   buildReviewSummary,
@@ -262,6 +263,8 @@ export async function enrichPrsWithReviewState(
     for (const pr of prs) {
       const known = lastKnown.get(keyFor(pr.number));
       if (known) Object.assign(pr, known);
+      // The ancestry answer belongs to the head it was read for, not to the PR.
+      pr.behindBy = peekBehindBy(owner, repo, pr.baseBranch, pr.headSha);
       applyPrPhase(pr);
     }
   };
@@ -397,6 +400,17 @@ export async function enrichPrsWithReviewState(
       if (key.startsWith(prefix) && !live.has(key)) cache.delete(key);
     }
   }
+
+  // GitHub's BEHIND can disagree with ancestry, so ask the compare — only for a
+  // PR it says is BEHIND, and cached per head. A failed answer leaves `behindBy`
+  // unset, which keeps `behind` (never claim ready on a failed lookup).
+  await Promise.all(
+    prs
+      .filter((pr) => pr.mergeStateStatus === "BEHIND")
+      .map(async (pr) => {
+        pr.behindBy = await cachedBehindBy(token, owner, repo, pr.baseBranch, pr.headSha);
+      }),
+  );
 
   for (const pr of prs) applyPrPhase(pr);
 }

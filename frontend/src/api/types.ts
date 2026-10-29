@@ -1381,6 +1381,8 @@ export interface GitHubPROrWithChecks {
   ciFetched?: boolean;
   /** Head commit's check rollup (includes non-Actions checks); already folded into `ciStatus`. */
   checksRollup?: "success" | "failure" | "pending" | null;
+  /** Commits the head is behind its base; read only for a PR GitHub reports BEHIND. */
+  behindBy?: number | null;
   prPhase?: GitHubPrPhase;
 }
 

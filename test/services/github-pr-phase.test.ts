@@ -158,6 +158,24 @@ describe("derivePrPhase", () => {
     // they cannot reach this phase; ancestry (behindBy) drives the optional icon.
   });
 
+  it("lets an ancestry answer of 0 overrule GitHub's collapsed BEHIND (lazygit#5975)", () => {
+    const behind = { ...base, mergeStateStatus: "BEHIND" };
+    expect(derivePrPhase({ ...behind, behindBy: 0 })).toBe("ready_to_merge");
+    // Open conversations still block once the BEHIND is discounted.
+    expect(derivePrPhase({ ...behind, behindBy: 0, unresolvedThreads: 2 })).toBe(
+      "threads_unresolved",
+    );
+    // An unanswered thread lookup is not "nothing blocks".
+    expect(derivePrPhase({ ...behind, behindBy: 0, unresolvedThreads: null })).toBe("unknown");
+    // Genuinely behind, or no answer: stays behind (never claim ready on a failed lookup).
+    expect(derivePrPhase({ ...behind, behindBy: 2 })).toBe("behind");
+    expect(derivePrPhase({ ...behind, behindBy: null })).toBe("behind");
+    // behindBy only matters for a BEHIND head.
+    expect(derivePrPhase({ ...base, mergeStateStatus: "CLEAN", behindBy: 2 })).toBe(
+      "ready_to_merge",
+    );
+  });
+
   it("claims nothing beyond CI when review state wasn't fetched", () => {
     const unknown = { ...base, reviewStateKnown: false, reviewDecision: null as null };
     expect(derivePrPhase(unknown)).toBe("unknown");

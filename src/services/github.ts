@@ -152,6 +152,11 @@ export interface PROrWithChecks {
    * `combineCiStatus`; kept so the fold is idempotent across re-enrichment.
    */
   checksRollup?: ChecksRollupState;
+  /**
+   * Commits the head is behind its base, read (REST compare) only for a PR
+   * GitHub reports BEHIND; null/absent = not asked or unanswered.
+   */
+  behindBy?: number | null;
   prPhase: PrPhase;
 }
 
