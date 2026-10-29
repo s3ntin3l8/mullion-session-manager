@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DuplicateProjectsBanner } from "./DuplicateProjectsBanner.js";
 import { useDashboardStore } from "../../store/index.js";
@@ -102,8 +102,8 @@ describe("DuplicateProjectsBanner", () => {
     );
     await user.click(button);
     await user.click(screen.getByRole("button", { name: "Cancel" }));
-    land();
-    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await act(async () => land());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
   it("falls back to the host id when the host is unknown", async () => {

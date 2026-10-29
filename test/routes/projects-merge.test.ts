@@ -95,13 +95,16 @@ describe("project merge routes", () => {
         await import("../../src/services/repo-identity.js"),
         "buildOriginIndex",
       );
-      const [a, b] = await Promise.all([
-        getDuplicateGroups(app, { refresh: true }),
-        getDuplicateGroups(app, { refresh: true }),
-      ]);
-      expect(a).toBe(b);
-      expect(discover).toHaveBeenCalledTimes(1);
-      discover.mockRestore();
+      try {
+        const [a, b] = await Promise.all([
+          getDuplicateGroups(app, { refresh: true }),
+          getDuplicateGroups(app, { refresh: true }),
+        ]);
+        expect(a).toBe(b);
+        expect(discover).toHaveBeenCalledTimes(1);
+      } finally {
+        discover.mockRestore();
+      }
     });
 
     it("is invalidated by a merge", async () => {
