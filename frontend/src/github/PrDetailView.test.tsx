@@ -406,6 +406,11 @@ describe("PrDetailView", () => {
     const merging = await within(dialog).findByRole("button", { name: "Merging…" });
     expect(merging).toHaveAttribute("aria-disabled", "true");
     expect(merging).toHaveFocus();
+    // Inert, not just dim: neither button acts while the merge is in flight.
+    await userEvent.click(merging);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(fn.mock.calls.filter(([u]) => String(u).endsWith("/merge"))).toHaveLength(1);
     await act(async () => finish(jsonResponse(200, { merged: true, sha: "m" })));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(await screen.findByText("Merged (squash)")).toBeInTheDocument();

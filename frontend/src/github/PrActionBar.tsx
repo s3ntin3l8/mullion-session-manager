@@ -117,12 +117,16 @@ export function MergeConfirmModal({
             ref={cancelRef}
             type="button"
             className="sb-btn sb-btn--secondary"
-            aria-disabled={busy}
+            aria-disabled={busy || undefined}
             onClick={busy ? undefined : onCancel}
           >
             Cancel
           </button>
-          <Button variant="primary" aria-disabled={busy} onClick={busy ? undefined : onConfirm}>
+          <Button
+            variant="primary"
+            aria-disabled={busy || undefined}
+            onClick={busy ? undefined : onConfirm}
+          >
             {busy ? "Merging…" : "Merge"}
           </Button>
         </>

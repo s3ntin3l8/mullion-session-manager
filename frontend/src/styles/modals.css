@@ -90,6 +90,14 @@
   opacity: 0.6;
   cursor: default;
 }
+/* ...and does not light up on hover like a live one (the kit only excludes :disabled). */
+.create-modal-footer .sb-btn--secondary[aria-disabled="true"]:hover {
+  background: var(--surface);
+}
+.create-modal-footer .sb-btn--primary[aria-disabled="true"]:hover {
+  background: var(--accent-fill);
+  filter: none;
+}
 .create-modal-body {
   display: flex;
   flex-direction: column;
