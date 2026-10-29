@@ -3540,6 +3540,8 @@ describe("projects route", () => {
       });
 
       it("merge lets GitHub arbitrate a strict-BEHIND PR instead of refusing on the phase", async () => {
+        const { invalidatePrDetail } = await import("../../src/services/github-pr-detail.js");
+        invalidatePrDetail("acme", "widgets", 47);
         let merged = false;
         mockGithub(gqlPr(47, { mergeStateStatus: "BEHIND" }), (url) => {
           if (!url.endsWith("/pulls/47/merge")) return null;
@@ -3560,6 +3562,9 @@ describe("projects route", () => {
       });
 
       it("detail re-derives a BEHIND phase when the compare says the head is not behind", async () => {
+        // The detail cache is shared across tests: drop what these numbers hold.
+        const { invalidatePrDetail } = await import("../../src/services/github-pr-detail.js");
+        for (const n of [70, 71, 72]) invalidatePrDetail("acme", "widgets", n);
         mockGithub(
           gqlPr(70, { mergeStateStatus: "BEHIND", reviewThreads: { nodes: [] } }),
           (url) => (url.includes("/compare/") ? jsonResponse(200, { behind_by: 0 }) : null),

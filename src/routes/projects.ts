@@ -2530,6 +2530,8 @@ export async function projectsRoute(app: FastifyInstance) {
     // not behind, updating would be refused: re-derive without the BEHIND, so the
     // chip and the next-step button agree. The list has no compare, so it can
     // still say "behind" for such a PR; the merge route lets that through.
+    // (`unresolvedThreads ?? 0`: a null answer is read as "no conversations
+    // block" on purpose — BEHIND means the update is what's missing.)
     if (prPhase === "behind" && detail.behindBy === 0) {
       prPhase = derivePrPhase({
         ...phaseInput,
