@@ -78,6 +78,18 @@
 .create-modal-close:hover {
   color: var(--fg);
 }
+.create-modal-close[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: default;
+}
+.create-modal-close[aria-disabled="true"]:hover {
+  color: var(--muted);
+}
+/* A button that keeps focus while it cannot act (a dialog mid-request). */
+.create-modal-footer .sb-btn[aria-disabled="true"] {
+  opacity: 0.6;
+  cursor: default;
+}
 .create-modal-body {
   display: flex;
   flex-direction: column;

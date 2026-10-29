@@ -154,7 +154,7 @@ describe("getPrDetail", () => {
     expect((await getPrDetail("tok", "o", "r", 5)).behindBy).toBeNull();
   });
 
-  it("builds the same ReviewSummary as the list, keeping an empty COMMENTED review that carries threads", async () => {
+  it("builds the same ReviewSummary as the list, folding the empty COMMENTED wrapper of listed threads into them", async () => {
     fetchMock.mockImplementation((url: string) => {
       if (!url.includes("/graphql")) return Promise.resolve(new Response("[]", { status: 200 }));
       const pr = {
@@ -192,7 +192,9 @@ describe("getPrDetail", () => {
       );
     });
     const d = await getPrDetail("tok", "o", "r", 5);
-    expect(d.reviews).toHaveLength(1);
+    // The wrapper is only its inline comments, which the listed threads show.
+    expect(d.threads.length).toBeGreaterThan(0);
+    expect(d.reviews).toHaveLength(0);
     expect(d.reviewers).toEqual([]);
     expect(d.reviewSummary).toMatchObject({
       decision: "COMMENTED",
@@ -203,6 +205,64 @@ describe("getPrDetail", () => {
       ],
     });
     expect(String(fetchMock.mock.calls[0][1].body)).toContain("latestReviews");
+  });
+
+  it("keeps the empty wrapper when the thread list is cut off (past 50 threads)", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (!url.includes("/graphql")) return Promise.resolve(new Response("[]", { status: 200 }));
+      const pr = {
+        ...GQL_PR,
+        // Listed: the last 50 of 80 — the wrapper's comments may be in the other 30.
+        reviewThreads: { ...GQL_PR.reviewThreads, totalCount: 80 },
+        reviews: {
+          nodes: [
+            {
+              author: { login: "bob" },
+              state: "COMMENTED",
+              bodyHTML: "",
+              submittedAt: "2026-01-03T00:00:00Z",
+              comments: { totalCount: 2 },
+            },
+          ],
+        },
+      };
+      return Promise.resolve(
+        new Response(JSON.stringify({ data: { repository: { pullRequest: pr } } }), {
+          status: 200,
+        }),
+      );
+    });
+    const d = await getPrDetail("tok", "o", "r", 5);
+    expect(d.threads.length).toBeGreaterThan(0);
+    expect(d.reviews).toHaveLength(1);
+  });
+
+  it("keeps an empty COMMENTED review with inline comments when no thread is listed", async () => {
+    fetchMock.mockImplementation((url: string) => {
+      if (!url.includes("/graphql")) return Promise.resolve(new Response("[]", { status: 200 }));
+      const pr = {
+        ...GQL_PR,
+        reviewThreads: { nodes: [] },
+        reviews: {
+          nodes: [
+            {
+              author: { login: "bob" },
+              state: "COMMENTED",
+              bodyHTML: "",
+              submittedAt: "2026-01-03T00:00:00Z",
+              comments: { totalCount: 2 },
+            },
+          ],
+        },
+      };
+      return Promise.resolve(
+        new Response(JSON.stringify({ data: { repository: { pullRequest: pr } } }), {
+          status: 200,
+        }),
+      );
+    });
+    const d = await getPrDetail("tok", "o", "r", 5);
+    expect(d.reviews).toHaveLength(1);
   });
 
   it("caches for 30s and refetches after invalidation", async () => {

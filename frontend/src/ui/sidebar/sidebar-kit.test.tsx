@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   Button,
   DetailHeader,
+  ExternalLinkOwnedContext,
   IconButton,
   SidebarRow,
   SidebarSection,
@@ -145,6 +146,16 @@ describe("ViewHeader / DetailHeader", () => {
   it("omits the external slot without a URL", () => {
     render(<ViewHeader title="Plain" />);
     expect(screen.queryByRole("link")).toBeNull();
+  });
+
+  it("leaves the GitHub link to its owner, and can pin itself", () => {
+    const { container } = render(
+      <ExternalLinkOwnedContext.Provider value={true}>
+        <ViewHeader title="Owned" sticky externalUrl="https://github.com/o/r" />
+      </ExternalLinkOwnedContext.Provider>,
+    );
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(container.querySelector(".sb-vh--sticky")).not.toBeNull();
   });
 
   it("DetailHeader adds a back button", () => {

@@ -1,5 +1,6 @@
-import type { ReactNode } from "react";
-import { ExternalLinkIcon } from "../icons.js";
+import { useContext, type ReactNode } from "react";
+import { ExternalLinkOwnedContext } from "./externalLinkOwned.js";
+import { GitHubIcon } from "../icons.js";
 import { IconButton } from "./IconButton.js";
 
 export interface ViewHeaderProps {
@@ -12,6 +13,8 @@ export interface ViewHeaderProps {
   externalLabel?: string;
   /** Rendered before the title (DetailHeader's back button). */
   leading?: ReactNode;
+  /** Pin the header to the top of the scrolling view it sits in. */
+  sticky?: boolean;
 }
 
 export function ViewHeader({
@@ -21,9 +24,11 @@ export function ViewHeader({
   externalUrl,
   externalLabel = "Open on GitHub",
   leading,
+  sticky,
 }: ViewHeaderProps) {
+  const linkOwned = useContext(ExternalLinkOwnedContext);
   return (
-    <div className="sb-vh">
+    <div className={sticky ? "sb-vh sb-vh--sticky" : "sb-vh"}>
       {leading}
       <div className="sb-vh-title">
         <span className="sb-vh-name">{title}</span>
@@ -31,11 +36,11 @@ export function ViewHeader({
       </div>
       <div className="sb-vh-actions">
         {actions}
-        {externalUrl && (
+        {externalUrl && !linkOwned && (
           <>
             {actions != null && <span className="sb-vh-sep" aria-hidden="true" />}
             <IconButton external label={externalLabel} href={externalUrl}>
-              <ExternalLinkIcon size={14} />
+              <GitHubIcon size={14} />
             </IconButton>
           </>
         )}

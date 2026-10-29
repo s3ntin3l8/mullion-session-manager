@@ -74,7 +74,7 @@
   cursor: pointer;
   white-space: nowrap;
 }
-.sb-btn:hover:not(:disabled) {
+.sb-btn:hover:not(:disabled):not([aria-disabled="true"]) {
   background: var(--surface-hover);
 }
 .sb-btn:focus-visible {
@@ -90,7 +90,7 @@
   border-color: var(--ring);
   color: #fff;
 }
-.sb-btn--primary:hover:not(:disabled) {
+.sb-btn--primary:hover:not(:disabled):not([aria-disabled="true"]) {
   background: var(--accent-fill);
   filter: brightness(1.12);
 }
@@ -99,7 +99,7 @@
   border-color: var(--status-danger-border);
   background: var(--status-danger-bg);
 }
-.sb-btn--danger:hover:not(:disabled) {
+.sb-btn--danger:hover:not(:disabled):not([aria-disabled="true"]) {
   background: var(--status-danger-bg);
   filter: brightness(1.1);
 }
@@ -564,15 +564,86 @@ button.sb-chip:focus-visible,
 }
 .gh-issue-bar {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  align-items: center;
+  gap: 4px;
   padding: 2px 8px 6px;
 }
-.gh-issue-bar-row {
+.gh-issue-bar .gh-issue-search {
+  flex: 1;
+  min-width: 0;
+}
+/* A title bar that stays at the top of the view it scrolls in. */
+.sb-vh--sticky {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+}
+/* IconPopover: an icon button with a count badge and a small panel under it. */
+.sb-pop {
+  position: relative;
+  flex: none;
+}
+.sb-pop .sb-ibtn--on {
+  background: color-mix(in srgb, var(--fg) 10%, transparent);
+  color: var(--fg);
+}
+.sb-pop-badge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  box-sizing: border-box;
+  border-radius: 7px;
+  background: var(--accent);
+  color: var(--bg);
+  font-size: 0.5625rem;
+  line-height: 13px;
+  text-align: center;
+}
+.sb-pop-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 160px;
+  max-width: 240px;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--sidebar);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.25);
+}
+.sb-pop-row {
+  display: flex;
   align-items: center;
   gap: 6px;
+  padding: 3px 4px;
+  border-radius: 5px;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.sb-pop-row:hover {
+  background: color-mix(in srgb, var(--fg) 8%, transparent);
+}
+.sb-pop-radio {
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  font-size: 0.75rem;
+  text-align: left;
+  width: 100%;
+}
+.sb-pop-radio[aria-checked="true"] {
+  font-weight: 650;
+  color: var(--accent);
 }
 .gh-issue-count {
   display: inline-flex;

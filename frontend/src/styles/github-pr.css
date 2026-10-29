@@ -235,15 +235,96 @@ a.pr-dr-row:hover {
 .pr-events .attn {
   color: var(--status-danger-fg);
 }
-.pr-sticky {
+/* The title bar and the action bar stay put while the body scrolls. */
+.pr-top-sentinel {
+  height: 1px;
+  margin-bottom: -1px;
+}
+.pr-detail-top {
   position: sticky;
-  bottom: 0;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  padding: 8px 10px;
+  top: 0;
+  z-index: 4;
   background: var(--sidebar);
-  border-top: 1px solid var(--border);
+}
+.pr-actionbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.pr-actionbar-next-spacer {
+  flex: 1;
+}
+.pr-actionbar-next {
+  flex: 1;
+  min-width: 0;
+  justify-content: center;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.pr-actionbar .sb-ibtn--on {
+  background: var(--hover, color-mix(in srgb, var(--fg) 10%, transparent));
+  color: var(--fg);
+}
+.pr-detail-composer {
+  padding: 6px 10px 8px;
+  border-bottom: 1px solid var(--border);
+  max-height: 50vh;
+  overflow-y: auto;
+}
+.gh-composer-grow {
+  resize: vertical;
+  max-height: 40vh;
+}
+.pr-merge-line {
+  margin: 0 0 8px;
+  overflow-wrap: anywhere;
+}
+
+/* Conversation: threads are boxed, the timeline is not, resolved ones fold. */
+.pr-threads-h {
+  font-weight: 650;
+  scroll-margin-top: 120px;
+}
+.pr-detail .gh-thread {
+  margin: 6px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--fg) 3%, transparent);
+}
+.pr-detail .gh-thread .gh-comment:first-of-type {
+  border-top: 0;
+}
+.pr-detail .gh-comment > .gh-detail-meta {
+  font-weight: 600;
+}
+.pr-resolved {
+  margin: 6px 0 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.pr-resolved-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+  background: none;
+  border: 0;
+  color: var(--dim);
+  font: inherit;
+  font-size: 0.71875rem;
+  cursor: pointer;
+}
+.pr-resolved-toggle:hover {
+  color: var(--fg);
+}
+.pr-resolved-body {
+  margin-left: 6px;
+  padding-left: 8px;
+  border-left: 2px solid var(--border);
 }
 .pr-detail-scroll {
   display: flex;
@@ -262,6 +343,11 @@ a.pr-dr-row:hover {
   }
   .pr-detail-pad {
     padding: 0 8px;
+  }
+  .pr-actionbar,
+  .pr-detail-composer {
+    padding-left: 8px;
+    padding-right: 8px;
   }
 }
 .pr-tone-success {

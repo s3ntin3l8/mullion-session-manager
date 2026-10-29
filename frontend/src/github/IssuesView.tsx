@@ -10,13 +10,13 @@ import { issueBranchName, issueSeedPrompt } from "./issueWork.js";
 import { CommentComposer } from "./Composer.js";
 import { EmptyStateNote } from "../ui/EmptyState.js";
 import { ErrorText } from "../ui/ErrorText.js";
-import { BoltIcon, MessageIcon, PlayTriangleIcon } from "../ui/icons.js";
-import { Dropdown } from "../ui/primitives.js";
+import { BoltIcon, FilterIcon, MessageIcon, PlayTriangleIcon, SortIcon } from "../ui/icons.js";
 import { SafeHtml } from "../ui/SafeHtml.js";
 import {
   Button,
   DetailHeader,
   IconButton,
+  IconPopover,
   SidebarRow,
   SidebarSection,
   StatusChip,
@@ -193,31 +193,60 @@ export function IssuesSection({
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
-            <div className="gh-issue-bar-row">
-              <Dropdown
-                small
-                ariaLabel="Sort issues"
-                value={sort}
-                onChange={setSort}
-                options={SORT_OPTIONS}
-              />
-              <button
-                type="button"
-                className="sb-chip sb-chip--neutral"
-                aria-pressed={unassigned}
-                onClick={() => setUnassigned(!unassigned)}
-              >
-                Unassigned
-              </button>
-              {knownLabels.map((l) => (
-                <LabelChip
-                  key={l.name}
-                  label={l}
-                  active={selected.includes(l.name)}
-                  onClick={() => toggleLabel(l.name)}
+            <IconPopover
+              label="Filter issues"
+              icon={<FilterIcon size={14} />}
+              badge={selected.length + (unassigned ? 1 : 0)}
+            >
+              <label className="sb-pop-row">
+                <input
+                  type="checkbox"
+                  checked={unassigned}
+                  onChange={(e) => setUnassigned(e.target.checked)}
                 />
+                Unassigned
+              </label>
+              {knownLabels.map((l) => (
+                <label key={l.name} className="sb-pop-row">
+                  <input
+                    type="checkbox"
+                    checked={selected.includes(l.name)}
+                    onChange={() => toggleLabel(l.name)}
+                  />
+                  <LabelChip label={l} />
+                </label>
               ))}
-            </div>
+              {selected.length + (unassigned ? 1 : 0) > 0 && (
+                <button
+                  type="button"
+                  className="gh-link-button"
+                  onClick={() => setFilter({ labels: [], unassigned: false })}
+                >
+                  Clear filters
+                </button>
+              )}
+            </IconPopover>
+            <IconPopover label="Sort issues" icon={<SortIcon size={14} />}>
+              {(close) => (
+                <div role="radiogroup" aria-label="Sort issues">
+                  {SORT_OPTIONS.map((o) => (
+                    <button
+                      key={o.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={sort === o.value}
+                      className="sb-pop-row sb-pop-radio"
+                      onClick={() => {
+                        setSort(o.value);
+                        close();
+                      }}
+                    >
+                      {o.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </IconPopover>
           </div>
           {(actionError ?? error) && <ErrorText>{actionError ?? error}</ErrorText>}
           {data && data.issues.length === 0 && !loading && (
@@ -431,6 +460,7 @@ export function IssueDetailView({
   return (
     <div className="gh-detail">
       <DetailHeader
+        sticky
         onBack={onBack}
         title={issue ? `#${issue.number} · ${issue.title}` : `#${number}`}
         subtitle={

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { __resetGithubCacheForTests } from "../store/githubCacheReset.js";
 import { PrDetailView } from "./PrDetailView.js";
@@ -339,7 +339,9 @@ describe("PrDetailView", () => {
     expect(await screen.findByText("Changes requested by bob")).toBeInTheDocument();
     expect(screen.getByText("1 failing, 1 in progress")).toBeInTheDocument();
     expect(screen.getByText("Blocked: changes requested")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Squash and merge/ })).toBeDisabled();
+    // The bar's one labelled button says what is needed instead of a dead merge.
+    expect(screen.getByRole("button", { name: "Address changes" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: /Squash & merge/ })).toBeNull();
   });
 
   it("covers conflicts, awaiting review, draft and merged summaries", async () => {
@@ -370,20 +372,103 @@ describe("PrDetailView", () => {
     expect(await screen.findByText("Merged")).toBeInTheDocument();
     expect(screen.getByText("draft")).toBeInTheDocument();
     expect(screen.getByText("Review required")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Squash and merge/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Squash & merge/ })).toBeNull();
   });
 
-  it("squash-merges after the confirm click, pinned to the head sha", async () => {
+  it("squash-merges after the confirm dialog, pinned to the head sha", async () => {
     const fn = stub(PR, (url) =>
       url.endsWith("/merge") ? jsonResponse(200, { merged: true, sha: "m" }) : null,
     );
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
-    const btn = await screen.findByRole("button", { name: /Squash and merge/ });
-    await userEvent.click(btn);
-    await userEvent.click(screen.getByRole("button", { name: /Confirm merge/ }));
+    await userEvent.click(await screen.findByRole("button", { name: "Squash & merge" }));
+    const dialog = screen.getByRole("dialog");
+    expect(within(dialog).getByText(/Commit message:/)).toHaveTextContent("(#12)");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Merge" }));
     expect(await screen.findByText("Merged (squash)")).toBeInTheDocument();
     const call = fn.mock.calls.find(([u]) => String(u).endsWith("/merge"))!;
     expect(JSON.parse(String(call[1]?.body))).toEqual({ headSha: "abc" });
+  });
+
+  it("keeps the merge dialog up, busy, until the merge settles", async () => {
+    let finish: (r: Response) => void = () => {};
+    const fn = vi.fn((url: string) =>
+      String(url).endsWith("/merge")
+        ? new Promise<Response>((r) => (finish = r))
+        : Promise.resolve(jsonResponse(200, PR)),
+    );
+    vi.stubGlobal("fetch", fn);
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Squash & merge" }));
+    const dialog = screen.getByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Merge" }));
+    // aria-disabled, not disabled: the button the user pressed keeps focus, so
+    // it cannot fall out to the page behind the dialog.
+    const merging = await within(dialog).findByRole("button", { name: "Merging…" });
+    expect(merging).toHaveAttribute("aria-disabled", "true");
+    expect(merging).toHaveFocus();
+    // Inert, not just dim: neither button acts while the merge is in flight.
+    await userEvent.click(merging);
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    expect(fn.mock.calls.filter(([u]) => String(u).endsWith("/merge"))).toHaveLength(1);
+    await act(async () => finish(jsonResponse(200, { merged: true, sha: "m" })));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(await screen.findByText("Merged (squash)")).toBeInTheDocument();
+  });
+
+  it("cannot dismiss the merge dialog while the merge runs", async () => {
+    let finish: (r: Response) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        String(url).endsWith("/merge")
+          ? new Promise<Response>((r) => (finish = r))
+          : Promise.resolve(jsonResponse(200, PR)),
+      ),
+    );
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Squash & merge" }));
+    const dialog = screen.getByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Merge" }));
+    await within(dialog).findByRole("button", { name: "Merging…" });
+    // The X says so; Escape and the backdrop reach onClose regardless, so they
+    // are driven on the elements that carry them (a disabled button never
+    // delivers a key event, which is why this is not a keyboard() call).
+    expect(within(dialog).getByRole("button", { name: "Close dialog" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    fireEvent.click(dialog.parentElement!);
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await act(async () => finish(jsonResponse(200, { merged: true, sha: "m" })));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("opens the Conversation section collapsed when it was left collapsed", async () => {
+    localStorage.setItem(
+      "crs.sidebarKitSections",
+      JSON.stringify({ "github-pr-conversation": false }),
+    );
+    stub(PR);
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    expect(await screen.findByRole("button", { name: /Conversation/ })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    localStorage.removeItem("crs.sidebarKitSections");
+  });
+
+  it("does not merge when the confirm dialog is cancelled", async () => {
+    const fn = stub(PR);
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Squash & merge" }));
+    await userEvent.click(
+      within(screen.getByRole("dialog")).getByRole("button", { name: "Cancel" }),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(fn.mock.calls.some(([u]) => String(u).endsWith("/merge"))).toBe(false);
   });
 
   // Issue #1672 — GitHub's "Update branch", offered only to a PR behind its base.
@@ -411,7 +496,7 @@ describe("PrDetailView", () => {
   it("offers no Update branch to a PR that is not behind", async () => {
     stub({ ...PR, mergeStateStatus: "CLEAN" });
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
-    await screen.findByRole("button", { name: /Squash and merge/ });
+    await screen.findByRole("button", { name: /Squash & merge/ });
     expect(screen.queryByRole("button", { name: "Update branch" })).toBeNull();
   });
 
@@ -425,7 +510,7 @@ describe("PrDetailView", () => {
   it("offers no Update branch to an up-to-date PR (behindBy 0)", async () => {
     stub({ ...PR, mergeStateStatus: "CLEAN", behindBy: 0 });
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
-    await screen.findByRole("button", { name: /Squash and merge/ });
+    await screen.findByRole("button", { name: /Squash & merge/ });
     expect(screen.queryByRole("button", { name: "Update branch" })).toBeNull();
   });
 
@@ -1118,21 +1203,85 @@ describe("PrDetailView", () => {
       expect(within(drill).getByText("More checks exist than are shown")).toBeInTheDocument();
     });
 
-    it("offers the fix for what blocks the merge, in the Merge row", async () => {
+    it("offers the fix for what blocks the merge as the action bar's one labelled button", async () => {
       stub({ ...PR, prPhase: "ci_failing" }, (url) =>
         url.endsWith("/jobs") ? jsonResponse(200, []) : null,
       );
       const { unmount } = render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
-      await userEvent.click(await screen.findByRole("button", { name: /Merge/ }));
-      await userEvent.click(screen.getByRole("button", { name: "Show failing checks" }));
+      await userEvent.click(await screen.findByRole("button", { name: "Show failing checks" }));
       expect(screen.getByRole("region", { name: "Checks" })).toBeInTheDocument();
       unmount();
       __resetGithubCacheForTests();
 
       stub({ ...PR, prPhase: "review_pending" });
       render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
-      await userEvent.click(await screen.findByRole("button", { name: /Merge/ }));
-      expect(screen.getByRole("button", { name: "Request re-review" })).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: "Request re-review" })).toBeEnabled();
+    });
+
+    it("names open conversations as the next step and opens them", async () => {
+      const thread = (id: string) => ({
+        id,
+        isResolved: false,
+        isOutdated: false,
+        path: "a.ts",
+        line: 3,
+        comments: [{ author: "bob", bodyHtml: "<p>fix</p>", createdAt: PR.createdAt }],
+      });
+      stub({ ...PR, prPhase: "threads_unresolved", threads: [thread("t1"), thread("t2")] });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const btn = await screen.findByRole("button", { name: "Resolve 2 conversations" });
+      expect(btn).toBeEnabled();
+      await userEvent.click(btn);
+      expect(screen.getByRole("button", { name: /Conversation/ })).toHaveAttribute(
+        "aria-expanded",
+        "true",
+      );
+    });
+
+    it("drops the branch line from the sticky header once the view scrolls", async () => {
+      let notify: (e: Partial<IntersectionObserverEntry>[]) => void = () => {};
+      class FakeObserver {
+        constructor(cb: (e: Partial<IntersectionObserverEntry>[]) => void) {
+          notify = cb;
+        }
+        observe() {}
+        disconnect() {}
+      }
+      vi.stubGlobal("IntersectionObserver", FakeObserver);
+      try {
+        stub(PR);
+        render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+        expect(await screen.findByText(`${PR.baseBranch} ← ${PR.headBranch}`)).toBeInTheDocument();
+        act(() => notify([{ isIntersecting: false }]));
+        expect(screen.queryByText(`${PR.baseBranch} ← ${PR.headBranch}`)).toBeNull();
+        act(() => notify([{ isIntersecting: true }]));
+        expect(screen.getByText(`${PR.baseBranch} ← ${PR.headBranch}`)).toBeInTheDocument();
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    });
+
+    it("keeps resolved threads folded until asked, with the chevron saying so", async () => {
+      stub({
+        ...PR,
+        threads: [
+          {
+            id: "t1",
+            isResolved: true,
+            isOutdated: false,
+            path: "a.ts",
+            line: 3,
+            comments: [{ author: "bob", bodyHtml: "<p>old note</p>", createdAt: PR.createdAt }],
+          },
+        ],
+      });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const toggle = await screen.findByRole("button", { name: /Resolved threads \(1\)/ });
+      expect(toggle).toHaveAttribute("aria-expanded", "false");
+      expect(screen.queryByText("old note")).toBeNull();
+      await userEvent.click(toggle);
+      expect(toggle).toHaveAttribute("aria-expanded", "true");
+      expect(screen.getByText("old note")).toBeInTheDocument();
     });
 
     it("lists a comment-only reviewer in the Reviews drilldown, not 'No reviewers'", async () => {
@@ -1235,19 +1384,20 @@ describe("PrDetailView", () => {
           : null,
       );
       render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
-      await userEvent.type(
-        await screen.findByRole("textbox", { name: "Comment on this pull request" }),
-        "thanks",
-      );
-      const review = screen.getByRole("group", { name: "Review" });
-      await userEvent.click(
-        screen.getAllByRole("button", { name: "Comment" }).find((b) => !review.contains(b))!,
-      );
+      const toggle = await screen.findByRole("button", { name: "Comment or review" });
+      // Nothing is on screen until the action bar's icon asks for it.
+      expect(screen.queryByRole("textbox", { name: "Comment or review" })).toBeNull();
+      await userEvent.click(toggle);
+      await userEvent.type(screen.getByRole("textbox", { name: "Comment or review" }), "thanks");
+      await userEvent.click(screen.getByRole("button", { name: "Comment" }));
       expect(await screen.findByText("Comment posted")).toBeInTheDocument();
       const comment = fn.mock.calls.find(([u]) => String(u).endsWith("/issues/12/comments"))!;
       expect(JSON.parse(String(comment[1]?.body))).toEqual({ body: "thanks" });
+      // Posting closes the composer.
+      expect(screen.queryByRole("textbox", { name: "Comment or review" })).toBeNull();
 
-      await userEvent.click(within(review).getByRole("button", { name: "Approve" }));
+      await userEvent.click(screen.getByRole("button", { name: "Comment or review" }));
+      await userEvent.click(screen.getByRole("button", { name: "Approve" }));
       expect(await screen.findByText("Review submitted")).toBeInTheDocument();
       const posted = fn.mock.calls.find(([u]) => String(u).endsWith("/prs/12/reviews"))!;
       expect(JSON.parse(String(posted[1]?.body))).toEqual({
@@ -1257,14 +1407,14 @@ describe("PrDetailView", () => {
       });
     });
 
-    it("offers no review box on a closed PR", async () => {
+    it("offers a comment but no review verdicts on a closed PR", async () => {
       __resetGithubCacheForTests();
       stub({ ...PR, state: "MERGED" });
       render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
-      expect(
-        await screen.findByRole("textbox", { name: "Comment on this pull request" }),
-      ).toBeInTheDocument();
-      expect(screen.queryByRole("group", { name: "Review" })).toBeNull();
+      await userEvent.click(await screen.findByRole("button", { name: "Comment or review" }));
+      expect(screen.getByRole("textbox", { name: "Comment or review" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+      expect(screen.queryByRole("button", { name: "Request changes" })).toBeNull();
     });
 
     it("says reviews and conversation are unavailable on a partial detail", async () => {
