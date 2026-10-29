@@ -9,6 +9,7 @@ import {
   probeSocket,
   isSocketLive,
   reclaimSocketPath,
+  secureIpcEndpoint,
   SocketAlreadyListeningError,
   PROBE_TIMEOUT_MS,
   RECLAIM_PROBE_TIMEOUTS_MS,
@@ -340,5 +341,55 @@ describe("probeSocket / reclaimSocketPath on a named pipe", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+// Issue #2209 — the step after listen() shared by every local IPC endpoint.
+const PIPE = "\\\\.\\pipe\\mullion-abc-relay";
+describe("secureIpcEndpoint", () => {
+  it("narrows a unix socket to its owner (mode 0600) without touching ACLs", async () => {
+    const socketPath = tmpSocketPath("secure-unix");
+    fs.rmSync(socketPath, { force: true });
+    const server = net.createServer();
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    try {
+      fs.chmodSync(socketPath, 0o666);
+      const run = vi.fn();
+      expect(await secureIpcEndpoint(socketPath, { execFile: run as never })).toBe(true);
+      expect(fs.statSync(socketPath).mode & 0o777).toBe(0o600);
+      expect(run).not.toHaveBeenCalled();
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      fs.rmSync(socketPath, { force: true });
+    }
+  });
+
+  it("restricts a Windows named pipe through its access list and never chmods it", async () => {
+    const run = vi.fn((_cmd: string, _args: string[], _opts: unknown, cb: (e: null) => void) =>
+      cb(null),
+    );
+    expect(
+      await secureIpcEndpoint(PIPE, {
+        platform: "win32",
+        execFile: run as never,
+      }),
+    ).toBe(true);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]![0]).toBe("powershell.exe");
+  });
+
+  it("reports a pipe whose access list could not be narrowed", async () => {
+    const log = vi.fn();
+    const run = vi.fn((_cmd: string, _args: string[], _opts: unknown, cb: (e: Error) => void) =>
+      cb(new Error("access denied")),
+    );
+    expect(
+      await secureIpcEndpoint(PIPE, {
+        platform: "win32",
+        execFile: run as never,
+        log,
+      }),
+    ).toBe(false);
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("access denied"));
   });
 });

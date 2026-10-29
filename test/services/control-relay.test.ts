@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { buildTestApp } from "../helpers/app.js";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../../src/db/schema.js";
@@ -192,6 +192,18 @@ describe("agent relay socket", () => {
       const [frame] = await talk(socketPath, [hs]);
       expect(frame).toMatchObject({ ok: false, status: 401 });
     }
+  });
+
+  it("serves the endpoint ipcPath() names: the path itself off Windows (#2209)", async () => {
+    const socketPath = tmpSock();
+    const handle = await materializeControlRelaySocket({
+      socketPath,
+      resolveToken: () => undefined,
+      getMux: () => null,
+    });
+    handles.push(handle);
+    expect(handle.socketPath).toBe(socketPath);
+    expect(statSync(socketPath).mode & 0o777).toBe(0o600);
   });
 
   it("answers relay-unavailable when the primary never dials in", async () => {

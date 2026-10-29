@@ -1,5 +1,4 @@
 import net from "node:net";
-import { chmodSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import {
   HANDSHAKE_TIMEOUT_MS,
@@ -13,7 +12,8 @@ import {
   RELAY_UNAVAILABLE_TIMEOUT_MS,
 } from "./control-relay.js";
 import { pipeNetSocketToChannel, type MuxChannel, type MuxConnection } from "./ssh-agent-mux.js";
-import { reclaimSocketPath } from "./unix-socket.js";
+import { ipcPath } from "../cli/ipc-path.mjs";
+import { reclaimSocketPath, secureIpcEndpoint } from "./unix-socket.js";
 
 // Issue #1656 — the agent half of the control relay: a local unix socket that
 // speaks the control socket's NDJSON handshake, authenticates the session on
@@ -211,7 +211,10 @@ export async function materializeControlRelaySocket(
     socket.resume();
   };
 
-  await reclaimSocketPath(opts.socketPath);
+  // On Windows the filesystem-style path becomes a named pipe (cli/ipc-path.mjs); a
+  // path that already names a pipe, and every path off Windows, is used as given.
+  const endpoint = ipcPath(opts.socketPath);
+  await reclaimSocketPath(endpoint);
   const server = net.createServer(onConnection);
   server.maxConnections = MAX_RELAYED_CONNECTIONS * 2;
   let previousUmask: number | null = null;
@@ -223,7 +226,7 @@ export async function materializeControlRelaySocket(
   try {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
-      server.listen(opts.socketPath, () => {
+      server.listen(endpoint, () => {
         server.removeListener("error", reject);
         resolve();
       });
@@ -233,10 +236,12 @@ export async function materializeControlRelaySocket(
   } finally {
     if (previousUmask !== null) process.umask(previousUmask);
   }
-  chmodSync(opts.socketPath, 0o600);
+  await secureIpcEndpoint(endpoint, {
+    log: (msg) => opts.log?.warn({ endpoint }, `control-relay: ${msg}`),
+  });
 
   return {
-    socketPath: opts.socketPath,
+    socketPath: endpoint,
     relayDown(reason) {
       for (const socket of relayed) {
         if (socket.writable) {
