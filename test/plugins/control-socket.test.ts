@@ -2556,6 +2556,80 @@ describe("controlSocketPlugin (issue #185)", () => {
         expect((await spawn(hookToken, { project: target })).status).toBe(201);
       });
 
+      it("a same-named project that refuses the coordinator is not leaked by the name lookup (#2124)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId, hookToken } = await createRealSession();
+        const open = await makeProject("twin-name");
+        const closed = await makeProject("twin-name");
+        await setCoordinator(await parentProjectId(parentId), true);
+        await patchProject(closed, { acceptsChildrenFrom: "none" });
+
+        // Only one usable project has the name, so it resolves: no 409 naming the refused one.
+        const byName = await spawn(hookToken, { project: "twin-name" });
+        expect(byName.status).toBe(201);
+        expect((byName.result as { projectId: number }).projectId).toBe(open);
+        // The refused one by id (number or numeric string) is the uniform 403.
+        const missing = await spawn(hookToken, { project: 999_999 });
+        const byId = await spawn(hookToken, { project: closed });
+        const byIdString = await spawn(hookToken, { project: String(closed) });
+        expect(byId.status).toBe(403);
+        expect(byId.error).toBe(missing.error);
+        expect(byIdString.error).toBe(missing.error);
+      });
+
+      it("full scope keeps the precise 404 for an unknown project but 403s a refused one", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId } = await createRealSession();
+        const closed = await makeProject("full-scope-closed");
+        await setCoordinator(await parentProjectId(parentId), true);
+        await patchProject(closed, { acceptsChildrenFrom: "none" });
+
+        const socket = await fullScopeSocket();
+        const call = async (project: unknown) => {
+          socket.write(
+            `${JSON.stringify({
+              id: 1,
+              op: "sessions.spawn_child",
+              body: { parentSessionId: parentId, command: "bash", project },
+            })}\n`,
+          );
+          return waitForReply(socket);
+        };
+        expect((await call(999_999)).status).toBe(404);
+        expect((await call(closed)).status).toBe(403);
+        socket.destroy();
+      });
+
+      it("rejects a project listing itself and reads the lists back as arrays (#2123, #2124)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const project = await makeProject("self-list");
+        const other = await makeProject("self-list-other");
+        expect((await patchProject(project, { crossProjectTargets: [project] })).statusCode).toBe(
+          400,
+        );
+        expect(
+          (
+            await patchProject(project, {
+              acceptsChildrenFrom: "listed",
+              acceptsChildrenFromList: [project],
+            })
+          ).statusCode,
+        ).toBe(400);
+        await patchProject(project, { crossProjectTargets: [other] });
+        const read = await app.inject({
+          method: "GET",
+          url: "/api/projects",
+          headers: authHeaders,
+        });
+        const row = (
+          read.json() as Array<{ id: number; crossProjectTargets: number[] | null }>
+        ).find((p) => p.id === project);
+        expect(row?.crossProjectTargets).toEqual([other]);
+      });
+
       it("a direct POST /api/sessions with a cross-project parent is bound by the same rule", async () => {
         app = await buildApp();
         await app.ready();

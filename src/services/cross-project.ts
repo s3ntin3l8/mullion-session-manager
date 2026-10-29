@@ -27,9 +27,9 @@ export const MAX_PROJECT_LIST = 200;
 
 /**
  * A stored id list as an array, or `null` for "no list". Anything that is not a
- * JSON array of positive integers is treated as no list rather than throwing, so a
- * hand-edited row cannot break the rule (a malformed ACCEPT list then reads as
- * empty, which refuses).
+ * JSON array of positive integers is treated as no list rather than throwing; the
+ * callers decide what "no list" means (every project for a coordinator's targets,
+ * nobody for a consent list), and a set-but-unreadable value fails closed in both.
  */
 export function parseProjectIdList(raw: string | null | undefined): number[] | null {
   if (raw === null || raw === undefined || raw.trim() === "") return null;
@@ -50,8 +50,11 @@ export function serializeProjectIdList(ids: readonly number[] | null | undefined
   return JSON.stringify([...new Set(ids)].sort((a, b) => a - b));
 }
 
+/** The stored consent mode. Unset (null) is the default, any; a value this build does
+ * not know refuses, so a hand-edited row never opens a project up. */
 function readAccepts(value: string | null | undefined): AcceptsChildrenFrom {
-  return value === "none" || value === "listed" ? value : "any";
+  if (value === null || value === undefined || value === "" || value === "any") return "any";
+  return value === "listed" ? "listed" : "none";
 }
 
 /** Whether `target` takes cross-project children from `sourceId`. */
@@ -69,9 +72,11 @@ export function targetAccepts(target: ProjectRow, sourceId: number): boolean {
 /** Whether the coordinator `source` may reach `target`. */
 export function coordinatorReaches(source: ProjectRow, target: ProjectRow): boolean {
   if (source.allowCrossProjectSpawn !== true) return false;
-  const list = parseProjectIdList(source.crossProjectTargets);
-  // null = every project; a stored list is stored non-empty (see serialize).
-  return list === null || list.includes(target.id);
+  const raw = source.crossProjectTargets;
+  // Unset = every project. A value that is set but is not a readable list (a hand
+  // edit) reaches nothing rather than everything.
+  if (raw === null || raw === undefined || raw.trim() === "") return true;
+  return (parseProjectIdList(raw) ?? []).includes(target.id);
 }
 
 /**

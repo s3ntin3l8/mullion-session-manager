@@ -461,7 +461,10 @@ export function CreateProjectModal({
         setError({ message: `A project can list at most ${MAX_HOST_CWDS} other hosts.` });
         return;
       }
-      if (acceptsChildrenFrom === "listed" && acceptsChildrenFromList.length === 0) {
+      if (
+        acceptsChildrenFrom === "listed" &&
+        !acceptsChildrenFromList.some((id) => otherProjects.some((p) => p.id === id))
+      ) {
         setError({
           message: 'Pick at least one project to accept children from, or choose "None".',
         });

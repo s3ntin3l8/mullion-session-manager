@@ -5123,6 +5123,12 @@ export async function projectsRoute(app: FastifyInstance) {
         );
         const unknown = referenced.find((id) => !known.has(id));
         if (unknown !== undefined) return reply.badRequest(`unknown project ${unknown}`);
+        // A project's own id means nothing in either list (same-project children
+        // never consult the rule), and would let "listed" pass its non-empty check
+        // while accepting nobody.
+        if (referenced.includes(projectId)) {
+          return reply.badRequest("a project cannot list itself");
+        }
       }
       const effectiveConsent =
         acceptsChildrenFrom === undefined ? existing.acceptsChildrenFrom : acceptsChildrenFrom;

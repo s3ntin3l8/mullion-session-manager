@@ -27,8 +27,6 @@ import { restrictPipeToCurrentUser } from "../cli/pipe-acl.mjs";
 import { and, eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { crossProjectAllowed } from "../services/cross-project.js";
-
-type ProjectRow = typeof projects.$inferSelect;
 import type { SessionSeverity, SessionStatus } from "../shared/types.js";
 import { compileOutputMatcher } from "../services/output-wait.js";
 import {
@@ -52,6 +50,8 @@ import {
 } from "../services/session-live-info.js";
 import { getStoredSettings } from "../services/settings.js";
 import { MAX_PROMPT_BYTES, sanitizePromptText } from "../services/hook-adapters/shared.js";
+
+type ProjectRow = typeof projects.$inferSelect;
 
 // Phase 4 (#185) — a general-purpose Unix control socket: the transport
 // behind the `mullion` CLI (#134/#190) and any other local script that wants

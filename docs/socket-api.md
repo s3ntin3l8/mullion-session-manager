@@ -508,7 +508,9 @@ project that does not exist, one outside the coordinator's list and one that ref
 coordinators all get the **same** `403`, so a session cannot probe which projects and
 names exist; full scope (the operator) keeps `404` for an unknown project. A name shared by
 several usable projects is `409` listing the ids, a blank or
-non-string/number value `400`. A value made only of digits is always read as an id, so a project
+non-string/number value `400`. The rule is checked when a child is created: narrowing a
+coordinator's list or a target's consent later does not stop children that already exist
+(they stay the parent's children, and `children`/`wait`/`prompt`/`kill` keep working). A value made only of digits is always read as an id, so a project
 named "2024" can be addressed by its id only. A session whose project is NOT a coordinator gets
 the same `403` for any other project, existing or not (decided before any lookup, so it cannot
 be used to probe which projects exist). Naming the parent's own project **by its numeric id** needs no permission (a session that is not a coordinator is refused for any other value, its own project's _name_ included: it never needs to name its own project anyway).

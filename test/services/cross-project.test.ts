@@ -56,8 +56,16 @@ describe("crossProjectAllowed", () => {
     expect(crossProjectAllowed(source, listed("not json"))).toBe(false);
   });
 
-  it("an unknown consent value reads as the default, any", () => {
-    expect(targetAccepts(project(2, { acceptsChildrenFrom: "weird" }), 1)).toBe(true);
+  it("fails closed on hand-edited data: an unknown consent mode refuses, an unreadable target list reaches nothing", () => {
+    expect(targetAccepts(project(2, { acceptsChildrenFrom: "weird" }), 1)).toBe(false);
+    expect(targetAccepts(project(2, { acceptsChildrenFrom: "None" }), 1)).toBe(false);
+    const broken = project(1, { allowCrossProjectSpawn: true, crossProjectTargets: "not json" });
+    expect(crossProjectAllowed(broken, project(2))).toBe(false);
+    const wrongShape = project(1, { allowCrossProjectSpawn: true, crossProjectTargets: '{"a":1}' });
+    expect(crossProjectAllowed(wrongShape, project(2))).toBe(false);
+    // Blank is "unset", the same as null.
+    const blank = project(1, { allowCrossProjectSpawn: true, crossProjectTargets: " " });
+    expect(crossProjectAllowed(blank, project(2))).toBe(true);
   });
 });
 
