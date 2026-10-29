@@ -4792,7 +4792,8 @@ export async function projectsRoute(app: FastifyInstance) {
   // A project that appears, changes (cwd, host checkouts), disappears or merges
   // can change which projects share an origin: refresh the duplicate check.
   app.addHook("onResponse", async (request, reply) => {
-    if (reply.statusCode >= 300 || request.method === "GET") return;
+    if (reply.statusCode >= 300 || !["POST", "PATCH", "PUT", "DELETE"].includes(request.method))
+      return;
     if (/^\/api\/projects(\/\d+(\/merge)?)?$/.test(request.url.split("?")[0])) {
       refreshDuplicateGroupsInBackground(app);
     }
@@ -4939,9 +4940,13 @@ export async function projectsRoute(app: FastifyInstance) {
   // Issue #2232 — projects that share one origin, oldest first as the survivor.
   // Served from a cache that project create/edit/delete/merge invalidate;
   // `?refresh=1` (the Check button) forces a fresh read.
-  app.get<{ Querystring: { refresh?: string } }>("/api/projects/duplicates", async (request) => ({
-    groups: await getDuplicateGroups(app, { refresh: request.query.refresh === "1" }),
-  }));
+  app.get<{ Querystring: { refresh?: string } }>(
+    "/api/projects/duplicates",
+    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (request) => ({
+      groups: await getDuplicateGroups(app, { refresh: request.query.refresh === "1" }),
+    }),
+  );
 
   // Merge this project (the duplicate) into `into` (the survivor). Both must
   // resolve to the same origin key the create gate uses.

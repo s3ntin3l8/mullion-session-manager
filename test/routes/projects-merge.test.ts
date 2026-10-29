@@ -77,6 +77,18 @@ describe("project merge routes", () => {
       expect(extra.id).toBeGreaterThan(0);
     });
 
+    it("recomputes an entry older than the TTL", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        expect((await list()).groups[0].duplicates).toHaveLength(1);
+        localProject(app, tmp, "app-copy", new Date("2026-01-01"));
+        vi.advanceTimersByTime(6 * 60_000);
+        expect((await list()).groups[0].duplicates).toHaveLength(2);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("is invalidated by a merge", async () => {
       expect((await list()).groups).toHaveLength(1);
       expect((await merge(dupId, { into: survivorId })).statusCode).toBe(200);

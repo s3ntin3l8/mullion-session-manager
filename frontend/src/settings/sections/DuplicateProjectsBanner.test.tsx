@@ -72,21 +72,29 @@ describe("DuplicateProjectsBanner", () => {
     const user = userEvent.setup();
     render(<DuplicateProjectsBanner />);
     expect(
-      await screen.findByText("#30 · macbook · /m → #19 · this server · /a"),
+      await screen.findByText("#30 · macbook · /m → #19 · this machine · /a"),
     ).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Merge into #19 (this server)" }));
+    await user.click(screen.getByRole("button", { name: "Merge into #19 (this machine)" }));
     const dialog = screen.getByRole("alertdialog");
     expect(dialog).toHaveTextContent("#30 app-mac (macbook)");
-    expect(dialog).toHaveTextContent("#19 app (this server)");
+    expect(dialog).toHaveTextContent("#19 app (this machine)");
     expect(dialog).toHaveTextContent("deletes #30 (macbook)");
     expect(dialog).toHaveTextContent("“Also lives on” checkout of #19");
     expect(dialog).toHaveTextContent("cannot be undone");
   });
 
+  it("re-reads the counts when the confirm opens", async () => {
+    const user = open();
+    await user.click(await screen.findByRole("button", { name: "Merge into #19 (this machine)" }));
+    await waitFor(() =>
+      expect(api.getProjectDuplicates).toHaveBeenLastCalledWith({ refresh: true }),
+    );
+  });
+
   it("falls back to the host id when the host is unknown", async () => {
     useDashboardStore.setState({ hosts: [] });
     render(<DuplicateProjectsBanner />);
-    expect(await screen.findByText("#30 · mac · /m → #19 · this server · /a")).toBeInTheDocument();
+    expect(await screen.findByText("#30 · mac · /m → #19 · this machine · /a")).toBeInTheDocument();
   });
 
   it("Check forces a fresh read", async () => {
@@ -110,7 +118,7 @@ describe("DuplicateProjectsBanner", () => {
   it("counts what moves in the confirm, merges, and refreshes the project list", async () => {
     vi.mocked(api.mergeProject).mockResolvedValue({ survivor: {} as never, counts });
     const user = open();
-    await user.click(await screen.findByRole("button", { name: "Merge into #19 (this server)" }));
+    await user.click(await screen.findByRole("button", { name: "Merge into #19 (this machine)" }));
 
     const dialog = screen.getByRole("alertdialog");
     expect(dialog).toHaveTextContent("5 tasks (1 live), 2 active sessions, 1 preview");
@@ -126,7 +134,7 @@ describe("DuplicateProjectsBanner", () => {
   it("shows the server's message when the merge is refused", async () => {
     vi.mocked(api.mergeProject).mockRejectedValue(new ApiError("Stop one first.", 409));
     const user = open();
-    await user.click(await screen.findByRole("button", { name: "Merge into #19 (this server)" }));
+    await user.click(await screen.findByRole("button", { name: "Merge into #19 (this machine)" }));
     await user.click(screen.getByRole("button", { name: "Merge" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Stop one first.");
     expect(refreshProjects).not.toHaveBeenCalled();
@@ -134,7 +142,7 @@ describe("DuplicateProjectsBanner", () => {
 
   it("cancel closes the confirm without merging", async () => {
     const user = open();
-    await user.click(await screen.findByRole("button", { name: "Merge into #19 (this server)" }));
+    await user.click(await screen.findByRole("button", { name: "Merge into #19 (this machine)" }));
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(api.mergeProject).not.toHaveBeenCalled();
@@ -156,6 +164,6 @@ describe("DuplicateProjectsBanner", () => {
     });
     open();
     expect(await screen.findByText("Both projects live on the same host.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Merge into #19 (this server)" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Merge into #19 (this machine)" })).toBeDisabled();
   });
 });

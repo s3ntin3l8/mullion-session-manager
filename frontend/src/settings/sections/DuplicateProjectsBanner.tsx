@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "../../api/index.js";
 import type { DuplicateGroup, DuplicateProjectEntry, Host } from "../../api/index.js";
-import { LOCAL_HOST_ID } from "../../../../src/shared/constants.js";
+import { hostDisplayName } from "../../lib/hostBadge.js";
 import { useDashboardStore } from "../../store/index.js";
 import { GroupHeading, ListRow, Row, SecondaryButton, StyledList } from "../../ui/primitives.js";
 
@@ -23,10 +23,7 @@ function impact(d: DuplicateProjectEntry): string {
 }
 
 // The two projects can share a name; the host is what tells them apart.
-function hostName(hostId: string, hosts: Host[]): string {
-  if (hostId === LOCAL_HOST_ID) return "this server";
-  return hosts.find((h) => h.id === hostId)?.name ?? hostId;
-}
+const hostName = hostDisplayName;
 
 type Member = { id: number; name: string; hostId: string; cwd: string };
 
@@ -128,6 +125,15 @@ export function DuplicateProjectsBanner() {
                   onClick={() => {
                     setError(null);
                     setConfirming({ group: g, dup: d });
+                    // The counts in the confirm are irreversible-merge input: re-read them.
+                    void api
+                      .getProjectDuplicates({ refresh: true })
+                      .then((r) => {
+                        const group = r.groups.find((x) => x.survivor.id === g.survivor.id);
+                        const dup = group?.duplicates.find((x) => x.id === d.id);
+                        if (group && dup) setConfirming({ group, dup });
+                      })
+                      .catch(() => undefined);
                   }}
                   disabled={d.refusal !== null || merging}
                 >

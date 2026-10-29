@@ -264,6 +264,9 @@ export async function findDuplicateGroups(app: FastifyInstance): Promise<Duplica
 
 interface DuplicateCache {
   groups: DuplicateGroup[] | null;
+  computedAt: number;
+  /** One scan at a time: concurrent misses and forced refreshes share it. */
+  inflight: { generation: number; promise: Promise<DuplicateGroup[]> } | null;
   /** Bumped by every invalidation, so a read that started before one is not cached. */
   generation: number;
   /** Origin keys already announced on the bell; in memory only, so a restart may announce again. */
@@ -276,7 +279,14 @@ const duplicateCaches = new WeakMap<FastifyInstance, DuplicateCache>();
 function cacheFor(app: FastifyInstance): DuplicateCache {
   let cache = duplicateCaches.get(app);
   if (!cache) {
-    cache = { groups: null, generation: 0, announced: new Set(), timer: null };
+    cache = {
+      groups: null,
+      computedAt: 0,
+      inflight: null,
+      generation: 0,
+      announced: new Set(),
+      timer: null,
+    };
     duplicateCaches.set(app, cache);
   }
   return cache;
@@ -305,27 +315,46 @@ function announceNewDuplicates(
 }
 
 /**
+ * A cached answer older than this is recomputed: the scan is best-effort (an
+ * offline host's projects have no readable origin and drop out), so a miss
+ * made while a host was asleep must not be served forever.
+ */
+const CACHE_TTL_MS = 5 * 60_000;
+
+/**
  * The duplicate groups, from a cache that create/edit/delete/merge invalidate.
  * Finding them reads every project's origin (one discovery call per remote
- * host), so `refresh` is for an explicit operator check.
+ * host), so `refresh` is for an explicit operator check. Concurrent scans of
+ * the same cache generation share one read.
  */
 export async function getDuplicateGroups(
   app: FastifyInstance,
   opts: { refresh?: boolean } = {},
 ): Promise<DuplicateGroup[]> {
   const cache = cacheFor(app);
-  if (!opts.refresh && cache.groups) return cache.groups;
-  const generation = cache.generation;
-  const groups = await findDuplicateGroups(app);
-  if (generation === cache.generation) {
-    cache.groups = groups;
-    announceNewDuplicates(app, cache, groups);
+  if (!opts.refresh && cache.groups && Date.now() - cache.computedAt < CACHE_TTL_MS) {
+    return cache.groups;
   }
-  return groups;
+  const generation = cache.generation;
+  if (cache.inflight?.generation === generation) return cache.inflight.promise;
+  const promise = findDuplicateGroups(app)
+    .then((groups) => {
+      if (generation === cache.generation) {
+        cache.groups = groups;
+        cache.computedAt = Date.now();
+        announceNewDuplicates(app, cache, groups);
+      }
+      return groups;
+    })
+    .finally(() => {
+      if (cache.inflight?.promise === promise) cache.inflight = null;
+    });
+  cache.inflight = { generation, promise };
+  return promise;
 }
 
 /** Drops the cached result: the next read recomputes. */
-export function invalidateDuplicateGroups(app: FastifyInstance): void {
+function invalidateDuplicateGroups(app: FastifyInstance): void {
   const cache = cacheFor(app);
   cache.generation++;
   cache.groups = null;
