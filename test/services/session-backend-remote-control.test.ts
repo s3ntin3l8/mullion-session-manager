@@ -6,6 +6,7 @@ const clientMock = vi.hoisted(() => ({
   resolvePrompt: vi.fn(),
   resolveWaitOutput: vi.fn(),
   bulkLiveStatus: vi.fn(),
+  compareWorktreePaths: vi.fn(),
 }));
 
 vi.mock("../../src/services/remote-host-client.js", async (importActual) => ({
@@ -216,5 +217,35 @@ describe("RemoteBackend.waitOutput", () => {
       failed: true,
       status: 502,
     });
+  });
+});
+
+describe("RemoteBackend.compareWorktreePaths", () => {
+  it("rejects stale comparisons when live state changes between batches", async () => {
+    clientMock.compareWorktreePaths
+      .mockReset()
+      .mockResolvedValueOnce({
+        generation: "a",
+        stable: true,
+        relations: Array(256).fill("outside"),
+      })
+      .mockResolvedValueOnce({ generation: "b", stable: true, relations: ["outside"] });
+    const entries = Array.from({ length: 257 }, (_, i) => ({ id: String(i), cwd: "/repo" }));
+    expect(await backend().compareWorktreePaths("/repo/worktree", entries)).toEqual(
+      Array(257).fill("unknown"),
+    );
+  });
+  it("treats missing, unstable, old and unreachable replies as unknown", async () => {
+    const entries = [{ id: "1", cwd: "/repo" }];
+    for (const reply of [
+      { stable: false, generation: "a", relations: ["outside"] },
+      { stable: true, generation: "a", relations: [] },
+      null,
+    ]) {
+      clientMock.compareWorktreePaths.mockReset().mockResolvedValue(reply);
+      expect(await backend().compareWorktreePaths("/repo/worktree", entries)).toEqual(["unknown"]);
+    }
+    clientMock.compareWorktreePaths.mockReset().mockRejectedValue(new Error("old agent"));
+    expect(await backend().compareWorktreePaths("/repo/worktree", entries)).toEqual(["unknown"]);
   });
 });

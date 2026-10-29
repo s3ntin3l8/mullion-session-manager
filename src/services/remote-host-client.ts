@@ -245,6 +245,8 @@ const GIT_PUSH_REQUEST_TIMEOUT_MS = 140_000;
 const GIT_BASE_REF_REQUEST_TIMEOUT_MS = 60_000;
 /** git-worktree.ts's GIT_TIMEOUT_MS is 15s (one `git worktree add`). */
 const GIT_WORKTREE_RESUME_REQUEST_TIMEOUT_MS = 20_000;
+/** A bounded batch may resolve hundreds of paths on a slow agent filesystem. */
+const WORKTREE_PATH_COMPARE_TIMEOUT_MS = 30_000;
 /** git-status.ts's GIT_TIMEOUT_MS is 5s (one `git status`). */
 const GIT_STATUS_FRESH_REQUEST_TIMEOUT_MS = 10_000;
 
@@ -1805,6 +1807,21 @@ export class RemoteHostClient {
       });
     this.liveStatusInFlight.set(key, promise);
     return promise;
+  }
+
+  compareWorktreePaths(
+    target: string,
+    candidates: { id: string; cwd: string | null }[],
+  ): Promise<unknown> {
+    return this.request(
+      "/internal/worktrees/compare-paths",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ target, candidates }),
+      },
+      WORKTREE_PATH_COMPARE_TIMEOUT_MS,
+    );
   }
 
   bulkIsMasterAlive(ids: string[]): Promise<Record<string, boolean>> {

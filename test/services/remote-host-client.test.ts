@@ -78,6 +78,19 @@ describe("RemoteHostClient", () => {
     });
   }
 
+  it("allows a bounded remote worktree path batch time to finish", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, { generation: "stable", stable: true, relations: ["inside"] }),
+    );
+    try {
+      await client().compareWorktreePaths("/work/tree", [{ id: "1", cwd: "/work/alias" }]);
+      expect(timeout).toHaveBeenCalledWith(30_000);
+    } finally {
+      timeout.mockRestore();
+    }
+  });
+
   describe("statProjectFile", () => {
     it("posts the path and returns the agent's size and mtime", async () => {
       fetchMock.mockResolvedValue(jsonResponse(200, { path: "a.ts", size: 5, mtimeMs: 123.5 }));

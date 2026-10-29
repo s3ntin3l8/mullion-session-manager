@@ -401,6 +401,72 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  it("compares host paths within configured roots and refuses escaped paths", async () => {
+    const app = await buildApp();
+    const worktree = path.join(projectsRoot, "comparison-target");
+    const alias = path.join(projectsRoot, "comparison-alias");
+    fs.mkdirSync(worktree, { recursive: true });
+    fs.symlinkSync(worktree, alias, "dir");
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/worktrees/compare-paths",
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: {
+        target: worktree,
+        candidates: [
+          { id: "1", cwd: alias },
+          { id: "2", cwd: projectsRoot },
+          { id: "3", cwd: os.tmpdir() },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      stable: true,
+      generation: expect.any(String),
+      relations: ["inside", "outside", "unknown"],
+    });
+    fs.rmSync(alias);
+    fs.rmSync(worktree, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("uses the agent session launch cwd when the primary has none", async () => {
+    const app = await buildApp();
+    const worktree = path.join(projectsRoot, "comparison-launch-target");
+    fs.mkdirSync(worktree, { recursive: true });
+    const get = vi
+      .spyOn(app.pty, "get")
+      .mockReturnValue({ cwd: worktree, liveCwd: null } as ReturnType<typeof app.pty.get>);
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/internal/worktrees/compare-paths",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: {
+          target: worktree,
+          candidates: [
+            { id: "1", cwd: null },
+            { id: "2", cwd: null },
+          ],
+        },
+      });
+      expect(res.json()).toMatchObject({ stable: true, relations: ["inside", "inside"] });
+      get.mockReturnValue(undefined);
+      const unknown = await app.inject({
+        method: "POST",
+        url: "/internal/worktrees/compare-paths",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { target: worktree, candidates: [{ id: "1", cwd: null }] },
+      });
+      expect(unknown.json()).toMatchObject({ relations: ["unknown"] });
+    } finally {
+      get.mockRestore();
+      fs.rmSync(worktree, { recursive: true, force: true });
+      await app.close();
+    }
+  });
+
   it("rejects a request with the wrong token", async () => {
     const app = await buildApp();
     const res = await app.inject({

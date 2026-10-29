@@ -135,6 +135,7 @@ function fakeSessionBackend(overrides: Partial<SessionBackend>): SessionBackend 
     spawn: vi.fn().mockResolvedValue({}),
     liveStatus: vi.fn().mockResolvedValue({}),
     liveness: vi.fn().mockResolvedValue({}),
+    compareWorktreePaths: vi.fn().mockResolvedValue([]),
     terminate: vi.fn().mockResolvedValue(undefined),
     getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
     getRenderedScrollback: vi.fn().mockResolvedValue(""),

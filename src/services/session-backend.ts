@@ -1,3 +1,5 @@
+import { compareWorktreePaths } from "./worktree-paths.js";
+import type { WorktreePathCandidate, WorktreePathRelation } from "./worktree-paths.js";
 import { renderScrollback } from "./scrollback-render.js";
 import type { FastifyInstance } from "fastify";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
@@ -163,6 +165,10 @@ export interface SessionBackend {
   // old name collided with PtyManager's differently-shaped single-id
   // `isMasterAliveState(id)` — see that method's own doc comment.
   liveness(ids: string[]): Promise<Record<string, SessionLiveness>>;
+  compareWorktreePaths(
+    target: string,
+    candidates: WorktreePathCandidate[],
+  ): Promise<WorktreePathRelation[]>;
   terminate(id: string): Promise<void>;
   // Phase 4 (#187) — the scrollback replay buffer for whichever host
   // actually runs this session's PTY. Never rejects for "not currently
@@ -457,6 +463,20 @@ class LocalBackend implements SessionBackend {
     return this.app.pty.isMasterAliveStateBatch(ids);
   }
 
+  compareWorktreePaths(
+    target: string,
+    candidates: WorktreePathCandidate[],
+  ): Promise<WorktreePathRelation[]> {
+    // Only the remote usage guard calls this seam today. Local callers own
+    // these filesystem paths; the agent endpoint separately enforces roots.
+    return compareWorktreePaths(
+      target,
+      candidates,
+      () => true,
+      (id) => this.app.pty.get(id)?.liveCwd ?? null,
+    );
+  }
+
   async terminate(id: string): Promise<void> {
     await this.app.pty.terminate(id);
   }
@@ -718,6 +738,40 @@ class RemoteBackend implements SessionBackend {
     const result: Record<string, SessionLiveness> = Object.create(null);
     for (const id of ids) result[id] = livenessFromWire(wire, id);
     return result;
+  }
+
+  async compareWorktreePaths(
+    target: string,
+    candidates: WorktreePathCandidate[],
+  ): Promise<WorktreePathRelation[]> {
+    const relations: WorktreePathRelation[] = [];
+    let generation: string | undefined;
+    for (let index = 0; index < candidates.length; index += 256) {
+      const batch = candidates.slice(index, index + 256);
+      try {
+        const result = await this.client.compareWorktreePaths(target, batch);
+        if (!result || typeof result !== "object")
+          throw new Error("Invalid path comparison response");
+        const response = result as { generation?: unknown; stable?: unknown; relations?: unknown };
+        if (
+          response.stable !== true ||
+          typeof response.generation !== "string" ||
+          !Array.isArray(response.relations) ||
+          response.relations.length !== batch.length ||
+          (generation !== undefined && generation !== response.generation)
+        )
+          throw new Error("Inconsistent path comparison response");
+        generation = response.generation;
+        relations.push(
+          ...response.relations.map((item: unknown) =>
+            item === "inside" || item === "outside" ? item : "unknown",
+          ),
+        );
+      } catch {
+        return candidates.map(() => "unknown");
+      }
+    }
+    return relations;
   }
 
   terminate(id: string): Promise<void> {
