@@ -116,7 +116,8 @@ instead of leaving for GitHub:
   each held session (the same decision the session and the notification bell
   offer); one answered elsewhere in the meantime just refreshes.
 - Clicking the **GitHub rail icon** while a PR needs attention (failing CI,
-  changes requested, conflicts, unresolved conversations) opens the most
+  changes requested, conflicts, unresolved conversations, a head behind its
+  base under strict protection) opens the most
   urgent such PR; with nothing needing attention it opens the list. While
   GitHub is showing, a click closes it.
 - **Palette:** `Prune merged branches` (opens the prune preview), `Go to PR …`

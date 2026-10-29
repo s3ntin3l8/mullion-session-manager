@@ -27,14 +27,17 @@ export const PHASE_LABEL: Record<GitHubPrPhase, string> = {
 
 /**
  * Phases that want the user's attention first, most urgent first. Open
- * conversations come last: they need the user (reply / resolve) but nothing is
- * broken. `behind` is deliberately absent until the list can verify ancestry.
+ * conversations and a behind head come last: each needs the user (reply /
+ * resolve; Update branch under strict protection) but nothing is broken, and
+ * `behind` is one click from mergeable. The list verifies `behind` against
+ * ancestry (the compare), so it is safe to count.
  */
 export const ATTENTION_ORDER: GitHubPrPhase[] = [
   "ci_failing",
   "changes_requested",
   "conflicts",
   "threads_unresolved",
+  "behind",
 ];
 
 export function phaseTone(phase: GitHubPrPhase): "bad" | "warn" | "good" | "dim" {
