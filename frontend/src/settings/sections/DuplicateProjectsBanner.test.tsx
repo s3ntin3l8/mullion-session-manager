@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DuplicateProjectsBanner } from "./DuplicateProjectsBanner.js";
 import { useDashboardStore } from "../../store/index.js";
@@ -42,19 +42,80 @@ describe("DuplicateProjectsBanner", () => {
       .mockReset()
       .mockResolvedValue({ groups: [group] });
     vi.mocked(api.mergeProject).mockReset();
-    useDashboardStore.setState({ refreshProjects });
+    useDashboardStore.setState({
+      refreshProjects,
+      hosts: [{ id: "mac", name: "macbook" }] as never,
+    });
   });
 
   async function check() {
     const user = userEvent.setup();
     render(<DuplicateProjectsBanner />);
+    // Loads on mount; wait for the first answer so Check is enabled again.
+    await waitFor(() => expect(screen.getByRole("button", { name: "Check" })).toBeEnabled());
     await user.click(screen.getByRole("button", { name: "Check" }));
     return user;
   }
 
-  it("does not look for duplicates until asked", () => {
+  function open() {
     render(<DuplicateProjectsBanner />);
-    expect(api.getProjectDuplicates).not.toHaveBeenCalled();
+    return userEvent.setup();
+  }
+
+  it("lists duplicates on mount without a click, using the cached read", async () => {
+    render(<DuplicateProjectsBanner />);
+    expect(await screen.findByTestId("duplicate-projects")).toBeInTheDocument();
+    expect(api.getProjectDuplicates).toHaveBeenCalledWith();
+  });
+
+  it("names each project's host in the row, the button and the confirm", async () => {
+    const user = userEvent.setup();
+    render(<DuplicateProjectsBanner />);
+    expect(
+      await screen.findByText("#30 · macbook · /m → #19 · this machine · /a"),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Merge into #19 (this machine)" }));
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog).toHaveTextContent("#30 app-mac (macbook)");
+    expect(dialog).toHaveTextContent("#19 app (this machine)");
+    expect(dialog).toHaveTextContent("deletes #30 (macbook)");
+    expect(dialog).toHaveTextContent("“Also lives on” checkout of #19");
+    expect(dialog).toHaveTextContent("cannot be undone");
+  });
+
+  it("re-reads the counts when the confirm opens", async () => {
+    const user = open();
+    await user.click(await screen.findByRole("button", { name: "Merge into #19 (this machine)" }));
+    await waitFor(() =>
+      expect(api.getProjectDuplicates).toHaveBeenLastCalledWith({ refresh: true }),
+    );
+  });
+
+  it("does not reopen a confirm that was cancelled before the re-read landed", async () => {
+    const user = open();
+    const button = await screen.findByRole("button", { name: "Merge into #19 (this machine)" });
+    let land!: () => void;
+    vi.mocked(api.getProjectDuplicates).mockReturnValueOnce(
+      new Promise((resolve) => {
+        land = () => resolve({ groups: [group] });
+      }),
+    );
+    await user.click(button);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await act(async () => land());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("falls back to the host id when the host is unknown", async () => {
+    useDashboardStore.setState({ hosts: [] });
+    render(<DuplicateProjectsBanner />);
+    expect(await screen.findByText("#30 · mac · /m → #19 · this machine · /a")).toBeInTheDocument();
+  });
+
+  it("Check forces a fresh read", async () => {
+    vi.mocked(api.getProjectDuplicates).mockResolvedValue({ groups: [] });
+    await check();
+    expect(api.getProjectDuplicates).toHaveBeenLastCalledWith({ refresh: true });
   });
 
   it("says so when there are none", async () => {
@@ -71,8 +132,8 @@ describe("DuplicateProjectsBanner", () => {
 
   it("counts what moves in the confirm, merges, and refreshes the project list", async () => {
     vi.mocked(api.mergeProject).mockResolvedValue({ survivor: {} as never, counts });
-    const user = await check();
-    await user.click(await screen.findByRole("button", { name: "Merge into app" }));
+    const user = open();
+    await user.click(await screen.findByRole("button", { name: "Merge into #19 (this machine)" }));
 
     const dialog = screen.getByRole("alertdialog");
     expect(dialog).toHaveTextContent("5 tasks (1 live), 2 active sessions, 1 preview");
@@ -87,16 +148,16 @@ describe("DuplicateProjectsBanner", () => {
 
   it("shows the server's message when the merge is refused", async () => {
     vi.mocked(api.mergeProject).mockRejectedValue(new ApiError("Stop one first.", 409));
-    const user = await check();
-    await user.click(await screen.findByRole("button", { name: "Merge into app" }));
+    const user = open();
+    await user.click(await screen.findByRole("button", { name: "Merge into #19 (this machine)" }));
     await user.click(screen.getByRole("button", { name: "Merge" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Stop one first.");
     expect(refreshProjects).not.toHaveBeenCalled();
   });
 
   it("cancel closes the confirm without merging", async () => {
-    const user = await check();
-    await user.click(await screen.findByRole("button", { name: "Merge into app" }));
+    const user = open();
+    await user.click(await screen.findByRole("button", { name: "Merge into #19 (this machine)" }));
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("alertdialog")).toBeNull();
     expect(api.mergeProject).not.toHaveBeenCalled();
@@ -116,8 +177,8 @@ describe("DuplicateProjectsBanner", () => {
         },
       ],
     });
-    await check();
+    open();
     expect(await screen.findByText("Both projects live on the same host.")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Merge into app" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Merge into #19 (this machine)" })).toBeDisabled();
   });
 });

@@ -242,6 +242,23 @@ export async function notifyTaskNeedsAttention(
   taskId: number,
   body: string,
 ): Promise<void> {
+  await pushToOperator(app, body, { taskId });
+}
+
+/**
+ * A notification that belongs to no session or task (today: two projects that
+ * point at the same repository). Same gating and generic-body rule as
+ * `notifyTaskNeedsAttention`: the caller decides when it is worth sending.
+ */
+export async function notifyOperator(app: FastifyInstance, body: string): Promise<void> {
+  await pushToOperator(app, body, {});
+}
+
+async function pushToOperator(
+  app: FastifyInstance,
+  body: string,
+  extra: { taskId?: number },
+): Promise<void> {
   if (!getStoredSettings(app.db).notifications.channels.push) return;
   const subscriptions = getSubscriptionsForSend(app);
   if (subscriptions.length === 0) return;
@@ -250,7 +267,7 @@ export async function notifyTaskNeedsAttention(
     app,
     subscriptions,
     keys,
-    JSON.stringify({ title: "Mullion", body, taskId }),
+    JSON.stringify({ title: "Mullion", body, ...extra }),
   );
 }
 

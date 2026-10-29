@@ -22,7 +22,12 @@ import {
   detectCheckouts,
   isStorablePath,
 } from "../services/host-checkout-detect.js";
-import { findDuplicateGroups, mergeProjects } from "../services/project-merge.js";
+import {
+  cancelDuplicateRefresh,
+  getDuplicateGroups,
+  mergeProjects,
+  refreshDuplicateGroupsInBackground,
+} from "../services/project-merge.js";
 import {
   buildOriginIndex,
   findProjectByRepoIdentity,
@@ -1091,6 +1096,8 @@ function remoteHostFailureMessage(
   app.log.warn({ hostId, err }, message);
   return message;
 }
+
+const DUPLICATE_PRIME_DELAY_MS = 30_000;
 
 export async function projectsRoute(app: FastifyInstance) {
   // detectedDevServerPort is derived, not persisted (see dev-server-detect.ts):
@@ -4782,6 +4789,16 @@ export async function projectsRoute(app: FastifyInstance) {
     },
   );
 
+  // A project that appears, changes (cwd, host checkouts), disappears or merges
+  // can change which projects share an origin: refresh the duplicate check.
+  app.addHook("onResponse", async (request, reply) => {
+    if (reply.statusCode >= 300 || !["POST", "PATCH", "PUT", "DELETE"].includes(request.method))
+      return;
+    if (/^\/api\/projects(\/\d+(\/merge)?)?$/.test(request.url.split("?")[0])) {
+      refreshDuplicateGroupsInBackground(app);
+    }
+  });
+
   app.post<{ Body: CreateProjectBody }>(
     "/api/projects",
     { schema: createProjectSchema, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
@@ -4921,9 +4938,15 @@ export async function projectsRoute(app: FastifyInstance) {
   );
 
   // Issue #2232 — projects that share one origin, oldest first as the survivor.
-  app.get("/api/projects/duplicates", async () => ({
-    groups: await findDuplicateGroups(app),
-  }));
+  // Served from a cache that project create/edit/delete/merge invalidate;
+  // `?refresh=1` (the Check button) forces a fresh read.
+  app.get<{ Querystring: { refresh?: string } }>(
+    "/api/projects/duplicates",
+    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (request) => ({
+      groups: await getDuplicateGroups(app, { refresh: request.query.refresh === "1" }),
+    }),
+  );
 
   // Merge this project (the duplicate) into `into` (the survivor). Both must
   // resolve to the same origin key the create gate uses.
@@ -5413,6 +5436,16 @@ export async function projectsRoute(app: FastifyInstance) {
       return { online };
     },
   );
+
+  // Production only (like system-resources' warm-up): prime the duplicate
+  // cache a little after start, so remote hosts have connected and their
+  // origins are readable, and a pre-existing duplicate rings the bell once.
+  if (app.config.NODE_ENV === "production") {
+    app.addHook("onReady", async () => {
+      refreshDuplicateGroupsInBackground(app, DUPLICATE_PRIME_DELAY_MS);
+    });
+  }
+  app.addHook("onClose", async () => cancelDuplicateRefresh(app));
 }
 
 export function pingDevServer(urlStr: string, timeoutMs = 1000): Promise<boolean> {
