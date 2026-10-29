@@ -108,7 +108,7 @@ describe("session-lifecycle.ts — scaffold-committed-file gate on projectSkill/
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name, cwd: projectDir },
+      payload: { allowDuplicate: true, name, cwd: projectDir },
     });
     const projectId = res.json().id as number;
     return { projectId, projectDir };
@@ -195,7 +195,7 @@ describe("session-lifecycle.ts — scaffold-committed-file gate on projectSkill/
       const res = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "scaffold-gate-unsafe-slug", cwd: projectDir },
+        payload: { allowDuplicate: true, name: "scaffold-gate-unsafe-slug", cwd: projectDir },
       });
       const projectId = res.json().id as number;
 
@@ -623,7 +623,7 @@ describe("session-lifecycle.ts — scaffold gate checks the session's own worktr
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "scaffold-gate-worktree", cwd: repoDir },
+      payload: { allowDuplicate: true, name: "scaffold-gate-worktree", cwd: repoDir },
     });
     return res.json().id as number;
   }

@@ -151,7 +151,7 @@ describe("claimTask", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "claim-svc-p", cwd },
+      payload: { allowDuplicate: true, createDir: true, name: "claim-svc-p", cwd },
     });
     return res.json().id as number;
   }
@@ -1744,7 +1744,7 @@ describe("retryTask (#483)", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "retry-svc-p", cwd },
+      payload: { allowDuplicate: true, createDir: true, name: "retry-svc-p", cwd },
     });
     return res.json().id as number;
   }

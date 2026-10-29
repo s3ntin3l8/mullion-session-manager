@@ -163,7 +163,7 @@ describe("multi-host scaffold setup (issue #895)", () => {
     const projectRes = await primary.app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "scaffold-setup-remote", cwd, hostId },
+      payload: { allowDuplicate: true, name: "scaffold-setup-remote", cwd, hostId },
     });
     projectId = projectRes.json().id;
   });

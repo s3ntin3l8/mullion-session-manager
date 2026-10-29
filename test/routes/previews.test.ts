@@ -23,7 +23,12 @@ async function createProject(app: Awaited<ReturnType<typeof buildApp>>) {
   const res = await app.inject({
     method: "POST",
     url: "/api/projects",
-    payload: { createDir: true, name: "with-dev-server", cwd: "/tmp/previews-test" },
+    payload: {
+      allowDuplicate: true,
+      createDir: true,
+      name: "with-dev-server",
+      cwd: "/tmp/previews-test",
+    },
   });
   return res.json().id as number;
 }
@@ -402,7 +407,7 @@ describe("previews route (issue #28)", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "branchy", cwd },
+      payload: { allowDuplicate: true, createDir: true, name: "branchy", cwd },
     });
     const projectId = created.json().id as number;
 
@@ -466,7 +471,7 @@ describe("previews route (issue #28)", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: `sess-${Math.random()}`, cwd },
+        payload: { allowDuplicate: true, createDir: true, name: `sess-${Math.random()}`, cwd },
       });
       const projectId = created.json().id as number;
       const [session] = app.db
@@ -613,7 +618,12 @@ describe("GET /api/previews/:slug/open with PREVIEW_AUTH_REQUIRED=true (issue #1
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "open-route-test", cwd: "/tmp/previews-open-test" },
+      payload: {
+        allowDuplicate: true,
+        createDir: true,
+        name: "open-route-test",
+        cwd: "/tmp/previews-open-test",
+      },
       headers: DASHBOARD_AUTH_HEADERS,
     });
     const projectId = created.json().id as number;

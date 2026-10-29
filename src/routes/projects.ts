@@ -17,7 +17,16 @@ import {
   parseHostCwdsMeta,
   serializeHostCwdsMeta,
 } from "../services/host-cwds-meta.js";
-import { detectCheckouts } from "../services/host-checkout-detect.js";
+import {
+  attachHostCheckout,
+  detectCheckouts,
+  isStorablePath,
+} from "../services/host-checkout-detect.js";
+import {
+  findProjectByRepoIdentity,
+  projectHasPath,
+  type RepoMatchReason,
+} from "../services/repo-identity.js";
 import { KNOWN_AGENTS } from "../services/agent-detect.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { LOCAL_HOST_ID, getHostRow } from "../services/host-registry.js";
@@ -212,6 +221,8 @@ interface CreateProjectBody {
   // Only applied when this request actually created the directory
   // (createDir + a fresh dir, not an already-existing one).
   gitInit?: boolean;
+  // Issue #2231 — skip the same-repo duplicate check (409 DUPLICATE_PROJECT).
+  allowDuplicate?: boolean;
 }
 
 interface UpdateProjectBody {
@@ -288,10 +299,17 @@ interface UpdateProjectBody {
   // Same confirm-first contract as CreateProjectBody, above.
   createDir?: boolean;
   gitInit?: boolean;
+  // Same contract as CreateProjectBody.allowDuplicate.
+  allowDuplicate?: boolean;
 }
 
 interface DiscoveredProject extends DiscoveredCandidate {
   isRegistered: boolean;
+  // Issue #2231 — the existing project this candidate is a checkout of, when
+  // its path or git origin matches one. The UI offers "Add as checkout of".
+  // `hostId` is the project's own host: a candidate on that host is a second
+  // clone there, which cannot be attached (only created separately).
+  matchedProject?: { id: number; name: string; hostId: string; reason: RepoMatchReason };
 }
 
 /**
@@ -314,6 +332,57 @@ function unknownHostInCwds(
     if (!known.has(hostId)) return hostId;
   }
   return null;
+}
+
+/**
+ * Issue #2231 — the existing project (other than `excludeProjectId`) that a
+ * create/edit would duplicate: any of the given (host, path) checkouts is
+ * already that project's, or has its git origin (compared against local
+ * projects only: saving never waits on another host).
+ */
+async function findDuplicateProject(
+  app: FastifyInstance,
+  checkouts: { hostId: string; cwd: string }[],
+  excludeProjectId?: number,
+) {
+  const originIndexRef = {};
+  const rows = app.db.select().from(projects).all();
+  for (const c of checkouts) {
+    const match = await findProjectByRepoIdentity(app, {
+      ...c,
+      projects: rows,
+      excludeProjectId,
+      originIndexRef,
+      localOnly: true,
+    });
+    if (match) return match.project;
+  }
+  return null;
+}
+
+// What the caller can do next, per route: the same 409 reads differently for
+// a create, an edit and an attach.
+const DUPLICATE_HINTS = {
+  create:
+    "Attach this checkout to it, or send allowDuplicate: true to create a separate project anyway.",
+  update: "Send allowDuplicate: true to save this change anyway.",
+  attach: "That path belongs to it already; a path can only belong to one project.",
+} as const;
+
+function duplicateProjectReply(
+  reply: FastifyReply,
+  existing: { id: number; name: string; hostId: string },
+  context: keyof typeof DUPLICATE_HINTS,
+) {
+  return reply.code(409).send({
+    statusCode: 409,
+    error: "Conflict",
+    message: `This repository already has a project: ${existing.name}. ${DUPLICATE_HINTS[context]}`,
+    code: "DUPLICATE_PROJECT",
+    existingProjectId: existing.id,
+    existingName: existing.name,
+    existingHostId: existing.hostId,
+  });
 }
 
 const createProjectSchema = {
@@ -342,6 +411,7 @@ const createProjectSchema = {
       },
       createDir: { type: "boolean" },
       gitInit: { type: "boolean" },
+      allowDuplicate: { type: "boolean" },
     },
   },
 };
@@ -379,6 +449,19 @@ const updateProjectSchema = {
       suppressConventionsInjectionAfterScaffold: { type: ["boolean", "null"] },
       createDir: { type: "boolean" },
       gitInit: { type: "boolean" },
+      allowDuplicate: { type: "boolean" },
+    },
+  },
+};
+
+const hostCheckoutSchema = {
+  body: {
+    type: "object",
+    required: ["hostId", "cwd"],
+    additionalProperties: false,
+    properties: {
+      hostId: { type: "string", minLength: 1 },
+      cwd: { type: "string", minLength: 1, pattern: "^/" },
     },
   },
 };
@@ -1212,11 +1295,37 @@ export async function projectsRoute(app: FastifyInstance) {
           .all()
           .map((p) => p.cwd),
       );
+      // Issue #2231 — a path mapped in ANOTHER project's hostCwds is
+      // registered too, and a candidate whose path or origin matches a project
+      // is reported with that project so the UI can attach instead of add.
+      const allProjects = app.db.select().from(projects).all();
+      const originIndexRef = {};
 
-      const discovered: DiscoveredProject[] = candidates.map((c) => ({
-        ...c,
-        isRegistered: registeredCwds.has(c.cwd),
-      }));
+      const discovered: DiscoveredProject[] = [];
+      for (const c of candidates) {
+        const mapped = allProjects.some((p) => projectHasPath(p, hostId, c.cwd));
+        const match = await findProjectByRepoIdentity(app, {
+          hostId,
+          cwd: c.cwd,
+          origin: c.origin ?? null,
+          originIndexRef,
+          projects: allProjects,
+        });
+        discovered.push({
+          ...c,
+          isRegistered: registeredCwds.has(c.cwd) || mapped,
+          ...(match
+            ? {
+                matchedProject: {
+                  id: match.project.id,
+                  name: match.project.name,
+                  hostId: match.project.hostId,
+                  reason: match.reason,
+                },
+              }
+            : {}),
+        });
+      }
       return discovered;
     },
   );
@@ -4625,7 +4734,7 @@ export async function projectsRoute(app: FastifyInstance) {
     "/api/projects",
     { schema: createProjectSchema, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
-      const { name, cwd, createDir, gitInit, placement, hostCwds } = request.body;
+      const { name, cwd, createDir, gitInit, placement, hostCwds, allowDuplicate } = request.body;
       const unknownHost = unknownHostInCwds(app, hostCwds);
       if (unknownHost !== null) {
         return reply.badRequest(`hostCwds names an unknown host: ${unknownHost}`);
@@ -4667,6 +4776,17 @@ export async function projectsRoute(app: FastifyInstance) {
       // home dir, not this process's — see host-registry.ts/issue #26's
       // landmine #3 — so it's stored/forwarded raw instead.
       const resolvedCwd = hostId === LOCAL_HOST_ID ? path.resolve(expandHome(cwd)) : cwd;
+
+      // Issue #2231 — refuse a second project for a repo that already has one,
+      // BEFORE any directory is created. `allowDuplicate` is the deliberate
+      // opt-out (a second checkout on the same host, a fork under one name).
+      if (!allowDuplicate) {
+        const duplicate = await findDuplicateProject(app, [
+          { hostId, cwd: resolvedCwd },
+          ...Object.entries(hostCwds ?? {}).map(([h, c]) => ({ hostId: h, cwd: c })),
+        ]);
+        if (duplicate) return duplicateProjectReply(reply, duplicate, "create");
+      }
 
       // Validate (and, if confirmed, create) the directory BEFORE the row
       // is inserted, so a rejected/failed create never leaves an orphan
@@ -4742,6 +4862,58 @@ export async function projectsRoute(app: FastifyInstance) {
     },
   );
 
+  // Issue #2231 — attach a checkout on ANOTHER host to an existing project
+  // (what "Add as checkout of <project>" does) instead of creating a duplicate.
+  app.post<{ Params: { id: string }; Body: { hostId: string; cwd: string } }>(
+    "/api/projects/:id/host-checkouts",
+    { schema: hostCheckoutSchema, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const { hostId, cwd } = request.body;
+      // Positively validate the request's host before anything is keyed by it.
+      if (hostId !== LOCAL_HOST_ID && !getHostRow(app, hostId)) {
+        return reply.badRequest(`Unknown hostId ${hostId}`);
+      }
+      if (!isStorablePath(cwd)) {
+        return reply.badRequest("cwd must be an absolute path without '..' segments");
+      }
+      // The path must not already belong to ANOTHER project: attaching it
+      // would create exactly the duplicate this feature prevents.
+      const owner = app.db
+        .select()
+        .from(projects)
+        .all()
+        .find((p) => p.id !== projectId && projectHasPath(p, hostId, cwd));
+      if (owner) return duplicateProjectReply(reply, owner, "attach");
+      const result = attachHostCheckout(app, projectId, hostId, cwd);
+      if (result === "not-found") return reply.notFound();
+      if (result === "own-host") {
+        return reply.badRequest(
+          "That is the project's own host — create a separate project instead.",
+        );
+      }
+      if (result === "mapped") {
+        return reply.code(409).send({
+          statusCode: 409,
+          error: "Conflict",
+          message:
+            "This project already has a different path on that host — edit it in Edit project.",
+          code: "HOST_PATH_ALREADY_MAPPED",
+        });
+      }
+      if (result === "limit") {
+        return reply.badRequest(`A project can map at most ${MAX_HOST_CWDS} hosts.`);
+      }
+      const [row] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      return {
+        ...row,
+        hostCwds: { ...parseHostCwds(row.hostCwds) },
+        hostCwdsMeta: parseHostCwdsMeta(row.hostCwdsMeta),
+      };
+    },
+  );
+
   // Partial update — a project's own edit modal reuses CreateProjectModal
   // pre-filled, submitting whichever of name/cwd changed. Applies the same
   // expandHome() tilde-expansion POST already does, so re-pointing a
@@ -4778,6 +4950,7 @@ export async function projectsRoute(app: FastifyInstance) {
         createDir,
         gitInit,
         hostCwds,
+        allowDuplicate,
       } = request.body;
       const unknownHost = unknownHostInCwds(app, hostCwds);
       if (unknownHost !== null) {
@@ -4853,6 +5026,23 @@ export async function projectsRoute(app: FastifyInstance) {
         cwd !== undefined && existing.hostId === LOCAL_HOST_ID
           ? path.resolve(expandHome(cwd))
           : cwd;
+
+      // Issue #2231 — same duplicate check as POST, only for what actually
+      // changes (the Edit modal always resends `cwd`), excluding this project.
+      if (!allowDuplicate) {
+        const changed: { hostId: string; cwd: string }[] = [];
+        if (resolvedCwd !== undefined && resolvedCwd !== existing.cwd) {
+          changed.push({ hostId: existing.hostId, cwd: resolvedCwd });
+        }
+        if (hostCwds) {
+          const before = parseHostCwds(existing.hostCwds);
+          for (const [h, c] of Object.entries(hostCwds)) {
+            if (before[h] !== c) changed.push({ hostId: h, cwd: c });
+          }
+        }
+        const duplicate = await findDuplicateProject(app, changed, projectId);
+        if (duplicate) return duplicateProjectReply(reply, duplicate, "update");
+      }
 
       // Validate/create BEFORE the row is updated — same ordering rationale
       // as POST. Skipped entirely when the cwd isn't actually changing: the

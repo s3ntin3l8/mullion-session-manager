@@ -118,7 +118,7 @@ describe("promote lands the replacement where its worktree was cut (issue #1958)
     const projectRes = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name, cwd: LOCAL_CWD },
+      payload: { allowDuplicate: true, createDir: true, name, cwd: LOCAL_CWD },
     });
     const projectId = projectRes.json().id as number;
     app.db
@@ -142,7 +142,7 @@ describe("promote lands the replacement where its worktree was cut (issue #1958)
     const projectRes = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "promote-auto", cwd: REMOTE_CWD, hostId: busy },
+      payload: { allowDuplicate: true, name: "promote-auto", cwd: REMOTE_CWD, hostId: busy },
     });
     const projectId = projectRes.json().id as number;
     app.db
@@ -276,7 +276,7 @@ describe("promote lands the replacement where its worktree was cut (issue #1958)
     const projectRes = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "promote-crossrepo", cwd: LOCAL_CWD },
+      payload: { allowDuplicate: true, createDir: true, name: "promote-crossrepo", cwd: LOCAL_CWD },
     });
     const projectId = projectRes.json().id as number;
     const { backendFor } = installFakeBackends();
@@ -307,7 +307,7 @@ describe("promote lands the replacement where its worktree was cut (issue #1958)
     const projectRes = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "promote-unmapped", cwd: LOCAL_CWD },
+      payload: { allowDuplicate: true, createDir: true, name: "promote-unmapped", cwd: LOCAL_CWD },
     });
     const projectId = projectRes.json().id as number;
     installFakeBackends();

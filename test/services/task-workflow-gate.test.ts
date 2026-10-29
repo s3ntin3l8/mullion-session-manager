@@ -62,7 +62,7 @@ describe("task-workflow-gate", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "gate-project", cwd },
+      payload: { allowDuplicate: true, createDir: true, name: "gate-project", cwd },
     });
     projectId = res.json().id;
   });

@@ -1242,7 +1242,13 @@ export interface DiscoveredProject {
   name: string;
   cwd: string;
   isGitRepo: boolean;
+  // Normalised-or-raw `origin` remote; absent from an agent too old to report one.
+  origin?: string | null;
+  isWorktree?: boolean;
   isRegistered: boolean;
+  // Issue #2231 — the existing project this checkout belongs to (same path, or
+  // same git origin), so the UI offers "Add as checkout of <project>".
+  matchedProject?: { id: number; name: string; hostId: string; reason: "path" | "origin" };
 }
 
 // Issue #2090 — mirrors src/services/host-cwds-meta.ts's HostCwdsMeta: which
@@ -2654,6 +2660,8 @@ export interface CreateProjectDirOptions {
   createDir?: boolean;
   // Only takes effect when this request actually creates the directory.
   gitInit?: boolean;
+  // Issue #2231 — skip the same-repo duplicate check (409 DUPLICATE_PROJECT).
+  allowDuplicate?: boolean;
 }
 
 // The placement mode as an OPT-IN on creation — issue #1723 / roadmap 8.9.

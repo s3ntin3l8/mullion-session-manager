@@ -38,7 +38,7 @@ describe("reseedTaskIfSessionExited", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "reseed-test", cwd: "/tmp" },
+      payload: { allowDuplicate: true, createDir: true, name: "reseed-test", cwd: "/tmp" },
     });
     projectId = res.json().id;
   });

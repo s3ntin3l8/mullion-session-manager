@@ -31,7 +31,7 @@ describe("POST /api/sessions/:id/task-push (#2102)", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "task-push-project", cwd },
+      payload: { allowDuplicate: true, createDir: true, name: "task-push-project", cwd },
     });
     projectId = res.json().id;
   });

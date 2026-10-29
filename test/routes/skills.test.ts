@@ -96,7 +96,7 @@ describe("skills routes", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "skills-test", cwd: projectCwd },
+      payload: { allowDuplicate: true, createDir: true, name: "skills-test", cwd: projectCwd },
     });
     return { app, projectId: created.json().id as number };
   }
@@ -497,7 +497,12 @@ describe("skills routes", () => {
       const project = await primary.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "skills-remote", cwd: projectCwd, hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "skills-remote",
+          cwd: projectCwd,
+          hostId: host.json().id,
+        },
       });
 
       const res = await primary.inject({
@@ -536,7 +541,12 @@ describe("skills routes", () => {
       const project = await primary.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "skills-remote-toggle", cwd: projectCwd, hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "skills-remote-toggle",
+          cwd: projectCwd,
+          hostId: host.json().id,
+        },
       });
 
       const putRes = await primary.inject({
@@ -573,7 +583,12 @@ describe("skills routes", () => {
       const project = await primary.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "skills-wrong-token", cwd: projectCwd, hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "skills-wrong-token",
+          cwd: projectCwd,
+          hostId: host.json().id,
+        },
       });
 
       const res = await primary.inject({

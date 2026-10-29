@@ -166,7 +166,12 @@ describe("multi-host proxy — browser automation (issue #407)", () => {
     const projectRes = await primary.app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "remote-browser-e2e", cwd: "/tmp/remote-project", hostId },
+      payload: {
+        allowDuplicate: true,
+        name: "remote-browser-e2e",
+        cwd: "/tmp/remote-project",
+        hostId,
+      },
     });
     projectId = projectRes.json().id;
 

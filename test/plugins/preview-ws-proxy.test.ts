@@ -106,7 +106,12 @@ async function createProjectWithDevServer(
   const created = await app.inject({
     method: "POST",
     url: "/api/projects",
-    payload: { createDir: true, name: "ws-proxy-test", cwd: "/tmp/preview-ws-proxy-test" },
+    payload: {
+      allowDuplicate: true,
+      createDir: true,
+      name: "ws-proxy-test",
+      cwd: "/tmp/preview-ws-proxy-test",
+    },
     headers,
   });
   const projectId = created.json().id as number;
@@ -239,6 +244,7 @@ describe("preview proxy plugin — HMR websocket (issue #28, phase 3)", () => {
       method: "POST",
       url: "/api/projects",
       payload: {
+        allowDuplicate: true,
         createDir: true,
         name: "no-dev-server",
         cwd: "/tmp/preview-ws-proxy-no-dev-server",

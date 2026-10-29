@@ -94,7 +94,7 @@ describe("GET /api/projects — detectedDevServerPort, positive path (issue #28 
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "with-dock", cwd: "/tmp/with-dock" },
+      payload: { allowDuplicate: true, createDir: true, name: "with-dock", cwd: "/tmp/with-dock" },
     });
     const projectId = created.json().id as number;
 

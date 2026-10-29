@@ -74,7 +74,7 @@ describe("session-lifecycle.ts — per-project pinned note (issue #942, no file 
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "briefing-precedence", cwd: projectDir },
+      payload: { allowDuplicate: true, name: "briefing-precedence", cwd: projectDir },
     });
     return res.json().id as number;
   }

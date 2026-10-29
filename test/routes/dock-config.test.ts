@@ -45,7 +45,7 @@ describe("dock-config routes", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "dock-config-test", cwd: projectCwd },
+      payload: { allowDuplicate: true, createDir: true, name: "dock-config-test", cwd: projectCwd },
     });
     return { app, projectId: created.json().id as number };
   }
@@ -354,7 +354,12 @@ describe("dock-config routes", () => {
       const project = await primary.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "dock-config-remote", cwd: projectCwd, hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "dock-config-remote",
+          cwd: projectCwd,
+          hostId: host.json().id,
+        },
       });
       const projectId = project.json().id as number;
       expect(project.json().hostId).toBe(host.json().id);
@@ -395,7 +400,12 @@ describe("dock-config routes", () => {
       const project = await primary.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "dock-config-remote-2", cwd: projectCwd, hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "dock-config-remote-2",
+          cwd: projectCwd,
+          hostId: host.json().id,
+        },
       });
 
       const res = await primary.inject({
@@ -431,7 +441,12 @@ describe("dock-config routes", () => {
       const project = await primary.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "dock-config-wrong-token", cwd: projectCwd, hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "dock-config-wrong-token",
+          cwd: projectCwd,
+          hostId: host.json().id,
+        },
       });
 
       const res = await primary.inject({
@@ -463,7 +478,12 @@ describe("dock-config routes", () => {
       const project = await primary.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "dock-config-unreachable", cwd: projectCwd, hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "dock-config-unreachable",
+          cwd: projectCwd,
+          hostId: host.json().id,
+        },
       });
 
       const res = await primary.inject({

@@ -86,7 +86,12 @@ describe("placement decides where a session runs (issue #1724)", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: `p-${Math.random()}`, cwd: LOCAL_CWD },
+      payload: {
+        allowDuplicate: true,
+        createDir: true,
+        name: `p-${Math.random()}`,
+        cwd: LOCAL_CWD,
+      },
     });
     const projectId = project.json().id as number;
 
@@ -276,7 +281,7 @@ describe("a task's sessions share one host (issue #1724)", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "p", cwd: LOCAL_CWD },
+      payload: { allowDuplicate: true, createDir: true, name: "p", cwd: LOCAL_CWD },
     });
     const projectId = project.json().id as number;
 

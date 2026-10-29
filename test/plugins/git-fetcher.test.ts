@@ -41,7 +41,7 @@ describe("gitFetcherPlugin: the clone it shares with the repair (issue #1896)", 
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "fetcher-repo", cwd: repo },
+      payload: { allowDuplicate: true, name: "fetcher-repo", cwd: repo },
     });
     await app.inject({
       method: "PATCH",
@@ -68,7 +68,7 @@ describe("gitFetcherPlugin: the clone it shares with the repair (issue #1896)", 
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "fetcher-busy-repo", cwd: repo },
+      payload: { allowDuplicate: true, name: "fetcher-busy-repo", cwd: repo },
     });
     await app.inject({
       method: "PATCH",

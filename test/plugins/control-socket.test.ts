@@ -1022,7 +1022,7 @@ describe("controlSocketPlugin (issue #185)", () => {
         method: "POST",
         url: "/api/projects",
         headers: authHeaders,
-        payload: { createDir: true, name: "p", cwd: "/tmp" },
+        payload: { allowDuplicate: true, createDir: true, name: "p", cwd: "/tmp" },
       });
       const before = fakePtyChildren.length;
       const created = await app!.inject({
@@ -1627,7 +1627,7 @@ describe("controlSocketPlugin (issue #185)", () => {
           method: "POST",
           url: "/api/projects",
           headers: { authorization: `Bearer ${TEST_TOKEN}` },
-          payload: { createDir: true, name: "p2", cwd: "/tmp" },
+          payload: { allowDuplicate: true, createDir: true, name: "p2", cwd: "/tmp" },
         });
         const socket = await fullScopeSocket();
         socket.write(
@@ -2300,7 +2300,7 @@ describe("controlSocketPlugin (issue #185)", () => {
           method: "POST",
           url: "/api/projects",
           headers: authHeaders,
-          payload: { name, cwd: dir },
+          payload: { allowDuplicate: true, name, cwd: dir },
         });
         expect(res.statusCode).toBe(201);
         return (res.json() as { id: number }).id;
@@ -2568,7 +2568,7 @@ describe("controlSocketPlugin (issue #185)", () => {
           method: "POST",
           url: "/api/projects",
           headers: authHeaders,
-          payload: { name: "runway-targets", cwd: dir },
+          payload: { allowDuplicate: true, name: "runway-targets", cwd: dir },
         });
         const otherId = (created.json() as { id: number }).id;
         await app.inject({
@@ -5599,7 +5599,7 @@ describe("controlSocketPlugin (issue #185)", () => {
             method: "POST",
             url: "/api/projects",
             headers: authHeaders,
-            payload: { createDir: true, name: "p", cwd: "/tmp" },
+            payload: { allowDuplicate: true, createDir: true, name: "p", cwd: "/tmp" },
           });
           const socket = await fullScopeSocket();
           socket.write(
@@ -5646,7 +5646,7 @@ describe("controlSocketPlugin (issue #185)", () => {
             method: "POST",
             url: "/api/projects",
             headers: { authorization: `Bearer ${TEST_TOKEN}` },
-            payload: { createDir: true, name: "other", cwd: "/tmp/other" },
+            payload: { allowDuplicate: true, createDir: true, name: "other", cwd: "/tmp/other" },
           });
           const socket = await sessionScopeSocket(hookToken);
           socket.write(
@@ -5671,7 +5671,7 @@ describe("controlSocketPlugin (issue #185)", () => {
             method: "POST",
             url: "/api/projects",
             headers: { authorization: `Bearer ${TEST_TOKEN}` },
-            payload: { createDir: true, name: "p", cwd: "/tmp" },
+            payload: { allowDuplicate: true, createDir: true, name: "p", cwd: "/tmp" },
           });
           const socket = await fullScopeSocket();
           socket.write(
@@ -5723,7 +5723,7 @@ describe("controlSocketPlugin (issue #185)", () => {
             method: "POST",
             url: "/api/projects",
             headers: { authorization: `Bearer ${TEST_TOKEN}` },
-            payload: { createDir: true, name: "p", cwd: "/tmp" },
+            payload: { allowDuplicate: true, createDir: true, name: "p", cwd: "/tmp" },
           });
           const socket = await fullScopeSocket();
           socket.write(
@@ -5746,7 +5746,7 @@ describe("controlSocketPlugin (issue #185)", () => {
             method: "POST",
             url: "/api/projects",
             headers: { authorization: `Bearer ${TEST_TOKEN}` },
-            payload: { createDir: true, name: "p", cwd: "/tmp" },
+            payload: { allowDuplicate: true, createDir: true, name: "p", cwd: "/tmp" },
           });
           const projectId = project.json().id;
           await app.inject({
@@ -5830,7 +5830,7 @@ describe("controlSocketPlugin (issue #185)", () => {
             method: "POST",
             url: "/api/projects",
             headers: { authorization: `Bearer ${TEST_TOKEN}` },
-            payload: { createDir: true, name: "p", cwd: "/tmp" },
+            payload: { allowDuplicate: true, createDir: true, name: "p", cwd: "/tmp" },
           });
           const projectId = project.json().id;
           const socket = await fullScopeSocket();
@@ -5886,7 +5886,7 @@ describe("controlSocketPlugin (issue #185)", () => {
             method: "POST",
             url: "/api/projects",
             headers: { authorization: `Bearer ${TEST_TOKEN}` },
-            payload: { createDir: true, name: "p", cwd: "/tmp" },
+            payload: { allowDuplicate: true, createDir: true, name: "p", cwd: "/tmp" },
           });
           const projectId = project.json().id;
           const socket = await fullScopeSocket();
@@ -5920,7 +5920,7 @@ describe("controlSocketPlugin (issue #185)", () => {
             method: "POST",
             url: "/api/projects",
             headers: { authorization: `Bearer ${TEST_TOKEN}` },
-            payload: { createDir: true, name: "p", cwd: "/tmp" },
+            payload: { allowDuplicate: true, createDir: true, name: "p", cwd: "/tmp" },
           });
           const projectId = project.json().id;
           const socket = await fullScopeSocket();

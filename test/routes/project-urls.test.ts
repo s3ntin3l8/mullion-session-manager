@@ -11,7 +11,7 @@ async function createProject(app: Awaited<ReturnType<typeof buildApp>>) {
   const res = await app.inject({
     method: "POST",
     url: "/api/projects",
-    payload: { createDir: true, name: "urls-test", cwd: "/tmp/urls-test" },
+    payload: { allowDuplicate: true, createDir: true, name: "urls-test", cwd: "/tmp/urls-test" },
   });
   return res.json().id as number;
 }

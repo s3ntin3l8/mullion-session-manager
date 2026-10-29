@@ -131,21 +131,30 @@ function discoverOnHost(
   return pending;
 }
 
-/** The project's own normalised origin, or null when it cannot be told (no
- * origin, a path outside its host's discovery roots, an agent too old to
- * report one). Null means: no origin-based suggestions for this project. */
-async function projectOrigin(
+/** The normalised origin of the checkout at `cwd` on `hostId`, or null when
+ * it cannot be told (no origin, a path outside the host's discovery roots, an
+ * agent too old to report one, an unreachable host). Null means: no
+ * origin-based matching for this checkout. */
+export async function projectOrigin(
   app: FastifyInstance,
-  project: ProjectRow,
-  cache: HostCandidateCache,
+  project: { hostId: string; cwd: string },
+  cache: HostCandidateCache = new Map(),
 ): Promise<string | null> {
-  if (project.hostId === LOCAL_HOST_ID) {
-    const raw = readOriginUrl(project.cwd);
-    return raw === null ? null : normalizeGitRemote(raw);
-  }
+  const raw = await projectRemoteUrl(app, project, cache);
+  return raw === null ? null : normalizeGitRemote(raw);
+}
+
+/** The checkout's raw `origin` URL (not normalised), with the same null cases
+ * as `projectOrigin`. The duplicate gate keys it its own way (port kept). */
+export async function projectRemoteUrl(
+  app: FastifyInstance,
+  project: { hostId: string; cwd: string },
+  cache: HostCandidateCache = new Map(),
+): Promise<string | null> {
+  if (project.hostId === LOCAL_HOST_ID) return readOriginUrl(project.cwd);
   const list = await discoverOnHost(app, project.hostId, cache);
   const own = list?.find((c) => c.cwd === project.cwd);
-  return typeof own?.origin === "string" ? normalizeGitRemote(own.origin) : null;
+  return typeof own?.origin === "string" ? own.origin : null;
 }
 
 /**
@@ -242,6 +251,51 @@ function commitAutoFill(
       .where(eq(projects.id, projectId))
       .run();
     return true;
+  });
+}
+
+export type AttachCheckoutResult = "attached" | "own-host" | "limit" | "not-found" | "mapped";
+
+/**
+ * Operator-initiated attach of `hostId -> cwd` to the project's `hostCwds`
+ * (issue #2231): same transaction shape as `commitAutoFill`, but the operator
+ * chose it, so it clears an earlier decline for that host and is NOT flagged
+ * `auto`. A different path already mapped for the host is never replaced. The project's own host is refused: a second checkout on
+ * the same host stays a deliberate `allowDuplicate` project.
+ */
+export function attachHostCheckout(
+  app: FastifyInstance,
+  projectId: number,
+  hostId: string,
+  cwd: string,
+): AttachCheckoutResult {
+  return app.db.transaction((tx) => {
+    const [row] = tx.select().from(projects).where(eq(projects.id, projectId)).all();
+    if (!row) return "not-found";
+    if (row.hostId === hostId) return "own-host";
+    const map = parseHostCwds(row.hostCwds);
+    const meta = parseHostCwdsMeta(row.hostCwdsMeta);
+    // A different path already mapped for this host is the operator's, and is
+    // not silently replaced: they edit it in Edit project.
+    if (Object.hasOwn(map, hostId) && map[hostId] !== cwd) return "mapped";
+    if (!Object.hasOwn(map, hostId) && Object.keys(map).length >= MAX_HOST_CWDS) return "limit";
+    // `hostId` came from a request (the route has checked the host is
+    // registered): it is set through a Map, never as a computed object key, so
+    // it cannot reach the prototype chain. `fromEntries` defines own properties.
+    const entries = new Map(Object.entries(map));
+    entries.set(hostId, cwd);
+    const next: Record<string, string> = Object.fromEntries(entries);
+    tx.update(projects)
+      .set({
+        hostCwds: serializeHostCwds(next),
+        hostCwdsMeta: serializeHostCwdsMeta({
+          auto: meta.auto.filter((h) => h !== hostId),
+          declined: meta.declined.filter((h) => h !== hostId),
+        }),
+      })
+      .where(eq(projects.id, projectId))
+      .run();
+    return "attached";
   });
 }
 

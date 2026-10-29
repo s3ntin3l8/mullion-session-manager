@@ -56,7 +56,7 @@ describe("session-lifecycle.ts — per-project injectAgentGuide/injectProjectBri
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name, cwd: projectDir },
+      payload: { allowDuplicate: true, name, cwd: projectDir },
     });
     return res.json().id as number;
   }

@@ -39,7 +39,7 @@ describe("browser cookies route (issue #184)", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "p", cwd: "/tmp" },
+      payload: { allowDuplicate: true, createDir: true, name: "p", cwd: "/tmp" },
     });
     return res.json().id as number;
   }
@@ -245,7 +245,7 @@ describe("browser cookies route (issue #184)", () => {
       const projectRes = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-project", cwd: "/tmp", hostId },
+        payload: { allowDuplicate: true, name: "remote-project", cwd: "/tmp", hostId },
       });
       return projectRes.json().id as number;
     }

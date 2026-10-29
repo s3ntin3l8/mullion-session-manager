@@ -59,7 +59,7 @@ describe("agent-rules routes", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "agent-rules-test", cwd: projectCwd },
+      payload: { allowDuplicate: true, createDir: true, name: "agent-rules-test", cwd: projectCwd },
     });
     return { app, projectId: created.json().id as number };
   }
@@ -291,7 +291,12 @@ describe("agent-rules routes", () => {
       const project = await primary.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "agent-rules-remote", cwd: projectCwd, hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "agent-rules-remote",
+          cwd: projectCwd,
+          hostId: host.json().id,
+        },
       });
 
       const res = await primary.inject({
@@ -350,7 +355,12 @@ describe("agent-rules routes", () => {
       const project = await primary.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "agent-rules-wrong-token", cwd: projectCwd, hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "agent-rules-wrong-token",
+          cwd: projectCwd,
+          hostId: host.json().id,
+        },
       });
 
       const res = await primary.inject({

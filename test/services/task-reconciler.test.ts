@@ -660,7 +660,7 @@ describe("reconcileTasks", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "p", cwd: "/tmp" },
+      payload: { allowDuplicate: true, createDir: true, name: "p", cwd: "/tmp" },
     });
     const session = await app.inject({
       method: "POST",
@@ -696,7 +696,7 @@ describe("reconcileTasks", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "p-review", cwd: "/tmp" },
+      payload: { allowDuplicate: true, createDir: true, name: "p-review", cwd: "/tmp" },
     });
     await app.inject({
       method: "PATCH",
@@ -798,7 +798,12 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: `p-cc-title-${Math.random()}`, cwd: "/tmp" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: `p-cc-title-${Math.random()}`,
+          cwd: "/tmp",
+        },
       });
       const projectId = project.json().id;
       await app.inject({
@@ -937,7 +942,7 @@ describe("reconcileTasks", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: `p-rp-auto-${Math.random()}`, cwd },
+        payload: { allowDuplicate: true, createDir: true, name: `p-rp-auto-${Math.random()}`, cwd },
       });
       return created.json().id;
     }
@@ -1448,7 +1453,7 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "p-review-skew", cwd: "/remote/project", hostId },
+        payload: { allowDuplicate: true, name: "p-review-skew", cwd: "/remote/project", hostId },
       });
       const projectId = project.json().id;
       await app.inject({
@@ -1550,7 +1555,12 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "p-review-remote-dir", cwd: "/remote/project", hostId },
+        payload: {
+          allowDuplicate: true,
+          name: "p-review-remote-dir",
+          cwd: "/remote/project",
+          hostId,
+        },
       });
       const projectId = project.json().id;
       await app.inject({
@@ -1651,7 +1661,12 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "p-review-remote-fallback", cwd: "/remote/project", hostId },
+        payload: {
+          allowDuplicate: true,
+          name: "p-review-remote-fallback",
+          cwd: "/remote/project",
+          hostId,
+        },
       });
       const projectId = project.json().id;
       await app.inject({
@@ -1928,7 +1943,12 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: `p-stranded-${Math.random()}`, cwd: "/tmp" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: `p-stranded-${Math.random()}`,
+          cwd: "/tmp",
+        },
       });
       const [row] = app.db
         .insert(tasks)
@@ -2133,7 +2153,12 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: `p-merge-${Math.random()}`, cwd: "/tmp" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: `p-merge-${Math.random()}`,
+          cwd: "/tmp",
+        },
       });
       const [row] = app.db
         .insert(tasks)
@@ -2271,7 +2296,12 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: `p-unstable-self-heal-${Math.random()}`, cwd: "/tmp" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: `p-unstable-self-heal-${Math.random()}`,
+          cwd: "/tmp",
+        },
       });
       const [row] = app.db
         .insert(tasks)
@@ -2354,7 +2384,12 @@ describe("reconcileTasks", () => {
         const project = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { createDir: true, name: `p-rebase-${Math.random()}`, cwd: "/tmp" },
+          payload: {
+            allowDuplicate: true,
+            createDir: true,
+            name: `p-rebase-${Math.random()}`,
+            cwd: "/tmp",
+          },
         });
         const projectId = project.json().id;
         await app.inject({
@@ -2490,7 +2525,12 @@ describe("reconcileTasks", () => {
         const project = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { createDir: true, name: `p-rebase-${Math.random()}`, cwd: "/tmp" },
+          payload: {
+            allowDuplicate: true,
+            createDir: true,
+            name: `p-rebase-${Math.random()}`,
+            cwd: "/tmp",
+          },
         });
         const projectId = project.json().id;
         await app.inject({
@@ -2604,7 +2644,12 @@ describe("reconcileTasks", () => {
         const project = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { createDir: true, name: `p-rebase-${Math.random()}`, cwd: "/tmp" },
+          payload: {
+            allowDuplicate: true,
+            createDir: true,
+            name: `p-rebase-${Math.random()}`,
+            cwd: "/tmp",
+          },
         });
         const projectId = project.json().id;
         await app.inject({
@@ -2690,7 +2735,12 @@ describe("reconcileTasks", () => {
         const session = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { createDir: true, name: `p-rebase-merge-${Math.random()}`, cwd: "/tmp" },
+          payload: {
+            allowDuplicate: true,
+            createDir: true,
+            name: `p-rebase-merge-${Math.random()}`,
+            cwd: "/tmp",
+          },
         });
         const projectId = session.json().id;
         const workerSession = await app.inject({
@@ -3343,7 +3393,12 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: `p-no-merge-${Math.random()}`, cwd: "/tmp" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: `p-no-merge-${Math.random()}`,
+          cwd: "/tmp",
+        },
       });
       app.db
         .insert(tasks)
@@ -3416,7 +3471,12 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: `p-release-${Math.random()}`, cwd: "/tmp" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: `p-release-${Math.random()}`,
+          cwd: "/tmp",
+        },
       });
       const projectId = project.json().id as number;
       await app.inject({
@@ -3732,7 +3792,12 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: `p-auto-approve-${Math.random()}`, cwd: "/tmp" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: `p-auto-approve-${Math.random()}`,
+          cwd: "/tmp",
+        },
       });
       const projectId = project.json().id;
       await app.inject({
@@ -5554,7 +5619,12 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: `p-gate-${Math.random()}`, cwd: "/tmp" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: `p-gate-${Math.random()}`,
+          cwd: "/tmp",
+        },
       });
       const session = await app.inject({
         method: "POST",
@@ -6051,7 +6121,12 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: `p-remote-gate-${name}`, cwd: `/remote/project-${name}`, hostId },
+        payload: {
+          allowDuplicate: true,
+          name: `p-remote-gate-${name}`,
+          cwd: `/remote/project-${name}`,
+          hostId,
+        },
       });
       const projectId = project.json().id;
       const [workerSession] = app.db
@@ -7321,7 +7396,12 @@ describe("reconcileTasks", () => {
         const created = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { createDir: true, name: `p-stall-${Math.random()}`, cwd: "/tmp" },
+          payload: {
+            allowDuplicate: true,
+            createDir: true,
+            name: `p-stall-${Math.random()}`,
+            cwd: "/tmp",
+          },
         });
         const projectId = created.json().id;
         if (project.maxAutoReturnRounds !== undefined) {
@@ -7986,7 +8066,7 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "p-bounded", cwd: "/tmp" },
+        payload: { allowDuplicate: true, createDir: true, name: "p-bounded", cwd: "/tmp" },
       });
       const workerSession = await app.inject({
         method: "POST",
@@ -8111,7 +8191,7 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "p-bounded-clean", cwd: "/tmp" },
+        payload: { allowDuplicate: true, createDir: true, name: "p-bounded-clean", cwd: "/tmp" },
       });
       const workerSession = await app.inject({
         method: "POST",
@@ -8191,7 +8271,7 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "p-bounded-anchored", cwd: "/tmp" },
+        payload: { allowDuplicate: true, createDir: true, name: "p-bounded-anchored", cwd: "/tmp" },
       });
       const workerSession = await app.inject({
         method: "POST",
@@ -8274,7 +8354,12 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "p-review-body-anchors", cwd: "/tmp" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: "p-review-body-anchors",
+          cwd: "/tmp",
+        },
       });
       const workerSession = await app.inject({
         method: "POST",
@@ -8374,7 +8459,7 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "p-second-round", cwd: "/tmp" },
+        payload: { allowDuplicate: true, createDir: true, name: "p-second-round", cwd: "/tmp" },
       });
       const workerSession = await app.inject({
         method: "POST",
@@ -8422,7 +8507,7 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "p-low-cap", cwd: "/tmp" },
+        payload: { allowDuplicate: true, createDir: true, name: "p-low-cap", cwd: "/tmp" },
       });
       const projectId = project.json().id;
       app.db
@@ -8549,7 +8634,7 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "p-remote-review", cwd: "/remote/project", hostId },
+        payload: { allowDuplicate: true, name: "p-remote-review", cwd: "/remote/project", hostId },
       });
       const projectId = project.json().id;
       const [workerSession] = app.db
@@ -8607,7 +8692,12 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "p-remote-review-ok", cwd: "/remote/project", hostId },
+        payload: {
+          allowDuplicate: true,
+          name: "p-remote-review-ok",
+          cwd: "/remote/project",
+          hostId,
+        },
       });
       const projectId = project.json().id;
       const [workerSession] = app.db
@@ -8694,7 +8784,12 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "p-remote-review-readfail", cwd: "/remote/project", hostId },
+        payload: {
+          allowDuplicate: true,
+          name: "p-remote-review-readfail",
+          cwd: "/remote/project",
+          hostId,
+        },
       });
       const projectId = project.json().id;
       const [workerSession] = app.db
@@ -8782,7 +8877,12 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "p-remote-review-absent", cwd: "/remote/project", hostId },
+        payload: {
+          allowDuplicate: true,
+          name: "p-remote-review-absent",
+          cwd: "/remote/project",
+          hostId,
+        },
       });
       const projectId = project.json().id;
       const [workerSession] = app.db
@@ -9148,7 +9248,12 @@ describe("reconcileTasks", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: `p-rearm-${Date.now()}-${Math.random()}`, cwd: "/tmp" },
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: `p-rearm-${Date.now()}-${Math.random()}`,
+          cwd: "/tmp",
+        },
       });
       const workerSession = await app.inject({
         method: "POST",
@@ -9333,6 +9438,7 @@ describe("reconcileTasks", () => {
         method: "POST",
         url: "/api/projects",
         payload: {
+          allowDuplicate: true,
           createDir: true,
           name: `p-inconclusive-rearm-${Date.now()}-${Math.random()}`,
           cwd: "/tmp",

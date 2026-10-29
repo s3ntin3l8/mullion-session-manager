@@ -62,7 +62,12 @@ async function createProjectWithDevServer(
   const created = await app.inject({
     method: "POST",
     url: "/api/projects",
-    payload: { createDir: true, name: "proxy-test", cwd: "/tmp/preview-proxy-test" },
+    payload: {
+      allowDuplicate: true,
+      createDir: true,
+      name: "proxy-test",
+      cwd: "/tmp/preview-proxy-test",
+    },
     headers,
   });
   const projectId = created.json().id as number;
@@ -781,7 +786,12 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "remote-proxy-test", cwd: "/x", hostId: host.json().id },
+      payload: {
+        allowDuplicate: true,
+        name: "remote-proxy-test",
+        cwd: "/x",
+        hostId: host.json().id,
+      },
     });
     const projectId = created.json().id as number;
     await app.inject({

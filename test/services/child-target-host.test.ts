@@ -79,7 +79,12 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: `p-${Math.random()}`, cwd: LOCAL_CWD },
+      payload: {
+        allowDuplicate: true,
+        createDir: true,
+        name: `p-${Math.random()}`,
+        cwd: LOCAL_CWD,
+      },
     });
     const projectId = project.json().id as number;
 

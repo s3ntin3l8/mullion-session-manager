@@ -177,7 +177,7 @@ describe("projects route", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "home", cwd: homeCwd },
+      payload: { createDir: true, allowDuplicate: true, name: "home", cwd: homeCwd },
     });
     expect(created.statusCode).toBe(201);
     expect(created.json()).toMatchObject({ name: "home", cwd: homeCwd });
@@ -204,7 +204,7 @@ describe("projects route", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "pinned-project", cwd },
+      payload: { createDir: true, allowDuplicate: true, name: "pinned-project", cwd },
     });
     expect(created.statusCode).toBe(201);
     expect(created.json().placement).toBe("pinned");
@@ -221,7 +221,13 @@ describe("projects route", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "auto-project", cwd, placement: "auto" },
+      payload: {
+        createDir: true,
+        allowDuplicate: true,
+        name: "auto-project",
+        cwd,
+        placement: "auto",
+      },
     });
     expect(created.statusCode).toBe(201);
     expect(created.json().placement).toBe("auto");
@@ -266,6 +272,7 @@ describe("projects route", () => {
       method: "POST",
       url: "/api/projects",
       payload: {
+        allowDuplicate: true,
         createDir: true,
         name: "mapped-project",
         cwd,
@@ -318,6 +325,7 @@ describe("projects route", () => {
       method: "POST",
       url: "/api/projects",
       payload: {
+        allowDuplicate: true,
         createDir: true,
         name: "relative-map",
         cwd,
@@ -339,6 +347,7 @@ describe("projects route", () => {
       method: "POST",
       url: "/api/projects",
       payload: {
+        allowDuplicate: true,
         createDir: true,
         name: "typo-map",
         cwd,
@@ -360,6 +369,7 @@ describe("projects route", () => {
       method: "POST",
       url: "/api/projects",
       payload: {
+        allowDuplicate: true,
         createDir: true,
         name: "bad-map",
         cwd,
@@ -377,7 +387,13 @@ describe("projects route", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "bad-placement", cwd, placement: "whatever" },
+      payload: {
+        createDir: true,
+        allowDuplicate: true,
+        name: "bad-placement",
+        cwd,
+        placement: "whatever",
+      },
     });
     expect(res.statusCode).toBe(400);
     await app.close();
@@ -393,7 +409,13 @@ describe("projects route", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "preview-project", cwd, placement: "auto" },
+      payload: {
+        createDir: true,
+        allowDuplicate: true,
+        name: "preview-project",
+        cwd,
+        placement: "auto",
+      },
     });
     expect(created.statusCode).toBe(201);
     const { id } = created.json();
@@ -422,7 +444,7 @@ describe("projects route", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "pinned-preview", cwd },
+      payload: { createDir: true, allowDuplicate: true, name: "pinned-preview", cwd },
     });
     const { id } = created.json();
 
@@ -449,7 +471,7 @@ describe("projects route", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "mode-override", cwd },
+      payload: { createDir: true, allowDuplicate: true, name: "mode-override", cwd },
     });
     const { id } = created.json();
 
@@ -480,7 +502,7 @@ describe("projects route", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "bad-mode-preview", cwd },
+      payload: { createDir: true, allowDuplicate: true, name: "bad-mode-preview", cwd },
     });
     const { id } = created.json();
 
@@ -542,22 +564,22 @@ describe("projects route", () => {
     await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "zeta", cwd: "/tmp/z" },
+      payload: { createDir: true, allowDuplicate: true, name: "zeta", cwd: "/tmp/z" },
     });
     await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "Alpha", cwd: "/tmp/a" },
+      payload: { createDir: true, allowDuplicate: true, name: "Alpha", cwd: "/tmp/a" },
     });
     await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "beta", cwd: "/tmp/b" },
+      payload: { createDir: true, allowDuplicate: true, name: "beta", cwd: "/tmp/b" },
     });
     await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "Gamma", cwd: "/tmp/g" },
+      payload: { createDir: true, allowDuplicate: true, name: "Gamma", cwd: "/tmp/g" },
     });
 
     const listed = await app.inject({ method: "GET", url: "/api/projects" });
@@ -576,7 +598,7 @@ describe("projects route", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "tilde", cwd: "~/definitely-not-here/my-project" },
+      payload: { allowDuplicate: true, name: "tilde", cwd: "~/definitely-not-here/my-project" },
     });
     // Proves expandHome() still runs before directory validation, with zero
     // filesystem side effects — the error message carries the *expanded*
@@ -598,7 +620,7 @@ describe("projects route", () => {
     const withoutFlag = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "mkdir-test", cwd },
+      payload: { allowDuplicate: true, name: "mkdir-test", cwd },
     });
     expect(withoutFlag.statusCode).toBe(400);
     expect(withoutFlag.json().code).toBe("PROJECT_DIR_MISSING");
@@ -610,7 +632,7 @@ describe("projects route", () => {
     const withFlag = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "mkdir-test", cwd, createDir: true },
+      payload: { allowDuplicate: true, name: "mkdir-test", cwd, createDir: true },
     });
     expect(withFlag.statusCode).toBe(201);
     expect(withFlag.json()).toMatchObject({ dirCreated: true, gitInitialized: false });
@@ -627,7 +649,7 @@ describe("projects route", () => {
     const withoutFlag = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "mkdir-fail", cwd },
+      payload: { allowDuplicate: true, name: "mkdir-fail", cwd },
     });
     expect(withoutFlag.statusCode).toBe(400);
     expect(withoutFlag.json().code).toBe("PROJECT_PATH_NOT_A_DIRECTORY");
@@ -635,7 +657,7 @@ describe("projects route", () => {
     const withFlag = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "mkdir-fail", cwd, createDir: true },
+      payload: { allowDuplicate: true, name: "mkdir-fail", cwd, createDir: true },
     });
     expect(withFlag.statusCode).toBe(400);
     expect(withFlag.json().code).toBe("PROJECT_PATH_NOT_A_DIRECTORY");
@@ -650,7 +672,7 @@ describe("projects route", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "leaf-only", cwd, createDir: true },
+      payload: { allowDuplicate: true, name: "leaf-only", cwd, createDir: true },
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().code).toBe("PROJECT_PARENT_MISSING");
@@ -666,7 +688,7 @@ describe("projects route", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "mkdir-existing", cwd, createDir: true },
+      payload: { allowDuplicate: true, name: "mkdir-existing", cwd, createDir: true },
     });
     expect(res.statusCode).toBe(201);
     expect(res.json().dirCreated).toBe(false);
@@ -683,7 +705,7 @@ describe("projects route", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "dangling", cwd, createDir: true },
+      payload: { allowDuplicate: true, name: "dangling", cwd, createDir: true },
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().code).toBe("PROJECT_PATH_IS_SYMLINK");
@@ -703,7 +725,13 @@ describe("projects route", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "remote-createdir", cwd: "/remote/path", hostId, createDir: true },
+      payload: {
+        allowDuplicate: true,
+        name: "remote-createdir",
+        cwd: "/remote/path",
+        hostId,
+        createDir: true,
+      },
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().code).toBe("PROJECT_DIR_REMOTE_UNSUPPORTED");
@@ -717,7 +745,13 @@ describe("projects route", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "git-init-fresh", cwd, createDir: true, gitInit: true },
+      payload: {
+        allowDuplicate: true,
+        name: "git-init-fresh",
+        cwd,
+        createDir: true,
+        gitInit: true,
+      },
     });
     expect(created.statusCode).toBe(201);
     expect(created.json()).toMatchObject({ dirCreated: true, gitInitialized: true });
@@ -732,7 +766,13 @@ describe("projects route", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "git-init-existing", cwd, createDir: true, gitInit: true },
+      payload: {
+        allowDuplicate: true,
+        name: "git-init-existing",
+        cwd,
+        createDir: true,
+        gitInit: true,
+      },
     });
     expect(created.statusCode).toBe(201);
     expect(created.json()).toMatchObject({ dirCreated: false, gitInitialized: false });
@@ -748,7 +788,13 @@ describe("projects route", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "git-init-fails", cwd, createDir: true, gitInit: true },
+      payload: {
+        allowDuplicate: true,
+        name: "git-init-fails",
+        cwd,
+        createDir: true,
+        gitInit: true,
+      },
     });
     expect(created.statusCode).toBe(201);
     expect(created.json()).toMatchObject({ dirCreated: true, gitInitialized: false });
@@ -765,7 +811,7 @@ describe("projects route", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "git-init-no-createdir", cwd, gitInit: true },
+      payload: { allowDuplicate: true, name: "git-init-no-createdir", cwd, gitInit: true },
     });
     expect(res.statusCode).toBe(400);
     expect(res.json().code).toBe("PROJECT_GIT_INIT_WITHOUT_CREATE_DIR");
@@ -777,7 +823,7 @@ describe("projects route", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "no-cwd" },
+      payload: { allowDuplicate: true, name: "no-cwd" },
     });
     expect(res.statusCode).toBe(400);
     await app.close();
@@ -795,7 +841,7 @@ describe("projects route", () => {
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "throwaway", cwd: "/tmp" },
+      payload: { createDir: true, allowDuplicate: true, name: "throwaway", cwd: "/tmp" },
     });
     const { id } = created.json();
 
@@ -812,7 +858,12 @@ describe("projects route", () => {
         const created = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { createDir: true, name: "single-read", cwd: "/tmp/single-read" },
+          payload: {
+            createDir: true,
+            allowDuplicate: true,
+            name: "single-read",
+            cwd: "/tmp/single-read",
+          },
         });
         const { id } = created.json();
 
@@ -839,7 +890,12 @@ describe("projects route", () => {
         const created = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { name: "single-read-remote", cwd: "/x", hostId: host.json().id },
+          payload: {
+            allowDuplicate: true,
+            name: "single-read-remote",
+            cwd: "/x",
+            hostId: host.json().id,
+          },
         });
         const { id } = created.json();
 
@@ -886,14 +942,14 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "before", cwd: "/tmp/before" },
+        payload: { createDir: true, allowDuplicate: true, name: "before", cwd: "/tmp/before" },
       });
       const { id } = created.json();
 
       const patched = await app.inject({
         method: "PATCH",
         url: `/api/projects/${id}`,
-        payload: { createDir: true, name: "after", cwd: "/tmp/after" },
+        payload: { createDir: true, allowDuplicate: true, name: "after", cwd: "/tmp/after" },
       });
       expect(patched.statusCode).toBe(200);
       expect(patched.json()).toMatchObject({ id, name: "after", cwd: "/tmp/after" });
@@ -906,7 +962,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "tilde-edit", cwd: "/tmp/tilde-edit" },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "tilde-edit",
+          cwd: "/tmp/tilde-edit",
+        },
       });
       const { id } = created.json();
 
@@ -932,7 +993,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "mkdir-update", cwd: "/tmp/mkdir-update-init" },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "mkdir-update",
+          cwd: "/tmp/mkdir-update-init",
+        },
       });
       const { id } = created.json();
       const newCwd = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "mkdir-update-")), "project");
@@ -964,7 +1030,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "mkdir-fail-update", cwd: "/tmp/mkdir-fail-update-init" },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "mkdir-fail-update",
+          cwd: "/tmp/mkdir-fail-update-init",
+        },
       });
       const { id } = created.json();
       const parent = fs.mkdtempSync(path.join(os.tmpdir(), "mkdir-fail-update-"));
@@ -987,7 +1058,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "flag-without-cwd", cwd: "/tmp/flag-without-cwd" },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "flag-without-cwd",
+          cwd: "/tmp/flag-without-cwd",
+        },
       });
       const { id } = created.json();
 
@@ -1008,7 +1084,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "rename-me", cwd },
+        payload: { allowDuplicate: true, name: "rename-me", cwd },
       });
       const { id } = created.json();
       fs.rmSync(cwd, { recursive: true, force: true });
@@ -1030,7 +1106,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "flags-only", cwd },
+        payload: { allowDuplicate: true, name: "flags-only", cwd },
       });
       const { id } = created.json();
 
@@ -1057,7 +1133,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "git-init-no-createdir", cwd },
+        payload: { allowDuplicate: true, name: "git-init-no-createdir", cwd },
       });
       const { id } = created.json();
 
@@ -1077,7 +1153,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "partial-before", cwd: "/tmp/partial" },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "partial-before",
+          cwd: "/tmp/partial",
+        },
       });
       const { id } = created.json();
 
@@ -1097,7 +1178,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "dev-server", cwd: "/tmp/dev-server" },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "dev-server",
+          cwd: "/tmp/dev-server",
+        },
       });
       const { id } = created.json();
 
@@ -1133,7 +1219,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "agent-defaults", cwd: "/tmp/agent-defaults" },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "agent-defaults",
+          cwd: "/tmp/agent-defaults",
+        },
       });
       const { id } = created.json();
       expect(created.json().defaultAgent).toBeNull();
@@ -1164,7 +1255,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "merge-settings", cwd: "/tmp/merge-settings" },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "merge-settings",
+          cwd: "/tmp/merge-settings",
+        },
       });
       const { id } = created.json();
       expect(created.json().mergeOnApprove).toBeNull();
@@ -1197,7 +1293,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "coordinator-flag", cwd: "/tmp/coordinator-flag" },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "coordinator-flag",
+          cwd: "/tmp/coordinator-flag",
+        },
       });
       const { id } = created.json();
       expect(created.json().allowCrossProjectSpawn).toBeNull();
@@ -1236,7 +1337,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "merge-only-field", cwd: "/tmp/merge-only-field" },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "merge-only-field",
+          cwd: "/tmp/merge-only-field",
+        },
       });
       const { id } = created.json();
 
@@ -1257,7 +1363,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "round-cap-p", cwd: "/tmp/round-cap-p" },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "round-cap-p",
+          cwd: "/tmp/round-cap-p",
+        },
       });
       const { id } = created.json();
       expect(created.json().maxAutoReturnRounds).toBeNull();
@@ -1286,7 +1397,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "round-cap-invalid-p", cwd: "/tmp/round-cap-invalid-p" },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "round-cap-invalid-p",
+          cwd: "/tmp/round-cap-invalid-p",
+        },
       });
       const { id } = created.json();
 
@@ -1316,6 +1432,7 @@ describe("projects route", () => {
         method: "POST",
         url: "/api/projects",
         payload: {
+          allowDuplicate: true,
           createDir: true,
           name: "round-cap-only-field",
           cwd: "/tmp/round-cap-only-field",
@@ -1339,7 +1456,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "cc-titles-p", cwd: "/tmp/cc-titles-p" },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "cc-titles-p",
+          cwd: "/tmp/cc-titles-p",
+        },
       });
       const { id } = created.json();
       expect(created.json().conventionalCommitTitles).toBeNull();
@@ -1371,6 +1493,7 @@ describe("projects route", () => {
         method: "POST",
         url: "/api/projects",
         payload: {
+          allowDuplicate: true,
           createDir: true,
           name: "cc-titles-only-field",
           cwd: "/tmp/cc-titles-only-field",
@@ -1394,7 +1517,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "auto-tag-release-p", cwd: "/tmp/auto-tag-release-p" },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "auto-tag-release-p",
+          cwd: "/tmp/auto-tag-release-p",
+        },
       });
       const { id } = created.json();
       expect(created.json().autoTagRelease).toBeNull();
@@ -1424,6 +1552,7 @@ describe("projects route", () => {
         method: "POST",
         url: "/api/projects",
         payload: {
+          allowDuplicate: true,
           createDir: true,
           name: "auto-tag-release-only-field",
           cwd: "/tmp/auto-tag-release-only-field",
@@ -1450,7 +1579,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "inject-overrides-p", cwd: "/tmp/inject-overrides-p" },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "inject-overrides-p",
+          cwd: "/tmp/inject-overrides-p",
+        },
       });
       const { id } = created.json();
       expect(created.json().injectAgentGuide).toBeNull();
@@ -1482,6 +1616,7 @@ describe("projects route", () => {
         method: "POST",
         url: "/api/projects",
         payload: {
+          allowDuplicate: true,
           createDir: true,
           name: "inject-agent-guide-only-field",
           cwd: "/tmp/inject-agent-guide-only-field",
@@ -1509,6 +1644,7 @@ describe("projects route", () => {
         method: "POST",
         url: "/api/projects",
         payload: {
+          allowDuplicate: true,
           createDir: true,
           name: "inject-workflow-conventions-p",
           cwd: "/tmp/inject-workflow-conventions-p",
@@ -1547,6 +1683,7 @@ describe("projects route", () => {
         method: "POST",
         url: "/api/projects",
         payload: {
+          allowDuplicate: true,
           createDir: true,
           name: "inject-workflow-conventions-list",
           cwd: "/tmp/inject-workflow-conventions-list",
@@ -1579,6 +1716,7 @@ describe("projects route", () => {
         method: "POST",
         url: "/api/projects",
         payload: {
+          allowDuplicate: true,
           createDir: true,
           name: "suppress-conventions-injection-p",
           cwd: "/tmp/suppress-conventions-injection-p",
@@ -1614,6 +1752,7 @@ describe("projects route", () => {
         method: "POST",
         url: "/api/projects",
         payload: {
+          allowDuplicate: true,
           createDir: true,
           name: "suppress-conventions-injection-list",
           cwd: "/tmp/suppress-conventions-injection-list",
@@ -1645,6 +1784,7 @@ describe("projects route", () => {
         method: "POST",
         url: "/api/projects",
         payload: {
+          allowDuplicate: true,
           createDir: true,
           name: "auto-approve-only-field",
           cwd: "/tmp/auto-approve-only",
@@ -1668,7 +1808,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "bad-agent-default", cwd: "/tmp/bad-agent-default" },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "bad-agent-default",
+          cwd: "/tmp/bad-agent-default",
+        },
       });
       const { id } = created.json();
 
@@ -1687,7 +1832,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "bad-dev-server", cwd: "/tmp/bad-dev-server" },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "bad-dev-server",
+          cwd: "/tmp/bad-dev-server",
+        },
       });
       const { id } = created.json();
 
@@ -1724,7 +1874,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "empty-body", cwd: "/tmp/empty-body" },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "empty-body",
+          cwd: "/tmp/empty-body",
+        },
       });
       const { id } = created.json();
 
@@ -1772,7 +1927,12 @@ describe("projects route", () => {
       await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "git-repo", cwd: path.join(root, "git-repo") },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "git-repo",
+          cwd: path.join(root, "git-repo"),
+        },
       });
 
       const res = await app.inject({ method: "GET", url: "/api/projects/discover" });
@@ -1894,7 +2054,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "no-dock", cwd: projectCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "no-dock", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -1923,7 +2083,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "with-dock", cwd: projectCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "with-dock", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -2023,7 +2183,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "no-remote", cwd: projectCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "no-remote", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -2046,7 +2206,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "no-token", cwd: projectCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "no-token", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -2109,7 +2269,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "connected", cwd: projectCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "connected", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -2148,7 +2308,7 @@ describe("projects route", () => {
         const created = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { createDir: true, name: "issues-view", cwd: projectCwd },
+          payload: { createDir: true, allowDuplicate: true, name: "issues-view", cwd: projectCwd },
         });
         return { projectCwd, id: created.json().id as number };
       }
@@ -2574,7 +2734,7 @@ describe("projects route", () => {
         const created = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { createDir: true, name: "pr-detail", cwd: projectCwd },
+          payload: { createDir: true, allowDuplicate: true, name: "pr-detail", cwd: projectCwd },
         });
         return { projectCwd, id: created.json().id as number };
       }
@@ -3791,7 +3951,7 @@ describe("projects route", () => {
         const created = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { createDir: true, name: "gitlog", cwd: dir },
+          payload: { createDir: true, allowDuplicate: true, name: "gitlog", cwd: dir },
         });
         return { dir, id: created.json().id as number, head: gitIn(dir, "rev-parse", "HEAD") };
       }
@@ -3907,7 +4067,12 @@ describe("projects route", () => {
           const project = await app.inject({
             method: "POST",
             url: "/api/projects",
-            payload: { name: "remote-history", cwd: "/x", hostId: host.json().id },
+            payload: {
+              allowDuplicate: true,
+              name: "remote-history",
+              cwd: "/x",
+              hostId: host.json().id,
+            },
           });
           await run({ app, id: project.json().id as number, seen });
         } finally {
@@ -4039,7 +4204,12 @@ describe("projects route", () => {
         const project = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { name: "remote-history-down", cwd: "/x", hostId: host.json().id },
+          payload: {
+            allowDuplicate: true,
+            name: "remote-history-down",
+            cwd: "/x",
+            hostId: host.json().id,
+          },
         });
         const id = project.json().id;
         for (const url of [
@@ -4068,7 +4238,7 @@ describe("projects route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-github", cwd: "/x", hostId: host.json().id },
+        payload: { allowDuplicate: true, name: "remote-github", cwd: "/x", hostId: host.json().id },
       });
 
       const res = await app.inject({
@@ -4165,7 +4335,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "no-remote", cwd: projectCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "no-remote", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -4188,7 +4358,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "no-cache", cwd: projectCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "no-cache", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -4226,7 +4396,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "empty-prs", cwd: projectCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "empty-prs", cwd: projectCwd },
       });
 
       // Prime the cache as the poller would.
@@ -4271,7 +4441,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "cached-prs", cwd: projectCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "cached-prs", cwd: projectCwd },
       });
 
       const { setRepoPRsStatus } = await import("../../src/services/github.js");
@@ -4342,7 +4512,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "branch-filter-prs", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "branch-filter-prs",
+          cwd: projectCwd,
+        },
       });
 
       const { setRepoPRsStatus } = await import("../../src/services/github.js");
@@ -4424,7 +4599,7 @@ describe("projects route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-prs", cwd: "/x", hostId: host.json().id },
+        payload: { allowDuplicate: true, name: "remote-prs", cwd: "/x", hostId: host.json().id },
       });
 
       const res = await app.inject({
@@ -4503,7 +4678,12 @@ describe("projects route", () => {
       const project = await primary.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-prs-success", cwd: remoteCwd, hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "remote-prs-success",
+          cwd: remoteCwd,
+          hostId: host.json().id,
+        },
       });
 
       const { setRepoPRsStatus } = await import("../../src/services/github.js");
@@ -4613,7 +4793,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "jobs-connected", cwd: projectCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "jobs-connected", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -4673,7 +4853,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "batch-real-repo", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "batch-real-repo",
+          cwd: projectCwd,
+        },
       });
       const projectId = created.json().id as number;
 
@@ -4699,7 +4884,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "batch-not-a-repo", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "batch-not-a-repo",
+          cwd: projectCwd,
+        },
       });
       const projectId = created.json().id as number;
 
@@ -4736,7 +4926,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "batch-transiently-broken", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "batch-transiently-broken",
+          cwd: projectCwd,
+        },
       });
       const projectId = created.json().id as number;
 
@@ -4767,7 +4962,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "batch-bare-flag", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "batch-bare-flag",
+          cwd: projectCwd,
+        },
       });
       const projectId = created.json().id as number;
 
@@ -4801,7 +5001,7 @@ describe("projects route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "batch-remote", cwd: "/x", hostId: host.json().id },
+        payload: { allowDuplicate: true, name: "batch-remote", cwd: "/x", hostId: host.json().id },
       });
       const projectId = project.json().id as number;
 
@@ -4826,7 +5026,12 @@ describe("projects route", () => {
         const project = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { name: "remote-problem", cwd: "/x", hostId: host.json().id },
+          payload: {
+            allowDuplicate: true,
+            name: "remote-problem",
+            cwd: "/x",
+            hostId: host.json().id,
+          },
         });
         return project.json().id as number;
       }
@@ -4908,12 +5113,17 @@ describe("projects route", () => {
       const repo = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "batch-mix-repo", cwd: repoDir },
+        payload: { createDir: true, allowDuplicate: true, name: "batch-mix-repo", cwd: repoDir },
       });
       const nonRepo = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "batch-mix-nonrepo", cwd: nonRepoDir },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "batch-mix-nonrepo",
+          cwd: nonRepoDir,
+        },
       });
       const repoId = repo.json().id as number;
       const nonRepoId = nonRepo.json().id as number;
@@ -4969,7 +5179,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "batch-session-project", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "batch-session-project",
+          cwd: projectCwd,
+        },
       });
       const projectId = created.json().id as number;
 
@@ -5042,7 +5257,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "batch-session-livecwd-project", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "batch-session-livecwd-project",
+          cwd: projectCwd,
+        },
       });
       const projectId = created.json().id as number;
 
@@ -5102,7 +5322,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "batch-session-badlive-project", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "batch-session-badlive-project",
+          cwd: projectCwd,
+        },
       });
       const projectId = created.json().id as number;
       const sessionRes = await app.inject({
@@ -5138,7 +5363,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "batch-session-nonrepo", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "batch-session-nonrepo",
+          cwd: projectCwd,
+        },
       });
       const projectId = created.json().id as number;
       const sessionRes = await app.inject({
@@ -5204,7 +5434,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "batch-session-foreign-project", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "batch-session-foreign-project",
+          cwd: projectCwd,
+        },
       });
       const projectId = created.json().id as number;
       const sessionRes = await app.inject({
@@ -5279,7 +5514,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "batch-git-refs-real", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "batch-git-refs-real",
+          cwd: projectCwd,
+        },
       });
       const projectId = created.json().id as number;
 
@@ -5333,7 +5573,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "batch-git-refs-ci", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "batch-git-refs-ci",
+          cwd: projectCwd,
+        },
       });
       const projectId = created.json().id as number;
       const { setRepoPRsStatus, setDefaultBranchCi } = await import("../../src/services/github.js");
@@ -5366,7 +5611,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "batch-git-refs-none", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "batch-git-refs-none",
+          cwd: projectCwd,
+        },
       });
       const projectId = created.json().id as number;
 
@@ -5401,7 +5651,12 @@ describe("projects route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "batch-refs-remote", cwd: "/x", hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "batch-refs-remote",
+          cwd: "/x",
+          hostId: host.json().id,
+        },
       });
       const projectId = project.json().id as number;
 
@@ -5431,7 +5686,12 @@ describe("projects route", () => {
       const repo = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "batch-git-refs-mix-repo", cwd: repoDir },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "batch-git-refs-mix-repo",
+          cwd: repoDir,
+        },
       });
       const repoId = repo.json().id as number;
 
@@ -5443,7 +5703,12 @@ describe("projects route", () => {
       const remote = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "batch-git-refs-mix-remote", cwd: "/x", hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "batch-git-refs-mix-remote",
+          cwd: "/x",
+          hostId: host.json().id,
+        },
       });
       const remoteId = remote.json().id as number;
 
@@ -5479,7 +5744,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "not-a-repo", cwd: projectCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "not-a-repo", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -5512,7 +5777,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "real-repo", cwd: projectCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "real-repo", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -5551,7 +5816,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "fresh-status-repo", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "fresh-status-repo",
+          cwd: projectCwd,
+        },
       });
       const projectId = created.json().id;
 
@@ -5591,7 +5861,12 @@ describe("projects route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-git-status", cwd: "/x", hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "remote-git-status",
+          cwd: "/x",
+          hostId: host.json().id,
+        },
       });
 
       const res = await app.inject({
@@ -5631,7 +5906,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "transiently-broken-repo", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "transiently-broken-repo",
+          cwd: projectCwd,
+        },
       });
 
       const res = await app.inject({
@@ -5659,7 +5939,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "not-a-repo", cwd: projectCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "not-a-repo", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -5697,7 +5977,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "real-repo-branches", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "real-repo-branches",
+          cwd: projectCwd,
+        },
       });
 
       const res = await app.inject({
@@ -5748,7 +6033,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "default-branch-repo", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "default-branch-repo",
+          cwd: projectCwd,
+        },
       });
 
       const res = await app.inject({
@@ -5790,7 +6080,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "detail-repo-branches", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "detail-repo-branches",
+          cwd: projectCwd,
+        },
       });
 
       const withoutDetail = await app.inject({
@@ -5827,7 +6122,12 @@ describe("projects route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-git-branches", cwd: "/x", hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "remote-git-branches",
+          cwd: "/x",
+          hostId: host.json().id,
+        },
       });
 
       const res = await app.inject({
@@ -5898,7 +6198,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "repair-plan-repo", cwd },
+        payload: { createDir: true, allowDuplicate: true, name: "repair-plan-repo", cwd },
       });
 
       const res = await app.inject({
@@ -5929,7 +6229,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "repair-run-repo", cwd },
+        payload: { createDir: true, allowDuplicate: true, name: "repair-run-repo", cwd },
       });
 
       const res = await app.inject({
@@ -5966,7 +6266,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "repair-busy-repo", cwd },
+        payload: { createDir: true, allowDuplicate: true, name: "repair-busy-repo", cwd },
       });
 
       // Stand in for the auto-fetch sweep, which claims the same clone.
@@ -5998,7 +6298,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "busy-repo", cwd: projectCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "busy-repo", cwd: projectCwd },
       });
 
       markCloneBusy(LOCAL_HOST_ID, projectCwd);
@@ -6028,7 +6328,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "repair-concurrent-repo", cwd },
+        payload: { createDir: true, allowDuplicate: true, name: "repair-concurrent-repo", cwd },
       });
       const url = `/api/projects/${created.json().id}/git-repair`;
 
@@ -6057,7 +6357,12 @@ describe("projects route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-git-repair", cwd: "/x", hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "remote-git-repair",
+          cwd: "/x",
+          hostId: host.json().id,
+        },
       });
 
       const res = await app.inject({
@@ -6113,7 +6418,12 @@ describe("projects route", () => {
         const project = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { name: "remote-git-repair-plan", cwd: "/x", hostId: host.json().id },
+          payload: {
+            allowDuplicate: true,
+            name: "remote-git-repair-plan",
+            cwd: "/x",
+            hostId: host.json().id,
+          },
         });
 
         const res = await app.inject({
@@ -6145,7 +6455,12 @@ describe("projects route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-git-repair-plan-dead", cwd: "/x", hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "remote-git-repair-plan-dead",
+          cwd: "/x",
+          hostId: host.json().id,
+        },
       });
 
       const res = await app.inject({
@@ -6182,7 +6497,12 @@ describe("projects route", () => {
         const project = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { name: "remote-git-repair-404", cwd: "/x", hostId: host.json().id },
+          payload: {
+            allowDuplicate: true,
+            name: "remote-git-repair-404",
+            cwd: "/x",
+            hostId: host.json().id,
+          },
         });
 
         const res = await app.inject({
@@ -6222,7 +6542,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "health-repo", cwd: projectCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "health-repo", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -6280,7 +6600,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "health-damaged", cwd: projectCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "health-damaged", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -6310,7 +6630,12 @@ describe("projects route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-git-health", cwd: "/x", hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "remote-git-health",
+          cwd: "/x",
+          hostId: host.json().id,
+        },
       });
 
       const res = await app.inject({
@@ -6359,7 +6684,12 @@ describe("projects route", () => {
         const project = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { name: "remote-git-health-ok", cwd: "/x", hostId: host.json().id },
+          payload: {
+            allowDuplicate: true,
+            name: "remote-git-health-ok",
+            cwd: "/x",
+            hostId: host.json().id,
+          },
         });
 
         const res = await app.inject({
@@ -6406,7 +6736,12 @@ describe("projects route", () => {
         const project = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { name: "remote-git-health-404", cwd: "/x", hostId: host.json().id },
+          payload: {
+            allowDuplicate: true,
+            name: "remote-git-health-404",
+            cwd: "/x",
+            hostId: host.json().id,
+          },
         });
 
         const res = await app.inject({
@@ -6445,7 +6780,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "fetch-repo", cwd: projectCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "fetch-repo", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -6471,7 +6806,12 @@ describe("projects route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-git-fetch", cwd: "/x", hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "remote-git-fetch",
+          cwd: "/x",
+          hostId: host.json().id,
+        },
       });
 
       const res = await app.inject({
@@ -6505,7 +6845,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "pull-repo", cwd: projectCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "pull-repo", cwd: projectCwd },
       });
 
       const res = await app.inject({
@@ -6531,7 +6871,12 @@ describe("projects route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-git-pull", cwd: "/x", hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "remote-git-pull",
+          cwd: "/x",
+          hostId: host.json().id,
+        },
       });
 
       const res = await app.inject({
@@ -6559,7 +6904,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "branch-delete-repo", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "branch-delete-repo",
+          cwd: projectCwd,
+        },
       });
       return { projectCwd, projectId: created.json().id as number };
     }
@@ -6671,7 +7021,12 @@ describe("projects route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-branch-delete", cwd: "/x", hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "remote-branch-delete",
+          cwd: "/x",
+          hostId: host.json().id,
+        },
       });
 
       const res = await app.inject({
@@ -6731,7 +7086,12 @@ describe("projects route", () => {
       const project = await primary.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-branch-delete-success", cwd: remoteCwd, hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "remote-branch-delete-success",
+          cwd: remoteCwd,
+          hostId: host.json().id,
+        },
       });
 
       const res = await primary.inject({
@@ -6818,7 +7178,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "prune", cwd: dir },
+        payload: { createDir: true, allowDuplicate: true, name: "prune", cwd: dir },
       });
       const id = created.json().id as number;
       const { tasks } = await import("../../src/db/schema.js");
@@ -7051,7 +7411,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "branch-ops-repo", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "branch-ops-repo",
+          cwd: projectCwd,
+        },
       });
       return { projectCwd, projectId: created.json().id as number, run };
     }
@@ -7165,7 +7530,7 @@ describe("projects route", () => {
         const twin = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { name: "branch-ops-twin", cwd: projectCwd },
+          payload: { allowDuplicate: true, name: "branch-ops-twin", cwd: projectCwd },
         });
         const twinId = twin.json().id as number;
         const inserted = app.db
@@ -7198,7 +7563,7 @@ describe("projects route", () => {
         const project = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { name: "branch-ops-in-worktree", cwd: linked },
+          payload: { allowDuplicate: true, name: "branch-ops-in-worktree", cwd: linked },
         });
         const id = project.json().id as number;
         const inserted = app.db
@@ -7245,7 +7610,12 @@ describe("projects route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-branch-ops", cwd: "/x", hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "remote-branch-ops",
+          cwd: "/x",
+          hostId: host.json().id,
+        },
       });
       return project.json().id as number;
     }
@@ -7314,7 +7684,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "worktree-remove-repo", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "worktree-remove-repo",
+          cwd: projectCwd,
+        },
       });
       return { projectCwd, worktreePath, projectId: created.json().id as number };
     }
@@ -7801,7 +8176,12 @@ describe("projects route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-worktree-remove", cwd: "/x", hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "remote-worktree-remove",
+          cwd: "/x",
+          hostId: host.json().id,
+        },
       });
 
       const res = await app.inject({
@@ -7932,7 +8312,7 @@ describe("projects route", () => {
         const project = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { name: "kept-remote", cwd: projectCwd },
+          payload: { allowDuplicate: true, name: "kept-remote", cwd: projectCwd },
         });
         const projectId = project.json().id as number;
         const repoCwd = "/remote/checkout";
@@ -8097,7 +8477,7 @@ describe("projects route", () => {
         const other = await app.inject({
           method: "POST",
           url: "/api/projects",
-          payload: { name: "kept-other", cwd: projectCwd },
+          payload: { allowDuplicate: true, name: "kept-other", cwd: projectCwd },
         });
         const foreignId = await insertOwner(app, {
           projectId: other.json().id,
@@ -8219,7 +8599,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "worktree-prune-repo", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "worktree-prune-repo",
+          cwd: projectCwd,
+        },
       });
 
       const res = await app.inject({
@@ -8243,7 +8628,12 @@ describe("projects route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-worktree-prune", cwd: "/x", hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "remote-worktree-prune",
+          cwd: "/x",
+          hostId: host.json().id,
+        },
       });
 
       const res = await app.inject({
@@ -8286,7 +8676,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "diff-stats-project", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "diff-stats-project",
+          cwd: projectCwd,
+        },
       });
       const projectId = created.json().id as number;
       const sessionRes = await app.inject({
@@ -8319,7 +8714,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "diff-stats-nonrepo", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "diff-stats-nonrepo",
+          cwd: projectCwd,
+        },
       });
       const projectId = created.json().id as number;
       const sessionRes = await app.inject({
@@ -8360,7 +8760,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "diff-stats-clean", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "diff-stats-clean",
+          cwd: projectCwd,
+        },
       });
       const projectId = created.json().id as number;
       const sessionRes = await app.inject({
@@ -8396,7 +8801,12 @@ describe("projects route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "diff-stats-remote-project", cwd: "/x", hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "diff-stats-remote-project",
+          cwd: "/x",
+          hostId: host.json().id,
+        },
       });
       const projectId = project.json().id as number;
 
@@ -8455,7 +8865,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "diff-stats-base-project", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "diff-stats-base-project",
+          cwd: projectCwd,
+        },
       });
       const projectId = created.json().id as number;
       const sessionRes = await app.inject({
@@ -8550,7 +8965,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "diff-stats-auto-project", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "diff-stats-auto-project",
+          cwd: projectCwd,
+        },
       });
       const projectId = created.json().id as number;
       const sessionRes = await app.inject({
@@ -8601,7 +9021,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name, cwd: projectCwd },
+        payload: { allowDuplicate: true, createDir: true, name, cwd: projectCwd },
       });
       return { projectId: created.json().id as number, projectCwd };
     }
@@ -8671,7 +9091,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "git-file-diff-nonrepo", cwd: projectCwd },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "git-file-diff-nonrepo",
+          cwd: projectCwd,
+        },
       });
       const projectId = created.json().id as number;
 
@@ -8697,7 +9122,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "branchy", cwd: projectCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "branchy", cwd: projectCwd },
       });
 
       const listed = await app.inject({ method: "GET", url: "/api/projects" });
@@ -8718,7 +9143,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-branch", cwd: "/x", hostId: host.json().id },
+        payload: { allowDuplicate: true, name: "remote-branch", cwd: "/x", hostId: host.json().id },
       });
 
       const listed = await app.inject({ method: "GET", url: "/api/projects" });
@@ -8752,12 +9177,18 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "dangling-hostid-project", cwd: "/x", hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "dangling-hostid-project",
+          cwd: "/x",
+          hostId: host.json().id,
+        },
       });
       const otherLocal = await app.inject({
         method: "POST",
         url: "/api/projects",
         payload: {
+          allowDuplicate: true,
           createDir: true,
           name: "still-fine-local",
           cwd: fs.mkdtempSync(path.join(os.tmpdir(), "dangling-hostid-sibling-")),
@@ -8793,7 +9224,7 @@ describe("projects route", () => {
       const res = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "orphan", cwd: "/x", hostId: "does-not-exist" },
+        payload: { allowDuplicate: true, name: "orphan", cwd: "/x", hostId: "does-not-exist" },
       });
       expect(res.statusCode).toBe(400);
       await app.close();
@@ -8809,7 +9240,12 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote", cwd: "~/on-the-agent", hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "remote",
+          cwd: "~/on-the-agent",
+          hostId: host.json().id,
+        },
       });
       expect(created.statusCode).toBe(201);
       // Expanding against *this* process's home dir would be wrong — issue
@@ -8832,7 +9268,12 @@ describe("projects route", () => {
       await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "same-path-local", cwd: "/shared/path" },
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "same-path-local",
+          cwd: "/shared/path",
+        },
       });
 
       const res = await app.inject({
@@ -8865,7 +9306,12 @@ describe("projects route", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-actions", cwd: "/x", hostId: host.json().id },
+        payload: {
+          allowDuplicate: true,
+          name: "remote-actions",
+          cwd: "/x",
+          hostId: host.json().id,
+        },
       });
       const projectId = project.json().id;
 
@@ -8888,7 +9334,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "untracked-dock", cwd: "/tmp" },
+        payload: { createDir: true, allowDuplicate: true, name: "untracked-dock", cwd: "/tmp" },
       });
       const projectId = created.json().id as number;
 
@@ -8916,7 +9362,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-dock", cwd: "/x", hostId: host.json().id },
+        payload: { allowDuplicate: true, name: "remote-dock", cwd: "/x", hostId: host.json().id },
       });
       const projectId = created.json().id as number;
 
@@ -8935,7 +9381,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "mixed-sessions", cwd: "/tmp" },
+        payload: { createDir: true, allowDuplicate: true, name: "mixed-sessions", cwd: "/tmp" },
       });
       const projectId = created.json().id as number;
 
@@ -9127,7 +9573,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "wiring-create", cwd },
+        payload: { createDir: true, allowDuplicate: true, name: "wiring-create", cwd },
       });
       expect(created.statusCode).toBe(201);
       const projectId = created.json().id as number;
@@ -9153,7 +9599,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "wiring-disabled", cwd },
+        payload: { createDir: true, allowDuplicate: true, name: "wiring-disabled", cwd },
       });
       expect(created.statusCode).toBe(201);
       expect(fetchMock).not.toHaveBeenCalled();
@@ -9178,7 +9624,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "wiring-patch", cwd: originalCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "wiring-patch", cwd: originalCwd },
       });
       const projectId = created.json().id as number;
       fetchMock.mockClear();
@@ -9246,7 +9692,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "wiring-move", cwd: originalCwd },
+        payload: { createDir: true, allowDuplicate: true, name: "wiring-move", cwd: originalCwd },
       });
       const projectId = created.json().id as number;
 
@@ -9294,7 +9740,7 @@ describe("projects route", () => {
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "wiring-delete", cwd },
+        payload: { createDir: true, allowDuplicate: true, name: "wiring-delete", cwd },
       });
       const projectId = created.json().id as number;
       fetchMock.mockClear();
@@ -9350,12 +9796,12 @@ describe("projects route", () => {
       const a = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "wiring-shared-a", cwd: cwdA },
+        payload: { allowDuplicate: true, createDir: true, name: "wiring-shared-a", cwd: cwdA },
       });
       const b = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "wiring-shared-b", cwd: cwdB },
+        payload: { allowDuplicate: true, createDir: true, name: "wiring-shared-b", cwd: cwdB },
       });
       const idA = a.json().id as number;
       const idB = b.json().id as number;
@@ -9415,12 +9861,12 @@ describe("projects route", () => {
       const a = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "wiring-ghost-a", cwd: cwdA },
+        payload: { allowDuplicate: true, createDir: true, name: "wiring-ghost-a", cwd: cwdA },
       });
       const b = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { createDir: true, name: "wiring-ghost-b", cwd: cwdB },
+        payload: { allowDuplicate: true, createDir: true, name: "wiring-ghost-b", cwd: cwdB },
       });
       // A project on a registered-but-dead remote host: its repo can't be resolved.
       const { hosts, projects: projectsTable } = await import("../../src/db/schema.js");
@@ -9454,6 +9900,344 @@ describe("projects route", () => {
 
       fs.rmSync(cwdA, { recursive: true, force: true });
       fs.rmSync(cwdB, { recursive: true, force: true });
+    });
+  });
+  // Issue #2231 — one project per repo: a checkout of a repo that already has
+  // a project is attached to it instead of becoming a duplicate.
+  describe("same-repo duplicate prevention (#2231)", () => {
+    const ORIGIN = "git@github.com:acme/dup.git";
+    let base: string;
+
+    function checkout(name: string, origin: string | null = ORIGIN): string {
+      const cwd = path.join(base, name);
+      fs.mkdirSync(path.join(cwd, ".git"), { recursive: true });
+      if (origin) {
+        fs.writeFileSync(
+          path.join(cwd, ".git", "config"),
+          `[remote "origin"]\n\turl = ${origin}\n`,
+        );
+      }
+      return cwd;
+    }
+
+    async function addHost(app: Awaited<ReturnType<typeof buildApp>>, name: string) {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      return res.json().id as string;
+    }
+
+    beforeEach(() => {
+      base = fs.mkdtempSync(path.join(os.tmpdir(), "projects-dup-"));
+    });
+    afterEach(() => {
+      fs.rmSync(base, { recursive: true, force: true });
+    });
+
+    it("POST answers 409 DUPLICATE_PROJECT for the same origin, before creating any directory", async () => {
+      const app = await buildApp();
+      const first = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "dup", cwd: checkout("one") },
+      });
+      expect(first.statusCode).toBe(201);
+
+      const missing = path.join(base, "not-yet", "x");
+      const again = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "dup-2", cwd: checkout("two") },
+      });
+      expect(again.statusCode).toBe(409);
+      expect(again.json()).toMatchObject({
+        code: "DUPLICATE_PROJECT",
+        existingProjectId: first.json().id,
+        existingName: "dup",
+      });
+
+      // The duplicate check runs before the directory is validated/created.
+      const noDir = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "dup", cwd: checkout("one"), createDir: true },
+      });
+      expect(noDir.statusCode).toBe(409);
+      expect(fs.existsSync(missing)).toBe(false);
+      await app.close();
+    });
+
+    it("POST does not treat two repos on one forge with different ports as duplicates", async () => {
+      const app = await buildApp();
+      const first = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          name: "gitea-a",
+          cwd: checkout("ga", "ssh://git@gitea.local:2222/team/app.git"),
+        },
+      });
+      const second = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          name: "gitea-b",
+          cwd: checkout("gb", "ssh://git@gitea.local:2223/team/app.git"),
+        },
+      });
+      expect([first.statusCode, second.statusCode]).toEqual([201, 201]);
+      // The same port is the same repo, and the 409 names the override.
+      const third = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "gitea-c", cwd: checkout("gc", "ssh://git@gitea.local:2222/team/app") },
+      });
+      expect(third.statusCode).toBe(409);
+      expect(third.json().message).toContain("allowDuplicate");
+      expect(third.json().existingHostId).toBe("local");
+      await app.close();
+    });
+
+    it("POST create for a remote hostId makes no discovery call (the check is local-only)", async () => {
+      const app = await buildApp();
+      const hostId = await addHost(app, "box-nonet");
+      const fetchSpy = vi.spyOn(globalThis, "fetch");
+      try {
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { name: "remote-nonet", cwd: "/srv/nonet", hostId },
+        });
+        expect(res.statusCode).toBe(201);
+        expect(
+          fetchSpy.mock.calls.filter((c) => String(c[0]).includes("/internal/discover")),
+        ).toEqual([]);
+      } finally {
+        fetchSpy.mockRestore();
+      }
+      await app.close();
+    });
+
+    it("POST with allowDuplicate:true creates the second project", async () => {
+      const app = await buildApp();
+      await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "dup", cwd: checkout("one") },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "dup-2", cwd: checkout("two"), allowDuplicate: true },
+      });
+      expect(res.statusCode).toBe(201);
+      await app.close();
+    });
+
+    it("POST 409s when the new cwd is mapped in another project's hostCwds", async () => {
+      const app = await buildApp();
+      const hostId = await addHost(app, "box-dup");
+      const first = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          name: "mapped",
+          cwd: checkout("solo", null),
+          hostCwds: { [hostId]: "/srv/mapped" },
+        },
+      });
+      expect(first.statusCode).toBe(201);
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "other", cwd: "/srv/mapped", hostId },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().existingProjectId).toBe(first.json().id);
+      await app.close();
+    });
+
+    it("PATCH 409s when the new cwd duplicates another project, ignores itself, and allowDuplicate overrides", async () => {
+      const app = await buildApp();
+      const a = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "a", cwd: checkout("a") },
+      });
+      const b = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "b", cwd: checkout("b", "git@github.com:acme/other.git") },
+      });
+      expect(b.statusCode).toBe(201);
+      const bId = b.json().id as number;
+
+      // Re-saving its own cwd is not a duplicate of itself.
+      const same = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${bId}`,
+        payload: { name: "b2", cwd: checkout("b", "git@github.com:acme/other.git") },
+      });
+      expect(same.statusCode).toBe(200);
+
+      const clash = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${bId}`,
+        payload: { cwd: checkout("c") },
+      });
+      expect(clash.statusCode).toBe(409);
+      expect(clash.json().message).toContain("save this change anyway");
+      expect(clash.json()).toMatchObject({
+        code: "DUPLICATE_PROJECT",
+        existingProjectId: a.json().id,
+      });
+
+      const forced = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${bId}`,
+        payload: { cwd: checkout("c"), allowDuplicate: true },
+      });
+      expect(forced.statusCode).toBe(200);
+
+      // allowDuplicate alone is not a field to update.
+      const only = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${bId}`,
+        payload: { allowDuplicate: true },
+      });
+      expect(only.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("PATCH 409s when a hostCwds entry is another project's path", async () => {
+      const app = await buildApp();
+      const hostId = await addHost(app, "box-patch");
+      const a = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "a", cwd: checkout("pa", null), hostCwds: { [hostId]: "/srv/pa" } },
+      });
+      const b = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "b", cwd: checkout("pb", null) },
+      });
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${b.json().id}`,
+        payload: { hostCwds: { [hostId]: "/srv/pa" } },
+      });
+      expect(res.statusCode).toBe(409);
+      expect(res.json().existingProjectId).toBe(a.json().id);
+      await app.close();
+    });
+
+    it("discover reports matchedProject for an origin match and counts a hostCwds path as registered", async () => {
+      const prev = process.env.PROJECTS_ROOTS;
+      process.env.PROJECTS_ROOTS = base;
+      const app = await buildApp();
+      const existing = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "dup", cwd: checkout("home") },
+      });
+      checkout("clone"); // same origin, not registered
+      checkout("unrelated", "git@github.com:acme/else.git");
+      const hostId = await addHost(app, "box-disc");
+      await app.inject({
+        method: "POST",
+        url: `/api/projects/${existing.json().id}/host-checkouts`,
+        payload: { hostId, cwd: path.join(base, "unrelated") },
+      });
+
+      const res = await app.inject({ method: "GET", url: "/api/projects/discover" });
+      const byName = Object.fromEntries(res.json().map((c: { name: string }) => [c.name, c]));
+      expect(byName.clone.isRegistered).toBe(false);
+      expect(byName.clone.matchedProject).toEqual({
+        id: existing.json().id,
+        name: "dup",
+        hostId: "local",
+        reason: "origin",
+      });
+      expect(byName.home.matchedProject.reason).toBe("path");
+      expect(byName.unrelated.matchedProject).toBeUndefined();
+      await app.close();
+      if (prev === undefined) delete process.env.PROJECTS_ROOTS;
+      else process.env.PROJECTS_ROOTS = prev;
+    });
+
+    it("POST /:id/host-checkouts attaches a path as operator-set and refuses bad input", async () => {
+      const app = await buildApp();
+      const hostId = await addHost(app, "box-attach");
+      const p = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "att", cwd: checkout("att", null) },
+      });
+      const id = p.json().id as number;
+
+      const ok = await app.inject({
+        method: "POST",
+        url: `/api/projects/${id}/host-checkouts`,
+        payload: { hostId, cwd: "/srv/att" },
+      });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json().hostCwds).toEqual({ [hostId]: "/srv/att" });
+      expect(ok.json().hostCwdsMeta.auto).toEqual([]);
+
+      const own = await app.inject({
+        method: "POST",
+        url: `/api/projects/${id}/host-checkouts`,
+        payload: { hostId: "local", cwd: "/x" },
+      });
+      expect(own.statusCode).toBe(400);
+
+      const unknown = await app.inject({
+        method: "POST",
+        url: `/api/projects/${id}/host-checkouts`,
+        payload: { hostId: "nope", cwd: "/x" },
+      });
+      expect(unknown.statusCode).toBe(400);
+
+      const traversal = await app.inject({
+        method: "POST",
+        url: `/api/projects/${id}/host-checkouts`,
+        payload: { hostId, cwd: "/srv/../etc" },
+      });
+      expect(traversal.statusCode).toBe(400);
+
+      // A different path already mapped for the host is not replaced.
+      const mapped = await app.inject({
+        method: "POST",
+        url: `/api/projects/${id}/host-checkouts`,
+        payload: { hostId, cwd: "/srv/att-2" },
+      });
+      expect(mapped.statusCode).toBe(409);
+      expect(mapped.json().code).toBe("HOST_PATH_ALREADY_MAPPED");
+
+      // A path that is another project's is refused, not attached twice.
+      const other = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { name: "other", cwd: checkout("other", null) },
+      });
+      const owned = await app.inject({
+        method: "POST",
+        url: `/api/projects/${other.json().id}/host-checkouts`,
+        payload: { hostId, cwd: "/srv/att" },
+      });
+      expect(owned.statusCode).toBe(409);
+      expect(owned.json().code).toBe("DUPLICATE_PROJECT");
+
+      const missing = await app.inject({
+        method: "POST",
+        url: "/api/projects/999999/host-checkouts",
+        payload: { hostId, cwd: "/srv/nobody" },
+      });
+      expect(missing.statusCode).toBe(404);
+      await app.close();
     });
   });
 });

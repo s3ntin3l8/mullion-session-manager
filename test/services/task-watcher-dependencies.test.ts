@@ -151,7 +151,12 @@ describe("autoClaimReadyTasks — dependency-aware claiming (#667)", () => {
     const res = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: `p-${crypto.randomBytes(4).toString("hex")}`, cwd },
+      payload: {
+        allowDuplicate: true,
+        createDir: true,
+        name: `p-${crypto.randomBytes(4).toString("hex")}`,
+        cwd,
+      },
     });
     return res.json().id as number;
   }

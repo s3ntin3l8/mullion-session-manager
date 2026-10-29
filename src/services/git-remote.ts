@@ -116,10 +116,40 @@ const SCP_REMOTE = /^(?:[^@/\s]+@)?([^:/\s]+):(?!\/\/)(.+)$/;
  * those cannot identify the same repository on another host.
  */
 export function normalizeGitRemote(raw: string): string | null {
+  const parsed = parseRemoteParts(raw);
+  return parsed === null ? null : `${parsed.host}/${parsed.path}`;
+}
+
+/** Scheme defaults a remote's port is dropped for (it names the same service). */
+const DEFAULT_PORTS: Record<string, string> = { "ssh:": "22", "git:": "9418" };
+
+/**
+ * Like `normalizeGitRemote`, but the port is part of the key. The matcher above
+ * drops it on purpose (right for suggestions: `git@h:o/r` and `https://h/o/r`
+ * are one repo), which is wrong as a HARD gate: `gitea.local:2222/team/app` and
+ * `gitea.local:2223/team/app` are different self-hosted repos. A scheme's
+ * default port (ssh 22, https 443, ...) is dropped, so the same repo spelled
+ * with and without it still compares equal; a non-default port is kept. The
+ * cost of keeping it is a missed duplicate across transports on a custom port,
+ * which only means no 409 — never a wrong refusal.
+ */
+export function gitRemoteGateKey(raw: string): string | null {
+  const parsed = parseRemoteParts(raw);
+  if (parsed === null) return null;
+  const port =
+    parsed.port !== "" && parsed.port !== DEFAULT_PORTS[parsed.protocol] ? parsed.port : "";
+  return `${parsed.host}${port === "" ? "" : `:${port}`}/${parsed.path}`;
+}
+
+function parseRemoteParts(
+  raw: string,
+): { host: string; port: string; protocol: string; path: string } | null {
   const url = raw.trim();
   if (url === "") return null;
 
   let host: string;
+  let port = "";
+  let protocol = "";
   let pathPart: string;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
     let parsed: URL;
@@ -130,6 +160,8 @@ export function normalizeGitRemote(raw: string): string | null {
     }
     if (parsed.protocol === "file:") return null;
     host = parsed.hostname;
+    port = parsed.port;
+    protocol = parsed.protocol;
     // Not percent-decoded: decoding can throw on a malformed escape and would
     // make `o%2Fr` equal `o/r`; both spellings of one repo are compared raw.
     pathPart = parsed.pathname;
@@ -148,5 +180,5 @@ export function normalizeGitRemote(raw: string): string | null {
     .replace(/\.git$/i, "")
     .replace(/\/+$/g, "");
   if (host === "" || cleaned === "") return null;
-  return `${host.toLowerCase()}/${cleaned.toLowerCase()}`;
+  return { host: host.toLowerCase(), port, protocol, path: cleaned.toLowerCase() };
 }

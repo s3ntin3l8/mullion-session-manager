@@ -134,7 +134,11 @@ describe("auth plugin + routes (issues #19, #30)", () => {
 
     it("lets a write with no Origin header through", async () => {
       const app = await buildApp();
-      const res = await app.inject({ method: "POST", url: "/api/projects", payload: {} });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { allowDuplicate: true },
+      });
       expect(res.statusCode).not.toBe(403);
       await app.close();
     });

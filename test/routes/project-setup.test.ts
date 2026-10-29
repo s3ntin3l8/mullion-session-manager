@@ -60,7 +60,7 @@ async function createProject(app: Awaited<ReturnType<typeof buildApp>>, cwd: str
   const res = await app.inject({
     method: "POST",
     url: "/api/projects",
-    payload: { name: "setup-test", cwd },
+    payload: { allowDuplicate: true, name: "setup-test", cwd },
   });
   return res.json().id as number;
 }
@@ -134,7 +134,7 @@ describe("project-setup route", () => {
     const projectRes = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "remote-setup", cwd: "/remote/path", hostId },
+      payload: { allowDuplicate: true, name: "remote-setup", cwd: "/remote/path", hostId },
     });
     const projectId = projectRes.json().id as number;
 
@@ -1059,7 +1059,7 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
     const projectRes = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "remote-generate", cwd: "/remote/path", hostId },
+      payload: { allowDuplicate: true, name: "remote-generate", cwd: "/remote/path", hostId },
     });
     const projectId = projectRes.json().id as number;
 

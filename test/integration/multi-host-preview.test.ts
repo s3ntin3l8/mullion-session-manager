@@ -203,7 +203,12 @@ describe("multi-host preview proxy (issue #28 phase 6)", () => {
     const projectRes = await primary.app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "remote-preview", cwd: "/tmp/remote-preview-project", hostId },
+      payload: {
+        allowDuplicate: true,
+        name: "remote-preview",
+        cwd: "/tmp/remote-preview-project",
+        hostId,
+      },
     });
     projectId = projectRes.json().id;
     await primary.app.inject({
@@ -282,7 +287,12 @@ describe("multi-host preview proxy (issue #28 phase 6)", () => {
     const deadProject = await primary.app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "dead-preview-project", cwd: "/x", hostId: deadHost.json().id },
+      payload: {
+        allowDuplicate: true,
+        name: "dead-preview-project",
+        cwd: "/x",
+        hostId: deadHost.json().id,
+      },
     });
     await primary.app.inject({
       method: "PATCH",
@@ -417,7 +427,12 @@ describe("multi-host preview proxy (issue #28 phase 6)", () => {
     const basePathProjectRes = await primary.app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { name: "remote-preview-subpath", cwd: "/tmp/remote-preview-subpath", hostId },
+      payload: {
+        allowDuplicate: true,
+        name: "remote-preview-subpath",
+        cwd: "/tmp/remote-preview-subpath",
+        hostId,
+      },
     });
     const basePathProjectId = basePathProjectRes.json().id;
     await primary.app.inject({

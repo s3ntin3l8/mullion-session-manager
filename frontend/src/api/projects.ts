@@ -65,6 +65,7 @@ export const projectsApi = {
         ...(hostId ? { hostId } : {}),
         ...(opts?.createDir ? { createDir: true } : {}),
         ...(opts?.gitInit ? { gitInit: true } : {}),
+        ...(opts?.allowDuplicate ? { allowDuplicate: true } : {}),
         ...(opts?.placement ? { placement: opts.placement } : {}),
       }),
     }),
@@ -99,6 +100,14 @@ export const projectsApi = {
     request<CreateProjectResult>(`/api/projects/${id}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
+    }),
+
+  // Issue #2231 — record a checkout on another host on an existing project
+  // (what Discover's "Add as checkout of <project>" does).
+  attachHostCheckout: (projectId: number, hostId: string, cwd: string) =>
+    request<Project>(`/api/projects/${projectId}/host-checkouts`, {
+      method: "POST",
+      body: JSON.stringify({ hostId, cwd }),
     }),
 
   deleteProject: (id: number) => request<void>(`/api/projects/${id}`, { method: "DELETE" }),

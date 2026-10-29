@@ -125,7 +125,7 @@ describe("reconcileExitedSessions", () => {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
-      payload: { createDir: true, name: "p", cwd: "/tmp" },
+      payload: { allowDuplicate: true, createDir: true, name: "p", cwd: "/tmp" },
     });
     const created = await app.inject({
       method: "POST",
@@ -958,7 +958,7 @@ describe("reconcileExitedSessions", () => {
       const remoteProject = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "remote-p", cwd: "/x", hostId: badHost.json().id },
+        payload: { allowDuplicate: true, name: "remote-p", cwd: "/x", hostId: badHost.json().id },
       });
       const { sessions } = await import("../../src/db/schema.js");
       const [remoteRow] = app.db
@@ -1033,7 +1033,7 @@ describe("reconcileExitedSessions", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "p", cwd: "/x", hostId: host.json().id },
+        payload: { allowDuplicate: true, name: "p", cwd: "/x", hostId: host.json().id },
       });
       const { sessions } = await import("../../src/db/schema.js");
       const [omitted] = app.db
@@ -1109,7 +1109,7 @@ describe("reconcileExitedSessions", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "p", cwd: "/x", hostId: host.json().id },
+        payload: { allowDuplicate: true, name: "p", cwd: "/x", hostId: host.json().id },
       });
       const { sessions } = await import("../../src/db/schema.js");
       const [remoteRow] = app.db
@@ -1158,7 +1158,7 @@ describe("reconcileExitedSessions", () => {
       const project = await app.inject({
         method: "POST",
         url: "/api/projects",
-        payload: { name: "p", cwd: "/x", hostId: host.json().id },
+        payload: { allowDuplicate: true, name: "p", cwd: "/x", hostId: host.json().id },
       });
       const { sessions } = await import("../../src/db/schema.js");
       const [row] = app.db
