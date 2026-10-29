@@ -1,5 +1,41 @@
 # Changelog
 
+## [0.3.52](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.51...v0.3.52) (2026-10-29)
+
+
+### Features
+
+* **github:** post sidebar comments and reviews as you, not the Mullion App ([#2282](https://github.com/s3ntin3l8/mullion-session-manager/issues/2282)) ([4323965](https://github.com/s3ntin3l8/mullion-session-manager/commit/4323965d0680663eeb50d4f51c8a563d6bea3113)), closes [#2049](https://github.com/s3ntin3l8/mullion-session-manager/issues/2049)
+* **github:** show who an issue comment and a thread reply post as ([#2283](https://github.com/s3ntin3l8/mullion-session-manager/issues/2283)) ([0cddc4b](https://github.com/s3ntin3l8/mullion-session-manager/commit/0cddc4b3f17a3350ab48c14a526d57c405c30978))
+* **github:** sticky PR/issue header, next-step action bar, issue filter popover ([#2264](https://github.com/s3ntin3l8/mullion-session-manager/issues/2264)) ([1b01ec7](https://github.com/s3ntin3l8/mullion-session-manager/commit/1b01ec724479cdbe48a9416eb79749dd0303eb2c))
+* **hosts:** generate agent tokens, optional base URL and token rotation on Add host ([#2266](https://github.com/s3ntin3l8/mullion-session-manager/issues/2266)) ([87e62e2](https://github.com/s3ntin3l8/mullion-session-manager/commit/87e62e2a56f6af2eac13af66a9083429b4eefa3f))
+* **projects:** merge a duplicate project into its same-repo survivor ([#2278](https://github.com/s3ntin3l8/mullion-session-manager/issues/2278)) ([e6a9bf7](https://github.com/s3ntin3l8/mullion-session-manager/commit/e6a9bf7843922a5a6a5adccbc14cd3a32d8619aa)), closes [#2232](https://github.com/s3ntin3l8/mullion-session-manager/issues/2232)
+* remove confirmed orphan worktree directories ([#2221](https://github.com/s3ntin3l8/mullion-session-manager/issues/2221)) ([d4ec68c](https://github.com/s3ntin3l8/mullion-session-manager/commit/d4ec68c2c8ed0098c96d3e8e301ab578c6d665fb))
+* **tasks:** push when an approved task waits for a human ([#2281](https://github.com/s3ntin3l8/mullion-session-manager/issues/2281)) ([71b5750](https://github.com/s3ntin3l8/mullion-session-manager/commit/71b5750341bbe1abc095ce0d99c6e27308f253f7))
+* **windows:** generated agent token, bind address and an Apps entry in the installer ([#2262](https://github.com/s3ntin3l8/mullion-session-manager/issues/2262)) ([72f6546](https://github.com/s3ntin3l8/mullion-session-manager/commit/72f654603727e5d19caa386b30e5807cf9f70481))
+* **windows:** run the agent as a windowless, Mullion-branded copy of Node ([#2277](https://github.com/s3ntin3l8/mullion-session-manager/issues/2277)) ([59f450b](https://github.com/s3ntin3l8/mullion-session-manager/commit/59f450ba31442386650c0d9a7bb870b6518baa05))
+
+
+### Bug Fixes
+
+* **github:** count standing change-requests and name open-conversation merge blocks ([#2253](https://github.com/s3ntin3l8/mullion-session-manager/issues/2253)) ([d5f4eb1](https://github.com/s3ntin3l8/mullion-session-manager/commit/d5f4eb1a14cc9a1f23d1b2997bdde54fd2b5245c))
+* **github:** make Update branch the next step when strict protection holds a PR back ([#2279](https://github.com/s3ntin3l8/mullion-session-manager/issues/2279)) ([1d6de9d](https://github.com/s3ntin3l8/mullion-session-manager/commit/1d6de9da411de08b62c81e95ebccbd856032eb6f))
+* **hosts:** an unreachable host no longer stalls GET /api/sessions or a new session's pane ([#2273](https://github.com/s3ntin3l8/mullion-session-manager/issues/2273)) ([fa5db68](https://github.com/s3ntin3l8/mullion-session-manager/commit/fa5db681e210c829c37b6078ce367f4f1e25db6c))
+* **projects:** attach a checkout of an existing repo instead of creating a duplicate project ([#2265](https://github.com/s3ntin3l8/mullion-session-manager/issues/2265)) ([a389fe8](https://github.com/s3ntin3l8/mullion-session-manager/commit/a389fe88099559381aae234f67c59ae2ea9a59c6))
+* **projects:** projects that share a repo no longer duplicate tasks or lose a shared webhook ([#2254](https://github.com/s3ntin3l8/mullion-session-manager/issues/2254)) ([fe71059](https://github.com/s3ntin3l8/mullion-session-manager/commit/fe71059225495e8dfc754ce03652454778b586e1))
+* **relay:** tell the client when the primary closes its channel, and answer 503 during shutdown ([#2274](https://github.com/s3ntin3l8/mullion-session-manager/issues/2274)) ([e8c7558](https://github.com/s3ntin3l8/mullion-session-manager/commit/e8c7558833f7afc41349a9de8f88be54cc228d91))
+* **sessions:** adopt restart-surviving sessions on demand ([#2275](https://github.com/s3ntin3l8/mullion-session-manager/issues/2275)) ([b857207](https://github.com/s3ntin3l8/mullion-session-manager/commit/b857207b735675d09a72fa828f53c1bc4f59e025)), closes [#2271](https://github.com/s3ntin3l8/mullion-session-manager/issues/2271)
+* **tasks:** show an approved task as waiting on you, the latest review round first, and where a task will run ([#2263](https://github.com/s3ntin3l8/mullion-session-manager/issues/2263)) ([998f30f](https://github.com/s3ntin3l8/mullion-session-manager/commit/998f30f8613b7a25f5de64a0cc80d1c58c69931a))
+* **terminal:** answer DA1/DA2 on replay so Claude Code applies the replayed palette reply ([#2256](https://github.com/s3ntin3l8/mullion-session-manager/issues/2256)) ([70ff389](https://github.com/s3ntin3l8/mullion-session-manager/commit/70ff38996c11eb3787e6f22b325dea69e3c16c39))
+* **terminal:** answer startup color/DA1 queries from the backend while no browser is attached ([#2267](https://github.com/s3ntin3l8/mullion-session-manager/issues/2267)) ([32def04](https://github.com/s3ntin3l8/mullion-session-manager/commit/32def041fb08044a25f6662adb4bb4bd30e6ae75))
+* **uiux:** light-theme --y text clears 4.5:1 ([#2269](https://github.com/s3ntin3l8/mullion-session-manager/issues/2269)) ([d78395b](https://github.com/s3ntin3l8/mullion-session-manager/commit/d78395bd7dbb0e32c5de31b9437726e8ecedc15a))
+* **worktrees:** resolve remote session path aliases ([#2276](https://github.com/s3ntin3l8/mullion-session-manager/issues/2276)) ([22599cb](https://github.com/s3ntin3l8/mullion-session-manager/commit/22599cb1efe8c780fd1b338527ec4c04244fb755))
+
+
+### Performance Improvements
+
+* **worktrees:** reduce reclaim sweep path checks ([#2286](https://github.com/s3ntin3l8/mullion-session-manager/issues/2286)) ([63023a6](https://github.com/s3ntin3l8/mullion-session-manager/commit/63023a675b3efec27c65754f3e54e63e361f0dfa))
+
 ## [0.3.51](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.50...v0.3.51) (2026-10-28)
 
 
