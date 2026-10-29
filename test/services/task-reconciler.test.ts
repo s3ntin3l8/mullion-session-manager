@@ -10365,7 +10365,12 @@ describe("reconcileTasks", () => {
     beforeEach(() => {
       mockNotifyTaskNeedsAttention.mockReset().mockResolvedValue(undefined);
       // Shared DB: other tests leave reviewing rows with approving verdicts.
-      getDb().delete(tasks).where(eq(tasks.status, "reviewing")).run();
+      // Wrapped like the outer beforeEach: with -t filtering, nothing may have migrated the DB yet.
+      try {
+        getDb().delete(tasks).where(eq(tasks.status, "reviewing")).run();
+      } catch {
+        // no tasks table yet
+      }
     });
 
     const T0 = new Date(1_700_000_000_000);
