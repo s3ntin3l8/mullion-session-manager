@@ -1221,9 +1221,8 @@ agent carries each connection to the primary:
    of a request, the client gets `relay-unavailable`.
 
 What it covers: every session-scope request/response op, for the session itself and its children
-(including children placed on another host), with the same permissions as on the primary. What it
-does not: Windows agents. The streaming ops (`sessions.attach`, `events.subscribe` / `events tail`)
-work too (#2125): each is a stream on its own relayed connection, with the mux's per-channel window
+(including children placed on another host), with the same permissions as on the primary. That
+includes the streaming ops (`sessions.attach`, `events.subscribe` / `events tail`, #2125): each is a stream on its own relayed connection, with the mux's per-channel window
 as flow control, so a client that stops reading stalls only its own connection. A relayed stream
 re-checks its session every 30 seconds and ends, with a `closed` frame carrying the reason, once
 the session is gone or hosted elsewhere; a relay drop ends it with the usual `relay-disconnected`.
@@ -1235,7 +1234,9 @@ hosts (it opens its event connections to the hosts while such a stream is open, 
 setting says; nothing is persisted when it is off). Events the primary received a moment before the
 stream opened but has not yet written to its store (up to about 30 seconds) are in neither the
 replay nor the live feed. A remote host's event is only passed on if the session it names really
-lives on that host, the same rule that guards persisting it. Each host is capped at 64 relayed connections and each connection at 16 open streams.
+lives on that host, the same rule that guards persisting it. The relay works on Linux, macOS and Windows agents (on Windows the agent serves it as a named pipe,
+restricted to the current user and SYSTEM like the hook and control endpoints). Each host is capped at
+64 relayed connections and each connection at 16 open streams.
 
 **Trust boundary.** A compromised agent can already impersonate the sessions it hosts (it mints
 their tokens). The relay adds no authority beyond that: the host binding limits it to sessions
@@ -1252,10 +1253,6 @@ that the primary itself placed on that host, and none of it reaches full scope.
   credential (plus, for a session credential, the signature described above
   in "Request signing"); put it behind the same network/VPN boundary you'd
   use for anything else with shell access.
-- **Control from a session on a Windows agent host isn't available yet (#1627).** The relay
-  below serves unix-socket agents (Linux, macOS); a Windows agent still sets
-  `MULLION_CONTROL_UNAVAILABLE=remote-host`, and the `mullion` CLI / MCP tools fail immediately
-  with an explanation instead of a connect error.
 - Task Master now works end-to-end against a remote-hosted project (`#484`)
   — issue ingest, claim, work, review with a real diff-stat, promotion to a
   PR, and Retry — given an agent build new enough to serve the routes it

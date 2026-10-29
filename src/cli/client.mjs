@@ -38,7 +38,7 @@ export const CONNECTION_CLOSED = "connection-closed";
 // always outlasts the server-side wait. Shared by the CLI and the MCP client.
 export const CONTROL_UNAVAILABLE_MESSAGE =
   "control ops are not available from a session on this remote host: parent→child control " +
-  "needs the primary's control socket, and a Windows agent host has no control relay to it yet " +
+  "needs the primary's control socket, and this agent host serves no control relay to it " +
   "(#1627, #1656)";
 export const WAIT_DEFAULT_TIMEOUT_MS = 600_000;
 export const WAIT_MAX_TIMEOUT_MS = 3_600_000;

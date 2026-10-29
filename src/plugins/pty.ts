@@ -637,9 +637,9 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
   // doesn't own — sshAgentPlugin must crash rather than silently degrade in
   // that specific case. See that plugin's own comment for how it uses this.
   app.decorate("sshAuthSockBridgeExpected", willMaterializeBridgeSocket);
-  // The control relay's socket is a plain unix socket; a Windows agent has no
-  // relay yet (its CLI reaches the control socket by named pipe).
-  const controlRelayExpected = app.config.MULLION_ROLE === "agent" && process.platform !== "win32";
+  // Every agent serves the control relay's local endpoint: a unix socket, or on
+  // Windows a named pipe (the `mullion` CLI reaches endpoints that way there).
+  const controlRelayExpected = app.config.MULLION_ROLE === "agent";
   app.decorate("controlRelayExpected", controlRelayExpected);
   // Captured once so the shadow-warning log below describes the exact same
   // inputs that produced `resolvedSshAuthSock`, rather than re-reading
@@ -711,8 +711,8 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     controlSocketPath: controlRelayExpected
       ? controlRelaySocketPath(sessionsDir)
       : app.config.MULLION_SOCKET_PATH || undefined,
-    // Without a relay (Windows agents) nothing listens, so tell the sessions
-    // rather than leave them a dead path (#1627).
+    // Only an agent that serves no relay would need to tell its sessions rather than
+    // leave them a dead path (#1627); every agent serves one now, so this is false.
     controlUnavailable: app.config.MULLION_ROLE === "agent" && !controlRelayExpected,
     getInjectAgentGuide: () => readInjectAgentGuide(app),
     getInjectProjectBriefing: () => readInjectProjectBriefing(app),

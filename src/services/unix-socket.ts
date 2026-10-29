@@ -1,6 +1,8 @@
 import net from "node:net";
-import { existsSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, unlinkSync } from "node:fs";
+import type { execFile } from "node:child_process";
 import { isPipePath } from "../cli/ipc-path.mjs";
+import { restrictPipeToCurrentUser } from "../cli/pipe-acl.mjs";
 
 // A Unix domain socket file outlives the process that created it — a hard
 // kill (kill -9, an OOM, a crash) leaves the filesystem entry behind even
@@ -182,4 +184,29 @@ export async function reclaimSocketPath(
     // taxonomy to report it through.
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
+}
+
+/**
+ * The step after `server.listen(endpoint)` that keeps a local IPC endpoint to its
+ * owner: a unix socket gets mode 0600, a Windows named pipe (which has no mode
+ * bits) gets its access list narrowed to this user and SYSTEM. The handshake token
+ * is still behind it either way. The hook socket and the control socket take the
+ * same two steps inline; the control relay's socket goes through this helper.
+ * For a pipe it resolves false, after logging why, when the list could not be
+ * narrowed, and never rejects; the unix branch's chmod can throw (ENOENT, EACCES),
+ * like the inline copies.
+ */
+export async function secureIpcEndpoint(
+  endpoint: string,
+  opts: {
+    log?: (message: string) => void;
+    platform?: NodeJS.Platform;
+    execFile?: typeof execFile;
+  } = {},
+): Promise<boolean> {
+  if (!isPipePath(endpoint)) {
+    chmodSync(endpoint, 0o600);
+    return true;
+  }
+  return restrictPipeToCurrentUser(endpoint, opts);
 }

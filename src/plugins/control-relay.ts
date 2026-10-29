@@ -12,8 +12,8 @@ import { createMuxConnection, type MuxConnection } from "../services/ssh-agent-m
 // this host reach the primary's control surface through; the primary's
 // `/internal/ws/control-relay` dial-in (routes/internal.ts) fills `holder`.
 // Registered before internalRoutes, which reads/writes the decoration.
-// Windows agents keep the MULLION_CONTROL_UNAVAILABLE marker (plugins/pty.ts):
-// the CLI's named-pipe path has no relay yet.
+// On a Windows agent the endpoint is a named pipe (#2209), restricted to the
+// current user and SYSTEM like the hook and control endpoints.
 
 export interface ControlRelayHolder {
   current: MuxConnection | null;

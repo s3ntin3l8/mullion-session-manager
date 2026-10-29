@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { buildTestApp } from "../helpers/app.js";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../../src/db/schema.js";
@@ -193,6 +193,21 @@ describe("agent relay socket", () => {
       expect(frame).toMatchObject({ ok: false, status: 401 });
     }
   });
+
+  it.skipIf(process.platform === "win32")(
+    "serves the endpoint ipcPath() names: the path itself off Windows (#2209)",
+    async () => {
+      const socketPath = tmpSock();
+      const handle = await materializeControlRelaySocket({
+        socketPath,
+        resolveToken: () => undefined,
+        getMux: () => null,
+      });
+      handles.push(handle);
+      expect(handle.socketPath).toBe(socketPath);
+      expect(statSync(socketPath).mode & 0o777).toBe(0o600);
+    },
+  );
 
   it("answers relay-unavailable when the primary never dials in", async () => {
     const socketPath = tmpSock();
@@ -518,5 +533,26 @@ describe("acceptControlRelayConnection", () => {
     second.close();
     expect(relayDown.mock.calls.length).toBe(before + 1);
     expect(holder.current).toBeNull();
+  });
+});
+
+// The branch #2209 adds: on Windows the relay endpoint is a named pipe (ipcPath maps the
+// filesystem-style path). Runs in CI's test-windows job, like pipe-acl.test.ts's real-pipe block.
+describe.runIf(process.platform === "win32")("agent relay endpoint on Windows (#2209)", () => {
+  it("serves a named pipe a client can connect to", async () => {
+    const log = { debug: vi.fn(), warn: vi.fn() };
+    const handle = await materializeControlRelaySocket({
+      socketPath: tmpSock(),
+      resolveToken: () => undefined,
+      getMux: () => null,
+      log,
+    });
+    handles.push(handle);
+    // restrictPipeToCurrentUser only logs a failed access-list change, so a connect alone
+    // would pass either way: the narrowing must not have warned.
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(handle.socketPath.startsWith("\\\\.\\pipe\\")).toBe(true);
+    const [frame] = await talk(handle.socketPath, ["{}"]);
+    expect(frame).toMatchObject({ ok: false, status: 401 });
   });
 });
