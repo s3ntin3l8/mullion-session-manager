@@ -3534,8 +3534,8 @@ const MAX_APPROVAL_NOTIFICATIONS_PER_SWEEP = 20;
  * Once per verdict, durably: `approvalNotifiedVerdictAt` holds the
  * `lastReviewVerdictAt` already announced, recorded BEFORE the send with a
  * compare-and-set, so a restart or an overlapping tick never doubles up
- * (a lost push beats a duplicated one: a verdict is also spent when push is
- * off or nobody is subscribed yet). Both columns are second-resolution
+ * (a lost push beats a duplicated one: a verdict is also spent when nobody is
+ * subscribed yet; with the push channel off nothing is recorded). Both columns are second-resolution
  * timestamps, so the update compares them to each other, not to a clock; two
  * verdicts in the same second would not re-arm, unreachable in practice.
  * An `auto-pending` task is never announced, even if the auto-approve sweep
@@ -3545,6 +3545,9 @@ const MAX_APPROVAL_NOTIFICATIONS_PER_SWEEP = 20;
 export async function notifyApprovalsAwaitingHuman(app: FastifyInstance): Promise<void> {
   const resolvedTaskMaster = resolveTaskMasterConfig(app);
   if (!resolvedTaskMaster.enabled) return;
+  // Delivery is impossible with the push channel off; recording a verdict
+  // then would lose the nudge for good instead of re-arming when it comes on.
+  if (!getStoredSettings(app.db).notifications.channels.push) return;
 
   const rows = app.db
     .select({ task: tasks, projectAutoApprove: projects.autoApprove })
@@ -4998,11 +5001,12 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // the DB, so a verdict ingested earlier in this pass is already visible
   // and can be acted on immediately, not deferred to the next tick.
   await processAutoApprovals(app);
-  // #2252 — after the auto-approve sweep, so a task it just took is not announced.
-  await notifyApprovalsAwaitingHuman(app);
   // #2103 — the slow, all-projects safety net for a PR merged/closed under a
   // reviewing task (projects without autoApprove never reach the call above).
   await processReviewingPrState(app);
+  // #2252 — after the auto-approve and merged-PR sweeps, so a task either
+  // just took, or whose PR already ended, is not announced.
+  await notifyApprovalsAwaitingHuman(app);
   // Same independence reasoning — a stranded "reviewing" task with no PR
   // needs to keep being retried regardless of whether anything is currently
   // claimed/in_progress.

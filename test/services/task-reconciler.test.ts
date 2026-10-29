@@ -10362,8 +10362,16 @@ describe("reconcileTasks", () => {
   });
 
   describe("approval push (#2252, notifyApprovalsAwaitingHuman)", () => {
-    beforeEach(() => {
+    beforeEach(async () => {
       mockNotifyTaskNeedsAttention.mockReset().mockResolvedValue(undefined);
+      // The push channel defaults to off; the sweep only records when it is on.
+      const setup = await buildApp();
+      await setup.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { notifications: { channels: { push: true } } },
+      });
+      await setup.close();
       // Shared DB: other tests leave reviewing rows with approving verdicts.
       // Wrapped like the outer beforeEach: with -t filtering, nothing may have migrated the DB yet.
       try {
@@ -10510,6 +10518,29 @@ describe("reconcileTasks", () => {
         url: "/api/settings",
         payload: { taskMaster: { enabled: "inherit" } },
       });
+      await app.close();
+    });
+
+    it("records nothing while the push channel is off, and announces once it is back on", async () => {
+      const app = await buildApp();
+      const taskId = await createCandidate(app);
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { notifications: { channels: { push: false } } },
+      });
+      await notifyApprovalsAwaitingHuman(app);
+      expect(mockNotifyTaskNeedsAttention).not.toHaveBeenCalled();
+      expect(
+        app.db.select().from(tasks).where(eq(tasks.id, taskId)).get()?.approvalNotifiedVerdictAt,
+      ).toBeNull();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { notifications: { channels: { push: true } } },
+      });
+      await notifyApprovalsAwaitingHuman(app);
+      expect(mockNotifyTaskNeedsAttention).toHaveBeenCalledTimes(1);
       await app.close();
     });
 
