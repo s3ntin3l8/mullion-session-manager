@@ -216,7 +216,7 @@ describe("projectSpansHosts / projectHostCount (issue #2238)", () => {
     status,
     resolvedHostId,
   });
-  const P = { id: 1, hostCwds: {} as Record<string, string> };
+  const P = { id: 1, hostId: "local", hostCwds: {} as Record<string, string> };
 
   it("is false for a single-host project", () => {
     expect(projectSpansHosts(P, [sess("local"), sess("local")])).toBe(false);
@@ -226,13 +226,15 @@ describe("projectSpansHosts / projectHostCount (issue #2238)", () => {
   });
 
   it("is true once hostCwds names another host, even with no sessions", () => {
-    const p = { id: 1, hostCwds: { "mac-mini": "/x" } };
+    const p = { id: 1, hostId: "local", hostCwds: { "mac-mini": "/x" } };
     expect(projectSpansHosts(p, [])).toBe(true);
     expect(projectHostCount(p, [sess("local")])).toBe(2);
   });
 
   it("is false when hostCwds names only the local host", () => {
-    expect(projectSpansHosts({ id: 1, hostCwds: { local: "/x" } }, [])).toBe(false);
+    expect(projectSpansHosts({ id: 1, hostId: "local", hostCwds: { local: "/x" } }, [])).toBe(
+      false,
+    );
   });
 
   it("counts a remote-hosted project as one host, not two", () => {

@@ -48,13 +48,10 @@ export interface HostBadge {
  * hide-ended / task-session settings currently show.
  */
 export function projectHostCount(
-  project: { id: number; hostId?: string; hostCwds?: Record<string, string> | null },
+  project: { id: number; hostId: string; hostCwds?: Record<string, string> | null },
   sessions: readonly { projectId: number; status: string; resolvedHostId: string }[],
 ): number {
-  const ids = new Set<string>([
-    project.hostId || LOCAL_HOST_ID,
-    ...Object.keys(project.hostCwds ?? {}),
-  ]);
+  const ids = new Set<string>([project.hostId, ...Object.keys(project.hostCwds ?? {})]);
   for (const s of sessions) {
     if (s.projectId === project.id && s.status !== "killed" && s.resolvedHostId) {
       ids.add(s.resolvedHostId);
@@ -66,7 +63,7 @@ export function projectHostCount(
 /** Whether a project reaches more than one host: a local row then needs a badge too. */
 export function projectSpansHosts(
   project:
-    { id: number; hostId?: string; hostCwds?: Record<string, string> | null } | null | undefined,
+    { id: number; hostId: string; hostCwds?: Record<string, string> | null } | null | undefined,
   sessions: readonly { projectId: number; status: string; resolvedHostId: string }[],
 ): boolean {
   return !!project && projectHostCount(project, sessions) > 1;
