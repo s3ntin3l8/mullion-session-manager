@@ -10,7 +10,7 @@ import {
   resetGitHubRateLimitForTests,
 } from "../../src/services/github-fetch.js";
 
-function pr(number: number): PROrWithChecks {
+function pr(number: number, over: Partial<PROrWithChecks> = {}): PROrWithChecks {
   return {
     number,
     title: `PR ${number}`,
@@ -33,6 +33,7 @@ function pr(number: number): PROrWithChecks {
     reviewStateKnown: false,
     ciFetched: false,
     prPhase: "unknown",
+    ...over,
   };
 }
 
@@ -117,7 +118,7 @@ describe("enrichPrsWithReviewState", () => {
     });
   });
 
-  it("counts a COMMENTED-only bot review: reviewers, summary and the `reviewed` phase", async () => {
+  it("counts a COMMENTED-only bot review: reviewers and summary; a BLOCKED PR with that thread open is `threads_unresolved`", async () => {
     // Recorded shape: the Hermes bot's single COMMENTED review. The old
     // `latestOpinionatedReviews` field returned no nodes for it.
     fetchMock
@@ -143,7 +144,49 @@ describe("enrichPrsWithReviewState", () => {
         ]),
       )
       .mockResolvedValueOnce(threadsResponse({ 1: 1 }));
-    const prs = [pr(1)];
+    const prs = [pr(1, { ciFetched: true })];
+    await enrichPrsWithReviewState("tok", "o", "r", prs);
+
+    expect(fetchMock.mock.calls[0][1].body).toContain("latestReviews");
+    // `reviewers` is merge gating's (opinionated) view: a comment is not in it.
+    expect(prs[0].reviewers).toEqual([]);
+    expect(prs[0].prPhase).toBe("threads_unresolved");
+    expect(prs[0].reviewSummary).toMatchObject({
+      decision: "COMMENTED",
+      commented: ["s3ntin3l8-hermes"],
+      unresolvedThreads: 1,
+      relay: null,
+      latest: [{ author: "s3ntin3l8-hermes", isBot: true, reviewedSha: "old-sha", stale: true }],
+    });
+  });
+
+  it("counts a COMMENTED-only bot review: reviewers, summary and the `reviewed` phase (no open threads)", async () => {
+    // Recorded shape: the Hermes bot's single COMMENTED review. The old
+    // `latestOpinionatedReviews` field returned no nodes for it.
+    fetchMock
+      .mockResolvedValueOnce(
+        listResponse([
+          gqlNode(1, {
+            reviewDecision: null,
+            mergeStateStatus: "BLOCKED",
+            reviewRequests: { nodes: [] },
+            latestOpinionatedReviews: { nodes: [] },
+            latestReviews: {
+              nodes: [
+                {
+                  author: { login: "s3ntin3l8-hermes", __typename: "Bot" },
+                  state: "COMMENTED",
+                  body: "Looks mostly fine.",
+                  submittedAt: "2026-10-18T09:00:00Z",
+                  commit: { oid: "old-sha" },
+                },
+              ],
+            },
+          }),
+        ]),
+      )
+      .mockResolvedValueOnce(threadsResponse({ 1: 0 }));
+    const prs = [pr(1, { ciFetched: true })];
     await enrichPrsWithReviewState("tok", "o", "r", prs);
 
     expect(fetchMock.mock.calls[0][1].body).toContain("latestReviews");
@@ -153,9 +196,47 @@ describe("enrichPrsWithReviewState", () => {
     expect(prs[0].reviewSummary).toMatchObject({
       decision: "COMMENTED",
       commented: ["s3ntin3l8-hermes"],
-      unresolvedThreads: 1,
+      unresolvedThreads: 0,
       relay: null,
       latest: [{ author: "s3ntin3l8-hermes", isBot: true, reviewedSha: "old-sha", stale: true }],
+    });
+  });
+
+  it("a bot's change-request that the opinionated list dropped blocks, whatever GitHub's decision says", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        listResponse([
+          gqlNode(1, {
+            reviewDecision: "APPROVED",
+            mergeStateStatus: "CLEAN",
+            reviewRequests: { nodes: [] },
+            latestOpinionatedReviews: { nodes: [] },
+            latestReviews: {
+              nodes: [
+                {
+                  author: { login: "s3ntin3l8-hermes", __typename: "Bot" },
+                  state: "CHANGES_REQUESTED",
+                  body: "",
+                  submittedAt: "2026-10-18T09:00:00Z",
+                  commit: { oid: "old-sha" },
+                },
+              ],
+            },
+          }),
+        ]),
+      )
+      .mockResolvedValueOnce(threadsResponse({ 1: 0 }));
+    const prs = [pr(1, { ciFetched: true })];
+    await enrichPrsWithReviewState("tok", "o", "r", prs);
+
+    // The flag survives onto the PR, where the phase reads it.
+    expect(prs[0].reviewers).toEqual([
+      { login: "s3ntin3l8-hermes", state: "CHANGES_REQUESTED", recovered: true },
+    ]);
+    expect(prs[0].prPhase).toBe("changes_requested");
+    expect(prs[0].reviewSummary).toMatchObject({
+      changesRequested: ["s3ntin3l8-hermes"],
+      changesRequestedStale: ["s3ntin3l8-hermes"],
     });
   });
 

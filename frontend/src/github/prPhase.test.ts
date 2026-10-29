@@ -226,6 +226,12 @@ describe("reviewStatus", () => {
       short: "Changes",
       text: "Changes requested by bob · 2 open",
     });
+    expect(
+      of({
+        changesRequested: ["hermes", "bob"],
+        changesRequestedStale: ["hermes"],
+      }).text,
+    ).toBe("Changes requested by hermes (older commit) and bob");
     expect(of({ decision: "APPROVED", approved: ["a", "b"] })).toMatchObject({
       tone: "success",
       label: "Approved",
@@ -308,6 +314,15 @@ describe("pendingLabel", () => {
 });
 
 describe("mergeStatus", () => {
+  it("names open conversations as the block", () => {
+    expect(mergeStatus(base({ prPhase: "threads_unresolved" }))).toMatchObject({
+      tone: "warn",
+      text: "Blocked: unresolved conversations",
+      label: "Blocked: Unresolved conversations",
+    });
+    expect(phaseChip("threads_unresolved", 2)).toEqual({ glyph: "", text: "threads 💬2" });
+  });
+
   it("says Ready, Conflicts, Draft, Blocked: reason, and Waiting", () => {
     expect(mergeStatus(base({ prPhase: "ready_to_merge" }))).toMatchObject({
       tone: "success",

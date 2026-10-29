@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   buildReviewSummary,
+  standingReviewers,
+  standingReviews,
   reviewersOf,
   withRelay,
   type GqlLatestReviewNode,
@@ -84,6 +86,69 @@ describe("buildReviewSummary", () => {
       decision: "CHANGES_REQUESTED",
     });
     expect(s.latest).toHaveLength(1);
+  });
+
+  it("counts a standing review that latestOpinionatedReviews dropped, on a non-head commit", () => {
+    const s = buildReviewSummary({
+      ...base,
+      opinionated: [],
+      reviews: [
+        {
+          author: { login: "hermes", __typename: "Bot" },
+          state: "CHANGES_REQUESTED",
+          body: "",
+          commit: { oid: "old000" },
+        },
+      ],
+    });
+    expect(s).toMatchObject({ changesRequested: ["hermes"], decision: "CHANGES_REQUESTED" });
+    expect(standingReviews([], [{ author: { login: "a" }, state: "APPROVED" }])).toHaveLength(1);
+  });
+
+  it("marks each change-requester whose review is of an older commit", () => {
+    const s = buildReviewSummary({
+      ...base,
+      opinionated: [
+        { author: { login: "bob" }, state: "CHANGES_REQUESTED", commit: { oid: "old000" } },
+        { author: { login: "eve" }, state: "CHANGES_REQUESTED", commit: { oid: "aaa111" } },
+        { author: { login: "kim" }, state: "CHANGES_REQUESTED" },
+      ],
+      reviews: [
+        {
+          author: { login: "hermes", __typename: "Bot" },
+          state: "CHANGES_REQUESTED",
+          commit: { oid: "old000" },
+        },
+      ],
+    });
+    // Per reviewer, not just the two with a readable body; unknown commit is not stale.
+    expect(s.changesRequested).toEqual(["bob", "eve", "kim", "hermes"]);
+    expect(s.changesRequestedStale).toEqual(["bob", "hermes"]);
+  });
+
+  it("flags only the recovered reviewers", () => {
+    const rs = standingReviewers(
+      [{ author: { login: "bob" }, state: "APPROVED" }],
+      [
+        { author: { login: "bob" }, state: "COMMENTED" },
+        { author: { login: "hermes" }, state: "CHANGES_REQUESTED" },
+      ],
+    );
+    expect(rs).toEqual([
+      { login: "bob", state: "APPROVED" },
+      { login: "hermes", state: "CHANGES_REQUESTED", recovered: true },
+    ]);
+  });
+
+  it("lets the opinionated entry win over the same author's latest review", () => {
+    const merged = standingReviews(
+      [{ author: { login: "bob" }, state: "CHANGES_REQUESTED" }],
+      [
+        { author: { login: "bob" }, state: "APPROVED" },
+        { author: { login: "eve" }, state: "COMMENTED" },
+      ],
+    );
+    expect(merged).toEqual([{ author: { login: "bob" }, state: "CHANGES_REQUESTED" }]);
   });
 
   it("prefers GitHub's own decision and derives one otherwise", () => {

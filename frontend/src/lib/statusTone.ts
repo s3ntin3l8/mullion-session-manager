@@ -25,6 +25,7 @@ export function statusTone(input: ToneInput): Tone {
         return "danger";
       case "review_pending":
       case "reviewed":
+      case "threads_unresolved":
       case "ci_pending":
         return "warn";
       case "ready_to_merge":

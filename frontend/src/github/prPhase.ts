@@ -18,6 +18,7 @@ export const PHASE_LABEL: Record<GitHubPrPhase, string> = {
   changes_requested: "Changes requested",
   review_pending: "Awaiting review",
   reviewed: "Reviewed",
+  threads_unresolved: "Unresolved conversations",
   ci_pending: "CI running",
   ready_to_merge: "Ready to merge",
   unknown: "Status unknown",
@@ -62,6 +63,8 @@ export function phaseChip(
       return { glyph: "✎", text: `changes${threads}` };
     case "conflicts":
       return { glyph: "⚠", text: `conflicts${threads}` };
+    case "threads_unresolved":
+      return { glyph: "", text: `threads${threads}` };
     case "ready_to_merge":
       return { glyph: "✓", text: `ready${threads}` };
     case "draft":
@@ -361,10 +364,16 @@ export function reviewStatus(
     short = glyph,
   ): ReviewStatus => ({ tone, glyph, text, label, short, relay });
   if (sum.changesRequested.length > 0 || sum.decision === "CHANGES_REQUESTED") {
+    // A block on a superseded commit still blocks; saying so separates "still
+    // blocked" from "re-review asked".
+    const stale = new Set(sum.changesRequestedStale ?? []);
+    const names = joinNames(
+      sum.changesRequested.map((n) => (stale.has(n) ? `${n} (older commit)` : n)),
+    );
     return mk(
       "danger",
       "✎",
-      `Changes requested by ${joinNames(sum.changesRequested) || "a reviewer"}${threads}${relaySuffix}`,
+      `Changes requested by ${names || "a reviewer"}${threads}${relaySuffix}`,
       "Changes requested",
       "Changes",
     );
@@ -452,7 +461,8 @@ function mergeStatusBase(input: PrStatusInput): DimStatus {
       short: "Draft",
     };
   }
-  const blocked = phase === "ci_failing" || phase === "changes_requested";
+  const blocked =
+    phase === "ci_failing" || phase === "changes_requested" || phase === "threads_unresolved";
   return {
     tone,
     glyph: tone === "danger" ? "✗" : "⋯",

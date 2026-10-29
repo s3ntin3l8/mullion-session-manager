@@ -109,6 +109,42 @@ describe("derivePrPhase", () => {
     );
   });
 
+  it("a recovered block outranks GitHub's decision, which never saw it", () => {
+    const approved = { ...base, reviewDecision: "APPROVED" as const };
+    expect(
+      derivePrPhase({ ...approved, reviewers: [{ state: "CHANGES_REQUESTED", recovered: true }] }),
+    ).toBe("changes_requested");
+    // Whereas GitHub's own word still wins over an opinionated reviewer's.
+    expect(derivePrPhase({ ...approved, reviewers: [{ state: "CHANGES_REQUESTED" }] })).toBe(
+      "ready_to_merge",
+    );
+  });
+
+  it("says unknown, not waiting, when the thread lookup did not answer", () => {
+    const blocked = { ...base, mergeStateStatus: "BLOCKED" };
+    expect(derivePrPhase({ ...blocked, unresolvedThreads: null })).toBe("unknown");
+    // A caller that does not track threads at all keeps its behaviour.
+    expect(derivePrPhase({ ...blocked })).toBe("review_pending");
+    expect(derivePrPhase({ ...blocked, unresolvedThreads: 0 })).toBe("review_pending");
+  });
+
+  it("does not blame conversations when CI was never read", () => {
+    const blocked = { ...base, mergeStateStatus: "BLOCKED", unresolvedThreads: 2 };
+    expect(derivePrPhase({ ...blocked, ciStatus: null, ciFetched: false })).toBe("unknown");
+    expect(derivePrPhase({ ...blocked, ciStatus: null, ciFetched: true })).toBe(
+      "threads_unresolved",
+    );
+  });
+
+  it("names open conversations as the block when nothing else is missing", () => {
+    const blocked = { ...base, mergeStateStatus: "BLOCKED", unresolvedThreads: 2 };
+    expect(derivePrPhase(blocked)).toBe("threads_unresolved");
+    expect(derivePrPhase({ ...blocked, reviewDecision: "REVIEW_REQUIRED" })).toBe("review_pending");
+    expect(derivePrPhase({ ...blocked, ciStatus: "in_progress" })).toBe("ci_pending");
+    expect(derivePrPhase({ ...blocked, unresolvedThreads: 0 })).toBe("review_pending");
+    expect(derivePrPhase({ ...base, unresolvedThreads: 2 })).toBe("ready_to_merge");
+  });
+
   it("claims nothing beyond CI when review state wasn't fetched", () => {
     const unknown = { ...base, reviewStateKnown: false, reviewDecision: null as null };
     expect(derivePrPhase(unknown)).toBe("unknown");

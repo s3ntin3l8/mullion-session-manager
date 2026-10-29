@@ -1332,7 +1332,7 @@ export interface GitHubPROrWithChecks {
   reviewDecision?: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
   mergeable?: "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
   mergeStateStatus?: string | null;
-  reviewers?: { login: string; state: string }[];
+  reviewers?: { login: string; state: string; recovered?: boolean }[];
   /** Server-computed review status, shared with the PR detail (epic #1965, A2). */
   reviewSummary?: ReviewSummary;
   requestedReviewers?: string[];
@@ -1361,6 +1361,7 @@ export type GitHubPrPhase =
   | "changes_requested"
   | "review_pending"
   | "reviewed"
+  | "threads_unresolved"
   | "ci_pending"
   | "ready_to_merge"
   | "unknown";
@@ -1410,7 +1411,7 @@ export interface GitHubPrDetail {
   behindBy?: number | null;
   reviewDecision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
   requestedReviewers: string[];
-  reviewers: { login: string; state: string }[];
+  reviewers: { login: string; state: string; recovered?: boolean }[];
   /** Server-computed review status (counts COMMENTED, folds in the relay). */
   reviewSummary?: ReviewSummary;
   reviews: (GitHubPrDetailComment & { state: string })[];

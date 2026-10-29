@@ -131,7 +131,7 @@ export interface PROrWithChecks {
   mergeable: PrMergeable;
   mergeStateStatus: string | null;
   /** Latest opinionated review per reviewer — merge gating's input (see `reviewSummary` for COMMENTED). */
-  reviewers: { login: string; state: string }[];
+  reviewers: { login: string; state: string; recovered?: boolean }[];
   /**
    * The server-computed review status shared with the PR detail (epic #1965,
    * A2). Absent until the GraphQL enrichment has run for the PR.

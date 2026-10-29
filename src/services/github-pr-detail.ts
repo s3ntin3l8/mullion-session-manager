@@ -21,7 +21,7 @@ import {
   buildReviewSummary,
   latestReviewsSelection,
   OPINIONATED_REVIEWS_SELECTION,
-  reviewersOf,
+  standingReviewers,
   type GqlLatestReviewNode,
 } from "./review-summary.js";
 import type { ReviewSummary } from "../shared/types.js";
@@ -101,7 +101,7 @@ export interface PrDetail {
   reviewDecision: PrReviewDecision;
   requestedReviewers: string[];
   /** Latest opinionated review per reviewer — what merge gating reads. */
-  reviewers: { login: string; state: string }[];
+  reviewers: { login: string; state: string; recovered?: boolean }[];
   /** The same server-computed status the PR list carries (epic #1965, A2). */
   reviewSummary: ReviewSummary;
   reviews: PrDetailReview[];
@@ -471,7 +471,7 @@ export async function getPrDetail(
     behindBy,
     reviewDecision: asDecision(pr.reviewDecision),
     requestedReviewers,
-    reviewers: reviewersOf(opinionated),
+    reviewers: standingReviewers(opinionated, latestReviews),
     reviewSummary: buildReviewSummary({
       reviewDecision: asDecision(pr.reviewDecision),
       reviews: latestReviews,

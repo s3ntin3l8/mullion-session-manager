@@ -35,7 +35,40 @@ export function latestReviewsSelection(first: number = LATEST_REVIEWS_PAGE): str
  * it, which is why the phase and the buckets below read this and not that.
  */
 export const OPINIONATED_REVIEWS_SELECTION =
-  "latestOpinionatedReviews(first: 10) { nodes { author { login } state } }";
+  "latestOpinionatedReviews(first: 10) { nodes { author { login } state commit { oid } } }";
+
+/**
+ * The APPROVED / CHANGES_REQUESTED reviews in `latestReviews` for an author
+ * that `latestOpinionatedReviews` dropped. GitHub's opinionated list omits
+ * Bot-authored reviews (live: runway-ai-usage-tracker #1053 and #1054 both
+ * return `latestOpinionatedReviews: []`, `reviewDecision: null` and the Hermes
+ * bot's review in `latestReviews`), so a bot's block read as "No reviews" and
+ * "Ready". For an author in both lists the opinionated entry wins, so a later
+ * COMMENTED still cannot erase a block.
+ */
+export function recoveredReviews(
+  opinionated: readonly (GqlLatestReviewNode | null)[],
+  latest: readonly (GqlLatestReviewNode | null)[],
+): GqlLatestReviewNode[] {
+  const seen = new Set(opinionated.map((n) => n?.author?.login));
+  return latest.filter(
+    (n): n is GqlLatestReviewNode =>
+      !!n?.author &&
+      !seen.has(n.author.login) &&
+      (n.state === "APPROVED" || n.state === "CHANGES_REQUESTED"),
+  );
+}
+
+/** What merge gating should read: the opinionated reviews plus the recovered ones. */
+export function standingReviews(
+  opinionated: readonly (GqlLatestReviewNode | null)[],
+  latest: readonly (GqlLatestReviewNode | null)[],
+): GqlLatestReviewNode[] {
+  return [
+    ...opinionated.filter((n): n is GqlLatestReviewNode => !!n),
+    ...recoveredReviews(opinionated, latest),
+  ];
+}
 
 export interface ReviewSummaryInput {
   reviewDecision: PrReviewDecision;
@@ -62,6 +95,23 @@ export function reviewersOf(
     .map((n) => ({ login: n.author.login, state: n.state }));
 }
 
+/**
+ * `reviewers` with the recovered reviews flagged: GitHub's own `reviewDecision`
+ * does not account for those, so the phase must not let it override them.
+ */
+export function standingReviewers(
+  opinionated: readonly (GqlLatestReviewNode | null)[],
+  latest: readonly (GqlLatestReviewNode | null)[],
+): { login: string; state: string; recovered?: true }[] {
+  return [
+    ...reviewersOf(opinionated),
+    ...reviewersOf(recoveredReviews(opinionated, latest)).map((r) => ({
+      ...r,
+      recovered: true as const,
+    })),
+  ];
+}
+
 function relayOf(relay: RelayReviewState | null | undefined): ReviewSummary["relay"] {
   if (!relay || relay.state === "none") return null;
   return {
@@ -74,14 +124,21 @@ function relayOf(relay: RelayReviewState | null | undefined): ReviewSummary["rel
 export function buildReviewSummary(input: ReviewSummaryInput): ReviewSummary {
   const approved: string[] = [];
   const changesRequested: string[] = [];
+  const changesRequestedStale: string[] = [];
   const commented: string[] = [];
   const candidates: ReviewSummaryEntry[] = [];
   const unresolved = input.unresolvedThreads ?? 0;
 
-  for (const n of input.opinionated) {
-    if (!n?.author) continue;
+  for (const n of standingReviews(input.opinionated, input.reviews)) {
+    if (!n.author) continue;
     if (n.state === "APPROVED") approved.push(n.author.login);
-    else if (n.state === "CHANGES_REQUESTED") changesRequested.push(n.author.login);
+    else if (n.state === "CHANGES_REQUESTED") {
+      changesRequested.push(n.author.login);
+      const sha = n.commit?.oid ?? "";
+      if (sha !== "" && input.headSha !== "" && sha !== input.headSha) {
+        changesRequestedStale.push(n.author.login);
+      }
+    }
   }
 
   for (const n of input.reviews) {
@@ -128,6 +185,7 @@ export function buildReviewSummary(input: ReviewSummaryInput): ReviewSummary {
     decision,
     approved,
     changesRequested,
+    changesRequestedStale,
     commented,
     requested: [...input.requestedReviewers],
     relay: relayOf(input.relayReview),
