@@ -132,8 +132,8 @@ read-only base scope the panel still shows everything, but each write answers
 403 "the connected token lacks write access", and the box keeps your draft.
 
 **Who the write posts as.** Your connected account (device flow or PAT): a
-comment, reply, resolve or review from the sidebar is yours, and the PR composer
-says so ("Posts as @you"). Only when no account is connected does the write post
+comment, reply, resolve or review from the sidebar is yours, and the PR composer,
+the issue comment box and a thread's reply box say so ("Posts as @you"). Only when no account is connected does the write post
 as the [GitHub App](#github-app-opt-in-layers-on-top-of-the-patoauth-token)'s bot
 (the installation token), and then the sidebar offers **Comment** only: an
 Approve or Request changes must be your own verdict, not the App's, so the

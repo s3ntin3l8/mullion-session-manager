@@ -2668,6 +2668,8 @@ describe("projects route", () => {
           bodyHtml: "<p>body</p>",
           comments: [{ id: 9, author: "bob", bodyHtml: "<p>hi</p>" }],
           taskStatus: null,
+          // #2049 — who a comment from the box posts as (the connected account).
+          writeIdentity: { kind: "user" },
         });
         // A task tracking the issue seeds the detail's Queued state.
         const { tasks } = await import("../../src/db/schema.js");

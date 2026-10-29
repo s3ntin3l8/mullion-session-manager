@@ -1465,7 +1465,7 @@ export interface GitHubPrDetail {
    * Who a sidebar write posts as: the connected account (`user`) or, with none
    * connected, the GitHub App (`app`). Null when no token can write.
    */
-  writeIdentity?: { kind: "user" | "app"; login: string | null } | null;
+  writeIdentity?: GitHubWriteIdentity | null;
   /** Checks that are not Actions runs ("Other checks"); counted in `ciStatus`. */
   otherChecks?: GitHubOtherCheck[];
   /** More checks exist on the head than were read; `otherChecks` is partial. */
@@ -1525,8 +1525,16 @@ export interface GitHubIssueComment {
   htmlUrl: string;
 }
 
+/** Who a sidebar write posts as: the connected account, or the App's bot. */
+export interface GitHubWriteIdentity {
+  kind: "user" | "app";
+  login: string | null;
+}
+
 export interface GitHubIssueDetail extends GitHubIssueListItem {
   state: "open" | "closed";
+  /** Who a comment from this box posts as; null when no token can write. */
+  writeIdentity?: GitHubWriteIdentity | null;
   /** GitHub-rendered HTML — sanitize before inserting. */
   bodyHtml: string;
   comments: GitHubIssueComment[];
