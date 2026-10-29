@@ -3561,36 +3561,36 @@ describe("projects route", () => {
 
       it("detail re-derives a BEHIND phase when the compare says the head is not behind", async () => {
         mockGithub(
-          gqlPr(54, { mergeStateStatus: "BEHIND", reviewThreads: { nodes: [] } }),
+          gqlPr(70, { mergeStateStatus: "BEHIND", reviewThreads: { nodes: [] } }),
           (url) => (url.includes("/compare/") ? jsonResponse(200, { behind_by: 0 }) : null),
         );
-        await warmCiCache(54, "success", true);
+        await warmCiCache(70, "success", true);
         const app = await makeApp();
         const { projectCwd, id } = await connectedProject(app);
         const detail = await app.inject({
           method: "GET",
-          url: `/api/projects/${id}/github/prs/54`,
+          url: `/api/projects/${id}/github/prs/70`,
         });
         expect(detail.json()).toMatchObject({ prPhase: "ready_to_merge", behindBy: 0 });
 
         // An open conversation still blocks, once the BEHIND is set aside.
-        mockGithub(gqlPr(56, { mergeStateStatus: "BEHIND" }), (url) =>
+        mockGithub(gqlPr(72, { mergeStateStatus: "BEHIND" }), (url) =>
           url.includes("/compare/") ? jsonResponse(200, { behind_by: 0 }) : null,
         );
-        await warmCiCache(56, "success", true);
+        await warmCiCache(72, "success", true);
         const threads = await app.inject({
           method: "GET",
-          url: `/api/projects/${id}/github/prs/56`,
+          url: `/api/projects/${id}/github/prs/72`,
         });
         expect(threads.json()).toMatchObject({ prPhase: "threads_unresolved" });
 
-        mockGithub(gqlPr(55, { mergeStateStatus: "BEHIND" }), (url) =>
+        mockGithub(gqlPr(71, { mergeStateStatus: "BEHIND" }), (url) =>
           url.includes("/compare/") ? jsonResponse(200, { behind_by: 2 }) : null,
         );
-        await warmCiCache(55, "success", true);
+        await warmCiCache(71, "success", true);
         const behind = await app.inject({
           method: "GET",
-          url: `/api/projects/${id}/github/prs/55`,
+          url: `/api/projects/${id}/github/prs/71`,
         });
         expect(behind.json()).toMatchObject({ prPhase: "behind", behindBy: 2 });
         fs.rmSync(projectCwd, { recursive: true, force: true });
