@@ -430,10 +430,46 @@ is_blank() {
   [ -z "$v" ]
 }
 
+# env_value KEY — the last value of KEY in $MULLION_HOME/.env (empty when absent).
+env_value() {
+  grep -E "^$1=" "$MULLION_HOME/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r' |
+    sed -E -e '/^"/{s/^"([^"]*)".*/\1/;b' -e '}' -e "/^'/{s/^'([^']*)'.*/\\1/;b" -e '}' -e 's/[[:space:]]+#.*$//' || true
+}
+
+# set_env_value KEY VALUE — replace KEY's line in $MULLION_HOME/.env, or append
+# it. The file is rewritten through a 0600 temp file in the same directory, so
+# it is never readable by others, even briefly.
+set_env_value() {
+  local key="$1" val="$2" f="$MULLION_HOME/.env" tmp kept rc=0
+  # grep exits 1 when nothing is left (fine) and 2 when it cannot read the
+  # file; replacing the .env then would drop every line it holds.
+  kept="$(grep -v "^${key}=" "$f")" || rc=$?
+  if [ "$rc" -gt 1 ]; then
+    echo "error: could not read $f to set $key" >&2
+    return 1
+  fi
+  tmp="$(umask 077 && mktemp "$f.XXXXXX")"
+  { [ -z "$kept" ] || printf '%s\n' "$kept"; printf '%s=%s\n' "$key" "$val"; } >"$tmp"
+  mv -f "$tmp" "$f"
+}
+
 if [ -f "$MULLION_HOME/.env" ]; then
   # Role-mismatch already checked and enforced right after $MULLION_HOME
   # was resolved, above — before any expensive/mutating step ran.
-  echo "==> $MULLION_HOME/.env already exists, leaving it as-is"
+  echo "==> $MULLION_HOME/.env already exists, keeping its existing settings"
+  if [ "$ROLE" = "agent" ]; then
+    # The one exception: values the caller passed on THIS run for what an
+    # install is asked to fix up (the Windows bootstrap's -BindHost/-Port, and
+    # the per-agent token it generates for an .env that has no credential), so
+    # re-running the installer with them is not a silent no-op.
+    if [ -n "${MULLION_AGENT_HOST:-}" ]; then set_env_value HOST "$MULLION_AGENT_HOST"; echo "==> set HOST in $MULLION_HOME/.env"; fi
+    if [ -n "${MULLION_AGENT_PORT:-}" ]; then set_env_value PORT "$MULLION_AGENT_PORT"; echo "==> set PORT in $MULLION_HOME/.env"; fi
+    if [ -n "${MULLION_AGENT_TOKEN:-}" ] && is_blank "$(env_value MULLION_AGENT_TOKEN)" &&
+      { is_blank "$(env_value MULLION_PRIMARY_URL)" || is_blank "$(env_value MULLION_ENROLLMENT_TOKEN)"; }; then
+      set_env_value MULLION_AGENT_TOKEN "$MULLION_AGENT_TOKEN"
+      echo "==> set MULLION_AGENT_TOKEN in $MULLION_HOME/.env (it had no credential)"
+    fi
+  fi
   # Hermes review, PR #529: content untouched, but permissions still
   # tightened — a legacy .env written at the ambient umask (644), or one
   # an operator hand-templated per this section's own docs, can hold
@@ -568,6 +604,16 @@ BROWSER_DATA_DIR=$MULLION_HOME/data/browsers
 # required for this agent to be useful at all.
 EOF
     printf 'PROJECTS_ROOTS=%s\n' "${MULLION_AGENT_PROJECTS_ROOTS:-}" >>"$MULLION_HOME/.env"
+    # The address and port the agent listens on, when the caller picked them
+    # (the Windows bootstrap's -BindHost/-Port). Left out otherwise, so the
+    # server's own defaults (127.0.0.1:3000) apply; the primary can only
+    # reach an agent that listens on a non-loopback address.
+    if [ -n "${MULLION_AGENT_HOST:-}" ]; then
+      printf '\n# Listen address, so the primary can reach this agent.\nHOST=%s\n' "$MULLION_AGENT_HOST" >>"$MULLION_HOME/.env"
+    fi
+    if [ -n "${MULLION_AGENT_PORT:-}" ]; then
+      printf 'PORT=%s\n' "$MULLION_AGENT_PORT" >>"$MULLION_HOME/.env"
+    fi
     cat >>"$MULLION_HOME/.env" <<'EOF'
 
 # --- Pick ONE of the two credential paths below; src/app.ts refuses to

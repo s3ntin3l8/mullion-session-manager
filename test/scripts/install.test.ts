@@ -471,7 +471,65 @@ describeOnLinux("deploy/install.sh", () => {
 
     expect(fs.readFileSync(envPath, "utf8")).toBe(original);
     expect(fs.statSync(envPath).mode & 0o777).toBe(0o600);
-    expect(stdout).toMatch(/already exists, leaving it as-is/);
+    expect(stdout).toMatch(/already exists, keeping its existing settings/);
+  });
+
+  describe("an existing agent .env", () => {
+    const run = async (original: string, env: Record<string, string>) => {
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      fs.writeFileSync(path.join(mullionHome, ".env"), original, { mode: 0o644 });
+      await runScript(["--role", "agent", mullionHome], { env });
+      return readEnvFile(mullionHome);
+    };
+
+    it("takes HOST and PORT from this run, replacing the old lines and keeping the rest", async () => {
+      const env = await run("MULLION_ROLE=agent\nHOST=127.0.0.1\nCUSTOM_KEY=keep-me\nPORT=3000\n", {
+        MULLION_AGENT_HOST: "192.168.2.174",
+        MULLION_AGENT_PORT: "4000",
+      });
+      expect(env).toMatch(/^HOST=192\.168\.2\.174$/m);
+      expect(env).toMatch(/^PORT=4000$/m);
+      expect(env.match(/^HOST=/gm)).toHaveLength(1);
+      expect(env.match(/^PORT=/gm)).toHaveLength(1);
+      expect(env).toMatch(/^CUSTOM_KEY=keep-me$/m);
+    });
+
+    it("fills in the agent token only when the file has no credential", async () => {
+      const filled = await run("MULLION_ROLE=agent\nMULLION_AGENT_TOKEN=\n", {
+        MULLION_AGENT_TOKEN: "fixture-new-tok", // pragma: allowlist secret
+      });
+      expect(filled).toMatch(/^MULLION_AGENT_TOKEN=fixture-new-tok$/m);
+      expect(filled.match(/^MULLION_AGENT_TOKEN=/gm)).toHaveLength(1);
+
+      const withOldToken = "MULLION_ROLE=agent\nMULLION_AGENT_TOKEN=fixture-old-tok\n"; // pragma: allowlist secret
+      const kept = await run(withOldToken, {
+        MULLION_AGENT_TOKEN: "fixture-new-tok", // pragma: allowlist secret
+      });
+      expect(kept).toMatch(/^MULLION_AGENT_TOKEN=fixture-old-tok$/m);
+      expect(kept).not.toContain("fixture-new-tok");
+
+      const enrolled = await run(
+        "MULLION_ROLE=agent\nMULLION_PRIMARY_URL=https://p.example\nMULLION_ENROLLMENT_TOKEN=fixture-enroll\n",
+        { MULLION_AGENT_TOKEN: "fixture-new-tok" }, // pragma: allowlist secret
+      );
+      expect(enrolled).not.toContain("fixture-new-tok");
+    });
+
+    it("treats a quoted-empty or comment-only token as no credential, and keeps the rest of the file", async () => {
+      for (const blank of ['""', "''", "  # todo"]) {
+        const filled = await run(`MULLION_ROLE=agent\nOTHER=keep\nMULLION_AGENT_TOKEN=${blank}\n`, {
+          MULLION_AGENT_TOKEN: "fixture-new-tok", // pragma: allowlist secret
+        });
+        expect(filled).toMatch(/^MULLION_AGENT_TOKEN=fixture-new-tok$/m);
+        expect(filled).toMatch(/^OTHER=keep$/m);
+      }
+    });
+
+    it("leaves it byte-for-byte alone when this run passes nothing for it", async () => {
+      const original = "MULLION_ROLE=agent\nHOST=127.0.0.1\nMULLION_AGENT_TOKEN=\n";
+      expect(await run(original, {})).toBe(original);
+    });
   });
 
   describe("primary .env generation", () => {
@@ -617,6 +675,32 @@ describeOnLinux("deploy/install.sh", () => {
       expect(env).toMatch(/^MULLION_PRIMARY_URL=$/m);
       expect(env).toMatch(/^MULLION_ENROLLMENT_TOKEN=$/m);
       expect(stderr).not.toMatch(/WARNING/);
+    });
+
+    it("writes HOST and PORT only when the caller picked them", async () => {
+      const picked = freshMullionHome();
+      skipDownload(picked);
+      await runScript(["--role", "agent", picked], {
+        env: {
+          MULLION_AGENT_PROJECTS_ROOTS: "/srv/projects",
+          MULLION_AGENT_TOKEN: "fixture-agent-tok", // pragma: allowlist secret
+          MULLION_AGENT_HOST: "192.168.2.174",
+          MULLION_AGENT_PORT: "4000",
+        },
+      });
+      const env = readEnvFile(picked);
+      expect(env).toMatch(/^HOST=192\.168\.2\.174$/m);
+      expect(env).toMatch(/^PORT=4000$/m);
+
+      const defaults = freshMullionHome();
+      skipDownload(defaults);
+      await runScript(["--role", "agent", defaults], {
+        env: {
+          MULLION_AGENT_PROJECTS_ROOTS: "/srv/projects",
+          MULLION_AGENT_TOKEN: "fixture-agent-tok", // pragma: allowlist secret
+        },
+      });
+      expect(readEnvFile(defaults)).not.toMatch(/^(HOST|PORT)=/m);
     });
 
     it("writes the self-registration credential path with no warnings", async () => {
