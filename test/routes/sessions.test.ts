@@ -5707,6 +5707,7 @@ describe("sessions route", () => {
       spy.mockReturnValue({
         getScrollback: vi.fn().mockResolvedValue(Buffer.from("remote")),
         getRenderedScrollback: vi.fn().mockResolvedValue(""),
+        getTranscript: vi.fn().mockResolvedValue({ ok: false, status: 404, error: "not running" }),
       } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
 
       const res = await app.inject({
@@ -5738,6 +5739,7 @@ describe("sessions route", () => {
       spy.mockReturnValue({
         getScrollback: vi.fn().mockResolvedValue(Buffer.from("local")),
         getRenderedScrollback: vi.fn().mockResolvedValue(""),
+        getTranscript: vi.fn().mockResolvedValue({ ok: false, status: 404, error: "not running" }),
       } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
 
       const res = await app.inject({
