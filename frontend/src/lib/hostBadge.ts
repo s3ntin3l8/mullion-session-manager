@@ -23,7 +23,7 @@ import type { Host } from "../api/index.js";
  */
 
 /** A host's display name: "this machine" for the local host, the id if the fleet list has no name. */
-export function hostDisplayName(hostId: string, hosts: Host[]): string {
+export function hostDisplayName(hostId: string, hosts: readonly Host[]): string {
   if (hostId === LOCAL_HOST_ID) return "this machine";
   return hosts.find((h) => h.id === hostId)?.name ?? hostId;
 }
@@ -50,7 +50,7 @@ export function describeHostBadge(
   // per-PROJECT host badge, and the per-session one is for the case that
   // matters — one project's sessions on different hosts.
   if (!hostId || hostId === LOCAL_HOST_ID) return null;
-  const name = hosts().find((h) => h.id === hostId)?.name ?? hostId;
+  const name = hostDisplayName(hostId, hosts());
   const reason = session?.placementReason;
   return {
     name,

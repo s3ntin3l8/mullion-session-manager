@@ -91,6 +91,21 @@ describe("DuplicateProjectsBanner", () => {
     );
   });
 
+  it("does not reopen a confirm that was cancelled before the re-read landed", async () => {
+    const user = open();
+    const button = await screen.findByRole("button", { name: "Merge into #19 (this machine)" });
+    let land!: () => void;
+    vi.mocked(api.getProjectDuplicates).mockReturnValueOnce(
+      new Promise((resolve) => {
+        land = () => resolve({ groups: [group] });
+      }),
+    );
+    await user.click(button);
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    land();
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+  });
+
   it("falls back to the host id when the host is unknown", async () => {
     useDashboardStore.setState({ hosts: [] });
     render(<DuplicateProjectsBanner />);

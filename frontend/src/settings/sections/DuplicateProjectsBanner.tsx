@@ -23,12 +23,10 @@ function impact(d: DuplicateProjectEntry): string {
 }
 
 // The two projects can share a name; the host is what tells them apart.
-const hostName = hostDisplayName;
-
 type Member = { id: number; name: string; hostId: string; cwd: string };
 
 function memberLabel(m: Member, hosts: Host[]): string {
-  return `#${m.id} · ${hostName(m.hostId, hosts)} · ${m.cwd}`;
+  return `#${m.id} · ${hostDisplayName(m.hostId, hosts)} · ${m.cwd}`;
 }
 
 export function DuplicateProjectsBanner() {
@@ -131,13 +129,16 @@ export function DuplicateProjectsBanner() {
                       .then((r) => {
                         const group = r.groups.find((x) => x.survivor.id === g.survivor.id);
                         const dup = group?.duplicates.find((x) => x.id === d.id);
-                        if (group && dup) setConfirming({ group, dup });
+                        // Only retarget the confirm this read was for: Cancel or another row wins.
+                        if (group && dup) {
+                          setConfirming((prev) => (prev?.dup.id === d.id ? { group, dup } : prev));
+                        }
                       })
                       .catch(() => undefined);
                   }}
                   disabled={d.refusal !== null || merging}
                 >
-                  Merge into #{g.survivor.id} ({hostName(g.survivor.hostId, hosts)})
+                  Merge into #{g.survivor.id} ({hostDisplayName(g.survivor.hostId, hosts)})
                 </SecondaryButton>
               }
               stacked
@@ -159,15 +160,16 @@ export function DuplicateProjectsBanner() {
           <div style={{ fontSize: "0.8125rem" }}>
             Merge{" "}
             <strong>
-              #{confirming.dup.id} {confirming.dup.name} ({hostName(confirming.dup.hostId, hosts)})
+              #{confirming.dup.id} {confirming.dup.name} (
+              {hostDisplayName(confirming.dup.hostId, hosts)})
             </strong>{" "}
             into{" "}
             <strong>
               #{confirming.group.survivor.id} {confirming.group.survivor.name} (
-              {hostName(confirming.group.survivor.hostId, hosts)})
+              {hostDisplayName(confirming.group.survivor.hostId, hosts)})
             </strong>
             ? This moves {impact(confirming.dup)} and deletes #{confirming.dup.id} (
-            {hostName(confirming.dup.hostId, hosts)}). Its path becomes an &ldquo;Also lives
+            {hostDisplayName(confirming.dup.hostId, hosts)}). Its path becomes an &ldquo;Also lives
             on&rdquo; checkout of #{confirming.group.survivor.id}. This cannot be undone.
           </div>
           {error && (

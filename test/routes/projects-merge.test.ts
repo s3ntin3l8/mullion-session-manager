@@ -89,6 +89,21 @@ describe("project merge routes", () => {
       }
     });
 
+    it("shares one scan between concurrent forced refreshes", async () => {
+      const { getDuplicateGroups } = await import("../../src/services/project-merge.js");
+      const discover = vi.spyOn(
+        await import("../../src/services/repo-identity.js"),
+        "buildOriginIndex",
+      );
+      const [a, b] = await Promise.all([
+        getDuplicateGroups(app, { refresh: true }),
+        getDuplicateGroups(app, { refresh: true }),
+      ]);
+      expect(a).toBe(b);
+      expect(discover).toHaveBeenCalledTimes(1);
+      discover.mockRestore();
+    });
+
     it("is invalidated by a merge", async () => {
       expect((await list()).groups).toHaveLength(1);
       expect((await merge(dupId, { into: survivorId })).statusCode).toBe(200);
