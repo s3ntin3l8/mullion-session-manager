@@ -216,26 +216,40 @@ describeOnWindows("deploy/windows/register-task.ps1", () => {
     // rcedit-x64.exe to run it locally; in CI it is fetched from the bootstrap's
     // own pin and checked against its SHA-256, so a wrong rcedit flag cannot hide
     // behind the fallback to an unbranded copy.
-    async function rceditPath(): Promise<string | null> {
-      const given = process.env.MULLION_TEST_RCEDIT;
-      if (given && fs.existsSync(given)) return given;
-      if (!process.env.CI) return null;
+    // The bootstrap's pin (mullion-install.ps1), repeated here; the test below
+    // keeps the two in step.
+    const RCEDIT_URL = "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe";
+    const RCEDIT_SHA256 = "3e7801db1a5edbec91b49a24a094aad776cb4515488ea5a4ca2289c400eade2a"; // pragma: allowlist secret
+    it("uses the same rcedit pin as the bootstrap", () => {
       const ps1 = fs.readFileSync(
         fileURLToPath(new URL("../../deploy/windows/mullion-install.ps1", import.meta.url)),
         "utf8",
       );
-      const url = /\$PinRceditUrl\s*=\s*'([^']+)'/.exec(ps1)?.[1];
-      const sha = /\$PinRceditSha256\s*=\s*'([0-9a-f]{64})'/.exec(ps1)?.[1];
-      if (!url || !sha) throw new Error("could not read the rcedit pin from mullion-install.ps1");
+      expect(ps1).toContain(`$PinRceditUrl = '${RCEDIT_URL}'`);
+      expect(ps1).toContain(`$PinRceditSha256 = '${RCEDIT_SHA256}'`);
+    });
+    async function rceditPath(): Promise<string | null> {
+      const given = process.env.MULLION_TEST_RCEDIT;
+      if (given && fs.existsSync(given)) return given;
+      if (!process.env.CI) return null;
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rcedit-"));
       dirs.push(dir);
       const file = path.join(dir, "rcedit-x64.exe");
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`downloading rcedit: HTTP ${res.status}`);
-      const bytes = Buffer.from(await res.arrayBuffer());
-      const got = createHash("sha256").update(bytes).digest("hex");
-      if (got !== sha) throw new Error(`rcedit checksum ${got} does not match the pin ${sha}`);
-      fs.writeFileSync(file, bytes);
+      // Downloaded by PowerShell (as the bootstrap does), not by this process.
+      await run(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri '${RCEDIT_URL}' -OutFile '${file}'`,
+        ],
+        { env: windowsPowerShellEnv(process.env), windowsHide: true, timeout: 120_000 },
+      );
+      const got = createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+      if (got !== RCEDIT_SHA256) {
+        throw new Error(`rcedit checksum ${got} does not match the pin ${RCEDIT_SHA256}`);
+      }
       return file;
     }
     it("carries the Mullion name and icon when rcedit is there", async () => {
