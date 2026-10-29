@@ -2715,7 +2715,7 @@ describe("controlSocketPlugin (issue #185)", () => {
       it("needs a coordinator sender, a top-level target in another project, and not itself (#2270)", async () => {
         app = await buildApp();
         await app.ready();
-        const { sender, target, senderProject, targetProject } = await messagePair({
+        const { sender, target, senderProject } = await messagePair({
           accepts: "any",
         });
         const body = { sessionId: target.sessionId, text: "hi" };
@@ -2738,11 +2738,25 @@ describe("controlSocketPlugin (issue #185)", () => {
           (await message(sender.hookToken, { sessionId: child.sessionId, text: "hi" })).error,
         ).toBe(baseline.error);
 
-        // Itself, and a session in the sender's own project.
+        // Itself, and ANOTHER session in the sender's own project (even one whose project
+        // accepts messages from everyone: messaging is cross-project only).
         expect(
           (await message(sender.hookToken, { sessionId: sender.sessionId, text: "hi" })).status,
         ).toBe(403);
-        void targetProject;
+        await patchProject(senderProject, { acceptsMessagesFrom: "any" });
+        const sibling = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          headers: authHeaders,
+          payload: { projectId: senderProject, command: "bash" },
+        });
+        expect(sibling.statusCode).toBe(201);
+        const sameProject = await message(sender.hookToken, {
+          sessionId: sibling.json().id,
+          text: "hi",
+        });
+        expect(sameProject.status).toBe(403);
+        expect(sameProject.error).toBe(baseline.error);
       });
 
       it("full scope has no sessions.message (it uses sessions.prompt)", async () => {

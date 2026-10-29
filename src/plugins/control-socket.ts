@@ -1671,8 +1671,14 @@ export const OPS: Record<string, OpSpec> = {
       const offClose = conn.onClose(() => aborter.abort());
       try {
         const settled = await queue.waitUntilSettled(message.id, aborter.signal);
-        if (settled && !aborter.signal.aborted) {
-          reply({ ok: true, status: 200, result: describeMessage(settled) });
+        if (!aborter.signal.aborted) {
+          // `undefined`: the record was evicted (the retention cap) between settling and
+          // this poll. Say so rather than leave the client waiting on its socket timeout.
+          reply(
+            settled
+              ? { ok: true, status: 200, result: describeMessage(settled) }
+              : bad(404, "the message was forgotten before its outcome could be read"),
+          );
         }
       } finally {
         conn.activeWaits -= 1;
