@@ -3,7 +3,7 @@ import type { LayoutTier } from "./lib/layoutTierTypes.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { api, normalizeAgentId } from "./api/index.js";
-import type { Launcher, Project, Session } from "./api/index.js";
+import type { Launcher, Session } from "./api/index.js";
 import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -21,7 +21,7 @@ import { buildPaletteCommands, searchPaletteCommands } from "./paletteCommands.j
 import type { PaletteCommand } from "./paletteCommands.js";
 import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
 import { describeError } from "./lib/describeError.js";
-import { projectHostCount, projectSpansHosts } from "./lib/hostBadge.js";
+import { projectHostCount } from "./lib/hostBadge.js";
 import { openSessionOn } from "./git/sessionLaunch.js";
 import { resolveActiveProjectId } from "./panelUtils.js";
 import { WorktreeOptions } from "./command-palette/WorktreeOptions.js";
@@ -711,12 +711,13 @@ export function CommandPalette({
     runCommand(command);
   };
 
-  // Issue #2238 — the host count for a picker row, or 0 when the project is
-  // single-host (the row then keeps its path subtitle).
-  const pickerHostCount = (p: Project): number => {
-    const own = sessions.filter((x) => x.projectId === p.id);
-    return projectSpansHosts(p, own) ? Math.max(2, projectHostCount(p, own)) : 0;
-  };
+  // Issue #2238 — host count per project, for the picker rows; a project
+  // reaching one host keeps its path subtitle.
+  const hostCountByProject = useMemo(() => {
+    const map = new Map<number, number>();
+    for (const p of projects) map.set(p.id, projectHostCount(p, sessions));
+    return map;
+  }, [projects, sessions]);
 
   const filteredProjects = useMemo(() => {
     if (!pickerOpen) return projects;
@@ -1289,7 +1290,9 @@ export function CommandPalette({
                 <span className="cmd-row-body">
                   <span className="cmd-row-title">{p.name}</span>
                   <span className="cmd-row-subtitle">
-                    {pickerHostCount(p) > 0 ? `${pickerHostCount(p)} hosts` : shortenHome(p.cwd)}
+                    {(hostCountByProject.get(p.id) ?? 1) > 1
+                      ? `${hostCountByProject.get(p.id)} hosts`
+                      : shortenHome(p.cwd)}
                   </span>
                 </span>
                 {p.id === effectiveProjectId && (

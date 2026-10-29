@@ -349,14 +349,14 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // decision's own words) are computed together, in one place, so the two
   // surfaces cannot disagree: see lib/hostBadge.ts.
   // Issue #2238 — a local tab also gets one when its project spans hosts.
-  // Only a LOCAL session needs the answer, so a remote tab never scans.
+  // The same predicate and session list as the sidebar. A boolean selector
+  // (and null work for a remote tab) so the badge appears as soon as a
+  // second host does, yet the tab only re-renders when the answer flips.
+  const spansHosts = useDashboardStore((s) =>
+    session?.resolvedHostId === LOCAL_HOST_ID ? projectSpansHosts(project, s.sessions) : false,
+  );
   const hostBadge = describeHostBadge(session, () => useDashboardStore.getState().hosts ?? [], {
-    spansHosts:
-      session?.resolvedHostId === LOCAL_HOST_ID &&
-      projectSpansHosts(
-        project,
-        useDashboardStore.getState().sessions.filter((x) => x.projectId === session.projectId),
-      ),
+    spansHosts,
   });
   // Issue #1892 — same split as the sidebar row: the name is non-reactive,
   // the derived status has to follow the heartbeat.

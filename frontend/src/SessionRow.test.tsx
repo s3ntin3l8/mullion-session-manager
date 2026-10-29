@@ -239,7 +239,7 @@ describe("SessionRow", () => {
       expect(document.querySelector(".session-host-badge")).toBeNull();
     });
 
-    it("shows a 'this server' badge for a local session when the project spans hosts (#2238)", () => {
+    it("shows a 'this machine' badge for a local session when the project spans hosts (#2238)", () => {
       render(
         <SessionRow
           session={{ ...SESSION, resolvedHostId: "local" }}
@@ -250,7 +250,7 @@ describe("SessionRow", () => {
         />,
       );
 
-      expect(document.querySelector(".session-host-badge")).toHaveTextContent("this server");
+      expect(document.querySelector(".session-host-badge")).toHaveTextContent("this machine");
     });
 
     it("sits OUTSIDE the status label's ellipsis box", () => {

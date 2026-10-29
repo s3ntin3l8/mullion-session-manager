@@ -379,15 +379,14 @@ export function Sidebar({
     return map;
   }, [treeProjects, sessions, hideEndedSessions, showTaskSessions, taskSessionIds, selectedChips]);
 
-  // Issue #2238 — once per project: does it span hosts? Computed on the base
-  // (unfiltered) list so a search box never flips a row's badge.
+  // Issue #2238 — once per project: does it span hosts? Computed from the
+  // store's FULL session list (not the display-filtered base list), so a
+  // Settings toggle or chip never flips a badge and the pane tab agrees.
   const spansHostsByProject = useMemo(() => {
     const map = new Map<number, boolean>();
-    for (const project of treeProjects) {
-      map.set(project.id, projectSpansHosts(project, baseSessionsByProject.get(project.id) ?? []));
-    }
+    for (const project of treeProjects) map.set(project.id, projectSpansHosts(project, sessions));
     return map;
-  }, [treeProjects, baseSessionsByProject]);
+  }, [treeProjects, sessions]);
 
   // Counted on the unfiltered base set (not whatever the search box
   // currently narrows to) — see VIRTUALIZE_SESSION_THRESHOLD's own comment
@@ -1855,7 +1854,8 @@ export function SessionRow({
   session: Session;
   project: Project;
   // Issue #2238 — computed once per project by Sidebar; unset (every other
-  // caller) keeps today's rows.
+  // caller, including the Kanban/board lanes, which are out of scope) keeps
+  // today's rows.
   spansHosts?: boolean;
   onOpen: () => void;
   onOpenAsFloat?: () => void;

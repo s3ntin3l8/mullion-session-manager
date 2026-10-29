@@ -168,13 +168,13 @@ describe("hasRemoteHosts / describeTaskHost (#2236)", () => {
 
 // Issue #2238 — once a project spans hosts, a local session gets a badge too.
 describe("describeHostBadge spansHosts (issue #2238)", () => {
-  it("labels a LOCAL session 'this server' when the project spans hosts", () => {
+  it("labels a LOCAL session 'this machine' when the project spans hosts", () => {
     const badge = describeHostBadge(
       { resolvedHostId: "local", placementReason: null },
       () => HOSTS,
       { spansHosts: true },
     );
-    expect(badge).toEqual({ name: "this server", title: "Runs on host: this server" });
+    expect(badge).toEqual({ name: "this machine", title: "Runs on host: this machine" });
   });
 
   it("uses the placement reason as the local tooltip", () => {
@@ -211,23 +211,37 @@ describe("describeHostBadge spansHosts (issue #2238)", () => {
 });
 
 describe("projectSpansHosts / projectHostCount (issue #2238)", () => {
-  const local = { resolvedHostId: "local" };
-  const mac = { resolvedHostId: "mac-mini" };
+  const sess = (resolvedHostId: string, status = "active", projectId = 1) => ({
+    projectId,
+    status,
+    resolvedHostId,
+  });
+  const P = { id: 1, hostCwds: {} as Record<string, string> };
 
   it("is false for a single-host project", () => {
-    expect(projectSpansHosts({ hostCwds: {} }, [local, local])).toBe(false);
-    expect(projectSpansHosts({ hostCwds: {} }, [])).toBe(false);
+    expect(projectSpansHosts(P, [sess("local"), sess("local")])).toBe(false);
+    expect(projectSpansHosts(P, [])).toBe(false);
     expect(projectSpansHosts(undefined, [])).toBe(false);
-    expect(projectHostCount({ hostCwds: {} }, [local])).toBe(1);
+    expect(projectHostCount(P, [sess("local")])).toBe(1);
   });
 
-  it("is true once hostCwds has an entry, even with no sessions", () => {
-    expect(projectSpansHosts({ hostCwds: { "mac-mini": "/x" } }, [])).toBe(true);
-    expect(projectHostCount({ hostCwds: { "mac-mini": "/x" } }, [local])).toBe(2);
+  it("is true once hostCwds names another host, even with no sessions", () => {
+    const p = { id: 1, hostCwds: { "mac-mini": "/x" } };
+    expect(projectSpansHosts(p, [])).toBe(true);
+    expect(projectHostCount(p, [sess("local")])).toBe(2);
   });
 
-  it("is true when listed sessions resolve to more than one host", () => {
-    expect(projectSpansHosts({ hostCwds: {} }, [local, mac])).toBe(true);
-    expect(projectHostCount({ hostCwds: {} }, [local, mac])).toBe(2);
+  it("is false when hostCwds names only the local host", () => {
+    expect(projectSpansHosts({ id: 1, hostCwds: { local: "/x" } }, [])).toBe(false);
+  });
+
+  it("is true when the project's sessions resolve to more than one host", () => {
+    expect(projectSpansHosts(P, [sess("local"), sess("mac-mini")])).toBe(true);
+    expect(projectHostCount(P, [sess("local"), sess("mac-mini")])).toBe(2);
+  });
+
+  it("ignores killed sessions and other projects' sessions", () => {
+    expect(projectSpansHosts(P, [sess("local"), sess("mac-mini", "killed")])).toBe(false);
+    expect(projectSpansHosts(P, [sess("local"), sess("mac-mini", "active", 2)])).toBe(false);
   });
 });

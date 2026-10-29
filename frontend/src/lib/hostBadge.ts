@@ -28,9 +28,6 @@ export function hostDisplayName(hostId: string, hosts: readonly Host[]): string 
   return hosts.find((h) => h.id === hostId)?.name ?? hostId;
 }
 
-/** What the local host is called in a badge. */
-export const LOCAL_HOST_LABEL = "this server";
-
 export interface HostBadge {
   /** The host's display name (its id, if the fleet list has no name for it). */
   name: string;
@@ -39,37 +36,43 @@ export interface HostBadge {
 }
 
 /**
- * Whether a project's sessions can land on more than one host (issue #2238):
- * it has per-host checkouts (`hostCwds`), or its listed sessions already
- * resolve to more than one host. Once it does, a local row needs a badge
- * too — an unbadged row would otherwise read as "no host info".
+ * The distinct hosts a project reaches (issue #2238): this machine, its
+ * per-host checkouts (`hostCwds`) and the hosts its sessions resolved to.
+ *
+ * `sessions` is the FULL store list, not a display-filtered one — the
+ * sidebar, the pane tab and the launch picker all pass it, so they cannot
+ * disagree about the same project. Killed sessions are ignored (they no
+ * longer run anywhere); everything else counts, whatever the sidebar's
+ * hide-ended / task-session settings currently show.
  */
-export function projectSpansHosts(
-  project: { hostCwds?: Record<string, string> | null } | null | undefined,
-  sessions: readonly { resolvedHostId: string }[],
-): boolean {
-  if (project?.hostCwds && Object.keys(project.hostCwds).length > 0) return true;
-  const first = sessions[0]?.resolvedHostId;
-  return sessions.some((s) => s.resolvedHostId !== first);
+export function projectHostCount(
+  project: { id: number; hostCwds?: Record<string, string> | null },
+  sessions: readonly { projectId: number; status: string; resolvedHostId: string }[],
+): number {
+  const ids = new Set<string>([LOCAL_HOST_ID, ...Object.keys(project.hostCwds ?? {})]);
+  for (const s of sessions) {
+    if (s.projectId === project.id && s.status !== "killed" && s.resolvedHostId) {
+      ids.add(s.resolvedHostId);
+    }
+  }
+  return ids.size;
 }
 
-/** Distinct hosts a project reaches: this server, its checkouts and its sessions. */
-export function projectHostCount(
-  project: { hostCwds?: Record<string, string> | null },
-  sessions: readonly { resolvedHostId: string }[],
-): number {
-  return new Set([
-    LOCAL_HOST_ID,
-    ...Object.keys(project.hostCwds ?? {}),
-    ...sessions.map((s) => s.resolvedHostId),
-  ]).size;
+/** Whether a project reaches more than one host: a local row then needs a badge too. */
+export function projectSpansHosts(
+  project: { id: number; hostCwds?: Record<string, string> | null } | null | undefined,
+  sessions: readonly { projectId: number; status: string; resolvedHostId: string }[],
+): boolean {
+  return !!project && projectHostCount(project, sessions) > 1;
 }
 
 /**
  * @param hosts A LAZY getter for the fleet's host list. It is called only
- *   for a session that is NOT on the local host — a local session has no
- *   badge, and reading the store for every row of the sidebar (to answer a
+ *   for a session that is NOT on the local host — a local session's name is
+ *   fixed, and reading the store for every row of the sidebar (to answer a
  *   question that has already been answered) is work for nothing.
+ * @param options.spansHosts The session's project reaches more than one
+ *   host (issue #2238). Without it a LOCAL session has no badge.
  */
 export function describeHostBadge(
   session: { resolvedHostId: string; placementReason: string | null } | null | undefined,
@@ -79,12 +82,14 @@ export function describeHostBadge(
   const hostId = session?.resolvedHostId;
   if (!hostId) return null;
   // A LOCAL session carries no badge in a single-host project (the common
-  // case). Once the project spans hosts (issue #2238) it gets one labelled
-  // "this server", so the rows that are NOT badged stop reading as unknown.
+  // case). Once the project spans hosts (issue #2238) it gets one, so the
+  // unbadged rows stop reading as "unknown". It returns BEFORE the
+  // replaceAll below on purpose: "local" is a short slug that could be a
+  // substring of the reason, so it must never be substituted.
   if (hostId === LOCAL_HOST_ID) {
     if (!options.spansHosts) return null;
-    const reason = session?.placementReason;
-    return { name: LOCAL_HOST_LABEL, title: reason ?? `Runs on host: ${LOCAL_HOST_LABEL}` };
+    const name = hostDisplayName(hostId, []);
+    return { name, title: session?.placementReason ?? `Runs on host: ${name}` };
   }
   const name = hostDisplayName(hostId, hosts());
   const reason = session?.placementReason;
@@ -94,8 +99,7 @@ export function describeHostBadge(
     // substring replace, and that is safe because the id being replaced is
     // a REMOTE host's — a UUID (host-registry.ts's createHost mints one),
     // which cannot be a substring of anything else in the sentence. (The
-    // local host's id IS a short slug, "local" — but a local session never
-    // gets a badge, so its id is never substituted.)
+    // local host's id IS a short slug, "local" — handled above, never here.)
     title: reason ? reason.replaceAll(hostId, name) : `Runs on host: ${name}`,
   };
 }

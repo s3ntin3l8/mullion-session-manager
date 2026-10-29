@@ -344,12 +344,13 @@ describe("PaneTab", () => {
       expect(document.querySelector(".pane-tab-host-badge")).toBeNull();
     });
 
-    it("badges a local tab 'this server' when its project spans hosts (#2238)", () => {
+    it("badges a local tab 'this machine' when its project spans hosts (#2238)", () => {
       session = { ...BASE_SESSION, resolvedHostId: "local" };
+      projects = [makeProject({ id: BASE_SESSION.projectId })];
       extraSessions = [{ ...BASE_SESSION, id: BASE_SESSION.id + 1, resolvedHostId: "mac-mini" }];
       render(<PaneTab {...makeProps()} />);
 
-      expect(document.querySelector(".pane-tab-host-badge")).toHaveTextContent("this server");
+      expect(document.querySelector(".pane-tab-host-badge")).toHaveTextContent("this machine");
     });
 
     it("badges a local tab when the project has hostCwds entries (#2238)", () => {
@@ -359,7 +360,7 @@ describe("PaneTab", () => {
       ];
       render(<PaneTab {...makeProps()} />);
 
-      expect(document.querySelector(".pane-tab-host-badge")).toHaveTextContent("this server");
+      expect(document.querySelector(".pane-tab-host-badge")).toHaveTextContent("this machine");
     });
 
     // Issue #1852 — the same tooltip the sidebar's host badge carries, so
