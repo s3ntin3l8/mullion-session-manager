@@ -17,15 +17,9 @@
 // entry's `seq` is `line * SEQ_LINE_STRIDE + index`. Callers treat it as an opaque
 // increasing cursor: pass the last `seq` seen (or the response's `nextSeq`) as
 // `afterSeq` to read what came after.
-import {
-  closeSync,
-  constants,
-  fstatSync,
-  lstatSync,
-  openSync,
-  readSync,
-  realpathSync,
-} from "node:fs";
+import { createHash } from "node:crypto";
+import { constants, lstatSync, realpathSync } from "node:fs";
+import { open, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { getAdapterTranscriptFormat } from "./hook-adapters/index.js";
 
@@ -50,7 +44,16 @@ export interface TranscriptQuery {
 }
 
 export type TranscriptResult =
-  | { ok: true; entries: TranscriptEntry[]; nextSeq: number; more: boolean }
+  | {
+      ok: true;
+      entries: TranscriptEntry[];
+      nextSeq: number;
+      more: boolean;
+      /** Identity of the file read (a short hash of its path). A cursor is a line
+       * number in ONE file; when the agent moves to a new transcript (a resume or
+       * a compaction) this changes, and the caller should read again from 0. */
+      file: string;
+    }
   | { ok: false; status: 404 | 409 | 501; error: string };
 
 /** What a session knows about where its CLI keeps the conversation. */
@@ -59,6 +62,27 @@ export interface TranscriptSource {
   path: string;
   /** Directories the file must resolve inside. */
   roots: string[];
+}
+
+/**
+ * The directory names Claude Code may file a session launched in `cwd` under, inside
+ * `<config dir>/projects/`: the path with every non-alphanumeric character replaced by
+ * `-` (`/home/u/.wt/x` is `-home-u--wt-x`), for the path as given and as resolved.
+ * Claude shortens a very long name with a hash suffix, which cannot be reproduced
+ * here, so a name past its 200-character limit yields `null`: the caller then falls
+ * back to the whole projects directory for that cwd.
+ */
+export function claudeProjectDirNames(cwd: string): Array<string | null> {
+  const names = new Set<string>([cwd]);
+  try {
+    names.add(realpathSync(cwd));
+  } catch {
+    // A cwd that no longer exists has only its literal name.
+  }
+  return [...names].map((name) => {
+    const encoded = name.replace(/[^a-zA-Z0-9]/g, "-");
+    return encoded.length > 200 ? null : encoded;
+  });
 }
 
 /** The slice of a live session this needs, so tests need no PtyManager. */
@@ -201,21 +225,28 @@ export function parseTranscriptLine(
 
 function capText(text: string): { text: string; truncated: boolean } {
   if (text.length <= MAX_ENTRY_CHARS) return { text, truncated: false };
+  // Do not cut a surrogate pair in half: a lone surrogate is not valid text.
+  let cut = MAX_ENTRY_CHARS;
+  const last = text.charCodeAt(cut - 1);
+  if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
   return {
-    text: `${text.slice(0, MAX_ENTRY_CHARS)}… [truncated ${text.length - MAX_ENTRY_CHARS} chars]`,
+    text: `${text.slice(0, cut)}… [truncated ${text.length - cut} chars]`,
     truncated: true,
   };
 }
 
 /**
  * Opens `candidate` for reading only when it is a regular file that resolves
- * inside one of `roots`. Returns the descriptor, or null when any check fails.
+ * inside one of `roots`. Returns the handle, or null when any check fails.
  * Same checks as `isCodexRolloutPath` (src/hooks/codex-rollout.mjs): lstat (so a
  * symlink is rejected outright), the real path inside the real root, then
  * O_NOFOLLOW plus fstat so a swap between the check and the open is not followed.
+ * O_NONBLOCK keeps a FIFO swapped in between the lstat and the open from blocking
+ * the open forever; the fstat then rejects it.
  */
-function openInsideRoots(candidate: string, roots: string[]): number | null {
+async function openInsideRoots(candidate: string, roots: string[]): Promise<FileHandle | null> {
   if (typeof candidate !== "string" || candidate.length === 0) return null;
+  let handle: FileHandle | null = null;
   try {
     if (!lstatSync(candidate).isFile()) return null;
     const real = realpathSync(candidate);
@@ -233,24 +264,28 @@ function openInsideRoots(candidate: string, roots: string[]): number | null {
       }
     });
     if (!inside) return null;
-    const fd = openSync(candidate, constants.O_RDONLY | constants.O_NOFOLLOW);
-    if (!fstatSync(fd).isFile()) {
-      closeSync(fd);
+    handle = await open(
+      candidate,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+    if (!(await handle.stat()).isFile()) {
+      await handle.close();
       return null;
     }
-    return fd;
+    return handle;
   } catch {
+    await handle?.close().catch(() => undefined);
     return null;
   }
 }
 
 /** Reads one page of a transcript file. */
-export function readTranscriptFile(
+export async function readTranscriptFile(
   source: TranscriptSource,
   query: TranscriptQuery,
-): TranscriptResult {
-  const fd = openInsideRoots(source.path, source.roots);
-  if (fd === null) {
+): Promise<TranscriptResult> {
+  const handle = await openInsideRoots(source.path, source.roots);
+  if (handle === null) {
     return { ok: false, status: 404, error: "the transcript file is not readable" };
   }
   const limit = Math.min(Math.max(1, Math.trunc(query.limit)), MAX_LIMIT);
@@ -301,7 +336,7 @@ export function readTranscriptFile(
     let oversized = false;
     let stop = false;
     while (!stop) {
-      const read = readSync(fd, chunk, 0, READ_CHUNK_BYTES, position);
+      const { bytesRead: read } = await handle.read(chunk, 0, READ_CHUNK_BYTES, position);
       if (read === 0) break;
       position += read;
       const view = chunk.subarray(0, read);
@@ -342,11 +377,7 @@ export function readTranscriptFile(
   } catch {
     return { ok: false, status: 404, error: "the transcript file is not readable" };
   } finally {
-    try {
-      closeSync(fd);
-    } catch {
-      // The read already produced its result.
-    }
+    await handle.close().catch(() => undefined);
   }
 
   const last = entries.length > 0 ? entries[entries.length - 1]!.seq : afterSeq;
@@ -354,16 +385,23 @@ export function readTranscriptFile(
   // end: skip past every complete line, so lines that held no entries are not
   // scanned again (a line still being written is not complete and not counted).
   const nextSeq = more ? last : Math.max(last, lineNo * SEQ_LINE_STRIDE + (SEQ_LINE_STRIDE - 1));
-  return { ok: true, entries, nextSeq: Math.max(nextSeq, afterSeq), more };
+  return {
+    ok: true,
+    entries,
+    nextSeq: Math.max(nextSeq, afterSeq),
+    more,
+    file: createHash("sha1").update(source.path).digest("hex").slice(0, 8),
+  };
 }
 
 /** Resolves a live session to its transcript and reads one page. */
-export function readSessionTranscript(
+export async function readSessionTranscript(
   session: TranscriptSession | undefined,
   query: TranscriptQuery,
-): TranscriptResult {
+): Promise<TranscriptResult> {
   if (!session) return { ok: false, status: 404, error: "the session is not running" };
-  if (getAdapterTranscriptFormat(session.command) === null) {
+  const format = getAdapterTranscriptFormat(session.command);
+  if (format === null) {
     return {
       ok: false,
       status: 501,
@@ -371,6 +409,11 @@ export function readSessionTranscript(
     };
   }
   const source = session.getTranscriptSource();
+  // The format that parses the file is the one the session's own CLI writes, never
+  // one a hook message implied.
+  if (source !== null && source.format !== format) {
+    return { ok: false, status: 409, error: "the reported transcript does not match this agent" };
+  }
   if (source === null) {
     return {
       ok: false,

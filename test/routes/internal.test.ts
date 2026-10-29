@@ -4835,6 +4835,27 @@ describe("internal routes (agent role, issue #26)", () => {
           more: false,
         });
 
+        // Another project's transcript, inside the same config dir, is refused too:
+        // a session reads only the project directory it was launched in.
+        const otherProject = path.join(configDir, "projects", "-somewhere-else");
+        fs.mkdirSync(otherProject, { recursive: true });
+        const otherFile = path.join(otherProject, "other.jsonl");
+        fs.writeFileSync(
+          otherFile,
+          `${JSON.stringify({ type: "user", message: { content: "someone else's conversation" } })}\n`,
+        );
+        app.pty.emitHookEvent("612", {
+          kind: "cwd_changed",
+          cwd: "/tmp",
+          transcriptPath: otherFile,
+        });
+        const crossProject = await app.inject({
+          method: "GET",
+          url: "/internal/sessions/612/transcript",
+          headers: auth,
+        });
+        expect(crossProject.json()).toMatchObject({ ok: false, status: 404 });
+
         // A forged path outside the config dir is refused, not read.
         const outside = path.join(configDir, "secret.jsonl");
         fs.writeFileSync(outside, "{}\n");

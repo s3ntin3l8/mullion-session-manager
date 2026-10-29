@@ -39,9 +39,9 @@ import { TerminalModeTracker } from "./terminal-mode-tracker.js";
 import { buildSessionEnv } from "./session-env.js";
 import type { HookMessageKind, HookMessage } from "./hook-protocol.js";
 import { filterOutstandingBackgroundTasks } from "./background-tasks.js";
-import { getAdapterEmits } from "./hook-adapters/index.js";
+import { getAdapterEmits, getAdapterTranscriptFormat } from "./hook-adapters/index.js";
 import { resolveClaudeConfigDir } from "./hook-adapters/claude-config-dir.js";
-import type { TranscriptSource } from "./session-transcript.js";
+import { claudeProjectDirNames, type TranscriptSource } from "./session-transcript.js";
 import { detectDevServerPortForPlainSession, portInUseReason } from "./dev-server-detect.js";
 import { lastMeaningfulLine, collapseAndTruncate } from "./terminal-text.js";
 import { ScrollbackBuffer } from "./scrollback-buffer.js";
@@ -2568,18 +2568,33 @@ export class Session {
    * backend's default; for Codex its sessions directory.
    */
   getTranscriptSource(): TranscriptSource | null {
-    if (this.codexTranscriptPath !== null) {
+    const format = getAdapterTranscriptFormat(this.command);
+    if (format === "codex" && this.codexTranscriptPath !== null) {
       return {
-        format: "codex",
+        format,
         path: this.codexTranscriptPath,
         roots: [path.join(this.codexHome(), "sessions")],
       };
     }
-    if (this._agentTranscriptPath !== null) {
+    // Only a Claude Code session may name a Claude transcript, and only inside ITS
+    // OWN project directory (Claude keys it by the launch cwd). The projects/ tree
+    // holds every session's conversation on the host, so a broader root would let a
+    // forged hook message point this session's reader at someone else's.
+    if (format === "claude-code" && this._agentTranscriptPath !== null) {
+      const configDirs = [resolveClaudeConfigDir()];
       const own = this.env.CLAUDE_CONFIG_DIR;
-      const roots = [path.join(resolveClaudeConfigDir(), "projects")];
-      if (typeof own === "string" && own.length > 0) roots.unshift(path.join(own, "projects"));
-      return { format: "claude-code", path: this._agentTranscriptPath, roots };
+      if (typeof own === "string" && own.length > 0) configDirs.unshift(own);
+      const cwds = [this.cwd, this._liveCwd].filter((cwd): cwd is string => !!cwd);
+      const roots = new Set<string>();
+      for (const configDir of configDirs) {
+        const projects = path.join(configDir, "projects");
+        for (const cwd of cwds) {
+          for (const candidate of claudeProjectDirNames(cwd)) {
+            roots.add(candidate === null ? projects : path.join(projects, candidate));
+          }
+        }
+      }
+      return { format, path: this._agentTranscriptPath, roots: [...roots] };
     }
     return null;
   }

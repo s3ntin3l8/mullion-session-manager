@@ -576,7 +576,8 @@ a one-line summary. Result:
     { "seq": 2000, "role": "user", "text": "run the tests", "ts": "2026-10-29T10:00:00Z" }
   ],
   "nextSeq": 9999,
-  "more": false
+  "more": false,
+  "file": "3f9a1c2e"
 }
 ```
 
@@ -586,11 +587,16 @@ consecutive). `more: true` means the page ended on a cap (`limit`, or 256 KiB of
 text) and `afterSeq: nextSeq` reads the rest; with `more: false`, `nextSeq` is
 the cursor to poll from. An entry longer than 16 KiB is cut and carries
 `truncated: true`. A subagent's own messages and the harness's injected context
-are left out.
+are left out. `file` identifies the transcript file that was read: a cursor is a
+line number in one file, so when `file` changes (the agent resumed or compacted
+into a new transcript) read again from `afterSeq: 0`. A last line still being
+written, with no newline yet, is not returned until it is complete.
 
 The reader runs on the host that runs the session; the hook-reported path is
 untrusted, so it is opened only when it resolves to a regular file inside the
-CLI's own config directory. Errors: `404` the session is not running or the file
+session's own project directory under the CLI's config directory (Claude Code
+files a conversation by the directory it was launched in; Codex under its
+sessions directory). Errors: `404` the session is not running or the file
 is unreadable, `409` the session has not reported its transcript yet (it arrives
 with the agent's first hook; a primary restart relearns it on the next hook),
 `501` the agent CLI has no readable transcript (`not-supported`: opencode, agy
