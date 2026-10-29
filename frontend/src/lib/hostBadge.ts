@@ -28,11 +28,41 @@ export function hostDisplayName(hostId: string, hosts: readonly Host[]): string 
   return hosts.find((h) => h.id === hostId)?.name ?? hostId;
 }
 
+/** What the local host is called in a badge. */
+export const LOCAL_HOST_LABEL = "this server";
+
 export interface HostBadge {
   /** The host's display name (its id, if the fleet list has no name for it). */
   name: string;
   /** The tooltip: the decision's own words, or the bare "which host". */
   title: string;
+}
+
+/**
+ * Whether a project's sessions can land on more than one host (issue #2238):
+ * it has per-host checkouts (`hostCwds`), or its listed sessions already
+ * resolve to more than one host. Once it does, a local row needs a badge
+ * too — an unbadged row would otherwise read as "no host info".
+ */
+export function projectSpansHosts(
+  project: { hostCwds?: Record<string, string> | null } | null | undefined,
+  sessions: readonly { resolvedHostId: string }[],
+): boolean {
+  if (project?.hostCwds && Object.keys(project.hostCwds).length > 0) return true;
+  const first = sessions[0]?.resolvedHostId;
+  return sessions.some((s) => s.resolvedHostId !== first);
+}
+
+/** Distinct hosts a project reaches: this server, its checkouts and its sessions. */
+export function projectHostCount(
+  project: { hostCwds?: Record<string, string> | null },
+  sessions: readonly { resolvedHostId: string }[],
+): number {
+  return new Set([
+    LOCAL_HOST_ID,
+    ...Object.keys(project.hostCwds ?? {}),
+    ...sessions.map((s) => s.resolvedHostId),
+  ]).size;
 }
 
 /**
@@ -44,12 +74,18 @@ export interface HostBadge {
 export function describeHostBadge(
   session: { resolvedHostId: string; placementReason: string | null } | null | undefined,
   hosts: () => Host[],
+  options: { spansHosts?: boolean } = {},
 ): HostBadge | null {
   const hostId = session?.resolvedHostId;
-  // A LOCAL session carries no badge: the sidebar already shows a
-  // per-PROJECT host badge, and the per-session one is for the case that
-  // matters — one project's sessions on different hosts.
-  if (!hostId || hostId === LOCAL_HOST_ID) return null;
+  if (!hostId) return null;
+  // A LOCAL session carries no badge in a single-host project (the common
+  // case). Once the project spans hosts (issue #2238) it gets one labelled
+  // "this server", so the rows that are NOT badged stop reading as unknown.
+  if (hostId === LOCAL_HOST_ID) {
+    if (!options.spansHosts) return null;
+    const reason = session?.placementReason;
+    return { name: LOCAL_HOST_LABEL, title: reason ?? `Runs on host: ${LOCAL_HOST_LABEL}` };
+  }
   const name = hostDisplayName(hostId, hosts());
   const reason = session?.placementReason;
   return {

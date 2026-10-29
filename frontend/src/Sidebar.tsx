@@ -17,7 +17,7 @@ import { api, ApiError, LOCAL_HOST_ID } from "./api/index.js";
 import type { Device, DiscoveredProject, Host, Project, Session, Task } from "./api/index.js";
 import { SidebarDevices } from "./SidebarDevices.js";
 import { deriveNowLine } from "./lib/sessionNowLine.js";
-import { describeHostBadge, selectRemoteHost } from "./lib/hostBadge.js";
+import { describeHostBadge, projectSpansHosts, selectRemoteHost } from "./lib/hostBadge.js";
 import { HostStatusLabel } from "./HostStatusLabel.js";
 import {
   formatStatusLabel,
@@ -378,6 +378,16 @@ export function Sidebar({
     }
     return map;
   }, [treeProjects, sessions, hideEndedSessions, showTaskSessions, taskSessionIds, selectedChips]);
+
+  // Issue #2238 — once per project: does it span hosts? Computed on the base
+  // (unfiltered) list so a search box never flips a row's badge.
+  const spansHostsByProject = useMemo(() => {
+    const map = new Map<number, boolean>();
+    for (const project of treeProjects) {
+      map.set(project.id, projectSpansHosts(project, baseSessionsByProject.get(project.id) ?? []));
+    }
+    return map;
+  }, [treeProjects, baseSessionsByProject]);
 
   // Counted on the unfiltered base set (not whatever the search box
   // currently narrows to) — see VIRTUALIZE_SESSION_THRESHOLD's own comment
@@ -794,6 +804,7 @@ export function Sidebar({
                 <VirtualizedProjectTree
                   rows={flatRows}
                   hosts={hosts}
+                  spansHostsByProject={spansHostsByProject}
                   openSessionIds={openSessionIdSet}
                   onOpenSession={onOpenSession}
                   onOpenSessionAsFloat={onOpenSessionAsFloat}
@@ -811,6 +822,7 @@ export function Sidebar({
                     onOpenSessionAsFloat={onOpenSessionAsFloat}
                     sessions={filteredSessionsByProject.get(project.id) ?? []}
                     allSessions={baseSessionsByProject.get(project.id) ?? []}
+                    spansHosts={spansHostsByProject.get(project.id) ?? false}
                     onOpenSession={onOpenSession}
                     onSessionEnded={onSessionEnded}
                     onOpenLauncher={() => onOpenProjectLauncher(project.id)}
@@ -1465,6 +1477,7 @@ export function ProjectSection({
   project,
   sessions,
   allSessions,
+  spansHosts = false,
   hosts,
   onOpenSession,
   onOpenSessionAsFloat,
@@ -1485,6 +1498,8 @@ export function ProjectSection({
   // that call shape valid without every test needing to learn a second prop
   // it doesn't care about.
   allSessions?: Session[];
+  // Issue #2238 — the project spans hosts, so a local row gets a badge too.
+  spansHosts?: boolean;
   hosts: Host[];
   onOpenSession: (session: Session) => void;
   onOpenSessionAsFloat: (session: Session) => void;
@@ -1571,6 +1586,7 @@ export function ProjectSection({
               key={session.id}
               session={session}
               project={project}
+              spansHosts={spansHosts}
               depth={depth}
               onOpen={() => onOpenSession(session)}
               onOpenAsFloat={() => onOpenSessionAsFloat(session)}
@@ -1618,6 +1634,7 @@ export function ProjectSection({
 function VirtualizedProjectTree({
   rows,
   hosts,
+  spansHostsByProject,
   openSessionIds,
   onOpenSession,
   onOpenSessionAsFloat,
@@ -1628,6 +1645,7 @@ function VirtualizedProjectTree({
 }: {
   rows: SidebarFlatRow[];
   hosts: Host[];
+  spansHostsByProject: ReadonlyMap<number, boolean>;
   openSessionIds: ReadonlySet<number> | null;
   onOpenSession: (session: Session) => void;
   onOpenSessionAsFloat: (session: Session) => void;
@@ -1726,6 +1744,7 @@ function VirtualizedProjectTree({
                 <SessionRow
                   session={row.session}
                   project={row.project}
+                  spansHosts={spansHostsByProject.get(row.project.id) ?? false}
                   depth={row.depth}
                   onOpen={() => onOpenSession(row.session)}
                   onOpenAsFloat={() => onOpenSessionAsFloat(row.session)}
@@ -1831,9 +1850,13 @@ export function SessionRow({
   foldDetails = true,
   depth = 0,
   openInWorkspace = false,
+  spansHosts = false,
 }: {
   session: Session;
   project: Project;
+  // Issue #2238 — computed once per project by Sidebar; unset (every other
+  // caller) keeps today's rows.
+  spansHosts?: boolean;
   onOpen: () => void;
   onOpenAsFloat?: () => void;
   // Passed straight through to PromoteDialog (see that prop's own doc
@@ -2146,7 +2169,9 @@ export function SessionRow({
   // decision's own words) are computed together, in one place: see
   // lib/hostBadge.ts's own comment for why the two disagree about how to
   // name a host.
-  const hostBadge = describeHostBadge(session, () => useDashboardStore.getState().hosts ?? []);
+  const hostBadge = describeHostBadge(session, () => useDashboardStore.getState().hosts ?? [], {
+    spansHosts,
+  });
   // Issue #1892 — the badge above names the host and deliberately does not
   // subscribe (a name does not change when the heartbeat does). The status
   // does, so this row subscribes to that one host. Local sessions have no

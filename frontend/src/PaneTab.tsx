@@ -7,7 +7,8 @@ import { formatBranchLabel } from "./paneTitle.js";
 import { BellIcon, CheckIcon, CloseIcon, HostsIcon } from "./ui/icons.js";
 import { unreadEventSummary } from "./eventDescriptions.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
-import { describeHostBadge, selectRemoteHost } from "./lib/hostBadge.js";
+import { LOCAL_HOST_ID } from "../../src/shared/constants.js";
+import { describeHostBadge, projectSpansHosts, selectRemoteHost } from "./lib/hostBadge.js";
 import { HostStatusLabel } from "./HostStatusLabel.js";
 import { PaneActionsMenu } from "./PaneActionsMenu.js";
 import { panelSessionId } from "./panelUtils.js";
@@ -347,7 +348,16 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
   // Issue #1852 — the host badge AND its tooltip (the placement
   // decision's own words) are computed together, in one place, so the two
   // surfaces cannot disagree: see lib/hostBadge.ts.
-  const hostBadge = describeHostBadge(session, () => useDashboardStore.getState().hosts ?? []);
+  // Issue #2238 — a local tab also gets one when its project spans hosts.
+  // Only a LOCAL session needs the answer, so a remote tab never scans.
+  const hostBadge = describeHostBadge(session, () => useDashboardStore.getState().hosts ?? [], {
+    spansHosts:
+      session?.resolvedHostId === LOCAL_HOST_ID &&
+      projectSpansHosts(
+        project,
+        useDashboardStore.getState().sessions.filter((x) => x.projectId === session.projectId),
+      ),
+  });
   // Issue #1892 — same split as the sidebar row: the name is non-reactive,
   // the derived status has to follow the heartbeat.
   const remoteHost = useDashboardStore((s) => selectRemoteHost(s.hosts, session?.resolvedHostId));

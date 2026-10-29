@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { describeHostBadge, describeTaskHost, hasRemoteHosts } from "./hostBadge.js";
+import {
+  describeHostBadge,
+  describeTaskHost,
+  hasRemoteHosts,
+  projectHostCount,
+  projectSpansHosts,
+} from "./hostBadge.js";
 import { makeHost } from "../test/fixtures.js";
 
 // Issue #1852 — the per-session host badge and its tooltip. The two
@@ -157,5 +163,71 @@ describe("hasRemoteHosts / describeTaskHost (#2236)", () => {
     expect(
       describeTaskHost({ placementRequirement: null }, null, undefined, [local, mini])?.label,
     ).toBe("auto");
+  });
+});
+
+// Issue #2238 — once a project spans hosts, a local session gets a badge too.
+describe("describeHostBadge spansHosts (issue #2238)", () => {
+  it("labels a LOCAL session 'this server' when the project spans hosts", () => {
+    const badge = describeHostBadge(
+      { resolvedHostId: "local", placementReason: null },
+      () => HOSTS,
+      { spansHosts: true },
+    );
+    expect(badge).toEqual({ name: "this server", title: "Runs on host: this server" });
+  });
+
+  it("uses the placement reason as the local tooltip", () => {
+    const badge = describeHostBadge(
+      { resolvedHostId: "local", placementReason: "pinned to local" },
+      () => HOSTS,
+      { spansHosts: true },
+    );
+    expect(badge?.title).toBe("pinned to local");
+  });
+
+  it("still never reads the fleet list for a local session", () => {
+    let reads = 0;
+    describeHostBadge(
+      { resolvedHostId: "local", placementReason: null },
+      () => {
+        reads += 1;
+        return HOSTS;
+      },
+      { spansHosts: true },
+    );
+    expect(reads).toBe(0);
+  });
+
+  it("keeps a local session unbadged when spansHosts is false or unset", () => {
+    const s = { resolvedHostId: "local", placementReason: null };
+    expect(describeHostBadge(s, () => HOSTS, { spansHosts: false })).toBeNull();
+    expect(describeHostBadge(s, () => HOSTS)).toBeNull();
+  });
+
+  it("is nothing for a session with no resolved host", () => {
+    expect(describeHostBadge(null, () => HOSTS, { spansHosts: true })).toBeNull();
+  });
+});
+
+describe("projectSpansHosts / projectHostCount (issue #2238)", () => {
+  const local = { resolvedHostId: "local" };
+  const mac = { resolvedHostId: "mac-mini" };
+
+  it("is false for a single-host project", () => {
+    expect(projectSpansHosts({ hostCwds: {} }, [local, local])).toBe(false);
+    expect(projectSpansHosts({ hostCwds: {} }, [])).toBe(false);
+    expect(projectSpansHosts(undefined, [])).toBe(false);
+    expect(projectHostCount({ hostCwds: {} }, [local])).toBe(1);
+  });
+
+  it("is true once hostCwds has an entry, even with no sessions", () => {
+    expect(projectSpansHosts({ hostCwds: { "mac-mini": "/x" } }, [])).toBe(true);
+    expect(projectHostCount({ hostCwds: { "mac-mini": "/x" } }, [local])).toBe(2);
+  });
+
+  it("is true when listed sessions resolve to more than one host", () => {
+    expect(projectSpansHosts({ hostCwds: {} }, [local, mac])).toBe(true);
+    expect(projectHostCount({ hostCwds: {} }, [local, mac])).toBe(2);
   });
 });

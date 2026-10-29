@@ -2225,6 +2225,43 @@ describe("CommandPalette -> target project picker (Launch in dropdown)", () => {
     vi.unstubAllGlobals();
   });
 
+  it("shows 'N hosts' instead of the path for a project that spans hosts (#2238)", async () => {
+    const user = userEvent.setup();
+    useDashboardStore.setState({
+      projects: [{ ...PROJECT_A, hostCwds: { "mac-mini": "/Users/x/alpha" } }, PROJECT_B],
+    });
+    render(
+      <CommandPalette
+        scope="global"
+        projectId={null}
+        onClose={vi.fn()}
+        onLaunched={vi.fn()}
+        onOpenSession={vi.fn()}
+        onOpenGitHub={vi.fn()}
+        onOpenAgentRules={vi.fn()}
+        onOpenFileEditor={vi.fn()}
+        onOpenExternalFile={vi.fn()}
+        onOpenProjectBriefing={vi.fn()}
+        onOpenProjectSetup={vi.fn()}
+        onOpenDockConfig={vi.fn()}
+        onOpenSkills={vi.fn()}
+        onOpenBrowser={vi.fn()}
+        onOpenBlankBrowser={vi.fn()}
+        onOpenSettingsSection={vi.fn()}
+        onOpenTasks={vi.fn()}
+        onOpenBrowserUrl={vi.fn()}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: /Target project:/ }));
+
+    const options = screen.getAllByRole("option");
+    const alpha = options.find((o) => o.textContent?.includes(PROJECT_A.name));
+    const beta = options.find((o) => o.textContent?.includes(PROJECT_B.name));
+    expect(alpha).toHaveTextContent("2 hosts");
+    expect(alpha).toHaveAttribute("title", PROJECT_A.cwd);
+    expect(beta).not.toHaveTextContent("hosts");
+  });
+
   it("toggles the project picker open and closed when clicking the 'Launch in' chip", async () => {
     const user = userEvent.setup();
     render(

@@ -3,7 +3,7 @@ import type { LayoutTier } from "./lib/layoutTierTypes.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { api, normalizeAgentId } from "./api/index.js";
-import type { Launcher, Session } from "./api/index.js";
+import type { Launcher, Project, Session } from "./api/index.js";
 import { useDashboardStore } from "./store/index.js";
 import { useShallow } from "zustand/react/shallow";
 import {
@@ -21,6 +21,7 @@ import { buildPaletteCommands, searchPaletteCommands } from "./paletteCommands.j
 import type { PaletteCommand } from "./paletteCommands.js";
 import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
 import { describeError } from "./lib/describeError.js";
+import { projectHostCount, projectSpansHosts } from "./lib/hostBadge.js";
 import { openSessionOn } from "./git/sessionLaunch.js";
 import { resolveActiveProjectId } from "./panelUtils.js";
 import { WorktreeOptions } from "./command-palette/WorktreeOptions.js";
@@ -710,6 +711,13 @@ export function CommandPalette({
     runCommand(command);
   };
 
+  // Issue #2238 — the host count for a picker row, or 0 when the project is
+  // single-host (the row then keeps its path subtitle).
+  const pickerHostCount = (p: Project): number => {
+    const own = sessions.filter((x) => x.projectId === p.id);
+    return projectSpansHosts(p, own) ? Math.max(2, projectHostCount(p, own)) : 0;
+  };
+
   const filteredProjects = useMemo(() => {
     if (!pickerOpen) return projects;
     const q = query.trim().toLowerCase();
@@ -1265,6 +1273,7 @@ export function CommandPalette({
                 aria-selected={idx === activeProjectIndex}
                 data-index={idx}
                 className={`cmd-row${idx === activeProjectIndex ? " selected" : ""}`}
+                title={p.cwd}
                 onClick={() => {
                   setManualTargetProjectId(p.id);
                   closeProjectPicker();
@@ -1279,7 +1288,9 @@ export function CommandPalette({
                 </span>
                 <span className="cmd-row-body">
                   <span className="cmd-row-title">{p.name}</span>
-                  <span className="cmd-row-subtitle">{shortenHome(p.cwd)}</span>
+                  <span className="cmd-row-subtitle">
+                    {pickerHostCount(p) > 0 ? `${pickerHostCount(p)} hosts` : shortenHome(p.cwd)}
+                  </span>
                 </span>
                 {p.id === effectiveProjectId && (
                   <span className="cmd-row-current" aria-label="Current project">
