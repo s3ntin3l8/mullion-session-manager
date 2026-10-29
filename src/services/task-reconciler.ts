@@ -3534,8 +3534,12 @@ const MAX_APPROVAL_NOTIFICATIONS_PER_SWEEP = 20;
  * Once per verdict, durably: `approvalNotifiedVerdictAt` holds the
  * `lastReviewVerdictAt` already announced, recorded BEFORE the send with a
  * compare-and-set, so a restart or an overlapping tick never doubles up
- * (a lost push beats a duplicated one). Both columns are second-resolution
- * timestamps, so the update compares them to each other, not to a clock.
+ * (a lost push beats a duplicated one: a verdict is also spent when push is
+ * off or nobody is subscribed yet). Both columns are second-resolution
+ * timestamps, so the update compares them to each other, not to a clock; two
+ * verdicts in the same second would not re-arm, unreachable in practice.
+ * An `auto-pending` task is never announced, even if the auto-approve sweep
+ * keeps declining it (red CI): the board shows it, this push does not.
  * The body is generic on purpose (see notifyTaskNeedsAttention).
  */
 export async function notifyApprovalsAwaitingHuman(app: FastifyInstance): Promise<void> {

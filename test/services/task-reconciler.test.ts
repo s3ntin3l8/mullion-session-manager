@@ -10441,6 +10441,14 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    it("does not send when the verdict was already recorded as announced", async () => {
+      const app = await buildApp();
+      await createCandidate(app, { approvalNotifiedVerdictAt: T0 });
+      await notifyApprovalsAwaitingHuman(app);
+      expect(mockNotifyTaskNeedsAttention).not.toHaveBeenCalled();
+      await app.close();
+    });
+
     it("is driven by reconcileTasks", async () => {
       const app = await buildApp();
       await createCandidate(app);

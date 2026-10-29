@@ -388,7 +388,8 @@ approval` (generic on purpose, no title: a notification tray is outside the
   `notifyApprovalsAwaitingHuman` records the announced `lastReviewVerdictAt`
   in `tasks.approvalNotifiedVerdictAt` before sending, so a restart or a
   carried approval stays silent and a new review of a new head commit
-  notifies again. An `auto-pending` task never pushes, and neither does a
+  notifies again. An `auto-pending` task never pushes (even if the auto-approve
+  sweep keeps declining it, e.g. red CI; only the board shows that), and neither does a
   task on an install with Task Master off. At most 20 pushes per sweep.
 - Drag-and-drop uses its own `application/x-mullion-task` MIME type (not
   the session grid's `application/x-mullion-session`), so a task card can't
