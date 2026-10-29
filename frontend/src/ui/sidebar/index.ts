@@ -17,4 +17,5 @@ export { SidebarSection, type SidebarSectionProps } from "./SidebarSection.js";
 export { StatusChip, type StatusChipProps } from "./StatusChip.js";
 export { StatusTriad, type StatusTriadProps, type TriadItem } from "./StatusTriad.js";
 export { ExternalLinkOwnedContext } from "./externalLinkOwned.js";
+export { readPersistedSection } from "./sectionState.js";
 export { ViewHeader, type ViewHeaderProps } from "./ViewHeader.js";

@@ -407,6 +407,27 @@ describe("PrDetailView", () => {
     expect(await screen.findByText("Merged (squash)")).toBeInTheDocument();
   });
 
+  it("cannot dismiss the merge dialog with Escape while the merge runs", async () => {
+    let finish: (r: Response) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        String(url).endsWith("/merge")
+          ? new Promise<Response>((r) => (finish = r))
+          : Promise.resolve(jsonResponse(200, PR)),
+      ),
+    );
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Squash & merge" }));
+    const dialog = screen.getByRole("dialog");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Merge" }));
+    await within(dialog).findByRole("button", { name: "Merging…" });
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    await act(async () => finish(jsonResponse(200, { merged: true, sha: "m" })));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
   it("opens the Conversation section collapsed when it was left collapsed", async () => {
     localStorage.setItem(
       "crs.sidebarKitSections",

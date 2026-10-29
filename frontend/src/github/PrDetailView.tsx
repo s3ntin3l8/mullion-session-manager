@@ -27,9 +27,9 @@ import {
   TaskChip,
   decideSessionAction,
   gatedSessions,
+  readPersistedSection,
 } from "../ui/sidebar/index.js";
 import type { Tone } from "../lib/statusTone.js";
-import { readPersistedSection } from "../ui/sidebar/sectionState.js";
 import { ConversationComposer, ThreadActions } from "./Composer.js";
 import { MergeConfirmModal, PrActionBar } from "./PrActionBar.js";
 import { nextStep } from "./prNextStep.js";
@@ -46,6 +46,10 @@ import { parseWorkflowChange } from "../workflowChange.js";
 // disagree. Actions live in a sticky bar; they are secondary to the status.
 
 type StatusKey = "ci" | "review" | "merge";
+
+// One id for the Conversation section: its stored state is read at mount and
+// written by the section under the same key.
+const CONVERSATION_KEY = "github-pr-conversation";
 
 function StatusRow({
   dim,
@@ -261,7 +265,7 @@ export function PrDetailView({
   // Seeded from the section's stored state: a controlled `open` makes the
   // section ignore it, and the next-step button needs to open it from outside.
   const [conversationOpen, setConversationOpen] = useState(() =>
-    readPersistedSection("github-pr-conversation", true),
+    readPersistedSection(CONVERSATION_KEY, true),
   );
   const openThreadsRef = useRef<HTMLDivElement>(null);
   // The branch line under the title only shows while the view is at the top:
@@ -794,7 +798,7 @@ export function PrDetailView({
           title="Conversation"
           open={conversationOpen}
           onToggle={setConversationOpen}
-          persistKey="github-pr-conversation"
+          persistKey={CONVERSATION_KEY}
         >
           <div className="pr-detail-pad">
             {openThreads.length > 0 && (

@@ -1,15 +1,17 @@
 // @vitest-environment jsdom
 import { render } from "@testing-library/react";
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 const mounts: number[] = [];
 
 vi.mock("../GitHubPanel.js", () => ({
   GitHubPanel: ({ params }: { params: { projectId: number } }) => {
+    // Mount only: a reused instance must not record the new project.
+    const first = useRef(params.projectId);
     useEffect(() => {
-      mounts.push(params.projectId);
-    }, [params.projectId]);
+      mounts.push(first.current);
+    }, []);
     return <div />;
   },
 }));

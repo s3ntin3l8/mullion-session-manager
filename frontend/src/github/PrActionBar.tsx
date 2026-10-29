@@ -103,7 +103,9 @@ export function MergeConfirmModal({
   const cancelRef = useRef<HTMLButtonElement>(null);
   return (
     <Modal
-      onClose={onCancel}
+      // Escape, the backdrop and the X cannot dismiss a merge in flight, as
+      // the Cancel button cannot.
+      onClose={busy ? () => {} : onCancel}
       title={`Squash and merge #${pr.number}`}
       initialFocusRef={cancelRef}
       footer={
