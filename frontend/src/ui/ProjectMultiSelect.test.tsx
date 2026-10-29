@@ -114,11 +114,15 @@ describe("ProjectMultiSelect (#2123, #2124)", () => {
     await user.click(screen.getByRole("button", { name: "Clear selection" }));
     expect(onChange).not.toHaveBeenCalled();
     expect(screen.getByRole("alert")).toHaveTextContent("EVERY project");
+    // Keyboard focus follows the swap instead of dropping to <body>.
+    expect(screen.getByRole("button", { name: "Confirm" })).toHaveFocus();
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Clear selection" })).toHaveFocus();
     await user.click(screen.getByRole("button", { name: "Clear selection" }));
     await user.click(screen.getByRole("button", { name: "Confirm" }));
     expect(onChange).toHaveBeenLastCalledWith([]);
+    expect(screen.getByRole("button", { name: "targets" })).toHaveFocus();
   });
 
   it("filters a long list and says when there is nothing to pick", async () => {

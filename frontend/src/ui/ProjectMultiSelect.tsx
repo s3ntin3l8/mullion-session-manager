@@ -41,10 +41,21 @@ export function ProjectMultiSelect({
   const [confirmingClear, setConfirmingClear] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const confirmRef = useRef<HTMLButtonElement>(null);
+  const clearRef = useRef<HTMLButtonElement>(null);
+  // Which control should take focus after the clear control swaps for Confirm/Cancel or
+  // back, so a keyboard user is not dropped to <body> (and back to the top of the form).
+  const focusAfterSwap = useRef<"confirm" | "clear" | null>(null);
   const panelId = useId();
   const known = useMemo(() => new Set(options.map((o) => o.id)), [options]);
   const live = selected.filter((id) => known.has(id));
   const shown = options.filter((o) => o.name.toLowerCase().includes(filter.trim().toLowerCase()));
+
+  useEffect(() => {
+    if (focusAfterSwap.current === "confirm") confirmRef.current?.focus();
+    else if (focusAfterSwap.current === "clear") clearRef.current?.focus();
+    focusAfterSwap.current = null;
+  }, [confirmingClear]);
 
   const close = () => {
     setOpen(false);
@@ -129,10 +140,13 @@ export function ProjectMultiSelect({
                 {clearWarning}{" "}
                 <button
                   type="button"
+                  ref={confirmRef}
                   className="project-multiselect-clear"
                   onClick={() => {
                     onChange([]);
                     setConfirmingClear(false);
+                    focusAfterSwap.current = null;
+                    buttonRef.current?.focus();
                   }}
                 >
                   Confirm
@@ -140,7 +154,10 @@ export function ProjectMultiSelect({
                 <button
                   type="button"
                   className="project-multiselect-clear"
-                  onClick={() => setConfirmingClear(false)}
+                  onClick={() => {
+                    focusAfterSwap.current = "clear";
+                    setConfirmingClear(false);
+                  }}
                 >
                   Cancel
                 </button>
@@ -148,8 +165,13 @@ export function ProjectMultiSelect({
             ) : (
               <button
                 type="button"
+                ref={clearRef}
                 className="project-multiselect-clear"
-                onClick={() => (clearWarning ? setConfirmingClear(true) : onChange([]))}
+                onClick={() => {
+                  if (!clearWarning) return onChange([]);
+                  focusAfterSwap.current = "confirm";
+                  setConfirmingClear(true);
+                }}
               >
                 Clear selection
               </button>
