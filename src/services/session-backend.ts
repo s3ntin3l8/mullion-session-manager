@@ -168,6 +168,7 @@ export interface SessionBackend {
   compareWorktreePaths(
     target: string,
     candidates: WorktreePathCandidate[],
+    signal?: AbortSignal,
   ): Promise<WorktreePathRelation[]>;
   terminate(id: string): Promise<void>;
   // Phase 4 (#187) — the scrollback replay buffer for whichever host
@@ -743,13 +744,16 @@ class RemoteBackend implements SessionBackend {
   async compareWorktreePaths(
     target: string,
     candidates: WorktreePathCandidate[],
+    signal?: AbortSignal,
   ): Promise<WorktreePathRelation[]> {
     const relations: WorktreePathRelation[] = [];
     let generation: string | undefined;
     for (let index = 0; index < candidates.length; index += 256) {
+      if (signal?.aborted) return candidates.map(() => "unknown");
       const batch = candidates.slice(index, index + 256);
       try {
         const result = await this.client.compareWorktreePaths(target, batch);
+        if (signal?.aborted) return candidates.map(() => "unknown");
         if (!result || typeof result !== "object")
           throw new Error("Invalid path comparison response");
         const response = result as { generation?: unknown; stable?: unknown; relations?: unknown };
