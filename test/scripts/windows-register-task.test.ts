@@ -5,6 +5,7 @@
 // CI's test-windows job.
 import { describe, it, expect, afterEach } from "vitest";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -102,10 +103,183 @@ describeOnWindows("deploy/windows/register-task.ps1", () => {
     // has C:\Users\runneradmin\... for it.
     const launcher = fs.realpathSync.native(f.launcher);
     const home = fs.realpathSync.native(f.home);
-    expect(xml).toContain(`<Command>${process.execPath}</Command>`);
+    // The task runs the windowless copy of Node, not node.exe itself.
+    expect(xml).toContain(`<Command>${path.join(home, "runtime", "mullion-agent.exe")}</Command>`);
     expect(xml).toContain(`<Arguments>"${launcher}" "${home}" "${name}"</Arguments>`);
     expect(xml).toContain(`<WorkingDirectory>${home}</WorkingDirectory>`);
   }, 90_000);
+
+  describe("the windowless copy of Node", () => {
+    const copyOf = (f: ReturnType<typeof fixture>) =>
+      path.join(f.home, "runtime", "mullion-agent.exe");
+    const stampOf = (f: ReturnType<typeof fixture>) =>
+      JSON.parse(fs.readFileSync(`${copyOf(f)}.json`, "utf8")) as Record<string, unknown>;
+
+    /** The PE Subsystem field: 3 = console, 2 = Windows GUI (no console window). */
+    function subsystem(file: string): number {
+      const fd = fs.openSync(file, "r");
+      try {
+        const head = Buffer.alloc(4);
+        fs.readSync(fd, head, 0, 4, 0x3c);
+        const pe = head.readInt32LE(0);
+        const field = Buffer.alloc(2);
+        fs.readSync(fd, field, 0, 2, pe + 0x5c);
+        return field.readUInt16LE(0);
+      } finally {
+        fs.closeSync(fd);
+      }
+    }
+    const versionOf = async (file: string) =>
+      (await run(file, ["--version"], { windowsHide: true, timeout: 30_000 })).stdout.trim();
+
+    it("is a GUI-subsystem copy that behaves exactly like the Node it came from", async () => {
+      const f = fixture();
+      const result = await register(f);
+      expect(result.code, result.stderr).toBe(0);
+      expect(subsystem(copyOf(f))).toBe(2);
+      expect(subsystem(process.execPath)).toBe(3);
+      expect(await versionOf(copyOf(f))).toBe(`v${process.versions.node}`);
+      expect(stampOf(f)).toMatchObject({
+        rcedit: false,
+        length: fs.statSync(process.execPath).size,
+      });
+      expect(fs.realpathSync.native(String(stampOf(f).source))).toBe(
+        fs.realpathSync.native(process.execPath),
+      );
+    }, 120_000);
+
+    it("is built once, and again only when the Node it was made from changed", async () => {
+      const f = fixture();
+      expect((await register(f)).code).toBe(0);
+      const built = fs.statSync(copyOf(f)).mtimeMs;
+      expect((await register(f)).code).toBe(0);
+      expect(fs.statSync(copyOf(f)).mtimeMs).toBe(built);
+
+      // The recorded Node no longer matches: the copy is made again.
+      const stamp = stampOf(f);
+      fs.writeFileSync(`${copyOf(f)}.json`, JSON.stringify({ ...stamp, length: 1 }));
+      expect((await register(f)).code).toBe(0);
+      expect(stampOf(f)).toEqual(stamp);
+    }, 180_000);
+
+    it("hands the original Node back when the copy itself is passed as -NodePath, as the updater does", async () => {
+      const f = fixture();
+      expect((await register(f)).code).toBe(0);
+      const stamp = stampOf(f);
+      const again = await powershell([
+        "-TaskName",
+        name,
+        "-NodePath",
+        copyOf(f),
+        "-LauncherPath",
+        f.launcher,
+        "-MullionHome",
+        f.home,
+      ]);
+      expect(again.code, again.stderr).toBe(0);
+      expect(stampOf(f)).toEqual(stamp);
+      const xml = (await taskXml(name))!;
+      expect(xml).toContain(`<Command>${fs.realpathSync.native(copyOf(f))}</Command>`);
+    }, 150_000);
+
+    it("-NoBrand keeps the plain node.exe", async () => {
+      const f = fixture();
+      const result = await register(f, "-NoBrand");
+      expect(result.code, result.stderr).toBe(0);
+      expect(fs.existsSync(copyOf(f))).toBe(false);
+      expect(await taskXml(name)).toContain(`<Command>${process.execPath}</Command>`);
+      // Remembered: a later registration without the flag (an update) stays plain.
+      const again = await register(f);
+      expect(again.code, again.stderr).toBe(0);
+      expect(fs.existsSync(copyOf(f))).toBe(false);
+      expect(await taskXml(name)).toContain(`<Command>${process.execPath}</Command>`);
+    }, 150_000);
+
+    it("falls back to the given Node, and says so, when a copy cannot be made", async () => {
+      const f = fixture();
+      const notNode = path.join(f.root, "node.exe");
+      fs.writeFileSync(notNode, "this is not a PE file");
+      const result = await powershell([
+        "-TaskName",
+        name,
+        "-NodePath",
+        notNode,
+        "-LauncherPath",
+        f.launcher,
+        "-MullionHome",
+        f.home,
+      ]);
+      expect(result.code, result.stderr).toBe(0);
+      expect(result.stdout).toContain("branding skipped");
+      expect(fs.existsSync(copyOf(f))).toBe(false);
+      expect(await taskXml(name)).toContain(
+        `<Command>${fs.realpathSync.native(notNode)}</Command>`,
+      );
+    }, 90_000);
+
+    // The resource editing needs rcedit. Set MULLION_TEST_RCEDIT to an
+    // rcedit-x64.exe to run it locally; in CI it is fetched from the bootstrap's
+    // own pin and checked against its SHA-256, so a wrong rcedit flag cannot hide
+    // behind the fallback to an unbranded copy.
+    // The bootstrap's pin (mullion-install.ps1), repeated here; the test below
+    // keeps the two in step.
+    const RCEDIT_URL = "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe";
+    const RCEDIT_SHA256 = "3e7801db1a5edbec91b49a24a094aad776cb4515488ea5a4ca2289c400eade2a"; // pragma: allowlist secret
+    it("uses the same rcedit pin as the bootstrap", () => {
+      const ps1 = fs.readFileSync(
+        fileURLToPath(new URL("../../deploy/windows/mullion-install.ps1", import.meta.url)),
+        "utf8",
+      );
+      expect(ps1).toContain(`$PinRceditUrl = '${RCEDIT_URL}'`);
+      expect(ps1).toContain(`$PinRceditSha256 = '${RCEDIT_SHA256}'`);
+    });
+    async function rceditPath(): Promise<string | null> {
+      const given = process.env.MULLION_TEST_RCEDIT;
+      if (given && fs.existsSync(given)) return given;
+      if (!process.env.CI) return null;
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rcedit-"));
+      dirs.push(dir);
+      const file = path.join(dir, "rcedit-x64.exe");
+      // Downloaded by PowerShell (as the bootstrap does), not by this process.
+      await run(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri '${RCEDIT_URL}' -OutFile '${file}'`,
+        ],
+        { env: windowsPowerShellEnv(process.env), windowsHide: true, timeout: 120_000 },
+      );
+      const got = createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+      if (got !== RCEDIT_SHA256) {
+        throw new Error(`rcedit checksum ${got} does not match the pin ${RCEDIT_SHA256}`);
+      }
+      return file;
+    }
+    it("carries the Mullion name and icon when rcedit is there", async (ctx) => {
+      const rcedit = await rceditPath();
+      if (!rcedit) return ctx.skip(); // not CI, and no MULLION_TEST_RCEDIT
+      const f = fixture();
+      fs.mkdirSync(path.join(f.home, "runtime"));
+      fs.copyFileSync(rcedit, path.join(f.home, "runtime", "rcedit.exe"));
+      const result = await register(f);
+      expect(result.code, result.stderr).toBe(0);
+      expect(stampOf(f)).toMatchObject({ rcedit: true });
+      const { stdout } = await run(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          `$v = (Get-Item '${copyOf(f)}').VersionInfo; "$($v.FileDescription)|$($v.ProductName)|$($v.OriginalFilename)"`,
+        ],
+        { env: windowsPowerShellEnv(process.env), windowsHide: true, timeout: 60_000 },
+      );
+      expect(stdout.trim()).toBe("Mullion agent|Mullion|mullion-agent.exe");
+      expect(await versionOf(copyOf(f))).toBe(`v${process.versions.node}`);
+    }, 150_000);
+  });
 
   it("does not let a trailing backslash on the install root swallow the task name", async () => {
     // "C:\...\Mullion home\" followed by a quote: the backslash escapes the

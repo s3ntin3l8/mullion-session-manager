@@ -133,6 +133,11 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
         PATH: [system32, path.join(system32, "WindowsPowerShell", "v1.0")].join(path.delimiter),
       });
     }
+    if (!args.includes("-RceditUrl")) {
+      const stub = path.join(tmp("bootstrap-rcedit-"), "rcedit-x64.exe");
+      fs.writeFileSync(stub, "stand-in for rcedit");
+      args = [...args, "-RceditUrl", pathToFileURL(stub).href, "-RceditSha256", sha256(stub)];
+    }
     let appsKey = `HKCU:\\Software\\MullionTest-${crypto.randomUUID()}`;
     const given = args.indexOf("-UninstallRegistryKey");
     if (given >= 0) appsKey = args[given + 1]!;
@@ -141,7 +146,7 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
     try {
       // Parameter names stay bare (a quoted -Json is a string, not a switch).
       const quoted = args
-        .map((a) => (/^-[A-Za-z]+$/.test(a) ? a : `'${a.replaceAll("'", "''")}'`))
+        .map((a) => (/^-[A-Za-z][A-Za-z0-9]*$/.test(a) ? a : `'${a.replaceAll("'", "''")}'`))
         .join(" ");
       const psArgs = opts.asScriptBlock
         ? [
@@ -275,7 +280,8 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
         expect(byStep("node")).toEqual(["start", "skip"]);
         expect(byStep("git-bash")).toEqual(["start", "skip"]);
         expect(res.events.some((e) => e.detail.includes("stub installer running"))).toBe(true);
-        expect(fs.existsSync(path.join(root, "runtime"))).toBe(false);
+        // Nothing was downloaded for Node or Git; only the branding tool is there.
+        expect(fs.readdirSync(path.join(root, "runtime"))).toEqual(["rcedit.exe"]);
 
         const done = res.events.at(-1)!;
         expect(done).toMatchObject({ step: "done", status: "ok", role: "agent", version: "9.9.9" });
@@ -480,6 +486,77 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
     );
 
     it.skipIf(!gitBash || !hasNode26)(
+      "fetches the branding tool once, verified, and reuses it",
+      async () => {
+        const stub = path.join(tmp("bootstrap-rcedit-"), "rcedit-x64.exe");
+        fs.writeFileSync(stub, "pretend rcedit");
+        const rceditArgs = ["-RceditUrl", pathToFileURL(stub).href, "-RceditSha256", sha256(stub)];
+        const release = fakeRelease();
+        const root = installRoot();
+        const first = await bootstrap(
+          ["-Json", "-InstallRoot", root, "-ReleaseBaseUrl", release.url, ...rceditArgs],
+          { env: { CLAUDE_CODE_GIT_BASH_PATH: gitBash! } },
+        );
+        expect(first.code).toBe(0);
+        const step = (r: Result) =>
+          r.events.filter((e) => e.step === "rcedit").map((e) => e.status);
+        expect(step(first)).toContain("ok");
+        expect(fs.readFileSync(path.join(root, "runtime", "rcedit.exe"), "utf8")).toBe(
+          "pretend rcedit",
+        );
+
+        // A second run finds it and does not download again (a URL that would fail proves it).
+        const second = await bootstrap(
+          [
+            "-Json",
+            "-InstallRoot",
+            root,
+            "-ReleaseBaseUrl",
+            release.url,
+            "-RceditUrl",
+            "file:///no/such/rcedit.exe",
+            "-RceditSha256",
+            sha256(stub),
+          ],
+          { env: { CLAUDE_CODE_GIT_BASH_PATH: gitBash! } },
+        );
+        expect(second.code).toBe(0);
+        expect(step(second)).toEqual(["start", "skip"]);
+      },
+      240_000,
+    );
+
+    it.skipIf(!gitBash || !hasNode26)(
+      "carries on without the branding tool when its download does not match the pin or fails",
+      async () => {
+        const stub = path.join(tmp("bootstrap-rcedit-"), "rcedit-x64.exe");
+        fs.writeFileSync(stub, "tampered");
+        for (const [name, extra] of [
+          [
+            "checksum mismatch",
+            ["-RceditUrl", pathToFileURL(stub).href, "-RceditSha256", "0".repeat(64)],
+          ],
+          [
+            "unreachable",
+            ["-RceditUrl", "file:///no/such/rcedit.exe", "-RceditSha256", "0".repeat(64)],
+          ],
+        ] as const) {
+          const root = installRoot();
+          const res = await bootstrap(
+            ["-Json", "-InstallRoot", root, "-ReleaseBaseUrl", fakeRelease().url, ...extra],
+            { env: { CLAUDE_CODE_GIT_BASH_PATH: gitBash! } },
+          );
+          expect(res.code, name).toBe(0);
+          expect(res.events.at(-1), name).toMatchObject({ step: "done", status: "ok" });
+          const steps = res.events.filter((e) => e.step === "rcedit").map((e) => e.status);
+          expect(steps.at(-1), name).toBe("skip");
+          expect(fs.existsSync(path.join(root, "runtime", "rcedit.exe")), name).toBe(false);
+        }
+      },
+      240_000,
+    );
+
+    it.skipIf(!gitBash || !hasNode26)(
       "warns when the advertise URL has no bind address behind it",
       async () => {
         const release = fakeRelease();
@@ -586,7 +663,7 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
         const rec = JSON.parse(fs.readFileSync(release.record, "utf8"));
         expect(realPath(String(rec.nodeExe))).toBe(realPath(privateNode));
         // No leftovers from the download.
-        expect(fs.readdirSync(path.join(root, "runtime"))).toEqual(["node"]);
+        expect(fs.readdirSync(path.join(root, "runtime"))).toEqual(["node", "rcedit.exe"]);
       },
       240_000,
     );
