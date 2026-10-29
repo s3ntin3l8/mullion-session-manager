@@ -462,6 +462,12 @@ export function mergeProjects(
   if (result.ok) {
     // Live local sessions keep their project id in memory: re-key them.
     app.pty.repointProject(opts.duplicateId, opts.survivorId);
+    // The browser pool is keyed by project id: close the merged-away project's
+    // Chromium (it would keep counting against the pool until a restart). A
+    // session bound to it relaunches one under the survivor on next use.
+    app.browser.closeForProject(opts.duplicateId).catch((err) => {
+      app.log.warn({ err, projectId: opts.duplicateId }, "merge: failed to close project browser");
+    });
     // The board refetches on "ingested"; DELETE broadcasts nothing, so the
     // frontend also refreshes the project list itself.
     for (const taskId of result.movedTaskIds) {
