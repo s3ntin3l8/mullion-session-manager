@@ -21,6 +21,9 @@ export type PrMergeable = "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
  * - `threads_unresolved`: nothing is missing a review, but GitHub reports the PR
  *   blocked while conversations are open (branch protection's "require
  *   conversation resolution"). Not an attention phase: it needs a click, not a fix.
+ * - `behind`: strict branch protection ("require branches to be up to date")
+ *   and the head has fallen behind its base; GitHub reports BEHIND only then.
+ *   Updating the branch is the next step. Not an attention phase.
  * - `ci_pending`: approved (or no review needed) but CI is still running.
  * - `ready_to_merge`: nothing left to wait for.
  * - `unknown`: review state couldn't be fetched (GraphQL failed or backed
@@ -35,6 +38,7 @@ export type PrPhase =
   | "review_pending"
   | "reviewed"
   | "threads_unresolved"
+  | "behind"
   | "ci_pending"
   | "ready_to_merge"
   | "unknown";
@@ -92,6 +96,7 @@ export function derivePrPhase(pr: PrPhaseInput): PrPhase {
   // No review requirement configured (decision is null) but someone was
   // asked, or branch protection still reports the PR as blocked.
   if (pr.reviewDecision === null && pr.requestedReviewers.length > 0) return waiting();
+  if (pr.mergeStateStatus === "BEHIND" && pr.ciStatus !== "in_progress") return "behind";
   if (pr.mergeStateStatus === "BLOCKED" && pr.ciStatus !== "in_progress") {
     // null = the thread lookup did not answer: nothing says what blocks it.
     if (pr.unresolvedThreads === null) return "unknown";

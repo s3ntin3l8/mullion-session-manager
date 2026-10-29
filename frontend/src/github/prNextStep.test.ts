@@ -18,6 +18,14 @@ describe("nextStep", () => {
     expect(nextStep("reviewed", 0)).toMatchObject({ kind: "reReview" });
   });
 
+  it("makes updating the branch the step for a PR strict protection holds back", () => {
+    expect(nextStep("behind", 0)).toEqual({
+      kind: "update",
+      label: "Update branch",
+      disabled: false,
+    });
+  });
+
   it("counts the open conversations", () => {
     expect(nextStep("threads_unresolved", 1).label).toBe("Resolve 1 conversation");
     expect(nextStep("threads_unresolved", 3).label).toBe("Resolve 3 conversations");

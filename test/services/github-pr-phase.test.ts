@@ -145,6 +145,18 @@ describe("derivePrPhase", () => {
     expect(derivePrPhase({ ...base, unresolvedThreads: 2 })).toBe("ready_to_merge");
   });
 
+  it("names a strict-protection BEHIND head as the next step, after everything that outranks it", () => {
+    const behind = { ...base, mergeStateStatus: "BEHIND" };
+    expect(derivePrPhase(behind)).toBe("behind");
+    expect(derivePrPhase({ ...behind, unresolvedThreads: 2 })).toBe("behind");
+    expect(derivePrPhase({ ...behind, reviewDecision: "REVIEW_REQUIRED" })).toBe("review_pending");
+    expect(derivePrPhase({ ...behind, ciStatus: "failure" })).toBe("ci_failing");
+    expect(derivePrPhase({ ...behind, ciStatus: "in_progress" })).toBe("ci_pending");
+    expect(derivePrPhase({ ...behind, mergeable: "CONFLICTING" })).toBe("conflicts");
+    // Non-strict: a behind PR still reads CLEAN, so nothing changes.
+    expect(derivePrPhase({ ...base, mergeStateStatus: "CLEAN" })).toBe("ready_to_merge");
+  });
+
   it("claims nothing beyond CI when review state wasn't fetched", () => {
     const unknown = { ...base, reviewStateKnown: false, reviewDecision: null as null };
     expect(derivePrPhase(unknown)).toBe("unknown");

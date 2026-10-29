@@ -19,6 +19,7 @@ export const PHASE_LABEL: Record<GitHubPrPhase, string> = {
   review_pending: "Awaiting review",
   reviewed: "Reviewed",
   threads_unresolved: "Unresolved conversations",
+  behind: "Behind base",
   ci_pending: "CI running",
   ready_to_merge: "Ready to merge",
   unknown: "Status unknown",
@@ -65,6 +66,8 @@ export function phaseChip(
       return { glyph: "⚠", text: `conflicts${threads}` };
     case "threads_unresolved":
       return { glyph: "", text: `threads${threads}` };
+    case "behind":
+      return { glyph: "", text: `behind${threads}` };
     case "ready_to_merge":
       return { glyph: "✓", text: `ready${threads}` };
     case "draft":
@@ -462,7 +465,10 @@ function mergeStatusBase(input: PrStatusInput): DimStatus {
     };
   }
   const blocked =
-    phase === "ci_failing" || phase === "changes_requested" || phase === "threads_unresolved";
+    phase === "ci_failing" ||
+    phase === "changes_requested" ||
+    phase === "threads_unresolved" ||
+    phase === "behind";
   return {
     tone,
     glyph: tone === "danger" ? "✗" : "⋯",

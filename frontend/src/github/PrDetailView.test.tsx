@@ -493,6 +493,20 @@ describe("PrDetailView", () => {
     expect(await screen.findByText(/refused to update the branch/)).toBeInTheDocument();
   });
 
+  it("makes Update branch the next step under strict protection, with no duplicate icon", async () => {
+    const fn = stub({ ...PR, mergeStateStatus: "BEHIND", prPhase: "behind" }, (url) =>
+      url.endsWith("/update-branch") ? jsonResponse(200, { updated: true }) : null,
+    );
+    render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+    const buttons = await screen.findAllByRole("button", { name: "Update branch" });
+    expect(buttons).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Squash & merge" })).toBeNull();
+    await userEvent.click(buttons[0]!);
+    await waitFor(() =>
+      expect(fn.mock.calls.some(([u]) => String(u).endsWith("/update-branch"))).toBe(true),
+    );
+  });
+
   it("offers no Update branch to a PR that is not behind", async () => {
     stub({ ...PR, mergeStateStatus: "CLEAN" });
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);

@@ -532,6 +532,9 @@ export function PrDetailView({
       case "reReview":
         void reReview();
         break;
+      case "update":
+        void updateBranch();
+        break;
     }
   };
 
@@ -562,7 +565,9 @@ export function PrDetailView({
           sessionLabel={
             sessionAction.kind === "open-existing" ? "Open existing session" : "Open session"
           }
-          behind={pr.mergeStateStatus === "BEHIND" || (pr.behindBy ?? 0) > 0}
+          behind={
+            (pr.mergeStateStatus === "BEHIND" || (pr.behindBy ?? 0) > 0) && step.kind !== "update"
+          }
           composerOpen={composerOpen}
           onStep={runStep}
           onSession={() =>
