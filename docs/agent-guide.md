@@ -304,8 +304,11 @@ a human turned on "This project coordinates" in Edit project, off by default —
 start a child in a different project: `mullion project targets` (MCP
 `list_spawn_targets`) lists the projects you can name, and `mullion session
 spawn-child --project <id|name> ...` (MCP `spawn_child_session` with `project`)
-spawns there. A name shared by several projects is a 409 (pass the id), an unknown
-one a 404, and a project that is not a coordinator gets a 403 naming the setting.
+spawns there. A name shared by several projects is a 409 (pass the id). A project that is not
+a coordinator gets a 403 naming the setting; a coordinator also gets the same 403 for a
+project that does not exist, one outside the list of projects it may reach, or one whose
+owner turned off "Accepts children from other projects" — they are deliberately
+indistinguishable, so `project targets` is the way to see what you can name.
 `cwd`, `isolate` and `--host`/`--platform` then refer to the _target_ project (its
 directory, its checkouts on other hosts), the child is still your child (`children`,
 `wait`, `prompt`, `kill` work), and it inherits your unattended posture exactly as a

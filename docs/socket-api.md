@@ -497,8 +497,17 @@ real `GET /api/sessions/:id`, never trusted from the request. The ONE way to put
 the child in another project is `body.project` (issue #2110): a project id or an
 exact project name, honoured only when the parent's project is a **coordinator**
 (`projects.allowCrossProjectSpawn`, the "This project coordinates" checkbox in Edit
-project; off by default) — otherwise `403` naming the setting. An unknown id or name
-is `404`, a name shared by several projects is `409` listing the ids, a blank or
+project; off by default) — otherwise `403` naming the setting. Two optional limits
+narrow that (issues #2123, #2124): the coordinator may be limited to a **list of target
+projects** (`projects.crossProjectTargets`, empty = every project), and the **target**
+project may refuse coordinators (`projects.acceptsChildrenFrom`: `any`, the default;
+`listed`, only the projects in `acceptsChildrenFromList`; or `none`). Both are set in Edit
+project (a drop-down multi-select of projects, not free text) and checked in one place
+(`validateParent`), so a direct `POST /api/sessions` is bound by them too. At session scope a
+project that does not exist, one outside the coordinator's list and one that refuses
+coordinators all get the **same** `403`, so a session cannot probe which projects and
+names exist; full scope (the operator) keeps `404` for an unknown project. A name shared by
+several usable projects is `409` listing the ids, a blank or
 non-string/number value `400`. A value made only of digits is always read as an id, so a project
 named "2024" can be addressed by its id only. A session whose project is NOT a coordinator gets
 the same `403` for any other project, existing or not (decided before any lookup, so it cannot
@@ -506,8 +515,8 @@ be used to probe which projects exist). Naming the parent's own project **by its
 The resolved id is what is forwarded as `projectId`, and `cwd`, `isolate` and
 `targetHostId`/`targetPlatform` are then evaluated against that **target** project.
 The `projects.spawn_targets` op (session or full scope; full scope names the session in
-`body.parentSessionId`) lists `{id, name, hostId}` of every other project for a
-coordinator's session and is `403` for any other. `body.open` (`"right"` | `"below"`, issue #1624) is stored as the child row's advisory `openHint`: the frontend opens the child's panel beside its parent's (even with the auto-open-child-panels setting off) the first time it sees the child; the backend never touches `workspaces.layout`. The rest of
+`body.parentSessionId`) lists `{id, name, hostId}` of every other project the coordinator may reach (its target list
+and each target's consent applied) and is `403` for a session that is not a coordinator. `body.open` (`"right"` | `"below"`, issue #1624) is stored as the child row's advisory `openHint`: the frontend opens the child's panel beside its parent's (even with the auto-open-child-panels setting off) the first time it sees the child; the backend never touches `workspaces.layout`. The rest of
 `body` (`command` required; optional `name`/`cwd`/`kind`/`skipPermissions`/
 `env`/`seedPrompt`/`model`/`smallModel`/`targetHostId`/`targetPlatform`/`isolate`) maps onto `POST /api/sessions`; the last three (issue #1951) run the child on a chosen host id or platform and, with `isolate`, in a server-chosen worktree on that host — `POST /api/sessions` answers 409 when no eligible host matches and 400 for `isolate` with `cwd`/`worktree` or both targets, and all three are forwarded at session scope;
 `worktree`/`worktreeRefresh` are stripped even if present, since a child

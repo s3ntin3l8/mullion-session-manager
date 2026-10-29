@@ -282,8 +282,9 @@ const spawnChildSession = {
         description:
           "Spawn the child in this OTHER project (a project id, or an exact project name) " +
           "instead of the calling session's own. Refused (403) unless the calling session's " +
-          "project is a coordinator ('This project coordinates' in Edit project); an unknown " +
-          "name is a 404 and a name shared by several projects a 409 (pass the id). " +
+          "project is a coordinator ('This project coordinates' in Edit project). A project it " +
+          "may not use (unknown, outside its target list, or refusing coordinators) is the same " +
+          "403; a name shared by several usable projects is a 409 (pass the id). " +
           "'cwd', 'isolate', 'host' and 'platform' then refer to THAT project (its directory, " +
           "its checkouts on other hosts). The child is still your child: children, wait, " +
           "prompt and kill work on it as for any other.",

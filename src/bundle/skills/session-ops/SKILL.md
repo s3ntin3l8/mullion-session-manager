@@ -27,7 +27,10 @@ projects you may name, and `--project <id|name>` (MCP `project`) spawns the
 child there. `cwd`, `isolate` and `host`/`platform` then refer to that project
 and its checkouts, the child still counts as your child (`session children`,
 `wait`, `prompt`, `kill`), and your unattended posture still caps the child's.
-Without the coordinator setting you get a 403 that names it.
+Without the coordinator setting you get a 403 that names it. The coordinator may also be
+limited to a list of projects, and a project can refuse children from other projects; a
+project you may not use gets the same 403 as one that does not exist, so list what you can
+name with `project targets` instead of guessing.
 To run the child on a **different machine** — e.g. a Mac for Xcode/iOS work or a
 macOS-only spike — pass `host: "<hostId>"` or `platform: "darwin"` (CLI
 `--host`/`--platform`) and usually `isolate: true` (`--isolate`): the child

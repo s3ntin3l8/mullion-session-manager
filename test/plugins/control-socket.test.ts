@@ -2449,7 +2449,7 @@ describe("controlSocketPlugin (issue #185)", () => {
         expect((byName.result as { projectId: number }).projectId).toBe(other);
       });
 
-      it("404s an unknown id or name, and 409s a name shared by several projects", async () => {
+      it("refuses an unknown id or name with the same 403 as a refused one, and 409s a name shared by several projects", async () => {
         app = await buildApp();
         await app.ready();
         const { sessionId: parentId, hookToken } = await createRealSession();
@@ -2457,8 +2457,10 @@ describe("controlSocketPlugin (issue #185)", () => {
         const second = await makeProject("twin");
         await setCoordinator(await parentProjectId(parentId), true);
 
-        expect((await spawn(hookToken, { project: 999_999 })).status).toBe(404);
-        expect((await spawn(hookToken, { project: "nope" })).status).toBe(404);
+        // Issues #2123 / #2124: at session scope an unknown project is indistinguishable
+        // from one the coordinator may not use.
+        expect((await spawn(hookToken, { project: 999_999 })).status).toBe(403);
+        expect((await spawn(hookToken, { project: "nope" })).status).toBe(403);
         const ambiguous = await spawn(hookToken, { project: "twin" });
         expect(ambiguous.status).toBe(409);
         expect(String(ambiguous.error)).toContain(`${first}`);
@@ -2466,6 +2468,143 @@ describe("controlSocketPlugin (issue #185)", () => {
         // A blank or non-string/number value is a 400, not a guess.
         expect((await spawn(hookToken, { project: " " })).status).toBe(400);
         expect((await spawn(hookToken, { project: { id: 1 } })).status).toBe(400);
+      });
+
+      async function patchProject(projectId: number, payload: Record<string, unknown>) {
+        return app!.inject({
+          method: "PATCH",
+          url: `/api/projects/${projectId}`,
+          headers: authHeaders,
+          payload,
+        });
+      }
+
+      it("a coordinator's target list limits where it can spawn, with the uniform 403 for the rest (#2123)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId, hookToken } = await createRealSession();
+        const listed = await makeProject("listed-target");
+        const unlisted = await makeProject("unlisted-target");
+        const coordinator = await parentProjectId(parentId);
+        await setCoordinator(coordinator, true);
+        expect(
+          (await patchProject(coordinator, { crossProjectTargets: [listed] })).statusCode,
+        ).toBe(200);
+
+        expect((await spawn(hookToken, { project: listed })).status).toBe(201);
+        const refused = await spawn(hookToken, { project: unlisted });
+        const missing = await spawn(hookToken, { project: 999_999 });
+        const byName = await spawn(hookToken, { project: "unlisted-target" });
+        expect(refused.status).toBe(403);
+        expect(missing.error).toBe(refused.error);
+        expect(byName.error).toBe(refused.error);
+      });
+
+      it("projects.spawn_targets lists only the projects the coordinator may reach (#2123, #2124)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId, hookToken } = await createRealSession();
+        const open = await makeProject("open-target");
+        const closed = await makeProject("closed-target");
+        const coordinator = await parentProjectId(parentId);
+        await setCoordinator(coordinator, true);
+        await patchProject(closed, { acceptsChildrenFrom: "none" });
+
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "projects.spawn_targets" })}\n`);
+        const reply = await waitForReply(socket);
+        socket.destroy();
+        const ids = (reply.result as Array<{ id: number }>).map((p) => p.id);
+        expect(ids).toContain(open);
+        expect(ids).not.toContain(closed);
+        expect(ids).not.toContain(coordinator);
+      });
+
+      it("a target that accepts no children is refused like a project that does not exist (#2124)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId, hookToken } = await createRealSession();
+        const target = await makeProject("shut-target");
+        await setCoordinator(await parentProjectId(parentId), true);
+        await patchProject(target, { acceptsChildrenFrom: "none" });
+
+        const refused = await spawn(hookToken, { project: target });
+        const missing = await spawn(hookToken, { project: 999_999 });
+        expect(refused.status).toBe(403);
+        expect(refused.error).toBe(missing.error);
+
+        // Back to the default and it spawns again.
+        await patchProject(target, { acceptsChildrenFrom: "any" });
+        expect((await spawn(hookToken, { project: target })).status).toBe(201);
+      });
+
+      it("a 'listed' target accepts only the projects on its list (#2124)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId, hookToken } = await createRealSession();
+        const target = await makeProject("picky-target");
+        const coordinator = await parentProjectId(parentId);
+        await setCoordinator(coordinator, true);
+        const stranger = await makeProject("stranger");
+
+        await patchProject(target, {
+          acceptsChildrenFrom: "listed",
+          acceptsChildrenFromList: [stranger],
+        });
+        expect((await spawn(hookToken, { project: target })).status).toBe(403);
+        await patchProject(target, { acceptsChildrenFromList: [stranger, coordinator] });
+        expect((await spawn(hookToken, { project: target })).status).toBe(201);
+      });
+
+      it("a direct POST /api/sessions with a cross-project parent is bound by the same rule", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sessionId: parentId } = await createRealSession();
+        const target = await makeProject("direct-target");
+        await setCoordinator(await parentProjectId(parentId), true);
+        await patchProject(target, { acceptsChildrenFrom: "none" });
+
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          headers: authHeaders,
+          payload: { projectId: target, command: "bash", parentSessionId: parentId },
+        });
+        expect(res.statusCode).toBeGreaterThanOrEqual(400);
+        expect(res.statusCode).toBeLessThan(500);
+      });
+
+      it("validates and normalises the project lists on PATCH (#2123, #2124)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const project = await makeProject("lists");
+        const other = await makeProject("lists-other");
+
+        expect((await patchProject(project, { crossProjectTargets: [999_999] })).statusCode).toBe(
+          400,
+        );
+        expect((await patchProject(project, { acceptsChildrenFrom: "sometimes" })).statusCode).toBe(
+          400,
+        );
+        // "listed" with nobody on the list would be "none" under another name.
+        expect((await patchProject(project, { acceptsChildrenFrom: "listed" })).statusCode).toBe(
+          400,
+        );
+
+        const saved = await patchProject(project, {
+          crossProjectTargets: [other],
+          acceptsChildrenFrom: "listed",
+          acceptsChildrenFromList: [other],
+        });
+        expect(saved.statusCode).toBe(200);
+        expect(saved.json()).toMatchObject({
+          crossProjectTargets: [other],
+          acceptsChildrenFrom: "listed",
+          acceptsChildrenFromList: [other],
+        });
+        // An empty selection means "all" again.
+        const cleared = await patchProject(project, { crossProjectTargets: [] });
+        expect(cleared.json().crossProjectTargets).toBeNull();
       });
 
       it("a non-coordinator gets the SAME 403 whether or not the named project exists (no probing)", async () => {

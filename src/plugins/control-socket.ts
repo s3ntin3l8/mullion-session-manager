@@ -26,6 +26,9 @@ import { isPipePath } from "../cli/ipc-path.mjs";
 import { restrictPipeToCurrentUser } from "../cli/pipe-acl.mjs";
 import { and, eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
+import { crossProjectAllowed } from "../services/cross-project.js";
+
+type ProjectRow = typeof projects.$inferSelect;
 import type { SessionSeverity, SessionStatus } from "../shared/types.js";
 import { compileOutputMatcher } from "../services/output-wait.js";
 import {
@@ -213,35 +216,51 @@ const SESSION_SPAWN_CHILD_FIELDS: readonly string[] = [
 /**
  * Issue #2110 — resolves the `project` a coordinator named for a cross-project
  * spawn: a project id (a number, or a string of digits) or an EXACT project
- * name. Unknown -> 404; a name that matches more than one project -> 409, asking
- * for the id (project names are not unique).
+ * name. A name that matches more than one project the caller may use -> 409,
+ * asking for the id (project names are not unique).
+ *
+ * Issues #2123 / #2124 — only a project the source may reach AND that accepts it
+ * (`allowed`) can be resolved. At session scope (`uniform`) everything else is the
+ * SAME 403 — a project that does not exist, one outside the coordinator's list,
+ * one that refuses coordinators — so a session cannot probe which projects and
+ * names exist. Full scope is the operator and keeps the precise 404.
  */
 function resolveSpawnTarget(
   app: FastifyInstance,
   ref: unknown,
+  rule: { allowed: (project: ProjectRow) => boolean; uniform: boolean },
 ): { ok: true; id: number } | { ok: false; reply: ReplyPayload } {
   const bad = (status: number, error: string) => ({
     ok: false as const,
     reply: { ok: false as const, status, error },
   });
+  const refused = (notFound: string) =>
+    rule.uniform ? bad(403, CROSS_PROJECT_TARGET_REFUSED) : bad(404, notFound);
   if (typeof ref === "number" || (typeof ref === "string" && /^\d+$/.test(ref.trim()))) {
     const id = Number(ref);
     const [row] = app.db.select().from(projects).where(eq(projects.id, id)).all();
-    return row ? { ok: true, id: row.id } : bad(404, `unknown project ${id}`);
+    if (!row) return refused(`unknown project ${id}`);
+    return rule.allowed(row) ? { ok: true, id: row.id } : bad(403, CROSS_PROJECT_TARGET_REFUSED);
   }
   if (typeof ref !== "string" || ref.trim() === "") {
     return bad(400, "'project' must be a project id or an exact project name");
   }
   const rows = app.db.select().from(projects).where(eq(projects.name, ref)).all();
-  if (rows.length === 0) return bad(404, `unknown project "${ref}"`);
-  if (rows.length > 1) {
+  if (rows.length === 0) return refused(`unknown project "${ref}"`);
+  const usable = rows.filter(rule.allowed);
+  if (usable.length === 0) return bad(403, CROSS_PROJECT_TARGET_REFUSED);
+  if (usable.length > 1) {
     return bad(
       409,
-      `more than one project is named "${ref}" (ids ${rows.map((r) => r.id).join(", ")}); pass the id`,
+      `more than one project is named "${ref}" (ids ${usable.map((r) => r.id).join(", ")}); pass the id`,
     );
   }
-  return { ok: true, id: rows[0]!.id };
+  return { ok: true, id: usable[0]!.id };
 }
+
+const CROSS_PROJECT_TARGET_REFUSED =
+  "no such project, or this session's project may not spawn children there " +
+  "(see 'This project coordinates' and the target project's consent in Edit project)";
 
 const CROSS_PROJECT_DISABLED =
   "this session's project is not allowed to spawn children in other projects " +
@@ -251,6 +270,16 @@ const CROSS_PROJECT_DISABLED =
 function projectCoordinates(app: FastifyInstance, projectId: number): boolean {
   const [row] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
   return row?.allowCrossProjectSpawn === true;
+}
+
+/** The projects a session of `source` may start children in (the rule of
+ * services/cross-project.ts), never including the source itself. */
+function allowedSpawnTargets(app: FastifyInstance, source: ProjectRow): ProjectRow[] {
+  return app.db
+    .select()
+    .from(projects)
+    .all()
+    .filter((p) => p.id !== source.id && crossProjectAllowed(source, p));
 }
 
 /** Streaming ops need a socket to write their frames to; only a connection with
@@ -1595,7 +1624,16 @@ export const OPS: Record<string, OpSpec> = {
             return;
           }
         } else {
-          const target = resolveSpawnTarget(app, projectRef);
+          const [sourceProject] = app.db
+            .select()
+            .from(projects)
+            .where(eq(projects.id, parentProjectId))
+            .all();
+          const target = resolveSpawnTarget(app, projectRef, {
+            allowed: (candidate) =>
+              candidate.id === parentProjectId || crossProjectAllowed(sourceProject, candidate),
+            uniform: conn.scope === "session",
+          });
           if (!target.ok) {
             reply(target.reply);
             return;
@@ -2293,11 +2331,12 @@ export const OPS: Record<string, OpSpec> = {
         reply({ ok: false, status: 403, error: CROSS_PROJECT_DISABLED });
         return;
       }
-      const targets = app.db
-        .select({ id: projects.id, name: projects.name, hostId: projects.hostId })
-        .from(projects)
-        .all()
-        .filter((p) => p.id !== own.projectId);
+      const [source] = app.db.select().from(projects).where(eq(projects.id, own.projectId)).all();
+      const targets = allowedSpawnTargets(app, source!).map((p) => ({
+        id: p.id,
+        name: p.name,
+        hostId: p.hostId,
+      }));
       reply({ ok: true, status: 200, result: targets });
     },
   },

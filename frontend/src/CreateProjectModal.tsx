@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ProjectMultiSelect } from "./ui/ProjectMultiSelect.js";
 import { FolderIcon, HostsIcon, BotIcon } from "./ui/icons.js";
 import { api, ApiError, LOCAL_HOST_ID, MAX_HOST_CWDS, normalizeAgentId } from "./api/index.js";
 import type {
@@ -62,6 +63,11 @@ interface CreateProjectModalProps {
     // #2110 — a "coordinator" project: its sessions may start child sessions
     // in other projects. Per-project, edit-mode only, off by default.
     allowCrossProjectSpawn?: boolean | null;
+    // #2123 / #2124 — which projects a coordinator reaches (empty = all) and
+    // whether this project takes children from other projects' coordinators.
+    crossProjectTargets?: number[] | null;
+    acceptsChildrenFrom?: "any" | "listed" | "none" | null;
+    acceptsChildrenFromList?: number[] | null;
     // #756 — per-project override of the auto-return round cap. `null`
     // means "use the install default" — the modal sends `null` when the
     // field is left blank, never `0` (the API rejects a cap below 1).
@@ -120,6 +126,9 @@ interface CreateProjectModalProps {
   initialMergeOnApprove?: boolean | null;
   initialAutoApprove?: boolean | null;
   initialAllowCrossProjectSpawn?: boolean | null;
+  initialCrossProjectTargets?: number[] | null;
+  initialAcceptsChildrenFrom?: "any" | "listed" | "none" | null;
+  initialAcceptsChildrenFromList?: number[] | null;
   initialMaxAutoReturnRounds?: number | null;
   initialConventionalCommitTitles?: boolean | null;
   initialAutoTagRelease?: boolean | null;
@@ -165,6 +174,12 @@ function sameHostPaths(a: Record<string, string>, b: Record<string, string>): bo
 // web app can't invoke a real OS folder picker without the user-gesture-
 // gated File System Access API — this is a platform limitation, not an
 // unported interaction.
+/** Whether two project-id selections hold the same ids (order and null/empty aside). */
+function sameIds(a: number[], b: number[] | null | undefined): boolean {
+  const other = b ?? [];
+  return a.length === other.length && a.every((id) => other.includes(id));
+}
+
 export function CreateProjectModal({
   onClose,
   onCreate,
@@ -178,6 +193,9 @@ export function CreateProjectModal({
   initialMergeOnApprove = null,
   initialAutoApprove = null,
   initialAllowCrossProjectSpawn = null,
+  initialCrossProjectTargets = null,
+  initialAcceptsChildrenFrom = null,
+  initialAcceptsChildrenFromList = null,
   initialMaxAutoReturnRounds = null,
   initialConventionalCommitTitles = null,
   initialAutoTagRelease = null,
@@ -210,6 +228,25 @@ export function CreateProjectModal({
   const [autoApprove, setAutoApprove] = useState(initialAutoApprove ?? false);
   const [allowCrossProjectSpawn, setAllowCrossProjectSpawn] = useState(
     initialAllowCrossProjectSpawn ?? false,
+  );
+  const [crossProjectTargets, setCrossProjectTargets] = useState<number[]>(
+    initialCrossProjectTargets ?? [],
+  );
+  const [acceptsChildrenFrom, setAcceptsChildrenFrom] = useState<"any" | "listed" | "none">(
+    initialAcceptsChildrenFrom ?? "any",
+  );
+  const [acceptsChildrenFromList, setAcceptsChildrenFromList] = useState<number[]>(
+    initialAcceptsChildrenFromList ?? [],
+  );
+  // The other projects, for the two pickers. The store is the one list of them.
+  const allProjects = useDashboardStore((s) => s.projects);
+  const otherProjects = useMemo(
+    () =>
+      allProjects
+        .filter((p) => p.id !== projectId)
+        .map((p) => ({ id: p.id, name: p.name }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [allProjects, projectId],
   );
   // String state, not number — an empty field means "use the install
   // default" (sent as `null`, never `0`/NaN), and a controlled number
@@ -424,6 +461,12 @@ export function CreateProjectModal({
         setError({ message: `A project can list at most ${MAX_HOST_CWDS} other hosts.` });
         return;
       }
+      if (acceptsChildrenFrom === "listed" && acceptsChildrenFromList.length === 0) {
+        setError({
+          message: 'Pick at least one project to accept children from, or choose "None".',
+        });
+        return;
+      }
     }
     // `hosts` starts empty in the store and stays empty when the host list
     // fails to load. Then NO entry is "known", every stored path would be
@@ -485,6 +528,24 @@ export function CreateProjectModal({
         mergeOnApprove: isEdit ? mergeOnApprove : undefined,
         autoApprove: isEdit ? autoApprove : undefined,
         allowCrossProjectSpawn: isEdit ? allowCrossProjectSpawn : undefined,
+        // Sent only when changed, so saving an unrelated field never rewrites them. An
+        // empty target selection means "every project" (null on the wire).
+        crossProjectTargets:
+          isEdit &&
+          allowCrossProjectSpawn &&
+          !sameIds(crossProjectTargets, initialCrossProjectTargets)
+            ? crossProjectTargets
+            : undefined,
+        acceptsChildrenFrom:
+          isEdit && acceptsChildrenFrom !== (initialAcceptsChildrenFrom ?? "any")
+            ? acceptsChildrenFrom
+            : undefined,
+        acceptsChildrenFromList:
+          isEdit &&
+          acceptsChildrenFrom === "listed" &&
+          !sameIds(acceptsChildrenFromList, initialAcceptsChildrenFromList)
+            ? acceptsChildrenFromList
+            : undefined,
         maxAutoReturnRounds: isEdit
           ? unlimitedRounds
             ? 0
@@ -999,6 +1060,49 @@ export function CreateProjectModal({
             Off by default. A child runs in the target project's repo (on that project's host) and
             inherits this session's unattended posture, so only turn it on for a project whose
             sessions you trust to drive your other projects.
+          </span>
+          {allowCrossProjectSpawn && (
+            <>
+              <ProjectMultiSelect
+                ariaLabel="Projects this coordinator may reach"
+                options={otherProjects}
+                selected={crossProjectTargets}
+                onChange={setCrossProjectTargets}
+                emptyLabel="Every project"
+              />
+              <span className="create-modal-field-hint">
+                Limit which projects it can reach, or leave it on every project. A project can still
+                refuse coordinators below.
+              </span>
+            </>
+          )}
+        </label>
+      )}
+
+      {isEdit && (
+        <label className="create-modal-field">
+          <span className="create-modal-field-label">Accepts children from other projects</span>
+          <select
+            value={acceptsChildrenFrom}
+            aria-label="Accepts children from other projects"
+            onChange={(e) => setAcceptsChildrenFrom(e.target.value as "any" | "listed" | "none")}
+          >
+            <option value="any">Any coordinator project</option>
+            <option value="listed">Only the projects I pick</option>
+            <option value="none">None</option>
+          </select>
+          {acceptsChildrenFrom === "listed" && (
+            <ProjectMultiSelect
+              ariaLabel="Projects whose coordinators may start children here"
+              options={otherProjects}
+              selected={acceptsChildrenFromList}
+              onChange={setAcceptsChildrenFromList}
+              emptyLabel="Pick at least one project"
+            />
+          )}
+          <span className="create-modal-field-hint">
+            Whether another project's coordinator may start sessions here. A refused request looks
+            the same as a project that does not exist.
           </span>
         </label>
       )}

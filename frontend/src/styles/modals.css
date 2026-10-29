@@ -1645,3 +1645,49 @@ summary.space-row {
   font-size: 0.71875rem;
   color: var(--dim);
 }
+.project-multiselect {
+  position: relative;
+}
+.project-multiselect-button {
+  width: 100%;
+  min-height: 28px;
+  padding: 0 10px;
+  text-align: left;
+  font-size: 0.75rem;
+  color: var(--fg);
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.project-multiselect-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  background: var(--field);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.project-multiselect-filter {
+  height: 26px;
+  padding: 0 8px;
+  font-size: 0.75rem;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.project-multiselect-clear {
+  align-self: flex-start;
+  padding: 0;
+  font-size: 0.6875rem;
+  color: var(--muted);
+  text-decoration: underline;
+  background: none;
+  border: none;
+  cursor: pointer;
+}

@@ -301,6 +301,19 @@ export const projects = sqliteTable("projects", {
   // one compromised or confused session could launch (unattended, with
   // `skipPermissions` inherited) agents in every registered repo.
   allowCrossProjectSpawn: integer("allow_cross_project_spawn", { mode: "boolean" }),
+  // Issue #2123 — which projects a coordinator may reach: a JSON array of project
+  // ids. Null (the default) means every project, so a coordinator set up under
+  // #2110 behaves exactly as before; the toggle above still gates everything.
+  // Stored non-empty (an empty selection is saved as null). A deleted project's
+  // id stays in the list and simply matches nothing. See services/cross-project.ts.
+  crossProjectTargets: text("cross_project_targets"),
+  // Issue #2124 — the TARGET side: whether other projects' coordinators may start
+  // children here. Null/"any" (the default) keeps today's behaviour; "none" refuses
+  // them all; "listed" accepts only the projects in `acceptsChildrenFromList`
+  // (JSON array of project ids). The refusal is the same 403 as for a project that
+  // does not exist.
+  acceptsChildrenFrom: text("accepts_children_from"),
+  acceptsChildrenFromList: text("accepts_children_from_list"),
   // #772's roadmap follow-up — the per-project override of how many
   // automatic "reviewing -> in_progress" rounds a task may spend across its
   // lifecycle (tasks.autoReturnRounds/lastAutoReturnReason). Null means
