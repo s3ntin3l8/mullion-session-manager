@@ -104,7 +104,9 @@ export function MergeConfirmModal({
   return (
     <Modal
       // Escape, the backdrop and the X cannot dismiss a merge in flight, as
-      // the Cancel button cannot.
+      // the Cancel button cannot. Nothing in the dialog is `disabled` meanwhile
+      // (that would drop focus to the page behind): the buttons are
+      // `aria-disabled` and ignore clicks.
       onClose={busy ? () => {} : onCancel}
       closeDisabled={busy}
       title={`Squash and merge #${pr.number}`}
@@ -115,12 +117,12 @@ export function MergeConfirmModal({
             ref={cancelRef}
             type="button"
             className="sb-btn sb-btn--secondary"
-            disabled={busy}
-            onClick={onCancel}
+            aria-disabled={busy}
+            onClick={busy ? undefined : onCancel}
           >
             Cancel
           </button>
-          <Button variant="primary" disabled={busy} onClick={onConfirm}>
+          <Button variant="primary" aria-disabled={busy} onClick={busy ? undefined : onConfirm}>
             {busy ? "Merging…" : "Merge"}
           </Button>
         </>

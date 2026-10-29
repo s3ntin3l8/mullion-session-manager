@@ -401,7 +401,11 @@ describe("PrDetailView", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Squash & merge" }));
     const dialog = screen.getByRole("dialog");
     await userEvent.click(within(dialog).getByRole("button", { name: "Merge" }));
-    expect(await within(dialog).findByRole("button", { name: "Merging…" })).toBeDisabled();
+    // aria-disabled, not disabled: the button the user pressed keeps focus, so
+    // it cannot fall out to the page behind the dialog.
+    const merging = await within(dialog).findByRole("button", { name: "Merging…" });
+    expect(merging).toHaveAttribute("aria-disabled", "true");
+    expect(merging).toHaveFocus();
     await act(async () => finish(jsonResponse(200, { merged: true, sha: "m" })));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(await screen.findByText("Merged (squash)")).toBeInTheDocument();
@@ -425,7 +429,10 @@ describe("PrDetailView", () => {
     // The X says so; Escape and the backdrop reach onClose regardless, so they
     // are driven on the elements that carry them (a disabled button never
     // delivers a key event, which is why this is not a keyboard() call).
-    expect(within(dialog).getByRole("button", { name: "Close dialog" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Close dialog" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     fireEvent.keyDown(dialog, { key: "Escape" });
     expect(screen.getByRole("dialog")).toBeInTheDocument();
     fireEvent.click(dialog.parentElement!);

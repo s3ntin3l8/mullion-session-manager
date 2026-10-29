@@ -91,6 +91,24 @@ describe("ui/Modal", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it("closeDisabled keeps the close button focusable but inert", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <Modal onClose={onClose} closeDisabled title="T">
+        <p>body</p>
+      </Modal>,
+    );
+    const close = screen.getByRole("button", { name: "Close dialog" });
+    // aria-disabled, not disabled: it stays the focus target inside the dialog.
+    expect(close).toHaveAttribute("aria-disabled", "true");
+    expect(close).not.toBeDisabled();
+    close.focus();
+    expect(close).toHaveFocus();
+    await user.click(close);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("calls onClose on Escape", async () => {
     const onClose = vi.fn();
     const user = userEvent.setup();
