@@ -22,7 +22,9 @@ import {
   detectCheckouts,
   isStorablePath,
 } from "../services/host-checkout-detect.js";
+import { findDuplicateGroups, mergeProjects } from "../services/project-merge.js";
 import {
+  buildOriginIndex,
   findProjectByRepoIdentity,
   projectHasPath,
   type RepoMatchReason,
@@ -450,6 +452,17 @@ const updateProjectSchema = {
       createDir: { type: "boolean" },
       gitInit: { type: "boolean" },
       allowDuplicate: { type: "boolean" },
+    },
+  },
+};
+
+const mergeProjectSchema = {
+  body: {
+    type: "object",
+    required: ["into"],
+    additionalProperties: false,
+    properties: {
+      into: { type: "integer", minimum: 1 },
     },
   },
 };
@@ -4877,6 +4890,61 @@ export async function projectsRoute(app: FastifyInstance) {
         hostCwdsMeta: parseHostCwdsMeta(withReleasePleaseDefault.hostCwdsMeta),
       };
       return createDir ? { ...response, dirCreated, gitInitialized } : response;
+    },
+  );
+
+  // Issue #2232 — projects that share one origin, oldest first as the survivor.
+  app.get("/api/projects/duplicates", async () => ({
+    groups: await findDuplicateGroups(app),
+  }));
+
+  // Merge this project (the duplicate) into `into` (the survivor). Both must
+  // resolve to the same origin key the create gate uses.
+  app.post<{ Params: { id: string }; Body: { into: number } }>(
+    "/api/projects/:id/merge",
+    { schema: mergeProjectSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const duplicateId = Number(request.params.id);
+      if (!Number.isInteger(duplicateId)) return reply.badRequest("Invalid project id");
+      const survivorId = request.body.into;
+      const pair = app.db
+        .select()
+        .from(projects)
+        .where(inArray(projects.id, [duplicateId, survivorId]))
+        .all();
+      const duplicate = pair.find((p) => p.id === duplicateId);
+      const survivor = pair.find((p) => p.id === survivorId);
+      if (!duplicate || !survivor) return reply.notFound("Project not found");
+      if (duplicate.id !== survivor.id) {
+        const index = await buildOriginIndex(app, { projects: [duplicate, survivor] });
+        const key = index.get(survivor.id);
+        if (!key || key !== index.get(duplicate.id)) {
+          return reply.code(409).send({
+            statusCode: 409,
+            error: "Conflict",
+            message: "These projects do not share a readable origin, so they are not duplicates.",
+            code: "NOT_SAME_REPO",
+          });
+        }
+      }
+      const result = mergeProjects(app, { survivorId, duplicateId });
+      if (!result.ok) {
+        return reply.code(result.refusal.code === "NOT_FOUND" ? 404 : 409).send({
+          statusCode: result.refusal.code === "NOT_FOUND" ? 404 : 409,
+          error: result.refusal.code === "NOT_FOUND" ? "Not Found" : "Conflict",
+          message: result.refusal.message,
+          code: `MERGE_${result.refusal.code}`,
+        });
+      }
+      const [row] = app.db.select().from(projects).where(eq(projects.id, survivorId)).all();
+      return {
+        survivor: {
+          ...row,
+          hostCwds: { ...parseHostCwds(row.hostCwds) },
+          hostCwdsMeta: parseHostCwdsMeta(row.hostCwdsMeta),
+        },
+        counts: result.counts,
+      };
     },
   );
 

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
+  staleProjectPanelIds,
   openSessionPanel,
   openTimelinePanel,
   openBrowserPanePanel,
@@ -3238,5 +3239,21 @@ describe("sessionIdFromPanelId", () => {
     expect(sessionIdFromPanelId(null)).toBeNull();
     expect(sessionIdFromPanelId(undefined)).toBeNull();
     expect(sessionIdFromPanelId("")).toBeNull();
+  });
+});
+
+describe("staleProjectPanelIds", () => {
+  it("returns per-project panels whose project is gone and keeps the rest", () => {
+    const ids = [
+      "session-3",
+      "project-hub-1",
+      "project-hub-2",
+      "file-editor-2",
+      "skills-2",
+      "device-2",
+      "project-hub-x",
+    ];
+    expect(staleProjectPanelIds(ids, [1])).toEqual(["project-hub-2", "file-editor-2", "skills-2"]);
+    expect(staleProjectPanelIds(ids, [1, 2])).toEqual([]);
   });
 });

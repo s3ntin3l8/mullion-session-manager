@@ -20,6 +20,8 @@ vi.mock("../../api/index.js", async (importOriginal) => {
       getServerInfo: vi.fn(),
       detectHostCheckouts: vi.fn(),
       discoverProjects: vi.fn(),
+      getProjectDuplicates: vi.fn().mockResolvedValue({ groups: [] }),
+      mergeProject: vi.fn(),
     },
   };
 });

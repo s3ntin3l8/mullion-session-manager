@@ -600,7 +600,8 @@ export class Session {
   // otherwise unchanged) — it describes ongoing launch configuration, not a
   // one-time consumable.
   private readonly env: Record<string, string>;
-  readonly projectId: number | null;
+  // Mutable only for repointProject (project merge, issue #2232).
+  projectId: number | null;
 
   private ptyProcess: AttachClient | null = null;
   private cols: number;
@@ -4255,6 +4256,19 @@ export class PtyManager {
     return [...this.sessions.values()]
       .filter((s) => s.projectId === projectId)
       .map((s) => ({ id: s.id, cwd: s.liveCwd ?? s.cwd, liveBranch: s.liveBranch }));
+  }
+
+  /** A project merge (issue #2232) moved the DB rows of `from` to `to`; the
+   * live sessions follow, so `projectSessions(to)` and the events they emit
+   * carry the surviving project. Returns how many were re-keyed. */
+  repointProject(from: number, to: number): number {
+    let n = 0;
+    for (const s of this.sessions.values()) {
+      if (s.projectId !== from) continue;
+      s.projectId = to;
+      n++;
+    }
+    return n;
   }
 
   /** Rich statuses — the TTL backstop's entry point, called from the

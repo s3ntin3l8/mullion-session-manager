@@ -5168,6 +5168,27 @@ describe("PtyManager", () => {
       expect(manager.projectSessions(7)).toEqual([]);
     });
 
+    it("repointProject re-keys a project's live sessions and leaves the others", async () => {
+      const mk = async (id: string, projectId: number) => {
+        const s = manager.getOrCreate({
+          id,
+          cwd: "/tmp",
+          command: "bash",
+          cols: 80,
+          rows: 24,
+          projectId,
+        });
+        await waitForSpawn(s);
+      };
+      await mk("1", 5);
+      await mk("2", 5);
+      await mk("3", 6);
+      expect(manager.repointProject(5, 9)).toBe(2);
+      expect(manager.projectSessions(5)).toEqual([]);
+      expect(manager.projectSessions(9).map((s) => s.id)).toEqual(["1", "2"]);
+      expect(manager.projectSessions(6).map((s) => s.id)).toEqual(["3"]);
+    });
+
     it("git_branch: stores the branch in liveBranch and emits a status_change event", async () => {
       const session = manager.getOrCreate({
         id: "1",

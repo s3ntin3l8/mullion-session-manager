@@ -1176,6 +1176,26 @@ export const LEGACY_PROJECT_PANEL_KINDS: Record<string, ProjectHubTab> = {
 const LEGACY_PROJECT_PANEL_ID_RE =
   /^(agent-rules|project-briefing|project-setup|dock-config|skills)-(\d+)$/;
 
+const PROJECT_PANEL_ID_RE =
+  /^(?:project-hub|file-editor|agent-rules|project-briefing|project-setup|dock-config|skills)-(\d+)$/;
+
+/**
+ * Ids of per-project panels (`project-hub-<id>`, `file-editor-<id>` and the
+ * legacy setup kinds) whose project no longer exists, e.g. after it was merged
+ * into another (issue #2232). The backend never parses a saved layout, so a
+ * restored layout can still hold them; the caller closes these once the
+ * project list has loaded.
+ */
+export function staleProjectPanelIds(
+  panelIds: readonly string[],
+  projectIds: readonly number[],
+): string[] {
+  return panelIds.filter((id) => {
+    const match = PROJECT_PANEL_ID_RE.exec(id);
+    return match !== null && !projectIds.includes(parseInt(match[1], 10));
+  });
+}
+
 // Replaces each legacy per-project setup panel with the project's hub panel,
 // in the same group (`within`); several legacy panels of one project merge
 // into one hub (the first one found picks the tab). Matches on the panel id

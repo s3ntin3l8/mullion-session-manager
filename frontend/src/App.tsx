@@ -47,6 +47,7 @@ import {
   shouldWarnTabletPaneCap,
   canLaunchTerminal,
   shouldShowCodexHookTrustBanner,
+  staleProjectPanelIds,
   workspaceProjectIdsFromPanels,
   openTerminalSessionIds,
 } from "./panelUtils.js";
@@ -234,6 +235,8 @@ export function App() {
     activePanelId,
     devices,
     devicesLoaded,
+    projectsLoaded,
+    projectsError,
   } = useDashboardStore(
     useShallow((s) => ({
       workspaces: s.workspaces,
@@ -263,6 +266,8 @@ export function App() {
       // practice they land on the same tick rather than doubling up).
       devices: s.devices,
       devicesLoaded: s.devicesLoaded,
+      projectsLoaded: s.projectsLoaded,
+      projectsError: s.projectsError,
     })),
   );
 
@@ -876,6 +881,20 @@ export function App() {
       }
     }
   }, [devices, devicesLoaded, dockviewApi]);
+
+  // A project-scoped panel (`project-hub-<id>`, `file-editor-<id>`) outliving
+  // its project, e.g. one merged into another (issue #2232), would render an
+  // empty hub forever. Gated on projectsLoaded: `projects` starts [] and every
+  // such panel would otherwise be closed before GET /api/projects resolves, or
+  // after it fails (the list then stays empty, and every project looks gone).
+  useEffect(() => {
+    if (!dockviewApi || !projectsLoaded || projectsError !== null) return;
+    const stale = staleProjectPanelIds(
+      dockviewApi.panels.map((p) => p.id),
+      projects.map((p) => p.id),
+    );
+    for (const id of stale) dockviewApi.getPanel(id)?.api.close();
+  }, [projects, projectsLoaded, projectsError, dockviewApi]);
 
   // The 12 `onOpen*` panel-opening callbacks (session/session-as-float/
   // timeline/GitHub/Git/Agent Rules/Dock Config/Skills/Browser/Tasks/
