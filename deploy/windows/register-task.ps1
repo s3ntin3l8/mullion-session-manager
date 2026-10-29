@@ -252,7 +252,14 @@ try {
   # so the old copy is not in use. Anything that goes wrong falls back to the
   # plain node.exe: the agent runs either way.
   $exe = $node
-  if (-not $NoBrand) {
+  # -NoBrand is remembered in runtime/no-brand, because the installer and the
+  # self-update re-run this script without it; delete the file to brand again.
+  $noBrandFile = Join-Path (Join-Path $home_ 'runtime') 'no-brand'
+  if ($NoBrand) {
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $noBrandFile) | Out-Null
+    Set-Content -LiteralPath $noBrandFile -Value 'registered with -NoBrand; delete this file to run the Mullion-branded copy again' -Encoding ASCII
+  }
+  if (-not (Test-Path -LiteralPath $noBrandFile)) {
     if (-not $RceditPath) { $RceditPath = Join-Path $home_ 'runtime\rcedit.exe' }
     if (-not $IconPath) { $IconPath = Join-Path $PSScriptRoot 'mullion.ico' }
     try {

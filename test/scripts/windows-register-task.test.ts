@@ -188,7 +188,12 @@ describeOnWindows("deploy/windows/register-task.ps1", () => {
       expect(result.code, result.stderr).toBe(0);
       expect(fs.existsSync(copyOf(f))).toBe(false);
       expect(await taskXml(name)).toContain(`<Command>${process.execPath}</Command>`);
-    }, 90_000);
+      // Remembered: a later registration without the flag (an update) stays plain.
+      const again = await register(f);
+      expect(again.code, again.stderr).toBe(0);
+      expect(fs.existsSync(copyOf(f))).toBe(false);
+      expect(await taskXml(name)).toContain(`<Command>${process.execPath}</Command>`);
+    }, 150_000);
 
     it("falls back to the given Node, and says so, when a copy cannot be made", async () => {
       const f = fixture();
@@ -252,9 +257,9 @@ describeOnWindows("deploy/windows/register-task.ps1", () => {
       }
       return file;
     }
-    it("carries the Mullion name and icon when rcedit is there", async () => {
+    it("carries the Mullion name and icon when rcedit is there", async (ctx) => {
       const rcedit = await rceditPath();
-      if (!rcedit) return; // not CI, and no MULLION_TEST_RCEDIT
+      if (!rcedit) return ctx.skip(); // not CI, and no MULLION_TEST_RCEDIT
       const f = fixture();
       fs.mkdirSync(path.join(f.home, "runtime"));
       fs.copyFileSync(rcedit, path.join(f.home, "runtime", "rcedit.exe"));
