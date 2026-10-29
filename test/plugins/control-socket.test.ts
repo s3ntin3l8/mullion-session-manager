@@ -2644,8 +2644,19 @@ describe("controlSocketPlugin (issue #185)", () => {
           headers: authHeaders,
           payload: { projectId: target, command: "bash", parentSessionId: parentId },
         });
-        expect(res.statusCode).toBeGreaterThanOrEqual(400);
-        expect(res.statusCode).toBeLessThan(500);
+        expect(res.statusCode).toBe(400);
+        expect(res.json().message).toContain("coordinator");
+
+        // The refusal came from the new rule: the same request succeeds once the target
+        // accepts children again.
+        await patchProject(target, { acceptsChildrenFrom: "any" });
+        const allowed = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          headers: authHeaders,
+          payload: { projectId: target, command: "bash", parentSessionId: parentId },
+        });
+        expect(allowed.statusCode).toBe(201);
       });
 
       it("validates and normalises the project lists on PATCH (#2123, #2124)", async () => {

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 
 export interface ProjectOption {
   id: number;
@@ -6,12 +6,19 @@ export interface ProjectOption {
 }
 
 /**
- * A drop-down multi-select of projects (issues #2123 / #2124): a button showing
- * what is selected, opening a filterable list of checkboxes. Not a free-text
- * field — the ids it reports are always real projects.
+ * A drop-down multi-select of projects (issues #2123 / #2124): a button showing what
+ * is selected, opening a filterable group of checkboxes. Not a free-text field — the ids
+ * it reports are always real projects.
  *
- * `selected` may hold ids of projects that no longer exist; they are not shown
- * and are dropped from the next change.
+ * A disclosure, not a listbox: the panel holds checkboxes (each one a real, labelled
+ * control), so it is announced as a group of them. Escape and a click outside close it,
+ * like ui/CustomSelect.
+ *
+ * `selected` may hold ids of projects that no longer exist; they are not shown and are
+ * dropped from the next change.
+ *
+ * `clearWarning`, when given, makes "Clear selection" a two-step action that shows the
+ * warning first: clearing a restriction can widen what something is allowed to do.
  */
 export function ProjectMultiSelect({
   options,
@@ -19,6 +26,7 @@ export function ProjectMultiSelect({
   onChange,
   emptyLabel,
   ariaLabel,
+  clearWarning,
 }: {
   options: ProjectOption[];
   selected: number[];
@@ -26,12 +34,31 @@ export function ProjectMultiSelect({
   /** What the button says while nothing is selected. */
   emptyLabel: string;
   ariaLabel: string;
+  clearWarning?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
+  const [confirmingClear, setConfirmingClear] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const panelId = useId();
   const known = useMemo(() => new Set(options.map((o) => o.id)), [options]);
   const live = selected.filter((id) => known.has(id));
   const shown = options.filter((o) => o.name.toLowerCase().includes(filter.trim().toLowerCase()));
+
+  const close = () => {
+    setOpen(false);
+    setConfirmingClear(false);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const onMouseDown = (event: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(event.target as Node)) close();
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    return () => document.removeEventListener("mousedown", onMouseDown);
+  }, [open]);
 
   const summary =
     live.length === 0
@@ -47,19 +74,31 @@ export function ProjectMultiSelect({
     onChange(live.includes(id) ? live.filter((x) => x !== id) : [...live, id]);
 
   return (
-    <div className="project-multiselect">
+    <div
+      className="project-multiselect"
+      ref={rootRef}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && open) {
+          // Close this popup only: the modal's own Escape must not also fire.
+          e.stopPropagation();
+          close();
+          buttonRef.current?.focus();
+        }
+      }}
+    >
       <button
         type="button"
+        ref={buttonRef}
         className="project-multiselect-button"
         aria-label={ariaLabel}
-        aria-haspopup="listbox"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        aria-controls={open ? panelId : undefined}
+        onClick={() => (open ? close() : setOpen(true))}
       >
         {summary}
       </button>
       {open && (
-        <div className="project-multiselect-panel" role="listbox" aria-multiselectable="true">
+        <div className="project-multiselect-panel" id={panelId} role="group" aria-label={ariaLabel}>
           {options.length > 8 && (
             <input
               type="text"
@@ -84,15 +123,37 @@ export function ProjectMultiSelect({
               </label>
             ))
           )}
-          {live.length > 0 && (
-            <button
-              type="button"
-              className="project-multiselect-clear"
-              onClick={() => onChange([])}
-            >
-              Clear selection
-            </button>
-          )}
+          {live.length > 0 &&
+            (confirmingClear ? (
+              <span className="create-modal-field-hint" role="alert">
+                {clearWarning}{" "}
+                <button
+                  type="button"
+                  className="project-multiselect-clear"
+                  onClick={() => {
+                    onChange([]);
+                    setConfirmingClear(false);
+                  }}
+                >
+                  Confirm
+                </button>{" "}
+                <button
+                  type="button"
+                  className="project-multiselect-clear"
+                  onClick={() => setConfirmingClear(false)}
+                >
+                  Cancel
+                </button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                className="project-multiselect-clear"
+                onClick={() => (clearWarning ? setConfirmingClear(true) : onChange([]))}
+              >
+                Clear selection
+              </button>
+            ))}
         </div>
       )}
     </div>

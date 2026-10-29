@@ -67,6 +67,60 @@ describe("ProjectMultiSelect (#2123, #2124)", () => {
     expect(onChange).toHaveBeenLastCalledWith([]);
   });
 
+  it("is a disclosure of labelled checkboxes: Escape and an outside click close it", async () => {
+    const user = userEvent.setup();
+    render(
+      <div>
+        <button type="button">elsewhere</button>
+        <ProjectMultiSelect
+          ariaLabel="targets"
+          options={options}
+          selected={[]}
+          onChange={vi.fn()}
+          emptyLabel="Every project"
+        />
+      </div>,
+    );
+    const trigger = screen.getByRole("button", { name: "targets" });
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByRole("group", { name: "targets" })).toBeInTheDocument();
+    expect(screen.queryByRole("listbox")).toBeNull();
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("group", { name: "targets" })).toBeNull();
+    expect(trigger).toHaveFocus();
+
+    await user.click(trigger);
+    await user.click(screen.getByRole("button", { name: "elsewhere" }));
+    expect(screen.queryByRole("group", { name: "targets" })).toBeNull();
+  });
+
+  it("asks before clearing when a warning is given, and Cancel keeps the selection", async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ProjectMultiSelect
+        ariaLabel="targets"
+        options={options}
+        selected={[1]}
+        onChange={onChange}
+        emptyLabel="Every project"
+        clearWarning="Clearing lets it reach EVERY project."
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "targets" }));
+    await user.click(screen.getByRole("button", { name: "Clear selection" }));
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert")).toHaveTextContent("EVERY project");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(onChange).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Clear selection" }));
+    await user.click(screen.getByRole("button", { name: "Confirm" }));
+    expect(onChange).toHaveBeenLastCalledWith([]);
+  });
+
   it("filters a long list and says when there is nothing to pick", async () => {
     const many = Array.from({ length: 10 }, (_, i) => ({ id: i + 1, name: `proj-${i + 1}` }));
     const user = userEvent.setup();

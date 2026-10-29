@@ -1072,6 +1072,7 @@ export function CreateProjectModal({
                 selected={crossProjectTargets}
                 onChange={setCrossProjectTargets}
                 emptyLabel="Every project"
+                clearWarning="Clearing the list lets this coordinator reach EVERY project."
               />
               <span className="create-modal-field-hint">
                 Limit which projects it can reach, or leave it on every project. A project can still

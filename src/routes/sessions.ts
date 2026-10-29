@@ -767,7 +767,7 @@ export async function sessionsRoute(app: FastifyInstance) {
         if (result.reason === "unknown-parent") return reply.badRequest("Unknown parentSessionId");
         if (result.reason === "parent-wrong-project") {
           return reply.badRequest(
-            "parentSessionId must belong to the same project (unless its project allows cross-project spawning)",
+            "parentSessionId must belong to the same project, unless its project is a coordinator that may reach this project and this project accepts children from it",
           );
         }
         if (result.reason === "parent-is-child") {
