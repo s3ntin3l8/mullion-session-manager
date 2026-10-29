@@ -43,14 +43,17 @@ describe("toolNodePath", () => {
     expect(toolNodePath("/usr/bin/node")).toBe("/usr/bin/node");
   });
 
-  it("keeps the copy itself when there is no usable stamp", () => {
-    expect(toolNodePath(brandedCopy(undefined).copy)).toMatch(/mullion-agent\.exe$/);
+  it("uses the sibling runtime/node/node.exe when there is no usable stamp", () => {
+    const none = brandedCopy(undefined);
+    expect(toolNodePath(none.copy)).toBe(none.source);
     const garbage = brandedCopy("{not json");
-    expect(toolNodePath(garbage.copy)).toBe(garbage.copy);
+    expect(toolNodePath(garbage.copy)).toBe(garbage.source);
+    fs.rmSync(path.dirname(none.source), { recursive: true, force: true });
+    expect(toolNodePath(none.copy)).toBe(none.copy);
     const missing = brandedCopy(() => ({ source: path.join(os.tmpdir(), "no-such-node.exe") }));
-    expect(toolNodePath(missing.copy)).toBe(missing.copy);
+    expect(toolNodePath(missing.copy)).toBe(missing.source);
     const wrongType = brandedCopy(() => ({ source: 42 }));
-    expect(toolNodePath(wrongType.copy)).toBe(wrongType.copy);
+    expect(toolNodePath(wrongType.copy)).toBe(wrongType.source);
   });
 
   it("defaults to the running executable", () => {

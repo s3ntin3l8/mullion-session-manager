@@ -883,7 +883,10 @@ re-registers the task and moves `current` to the newest release.
   Node it came from; the copy is rebuilt when that Node changes, and left as it
   is (with a note) while a session started by the previous agent still holds it.
   If a copy cannot be made the task runs the plain `node.exe`, and `-NoBrand`
-  on `register-task.ps1` asks for that. Sessions still find `node`, `npm` and
+  on `register-task.ps1` asks for that. The copy is **not signed** (editing it
+  voids `node.exe`'s Authenticode signature), so a machine whose policy only
+  allows signed programs (AppLocker or WDAC publisher rules, some EDR) will
+  block it at run time with no automatic fallback: re-register with `-NoBrand`. Sessions still find `node`, `npm` and
   `npx` from the original Node's folder;
 - an entry in **Settings → Apps → Installed apps** ("Mullion agent"), whose
   uninstall runs the bootstrap's `-Uninstall` from a copy of the script kept in

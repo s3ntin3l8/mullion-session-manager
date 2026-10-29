@@ -25,7 +25,7 @@ const BEGIN = "# BEGIN PINS (refreshed by scripts/update-windows-prereqs.mjs)";
 const RCEDIT = {
   rceditVersion: "2.0.0",
   rceditUrl: "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe",
-  rceditSha256: "3e7801db1a5edbec91b49a24a094aad776cb4515488ea5a4ca2289c400eade2a",
+  rceditSha256: "3e7801db1a5edbec91b49a24a094aad776cb4515488ea5a4ca2289c400eade2a", // pragma: allowlist secret
 };
 const END = "# END PINS";
 

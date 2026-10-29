@@ -5,6 +5,7 @@
 // CI's test-windows job.
 import { describe, it, expect, afterEach } from "vitest";
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -211,33 +212,54 @@ describeOnWindows("deploy/windows/register-task.ps1", () => {
       );
     }, 90_000);
 
-    // The resource editing needs rcedit, which the bootstrap downloads and the
-    // suite does not: point MULLION_TEST_RCEDIT at an rcedit-x64.exe to run it.
-    const rcedit = process.env.MULLION_TEST_RCEDIT;
-    it.runIf(rcedit && fs.existsSync(rcedit))(
-      "carries the Mullion name and icon when rcedit is there",
-      async () => {
-        const f = fixture();
-        fs.mkdirSync(path.join(f.home, "runtime"));
-        fs.copyFileSync(rcedit!, path.join(f.home, "runtime", "rcedit.exe"));
-        const result = await register(f);
-        expect(result.code, result.stderr).toBe(0);
-        expect(stampOf(f)).toMatchObject({ rcedit: true });
-        const { stdout } = await run(
-          "powershell.exe",
-          [
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            `$v = (Get-Item '${copyOf(f)}').VersionInfo; "$($v.FileDescription)|$($v.ProductName)|$($v.OriginalFilename)"`,
-          ],
-          { env: windowsPowerShellEnv(process.env), windowsHide: true, timeout: 60_000 },
-        );
-        expect(stdout.trim()).toBe("Mullion agent|Mullion|mullion-agent.exe");
-        expect(await versionOf(copyOf(f))).toBe(`v${process.versions.node}`);
-      },
-      150_000,
-    );
+    // The resource editing needs rcedit. Set MULLION_TEST_RCEDIT to an
+    // rcedit-x64.exe to run it locally; in CI it is fetched from the bootstrap's
+    // own pin and checked against its SHA-256, so a wrong rcedit flag cannot hide
+    // behind the fallback to an unbranded copy.
+    async function rceditPath(): Promise<string | null> {
+      const given = process.env.MULLION_TEST_RCEDIT;
+      if (given && fs.existsSync(given)) return given;
+      if (!process.env.CI) return null;
+      const ps1 = fs.readFileSync(
+        fileURLToPath(new URL("../../deploy/windows/mullion-install.ps1", import.meta.url)),
+        "utf8",
+      );
+      const url = /\$PinRceditUrl\s*=\s*'([^']+)'/.exec(ps1)?.[1];
+      const sha = /\$PinRceditSha256\s*=\s*'([0-9a-f]{64})'/.exec(ps1)?.[1];
+      if (!url || !sha) throw new Error("could not read the rcedit pin from mullion-install.ps1");
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "rcedit-"));
+      dirs.push(dir);
+      const file = path.join(dir, "rcedit-x64.exe");
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`downloading rcedit: HTTP ${res.status}`);
+      const bytes = Buffer.from(await res.arrayBuffer());
+      const got = createHash("sha256").update(bytes).digest("hex");
+      if (got !== sha) throw new Error(`rcedit checksum ${got} does not match the pin ${sha}`);
+      fs.writeFileSync(file, bytes);
+      return file;
+    }
+    it("carries the Mullion name and icon when rcedit is there", async () => {
+      const rcedit = await rceditPath();
+      if (!rcedit) return; // not CI, and no MULLION_TEST_RCEDIT
+      const f = fixture();
+      fs.mkdirSync(path.join(f.home, "runtime"));
+      fs.copyFileSync(rcedit, path.join(f.home, "runtime", "rcedit.exe"));
+      const result = await register(f);
+      expect(result.code, result.stderr).toBe(0);
+      expect(stampOf(f)).toMatchObject({ rcedit: true });
+      const { stdout } = await run(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          `$v = (Get-Item '${copyOf(f)}').VersionInfo; "$($v.FileDescription)|$($v.ProductName)|$($v.OriginalFilename)"`,
+        ],
+        { env: windowsPowerShellEnv(process.env), windowsHide: true, timeout: 60_000 },
+      );
+      expect(stdout.trim()).toBe("Mullion agent|Mullion|mullion-agent.exe");
+      expect(await versionOf(copyOf(f))).toBe(`v${process.versions.node}`);
+    }, 150_000);
   });
 
   it("does not let a trailing backslash on the install root swallow the task name", async () => {

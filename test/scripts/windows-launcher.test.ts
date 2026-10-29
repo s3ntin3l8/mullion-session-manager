@@ -549,15 +549,21 @@ describe("toolNodeDir", () => {
     expect(toolNodeDir(source)).toBe(path.dirname(source));
   });
 
-  it("falls back to the copy's folder with no stamp, a broken one, or a Node that is gone", () => {
+  it("falls back to the sibling runtime/node folder with no stamp, a broken one, or a Node that is gone", () => {
     for (const stamp of [
       undefined,
       "{broken",
       () => ({ source: path.join(os.tmpdir(), "gone.exe") }),
     ]) {
       const { runtime, copy } = install(stamp);
-      expect(toolNodeDir(copy)).toBe(runtime);
+      expect(toolNodeDir(copy)).toBe(path.join(runtime, "node"));
     }
+  });
+
+  it("falls back to the copy's own folder when there is no sibling Node either", () => {
+    const { runtime, copy, source } = install(undefined);
+    fs.rmSync(path.dirname(source), { recursive: true, force: true });
+    expect(toolNodeDir(copy)).toBe(runtime);
   });
 
   it("defaults to the running Node's folder", () => {

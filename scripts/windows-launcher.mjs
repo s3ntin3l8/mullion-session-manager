@@ -320,8 +320,12 @@ export function toolNodeDir(execPath = process.execPath) {
       const { source } = JSON.parse(readFileSync(`${execPath}.json`, "utf8"));
       if (typeof source === "string" && existsSync(source)) return path.dirname(source);
     } catch {
-      // No (or an unreadable) stamp: the copy's own folder is the best there is.
+      // No (or an unreadable) stamp: fall through to the sibling Node below.
     }
+    // The bootstrap's private Node sits next to the copy (runtime/node); the
+    // same rule as toolNodePath in src/services/agent-exe.ts.
+    const sibling = path.join(path.dirname(execPath), "node");
+    if (existsSync(path.join(sibling, "node.exe"))) return sibling;
   }
   return path.dirname(execPath);
 }

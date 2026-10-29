@@ -166,9 +166,12 @@ function Get-NodeMajor([string]$Exe) {
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
     $p = [Diagnostics.Process]::Start($psi)
-    $out = $p.StandardOutput.ReadToEnd()
-    [void]$p.StandardError.ReadToEnd()
+    # Read asynchronously: a blocking ReadToEnd first would never let the
+    # timeout fire for a process that hangs with its stdout open.
+    $outTask = $p.StandardOutput.ReadToEndAsync()
+    [void]$p.StandardError.ReadToEndAsync()
     if (-not $p.WaitForExit(20000)) { $p.Kill(); return 0 }
+    $out = $outTask.Result
     if ($out -match '^v(\d+)\.') { return [int]$Matches[1] }
   } catch { }
   return 0

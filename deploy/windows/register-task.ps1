@@ -79,9 +79,12 @@ function Get-ProgramVersion([string]$Exe) {
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
     $p = [Diagnostics.Process]::Start($psi)
-    $out = $p.StandardOutput.ReadToEnd()
-    [void]$p.StandardError.ReadToEnd()
+    # Read asynchronously: a blocking ReadToEnd first would never let the
+    # timeout fire for a process that hangs with its stdout open.
+    $outTask = $p.StandardOutput.ReadToEndAsync()
+    [void]$p.StandardError.ReadToEndAsync()
     if (-not $p.WaitForExit(20000)) { $p.Kill(); return '' }
+    $out = $outTask.Result
     return $out.Trim()
   } catch { return '' }
 }
@@ -186,7 +189,8 @@ function Get-AgentExe([string]$SourceNode, [string]$Home_, [string]$Rcedit, [str
   if (-not $replaced) {
     Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $target) {
-      Write-Output "branding: $target is in use (a session started by the previous agent is still running); keeping the existing copy"
+      $inUse = Get-ProgramVersion $target
+      Write-Output "branding: $target is in use (a session started by the previous agent is still running); keeping the existing copy, which is Node $inUse (the Node it should be made from is $sourceVersion)"
       return $target
     }
     throw "could not write $target"

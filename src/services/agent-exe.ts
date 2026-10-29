@@ -15,7 +15,11 @@ export function toolNodePath(execPath: string = process.execPath): string {
     const stamp = JSON.parse(fs.readFileSync(`${execPath}.json`, "utf8")) as { source?: unknown };
     if (typeof stamp.source === "string" && fs.existsSync(stamp.source)) return stamp.source;
   } catch {
-    // No (or an unreadable) stamp: the running executable is all there is.
+    // No (or an unreadable) stamp: fall through to the sibling Node below.
   }
+  // The bootstrap's private Node sits next to the copy (runtime/node); the
+  // same rule as toolNodeDir in scripts/windows-launcher.mjs.
+  const sibling = path.join(path.dirname(execPath), "node", "node.exe");
+  if (fs.existsSync(sibling)) return sibling;
   return execPath;
 }
