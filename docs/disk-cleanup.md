@@ -342,6 +342,12 @@ It is removed only when **all** of these hold:
 **The branch is always kept**; only the directory goes, so a commit is never
 lost. What git ignores (`node_modules`, a local `.env`) goes with the directory.
 
+For remote sessions, Mullion compares worktree and session paths on the owning
+host, including symlink aliases and the agent-recorded launch directory when
+the session row has no cwd. If that
+host is unreachable, too old to resolve paths, or cannot verify a path, the
+sweep defers removal; manual removal can still use its explicit force option.
+
 A worktree that fails a check is left in place, and the reason is recorded on
 the session row as `worktreeKeptReason` (`in-use`, `still-running`, `unpushed`,
 `dirty`, `conflicts`, `branch-missing` or `remove-failed`), next to

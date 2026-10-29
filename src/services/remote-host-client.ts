@@ -1807,6 +1807,17 @@ export class RemoteHostClient {
     return promise;
   }
 
+  compareWorktreePaths(
+    target: string,
+    candidates: { id: string; cwd: string | null }[],
+  ): Promise<unknown> {
+    return this.request("/internal/worktrees/compare-paths", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ target, candidates }),
+    });
+  }
+
   bulkIsMasterAlive(ids: string[]): Promise<Record<string, boolean>> {
     if (ids.length === 0) return Promise.resolve(Object.create(null));
     return this.request("/internal/sessions/liveness", {

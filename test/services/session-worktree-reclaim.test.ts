@@ -408,6 +408,11 @@ describe("reclaiming an ended session's worktree (issue #1964)", () => {
       const removeWorktreeIfClean = vi.fn().mockResolvedValue(removal);
       vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue({
         removeWorktreeIfClean,
+        compareWorktreePaths: vi.fn(async (target: string, candidates: { cwd: string | null }[]) =>
+          candidates.map(({ cwd }) =>
+            cwd && (cwd === target || cwd.startsWith(target + "/")) ? "inside" : "outside",
+          ),
+        ),
         liveness: vi.fn(async (ids: string[]) =>
           Object.fromEntries(
             ids.map((id) => [id, typeof liveness === "function" ? liveness(id) : liveness]),
@@ -513,6 +518,9 @@ describe("reclaiming an ended session's worktree (issue #1964)", () => {
       const liveness = vi.fn().mockRejectedValue(new Error("host unreachable"));
       vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue({
         liveness,
+        compareWorktreePaths: vi.fn(async (target: string, candidates: { cwd: string | null }[]) =>
+          candidates.map(({ cwd }) => (cwd && cwd.startsWith(target + "/") ? "inside" : "outside")),
+        ),
       } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
       await expect(reclaimSessionWorktree(app, session.id)).resolves.toEqual({
         status: "kept",

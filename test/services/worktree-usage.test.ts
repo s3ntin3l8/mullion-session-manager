@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -6,7 +6,8 @@ import { ne } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts, projects, sessions } from "../../src/db/schema.js";
-import { worktreeInUse } from "../../src/services/worktree-usage.js";
+import * as sessionBackends from "../../src/services/session-backend.js";
+import { worktreeInUse, sessionsUsingWorktree } from "../../src/services/worktree-usage.js";
 
 // Issue #1722 / roadmap 8.8 — "local" means the SESSION's own host is
 // local, not its project's. A session placed on a remote host has a cwd on
@@ -41,6 +42,8 @@ describe("worktreeInUse — the session's own host decides locality (issue #1722
     // same `id != 'local'` predicate from the column itself.
     app.db.delete(hosts).where(ne(hosts.id, "local")).run();
   });
+
+  afterEach(() => vi.restoreAllMocks());
 
   const worktreePath = "/tmp/mullion-worktree-usage-test";
 
@@ -91,5 +94,148 @@ describe("worktreeInUse — the session's own host decides locality (issue #1722
     const projectId = seedProject("local");
     seedSession(projectId);
     expect(worktreeInUse(app, worktreePath)).toBe(true);
+  });
+  it("compares all sessions on the owning remote host including aliases and fallback cwd", async () => {
+    app.db
+      .insert(hosts)
+      .values({ id: "remote-b", name: "remote-b", baseUrl: "http://remote-b.example" })
+      .run();
+    const project = seedProject("remote-b");
+    const alias = app.db
+      .insert(sessions)
+      .values({ projectId: project, command: "bash", cwd: "/alias/sub" })
+      .run();
+    const fallback = app.db
+      .insert(sessions)
+      .values({ projectId: project, command: "bash", cwd: null })
+      .run();
+    const local = seedProject("local");
+    seedSession(local);
+    const compareWorktreePaths = vi.fn(async (_target: string, entries: { cwd: string | null }[]) =>
+      entries.map((entry) => (entry.cwd === "/alias/sub" ? "inside" : "outside")),
+    );
+    vi.spyOn(sessionBackends, "resolveBackend").mockReturnValue({
+      compareWorktreePaths,
+    } as unknown as sessionBackends.SessionBackend);
+    const usage = await sessionsUsingWorktree(app, worktreePath, "remote-b");
+    expect(usage.active).toEqual([Number(alias.lastInsertRowid)]);
+    expect(usage.unknown).toEqual([]);
+    expect(compareWorktreePaths).toHaveBeenCalledWith(
+      worktreePath,
+      expect.arrayContaining([{ id: String(fallback.lastInsertRowid), cwd: null }]),
+    );
+    expect(compareWorktreePaths.mock.calls[0]![1]).toHaveLength(2);
+  });
+
+  it("marks remote sessions unknown when the agent cannot compare paths", async () => {
+    app.db
+      .insert(hosts)
+      .values({ id: "remote-b", name: "remote-b", baseUrl: "http://remote-b.example" })
+      .run();
+    const project = seedProject("remote-b");
+    const id = seedSession(project);
+    const compareWorktreePaths = vi.fn().mockRejectedValue(new Error("old or unreachable"));
+    vi.spyOn(sessionBackends, "resolveBackend").mockReturnValue({
+      compareWorktreePaths,
+    } as unknown as sessionBackends.SessionBackend);
+    expect(await sessionsUsingWorktree(app, worktreePath, "remote-b")).toEqual({
+      active: [],
+      alive: [],
+      unknown: [id],
+    });
+  });
+  it("blocks a session added while ended-session liveness is checked", async () => {
+    app.db
+      .insert(hosts)
+      .values({ id: "remote-b", name: "remote-b", baseUrl: "http://remote-b.example" })
+      .run();
+    const project = seedProject("remote-b");
+    app.db
+      .insert(sessions)
+      .values({ projectId: project, command: "bash", cwd: worktreePath, status: "exited" })
+      .run();
+    let created = 0;
+    const compareWorktreePaths = vi.fn(async (_target: string, candidates: unknown[]) =>
+      candidates.map(() => "inside"),
+    );
+    const liveness = vi.fn(async () => {
+      created = seedSession(project);
+      return {};
+    });
+    vi.spyOn(sessionBackends, "resolveBackend").mockReturnValue({
+      compareWorktreePaths,
+      liveness,
+    } as unknown as sessionBackends.SessionBackend);
+    const usage = await sessionsUsingWorktree(app, worktreePath, "remote-b");
+    expect(usage.unknown).toContain(created);
+  });
+  it("rechecks live paths after querying ended-session liveness", async () => {
+    app.db
+      .insert(hosts)
+      .values({ id: "remote-b", name: "remote-b", baseUrl: "http://remote-b.example" })
+      .run();
+    const project = seedProject("remote-b");
+    const active = seedSession(project);
+    app.db
+      .insert(sessions)
+      .values({ projectId: project, command: "bash", cwd: worktreePath, status: "exited" })
+      .run();
+    const liveness = vi.fn().mockResolvedValue({});
+    const compareWorktreePaths = vi.fn(async () =>
+      liveness.mock.calls.length ? ["inside", "outside"] : ["outside", "outside"],
+    );
+    vi.spyOn(sessionBackends, "resolveBackend").mockReturnValue({
+      compareWorktreePaths,
+      liveness,
+    } as unknown as sessionBackends.SessionBackend);
+    expect((await sessionsUsingWorktree(app, worktreePath, "remote-b")).active).toContain(active);
+  });
+  it("does not trust a primary-host project path for a remotely placed session with no cwd", async () => {
+    app.db
+      .insert(hosts)
+      .values({ id: "remote-b", name: "remote-b", baseUrl: "http://remote-b.example" })
+      .run();
+    const project = seedProject("local");
+    const sessionId = Number(
+      app.db
+        .insert(sessions)
+        .values({ projectId: project, command: "bash", cwd: null, hostId: "remote-b" })
+        .run().lastInsertRowid,
+    );
+    const compareWorktreePaths = vi.fn().mockResolvedValue(["unknown"]);
+    vi.spyOn(sessionBackends, "resolveBackend").mockReturnValue({
+      compareWorktreePaths,
+    } as unknown as sessionBackends.SessionBackend);
+    expect((await sessionsUsingWorktree(app, worktreePath, "remote-b")).unknown).toEqual([
+      sessionId,
+    ]);
+    expect(compareWorktreePaths).toHaveBeenCalledWith(worktreePath, [
+      { id: String(sessionId), cwd: null },
+    ]);
+  });
+  it("does not resolve paths for confirmed-dead historical sessions", async () => {
+    app.db
+      .insert(hosts)
+      .values({ id: "remote-b", name: "remote-b", baseUrl: "http://remote-b.example" })
+      .run();
+    const project = seedProject("remote-b");
+    const id = Number(
+      app.db
+        .insert(sessions)
+        .values({ projectId: project, command: "bash", cwd: "/old/alias", status: "exited" })
+        .run().lastInsertRowid,
+    );
+    const compareWorktreePaths = vi.fn().mockResolvedValue([]);
+    const liveness = vi.fn().mockResolvedValue({ [String(id)]: "dead" });
+    vi.spyOn(sessionBackends, "resolveBackend").mockReturnValue({
+      compareWorktreePaths,
+      liveness,
+    } as unknown as sessionBackends.SessionBackend);
+    expect(await sessionsUsingWorktree(app, worktreePath, "remote-b")).toEqual({
+      active: [],
+      alive: [],
+      unknown: [],
+    });
+    expect(compareWorktreePaths).toHaveBeenCalledWith(worktreePath, []);
   });
 });

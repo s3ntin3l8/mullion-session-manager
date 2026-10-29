@@ -1,10 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, or, sql } from "drizzle-orm";
 import path from "node:path";
-import fs from "node:fs/promises";
+import { canonicalWorktreePath } from "./worktree-paths.js";
+export { canonicalWorktreePath } from "./worktree-paths.js";
 import { projects, sessions, tasks } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 import { isGitRepo } from "./git-status.js";
+import type { SessionLiveness } from "./session-process.js";
 import { resolveBackend } from "./session-backend.js";
 
 // Task states a worktree is still needed in (a `done`/`cancelled` task keeps its
@@ -68,36 +70,6 @@ export function worktreeInUse(app: FastifyInstance, worktreePath: string): boole
   );
 }
 
-/** Resolve an existing ancestor without blocking the event loop. */
-export async function canonicalWorktreePath(value: string): Promise<string> {
-  const resolved = path.resolve(value);
-  let prefix = resolved;
-  for (;;) {
-    try {
-      // This only resolves directory metadata for the usage guard; it does
-      // not read or modify file content. Registered-worktree membership is
-      // independently checked before removal (CodeQL alert #430).
-      const real = await fs.realpath(prefix);
-      return path.resolve(real, path.relative(prefix, resolved));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      // A dangling symlink is not a missing ordinary path: its target may
-      // have just moved, so its location is unknown rather than lexical.
-      const brokenLink = await fs.lstat(prefix).then(
-        (stat) => stat.isSymbolicLink(),
-        (err: unknown) => {
-          if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
-          throw err;
-        },
-      );
-      if (brokenLink) throw error;
-      const parent = path.dirname(prefix);
-      if (parent === prefix) throw error;
-      prefix = parent;
-    }
-  }
-}
-
 /** Sessions on the worktree's host whose recorded or live cwd is inside it.
  * Ended sessions remain blockers until their process is confirmed dead. */
 export async function sessionsUsingWorktree(
@@ -107,6 +79,9 @@ export async function sessionsUsingWorktree(
   excludeId?: number,
   stopOnActive = false,
 ): Promise<{ active: number[]; alive: number[]; unknown: number[] }> {
+  if (hostId !== LOCAL_HOST_ID) {
+    return remoteSessionsUsingWorktree(app, worktreePath, hostId, excludeId, stopOnActive);
+  }
   const resolvedPath = path.resolve(worktreePath);
   const effectiveCwd = sql<string | null>`coalesce(${sessions.cwd}, ${projects.cwd})`;
   const hostMatch = sql`coalesce(${sessions.hostId}, ${projects.hostId}, ${LOCAL_HOST_ID}) = ${hostId}`;
@@ -250,6 +225,105 @@ export async function sessionsUsingWorktree(
       if (state === "dead") continue;
       if (state === "alive" && definitelyInside(row)) alive.push(row.id);
       else unknown.push(row.id);
+    }
+  }
+  return { active, alive, unknown };
+}
+
+/** Compare every session on the owning host; lexical prefiltering would miss aliases. */
+async function remoteSessionsUsingWorktree(
+  app: FastifyInstance,
+  worktreePath: string,
+  hostId: string,
+  excludeId?: number,
+  stopOnActive = false,
+): Promise<{ active: number[]; alive: number[]; unknown: number[] }> {
+  const readRows = () =>
+    app.db
+      .select({
+        id: sessions.id,
+        status: sessions.status,
+        cwd: sessions.cwd,
+        projectCwd: projects.cwd,
+      })
+      .from(sessions)
+      .leftJoin(projects, eq(sessions.projectId, projects.id))
+      .where(sql`coalesce(${sessions.hostId}, ${projects.hostId}, ${LOCAL_HOST_ID}) = ${hostId}`)
+      .all()
+      .filter((row) => row.id !== excludeId);
+  const backend = resolveBackend(app, hostId);
+  let lastRows: ReturnType<typeof readRows> = [];
+  let lastRelations: ("inside" | "outside" | "unknown")[] = [];
+  let lastStates: Record<string, SessionLiveness> = {};
+  const signature = (rows: ReturnType<typeof readRows>) =>
+    JSON.stringify(rows.map((row) => [row.id, row.status, row.cwd, row.projectCwd]));
+  const compare = async (rows: ReturnType<typeof readRows>) => {
+    const entries = rows.map((row) => ({ id: String(row.id), cwd: row.cwd }));
+    try {
+      const result = await backend.compareWorktreePaths(worktreePath, entries);
+      return entries.map((_, index) =>
+        result[index] === "inside" || result[index] === "outside"
+          ? result[index]
+          : ("unknown" as const),
+      );
+    } catch {
+      return entries.map(() => "unknown" as const);
+    }
+  };
+  for (let round = 0; round < 3; round++) {
+    const snapshot = readRows();
+    // Preserve the fast stop-on-active path without waiting for ended sessions.
+    if (stopOnActive) {
+      const active = snapshot.filter((row) => row.status === "active");
+      const relations = await compare(active);
+      const inside = active
+        .filter((_, index) => relations[index] === "inside")
+        .map((row) => row.id);
+      if (inside.length)
+        return {
+          active: inside,
+          alive: [],
+          unknown: active.filter((_, index) => relations[index] === "unknown").map((row) => row.id),
+        };
+    }
+    const ended = snapshot.filter((row) => row.status !== "active");
+    let states: Record<string, SessionLiveness> = {};
+    if (ended.length) {
+      try {
+        states = await backend.liveness(ended.map((row) => String(row.id)));
+      } catch {
+        /* Unknown host state must defer deletion. */
+      }
+    }
+    // Confirmed-dead historical sessions cannot hold a worktree. Compare
+    // everything else only after liveness, so live-cwd changes while it was
+    // in flight are reflected by the owning host's generation check.
+    const relevant = snapshot.filter(
+      (row) => row.status === "active" || states[String(row.id)] !== "dead",
+    );
+    const relations = await compare(relevant);
+    lastRows = relevant;
+    lastRelations = relations;
+    lastStates = states;
+    if (signature(snapshot) === signature(readRows())) break;
+    if (round === 2) {
+      // A continually changing session set has not been checked as a whole.
+      const current = readRows();
+      return { active: [], alive: [], unknown: current.map((row) => row.id) };
+    }
+  }
+  const active: number[] = [];
+  const alive: number[] = [];
+  const unknown: number[] = [];
+  for (const [index, row] of lastRows.entries()) {
+    const relation = lastRelations[index];
+    if (relation === "outside") continue;
+    if (row.status === "active") {
+      (relation === "inside" ? active : unknown).push(row.id);
+    } else if (lastStates[String(row.id)] === "alive" && relation === "inside") {
+      alive.push(row.id);
+    } else {
+      unknown.push(row.id);
     }
   }
   return { active, alive, unknown };

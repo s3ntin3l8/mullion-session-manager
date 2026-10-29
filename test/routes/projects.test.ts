@@ -7948,16 +7948,23 @@ describe("projects route", () => {
         const liveness = vi.fn(async (ids: string[]) =>
           Object.fromEntries(ids.map((id) => [id, "dead"])),
         );
+        const compareWorktreePaths = vi.fn(
+          async (_target: string, candidates: { cwd: string | null }[]) =>
+            candidates.map((candidate) =>
+              candidate.cwd === "/remote/alias" ? "inside" : "outside",
+            ),
+        );
         const resolveBackendSpy = vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue({
           removeListedWorktree,
           liveness,
+          compareWorktreePaths,
         } as unknown as SessionBackend);
 
-        // Another session still active inside the worktree, on that host.
+        // Another session still active inside the worktree, through an alias on that host.
         const { sessions } = await import("../../src/db/schema.js");
         const sibling = app.db
           .insert(sessions)
-          .values({ projectId, command: "bash", cwd: worktreePath, hostId: remoteHostId })
+          .values({ projectId, command: "bash", cwd: "/remote/alias", hostId: remoteHostId })
           .run();
         const guarded = await app.inject({
           method: "POST",

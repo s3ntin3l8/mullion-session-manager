@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { compareWorktreePaths } from "../services/worktree-paths.js";
 import { renderScrollback } from "../services/scrollback-render.js";
 import {
   normalizePreviewDestination,
@@ -2575,6 +2577,65 @@ export async function internalRoutes(app: FastifyInstance) {
         out[k] = v;
       }
       return out;
+    },
+  );
+
+  // Resolve path identity on the owning host. Unknown/out-of-root paths never
+  // become a negative match, and the response contains no filesystem data.
+  app.post<{ Body: { target: string; candidates: { id: string; cwd: string | null }[] } }>(
+    "/internal/worktrees/compare-paths",
+    {
+      ...INTERNAL_RATE_LIMIT,
+      schema: {
+        body: {
+          type: "object",
+          required: ["target", "candidates"],
+          additionalProperties: false,
+          properties: {
+            target: { type: "string", minLength: 1, maxLength: 4096 },
+            candidates: {
+              type: "array",
+              maxItems: 256,
+              items: {
+                type: "object",
+                required: ["id", "cwd"],
+                additionalProperties: false,
+                properties: {
+                  id: { type: "string", maxLength: 128 },
+                  cwd: { type: ["string", "null"], maxLength: 4096 },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+    async (request) => {
+      const generation = () =>
+        createHash("sha256")
+          .update(
+            JSON.stringify(
+              app.pty
+                .list()
+                .map(({ id, liveCwd }) => [id, liveCwd])
+                .sort(([a], [b]) => String(a).localeCompare(String(b))),
+            ),
+          )
+          .digest("hex");
+      const before = generation();
+      const relations = await compareWorktreePaths(
+        request.body.target,
+        request.body.candidates.map((candidate) => ({
+          ...candidate,
+          // The project mapping can change after spawn. Only the agent's
+          // immutable session cwd is authoritative when the row has none.
+          cwd: candidate.cwd ?? app.pty.get(candidate.id)?.cwd ?? null,
+        })),
+        (candidate) => resolveWithinRoots(app, candidate) !== null,
+        (id) => app.pty.get(id)?.liveCwd ?? null,
+      );
+      const after = generation();
+      return { generation: after, stable: before === after, relations };
     },
   );
 
