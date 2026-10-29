@@ -78,9 +78,18 @@ export class SessionStateFile<TState> {
    * schema-version mismatch — callers treat all three identically: keep
    * defaults. */
   read(): StoredSessionState<TState> | null {
+    return SessionStateFile.readStored<TState>(this.filePath, this.onCorrupt);
+  }
+
+  /** read() without an instance: for a read-only caller that has no state of
+   * its own to write back (e.g. looking at a session nothing is tracking). */
+  static readStored<TState>(
+    filePath: string,
+    onCorrupt?: () => void,
+  ): StoredSessionState<TState> | null {
     let raw: string;
     try {
-      raw = readFileSync(this.filePath, "utf8");
+      raw = readFileSync(filePath, "utf8");
     } catch {
       // ENOENT — no prior state, this is a fresh session or the file was
       // cleaned up on terminate. Leave all defaults in place.
@@ -90,7 +99,7 @@ export class SessionStateFile<TState> {
     try {
       parsed = JSON.parse(raw) as StoredSessionState<TState>;
     } catch {
-      this.onCorrupt?.();
+      onCorrupt?.();
       return null;
     }
     // Defensive: only accept the current schema version.

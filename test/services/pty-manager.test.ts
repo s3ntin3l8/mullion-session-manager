@@ -8925,6 +8925,35 @@ describe("Session state file persistence (issue #323)", () => {
     expect(info.restoredVersion).toBeNull();
   });
 
+  it("persists the pty size and storedPtySize reads it back for an untracked session (#2271)", () => {
+    const session = makeSession();
+    session.resize(150, 50);
+    // kill() flushes the debounced state file (and disables further writes).
+    session.kill();
+
+    expect(new PtyManager({ sessionsDir }).storedPtySize("1")).toEqual({ cols: 150, rows: 50 });
+  });
+
+  it("storedPtySize is null without a state file, or when it predates persisted sizes (#2271)", () => {
+    expect(new PtyManager({ sessionsDir }).storedPtySize("1")).toBeNull();
+
+    fs.writeFileSync(
+      stateFilePath("1"),
+      JSON.stringify({ v: 1, launchedAtVersion: "0.0.0", state: { permissionState: "idle" } }),
+    );
+    expect(new PtyManager({ sessionsDir }).storedPtySize("1")).toBeNull();
+
+    fs.writeFileSync(
+      stateFilePath("1"),
+      JSON.stringify({
+        v: 1,
+        launchedAtVersion: "0.0.0",
+        state: { ptySize: { cols: "x", rows: 2 } },
+      }),
+    );
+    expect(new PtyManager({ sessionsDir }).storedPtySize("1")).toBeNull();
+  });
+
   it("restores state from a valid file on construction", () => {
     const state = {
       v: 1,
