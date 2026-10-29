@@ -113,7 +113,11 @@ export const projectsApi = {
     }),
 
   // Issue #2232 — groups of projects on one repo, and the merge action.
-  getProjectDuplicates: () => request<{ groups: DuplicateGroup[] }>("/api/projects/duplicates"),
+  // `refresh` forces a fresh read; otherwise the server answers from its cache.
+  getProjectDuplicates: (opts?: { refresh?: boolean }) =>
+    request<{ groups: DuplicateGroup[] }>(
+      `/api/projects/duplicates${opts?.refresh ? "?refresh=1" : ""}`,
+    ),
 
   mergeProject: (id: number, into: number) =>
     request<{ survivor: Project; counts: MergeCounts }>(`/api/projects/${id}/merge`, {

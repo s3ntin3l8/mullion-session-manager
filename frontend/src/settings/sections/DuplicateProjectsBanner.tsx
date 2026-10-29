@@ -1,6 +1,7 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "../../api/index.js";
-import type { DuplicateGroup, DuplicateProjectEntry } from "../../api/index.js";
+import type { DuplicateGroup, DuplicateProjectEntry, Host } from "../../api/index.js";
+import { LOCAL_HOST_ID } from "../../../../src/shared/constants.js";
 import { useDashboardStore } from "../../store/index.js";
 import { GroupHeading, ListRow, Row, SecondaryButton, StyledList } from "../../ui/primitives.js";
 
@@ -21,12 +22,26 @@ function impact(d: DuplicateProjectEntry): string {
   ].join(", ");
 }
 
+// The two projects can share a name; the host is what tells them apart.
+function hostName(hostId: string, hosts: Host[]): string {
+  if (hostId === LOCAL_HOST_ID) return "this server";
+  return hosts.find((h) => h.id === hostId)?.name ?? hostId;
+}
+
+type Member = { id: number; name: string; hostId: string; cwd: string };
+
+function memberLabel(m: Member, hosts: Host[]): string {
+  return `#${m.id} · ${hostName(m.hostId, hosts)} · ${m.cwd}`;
+}
+
 export function DuplicateProjectsBanner() {
   const refreshProjects = useDashboardStore((s) => s.refreshProjects);
-  // null until the operator asks: finding duplicates reads every project's origin
-  // (one discovery call per remote host), too much to run on every mount.
+  const hosts = useDashboardStore((s) => s.hosts);
+  // null until the first answer. The server serves a cached result on mount;
+  // Check forces a fresh read.
   const [groups, setGroups] = useState<DuplicateGroup[] | null>(null);
-  const [checking, setChecking] = useState(false);
+  // True from the start: the first read is the mount effect's.
+  const [checking, setChecking] = useState(true);
   const [checkError, setCheckError] = useState(false);
   const [confirming, setConfirming] = useState<{
     group: DuplicateGroup;
@@ -35,14 +50,26 @@ export function DuplicateProjectsBanner() {
   const [merging, setMerging] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(() => {
+  const load = useCallback((refresh = false) => {
     setChecking(true);
     setCheckError(false);
     api
-      .getProjectDuplicates()
+      .getProjectDuplicates(refresh ? { refresh: true } : undefined)
       .then((r) => setGroups(r.groups))
       .catch(() => setCheckError(true))
       .finally(() => setChecking(false));
+  }, []);
+
+  useEffect(() => {
+    let live = true;
+    api
+      .getProjectDuplicates()
+      .then((r) => live && setGroups(r.groups))
+      .catch(() => live && setCheckError(true))
+      .finally(() => live && setChecking(false));
+    return () => {
+      live = false;
+    };
   }, []);
 
   const doMerge = async () => {
@@ -54,7 +81,7 @@ export function DuplicateProjectsBanner() {
       setConfirming(null);
       // DELETE-style removal broadcasts nothing, so refetch the list ourselves.
       await refreshProjects();
-      load();
+      load(true);
     } catch (err) {
       setError(err instanceof ApiError || err instanceof Error ? err.message : "Merge failed");
     } finally {
@@ -75,7 +102,7 @@ export function DuplicateProjectsBanner() {
           {groups !== null && !checkError && !checking && (
             <span style={{ fontSize: "0.71875rem", color: "var(--dim)" }}>No duplicates found</span>
           )}
-          <SecondaryButton onClick={load} disabled={checking}>
+          <SecondaryButton onClick={() => load(true)} disabled={checking}>
             Check
           </SecondaryButton>
         </div>
@@ -94,7 +121,7 @@ export function DuplicateProjectsBanner() {
           g.duplicates.map((d) => (
             <ListRow
               key={d.id}
-              title={`${d.name} → ${g.survivor.name}`}
+              title={`${memberLabel(d, hosts)} → ${memberLabel(g.survivor, hosts)}`}
               subtitle={d.refusal ? d.refusal.message : impact(d)}
               trailing={
                 <SecondaryButton
@@ -104,7 +131,7 @@ export function DuplicateProjectsBanner() {
                   }}
                   disabled={d.refusal !== null || merging}
                 >
-                  Merge into {g.survivor.name}
+                  Merge into #{g.survivor.id} ({hostName(g.survivor.hostId, hosts)})
                 </SecondaryButton>
               }
               stacked
@@ -124,9 +151,18 @@ export function DuplicateProjectsBanner() {
           }}
         >
           <div style={{ fontSize: "0.8125rem" }}>
-            Merge <strong>{confirming.dup.name}</strong> into{" "}
-            <strong>{confirming.group.survivor.name}</strong>? This moves {impact(confirming.dup)}{" "}
-            and deletes {confirming.dup.name}. It cannot be undone.
+            Merge{" "}
+            <strong>
+              #{confirming.dup.id} {confirming.dup.name} ({hostName(confirming.dup.hostId, hosts)})
+            </strong>{" "}
+            into{" "}
+            <strong>
+              #{confirming.group.survivor.id} {confirming.group.survivor.name} (
+              {hostName(confirming.group.survivor.hostId, hosts)})
+            </strong>
+            ? This moves {impact(confirming.dup)} and deletes #{confirming.dup.id} (
+            {hostName(confirming.dup.hostId, hosts)}). Its path becomes an &ldquo;Also lives
+            on&rdquo; checkout of #{confirming.group.survivor.id}. This cannot be undone.
           </div>
           {error && (
             <div role="alert" style={{ color: "var(--danger, #e5484d)", fontSize: "0.75rem" }}>

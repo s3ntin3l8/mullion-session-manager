@@ -17,6 +17,7 @@ import {
 import { parseHostCwds, serializeHostCwds } from "./placement.js";
 import { parseHostCwdsMeta, serializeHostCwdsMeta } from "./host-cwds-meta.js";
 import { buildOriginIndex } from "./repo-identity.js";
+import { notifyOperator } from "./push-delivery.js";
 import { broadcastTaskEvent } from "./task-events.js";
 
 // Issue #2232 — merge a duplicate project into its same-repo survivor. The
@@ -259,6 +260,82 @@ export async function findDuplicateGroups(app: FastifyInstance): Promise<Duplica
     });
   }
   return groups.sort((a, b) => a.survivor.id - b.survivor.id);
+}
+
+interface DuplicateCache {
+  groups: DuplicateGroup[] | null;
+  /** Bumped by every invalidation, so a read that started before one is not cached. */
+  generation: number;
+  /** Origin keys already announced on the bell; in memory only, so a restart may announce again. */
+  announced: Set<string>;
+}
+
+const duplicateCaches = new WeakMap<FastifyInstance, DuplicateCache>();
+
+function cacheFor(app: FastifyInstance): DuplicateCache {
+  let cache = duplicateCaches.get(app);
+  if (!cache) {
+    cache = { groups: null, generation: 0, announced: new Set() };
+    duplicateCaches.set(app, cache);
+  }
+  return cache;
+}
+
+/** Notifies once per origin key that has not been announced before. */
+function announceNewDuplicates(
+  app: FastifyInstance,
+  cache: DuplicateCache,
+  groups: DuplicateGroup[],
+) {
+  const present = new Set(groups.map((g) => g.origin));
+  // A group that merged away may reappear later; that is news again.
+  for (const key of cache.announced) if (!present.has(key)) cache.announced.delete(key);
+  const fresh = groups.filter((g) => !cache.announced.has(g.origin));
+  if (fresh.length === 0) return;
+  for (const g of fresh) cache.announced.add(g.origin);
+  const projectCount = fresh.reduce((n, g) => n + 1 + g.duplicates.length, 0);
+  const body =
+    fresh.length === 1
+      ? `${projectCount} projects point at the same repository — merge them in Settings → Projects`
+      : `${projectCount} projects point at the same ${fresh.length} repositories — merge them in Settings → Projects`;
+  void notifyOperator(app, body).catch((err) =>
+    app.log.warn({ err }, "project merge: duplicate-projects notification failed"),
+  );
+}
+
+/**
+ * The duplicate groups, from a cache that create/edit/delete/merge invalidate.
+ * Finding them reads every project's origin (one discovery call per remote
+ * host), so `refresh` is for an explicit operator check.
+ */
+export async function getDuplicateGroups(
+  app: FastifyInstance,
+  opts: { refresh?: boolean } = {},
+): Promise<DuplicateGroup[]> {
+  const cache = cacheFor(app);
+  if (!opts.refresh && cache.groups) return cache.groups;
+  const generation = cache.generation;
+  const groups = await findDuplicateGroups(app);
+  if (generation === cache.generation) {
+    cache.groups = groups;
+    announceNewDuplicates(app, cache, groups);
+  }
+  return groups;
+}
+
+/** Drops the cached result: the next read recomputes. */
+export function invalidateDuplicateGroups(app: FastifyInstance): void {
+  const cache = cacheFor(app);
+  cache.generation++;
+  cache.groups = null;
+}
+
+/** Invalidates and recomputes without making the caller wait (a failure is only logged). */
+export function refreshDuplicateGroupsInBackground(app: FastifyInstance): void {
+  invalidateDuplicateGroups(app);
+  void getDuplicateGroups(app, { refresh: true }).catch((err) =>
+    app.log.warn({ err }, "project merge: duplicate-groups recompute failed"),
+  );
 }
 
 export type MergeResult =
