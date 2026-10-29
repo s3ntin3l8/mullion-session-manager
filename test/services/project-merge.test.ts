@@ -194,6 +194,20 @@ describe("project-merge", () => {
       expect(app.db.select().from(projectPreviewTargets).get()?.projectId).toBe(survivorId);
     });
 
+    it("pins host-less legacy sessions to the duplicate's host and re-keys live sessions", () => {
+      const legacy = app.db
+        .insert(sessions)
+        .values({ projectId: dupId, command: "bash", status: "active" })
+        .returning()
+        .get();
+      const repoint = vi.spyOn(app.pty, "repointProject");
+      expect(merge().ok).toBe(true);
+      expect(repoint).toHaveBeenCalledWith(dupId, survivorId);
+      expect(app.db.select().from(sessions).where(eq(sessions.id, legacy.id)).get()?.hostId).toBe(
+        macId,
+      );
+    });
+
     it("previews: moves non-conflicting rows, drops a conflicting branch", () => {
       const add = (projectId: number, branch: string, slug: string) =>
         app.db.insert(previews).values({ slug, kind: "project", projectId, branch }).run();

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { and, eq, inArray, like, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, like, sql } from "drizzle-orm";
 import { MAX_HOST_CWDS } from "../shared/constants.js";
 import {
   browserCookies,
@@ -319,6 +319,12 @@ export function mergeProjects(
       .run();
 
     // Plain re-points (no unique index involving project_id).
+    // Rows from before #1722 have no host of their own and inherit the
+    // project's: pin them to the duplicate's host before they change project.
+    tx.update(sessions)
+      .set({ hostId: duplicate.hostId })
+      .where(and(eq(sessions.projectId, from), isNull(sessions.hostId)))
+      .run();
     tx.update(sessions).set({ projectId: to }).where(eq(sessions.projectId, from)).run();
     tx.update(sessionBrowsers)
       .set({ projectId: to })
@@ -454,6 +460,8 @@ export function mergeProjects(
   });
 
   if (result.ok) {
+    // Live local sessions keep their project id in memory: re-key them.
+    app.pty.repointProject(opts.duplicateId, opts.survivorId);
     // The board refetches on "ingested"; DELETE broadcasts nothing, so the
     // frontend also refreshes the project list itself.
     for (const taskId of result.movedTaskIds) {

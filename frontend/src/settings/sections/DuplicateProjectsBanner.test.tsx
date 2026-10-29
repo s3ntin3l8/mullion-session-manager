@@ -45,40 +45,49 @@ describe("DuplicateProjectsBanner", () => {
     useDashboardStore.setState({ refreshProjects });
   });
 
-  it("renders nothing without duplicates", async () => {
-    vi.mocked(api.getProjectDuplicates).mockResolvedValue({ groups: [] });
-    const { container } = render(<DuplicateProjectsBanner />);
-    await waitFor(() => expect(api.getProjectDuplicates).toHaveBeenCalled());
-    expect(container).toBeEmptyDOMElement();
+  async function check() {
+    const user = userEvent.setup();
+    render(<DuplicateProjectsBanner />);
+    await user.click(screen.getByRole("button", { name: "Check" }));
+    return user;
+  }
+
+  it("does not look for duplicates until asked", () => {
+    render(<DuplicateProjectsBanner />);
+    expect(api.getProjectDuplicates).not.toHaveBeenCalled();
   });
 
-  it("renders nothing when the lookup fails", async () => {
+  it("says so when there are none", async () => {
+    vi.mocked(api.getProjectDuplicates).mockResolvedValue({ groups: [] });
+    await check();
+    expect(await screen.findByText("No duplicates found")).toBeInTheDocument();
+  });
+
+  it("says so when the lookup fails", async () => {
     vi.mocked(api.getProjectDuplicates).mockRejectedValue(new Error("down"));
-    const { container } = render(<DuplicateProjectsBanner />);
-    await waitFor(() => expect(api.getProjectDuplicates).toHaveBeenCalled());
-    expect(container).toBeEmptyDOMElement();
+    await check();
+    expect(await screen.findByText("Check failed")).toBeInTheDocument();
   });
 
   it("counts what moves in the confirm, merges, and refreshes the project list", async () => {
-    const user = userEvent.setup();
     vi.mocked(api.mergeProject).mockResolvedValue({ survivor: {} as never, counts });
-    render(<DuplicateProjectsBanner />);
+    const user = await check();
     await user.click(await screen.findByRole("button", { name: "Merge into app" }));
 
     const dialog = screen.getByRole("alertdialog");
-    expect(dialog).toHaveTextContent("5 tasks (1 live), 2 running sessions, 1 preview");
+    expect(dialog).toHaveTextContent("5 tasks (1 live), 2 active sessions, 1 preview");
 
     vi.mocked(api.getProjectDuplicates).mockResolvedValue({ groups: [] });
     await user.click(screen.getByRole("button", { name: "Merge" }));
     await waitFor(() => expect(api.mergeProject).toHaveBeenCalledWith(30, 19));
     await waitFor(() => expect(refreshProjects).toHaveBeenCalled());
     await waitFor(() => expect(screen.queryByTestId("duplicate-projects")).toBeNull());
+    expect(await screen.findByText("No duplicates found")).toBeInTheDocument();
   });
 
   it("shows the server's message when the merge is refused", async () => {
-    const user = userEvent.setup();
     vi.mocked(api.mergeProject).mockRejectedValue(new ApiError("Stop one first.", 409));
-    render(<DuplicateProjectsBanner />);
+    const user = await check();
     await user.click(await screen.findByRole("button", { name: "Merge into app" }));
     await user.click(screen.getByRole("button", { name: "Merge" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Stop one first.");
@@ -86,8 +95,7 @@ describe("DuplicateProjectsBanner", () => {
   });
 
   it("cancel closes the confirm without merging", async () => {
-    const user = userEvent.setup();
-    render(<DuplicateProjectsBanner />);
+    const user = await check();
     await user.click(await screen.findByRole("button", { name: "Merge into app" }));
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("alertdialog")).toBeNull();
@@ -108,7 +116,7 @@ describe("DuplicateProjectsBanner", () => {
         },
       ],
     });
-    render(<DuplicateProjectsBanner />);
+    await check();
     expect(await screen.findByText("Both projects live on the same host.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Merge into app" })).toBeDisabled();
   });

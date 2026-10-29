@@ -282,7 +282,7 @@ existingName, existingHostId }` when the new `cwd` (or a `hostCwds` entry) is al
   `conventionalCommitTitles`, `autoTagRelease`, the inject flags, `devServerUrl`, `autoFetch`)
   are filled from the duplicate; a value the survivor already has wins, and `placement` stays
   the survivor's.
-- Sessions move **including running ones**: a session is identified by its host and dtach
+- Sessions move **including running ones** (the live local sessions are re-keyed in memory too): a session is identified by its host and dtach
   socket, and the survivor now maps the duplicate's path, so its cwd keeps resolving. Browser
   panes, devices, saved URLs, preview targets and previews move too (a preview whose branch the
   survivor already has is dropped); on a browser-cookie label or project-tooling clash the
@@ -291,7 +291,9 @@ existingName, existingHostId }` when the new `cwd` (or a `hostCwds` entry) is al
 - **409 refusals**, nothing changed: `NOT_SAME_REPO` (origins differ or are unreadable),
   `MERGE_SAME_HOST` (two checkouts on one host stay two projects), `MERGE_HOST_PATH_CONFLICT` (the
   survivor maps that host to a different path), `MERGE_HOST_CWDS_LIMIT`, and
-  `MERGE_STACK_IDENTITY_CONFLICT` (both have an active docker-stack session).
+  `MERGE_STACK_IDENTITY_CONFLICT` (both have an active docker-stack session),
+  `MERGE_LIVE_TASK_CONFLICT` (a live task for the same issue in both projects) and
+  `MERGE_SAME_PROJECT`.
 - Browser-local state may still name the deleted project (dock pins, the active project, the
   collapsed flags) and a saved layout may hold its `project-hub-<id>` / `file-editor-<id>` panels.
   The backend never parses a layout, so the dock ignores unknown ids and the app closes such

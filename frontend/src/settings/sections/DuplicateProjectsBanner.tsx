@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { api, ApiError } from "../../api/index.js";
 import type { DuplicateGroup, DuplicateProjectEntry } from "../../api/index.js";
 import { useDashboardStore } from "../../store/index.js";
-import { GroupHeading, ListRow, SecondaryButton, StyledList } from "../../ui/primitives.js";
+import { GroupHeading, ListRow, Row, SecondaryButton, StyledList } from "../../ui/primitives.js";
 
 // Issue #2232 — projects that point at the same repo (e.g. a macbook-pinned
 // project next to the original). Merging folds the newer one into the oldest:
@@ -16,14 +16,18 @@ function impact(d: DuplicateProjectEntry): string {
   const c = d.counts;
   return [
     plural(c.tasks, "task") + (c.liveTasks > 0 ? ` (${c.liveTasks} live)` : ""),
-    plural(c.runningSessions, "running session"),
+    plural(c.runningSessions, "active session"),
     plural(c.previews, "preview"),
   ].join(", ");
 }
 
 export function DuplicateProjectsBanner() {
   const refreshProjects = useDashboardStore((s) => s.refreshProjects);
-  const [groups, setGroups] = useState<DuplicateGroup[]>([]);
+  // null until the operator asks: finding duplicates reads every project's origin
+  // (one discovery call per remote host), too much to run on every mount.
+  const [groups, setGroups] = useState<DuplicateGroup[] | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [checkError, setCheckError] = useState(false);
   const [confirming, setConfirming] = useState<{
     group: DuplicateGroup;
     dup: DuplicateProjectEntry;
@@ -32,12 +36,14 @@ export function DuplicateProjectsBanner() {
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(() => {
+    setChecking(true);
+    setCheckError(false);
     api
       .getProjectDuplicates()
       .then((r) => setGroups(r.groups))
-      .catch(() => setGroups([]));
+      .catch(() => setCheckError(true))
+      .finally(() => setChecking(false));
   }, []);
-  useEffect(load, [load]);
 
   const doMerge = async () => {
     if (!confirming) return;
@@ -56,7 +62,26 @@ export function DuplicateProjectsBanner() {
     }
   };
 
-  if (groups.length === 0) return null;
+  if (groups === null || groups.length === 0) {
+    return (
+      <Row
+        label="Duplicate projects"
+        desc="Find projects that point at the same repository, e.g. one per host, and merge them."
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {checkError && (
+            <span style={{ fontSize: "0.71875rem", color: "var(--dim)" }}>Check failed</span>
+          )}
+          {groups !== null && !checkError && !checking && (
+            <span style={{ fontSize: "0.71875rem", color: "var(--dim)" }}>No duplicates found</span>
+          )}
+          <SecondaryButton onClick={load} disabled={checking}>
+            Check
+          </SecondaryButton>
+        </div>
+      </Row>
+    );
+  }
 
   return (
     <div data-testid="duplicate-projects">
