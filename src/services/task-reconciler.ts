@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNotNull, isNull, lt, lte, or } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
 import type { SessionInfo } from "./pty-manager.js";
@@ -21,6 +21,8 @@ import {
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
+import { deriveApprovalState } from "./task-approval-state.js";
+import { notifyTaskNeedsAttention } from "./push-delivery.js";
 import {
   resolveReviewAgentCommand,
   commandSupportsSeed,
@@ -3519,6 +3521,69 @@ async function attemptAutoApprove(
   }
 }
 
+const MAX_APPROVAL_NOTIFICATIONS_PER_SWEEP = 20;
+
+/**
+ * #2252 — push once when a review approves a task that now waits for a human.
+ * Reads the same predicate the board's "approved, needs your approval" state
+ * uses (`deriveApprovalState`), so the two cannot disagree. A sweep rather
+ * than a call inside verdict ingestion: it sees exactly the state the board
+ * shows, and an `approved-with-suggestions` verdict that is about to go back
+ * to the worker is never announced because the next tick sees it as returned.
+ *
+ * Once per verdict, durably: `approvalNotifiedVerdictAt` holds the
+ * `lastReviewVerdictAt` already announced, recorded BEFORE the send with a
+ * compare-and-set, so a restart or an overlapping tick never doubles up
+ * (a lost push beats a duplicated one). Both columns are second-resolution
+ * timestamps, so the update compares them to each other, not to a clock.
+ * The body is generic on purpose (see notifyTaskNeedsAttention).
+ */
+export async function notifyApprovalsAwaitingHuman(app: FastifyInstance): Promise<void> {
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  if (!resolvedTaskMaster.enabled) return;
+
+  const rows = app.db
+    .select({ task: tasks, projectAutoApprove: projects.autoApprove })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(and(eq(tasks.status, "reviewing"), isNotNull(tasks.lastReviewVerdictAt)))
+    .all();
+
+  let sent = 0;
+  for (const { task, projectAutoApprove } of rows) {
+    if (sent >= MAX_APPROVAL_NOTIFICATIONS_PER_SWEEP) return;
+    if (deriveApprovalState({ ...task, projectAutoApprove }, true) !== "awaiting-human") continue;
+
+    const claimed = app.db
+      .update(tasks)
+      .set({ approvalNotifiedVerdictAt: sql`${tasks.lastReviewVerdictAt}` })
+      .where(
+        and(
+          eq(tasks.id, task.id),
+          eq(tasks.status, "reviewing"),
+          isNotNull(tasks.lastReviewVerdictAt),
+          or(
+            isNull(tasks.approvalNotifiedVerdictAt),
+            ne(tasks.approvalNotifiedVerdictAt, tasks.lastReviewVerdictAt),
+          ),
+        ),
+      )
+      .run();
+    if (claimed.changes === 0) continue;
+
+    sent++;
+    try {
+      await notifyTaskNeedsAttention(
+        app,
+        task.id,
+        `Task #${task.id}: approved, needs your approval`,
+      );
+    } catch (err) {
+      app.log.warn({ err, taskId: task.id }, "task reconcile: approval notification failed");
+    }
+  }
+}
+
 async function processAutoApprovals(app: FastifyInstance): Promise<void> {
   const resolvedTaskMaster = resolveTaskMasterConfig(app);
   if (!resolvedTaskMaster.enabled) return;
@@ -4929,6 +4994,8 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // the DB, so a verdict ingested earlier in this pass is already visible
   // and can be acted on immediately, not deferred to the next tick.
   await processAutoApprovals(app);
+  // #2252 — after the auto-approve sweep, so a task it just took is not announced.
+  await notifyApprovalsAwaitingHuman(app);
   // #2103 — the slow, all-projects safety net for a PR merged/closed under a
   // reviewing task (projects without autoApprove never reach the call above).
   await processReviewingPrState(app);
