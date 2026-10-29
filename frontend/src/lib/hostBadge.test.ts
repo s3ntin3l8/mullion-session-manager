@@ -235,6 +235,13 @@ describe("projectSpansHosts / projectHostCount (issue #2238)", () => {
     expect(projectSpansHosts({ id: 1, hostCwds: { local: "/x" } }, [])).toBe(false);
   });
 
+  it("counts a remote-hosted project as one host, not two", () => {
+    const p = { id: 1, hostId: "mac-mini", hostCwds: {} };
+    expect(projectHostCount(p, [sess("mac-mini")])).toBe(1);
+    expect(projectSpansHosts(p, [sess("mac-mini")])).toBe(false);
+    expect(projectSpansHosts(p, [sess("mac-mini"), sess("local")])).toBe(true);
+  });
+
   it("is true when the project's sessions resolve to more than one host", () => {
     expect(projectSpansHosts(P, [sess("local"), sess("mac-mini")])).toBe(true);
     expect(projectHostCount(P, [sess("local"), sess("mac-mini")])).toBe(2);

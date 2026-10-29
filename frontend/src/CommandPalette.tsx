@@ -715,9 +715,10 @@ export function CommandPalette({
   // reaching one host keeps its path subtitle.
   const hostCountByProject = useMemo(() => {
     const map = new Map<number, number>();
+    if (!pickerOpen) return map;
     for (const p of projects) map.set(p.id, projectHostCount(p, sessions));
     return map;
-  }, [projects, sessions]);
+  }, [pickerOpen, projects, sessions]);
 
   const filteredProjects = useMemo(() => {
     if (!pickerOpen) return projects;

@@ -36,20 +36,25 @@ export interface HostBadge {
 }
 
 /**
- * The distinct hosts a project reaches (issue #2238): this machine, its
- * per-host checkouts (`hostCwds`) and the hosts its sessions resolved to.
+ * The distinct hosts a project reaches (issue #2238): the host it lives on
+ * (`hostId`, "local" unless it is remote-hosted), its other-host checkouts (`hostCwds`) and the hosts its sessions resolved to.
  *
  * `sessions` is the FULL store list, not a display-filtered one — the
  * sidebar, the pane tab and the launch picker all pass it, so they cannot
  * disagree about the same project. Killed sessions are ignored (they no
- * longer run anywhere); everything else counts, whatever the sidebar's
+ * longer run anywhere); an exited session still counts, deliberately — it
+ * did run there, and the project's reach does not shrink with it. Everything
+ * else counts too, whatever the sidebar's
  * hide-ended / task-session settings currently show.
  */
 export function projectHostCount(
-  project: { id: number; hostCwds?: Record<string, string> | null },
+  project: { id: number; hostId?: string; hostCwds?: Record<string, string> | null },
   sessions: readonly { projectId: number; status: string; resolvedHostId: string }[],
 ): number {
-  const ids = new Set<string>([LOCAL_HOST_ID, ...Object.keys(project.hostCwds ?? {})]);
+  const ids = new Set<string>([
+    project.hostId || LOCAL_HOST_ID,
+    ...Object.keys(project.hostCwds ?? {}),
+  ]);
   for (const s of sessions) {
     if (s.projectId === project.id && s.status !== "killed" && s.resolvedHostId) {
       ids.add(s.resolvedHostId);
@@ -60,7 +65,8 @@ export function projectHostCount(
 
 /** Whether a project reaches more than one host: a local row then needs a badge too. */
 export function projectSpansHosts(
-  project: { id: number; hostCwds?: Record<string, string> | null } | null | undefined,
+  project:
+    { id: number; hostId?: string; hostCwds?: Record<string, string> | null } | null | undefined,
   sessions: readonly { projectId: number; status: string; resolvedHostId: string }[],
 ): boolean {
   return !!project && projectHostCount(project, sessions) > 1;
