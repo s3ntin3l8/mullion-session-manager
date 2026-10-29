@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   envUpdateSnippet,
+  staticEnvUpdateSnippet,
   unixInstallCommand,
   windowsInstallCommand,
 } from "./agentInstallCommand.js";
@@ -61,7 +62,15 @@ describe("unixInstallCommand", () => {
 });
 
 describe("envUpdateSnippet", () => {
-  it("sets the enrollment token and clears the manual one", () => {
-    expect(envUpdateSnippet("tok")).toBe("MULLION_ENROLLMENT_TOKEN=tok\nMULLION_AGENT_TOKEN=");
+  it("sets the primary URL and enrollment token and clears the manual one", () => {
+    expect(envUpdateSnippet("tok", "http://p:3100")).toBe(
+      "MULLION_PRIMARY_URL=http://p:3100\nMULLION_ENROLLMENT_TOKEN=tok\nMULLION_AGENT_TOKEN=",
+    );
+  });
+});
+
+describe("staticEnvUpdateSnippet", () => {
+  it("sets only the manual agent token", () => {
+    expect(staticEnvUpdateSnippet("tok")).toBe("MULLION_AGENT_TOKEN=tok");
   });
 });

@@ -360,6 +360,32 @@ describe("projects route", () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
+  it("rejects a hostCwds key that names a host still waiting for its agent", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-hostcwds-"));
+    const host = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "pending-box" },
+    });
+    expect(host.statusCode).toBe(201);
+    const rejected = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: {
+        allowDuplicate: true,
+        createDir: true,
+        name: "pending-map",
+        cwd,
+        hostCwds: { [host.json().id]: "/srv/repo" },
+      },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json().message).toMatch(/unknown host/i);
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
   it("rejects a hostCwds value that is not a path", async () => {
     const app = await buildApp();
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-hostcwds-"));

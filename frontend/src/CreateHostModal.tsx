@@ -68,6 +68,12 @@ export function CreateHostModal({
       nameInputRef.current?.focus();
       return;
     }
+    // Edit mode drops an empty Base URL from the PATCH, which would silently
+    // keep the old one; a host still waiting for its agent has none to clear.
+    if (isEdit && !trimmedBaseUrl && initialBaseUrl.trim()) {
+      setError("Base URL can't be cleared once set.");
+      return;
+    }
     if (!isEdit && ownToken && !token.trim()) {
       setError("Enter the token, or turn off “Use my own token” to have one generated.");
       return;

@@ -329,7 +329,13 @@ function unknownHostInCwds(
   map: Record<string, string> | null | undefined,
 ): string | null {
   if (map === null || map === undefined) return null;
-  const known = new Set(listHosts(app).map((host) => host.id));
+  // A pending host (no baseUrl yet) is not somewhere a session can run, so a
+  // cwd keyed to one is as wrong as a typo.
+  const known = new Set(
+    listHosts(app)
+      .filter((host) => host.id === LOCAL_HOST_ID || host.baseUrl !== null)
+      .map((host) => host.id),
+  );
   for (const hostId of Object.keys(map)) {
     if (!known.has(hostId)) return hostId;
   }

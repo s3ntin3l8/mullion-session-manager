@@ -58,10 +58,25 @@ export function unixInstallCommand(p: AgentInstallParams): string {
 }
 
 /**
- * What an agent that is already installed changes after a rotate. install.sh
- * never rewrites an existing .env, so re-running the installer would not
- * apply the new token.
+ * What an agent that registered itself (installed from the Add host command)
+ * changes after a rotate. install.sh never rewrites an existing .env, so
+ * re-running the installer would not apply the new token. The primary URL is
+ * repeated so the enrollment path is complete before the static token is
+ * cleared: an agent with neither path refuses to boot.
  */
-export function envUpdateSnippet(token: string): string {
-  return [`MULLION_ENROLLMENT_TOKEN=${token}`, `MULLION_AGENT_TOKEN=`].join("\n");
+export function envUpdateSnippet(token: string, primaryUrl: string): string {
+  return [
+    `MULLION_PRIMARY_URL=${primaryUrl}`,
+    `MULLION_ENROLLMENT_TOKEN=${token}`,
+    `MULLION_AGENT_TOKEN=`,
+  ].join("\n");
+}
+
+/**
+ * The same rotate for a host added with "Use my own token": that agent never
+ * registers, the primary sends the row's token as a static bearer, and the
+ * agent checks it against MULLION_AGENT_TOKEN.
+ */
+export function staticEnvUpdateSnippet(token: string): string {
+  return `MULLION_AGENT_TOKEN=${token}`;
 }

@@ -101,6 +101,26 @@ describe("CreateHostModal", () => {
     });
   });
 
+  it("edit mode refuses to clear an existing Base URL instead of silently keeping it", async () => {
+    const user = userEvent.setup();
+    const onSave = vi.fn();
+    render(
+      <CreateHostModal
+        onClose={vi.fn()}
+        onSave={onSave}
+        mode="edit"
+        initialName="home-server"
+        initialBaseUrl="http://192.168.1.20:4000"
+      />,
+    );
+
+    await user.clear(screen.getByLabelText(/^Base URL/));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    expect(screen.getByText("Base URL can't be cleared once set.")).toBeInTheDocument();
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   it("surfaces a rejected save as an inline error and keeps the modal open", async () => {
     const user = userEvent.setup();
     const onSave = vi.fn().mockRejectedValue(new Error("host name already in use"));
