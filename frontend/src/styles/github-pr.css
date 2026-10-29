@@ -274,6 +274,11 @@ a.pr-dr-row:hover {
   max-height: 50vh;
   overflow-y: auto;
 }
+.gh-composer-identity {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
 .gh-composer-grow {
   resize: vertical;
   max-height: 40vh;

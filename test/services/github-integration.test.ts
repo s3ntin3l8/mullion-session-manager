@@ -48,6 +48,8 @@ import {
   clearMintOutcomesForTests,
   resolveWorkflowWriteToken,
   resolveMullionReviewLogins,
+  resolveSidebarWriteIdentity,
+  resetSidebarIdentityCache,
   verifyAppCredentials,
   GITHUB_PROVIDER,
   GITHUB_REVIEWER_PROVIDER,
@@ -1297,6 +1299,63 @@ describe("github-integration service", () => {
 
     afterEach(() => {
       clearGitHubAppStatusCacheForTests();
+    });
+  });
+
+  // #2049 — the identity the sidebar's own writes post as.
+  describe("resolveSidebarWriteIdentity (#2049)", () => {
+    const repo = { owner: "acme", repo: "widgets" };
+    beforeEach(() => resetSidebarIdentityCache());
+
+    it("is the connected account whenever there is one, even with an App installed", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockGetInstallationToken.mockResolvedValue({ token: "ghs_app", installationsChecked: null });
+
+      const id = await resolveSidebarWriteIdentity(app, repo);
+
+      expect(id).toEqual({ token: "ghp_shared", kind: "user", login: "octocat" });
+      expect(mockGetInstallationToken).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("is the App, with its login memoised, when no account is connected", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockGetInstallationToken.mockResolvedValue({ token: "ghs_app", installationsChecked: null });
+      fetchMock.mockResolvedValue(
+        jsonResponse(200, { data: { viewer: { login: "mullion-session-manager[bot]" } } }),
+      );
+
+      const first = await resolveSidebarWriteIdentity(app, repo);
+      const second = await resolveSidebarWriteIdentity(app, repo);
+
+      expect(first).toEqual({ token: "ghs_app", kind: "app", login: "mullion-session-manager" });
+      expect(second).toEqual(first);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await app.close();
+    });
+
+    it("keeps the App as the identity, with no login, when its lookup fails", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockGetInstallationToken.mockResolvedValue({ token: "ghs_app", installationsChecked: null });
+      fetchMock.mockResolvedValue(jsonResponse(500, {}));
+
+      expect(await resolveSidebarWriteIdentity(app, repo)).toEqual({
+        token: "ghs_app",
+        kind: "app",
+        login: null,
+      });
+      await app.close();
+    });
+
+    it("is null when nothing can write", async () => {
+      const app = await buildApp();
+      expect(await resolveSidebarWriteIdentity(app, repo)).toBeNull();
+      await app.close();
     });
   });
 });

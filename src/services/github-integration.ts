@@ -961,6 +961,56 @@ export async function resolveReviewerToken(
   }
 }
 
+/** Who a sidebar write posts as (#2049). */
+export interface SidebarWriteIdentity {
+  token: string;
+  /** `user`: the connected PAT/OAuth account. `app`: the GitHub App's bot. */
+  kind: "user" | "app";
+  login: string | null;
+}
+
+const APP_LOGIN_TTL_MS = 10 * 60 * 1000;
+const appLoginCache = new Map<string, { login: string | null; at: number }>();
+
+/** Test seam: forget memoised App logins. */
+export function resetSidebarIdentityCache(): void {
+  appLoginCache.clear();
+}
+
+/**
+ * #2049 — the identity the GitHub sidebar's own writes (reply, resolve,
+ * comment, review) post as. The human's connected account wins when there is
+ * one, so the write is theirs; the App is only the identity of a write when no
+ * account is connected. There is deliberately NO fallback from the account to
+ * the App when GitHub refuses the account's write: a write must come out as
+ * the identity the composer said, and a bot's verdict is not the human's.
+ * Task Master, the merge route and the relay keep `resolveGitHubToken`.
+ */
+export async function resolveSidebarWriteIdentity(
+  app: FastifyInstance,
+  repo: { owner: string; repo: string },
+): Promise<SidebarWriteIdentity | null> {
+  const userToken = getToken(app);
+  if (userToken) {
+    return { token: userToken, kind: "user", login: getRow(app)?.login ?? null };
+  }
+  const token = await resolveGitHubToken(app, repo, "write");
+  if (!token) return null;
+  const key = `${repo.owner}/${repo.repo}`;
+  const hit = appLoginCache.get(key);
+  if (hit && Date.now() - hit.at < APP_LOGIN_TTL_MS) {
+    return { token, kind: "app", login: hit.login };
+  }
+  let login: string | null = null;
+  try {
+    login = await fetchViewerLogin(token);
+  } catch (err) {
+    app.log.warn({ err, ...repo }, "[github-integration] sidebar App identity lookup failed");
+  }
+  appLoginCache.set(key, { login, at: Date.now() });
+  return { token, kind: "app", login };
+}
+
 /**
  * The set of GitHub logins Mullion's own review-related posts on a PR can
  * appear under, for callers that need to exclude "our own comments" from
