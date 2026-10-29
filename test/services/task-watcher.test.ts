@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { FastifyInstance } from "fastify";
+import type { SQL } from "drizzle-orm";
+import { SQLiteSyncDialect } from "drizzle-orm/sqlite-core";
 
 const mockListLabeledIssues = vi.hoisted(() => vi.fn());
 const mockResolveGitHubToken = vi.hoisted(() => vi.fn());
@@ -117,6 +119,10 @@ interface TrackedTaskRow {
   status: string;
 }
 
+// The `where` the auto-claim ready-tasks query was last built with, so a test
+// can assert on its predicate (the mock below otherwise ignores it).
+let lastReadyTasksWhere: unknown;
+
 function mockApp(
   rows: { id: number; cwd: string; hostId: string }[],
   inserted: InsertedTaskRow[],
@@ -179,11 +185,12 @@ function mockApp(
           from: () => ({
             all: () => rows,
             orderBy: () => ({ all: () => rows }),
-            where: () => ({
+            where: (cond?: unknown) => ({
               all: () => (projection === undefined ? trackedNonTerminal : inFlightRows),
               orderBy: () => ({
-                all: () =>
-                  isReadyTasksQuery
+                all: () => {
+                  if (isReadyTasksQuery) lastReadyTasksWhere = cond;
+                  return isReadyTasksQuery
                     ? readyTasks.map((t) => ({
                         projectId: 1,
                         issueNumber: null,
@@ -204,7 +211,8 @@ function mockApp(
                           issueNumber: null,
                           dependencyCount: null,
                           ...t,
-                        })),
+                        }));
+                },
               }),
               // upsertIssueTask's existed-check — this mock always answers
               // "doesn't exist yet" (undefined), so every ingest in these
@@ -983,6 +991,23 @@ describe("startTaskWatcher", () => {
 
       expect(mockEnqueueTask).toHaveBeenCalledWith(app, 10, { auto: true });
       expect(mockEnqueueTask).toHaveBeenCalledWith(app, 11, { auto: true });
+
+      cleanup();
+      vi.useRealTimers();
+    });
+
+    it("only selects unarchived ready tasks — an archived one must never be auto-claimed", async () => {
+      mockResolveGitHubToken.mockReturnValue(null);
+      const app = mockApp([], [], [], [{ id: 12 }]);
+      vi.useFakeTimers();
+      const cleanup = startTaskWatcher(app);
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      const sqlText = new SQLiteSyncDialect().sqlToQuery(lastReadyTasksWhere as SQL).sql;
+      expect(sqlText).toContain('"archived_at" is null');
+      expect(sqlText).toContain('"status"');
+      expect(mockEnqueueTask).toHaveBeenCalledWith(app, 12, { auto: true });
 
       cleanup();
       vi.useRealTimers();

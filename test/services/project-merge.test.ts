@@ -349,6 +349,31 @@ describe("project-merge", () => {
         expect(d.archivedAt).not.toBeNull();
       });
 
+      it("a superseded ready or backlog copy leaves the queue as failed; done rows stay as they are", () => {
+        const keepA = task(survivorId, { issueNumber: 20, status: "in_progress" });
+        const keepB = task(survivorId, { issueNumber: 21, status: "in_progress" });
+        const keepC = task(survivorId, { issueNumber: 22, status: "in_progress" });
+        const ready = task(dupId, { issueNumber: keepA.issueNumber, status: "ready" });
+        const backlog = task(dupId, { issueNumber: keepB.issueNumber, status: "backlog" });
+        const done = task(dupId, { issueNumber: keepC.issueNumber, status: "done" });
+        expect(merge().ok).toBe(true);
+        const row = (id: number) => app.db.select().from(tasks).where(eq(tasks.id, id)).get()!;
+        for (const t of [ready, backlog]) {
+          expect(row(t.id)).toMatchObject({ status: "failed", issueNumber: null });
+          expect(row(t.id).archivedAt).not.toBeNull();
+        }
+        expect(row(done.id)).toMatchObject({ status: "done", issueNumber: null });
+      });
+
+      it("a replaced survivor copy that was ready ends up failed and archived", () => {
+        const stale = task(survivorId, { issueNumber: 30, status: "ready" });
+        task(dupId, { issueNumber: 30, status: "in_progress" });
+        expect(merge().ok).toBe(true);
+        const old = app.db.select().from(tasks).where(eq(tasks.id, stale.id)).get()!;
+        expect(old.status).toBe("failed");
+        expect(old.archivedAt).not.toBeNull();
+      });
+
       it("moves tasks with no clash untouched, including local ones", () => {
         const a = task(dupId, { issueNumber: 9, status: "ready" });
         const b = task(dupId, { status: "backlog" });
