@@ -109,6 +109,8 @@ export async function sessionsUsingWorktree(
   raceRetries = 0,
 ): Promise<{ active: number[]; alive: number[]; unknown: number[] }> {
   const deadHistory = sweep?.deadHistory;
+  // Remote checks (including their internal retries) share one deadline. The
+  // retry below this return is solely for local liveness snapshots.
   if (hostId !== LOCAL_HOST_ID) {
     const check = (signal?: AbortSignal) =>
       remoteSessionsUsingWorktree(app, worktreePath, hostId, excludeId, stopOnActive, signal);
@@ -354,7 +356,9 @@ export async function sessionsUsingWorktree(
       for (const row of currentRows)
         if (beforeRows.get(row.id) !== JSON.stringify(row)) changed.add(row.id);
       for (const { id, liveCwd } of app.pty.list()) {
-        if (!beforeLive.has(id) || beforeLive.get(id) !== liveCwd) changed.add(Number(id));
+        const numericId = Number(id);
+        if (Number.isInteger(numericId) && (!beforeLive.has(id) || beforeLive.get(id) !== liveCwd))
+          changed.add(numericId);
       }
       if (changed.size && raceRetries < 2)
         return sessionsUsingWorktree(

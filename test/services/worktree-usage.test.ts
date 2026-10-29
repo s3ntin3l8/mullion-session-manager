@@ -186,6 +186,49 @@ describe("worktreeInUse — the session's own host decides locality (issue #1722
       vi.useRealTimers();
     }
   });
+  it("uses one remote deadline even when changed rows cause internal retries", async () => {
+    app.db
+      .insert(hosts)
+      .values({ id: "remote-b", name: "remote-b", baseUrl: "http://remote-b.example" })
+      .run();
+    const project = seedProject("remote-b");
+    const id = Number(
+      app.db
+        .insert(sessions)
+        .values({ projectId: project, command: "bash", cwd: "/old", status: "exited" })
+        .run().lastInsertRowid,
+    );
+    let calls = 0;
+    const liveness = vi.fn(async () => {
+      await new Promise<void>((resolve) => setTimeout(resolve, 1500));
+      app.db
+        .update(sessions)
+        .set({ cwd: `/changed-${++calls}` })
+        .where(eq(sessions.id, id))
+        .run();
+      return { [String(id)]: "alive" };
+    });
+    const compareWorktreePaths = vi.fn().mockResolvedValue(["outside"]);
+    vi.spyOn(sessionBackends, "resolveBackend").mockReturnValue({
+      liveness,
+      compareWorktreePaths,
+    } as unknown as sessionBackends.SessionBackend);
+    vi.useFakeTimers();
+    try {
+      const result = sessionsUsingWorktree(app, worktreePath, "remote-b", undefined, false, {
+        remoteTimeoutMs: 4000,
+        deadHistory: { ids: new Set(), initialized: false },
+      });
+      const rejection = expect(result).rejects.toBeInstanceOf(WorktreeComparisonTimeout);
+      await vi.advanceTimersByTimeAsync(4000);
+      await rejection;
+      expect(liveness).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(compareWorktreePaths).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("blocks a session added while ended-session liveness is checked", async () => {
     app.db
       .insert(hosts)
@@ -336,7 +379,7 @@ describe("worktreeInUse — the session's own host decides locality (issue #1722
     ).toContain(id);
   });
 
-  it("defers if a session starts during the final ended-session liveness check", async () => {
+  it("reports a session that starts during the final ended-session liveness check", async () => {
     const project = seedProject("local");
     const ended = Number(
       app.db
@@ -359,7 +402,7 @@ describe("worktreeInUse — the session's own host decides locality (issue #1722
       remoteTimeoutMs: 4000,
       deadHistory: { ids: new Set(), initialized: false },
     });
-    expect([...result.active, ...result.unknown]).toContain(added);
+    expect(result.active).toContain(added);
   });
 
   it("does not report an unrelated new session as a manual-removal blocker", async () => {
