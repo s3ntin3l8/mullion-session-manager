@@ -105,7 +105,8 @@ export function ConversationComposer({
   const canReview =
     onReview !== undefined &&
     identity?.kind === "user" &&
-    (identity.login === null || identity.login !== prAuthor);
+    // GitHub logins are case-insensitive.
+    (identity.login === null || identity.login.toLowerCase() !== prAuthor?.toLowerCase());
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState<GitHubPrReviewEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -116,8 +117,9 @@ export function ConversationComposer({
     setBusy(event);
     setError(null);
     try {
-      if (event === "COMMENT" || !onReview || !canReview) await onComment(body.trim());
-      else await onReview(event, body.trim());
+      if (event === "COMMENT") await onComment(body.trim());
+      else if (onReview && canReview) await onReview(event, body.trim());
+      else throw new Error("Reviews can't be submitted from this account.");
       setBody("");
       onClose();
     } catch (err) {

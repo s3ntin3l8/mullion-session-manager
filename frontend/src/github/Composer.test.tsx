@@ -118,6 +118,10 @@ describe("ConversationComposer", () => {
     expect(screen.queryByRole("button", { name: "Request changes" })).toBeNull();
     expect(screen.getByRole("button", { name: "Comment" })).toBeInTheDocument();
 
+    // Logins are case-insensitive: your own PR under another casing is still yours.
+    rerender(<ConversationComposer {...props} identity={me} prAuthor="ME" />);
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+
     // The App's bot: a verdict from it does not count, so comment only.
     rerender(
       <ConversationComposer

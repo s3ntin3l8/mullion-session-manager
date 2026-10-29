@@ -49,6 +49,7 @@ import {
   resolveWorkflowWriteToken,
   resolveMullionReviewLogins,
   resolveSidebarWriteIdentity,
+  describeSidebarWriteIdentity,
   resetSidebarIdentityCache,
   verifyAppCredentials,
   GITHUB_PROVIDER,
@@ -1352,9 +1353,46 @@ describe("github-integration service", () => {
       await app.close();
     });
 
+    it("does not memoise a failed lookup, so the next read retries", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockGetInstallationToken.mockResolvedValue({ token: "ghs_app", installationsChecked: null });
+      fetchMock.mockResolvedValueOnce(jsonResponse(500, {}));
+      expect((await resolveSidebarWriteIdentity(app, repo))?.login).toBeNull();
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse(200, { data: { viewer: { login: "mullion-session-manager[bot]" } } }),
+      );
+      expect((await resolveSidebarWriteIdentity(app, repo))?.login).toBe("mullion-session-manager");
+      await app.close();
+    });
+
+    it("describes the identity for a read without minting a write token", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      mockGetInstallationToken.mockResolvedValue({ token: "ghs_app", installationsChecked: null });
+      // A fresh Response per call: a body can only be read once.
+      fetchMock.mockImplementation(() =>
+        Promise.resolve(
+          jsonResponse(200, {
+            login: "octocat",
+            data: { viewer: { login: "mullion-session-manager[bot]" } },
+          }),
+        ),
+      );
+      expect(await describeSidebarWriteIdentity(app, repo)).toEqual({
+        kind: "app",
+        login: "mullion-session-manager",
+      });
+      expect(mockGetInstallationToken.mock.calls.every((c) => c[4] === "read")).toBe(true);
+      await setPat(app, "ghp_x");
+      expect((await describeSidebarWriteIdentity(app, repo))?.kind).toBe("user");
+      await app.close();
+    });
+
     it("is null when nothing can write", async () => {
       const app = await buildApp();
       expect(await resolveSidebarWriteIdentity(app, repo)).toBeNull();
+      expect(await describeSidebarWriteIdentity(app, repo)).toBeNull();
       await app.close();
     });
   });

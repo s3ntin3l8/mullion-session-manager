@@ -132,12 +132,12 @@ read-only base scope the panel still shows everything, but each write answers
 403 "the connected token lacks write access", and the box keeps your draft.
 
 **Who the write posts as.** Your connected account (device flow or PAT): a
-comment, reply, resolve or review from the sidebar is yours, and the composer
+comment, reply, resolve or review from the sidebar is yours, and the PR composer
 says so ("Posts as @you"). Only when no account is connected does the write post
 as the [GitHub App](#github-app-opt-in-layers-on-top-of-the-patoauth-token)'s bot
-(the installation token), and then the sidebar offers **Comment** only: a bot's
-Approve or Request changes would not be yours and does not count toward a
-review requirement, so the server refuses it (409). There is no silent fallback
+(the installation token), and then the sidebar offers **Comment** only: an
+Approve or Request changes must be your own verdict, not the App's, so the
+server refuses it (409). There is no silent fallback
 from your account to the App: if GitHub refuses your token's write the box says
 so rather than posting as the bot. Task Master, the merge route and the review
 relay keep the App identity. GitHub also does not let a pull request's author

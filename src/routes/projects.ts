@@ -117,7 +117,7 @@ import {
   getToken,
   resolveChecksReadToken,
   resolveGitHubToken,
-  resolveSidebarWriteIdentity,
+  describeSidebarWriteIdentity,
   resolveMarkerTokens,
 } from "../services/github-integration.js";
 import { maybeAutoEnableConventionalTitles } from "../services/project-release-please.js";
@@ -2668,8 +2668,7 @@ export async function projectsRoute(app: FastifyInstance) {
         // #2049 — who a sidebar write on this PR would post as, so the composer
         // can say so and offer a verdict only to the human's own account.
         // Per repo, not per PR, so it stays out of the cached detail.
-        const identity = await resolveSidebarWriteIdentity(app, ctx.repoRef);
-        const writeIdentity = identity ? { kind: identity.kind, login: identity.login } : null;
+        const writeIdentity = await describeSidebarWriteIdentity(app, ctx.repoRef);
         return { ...detail, ciStatus, ciKnown, actionsRuns, prPhase, writeIdentity };
       } catch (err) {
         if (!(err instanceof GitHubApiError)) throw err;

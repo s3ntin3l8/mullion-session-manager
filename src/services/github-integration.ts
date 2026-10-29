@@ -970,11 +970,36 @@ export interface SidebarWriteIdentity {
 }
 
 const APP_LOGIN_TTL_MS = 10 * 60 * 1000;
-const appLoginCache = new Map<string, { login: string | null; at: number }>();
+const appLoginCache = new Map<string, { login: string; at: number }>();
 
 /** Test seam: forget memoised App logins. */
 export function resetSidebarIdentityCache(): void {
   appLoginCache.clear();
+}
+
+/**
+ * The App's bot login, read with a READ-scoped token (the same identity as a
+ * write token's, and a page load must not mint a write-capable one). Only a
+ * successful lookup is memoised, so one GraphQL blip doesn't hide the hint.
+ */
+async function appBotLogin(
+  app: FastifyInstance,
+  repo: { owner: string; repo: string },
+  fallbackToken: string | null,
+): Promise<string | null> {
+  const key = `${repo.owner}/${repo.repo}`;
+  const hit = appLoginCache.get(key);
+  if (hit && Date.now() - hit.at < APP_LOGIN_TTL_MS) return hit.login;
+  const token = (await resolveGitHubToken(app, repo, "read")) ?? fallbackToken;
+  if (!token) return null;
+  try {
+    const login = await fetchViewerLogin(token);
+    if (login) appLoginCache.set(key, { login, at: Date.now() });
+    return login;
+  } catch (err) {
+    app.log.warn({ err, ...repo }, "[github-integration] sidebar App identity lookup failed");
+    return null;
+  }
 }
 
 /**
@@ -983,8 +1008,8 @@ export function resetSidebarIdentityCache(): void {
  * one, so the write is theirs; the App is only the identity of a write when no
  * account is connected. There is deliberately NO fallback from the account to
  * the App when GitHub refuses the account's write: a write must come out as
- * the identity the composer said, and a bot's verdict is not the human's.
- * Task Master, the merge route and the relay keep `resolveGitHubToken`.
+ * the identity the composer said, and a verdict must be the human's, not the
+ * App's. Task Master, the merge route and the relay keep `resolveGitHubToken`.
  */
 export async function resolveSidebarWriteIdentity(
   app: FastifyInstance,
@@ -996,19 +1021,21 @@ export async function resolveSidebarWriteIdentity(
   }
   const token = await resolveGitHubToken(app, repo, "write");
   if (!token) return null;
-  const key = `${repo.owner}/${repo.repo}`;
-  const hit = appLoginCache.get(key);
-  if (hit && Date.now() - hit.at < APP_LOGIN_TTL_MS) {
-    return { token, kind: "app", login: hit.login };
-  }
-  let login: string | null = null;
-  try {
-    login = await fetchViewerLogin(token);
-  } catch (err) {
-    app.log.warn({ err, ...repo }, "[github-integration] sidebar App identity lookup failed");
-  }
-  appLoginCache.set(key, { login, at: Date.now() });
-  return { token, kind: "app", login };
+  return { token, kind: "app", login: await appBotLogin(app, repo, token) };
+}
+
+/**
+ * The same identity without minting a write token, for the PR detail read
+ * (which only shows it). With no account connected, any token that resolves
+ * is the App's.
+ */
+export async function describeSidebarWriteIdentity(
+  app: FastifyInstance,
+  repo: { owner: string; repo: string },
+): Promise<{ kind: "user" | "app"; login: string | null } | null> {
+  if (getToken(app)) return { kind: "user", login: getRow(app)?.login ?? null };
+  if (!(await resolveGitHubToken(app, repo, "read"))) return null;
+  return { kind: "app", login: await appBotLogin(app, repo, null) };
 }
 
 /**
