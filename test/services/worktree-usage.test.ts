@@ -2,12 +2,16 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } 
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { ne } from "drizzle-orm";
+import { eq, ne } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts, projects, sessions } from "../../src/db/schema.js";
 import * as sessionBackends from "../../src/services/session-backend.js";
-import { worktreeInUse, sessionsUsingWorktree } from "../../src/services/worktree-usage.js";
+import {
+  worktreeInUse,
+  sessionsUsingWorktree,
+  WorktreeComparisonTimeout,
+} from "../../src/services/worktree-usage.js";
 
 // Issue #1722 / roadmap 8.8 — "local" means the SESSION's own host is
 // local, not its project's. A session placed on a remote host has a cwd on
@@ -144,6 +148,41 @@ describe("worktreeInUse — the session's own host decides locality (issue #1722
       unknown: [id],
     });
   });
+  it("bounds a remote liveness probe during a sweep and does not compare afterward", async () => {
+    app.db
+      .insert(hosts)
+      .values({ id: "remote-b", name: "remote-b", baseUrl: "http://remote-b.example" })
+      .run();
+    const project = seedProject("remote-b");
+    app.db
+      .insert(sessions)
+      .values({ projectId: project, command: "bash", cwd: "/old", status: "exited" })
+      .run();
+    let finish!: (value: Record<string, string>) => void;
+    const compareWorktreePaths = vi.fn().mockResolvedValue([]);
+    const liveness = vi.fn(
+      () =>
+        new Promise<Record<string, string>>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    vi.spyOn(sessionBackends, "resolveBackend").mockReturnValue({
+      liveness,
+      compareWorktreePaths,
+    } as unknown as sessionBackends.SessionBackend);
+    vi.useFakeTimers();
+    try {
+      const result = sessionsUsingWorktree(app, worktreePath, "remote-b", undefined, true, 4000);
+      const rejection = expect(result).rejects.toBeInstanceOf(WorktreeComparisonTimeout);
+      await vi.advanceTimersByTimeAsync(4000);
+      await rejection;
+      finish({});
+      await Promise.resolve();
+      expect(compareWorktreePaths).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("blocks a session added while ended-session liveness is checked", async () => {
     app.db
       .insert(hosts)
@@ -237,5 +276,134 @@ describe("worktreeInUse — the session's own host decides locality (issue #1722
       unknown: [],
     });
     expect(compareWorktreePaths).toHaveBeenCalledWith(worktreePath, []);
+  });
+
+  it("avoids resolving many dead historical paths for each local worktree", async () => {
+    const project = seedProject("local");
+    for (let i = 0; i < 100; i++) {
+      app.db
+        .insert(sessions)
+        .values({ projectId: project, command: "bash", cwd: `/historical/${i}`, status: "exited" })
+        .run();
+    }
+    const liveness = vi.fn(async (ids: string[]) =>
+      Object.fromEntries(ids.map((id) => [id, "dead"])),
+    );
+    vi.spyOn(sessionBackends, "resolveBackend").mockReturnValue({
+      liveness,
+    } as unknown as sessionBackends.SessionBackend);
+    const realpath = vi.spyOn(fs.promises, "realpath");
+    const history = { ids: new Set<number>(), initialized: false };
+    for (let i = 0; i < 10; i++) {
+      expect(
+        await sessionsUsingWorktree(
+          app,
+          `/tmp/target-${i}`,
+          "local",
+          undefined,
+          true,
+          undefined,
+          history,
+        ),
+      ).toEqual({ active: [], alive: [], unknown: [] });
+    }
+    expect(
+      realpath.mock.calls.filter(([value]) => String(value).startsWith("/historical/")),
+    ).toHaveLength(0);
+    expect(liveness).toHaveBeenCalledTimes(11);
+  });
+
+  it("does not trust a dead snapshot when a process reappears during the check", async () => {
+    const project = seedProject("local");
+    const id = Number(
+      app.db
+        .insert(sessions)
+        .values({ projectId: project, command: "bash", cwd: "/outside", status: "exited" })
+        .run().lastInsertRowid,
+    );
+    const liveness = vi
+      .fn()
+      .mockResolvedValueOnce({ [String(id)]: "dead" })
+      .mockResolvedValue({ [String(id)]: "alive" });
+    vi.spyOn(sessionBackends, "resolveBackend").mockReturnValue({
+      liveness,
+    } as unknown as sessionBackends.SessionBackend);
+    expect(
+      (
+        await sessionsUsingWorktree(app, worktreePath, "local", undefined, true, undefined, {
+          ids: new Set(),
+          initialized: false,
+        })
+      ).unknown,
+    ).toContain(id);
+  });
+
+  it("defers if a session starts during the final ended-session liveness check", async () => {
+    const project = seedProject("local");
+    const ended = Number(
+      app.db
+        .insert(sessions)
+        .values({ projectId: project, command: "bash", cwd: worktreePath, status: "exited" })
+        .run().lastInsertRowid,
+    );
+    let added = 0;
+    const liveness = vi
+      .fn()
+      .mockResolvedValueOnce({ [String(ended)]: "alive" })
+      .mockImplementationOnce(async () => {
+        added = seedSession(project);
+        return { [String(ended)]: "dead" };
+      });
+    vi.spyOn(sessionBackends, "resolveBackend").mockReturnValue({
+      liveness,
+    } as unknown as sessionBackends.SessionBackend);
+    const result = await sessionsUsingWorktree(
+      app,
+      worktreePath,
+      "local",
+      undefined,
+      true,
+      undefined,
+      { ids: new Set(), initialized: false },
+    );
+    expect(result.unknown).toContain(added);
+  });
+
+  it("observes new sessions and changed symlinks on the next sweep check", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "usage-sweep-"));
+    try {
+      const target = path.join(root, "target");
+      const outside = path.join(root, "outside");
+      const alias = path.join(root, "alias");
+      fs.mkdirSync(target);
+      fs.mkdirSync(outside);
+      fs.symlinkSync(outside, alias, "dir");
+      const project = seedProject("local");
+      const id = seedSession(project);
+      const history = { ids: new Set<number>(), initialized: false };
+      app.db.update(sessions).set({ cwd: alias }).where(eq(sessions.id, id)).run();
+      expect(
+        (await sessionsUsingWorktree(app, target, "local", undefined, true, undefined, history))
+          .active,
+      ).toEqual([]);
+      fs.unlinkSync(alias);
+      fs.symlinkSync(target, alias, "dir");
+      expect(
+        (await sessionsUsingWorktree(app, target, "local", undefined, true, undefined, history))
+          .active,
+      ).toContain(id);
+      fs.unlinkSync(alias);
+      fs.symlinkSync(outside, alias, "dir");
+      const added = Number(
+        app.db.insert(sessions).values({ projectId: project, command: "bash", cwd: target }).run()
+          .lastInsertRowid,
+      );
+      expect(
+        (await sessionsUsingWorktree(app, target, "local", undefined, true, undefined, history))
+          .active,
+      ).toContain(added);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

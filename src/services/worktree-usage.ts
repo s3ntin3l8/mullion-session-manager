@@ -14,6 +14,31 @@ import { resolveBackend } from "./session-backend.js";
 // worktree-removal guard, so the two can't drift.
 export const RESUMABLE_TASK_STATUSES = ["claimed", "in_progress", "reviewing", "failed"] as const;
 
+/** A sweep can abandon a host whose read-only path comparison never returns. */
+export class WorktreeComparisonTimeout extends Error {}
+
+async function withComparisonTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const controller = new AbortController();
+  try {
+    return await Promise.race([
+      operation(controller.signal),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          controller.abort();
+          reject(new WorktreeComparisonTimeout());
+        }, timeoutMs);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 const isWithin = (candidate: string, directory: string) => {
   const resolvedCandidate = path.resolve(candidate);
   const resolvedDirectory = path.resolve(directory);
@@ -78,9 +103,15 @@ export async function sessionsUsingWorktree(
   hostId: string,
   excludeId?: number,
   stopOnActive = false,
+  comparisonTimeoutMs?: number,
+  deadHistory?: { ids: Set<number>; initialized: boolean },
 ): Promise<{ active: number[]; alive: number[]; unknown: number[] }> {
   if (hostId !== LOCAL_HOST_ID) {
-    return remoteSessionsUsingWorktree(app, worktreePath, hostId, excludeId, stopOnActive);
+    const check = (signal?: AbortSignal) =>
+      remoteSessionsUsingWorktree(app, worktreePath, hostId, excludeId, stopOnActive, signal);
+    return comparisonTimeoutMs === undefined
+      ? check()
+      : withComparisonTimeout(check, comparisonTimeoutMs);
   }
   const resolvedPath = path.resolve(worktreePath);
   const effectiveCwd = sql<string | null>`coalesce(${sessions.cwd}, ${projects.cwd})`;
@@ -91,21 +122,51 @@ export async function sessionsUsingWorktree(
   const uncertainPaths = new Set<string | null>();
   const uncertainLive = new Set<number>();
   if (hostId === LOCAL_HOST_ID) {
-    const canonicalTarget = await canonicalWorktreePath(resolvedPath);
-    const seen = new Set<string | null>();
-    const aliases: string[] = [];
-    const readPaths = () =>
+    // A sweep can have thousands of ended sessions. Probe them in one batch
+    // before resolving paths, then verify those omitted again below. No path
+    // resolution is cached: active, alive and unknown sessions are resolved
+    // afresh for every worktree, so a changed symlink cannot authorize removal.
+    const readRows = () =>
       app.db
-        .selectDistinct({ cwd: effectiveCwd })
+        .select({ id: sessions.id, status: sessions.status, cwd: effectiveCwd })
         .from(sessions)
         .leftJoin(projects, eq(sessions.projectId, projects.id))
         .where(hostMatch)
-        .all()
-        .filter(({ cwd }) => !seen.has(cwd));
+        .all();
+    const initialRows = deadHistory ? readRows() : undefined;
+    const historical =
+      initialRows?.filter((row) => row.status !== "active" && row.id !== excludeId) ?? [];
+    let omitted = new Set(deadHistory?.ids);
+    if (deadHistory && !deadHistory.initialized && historical.length) {
+      try {
+        const states = await resolveBackend(app, hostId).liveness(
+          historical.map(({ id }) => String(id)),
+        );
+        omitted = new Set(
+          historical.filter(({ id }) => states[String(id)] === "dead").map(({ id }) => id),
+        );
+      } catch {
+        // An unavailable liveness probe must never turn uncertainty into safety.
+      }
+    }
+    if (deadHistory && !deadHistory.initialized) {
+      deadHistory.ids = new Set(omitted);
+      deadHistory.initialized = true;
+    }
+    const canonicalTarget = await canonicalWorktreePath(resolvedPath);
+    const seen = new Set<string | null>();
+    const aliases: string[] = [];
+    const readPaths = (rows = readRows()) => {
+      const paths = new Set<string | null>();
+      for (const { id, status, cwd } of rows) {
+        if (!(omitted.has(id) && status !== "active") && !seen.has(cwd)) paths.add(cwd);
+      }
+      return [...paths].map((cwd) => ({ cwd }));
+    };
     // Repeat when sessions appeared while filesystem resolution was in flight.
     // Any remaining new paths become uncertain blockers after bounded retries.
-    for (let round = 0; round < 3; round++) {
-      const paths = readPaths();
+    for (let round = 0; round < (deadHistory ? 1 : 3); round++) {
+      const paths = readPaths(round === 0 ? initialRows : undefined);
       if (paths.length === 0) break;
       let next = 0;
       await Promise.all(
@@ -170,9 +231,42 @@ export async function sessionsUsingWorktree(
       if (state === "unknown") uncertainLive.add(numericId);
       liveIds.push(numericId);
     }
-    // The live-cwd work above yields; newly recorded paths are conservative
-    // blockers until a later check can resolve them.
-    for (const { cwd } of readPaths()) {
+    let omittedStates: Record<string, SessionLiveness> = {};
+    if (omitted.size) {
+      // A process may have reappeared while paths were being resolved. An
+      // omitted row that is no longer confirmed dead is an unknown blocker;
+      // this also catches rows reactivated during the check.
+      try {
+        omittedStates = await resolveBackend(app, hostId).liveness([...omitted].map(String));
+      } catch {
+        // Treat every omitted row as unknown below.
+      }
+      if (deadHistory) {
+        for (const id of omitted)
+          if (omittedStates[String(id)] !== "dead") deadHistory.ids.delete(id);
+      }
+    }
+    const currentRows = readRows();
+    if (omitted.size) {
+      for (const { id, status } of currentRows) {
+        if (omitted.has(id) && (status === "active" || omittedStates[String(id)] !== "dead")) {
+          if (!liveIds.includes(id)) {
+            uncertainLive.add(id);
+            liveIds.push(id);
+          }
+        }
+      }
+      for (const { id, liveCwd } of app.pty.list()) {
+        if (checkedLive.has(id) && checkedLive.get(id) === liveCwd) continue;
+        const numericId = Number(id);
+        if (!Number.isInteger(numericId)) continue;
+        uncertainLive.add(numericId);
+        if (!liveIds.includes(numericId)) liveIds.push(numericId);
+      }
+    }
+    // Filesystem and liveness calls yield; paths added during either are
+    // conservative blockers until a later check can resolve them.
+    for (const { cwd } of readPaths(currentRows)) {
       uncertainPaths.add(cwd);
       if (cwd !== null) aliases.push(cwd);
     }
@@ -219,12 +313,46 @@ export async function sessionsUsingWorktree(
   const ended = matching.filter((row) => row.status !== "active");
   const alive: number[] = [];
   if (ended.length > 0) {
+    const snapshotRows = () =>
+      app.db
+        .select({
+          id: sessions.id,
+          status: sessions.status,
+          cwd: sessions.cwd,
+          projectCwd: projects.cwd,
+        })
+        .from(sessions)
+        .leftJoin(projects, eq(sessions.projectId, projects.id))
+        .where(hostMatch)
+        .all();
+    const beforeRows = new Map(snapshotRows().map((row) => [row.id, JSON.stringify(row)]));
+    const beforeLive = new Map(app.pty.list().map(({ id, liveCwd }) => [id, liveCwd]));
     const states = await resolveBackend(app, hostId).liveness(ended.map((row) => String(row.id)));
     for (const row of ended) {
       const state = states[String(row.id)];
       if (state === "dead") continue;
       if (state === "alive" && definitelyInside(row)) alive.push(row.id);
       else unknown.push(row.id);
+    }
+    // Liveness yields after the path checks. A newly inserted or changed row,
+    // or a PTY that moved in that interval, has not had its path checked.
+    const currentRows = snapshotRows();
+    const currentIds = new Set(currentRows.map(({ id }) => id));
+    const markUnknown = (id: number) => {
+      if (
+        id !== excludeId &&
+        currentIds.has(id) &&
+        !unknown.includes(id) &&
+        !active.includes(id) &&
+        !alive.includes(id)
+      )
+        unknown.push(id);
+    };
+    for (const row of currentRows) {
+      if (beforeRows.get(row.id) !== JSON.stringify(row)) markUnknown(row.id);
+    }
+    for (const { id, liveCwd } of app.pty.list()) {
+      if (!beforeLive.has(id) || beforeLive.get(id) !== liveCwd) markUnknown(Number(id));
     }
   }
   return { active, alive, unknown };
@@ -237,6 +365,7 @@ async function remoteSessionsUsingWorktree(
   hostId: string,
   excludeId?: number,
   stopOnActive = false,
+  signal?: AbortSignal,
 ): Promise<{ active: number[]; alive: number[]; unknown: number[] }> {
   const readRows = () =>
     app.db
@@ -259,19 +388,24 @@ async function remoteSessionsUsingWorktree(
     JSON.stringify(rows.map((row) => [row.id, row.status, row.cwd, row.projectCwd]));
   const compare = async (rows: ReturnType<typeof readRows>) => {
     const entries = rows.map((row) => ({ id: String(row.id), cwd: row.cwd }));
+    if (signal?.aborted) return entries.map(() => "unknown" as const);
     try {
-      const result = await backend.compareWorktreePaths(worktreePath, entries);
+      const result = signal
+        ? await backend.compareWorktreePaths(worktreePath, entries, signal)
+        : await backend.compareWorktreePaths(worktreePath, entries);
       return entries.map((_, index) =>
         result[index] === "inside" || result[index] === "outside"
           ? result[index]
           : ("unknown" as const),
       );
-    } catch {
+    } catch (error) {
+      if (error instanceof WorktreeComparisonTimeout) throw error;
       return entries.map(() => "unknown" as const);
     }
   };
   for (let round = 0; round < 3; round++) {
     const snapshot = readRows();
+    if (signal?.aborted) return { active: [], alive: [], unknown: snapshot.map((row) => row.id) };
     // Preserve the fast stop-on-active path without waiting for ended sessions.
     if (stopOnActive) {
       const active = snapshot.filter((row) => row.status === "active");
@@ -295,6 +429,7 @@ async function remoteSessionsUsingWorktree(
         /* Unknown host state must defer deletion. */
       }
     }
+    if (signal?.aborted) return { active: [], alive: [], unknown: snapshot.map((row) => row.id) };
     // Confirmed-dead historical sessions cannot hold a worktree. Compare
     // everything else only after liveness, so live-cwd changes while it was
     // in flight are reflected by the owning host's generation check.

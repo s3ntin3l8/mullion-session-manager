@@ -617,6 +617,50 @@ describe("reclaiming an ended session's worktree (issue #1964)", () => {
   });
 
   describe("the periodic sweep", () => {
+    it("moves on to other hosts after a remote comparison hangs", async () => {
+      vi.useFakeTimers();
+      try {
+        const first = sessionOwning("/slow/a", "mullion/a", {
+          hostId: "slow",
+          worktreeRepoCwd: "/slow",
+        });
+        const second = sessionOwning("/slow/b", "mullion/b", {
+          hostId: "slow",
+          worktreeRepoCwd: "/slow",
+        });
+        const other = sessionOwning("/fast/c", "mullion/c", {
+          hostId: "fast",
+          worktreeRepoCwd: "/fast",
+        });
+        const slowCompare = vi.fn(() => new Promise<never>(() => {}));
+        const fastRemove = vi.fn().mockResolvedValue({ removed: true });
+        const liveness = vi.fn(async (ids: string[]) =>
+          Object.fromEntries(ids.map((id) => [id, "dead"])),
+        );
+        vi.spyOn(sessionBackendModule, "resolveBackend").mockImplementation(
+          (_app, host) =>
+            ({
+              liveness,
+              compareWorktreePaths: host === "slow" ? slowCompare : vi.fn().mockResolvedValue([]),
+              removeWorktreeIfClean: fastRemove,
+            }) as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>,
+        );
+        vi.spyOn(hostGitModule, "resolveHostBranches").mockResolvedValue({
+          ok: true,
+          value: [{ name: "mullion/c", isCurrent: false, isMerged: true }],
+        });
+        const sweep = sweepSessionWorktrees(app);
+        await vi.advanceTimersByTimeAsync(4_000);
+        expect(await sweep).toEqual({ reclaimed: 1, kept: 0, deferred: 2 });
+        expect(slowCompare).toHaveBeenCalledTimes(1);
+        expect(fastRemove).toHaveBeenCalledTimes(1);
+        expect(rowOf(first.id).worktreeReclaimedAt).toBeNull();
+        expect(rowOf(second.id).worktreeReclaimedAt).toBeNull();
+        expect(rowOf(other.id).worktreeReclaimedAt).toBeInstanceOf(Date);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
     it("reclaims every ended session whose branch has since been pushed, and reports what it did", async () => {
       const ready = addWorktree("ready");
       commit(ready.dir, "a.txt", "a");

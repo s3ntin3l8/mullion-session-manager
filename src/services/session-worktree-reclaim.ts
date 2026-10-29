@@ -36,7 +36,7 @@ import type { GitBranchInfo } from "../shared/types.js";
 import { resolveHostBranches, resolveHostGitStatus } from "./host-git.js";
 import { resolveBackend } from "./session-backend.js";
 import { resolveSessionHostId } from "./session-live-info.js";
-import { sessionsUsingWorktree } from "./worktree-usage.js";
+import { sessionsUsingWorktree, WorktreeComparisonTimeout } from "./worktree-usage.js";
 
 export type KeptReason =
   | "in-use"
@@ -61,6 +61,13 @@ export type ReclaimOutcome =
 /** Sessions being reclaimed right now, so a kill and a sweep tick racing on the
  * same session do not both run git against it. */
 const inFlight = new Set<number>();
+// Shorter than the agent client's individual five-second request timeout, so
+// a slow agent is skipped for this whole pass instead of retried per worktree.
+const SWEEP_COMPARISON_TIMEOUT_MS = 4_000;
+type SweepContext = {
+  timedOutHosts: Set<string>;
+  deadHistory: { ids: Set<number>; initialized: boolean };
+};
 
 /**
  * Holds the same in-flight slot for a manual removal (Settings → Storage), so
@@ -131,11 +138,12 @@ export function recordReclaimed(app: FastifyInstance, row: typeof sessions.$infe
 export async function reclaimSessionWorktree(
   app: FastifyInstance,
   sessionId: number,
+  sweep?: SweepContext,
 ): Promise<ReclaimOutcome> {
   if (inFlight.has(sessionId)) return { status: "skipped", reason: "in-flight" };
   inFlight.add(sessionId);
   try {
-    return await reclaim(app, sessionId);
+    return await reclaim(app, sessionId, sweep);
   } catch (err) {
     app.log.warn({ err, sessionId }, "session worktree reclaim failed");
     return { status: "deferred" };
@@ -144,7 +152,11 @@ export async function reclaimSessionWorktree(
   }
 }
 
-async function reclaim(app: FastifyInstance, sessionId: number): Promise<ReclaimOutcome> {
+async function reclaim(
+  app: FastifyInstance,
+  sessionId: number,
+  sweep?: SweepContext,
+): Promise<ReclaimOutcome> {
   const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
   if (!row) return { status: "skipped", reason: "not-found" };
   if (!row.worktreeBranch || !row.worktreeRepoCwd || !row.cwd) {
@@ -155,12 +167,28 @@ async function reclaim(app: FastifyInstance, sessionId: number): Promise<Reclaim
 
   const hostId = resolveSessionHostId(app, row);
   recordAttempt(app, row);
+  if (sweep?.timedOutHosts.has(hostId)) return { status: "deferred" };
   const keep = (reason: KeptReason): ReclaimOutcome => {
     recordKept(app, row, reason);
     return { status: "kept", reason };
   };
 
-  const sibling = await sessionsUsingWorktree(app, row.cwd, hostId, row.id, true);
+  let sibling: Awaited<ReturnType<typeof sessionsUsingWorktree>>;
+  try {
+    sibling = await sessionsUsingWorktree(
+      app,
+      row.cwd,
+      hostId,
+      row.id,
+      true,
+      sweep ? SWEEP_COMPARISON_TIMEOUT_MS : undefined,
+      sweep?.deadHistory,
+    );
+  } catch (error) {
+    if (!(error instanceof WorktreeComparisonTimeout) || !sweep) throw error;
+    sweep.timedOutHosts.add(hostId);
+    return { status: "deferred" };
+  }
   if (sibling.active.length > 0 || sibling.alive.length > 0) return keep("in-use");
   if (sibling.unknown.length > 0) return { status: "deferred" };
 
@@ -261,8 +289,14 @@ export async function sweepSessionWorktrees(
   limit = 100,
 ): Promise<{ reclaimed: number; kept: number; deferred: number }> {
   const counts = { reclaimed: 0, kept: 0, deferred: 0 };
+  // A comparison is read-only: abandoning it cannot start a later removal.
+  // Skip the rest of that host for this pass, but continue with other hosts.
+  const sweep: SweepContext = {
+    timedOutHosts: new Set(),
+    deadHistory: { ids: new Set(), initialized: false },
+  };
   for (const id of sessionsAwaitingReclaim(app, limit)) {
-    const outcome = await reclaimSessionWorktree(app, id);
+    const outcome = await reclaimSessionWorktree(app, id, sweep);
     if (outcome.status === "reclaimed") counts.reclaimed += 1;
     else if (outcome.status === "kept") counts.kept += 1;
     else if (outcome.status === "deferred") counts.deferred += 1;

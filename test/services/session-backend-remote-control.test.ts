@@ -221,6 +221,22 @@ describe("RemoteBackend.waitOutput", () => {
 });
 
 describe("RemoteBackend.compareWorktreePaths", () => {
+  it("does not send further batches after a sweep cancels a slow comparison", async () => {
+    let finish!: (value: unknown) => void;
+    clientMock.compareWorktreePaths.mockReset().mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const entries = Array.from({ length: 257 }, (_, i) => ({ id: String(i), cwd: "/repo" }));
+    const controller = new AbortController();
+    const result = backend().compareWorktreePaths("/repo/worktree", entries, controller.signal);
+    controller.abort();
+    finish({ generation: "a", stable: true, relations: Array(256).fill("outside") });
+    expect(await result).toEqual(Array(257).fill("unknown"));
+    expect(clientMock.compareWorktreePaths).toHaveBeenCalledTimes(1);
+  });
   it("rejects stale comparisons when live state changes between batches", async () => {
     clientMock.compareWorktreePaths
       .mockReset()
