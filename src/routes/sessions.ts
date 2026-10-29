@@ -124,6 +124,10 @@ const createSessionSchema = {
       // instead of the bad request it is. 409 stays for a KNOWN platform no
       // eligible host has. These are Node's own `process.platform` values.
       targetPlatform: { type: "string", enum: [...NODE_PLATFORMS] },
+      // Issue #2237 — "auto" applies the Auto placement policy to this launch
+      // only; the project's stored mode is untouched. Exclusive with the
+      // targets above.
+      placement: { type: "string", enum: ["auto"] },
       // Issue #1951 — a server-chosen fresh worktree on the placement host.
       isolate: { type: "boolean" },
       skipPermissions: { type: "boolean" },
@@ -581,6 +585,14 @@ export async function sessionsRoute(app: FastifyInstance) {
       // below, so the service never sees the pair. The other contradictory
       // options (hostId+target, isolate+worktree, isolate+cwd) are enforced
       // in createSessionRecord and surface here as `invalid-options` (400).
+      if (
+        request.body.placement !== undefined &&
+        (request.body.targetHostId !== undefined || request.body.targetPlatform !== undefined)
+      ) {
+        return reply.badRequest(
+          "placement is mutually exclusive with targetHostId and targetPlatform",
+        );
+      }
       if (request.body.targetHostId !== undefined && request.body.targetPlatform !== undefined) {
         return reply.badRequest("targetHostId and targetPlatform are mutually exclusive");
       }

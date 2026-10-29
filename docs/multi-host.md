@@ -207,6 +207,23 @@ moved. Automatic placement ([#1723](https://github.com/s3ntin3l8/mullion-session
 Set it with the project API — `placement: "auto"` on `POST /api/projects`, or
 on `PATCH /api/projects/:id` to switch a project in or out.
 
+**Launching on a host from the launcher.** For a project that reaches more than
+one host (its own plus the `hostCwds` hosts), the session launcher shows an
+**On** chip next to the project. Its options are the project's own host (the
+default, "this server" when it is local — a launch you do not touch behaves as
+before), each `hostCwds` host by name, then **Auto**. A host that is offline or
+parked is listed but disabled. Choosing a host sends `targetHostId`; choosing
+Auto sends `placement: "auto"` on `POST /api/sessions`, which applies Auto to
+that one launch without changing the project's stored mode (it is exclusive
+with `targetHostId`/`targetPlatform`, `400` otherwise). For Auto the chip shows
+the placement preview: the chosen host, why, and the hosts not considered. The
+choice is remembered per project. With the worktree toggle on, a launch aimed
+at another host or at Auto sends `isolate: true` instead of a base ref — a
+branch picked from this server's list is not valid on another host — and the
+server cuts the worktree from the placed host's default branch. A launcher's
+own sub-directory (`cwd`) is likewise dropped for such a launch, since it is a
+path on the project's own host.
+
 **What makes a host eligible.** It has to be _online_ per the heartbeat, not
 _drained_, it has to have _reported a capacity_ (the load, cores and
 memory the fleet reads in `GET /api/hosts`), and it has to have **the

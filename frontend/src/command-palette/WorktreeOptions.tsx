@@ -30,6 +30,10 @@ export interface WorktreeOptionsProps {
   onEnabledChange: (enabled: boolean) => void;
   baseRef: string;
   onBaseRefChange: Dispatch<SetStateAction<string>>;
+  // Issue #2237 — the launch targets another host (or Auto): a base ref
+  // picked from THIS host's branches is not valid there, so the field is
+  // hidden and the launcher sends `isolate` for the server to pick it.
+  baseOnPlacedHost?: boolean;
 }
 
 export function WorktreeOptions({
@@ -38,9 +42,10 @@ export function WorktreeOptions({
   onEnabledChange,
   baseRef,
   onBaseRefChange,
+  baseOnPlacedHost = false,
 }: WorktreeOptionsProps) {
   const { branches, currentBranch, defaultBranch, error } = useGitBranches(projectId, {
-    enabled,
+    enabled: enabled && !baseOnPlacedHost,
     onLoaded: ({ branches, currentBranch, defaultBranch }) => {
       onBaseRefChange((prev) => prev || defaultBranch || currentBranch || branches[0] || "");
     },
@@ -74,7 +79,10 @@ export function WorktreeOptions({
         <GitBranchIcon size={13} style={{ color: "var(--muted)" }} />
         <span>Isolate in a new worktree</span>
       </label>
-      {enabled && (
+      {enabled && baseOnPlacedHost && (
+        <span className="cmd-palette-target-hint">base: the host&apos;s default branch</span>
+      )}
+      {enabled && !baseOnPlacedHost && (
         <div className="cmd-palette-worktree-picker">
           <Dropdown small value={baseRef} onChange={onBaseRefChange} options={dropdownOptions} />
           {error && (

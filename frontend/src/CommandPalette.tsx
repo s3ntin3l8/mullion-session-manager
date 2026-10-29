@@ -19,12 +19,27 @@ import { useCommandSearch } from "./hooks/useCommandSearch.js";
 import type { PaletteEntry } from "./hooks/useCommandSearch.js";
 import { buildPaletteCommands, searchPaletteCommands } from "./paletteCommands.js";
 import type { PaletteCommand } from "./paletteCommands.js";
-import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
+import {
+  STORAGE_KEYS,
+  readJSON,
+  readNumber,
+  writeJSON,
+  writeNumber,
+} from "./lib/persistedState.js";
 import { describeError } from "./lib/describeError.js";
 import { projectHostCount } from "./lib/hostBadge.js";
 import { openSessionOn } from "./git/sessionLaunch.js";
 import { resolveActiveProjectId } from "./panelUtils.js";
 import { WorktreeOptions } from "./command-palette/WorktreeOptions.js";
+import {
+  AUTO_VALUE,
+  OWN_HOST_VALUE,
+  buildHostTargetOptions,
+  describeAutoPreview,
+  resolveHostChoice,
+} from "./command-palette/hostTarget.js";
+import type { PlacementPreview } from "./api/types.js";
+import { Dropdown } from "./ui/primitives.js";
 import { useFocusTrap, isVisible } from "./hooks/useFocusTrap.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import { dockUnavailableReason } from "./lib/dockAvailability.js";
@@ -517,6 +532,18 @@ export function CommandPalette({
   // time.
   const [worktreeEnabled, setWorktreeEnabled] = useState(false);
   const [worktreeBaseRef, setWorktreeBaseRef] = useState("");
+  // Issue #2237 — the launcher's host target. `rememberedHosts` mirrors the
+  // persisted project id -> choice map; the EFFECTIVE choice is derived from
+  // it against the current project/hosts so a host that has left the project
+  // falls back to the default (null = the project's own host).
+  const hosts = useDashboardStore((s) => s.hosts);
+  const [rememberedHosts, setRememberedHosts] = useState<Record<string, string>>(() =>
+    readJSON<Record<string, string>>(STORAGE_KEYS.lastLaunchHostByProject, {}),
+  );
+  const [autoPreview, setAutoPreview] = useState<{
+    projectId: number;
+    preview: PlacementPreview | null;
+  } | null>(null);
   // The project drill-in and the "New workspace" name step. Declared up
   // here so "New workspace" `.run()` can open the name step without a ref:
   // the step's query reset needs setQuery, which does not exist until the
@@ -901,6 +928,39 @@ export function CommandPalette({
 
   const target = projects.find((p) => p.id === effectiveProjectId) ?? null;
 
+  // Issue #2237 — only a project reaching more than one host (its own plus
+  // its `hostCwds`) gets the chip; a single-host project launches as before.
+  const hostOptions = useMemo(
+    () => (target ? buildHostTargetOptions(target, hosts) : []),
+    [target, hosts],
+  );
+  const showHostChip = target !== null && projectHostCount(target, []) > 1;
+  const hostChoice = target ? resolveHostChoice(rememberedHosts[String(target.id)], target) : null;
+  const placedElsewhere = showHostChip && hostChoice !== null;
+  useEffect(() => {
+    if (!showHostChip || hostChoice !== AUTO_VALUE || effectiveProjectId === null) return;
+    let cancelled = false;
+    api
+      .getPlacementPreview(effectiveProjectId, "auto")
+      .then((preview) => {
+        if (!cancelled) setAutoPreview({ projectId: effectiveProjectId, preview });
+      })
+      .catch(() => {
+        if (!cancelled) setAutoPreview({ projectId: effectiveProjectId, preview: null });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [showHostChip, hostChoice, effectiveProjectId]);
+  const onHostChange = (value: string) => {
+    if (!target) return;
+    const next = { ...rememberedHosts };
+    if (value === OWN_HOST_VALUE) delete next[String(target.id)];
+    else next[String(target.id)] = value;
+    setRememberedHosts(next);
+    writeJSON(STORAGE_KEYS.lastLaunchHostByProject, next);
+  };
+
   // P9 — this used to be `void createSession(...).then(...)` with no
   // `.catch` at all: a failed launch (a 4xx from a bad worktree base ref, a
   // 503 from a dead remote host, ...) left the palette open showing nothing
@@ -944,9 +1004,20 @@ export function CommandPalette({
     useDashboardStore
       .getState()
       .createSession(effectiveProjectId, launcher.command, {
-        cwd: launcher.cwd,
+        // A launcher's cwd is a path on the project's own host; it means
+        // nothing on another one (and `isolate` excludes it).
+        cwd: placedElsewhere ? undefined : launcher.cwd,
         name,
-        worktree: worktreeEnabled && trimmedBaseRef ? { baseRef: trimmedBaseRef } : undefined,
+        // A base ref picked here is unsafe on another host: send `isolate`
+        // and let the server cut the worktree from that host's default.
+        worktree:
+          worktreeEnabled && !placedElsewhere && trimmedBaseRef
+            ? { baseRef: trimmedBaseRef }
+            : undefined,
+        isolate: worktreeEnabled && placedElsewhere ? true : undefined,
+        targetHostId:
+          placedElsewhere && hostChoice !== AUTO_VALUE ? (hostChoice ?? undefined) : undefined,
+        placement: placedElsewhere && hostChoice === AUTO_VALUE ? "auto" : undefined,
         model,
         skipPermissions:
           launcher.kind === "agent"
@@ -1171,6 +1242,29 @@ export function CommandPalette({
               A global command needs a project to resolve its working directory.
             </div>
           )}
+          {showHostChip && (
+            <>
+              <div className="cmd-palette-target-row">
+                <span className="cmd-palette-target-label">On</span>
+                <span className="cmd-palette-target-chip">
+                  <Dropdown
+                    small
+                    ariaLabel="Target host"
+                    value={hostChoice ?? OWN_HOST_VALUE}
+                    onChange={onHostChange}
+                    options={hostOptions}
+                  />
+                </span>
+              </div>
+              {hostChoice === AUTO_VALUE && (
+                <div className="cmd-palette-target-hint indent">
+                  {autoPreview?.projectId === effectiveProjectId && autoPreview.preview
+                    ? describeAutoPreview(autoPreview.preview, hosts)
+                    : "Auto picks the host when you launch."}
+                </div>
+              )}
+            </>
+          )}
           {/* Issue #271, option 1 — opt-in worktree isolation at launch time.
               Not shown until a project target is resolved (mirrors every
               other target-dependent affordance in this strip). */}
@@ -1181,6 +1275,7 @@ export function CommandPalette({
               onEnabledChange={setWorktreeEnabled}
               baseRef={worktreeBaseRef}
               onBaseRefChange={setWorktreeBaseRef}
+              baseOnPlacedHost={placedElsewhere}
             />
           )}
         </div>

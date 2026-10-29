@@ -141,6 +141,11 @@ export interface CreateSessionBody {
   // the two (the route rejects both); the route turns it into `target`.
   targetHostId?: string;
   targetPlatform?: string;
+  // Issue #2237 — apply the "auto" placement policy to THIS launch only,
+  // whatever the project's stored mode is (the project row is never
+  // written). Mutually exclusive with `targetHostId`/`targetPlatform` (the
+  // route) and `hostId` (createSessionRecord).
+  placement?: "auto";
   // When true, a preview worktree created for this session is periodically
   // synced to the branch's latest commit via `git reset --hard`. Set by
   // the frontend based on the dock control's worktreeRefresh config.
@@ -1050,7 +1055,8 @@ function resolveSessionPlacement(
   const decision = resolvePlacement(app, {
     project: {
       hostId: project.hostId,
-      placement: project.placement,
+      // Issue #2237 — a per-launch Auto; the stored mode is left alone.
+      placement: params.placement ?? project.placement,
       cwd: project.cwd,
       hostCwds: project.hostCwds,
     },
@@ -1100,6 +1106,16 @@ async function createSessionRecordInner(
       ok: false,
       reason: "invalid-options",
       detail: "hostId and target are mutually exclusive",
+    };
+  }
+  if (
+    params.placement !== undefined &&
+    (params.hostId !== undefined || params.target !== undefined)
+  ) {
+    return {
+      ok: false,
+      reason: "invalid-options",
+      detail: "placement is mutually exclusive with hostId and a target",
     };
   }
   if (params.isolate) {
