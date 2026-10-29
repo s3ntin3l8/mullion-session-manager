@@ -2593,6 +2593,8 @@ describe("runCommand", () => {
       expect(
         await runCommand(["session", "transcript"], { client: fakeClient(), io: fakeIo() }),
       ).toBe(2);
+    });
+
     it("session message queues a note for a session in another project, optionally waiting (#2270)", async () => {
       const request = vi.fn(async () => ({ messageId: "m-1", status: "queued" }));
       const io = fakeIo();

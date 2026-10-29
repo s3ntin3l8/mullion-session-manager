@@ -343,6 +343,8 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
       limit: 10,
       tools: true,
     });
+  });
+
   it("message_session and get_message_status call the client and validate their input (#2270)", async () => {
     const send = TOOLS.find((t) => t.name === "message_session")!;
     const status = TOOLS.find((t) => t.name === "get_message_status")!;

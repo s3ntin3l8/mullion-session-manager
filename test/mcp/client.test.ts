@@ -403,6 +403,9 @@ describe("MullionClient (issue #271)", () => {
         { sessionId: "7", afterSeq: 5 },
         { limit: 3 },
         { sessionId: "12", limit: 3 },
+      ]);
+    });
+
     it("messageSession and messageStatus send the right ops, and a wait extends the socket timeout (#2270)", async () => {
       const seen: Array<{ op: string; body: unknown }> = [];
       const socketPath = await startControlServer((msg, socket) => {
