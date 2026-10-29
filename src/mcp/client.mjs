@@ -565,6 +565,24 @@ export class MullionClient {
     return this.controlRequest("sessions.prompt", body, socketTimeoutMs);
   }
 
+  /** Issue #2270 — queues a message for a running top-level session in another project
+   * (sessions.message; session scope only). With `wait` it holds until the message is
+   * delivered, refused or expired (up to its ttl). */
+  /** @param {{ sessionId: string, text: string, ttlSeconds?: number, wait?: boolean }} args */
+  async messageSession({ sessionId, text, ttlSeconds, wait }) {
+    const body = { sessionId, text };
+    if (ttlSeconds !== undefined) body.ttlSeconds = ttlSeconds;
+    if (wait === true) body.wait = true;
+    const socketTimeoutMs =
+      wait === true ? (ttlSeconds ?? 600) * 1000 + WAIT_SOCKET_SLACK_MS : undefined;
+    return this.controlRequest("sessions.message", body, socketTimeoutMs);
+  }
+
+  /** The delivery status of a message this session sent. */
+  async messageStatus(messageId) {
+    return this.controlRequest("sessions.message_status", { messageId });
+  }
+
   /** Kills a child session. Session scope may only name a child of its own
    * session (control-socket.ts's resolveOwnedSessionId). */
   async killChildSession(sessionId) {

@@ -159,6 +159,8 @@ split across two cells.
 | `sessions.wait`            | full, session§  | — (server-side wait over `GET /api/sessions/:id`)          | `session wait`                                                      | `wait_for_session`                         |
 | `sessions.wait_for_output` | full, session§  | — (server-side wait over the child's PTY output)           | `session wait-output`                                               | `wait_for_output`                          |
 | `sessions.prompt`          | full, session§  | — (types into the child's PTY)                             | `session prompt`                                                    | `prompt_session`                           |
+| `sessions.message`         | session         | — (queued, then typed into the target)                     | `session message`                                                   | `message_session`                          |
+| `sessions.message_status`  | session         | — (the primary's in-memory queue)                          | `session message-status`                                            | `get_message_status`                       |
 | `sessions.kill`            | full, session‡  | `DELETE /api/sessions/:id`                                 | `session kill` (alias `kill`); `dock stop`†                         | `stop_dock_session`†, `kill_child_session` |
 | `sessions.rename`          | full, session   | `PATCH /api/sessions/:id`                                  | `session rename`                                                    | —                                          |
 | `sessions.scrollback`      | full, session   | `GET /api/sessions/:id/scrollback[?mode=rendered]`         | `session logs [--text]` (alias `logs`)                              | `get_scrollback`                           |
@@ -618,6 +620,45 @@ with the agent's first hook; a primary restart relearns it on the next hook),
 and plain shells), or a Claude session whose working directory path is over 200 characters
 (Claude hashes that project directory's name in a way Mullion cannot reproduce, so it is not read
 rather than guessed). Over the control relay it is an ordinary request/response op.
+
+### `sessions.message` (issue #2270)
+
+Hands a note to an already-running **top-level** session in **another project** (session scope
+only; a full-scope client uses `sessions.prompt`). Body: `{ sessionId, text, ttlSeconds?, wait? }`.
+
+Who may send: the caller's project is a **coordinator** (`allowCrossProjectSpawn`) that reaches the
+target's project (its `crossProjectTargets` list, if any), **and** the target's project has opted in
+(`acceptsMessagesFrom`: `none`, the default; `listed`, only the projects in `acceptsMessagesFromList`;
+or `any`, set in Edit project). The target must be active, have no parent, and not be the caller.
+Every other case — a session that does not exist, a child, the caller's own project, a project that
+has not opted in — is the **same `403`** with the same message, decided from rows alone, so a sender
+cannot probe which sessions and projects exist. Wrong-shaped bodies are `400` (`text` over 8 KiB is
+`413`, `ttlSeconds` must be 1 to 3600). A sender may send 10 messages per minute (`429`), and at most
+8 may wait for one target (`429`).
+
+The text is **queued, not typed**. The primary tries about every two seconds and types it into the
+target once the target is idle: not on a permission/plan/question dialog (typing would answer it),
+not mid-turn, and its agent supports prompts. It is typed as
+
+```
+Message from session <id> (project "<name>"):
+<text>
+```
+
+through the same framing `sessions.prompt` uses, so the target agent knows who is speaking. It carries
+no flags: it cannot raise the target's permissions. The sender and the consent are checked again at
+delivery time; a message whose consent was revoked, or whose sender has exited, is refused. If the
+target does not become idle within `ttlSeconds` (default 600) the message **expires**.
+
+Reply: `202 { messageId, status: "queued", targetSessionId, createdAt, expiresAt }`; with
+`wait: true` the reply is held (counting against the per-connection wait limit) until it is `200`
+with `status` `delivered`, `refused` (with `reason`) or `expired`. **`sessions.message_status`**
+`{ messageId }` returns the same object later; only the sender can read it, and an unknown id,
+someone else's, and a message the primary has forgotten are all `404`. The queue lives in the
+primary's memory: a restart loses queued messages and statuses, and finished ones are forgotten an
+hour later. Each message is audited: a `sessions.message` log line, and `message_sent` /
+`message_received` events on the two sessions' event history (for sessions this primary hosts).
+Works the same from a session on an agent host, through the control relay, and to a target on one.
 
 ## PTY I/O streams (`sessions.attach`/`input`/`resize`/`detach`)
 

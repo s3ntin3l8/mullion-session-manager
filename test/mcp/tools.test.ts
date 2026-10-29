@@ -64,6 +64,8 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "wait_for_session",
       "wait_for_output",
       "prompt_session",
+      "message_session",
+      "get_message_status",
       "kill_child_session",
       "stop_dock_session",
       "get_scrollback",
@@ -341,6 +343,26 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
       limit: 10,
       tools: true,
     });
+  it("message_session and get_message_status call the client and validate their input (#2270)", async () => {
+    const send = TOOLS.find((t) => t.name === "message_session")!;
+    const status = TOOLS.find((t) => t.name === "get_message_status")!;
+    const messageSession = vi.fn().mockResolvedValue({ messageId: "m-1", status: "queued" });
+    const messageStatus = vi.fn().mockResolvedValue({ messageId: "m-1", status: "delivered" });
+    const args = { sessionId: "9", text: "hi", ttlSeconds: 60, wait: true };
+    expect(JSON.parse(await send.handler(args, { messageSession }))).toMatchObject({
+      status: "queued",
+    });
+    expect(messageSession).toHaveBeenCalledWith(args);
+    await expect(send.handler({ text: "x" }, { messageSession })).rejects.toThrow(/sessionId/);
+    await expect(send.handler({ sessionId: "9", text: " " }, { messageSession })).rejects.toThrow(
+      /text/,
+    );
+    expect(JSON.parse(await status.handler({ messageId: "m-1" }, { messageStatus }))).toMatchObject(
+      {
+        status: "delivered",
+      },
+    );
+    await expect(status.handler({}, { messageStatus })).rejects.toThrow(/messageId/);
   });
 
   it('get_scrollback mode "raw" calls client.getScrollback and decodes the b64 result', async () => {

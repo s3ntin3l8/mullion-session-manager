@@ -117,6 +117,8 @@ export interface ProjectsSlice {
         | "crossProjectTargets"
         | "acceptsChildrenFrom"
         | "acceptsChildrenFromList"
+        | "acceptsMessagesFrom"
+        | "acceptsMessagesFromList"
         | "maxAutoReturnRounds"
         | "conventionalCommitTitles"
         | "autoTagRelease"

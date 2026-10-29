@@ -1093,6 +1093,33 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       ).toBeInTheDocument();
     });
 
+    it("sends the messaging consent only when changed, and guards an empty 'listed' (#2270)", async () => {
+      const user = userEvent.setup();
+      const onCreate = renderEdit();
+      const select = screen.getByRole("combobox", { name: "Accepts messages from other projects" });
+      expect(select).toHaveValue("none");
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      expect(onCreate.mock.calls[0]![0].acceptsMessagesFrom).toBeUndefined();
+
+      await user.selectOptions(select, "listed");
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      expect(onCreate).toHaveBeenCalledTimes(1);
+      expect(
+        screen.getByText(/Pick at least one project to accept messages from/),
+      ).toBeInTheDocument();
+
+      await user.click(
+        screen.getByRole("button", {
+          name: "Projects whose coordinators may message a running session here",
+        }),
+      );
+      await user.click(screen.getByRole("checkbox", { name: "runway" }));
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      expect(onCreate).toHaveBeenLastCalledWith(
+        expect.objectContaining({ acceptsMessagesFrom: "listed", acceptsMessagesFromList: [2] }),
+      );
+    });
+
     it("pre-fills the saved consent and has no consent control when creating", () => {
       renderEdit({ initialAcceptsChildrenFrom: "none" });
       expect(

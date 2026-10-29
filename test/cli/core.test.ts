@@ -2593,6 +2593,51 @@ describe("runCommand", () => {
       expect(
         await runCommand(["session", "transcript"], { client: fakeClient(), io: fakeIo() }),
       ).toBe(2);
+    it("session message queues a note for a session in another project, optionally waiting (#2270)", async () => {
+      const request = vi.fn(async () => ({ messageId: "m-1", status: "queued" }));
+      const io = fakeIo();
+      const code = await runCommand(
+        ["session", "message", "9", "please", "re-run", "CI", "--ttl", "120"],
+        { client: fakeClient({ request }), io },
+      );
+      expect(code).toBe(0);
+      expect(request).toHaveBeenCalledWith(
+        "sessions.message",
+        { sessionId: "9", text: "please re-run CI", ttlSeconds: 120 },
+        undefined,
+      );
+      expect(io.written.map((b) => b.toString()).join("")).toContain("message m-1: queued");
+
+      await runCommand(["session", "message", "9", "hi", "--wait", "--ttl", "30"], {
+        client: fakeClient({ request }),
+        io: fakeIo(),
+      });
+      expect(request).toHaveBeenLastCalledWith(
+        "sessions.message",
+        { sessionId: "9", text: "hi", ttlSeconds: 30, wait: true },
+        { timeoutMs: 30_000 + 15_000 },
+      );
+    });
+
+    it("session message needs a target and text; message-status needs an id (#2270)", async () => {
+      const client = fakeClient();
+      expect(await runCommand(["session", "message"], { client, io: fakeIo() })).toBe(2);
+      expect(await runCommand(["session", "message", "9"], { client, io: fakeIo() })).toBe(2);
+      expect(await runCommand(["session", "message-status"], { client, io: fakeIo() })).toBe(2);
+      const request = vi.fn(async () => ({
+        messageId: "m-1",
+        status: "refused",
+        reason: "not supported",
+      }));
+      const io = fakeIo();
+      expect(
+        await runCommand(["session", "message-status", "m-1"], {
+          client: fakeClient({ request }),
+          io,
+        }),
+      ).toBe(0);
+      expect(request).toHaveBeenCalledWith("sessions.message_status", { messageId: "m-1" });
+      expect(io.written.map((b) => b.toString()).join("")).toContain("refused (not supported)");
     });
 
     it("session logs --text prints nothing for an empty screen (issue #2112)", async () => {

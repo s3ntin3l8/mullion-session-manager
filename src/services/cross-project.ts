@@ -93,13 +93,50 @@ export function crossProjectAllowed(
   return coordinatorReaches(source, target) && targetAccepts(target, source.id);
 }
 
+export type AcceptsMessagesFrom = AcceptsChildrenFrom;
+
+/** The stored messaging consent. Unlike children, the default (unset) is NONE: a
+ * running session never takes instructions from another project until its operator
+ * opts in. An unknown value refuses. */
+function readAcceptsMessages(value: string | null | undefined): AcceptsMessagesFrom {
+  return value === "any" || value === "listed" ? value : "none";
+}
+
+/** Whether `target` takes messages from `sourceId`'s sessions. */
+export function targetAcceptsMessages(target: ProjectRow, sourceId: number): boolean {
+  switch (readAcceptsMessages(target.acceptsMessagesFrom)) {
+    case "any":
+      return true;
+    case "none":
+      return false;
+    case "listed":
+      return (parseProjectIdList(target.acceptsMessagesFromList) ?? []).includes(sourceId);
+  }
+}
+
+/**
+ * May a session of `source` send a message to a running session of `target`
+ * (issue #2270)? Only across projects: the source must be a coordinator that reaches
+ * the target (the same target list as spawning), AND the target project must have
+ * opted in to messages from the source. A missing row refuses.
+ */
+export function messageAllowed(
+  source: ProjectRow | undefined,
+  target: ProjectRow | undefined,
+): boolean {
+  if (!source || !target || source.id === target.id) return false;
+  return coordinatorReaches(source, target) && targetAcceptsMessages(target, source.id);
+}
+
 /** A project row's lists as arrays for the API (the columns hold JSON text). */
 export function crossProjectFieldsOut(row: ProjectRow): {
   crossProjectTargets: number[] | null;
   acceptsChildrenFromList: number[] | null;
+  acceptsMessagesFromList: number[] | null;
 } {
   return {
     crossProjectTargets: parseProjectIdList(row.crossProjectTargets),
     acceptsChildrenFromList: parseProjectIdList(row.acceptsChildrenFromList),
+    acceptsMessagesFromList: parseProjectIdList(row.acceptsMessagesFromList),
   };
 }

@@ -24,9 +24,17 @@ import { SocketChannel, WRITE_HARD_CEILING_BYTES } from "../services/socket-chan
 import { reclaimSocketPath } from "../services/unix-socket.js";
 import { isPipePath } from "../cli/ipc-path.mjs";
 import { restrictPipeToCurrentUser } from "../cli/pipe-acl.mjs";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
-import { crossProjectAllowed } from "../services/cross-project.js";
+import { crossProjectAllowed, messageAllowed } from "../services/cross-project.js";
+import {
+  DEFAULT_MESSAGE_TTL_MS,
+  SessionMessageQueue,
+  WindowRateLimiter,
+  type DeliverOutcome,
+  type QueuedMessage,
+  type TargetReadiness,
+} from "../services/session-message-queue.js";
 import type { SessionSeverity, SessionStatus } from "../shared/types.js";
 import { compileOutputMatcher } from "../services/output-wait.js";
 import {
@@ -1185,6 +1193,163 @@ async function refuseIfBlockedOrGone(
 // docs/socket-api.md's stream section — without needing any change to
 // handleConnection's dispatch loop below.
 /** Exported for the scope-matrix test in test/plugins/control-socket.test.ts. */
+
+// ---------------------------------------------------------------------------
+// Issue #2270 — sessions.message: a coordinator's session hands text to an already
+// running TOP-LEVEL session in another project, with that project's consent.
+// ---------------------------------------------------------------------------
+
+/** Most bytes of one message. Smaller than a prompt: this is a note, not a task. */
+const MAX_MESSAGE_BYTES = 8 * 1024;
+const MAX_MESSAGE_TTL_SECONDS = 3600;
+/** Messages one session may send per minute. */
+const MESSAGES_PER_MINUTE = 10;
+
+/** One uniform 403 for every reason a message is not allowed (no such session, a
+ * child, the sender's own project, a project that has not opted in, ...), decided from
+ * rows alone, so a sender cannot probe which sessions and projects exist. */
+const MESSAGE_REFUSED =
+  "no such session, or this session may not message it " +
+  "(a coordinator project, and a target project that accepts messages from it, are required)";
+
+/** Null when `callerId` may message the running top-level session `targetId`. */
+function messageRefusal(app: FastifyInstance, callerId: number, targetId: number): string | null {
+  if (callerId === targetId) return MESSAGE_REFUSED;
+  const rows = app.db
+    .select({
+      id: sessions.id,
+      status: sessions.status,
+      parentSessionId: sessions.parentSessionId,
+      projectId: sessions.projectId,
+    })
+    .from(sessions)
+    .where(inArray(sessions.id, [callerId, targetId]))
+    .all();
+  const caller = rows.find((row) => row.id === callerId);
+  const target = rows.find((row) => row.id === targetId);
+  if (!caller || !target || target.status !== "active" || target.parentSessionId !== null) {
+    return MESSAGE_REFUSED;
+  }
+  if (caller.projectId === null || target.projectId === null) return MESSAGE_REFUSED;
+  const [callerProject] = app.db
+    .select()
+    .from(projects)
+    .where(eq(projects.id, caller.projectId))
+    .all();
+  const [targetProject] = app.db
+    .select()
+    .from(projects)
+    .where(eq(projects.id, target.projectId))
+    .all();
+  return messageAllowed(callerProject, targetProject) ? null : MESSAGE_REFUSED;
+}
+
+const isBusyOrBlocked = (error: string | undefined): boolean =>
+  typeof error === "string" && /^agent_(busy|blocked)\b/.test(error);
+
+interface MessageState {
+  queue: SessionMessageQueue;
+  limiter: WindowRateLimiter;
+}
+const messageStates = new WeakMap<FastifyInstance, MessageState>();
+
+function messageState(app: FastifyInstance): MessageState {
+  const existing = messageStates.get(app);
+  if (existing) return existing;
+  const queue = new SessionMessageQueue({
+    // Re-decided at delivery time: consent can be revoked, the sender can die, the
+    // target can finish or start a turn in the meantime.
+    check: async (message): Promise<TargetReadiness> => {
+      if (messageRefusal(app, message.fromSessionId, message.targetSessionId) !== null) {
+        return { state: "refuse", reason: "no longer permitted" };
+      }
+      if (!sessionRowIsActive(app, String(message.fromSessionId))) {
+        return { state: "refuse", reason: "the sender is no longer active" };
+      }
+      const refusal = await refuseIfBlockedOrGone(app, String(message.targetSessionId), {
+        refuseBusy: true,
+      });
+      if (refusal === null) return { state: "ready" };
+      return isBusyOrBlocked(refusal.ok ? undefined : refusal.error)
+        ? { state: "wait" }
+        : { state: "refuse", reason: refusal.ok ? "refused" : (refusal.error ?? "refused") };
+    },
+    deliver: async (message): Promise<DeliverOutcome> => {
+      const id = String(message.targetSessionId);
+      const text = sanitizePromptText(
+        `Message from session ${message.fromSessionId}${message.fromLabel ? ` (${message.fromLabel})` : ""}:\n${message.text}`,
+      );
+      const hostId = childHostId(app, id);
+      if (hostId !== LOCAL_HOST_ID) {
+        const outcome = await resolveBackend(app, hostId).prompt(id, { text, submit: true });
+        return outcome.ok
+          ? { ok: true }
+          : { ok: false, reason: outcome.error, retry: isBusyOrBlocked(outcome.error) };
+      }
+      const unverifiable = await adoptLocalChild(app, id);
+      if (unverifiable) return { ok: false, reason: UNVERIFIABLE_MESSAGE, retry: true };
+      const delivery = await deliverPrompt(app, id, {
+        text,
+        submit: true,
+        notRunning: NOT_LOCAL_MESSAGE,
+        check: async (stage) => {
+          const refusal = await refuseIfBlockedOrGone(
+            app,
+            id,
+            stage === "before"
+              ? { refuseBusy: true }
+              : {
+                  note: " — the text was typed but NOT submitted and may still be in its input box",
+                },
+          );
+          return refusal && !refusal.ok
+            ? { status: refusal.status ?? 500, error: refusal.error ?? "refused" }
+            : null;
+        },
+      });
+      return delivery.ok
+        ? { ok: true }
+        : { ok: false, reason: delivery.error, retry: isBusyOrBlocked(delivery.error) };
+    },
+    onChange: (message) => auditMessage(app, message),
+  });
+  const state = { queue, limiter: new WindowRateLimiter(MESSAGES_PER_MINUTE, 60_000) };
+  messageStates.set(app, state);
+  return state;
+}
+
+/** Logs a message's outcome and records it on both sessions' event history (where the
+ * session lives on this primary; a session on another host is covered by the log). */
+function auditMessage(app: FastifyInstance, message: QueuedMessage): void {
+  const detail = {
+    messageId: message.id,
+    from: message.fromSessionId,
+    to: message.targetSessionId,
+    status: message.status,
+    ...(message.reason !== undefined ? { reason: message.reason } : {}),
+  };
+  app.log.info(detail, "sessions.message");
+  app.pty.get(String(message.fromSessionId))?.emitMessageEvent("message_sent", detail);
+  if (message.status === "delivered") {
+    app.pty.get(String(message.targetSessionId))?.emitMessageEvent("message_received", {
+      ...detail,
+      bytes: Buffer.byteLength(message.text, "utf8"),
+    });
+  }
+}
+
+function describeMessage(message: QueuedMessage): Record<string, unknown> {
+  return {
+    messageId: message.id,
+    status: message.status,
+    targetSessionId: message.targetSessionId,
+    createdAt: message.createdAt,
+    expiresAt: message.expiresAt,
+    ...(message.reason !== undefined ? { reason: message.reason } : {}),
+    ...(message.finishedAt !== undefined ? { finishedAt: message.finishedAt } : {}),
+  };
+}
+
 export const OPS: Record<string, OpSpec> = {
   ping: {
     scopes: ["full", "session"],
@@ -1397,6 +1562,131 @@ export const OPS: Record<string, OpSpec> = {
   // prompt must not read as the human acknowledging the child's pending
   // attention. It still starts a new turn (Session.beginAgentTurn) so a
   // following wait can't match the previous turn's `finished`.
+  // Issue #2270 — hand a note to an already-running top-level session in ANOTHER
+  // project. Session scope only (full scope has sessions.prompt). Allowed when the
+  // caller's project is a coordinator that reaches the target's project AND that
+  // project accepts messages from it (off by default); anything else is one uniform
+  // 403. The text is QUEUED, not typed: it is delivered, framed with its source, once
+  // the target is idle and not on a dialog, or expires. `wait: true` holds the reply
+  // until it is delivered, refused or expired.
+  "sessions.message": {
+    scopes: ["session"],
+    handler: async ({ app, conn, body, reply }) => {
+      const targetRef = extractSessionId(body);
+      if (targetRef === null) {
+        reply(bad(400, "'sessionId' is required (the session to message)"));
+        return;
+      }
+      const text = body?.text;
+      if (typeof text !== "string") {
+        reply(bad(400, "'text' is required"));
+        return;
+      }
+      if (Buffer.byteLength(text, "utf8") > MAX_MESSAGE_BYTES) {
+        reply(bad(413, `'text' exceeds ${MAX_MESSAGE_BYTES} bytes`));
+        return;
+      }
+      if (sanitizePromptText(text).trim().length === 0) {
+        reply(bad(400, "'text' is required"));
+        return;
+      }
+      const ttlSeconds = body?.ttlSeconds;
+      if (
+        ttlSeconds !== undefined &&
+        (typeof ttlSeconds !== "number" ||
+          !Number.isInteger(ttlSeconds) ||
+          ttlSeconds < 1 ||
+          ttlSeconds > MAX_MESSAGE_TTL_SECONDS)
+      ) {
+        reply(bad(400, `'ttlSeconds' must be an integer from 1 to ${MAX_MESSAGE_TTL_SECONDS}`));
+        return;
+      }
+      const wait = body?.wait;
+      if (wait !== undefined && typeof wait !== "boolean") {
+        reply(bad(400, "'wait' must be a boolean"));
+        return;
+      }
+      const callerId = Number(conn.sessionId);
+      if (!sessionRowIsActive(app, conn.sessionId!)) {
+        reply({ ok: false, status: 403, error: "this session is no longer active" });
+        return;
+      }
+      const { queue, limiter } = messageState(app);
+      // Counted before the authorization below, so probing for a consenting session
+      // is bounded too.
+      if (!limiter.take(String(callerId))) {
+        reply(bad(429, `at most ${MESSAGES_PER_MINUTE} messages per minute per session`));
+        return;
+      }
+      const targetId = Number(targetRef);
+      const refusal = Number.isInteger(targetId)
+        ? messageRefusal(app, callerId, targetId)
+        : MESSAGE_REFUSED;
+      if (refusal !== null) {
+        reply({ ok: false, status: 403, error: refusal });
+        return;
+      }
+      if (wait === true && (conn.activeWaits ?? 0) >= MAX_WAITS_PER_CONNECTION) {
+        reply(bad(429, "too many pending waits on this connection"));
+        return;
+      }
+      const [callerRow] = app.db
+        .select({ name: projects.name })
+        .from(sessions)
+        .innerJoin(projects, eq(sessions.projectId, projects.id))
+        .where(eq(sessions.id, callerId))
+        .all();
+      const message = queue.enqueue({
+        fromSessionId: callerId,
+        fromLabel: sanitizePromptText(`project ${JSON.stringify(callerRow?.name ?? "?")}`).slice(
+          0,
+          120,
+        ),
+        targetSessionId: targetId,
+        text,
+        ttlMs: (ttlSeconds ?? DEFAULT_MESSAGE_TTL_MS / 1000) * 1000,
+      });
+      if (message === null) {
+        reply(bad(429, "too many messages are already waiting for that session"));
+        return;
+      }
+      if (wait !== true) {
+        reply({ ok: true, status: 202, result: describeMessage(message) });
+        return;
+      }
+      conn.activeWaits += 1;
+      const aborter = new AbortController();
+      const offClose = conn.onClose(() => aborter.abort());
+      try {
+        const settled = await queue.waitUntilSettled(message.id, aborter.signal);
+        if (settled && !aborter.signal.aborted) {
+          reply({ ok: true, status: 200, result: describeMessage(settled) });
+        }
+      } finally {
+        conn.activeWaits -= 1;
+        offClose();
+      }
+    },
+  },
+  // The delivery status of a message the caller sent: queued, delivered, expired or
+  // refused. Only the sender can ask; an unknown id, someone else's, and a message the
+  // primary forgot (a restart, or an hour after it finished) are all the same 404.
+  "sessions.message_status": {
+    scopes: ["session"],
+    handler: ({ app, conn, body, reply }) => {
+      const messageId = body?.messageId;
+      if (typeof messageId !== "string" || messageId.length === 0) {
+        reply(bad(400, "'messageId' is required"));
+        return;
+      }
+      const message = messageState(app).queue.get(messageId);
+      if (!message || message.fromSessionId !== Number(conn.sessionId)) {
+        reply(bad(404, "unknown message (it may have been forgotten after a restart)"));
+        return;
+      }
+      reply({ ok: true, status: 200, result: describeMessage(message) });
+    },
+  },
   "sessions.prompt": {
     scopes: ["full", "session"],
     handler: async ({ app, conn, body, reply }) => {
@@ -2894,6 +3184,9 @@ export const controlSocketPlugin = fp(async (app: FastifyInstance) => {
   app.decorate("controlServer", server);
 
   app.addHook("onClose", async () => {
+    // Issue #2270 — the queue is created on first use (the app may already be listening
+    // by then, when hooks can no longer be added), so it is stopped here.
+    messageStates.get(app)?.queue.stop();
     for (const socket of openSockets) {
       // Issue #2271 — tell the peer WHY it is being dropped: this is the
       // id-less fatal frame the clients already fail every pending request

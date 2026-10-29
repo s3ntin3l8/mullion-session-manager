@@ -1387,6 +1387,8 @@ function ProjectHeader({
               initialCrossProjectTargets={project.crossProjectTargets}
               initialAcceptsChildrenFrom={project.acceptsChildrenFrom}
               initialAcceptsChildrenFromList={project.acceptsChildrenFromList}
+              initialAcceptsMessagesFrom={project.acceptsMessagesFrom}
+              initialAcceptsMessagesFromList={project.acceptsMessagesFromList}
               initialMaxAutoReturnRounds={project.maxAutoReturnRounds}
               initialConventionalCommitTitles={project.conventionalCommitTitles}
               initialAutoTagRelease={project.autoTagRelease}
@@ -1412,6 +1414,8 @@ function ProjectHeader({
                 crossProjectTargets,
                 acceptsChildrenFrom,
                 acceptsChildrenFromList,
+                acceptsMessagesFrom,
+                acceptsMessagesFromList,
                 maxAutoReturnRounds,
                 conventionalCommitTitles,
                 autoTagRelease,
@@ -1433,6 +1437,8 @@ function ProjectHeader({
                   crossProjectTargets,
                   acceptsChildrenFrom,
                   acceptsChildrenFromList,
+                  acceptsMessagesFrom,
+                  acceptsMessagesFromList,
                   maxAutoReturnRounds,
                   conventionalCommitTitles,
                   autoTagRelease,

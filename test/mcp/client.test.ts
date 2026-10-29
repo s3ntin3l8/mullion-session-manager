@@ -403,6 +403,25 @@ describe("MullionClient (issue #271)", () => {
         { sessionId: "7", afterSeq: 5 },
         { limit: 3 },
         { sessionId: "12", limit: 3 },
+    it("messageSession and messageStatus send the right ops, and a wait extends the socket timeout (#2270)", async () => {
+      const seen: Array<{ op: string; body: unknown }> = [];
+      const socketPath = await startControlServer((msg, socket) => {
+        seen.push({ op: msg.op as string, body: msg.body });
+        socket.write(
+          `${JSON.stringify({ id: msg.id, ok: true, status: 202, result: { messageId: "m-1", status: "queued" } })}\n`,
+        );
+      });
+      const client = new MullionClient({ MULLION_SOCKET_PATH: socketPath });
+      await client.messageSession({ sessionId: "9", text: "hi", ttlSeconds: 30, wait: true });
+      await client.messageSession({ sessionId: "9", text: "hi" });
+      await client.messageStatus("m-1");
+      expect(seen).toEqual([
+        {
+          op: "sessions.message",
+          body: { sessionId: "9", text: "hi", ttlSeconds: 30, wait: true },
+        },
+        { op: "sessions.message", body: { sessionId: "9", text: "hi" } },
+        { op: "sessions.message_status", body: { messageId: "m-1" } },
       ]);
     });
 
