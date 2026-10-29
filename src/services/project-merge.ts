@@ -268,6 +268,7 @@ interface DuplicateCache {
   generation: number;
   /** Origin keys already announced on the bell; in memory only, so a restart may announce again. */
   announced: Set<string>;
+  timer: NodeJS.Timeout | null;
 }
 
 const duplicateCaches = new WeakMap<FastifyInstance, DuplicateCache>();
@@ -275,7 +276,7 @@ const duplicateCaches = new WeakMap<FastifyInstance, DuplicateCache>();
 function cacheFor(app: FastifyInstance): DuplicateCache {
   let cache = duplicateCaches.get(app);
   if (!cache) {
-    cache = { groups: null, generation: 0, announced: new Set() };
+    cache = { groups: null, generation: 0, announced: new Set(), timer: null };
     duplicateCaches.set(app, cache);
   }
   return cache;
@@ -330,12 +331,34 @@ export function invalidateDuplicateGroups(app: FastifyInstance): void {
   cache.groups = null;
 }
 
-/** Invalidates and recomputes without making the caller wait (a failure is only logged). */
-export function refreshDuplicateGroupsInBackground(app: FastifyInstance): void {
+/** How long a burst of project edits settles before the recompute reads every origin. */
+const RECOMPUTE_DELAY_MS = 5_000;
+
+/**
+ * Invalidates now and recomputes a little later, without making the caller
+ * wait (a failure is only logged). Repeated calls coalesce into one recompute.
+ */
+export function refreshDuplicateGroupsInBackground(
+  app: FastifyInstance,
+  delayMs = RECOMPUTE_DELAY_MS,
+): void {
   invalidateDuplicateGroups(app);
-  void getDuplicateGroups(app, { refresh: true }).catch((err) =>
-    app.log.warn({ err }, "project merge: duplicate-groups recompute failed"),
-  );
+  const cache = cacheFor(app);
+  if (cache.timer) clearTimeout(cache.timer);
+  cache.timer = setTimeout(() => {
+    cache.timer = null;
+    void getDuplicateGroups(app, { refresh: true }).catch((err) =>
+      app.log.warn({ err }, "project merge: duplicate-groups recompute failed"),
+    );
+  }, delayMs);
+  cache.timer.unref();
+}
+
+/** Drops a pending background recompute (the app is closing). */
+export function cancelDuplicateRefresh(app: FastifyInstance): void {
+  const cache = cacheFor(app);
+  if (cache.timer) clearTimeout(cache.timer);
+  cache.timer = null;
 }
 
 export type MergeResult =

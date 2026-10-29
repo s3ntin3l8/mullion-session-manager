@@ -23,6 +23,7 @@ import {
   isStorablePath,
 } from "../services/host-checkout-detect.js";
 import {
+  cancelDuplicateRefresh,
   getDuplicateGroups,
   mergeProjects,
   refreshDuplicateGroupsInBackground,
@@ -5435,13 +5436,11 @@ export async function projectsRoute(app: FastifyInstance) {
   // cache a little after start, so remote hosts have connected and their
   // origins are readable, and a pre-existing duplicate rings the bell once.
   if (app.config.NODE_ENV === "production") {
-    let prime: NodeJS.Timeout | undefined;
     app.addHook("onReady", async () => {
-      prime = setTimeout(() => refreshDuplicateGroupsInBackground(app), DUPLICATE_PRIME_DELAY_MS);
-      prime.unref();
+      refreshDuplicateGroupsInBackground(app, DUPLICATE_PRIME_DELAY_MS);
     });
-    app.addHook("onClose", async () => clearTimeout(prime));
   }
+  app.addHook("onClose", async () => cancelDuplicateRefresh(app));
 }
 
 export function pingDevServer(urlStr: string, timeoutMs = 1000): Promise<boolean> {

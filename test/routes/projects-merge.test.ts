@@ -90,6 +90,17 @@ describe("project merge routes", () => {
       await vi.waitFor(async () => expect((await list()).groups).toHaveLength(0));
     });
 
+    it("recomputes in the background after an invalidation, coalescing bursts", async () => {
+      const { refreshDuplicateGroupsInBackground, cancelDuplicateRefresh } =
+        await import("../../src/services/project-merge.js");
+      refreshDuplicateGroupsInBackground(app, 10_000);
+      cancelDuplicateRefresh(app);
+      expect(notifyOperator).not.toHaveBeenCalled();
+      refreshDuplicateGroupsInBackground(app, 0);
+      refreshDuplicateGroupsInBackground(app, 0);
+      await vi.waitFor(() => expect(notifyOperator).toHaveBeenCalledTimes(1));
+    });
+
     it("notifies once per group, without naming the repository", async () => {
       await list();
       await list("?refresh=1");
