@@ -467,6 +467,8 @@ class LocalBackend implements SessionBackend {
     target: string,
     candidates: WorktreePathCandidate[],
   ): Promise<WorktreePathRelation[]> {
+    // Only the remote usage guard calls this seam today. Local callers own
+    // these filesystem paths; the agent endpoint separately enforces roots.
     return compareWorktreePaths(
       target,
       candidates,
