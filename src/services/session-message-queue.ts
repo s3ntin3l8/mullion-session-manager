@@ -10,6 +10,7 @@
 // socket, do the work: `check` says whether the target can take text right now, `deliver`
 // types it. That keeps the policy here and the terminal handling where it already lives.
 import { randomUUID } from "node:crypto";
+import { sanitizePromptText } from "./hook-adapters/shared.js";
 
 export type MessageStatus = "queued" | "delivered" | "expired" | "refused";
 
@@ -238,4 +239,29 @@ export class WindowRateLimiter {
     current.used += 1;
     return true;
   }
+}
+
+/** A sender's project name made safe for the provenance line: control and line-break
+ * characters removed FIRST (so none can survive into the header), cut by code points. */
+export function provenanceLabel(projectName: string): string {
+  const clean = sanitizePromptText(projectName).replace(/\s+/g, " ").trim();
+  return `project ${JSON.stringify([...clean].slice(0, 80).join("") || "?")}`;
+}
+
+/**
+ * The text typed into the target: a provenance header, the body with EVERY line quoted
+ * (`> `), and an end line naming the sender. Quoting is what keeps a body from forging a
+ * second "Message from session ..." header or an end line: whatever it contains, only
+ * these lines start without the quote. Line breaks of every kind are normalised before
+ * quoting, so U+2028 and friends cannot start an unquoted line either.
+ */
+export function frameMessage(
+  message: Pick<QueuedMessage, "fromSessionId" | "fromLabel" | "text">,
+): string {
+  const body = sanitizePromptText(message.text)
+    .split("\n")
+    .map((line) => `> ${line}`)
+    .join("\n");
+  const from = `session ${message.fromSessionId}${message.fromLabel ? ` (${message.fromLabel})` : ""}`;
+  return `Message from ${from}:\n${body}\n(end of message from session ${message.fromSessionId})`;
 }

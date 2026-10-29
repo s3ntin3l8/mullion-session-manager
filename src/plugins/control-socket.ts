@@ -30,6 +30,8 @@ import { crossProjectAllowed, messageAllowed } from "../services/cross-project.j
 import {
   DEFAULT_MESSAGE_TTL_MS,
   SessionMessageQueue,
+  frameMessage,
+  provenanceLabel,
   WindowRateLimiter,
   type DeliverOutcome,
   type QueuedMessage,
@@ -1270,15 +1272,19 @@ function messageState(app: FastifyInstance): MessageState {
         refuseBusy: true,
       });
       if (refusal === null) return { state: "ready" };
-      return isBusyOrBlocked(refusal.ok ? undefined : refusal.error)
-        ? { state: "wait" }
-        : { state: "refuse", reason: refusal.ok ? "refused" : (refusal.error ?? "refused") };
+      // Busy and blocked wait for the target to settle. So does a server-side failure
+      // reading its status (a remote host unreachable for a moment): the TTL bounds it,
+      // and a note must not be lost to a one-tick blip. Gone, unknown and unsupported
+      // sessions are final.
+      const error = refusal.ok ? undefined : refusal.error;
+      if (isBusyOrBlocked(error) || (!refusal.ok && (refusal.status ?? 0) >= 500)) {
+        return { state: "wait" };
+      }
+      return { state: "refuse", reason: error ?? "refused" };
     },
     deliver: async (message): Promise<DeliverOutcome> => {
       const id = String(message.targetSessionId);
-      const text = sanitizePromptText(
-        `Message from session ${message.fromSessionId}${message.fromLabel ? ` (${message.fromLabel})` : ""}:\n${message.text}`,
-      );
+      const text = frameMessage(message);
       const hostId = childHostId(app, id);
       if (hostId !== LOCAL_HOST_ID) {
         const outcome = await resolveBackend(app, hostId).prompt(id, { text, submit: true });
@@ -1288,6 +1294,10 @@ function messageState(app: FastifyInstance): MessageState {
       }
       const unverifiable = await adoptLocalChild(app, id);
       if (unverifiable) return { ok: false, reason: UNVERIFIABLE_MESSAGE, retry: true };
+      // Set once a refusal comes AFTER the text was typed (the dialog appeared in the gap
+      // before Enter): the text may still sit in the target's input box, so typing it
+      // again on a retry would double it. That one is final.
+      let typedBeforeRefusal = false;
       const delivery = await deliverPrompt(app, id, {
         text,
         submit: true,
@@ -1302,6 +1312,7 @@ function messageState(app: FastifyInstance): MessageState {
                   note: " — the text was typed but NOT submitted and may still be in its input box",
                 },
           );
+          if (refusal && !refusal.ok && stage !== "before") typedBeforeRefusal = true;
           return refusal && !refusal.ok
             ? { status: refusal.status ?? 500, error: refusal.error ?? "refused" }
             : null;
@@ -1309,7 +1320,11 @@ function messageState(app: FastifyInstance): MessageState {
       });
       return delivery.ok
         ? { ok: true }
-        : { ok: false, reason: delivery.error, retry: isBusyOrBlocked(delivery.error) };
+        : {
+            ok: false,
+            reason: delivery.error,
+            retry: !typedBeforeRefusal && isBusyOrBlocked(delivery.error),
+          };
     },
     onChange: (message) => auditMessage(app, message),
   });
@@ -1638,10 +1653,7 @@ export const OPS: Record<string, OpSpec> = {
         .all();
       const message = queue.enqueue({
         fromSessionId: callerId,
-        fromLabel: sanitizePromptText(`project ${JSON.stringify(callerRow?.name ?? "?")}`).slice(
-          0,
-          120,
-        ),
+        fromLabel: provenanceLabel(callerRow?.name ?? "?"),
         targetSessionId: targetId,
         text,
         ttlMs: (ttlSeconds ?? DEFAULT_MESSAGE_TTL_MS / 1000) * 1000,
