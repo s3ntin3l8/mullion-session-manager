@@ -122,8 +122,9 @@ export interface ConnectionState {
   /** Runs `listener` once if the connection closes; returns the unsubscribe. */
   onClose: (listener: () => void) => () => void;
   /** The raw socket, for the streaming ops (`attach`, `events.*`) that write
-   * through a SocketChannel. Null on a connection with no local socket (a
-   * relay), where those ops are refused. */
+   * through a SocketChannel. A relayed connection carries its in-memory pair's
+   * server half here (#2125). Null only on a connection with no socket at all
+   * (a test sink), where those ops are refused. */
   readonly socket: net.Socket | null;
   scope: Scope;
   /** Set only for scope "session" — the connection is pinned to this
@@ -252,7 +253,8 @@ function projectCoordinates(app: FastifyInstance, projectId: number): boolean {
   return row?.allowCrossProjectSpawn === true;
 }
 
-/** Streaming ops need the raw socket; a relayed connection has none (#2125). */
+/** Streaming ops need a socket to write their frames to; only a connection with
+ * none (a test sink) lacks one now that a relay carries its pair (#2125). */
 const STREAM_UNAVAILABLE: ReplyPayload = {
   ok: false,
   status: 501,
@@ -482,14 +484,6 @@ function sessionRowIsActive(app: FastifyInstance, id: string): boolean {
   return row?.status === "active";
 }
 
-/**
- * Event filter for a session-scoped `events.subscribe` with `includeChildren`:
- * the pinned session plus every session whose `parent_session_id` is it. The
- * bus carries no "child spawned" event, so an id is classified the first time
- * one of its events shows up, with one synchronous DB lookup memoised per
- * subscription — safe to cache negatives too, because `parent_session_id` is
- * set at creation and never changes.
- */
 /** The ids of `parentId`'s children (issue #2125: seeds an event replay). */
 function childSessionIds(app: FastifyInstance, parentId: number): number[] {
   return app.db
@@ -500,6 +494,14 @@ function childSessionIds(app: FastifyInstance, parentId: number): number[] {
     .map((row) => row.id);
 }
 
+/**
+ * Event filter for a session-scoped `events.subscribe` with `includeChildren`:
+ * the pinned session plus every session whose `parent_session_id` is it. The
+ * bus carries no "child spawned" event, so an id is classified the first time
+ * one of its events shows up, with one synchronous DB lookup memoised per
+ * subscription — safe to cache negatives too, because `parent_session_id` is
+ * set at creation and never changes.
+ */
 function ownAndChildSessionFilter(
   app: FastifyInstance,
   pinnedId: number,

@@ -428,5 +428,11 @@ export function publishVerifiedRemoteEvent(
   sourceHostId: string,
 ): void {
   if (!bus || bus.size === 0) return;
-  if (filterHostOwnership(app, [{ event, sourceHostId }]).length === 1) bus.publish(event);
+  // Called from the remote subscriber's websocket message handler, where a throw would
+  // reach the process: log it and drop the live event, as flush() does for a batch.
+  try {
+    if (filterHostOwnership(app, [{ event, sourceHostId }]).length === 1) bus.publish(event);
+  } catch (err) {
+    app.log.error({ err }, "failed to verify a remote event's host for the live feed; dropping it");
+  }
 }

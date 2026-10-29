@@ -137,6 +137,14 @@ describe("publishVerifiedRemoteEvent (#2125)", () => {
     // A session that does not exist is dropped too.
     publishVerifiedRemoteEvent(app, bus, remoteEvent(999_999, 1), "host-a");
     expect(heard.map((e) => e.seq)).toEqual([2]);
+    // A failing ownership read drops the event and never throws into the caller.
+    const original = app.db.select.bind(app.db);
+    app.db.select = (() => {
+      throw new Error("db closed");
+    }) as never;
+    expect(() => publishVerifiedRemoteEvent(app, bus, remoteEvent(onA, 4), "host-a")).not.toThrow();
+    app.db.select = original as never;
+    expect(heard.map((e) => e.seq)).toEqual([2]);
     // The agent role has no bus at all.
     expect(() => publishVerifiedRemoteEvent(app, null, event, "host-a")).not.toThrow();
   });
