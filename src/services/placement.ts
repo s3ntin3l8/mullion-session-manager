@@ -366,16 +366,17 @@ export function chooseHost(
  */
 function exclusionReason(candidate: PlacementCandidate, context: PlacementContext): string | null {
   const capacity = candidate.isLocal ? context.localCapacity : candidate.capacity;
+  // Issue #2239 — checked FIRST: the role is static, while a sleeping laptop
+  // is usually also offline, and "burst host" is the reason worth showing.
+  if (candidate.role === "burst" && context.allowBurst !== true) {
+    return "burst host (only an explicit target uses it)";
+  }
   if (!candidate.online) return "offline";
   if (candidate.drained) return "parked";
   if (capacity === null) return "no capacity reported";
   // Issue #1724 — the host must have the project: a session runs in a
   // directory, and this host's directory does not have it.
   if (candidate.projectCwd === null) return "the project has no path on this host";
-  // Issue #2239 — a burst host is not always on; only an explicit target uses it.
-  if (candidate.role === "burst" && context.allowBurst !== true) {
-    return "burst host (only an explicit target uses it)";
-  }
   return null;
 }
 
@@ -482,10 +483,11 @@ function collectCandidates(app: FastifyInstance, project: PlacementProject): Col
       // Issue #1724 — where the project lives on THIS host. Null for a
       // host the project is not on, which makes it not a candidate.
       projectCwd: projectCwdOnHost(project, host.id, hostCwds),
+      // Issue #2239 — what the host is for (burst hosts stay out of Auto).
+      role: host.role,
       // Issue #1951 — what a targeted spawn matches `platform` against: the
       // host's self-reported platform, else its cached capacity reading's,
       // else (the local host) this process's own.
-      role: host.role,
       platform: isLocal
         ? (localCapacity?.platform ?? process.platform)
         : (host.platform ?? app.hostCapacityTracker?.get(host.id)?.capacity.platform ?? null),

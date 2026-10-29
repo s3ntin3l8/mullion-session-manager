@@ -1,4 +1,5 @@
 import type { ProjectPreviewConfig } from "../api/types.js";
+import type { HostEditableRole } from "../../../src/shared/constants.js";
 import type {
   AppSettings,
   CodexHookTrust,
@@ -578,7 +579,7 @@ export interface HostsSlice {
       baseUrl: string;
       token: string;
       drained: boolean;
-      role: "worker" | "burst";
+      role: HostEditableRole;
     }>,
   ) => Promise<void>;
   // Rejects with the same conflict Error api.deleteHost throws (still-owns-

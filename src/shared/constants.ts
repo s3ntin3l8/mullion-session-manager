@@ -185,6 +185,15 @@ export type PlacementMode = (typeof PLACEMENT_MODES)[number];
 export const HOST_ROLES = ["main", "worker", "burst"] as const;
 export type HostRole = (typeof HOST_ROLES)[number];
 
+// The roles an operator may SET (`PATCH /api/hosts/:id`): everything but
+// "main", which is the primary's and fixed. Derived from HOST_ROLES so a new
+// role cannot leave the route schema or the frontend patch type behind.
+export const HOST_EDITABLE_ROLES = HOST_ROLES.filter((role) => role !== "main") as Exclude<
+  HostRole,
+  "main"
+>[];
+export type HostEditableRole = (typeof HOST_EDITABLE_ROLES)[number];
+
 /** Content-Type of a streamed file body on the primary->agent hop of the file
  * browser's upload (routes/internal.ts registers the parser for it). Not
  * application/octet-stream: /internal/uploads buffers that type, and a plugin

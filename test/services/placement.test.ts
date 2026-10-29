@@ -424,6 +424,16 @@ describe("excluded hosts and host roles (issue #2239)", () => {
     ]);
   });
 
+  it("reports a sleeping burst laptop as a burst host, not as offline", () => {
+    const decision = chooseHost(
+      [candidate({ hostId: "laptop", role: "burst", online: false, capacity: null })],
+      context(),
+    );
+    expect(decision.excluded).toEqual([
+      { hostId: "laptop", reason: "burst host (only an explicit target uses it)" },
+    ]);
+  });
+
   it("keeps excluded on the fallback and empty when nothing is filtered", () => {
     const fallback = chooseHost([candidate({ online: false })], context());
     expect(fallback.fellBack).toBe(true);

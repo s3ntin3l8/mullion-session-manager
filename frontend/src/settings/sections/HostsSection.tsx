@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { HostEditableRole } from "../../../../src/shared/constants.js";
 import { useDashboardStore, LIVE_REFRESH_INTERVAL_MS } from "../../store/index.js";
 import { api, ApiError, LOCAL_HOST_ID } from "../../api/index.js";
 import { hasRemoteHosts } from "../../lib/hostBadge.js";
@@ -83,7 +84,7 @@ export function HostsSection() {
     });
   };
   // Issue #2239 — worker | burst. Surfaced on failure like toggleDrain.
-  const changeRole = (host: Host, role: "worker" | "burst") => {
+  const changeRole = (host: Host, role: HostEditableRole) => {
     setDrainError(null);
     void updateHost(host.id, { role }).catch((err: unknown) => {
       setDrainError(err instanceof Error ? err.message : String(err));
@@ -378,21 +379,21 @@ export function HostsSection() {
                         {display.label}
                       </span>
                     )}
-                    {/* Issue #1725 — the parked state, visible next to the
-                        health: the host is up, it is just taking no new
-                        work. */}
                     {/* Issue #2239 — a burst host (a laptop that sleeps) stays out
                         of automatic placement; an explicit target still reaches it. */}
                     <select
                       aria-label={`Role of ${host.name}`}
                       value={host.role}
-                      onChange={(e) => changeRole(host, e.target.value as "worker" | "burst")}
+                      onChange={(e) => changeRole(host, e.target.value as HostEditableRole)}
                       title="Worker: eligible for automatic placement. Burst: only used when a session or task names this host."
                       style={{ fontSize: "0.65625rem" }}
                     >
                       <option value="worker">worker</option>
                       <option value="burst">burst</option>
                     </select>
+                    {/* Issue #1725 — the parked state, visible next to the
+                        health: the host is up, it is just taking no new
+                        work. */}
                     {host.drained && (
                       <span
                         style={{ fontSize: "0.65625rem", color: "var(--y)" }}

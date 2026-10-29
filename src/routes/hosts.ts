@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
+import { HOST_EDITABLE_ROLES, type HostEditableRole } from "../shared/constants.js";
 import {
   LOCAL_HOST_ID,
   HostHasProjectsError,
@@ -41,7 +42,7 @@ interface UpdateHostBody {
   // A flag, not an action — nothing is terminated.
   drained?: boolean;
   // Issue #2239 — worker | burst. "main" is the primary's, fixed.
-  role?: "worker" | "burst";
+  role?: HostEditableRole;
 }
 
 const createHostSchema = {
@@ -72,7 +73,7 @@ const updateHostSchema = {
       drained: { type: "boolean" },
       // Issue #2239 — "main" is deliberately not settable: there is one
       // primary, and it is `local`.
-      role: { type: "string", enum: ["worker", "burst"] },
+      role: { type: "string", enum: [...HOST_EDITABLE_ROLES] },
     },
   },
 };

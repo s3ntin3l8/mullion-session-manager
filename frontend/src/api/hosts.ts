@@ -2,6 +2,7 @@
 // reading the config of a remote Mullion host. Split out of the former flat
 // frontend/src/api.ts (PR 22 of the refactoring roadmap).
 import { request } from "./client.js";
+import type { HostEditableRole } from "../../../src/shared/constants.js";
 import type {
   DetectCheckoutsResult,
   Host,
@@ -38,7 +39,7 @@ export const hostsApi = {
       baseUrl: string;
       token: string;
       drained: boolean;
-      role: "worker" | "burst";
+      role: HostEditableRole;
     }>,
   ) =>
     request<Host>(`/api/hosts/${encodeURIComponent(id)}`, {

@@ -214,9 +214,10 @@ project** — see below. A host that has never reported a capacity is not a
 failure — it is simply not a candidate. And it must not be a **burst** host
 (see _Host roles_ below), unless the caller named it.
 
-Every host that is not eligible is listed, with the first rule it failed
-(`offline`, `parked`, `no capacity reported`, `the project has no path on this
-host`, `burst host (only an explicit target uses it)`), as `excluded` in the
+Every host that is not eligible is listed, with the first rule it failed — the
+role is checked first, so a sleeping laptop reads as a burst host, not as
+offline (`burst host (only an explicit target uses it)`, `offline`, `parked`,
+`no capacity reported`, `the project has no path on this host`), as `excluded` in the
 placement preview (`GET /api/projects/:id/placement-preview`,
 `POST /api/projects/placement-preview`) and in the server log. The project
 dialog's Auto preview shows it as "Not considered: …". It is never put in a
