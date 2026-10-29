@@ -1,6 +1,7 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import { startHostHeartbeat } from "../services/host-heartbeat.js";
+import { pushTerminalPaletteToHost } from "../services/terminal-palette-sync.js";
 import { autoFillHostCwds } from "../services/host-checkout-detect.js";
 
 // Primary-only, same role gate as githubPRPollerPlugin/gitFetcherPlugin —
@@ -30,6 +31,7 @@ export const hostHeartbeatPlugin = fp(async (app: FastifyInstance) => {
   //     here is belt-and-braces: it recovers sooner, and it does not rely on
   //     the mux's own liveness detection.
   function onHostRecovered(hostId: string): void {
+    void pushTerminalPaletteToHost(app, hostId);
     app.log.info({ hostId }, "[host-heartbeat] host recovered — forcing a reconnect");
     app.reconfigureRemoteEventSubscriptions?.({ forceReconnect: [hostId] });
     app.reconfigureSshAgentFanout?.({ forceReconnect: [hostId] });
@@ -41,6 +43,9 @@ export const hostHeartbeatPlugin = fp(async (app: FastifyInstance) => {
   // best-effort bookkeeping and must never hold up (or fail) the heartbeat.
   const detecting = new Set<string>();
   function onHostOnline(hostId: string): void {
+    // A host that was asleep, offline or restarted has lost (or never got) the
+    // palette its sessions' startup color queries are answered from.
+    void pushTerminalPaletteToHost(app, hostId);
     // One run per host at a time: a run that outlasts the sweep interval must
     // not be stacked on by the next "came online".
     if (detecting.has(hostId)) return;

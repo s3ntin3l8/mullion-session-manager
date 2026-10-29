@@ -12,6 +12,10 @@ import { execFileSync, spawn as childProcessSpawn } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
 import { gitEnv } from "../../src/services/git-env.js";
+import {
+  getTerminalPalette,
+  resetTerminalPalette,
+} from "../../src/services/terminal-query-reply.js";
 import { cloneWithRemote } from "../helpers/git-clone.js";
 import type { CloneHealth } from "../../src/shared/types.js";
 import {
@@ -688,6 +692,47 @@ describe("internal routes (agent role, issue #26)", () => {
   // mkdtemp MULLION_HOME) rather than sharing them, since these routes are
   // reached over a different mount point (/internal/updates/* — see this
   // file's own onRequest gate above) with a different auth requirement.
+  describe("PUT /internal/terminal/palette", () => {
+    const palette = { foreground: "#1d1d1d", background: "#f2f2f2", cursor: "#1d1d1d" };
+
+    it("rejects a request with no Authorization header", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "PUT",
+        url: "/internal/terminal/palette",
+        payload: palette,
+      });
+      expect(res.statusCode).toBe(401);
+      await app.close();
+    });
+
+    it("caches the forwarded palette for this agent's startup query replies", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "PUT",
+        url: "/internal/terminal/palette",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: palette,
+      });
+      expect(res.statusCode).toBe(204);
+      expect(getTerminalPalette()).toEqual(palette);
+      resetTerminalPalette();
+      await app.close();
+    });
+
+    it("rejects a malformed color", async () => {
+      const app = await buildApp();
+      const res = await app.inject({
+        method: "PUT",
+        url: "/internal/terminal/palette",
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { ...palette, background: "red" },
+      });
+      expect(res.statusCode).toBe(400);
+      await app.close();
+    });
+  });
+
   describe("self-update (issue #647 / roadmap 7.8)", () => {
     const VALID_ASSET_URL =
       "https://github.com/s3ntin3l8/mullion-session-manager/releases/download/v0.1.5/mullion-0.1.5.tgz";

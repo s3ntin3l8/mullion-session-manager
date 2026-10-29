@@ -2,6 +2,8 @@ import { describe, it, expect, afterAll, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { vi } from "vitest";
+import type * as PaletteSync from "../../src/services/terminal-palette-sync.js";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import {
@@ -10,6 +12,12 @@ import {
 } from "../../src/services/terminal-query-reply.js";
 
 const tmpDb = path.join(os.tmpdir(), `terminal-palette-test-${process.pid}.db`);
+
+const pushToHosts = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../../src/services/terminal-palette-sync.js", async (orig) => ({
+  ...(await orig<typeof PaletteSync>()),
+  pushTerminalPaletteToHosts: pushToHosts,
+}));
 
 describe("PUT /api/terminal/palette", () => {
   afterEach(() => resetTerminalPalette());
@@ -48,6 +56,19 @@ describe("PUT /api/terminal/palette", () => {
     });
     expect(res.statusCode).toBe(400);
     expect(getTerminalPalette()).toBeNull();
+    await a.close();
+  });
+
+  it("forwards the palette to remote hosts without waiting on them", async () => {
+    pushToHosts.mockReturnValueOnce(new Promise(() => {}));
+    const a = await app();
+    const res = await a.inject({
+      method: "PUT",
+      url: "/api/terminal/palette",
+      payload: { foreground: "#1d1d1d", background: "#f2f2f2", cursor: "#1d1d1d" },
+    });
+    expect(res.statusCode).toBe(204);
+    expect(pushToHosts).toHaveBeenCalled();
     await a.close();
   });
 });
