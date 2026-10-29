@@ -64,6 +64,14 @@ Claude Code and Codex children. `mullion session logs <childId> --text` / `get_s
 full-screen agent CLI reads as its final screen rather than as cursor-movement
 escapes (`mode: "raw"` / no `--text` gives the raw byte stream); `mullion session kill <childId>` / `kill_child_session` stops it.
 
+To hand a note to a session that is **already running in another project** (not your child),
+a coordinator project can use `mullion session message <id> "<text>"` / `message_session`, if that
+project accepts messages (an operator setting, off by default). It is queued and typed into that
+session when it is idle, framed as coming from you, so write it as a note ("CI on #123 is green, go
+ahead and merge"), not as a command it cannot refuse. A 403 means "no such session or not allowed",
+deliberately without saying which. `get_message_status` / `session message-status` tells you whether
+it was delivered, refused or expired; it cannot read the reply (use the shared issue or PR for that).
+
 To block until a child needs you — instead of polling — use
 `mullion session wait <childId>` / `wait_for_session`: it returns when the
 child finishes its turn, asks for permission/a plan decision/an answer, errors,

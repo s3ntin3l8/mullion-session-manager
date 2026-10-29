@@ -314,6 +314,13 @@ export const projects = sqliteTable("projects", {
   // does not exist.
   acceptsChildrenFrom: text("accepts_children_from"),
   acceptsChildrenFromList: text("accepts_children_from_list"),
+  // Issue #2270 — whether OTHER projects' coordinator sessions may send a message to
+  // an already-running top-level session of this project (sessions.message). Unlike
+  // acceptsChildrenFrom this is OFF by default: null means "none". "any" accepts
+  // every coordinator project that can reach this one; "listed" only the projects in
+  // `acceptsMessagesFromList` (JSON array of project ids). See services/cross-project.ts.
+  acceptsMessagesFrom: text("accepts_messages_from"),
+  acceptsMessagesFromList: text("accepts_messages_from_list"),
   // #772's roadmap follow-up — the per-project override of how many
   // automatic "reviewing -> in_progress" rounds a task may spend across its
   // lifecycle (tasks.autoReturnRounds/lastAutoReturnReason). Null means

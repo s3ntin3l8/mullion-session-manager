@@ -390,6 +390,10 @@ export interface Project {
   // children here (null = any), and the projects accepted when "listed".
   acceptsChildrenFrom?: "any" | "listed" | "none" | null;
   acceptsChildrenFromList?: number[] | null;
+  // #2270 — whether other projects' coordinators may message a running session here
+  // (null = none, the default), and the projects accepted when "listed".
+  acceptsMessagesFrom?: "any" | "listed" | "none" | null;
+  acceptsMessagesFromList?: number[] | null;
   // #756 — per-project override of the auto-return round cap. Null means
   // "use the install-wide taskMaster.maxAutoReturnRounds" (default 10); 0
   // means unlimited. Mirrors projects.maxAutoReturnRounds.

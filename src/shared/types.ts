@@ -111,7 +111,11 @@ export interface NotificationEvent {
     | "pr_review_submitted"
     | "pr_new_comments"
     | "pr_merged"
-    | "pr_conflicts";
+    | "pr_conflicts"
+    // Issue #2270 — audit of a message one session sent another (sessions.message):
+    // `message_sent` on the sender, `message_received` on the target.
+    | "message_sent"
+    | "message_received";
   ts: number;
   payload: Record<string, unknown>;
 }

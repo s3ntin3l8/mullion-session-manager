@@ -68,6 +68,9 @@ interface CreateProjectModalProps {
     crossProjectTargets?: number[] | null;
     acceptsChildrenFrom?: "any" | "listed" | "none" | null;
     acceptsChildrenFromList?: number[] | null;
+    // #2270 — whether other projects' coordinators may message a running session here.
+    acceptsMessagesFrom?: "any" | "listed" | "none" | null;
+    acceptsMessagesFromList?: number[] | null;
     // #756 — per-project override of the auto-return round cap. `null`
     // means "use the install default" — the modal sends `null` when the
     // field is left blank, never `0` (the API rejects a cap below 1).
@@ -129,6 +132,8 @@ interface CreateProjectModalProps {
   initialCrossProjectTargets?: number[] | null;
   initialAcceptsChildrenFrom?: "any" | "listed" | "none" | null;
   initialAcceptsChildrenFromList?: number[] | null;
+  initialAcceptsMessagesFrom?: "any" | "listed" | "none" | null;
+  initialAcceptsMessagesFromList?: number[] | null;
   initialMaxAutoReturnRounds?: number | null;
   initialConventionalCommitTitles?: boolean | null;
   initialAutoTagRelease?: boolean | null;
@@ -196,6 +201,8 @@ export function CreateProjectModal({
   initialCrossProjectTargets = null,
   initialAcceptsChildrenFrom = null,
   initialAcceptsChildrenFromList = null,
+  initialAcceptsMessagesFrom = null,
+  initialAcceptsMessagesFromList = null,
   initialMaxAutoReturnRounds = null,
   initialConventionalCommitTitles = null,
   initialAutoTagRelease = null,
@@ -238,7 +245,13 @@ export function CreateProjectModal({
   const [acceptsChildrenFromList, setAcceptsChildrenFromList] = useState<number[]>(
     initialAcceptsChildrenFromList ?? [],
   );
-  // The other projects, for the two pickers. The store is the one list of them.
+  const [acceptsMessagesFrom, setAcceptsMessagesFrom] = useState<"any" | "listed" | "none">(
+    initialAcceptsMessagesFrom ?? "none",
+  );
+  const [acceptsMessagesFromList, setAcceptsMessagesFromList] = useState<number[]>(
+    initialAcceptsMessagesFromList ?? [],
+  );
+  // The other projects, for the pickers. The store is the one list of them.
   const allProjects = useDashboardStore((s) => s.projects);
   const otherProjects = useMemo(
     () =>
@@ -462,6 +475,15 @@ export function CreateProjectModal({
         return;
       }
       if (
+        acceptsMessagesFrom === "listed" &&
+        !acceptsMessagesFromList.some((id) => otherProjects.some((p) => p.id === id))
+      ) {
+        setError({
+          message: 'Pick at least one project to accept messages from, or choose "None".',
+        });
+        return;
+      }
+      if (
         acceptsChildrenFrom === "listed" &&
         !acceptsChildrenFromList.some((id) => otherProjects.some((p) => p.id === id))
       ) {
@@ -548,6 +570,16 @@ export function CreateProjectModal({
           acceptsChildrenFrom === "listed" &&
           !sameIds(acceptsChildrenFromList, initialAcceptsChildrenFromList)
             ? acceptsChildrenFromList
+            : undefined,
+        acceptsMessagesFrom:
+          isEdit && acceptsMessagesFrom !== (initialAcceptsMessagesFrom ?? "none")
+            ? acceptsMessagesFrom
+            : undefined,
+        acceptsMessagesFromList:
+          isEdit &&
+          acceptsMessagesFrom === "listed" &&
+          !sameIds(acceptsMessagesFromList, initialAcceptsMessagesFromList)
+            ? acceptsMessagesFromList
             : undefined,
         maxAutoReturnRounds: isEdit
           ? unlimitedRounds
@@ -1107,6 +1139,35 @@ export function CreateProjectModal({
           <span className="create-modal-field-hint">
             Whether another project's coordinator may start sessions here. A refused request looks
             the same as a project that does not exist.
+          </span>
+        </label>
+      )}
+
+      {isEdit && (
+        <label className="create-modal-field">
+          <span className="create-modal-field-label">Accepts messages from other projects</span>
+          <select
+            value={acceptsMessagesFrom}
+            aria-label="Accepts messages from other projects"
+            onChange={(e) => setAcceptsMessagesFrom(e.target.value as "any" | "listed" | "none")}
+          >
+            <option value="none">None</option>
+            <option value="listed">Only the projects I pick</option>
+            <option value="any">Any coordinator project</option>
+          </select>
+          {acceptsMessagesFrom === "listed" && (
+            <ProjectMultiSelect
+              ariaLabel="Projects whose coordinators may message a running session here"
+              options={otherProjects}
+              selected={acceptsMessagesFromList}
+              onChange={setAcceptsMessagesFromList}
+              emptyLabel="Pick at least one project"
+            />
+          )}
+          <span className="create-modal-field-hint">
+            Lets a coordinator project's session send a note to a session already running here. It
+            is typed into the session once it is idle, prefixed with where it came from, and cannot
+            change the session's permissions. Off by default.
           </span>
         </label>
       )}

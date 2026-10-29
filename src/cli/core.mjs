@@ -715,6 +715,9 @@ const SESSION_KILL_SPEC = { cascade: "string" };
 const SESSION_CHILDREN_SPEC = { status: "string" };
 const SESSION_WAIT_SPEC = { until: "string", timeout: "string", "after-seq": "string" };
 const SESSION_WAIT_OUTPUT_SPEC = { regex: "boolean", timeout: "string", "after-offset": "string" };
+// Issue #2270 — `session message <id> <text...> [--wait] [--ttl <seconds>]`.
+const SESSION_MESSAGE_SPEC = { wait: "boolean", ttl: "number" };
+
 const SESSION_PROMPT_SPEC = {
   wait: "boolean",
   "no-submit": "boolean",
@@ -925,6 +928,44 @@ const sessionCommands = {
       socketTimeoutMs !== undefined ? { timeoutMs: socketTimeoutMs } : undefined,
     );
     return { json: result };
+  },
+  // Issue #2270 — hand a note to a RUNNING top-level session in another project. The
+  // text is queued and typed into the target once it is idle (framed with its source),
+  // so this returns at once with a message id unless --wait. Needs a coordinator
+  // project on this side and a project that accepts messages on the other.
+  async message(client, args, opts, io) {
+    const { flags, rest } = extractFlags(args, SESSION_MESSAGE_SPEC);
+    const id = opts.session ?? rest[0];
+    const words = opts.session !== undefined ? rest : rest.slice(1);
+    if (id === undefined) throw new CliUsageError("target session id is required");
+    let text = words.join(" ");
+    if (text === "-") text = await readAll(io.stdin);
+    if (text.trim().length === 0) throw new CliUsageError("message text is required");
+    const body = { sessionId: id, text };
+    if (flags.ttl !== undefined) body.ttlSeconds = flags.ttl;
+    let socketTimeoutMs;
+    if (flags.wait === true) {
+      body.wait = true;
+      socketTimeoutMs = (flags.ttl ?? 600) * 1000 + WAIT_SOCKET_SLACK_MS;
+    }
+    const result = await client.request(
+      "sessions.message",
+      body,
+      socketTimeoutMs !== undefined ? { timeoutMs: socketTimeoutMs } : undefined,
+    );
+    return {
+      json: result,
+      text: `message ${result.messageId}: ${result.status}${result.reason ? ` (${result.reason})` : ""}`,
+    };
+  },
+  async "message-status"(client, args) {
+    const messageId = args[0];
+    if (messageId === undefined) throw new CliUsageError("message id is required");
+    const result = await client.request("sessions.message_status", { messageId });
+    return {
+      json: result,
+      text: `message ${result.messageId}: ${result.status}${result.reason ? ` (${result.reason})` : ""}`,
+    };
   },
   async create(client, args) {
     const { flags } = extractFlags(args, SESSION_CREATE_SPEC);
@@ -1972,7 +2013,7 @@ export const COMMANDS = {
 export const USAGE = `Usage: mullion <command> [args] [flags]
 
 Commands:
-  session list|get|children|wait|prompt|create|spawn-child|kill|rename|logs|transcript|exec
+  session list|get|children|wait|prompt|message|message-status|create|spawn-child|kill|rename|logs|transcript|exec
   browser navigate|click|fill|type|press|select|check|uncheck|hover|
           scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors|
           download

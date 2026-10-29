@@ -88,6 +88,8 @@ export const projectsApi = {
         | "crossProjectTargets"
         | "acceptsChildrenFrom"
         | "acceptsChildrenFromList"
+        | "acceptsMessagesFrom"
+        | "acceptsMessagesFromList"
         | "maxAutoReturnRounds"
         | "conventionalCommitTitles"
         | "autoTagRelease"

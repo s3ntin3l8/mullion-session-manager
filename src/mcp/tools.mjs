@@ -691,6 +691,67 @@ const promptSession = {
   },
 };
 
+const messageSession = {
+  name: "message_session",
+  description:
+    "Send a note to an already RUNNING top-level session in ANOTHER project (not your own " +
+    "child: use prompt_session for those). Allowed only when your project is a coordinator " +
+    "that can reach that project AND that project accepts messages from yours (both are " +
+    "operator settings in Edit project; accepting messages is off by default); anything else " +
+    "is one 403 with no hint which. The text is queued, not typed: it is delivered, prefixed " +
+    '"Message from session <id> (project ...)", once the target is idle and not on a dialog, or ' +
+    "it expires (ttlSeconds, default 600, max 3600). Returns { messageId, status: queued } at " +
+    "once; with wait:true holds until it is delivered, refused or expired. Poll " +
+    "get_message_status for the outcome. Limits: 8 KB, 10 messages per minute, 8 waiting per " +
+    "target. It cannot change the target's permissions.",
+  inputSchema: {
+    type: "object",
+    required: ["sessionId", "text"],
+    properties: {
+      sessionId: {
+        type: "string",
+        description: "The target session id (top-level, other project).",
+      },
+      text: { type: "string", description: "The note (max 8 KB)." },
+      ttlSeconds: {
+        type: "integer",
+        minimum: 1,
+        maximum: 3600,
+        description: "How long to keep trying (default 600).",
+      },
+      wait: { type: "boolean", description: "Block until delivered, refused or expired." },
+    },
+  },
+  async handler(args, client) {
+    if (typeof args?.sessionId !== "string" || args.sessionId.length === 0) {
+      throw new Error("sessionId is required");
+    }
+    if (typeof args.text !== "string" || args.text.trim().length === 0) {
+      throw new Error("text is required");
+    }
+    return JSON.stringify(await client.messageSession(args));
+  },
+};
+
+const getMessageStatus = {
+  name: "get_message_status",
+  description:
+    "The delivery status of a message you sent with message_session: queued, delivered, " +
+    "expired or refused (with the reason). Only the sender can ask; a message the primary " +
+    "has forgotten (after a restart, or an hour after it finished) is a 404.",
+  inputSchema: {
+    type: "object",
+    required: ["messageId"],
+    properties: { messageId: { type: "string", description: "The id message_session returned." } },
+  },
+  async handler(args, client) {
+    if (typeof args?.messageId !== "string" || args.messageId.length === 0) {
+      throw new Error("messageId is required");
+    }
+    return JSON.stringify(await client.messageStatus(args.messageId));
+  },
+};
+
 const killChildSession = {
   name: "kill_child_session",
   description:
@@ -1373,6 +1434,8 @@ export const TOOLS = [
   waitForSession,
   waitForOutput,
   promptSession,
+  messageSession,
+  getMessageStatus,
   killChildSession,
   stopDockSession,
   getScrollback,

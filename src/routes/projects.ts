@@ -289,6 +289,10 @@ interface UpdateProjectBody {
   // `any` (default, `null`), `listed` (only `acceptsChildrenFromList`) or `none`.
   acceptsChildrenFrom?: AcceptsChildrenFrom | null;
   acceptsChildrenFromList?: number[] | null;
+  // Issue #2270 — whether other projects' coordinators may message a running
+  // session here: `none` (the default, `null`), `listed` or `any`.
+  acceptsMessagesFrom?: AcceptsChildrenFrom | null;
+  acceptsMessagesFromList?: number[] | null;
   // #756 — per-project override of the resolved auto-return round cap.
   // `null` clears it (falls back to the install-wide
   // taskMaster.maxAutoReturnRounds setting via resolveMaxAutoReturnRounds in
@@ -487,6 +491,8 @@ const updateProjectSchema = {
       crossProjectTargets: PROJECT_ID_LIST_SCHEMA,
       acceptsChildrenFrom: { type: ["string", "null"], enum: [...ACCEPTS_CHILDREN_FROM, null] },
       acceptsChildrenFromList: PROJECT_ID_LIST_SCHEMA,
+      acceptsMessagesFrom: { type: ["string", "null"], enum: [...ACCEPTS_CHILDREN_FROM, null] },
+      acceptsMessagesFromList: PROJECT_ID_LIST_SCHEMA,
       maxAutoReturnRounds: { type: ["integer", "null"], minimum: 0 },
       conventionalCommitTitles: { type: ["boolean", "null"] },
       autoTagRelease: { type: ["boolean", "null"] },
@@ -5097,6 +5103,8 @@ export async function projectsRoute(app: FastifyInstance) {
         crossProjectTargets,
         acceptsChildrenFrom,
         acceptsChildrenFromList,
+        acceptsMessagesFrom,
+        acceptsMessagesFromList,
         maxAutoReturnRounds,
         conventionalCommitTitles,
         autoTagRelease,
@@ -5112,7 +5120,11 @@ export async function projectsRoute(app: FastifyInstance) {
       // Issues #2123 / #2124 — the project lists must name real projects, and a
       // "listed" consent needs somebody on the list (an empty "listed" would be
       // "none" under another name).
-      const referenced = [...(crossProjectTargets ?? []), ...(acceptsChildrenFromList ?? [])];
+      const referenced = [
+        ...(crossProjectTargets ?? []),
+        ...(acceptsChildrenFromList ?? []),
+        ...(acceptsMessagesFromList ?? []),
+      ];
       if (referenced.length > 0) {
         const known = new Set(
           app.db
@@ -5138,6 +5150,15 @@ export async function projectsRoute(app: FastifyInstance) {
           : acceptsChildrenFromList;
       if (effectiveConsent === "listed" && (effectiveConsentList ?? []).length === 0) {
         return reply.badRequest("'listed' needs at least one project in acceptsChildrenFromList");
+      }
+      const effectiveMessages =
+        acceptsMessagesFrom === undefined ? existing.acceptsMessagesFrom : acceptsMessagesFrom;
+      const effectiveMessagesList =
+        acceptsMessagesFromList === undefined
+          ? parseProjectIdList(existing.acceptsMessagesFromList)
+          : acceptsMessagesFromList;
+      if (effectiveMessages === "listed" && (effectiveMessagesList ?? []).length === 0) {
+        return reply.badRequest("'listed' needs at least one project in acceptsMessagesFromList");
       }
       const unknownHost = unknownHostInCwds(app, hostCwds);
       if (unknownHost !== null) {
@@ -5199,6 +5220,8 @@ export async function projectsRoute(app: FastifyInstance) {
         crossProjectTargets === undefined &&
         acceptsChildrenFrom === undefined &&
         acceptsChildrenFromList === undefined &&
+        acceptsMessagesFrom === undefined &&
+        acceptsMessagesFromList === undefined &&
         maxAutoReturnRounds === undefined &&
         conventionalCommitTitles === undefined &&
         autoTagRelease === undefined &&
@@ -5208,7 +5231,7 @@ export async function projectsRoute(app: FastifyInstance) {
         suppressConventionsInjectionAfterScaffold === undefined
       ) {
         return reply.badRequest(
-          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, placement, hostCwds, mergeOnApprove, autoApprove, allowCrossProjectSpawn, crossProjectTargets, acceptsChildrenFrom, acceptsChildrenFromList, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
+          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, placement, hostCwds, mergeOnApprove, autoApprove, allowCrossProjectSpawn, crossProjectTargets, acceptsChildrenFrom, acceptsChildrenFromList, acceptsMessagesFrom, acceptsMessagesFromList, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
         );
       }
 
@@ -5308,6 +5331,13 @@ export async function projectsRoute(app: FastifyInstance) {
             : {}),
           ...(acceptsChildrenFromList !== undefined
             ? { acceptsChildrenFromList: serializeProjectIdList(acceptsChildrenFromList) }
+            : {}),
+          // Issue #2270 — "none" is the default for messages, so it is stored as null.
+          ...(acceptsMessagesFrom !== undefined
+            ? { acceptsMessagesFrom: acceptsMessagesFrom === "none" ? null : acceptsMessagesFrom }
+            : {}),
+          ...(acceptsMessagesFromList !== undefined
+            ? { acceptsMessagesFromList: serializeProjectIdList(acceptsMessagesFromList) }
             : {}),
           ...(maxAutoReturnRounds !== undefined ? { maxAutoReturnRounds } : {}),
           // A human PATCHing this field — on, or explicitly back off — is a

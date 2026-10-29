@@ -2630,6 +2630,208 @@ describe("controlSocketPlugin (issue #185)", () => {
         expect(row?.crossProjectTargets).toEqual([other]);
       });
 
+      // Issue #2270 — sessions.message. The test sessions run `bash`, which has no
+      // prompt framing, so a message that is allowed is QUEUED (202) and then refused
+      // or expired rather than typed; delivery itself is covered by the queue's own
+      // tests (test/services/session-message-queue.test.ts). What these pin is who may
+      // send, and the uniform 403 for everyone else.
+      async function messagePair(opts: { accepts?: "any" | "listed" | "none" | null } = {}) {
+        const sender = await createRealSession();
+        const target = await createRealSession();
+        const senderProject = await parentProjectId(sender.sessionId);
+        const targetProject = await parentProjectId(target.sessionId);
+        await setCoordinator(senderProject, true);
+        if (opts.accepts) {
+          await patchProject(targetProject, {
+            acceptsMessagesFrom: opts.accepts,
+            ...(opts.accepts === "listed" ? { acceptsMessagesFromList: [senderProject] } : {}),
+          });
+        }
+        return { sender, target, senderProject, targetProject };
+      }
+
+      async function message(hookToken: string, body: Record<string, unknown>) {
+        const socket = await sessionScopeSocket(hookToken);
+        socket.write(`${JSON.stringify({ id: 1, op: "sessions.message", body })}\n`);
+        const reply = await waitForReply(socket);
+        socket.destroy();
+        return reply;
+      }
+
+      it("queues a message to a consenting project's session, and refuses everyone else with one 403 (#2270)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sender, target, targetProject } = await messagePair();
+        const body = { sessionId: target.sessionId, text: "heads up" };
+
+        // Off by default: the target project has not opted in.
+        const refusedDefault = await message(sender.hookToken, body);
+        expect(refusedDefault.status).toBe(403);
+        const missing = await message(sender.hookToken, { ...body, sessionId: 999_999 });
+        expect(missing.status).toBe(403);
+        expect(missing.error).toBe(refusedDefault.error);
+
+        await patchProject(targetProject, { acceptsMessagesFrom: "any" });
+        const accepted = await message(sender.hookToken, body);
+        expect(accepted.ok).toBe(true);
+        expect(accepted.status).toBe(202);
+        expect(accepted.result).toMatchObject({
+          status: "queued",
+          targetSessionId: target.sessionId,
+        });
+      });
+
+      it("a 'listed' target accepts only the projects on its list; none refuses all (#2270)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const listed = await messagePair({ accepts: "listed" });
+        expect(
+          (
+            await message(listed.sender.hookToken, {
+              sessionId: listed.target.sessionId,
+              text: "hi",
+            })
+          ).status,
+        ).toBe(202);
+        // A second coordinator that is not on the list.
+        const stranger = await createRealSession();
+        await setCoordinator(await parentProjectId(stranger.sessionId), true);
+        expect(
+          (await message(stranger.hookToken, { sessionId: listed.target.sessionId, text: "hi" }))
+            .status,
+        ).toBe(403);
+
+        await patchProject(listed.targetProject, { acceptsMessagesFrom: "none" });
+        expect(
+          (
+            await message(listed.sender.hookToken, {
+              sessionId: listed.target.sessionId,
+              text: "hi",
+            })
+          ).status,
+        ).toBe(403);
+      });
+
+      it("needs a coordinator sender, a top-level target in another project, and not itself (#2270)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sender, target, senderProject } = await messagePair({
+          accepts: "any",
+        });
+        const body = { sessionId: target.sessionId, text: "hi" };
+        const baseline = await message(sender.hookToken, { sessionId: 999_999, text: "hi" });
+
+        // Not a coordinator.
+        await setCoordinator(senderProject, false);
+        expect((await message(sender.hookToken, body)).error).toBe(baseline.error);
+        await setCoordinator(senderProject, true);
+
+        // The target is a child, not a top-level session.
+        const child = await createRealSession();
+        app.db
+          .update(sessions)
+          .set({ parentSessionId: target.sessionId })
+          .where(eq(sessions.id, child.sessionId))
+          .run();
+        await patchProject(await parentProjectId(child.sessionId), { acceptsMessagesFrom: "any" });
+        expect(
+          (await message(sender.hookToken, { sessionId: child.sessionId, text: "hi" })).error,
+        ).toBe(baseline.error);
+
+        // Itself, and ANOTHER session in the sender's own project (even one whose project
+        // accepts messages from everyone: messaging is cross-project only).
+        expect(
+          (await message(sender.hookToken, { sessionId: sender.sessionId, text: "hi" })).status,
+        ).toBe(403);
+        await patchProject(senderProject, { acceptsMessagesFrom: "any" });
+        const sibling = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          headers: authHeaders,
+          payload: { projectId: senderProject, command: "bash" },
+        });
+        expect(sibling.statusCode).toBe(201);
+        const sameProject = await message(sender.hookToken, {
+          sessionId: sibling.json().id,
+          text: "hi",
+        });
+        expect(sameProject.status).toBe(403);
+        expect(sameProject.error).toBe(baseline.error);
+      });
+
+      it("full scope has no sessions.message (it uses sessions.prompt)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { target } = await messagePair({ accepts: "any" });
+        const socket = await fullScopeSocket();
+        socket.write(
+          `${JSON.stringify({ id: 1, op: "sessions.message", body: { sessionId: target.sessionId, text: "x" } })}\n`,
+        );
+        const reply = await waitForReply(socket);
+        socket.destroy();
+        expect(reply.status).toBe(403);
+      });
+
+      it("validates the body, and rate-limits a sender (#2270)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sender, target } = await messagePair({ accepts: "any" });
+        const id = target.sessionId;
+        expect((await message(sender.hookToken, { text: "x" })).status).toBe(400);
+        expect((await message(sender.hookToken, { sessionId: id })).status).toBe(400);
+        expect((await message(sender.hookToken, { sessionId: id, text: "  " })).status).toBe(400);
+        expect(
+          (await message(sender.hookToken, { sessionId: id, text: "x".repeat(8 * 1024 + 1) }))
+            .status,
+        ).toBe(413);
+        for (const ttlSeconds of [0, 3601, 1.5, "5"]) {
+          expect(
+            (await message(sender.hookToken, { sessionId: id, text: "x", ttlSeconds })).status,
+          ).toBe(400);
+        }
+        expect(
+          (await message(sender.hookToken, { sessionId: id, text: "x", wait: "yes" })).status,
+        ).toBe(400);
+        // Rejected bodies cost no allowance; ten accepted-or-refused sends do.
+        let last = 0;
+        for (let i = 0; i < 11; i++) {
+          last = Number((await message(sender.hookToken, { sessionId: id, text: `n${i}` })).status);
+        }
+        expect(last).toBe(429);
+      });
+
+      it("reports a message's status to its sender only, and wait:true holds for the outcome (#2270)", async () => {
+        app = await buildApp();
+        await app.ready();
+        const { sender, target } = await messagePair({ accepts: "any" });
+        const waited = await message(sender.hookToken, {
+          sessionId: target.sessionId,
+          text: "will not be typed into a shell",
+          wait: true,
+          ttlSeconds: 1,
+        });
+        expect(waited.ok).toBe(true);
+        // A shell has no prompt framing, so it is refused (or, if the shell looked busy, expires).
+        expect(["refused", "expired"]).toContain((waited.result as { status: string }).status);
+        const { messageId } = waited.result as { messageId: string };
+
+        const status = async (token: string, id: string) => {
+          const socket = await sessionScopeSocket(token);
+          socket.write(
+            `${JSON.stringify({ id: 2, op: "sessions.message_status", body: { messageId: id } })}\n`,
+          );
+          const reply = await waitForReply(socket);
+          socket.destroy();
+          return reply;
+        };
+        const own = await status(sender.hookToken, messageId);
+        expect(own.result).toMatchObject({ messageId, targetSessionId: target.sessionId });
+        // The target (or anyone else) cannot read it; nor an unknown id.
+        expect((await status(target.hookToken, messageId)).status).toBe(404);
+        expect((await status(sender.hookToken, "nope")).status).toBe(404);
+        expect((await status(sender.hookToken, "")).status).toBe(400);
+      });
+
       it("a direct POST /api/sessions with a cross-project parent is bound by the same rule", async () => {
         app = await buildApp();
         await app.ready();

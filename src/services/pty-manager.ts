@@ -2020,6 +2020,16 @@ export class Session {
     this.emitEvent(kind, payload);
   }
 
+  /** Records the audit of a session-to-session message (issue #2270) on this session:
+   * the second public door onto the private emitEvent, restricted to the two
+   * message kinds. */
+  emitMessageEvent(kind: NotificationEvent["kind"], payload: Record<string, unknown>): void {
+    if (kind !== "message_sent" && kind !== "message_received") {
+      throw new Error(`emitMessageEvent: not a message kind: ${kind}`);
+    }
+    this.emitEvent(kind, payload);
+  }
+
   /**
    * Record a notification event into this session's ring buffer and fan it
    * out to live subscribers (mirrors scrollbackBuffer's own FIFO-eviction
