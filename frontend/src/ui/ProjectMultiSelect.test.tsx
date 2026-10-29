@@ -65,6 +65,8 @@ describe("ProjectMultiSelect (#2123, #2124)", () => {
     expect(onChange).toHaveBeenLastCalledWith([]);
     await user.click(screen.getByRole("button", { name: "Clear selection" }));
     expect(onChange).toHaveBeenLastCalledWith([]);
+    // The clear control goes away with the selection: focus stays on the trigger.
+    expect(screen.getByRole("button", { name: "targets" })).toHaveFocus();
   });
 
   it("is a disclosure of labelled checkboxes: Escape and an outside click close it", async () => {

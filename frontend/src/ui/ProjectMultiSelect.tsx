@@ -168,7 +168,12 @@ export function ProjectMultiSelect({
                 ref={clearRef}
                 className="project-multiselect-clear"
                 onClick={() => {
-                  if (!clearWarning) return onChange([]);
+                  if (!clearWarning) {
+                    onChange([]);
+                    // This control unmounts with the selection; keep focus on the trigger.
+                    buttonRef.current?.focus();
+                    return;
+                  }
                   focusAfterSwap.current = "confirm";
                   setConfirmingClear(true);
                 }}
