@@ -13,7 +13,17 @@ vi.mock("../../src/services/host-registry.js", () => ({
 }));
 vi.mock("../../src/services/remote-host-client.js", () => ({
   getRemoteHostClient: (a: unknown, id: string) => getClient(a, id),
+  HostRequestError: class HostRequestError extends Error {
+    constructor(
+      _hostId: string,
+      public readonly statusCode: number,
+      _body: string,
+    ) {
+      super("rejected");
+    }
+  },
 }));
+import { HostRequestError } from "../../src/services/remote-host-client.js";
 
 import {
   pushTerminalPaletteToHost,
@@ -26,7 +36,8 @@ import {
 
 const palette = { foreground: "#111111", background: "#f2f2f2", cursor: "#111111" };
 const warn = vi.fn();
-const app = { log: { warn } } as unknown as FastifyInstance;
+const debug = vi.fn();
+const app = { log: { warn, debug } } as unknown as FastifyInstance;
 
 describe("terminal palette sync", () => {
   beforeEach(() => {
@@ -56,7 +67,7 @@ describe("terminal palette sync", () => {
   it("pushes to enrolled remote hosts only, skipping pending rows", async () => {
     setTerminalPalette(palette);
     mockListHosts.mockReturnValue([
-      { id: "local", baseUrl: null },
+      { id: "local", baseUrl: "http://self" },
       { id: "h1", baseUrl: "http://a" },
       { id: "h2", baseUrl: null },
       { id: "h3", baseUrl: "http://c" },
@@ -65,9 +76,17 @@ describe("terminal palette sync", () => {
     expect(getClient.mock.calls.map((c) => c[1])).toEqual(["h1", "h3"]);
   });
 
-  it("logs and swallows a failed push", async () => {
+  it("swallows an unreachable host quietly", async () => {
     setTerminalPalette(palette);
     setPalette.mockRejectedValueOnce(new Error("offline"));
+    await expect(pushTerminalPaletteToHost(app, "h1")).resolves.toBeUndefined();
+    expect(debug).toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("warns when the agent predates the route (404)", async () => {
+    setTerminalPalette(palette);
+    setPalette.mockRejectedValueOnce(new HostRequestError("h1", 404, ""));
     await expect(pushTerminalPaletteToHost(app, "h1")).resolves.toBeUndefined();
     expect(warn).toHaveBeenCalled();
   });

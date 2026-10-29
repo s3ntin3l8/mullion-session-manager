@@ -856,9 +856,6 @@ export class RemoteHostClient {
     return this.request(`/internal/skills?cwd=${encodeURIComponent(cwd)}`);
   }
 
-  // Issue #463 — the client half of the skills enable/disable triple; see
-  // routes/internal.ts's PUT /internal/skills. Same body-only
-  // {agent, name, enabled} contract as writeAgentRule above.
   // Forwards the dashboard's resolved terminal palette so this agent can answer
   // its sessions' startup color queries (see terminal-query-reply.ts).
   async setTerminalPalette(palette: TerminalPalette): Promise<void> {
@@ -869,6 +866,9 @@ export class RemoteHostClient {
     });
   }
 
+  // Issue #463 — the client half of the skills enable/disable triple; see
+  // routes/internal.ts's PUT /internal/skills. Same body-only
+  // {agent, name, enabled} contract as writeAgentRule above.
   writeSkillEnabled(
     cwd: string,
     agent: SkillAgent,

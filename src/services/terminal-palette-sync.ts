@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { LOCAL_HOST_ID, listHosts } from "./host-registry.js";
-import { getRemoteHostClient } from "./remote-host-client.js";
+import { HostRequestError, getRemoteHostClient } from "./remote-host-client.js";
 import { getTerminalPalette } from "./terminal-query-reply.js";
 
 // A remote session's PTY runs in the agent's own process, so the agent answers
@@ -18,7 +18,14 @@ export async function pushTerminalPaletteToHost(
   try {
     await getRemoteHostClient(app, hostId).setTerminalPalette(palette);
   } catch (err) {
-    app.log.warn({ err, hostId }, "[terminal-palette] could not push the palette to host");
+    if (err instanceof HostRequestError && err.statusCode === 404) {
+      // An agent that predates the route: one-time, fixed by updating it.
+      app.log.warn({ hostId }, "[terminal-palette] host has no palette route; update the agent");
+    } else {
+      // Usually a sleeping or unreachable host, and this runs on every
+      // dashboard load, so keep it quiet; the next push retries.
+      app.log.debug({ err, hostId }, "[terminal-palette] could not push the palette to host");
+    }
   }
 }
 
