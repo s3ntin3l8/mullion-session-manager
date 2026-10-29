@@ -130,4 +130,25 @@ describe("dispatch over a socket-less connection (#1656)", () => {
     await dispatch(app, conn, { id: 9, op: "projects.actions" });
     expect(frames[0]).toMatchObject({ id: 9, ok: false, status: 400 });
   });
+
+  it("answers 503, not a raw 500, when a request lands as the app is closing", async () => {
+    const app = await buildTestApp();
+    await app.ready();
+    const projectId = Number(
+      app.db.insert(projects).values({ name: "closing", cwd: "/tmp/closing" }).run()
+        .lastInsertRowid,
+    );
+    const sessionId = Number(
+      app.db.insert(sessions).values({ projectId, command: "bash", cwd: "/tmp/closing" }).run()
+        .lastInsertRowid,
+    );
+    const { conn, frames } = sinkConn("session", String(sessionId));
+    // What app.inject() throws once the app has closed.
+    vi.spyOn(app, "inject").mockRejectedValue(
+      Object.assign(new Error("closed"), { code: "FST_ERR_REOPENED_CLOSE_SERVER" }),
+    );
+    await dispatch(app, conn, { id: 10, op: "projects.actions" });
+    expect(frames[0]).toMatchObject({ id: 10, ok: false, status: 503 });
+    expect(String(frames[0].error)).toContain("shutting down");
+  });
 });

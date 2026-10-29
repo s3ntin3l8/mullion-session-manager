@@ -25,8 +25,10 @@ export interface ControlRelayHolder {
  * Adopts the primary's dial-in as THE relay connection (superseding any
  * earlier one). Relayed clients are told the relay dropped from the raw
  * socket's own "close", registered before the mux's: the mux's teardown closes
- * every channel first, which destroys the local sockets, so by the time
- * `mux.onClose` fires there is no one left to tell.
+ * every channel first, and a channel close ends the local socket (after
+ * flushing its own notice, see notifyOnPeerClose), so by the time
+ * `mux.onClose` fires there is no one left to tell. Either notice may win a
+ * drop; the other sees a socket that is already ending and does nothing.
  */
 export function acceptControlRelayConnection(
   app: Pick<FastifyInstance, "controlRelayConnection" | "log">,
