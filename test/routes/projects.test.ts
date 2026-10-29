@@ -3559,6 +3559,43 @@ describe("projects route", () => {
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 
+      it("detail re-derives a BEHIND phase when the compare says the head is not behind", async () => {
+        mockGithub(
+          gqlPr(54, { mergeStateStatus: "BEHIND", reviewThreads: { nodes: [] } }),
+          (url) => (url.includes("/compare/") ? jsonResponse(200, { behind_by: 0 }) : null),
+        );
+        await warmCiCache(54, "success", true);
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const detail = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/54`,
+        });
+        expect(detail.json()).toMatchObject({ prPhase: "ready_to_merge", behindBy: 0 });
+
+        // An open conversation still blocks, once the BEHIND is set aside.
+        mockGithub(gqlPr(56, { mergeStateStatus: "BEHIND" }), (url) =>
+          url.includes("/compare/") ? jsonResponse(200, { behind_by: 0 }) : null,
+        );
+        await warmCiCache(56, "success", true);
+        const threads = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/56`,
+        });
+        expect(threads.json()).toMatchObject({ prPhase: "threads_unresolved" });
+
+        mockGithub(gqlPr(55, { mergeStateStatus: "BEHIND" }), (url) =>
+          url.includes("/compare/") ? jsonResponse(200, { behind_by: 2 }) : null,
+        );
+        await warmCiCache(55, "success", true);
+        const behind = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/55`,
+        });
+        expect(behind.json()).toMatchObject({ prPhase: "behind", behindBy: 2 });
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
       it("merge refuses a PR that is not ready (changes requested)", async () => {
         mockGithub(gqlPr(44, { reviewDecision: "CHANGES_REQUESTED" }));
         await warmCiCache(44, "success", true);

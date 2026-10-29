@@ -507,8 +507,9 @@ describe("PrDetailView", () => {
     );
   });
 
-  it("treats BEHIND with a head that is not behind (behindBy 0) as ready to merge", async () => {
-    stub({ ...PR, mergeStateStatus: "BEHIND", prPhase: "behind", behindBy: 0 });
+  it("drops the Update branch icon when ancestry says the head is not behind", async () => {
+    // The detail route has already re-derived the phase from behindBy.
+    stub({ ...PR, mergeStateStatus: "BEHIND", prPhase: "ready_to_merge", behindBy: 0 });
     render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
     expect(await screen.findByRole("button", { name: "Squash & merge" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Update branch" })).toBeNull();

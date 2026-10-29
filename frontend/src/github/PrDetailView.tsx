@@ -513,12 +513,7 @@ export function PrDetailView({
     });
 
   const toggleStatus = (k: StatusKey) => setOpenStatus((cur) => (cur === k ? null : k));
-  // BEHIND is GitHub's collapsed state; when ancestry says the head is not
-  // behind, updating would be refused, so the PR is ready.
-  const step = nextStep(
-    pr.prPhase === "behind" && pr.behindBy === 0 ? "ready_to_merge" : pr.prPhase,
-    unresolved,
-  );
+  const step = nextStep(pr.prPhase, unresolved);
   const runStep = () => {
     switch (step.kind) {
       case "merge":

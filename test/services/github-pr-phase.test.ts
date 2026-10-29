@@ -153,8 +153,9 @@ describe("derivePrPhase", () => {
     expect(derivePrPhase({ ...behind, ciStatus: "failure" })).toBe("ci_failing");
     expect(derivePrPhase({ ...behind, ciStatus: "in_progress" })).toBe("ci_pending");
     expect(derivePrPhase({ ...behind, mergeable: "CONFLICTING" })).toBe("conflicts");
-    // Non-strict repos never report BEHIND (a behind head reads CLEAN/BLOCKED),
-    // so they cannot reach this phase; ancestry is the UI's optional icon.
+    // Non-strict repos do not report BEHIND: a genuinely behind head there reads
+    // BLOCKED (observed on this repo's own #2276/#2278/#2279, behind_by 1-2), so
+    // they cannot reach this phase; ancestry (behindBy) drives the optional icon.
   });
 
   it("claims nothing beyond CI when review state wasn't fetched", () => {
