@@ -43,7 +43,7 @@ import type {
   ReviewSummary,
   ReviewSummaryEntry,
 } from "../../../src/shared/types.js";
-import type { PlacementMode, TaskStatus } from "../../../src/shared/constants.js";
+import type { HostRole, PlacementMode, TaskStatus } from "../../../src/shared/constants.js";
 
 export type { GitPullReason, GitPullResult, CloneHealth, RepairOutcome, RepairPlan };
 export type { GitBranchOpReason, GitBranchOpResult };
@@ -492,6 +492,10 @@ export interface Host {
   // `undefined` a THIRD state, and every reader (`!host.drained`)
   // would silently read it as "not parked".
   drained: boolean;
+  // Issue #2239 — what the host is for. "main" is the primary (`local`
+  // only); "burst" hosts stay out of automatic placement. Required for the
+  // same reason as `drained`: the column is notNull with a default.
+  role: HostRole;
 }
 
 // Mirrors src/services/host-capacity.ts's HostCapacity 1:1 — issue #1721,
@@ -532,6 +536,8 @@ export interface PlacementPreview {
     loadPerCore: number;
     chosen: boolean;
   }[];
+  /** The hosts that were not eligible, each with the first rule it failed. */
+  excluded: { hostId: string; reason: string }[];
   /** True when the fallback was used (no eligible host at all). */
   fellBack: boolean;
 }

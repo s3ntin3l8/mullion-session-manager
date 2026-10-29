@@ -768,6 +768,16 @@ export function CreateProjectModal({
               <>
                 Right now a new session would land on{" "}
                 <strong>{previewHostName(preview.hostId)}</strong> — {preview.reason}.
+                {preview.excluded.length > 0 && (
+                  <>
+                    {" "}
+                    Not considered:{" "}
+                    {preview.excluded
+                      .map((e) => `${previewHostName(e.hostId)} (${e.reason})`)
+                      .join(", ")}
+                    .
+                  </>
+                )}
               </>
             ) : (
               "Reading where a new session would land…"

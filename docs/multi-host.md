@@ -211,7 +211,28 @@ on `PATCH /api/projects/:id` to switch a project in or out.
 _drained_, it has to have _reported a capacity_ (the load, cores and
 memory the fleet reads in `GET /api/hosts`), and it has to have **the
 project** — see below. A host that has never reported a capacity is not a
-failure — it is simply not a candidate.
+failure — it is simply not a candidate. And it must not be a **burst** host
+(see _Host roles_ below), unless the caller named it.
+
+Every host that is not eligible is listed, with the first rule it failed
+(`offline`, `parked`, `no capacity reported`, `the project has no path on this
+host`, `burst host (only an explicit target uses it)`), as `excluded` in the
+placement preview (`GET /api/projects/:id/placement-preview`,
+`POST /api/projects/placement-preview`) and in the server log. The project
+dialog's Auto preview shows it as "Not considered: …". It is never put in a
+refusal a session-scoped caller can read.
+
+**Host roles.** Each host has a role, set in **Settings → Hosts** or with
+`PATCH /api/hosts/:id` `{"role": "worker" | "burst"}`:
+
+- `main` — the primary (`local`). Fixed; it cannot be set on a remote host or
+  changed on `local`.
+- `worker` — the default for a remote host. Eligible for automatic placement.
+- `burst` — a host that is not always on (a laptop that sleeps). It stays out
+  of Auto and out of unattended Task Master placement, so a long run does not
+  land on a machine that may vanish. An explicit target still reaches it:
+  `targetHostId`, `--host`/`--platform` on a child spawn, and a `Host:` /
+  `Platform:` directive on a task.
 
 **A host has to have the project.** A session runs in a directory, so a host
 that does not have the project cannot host a session for it: the checkout
@@ -390,8 +411,11 @@ A Task Master issue can also _require_ a platform or host (`Platform: darwin`,
 #1954). That uses the same filter as `--host` / `--platform` on a child spawn,
 so the same prerequisite applies: the target host must have an entry for the
 project in `hostCwds` (**Edit project → Also lives on**), and be online and not
-parked. When none qualifies the task is failed with the reason — it is never
-run on a host where it would break.
+parked. A burst host qualifies, because the task named it. When no host exists
+that could ever match (no such host or platform, or none has the project) the
+task is failed with the reason; when one exists but is not eligible right now
+(offline, parked, no capacity reading yet) the task is **held** and starts once
+it is (#2006). It is never run on a host where it would break.
 
 **How the choice is made.**
 

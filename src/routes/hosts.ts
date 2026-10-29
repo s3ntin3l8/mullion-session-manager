@@ -40,6 +40,8 @@ interface UpdateHostBody {
   // Issue #1725 / roadmap 8.11 — park this host: it takes no new work.
   // A flag, not an action — nothing is terminated.
   drained?: boolean;
+  // Issue #2239 — worker | burst. "main" is the primary's, fixed.
+  role?: "worker" | "burst";
 }
 
 const createHostSchema = {
@@ -68,6 +70,9 @@ const updateHostSchema = {
       // host is never parked: parking is a decision about a host that is
       // already in the fleet.
       drained: { type: "boolean" },
+      // Issue #2239 — "main" is deliberately not settable: there is one
+      // primary, and it is `local`.
+      role: { type: "string", enum: ["worker", "burst"] },
     },
   },
 };

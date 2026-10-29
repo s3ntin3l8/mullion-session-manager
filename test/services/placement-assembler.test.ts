@@ -149,6 +149,32 @@ describe("resolvePlacement — the candidate set comes from the live trackers (i
     expect(decision.considered.map((c) => c.hostId)).not.toContain(hostId);
   });
 
+  it("excludes a burst host from Auto, reads the role from the row, and reports why", async () => {
+    const hostId = await registerHost("laptop");
+    app.hostHeartbeatTracker?.recordSuccess(hostId);
+    app.hostCapacityTracker?.record(hostId, capacity(0.2, 8));
+    const patched = await app.inject({
+      method: "PATCH",
+      url: `/api/hosts/${hostId}`,
+      payload: { role: "burst" },
+    });
+    expect(patched.json().role).toBe("burst");
+
+    const decision = resolvePlacement(app, {
+      project: {
+        hostId: "local",
+        placement: "auto",
+        cwd: LOCAL_CWD,
+        hostCwds: JSON.stringify({ [hostId]: REMOTE_CWD }),
+      },
+      unattended: true,
+    });
+    expect(decision.hostId).toBe("local");
+    expect(decision.excluded).toEqual([
+      { hostId, reason: "burst host (only an explicit target uses it)" },
+    ]);
+  });
+
   it("does not offer a host that never reported a capacity", async () => {
     const hostId = await registerHost("silent-agent");
     app.hostHeartbeatTracker?.recordSuccess(hostId);

@@ -33,7 +33,13 @@ export const hostsApi = {
   // work) or un-parks it. A flag, not an action: nothing is terminated.
   updateHost: (
     id: string,
-    patch: Partial<{ name: string; baseUrl: string; token: string; drained: boolean }>,
+    patch: Partial<{
+      name: string;
+      baseUrl: string;
+      token: string;
+      drained: boolean;
+      role: "worker" | "burst";
+    }>,
   ) =>
     request<Host>(`/api/hosts/${encodeURIComponent(id)}`, {
       method: "PATCH",

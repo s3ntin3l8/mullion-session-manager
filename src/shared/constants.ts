@@ -171,6 +171,20 @@ export const PLACEMENT_MODES = ["pinned", "auto"] as const;
 // import path for the list and the type it yields.
 export type PlacementMode = (typeof PLACEMENT_MODES)[number];
 
+// ---------------------------------------------------------------------------
+// db/schema.ts — HOST_ROLES / HostRole (issue #2239, epic #2228)
+// ---------------------------------------------------------------------------
+//
+// What a host is FOR. "main" is the primary itself (always `local`, never
+// settable on a remote host); "worker" is the default for a remote host;
+// "burst" is a host that is not always on (a laptop) — it stays out of
+// automatic placement and unattended Task Master, but an explicit target
+// (`targetHostId`, a `Host:`/`Platform:` directive) still reaches it. Derived
+// from the list like PLACEMENT_MODES, so the column, the route schema and the
+// frontend type are one spelling.
+export const HOST_ROLES = ["main", "worker", "burst"] as const;
+export type HostRole = (typeof HOST_ROLES)[number];
+
 /** Content-Type of a streamed file body on the primary->agent hop of the file
  * browser's upload (routes/internal.ts registers the parser for it). Not
  * application/octet-stream: /internal/uploads buffers that type, and a plugin
