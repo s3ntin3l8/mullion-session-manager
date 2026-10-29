@@ -21,6 +21,7 @@ import { buildPaletteCommands, searchPaletteCommands } from "./paletteCommands.j
 import type { PaletteCommand } from "./paletteCommands.js";
 import { STORAGE_KEYS, readNumber, writeNumber } from "./lib/persistedState.js";
 import { describeError } from "./lib/describeError.js";
+import { projectHostCount } from "./lib/hostBadge.js";
 import { openSessionOn } from "./git/sessionLaunch.js";
 import { resolveActiveProjectId } from "./panelUtils.js";
 import { WorktreeOptions } from "./command-palette/WorktreeOptions.js";
@@ -710,6 +711,15 @@ export function CommandPalette({
     runCommand(command);
   };
 
+  // Issue #2238 — host count per project, for the picker rows; a project
+  // reaching one host keeps its path subtitle.
+  const hostCountByProject = useMemo(() => {
+    const map = new Map<number, number>();
+    if (!pickerOpen) return map;
+    for (const p of projects) map.set(p.id, projectHostCount(p, sessions));
+    return map;
+  }, [pickerOpen, projects, sessions]);
+
   const filteredProjects = useMemo(() => {
     if (!pickerOpen) return projects;
     const q = query.trim().toLowerCase();
@@ -1265,6 +1275,7 @@ export function CommandPalette({
                 aria-selected={idx === activeProjectIndex}
                 data-index={idx}
                 className={`cmd-row${idx === activeProjectIndex ? " selected" : ""}`}
+                title={p.cwd}
                 onClick={() => {
                   setManualTargetProjectId(p.id);
                   closeProjectPicker();
@@ -1279,7 +1290,11 @@ export function CommandPalette({
                 </span>
                 <span className="cmd-row-body">
                   <span className="cmd-row-title">{p.name}</span>
-                  <span className="cmd-row-subtitle">{shortenHome(p.cwd)}</span>
+                  <span className="cmd-row-subtitle">
+                    {(hostCountByProject.get(p.id) ?? 1) > 1
+                      ? `${hostCountByProject.get(p.id)} hosts`
+                      : shortenHome(p.cwd)}
+                  </span>
                 </span>
                 {p.id === effectiveProjectId && (
                   <span className="cmd-row-current" aria-label="Current project">

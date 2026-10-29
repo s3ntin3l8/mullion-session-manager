@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { describeHostBadge, describeTaskHost, hasRemoteHosts } from "./hostBadge.js";
+import {
+  describeHostBadge,
+  describeTaskHost,
+  hasRemoteHosts,
+  projectHostCount,
+  projectSpansHosts,
+} from "./hostBadge.js";
 import { makeHost } from "../test/fixtures.js";
 
 // Issue #1852 — the per-session host badge and its tooltip. The two
@@ -157,5 +163,94 @@ describe("hasRemoteHosts / describeTaskHost (#2236)", () => {
     expect(
       describeTaskHost({ placementRequirement: null }, null, undefined, [local, mini])?.label,
     ).toBe("auto");
+  });
+});
+
+// Issue #2238 — once a project spans hosts, a local session gets a badge too.
+describe("describeHostBadge spansHosts (issue #2238)", () => {
+  it("labels a LOCAL session 'this machine' when the project spans hosts", () => {
+    const badge = describeHostBadge(
+      { resolvedHostId: "local", placementReason: null },
+      () => HOSTS,
+      { spansHosts: true },
+    );
+    expect(badge).toEqual({ name: "this machine", title: "Runs on host: this machine" });
+  });
+
+  it("uses the placement reason as the local tooltip", () => {
+    const badge = describeHostBadge(
+      { resolvedHostId: "local", placementReason: "pinned to local" },
+      () => HOSTS,
+      { spansHosts: true },
+    );
+    expect(badge?.title).toBe("pinned to local");
+  });
+
+  it("still never reads the fleet list for a local session", () => {
+    let reads = 0;
+    describeHostBadge(
+      { resolvedHostId: "local", placementReason: null },
+      () => {
+        reads += 1;
+        return HOSTS;
+      },
+      { spansHosts: true },
+    );
+    expect(reads).toBe(0);
+  });
+
+  it("keeps a local session unbadged when spansHosts is false or unset", () => {
+    const s = { resolvedHostId: "local", placementReason: null };
+    expect(describeHostBadge(s, () => HOSTS, { spansHosts: false })).toBeNull();
+    expect(describeHostBadge(s, () => HOSTS)).toBeNull();
+  });
+
+  it("is nothing for a session with no resolved host", () => {
+    expect(describeHostBadge(null, () => HOSTS, { spansHosts: true })).toBeNull();
+  });
+});
+
+describe("projectSpansHosts / projectHostCount (issue #2238)", () => {
+  const sess = (resolvedHostId: string, status = "active", projectId = 1) => ({
+    projectId,
+    status,
+    resolvedHostId,
+  });
+  const P = { id: 1, hostId: "local", hostCwds: {} as Record<string, string> };
+
+  it("is false for a single-host project", () => {
+    expect(projectSpansHosts(P, [sess("local"), sess("local")])).toBe(false);
+    expect(projectSpansHosts(P, [])).toBe(false);
+    expect(projectSpansHosts(undefined, [])).toBe(false);
+    expect(projectHostCount(P, [sess("local")])).toBe(1);
+  });
+
+  it("is true once hostCwds names another host, even with no sessions", () => {
+    const p = { id: 1, hostId: "local", hostCwds: { "mac-mini": "/x" } };
+    expect(projectSpansHosts(p, [])).toBe(true);
+    expect(projectHostCount(p, [sess("local")])).toBe(2);
+  });
+
+  it("is false when hostCwds names only the local host", () => {
+    expect(projectSpansHosts({ id: 1, hostId: "local", hostCwds: { local: "/x" } }, [])).toBe(
+      false,
+    );
+  });
+
+  it("counts a remote-hosted project as one host, not two", () => {
+    const p = { id: 1, hostId: "mac-mini", hostCwds: {} };
+    expect(projectHostCount(p, [sess("mac-mini")])).toBe(1);
+    expect(projectSpansHosts(p, [sess("mac-mini")])).toBe(false);
+    expect(projectSpansHosts(p, [sess("mac-mini"), sess("local")])).toBe(true);
+  });
+
+  it("is true when the project's sessions resolve to more than one host", () => {
+    expect(projectSpansHosts(P, [sess("local"), sess("mac-mini")])).toBe(true);
+    expect(projectHostCount(P, [sess("local"), sess("mac-mini")])).toBe(2);
+  });
+
+  it("ignores killed sessions and other projects' sessions", () => {
+    expect(projectSpansHosts(P, [sess("local"), sess("mac-mini", "killed")])).toBe(false);
+    expect(projectSpansHosts(P, [sess("local"), sess("mac-mini", "active", 2)])).toBe(false);
   });
 });

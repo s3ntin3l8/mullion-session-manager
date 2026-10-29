@@ -5,7 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { PaneTab } from "./PaneTab.js";
 import { api } from "./api/index.js";
 import type { GitStatus, Host, NotificationEvent, Project, Session } from "./api/index.js";
-import { makeHost } from "./test/fixtures.js";
+import { makeHost, makeProject } from "./test/fixtures.js";
 import type { IDockviewPanel, IDockviewPanelHeaderProps } from "dockview-react";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 
@@ -342,6 +342,25 @@ describe("PaneTab", () => {
 
       expect(screen.queryByText("mac-mini")).not.toBeInTheDocument();
       expect(document.querySelector(".pane-tab-host-badge")).toBeNull();
+    });
+
+    it("badges a local tab 'this machine' when its project spans hosts (#2238)", () => {
+      session = { ...BASE_SESSION, resolvedHostId: "local" };
+      projects = [makeProject({ id: BASE_SESSION.projectId })];
+      extraSessions = [{ ...BASE_SESSION, id: BASE_SESSION.id + 1, resolvedHostId: "mac-mini" }];
+      render(<PaneTab {...makeProps()} />);
+
+      expect(document.querySelector(".pane-tab-host-badge")).toHaveTextContent("this machine");
+    });
+
+    it("badges a local tab when the project has hostCwds entries (#2238)", () => {
+      session = { ...BASE_SESSION, resolvedHostId: "local" };
+      projects = [
+        { ...makeProject({ id: BASE_SESSION.projectId }), hostCwds: { "mac-mini": "/x" } },
+      ];
+      render(<PaneTab {...makeProps()} />);
+
+      expect(document.querySelector(".pane-tab-host-badge")).toHaveTextContent("this machine");
     });
 
     // Issue #1852 — the same tooltip the sidebar's host badge carries, so

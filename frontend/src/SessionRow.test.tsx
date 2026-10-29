@@ -239,6 +239,20 @@ describe("SessionRow", () => {
       expect(document.querySelector(".session-host-badge")).toBeNull();
     });
 
+    it("shows a 'this machine' badge for a local session when the project spans hosts (#2238)", () => {
+      render(
+        <SessionRow
+          session={{ ...SESSION, resolvedHostId: "local" }}
+          project={PROJECT}
+          spansHosts
+          onOpen={vi.fn()}
+          onEnd={vi.fn()}
+        />,
+      );
+
+      expect(document.querySelector(".session-host-badge")).toHaveTextContent("this machine");
+    });
+
     it("sits OUTSIDE the status label's ellipsis box", () => {
       // The status label ellipsis-overflows its own box (overflow: hidden),
       // so a badge INSIDE it would be clipped by a long status detail. The
