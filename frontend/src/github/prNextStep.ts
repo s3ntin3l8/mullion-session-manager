@@ -5,7 +5,8 @@ import { PHASE_LABEL } from "./prPhase.js";
 // PR detail's action bar (PrActionBar.tsx). A merge button that is merely
 // disabled hides why; this says it.
 
-export type NextStepKind = "merge" | "threads" | "handoff" | "checks" | "reReview" | "none";
+export type NextStepKind =
+  "merge" | "threads" | "handoff" | "checks" | "reReview" | "update" | "none";
 
 export interface NextStep {
   kind: NextStepKind;
@@ -31,6 +32,8 @@ export function nextStep(phase: GitHubPrPhase | undefined, unresolved: number): 
       return { kind: "handoff", label: "Address changes", disabled: false };
     case "conflicts":
       return { kind: "handoff", label: "Fix conflicts", disabled: false };
+    case "behind":
+      return { kind: "update", label: "Update branch", disabled: false };
     case "ci_failing":
       return { kind: "checks", label: "Show failing checks", disabled: false };
     case "review_pending":

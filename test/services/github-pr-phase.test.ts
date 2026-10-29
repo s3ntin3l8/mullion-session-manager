@@ -145,6 +145,19 @@ describe("derivePrPhase", () => {
     expect(derivePrPhase({ ...base, unresolvedThreads: 2 })).toBe("ready_to_merge");
   });
 
+  it("names a strict-protection BEHIND head as the next step; only draft, conflicts, CI and review outrank it", () => {
+    const behind = { ...base, mergeStateStatus: "BEHIND" };
+    expect(derivePrPhase(behind)).toBe("behind");
+    expect(derivePrPhase({ ...behind, unresolvedThreads: 2 })).toBe("behind");
+    expect(derivePrPhase({ ...behind, reviewDecision: "REVIEW_REQUIRED" })).toBe("review_pending");
+    expect(derivePrPhase({ ...behind, ciStatus: "failure" })).toBe("ci_failing");
+    expect(derivePrPhase({ ...behind, ciStatus: "in_progress" })).toBe("ci_pending");
+    expect(derivePrPhase({ ...behind, mergeable: "CONFLICTING" })).toBe("conflicts");
+    // Non-strict repos do not report BEHIND: a genuinely behind head there reads
+    // BLOCKED (observed on this repo's own #2276/#2278/#2279, behind_by 1-2), so
+    // they cannot reach this phase; ancestry (behindBy) drives the optional icon.
+  });
+
   it("claims nothing beyond CI when review state wasn't fetched", () => {
     const unknown = { ...base, reviewStateKnown: false, reviewDecision: null as null };
     expect(derivePrPhase(unknown)).toBe("unknown");

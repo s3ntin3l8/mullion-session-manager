@@ -3539,6 +3539,68 @@ describe("projects route", () => {
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 
+      it("merge lets GitHub arbitrate a strict-BEHIND PR instead of refusing on the phase", async () => {
+        const { invalidatePrDetail } = await import("../../src/services/github-pr-detail.js");
+        invalidatePrDetail("acme", "widgets", 47);
+        let merged = false;
+        mockGithub(gqlPr(47, { mergeStateStatus: "BEHIND" }), (url) => {
+          if (!url.endsWith("/pulls/47/merge")) return null;
+          merged = true;
+          return jsonResponse(200, { merged: true, sha: "mergesha" });
+        });
+        await warmCiCache(47, "success", true);
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${id}/github/prs/47/merge`,
+          payload: { headSha: "sha47" },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(merged).toBe(true);
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      it("detail re-derives a BEHIND phase when the compare says the head is not behind", async () => {
+        // The detail cache is shared across tests: drop what these numbers hold.
+        const { invalidatePrDetail } = await import("../../src/services/github-pr-detail.js");
+        for (const n of [70, 71, 72]) invalidatePrDetail("acme", "widgets", n);
+        mockGithub(
+          gqlPr(70, { mergeStateStatus: "BEHIND", reviewThreads: { nodes: [] } }),
+          (url) => (url.includes("/compare/") ? jsonResponse(200, { behind_by: 0 }) : null),
+        );
+        await warmCiCache(70, "success", true);
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const detail = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/70`,
+        });
+        expect(detail.json()).toMatchObject({ prPhase: "ready_to_merge", behindBy: 0 });
+
+        // An open conversation still blocks, once the BEHIND is set aside.
+        mockGithub(gqlPr(72, { mergeStateStatus: "BEHIND" }), (url) =>
+          url.includes("/compare/") ? jsonResponse(200, { behind_by: 0 }) : null,
+        );
+        await warmCiCache(72, "success", true);
+        const threads = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/72`,
+        });
+        expect(threads.json()).toMatchObject({ prPhase: "threads_unresolved" });
+
+        mockGithub(gqlPr(71, { mergeStateStatus: "BEHIND" }), (url) =>
+          url.includes("/compare/") ? jsonResponse(200, { behind_by: 2 }) : null,
+        );
+        await warmCiCache(71, "success", true);
+        const behind = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/71`,
+        });
+        expect(behind.json()).toMatchObject({ prPhase: "behind", behindBy: 2 });
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
       it("merge refuses a PR that is not ready (changes requested)", async () => {
         mockGithub(gqlPr(44, { reviewDecision: "CHANGES_REQUESTED" }));
         await warmCiCache(44, "success", true);

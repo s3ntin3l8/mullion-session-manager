@@ -56,20 +56,28 @@ export function prTriad(pr: GitHubPROrWithChecks, onOpen: () => void): TriadItem
               short: "Ready",
               title: "Ready to merge",
             }
-          : pr.mergeStateStatus === "BLOCKED"
+          : pr.prPhase === "behind"
             ? {
                 key: "merge",
                 tone: "warn",
-                label: "Blocked",
-                short: "Blocked",
-                title: "Merge blocked",
+                label: "Behind",
+                short: "Behind",
+                title: "Blocked: behind base",
               }
-            : {
-                key: "merge",
-                tone: "neutral",
-                label: "Unknown",
-                short: "–",
-                title: "Merge state unknown",
-              };
+            : pr.mergeStateStatus === "BLOCKED"
+              ? {
+                  key: "merge",
+                  tone: "warn",
+                  label: "Blocked",
+                  short: "Blocked",
+                  title: "Merge blocked",
+                }
+              : {
+                  key: "merge",
+                  tone: "neutral",
+                  label: "Unknown",
+                  short: "–",
+                  title: "Merge state unknown",
+                };
   return [ci, review, merge].map((i) => ({ ...i, onClick: onOpen }));
 }

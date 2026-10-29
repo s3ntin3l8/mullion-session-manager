@@ -2510,7 +2510,7 @@ export async function projectsRoute(app: FastifyInstance) {
     // is CLEAN — the same rule the poller's list pill uses (derivePrPhase).
     // Review and conflict phases don't depend on CI knowledge.
     const ciKnown = runsAnswered || detail.checksRollup !== null;
-    const prPhase = derivePrPhase({
+    const phaseInput = {
       // A partial detail has no review data, so its review phase is unknown.
       reviewStateKnown: detail.partial !== true,
       ciFetched: ciKnown,
@@ -2523,7 +2523,21 @@ export async function projectsRoute(app: FastifyInstance) {
       hasCommentedReview: detail.reviewSummary.commented.length > 0,
       unresolvedThreads: detail.reviewSummary.unresolvedThreads,
       ciStatus,
-    });
+    };
+    let prPhase = derivePrPhase(phaseInput);
+    // BEHIND is GitHub's collapsed state and can disagree with ancestry
+    // (lazygit#5975: BEHIND with behind_by 0). When the compare says the head is
+    // not behind, updating would be refused: re-derive without the BEHIND, so the
+    // chip and the next-step button agree. The list has no compare, so it can
+    // still say "behind" for such a PR; the merge route lets that through.
+    // (`unresolvedThreads ?? 0`: a null answer is read as "no conversations
+    // block" on purpose — BEHIND means the update is what's missing.)
+    if (prPhase === "behind" && detail.behindBy === 0) {
+      prPhase = derivePrPhase({
+        ...phaseInput,
+        mergeStateStatus: (detail.reviewSummary.unresolvedThreads ?? 0) > 0 ? "BLOCKED" : "CLEAN",
+      });
+    }
     // Fold the relay's state into the review summary so the Reviews row is the
     // one place it shows. Best effort: the relay is decorative next to the
     // reviews themselves, so a failed lookup leaves the summary as it is.
@@ -2737,7 +2751,11 @@ export async function projectsRoute(app: FastifyInstance) {
         if (detail.mergeable !== "MERGEABLE") {
           return reply.conflict("GitHub has not confirmed this pull request is mergeable yet");
         }
-        if (prPhase !== "ready_to_merge") {
+        // `behind` rides on GitHub's collapsed mergeStateStatus, which can say
+        // BEHIND for a head that is not (behind_by 0): don't refuse on it. The
+        // merge is pinned to headSha and a 422 maps to "GitHub refused", so
+        // GitHub arbitrates.
+        if (prPhase !== "ready_to_merge" && prPhase !== "behind") {
           return reply.conflict(`Not ready to merge (${prPhase.replace(/_/g, " ")})`);
         }
         const result = await mergePullRequest(

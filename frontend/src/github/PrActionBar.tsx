@@ -29,7 +29,7 @@ export function PrActionBar({
   busy: boolean;
   /** "Open session" or "Open existing session". */
   sessionLabel: string;
-  /** The PR has fallen behind its base: offer GitHub's "Update branch". */
+  /** Behind its base but not required to update: the optional "Update branch". */
   behind: boolean;
   composerOpen: boolean;
   onStep: () => void;

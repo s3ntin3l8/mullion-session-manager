@@ -1368,6 +1368,7 @@ export type GitHubPrPhase =
   | "review_pending"
   | "reviewed"
   | "threads_unresolved"
+  | "behind"
   | "ci_pending"
   | "ready_to_merge"
   | "unknown";
