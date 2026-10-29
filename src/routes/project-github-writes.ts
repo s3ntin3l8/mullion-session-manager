@@ -1,6 +1,9 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { GitHubApiError, GitHubRateLimitError } from "../services/github-fetch.js";
-import { resolveGitHubToken } from "../services/github-integration.js";
+import {
+  resolveSidebarWriteIdentity,
+  type SidebarWriteIdentity,
+} from "../services/github-integration.js";
 import { invalidatePrDetail } from "../services/github-pr-detail.js";
 import {
   createComment,
@@ -13,9 +16,10 @@ import { loadProjectRepoContext } from "./projects.js";
 
 // The GitHub sidebar's own writes (#1672 a, b): reply to and resolve a review
 // thread, comment on an issue or PR, and submit a PR review. Each goes out
-// with the "write" token the merge route uses — the GitHub App installation
-// token when one is configured, so the write posts as the App, else the
-// connected PAT/OAuth account. After a write the PR's cached detail is
+// with the connected PAT/OAuth account, so the write is the human's own; only
+// with no account connected does it post as the GitHub App (#2049), and then
+// a verdict (approve / request changes) is refused, since a bot's does not
+// count. After a write the PR's cached detail is
 // dropped so the next read shows it.
 
 // GitHub's own limit on a comment/review body.
@@ -86,7 +90,7 @@ function replyWriteError(reply: FastifyReply, err: unknown, what: string): Fasti
   if (/own pull request/i.test(err.message)) {
     return reply.code(422).send({
       message:
-        "GitHub does not let a pull request's author approve or request changes on it, and this review would post as that author (the connected GitHub App or account). Leave a comment instead.",
+        "GitHub does not let a pull request's author approve or request changes on it, and this review would post as that author (your connected GitHub account). Leave a comment instead.",
       statusCode: 422,
     });
   }
@@ -116,12 +120,18 @@ function parseNumber(raw: string): number | null {
 }
 
 export async function projectGitHubWritesRoute(app: FastifyInstance) {
-  const writeContext = (reply: FastifyReply, projectId: string, label: string) =>
-    loadProjectRepoContext(app, reply, Number(projectId), {
+  const writeContext = async (reply: FastifyReply, projectId: string, label: string) => {
+    let identity: SidebarWriteIdentity | null = null;
+    const ctx = await loadProjectRepoContext(app, reply, Number(projectId), {
       unavailableLabel: label,
-      resolveToken: (ref) => resolveGitHubToken(app, ref, "write"),
+      resolveToken: async (ref) => {
+        identity = await resolveSidebarWriteIdentity(app, ref);
+        return identity?.token ?? null;
+      },
       noTokenMessage: "No GitHub token with write access is available",
     });
+    return ctx && identity ? { ...ctx, identity: identity as SidebarWriteIdentity } : null;
+  };
 
   app.post<{ Params: { id: string; number: string; threadId: string }; Body: { body: string } }>(
     "/api/projects/:id/github/prs/:number/threads/:threadId/reply",
@@ -204,6 +214,11 @@ export async function projectGitHubWritesRoute(app: FastifyInstance) {
       // GitHub requires a body for a comment or a change request, not for an approval.
       if (!body && event !== "APPROVE") {
         return reply.badRequest("A comment or change request needs a body");
+      }
+      if (event !== "COMMENT" && ctx.identity.kind === "app") {
+        return reply.conflict(
+          "Reviews from the Mullion App don't count as approvals: connect your GitHub account in Settings → GitHub to approve or request changes.",
+        );
       }
       try {
         const posted = await createPullRequestReview(

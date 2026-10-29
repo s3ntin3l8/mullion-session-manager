@@ -131,14 +131,18 @@ scope, or a device-flow token (which carries `repo` already). With only the
 read-only base scope the panel still shows everything, but each write answers
 403 "the connected token lacks write access", and the box keeps your draft.
 
-**Who the write posts as.** When a [GitHub App](#github-app-opt-in-layers-on-top-of-the-patoauth-token)
-is configured, the write token is the App's installation token, so comments,
-replies and reviews post as the App's bot account, not as you. Without an App
-they post as the account that owns the connected PAT/OAuth token. One
-consequence: GitHub does not let a pull request's author approve it or request
-changes on it. On a PR the same identity opened (every Task Master PR, when the
-App opened it) **Approve** and **Request changes** are refused, and the panel
-says so; **Comment** still works.
+**Who the write posts as.** Your connected account (device flow or PAT): a
+comment, reply, resolve or review from the sidebar is yours, and the PR composer
+says so ("Posts as @you"). Only when no account is connected does the write post
+as the [GitHub App](#github-app-opt-in-layers-on-top-of-the-patoauth-token)'s bot
+(the installation token), and then the sidebar offers **Comment** only: an
+Approve or Request changes must be your own verdict, not the App's, so the
+server refuses it (409). There is no silent fallback
+from your account to the App: if GitHub refuses your token's write the box says
+so rather than posting as the bot. Task Master, the merge route and the review
+relay keep the App identity. GitHub also does not let a pull request's author
+approve it or request changes on it, so **Approve** and **Request changes** are
+hidden on a PR you opened; **Comment** always works.
 
 ### Device flow ("Connect with GitHub" button, opt-in)
 

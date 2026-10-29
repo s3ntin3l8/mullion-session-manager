@@ -1398,9 +1398,26 @@ describe("PrDetailView", () => {
       expect(fn.mock.calls.some(([u]) => String(u).includes("/threads/T1/resolve"))).toBe(true);
     });
 
+    it("offers no verdict on your own PR, or when the App is the identity", async () => {
+      __resetGithubCacheForTests();
+      stub({ ...PR, author: "me", writeIdentity: { kind: "user", login: "me" } });
+      const { unmount } = render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      await userEvent.click(await screen.findByRole("button", { name: "Comment or review" }));
+      expect(screen.getByText("Posts as @me")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+      unmount();
+
+      __resetGithubCacheForTests();
+      stub({ ...PR, writeIdentity: { kind: "app", login: "mullion-session-manager" } });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      await userEvent.click(await screen.findByRole("button", { name: "Comment or review" }));
+      expect(screen.getByText(/Posts as @mullion-session-manager/)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    });
+
     it("comments on the PR and submits a review pinned to the head sha", async () => {
       __resetGithubCacheForTests();
-      const fn = stub(PR, (url) =>
+      const fn = stub({ ...PR, writeIdentity: { kind: "user", login: "reviewer" } }, (url) =>
         url.endsWith("/issues/12/comments") || url.endsWith("/prs/12/reviews")
           ? jsonResponse(200, { id: 1, htmlUrl: "https://github.com/a/b/pull/12#c1" })
           : null,

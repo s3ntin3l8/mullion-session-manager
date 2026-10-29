@@ -117,6 +117,7 @@ import {
   getToken,
   resolveChecksReadToken,
   resolveGitHubToken,
+  describeSidebarWriteIdentity,
   resolveMarkerTokens,
 } from "../services/github-integration.js";
 import { maybeAutoEnableConventionalTitles } from "../services/project-release-please.js";
@@ -2664,7 +2665,11 @@ export async function projectsRoute(app: FastifyInstance) {
           number,
           ctx,
         );
-        return { ...detail, ciStatus, ciKnown, actionsRuns, prPhase };
+        // #2049 — who a sidebar write on this PR would post as, so the composer
+        // can say so and offer a verdict only to the human's own account.
+        // Per repo, not per PR, so it stays out of the cached detail.
+        const writeIdentity = await describeSidebarWriteIdentity(app, ctx.repoRef);
+        return { ...detail, ciStatus, ciKnown, actionsRuns, prPhase, writeIdentity };
       } catch (err) {
         if (!(err instanceof GitHubApiError)) throw err;
         if (err.statusCode === 404) return reply.notFound("Pull request not found");

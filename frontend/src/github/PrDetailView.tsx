@@ -586,6 +586,8 @@ export function PrDetailView({
             <ConversationComposer
               onComment={postComment}
               onReview={pr.state === "OPEN" ? postReview : undefined}
+              identity={pr.writeIdentity}
+              prAuthor={pr.author}
               onClose={() => setComposerOpen(false)}
             />
           </div>

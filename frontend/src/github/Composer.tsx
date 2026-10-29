@@ -87,13 +87,26 @@ export function CommentComposer({
 export function ConversationComposer({
   onComment,
   onReview,
+  identity,
+  prAuthor,
   onClose,
 }: {
   onComment: (body: string) => Promise<void>;
   /** Omitted where no review can be submitted (a closed or merged PR). */
   onReview?: (event: GitHubPrReviewEvent, body: string) => Promise<void>;
+  /** Who a post comes out as (#2049): the connected account, or the App's bot. */
+  identity?: { kind: "user" | "app"; login: string | null } | null;
+  /** The PR's author: GitHub does not let an author review their own PR. */
+  prAuthor?: string | null;
   onClose: () => void;
 }) {
+  // A verdict is the human's own: a bot's does not count, and an author cannot
+  // approve or request changes on their own PR. Comment is always on offer.
+  const canReview =
+    onReview !== undefined &&
+    identity?.kind === "user" &&
+    // GitHub logins are case-insensitive.
+    (identity.login === null || identity.login.toLowerCase() !== prAuthor?.toLowerCase());
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState<GitHubPrReviewEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -104,8 +117,9 @@ export function ConversationComposer({
     setBusy(event);
     setError(null);
     try {
-      if (event === "COMMENT" || !onReview) await onComment(body.trim());
-      else await onReview(event, body.trim());
+      if (event === "COMMENT") await onComment(body.trim());
+      else if (onReview && canReview) await onReview(event, body.trim());
+      else throw new Error("Reviews can't be submitted from this account.");
       setBody("");
       onClose();
     } catch (err) {
@@ -121,7 +135,7 @@ export function ConversationComposer({
         className="create-modal-textarea gh-composer-input gh-composer-grow"
         aria-label="Comment or review"
         placeholder={
-          onReview
+          canReview
             ? "Leave a comment, or write a review summary (Ctrl+Enter posts a comment)"
             : "Leave a comment (Ctrl+Enter posts)"
         }
@@ -144,6 +158,12 @@ export function ConversationComposer({
           } else if (isSubmitKey(e)) void send("COMMENT");
         }}
       />
+      {identity?.login && (
+        <div className="gh-composer-identity">
+          Posts as @{identity.login}
+          {identity.kind === "app" ? " (Mullion App; connect your account to review)" : ""}
+        </div>
+      )}
       {error && <ErrorText>{error}</ErrorText>}
       <div className="gh-detail-actions">
         <Button
@@ -154,7 +174,7 @@ export function ConversationComposer({
         >
           {busy === "COMMENT" ? "Posting…" : "Comment"}
         </Button>
-        {onReview && (
+        {canReview && (
           <>
             <Button size="sm" disabled={busy !== null} onClick={() => void send("APPROVE")}>
               {busy === "APPROVE" ? "Submitting…" : "Approve"}

@@ -3,6 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 
+import type * as GithubAppModule from "../../src/services/github-app.js";
+
+// A fake PEM, never a real key.
+const FAKE_APP_PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----"; // pragma: allowlist secret
+
+const mockGetInstallationToken = vi.hoisted(() => vi.fn());
+vi.mock("../../src/services/github-app.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof GithubAppModule>();
+  return { ...actual, getInstallationToken: mockGetInstallationToken };
+});
+
 // #1672 (a, b) — the GitHub sidebar's writes: reply to / resolve a review
 // thread, comment on an issue or PR, submit a PR review. Own file (like
 // projects-release.test.ts) rather than growing projects.test.ts; these
@@ -87,6 +98,8 @@ describe("GitHub sidebar write routes (#1672)", () => {
   beforeEach(() => {
     fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
+    mockGetInstallationToken.mockReset();
+    mockGetInstallationToken.mockResolvedValue({ token: null, installationsChecked: 0 });
     resetGitHubRateLimitForTests();
     resetGraphqlBackoffForTests();
     resetPrDetailCacheForTests();
@@ -449,6 +462,52 @@ describe("GitHub sidebar write routes (#1672)", () => {
       });
       return calls;
     }
+
+    // #2049 — the sidebar posts as the connected account, not the App.
+    it("posts with the connected account's token even when an App is installed", async () => {
+      mockGetInstallationToken.mockResolvedValue({ token: "ghs_app", installationsChecked: null });
+      const calls = reviewRoute(() => jsonResponse(200, { id: 5, html_url: "u" }));
+      const app = await makeApp();
+      const { setGitHubApp } = await import("../../src/services/github-integration.js");
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      const id = await connectedProject(app);
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${id}/github/prs/7/reviews`,
+        payload: { event: "APPROVE" },
+      });
+      expect(res.statusCode).toBe(200);
+      // The App is still minted for reads, but never for this write.
+      expect(mockGetInstallationToken.mock.calls.some((c) => c[4] === "write")).toBe(false);
+      expect(calls.some((c) => c.url.endsWith("/pulls/7/reviews"))).toBe(true);
+    });
+
+    it("lets the App comment but refuses its verdicts when no account is connected", async () => {
+      mockGetInstallationToken.mockResolvedValue({ token: "ghs_app", installationsChecked: null });
+      reviewRoute(() => jsonResponse(200, { id: 5, html_url: "u" }));
+      const app = await makeApp();
+      const { setGitHubApp } = await import("../../src/services/github-integration.js");
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      const id = await connectedProject(app);
+      await app.inject({ method: "DELETE", url: "/api/integrations/github" });
+      const url = `/api/projects/${id}/github/prs/7/reviews`;
+
+      const approve = await app.inject({ method: "POST", url, payload: { event: "APPROVE" } });
+      expect(approve.statusCode).toBe(409);
+      expect(approve.json().message).toMatch(/connect your GitHub account/);
+      const changes = await app.inject({
+        method: "POST",
+        url,
+        payload: { event: "REQUEST_CHANGES", body: "x" },
+      });
+      expect(changes.statusCode).toBe(409);
+      const comment = await app.inject({
+        method: "POST",
+        url,
+        payload: { event: "COMMENT", body: "a thought" },
+      });
+      expect(comment.statusCode).toBe(200);
+    });
 
     it("submits each event, pinned to the head the user saw", async () => {
       const calls = reviewRoute(() =>

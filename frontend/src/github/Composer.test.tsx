@@ -43,13 +43,22 @@ describe("CommentComposer", () => {
 });
 
 describe("ConversationComposer", () => {
+  const me = { kind: "user", login: "me" } as const;
   const box = () => screen.getByRole("textbox", { name: "Comment or review" });
 
   it("approves without a body, but needs one to comment or request changes", async () => {
     const onComment = vi.fn(() => Promise.resolve());
     const onReview = vi.fn(() => Promise.resolve());
     const onClose = vi.fn();
-    render(<ConversationComposer onComment={onComment} onReview={onReview} onClose={onClose} />);
+    render(
+      <ConversationComposer
+        onComment={onComment}
+        onReview={onReview}
+        identity={me}
+        prAuthor="someone"
+        onClose={onClose}
+      />,
+    );
     expect(screen.getByRole("button", { name: "Comment" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Request changes" })).toBeDisabled();
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
@@ -79,12 +88,55 @@ describe("ConversationComposer", () => {
   it("shows GitHub's refusal and keeps the draft", async () => {
     const onReview = vi.fn(() => Promise.reject(new Error("Can not approve your own PR")));
     const onClose = vi.fn();
-    render(<ConversationComposer onComment={vi.fn()} onReview={onReview} onClose={onClose} />);
+    render(
+      <ConversationComposer
+        onComment={vi.fn()}
+        onReview={onReview}
+        identity={me}
+        prAuthor="someone"
+        onClose={onClose}
+      />,
+    );
     await userEvent.type(box(), "ok");
     await userEvent.click(screen.getByRole("button", { name: "Approve" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Can not approve your own PR");
     expect(box()).toHaveValue("ok");
     expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("says who it posts as, and offers a verdict only to the account itself", async () => {
+    const props = { onComment: vi.fn(), onReview: vi.fn(), onClose: vi.fn() };
+    const { rerender } = render(
+      <ConversationComposer {...props} identity={me} prAuthor="someone" />,
+    );
+    expect(screen.getByText("Posts as @me")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Approve" })).toBeInTheDocument();
+
+    // Your own PR: GitHub would refuse a verdict, so none is offered.
+    rerender(<ConversationComposer {...props} identity={me} prAuthor="me" />);
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Request changes" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Comment" })).toBeInTheDocument();
+
+    // Logins are case-insensitive: your own PR under another casing is still yours.
+    rerender(<ConversationComposer {...props} identity={me} prAuthor="ME" />);
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+
+    // The App's bot: a verdict from it does not count, so comment only.
+    rerender(
+      <ConversationComposer
+        {...props}
+        identity={{ kind: "app", login: "mullion-session-manager" }}
+        prAuthor="someone"
+      />,
+    );
+    expect(screen.getByText(/Posts as @mullion-session-manager \(Mullion App/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
+
+    // No identity known: comment only, nothing claimed.
+    rerender(<ConversationComposer {...props} identity={null} prAuthor="someone" />);
+    expect(screen.queryByText(/Posts as/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Approve" })).toBeNull();
   });
 
   it("closes on Escape and on Cancel", async () => {

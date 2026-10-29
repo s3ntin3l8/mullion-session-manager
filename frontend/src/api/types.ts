@@ -1461,6 +1461,11 @@ export interface GitHubPrDetail {
   ciKnown: boolean;
   actionsRuns: GitHubActionsRun[];
   prPhase: GitHubPrPhase;
+  /**
+   * Who a sidebar write posts as: the connected account (`user`) or, with none
+   * connected, the GitHub App (`app`). Null when no token can write.
+   */
+  writeIdentity?: { kind: "user" | "app"; login: string | null } | null;
   /** Checks that are not Actions runs ("Other checks"); counted in `ciStatus`. */
   otherChecks?: GitHubOtherCheck[];
   /** More checks exist on the head than were read; `otherChecks` is partial. */
