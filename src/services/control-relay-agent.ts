@@ -23,6 +23,9 @@ import { reclaimSocketPath } from "./unix-socket.js";
 // token is refused, whatever the primary's own auth settings are.
 
 const MUX_POLL_MS = 100;
+/** How long a client may take to read the relay-dropped notice before it is cut. */
+const CLOSE_NOTICE_LINGER_MS = 5_000;
+const PEER_CLOSED_MESSAGE = "relay-disconnected: the primary closed this relay connection";
 
 export interface ControlRelayAgentOptions {
   socketPath: string;
@@ -80,14 +83,19 @@ function notifyOnPeerClose(socket: net.Socket, channel: MuxChannel): MuxChannel 
     acknowledgeConsumed: (count) => channel.acknowledgeConsumed(count),
     onClose: (listener) =>
       channel.onClose(() => {
-        if (socket.destroyed || !socket.writable) {
+        // Already ending (relayDown() got there first) or gone: nothing to add.
+        if (socket.destroyed || !socket.writable || socket.writableEnded) {
           listener();
           return;
         }
-        socket.end(
-          relayErrorFrame(503, "relay-disconnected: the primary closed this relay connection"),
-          listener,
-        );
+        // A client that never reads would never flush the frame, so the pipe's
+        // destroy would never run: destroy after a linger regardless.
+        const backstop = setTimeout(listener, CLOSE_NOTICE_LINGER_MS);
+        backstop.unref();
+        socket.end(relayErrorFrame(503, PEER_CLOSED_MESSAGE), () => {
+          clearTimeout(backstop);
+          listener();
+        });
       }),
   };
 }
@@ -194,7 +202,7 @@ export async function materializeControlRelaySocket(
     }
     if (channel.closed) {
       // The primary closed it between the open and the header (a shutdown).
-      refuse(socket, 503, "relay-disconnected: the primary closed this relay connection");
+      refuse(socket, 503, PEER_CLOSED_MESSAGE);
       return;
     }
     relayed.add(socket);

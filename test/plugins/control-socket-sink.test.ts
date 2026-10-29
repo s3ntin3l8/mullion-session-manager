@@ -145,7 +145,7 @@ describe("dispatch over a socket-less connection (#1656)", () => {
     const { conn, frames } = sinkConn("session", String(sessionId));
     // What app.inject() throws once the app has closed.
     vi.spyOn(app, "inject").mockRejectedValue(
-      new Error("Fastify has already been closed and cannot be reopened"),
+      Object.assign(new Error("closed"), { code: "FST_ERR_REOPENED_CLOSE_SERVER" }),
     );
     await dispatch(app, conn, { id: 10, op: "projects.actions" });
     expect(frames[0]).toMatchObject({ id: 10, ok: false, status: 503 });

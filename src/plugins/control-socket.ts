@@ -2630,7 +2630,9 @@ export async function dispatch(
       const message = err instanceof Error ? err.message : String(err);
       // A request that lands while the app is closing (a service restart)
       // is a shutdown, not a fault: say so rather than echo Fastify's text.
-      if (/has already been closed/.test(message)) {
+      // Keyed off Fastify's error code; its text is only a fallback.
+      const code = (err as { code?: unknown } | null)?.code;
+      if (code === "FST_ERR_REOPENED_CLOSE_SERVER" || /has already been closed/.test(message)) {
         reply({ ok: false, status: 503, error: "the primary is shutting down" });
       } else {
         reply({ ok: false, status: 500, error: message });
