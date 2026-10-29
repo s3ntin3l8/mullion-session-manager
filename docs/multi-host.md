@@ -463,7 +463,9 @@ See [Isolated session worktrees](disk-cleanup.md#isolated-session-worktrees).
 
 **Across projects** (#2110). A coordinator project's sessions can aim the child at a
 _different project_ with `--project <id|name>` (**Edit project → This project coordinates**,
-off by default). `--host`/`--platform`, `--isolate` and the worktree then follow the
+off by default; it can be limited to a list of projects, and each project can refuse
+coordinators under **Accepts children from other projects**, #2123/#2124).
+`--host`/`--platform`, `--isolate` and the worktree then follow the
 **target** project: only hosts in _its_ `hostCwds` are candidates, and the worktree is cut
 from _its_ checkout on the chosen host. So a coordinator in one project can hand
 macOS-only work in another project to the Mac, provided that project has a path there.

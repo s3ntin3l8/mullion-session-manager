@@ -6,6 +6,7 @@ import { CreateProjectModal } from "./CreateProjectModal.js";
 import { api, ApiError } from "./api/index.js";
 import type { Launcher } from "./api/index.js";
 import { makeHost, makeProject } from "./test/fixtures.js";
+import { useDashboardStore } from "./store/index.js";
 import type * as ApiModule from "./api/index.js";
 
 vi.mock("./api/index.js", async (importOriginal) => {
@@ -1002,6 +1003,102 @@ describe("CreateProjectModal — Default Agent / Default Review Agent dropdowns"
       />,
     );
     expect(screen.queryByRole("checkbox", { name: /This project coordinates/ })).toBeNull();
+  });
+
+  // Issues #2123 / #2124 — which projects a coordinator reaches, and whether this
+  // project takes children from other projects' coordinators.
+  describe("cross-project consent controls", () => {
+    const others = [makeProject({ id: 2, name: "runway" }), makeProject({ id: 3, name: "harbor" })];
+
+    function renderEdit(props: Partial<React.ComponentProps<typeof CreateProjectModal>> = {}) {
+      vi.mocked(api.listProjectActions).mockResolvedValue([]);
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 1, name: "mullion" }), ...others],
+      });
+      const onCreate = vi.fn().mockResolvedValue(undefined);
+      render(
+        <CreateProjectModal
+          mode="edit"
+          initialName="mullion"
+          initialPath="/home/x/mullion"
+          projectId={1}
+          onClose={vi.fn()}
+          onCreate={onCreate}
+          {...props}
+        />,
+      );
+      return onCreate;
+    }
+
+    it("shows the target picker only for a coordinator, and sends the picked projects", async () => {
+      const user = userEvent.setup();
+      const onCreate = renderEdit();
+      expect(
+        screen.queryByRole("button", { name: "Projects this coordinator may reach" }),
+      ).toBeNull();
+
+      await user.click(screen.getByRole("checkbox", { name: /This project coordinates/ }));
+      const picker = screen.getByRole("button", { name: "Projects this coordinator may reach" });
+      expect(picker).toHaveTextContent("Every project");
+      await user.click(picker);
+      // The project being edited is not offered as its own target.
+      expect(screen.queryByRole("checkbox", { name: "mullion" })).toBeNull();
+      await user.click(screen.getByRole("checkbox", { name: "runway" }));
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      expect(onCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ allowCrossProjectSpawn: true, crossProjectTargets: [2] }),
+      );
+    });
+
+    it("does not send a target list while the coordinator toggle is off", async () => {
+      const user = userEvent.setup();
+      const onCreate = renderEdit({ initialCrossProjectTargets: [2] });
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      expect(onCreate.mock.calls[0]![0].crossProjectTargets).toBeUndefined();
+    });
+
+    it("sends the consent mode, and the list only for 'listed'", async () => {
+      const user = userEvent.setup();
+      const onCreate = renderEdit();
+      const select = screen.getByRole("combobox", { name: "Accepts children from other projects" });
+      expect(select).toHaveValue("any");
+
+      await user.selectOptions(select, "none");
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      expect(onCreate).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          acceptsChildrenFrom: "none",
+          acceptsChildrenFromList: undefined,
+        }),
+      );
+
+      await user.selectOptions(select, "listed");
+      await user.click(
+        screen.getByRole("button", { name: "Projects whose coordinators may start children here" }),
+      );
+      await user.click(screen.getByRole("checkbox", { name: "harbor" }));
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      expect(onCreate).toHaveBeenLastCalledWith(
+        expect.objectContaining({ acceptsChildrenFrom: "listed", acceptsChildrenFromList: [3] }),
+      );
+    });
+
+    it("refuses to save 'listed' with nobody on the list", async () => {
+      const user = userEvent.setup();
+      const onCreate = renderEdit({ initialAcceptsChildrenFrom: "listed" });
+      await user.click(screen.getByRole("button", { name: "Save changes" }));
+      expect(onCreate).not.toHaveBeenCalled();
+      expect(
+        screen.getByText(/Pick at least one project to accept children from/),
+      ).toBeInTheDocument();
+    });
+
+    it("pre-fills the saved consent and has no consent control when creating", () => {
+      renderEdit({ initialAcceptsChildrenFrom: "none" });
+      expect(
+        screen.getByRole("combobox", { name: "Accepts children from other projects" }),
+      ).toHaveValue("none");
+    });
   });
 
   it("pre-fills mergeOnApprove/autoApprove from the project's current values", () => {

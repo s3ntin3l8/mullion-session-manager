@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { crossProjectAllowed } from "./cross-project.js";
 import path from "node:path";
 import { readdirSync, openSync, readSync, closeSync, statSync, realpathSync } from "node:fs";
 import { and, eq } from "drizzle-orm";
@@ -1265,7 +1266,14 @@ function validateParent(
       parentRow.projectId === null
         ? []
         : app.db.select().from(projects).where(eq(projects.id, parentRow.projectId)).all();
-    if (parentProject?.allowCrossProjectSpawn !== true) return fail("parent-wrong-project");
+    const [targetProject] = app.db
+      .select()
+      .from(projects)
+      .where(eq(projects.id, params.projectId))
+      .all();
+    // Issues #2123 / #2124 — the coordinator must reach the target (its optional
+    // target list) and the target must accept it (its consent setting).
+    if (!crossProjectAllowed(parentProject, targetProject)) return fail("parent-wrong-project");
   }
   if (parentRow.parentSessionId !== null) return fail("parent-is-child");
   return { ok: true, parentId: params.parentSessionId };

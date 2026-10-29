@@ -383,6 +383,13 @@ export interface Project {
   // #2110 — a "coordinator" project: its sessions may spawn child sessions in
   // other projects. Null/false = off. Mirrors projects.allowCrossProjectSpawn.
   allowCrossProjectSpawn: boolean | null;
+  // #2123 — the projects a coordinator may reach; null = every project. Optional
+  // so a Project built before these fields existed (tests, fixtures) still types.
+  crossProjectTargets?: number[] | null;
+  // #2124 — the target side: whether other projects' coordinators may start
+  // children here (null = any), and the projects accepted when "listed".
+  acceptsChildrenFrom?: "any" | "listed" | "none" | null;
+  acceptsChildrenFromList?: number[] | null;
   // #756 — per-project override of the auto-return round cap. Null means
   // "use the install-wide taskMaster.maxAutoReturnRounds" (default 10); 0
   // means unlimited. Mirrors projects.maxAutoReturnRounds.

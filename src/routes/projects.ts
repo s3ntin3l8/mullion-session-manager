@@ -4,6 +4,14 @@ import net from "node:net";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { projects, sessions, tasks, webhookRegistrations } from "../db/schema.js";
 import {
+  ACCEPTS_CHILDREN_FROM,
+  MAX_PROJECT_LIST,
+  crossProjectFieldsOut,
+  parseProjectIdList,
+  serializeProjectIdList,
+  type AcceptsChildrenFrom,
+} from "../services/cross-project.js";
+import {
   discoverCandidates,
   expandHome,
   resolveProjectActions,
@@ -208,6 +216,14 @@ import { RESUMABLE_TASK_STATUSES, sessionsUsingWorktree } from "../services/work
 import { parseHostCwds, serializeHostCwds } from "../services/placement.js";
 import { listHosts } from "../services/host-registry.js";
 
+/** Issues #2123 / #2124 — a list of project ids (an empty one is stored as null). */
+const PROJECT_ID_LIST_SCHEMA = {
+  type: ["array", "null"],
+  items: { type: "integer", minimum: 1 },
+  maxItems: MAX_PROJECT_LIST,
+  uniqueItems: true,
+} as const;
+
 interface CreateProjectBody {
   name: string;
   cwd: string;
@@ -267,6 +283,12 @@ interface UpdateProjectBody {
   // Issue #2110 — this project's sessions may spawn children in other
   // projects. Per-project, `null`/`false` = off (the default).
   allowCrossProjectSpawn?: boolean | null;
+  // Issue #2123 — the projects a coordinator may reach; `null` or empty = all.
+  crossProjectTargets?: number[] | null;
+  // Issue #2124 — whether other projects' coordinators may start children here:
+  // `any` (default, `null`), `listed` (only `acceptsChildrenFromList`) or `none`.
+  acceptsChildrenFrom?: AcceptsChildrenFrom | null;
+  acceptsChildrenFromList?: number[] | null;
   // #756 — per-project override of the resolved auto-return round cap.
   // `null` clears it (falls back to the install-wide
   // taskMaster.maxAutoReturnRounds setting via resolveMaxAutoReturnRounds in
@@ -462,6 +484,9 @@ const updateProjectSchema = {
       mergeOnApprove: { type: ["boolean", "null"] },
       autoApprove: { type: ["boolean", "null"] },
       allowCrossProjectSpawn: { type: ["boolean", "null"] },
+      crossProjectTargets: PROJECT_ID_LIST_SCHEMA,
+      acceptsChildrenFrom: { type: ["string", "null"], enum: [...ACCEPTS_CHILDREN_FROM, null] },
+      acceptsChildrenFromList: PROJECT_ID_LIST_SCHEMA,
       maxAutoReturnRounds: { type: ["integer", "null"], minimum: 0 },
       conventionalCommitTitles: { type: ["boolean", "null"] },
       autoTagRelease: { type: ["boolean", "null"] },
@@ -1251,6 +1276,7 @@ export async function projectsRoute(app: FastifyInstance) {
           // Issue #2090 — which entries were auto-detected, which hosts the
           // operator declined: an OBJECT on the way out, like hostCwds.
           hostCwdsMeta: parseHostCwdsMeta(row.hostCwdsMeta),
+          ...crossProjectFieldsOut(row),
           currentBranch,
           ruleFiles,
           conventionsDrifted,
@@ -4921,6 +4947,7 @@ export async function projectsRoute(app: FastifyInstance) {
         ...withReleasePleaseDefault,
         hostCwds: { ...parseHostCwds(withReleasePleaseDefault.hostCwds) },
         hostCwdsMeta: parseHostCwdsMeta(withReleasePleaseDefault.hostCwdsMeta),
+        ...crossProjectFieldsOut(withReleasePleaseDefault),
       };
       return createDir ? { ...response, dirCreated, gitInitialized } : response;
     },
@@ -4981,6 +5008,7 @@ export async function projectsRoute(app: FastifyInstance) {
           ...row,
           hostCwds: { ...parseHostCwds(row.hostCwds) },
           hostCwdsMeta: parseHostCwdsMeta(row.hostCwdsMeta),
+          ...crossProjectFieldsOut(row),
         },
         counts: result.counts,
       };
@@ -5035,6 +5063,7 @@ export async function projectsRoute(app: FastifyInstance) {
         ...row,
         hostCwds: { ...parseHostCwds(row.hostCwds) },
         hostCwdsMeta: parseHostCwdsMeta(row.hostCwdsMeta),
+        ...crossProjectFieldsOut(row),
       };
     },
   );
@@ -5065,6 +5094,9 @@ export async function projectsRoute(app: FastifyInstance) {
         mergeOnApprove,
         autoApprove,
         allowCrossProjectSpawn,
+        crossProjectTargets,
+        acceptsChildrenFrom,
+        acceptsChildrenFromList,
         maxAutoReturnRounds,
         conventionalCommitTitles,
         autoTagRelease,
@@ -5077,6 +5109,36 @@ export async function projectsRoute(app: FastifyInstance) {
         hostCwds,
         allowDuplicate,
       } = request.body;
+      // Issues #2123 / #2124 — the project lists must name real projects, and a
+      // "listed" consent needs somebody on the list (an empty "listed" would be
+      // "none" under another name).
+      const referenced = [...(crossProjectTargets ?? []), ...(acceptsChildrenFromList ?? [])];
+      if (referenced.length > 0) {
+        const known = new Set(
+          app.db
+            .select({ id: projects.id })
+            .from(projects)
+            .all()
+            .map((p) => p.id),
+        );
+        const unknown = referenced.find((id) => !known.has(id));
+        if (unknown !== undefined) return reply.badRequest(`unknown project ${unknown}`);
+        // A project's own id means nothing in either list (same-project children
+        // never consult the rule), and would let "listed" pass its non-empty check
+        // while accepting nobody.
+        if (referenced.includes(projectId)) {
+          return reply.badRequest("a project cannot list itself");
+        }
+      }
+      const effectiveConsent =
+        acceptsChildrenFrom === undefined ? existing.acceptsChildrenFrom : acceptsChildrenFrom;
+      const effectiveConsentList =
+        acceptsChildrenFromList === undefined
+          ? parseProjectIdList(existing.acceptsChildrenFromList)
+          : acceptsChildrenFromList;
+      if (effectiveConsent === "listed" && (effectiveConsentList ?? []).length === 0) {
+        return reply.badRequest("'listed' needs at least one project in acceptsChildrenFromList");
+      }
       const unknownHost = unknownHostInCwds(app, hostCwds);
       if (unknownHost !== null) {
         return reply.badRequest(unknownHostMessage(app, unknownHost));
@@ -5134,6 +5196,9 @@ export async function projectsRoute(app: FastifyInstance) {
         mergeOnApprove === undefined &&
         autoApprove === undefined &&
         allowCrossProjectSpawn === undefined &&
+        crossProjectTargets === undefined &&
+        acceptsChildrenFrom === undefined &&
+        acceptsChildrenFromList === undefined &&
         maxAutoReturnRounds === undefined &&
         conventionalCommitTitles === undefined &&
         autoTagRelease === undefined &&
@@ -5143,7 +5208,7 @@ export async function projectsRoute(app: FastifyInstance) {
         suppressConventionsInjectionAfterScaffold === undefined
       ) {
         return reply.badRequest(
-          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, placement, hostCwds, mergeOnApprove, autoApprove, allowCrossProjectSpawn, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
+          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, placement, hostCwds, mergeOnApprove, autoApprove, allowCrossProjectSpawn, crossProjectTargets, acceptsChildrenFrom, acceptsChildrenFromList, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
         );
       }
 
@@ -5235,6 +5300,15 @@ export async function projectsRoute(app: FastifyInstance) {
           ...(mergeOnApprove !== undefined ? { mergeOnApprove } : {}),
           ...(autoApprove !== undefined ? { autoApprove } : {}),
           ...(allowCrossProjectSpawn !== undefined ? { allowCrossProjectSpawn } : {}),
+          ...(crossProjectTargets !== undefined
+            ? { crossProjectTargets: serializeProjectIdList(crossProjectTargets) }
+            : {}),
+          ...(acceptsChildrenFrom !== undefined
+            ? { acceptsChildrenFrom: acceptsChildrenFrom === "any" ? null : acceptsChildrenFrom }
+            : {}),
+          ...(acceptsChildrenFromList !== undefined
+            ? { acceptsChildrenFromList: serializeProjectIdList(acceptsChildrenFromList) }
+            : {}),
           ...(maxAutoReturnRounds !== undefined ? { maxAutoReturnRounds } : {}),
           // A human PATCHing this field — on, or explicitly back off — is a
           // deliberate decision that must permanently outrank the
@@ -5272,6 +5346,7 @@ export async function projectsRoute(app: FastifyInstance) {
         ...updated[0],
         hostCwds: { ...parseHostCwds(updated[0].hostCwds) },
         hostCwdsMeta: parseHostCwdsMeta(updated[0].hostCwdsMeta),
+        ...crossProjectFieldsOut(updated[0]),
       };
       return createDir ? { ...response, dirCreated, gitInitialized } : response;
     },

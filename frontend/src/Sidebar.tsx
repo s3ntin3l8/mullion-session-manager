@@ -1384,6 +1384,9 @@ function ProjectHeader({
               initialMergeOnApprove={project.mergeOnApprove}
               initialAutoApprove={project.autoApprove}
               initialAllowCrossProjectSpawn={project.allowCrossProjectSpawn}
+              initialCrossProjectTargets={project.crossProjectTargets}
+              initialAcceptsChildrenFrom={project.acceptsChildrenFrom}
+              initialAcceptsChildrenFromList={project.acceptsChildrenFromList}
               initialMaxAutoReturnRounds={project.maxAutoReturnRounds}
               initialConventionalCommitTitles={project.conventionalCommitTitles}
               initialAutoTagRelease={project.autoTagRelease}
@@ -1406,6 +1409,9 @@ function ProjectHeader({
                 mergeOnApprove,
                 autoApprove,
                 allowCrossProjectSpawn,
+                crossProjectTargets,
+                acceptsChildrenFrom,
+                acceptsChildrenFromList,
                 maxAutoReturnRounds,
                 conventionalCommitTitles,
                 autoTagRelease,
@@ -1424,6 +1430,9 @@ function ProjectHeader({
                   mergeOnApprove,
                   autoApprove,
                   allowCrossProjectSpawn,
+                  crossProjectTargets,
+                  acceptsChildrenFrom,
+                  acceptsChildrenFromList,
                   maxAutoReturnRounds,
                   conventionalCommitTitles,
                   autoTagRelease,
