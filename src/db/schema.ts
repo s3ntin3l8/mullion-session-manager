@@ -1214,6 +1214,11 @@ export const tasks = sqliteTable(
     // every unrelated write to the row (drizzle's `$onUpdate`), not just a
     // verdict ingest.
     lastReviewVerdictAt: integer("last_review_verdict_at", { mode: "timestamp" }),
+    // #2252 — the `lastReviewVerdictAt` value whose "approved, needs your
+    // approval" push was already sent (notifyApprovalsAwaitingHuman). Compared
+    // against the column, not a clock: both are second-resolution timestamps,
+    // and a new verdict rewrites `lastReviewVerdictAt`, which re-arms the push.
+    approvalNotifiedVerdictAt: integer("approval_notified_verdict_at", { mode: "timestamp" }),
     // Task 409707 — bounds `reannounceInconclusiveReviewsAfterGrace` to a
     // small, fixed number of automatic re-arm attempts per review round, so
     // a genuinely-broken review adapter that goes idle-with-no-signal on

@@ -11,6 +11,16 @@ import type * as GitHubWriteModule from "../../src/services/github-write.js";
 import type * as GitHubModule from "../../src/services/github.js";
 import { PR_REVIEW_DEFAULTS } from "../helpers/pr-review-defaults.js";
 
+// #2252 — the approval push goes through notifyTaskNeedsAttention; mocked the
+// way task-promote.test.ts mocks it for the workflow-hold push.
+const { mockNotifyTaskNeedsAttention } = vi.hoisted(() => ({
+  mockNotifyTaskNeedsAttention: vi.fn(),
+}));
+vi.mock("../../src/services/push-delivery.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  notifyTaskNeedsAttention: mockNotifyTaskNeedsAttention,
+}));
+
 // Same fakes as session-reconciler.test.ts / test/routes/sessions.test.ts —
 // session creation still spawns real OS processes (systemd-run, dtach) via
 // PtyManager, faked so this file exercises reconcileTasks against a real
@@ -376,6 +386,7 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb, getDb } = await import("../../src/db/client.js");
 const {
   reconcileTasks,
+  notifyApprovalsAwaitingHuman,
   retryPermanentPushFailuresNow,
   DEFAULT_MAX_AUTO_RETURN_ROUNDS,
   resetRequiredStatusContextsForbiddenWarningsForTests,
@@ -10346,6 +10357,212 @@ describe("reconcileTasks", () => {
       // later test's reconcileTasks() call runs next, consuming THAT test's
       // own single-shot mockFetchRunsForHead queue entry out from under it.
       getDb().delete(tasks).where(eq(tasks.id, taskId)).run();
+      await app.close();
+    });
+  });
+
+  describe("approval push (#2252, notifyApprovalsAwaitingHuman)", () => {
+    beforeEach(async () => {
+      mockNotifyTaskNeedsAttention.mockReset().mockResolvedValue(undefined);
+      // The push channel defaults to off; the sweep only records when it is on.
+      const setup = await buildApp();
+      await setup.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { notifications: { channels: { push: true } } },
+      });
+      await setup.close();
+      // Shared DB: other tests leave reviewing rows with approving verdicts.
+      // Wrapped like the outer beforeEach: with -t filtering, nothing may have migrated the DB yet.
+      try {
+        getDb().delete(tasks).where(eq(tasks.status, "reviewing")).run();
+      } catch {
+        // no tasks table yet
+      }
+    });
+
+    const T0 = new Date(1_700_000_000_000);
+
+    async function createCandidate(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      overrides: Partial<typeof tasks.$inferInsert> = {},
+      autoApprove = false,
+    ) {
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          allowDuplicate: true,
+          createDir: true,
+          name: `p-approval-${Math.random()}`,
+          cwd: "/tmp",
+        },
+      });
+      const projectId = project.json().id;
+      await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${projectId}`,
+        payload: { autoApprove },
+      });
+      const session = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      const reviewSessionId = session.json().id as number;
+      const [row] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "secret title",
+          status: "reviewing",
+          claimedAt: new Date(),
+          reviewingAt: new Date(),
+          prNumber: 9,
+          reviewSessionId,
+          reviewFindingsIngestedSessionId: reviewSessionId,
+          lastReviewVerdict: "approved",
+          lastReviewVerdictAt: T0,
+          ...overrides,
+        })
+        .returning()
+        .all();
+      return row.id;
+    }
+
+    it("pushes once per verdict with a generic body, and again after a new verdict", async () => {
+      const app = await buildApp();
+      const taskId = await createCandidate(app);
+      await notifyApprovalsAwaitingHuman(app);
+      expect(mockNotifyTaskNeedsAttention).toHaveBeenCalledTimes(1);
+      expect(mockNotifyTaskNeedsAttention).toHaveBeenCalledWith(
+        expect.anything(),
+        taskId,
+        `Task #${taskId}: approved, needs your approval`,
+      );
+
+      await notifyApprovalsAwaitingHuman(app);
+      expect(mockNotifyTaskNeedsAttention).toHaveBeenCalledTimes(1);
+
+      app.db
+        .update(tasks)
+        .set({ lastReviewVerdictAt: new Date(T0.getTime() + 60_000) })
+        .where(eq(tasks.id, taskId))
+        .run();
+      await notifyApprovalsAwaitingHuman(app);
+      expect(mockNotifyTaskNeedsAttention).toHaveBeenCalledTimes(2);
+      await app.close();
+    });
+
+    it("does not send when the verdict was already recorded as announced", async () => {
+      const app = await buildApp();
+      await createCandidate(app, { approvalNotifiedVerdictAt: T0 });
+      await notifyApprovalsAwaitingHuman(app);
+      expect(mockNotifyTaskNeedsAttention).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("is driven by reconcileTasks", async () => {
+      const app = await buildApp();
+      await createCandidate(app);
+      await reconcileTasks(app);
+      expect(mockNotifyTaskNeedsAttention).toHaveBeenCalledTimes(1);
+      await app.close();
+    });
+
+    it("stays silent for an auto-approving project with a PR", async () => {
+      const app = await buildApp();
+      await createCandidate(app, {}, true);
+      await notifyApprovalsAwaitingHuman(app);
+      expect(mockNotifyTaskNeedsAttention).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("pushes when autoApprove is set but there is no PR number", async () => {
+      const app = await buildApp();
+      await createCandidate(app, { prNumber: null }, true);
+      await notifyApprovalsAwaitingHuman(app);
+      expect(mockNotifyTaskNeedsAttention).toHaveBeenCalledTimes(1);
+      await app.close();
+    });
+
+    it("stays silent when the verdict was not ingested for the current review session", async () => {
+      const app = await buildApp();
+      await createCandidate(app, { reviewFindingsIngestedSessionId: null });
+      await notifyApprovalsAwaitingHuman(app);
+      expect(mockNotifyTaskNeedsAttention).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("stays silent for a non-approving verdict and for a task that is not reviewing", async () => {
+      const app = await buildApp();
+      await createCandidate(app, { lastReviewVerdict: "changes-requested" });
+      await createCandidate(app, { status: "in_progress" });
+      await notifyApprovalsAwaitingHuman(app);
+      expect(mockNotifyTaskNeedsAttention).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("stays silent while Task Master is disabled", async () => {
+      const app = await buildApp();
+      await createCandidate(app);
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { enabled: "off" } },
+      });
+      await notifyApprovalsAwaitingHuman(app);
+      expect(mockNotifyTaskNeedsAttention).not.toHaveBeenCalled();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { taskMaster: { enabled: "inherit" } },
+      });
+      await app.close();
+    });
+
+    it("records nothing while the push channel is off, and announces once it is back on", async () => {
+      const app = await buildApp();
+      const taskId = await createCandidate(app);
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { notifications: { channels: { push: false } } },
+      });
+      await notifyApprovalsAwaitingHuman(app);
+      expect(mockNotifyTaskNeedsAttention).not.toHaveBeenCalled();
+      expect(
+        app.db.select().from(tasks).where(eq(tasks.id, taskId)).get()?.approvalNotifiedVerdictAt,
+      ).toBeNull();
+      await app.inject({
+        method: "PATCH",
+        url: "/api/settings",
+        payload: { notifications: { channels: { push: true } } },
+      });
+      await notifyApprovalsAwaitingHuman(app);
+      expect(mockNotifyTaskNeedsAttention).toHaveBeenCalledTimes(1);
+      await app.close();
+    });
+
+    it("does not throw when a send rejects, and the verdict stays recorded", async () => {
+      const app = await buildApp();
+      const taskId = await createCandidate(app);
+      mockNotifyTaskNeedsAttention.mockRejectedValueOnce(new Error("push down"));
+      await expect(notifyApprovalsAwaitingHuman(app)).resolves.toBeUndefined();
+      const row = app.db.select().from(tasks).where(eq(tasks.id, taskId)).get();
+      expect(row?.approvalNotifiedVerdictAt?.getTime()).toBe(T0.getTime());
+      await notifyApprovalsAwaitingHuman(app);
+      expect(mockNotifyTaskNeedsAttention).toHaveBeenCalledTimes(1);
+      await app.close();
+    });
+
+    it("sends at most 20 pushes per sweep", async () => {
+      const app = await buildApp();
+      for (let i = 0; i < 21; i++) await createCandidate(app);
+      await notifyApprovalsAwaitingHuman(app);
+      expect(mockNotifyTaskNeedsAttention).toHaveBeenCalledTimes(20);
+      await notifyApprovalsAwaitingHuman(app);
+      expect(mockNotifyTaskNeedsAttention).toHaveBeenCalledTimes(21);
       await app.close();
     });
   });

@@ -1,11 +1,15 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, isNull, isNotNull } from "drizzle-orm";
 import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
+import {
+  deriveApprovalState,
+  type ApprovalState,
+  type ApprovalStateRow,
+} from "../services/task-approval-state.js";
 import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import {
   buildRejectPrompt,
-  isApprovingVerdict,
   taskCommitTitlePath,
   parseCommitTitle,
   resolvePrTitle,
@@ -363,41 +367,14 @@ function withAutoReturnCapped<
   };
 }
 
-// #2234 — an approving review whose findings are in leaves the task waiting
-// on an approval, with no other signal: the card used to read "returned to
-// worker". `awaiting-human` = a human has to Approve. `auto-pending` = the
-// approve sweep (task-reconciler.ts's processAutoApprovals) will take it, so
-// it applies that sweep's own gates: the project auto-approves, the task has
-// a PR number, and Task Master is enabled. If the project auto-approves but
-// a gate fails (no PR yet, Task Master off) the sweep will never act, so the
-// honest state is `awaiting-human`, not a promise the machine won't keep.
-// Derived here, next to the other board states, so the frontend never
-// re-derives "approving verdict" (task-prompt.ts's isApprovingVerdict is the
-// one definition).
-function withApprovalState<
-  T extends {
-    status: string;
-    prNumber: number | null;
-    reviewSessionId: number | null;
-    reviewFindingsIngestedSessionId: number | null;
-    lastReviewVerdict: string | null;
-    projectAutoApprove: boolean | null;
-  },
->(
+// #2234 — the board's `approvalState`; the derivation lives in
+// services/task-approval-state.ts so the #2252 push shares it.
+function withApprovalState<T extends ApprovalStateRow>(
   row: T,
   taskMasterEnabled: boolean,
-): Omit<T, "projectAutoApprove"> & { approvalState: "awaiting-human" | "auto-pending" | null } {
-  const { projectAutoApprove, ...rest } = row;
-  const approved =
-    row.status === "reviewing" &&
-    row.reviewSessionId !== null &&
-    row.reviewFindingsIngestedSessionId === row.reviewSessionId &&
-    isApprovingVerdict(row.lastReviewVerdict);
-  const sweepWillApprove = !!projectAutoApprove && row.prNumber !== null && taskMasterEnabled;
-  return {
-    ...rest,
-    approvalState: approved ? (sweepWillApprove ? "auto-pending" : "awaiting-human") : null,
-  };
+): Omit<T, "projectAutoApprove"> & { approvalState: ApprovalState | null } {
+  const { projectAutoApprove: _projectAutoApprove, ...rest } = row;
+  return { ...rest, approvalState: deriveApprovalState(row, taskMasterEnabled) };
 }
 
 // The task drawer's surface for the second silent-fallback layer #761 left:

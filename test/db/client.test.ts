@@ -86,3 +86,46 @@ describe("sessions.project_id index (finding A3)", () => {
     expect(plan.some((row) => /SCAN sessions/.test(row.detail))).toBe(false);
   });
 });
+
+// #2252 — the approval-push migration backfills `approval_notified_verdict_at`
+// for tasks already waiting, so a deploy does not announce them.
+describe("approval_notified_verdict_at backfill migration (#2252)", () => {
+  const tmpDb = path.join(os.tmpdir(), `db-client-2252-test-${process.pid}.db`);
+  const drizzleDir = path.resolve(__dirname, "../../drizzle");
+
+  afterEach(() => {
+    for (const suffix of ["", "-wal", "-shm"]) fs.rmSync(`${tmpDb}${suffix}`, { force: true });
+  });
+
+  it("marks existing reviewing tasks as already announced and leaves others alone", () => {
+    const files = fs
+      .readdirSync(drizzleDir)
+      .filter((f) => /^\d{4}_.*\.sql$/.test(f))
+      .sort();
+    const target = files.find((f) =>
+      fs.readFileSync(path.join(drizzleDir, f), "utf8").includes("approval_notified_verdict_at"),
+    )!;
+    const apply = (db: Database.Database, file: string) => {
+      const sqlText = fs.readFileSync(path.join(drizzleDir, file), "utf8");
+      for (const stmt of sqlText.split("--> statement-breakpoint")) db.exec(stmt);
+    };
+    const db = new Database(tmpDb);
+    for (const f of files.slice(0, files.indexOf(target))) apply(db, f);
+
+    db.exec(
+      "INSERT INTO projects (id, name, cwd, created_at) VALUES (1, 'p', '/tmp', 1);" +
+        "INSERT INTO tasks (id, project_id, title, status, last_review_verdict_at, created_at, updated_at) VALUES " +
+        "(1, 1, 'waiting', 'reviewing', 1700000000, 1, 1), (2, 1, 'done', 'done', 1700000000, 1, 1);",
+    );
+    apply(db, target);
+
+    const rows = db
+      .prepare("SELECT id, approval_notified_verdict_at AS a FROM tasks ORDER BY id")
+      .all();
+    expect(rows).toEqual([
+      { id: 1, a: 1700000000 },
+      { id: 2, a: null },
+    ]);
+    db.close();
+  });
+});

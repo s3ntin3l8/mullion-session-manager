@@ -638,6 +638,13 @@
       "when": 1793118982417,
       "tag": "0090_yellow_hellion",
       "breakpoints": true
+    },
+    {
+      "idx": 91,
+      "version": "6",
+      "when": 1793265627416,
+      "tag": "0091_tidy_sprite",
+      "breakpoints": true
     }
   ]
 }
