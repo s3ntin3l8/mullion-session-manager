@@ -172,7 +172,10 @@ describe("worktreeInUse — the session's own host decides locality (issue #1722
     } as unknown as sessionBackends.SessionBackend);
     vi.useFakeTimers();
     try {
-      const result = sessionsUsingWorktree(app, worktreePath, "remote-b", undefined, true, 4000);
+      const result = sessionsUsingWorktree(app, worktreePath, "remote-b", undefined, true, {
+        remoteTimeoutMs: 4000,
+        deadHistory: { ids: new Set(), initialized: false },
+      });
       const rejection = expect(result).rejects.toBeInstanceOf(WorktreeComparisonTimeout);
       await vi.advanceTimersByTimeAsync(4000);
       await rejection;
@@ -296,15 +299,10 @@ describe("worktreeInUse — the session's own host decides locality (issue #1722
     const history = { ids: new Set<number>(), initialized: false };
     for (let i = 0; i < 10; i++) {
       expect(
-        await sessionsUsingWorktree(
-          app,
-          `/tmp/target-${i}`,
-          "local",
-          undefined,
-          true,
-          undefined,
-          history,
-        ),
+        await sessionsUsingWorktree(app, `/tmp/target-${i}`, "local", undefined, true, {
+          remoteTimeoutMs: 4000,
+          deadHistory: history,
+        }),
       ).toEqual({ active: [], alive: [], unknown: [] });
     }
     expect(
@@ -330,9 +328,9 @@ describe("worktreeInUse — the session's own host decides locality (issue #1722
     } as unknown as sessionBackends.SessionBackend);
     expect(
       (
-        await sessionsUsingWorktree(app, worktreePath, "local", undefined, true, undefined, {
-          ids: new Set(),
-          initialized: false,
+        await sessionsUsingWorktree(app, worktreePath, "local", undefined, true, {
+          remoteTimeoutMs: 4000,
+          deadHistory: { ids: new Set(), initialized: false },
         })
       ).unknown,
     ).toContain(id);
@@ -357,16 +355,61 @@ describe("worktreeInUse — the session's own host decides locality (issue #1722
     vi.spyOn(sessionBackends, "resolveBackend").mockReturnValue({
       liveness,
     } as unknown as sessionBackends.SessionBackend);
-    const result = await sessionsUsingWorktree(
-      app,
-      worktreePath,
-      "local",
-      undefined,
-      true,
-      undefined,
-      { ids: new Set(), initialized: false },
+    const result = await sessionsUsingWorktree(app, worktreePath, "local", undefined, true, {
+      remoteTimeoutMs: 4000,
+      deadHistory: { ids: new Set(), initialized: false },
+    });
+    expect([...result.active, ...result.unknown]).toContain(added);
+  });
+
+  it("does not report an unrelated new session as a manual-removal blocker", async () => {
+    const project = seedProject("local");
+    const ended = Number(
+      app.db
+        .insert(sessions)
+        .values({ projectId: project, command: "bash", cwd: worktreePath, status: "exited" })
+        .run().lastInsertRowid,
     );
-    expect(result.unknown).toContain(added);
+    const liveness = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        app.db
+          .insert(sessions)
+          .values({ projectId: project, command: "bash", cwd: "/unrelated" })
+          .run();
+        return { [String(ended)]: "dead" };
+      })
+      .mockResolvedValue({ [String(ended)]: "dead" });
+    vi.spyOn(sessionBackends, "resolveBackend").mockReturnValue({
+      liveness,
+    } as unknown as sessionBackends.SessionBackend);
+    expect(await sessionsUsingWorktree(app, worktreePath, "local")).toEqual({
+      active: [],
+      alive: [],
+      unknown: [],
+    });
+  });
+
+  it("detects a session entering the worktree during a manual-removal liveness probe", async () => {
+    const project = seedProject("local");
+    const ended = Number(
+      app.db
+        .insert(sessions)
+        .values({ projectId: project, command: "bash", cwd: worktreePath, status: "exited" })
+        .run().lastInsertRowid,
+    );
+    let added = 0;
+    const liveness = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        added = seedSession(project);
+        return { [String(ended)]: "dead" };
+      })
+      .mockResolvedValue({ [String(ended)]: "dead" });
+    vi.spyOn(sessionBackends, "resolveBackend").mockReturnValue({
+      liveness,
+    } as unknown as sessionBackends.SessionBackend);
+    expect((await sessionsUsingWorktree(app, worktreePath, "local")).active).toContain(added);
   });
 
   it("observes new sessions and changed symlinks on the next sweep check", async () => {
@@ -383,14 +426,22 @@ describe("worktreeInUse — the session's own host decides locality (issue #1722
       const history = { ids: new Set<number>(), initialized: false };
       app.db.update(sessions).set({ cwd: alias }).where(eq(sessions.id, id)).run();
       expect(
-        (await sessionsUsingWorktree(app, target, "local", undefined, true, undefined, history))
-          .active,
+        (
+          await sessionsUsingWorktree(app, target, "local", undefined, true, {
+            remoteTimeoutMs: 4000,
+            deadHistory: history,
+          })
+        ).active,
       ).toEqual([]);
       fs.unlinkSync(alias);
       fs.symlinkSync(target, alias, "dir");
       expect(
-        (await sessionsUsingWorktree(app, target, "local", undefined, true, undefined, history))
-          .active,
+        (
+          await sessionsUsingWorktree(app, target, "local", undefined, true, {
+            remoteTimeoutMs: 4000,
+            deadHistory: history,
+          })
+        ).active,
       ).toContain(id);
       fs.unlinkSync(alias);
       fs.symlinkSync(outside, alias, "dir");
@@ -399,8 +450,12 @@ describe("worktreeInUse — the session's own host decides locality (issue #1722
           .lastInsertRowid,
       );
       expect(
-        (await sessionsUsingWorktree(app, target, "local", undefined, true, undefined, history))
-          .active,
+        (
+          await sessionsUsingWorktree(app, target, "local", undefined, true, {
+            remoteTimeoutMs: 4000,
+            deadHistory: history,
+          })
+        ).active,
       ).toContain(added);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });

@@ -37,6 +37,7 @@ import { resolveHostBranches, resolveHostGitStatus } from "./host-git.js";
 import { resolveBackend } from "./session-backend.js";
 import { resolveSessionHostId } from "./session-live-info.js";
 import { sessionsUsingWorktree, WorktreeComparisonTimeout } from "./worktree-usage.js";
+import type { DeadHistoryHint } from "./worktree-usage.js";
 
 export type KeptReason =
   | "in-use"
@@ -66,7 +67,7 @@ const inFlight = new Set<number>();
 const SWEEP_COMPARISON_TIMEOUT_MS = 4_000;
 type SweepContext = {
   timedOutHosts: Set<string>;
-  deadHistory: { ids: Set<number>; initialized: boolean };
+  deadHistory: DeadHistoryHint;
 };
 
 /**
@@ -181,8 +182,9 @@ async function reclaim(
       hostId,
       row.id,
       true,
-      sweep ? SWEEP_COMPARISON_TIMEOUT_MS : undefined,
-      sweep?.deadHistory,
+      sweep
+        ? { remoteTimeoutMs: SWEEP_COMPARISON_TIMEOUT_MS, deadHistory: sweep.deadHistory }
+        : undefined,
     );
   } catch (error) {
     if (!(error instanceof WorktreeComparisonTimeout) || !sweep) throw error;

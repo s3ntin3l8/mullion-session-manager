@@ -95,6 +95,8 @@ export function worktreeInUse(app: FastifyInstance, worktreePath: string): boole
   );
 }
 
+export type DeadHistoryHint = { ids: Set<number>; initialized: boolean };
+
 /** Sessions on the worktree's host whose recorded or live cwd is inside it.
  * Ended sessions remain blockers until their process is confirmed dead. */
 export async function sessionsUsingWorktree(
@@ -103,15 +105,14 @@ export async function sessionsUsingWorktree(
   hostId: string,
   excludeId?: number,
   stopOnActive = false,
-  comparisonTimeoutMs?: number,
-  deadHistory?: { ids: Set<number>; initialized: boolean },
+  sweep?: { remoteTimeoutMs: number; deadHistory: DeadHistoryHint },
+  raceRetries = 0,
 ): Promise<{ active: number[]; alive: number[]; unknown: number[] }> {
+  const deadHistory = sweep?.deadHistory;
   if (hostId !== LOCAL_HOST_ID) {
     const check = (signal?: AbortSignal) =>
       remoteSessionsUsingWorktree(app, worktreePath, hostId, excludeId, stopOnActive, signal);
-    return comparisonTimeoutMs === undefined
-      ? check()
-      : withComparisonTimeout(check, comparisonTimeoutMs);
+    return sweep === undefined ? check() : withComparisonTimeout(check, sweep.remoteTimeoutMs);
   }
   const resolvedPath = path.resolve(worktreePath);
   const effectiveCwd = sql<string | null>`coalesce(${sessions.cwd}, ${projects.cwd})`;
@@ -336,23 +337,36 @@ export async function sessionsUsingWorktree(
     }
     // Liveness yields after the path checks. A newly inserted or changed row,
     // or a PTY that moved in that interval, has not had its path checked.
-    const currentRows = snapshotRows();
-    const currentIds = new Set(currentRows.map(({ id }) => id));
-    const markUnknown = (id: number) => {
-      if (
-        id !== excludeId &&
-        currentIds.has(id) &&
-        !unknown.includes(id) &&
-        !active.includes(id) &&
-        !alive.includes(id)
-      )
-        unknown.push(id);
-    };
-    for (const row of currentRows) {
-      if (beforeRows.get(row.id) !== JSON.stringify(row)) markUnknown(row.id);
-    }
-    for (const { id, liveCwd } of app.pty.list()) {
-      if (!beforeLive.has(id) || beforeLive.get(id) !== liveCwd) markUnknown(Number(id));
+    {
+      const currentRows = snapshotRows();
+      const currentIds = new Set(currentRows.map(({ id }) => id));
+      const markUnknown = (id: number) => {
+        if (
+          id !== excludeId &&
+          currentIds.has(id) &&
+          !unknown.includes(id) &&
+          !active.includes(id) &&
+          !alive.includes(id)
+        )
+          unknown.push(id);
+      };
+      const changed = new Set<number>();
+      for (const row of currentRows)
+        if (beforeRows.get(row.id) !== JSON.stringify(row)) changed.add(row.id);
+      for (const { id, liveCwd } of app.pty.list()) {
+        if (!beforeLive.has(id) || beforeLive.get(id) !== liveCwd) changed.add(Number(id));
+      }
+      if (changed.size && raceRetries < 2)
+        return sessionsUsingWorktree(
+          app,
+          worktreePath,
+          hostId,
+          excludeId,
+          stopOnActive,
+          sweep,
+          raceRetries + 1,
+        );
+      for (const id of changed) markUnknown(id);
     }
   }
   return { active, alive, unknown };

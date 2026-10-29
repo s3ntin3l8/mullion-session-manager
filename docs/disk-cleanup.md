@@ -347,6 +347,9 @@ host, including symlink aliases and the agent-recorded launch directory when
 the session row has no cwd. If that
 host is unreachable, too old to resolve paths, or cannot verify a path, the
 sweep defers removal; manual removal can still use its explicit force option.
+During a sweep, the remote usage check has a four-second deadline; a host that
+exceeds it is skipped for the rest of that pass so other hosts can proceed.
+The deadline does not apply to local filesystem checks or to removal itself.
 
 A worktree that fails a check is left in place, and the reason is recorded on
 the session row as `worktreeKeptReason` (`in-use`, `still-running`, `unpushed`,
