@@ -165,6 +165,8 @@ describe("derivePrPhase", () => {
     expect(derivePrPhase({ ...behind, behindBy: 0, unresolvedThreads: 2 })).toBe(
       "threads_unresolved",
     );
+    // An unanswered thread lookup is not "nothing blocks".
+    expect(derivePrPhase({ ...behind, behindBy: 0, unresolvedThreads: null })).toBe("unknown");
     // Genuinely behind, or no answer: stays behind (never claim ready on a failed lookup).
     expect(derivePrPhase({ ...behind, behindBy: 2 })).toBe("behind");
     expect(derivePrPhase({ ...behind, behindBy: null })).toBe("behind");

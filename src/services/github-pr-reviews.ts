@@ -22,7 +22,7 @@ import {
   type PROrWithChecks,
 } from "./github.js";
 import { isGitHubRateLimited } from "./github-fetch.js";
-import { cachedBehindBy } from "./github-compare.js";
+import { cachedBehindBy, peekBehindBy } from "./github-compare.js";
 import type { PrMergeable, PrReviewDecision } from "./github-pr-phase.js";
 import {
   buildReviewSummary,
@@ -96,7 +96,6 @@ type ReviewFields = Pick<
   | "reviewStateKnown"
   | "checksRollup"
   | "reviewSummary"
-  | "behindBy"
 >;
 
 // Last successfully fetched review fields per PR. A failed or backed-off
@@ -118,7 +117,6 @@ function reviewFieldsOf(pr: PROrWithChecks): ReviewFields {
     reviewStateKnown: pr.reviewStateKnown,
     checksRollup: pr.checksRollup,
     reviewSummary: pr.reviewSummary,
-    behindBy: pr.behindBy,
   };
 }
 
@@ -265,6 +263,8 @@ export async function enrichPrsWithReviewState(
     for (const pr of prs) {
       const known = lastKnown.get(keyFor(pr.number));
       if (known) Object.assign(pr, known);
+      // The ancestry answer belongs to the head it was read for, not to the PR.
+      pr.behindBy = peekBehindBy(owner, repo, pr.baseBranch, pr.headSha);
       applyPrPhase(pr);
     }
   };
@@ -409,8 +409,6 @@ export async function enrichPrsWithReviewState(
       .filter((pr) => pr.mergeStateStatus === "BEHIND")
       .map(async (pr) => {
         pr.behindBy = await cachedBehindBy(token, owner, repo, pr.baseBranch, pr.headSha);
-        const known = lastKnown.get(keyFor(pr.number));
-        if (known) known.behindBy = pr.behindBy;
       }),
   );
 

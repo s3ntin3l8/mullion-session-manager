@@ -105,11 +105,11 @@ export function derivePrPhase(pr: PrPhaseInput): PrPhase {
   // asked, or branch protection still reports the PR as blocked.
   if (pr.reviewDecision === null && pr.requestedReviewers.length > 0) return waiting();
   // Updating a head the compare says is not behind would be refused, so read it
-  // as no longer BEHIND. (`unresolvedThreads ?? 0`: a null answer is read as "no
-  // conversations block" on purpose — BEHIND means the update is what's missing.)
+  // as no longer BEHIND. An unanswered thread lookup (null) is not "nothing
+  // blocks": it reads as BLOCKED, which the branch below turns into `unknown`.
   const mergeState =
     pr.mergeStateStatus === "BEHIND" && pr.behindBy === 0
-      ? (pr.unresolvedThreads ?? 0) > 0
+      ? pr.unresolvedThreads === null || (pr.unresolvedThreads ?? 0) > 0
         ? "BLOCKED"
         : "CLEAN"
       : pr.mergeStateStatus;

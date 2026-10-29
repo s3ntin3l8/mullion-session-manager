@@ -351,6 +351,20 @@ describe("enrichPrsWithReviewState", () => {
       expect(compareCalls()).toHaveLength(1);
     });
 
+    it("does not carry a compare answer onto a new head when a later GraphQL call fails", async () => {
+      fetchMock
+        .mockResolvedValueOnce(listResponse([behindNode(1)]))
+        .mockResolvedValueOnce(threadsResponse({ 1: 0 }))
+        .mockResolvedValueOnce(compare(0));
+      await enrichPrsWithReviewState("tok", "o", "behind-newhead", [pr(1, { headSha: "old" })]);
+
+      fetchMock.mockRejectedValueOnce(new Error("timeout"));
+      const again = [pr(1, { headSha: "new" })];
+      await enrichPrsWithReviewState("tok", "o", "behind-newhead", again);
+      expect(again[0].behindBy).toBeUndefined();
+      expect(again[0].prPhase).toBe("behind");
+    });
+
     it("keeps the corrected phase when a later GraphQL call fails", async () => {
       fetchMock
         .mockResolvedValueOnce(listResponse([behindNode(1)]))
