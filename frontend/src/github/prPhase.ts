@@ -25,8 +25,17 @@ export const PHASE_LABEL: Record<GitHubPrPhase, string> = {
   unknown: "Status unknown",
 };
 
-/** Phases that want the user's attention first, most urgent first. */
-export const ATTENTION_ORDER: GitHubPrPhase[] = ["ci_failing", "changes_requested", "conflicts"];
+/**
+ * Phases that want the user's attention first, most urgent first. Open
+ * conversations come last: they need the user (reply / resolve) but nothing is
+ * broken. `behind` is deliberately absent until the list can verify ancestry.
+ */
+export const ATTENTION_ORDER: GitHubPrPhase[] = [
+  "ci_failing",
+  "changes_requested",
+  "conflicts",
+  "threads_unresolved",
+];
 
 export function phaseTone(phase: GitHubPrPhase): "bad" | "warn" | "good" | "dim" {
   return legacyPillClass(statusTone({ phase }));

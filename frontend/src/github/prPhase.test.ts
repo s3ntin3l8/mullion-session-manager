@@ -32,7 +32,7 @@ describe("phaseTone", () => {
 });
 
 describe("sortPrsByAttention", () => {
-  it("puts failing CI, then changes requested, then conflicts first, then newest", () => {
+  it("puts failing CI, then changes requested, conflicts, then open conversations first, then newest", () => {
     const prs = [
       { number: 1, prPhase: "ready_to_merge" as const, updatedAt: "2026-01-05T00:00:00Z" },
       { number: 2, prPhase: "conflicts" as const, updatedAt: "2026-01-01T00:00:00Z" },
@@ -40,8 +40,9 @@ describe("sortPrsByAttention", () => {
       { number: 4, prPhase: "changes_requested" as const, updatedAt: "2026-01-02T00:00:00Z" },
       { number: 5, prPhase: "ci_failing" as const, updatedAt: "2026-01-01T00:00:00Z" },
       { number: 6, updatedAt: null },
+      { number: 7, prPhase: "threads_unresolved" as const, updatedAt: "2026-01-08T00:00:00Z" },
     ];
-    expect(sortPrsByAttention(prs).map((p) => p.number)).toEqual([5, 4, 2, 3, 1, 6]);
+    expect(sortPrsByAttention(prs).map((p) => p.number)).toEqual([5, 4, 2, 7, 3, 1, 6]);
     // Does not mutate its input.
     expect(prs[0].number).toBe(1);
   });
@@ -69,10 +70,14 @@ describe("attentionSummary", () => {
         { prPhase: "ci_failing" },
         { prPhase: "ci_failing" },
         { prPhase: "conflicts" },
+        { prPhase: "threads_unresolved" },
+        // Needs a click, but not (yet) the user's attention: behind rides on a
+        // value the list cannot verify.
+        { prPhase: "behind" },
         { prPhase: "ready_to_merge" },
         {},
       ]),
-    ).toEqual({ total: 3, byPhase: { ci_failing: 2, conflicts: 1 } });
+    ).toEqual({ total: 4, byPhase: { ci_failing: 2, conflicts: 1, threads_unresolved: 1 } });
   });
 });
 

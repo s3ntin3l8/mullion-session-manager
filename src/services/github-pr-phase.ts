@@ -20,7 +20,9 @@ export type PrMergeable = "MERGEABLE" | "CONFLICTING" | "UNKNOWN" | null;
  *   replaces `review_pending`; `ready_to_merge` is untouched.
  * - `threads_unresolved`: nothing is missing a review, but GitHub reports the PR
  *   blocked while conversations are open (branch protection's "require
- *   conversation resolution"). Not an attention phase: it needs a click, not a fix.
+ *   conversation resolution"). The user has to reply or resolve, though nothing
+ *   is broken: the frontend counts it in the attention badge (ATTENTION_ORDER,
+ *   frontend/src/github/prPhase.ts).
  * - `behind`: strict branch protection ("require branches to be up to date")
  *   and the head has fallen behind its base; GitHub reports BEHIND only then.
  *   Updating the branch is the next step. Not an attention phase.
@@ -109,13 +111,6 @@ export function derivePrPhase(pr: PrPhaseInput): PrPhase {
   if (pr.ciFetched === false && pr.mergeStateStatus !== "CLEAN") return "unknown";
   return "ready_to_merge";
 }
-
-/** Phases that want the user's attention, in sort order (most urgent first). */
-export const PR_ATTENTION_PHASES: readonly PrPhase[] = [
-  "ci_failing",
-  "changes_requested",
-  "conflicts",
-];
 
 /** The slice of a PR the change-detection compares (and later notifies on). */
 export interface PrSnapshot {

@@ -165,6 +165,14 @@ describe("RightSidebar", () => {
       "GitHub — 1 PR: ci failing, 1 PR: changes requested, 1 PR: conflicts",
     );
 
+    // Open conversations need the user too, and read last.
+    act(() =>
+      useDashboardStore.setState({
+        prsByProject: { 1: withPrs("threads_unresolved", "ci_failing") },
+      }),
+    );
+    expect(github().title).toBe("GitHub — 1 PR: ci failing, 1 PR: unresolved conversations");
+
     // Waiting or ready PRs are not attention.
     act(() =>
       useDashboardStore.setState({
