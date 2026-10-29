@@ -5,6 +5,7 @@ import {
   graphqlBackoffRemainingMs,
   resetGraphqlBackoffForTests,
 } from "../../src/services/github-pr-reviews.js";
+import { resetBehindByCache } from "../../src/services/github-compare.js";
 import {
   isGitHubRateLimited,
   resetGitHubRateLimitForTests,
@@ -96,6 +97,7 @@ describe("enrichPrsWithReviewState", () => {
     vi.stubGlobal("fetch", fetchMock);
     resetGraphqlBackoffForTests();
     resetGitHubRateLimitForTests();
+    resetBehindByCache();
   });
   afterEach(() => vi.unstubAllGlobals());
 
@@ -299,6 +301,68 @@ describe("enrichPrsWithReviewState", () => {
     expect(threadsQuery).toContain("p2:");
     expect(threadsQuery).not.toContain("p1:");
     expect(second.map((p) => p.unresolvedThreads)).toEqual([1, 4]);
+  });
+
+  describe("BEHIND is checked against ancestry", () => {
+    const behindNode = (n: number) => gqlNode(n, { mergeStateStatus: "BEHIND" });
+    const compareCalls = () =>
+      fetchMock.mock.calls.filter(([url]) => String(url).includes("/compare/"));
+    const compare = (behindBy: number) =>
+      new Response(JSON.stringify({ behind_by: behindBy }), { status: 200 });
+
+    it("reads a BEHIND head the compare says is not behind as ready", async () => {
+      fetchMock
+        .mockResolvedValueOnce(listResponse([behindNode(1)]))
+        .mockResolvedValueOnce(threadsResponse({ 1: 0 }))
+        .mockResolvedValueOnce(compare(0));
+      const prs = [pr(1)];
+      await enrichPrsWithReviewState("tok", "o", "behind-0", prs);
+      expect(prs[0]).toMatchObject({ behindBy: 0, prPhase: "ready_to_merge" });
+      expect(String(compareCalls()[0][0])).toContain("/compare/main...sha");
+    });
+
+    it("keeps `behind` for a genuinely behind head and for a failed compare", async () => {
+      fetchMock
+        .mockResolvedValueOnce(listResponse([behindNode(1), behindNode(2)]))
+        .mockResolvedValueOnce(threadsResponse({ 1: 0, 2: 0 }))
+        .mockImplementation(async (url: string) =>
+          String(url).includes("main...a") ? compare(2) : new Response("boom", { status: 500 }),
+        );
+      const prs = [pr(1, { headSha: "a" }), pr(2, { headSha: "b" })];
+      await enrichPrsWithReviewState("tok", "o", "behind-n", prs);
+      expect(prs[0]).toMatchObject({ behindBy: 2, prPhase: "behind" });
+      expect(prs[1].prPhase).toBe("behind");
+    });
+
+    it("makes no compare call for a PR that is not BEHIND, and none twice for one head", async () => {
+      fetchMock
+        .mockResolvedValueOnce(listResponse([gqlNode(1)]))
+        .mockResolvedValueOnce(threadsResponse({ 1: 0 }));
+      await enrichPrsWithReviewState("tok", "o", "behind-cache", [pr(1)]);
+      expect(compareCalls()).toHaveLength(0);
+
+      for (let i = 0; i < 2; i++) {
+        fetchMock
+          .mockResolvedValueOnce(listResponse([behindNode(2)]))
+          .mockResolvedValueOnce(threadsResponse({ 2: 0 }))
+          .mockResolvedValueOnce(compare(0));
+        await enrichPrsWithReviewState("tok", "o", "behind-cache", [pr(2)]);
+      }
+      expect(compareCalls()).toHaveLength(1);
+    });
+
+    it("keeps the corrected phase when a later GraphQL call fails", async () => {
+      fetchMock
+        .mockResolvedValueOnce(listResponse([behindNode(1)]))
+        .mockResolvedValueOnce(threadsResponse({ 1: 0 }))
+        .mockResolvedValueOnce(compare(0));
+      await enrichPrsWithReviewState("tok", "o", "behind-stale", [pr(1)]);
+
+      fetchMock.mockRejectedValueOnce(new Error("timeout"));
+      const again = [pr(1)];
+      await enrichPrsWithReviewState("tok", "o", "behind-stale", again);
+      expect(again[0]).toMatchObject({ behindBy: 0, prPhase: "ready_to_merge" });
+    });
   });
 
   it("leaves PRs untouched when the request fails or errors", async () => {

@@ -10,6 +10,7 @@
 
 import { githubApiFetch, GitHubApiError } from "./github-fetch.js";
 import { graphql } from "./github-pr-reviews.js";
+import { fetchBehindBy } from "./github-compare.js";
 import {
   normalizeRollupState,
   parseOtherChecks,
@@ -283,27 +284,6 @@ async function fetchFiles(
     if (raw.length < 100) break;
   }
   return out;
-}
-
-/** How far the head is behind the base; null when GitHub cannot say. */
-async function fetchBehindBy(
-  token: string,
-  owner: string,
-  repo: string,
-  base: string,
-  headSha: string,
-): Promise<number | null> {
-  try {
-    const res = await githubApiFetch(
-      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/compare/${encodeURIComponent(base)}...${encodeURIComponent(headSha)}?per_page=1`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
-    if (!res.ok) return null;
-    const raw = (await res.json()) as { behind_by?: unknown };
-    return typeof raw.behind_by === "number" ? raw.behind_by : null;
-  } catch {
-    return null;
-  }
 }
 
 interface RestPr {

@@ -2553,21 +2553,10 @@ export async function projectsRoute(app: FastifyInstance) {
       hasCommentedReview: detail.reviewSummary.commented.length > 0,
       unresolvedThreads: detail.reviewSummary.unresolvedThreads,
       ciStatus,
+      // GitHub's BEHIND can disagree with ancestry; the compare overrules it.
+      behindBy: detail.behindBy,
     };
-    let prPhase = derivePrPhase(phaseInput);
-    // BEHIND is GitHub's collapsed state and can disagree with ancestry
-    // (lazygit#5975: BEHIND with behind_by 0). When the compare says the head is
-    // not behind, updating would be refused: re-derive without the BEHIND, so the
-    // chip and the next-step button agree. The list has no compare, so it can
-    // still say "behind" for such a PR; the merge route lets that through.
-    // (`unresolvedThreads ?? 0`: a null answer is read as "no conversations
-    // block" on purpose — BEHIND means the update is what's missing.)
-    if (prPhase === "behind" && detail.behindBy === 0) {
-      prPhase = derivePrPhase({
-        ...phaseInput,
-        mergeStateStatus: (detail.reviewSummary.unresolvedThreads ?? 0) > 0 ? "BLOCKED" : "CLEAN",
-      });
-    }
+    const prPhase = derivePrPhase(phaseInput);
     // Fold the relay's state into the review summary so the Reviews row is the
     // one place it shows. Best effort: the relay is decorative next to the
     // reviews themselves, so a failed lookup leaves the summary as it is.

@@ -22,6 +22,7 @@ import {
   type PROrWithChecks,
 } from "./github.js";
 import { isGitHubRateLimited } from "./github-fetch.js";
+import { cachedBehindBy } from "./github-compare.js";
 import type { PrMergeable, PrReviewDecision } from "./github-pr-phase.js";
 import {
   buildReviewSummary,
@@ -95,6 +96,7 @@ type ReviewFields = Pick<
   | "reviewStateKnown"
   | "checksRollup"
   | "reviewSummary"
+  | "behindBy"
 >;
 
 // Last successfully fetched review fields per PR. A failed or backed-off
@@ -116,6 +118,7 @@ function reviewFieldsOf(pr: PROrWithChecks): ReviewFields {
     reviewStateKnown: pr.reviewStateKnown,
     checksRollup: pr.checksRollup,
     reviewSummary: pr.reviewSummary,
+    behindBy: pr.behindBy,
   };
 }
 
@@ -397,6 +400,19 @@ export async function enrichPrsWithReviewState(
       if (key.startsWith(prefix) && !live.has(key)) cache.delete(key);
     }
   }
+
+  // GitHub's BEHIND can disagree with ancestry, so ask the compare — only for a
+  // PR it says is BEHIND, and cached per head. A failed answer leaves `behindBy`
+  // unset, which keeps `behind` (never claim ready on a failed lookup).
+  await Promise.all(
+    prs
+      .filter((pr) => pr.mergeStateStatus === "BEHIND")
+      .map(async (pr) => {
+        pr.behindBy = await cachedBehindBy(token, owner, repo, pr.baseBranch, pr.headSha);
+        const known = lastKnown.get(keyFor(pr.number));
+        if (known) known.behindBy = pr.behindBy;
+      }),
+  );
 
   for (const pr of prs) applyPrPhase(pr);
 }
