@@ -1457,6 +1457,32 @@ describe("github-integration service", () => {
         await app.close();
       });
 
+      it("reads a 403 as unknown (rate limit / SSO), not as no write access, and retries", async () => {
+        const app = await connect("repo");
+        repoReply({ message: "rate limited" }, 403);
+        expect(await describeSidebarWriteIdentity(app, repo)).toMatchObject({
+          canWrite: null,
+          canPush: null,
+        });
+        repoReply({ private: true, permissions: { push: true } });
+        expect(await describeSidebarWriteIdentity(app, repo)).toMatchObject({ canWrite: true });
+        await app.close();
+      });
+
+      it("forgets the answer when the credential is re-saved or removed", async () => {
+        const app = await connect("read:org");
+        repoReply({ private: true, permissions: { push: true } });
+        expect(await describeSidebarWriteIdentity(app, repo)).toMatchObject({ canWrite: false });
+        // Same account, wider scope: no ten-minute wait on the stale verdict.
+        fetchMock.mockResolvedValue(
+          jsonResponse(200, { login: "octocat" }, { "x-oauth-scopes": "repo" }),
+        );
+        await setPat(app, "ghp_wider");
+        repoReply({ private: true, permissions: { push: true } });
+        expect(await describeSidebarWriteIdentity(app, repo)).toMatchObject({ canWrite: true });
+        await app.close();
+      });
+
       it("memoises an answer but retries after a failure", async () => {
         const app = await connect("repo");
         repoReply({}, 500);

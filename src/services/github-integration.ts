@@ -994,7 +994,9 @@ export function resetSidebarIdentityCache(): void {
  * judged by its scopes (`repo`, or `public_repo` on a public repo); a
  * fine-grained PAT carries none and cannot be introspected, so it stays
  * unknown. `GET /repos/{owner}/{repo}` supplies visibility and push access; a
- * 403/404 means the token cannot see the repo at all. Only a real answer is
+ * 404 means the token cannot see the repo at all. Advisory only: it shapes the
+ * composer, and the write routes deliberately do no pre-check (the 403 mapping
+ * stays, #2282), so this must never become server-side authorization. Only a real answer is
  * memoised; a network blip or rate limit reads as unknown.
  */
 async function connectedWriteAccess(
@@ -1019,7 +1021,9 @@ async function connectedWriteAccess(
     return unknown;
   }
   let access: SidebarWriteAccess;
-  if (res.status === 403 || res.status === 404) {
+  // Only a 404 means "cannot see the repo". A 403 is as likely a rate limit or an
+  // SSO-enforced org, which says nothing about write scope: unknown, not cached.
+  if (res.status === 404) {
     access = { canWrite: false, canPush: false };
   } else if (res.ok) {
     const body = (await res.json()) as {
@@ -1220,6 +1224,8 @@ function storeToken(
   scopes: string[],
 ): GitHubIntegrationSummary {
   const connectedAt = new Date();
+  // A re-saved credential may widen what the token can do; forget the verdict.
+  resetSidebarIdentityCache();
   // Encrypted once and reused below (Hermes review, PR #38) — encrypting
   // twice was harmless today, but would silently diverge the insert vs.
   // update value if encryptString's output ever became non-deterministic
@@ -1281,6 +1287,7 @@ export async function setOAuthToken(
  * caller.
  */
 export function disconnect(app: FastifyInstance): void {
+  resetSidebarIdentityCache();
   app.db
     .update(integrations)
     .set({ authTokenEnc: null, tokenType: null, login: null, scopes: null, connectedAt: null })
