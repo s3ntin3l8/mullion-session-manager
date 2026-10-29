@@ -1256,6 +1256,25 @@ describe("mapClaudeCodeEvent cwd piggyback (issue: worktree/branch detection)", 
     ]);
   });
 
+  it("carries Claude's transcript_path on the piggybacked cwd_changed (issue #2268)", () => {
+    expect(
+      mapClaudeCodeEvent("PostToolUse", {
+        cwd: "/workspace/project",
+        transcript_path: "/home/u/.claude/projects/-workspace-project/abc.jsonl",
+      }),
+    ).toEqual([
+      {
+        kind: "cwd_changed",
+        cwd: "/workspace/project",
+        transcriptPath: "/home/u/.claude/projects/-workspace-project/abc.jsonl",
+      },
+    ]);
+    // An empty or non-string value is dropped rather than forwarded.
+    expect(
+      mapClaudeCodeEvent("PostToolUse", { cwd: "/workspace/project", transcript_path: "" }),
+    ).toEqual([{ kind: "cwd_changed", cwd: "/workspace/project" }]);
+  });
+
   it("appends cwd_changed BEFORE a single-object mapped result (Notification)", () => {
     expect(
       mapClaudeCodeEvent("Notification", { message: "hi", cwd: "/workspace/project" }),

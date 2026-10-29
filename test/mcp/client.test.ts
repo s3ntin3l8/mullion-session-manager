@@ -370,6 +370,42 @@ describe("MullionClient (issue #271)", () => {
       expect(bodies).toEqual([{ sessionId: "7", mode: "rendered" }, { sessionId: "7" }]);
     });
 
+    it("getSessionTranscript sends the query and falls back to the own session id (issue #2268)", async () => {
+      const bodies: unknown[] = [];
+      const socketPath = await startControlServer((msg, socket) => {
+        expect(msg.op).toBe("sessions.transcript");
+        bodies.push(msg.body);
+        const missing = (msg.body as { sessionId?: string }).sessionId === undefined;
+        socket.write(
+          `${JSON.stringify(
+            missing
+              ? { id: msg.id, ok: false, status: 400, error: "'sessionId' is required" }
+              : {
+                  id: msg.id,
+                  ok: true,
+                  status: 200,
+                  result: { entries: [], nextSeq: 1, more: false },
+                },
+          )}\n`,
+        );
+      });
+      const client = new MullionClient({
+        MULLION_SOCKET_PATH: socketPath,
+        MULLION_SESSION_ID: "12",
+      });
+      expect(await client.getSessionTranscript("7", { afterSeq: 5 })).toEqual({
+        entries: [],
+        nextSeq: 1,
+        more: false,
+      });
+      await client.getSessionTranscript(undefined, { limit: 3 });
+      expect(bodies).toEqual([
+        { sessionId: "7", afterSeq: 5 },
+        { limit: 3 },
+        { sessionId: "12", limit: 3 },
+      ]);
+    });
+
     it("listChildSessions sends sessions.children, with the given parent id when supplied", async () => {
       const socketPath = await startControlServer((msg, socket) => {
         expect(msg.op).toBe("sessions.children");

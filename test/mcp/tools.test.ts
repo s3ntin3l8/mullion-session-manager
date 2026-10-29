@@ -67,6 +67,7 @@ describe("TOOLS registry (issue #271, #134 part 2)", () => {
       "kill_child_session",
       "stop_dock_session",
       "get_scrollback",
+      "get_session_transcript",
       "push_task_branch",
       "request_review",
       "review_status",
@@ -322,6 +323,24 @@ describe("session/project/preview tool handlers (issue #134 part 2)", () => {
     expect(text).toBe("the final answer");
     await tool.handler({ sessionId: "4", mode: "rendered" }, { getScrollback });
     expect(getScrollback).toHaveBeenLastCalledWith("4", "rendered");
+  });
+
+  it("get_session_transcript forwards only the options it was given (issue #2268)", async () => {
+    const tool = TOOLS.find((t) => t.name === "get_session_transcript")!;
+    const page = { entries: [], nextSeq: 1999, more: false };
+    const getSessionTranscript = vi.fn().mockResolvedValue(page);
+    const text = await tool.handler({}, { getSessionTranscript });
+    expect(getSessionTranscript).toHaveBeenCalledWith(undefined, {});
+    expect(JSON.parse(text)).toEqual(page);
+    await tool.handler(
+      { sessionId: "9", afterSeq: 3999, limit: 10, tools: true },
+      { getSessionTranscript },
+    );
+    expect(getSessionTranscript).toHaveBeenLastCalledWith("9", {
+      afterSeq: 3999,
+      limit: 10,
+      tools: true,
+    });
   });
 
   it('get_scrollback mode "raw" calls client.getScrollback and decodes the b64 result', async () => {

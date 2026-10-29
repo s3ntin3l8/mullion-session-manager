@@ -912,6 +912,14 @@ export function mapClaudeCodeEvent(kind, payload) {
   if (typeof cwd !== "string" || cwd.length === 0) return mapped;
 
   const cwdMessage = { kind: "cwd_changed", cwd };
+  // Issue #2268 — every Claude hook payload carries `transcript_path`, the
+  // JSONL file of this session's conversation. It rides on the cwd_changed
+  // that is already sent with every event (see the comment above), so the
+  // backend learns it on the first hook of the session and again after a
+  // restart, with no extra message per event.
+  if (typeof payload.transcript_path === "string" && payload.transcript_path.length > 0) {
+    cwdMessage.transcriptPath = payload.transcript_path;
+  }
   if (mapped === null || mapped === undefined) return [cwdMessage];
   return Array.isArray(mapped) ? [cwdMessage, ...mapped] : [cwdMessage, mapped];
 }

@@ -753,6 +753,51 @@ const getScrollback = {
   },
 };
 
+const getSessionTranscript = {
+  name: "get_session_transcript",
+  description:
+    "Read what a session said, as plain text: the ordered conversation (user turns, assistant " +
+    "replies, and a one-line summary per tool call and result) from the agent CLI's own " +
+    "transcript. Use this instead of get_scrollback to read a child's reply: the terminal " +
+    "stream of a full-screen agent CLI is spinner repaints. Pass afterSeq (the previous " +
+    "page's nextSeq) to read only what came after, e.g. after prompt_session + wait_for_session. " +
+    "Returns { entries: [{ seq, role: user|assistant|tool, text, ts }], nextSeq, more }; when " +
+    "more is true, call again with afterSeq = nextSeq. Omit sessionId for the calling session; " +
+    "a child the caller spawned can be named. Claude Code and Codex sessions only; other CLIs " +
+    "answer not-supported.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      sessionId: {
+        type: "string",
+        description: "The session id to read. Defaults to the calling session.",
+      },
+      afterSeq: {
+        type: "integer",
+        minimum: 0,
+        description: "Return only entries after this cursor (a previous page's nextSeq).",
+      },
+      limit: {
+        type: "integer",
+        minimum: 1,
+        maximum: 500,
+        description: "Most entries to return (default 50).",
+      },
+      tools: {
+        type: "boolean",
+        description: "Include tool calls and results in full instead of a one-line summary.",
+      },
+    },
+  },
+  async handler(args, client) {
+    const query = {};
+    if (args?.afterSeq !== undefined) query.afterSeq = args.afterSeq;
+    if (args?.limit !== undefined) query.limit = args.limit;
+    if (args?.tools === true) query.tools = true;
+    return JSON.stringify(await client.getSessionTranscript(args?.sessionId, query));
+  },
+};
+
 const pushTaskBranch = {
   name: "push_task_branch",
   description:
@@ -1330,6 +1375,7 @@ export const TOOLS = [
   killChildSession,
   stopDockSession,
   getScrollback,
+  getSessionTranscript,
   pushTaskBranch,
   requestReview,
   reviewStatus,

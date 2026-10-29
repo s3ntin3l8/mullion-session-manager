@@ -776,6 +776,22 @@ function requireOne(args, label) {
   return value;
 }
 
+/** Renders a `sessions.transcript` page for the terminal: one block per entry,
+ * then a trailer with the cursor to resume from. */
+function formatTranscript(id, result) {
+  const blocks = (result.entries ?? []).map((entry) => {
+    const when = entry.ts ? ` ${entry.ts}` : "";
+    return `[${entry.role}${when}]\n${entry.text}`;
+  });
+  const resume = `mullion session transcript ${id} --after ${result.nextSeq}`;
+  blocks.push(
+    result.more
+      ? `-- more entries: ${resume}`
+      : `-- end of transcript so far; read new entries with: ${resume}`,
+  );
+  return blocks.join("\n\n");
+}
+
 const sessionCommands = {
   async list(client, args) {
     const { flags } = extractFlags(args, SESSION_LIST_SPEC);
@@ -1015,6 +1031,24 @@ const sessionCommands = {
     const result = await client.request("sessions.scrollback", { sessionId: id });
     io.stdout.write(Buffer.from(result.b64, "base64"));
     return { streamed: true };
+  },
+  // Issue #2268 — the conversation as plain text, from the agent CLI's own
+  // transcript. `--after` takes the cursor a previous page printed, so a parent
+  // reads what a child said since its last look instead of raw terminal bytes.
+  async transcript(client, args, opts) {
+    const { flags, rest } = extractFlags(args, {
+      after: "number",
+      limit: "number",
+      tools: "boolean",
+    });
+    const id = rest[0] ?? opts.session;
+    if (id === undefined) throw new CliUsageError("session id is required");
+    const body = { sessionId: id };
+    if (flags.after !== undefined) body.afterSeq = flags.after;
+    if (flags.limit !== undefined) body.limit = flags.limit;
+    if (flags.tools === true) body.tools = true;
+    const result = await client.request("sessions.transcript", body);
+    return { json: result, text: formatTranscript(id, result) };
   },
   async exec(client, args, opts, io) {
     const { flags, rest } = extractFlags(args, {
@@ -1938,7 +1972,7 @@ export const COMMANDS = {
 export const USAGE = `Usage: mullion <command> [args] [flags]
 
 Commands:
-  session list|get|children|wait|prompt|create|spawn-child|kill|rename|logs|exec
+  session list|get|children|wait|prompt|create|spawn-child|kill|rename|logs|transcript|exec
   browser navigate|click|fill|type|press|select|check|uncheck|hover|
           scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors|
           download

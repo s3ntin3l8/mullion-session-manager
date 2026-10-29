@@ -139,6 +139,7 @@ function fakeSessionBackend(overrides: Partial<SessionBackend>): SessionBackend 
     terminate: vi.fn().mockResolvedValue(undefined),
     getScrollback: vi.fn().mockResolvedValue(Buffer.alloc(0)),
     getRenderedScrollback: vi.fn().mockResolvedValue(""),
+    getTranscript: vi.fn().mockResolvedValue({ ok: false, status: 404, error: "not running" }),
     listSessionProcesses: vi.fn().mockResolvedValue([]),
     uploadImage: vi.fn().mockResolvedValue({ path: "/remote/upload.png" }),
     uploadFile: vi.fn().mockResolvedValue({ path: "/remote/upload.bin" }),
@@ -1293,6 +1294,80 @@ describe("sessions route", () => {
         childProcessMock.spawn.mock.calls[childProcessMock.spawn.mock.calls.length - 1];
       const argv = [spawnCall[0], ...(spawnCall[1] ?? [])].join(" ");
       expect(argv).not.toContain("--dangerously-skip-permissions");
+    });
+  });
+
+  describe("GET /api/sessions/:id/transcript (issue #2268)", () => {
+    async function activeSession(app: Awaited<ReturnType<typeof buildApp>>) {
+      const projectId = await createProject(app);
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/sessions",
+        payload: { projectId, command: "bash" },
+      });
+      return created.json().id as number;
+    }
+
+    it("404s an unknown session and 400s a bad query", async () => {
+      const app = await buildApp();
+      const missing = await app.inject({ method: "GET", url: "/api/sessions/999999/transcript" });
+      expect(missing.statusCode).toBe(404);
+      const bad = await app.inject({
+        method: "GET",
+        url: "/api/sessions/999999/transcript?limit=9999",
+      });
+      expect(bad.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("says a shell session has no transcript instead of returning an empty body", async () => {
+      const app = await buildApp();
+      const sessionId = await activeSession(app);
+      const res = await app.inject({ method: "GET", url: `/api/sessions/${sessionId}/transcript` });
+      expect(res.statusCode).toBe(501);
+      expect(res.json().error).toContain("not-supported");
+      await app.close();
+    });
+
+    it("passes the query to the host's backend and relays its page or its refusal", async () => {
+      const app = await buildApp();
+      const sessionId = await activeSession(app);
+      const getTranscript = vi
+        .fn()
+        .mockResolvedValueOnce({ ok: true, entries: [], nextSeq: 1999, more: false })
+        .mockResolvedValueOnce({ ok: false, status: 409, error: "not reported yet" })
+        .mockRejectedValueOnce(new Error("host down"));
+      const sessionBackendModule = await import("../../src/services/session-backend.js");
+      const spy = vi
+        .spyOn(sessionBackendModule, "resolveBackend")
+        .mockReturnValue(fakeSessionBackend({ getTranscript }));
+
+      const page = await app.inject({
+        method: "GET",
+        url: `/api/sessions/${sessionId}/transcript?afterSeq=5&limit=7&tools=1`,
+      });
+      expect(page.statusCode).toBe(200);
+      expect(page.json()).toEqual({ ok: true, entries: [], nextSeq: 1999, more: false });
+      expect(getTranscript).toHaveBeenCalledWith(String(sessionId), {
+        afterSeq: 5,
+        limit: 7,
+        fullTools: true,
+      });
+
+      const refused = await app.inject({
+        method: "GET",
+        url: `/api/sessions/${sessionId}/transcript`,
+      });
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json()).toEqual({ error: "not reported yet" });
+
+      const down = await app.inject({
+        method: "GET",
+        url: `/api/sessions/${sessionId}/transcript`,
+      });
+      expect(down.statusCode).toBe(503);
+      spy.mockRestore();
+      await app.close();
     });
   });
 
@@ -5632,6 +5707,7 @@ describe("sessions route", () => {
       spy.mockReturnValue({
         getScrollback: vi.fn().mockResolvedValue(Buffer.from("remote")),
         getRenderedScrollback: vi.fn().mockResolvedValue(""),
+        getTranscript: vi.fn().mockResolvedValue({ ok: false, status: 404, error: "not running" }),
       } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
 
       const res = await app.inject({
@@ -5663,6 +5739,7 @@ describe("sessions route", () => {
       spy.mockReturnValue({
         getScrollback: vi.fn().mockResolvedValue(Buffer.from("local")),
         getRenderedScrollback: vi.fn().mockResolvedValue(""),
+        getTranscript: vi.fn().mockResolvedValue({ ok: false, status: 404, error: "not running" }),
       } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
 
       const res = await app.inject({

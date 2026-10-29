@@ -594,6 +594,25 @@ export class MullionClient {
     }
   }
 
+  /** Issue #2268 — one page of a session's conversation as plain text. Same
+   * "try direct, retry only on the specific no-pin 400" shape as getScrollback. */
+  async getSessionTranscript(sessionId, query = {}) {
+    if (sessionId !== undefined) {
+      return this.controlRequest("sessions.transcript", { sessionId, ...query });
+    }
+    try {
+      return await this.controlRequest("sessions.transcript", { ...query });
+    } catch (err) {
+      if (!isMissingIdError(err, "'sessionId' is required") || this.ownSessionId === undefined) {
+        throw err;
+      }
+      return this.controlRequest("sessions.transcript", {
+        sessionId: this.ownSessionId,
+        ...query,
+      });
+    }
+  }
+
   /** Runs a session-pinned `reviews.*` op. Same "try direct, retry only on the
    * specific no-pin 400" shape as getScrollback above. */
   async reviewOp(op, body, timeoutMs = REVIEW_REQUEST_TIMEOUT_MS) {

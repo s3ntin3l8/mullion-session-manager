@@ -5245,6 +5245,62 @@ describe("PtyManager", () => {
       expect(events.map((e) => e.kind)).toContain("status_change");
     });
 
+    it("cwd_changed: records the Claude transcript path and pins it to the session's own project dir (issue #2268)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.getTranscriptSource()).toBeNull();
+
+      session.emitHookEvent({
+        kind: "cwd_changed",
+        cwd: "/tmp",
+        transcriptPath: "/home/u/.claude/projects/-tmp/s.jsonl",
+      });
+      const source = session.getTranscriptSource();
+      expect(source?.format).toBe("claude-code");
+      expect(source?.path).toBe("/home/u/.claude/projects/-tmp/s.jsonl");
+      // The path is untrusted: it may only resolve inside this session's own
+      // project directory, not anywhere in projects/ (other sessions' transcripts).
+      expect(source?.roots.length).toBeGreaterThan(0);
+      for (const root of source?.roots ?? []) {
+        expect(root.endsWith(path.join("projects", "-tmp"))).toBe(true);
+      }
+    });
+
+    it("cwd_changed: a long cwd that Claude hashes yields no source rather than the whole projects dir (issue #2268)", async () => {
+      const longCwd = `/tmp/${"d".repeat(240)}`;
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: longCwd,
+        command: "claude",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      expect(session.transcriptSourceBlocker()).toBeNull(); // nothing reported yet
+      session.emitHookEvent({ kind: "cwd_changed", cwd: longCwd, transcriptPath: "/x/s.jsonl" });
+      expect(session.getTranscriptSource()).toBeNull();
+      expect(session.transcriptSourceBlocker()).toContain("too long");
+    });
+
+    it("cwd_changed: a transcript path is ignored for a CLI that does not write one (issue #2268)", async () => {
+      const session = manager.getOrCreate({
+        id: "1",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      await waitForSpawn(session);
+      session.emitHookEvent({ kind: "cwd_changed", cwd: "/tmp", transcriptPath: "/x/s.jsonl" });
+      expect(session.getTranscriptSource()).toBeNull();
+    });
+
     it("permission_request: sets permissionState to pending and emits a permission_request event", async () => {
       const session = manager.getOrCreate({
         id: "1",

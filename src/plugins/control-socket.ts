@@ -1791,6 +1791,40 @@ export const OPS: Record<string, OpSpec> = {
       url: `/api/sessions/${enc(id)}/scrollback${ctx.body?.mode === "rendered" ? "?mode=rendered" : ""}`,
     })),
   ),
+  // Issue #2268 — the session's conversation as plain text, from the agent CLI's
+  // own transcript. Same target-id shape and reach as sessions.scrollback: own
+  // session and own children at session scope. `afterSeq` is the opaque cursor a
+  // previous page returned (`nextSeq`); `tools: true` keeps tool calls and
+  // results in full instead of a one-line summary.
+  "sessions.transcript": routeOp(
+    ["full", "session"],
+    onOwnedSession((id, ctx) => {
+      const { afterSeq, limit, tools } = ctx.body ?? {};
+      if (
+        afterSeq !== undefined &&
+        (typeof afterSeq !== "number" || !Number.isInteger(afterSeq) || afterSeq < 0)
+      ) {
+        return bad(400, "'afterSeq' must be a non-negative integer");
+      }
+      if (
+        limit !== undefined &&
+        (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 500)
+      ) {
+        return bad(400, "'limit' must be an integer from 1 to 500");
+      }
+      if (tools !== undefined && typeof tools !== "boolean") {
+        return bad(400, "'tools' must be a boolean");
+      }
+      return {
+        method: "GET",
+        url: `/api/sessions/${enc(id)}/transcript${relayQuery({
+          ...(afterSeq !== undefined ? { afterSeq } : {}),
+          ...(limit !== undefined ? { limit } : {}),
+          ...(tools === true ? { tools: "1" } : {}),
+        })}`,
+      };
+    }),
+  ),
   // Phase 4 (#186) — opens a multiplexed PTY I/O stream on this connection,
   // keyed by this request's own `id`: attachSocketToSession/
   // proxyToRemoteAttach (terminal.ts) write scrollback replay and live

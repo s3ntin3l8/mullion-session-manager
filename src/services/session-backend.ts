@@ -1,6 +1,11 @@
 import { compareWorktreePaths } from "./worktree-paths.js";
 import type { WorktreePathCandidate, WorktreePathRelation } from "./worktree-paths.js";
 import { renderScrollback } from "./scrollback-render.js";
+import {
+  readSessionTranscript,
+  type TranscriptQuery,
+  type TranscriptResult,
+} from "./session-transcript.js";
 import type { FastifyInstance } from "fastify";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import type { SessionInfo } from "./pty-manager.js";
@@ -182,6 +187,11 @@ export interface SessionBackend {
   // repaints resolve to what was on screen. Empty when the session isn't
   // tracked, like getScrollback.
   getRenderedScrollback(id: string): Promise<string>;
+  // Issue #2268 — one page of the session's conversation as plain text, read
+  // from the agent CLI's own transcript file on the host that runs it. A
+  // failure the caller can act on (not running, not supported, not reported
+  // yet) is a `{ ok: false, status }` result, not a throw.
+  getTranscript(id: string, query: TranscriptQuery): Promise<TranscriptResult>;
   // Icebox item filed during Phase 5 (#230) planning — the genuine OS
   // subprocesses running inside a session's cgroup (MCP servers,
   // `Bash run_in_background` jobs, nested CLIs), not to be confused with
@@ -492,6 +502,10 @@ class LocalBackend implements SessionBackend {
     return renderScrollback(session.getRenderableScrollback(), session.size);
   }
 
+  async getTranscript(id: string, query: TranscriptQuery): Promise<TranscriptResult> {
+    return readSessionTranscript(this.app.pty.get(id), query);
+  }
+
   listSessionProcesses(id: string): Promise<CgroupProcess[]> {
     return this.app.pty.listSessionProcesses(id);
   }
@@ -788,6 +802,16 @@ class RemoteBackend implements SessionBackend {
 
   getRenderedScrollback(id: string): Promise<string> {
     return this.client.resolveRenderedScrollback(id);
+  }
+
+  async getTranscript(id: string, query: TranscriptQuery): Promise<TranscriptResult> {
+    try {
+      return await this.client.resolveTranscript(id, query);
+    } catch (err) {
+      // A refusal is a value, like prompt/wait: an agent too old for the route
+      // (404), a rejection, or an unreachable host each get their own status.
+      return { ok: false, ...this.remoteRefusal(err, "transcript reads") };
+    }
   }
 
   listSessionProcesses(_id: string): Promise<CgroupProcess[]> {

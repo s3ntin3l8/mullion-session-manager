@@ -84,6 +84,10 @@ export interface SessionHookContext {
    * opencode currently reports this; `null` for every other agent, and for
    * an opencode session before its first session.idle has fired. */
   agentSessionId: string | null;
+  /** Issue #2268 — Claude Code's conversation file, kept live by the
+   * `cwd_changed` hook (which carries `transcriptPath`). `null` for every
+   * other agent and before the first hook. */
+  agentTranscriptPath: string | null;
   fileChangeQueue: Promise<void>;
   readonly gitIgnoreDirCache: Map<string, boolean>;
 
@@ -872,6 +876,12 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       // status_change event so consumers don't need to wait for the next
       // polling cycle to see the updated directory.
       const cwdMsg = message as CwdChangedHookMessage;
+      if (
+        cwdMsg.transcriptPath !== undefined &&
+        cwdMsg.transcriptPath !== ctx.agentTranscriptPath
+      ) {
+        ctx.agentTranscriptPath = cwdMsg.transcriptPath;
+      }
       if (cwdMsg.cwd !== ctx.liveCwd) {
         ctx.liveCwd = cwdMsg.cwd;
         ctx.emitEvent("status_change", { phase: "done" });

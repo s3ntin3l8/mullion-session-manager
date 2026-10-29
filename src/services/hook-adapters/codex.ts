@@ -775,4 +775,5 @@ export const codexAdapter: HookAgentAdapter = {
   initialPromptArgs: (prompt) => `-- ${shellQuote(prompt)}`,
   // sessions.prompt: paste-then-Enter into the running TUI (see standardPromptFraming).
   submitPrompt: standardPromptFraming,
+  transcriptFormat: "codex",
 };

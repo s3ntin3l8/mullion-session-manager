@@ -681,6 +681,25 @@ describe("parseHookMessage", () => {
       expect(result).toEqual({ ok: true, message: { kind: "cwd_changed", cwd: "/workspace/src" } });
     });
 
+    it("carries transcriptPath through the wire (issue #2268)", () => {
+      const result = parseHookMessage(
+        JSON.stringify({ kind: "cwd_changed", cwd: "/w", transcriptPath: "/home/u/t.jsonl" }),
+      );
+      expect(result).toEqual({
+        ok: true,
+        message: { kind: "cwd_changed", cwd: "/w", transcriptPath: "/home/u/t.jsonl" },
+      });
+    });
+
+    it("rejects a non-string transcriptPath and drops an empty one", () => {
+      expect(
+        parseHookMessage(JSON.stringify({ kind: "cwd_changed", cwd: "/w", transcriptPath: 5 })).ok,
+      ).toBe(false);
+      expect(
+        parseHookMessage(JSON.stringify({ kind: "cwd_changed", cwd: "/w", transcriptPath: "" })),
+      ).toEqual({ ok: true, message: { kind: "cwd_changed", cwd: "/w" } });
+    });
+
     it("rejects a cwd_changed with a missing cwd", () => {
       const result = parseHookMessage(JSON.stringify({ kind: "cwd_changed" }));
       expect(result.ok).toBe(false);
