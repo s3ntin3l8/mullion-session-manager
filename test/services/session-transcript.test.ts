@@ -291,28 +291,25 @@ describe("readTranscriptFile", () => {
     expect(result).toMatchObject({ ok: false, status: 404 });
   });
 
-  it("refuses a `..` traversal and a symlink, even one pointing inside the roots", async () => {
+  it("refuses a `..` traversal and a symlink that leaves the roots", async () => {
     const real = writeClaude();
-    const link = path.join(root, "link.jsonl");
-    fs.symlinkSync(real, link);
-    expect(
-      await readTranscriptFile(claudeSource(link), { afterSeq: 0, limit: 5, fullTools: false }),
-    ).toMatchObject({ ok: false });
-    const sneaky = path.join(root, "..", "projects", "s.jsonl");
     const outside = path.join(dir, "secret.jsonl");
     fs.writeFileSync(outside, jsonl(CLAUDE_LINES[1]));
+    const q = { afterSeq: 0, limit: 5, fullTools: false };
+
+    const escape = path.join(root, "escape.jsonl");
+    fs.symlinkSync(outside, escape);
+    expect(await readTranscriptFile(claudeSource(escape), q)).toMatchObject({ ok: false });
     expect(
-      await readTranscriptFile(claudeSource(path.join(root, "..", "secret.jsonl")), {
-        afterSeq: 0,
-        limit: 5,
-        fullTools: false,
-      }),
+      await readTranscriptFile(claudeSource(path.join(root, "..", "secret.jsonl")), q),
     ).toMatchObject({ ok: false });
-    // A `..` that still lands inside the root is a plain file and reads.
-    expect(
-      (await readTranscriptFile(claudeSource(sneaky), { afterSeq: 0, limit: 5, fullTools: false }))
-        .ok,
-    ).toBe(true);
+
+    // A symlink or `..` that still lands on a file inside the root is the same file.
+    const link = path.join(root, "link.jsonl");
+    fs.symlinkSync(real, link);
+    expect((await readTranscriptFile(claudeSource(link), q)).ok).toBe(true);
+    const sneaky = path.join(root, "..", "projects", "s.jsonl");
+    expect((await readTranscriptFile(claudeSource(sneaky), q)).ok).toBe(true);
   });
 
   it("refuses a directory and a missing file", async () => {

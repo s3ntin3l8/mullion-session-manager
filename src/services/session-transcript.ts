@@ -18,7 +18,7 @@
 // increasing cursor: pass the last `seq` seen (or the response's `nextSeq`) as
 // `afterSeq` to read what came after.
 import { createHash } from "node:crypto";
-import { constants, lstatSync, realpathSync } from "node:fs";
+import { constants, realpathSync, statSync } from "node:fs";
 import { open, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { getAdapterTranscriptFormat } from "./hook-adapters/index.js";
@@ -235,40 +235,53 @@ function capText(text: string): { text: string; truncated: boolean } {
   };
 }
 
+/** Whether `real` is a path strictly inside one of `roots` (both resolved). */
+function insideRoots(real: string, roots: string[]): boolean {
+  return roots.some((root) => {
+    try {
+      const relative = path.relative(realpathSync(root), real);
+      return (
+        relative.length > 0 &&
+        relative !== ".." &&
+        !relative.startsWith(".." + path.sep) &&
+        !path.isAbsolute(relative)
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
 /**
- * Opens `candidate` for reading only when it is a regular file that resolves
- * inside one of `roots`. Returns the handle, or null when any check fails.
- * Same checks as `isCodexRolloutPath` (src/hooks/codex-rollout.mjs): lstat (so a
- * symlink is rejected outright), the real path inside the real root, then
- * O_NOFOLLOW plus fstat so a swap between the check and the open is not followed.
- * O_NONBLOCK keeps a FIFO swapped in between the lstat and the open from blocking
- * the open forever; the fstat then rejects it.
+ * Opens `candidate` for reading only when it resolves to a regular file inside one
+ * of `roots`. Returns the handle, or null when any check fails.
+ *
+ * The path is untrusted and the file can be swapped while we look at it, so nothing
+ * is decided from a stat of the path BEFORE the open:
+ *  1. resolve the real path and require it inside a real root (a path-only check, so
+ *     nothing outside the roots is ever opened);
+ *  2. open that resolved path with O_NOFOLLOW (a final component swapped for a
+ *     symlink fails) and O_NONBLOCK (a FIFO swapped in cannot block the open);
+ *  3. fstat the descriptor: it must be a regular file;
+ *  4. resolve the path AGAIN and require it still inside the roots and still the
+ *     same file (device and inode) as the descriptor we hold, so a swapped directory
+ *     component cannot have pointed the open elsewhere.
  */
 async function openInsideRoots(candidate: string, roots: string[]): Promise<FileHandle | null> {
   if (typeof candidate !== "string" || candidate.length === 0) return null;
   let handle: FileHandle | null = null;
   try {
-    if (!lstatSync(candidate).isFile()) return null;
     const real = realpathSync(candidate);
-    const inside = roots.some((root) => {
-      try {
-        const relative = path.relative(realpathSync(root), real);
-        return (
-          relative.length > 0 &&
-          relative !== ".." &&
-          !relative.startsWith(".." + path.sep) &&
-          !path.isAbsolute(relative)
-        );
-      } catch {
-        return false;
-      }
-    });
-    if (!inside) return null;
-    handle = await open(
-      candidate,
-      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-    );
-    if (!(await handle.stat()).isFile()) {
+    if (!insideRoots(real, roots)) return null;
+    handle = await open(real, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const held = await handle.stat();
+    if (!held.isFile()) {
+      await handle.close();
+      return null;
+    }
+    const again = realpathSync(candidate);
+    const current = statSync(again);
+    if (!insideRoots(again, roots) || current.dev !== held.dev || current.ino !== held.ino) {
       await handle.close();
       return null;
     }
@@ -390,7 +403,7 @@ export async function readTranscriptFile(
     entries,
     nextSeq: Math.max(nextSeq, afterSeq),
     more,
-    file: createHash("sha1").update(source.path).digest("hex").slice(0, 8),
+    file: createHash("sha256").update(source.path).digest("hex").slice(0, 8),
   };
 }
 
