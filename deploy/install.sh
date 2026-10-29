@@ -432,23 +432,31 @@ is_blank() {
 
 # env_value KEY — the last value of KEY in $MULLION_HOME/.env (empty when absent).
 env_value() {
-  grep -E "^$1=" "$MULLION_HOME/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r' || true
+  grep -E "^$1=" "$MULLION_HOME/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '\r' |
+    sed -E -e '/^"/{s/^"([^"]*)".*/\1/;b' -e '}' -e "/^'/{s/^'([^']*)'.*/\\1/;b" -e '}' -e 's/[[:space:]]+#.*$//' || true
 }
 
 # set_env_value KEY VALUE — replace KEY's line in $MULLION_HOME/.env, or append
 # it. The file is rewritten through a 0600 temp file in the same directory, so
 # it is never readable by others, even briefly.
 set_env_value() {
-  local key="$1" val="$2" f="$MULLION_HOME/.env" tmp
+  local key="$1" val="$2" f="$MULLION_HOME/.env" tmp kept rc=0
+  # grep exits 1 when nothing is left (fine) and 2 when it cannot read the
+  # file; replacing the .env then would drop every line it holds.
+  kept="$(grep -v "^${key}=" "$f")" || rc=$?
+  if [ "$rc" -gt 1 ]; then
+    echo "error: could not read $f to set $key" >&2
+    return 1
+  fi
   tmp="$(umask 077 && mktemp "$f.XXXXXX")"
-  { grep -v "^${key}=" "$f" || true; printf '%s=%s\n' "$key" "$val"; } >"$tmp"
+  { [ -z "$kept" ] || printf '%s\n' "$kept"; printf '%s=%s\n' "$key" "$val"; } >"$tmp"
   mv -f "$tmp" "$f"
 }
 
 if [ -f "$MULLION_HOME/.env" ]; then
   # Role-mismatch already checked and enforced right after $MULLION_HOME
   # was resolved, above — before any expensive/mutating step ran.
-  echo "==> $MULLION_HOME/.env already exists, leaving it as-is"
+  echo "==> $MULLION_HOME/.env already exists, keeping its existing settings"
   if [ "$ROLE" = "agent" ]; then
     # The one exception: values the caller passed on THIS run for what an
     # install is asked to fix up (the Windows bootstrap's -BindHost/-Port, and

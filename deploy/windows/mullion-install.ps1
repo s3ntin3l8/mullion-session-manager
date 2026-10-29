@@ -218,7 +218,7 @@ function Get-RootPrefixes([string]$Root, [string[]]$AlsoRoots = @()) {
 # install.json (or the default, Mullion-agent), so without this a root that is
 # not the one the task runs would take down another install's agent.
 function Test-TaskInRoot($Task, [string]$Root, [string[]]$AlsoRoots = @()) {
-  $text = ((@($Task.Actions) | ForEach-Object { "$($_.Execute) $($_.Arguments) $($_.WorkingDirectory)" }) -join ' ').ToLowerInvariant().Replace('/', '\')
+  $text = ((@($Task.Actions) | ForEach-Object { "$($_.Execute) $($_.Arguments) $($_.WorkingDirectory)\" }) -join ' ').ToLowerInvariant().Replace('/', '\')
   foreach ($prefix in (Get-RootPrefixes $Root $AlsoRoots)) {
     if ($text.Contains($prefix)) { return $true }
   }
@@ -548,7 +548,15 @@ function Test-EnvCredential([string]$EnvFile) {
   # URL and an enrollment token.
   $vals = @{}
   foreach ($line in @(Get-Content -LiteralPath $EnvFile -ErrorAction SilentlyContinue)) {
-    if ($line -match '^\s*([A-Za-z_]+)=(.*)$') { $vals[$Matches[1]] = $Matches[2].Trim() }
+    if ($line -match '^\s*([A-Za-z_]+)=(.*)$') {
+      # As dotenv reads it: a matching quote pair is stripped (so KEY="" is
+      # blank), an unquoted value ends at a ' #' comment.
+      $v = $Matches[2].Trim()
+      if ($v -match '^"(.*)"') { $v = $Matches[1] }
+      elseif ($v -match "^'(.*)'") { $v = $Matches[1] }
+      else { $v = ($v -replace '\s+#.*$', '').Trim() }
+      $vals[$Matches[1]] = $v.Trim()
+    }
   }
   if ($vals['MULLION_AGENT_TOKEN']) { return $true }
   return [bool]($vals['MULLION_PRIMARY_URL'] -and $vals['MULLION_ENROLLMENT_TOKEN'])

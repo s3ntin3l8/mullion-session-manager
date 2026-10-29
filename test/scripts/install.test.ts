@@ -471,7 +471,7 @@ describeOnLinux("deploy/install.sh", () => {
 
     expect(fs.readFileSync(envPath, "utf8")).toBe(original);
     expect(fs.statSync(envPath).mode & 0o777).toBe(0o600);
-    expect(stdout).toMatch(/already exists, leaving it as-is/);
+    expect(stdout).toMatch(/already exists, keeping its existing settings/);
   });
 
   describe("an existing agent .env", () => {
@@ -514,6 +514,16 @@ describeOnLinux("deploy/install.sh", () => {
         { MULLION_AGENT_TOKEN: "fixture-new-tok" }, // pragma: allowlist secret
       );
       expect(enrolled).not.toContain("fixture-new-tok");
+    });
+
+    it("treats a quoted-empty or comment-only token as no credential, and keeps the rest of the file", async () => {
+      for (const blank of ['""', "''", "  # todo"]) {
+        const filled = await run(`MULLION_ROLE=agent\nOTHER=keep\nMULLION_AGENT_TOKEN=${blank}\n`, {
+          MULLION_AGENT_TOKEN: "fixture-new-tok", // pragma: allowlist secret
+        });
+        expect(filled).toMatch(/^MULLION_AGENT_TOKEN=fixture-new-tok$/m);
+        expect(filled).toMatch(/^OTHER=keep$/m);
+      }
     });
 
     it("leaves it byte-for-byte alone when this run passes nothing for it", async () => {

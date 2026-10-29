@@ -845,6 +845,31 @@ describeOnWindows("deploy/windows/mullion-install.ps1", () => {
       }
     }, 180_000);
 
+    it("recognizes a task by its working directory alone, as register-task.ps1 sets it to the root", async () => {
+      const { root } = installed();
+      const taskName = `MullionBootstrapCwd-${process.pid}`;
+      fs.writeFileSync(path.join(root, "install.json"), JSON.stringify({ taskName }));
+      const ps = [
+        `$a = New-ScheduledTaskAction -Execute 'cmd.exe' -Argument '/c exit' -WorkingDirectory '${root}'`,
+        `Register-ScheduledTask -TaskName '${taskName}' -Action $a -Trigger (New-ScheduledTaskTrigger -Once -At 23:59) | Out-Null`,
+      ].join("; ");
+      await run("powershell", ["-NoProfile", "-NonInteractive", "-Command", ps], {
+        windowsHide: true,
+      });
+      try {
+        const res = await bootstrap(["-Json", "-Uninstall", "-InstallRoot", root]);
+        expect(res.code).toBe(0);
+        expect(res.events.some((e) => e.detail.includes("does not run from"))).toBe(false);
+        await expect(
+          run("schtasks", ["/Query", "/TN", taskName], { windowsHide: true }),
+        ).rejects.toThrow();
+      } finally {
+        await run("schtasks", ["/Delete", "/TN", taskName, "/F"], { windowsHide: true }).catch(
+          () => {},
+        );
+      }
+    }, 180_000);
+
     it("removes the scheduled task that does run from the install root", async () => {
       const { root } = installed();
       const taskName = `MullionBootstrapOwn-${process.pid}`;
