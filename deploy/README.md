@@ -888,7 +888,8 @@ re-registers the task and moves `current` to the newest release.
   allows signed programs (AppLocker or WDAC publisher rules, some EDR) will
   block it at run time with no automatic fallback: re-register with `-NoBrand`,
   which is remembered in `runtime\no-brand` (updates re-run the registration
-  without the flag; delete that file to brand again). Sessions still find `node`, `npm` and
+  without the flag; delete that file to brand again, and note that `-Uninstall`
+  keeps it with the rest of `runtime`, so a reinstall into the same root stays plain). Sessions still find `node`, `npm` and
   `npx` from the original Node's folder;
 - an entry in **Settings → Apps → Installed apps** ("Mullion agent"), whose
   uninstall runs the bootstrap's `-Uninstall` from a copy of the script kept in
