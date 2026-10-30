@@ -178,11 +178,49 @@ describe("upsertMarkedRegionAfterIntro", () => {
     expect(result.indexOf(START)).toBeLessThan(result.indexOf("## Real"));
   });
 
-  it("falls back to upsertMarkedRegion when only one marker is present (no second start marker)", () => {
-    const text = `# T\n${START}\nold\n## A`;
-    expect(upsertMarkedRegionAfterIntro(text, START, END, "body")).toBe(
-      upsertMarkedRegion(text, START, END, "body"),
+  it("drops a lone start marker (end deleted), keeps the text and places ONE fresh region", () => {
+    const text = `# T\n\nintro\n${START}\nhand-written\n\n## A\nx\n`;
+    const result = upsertMarkedRegionAfterIntro(text, START, END, "body");
+    expect(result.match(new RegExp(START, "g"))).toHaveLength(1);
+    expect(result.match(new RegExp(END, "g"))).toHaveLength(1);
+    expect(result).toContain("hand-written");
+    expect(result.indexOf(START)).toBeLessThan(result.indexOf("## A"));
+    // The next run replaces only the region, never the text around it.
+    const again = upsertMarkedRegionAfterIntro(result, START, END, "body2");
+    expect(again).toContain("hand-written");
+    expect(again).toContain("body2");
+    expect(again).not.toContain("\nbody\n");
+  });
+
+  it("drops a lone end marker the same way", () => {
+    const result = upsertMarkedRegionAfterIntro(`# T\nold\n${END}\n## A\nx`, START, END, "body");
+    expect(result.match(new RegExp(END, "g"))).toHaveLength(1);
+    expect(result).toContain("old");
+  });
+
+  it("treats an end marker before the start marker as half-edited, not as a region", () => {
+    const result = upsertMarkedRegionAfterIntro(
+      `# T\n${END}\nmid\n${START}\n## A\nx`,
+      START,
+      END,
+      "body",
     );
+    expect(result.match(new RegExp(START, "g"))).toHaveLength(1);
+    expect(result.match(new RegExp(END, "g"))).toHaveLength(1);
+    expect(result).toContain("mid");
+  });
+
+  it("replaces a complete region in place and does not move it (a repo scaffolded earlier keeps its placement)", () => {
+    const text = `# T\n\n## A\nx\n\n${START}\nold\n${END}\n\n## B\ny\n`;
+    const result = upsertMarkedRegionAfterIntro(text, START, END, "new");
+    expect(result).toBe(`# T\n\n## A\nx\n\n${START}\nnew\n${END}\n\n## B\ny\n`);
+  });
+
+  it("does not mistake a leading thematic break for frontmatter", () => {
+    const text = "---\n\nSome intro prose.\n\n---\n\n## Real\nx";
+    const result = upsertMarkedRegionAfterIntro(text, START, END, "body");
+    expect(result.indexOf(START)).toBeLessThan(result.indexOf("## Real"));
+    expect(result.indexOf(START)).toBeGreaterThan(result.indexOf("Some intro prose."));
   });
 
   it("keeps a CRLF file CRLF", () => {
@@ -211,6 +249,10 @@ describe("topLevelLines", () => {
       false,
       true,
     ]);
+  });
+
+  it("treats an empty frontmatter block as frontmatter", () => {
+    expect(topLevelLines(["---", "---", "p"])).toEqual([false, false, true]);
   });
 
   it("does not treat an unclosed leading --- as frontmatter", () => {

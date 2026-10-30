@@ -182,7 +182,9 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
       if (err instanceof ApiError && err.statusCode === 409) {
         setOfferRefresh(true);
       } else if (err instanceof RateLimitedError) {
-        setError("Generation is rate limited (5 per 10 minutes) — try again shortly.");
+        setError(
+          `Generation is rate limited — try again in about ${Math.max(1, Math.ceil(err.retryAfterMs / 60_000))} minute(s).`,
+        );
       } else {
         setError(err instanceof ApiError ? err.message : "Failed to generate");
       }

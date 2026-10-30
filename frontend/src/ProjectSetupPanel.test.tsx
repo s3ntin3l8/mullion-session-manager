@@ -3,6 +3,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProjectSetupPanel } from "./ProjectSetupPanel.js";
+import { __resetRateLimitBreakerForTests } from "./api/client.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { useDashboardStore } from "./store/index.js";
 import { makeProject } from "./test/fixtures.js";
@@ -45,6 +46,9 @@ function mockFetch(opts: {
 describe("ProjectSetupPanel", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    // A 429 trips the per-endpoint breaker (api/client.ts), which would
+    // short-circuit any later test that generates for the same project.
+    __resetRateLimitBreakerForTests();
   });
 
   describe("Generate with agent", () => {
@@ -190,7 +194,9 @@ describe("ProjectSetupPanel", () => {
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
       await user.type(screen.getByPlaceholderText("my-project"), "demo");
       await user.click(screen.getByText("Generate with agent"));
-      expect(await screen.findByText(/rate limited \(5 per 10 minutes\)/)).toBeInTheDocument();
+      expect(
+        await screen.findByText(/rate limited — try again in about 10 minute/),
+      ).toBeInTheDocument();
     });
   });
 

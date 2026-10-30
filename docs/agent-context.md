@@ -331,7 +331,9 @@ overwriting hand edits.
    `CLAUDE.md`/`AGENTS.md` content with real overlap: a new `AGENTS.md` region
    is placed right after the file's title/intro (before its first `## `
    section, not at the end of the file, so the conventions are read before
-   the rules they have to outrank), a hand-written bare `@AGENTS.md` line in
+   the rules they have to outrank — only for a file with no region yet: a
+   repo scaffolded earlier keeps its region where it is and it is replaced in
+   place, and a half-edited region has its orphan marker removed first), a hand-written bare `@AGENTS.md` line in
    `CLAUDE.md` (and the comment block directly above it) is replaced by the
    scaffold's own pointer region so there is exactly one import, and
    everything else in either file stays — so the agent still loads any

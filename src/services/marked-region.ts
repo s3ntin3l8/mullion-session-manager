@@ -111,7 +111,13 @@ export function topLevelLines(lines: string[]): boolean[] {
   let i = 0;
   if (/^---\s*$/.test(lines[0] ?? "")) {
     const close = lines.findIndex((l, idx) => idx > 0 && /^(---|\.\.\.)\s*$/.test(l));
-    if (close > 0) {
+    // A `---` first line is frontmatter only if what follows looks like YAML
+    // (empty, or the first non-blank line is `key:`, a list item or a
+    // comment). Otherwise it is a thematic break, and a second `---` further
+    // down would wrongly hide every heading in between.
+    const firstBody = lines.slice(1, close === -1 ? 1 : close).find((l) => l.trim() !== "");
+    const looksYaml = firstBody === undefined || /^([\w.-]+\s*:|- |#)/.test(firstBody.trim());
+    if (close > 0 && looksYaml) {
       for (let k = 0; k <= close; k++) out[k] = false;
       i = close + 1;
     }
@@ -146,16 +152,34 @@ export function topLevelLines(lines: string[]): boolean[] {
   return out;
 }
 
+/** Removes each marker from `text`: a line holding nothing but the marker is
+ * dropped whole, an inline occurrence is just cut out. Everything else stays. */
+function withoutOrphanMarkers(text: string, markers: string[]): string {
+  let out = text;
+  for (const marker of markers) {
+    const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(new RegExp(`^[ \\t]*${escaped}[ \\t]*\\r?\\n?`, "gm"), "");
+    out = out.split(marker).join("");
+  }
+  return out;
+}
+
 /**
  * Like `upsertMarkedRegion`, but when the markers are absent the new region
  * goes right after the document's leading title/intro (immediately before the
  * first top-level `## ` heading) instead of at the end of the file. A scaffold's
  * conventions are what every agent must read first; appended after a long
- * hand-written file they land below the rules they have to outrank. Whenever
- * EITHER marker is already present (a complete region, or a half-edited one)
- * this is exactly `upsertMarkedRegion`, and a file with no top-level `## `
- * heading also falls back to appending. Headings inside frontmatter, fenced
- * code or HTML comments are skipped. Setext (underlined) headings are not
+ * hand-written file they land below the rules they have to outrank. A complete
+ * region already in the file is replaced IN PLACE, exactly as
+ * `upsertMarkedRegion` does, so a repo scaffolded before this placement
+ * existed keeps its region where it is (moving it would make a re-scaffold's
+ * diff noisy for no benefit). A half-edited file (one marker, or the end
+ * before the start) has its orphan marker removed, keeping the text around
+ * it, and then gets a fresh region placed as for a new file; appending a
+ * second region next to the orphan would leave two start markers, and the
+ * next run would then replace everything between them. A file with no
+ * top-level `## ` heading falls back to appending. Headings inside
+ * frontmatter, fenced code or HTML comments are skipped. Setext (underlined) headings are not
  * recognised, so a region may land after one; that is cosmetic. A CRLF file
  * gets a CRLF region.
  */
@@ -165,9 +189,11 @@ export function upsertMarkedRegionAfterIntro(
   endMarker: string,
   body: string,
 ): string {
-  if (text.includes(startMarker) || text.includes(endMarker)) {
+  const startIdx = text.indexOf(startMarker);
+  if (startIdx !== -1 && text.indexOf(endMarker, startIdx + startMarker.length) !== -1) {
     return upsertMarkedRegion(text, startMarker, endMarker, body);
   }
+  text = withoutOrphanMarkers(text, [startMarker, endMarker]);
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
   const region = `${startMarker}\n${body.trim()}\n${endMarker}`.replace(/\n/g, eol);
   const lines = text.split("\n");
