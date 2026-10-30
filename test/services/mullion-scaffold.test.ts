@@ -645,6 +645,27 @@ describe("computeScaffold", () => {
       expect(claudeMd.contents).toContain("- keep me");
     });
 
+    it("does not grow the moved-text region on re-runs in a CRLF CONTRIBUTING.md", () => {
+      const generated = {
+        scaffoldRegion: "Pointer.",
+        sandboxed: true,
+        contributingAppend: "## Moved\nstep one\nstep two\n",
+      };
+      let contributing = "# Contributing\r\n\r\nHello.\r\n";
+      const outputs: string[] = [];
+      for (let i = 0; i < 4; i++) {
+        const entry = computeScaffold(
+          { "CONTRIBUTING.md": contributing },
+          { slug: "demo", generated },
+        ).find((e) => e.path === "CONTRIBUTING.md") as { contents: string };
+        contributing = entry.contents;
+        outputs.push(contributing);
+      }
+      expect(contributing.match(/step one/g)).toHaveLength(1);
+      expect(contributing).not.toContain("\r\r");
+      expect(outputs[3]).toBe(outputs[1]);
+    });
+
     it("keeps one pointer region and one import when CLAUDE.md has a lone pointer marker", () => {
       const existing = `# CLAUDE.md\n\n${POINTER_MARKER_START}\n\n## Mine\n\n- keep me\n`;
       const once = computeScaffold({ "CLAUDE.md": existing }, { slug: "demo" }).find(

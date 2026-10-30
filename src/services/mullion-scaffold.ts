@@ -873,8 +873,15 @@ export function computeScaffold(
       // region rather than replace it, or text a person has since edited or
       // an earlier run moved would be destroyed. The same text twice is a
       // no-op, which keeps a re-run byte-identical.
-      const prior = extractMarkedRegion(contributing, MOVED_MARKER_START, MOVED_MARKER_END);
-      const wanted = movedText.trim();
+      // Compared with LF endings: a CRLF CONTRIBUTING.md holds the region
+      // with CRLF, and a CRLF-sensitive match would append the text again on
+      // every run.
+      const prior = extractMarkedRegion(
+        contributing,
+        MOVED_MARKER_START,
+        MOVED_MARKER_END,
+      )?.replace(/\r\n/g, "\n");
+      const wanted = movedText.trim().replace(/\r\n/g, "\n");
       const body = !prior ? wanted : prior.includes(wanted) ? prior : `${prior}\n\n${wanted}`;
       contributing = upsertMarkedRegion(contributing, MOVED_MARKER_START, MOVED_MARKER_END, body);
     }

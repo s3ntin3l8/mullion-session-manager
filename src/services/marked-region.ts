@@ -78,7 +78,9 @@ export function clampToBytes(text: string, maxBytes: number, sourceLabel: string
  * unambiguous only when appended, never spliced mid-paragraph. `body` is
  * trimmed before being placed between the markers, so callers don't need
  * to worry about leading/trailing whitespace producing a visually
- * inconsistent region across repeated calls.
+ * inconsistent region across repeated calls. A CRLF file (one containing
+ * `\r\n`) gets a CRLF region on every path, with `body`'s own line endings
+ * normalized first, so a re-run writes back the same bytes.
  */
 export function upsertMarkedRegion(
   text: string,
@@ -89,7 +91,10 @@ export function upsertMarkedRegion(
   // A CRLF file gets a CRLF region on every path, so a re-run replacing it in
   // place writes back the same bytes instead of flipping the endings.
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
-  const region = `${startMarker}\n${body.trim()}\n${endMarker}`.replace(/\n/g, eol);
+  const region = `${startMarker}\n${body.trim().replace(/\r\n/g, "\n")}\n${endMarker}`.replace(
+    /\n/g,
+    eol,
+  );
   const startIdx = text.indexOf(startMarker);
   const endIdx = startIdx === -1 ? -1 : text.indexOf(endMarker, startIdx + startMarker.length);
   if (startIdx !== -1 && endIdx !== -1) {
