@@ -220,7 +220,8 @@ the placement preview: the chosen host, why, and the hosts not considered. The
 choice is remembered per project. With the worktree toggle on, a launch aimed
 at another host or at Auto sends `isolate: true` instead of a base ref — a
 branch picked from this server's list is not valid on another host — and the
-server cuts the worktree from the placed host's default branch. A launcher's
+server cuts the worktree from the placed host's default branch. Auto only moves an interactive launch off a local-owned project when the local host is not eligible (it is
+preferred for interactive sessions), so for those projects the preview will usually name the project's own host. A launcher's
 own sub-directory (`cwd`) is likewise dropped for such a launch, since it is a
 path on the project's own host.
 
