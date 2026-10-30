@@ -23,6 +23,8 @@ function unavailableState(host: Host | undefined): string | null {
   if (!host) return null;
   if (host.drained) return "parked";
   if (host.health === "offline") return "offline";
+  // Never registered: the server refuses a target it has not seen online.
+  if (host.health === "pending") return "pending";
   return null;
 }
 

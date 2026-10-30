@@ -186,6 +186,7 @@ describe("hostTarget helpers", () => {
     expect(resolveHostChoice("auto", project)).toBe("auto");
     expect(resolveHostChoice("removed", project)).toBeNull();
     expect(resolveHostChoice("mac", project, [OFFLINE_MAC])).toBeNull();
+    expect(resolveHostChoice("mac", project, [{ ...OFFLINE_MAC, health: "pending" }])).toBeNull();
     // An auto project defaults to Auto; its own host is an explicit choice.
     const auto = { ...project, placement: "auto" };
     expect(resolveHostChoice(undefined, auto)).toBe("auto");

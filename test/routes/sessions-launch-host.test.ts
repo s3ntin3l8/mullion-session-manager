@@ -167,4 +167,16 @@ describe("launcher host target: placement:auto and targetHostId (issue #2237)", 
     });
     expect(res.statusCode).toBe(409);
   });
+
+  it("an auto project's explicit own-host targetHostId lands on that host (issue #2237)", async () => {
+    const { projectId } = await setup();
+    app.db.update(projects).set({ placement: "auto" }).where(eq(projects.id, projectId)).run();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash", targetHostId: "local" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().hostId).toBe("local");
+  });
 });
