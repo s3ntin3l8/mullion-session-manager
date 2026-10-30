@@ -1,5 +1,6 @@
 import type { ComponentType, SVGProps } from "react";
 import { useDashboardStore } from "../store/index.js";
+import { needsYouTasks } from "../github/taskMasterSummary.js";
 import { ATTENTION_ORDER, PHASE_LABEL, attentionSummary } from "../github/prPhase.js";
 import { FolderIcon, GitBranchIcon, GitHubIcon, GearIcon, HistoryIcon } from "../ui/icons.js";
 import { FilesSidebarView } from "./FilesSidebarView.js";
@@ -27,6 +28,7 @@ export interface RightSidebarActions {
   onOpenProjectSetup: (projectId: number) => void;
   onOpenDockConfig: (projectId: number) => void;
   onOpenSkills: (projectId: number) => void;
+  onOpenTasks: () => void;
 }
 
 export interface RightSidebarViewProps {
@@ -80,14 +82,21 @@ function useGitHubBadge(projectId: number | null): RailBadge | null {
   const defaultBranchFailing = useDashboardStore((s) =>
     projectId != null ? s.defaultBranchCiByProject[projectId] === "failure" : false,
   );
+  const tasks = useDashboardStore((s) => s.tasks);
+  const taskMasterEnabled = useDashboardStore((s) => s.taskMasterEnabled);
   const { total, byPhase } = attentionSummary(prs ?? []);
-  if (total === 0 && !defaultBranchFailing) return null;
+  const needsYou =
+    taskMasterEnabled && projectId != null
+      ? needsYouTasks(tasks.filter((t) => t.projectId === projectId)).length
+      : 0;
+  if (total === 0 && !defaultBranchFailing && needsYou === 0) return null;
   const reasons: string[] = [];
   for (const phase of ATTENTION_ORDER) {
     const n = byPhase[phase];
     if (n) reasons.push(`${n} PR${n === 1 ? "" : "s"}: ${PHASE_LABEL[phase].toLowerCase()}`);
   }
   if (defaultBranchFailing) reasons.push("default branch CI failing");
+  if (needsYou > 0) reasons.push(`${needsYou} task${needsYou === 1 ? "" : "s"} need you`);
   return { kind: "alert", title: reasons.join(", ") };
 }
 

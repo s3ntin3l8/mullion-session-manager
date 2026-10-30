@@ -1552,6 +1552,7 @@ export function App() {
       onOpenProjectSetup,
       onOpenDockConfig,
       onOpenSkills,
+      onOpenTasks,
     }),
     [
       onOpenGit,
@@ -1563,6 +1564,7 @@ export function App() {
       onOpenProjectSetup,
       onOpenDockConfig,
       onOpenSkills,
+      onOpenTasks,
     ],
   );
 
