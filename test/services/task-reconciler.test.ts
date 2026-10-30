@@ -13,6 +13,11 @@ import { PR_REVIEW_DEFAULTS } from "../helpers/pr-review-defaults.js";
 
 // #2252 — the approval push goes through notifyTaskNeedsAttention; mocked the
 // way task-promote.test.ts mocks it for the workflow-hold push.
+// Switch for fetchRunsForHeadChecked below: true makes the Actions-runs lookup
+// report ok:false (GitHub did not answer), the one state the real function
+// returns that a mock fetchRunsForHead cannot express.
+const runsLookup = vi.hoisted(() => ({ failed: false }));
+
 const { mockNotifyTaskNeedsAttention } = vi.hoisted(() => ({
   mockNotifyTaskNeedsAttention: vi.fn(),
 }));
@@ -327,6 +332,14 @@ vi.mock("../../src/services/github.js", async (importOriginal) => {
   return {
     ...actual,
     fetchRunsForHead: mockFetchRunsForHead,
+    // The reconciler's CI read goes through the Checked variant (it must tell
+    // "no runs" from "lookup failed"). Transparent over mockFetchRunsForHead —
+    // including a rejection, which the review-spawn gate's own tests use — and
+    // `runsLookup.failed` opts into the real function's ok:false answer.
+    fetchRunsForHeadChecked: async (...args: unknown[]) => {
+      if (runsLookup.failed) return { ok: false, runs: [] };
+      return { ok: true, runs: await mockFetchRunsForHead(...args) };
+    },
     fetchRequiredStatusContexts: mockFetchRequiredStatusContexts,
     getRequiredStatusContextsFailureReason: mockGetRequiredStatusContextsFailureReason,
     fetchCheckRunsForHead: mockFetchCheckRunsForHead,
@@ -4730,6 +4743,49 @@ describe("reconcileTasks", () => {
         const row = await getTask(app, taskId);
         expect(row.status).toBe("reviewing");
         expect(row.autoReturnRounds).toBe(0);
+
+        await app.close();
+      });
+
+      it("does not return the worker for an `unstable` red check when the Actions lookup itself failed", async () => {
+        const app = await buildApp();
+        const { taskId } = await createRedCiCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "unstable" }));
+        // A failed lookup degrades to "no runs" -> status null; without
+        // runsAnswered that reads as idle and would push mid-run.
+        runsLookup.failed = true;
+        mockFetchCheckRunsForHead.mockResolvedValue([
+          { name: "codecov/patch", conclusion: "failure" },
+        ]);
+
+        try {
+          await reconcileTasks(app);
+        } finally {
+          runsLookup.failed = false;
+        }
+
+        expect(mockFetchCheckRunsForHead).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.autoReturnRounds).toBe(0);
+
+        await app.close();
+      });
+
+      it("still returns the worker for an `unstable` red check when Actions has no runs at all (answered, empty)", async () => {
+        const app = await buildApp();
+        const { taskId } = await createRedCiCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "unstable" }));
+        mockFetchRunsForHead.mockResolvedValue([]);
+        mockFetchCheckRunsForHead.mockResolvedValue([
+          { name: "codecov/patch", conclusion: "failure" },
+        ]);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.lastAutoReturnReason).toBe("ci");
 
         await app.close();
       });

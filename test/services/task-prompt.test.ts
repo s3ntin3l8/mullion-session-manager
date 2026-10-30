@@ -1429,6 +1429,16 @@ describe("buildCiFailurePrompt", () => {
     expect(out).not.toContain("is SUCCESS");
   });
 
+  it("says Actions gave no signal, instead of 'review without it', above a failing check", () => {
+    const out = buildCiFailurePrompt({
+      ...base,
+      ci: { headSha: "abc1234", status: null, runs: [] },
+      failingChecks: [{ name: "codecov/patch" }],
+    });
+    expect(out).toContain("GitHub Actions gave no signal for this PR's head commit abc1234");
+    expect(out).not.toContain("review the diff without it");
+  });
+
   it("keeps the Actions summary when the Actions runs are the failure", () => {
     const out = buildCiFailurePrompt({
       ...base,

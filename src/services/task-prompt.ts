@@ -1246,10 +1246,16 @@ export function buildCiFailurePrompt(
   // was reached through GitHub's `unstable` merge state): printing "CI ... is
   // SUCCESS" straight above the failing-check list told the worker the opposite
   // of why it was returned.
+  // Likewise for `null` (Actions disabled, or its lookup failed): "could not be
+  // determined ... review the diff without it" above a failing-check list
+  // would tell the worker to ignore the one thing it was returned for.
+  const hasFailingChecks = opts.failingChecks !== undefined && opts.failingChecks.length > 0;
   const actionsSummary =
-    opts.ci.status === "success" && opts.failingChecks && opts.failingChecks.length > 0
+    hasFailingChecks && opts.ci.status === "success"
       ? `All GitHub Actions runs on this PR's head commit ${opts.ci.headSha.slice(0, 7)} are green; the failing check below is from another app.`
-      : renderCiSummary(opts.ci);
+      : hasFailingChecks && opts.ci.status === null
+        ? `GitHub Actions gave no signal for this PR's head commit ${opts.ci.headSha.slice(0, 7)}; the failing check below is the one to fix.`
+        : renderCiSummary(opts.ci);
   const failure =
     `A CI check failed on this task's PR after it reached review.\n\n${actionsSummary}\n\n${checks}` +
     "Pull the latest changes, read the failing check's log, and fix it — then commit and finish " +

@@ -281,26 +281,21 @@ first and preserve every other field (`strict`, `enforce_admins`,
 `required_conversation_resolution`, ...) — a PUT replaces the whole object,
 so a PUT that sends only the contexts silently drops the rest.
 
-**Issues #1360 / #2327 — the same lookup behind Task Master's CI-auto-return
-(`#755`, `attemptReturnRedCiToWorker`).** That feature reads exactly this
-endpoint (`fetchRequiredStatusContexts`, `src/services/github.ts`) to tell
-a red _required_ check apart from a red _non-required_ one (this repo's own
-`test-e2e` above is a real example). The endpoint needs `administration:
-read`, which the read token (`READ_PERMISSIONS`) never carries, so before
-`#2327` it was a silent no-op on every App-backed install. It now resolves a
-dedicated `"branch-protection"` token (`BRANCH_PROTECTION_PERMISSIONS`,
-`src/services/github-app.ts`): an installation that has been granted the
-optional Repository permission **Administration: Read-only** (and approved by
-the installation owner) mints it; one that has not 422s that mint alone and
-the lookup falls back to the account token, which needs admin access to the
-repo (a classic PAT needs the `repo` scope for a private repo; `admin:repo_hook`
-is a different scope, for webhook registration, and is not needed here). If
-neither source can read it, the gate still fails closed, but the task
-now shows "CI gating unavailable: required checks unreadable" with the
-reason and which credential answered, and the reconcile log carries a
-throttled warning naming the source. The `gh api` command above returning a
-403 (rather than the contexts list, or a 404 for "no protection configured")
-is the same signal Mullion's own code sees.
+**Task Master's CI-auto-return no longer reads this (`#755`, formerly `#1360` /
+`#2327`).** `attemptReturnRedCiToWorker` used to read exactly this endpoint
+(`fetchRequiredStatusContexts`, `src/services/github.ts`) to tell a red
+_required_ check from a red _non-required_ one (this repo's own `test-e2e`
+above is a real example), and the optional **Administration: Read-only** App
+permission (`BRANCH_PROTECTION_PERMISSIONS`, the `"branch-protection"` token
+scope) existed to make that read work. The gate now treats every red check as
+work to fix, required or not, because the merge sweep holds on an `unstable`
+PR either way — so it reads neither branch protection nor that token scope,
+and a 403 from the `gh api` command above no longer has anything to do with
+why a worker was, or was not, returned. If a worker is not coming back for a
+red check, look at the guards listed in [`tasks.md`](tasks.md)'s
+troubleshooting entry instead. The lookup helper and the permission are still
+defined (their removal is tracked separately); the `gh api` recipe above stays
+useful for reading the protection object by hand.
 
 ### PRs are not required to be up to date with `main` (`strict: false`)
 

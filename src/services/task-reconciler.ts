@@ -91,7 +91,7 @@ import {
 } from "./github-write.js";
 import {
   computeCiStatus,
-  fetchRunsForHead,
+  fetchRunsForHeadChecked,
   fetchCheckRunsForHead,
   isRedCheckConclusion,
   getPRsStatus,
@@ -471,6 +471,10 @@ async function fetchCurrentCiStatus(
   baseRef: string;
   mergeable: boolean | null;
   mergeableState: string;
+  // False when the Actions-runs lookup itself failed (a non-2xx or a network
+  // error): `status` is then `null`, which reads the same as "no Actions runs".
+  // Only the red-CI gate's `unstable` arm needs to tell the two apart.
+  runsAnswered: boolean;
   // #2103 — the PR's own lifecycle state, already in the payload: a closed or
   // merged PR is the end of a reviewing task, not something to keep polling.
   prState: "open" | "closed";
@@ -485,7 +489,12 @@ async function fetchCurrentCiStatus(
   const token = await resolveGitHubToken(app, repoRef, "read");
   if (!token) return null;
   const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
-  const runs = await fetchRunsForHead(token, repoRef.owner, repoRef.repo, pr.headSha);
+  const { ok: runsAnswered, runs } = await fetchRunsForHeadChecked(
+    token,
+    repoRef.owner,
+    repoRef.repo,
+    pr.headSha,
+  );
   const status = computeCiStatus(runs);
   const runSummaries = runs.map((r) => ({
     name: r.name,
@@ -500,6 +509,7 @@ async function fetchCurrentCiStatus(
     baseRef: pr.baseRef,
     mergeable: pr.mergeable,
     mergeableState: pr.mergeableState,
+    runsAnswered,
     prState: pr.state,
     merged: pr.merged,
     mergedAt: pr.mergedAt,
@@ -2705,8 +2715,13 @@ async function attemptReturnRedCiToWorker(
   // cheap signal that something outside Actions is not green.
   // The `unstable` arm also waits for the Actions runs to finish: `unstable`
   // means "failing OR still running", and a worker's push while Actions is
-  // mid-run would cancel and restart it.
-  const unstableOnly = current.mergeableState === "unstable" && current.status !== "in_progress";
+  // mid-run would cancel and restart it. A failed runs lookup also reads as
+  // `status: null` (same as "no Actions runs"), so it must not open the gate:
+  // an API blip would reproduce the mid-run push this guard prevents.
+  const unstableOnly =
+    current.mergeableState === "unstable" &&
+    current.runsAnswered &&
+    current.status !== "in_progress";
   if (current.status !== "failure" && !unstableOnly) {
     clearCiGatingUnavailable(app, task);
     return false;
