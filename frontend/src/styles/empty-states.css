@@ -3388,7 +3388,7 @@ button.github-panel-row.gh-issue-row {
 }
 
 .task-card-awaiting-merge {
-  font-size: 10px;
+  font-size: 0.625rem;
   padding: 1px 6px;
   border-radius: 8px;
   background: color-mix(in srgb, var(--warning, #d9a400) 22%, transparent);
