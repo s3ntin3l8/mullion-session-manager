@@ -22,6 +22,7 @@ import {
   StatusChip,
 } from "../ui/sidebar/index.js";
 import { decideSessionAction, taskTone } from "../ui/sidebar/linkDecisions.js";
+import { SearchInput } from "../ui/primitives.js";
 import { SessionPills } from "../ui/sidebar/SessionPills.js";
 import { TaskChip } from "../ui/sidebar/TaskChip.js";
 
@@ -185,9 +186,9 @@ export function IssuesSection({
       ) : (
         <>
           <div className="gh-issue-bar">
-            <input
+            <SearchInput
+              small
               className="gh-issue-search"
-              type="search"
               placeholder="Search issues…"
               aria-label="Search issues"
               value={query}

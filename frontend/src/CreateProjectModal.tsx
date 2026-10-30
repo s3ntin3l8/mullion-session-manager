@@ -19,7 +19,7 @@ import {
 } from "../../src/shared/constants.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { useDashboardStore } from "./store/index.js";
-import { Dropdown } from "./ui/primitives.js";
+import { Dropdown, TextInput } from "./ui/primitives.js";
 import { Modal } from "./ui/Modal.js";
 
 const PLATFORM_LABELS: Record<PlacementPlatform, string> = {
@@ -1245,15 +1245,16 @@ export function CreateProjectModal({
       {isEdit && (
         <label className="create-modal-field">
           <span className="create-modal-field-label">Accepts children from other projects</span>
-          <select
+          <Dropdown<"any" | "listed" | "none">
+            ariaLabel="Accepts children from other projects"
             value={acceptsChildrenFrom}
-            aria-label="Accepts children from other projects"
-            onChange={(e) => setAcceptsChildrenFrom(e.target.value as "any" | "listed" | "none")}
-          >
-            <option value="any">Any coordinator project</option>
-            <option value="listed">Only the projects I pick</option>
-            <option value="none">None</option>
-          </select>
+            onChange={setAcceptsChildrenFrom}
+            options={[
+              { value: "any", label: "Any coordinator project" },
+              { value: "listed", label: "Only the projects I pick" },
+              { value: "none", label: "None" },
+            ]}
+          />
           {acceptsChildrenFrom === "listed" && (
             <ProjectMultiSelect
               ariaLabel="Projects whose coordinators may start children here"
@@ -1273,15 +1274,16 @@ export function CreateProjectModal({
       {isEdit && (
         <label className="create-modal-field">
           <span className="create-modal-field-label">Accepts messages from other projects</span>
-          <select
+          <Dropdown<"any" | "listed" | "none">
+            ariaLabel="Accepts messages from other projects"
             value={acceptsMessagesFrom}
-            aria-label="Accepts messages from other projects"
-            onChange={(e) => setAcceptsMessagesFrom(e.target.value as "any" | "listed" | "none")}
-          >
-            <option value="none">None</option>
-            <option value="listed">Only the projects I pick</option>
-            <option value="any">Any coordinator project</option>
-          </select>
+            onChange={setAcceptsMessagesFrom}
+            options={[
+              { value: "none", label: "None" },
+              { value: "listed", label: "Only the projects I pick" },
+              { value: "any", label: "Any coordinator project" },
+            ]}
+          />
           {acceptsMessagesFrom === "listed" && (
             <ProjectMultiSelect
               ariaLabel="Projects whose coordinators may message a running session here"
@@ -1302,10 +1304,11 @@ export function CreateProjectModal({
       {isEdit && (
         <label className="create-modal-field">
           <span className="create-modal-field-label">Max automatic rounds</span>
-          <input
+          <TextInput
             type="number"
             min={1}
             placeholder="install default"
+            aria-label="Max automatic rounds"
             value={maxAutoReturnRounds}
             disabled={unlimitedRounds}
             onChange={(e) => {
