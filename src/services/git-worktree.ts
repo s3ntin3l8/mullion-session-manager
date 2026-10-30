@@ -9,7 +9,13 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
+import {
+  GIT_NO_AUTO_GC,
+  gitEnv,
+  gitIdentityArgs,
+  gitIdentityEnv,
+  type GitIdentity,
+} from "./git-env.js";
 import { getGitStatus } from "./git-status.js";
 import { listWorktrees } from "./git-refs.js";
 
@@ -63,14 +69,14 @@ interface GitResult {
 /** Runs `git -C <cwd> <args>`, capturing stdout/stderr on `'close'`. Never
  * rejects — a spawn error or timeout resolves with `code: null` the same way
  * a non-zero exit does, so every caller can treat "didn't work" uniformly. */
-function runGit(cwd: string, args: string[]): Promise<GitResult> {
+function runGit(cwd: string, args: string[], extraEnv: NodeJS.ProcessEnv = {}): Promise<GitResult> {
   return new Promise((resolve) => {
     let stdout = "";
     let stderr = "";
     let settled = false;
     const child = spawnChild("git", [...GIT_NO_AUTO_GC, "-C", cwd, ...args], {
       stdio: ["ignore", "pipe", "pipe"],
-      env: gitEnv(),
+      env: { ...gitEnv(), ...extraEnv },
     });
 
     const onStdoutData = (chunk: Buffer) => {
@@ -671,12 +677,16 @@ export interface CommitWipChangesResult {
  * this is a machine-made salvage commit, not a contribution — the human
  * decides what to do with it after Retry resumes the branch.
  *
+ * `identity`, when set, is the commit's author/committer (command-scope
+ * `-c user.name/user.email`); unset leaves the host's own git config in charge.
+ *
  * No-ops cleanly (`committed: false`, no `error`) when there's nothing to
  * stage — never creates an empty commit. Never throws.
  */
 export async function commitWipChanges(
   worktreePath: string,
   message = "wip: agent turn ended with uncommitted changes",
+  identity?: GitIdentity,
 ): Promise<CommitWipChangesResult> {
   if (!isSafeAbsolutePath(worktreePath)) return { committed: false, error: "unsafe path" };
 
@@ -724,7 +734,22 @@ export async function commitWipChanges(
     }
   }
 
-  const commit = await runGit(worktreePath, ["commit", "--no-verify", "-m", message]);
+  const commit = await runGit(
+    worktreePath,
+    [
+      // The configured identity, at command scope like gc.auto: it wins over
+      // the host's config files for this commit and writes nothing. Empty
+      // when unset, so a host without one behaves as before.
+      ...gitIdentityArgs(identity),
+      "commit",
+      "--no-verify",
+      "-m",
+      message,
+    ],
+    // GIT_AUTHOR_*/GIT_COMMITTER_* in the server's own env outrank any
+    // config, so they are set too — otherwise the identity would lose to them.
+    identity ? gitIdentityEnv(identity) : {},
+  );
   if (commit.code === 0) return { committed: true };
   // "nothing to commit, working tree clean" (or the "no changes added"
   // variant) is git's own way of saying the add step above staged nothing —

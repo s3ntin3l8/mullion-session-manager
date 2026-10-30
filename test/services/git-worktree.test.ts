@@ -960,6 +960,23 @@ describe("commitWipChanges (#722)", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it("commits as the given identity, and as the host's own without one", async () => {
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "one");
+    await commitWipChanges(tmpDir, undefined, { name: "Ada Lovelace", email: "ada@example.com" });
+    const author = () =>
+      execFileSync("git", ["log", "-1", "--pretty=%an <%ae>|%cn <%ce>"], {
+        cwd: tmpDir,
+        env: gitEnv(),
+      })
+        .toString()
+        .trim();
+    expect(author()).toBe("Ada Lovelace <ada@example.com>|Ada Lovelace <ada@example.com>");
+
+    fs.writeFileSync(path.join(tmpDir, "a.txt"), "two");
+    await commitWipChanges(tmpDir);
+    expect(author()).not.toContain("Ada Lovelace");
+  });
+
   it("commits tracked modifications and untracked-not-ignored files", async () => {
     fs.writeFileSync(path.join(tmpDir, "a.txt"), "modified");
     fs.writeFileSync(path.join(tmpDir, "new.txt"), "new file");

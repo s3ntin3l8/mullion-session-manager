@@ -1,4 +1,5 @@
 import { sanitizeCacheDirIds, type CacheDirId } from "./cache-storage.js";
+import { clampGitIdentityField } from "./git-identity.js";
 import { DEVICE_EMULATOR_GPU_PATTERN } from "./device-defaults.js";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
@@ -424,6 +425,13 @@ export interface AppSettings {
     // still appears in the sidebar unconditionally regardless of this flag;
     // this only gates whether its PANEL auto-opens.
     autoOpenChildPanels: boolean;
+    // The git identity stamped on commits made by Mullion sessions (as
+    // command-scope user.name/user.email, see session-env.ts) and by
+    // Mullion's own salvage commit (git-worktree.ts). A project's own
+    // `gitIdentity` beats it. Either field blank = unset: nothing is injected
+    // and the host's own git config applies. A plain object (not nullable) so
+    // deepMerge can patch it field by field.
+    gitIdentity: { name: string; email: string };
   };
   // Phase 6 Task Master (6.2/#215) — the runtime kill-switch the roadmap's
   // Security & trust row asks for, distinct from MULLION_TASK_MASTER_ENABLED
@@ -953,6 +961,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     workflowConventionsAppliedText: "",
     maxChildSessionsPerParent: 5,
     autoOpenChildPanels: false,
+    gitIdentity: { name: "", email: "" },
   },
   taskMaster: {
     autoClaimPaused: false,
@@ -1207,6 +1216,13 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
     },
     sessions: {
       ...settings.sessions,
+      // Each half is kept as typed (bounded) so the Settings UI can be
+      // filled in one field at a time; resolveGitIdentity (git-identity.ts)
+      // only uses the pair once BOTH halves are usable.
+      gitIdentity: {
+        name: clampGitIdentityField(settings.sessions.gitIdentity?.name),
+        email: clampGitIdentityField(settings.sessions.gitIdentity?.email),
+      },
       reconcileIntervalSeconds: safeNumber(settings.sessions.reconcileIntervalSeconds, {
         min: 5,
         max: 3600,

@@ -315,6 +315,51 @@ describe("projects route", () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
+  it("round-trips a per-project gitIdentity and clears it with null", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-git-identity-"));
+    const identity = { name: "Ada Lovelace", email: "ada@example.com" };
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: {
+        allowDuplicate: true,
+        createDir: true,
+        name: "ident-project",
+        cwd,
+        gitIdentity: identity,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().gitIdentity).toEqual(identity);
+    const id = created.json().id;
+
+    const half = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${id}`,
+      payload: { gitIdentity: { name: "only a name" } },
+    });
+    expect(half.statusCode).toBe(400);
+
+    const changed = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${id}`,
+      payload: { gitIdentity: { name: "Grace", email: "grace@example.com" } },
+    });
+    expect(changed.json().gitIdentity).toEqual({ name: "Grace", email: "grace@example.com" });
+
+    const cleared = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${id}`,
+      payload: { gitIdentity: null },
+    });
+    expect(cleared.json().gitIdentity).toBeNull();
+
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
   // Issue #2241 — placement steering flags.
   it("round-trips placementConstraints, reads back defaults, and clears them with null", async () => {
     const app = await buildApp();

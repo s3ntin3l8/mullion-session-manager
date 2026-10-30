@@ -713,6 +713,46 @@ describe("buildLaunchPlan — shell/argv/constraints shape", () => {
     });
   });
 
+  describe("git identity (merged GIT_CONFIG_* list)", () => {
+    const identity = { name: "Ada Lovelace", email: "ada@example.com" };
+
+    it("a manual session with an identity: gc.auto, then user.name/user.email", () => {
+      const env = buildLaunchPlan(baseSession({ gitIdentity: identity })).env;
+      expect(env.GIT_CONFIG_COUNT).toBe("3");
+      expect([env.GIT_CONFIG_KEY_0, env.GIT_CONFIG_VALUE_0]).toEqual(["gc.auto", "0"]);
+      expect([env.GIT_CONFIG_KEY_1, env.GIT_CONFIG_VALUE_1]).toEqual(["user.name", identity.name]);
+      expect([env.GIT_CONFIG_KEY_2, env.GIT_CONFIG_VALUE_2]).toEqual([
+        "user.email",
+        identity.email,
+      ]);
+    });
+
+    it("a task session with an identity keeps the push block at index 1", () => {
+      const env = buildLaunchPlan(baseSession({ taskId: 7, gitIdentity: identity })).env;
+      expect(env.GIT_CONFIG_COUNT).toBe("4");
+      expect(env.GIT_CONFIG_KEY_1).toBe("remote.origin.pushurl");
+      expect(env.GIT_CONFIG_KEY_2).toBe("user.name");
+      expect(env.GIT_CONFIG_VALUE_3).toBe(identity.email);
+    });
+
+    it("an unset identity injects no user.* keys", () => {
+      const env = buildLaunchPlan(baseSession({ gitIdentity: undefined })).env;
+      expect(env.GIT_CONFIG_COUNT).toBe("1");
+      expect(Object.values(env)).not.toContain("user.name");
+    });
+
+    it("a caller-supplied env cannot override the identity", () => {
+      const env = buildLaunchPlan(
+        baseSession({
+          gitIdentity: identity,
+          env: { GIT_CONFIG_VALUE_1: "Mallory", GIT_CONFIG_KEY_2: "core.bare" },
+        }),
+      ).env;
+      expect(env.GIT_CONFIG_VALUE_1).toBe(identity.name);
+      expect(env.GIT_CONFIG_KEY_2).toBe("user.email");
+    });
+  });
+
   it("manual sessions have full burst capacity (CPUWeight=100 and no CPUQuota)", () => {
     const plan = buildLaunchPlan(baseSession({ taskId: undefined }));
     expect(plan.constraints?.cpuWeight).toBe(100);

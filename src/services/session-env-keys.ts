@@ -1,4 +1,5 @@
 import {
+  GIT_CONFIG_MAX_ENTRIES,
   GIT_CONFIG_NO_AUTO_GC_ENV,
   GIT_CONFIG_TASK_PUSH_BLOCK_ENV,
   SERVER_ENV_KEYS,
@@ -41,6 +42,14 @@ const RESERVED_GIT_CONFIG_NO_AUTO_GC_KEYS = new Set<string>(Object.keys(GIT_CONF
 const RESERVED_GIT_CONFIG_TASK_PUSH_KEYS = new Set<string>(
   Object.keys(GIT_CONFIG_TASK_PUSH_BLOCK_ENV),
 );
+// The configured git identity (user.name/user.email) takes the next two
+// indices, so every KEY_n/VALUE_n the merged list can use is reserved.
+const RESERVED_GIT_CONFIG_IDENTITY_KEYS = new Set<string>(
+  Array.from({ length: GIT_CONFIG_MAX_ENTRIES }, (_, i) => [
+    `GIT_CONFIG_KEY_${i}`,
+    `GIT_CONFIG_VALUE_${i}`,
+  ]).flat(),
+);
 
 export function isReservedSessionEnvKey(key: string): boolean {
   if (key.length === 0) return true;
@@ -59,5 +68,6 @@ export function isReservedSessionEnvKey(key: string): boolean {
   if (RESERVED_SERVER_ENV_KEYS.has(key)) return true;
   if (RESERVED_GIT_CONFIG_NO_AUTO_GC_KEYS.has(key)) return true;
   if (RESERVED_GIT_CONFIG_TASK_PUSH_KEYS.has(key)) return true;
+  if (RESERVED_GIT_CONFIG_IDENTITY_KEYS.has(key)) return true;
   return false;
 }

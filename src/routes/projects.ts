@@ -1,4 +1,9 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
+import {
+  GIT_IDENTITY_FIELD_MAX,
+  parseProjectGitIdentity,
+  serializeProjectGitIdentity,
+} from "../services/git-identity.js";
 import path from "node:path";
 import net from "node:net";
 import { and, eq, inArray, sql } from "drizzle-orm";
@@ -234,6 +239,22 @@ const PROJECT_ID_LIST_SCHEMA = {
   uniqueItems: true,
 } as const;
 
+/** The per-project git identity override; `null` clears it. */
+interface GitIdentityBody {
+  name: string;
+  email: string;
+}
+
+const GIT_IDENTITY_SCHEMA = {
+  type: ["object", "null"],
+  additionalProperties: false,
+  required: ["name", "email"],
+  properties: {
+    name: { type: "string", minLength: 1, maxLength: GIT_IDENTITY_FIELD_MAX },
+    email: { type: "string", minLength: 1, maxLength: GIT_IDENTITY_FIELD_MAX },
+  },
+} as const;
+
 /** Issue #2241 — what the API accepts for `placementConstraints`. */
 interface PlacementConstraintsBody {
   platform?: PlacementPlatform[];
@@ -284,6 +305,7 @@ interface CreateProjectBody {
   hostCwds?: Record<string, string> | null;
   // Issue #2241 — placement steering flags; see PLACEMENT_CONSTRAINTS_SCHEMA.
   placementConstraints?: PlacementConstraintsBody | null;
+  gitIdentity?: GitIdentityBody | null;
   // Confirm-first directory creation (leaf-only — see project-dir.ts):
   // the initial POST without this flag 400s with code PROJECT_DIR_MISSING
   // when `cwd` doesn't exist yet; the modal re-submits with `createDir:
@@ -324,6 +346,7 @@ interface UpdateProjectBody {
   hostCwds?: Record<string, string> | null;
   // Issue #2241 — placement steering flags; `null` clears them.
   placementConstraints?: PlacementConstraintsBody | null;
+  gitIdentity?: GitIdentityBody | null;
   // Per-project only, no install-wide tier — same posture as
   // defaultReviewAgent above. `null`/`false` = off; default-off matters,
   // see schema.ts's own doc comment on these two columns.
@@ -507,6 +530,7 @@ const createProjectSchema = {
         maxProperties: MAX_HOST_CWDS,
       },
       placementConstraints: PLACEMENT_CONSTRAINTS_SCHEMA,
+      gitIdentity: GIT_IDENTITY_SCHEMA,
       createDir: { type: "boolean" },
       gitInit: { type: "boolean" },
       allowDuplicate: { type: "boolean" },
@@ -532,6 +556,7 @@ const updateProjectSchema = {
         maxProperties: MAX_HOST_CWDS,
       },
       placementConstraints: PLACEMENT_CONSTRAINTS_SCHEMA,
+      gitIdentity: GIT_IDENTITY_SCHEMA,
       devServerUrl: { type: ["string", "null"], minLength: 1 },
       autoFetch: { type: ["boolean", "null"] },
       defaultAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
@@ -1339,6 +1364,7 @@ export async function projectsRoute(app: FastifyInstance) {
           // operator declined: an OBJECT on the way out, like hostCwds.
           hostCwdsMeta: parseHostCwdsMeta(row.hostCwdsMeta),
           placementConstraints: parsePlacementConstraints(row.placementConstraints),
+          gitIdentity: parseProjectGitIdentity(row.gitIdentity) ?? null,
           ...crossProjectFieldsOut(row),
           currentBranch,
           ruleFiles,
@@ -4902,6 +4928,7 @@ export async function projectsRoute(app: FastifyInstance) {
         placement,
         hostCwds,
         placementConstraints,
+        gitIdentity,
         allowDuplicate,
       } = request.body;
       const unknownHost = unknownHostInCwds(app, hostCwds);
@@ -5011,6 +5038,7 @@ export async function projectsRoute(app: FastifyInstance) {
           hostCwds: serializeHostCwds(hostCwds),
           // Issue #2241 — the steering flags; null/default flags store as null.
           placementConstraints: serializePlacementConstraints(placementConstraints),
+          gitIdentity: serializeProjectGitIdentity(gitIdentity),
           // Issue #1723 / roadmap 8.9 — absent means "pinned" (the
           // column's default), so an existing project is untouched.
           ...(placement === undefined ? {} : { placement }),
@@ -5037,6 +5065,7 @@ export async function projectsRoute(app: FastifyInstance) {
         placementConstraints: parsePlacementConstraints(
           withReleasePleaseDefault.placementConstraints,
         ),
+        gitIdentity: parseProjectGitIdentity(withReleasePleaseDefault.gitIdentity) ?? null,
         ...crossProjectFieldsOut(withReleasePleaseDefault),
       };
       return createDir ? { ...response, dirCreated, gitInitialized } : response;
@@ -5099,6 +5128,7 @@ export async function projectsRoute(app: FastifyInstance) {
           hostCwds: { ...parseHostCwds(row.hostCwds) },
           hostCwdsMeta: parseHostCwdsMeta(row.hostCwdsMeta),
           placementConstraints: parsePlacementConstraints(row.placementConstraints),
+          gitIdentity: parseProjectGitIdentity(row.gitIdentity) ?? null,
           ...crossProjectFieldsOut(row),
         },
         counts: result.counts,
@@ -5155,6 +5185,7 @@ export async function projectsRoute(app: FastifyInstance) {
         hostCwds: { ...parseHostCwds(row.hostCwds) },
         hostCwdsMeta: parseHostCwdsMeta(row.hostCwdsMeta),
         placementConstraints: parsePlacementConstraints(row.placementConstraints),
+        gitIdentity: parseProjectGitIdentity(row.gitIdentity) ?? null,
         ...crossProjectFieldsOut(row),
       };
     },
@@ -5202,6 +5233,7 @@ export async function projectsRoute(app: FastifyInstance) {
         gitInit,
         hostCwds,
         placementConstraints,
+        gitIdentity,
         allowDuplicate,
       } = request.body;
       // Issues #2123 / #2124 — the project lists must name real projects, and a
@@ -5302,6 +5334,7 @@ export async function projectsRoute(app: FastifyInstance) {
         placement === undefined &&
         hostCwds === undefined &&
         placementConstraints === undefined &&
+        gitIdentity === undefined &&
         mergeOnApprove === undefined &&
         autoApprove === undefined &&
         allowCrossProjectSpawn === undefined &&
@@ -5319,7 +5352,7 @@ export async function projectsRoute(app: FastifyInstance) {
         suppressConventionsInjectionAfterScaffold === undefined
       ) {
         return reply.badRequest(
-          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, placement, hostCwds, placementConstraints, mergeOnApprove, autoApprove, allowCrossProjectSpawn, crossProjectTargets, acceptsChildrenFrom, acceptsChildrenFromList, acceptsMessagesFrom, acceptsMessagesFromList, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
+          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, placement, hostCwds, placementConstraints, gitIdentity, mergeOnApprove, autoApprove, allowCrossProjectSpawn, crossProjectTargets, acceptsChildrenFrom, acceptsChildrenFromList, acceptsMessagesFrom, acceptsMessagesFromList, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
         );
       }
 
@@ -5396,6 +5429,10 @@ export async function projectsRoute(app: FastifyInstance) {
           ...(placementConstraints !== undefined
             ? { placementConstraints: serializePlacementConstraints(placementConstraints) }
             : {}),
+          // The git identity override. `null` clears it.
+          ...(gitIdentity !== undefined
+            ? { gitIdentity: serializeProjectGitIdentity(gitIdentity) }
+            : {}),
           // Issue #1724 — the per-host cwd map. `null` clears it.
           ...(hostCwds !== undefined
             ? {
@@ -5469,6 +5506,7 @@ export async function projectsRoute(app: FastifyInstance) {
         hostCwds: { ...parseHostCwds(updated[0].hostCwds) },
         hostCwdsMeta: parseHostCwdsMeta(updated[0].hostCwdsMeta),
         placementConstraints: parsePlacementConstraints(updated[0].placementConstraints),
+        gitIdentity: parseProjectGitIdentity(updated[0].gitIdentity) ?? null,
         ...crossProjectFieldsOut(updated[0]),
       };
       return createDir ? { ...response, dirCreated, gitInitialized } : response;

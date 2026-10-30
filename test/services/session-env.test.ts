@@ -7,7 +7,9 @@ import { gitEnv } from "../../src/services/git-env.js";
 import { schema } from "../../src/plugins/env.js";
 import { isReservedSessionEnvKey } from "../../src/services/session-env-keys.js";
 import {
+  GIT_CONFIG_MAX_ENTRIES,
   GIT_CONFIG_NO_AUTO_GC_ENV,
+  buildGitConfigEnv,
   GIT_CONFIG_TASK_PUSH_BLOCK_ENV,
   HOST_DISPLAY_ENV_KEYS,
   SERVER_ENV_KEYS,
@@ -419,5 +421,35 @@ describe("session-env", () => {
         ...GIT_CONFIG_NO_AUTO_GC_ENV,
       });
     });
+  });
+});
+
+describe("buildGitConfigEnv", () => {
+  const identity = { name: "Ada", email: "ada@example.com" };
+
+  it("with nothing extra equals the gc.auto override", () => {
+    expect(buildGitConfigEnv({})).toEqual(GIT_CONFIG_NO_AUTO_GC_ENV);
+  });
+
+  it("with only the push block equals the task push-block env", () => {
+    expect(buildGitConfigEnv({ taskPushBlock: true })).toEqual(GIT_CONFIG_TASK_PUSH_BLOCK_ENV);
+  });
+
+  it("appends user.name/user.email after the existing entries", () => {
+    expect(buildGitConfigEnv({ identity })).toEqual({
+      GIT_CONFIG_COUNT: "3",
+      GIT_CONFIG_KEY_0: "gc.auto",
+      GIT_CONFIG_VALUE_0: "0",
+      GIT_CONFIG_KEY_1: "user.name",
+      GIT_CONFIG_VALUE_1: "Ada",
+      GIT_CONFIG_KEY_2: "user.email",
+      GIT_CONFIG_VALUE_2: "ada@example.com",
+    });
+    const all = buildGitConfigEnv({ taskPushBlock: true, identity });
+    expect(all.GIT_CONFIG_COUNT).toBe("4");
+    expect(all.GIT_CONFIG_KEY_1).toBe("remote.origin.pushurl");
+    expect(all.GIT_CONFIG_KEY_2).toBe("user.name");
+    expect(all.GIT_CONFIG_KEY_3).toBe("user.email");
+    expect(Object.keys(all)).toHaveLength(1 + 2 * GIT_CONFIG_MAX_ENTRIES);
   });
 });

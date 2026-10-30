@@ -1,4 +1,5 @@
 // Extracted from pty-manager.ts (issue #1522) — pure type declarations, no runtime code.
+import type { GitIdentity } from "./git-env.js";
 import type { HookMessageKind, BackgroundTask } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
 
@@ -156,6 +157,8 @@ export interface CreateSessionOptions {
    * with no taskId, which is the desired "not a Task Master session"
    * default. */
   taskId?: number;
+  /** The git identity for this session's commits — see LaunchPlanSession.gitIdentity. */
+  gitIdentity?: GitIdentity;
 }
 
 /** Phase 5 (Track A) — one subagent's identity and activity, built from the

@@ -25,6 +25,38 @@ describe("settings route", () => {
     delete process.env.DATABASE_URL;
   });
 
+  it("stores sessions.gitIdentity field by field and serves the primary's prefill", async () => {
+    const app = await buildApp();
+    expect(DEFAULT_SETTINGS.sessions.gitIdentity).toEqual({ name: "", email: "" });
+
+    await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { sessions: { gitIdentity: { name: "Ada" } } },
+    });
+    let res = await app.inject({ method: "GET", url: "/api/settings" });
+    expect(res.json().sessions.gitIdentity).toEqual({ name: "Ada", email: "" });
+
+    await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { sessions: { gitIdentity: { email: "ada@example.com" } } },
+    });
+    res = await app.inject({ method: "GET", url: "/api/settings" });
+    expect(res.json().sessions.gitIdentity).toEqual({ name: "Ada", email: "ada@example.com" });
+
+    const prefill = await app.inject({ method: "GET", url: "/api/settings/git-identity-default" });
+    expect(prefill.statusCode).toBe(200);
+    expect(prefill.json()).toEqual({ name: expect.any(String), email: expect.any(String) });
+
+    await app.inject({
+      method: "PATCH",
+      url: "/api/settings",
+      payload: { sessions: { gitIdentity: { name: "", email: "" } } },
+    });
+    await app.close();
+  });
+
   it("returns DEFAULT_SETTINGS before any row exists", async () => {
     const app = await buildApp();
     const res = await app.inject({ method: "GET", url: "/api/settings" });

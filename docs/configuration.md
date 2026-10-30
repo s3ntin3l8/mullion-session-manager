@@ -64,6 +64,32 @@ to your repository's settings — see
 what that covers, what it does not, and the one command to run if you want the
 tidy-up off in a repository you share with Mullion.
 
+### Git identity for sessions
+
+Agent sessions commit with whatever git identity their host has, if any — so an
+agent's commits can be attributed differently from yours, and a fresh remote
+host often has none. Set one identity and every Mullion session uses it:
+
+- **Settings → Sessions → Git identity for sessions** (`sessions.gitIdentity`,
+  a `{ name, email }` pair). **Use this server's git config** fills it in from
+  the server's `git config --global user.name` / `user.email`; edit it freely.
+- **Per project:** the project's panel has its own identity field
+  (`projects.git_identity`, PATCH `/api/projects/:id` `gitIdentity`). It beats
+  the settings value for that project's sessions; clearing it falls back.
+
+Leaving either field blank means unset: nothing is injected and each host's own
+git identity applies, exactly as before.
+
+The identity travels as command-scope git config in the session's environment
+(`GIT_CONFIG_COUNT` plus numbered `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n`
+entries, merged with the entries Mullion already injects). It is the same
+`GIT_CONFIG_*` env on a remote host, because it is part of the launch payload, so
+nothing has to be configured there. It overrides system, global and repository
+config, only for processes inside a Mullion session, and writes nothing to the
+host: it is gone when the session ends. Mullion's own salvage commit of an
+agent's uncommitted work uses the same identity. It does not cover GitHub
+credentials or commit signing.
+
 ## Database and sessions
 
 | Variable                        | Default              | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |

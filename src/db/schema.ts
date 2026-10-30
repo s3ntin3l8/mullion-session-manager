@@ -214,6 +214,11 @@ export const projects = sqliteTable("projects", {
   // against `platform`. Nullable: null = no flags, which is every project as of
   // this migration. Read it through `parsePlacementConstraints`.
   placementConstraints: text("placement_constraints"),
+  // A per-project git identity override, a JSON object `{ "name": "...",
+  // "email": "..." }`, beating settings.sessions.gitIdentity for this
+  // project's sessions and Mullion's own commits in it. Nullable: null = use
+  // the global identity (or none). Read it through `parseProjectGitIdentity`.
+  gitIdentity: text("git_identity"),
   // Issue #2090 — bookkeeping for the DETECTED (not hand-entered) side of
   // `hostCwds`: a JSON object `{ "auto": ["<hostId>", ...], "declined":
   // ["<hostId>", ...] }`.

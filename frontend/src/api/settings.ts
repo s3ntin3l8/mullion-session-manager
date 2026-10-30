@@ -27,6 +27,11 @@ export const settingsApi = {
       body: JSON.stringify(palette),
     }),
 
+  // The primary's own global git user.name/user.email, to prefill
+  // sessions.gitIdentity.
+  getGitIdentityDefault: () =>
+    request<{ name: string; email: string }>("/api/settings/git-identity-default"),
+
   patchSettings: (patch: SettingsPatch) =>
     request<AppSettings>("/api/settings", {
       method: "PATCH",
@@ -234,6 +239,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     workflowConventionAnswers: {},
     maxChildSessionsPerParent: 5,
     autoOpenChildPanels: false,
+    gitIdentity: { name: "", email: "" },
   },
   github: {
     pollActiveSeconds: -1,

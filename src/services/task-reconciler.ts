@@ -1,4 +1,5 @@
 import { and, eq, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
+import { resolveGitIdentity } from "./git-identity.js";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
 import type { SessionInfo } from "./pty-manager.js";
@@ -1086,7 +1087,13 @@ async function failReviewingGate(
     // Issue #1724 — the worktree is on the WORKER's host, so the commit
     // happens there too.
     const workerHostId = resolveTaskWorkerHost(app, task);
-    const commitResult = await commitHostWipChanges(app, workerHostId, task.worktreePath);
+    const commitResult = await commitHostWipChanges(
+      app,
+      workerHostId,
+      task.worktreePath,
+      undefined,
+      resolveGitIdentity(project.gitIdentity, getStoredSettings(app.db).sessions.gitIdentity),
+    );
     if (!commitResult.ok) {
       app.log.warn(
         {

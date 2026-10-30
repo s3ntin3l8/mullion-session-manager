@@ -109,6 +109,10 @@ export interface SpawnSessionBody {
   // value forwarded verbatim to a remote agent host. Spawn-time only, no
   // maxLength needed (a positive integer).
   taskId?: number;
+  // The resolved git identity (project override, else the global setting) —
+  // see CreateSessionOptions.gitIdentity (session-types.ts). Bounded like any
+  // other free-text value forwarded from the primary.
+  gitIdentity?: { name: string; email: string };
   // Issue #1337 — opencode model overrides forwarded from spawn_child_session
   // MCP tool. When omitted and parentSessionId is set on the public POST
   // /api/sessions route, the parent session's model/smallModel are inherited.
@@ -193,6 +197,15 @@ export const spawnSessionSchema = {
       // bound — it's an opaque positive task id, not a user-controlled
       // field.
       taskId: { type: "integer" },
+      gitIdentity: {
+        type: "object",
+        additionalProperties: false,
+        required: ["name", "email"],
+        properties: {
+          name: { type: "string", minLength: 1, maxLength: 256 },
+          email: { type: "string", minLength: 1, maxLength: 256 },
+        },
+      },
     },
   },
 };
@@ -408,6 +421,17 @@ const GIT_FIELD_DEFS = {
   // OPERATOR-authored persistent config — this is a one-shot commit
   // message, not stored config).
   message: { type: "string" },
+  // The git identity for that commit (project override, else global),
+  // resolved on the primary. Same shape as spawnSessionSchema's.
+  gitIdentity: {
+    type: "object",
+    additionalProperties: false,
+    required: ["name", "email"],
+    properties: {
+      name: { type: "string", minLength: 1, maxLength: 256 },
+      email: { type: "string", minLength: 1, maxLength: 256 },
+    },
+  },
   // Issue #895 — writeHostFiles' explicit opt-in to staging every change in
   // `cwd` via `git add -A` after writing (host-files.ts's own doc comment
   // on why this is a named, explicit flag rather than baked in unconditionally).
@@ -706,13 +730,14 @@ export const writeFilesSchema = schemaFor({
 export interface GitCommitWipBody {
   cwd: string;
   message?: string;
+  gitIdentity?: { name: string; email: string };
 }
 
 // Issue #895 — the agent-side counterpart of commitWipChanges
 // (git-worktree.ts), for a remote-hosted project's scaffold apply.
 export const gitCommitWipSchema = schemaFor({
   required: ["cwd"],
-  optional: ["message"],
+  optional: ["message", "gitIdentity"],
 });
 
 export interface RunGenerationTurnBody {

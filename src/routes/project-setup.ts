@@ -1,5 +1,6 @@
 import { EXISTING_INSTRUCTIONS_MODES } from "../shared/constants.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { resolveGitIdentity } from "../services/git-identity.js";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -971,6 +972,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
         project.hostId,
         record.worktreePath,
         `chore: scaffold Mullion integration (${record.slug})`,
+        resolveGitIdentity(project.gitIdentity, getStoredSettings(app.db).sessions.gitIdentity),
       );
       if (!commitResult.ok) {
         return reply.internalServerError(

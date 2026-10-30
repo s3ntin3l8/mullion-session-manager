@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { resolveGitIdentity } from "./git-identity.js";
 import { crossProjectAllowed } from "./cross-project.js";
 import path from "node:path";
 import { readdirSync, openSync, readSync, closeSync, statSync, realpathSync } from "node:fs";
@@ -1675,6 +1676,8 @@ async function resolveSpawnInputs(
     workflowConventionsText: resolvedWorkflowConventionsText,
     env: params.env,
     taskId: params.taskId,
+    // Project override beats the install-wide one; undefined injects nothing.
+    gitIdentity: resolveGitIdentity(project.gitIdentity, globalSessionSettings.gitIdentity),
   };
 }
 

@@ -109,6 +109,7 @@ export type { NotificationEvent };
 // the type-only file gets a (statement-free) coverage entry — the patch-
 // coverage script otherwise counts every interface member line as uncovered.
 export * from "./session-types.js";
+import type { GitIdentity } from "./git-env.js";
 import type { CreateSessionOptions, SubagentInfo, SessionInfo } from "./session-types.js";
 
 type DataListener = (chunk: Buffer) => void;
@@ -576,6 +577,9 @@ export class Session {
   private readonly projectReviewerAgent: string | undefined;
   private readonly model: string | undefined;
   private readonly smallModel: string | undefined;
+  // Spawn-time snapshot of the resolved git identity — see
+  // LaunchPlanSession.gitIdentity (launch-plan.ts).
+  private readonly gitIdentity: GitIdentity | undefined;
   // Set ONLY for Task Master worker/review/retry/re-seed sessions. Same
   // "spawn-time snapshot, consumed once in bootstrapMaster()" posture as
   // initialPrompt/seedPrompt/resumeAgentSessionId above; threaded through
@@ -1024,6 +1028,7 @@ export class Session {
     model?: string;
     smallModel?: string;
     taskId?: number;
+    gitIdentity?: GitIdentity;
   }) {
     // Issue #1521 — validate BEFORE anything below builds a path from the id
     // (hook token file, state file, ...): a non-digit id must never reach the
@@ -1063,6 +1068,7 @@ export class Session {
     this.projectReviewerAgent = opts.projectReviewerAgent;
     this.model = opts.model;
     this.smallModel = opts.smallModel;
+    this.gitIdentity = opts.gitIdentity;
     this.taskId = opts.taskId;
     this.env = opts.env ?? {};
     this.projectId = opts.projectId ?? null;
@@ -1629,6 +1635,7 @@ export class Session {
       model: this.model,
       smallModel: this.smallModel,
       taskId: this.taskId,
+      gitIdentity: this.gitIdentity,
     });
     this.hooksActive = plan.hooksActive;
     this.hookEmits = plan.hookEmits;
@@ -4264,6 +4271,7 @@ export class PtyManager {
         model: opts.model,
         smallModel: opts.smallModel,
         taskId: opts.taskId,
+        gitIdentity: opts.gitIdentity,
       });
       // Subscribed exactly once, at creation — re-emits every event this
       // brand-new session ever produces into the manager-level fan-out
