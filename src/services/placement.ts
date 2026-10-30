@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import {
   LOCAL_HOST_ID,
+  PLACEMENT_CAPABILITIES,
   PLACEMENT_PLATFORMS,
   type HostRole,
   type PlacementMode,
@@ -91,6 +92,11 @@ export interface PlacementCandidate {
    * CLI a session needs.
    */
   agents?: string[] | null;
+  /**
+   * The `PLACEMENT_CAPABILITIES` this host has (issue #2306). Null or absent =
+   * UNKNOWN, like `agents`: only a host KNOWN to lack one is excluded.
+   */
+  capabilities?: string[] | null;
   /** The host's Mullion version, for flagging an agent older than the primary. */
   mullionVersion?: string | null;
 }
@@ -135,6 +141,13 @@ export interface PlacementContext {
    * (a shell, or an unrecognised command).
    */
   requiredAgent?: string | readonly string[];
+  /**
+   * The project's `capabilities` flag (issue #2306): a REQUIREMENT, applied
+   * like `requiredAgent` — a host KNOWN to lack one is excluded, an unknown
+   * list fails open. Unlike `platforms`, a Task Master `Platform:`/`Host:`
+   * directive does not override it.
+   */
+  requiredCapabilities?: readonly string[];
   /** The primary's own version, to flag a chosen agent that runs an older one. */
   primaryVersion?: string;
 }
@@ -261,6 +274,8 @@ export function serializeHostCwds(map: Record<string, string> | null | undefined
 export interface PlacementConstraints {
   platform: string[];
   allowBurst: boolean;
+  /** Host capabilities (`PLACEMENT_CAPABILITIES`) the project needs (issue #2306). */
+  capabilities: string[];
 }
 
 /**
@@ -270,7 +285,7 @@ export interface PlacementConstraints {
  * value the route schema would have rejected cannot narrow the set.
  */
 export function parsePlacementConstraints(raw: string | null | undefined): PlacementConstraints {
-  const out: PlacementConstraints = { platform: [], allowBurst: false };
+  const out: PlacementConstraints = { platform: [], allowBurst: false, capabilities: [] };
   if (raw === null || raw === undefined || raw.trim() === "") return out;
   let parsed: unknown;
   try {
@@ -279,32 +294,48 @@ export function parsePlacementConstraints(raw: string | null | undefined): Place
     return out;
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return out;
-  const { platform, allowBurst } = parsed as Record<string, unknown>;
+  const { platform, allowBurst, capabilities } = parsed as Record<string, unknown>;
   if (Array.isArray(platform)) {
     out.platform = PLACEMENT_PLATFORMS.filter((p) => platform.includes(p));
   }
   out.allowBurst = allowBurst === true;
+  if (Array.isArray(capabilities)) {
+    out.capabilities = PLACEMENT_CAPABILITIES.filter((c) => capabilities.includes(c));
+  }
   return out;
 }
 
 /**
  * The flags, serialized for the column. Default flags (no platform list,
- * burst off) serialize to null — "no flags", which is what an absent column
+ * burst off, no capabilities) serialize to null — "no flags", which is what an absent column
  * means — so a cleared form never leaves a stray `{}` behind.
  */
 export function serializePlacementConstraints(
-  input: { platform?: readonly string[] | null; allowBurst?: boolean | null } | null | undefined,
+  input:
+    | {
+        platform?: readonly string[] | null;
+        allowBurst?: boolean | null;
+        capabilities?: readonly string[] | null;
+      }
+    | null
+    | undefined,
 ): string | null {
   if (input === null || input === undefined) return null;
   const platform = PLACEMENT_PLATFORMS.filter((p) => input.platform?.includes(p));
   const allowBurst = input.allowBurst === true;
-  if (platform.length === 0 && !allowBurst) return null;
-  return JSON.stringify({ platform, allowBurst });
+  const capabilities = PLACEMENT_CAPABILITIES.filter((c) => input.capabilities?.includes(c));
+  if (platform.length === 0 && !allowBurst && capabilities.length === 0) return null;
+  return JSON.stringify({ platform, allowBurst, capabilities });
 }
 
 /** `project allows only darwin hosts` / `darwin or linux hosts` — the reason a host is excluded. */
 export function describePlatformFlag(platforms: readonly string[]): string {
   return `project allows only ${platforms.join(" or ")} hosts`;
+}
+
+/** `project requires xcode` / `xcode and android-emulator` — the flag, for refusals. */
+export function describeCapabilityFlag(capabilities: readonly string[]): string {
+  return `project requires ${capabilities.join(" and ")}`;
 }
 
 /**
@@ -402,6 +433,10 @@ export function chooseHost(
     // Issue #2240 — the session needs a CLI and this host never told us
     // whether it has it: say so rather than imply it was checked.
     if (requiredAgents(context).length > 0 && !chosen.agents) notes.push("agent list unknown");
+    // Issue #2306 — likewise for a required capability the host never reported.
+    if ((context.requiredCapabilities?.length ?? 0) > 0 && !chosen.capabilities) {
+      notes.push("capabilities unknown");
+    }
   }
   if (
     chosen?.mullionVersion &&
@@ -530,7 +565,21 @@ function exclusionReason(candidate: PlacementCandidate, context: PlacementContex
   // unknown list does not exclude (fail open); `chooseHost` notes it instead.
   const missing = missingAgent(candidate, context);
   if (missing !== null) return `no ${missing} CLI on this host`;
+  // Issue #2306 — same for a required capability: known-lacking excludes,
+  // unknown fails open (`chooseHost` notes it).
+  const lacking = missingCapability(candidate, context);
+  if (lacking !== null) return `host lacks capability: ${lacking}`;
   return null;
+}
+
+function missingCapability(
+  candidate: PlacementCandidate,
+  context: Pick<PlacementContext, "requiredCapabilities">,
+): string | null {
+  if (!candidate.capabilities) return null;
+  return (
+    (context.requiredCapabilities ?? []).find((c) => !candidate.capabilities!.includes(c)) ?? null
+  );
 }
 
 function missingAgent(
@@ -660,6 +709,8 @@ function collectCandidates(
       role: host.role,
       // Issue #2240 — the CLIs this host has (null while unknown) and its version.
       agents: app.hostAgentTracker?.get(host.id)?.agents ?? null,
+      // Issue #2306 — likewise the host's capabilities (null while unknown).
+      capabilities: app.hostAgentTracker?.get(host.id)?.capabilities ?? null,
       mullionVersion: isLocal
         ? appVersion
         : (app.hostAgentTracker?.get(host.id)?.mullionVersion ?? null),
@@ -711,6 +762,7 @@ function decide(
   // a pinned project goes to its own host whatever they say.
   const constraints = parsePlacementConstraints(project.placementConstraints);
   const platformFlag = constraints.platform.length > 0;
+  const capabilityFlag = constraints.capabilities.length > 0;
   if (project.placement !== "auto") {
     const decision: PlacementDecision = {
       hostId: project.hostId,
@@ -730,7 +782,7 @@ function decide(
 
   let collected: CollectedCandidates;
   try {
-    collected = collectCandidates(app, project, requiredAgent !== undefined);
+    collected = collectCandidates(app, project, requiredAgent !== undefined || capabilityFlag);
   } catch (err) {
     // The seam must never fail a spawn, not just the policy: the DB read
     // or the measurement threw BEFORE chooseHost() was reached, and a
@@ -745,10 +797,10 @@ function decide(
       fellBack: true,
       // A platform flag forbids the silent fallback: the project's host may not
       // satisfy it, and nothing says a retry would fail too.
-      ...(platformFlag
+      ...(platformFlag || capabilityFlag
         ? {
             refusal: {
-              detail: `${describePlatformFlag(constraints.platform)}, but the hosts could not be checked just now`,
+              detail: `${describeFlags(constraints.platform, constraints.capabilities)}, but the hosts could not be checked just now`,
               transient: true,
               unreadable: true,
             },
@@ -771,10 +823,11 @@ function decide(
     allowBurst: constraints.allowBurst,
     platforms: constraints.platform,
     requiredAgent,
+    requiredCapabilities: constraints.capabilities,
     primaryVersion: appVersion,
   };
   let decision = chooseHost(collected.candidates, context);
-  if (decision.fellBack && platformFlag) {
+  if (decision.fellBack && (platformFlag || capabilityFlag)) {
     decision = refuseForFlags(decision, collected, context);
   }
 
@@ -795,8 +848,16 @@ function decide(
   return decision;
 }
 
+/** The active flags in words: `project allows only darwin hosts; project requires xcode`. */
+function describeFlags(platforms: readonly string[], capabilities: readonly string[]): string {
+  return [
+    ...(platforms.length > 0 ? [describePlatformFlag(platforms)] : []),
+    ...(capabilities.length > 0 ? [describeCapabilityFlag(capabilities)] : []),
+  ].join("; ");
+}
+
 /**
- * Issue #2241 — the platform flag is active and no host is eligible: turn the
+ * Issue #2241 / #2306 — a platform or capability flag is active and no host is eligible: turn the
  * silent fallback into a refusal.
  *
  * The reasons are built ONLY from hosts that satisfy the flags (plus a note
@@ -808,7 +869,7 @@ function refuseForFlags(
   collected: CollectedCandidates,
   context: PlacementContext,
 ): PlacementDecision {
-  const flag = describePlatformFlag(context.platforms!);
+  const flag = describeFlags(context.platforms ?? [], context.requiredCapabilities ?? []);
   // Hosts the flags let through, whatever else is wrong with them right now.
   const byPlatform = collected.candidates.filter(
     (candidate) => platformFlagState(candidate.platform, context.platforms) !== "forbidden",
@@ -828,6 +889,8 @@ function refuseForFlags(
     if (candidate.projectCwd === null) why.add("the project has no checkout on a matching host");
     const bin = missingAgent(candidate, context);
     if (bin !== null) why.add(`a matching host has no ${bin} CLI`);
+    const lacking = missingCapability(candidate, context);
+    if (lacking !== null) why.add(`a matching host lacks ${lacking}`);
   }
   if (passing.length < byPlatform.length) {
     why.add("a matching host is a burst host (this project does not allow burst hosts)");
@@ -836,7 +899,11 @@ function refuseForFlags(
   // Waiting helps when a passing host has the project and the CLI, and is only
   // temporarily unavailable (or has not reported its platform yet).
   const transient = passing.some(
-    (candidate) => candidate.projectCwd !== null && missingAgent(candidate, context) === null,
+    (candidate) =>
+      candidate.projectCwd !== null &&
+      missingAgent(candidate, context) === null &&
+      // A host known to lack a capability never gains it by waiting.
+      missingCapability(candidate, context) === null,
   );
   const detail = `no eligible host satisfies this project's placement flags (${flag}; ${[...why].join("; ")})`;
   return {
@@ -994,6 +1061,8 @@ export function resolveTargetHost(
      * by an explicit launcher/caller target; left off for a Task Master
      * directive, which overrides the project's flags. (`allowBurst` never
      * applies here: naming a host or platform is the opt-in to burst hosts.)
+     * The `capabilities` flag is NOT governed by this: it is a requirement and
+     * is always applied (issue #2306).
      */
     checkProjectFlags?: boolean;
   },
@@ -1009,9 +1078,19 @@ export function resolveTargetHost(
     ...(unreadable ? { unreadable } : {}),
   });
 
+  // Issue #2306 — a capability is a requirement: always applied, even to a
+  // Task Master directive (which overrides only the platform flag).
+  const requiredCapabilities = parsePlacementConstraints(
+    opts.project.placementConstraints,
+  ).capabilities;
+
   let collected: CollectedCandidates;
   try {
-    collected = collectCandidates(app, opts.project, opts.requiredAgent !== undefined);
+    collected = collectCandidates(
+      app,
+      opts.project,
+      opts.requiredAgent !== undefined || requiredCapabilities.length > 0,
+    );
   } catch (err) {
     app.log.warn({ err, target: opts.target }, "placement: could not evaluate a targeted spawn");
     // Could not read the fleet: nothing says a retry would fail too.
@@ -1033,7 +1112,7 @@ export function resolveTargetHost(
     (candidate) => platformFlagState(candidate.platform, flagPlatforms) === "ok",
   );
 
-  const agentContext = { requiredAgent: opts.requiredAgent };
+  const agentContext = { requiredAgent: opts.requiredAgent, requiredCapabilities };
   const decision = chooseHost(matching, {
     pinnedHostId: opts.project.hostId,
     unattended: opts.unattended,
@@ -1041,6 +1120,7 @@ export function resolveTargetHost(
     // The caller NAMED this host or platform, so a burst host is in scope.
     allowBurst: true,
     requiredAgent: opts.requiredAgent,
+    requiredCapabilities,
     primaryVersion: appVersion,
   });
   // chooseHost falls back to the pinned host when nothing is eligible; for a
@@ -1059,6 +1139,7 @@ export function resolveTargetHost(
         platformFlagState(candidate.platform, flagPlatforms) !== "forbidden" &&
         // A host known to lack the CLI never gains it by waiting.
         missingAgent(candidate, agentContext) === null &&
+        missingCapability(candidate, agentContext) === null &&
         (wantedHost === null || candidate.hostId === wantedHost) &&
         (wantedPlatform === undefined ||
           (candidate.platform ?? "").toLowerCase() === wantedPlatform ||
@@ -1074,6 +1155,8 @@ export function resolveTargetHost(
     for (const candidate of matching) {
       const bin = missingAgent(candidate, agentContext);
       if (bin !== null) why.push(`a matching host has no ${bin} CLI`);
+      const lacking = missingCapability(candidate, agentContext);
+      if (lacking !== null) why.push(`a matching host lacks ${lacking}`);
     }
     // The target exists but the project's flag rules it out; the caller named
     // it, so saying what the project allows leaks nothing.

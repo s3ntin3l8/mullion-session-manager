@@ -581,6 +581,7 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
     expect(onCreate.mock.calls[0][0].placementConstraints).toEqual({
       platform: ["darwin", "linux"],
       allowBurst: true,
+      capabilities: [],
     });
   });
 
@@ -603,6 +604,31 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
     expect(onCreate.mock.calls[0][0].placementConstraints).toEqual({
       platform: [],
       allowBurst: false,
+      capabilities: [],
+    });
+  });
+
+  it("edits the required capabilities and sends them (#2306)", async () => {
+    const user = userEvent.setup();
+    const onCreate = renderEdit({
+      initialPlacementConstraints: {
+        platform: [],
+        allowBurst: false,
+        capabilities: ["android-emulator"],
+      },
+    });
+    const xcode = screen.getByRole("checkbox", { name: "Needs Xcode (iOS Simulator)" });
+    expect(xcode).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Needs an Android emulator" })).toBeChecked();
+
+    await user.click(xcode);
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onCreate.mock.calls[0][0].placementConstraints).toEqual({
+      platform: [],
+      allowBurst: false,
+      capabilities: ["xcode", "android-emulator"],
     });
   });
 

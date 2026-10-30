@@ -328,17 +328,26 @@ describe("projects route", () => {
         createDir: true,
         name: "steered-project",
         cwd,
-        placementConstraints: { platform: ["darwin"], allowBurst: true },
+        placementConstraints: {
+          platform: ["darwin"],
+          allowBurst: true,
+          capabilities: ["xcode"],
+        },
       },
     });
     expect(created.statusCode).toBe(201);
-    expect(created.json().placementConstraints).toEqual({ platform: ["darwin"], allowBurst: true });
+    expect(created.json().placementConstraints).toEqual({
+      platform: ["darwin"],
+      allowBurst: true,
+      capabilities: ["xcode"],
+    });
     const { id } = created.json();
 
     const listed = await app.inject({ method: "GET", url: "/api/projects" });
     expect(listed.json().find((p: { id: number }) => p.id === id).placementConstraints).toEqual({
       platform: ["darwin"],
       allowBurst: true,
+      capabilities: ["xcode"],
     });
 
     // A partial object fills the defaults.
@@ -351,7 +360,29 @@ describe("projects route", () => {
     expect(patched.json().placementConstraints).toEqual({
       platform: ["linux", "win32"],
       allowBurst: false,
+      capabilities: [],
     });
+
+    // Capabilities alone are a real flag, and an unknown one is rejected.
+    const capsOnly = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${id}`,
+      payload: {
+        placementConstraints: {
+          platform: [],
+          allowBurst: false,
+          capabilities: ["android-emulator"],
+        },
+      },
+    });
+    expect(capsOnly.statusCode).toBe(200);
+    expect(capsOnly.json().placementConstraints.capabilities).toEqual(["android-emulator"]);
+    const bad = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${id}`,
+      payload: { placementConstraints: { platform: [], allowBurst: false, capabilities: ["gpu"] } },
+    });
+    expect(bad.statusCode).toBe(400);
 
     // null (and default-valued flags) clear them: no flags, the column's default.
     const cleared = await app.inject({
@@ -360,7 +391,11 @@ describe("projects route", () => {
       payload: { placementConstraints: null },
     });
     expect(cleared.statusCode).toBe(200);
-    expect(cleared.json().placementConstraints).toEqual({ platform: [], allowBurst: false });
+    expect(cleared.json().placementConstraints).toEqual({
+      platform: [],
+      allowBurst: false,
+      capabilities: [],
+    });
 
     await app.close();
     fs.rmSync(cwd, { recursive: true, force: true });

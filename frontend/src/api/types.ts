@@ -1298,10 +1298,12 @@ export interface DiscoveredProject {
 // Issue #2241 — where Auto may place a project's work. `platform` is an
 // allow-list (empty = any platform); `allowBurst` lets "burst" hosts take Auto
 // work (they stay out by default). A task `Platform:`/`Host:` directive
-// overrides both.
+// overrides both. Issue #2306 — `capabilities` are host capabilities the
+// project REQUIRES; unlike the two above, a directive does not override them.
 export interface PlacementConstraints {
   platform: PlacementPlatform[];
   allowBurst: boolean;
+  capabilities?: PlacementCapability[];
 }
 
 export interface HostCwdsMeta {

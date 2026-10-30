@@ -45,6 +45,21 @@ function platformFlagViolation(
 }
 
 /**
+ * Issue #2306 — why a required capability rules a host out, or null. Only a
+ * host KNOWN to lack one counts: a host that has not reported its capabilities
+ * (null/absent) is left selectable, the server decides. Unlike the platform
+ * flag, this applies to a pinned project's explicit target too.
+ */
+function capabilityFlagViolation(
+  host: Host | undefined,
+  constraints: PlacementConstraints | undefined,
+): string | null {
+  const lacking = (constraints?.capabilities ?? []).find((c) => !host?.capabilities?.includes(c));
+  if (!host?.capabilities || lacking === undefined) return null;
+  return `host lacks capability: ${lacking}`;
+}
+
+/**
  * The options for a project: its own host first (the default, "this server"
  * when it is local), each `hostCwds` host by name, then Auto. The project's
  * own host is never disabled — it is what the launcher does anyway.
@@ -66,7 +81,8 @@ export function buildHostTargetOptions(
   // is an explicit target, which the server checks against the flags.
   const ownViolation =
     project.placement === "auto"
-      ? platformFlagViolation(byId.get(own), project.placementConstraints)
+      ? (platformFlagViolation(byId.get(own), project.placementConstraints) ??
+        capabilityFlagViolation(byId.get(own), project.placementConstraints))
       : null;
   const ownLabel = own === LOCAL_HOST_ID ? "this server" : nameOf(own);
   const options: HostTargetOption[] = [
@@ -80,7 +96,8 @@ export function buildHostTargetOptions(
     if (id === own) continue;
     const state =
       unavailableState(byId.get(id)) ??
-      platformFlagViolation(byId.get(id), project.placementConstraints);
+      platformFlagViolation(byId.get(id), project.placementConstraints) ??
+      capabilityFlagViolation(byId.get(id), project.placementConstraints);
     options.push({
       value: id,
       label: state ? `${nameOf(id)} (${state})` : nameOf(id),
@@ -120,7 +137,8 @@ export function resolveHostChoice(
   // Issue #2241 — a host the project's platform flag now forbids is as gone as an offline one.
   const usable =
     unavailableState(host) === null &&
-    platformFlagViolation(host, project.placementConstraints) === null;
+    platformFlagViolation(host, project.placementConstraints) === null &&
+    capabilityFlagViolation(host, project.placementConstraints) === null;
   return usable ? remembered : fallback;
 }
 
