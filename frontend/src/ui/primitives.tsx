@@ -9,7 +9,7 @@
 // `.settings-*` rules in styles.css for a file move is pure
 // visual-regression risk for zero functional gain.
 import { createContext, useContext, useId, useRef } from "react";
-import type { ReactNode } from "react";
+import type { InputHTMLAttributes, ReactNode } from "react";
 
 /**
  * What a control inside a Row needs in order to name itself.
@@ -402,6 +402,25 @@ export function Dropdown<T extends string>({
       </select>
     </div>
   );
+}
+
+type InputProps = Omit<InputHTMLAttributes<HTMLInputElement>, "size"> & {
+  small?: boolean;
+};
+
+function inputClass(small: boolean | undefined, extra: string | undefined, base = "ui-input") {
+  return [base, small ? "small" : "", extra ?? ""].filter(Boolean).join(" ");
+}
+
+// Themed single-line text field. Everything else (type, min, placeholder,
+// aria-label, ...) passes through to the native input.
+export function TextInput({ small, className, type = "text", ...rest }: InputProps) {
+  return <input type={type} className={inputClass(small, className)} {...rest} />;
+}
+
+// A text field with type="search" and a themed clear button.
+export function SearchInput({ small, className, ...rest }: InputProps) {
+  return <input type="search" className={inputClass(small, className)} {...rest} />;
 }
 
 export function ListRow({

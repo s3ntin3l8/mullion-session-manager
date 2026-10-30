@@ -12,7 +12,13 @@ import { formatCapacityAge, formatHostCapacityNow } from "../../hostCapacity.js"
 import { KebabMenu } from "../../ui/KebabMenu.js";
 import { usePolling } from "../../hooks/usePolling.js";
 import { CloseIcon, GearIcon, HostsIcon, MoonIcon, PlusIcon, RenameIcon } from "../../ui/icons.js";
-import { GroupHeading, ListRow, SecondaryButton, StyledList } from "../../ui/primitives.js";
+import {
+  Dropdown,
+  GroupHeading,
+  ListRow,
+  SecondaryButton,
+  StyledList,
+} from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { BridgesSection } from "./BridgesSection.js";
 import { HostHeartbeatSetting } from "../RuntimeSettings.js";
@@ -398,16 +404,18 @@ export function HostsSection() {
                     )}
                     {/* Issue #2239 — a burst host (a laptop that sleeps) stays out
                         of automatic placement; an explicit target still reaches it. */}
-                    <select
-                      aria-label={`Role of ${host.name}`}
-                      value={host.role}
-                      onChange={(e) => changeRole(host, e.target.value as HostEditableRole)}
-                      title="Worker: eligible for automatic placement. Burst: only used when a session or task names this host."
-                      style={{ fontSize: "0.65625rem" }}
-                    >
-                      <option value="worker">worker</option>
-                      <option value="burst">burst</option>
-                    </select>
+                    <span title="Worker: eligible for automatic placement. Burst: only used when a session or task names this host.">
+                      <Dropdown<HostEditableRole>
+                        small
+                        ariaLabel={`Role of ${host.name}`}
+                        value={host.role as HostEditableRole}
+                        onChange={(r) => changeRole(host, r)}
+                        options={[
+                          { value: "worker", label: "worker" },
+                          { value: "burst", label: "burst" },
+                        ]}
+                      />
+                    </span>
                     {/* Issue #1725 — the parked state, visible next to the
                         health: the host is up, it is just taking no new
                         work. */}
