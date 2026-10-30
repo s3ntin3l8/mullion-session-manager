@@ -6,8 +6,9 @@
 // drag-to-reorder). Still mounts the full `<UnifiedBoard>` (same reasoning
 // as session-row/Header.test.tsx's own header comment).
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, act } from "@testing-library/react";
+import { render, screen, act, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
 import { UnifiedBoard } from "../UnifiedBoard.js";
 import type {
   GitBranchesResult,
@@ -152,6 +153,14 @@ beforeEach(() => {
   localStorage.clear();
 });
 
+// The lane starts collapsed (#2336); most tests read its body, so they render
+// the board and open the lane first.
+function renderExpanded(ui: ReactElement) {
+  const result = render(ui);
+  fireEvent.click(screen.getByRole("button", { name: /Ad-hoc sessions/ }));
+  return result;
+}
+
 describe("UnifiedBoard ad-hoc session lane", () => {
   it("groups unlinked sessions into severity sub-groups", () => {
     sessions = [
@@ -164,7 +173,7 @@ describe("UnifiedBoard ad-hoc session lane", () => {
         sessionStatusSeverity: "waiting",
       }),
     ];
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    renderExpanded(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
     expect(screen.getByText("working-one")).toBeInTheDocument();
     expect(screen.getByText("attn-one")).toBeInTheDocument();
@@ -173,7 +182,7 @@ describe("UnifiedBoard ad-hoc session lane", () => {
 
   it("shows the lane empty state when every sub-group is empty", () => {
     sessions = [];
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    renderExpanded(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
     expect(screen.getByText("No sessions without a task.")).toBeInTheDocument();
   });
 
@@ -186,7 +195,7 @@ describe("UnifiedBoard ad-hoc session lane", () => {
       makeSession({ id: 1, projectId: 1, command: "has-project" }),
       makeSession({ id: 2, projectId: 999, command: "deleted-project" }),
     ];
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    renderExpanded(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
     const button = screen.getByRole("button", { name: /Ad-hoc sessions/ });
     expect(button.parentElement?.querySelector(".kanban-lane-count")?.textContent).toBe("1");
@@ -214,7 +223,7 @@ describe("UnifiedBoard ad-hoc session lane", () => {
         sessionStatusSeverity: "waiting",
       }),
     ];
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    renderExpanded(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
     const attnTitle = screen.getByText("Needs Attention").closest(".kanban-lane-group-title");
     expect(attnTitle?.querySelector("span")?.textContent).toBe("1");
@@ -236,7 +245,7 @@ describe("UnifiedBoard ad-hoc session lane", () => {
         sessionStatusSeverity: "waiting",
       }),
     ];
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    renderExpanded(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
     expect(screen.queryByText("Needs Attention")).toBeNull();
     expect(screen.getByText("has-project")).toBeInTheDocument();
@@ -244,7 +253,7 @@ describe("UnifiedBoard ad-hoc session lane", () => {
 
   it("points the collapse button's aria-controls at the lane body it toggles", () => {
     sessions = [makeSession({ id: 1, command: "working-one" })];
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    renderExpanded(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
     const button = screen.getByRole("button", { name: /Ad-hoc sessions/ });
     const controlsId = button.getAttribute("aria-controls");
@@ -252,24 +261,27 @@ describe("UnifiedBoard ad-hoc session lane", () => {
     expect(document.getElementById(controlsId!)).not.toBeNull();
   });
 
-  it("collapses and re-expands the lane body when the collapse button is clicked", async () => {
+  it("starts collapsed with the count shown, expands on click and collapses again", async () => {
     sessions = [makeSession({ id: 1, command: "working-one" })];
     const user = userEvent.setup();
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
     const button = screen.getByRole("button", { name: /Ad-hoc sessions/ });
-    expect(button).toHaveAttribute("aria-expanded", "true");
-    expect(document.getElementById("kanban-lane-body")).not.toBeNull();
-
-    await user.click(button);
     expect(button).toHaveAttribute("aria-expanded", "false");
+    expect(document.querySelector(".kanban-lane-count")).toHaveTextContent("1");
     expect(document.getElementById("kanban-lane-body")).toBeNull();
     expect(screen.queryByText("working-one")).toBeNull();
+    expect(screen.queryByText("No sessions without a task.")).toBeNull();
 
     await user.click(button);
     expect(button).toHaveAttribute("aria-expanded", "true");
     expect(document.getElementById("kanban-lane-body")).not.toBeNull();
     expect(screen.getByText("working-one")).toBeInTheDocument();
+
+    await user.click(button);
+    expect(button).toHaveAttribute("aria-expanded", "false");
+    expect(document.getElementById("kanban-lane-body")).toBeNull();
+    expect(screen.queryByText("working-one")).toBeNull();
   });
 
   it("excludes dock sessions and honors hideEndedSessions", () => {
@@ -285,7 +297,7 @@ describe("UnifiedBoard ad-hoc session lane", () => {
       }),
       makeSession({ id: 3, command: "still-here" }),
     ];
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    renderExpanded(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
     expect(screen.queryByText("dock-monitor")).toBeNull();
     expect(screen.queryByText("should-be-hidden")).toBeNull();
@@ -297,7 +309,7 @@ describe("UnifiedBoard ad-hoc session lane", () => {
       makeSession({ id: 1, projectId: 1, command: "first" }),
       makeSession({ id: 2, projectId: 1, command: "second" }),
     ];
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    renderExpanded(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
     const cards = document.querySelectorAll(".kanban-lane-group .kanban-card");
     expect(cards).toHaveLength(2);
@@ -320,7 +332,7 @@ describe("UnifiedBoard ad-hoc session lane", () => {
       makeSession({ id: 1, projectId: 1, command: "attn-one", sessionStatusSeverity: "waiting" }),
       makeSession({ id: 2, projectId: 1, command: "working-one" }),
     ];
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    renderExpanded(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
     const attnCard = screen.getByText("attn-one").closest(".kanban-card") as HTMLElement;
     const workingCard = screen.getByText("working-one").closest(".kanban-card") as HTMLElement;
@@ -340,7 +352,7 @@ describe("UnifiedBoard ad-hoc session lane", () => {
     sessions = [makeSession({ id: 1, projectId: 1, command: "click-me" })];
     const onOpenSession = vi.fn();
     const user = userEvent.setup();
-    render(<UnifiedBoard onOpenSession={onOpenSession} onSessionEnded={vi.fn()} />);
+    renderExpanded(<UnifiedBoard onOpenSession={onOpenSession} onSessionEnded={vi.fn()} />);
 
     await user.click(screen.getByText("click-me"));
 

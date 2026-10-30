@@ -8,8 +8,9 @@
 // the linked session's live store data, which is simplest to drive through
 // a real board render.
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { ReactElement } from "react";
 import { UnifiedBoard } from "../UnifiedBoard.js";
 import type {
   GitBranchesResult,
@@ -120,11 +121,19 @@ beforeEach(() => {
   localStorage.clear();
 });
 
+// The lane starts collapsed (#2336); most tests read its body, so they render
+// the board and open the lane first.
+function renderExpanded(ui: ReactElement) {
+  const result = render(ui);
+  fireEvent.click(screen.getByRole("button", { name: /Ad-hoc sessions/ }));
+  return result;
+}
+
 describe("UnifiedBoard nested task session strip", () => {
   it("renders a live worker strip for task.sessionId and excludes it from the ad-hoc lane", () => {
     sessions = [makeSession({ id: 7, projectId: 1, command: "claude", sessionStatus: "working" })];
     tasks = [makeTask({ id: 1, status: "in_progress", sessionId: 7 })];
-    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    renderExpanded(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
 
     expect(screen.getByText("worker · Working")).toBeInTheDocument();
     // Ad-hoc lane must report no sessions — the linked one is nested on its
