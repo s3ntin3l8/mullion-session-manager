@@ -141,6 +141,13 @@ describe("upsertMarkedRegion", () => {
     expect(upsertMarkedRegion(once, START, END, "a\nb")).toBe(once);
   });
 
+  it("does not double a CR when the body itself already has CRLF endings", () => {
+    const once = upsertMarkedRegion("# T\r\nhand\r\n", START, END, "a\r\nb");
+    expect(once).toBe(`# T\r\nhand\r\n\r\n${START}\r\na\r\nb\r\n${END}\r\n`);
+    expect(upsertMarkedRegion(once, START, END, "a\r\nb")).toBe(once);
+    expect(once).not.toContain("\r\r");
+  });
+
   it("gives a marker-free CRLF file a CRLF region, and a re-run is byte-identical", () => {
     const once = upsertMarkedRegion("# T\r\nhand\r\n", START, END, "x");
     expect(once).toBe(`# T\r\nhand\r\n\r\n${START}\r\nx\r\n${END}\r\n`);
