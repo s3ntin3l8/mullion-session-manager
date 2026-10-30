@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { readPrimaryGitIdentity } from "../services/git-identity.js";
 import { applySettingsPatch, getStoredSettings } from "../services/settings.js";
 
 // The whole preferences blob is one JSON body — additionalProperties: true
@@ -34,6 +35,14 @@ export async function settingsRoute(app: FastifyInstance) {
     // never be interpreted as markup by a client.
     reply.type("application/json");
     return getStoredSettings(app.db);
+  });
+
+  // The primary's own `git config --global user.name` / `user.email`, so the
+  // Settings UI can prefill sessions.gitIdentity. Read-only; empty strings
+  // when the primary has none configured.
+  app.get("/api/settings/git-identity-default", async (_request, reply) => {
+    reply.type("application/json");
+    return readPrimaryGitIdentity();
   });
 
   app.patch<{ Body: Record<string, unknown> }>(

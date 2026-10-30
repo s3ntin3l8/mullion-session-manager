@@ -2,6 +2,7 @@ import { Fragment, useState } from "react";
 import { useDashboardStore } from "../../store/index.js";
 import { resolveAgentLogo } from "../../cliLogos.js";
 import { GroupHeading, NumberField, Row, Toggle } from "../../ui/primitives.js";
+import { GitIdentityFields } from "../../ui/GitIdentityFields.js";
 import { clampNumberFieldOnCommit } from "../clamp.js";
 
 export function SessionsSection() {
@@ -109,6 +110,19 @@ export function SessionsSection() {
           onChange={(v) => updateSettings({ sessions: { autoOpenChildPanels: v } })}
         />
       </Row>
+      <div style={{ padding: "6px 0 12px" }}>
+        <div style={{ fontSize: "0.84375rem", fontWeight: 500 }}>Git identity for sessions</div>
+        <div style={{ fontSize: "0.75rem", color: "var(--muted)", margin: "3px 0 8px" }}>
+          Commits made by Mullion sessions use this name and email on every host, instead of
+          whatever the host's git has (or lacks). Applied per session only; nothing is written to
+          git config. A project can override it. Leave either field blank to use each host's own
+          identity.
+        </div>
+        <GitIdentityFields
+          value={s.gitIdentity}
+          onChange={(gitIdentity) => updateSettings({ sessions: { gitIdentity } })}
+        />
+      </div>
       <Row
         label="Max child sessions per parent"
         desc="The most child sessions one agent can have running at the same time."

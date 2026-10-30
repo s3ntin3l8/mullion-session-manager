@@ -680,6 +680,13 @@
       "when": 1793384157689,
       "tag": "0096_plain_vargas",
       "breakpoints": true
+    },
+    {
+      "idx": 97,
+      "version": "6",
+      "when": 1793387657366,
+      "tag": "0097_striped_sugar_man",
+      "breakpoints": true
     }
   ]
 }

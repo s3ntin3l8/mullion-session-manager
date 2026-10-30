@@ -334,9 +334,16 @@ describe("host-git.ts", () => {
     it("local: commits via the real commitWipChanges, passing the message through", async () => {
       mockCommitWipChanges.mockResolvedValue({ committed: true });
 
-      const result = await commitHostWipChanges(fakeApp, "local", "/worktree", "chore: scaffold");
+      const identity = { name: "Ada", email: "ada@example.com" };
+      const result = await commitHostWipChanges(
+        fakeApp,
+        "local",
+        "/worktree",
+        "chore: scaffold",
+        identity,
+      );
 
-      expect(mockCommitWipChanges).toHaveBeenCalledWith("/worktree", "chore: scaffold");
+      expect(mockCommitWipChanges).toHaveBeenCalledWith("/worktree", "chore: scaffold", identity);
       expect(result).toEqual({ ok: true, value: { committed: true } });
     });
 
@@ -351,11 +358,13 @@ describe("host-git.ts", () => {
         "remote-host-1",
         "/remote/worktree",
         "chore: scaffold",
+        { name: "Ada", email: "ada@example.com" },
       );
 
       expect(mockResolveCommitWipChanges).toHaveBeenCalledWith(
         "/remote/worktree",
         "chore: scaffold",
+        { name: "Ada", email: "ada@example.com" },
       );
       expect(result).toEqual({ ok: true, value: { committed: true } });
     });

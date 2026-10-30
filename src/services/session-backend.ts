@@ -1,4 +1,5 @@
 import { compareWorktreePaths } from "./worktree-paths.js";
+import type { GitIdentity } from "./git-env.js";
 import type { WorktreePathCandidate, WorktreePathRelation } from "./worktree-paths.js";
 import { renderScrollback } from "./scrollback-render.js";
 import {
@@ -142,6 +143,10 @@ export interface SpawnOpts {
   // that gate on a human in the loop. Same "forwarded to a remote host
   // verbatim" posture as briefingOverride above.
   taskId?: number;
+  // Resolved on the primary (project override, else settings.sessions.gitIdentity)
+  // and forwarded to a remote host verbatim: it becomes user.name/user.email in
+  // the session's numbered GIT_CONFIG_* env (session-env.ts buildGitConfigEnv).
+  gitIdentity?: GitIdentity;
 }
 
 // The seam that lets every route (sessions.ts, terminal.ts's non-attach

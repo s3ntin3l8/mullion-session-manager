@@ -12,6 +12,7 @@
 // `(app, {cwd, hostId})`-shaped local/remote dispatch, same reason it lives
 // here rather than in git-status.ts/git-refs.ts/git-push.ts themselves:
 // those modules deliberately have no FastifyInstance import.
+import type { GitIdentity } from "./git-env.js";
 import type { FastifyInstance } from "fastify";
 import { getGitStatus, isGitRepo, type GitStatus } from "./git-status.js";
 import { listBranches, resolveDefaultBaseRef, resolveCommitSha } from "./git-refs.js";
@@ -268,11 +269,12 @@ export async function commitHostWipChanges(
   hostId: string,
   cwd: string,
   message?: string,
+  identity?: GitIdentity,
 ): Promise<HostGitResult<CommitWipChangesResult>> {
   if (hostId === LOCAL_HOST_ID) {
-    return { ok: true, value: await commitWipChanges(cwd, message) };
+    return { ok: true, value: await commitWipChanges(cwd, message, identity) };
   }
-  return viaRemote(app, hostId, (client) => client.resolveCommitWipChanges(cwd, message));
+  return viaRemote(app, hostId, (client) => client.resolveCommitWipChanges(cwd, message, identity));
 }
 
 /**

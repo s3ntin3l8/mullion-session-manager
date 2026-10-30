@@ -102,6 +102,8 @@ const FILLABLE_SETTINGS = [
   "autoFetch",
   // Issue #2241 — the placement steering flags; null = unset on the survivor.
   "placementConstraints",
+  // The per-project git identity override; null = unset on the survivor.
+  "gitIdentity",
 ] as const satisfies readonly (keyof ProjectRow)[];
 
 function byAge(a: ProjectRow, b: ProjectRow): number {

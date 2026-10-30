@@ -1,5 +1,5 @@
 import { schema as envSchema } from "../plugins/env.js";
-import { GIT_CONFIG_COUNT_KEY, GIT_ENV_KEYS_TO_STRIP } from "./git-env.js";
+import { GIT_CONFIG_COUNT_KEY, GIT_ENV_KEYS_TO_STRIP, type GitIdentity } from "./git-env.js";
 import { getUserShellPath, mergePaths } from "./user-shell-env.js";
 
 // Mullion-owned config keys (see src/plugins/env.ts's schema) that must
@@ -150,6 +150,12 @@ export const HOST_DISPLAY_ENV_KEYS: readonly string[] = [
  * way, so this is belt-and-braces — a silent no-op on an ancient git is
  * acceptable.
  */
+const GIT_CONFIG_ENTRY_GC = ["gc.auto", "0"] as const;
+const GIT_CONFIG_ENTRY_PUSH_BLOCK = [
+  "remote.origin.pushurl",
+  "use-mullion-task-push://blocked",
+] as const;
+
 export const GIT_CONFIG_NO_AUTO_GC_ENV = {
   GIT_CONFIG_COUNT: "1",
   GIT_CONFIG_KEY_0: "gc.auto",
@@ -180,6 +186,42 @@ export const GIT_CONFIG_TASK_PUSH_BLOCK_ENV = {
   GIT_CONFIG_KEY_1: "remote.origin.pushurl",
   GIT_CONFIG_VALUE_1: "use-mullion-task-push://blocked",
 } as const;
+
+/**
+ * The most numbered GIT_CONFIG_* entries a session can carry: gc.auto,
+ * the task push block, user.name and user.email. session-env-keys.ts reserves
+ * this many KEY_n/VALUE_n pairs against a caller's own `env`.
+ */
+export const GIT_CONFIG_MAX_ENTRIES = 4;
+
+/**
+ * Merges every git config entry a session gets into ONE numbered
+ * `GIT_CONFIG_COUNT` / `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n` list.
+ * git reads only indices 0..COUNT-1, so COUNT and the pairs must always be
+ * written together — two callers each assigning their own list would
+ * overwrite each other's indices.
+ *
+ * Order is fixed: gc.auto (always), the task push block (`taskPushBlock`),
+ * then user.name/user.email (`identity`, when set). With neither option the
+ * result equals GIT_CONFIG_NO_AUTO_GC_ENV; with only `taskPushBlock` it equals
+ * GIT_CONFIG_TASK_PUSH_BLOCK_ENV. An unset identity injects no user.* keys.
+ */
+export function buildGitConfigEnv(opts: {
+  taskPushBlock?: boolean;
+  identity?: GitIdentity;
+}): Record<string, string> {
+  const entries: Array<[string, string]> = [[...GIT_CONFIG_ENTRY_GC]];
+  if (opts.taskPushBlock) entries.push([...GIT_CONFIG_ENTRY_PUSH_BLOCK]);
+  if (opts.identity) {
+    entries.push(["user.name", opts.identity.name], ["user.email", opts.identity.email]);
+  }
+  const env: Record<string, string> = { [GIT_CONFIG_COUNT_KEY]: String(entries.length) };
+  entries.forEach(([key, value], i) => {
+    env[`GIT_CONFIG_KEY_${i}`] = key;
+    env[`GIT_CONFIG_VALUE_${i}`] = value;
+  });
+  return env;
+}
 
 /**
  * Returns a copy of `base` (defaults to `process.env`) with every

@@ -20,7 +20,8 @@
 import os from "node:os";
 import { mkdirSync } from "node:fs";
 import type { HookMessageKind } from "./hook-protocol.js";
-import { GIT_CONFIG_TASK_PUSH_BLOCK_ENV, buildSessionEnv } from "./session-env.js";
+import { buildGitConfigEnv, buildSessionEnv } from "./session-env.js";
+import type { GitIdentity } from "./git-env.js";
 import { applyShellIntegrationEnv } from "./shell-integration.js";
 import { writeSessionAgentGuide } from "./agent-guide.js";
 import { writeSessionBriefing } from "./project-briefing.js";
@@ -145,6 +146,10 @@ export interface LaunchPlanSession {
    * this function trusts its caller the same way it already does for
    * every other field. */
   readonly env: Record<string, string>;
+  /** The git identity for this session's commits (project override, else
+   * `settings.sessions.gitIdentity`), resolved on the primary and forwarded
+   * to a remote host verbatim. Undefined injects no user.* config. */
+  readonly gitIdentity?: GitIdentity;
   readonly injectAgentGuide: boolean;
   readonly injectProjectBriefing: boolean;
   /** See HookAdapterContext.injectMullionBundle's own doc comment
@@ -278,7 +283,16 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
   // branch is pushed by Mullion (gated, bot identity), not with the operator's
   // ambient credentials. After session.env, so the caller cannot override it
   // (the keys are reserved there too).
-  if (session.taskId !== undefined) Object.assign(sessionEnv, GIT_CONFIG_TASK_PUSH_BLOCK_ENV);
+  // Merged with the gc.auto entry and the configured git identity into one
+  // numbered list (buildGitConfigEnv) — they share GIT_CONFIG_COUNT, so they
+  // cannot be assigned separately.
+  Object.assign(
+    sessionEnv,
+    buildGitConfigEnv({
+      taskPushBlock: session.taskId !== undefined,
+      identity: session.gitIdentity,
+    }),
+  );
   // Issue: sidebar worktree display — injects the OSC 7 shell-integration
   // hook (ZDOTDIR shim for zsh, PROMPT_COMMAND for bash) so this session's
   // shell announces its cwd on every prompt draw, feeding Session.liveCwd.

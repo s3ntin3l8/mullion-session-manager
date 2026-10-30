@@ -1,4 +1,5 @@
 import { renderScrollback } from "./scrollback-render.js";
+import type { GitIdentity } from "./git-env.js";
 import type { TerminalPalette } from "./terminal-query-reply.js";
 import type { TranscriptQuery, TranscriptResult } from "./session-transcript.js";
 import type { FastifyInstance } from "fastify";
@@ -409,6 +410,10 @@ export interface SessionTarget {
   // that gate on a human in the loop. Forwarded verbatim to the agent
   // host, same posture as seedPrompt above.
   taskId?: number;
+  // Resolved on the primary (project override, else settings.sessions.gitIdentity)
+  // and forwarded to a remote host verbatim: it becomes user.name/user.email in
+  // the session's numbered GIT_CONFIG_* env (session-env.ts buildGitConfigEnv).
+  gitIdentity?: GitIdentity;
   projectId?: number;
   // Issue #822 — see CreateSessionBody.env's own doc comment
   // (session-lifecycle.ts). Unlike initialPrompt/seedPrompt, this DOES
@@ -1659,11 +1664,15 @@ export class RemoteHostClient {
    * message?}` -> `CommitWipChangesResult` shape. See git-worktree.ts's
    * commitWipChanges doc comment for the staging/no-op/never-throws
    * contract this preserves over the wire. */
-  resolveCommitWipChanges(cwd: string, message?: string): Promise<CommitWipChangesResult> {
+  resolveCommitWipChanges(
+    cwd: string,
+    message?: string,
+    gitIdentity?: GitIdentity,
+  ): Promise<CommitWipChangesResult> {
     return this.request("/internal/git-commit-wip", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ cwd, message }),
+      body: JSON.stringify({ cwd, message, gitIdentity }),
     });
   }
 

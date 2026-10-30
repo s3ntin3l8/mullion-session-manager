@@ -4,6 +4,7 @@ import { FileTextIcon } from "./ui/icons.js";
 import { ConfirmButton } from "./ui/ConfirmButton.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { Toggle } from "./ui/primitives.js";
+import { GitIdentityFields } from "./ui/GitIdentityFields.js";
 import { useDashboardStore } from "./store/index.js";
 
 export interface ProjectBriefingPanelParams {
@@ -547,6 +548,7 @@ export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelP
           </span>
         )}
       </div>
+      <ProjectGitIdentity projectId={params.projectId} />
       <div className="agent-rules-panel">
         <div className="agent-rules-panel-list cmux-scroll">
           {FIELD_CONFIGS.map((config) => (
@@ -585,6 +587,33 @@ export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelP
           onDirtyChange={setActiveFieldDirty}
         />
       </div>
+    </div>
+  );
+}
+
+// Per-project override of settings.sessions.gitIdentity. Saved when an input
+// loses focus; clearing both fields removes the override (the global identity
+// applies again).
+function ProjectGitIdentity({ projectId }: { projectId: number }) {
+  const saved = useDashboardStore((s) => s.projects.find((p) => p.id === projectId)?.gitIdentity);
+  const updateProject = useDashboardStore((s) => s.updateProject);
+  const [draft, setDraft] = useState(saved ?? { name: "", email: "" });
+  const commit = (next: { name: string; email: string }) => {
+    const name = next.name.trim();
+    const email = next.email.trim();
+    if (name === "" && email === "") {
+      if (saved) void updateProject(projectId, { gitIdentity: null });
+      return;
+    }
+    // A half identity is not saved: git needs both to commit.
+    if (name === "" || email === "") return;
+    if (saved?.name === name && saved.email === email) return;
+    void updateProject(projectId, { gitIdentity: { name, email } });
+  };
+  return (
+    <div className="agent-rules-panel-notice project-briefing-git-identity">
+      <span>Git identity for this project's sessions (overrides Settings → Sessions):</span>
+      <GitIdentityFields value={draft} onChange={setDraft} onCommit={commit} />
     </div>
   );
 }

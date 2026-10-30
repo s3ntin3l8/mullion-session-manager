@@ -340,6 +340,9 @@ export interface Project {
   // Optional only so a response from an older server (and hand-built test
   // fixtures) still type-checks; the current API always sends it.
   placementConstraints?: PlacementConstraints;
+  // Per-project git identity override (beats settings.sessions.gitIdentity);
+  // null = use the global one. Optional for older servers and fixtures.
+  gitIdentity?: { name: string; email: string } | null;
   // Where this project's dev server listens (issue #28) — a bare port
   // ("5173") or a full URL. The authoritative, manually-set fallback the
   // preview proxy resolves against; null when unconfigured.
@@ -2582,6 +2585,9 @@ export interface AppSettings {
     // Surfaced in Settings.tsx's Sessions section ("Auto-open child session
     // panels").
     autoOpenChildPanels: boolean;
+    // Mirrors src/services/settings.ts 1:1. The git identity stamped on
+    // Mullion session commits; either half blank = unset.
+    gitIdentity: { name: string; email: string };
   };
   // Mirrors src/services/settings.ts's AppSettings.taskMaster 1:1 — see its
   // doc comment for the full sentinel rationale. enabled/maxConcurrent/

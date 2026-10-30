@@ -608,6 +608,7 @@ function renderPane(
         workflowConventionAnswers: {},
         maxChildSessionsPerParent: 5,
         autoOpenChildPanels: false,
+        gitIdentity: { name: "", email: "" },
       },
       dock: {
         defaultWorktreeRefresh: false,

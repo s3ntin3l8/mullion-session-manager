@@ -1988,10 +1988,10 @@ export async function internalRoutes(app: FastifyInstance) {
     "/internal/git-commit-wip",
     { ...INTERNAL_RATE_LIMIT, schema: gitCommitWipSchema },
     async (request, reply) => {
-      const { cwd, message } = request.body;
+      const { cwd, message, gitIdentity } = request.body;
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
-      return await commitWipChanges(resolvedCwd, message);
+      return await commitWipChanges(resolvedCwd, message, gitIdentity);
     },
   );
 
@@ -2472,6 +2472,10 @@ export async function internalRoutes(app: FastifyInstance) {
         // denial list, and the primary learns this via the
         // `taskIdApplied` echo (below) being `false`.
         taskId,
+        // The resolved git identity — see CreateSessionOptions.gitIdentity.
+        // An older agent build strips it (additionalProperties: false) and
+        // the session simply commits with the host's own identity.
+        gitIdentity,
         // Issue #1337 — opencode model overrides forwarded from spawn_child_session
         // MCP tool. When omitted, the parent session's model/smallModel are inherited
         // by the POST /api/sessions route handler (server-side fallback).
@@ -2509,6 +2513,7 @@ export async function internalRoutes(app: FastifyInstance) {
         injectProjectBriefing,
         injectMullionBundle,
         taskId,
+        gitIdentity,
         model,
         smallModel,
       });

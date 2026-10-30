@@ -90,6 +90,37 @@ export const GIT_CONFIG_COUNT_KEY = "GIT_CONFIG_COUNT";
  */
 export const GIT_NO_AUTO_GC = ["-c", "gc.auto=0"] as const;
 
+/**
+ * The git identity Mullion stamps on commits it or its sessions make
+ * (`settings.sessions.gitIdentity`, overridable per project). Both fields
+ * are always set together: git refuses to guess half an identity.
+ */
+export interface GitIdentity {
+  name: string;
+  email: string;
+}
+
+/**
+ * `-c user.name=… -c user.email=…` for a git commit Mullion makes itself
+ * (git-worktree.ts's salvage commit). Command scope, like GIT_NO_AUTO_GC: it
+ * overrides system/global/repo config for that one invocation and writes
+ * nothing. `[]` when no identity is configured — today's behavior.
+ */
+export function gitIdentityArgs(identity: GitIdentity | undefined): string[] {
+  if (!identity) return [];
+  return ["-c", `user.name=${identity.name}`, "-c", `user.email=${identity.email}`];
+}
+
+/** The same identity as environment overrides, for a commit Mullion makes itself. */
+export function gitIdentityEnv(identity: GitIdentity): NodeJS.ProcessEnv {
+  return {
+    GIT_AUTHOR_NAME: identity.name,
+    GIT_AUTHOR_EMAIL: identity.email,
+    GIT_COMMITTER_NAME: identity.name,
+    GIT_COMMITTER_EMAIL: identity.email,
+  };
+}
+
 export function gitEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
   for (const key of GIT_ENV_KEYS_TO_STRIP) {
