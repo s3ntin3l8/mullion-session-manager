@@ -46,6 +46,11 @@ import { isGitHubRateLimited } from "../services/github-fetch.js";
 import { killSession } from "../services/session-lifecycle.js";
 
 import { KNOWN_AGENTS } from "../services/agent-detect.js";
+import { HERMES_REVIEW_AGENT, hermesReviewAgentRefusal } from "../services/task-agent-resolve.js";
+
+// A review agent is a CLI, "hermes" (the external reviewer, #2369 — not a CLI,
+// so not in KNOWN_AGENTS), or "none"; null falls through to the next tier.
+const REVIEW_AGENT_ENUM = [...KNOWN_AGENTS, HERMES_REVIEW_AGENT, "none", null];
 
 // Phase 6 (6.9/#233) — the only two statuses PR1 (this file, pre-6.2) knows
 // how to validate: a locally-created task starts "backlog" and the only
@@ -127,7 +132,7 @@ const createTaskSchema = {
       status: { type: "string", enum: [...LOCAL_CREATABLE_STATUSES] },
       boardOrder: { type: "integer", minimum: 0 },
       agent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
-      reviewAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, "none", null] },
+      reviewAgent: { type: ["string", "null"], enum: REVIEW_AGENT_ENUM },
     },
   },
 };
@@ -143,7 +148,7 @@ const updateTaskSchema = {
       status: { type: "string", enum: [...LOCAL_CREATABLE_STATUSES] },
       boardOrder: { type: "integer", minimum: 0 },
       agent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
-      reviewAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, "none", null] },
+      reviewAgent: { type: ["string", "null"], enum: REVIEW_AGENT_ENUM },
     },
   },
 };
@@ -154,7 +159,7 @@ const claimTaskSchema = {
     additionalProperties: false,
     properties: {
       agent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
-      reviewAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, "none", null] },
+      reviewAgent: { type: ["string", "null"], enum: REVIEW_AGENT_ENUM },
     },
   },
 };
@@ -631,6 +636,8 @@ export async function tasksRoute(app: FastifyInstance) {
     async (request, reply) => {
       const { projectId, title, body, status, boardOrder, agent, reviewAgent } = request.body;
       if (!getProjectOr404(projectId)) return reply.notFound("Project not found");
+      const hermesRefusal = hermesReviewAgentRefusal(app, reviewAgent);
+      if (hermesRefusal) return reply.badRequest(hermesRefusal);
 
       const [created] = app.db
         .insert(tasks)
@@ -675,6 +682,8 @@ export async function tasksRoute(app: FastifyInstance) {
       if (!existing) return reply.notFound();
 
       const { title, body, status, boardOrder, agent, reviewAgent } = request.body;
+      const hermesRefusal = hermesReviewAgentRefusal(app, reviewAgent);
+      if (hermesRefusal) return reply.badRequest(hermesRefusal);
       if ((title !== undefined || body !== undefined) && existing.issueNumber !== null) {
         return reply.conflict(
           "Cannot edit title/body of a task linked to a GitHub issue — edit the issue itself; boardOrder, status, and agents remain editable here",
@@ -1353,6 +1362,8 @@ export async function tasksRoute(app: FastifyInstance) {
       if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
 
       const body = request.body ?? {};
+      const hermesRefusal = hermesReviewAgentRefusal(app, body.reviewAgent);
+      if (hermesRefusal) return reply.badRequest(hermesRefusal);
       const outcome = await enqueueTask(app, taskId, {
         auto: false,
         agent: body.agent,
@@ -1391,6 +1402,8 @@ export async function tasksRoute(app: FastifyInstance) {
       const taskId = Number(request.params.id);
       if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
 
+      const hermesRefusal = hermesReviewAgentRefusal(app, request.body?.reviewAgent);
+      if (hermesRefusal) return reply.badRequest(hermesRefusal);
       const outcome = await retryTask(app, taskId, request.body || undefined);
       if (!outcome.ok) {
         switch (outcome.reason) {
