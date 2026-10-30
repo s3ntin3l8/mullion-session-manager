@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, RateLimitedError } from "./api/index.js";
+import type { ExistingInstructionsMode, ScaffoldConflict } from "./api/projects.js";
 import { parseUnifiedDiff } from "./diffUtils.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { FileTextIcon } from "./ui/icons.js";
@@ -26,6 +27,72 @@ interface PreviewState {
   generated?: boolean;
   sandboxed?: boolean;
   possiblyGeneric?: boolean;
+  // What the generation turn was asked to do with existing instructions, and
+  // what came back: a conflicts list (report) or a lossy-rewrite signal
+  // (restructure).
+  instructionsMode?: ExistingInstructionsMode;
+  conflicts?: ScaffoldConflict[];
+  droppedConflictLines?: number;
+  possiblyLossy?: boolean;
+}
+
+const INSTRUCTION_MODES: Array<{ id: ExistingInstructionsMode; label: string; desc: string }> = [
+  {
+    id: "keep",
+    label: "Leave it",
+    desc: "Mullion's section is added and everything else stays as written.",
+  },
+  {
+    id: "report",
+    label: "Tell me about conflicts",
+    desc: "Nothing is rewritten. The agent lists passages that contradict or repeat the conventions, so you can fix them yourself.",
+  },
+  {
+    id: "restructure",
+    label: "Restructure it",
+    desc: "The agent proposes a rewritten AGENTS.md: workflow rules that duplicate the conventions are dropped, repo facts move under “Repo specifics”, and procedural detail moves to CONTRIBUTING.md. You review it in the diff.",
+  },
+];
+
+function ConflictList({ conflicts, dropped }: { conflicts: ScaffoldConflict[]; dropped: number }) {
+  if (conflicts.length === 0) {
+    // "Nothing found" is only true if nothing was lost: lines the agent
+    // returned but we could not read must not read as an all-clear.
+    if (dropped > 0) {
+      return (
+        <div className="agent-rules-panel-notice warning">
+          The agent returned {dropped} line{dropped === 1 ? "" : "s"} that could not be read, so
+          this scaffold cannot say whether existing instructions conflict with the conventions.
+          Generate again, or check AGENTS.md by hand.
+        </div>
+      );
+    }
+    return (
+      <div className="agent-rules-panel-notice">
+        No existing instructions conflict with the conventions.
+      </div>
+    );
+  }
+  return (
+    <div className="agent-rules-panel-notice warning">
+      {conflicts.length} passage{conflicts.length === 1 ? "" : "s"} outside Mullion&apos;s section
+      contradict or repeat the conventions. They are NOT changed by this scaffold — fix them before
+      merging, or agents will keep following them.
+      <ul>
+        {conflicts.map((c, i) => (
+          <li key={i}>
+            <code>{c.file}</code> — {c.kind}: “{c.excerpt}” — {c.note}
+          </li>
+        ))}
+      </ul>
+      {dropped > 0 && (
+        <div>
+          {dropped} more line{dropped === 1 ? "" : "s"} from the agent could not be read or were
+          left out.
+        </div>
+      )}
+    </div>
+  );
 }
 
 interface ApplyResult {
@@ -121,6 +188,8 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
   const [applyResult, setApplyResult] = useState<ApplyResult | null>(null);
   const [previewing, setPreviewing] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [existingInstructions, setExistingInstructions] =
+    useState<ExistingInstructionsMode>("keep");
   // Set after /setup/generate answered 409 (skill and reviewer already
   // exist): the user then picks which to regenerate and tries again.
   const [offerRefresh, setOfferRefresh] = useState(false);
@@ -175,8 +244,9 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
         symlinkAgentsSkills,
         includeDockConfig,
         ...(refresh.length > 0 ? { refresh } : {}),
+        ...(existingInstructions !== "keep" ? { existingInstructions } : {}),
       });
-      setPreview({ ...result, generated: true });
+      setPreview({ ...result, generated: true, instructionsMode: existingInstructions });
       resetRefreshChoice();
     } catch (err) {
       if (err instanceof ApiError && err.statusCode === 409) {
@@ -202,6 +272,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
     refreshSkill,
     refreshReviewer,
     resetRefreshChoice,
+    existingInstructions,
   ]);
 
   const handleApply = useCallback(async () => {
@@ -296,6 +367,19 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
           <div className="agent-rules-panel-notice warning">
             The agent may not have read this repo — the generated skill and reviewer look generic.
             Review them carefully, or go back and generate again.
+          </div>
+        )}
+        {preview.generated && preview.instructionsMode === "report" && (
+          <ConflictList
+            conflicts={preview.conflicts ?? []}
+            dropped={preview.droppedConflictLines ?? 0}
+          />
+        )}
+        {preview.generated && preview.instructionsMode === "restructure" && (
+          <div className={`agent-rules-panel-notice${preview.possiblyLossy ? " warning" : ""}`}>
+            {preview.possiblyLossy
+              ? "The rewritten AGENTS.md is much shorter than the original, or most of its sections are gone. Read the diff for lost repo-specific detail before applying."
+              : "AGENTS.md is restructured below. Check that nothing repo-specific was dropped before applying."}
           </div>
         )}
         {preview.hasAgentsOverride && (
@@ -481,6 +565,41 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
           </div>
         </div>
       )}
+      <div className="settings-row">
+        <div className="settings-row-text">
+          <div className="settings-row-label" id="setup-existing-instructions-label">
+            Instructions this repo already has
+          </div>
+          <div className="settings-row-desc">
+            Only used by “Generate with agent”. If this repo already has its own workflow rules,
+            they can contradict the conventions Mullion commits, and agents will follow whichever is
+            in the file.
+          </div>
+        </div>
+        <div
+          className="settings-row-control"
+          role="radiogroup"
+          aria-labelledby="setup-existing-instructions-label"
+          aria-describedby="setup-existing-instructions-desc"
+        >
+          {INSTRUCTION_MODES.map((m) => (
+            <label key={m.id} style={{ display: "block" }} title={m.desc}>
+              <input
+                type="radio"
+                name="setup-existing-instructions"
+                value={m.id}
+                checked={existingInstructions === m.id}
+                disabled={generating}
+                onChange={() => setExistingInstructions(m.id)}
+              />{" "}
+              {m.label}
+            </label>
+          ))}
+          <div className="settings-row-desc" id="setup-existing-instructions-desc">
+            {INSTRUCTION_MODES.find((m) => m.id === existingInstructions)?.desc}
+          </div>
+        </div>
+      </div>
       <div className="settings-row-desc">
         Preview writes starter placeholders. Generate runs your default agent ({defaultAgent}) in a
         read-only sandbox over this repo to write a skill and reviewer specific to it — this can

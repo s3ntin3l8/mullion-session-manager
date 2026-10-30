@@ -66,3 +66,29 @@ describe("projectsApi.generateProjectSetup", () => {
     expect(result.sandboxed).toBe(true);
   });
 });
+
+describe("projectsApi.generateProjectSetup — existingInstructions", () => {
+  it("sends the mode and returns conflicts untouched", async () => {
+    const conflict = { file: "AGENTS.md", excerpt: "x", kind: "contradicts", note: "n" };
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        previewId: "p",
+        diff: "",
+        files: [],
+        hasAgentsOverride: false,
+        sandboxed: true,
+        conflicts: [conflict],
+        droppedConflictLines: 1,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await projectsApi.generateProjectSetup(7, {
+      slug: "demo",
+      existingInstructions: "report",
+    });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string).existingInstructions).toBe("report");
+    expect(result.conflicts).toEqual([conflict]);
+    expect(result.droppedConflictLines).toBe(1);
+  });
+});

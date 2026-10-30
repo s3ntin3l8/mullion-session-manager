@@ -1,3 +1,4 @@
+import { EXISTING_INSTRUCTIONS_MODES } from "../shared/constants.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -10,6 +11,7 @@ import {
   conventionsUseWtDirectory,
   isValidScaffoldSlug,
   InvalidScaffoldSlugError,
+  MissingRegionPlaceholderError,
   scaffoldSkillPath,
   scaffoldReviewerPath,
   hashWorkflowConventionsSection,
@@ -46,6 +48,8 @@ import {
   GenerationSpawnError,
   GenerationOutputError,
   type GeneratedScaffoldContent,
+  type ExistingInstructionsMode,
+  type ScaffoldConflict,
 } from "../services/scaffold-generate.js";
 
 // Issue: apply Mullion tooling to other repos, Layer 3 (PR-6) — the
@@ -139,6 +143,10 @@ const generateSchema = {
         maxItems: 2,
         uniqueItems: true,
       },
+      // Issue #2316 — what the generation turn does with instruction content
+      // that already exists outside Mullion's own regions. Absent means
+      // "keep" (leave it alone), the historical behavior.
+      existingInstructions: { type: "string", enum: [...EXISTING_INSTRUCTIONS_MODES] },
     },
   },
 };
@@ -428,6 +436,12 @@ interface PreviewRecord {
   // would make the drift badge wrong from the moment it ships. Same
   // "resolved once, read back unchanged" posture as `slug` itself.
   workflowConventionsText: string;
+  // Issue #2316 — true when this preview came from /setup/generate in a mode
+  // that rewrites instruction files (report/restructure). Its worktree then
+  // holds content (a rewritten AGENTS.md, moved CONTRIBUTING.md text) that a
+  // later request with different options must NOT read back as "the repo's
+  // current files" — see ensureSetupWorktree's `fresh`.
+  rewroteInstructions?: boolean;
 }
 
 // In-memory only, primary-only, short-lived — a preview is a "here's what
@@ -515,9 +529,27 @@ async function ensureSetupWorktree(
   project: { cwd: string; hostId: string },
   projectId: number,
   slug: string,
+  opts: { fresh?: boolean } = {},
 ): Promise<{ ok: true; worktree: ReadyWorktree } | { ok: false; message: string }> {
   const seed = `setup-${slug}`;
-  const liveSlugPreview = findLiveSlugPreview(projectId, slug);
+  let liveSlugPreview = findLiveSlugPreview(projectId, slug);
+  // Issue #2316 — a reused worktree carries the previous request's uncommitted
+  // writes, and existingFiles is read from it. That is deliberate for a plain
+  // re-preview (toggling a checkbox keeps the window), but a generate turn
+  // that rewrote instruction files would leak into the next request: switch
+  // the radio from "Restructure" back to "Leave it" and the restructured
+  // AGENTS.md would still be committed, and assessRewrite would compare
+  // against the previous rewrite instead of the real original. So a generate
+  // always starts from a clean checkout of the base ref, and so does any
+  // request that follows a generate which rewrote instructions. Older preview
+  // records for the slug are dropped with the worktree they pointed at, so an
+  // old previewId can never apply content it was not computed for.
+  if (opts.fresh || liveSlugPreview?.rewroteInstructions) {
+    for (const [id, record] of previews) {
+      if (record.projectId === projectId && record.slug === slug) previews.delete(id);
+    }
+    liveSlugPreview = null;
+  }
   const worktreeResult = await reuseOrCreateWorktree(
     app,
     project.hostId,
@@ -551,6 +583,7 @@ async function finishPreview(
   options: ScaffoldOptions,
   worktree: ReadyWorktree,
   existingFiles: Record<string, string | undefined>,
+  rewroteInstructions = false,
 ): Promise<PreviewComputation> {
   let entries;
   try {
@@ -558,6 +591,11 @@ async function finishPreview(
   } catch (err) {
     if (err instanceof InvalidScaffoldSlugError)
       return { ok: false, status: 400, message: err.message };
+    // An agent body that slipped past the parser without a placeholder: the
+    // turn's output can't be used, which is a server-side failure, not a bad
+    // request.
+    if (err instanceof MissingRegionPlaceholderError)
+      return { ok: false, status: 500, message: err.message };
     throw err;
   }
   // `stage: true` — `git diff HEAD` never shows an untracked file, staged
@@ -604,6 +642,7 @@ async function finishPreview(
     // — the `?? ""` only guards ScaffoldOptions's own optional typing, it's
     // never actually reached with undefined in practice.
     workflowConventionsText: options.workflowConventionsText ?? "",
+    ...(rewroteInstructions ? { rewroteInstructions: true } : {}),
   });
 
   return {
@@ -691,7 +730,11 @@ export async function projectSetupRoute(app: FastifyInstance) {
 
   app.post<{
     Params: { id: string };
-    Body: { slug: string; refresh?: Array<"skill" | "reviewer"> } & Omit<ScaffoldOptions, "slug">;
+    Body: {
+      slug: string;
+      refresh?: Array<"skill" | "reviewer">;
+      existingInstructions?: ExistingInstructionsMode;
+    } & Omit<ScaffoldOptions, "slug">;
   }>(
     "/api/projects/:id/setup/generate",
     { ...GENERATE_RATE_LIMIT, schema: generateSchema },
@@ -728,9 +771,18 @@ export async function projectSetupRoute(app: FastifyInstance) {
       // independent read against `project.cwd` could answer a DIFFERENT
       // question if the live checkout and the scratch worktree's resolved
       // base ref ever disagree).
-      const ensured = await ensureSetupWorktree(app, project, projectId, options.slug);
+      const existingInstructions = request.body.existingInstructions ?? "keep";
+      const ensured = await ensureSetupWorktree(app, project, projectId, options.slug, {
+        fresh: existingInstructions !== "keep",
+      });
       if (!ensured.ok) return reply.internalServerError(ensured.message);
       const relPaths = scaffoldableRelPaths(options.slug, options);
+      // Issue #2316 — a restructure may append moved text to CONTRIBUTING.md,
+      // which must be read so the append is an upsert into the real file and
+      // never an overwrite of it (same reasoning as scaffoldableRelPaths').
+      if (existingInstructions === "restructure" && !relPaths.includes("CONTRIBUTING.md")) {
+        relPaths.push("CONTRIBUTING.md");
+      }
       const read = await readScaffoldableFiles(
         app,
         project.hostId,
@@ -764,7 +816,15 @@ export async function projectSetupRoute(app: FastifyInstance) {
       // is worth spending on — the short-circuit below now only fires when
       // nothing was asked to change, which is the one case a real refresh
       // path doesn't need to touch at all.
-      if (hasSkill && hasReviewer && !refreshSkill && !refreshReviewer) {
+      // Issue #2316 — an instructions-only pass (report/restructure) is worth
+      // the turn even when nothing else would be regenerated.
+      if (
+        hasSkill &&
+        hasReviewer &&
+        !refreshSkill &&
+        !refreshReviewer &&
+        existingInstructions === "keep"
+      ) {
         return reply.conflict(
           `.claude/skills/${options.slug}/SKILL.md and .claude/agents/${options.slug}-reviewer.md ` +
             // "already exist" — NOT "are already committed": `hasSkill`/
@@ -804,6 +864,9 @@ export async function projectSetupRoute(app: FastifyInstance) {
           hasSkill,
           hasReviewer,
           hasScaffoldRegion,
+          existingInstructions,
+          conventionsText: options.workflowConventionsText,
+          originalAgentsMd: existingFiles["AGENTS.md"],
           // Issue #1133 — this primary's own opt-out; only takes effect for
           // a LOCAL_HOST_ID project (generateScaffoldContent's own doc
           // comment). A remote-hosted project's own
@@ -843,6 +906,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
         { ...options, generated },
         ensured.worktree,
         writeExistingFiles,
+        existingInstructions !== "keep",
       );
       if (!result.ok) return sendPreviewComputation(reply, result);
       // Hermes review, PR #1200 round 1 (suggestion) — `hasAgentsOverride`
@@ -857,6 +921,9 @@ export async function projectSetupRoute(app: FastifyInstance) {
         sandboxed: boolean;
         hasAgentsOverride: boolean;
         possiblyGeneric?: boolean;
+        conflicts?: ScaffoldConflict[];
+        droppedConflictLines?: number;
+        possiblyLossy?: boolean;
       } = {
         previewId: result.previewId,
         diff: result.diff,
@@ -867,6 +934,12 @@ export async function projectSetupRoute(app: FastifyInstance) {
       if (generated.possiblyGeneric) {
         response.possiblyGeneric = true;
       }
+      // Issue #2316 — present only for the mode that produced them.
+      if (generated.conflicts) response.conflicts = generated.conflicts;
+      if (generated.droppedConflictLines) {
+        response.droppedConflictLines = generated.droppedConflictLines;
+      }
+      if (generated.possiblyLossy) response.possiblyLossy = true;
       return response;
     },
   );

@@ -300,6 +300,46 @@ minutes) that reads the repo and writes the skill, the reviewer and the
 skill and reviewer already exist it asks which to regenerate rather than
 overwriting hand edits.
 
+**What happens to instructions the repo already has.** Generate also has an
+"Instructions this repo already has" choice (`existingInstructions` in the
+request; absent means `keep`). The committed conventions are what agents are
+told to follow, but a repo's own rules outside Mullion's region win on a
+conflict ("AGENTS.md wins"), so hand-written workflow rules that contradict
+the conventions (say, re-requesting a review with an `@mention` the relay
+forbids) keep being obeyed. Three modes:
+
+- **Leave it** (`keep`) — today's behavior: Mullion's section is added and the
+  rest of the file is untouched.
+- **Tell me about conflicts** (`report`) — nothing is rewritten. The agent
+  returns one JSON object per passage outside Mullion's markers that
+  contradicts, repeats or misplaces a workflow rule (`kind`:
+  `contradicts` / `duplicates` / `misplaced`); the panel lists them above the
+  diff. Lines that are not valid objects are dropped and counted.
+- **Restructure it** (`restructure`) — the agent returns a complete proposed
+  `AGENTS.md` with a single `<<<MULLION_REGION>>>` line where Mullion's
+  region goes, plus optionally procedural text moved to `CONTRIBUTING.md`.
+  Layout: intro, region, `## Repo specifics`, the repo's own invariants and
+  commands. The body is rejected (the turn fails, nothing is committed) unless
+  it has exactly one placeholder, no Mullion markers and no
+  `## Workflow Conventions` section of its own. The moved text goes into a
+  `mullion:moved` region in `CONTRIBUTING.md`: a later run adds to that region
+  (the same text twice is a no-op) and never replaces it or anything else
+  already in the file. A `possiblyLossy` warning shows
+  when the rewrite plus the moved text is under 30% of the original's size, or
+  more than 60% of its `##` sections are gone from both. Dropping the workflow
+  rules is the point, so one missing section is expected.
+
+A `report`/`restructure` turn always starts from a clean checkout of the base
+ref, and so does the next request after one, so switching the choice back to
+**Leave it** never commits an earlier rewrite and the lossiness check compares
+against the repo's real `AGENTS.md`; an earlier preview id for that slug stops
+working.
+
+Either non-`keep` mode counts as worth an agent turn even when the skill and
+reviewer already exist, so it does not 409. Everything the agent returns still
+flows through the same diff and **Apply** step, and the agent never writes to
+the repo itself.
+
 1. **Preview** computes the target file set — a scaffolded `AGENTS.md`
    scaffold region (created fresh, or upserted in place if the file
    already has one), a **`CLAUDE.md` `@AGENTS.md` import** (unconditional,
