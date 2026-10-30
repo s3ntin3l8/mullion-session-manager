@@ -293,6 +293,8 @@ runs on its own host. Where they meet an explicit request:
   against `platform`.** The launcher's host chip disables a host the flag rules
   out and says why. Naming a burst host stays the opt-in to burst hosts, so
   `allowBurst` does not apply to an explicit target.
+  This holds for a pinned project too: the flag is checked whenever a host is
+  named, but a launch that names nothing on a pinned project is not steered.
 - **No host satisfies `platform`.** An Auto launch is refused with `409` and the
   reason; it never falls back to the project's own host (which may not satisfy
   the flag). Task Master follows the same rule as for directives: it **holds**

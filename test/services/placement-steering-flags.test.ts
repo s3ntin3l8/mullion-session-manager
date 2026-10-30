@@ -243,6 +243,29 @@ describe("a project's placement steering flags (issue #2241)", () => {
     expect(app.db.select().from(sessions).all()).toHaveLength(0);
   });
 
+  it("calls a refusal transient while a host that has not reported its platform might match", async () => {
+    // No capacity reading and no self-reported platform: it cannot be told apart from a match.
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "unreported", baseUrl: "http://127.0.0.1:1", token: "t" },
+    });
+    const project = addProject({ [res.json().id as string]: REMOTE_CWD }, { platform: [OTHER] });
+
+    const decision = previewPlacement(app, {
+      project: {
+        hostId: project.hostId,
+        placement: "auto",
+        cwd: project.cwd,
+        hostCwds: project.hostCwds,
+        placementConstraints: project.placementConstraints,
+      },
+    });
+
+    expect(decision.refusal?.transient).toBe(true);
+    expect(decision.refusal?.detail).toContain("has not reported its platform");
+  });
+
   it("does not change a project with no flags", async () => {
     const host = await addHost(OTHER);
     const project = addProject({ [host]: REMOTE_CWD }, null);

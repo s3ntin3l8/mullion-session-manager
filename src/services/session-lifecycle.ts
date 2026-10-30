@@ -977,7 +977,9 @@ interface SessionPlacement {
  *   2. `resolvePlacement()` (issue #1723) — the policy's choice, for an
  *      "auto" project. It never fails: with no eligible host it falls back
  *      to the project's own host, which is where the session would have gone
- *      anyway.
+ *      anyway. The one exception is a project whose `platform` flag (issue
+ *      #2241) leaves no host: that is refused (`no-target-host`), because the
+ *      project's own host may not satisfy the flag.
  *   3. The project's own host — a "pinned" project, or any project the
  *      policy short-circuits.
  *
