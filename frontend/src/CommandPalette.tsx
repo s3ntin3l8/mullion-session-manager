@@ -15,6 +15,7 @@ import {
   TerminalPromptIcon,
 } from "./ui/icons.js";
 import { resolveLauncherLogo } from "./cliLogos.js";
+import { resolveSkipPermissions } from "./launchers/skipPermissions.js";
 import { useCommandSearch } from "./hooks/useCommandSearch.js";
 import type { PaletteEntry } from "./hooks/useCommandSearch.js";
 import { buildPaletteCommands, searchPaletteCommands } from "./paletteCommands.js";
@@ -1024,18 +1025,7 @@ export function CommandPalette({
           showHostChip && hostChoice !== null && hostChoice !== AUTO_VALUE ? hostChoice : undefined,
         placement: showHostChip && hostChoice === AUTO_VALUE ? "auto" : undefined,
         model,
-        skipPermissions:
-          launcher.kind === "agent"
-            ? skipPermissionsOverride !== null
-              ? skipPermissionsOverride
-              : launcher.skipPermissions === true
-                ? true
-                : launcher.skipPermissions === false
-                  ? false
-                  : (settings.launchers.skipPermissionsAgents?.includes(
-                      normalizeAgentId(launcher.id),
-                    ) ?? false)
-            : undefined,
+        skipPermissions: resolveSkipPermissions(launcher, settings, skipPermissionsOverride),
       })
       .then((session) => {
         onLaunched(session);

@@ -1,4 +1,5 @@
 import { api } from "../api/index.js";
+import { resolveSkipPermissions } from "../launchers/skipPermissions.js";
 import { useDashboardStore } from "../store/index.js";
 
 /**
@@ -17,10 +18,9 @@ export async function openSessionOn(
     launchers.find((l) => l.id === `agent:${state.settings.launchers.defaultAgent}`) ??
     launchers[0];
   if (!launcher) throw new Error("No launcher is configured for this project.");
-  const session = await state.createSession(
-    projectId,
-    launcher.command,
-    "cwd" in target ? { cwd: target.cwd } : { worktree: { branch: target.branch } },
-  );
+  const session = await state.createSession(projectId, launcher.command, {
+    ...("cwd" in target ? { cwd: target.cwd } : { worktree: { branch: target.branch } }),
+    skipPermissions: resolveSkipPermissions(launcher, state.settings),
+  });
   state.requestOpenSession(session.id);
 }
