@@ -4253,6 +4253,11 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
       for (const row of hostRows) {
         const { task, session, project } = row;
 
+        // Every row here has a review session — the query inner-joins
+        // `sessions` on `tasks.reviewSessionId`. That matters: unlike the bare
+        // equality this replaced, `hasIngestedCurrentReview` is false for a
+        // task with no review session, so a row that slipped in without one
+        // (an outer join, a hand-built row) would fall through to ingestion.
         if (hasIngestedCurrentReview(task)) continue;
 
         const info = liveMap[String(session.id)];
@@ -4435,7 +4440,9 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           now,
           backend,
           resolvedTaskMaster,
-          latch: { reviewFindingsIngestedSessionId: task.reviewSessionId },
+          // The joined session IS `task.reviewSessionId` (see the query's
+          // inner join), which is what the ingest marker has to equal.
+          latchSessionId: session.id,
           cleanupFindingsFile: () =>
             unlinkFindingsFileIfPresent(app, backend, task.id, task.autoReturnRounds),
         });
@@ -4453,9 +4460,12 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
  * `parsed` is null when the reviewer produced nothing usable (the verdict is
  * then `inconclusive`, worded with `noFindingsReason`). `finished` says the
  * review ended deliberately — a finished turn, not a crash or a timeout — and
- * gates both auto-return paths. `latch` is the pair of columns that record
- * "this review's verdict is in". `cleanupFindingsFile` runs once the outcome
- * is durable, and also when a concurrent decision beat this write to it.
+ * gates both auto-return paths. `latchSessionId` is the review session this
+ * outcome belongs to — it must be the task's current `reviewSessionId`, since
+ * it becomes the ingest marker `hasIngestedCurrentReview` compares against
+ * (a mismatch would never latch, and every tick would ingest and comment
+ * again). `cleanupFindingsFile` runs once the outcome is durable, and also
+ * when a concurrent decision beat this write to it.
  */
 async function ingestReviewOutcome(
   app: FastifyInstance,
@@ -4468,7 +4478,7 @@ async function ingestReviewOutcome(
     now: number;
     backend: SessionBackend;
     resolvedTaskMaster: ReturnType<typeof resolveTaskMasterConfig>;
-    latch: Partial<typeof tasks.$inferInsert>;
+    latchSessionId: number;
     cleanupFindingsFile: () => Promise<void>;
   },
 ): Promise<void> {
@@ -4481,7 +4491,7 @@ async function ingestReviewOutcome(
     now,
     backend,
     resolvedTaskMaster,
-    latch,
+    latchSessionId,
     cleanupFindingsFile,
   } = input;
   // A suggestions round spends no round, so a re-review after one (the
@@ -4637,7 +4647,7 @@ async function ingestReviewOutcome(
     .update(tasks)
     .set({
       reviewFindings: appendedFindings,
-      ...latch,
+      reviewFindingsIngestedSessionId: latchSessionId,
       lastReviewVerdict: verdict,
       // A fresh review of the current head supersedes any carried
       // approval — the verdict above is now earned, not inherited.
