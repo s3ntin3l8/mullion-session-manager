@@ -934,9 +934,14 @@ export function CommandPalette({
     () => (target ? buildHostTargetOptions(target, hosts) : []),
     [target, hosts],
   );
-  const showHostChip = target !== null && projectHostCount(target, []) > 1;
-  const hostChoice = target ? resolveHostChoice(rememberedHosts[String(target.id)], target) : null;
-  const placedElsewhere = showHostChip && hostChoice !== null;
+  const showHostChip = target !== null && projectHostCount(target, sessions) > 1;
+  const hostChoice = target
+    ? resolveHostChoice(rememberedHosts[String(target.id)], target, hosts)
+    : null;
+  // "Elsewhere" = a base ref from this host's branches is not safe: another
+  // host, or Auto. The project's own host (explicit, on an auto project) is not.
+  const placedElsewhere =
+    showHostChip && hostChoice !== null && (target === null || hostChoice !== target.hostId);
   useEffect(() => {
     if (!showHostChip || hostChoice !== AUTO_VALUE || effectiveProjectId === null) return;
     let cancelled = false;
@@ -955,8 +960,8 @@ export function CommandPalette({
   const onHostChange = (value: string) => {
     if (!target) return;
     const next = { ...rememberedHosts };
-    if (value === OWN_HOST_VALUE) delete next[String(target.id)];
-    else next[String(target.id)] = value;
+    if (value === OWN_HOST_VALUE && target.placement !== "auto") delete next[String(target.id)];
+    else next[String(target.id)] = value === OWN_HOST_VALUE ? target.hostId : value;
     setRememberedHosts(next);
     writeJSON(STORAGE_KEYS.lastLaunchHostByProject, next);
   };
@@ -1016,8 +1021,8 @@ export function CommandPalette({
             : undefined,
         isolate: worktreeEnabled && placedElsewhere ? true : undefined,
         targetHostId:
-          placedElsewhere && hostChoice !== AUTO_VALUE ? (hostChoice ?? undefined) : undefined,
-        placement: placedElsewhere && hostChoice === AUTO_VALUE ? "auto" : undefined,
+          showHostChip && hostChoice !== null && hostChoice !== AUTO_VALUE ? hostChoice : undefined,
+        placement: showHostChip && hostChoice === AUTO_VALUE ? "auto" : undefined,
         model,
         skipPermissions:
           launcher.kind === "agent"
@@ -1250,7 +1255,11 @@ export function CommandPalette({
                   <Dropdown
                     small
                     ariaLabel="Target host"
-                    value={hostChoice ?? OWN_HOST_VALUE}
+                    value={
+                      hostChoice === null || hostChoice === target?.hostId
+                        ? OWN_HOST_VALUE
+                        : hostChoice
+                    }
                     onChange={onHostChange}
                     options={hostOptions}
                   />

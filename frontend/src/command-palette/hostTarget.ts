@@ -59,17 +59,26 @@ export function buildHostTargetOptions(
 }
 
 /**
- * Whether a remembered choice still means something for this project: Auto
- * always does; a host only while the project still has a path on it. Anything
- * else falls back to the default (null).
+ * The effective choice for a project. Nothing remembered means the project's
+ * own host for a pinned project, but Auto for a project stored as `auto`: the
+ * server applies the stored mode to a launch that names nothing, so the chip
+ * must say so rather than claim "this server". Picking the own host of an auto
+ * project is remembered as that host id and sent as an explicit target.
+ *
+ * A remembered choice that no longer means anything falls back to that default:
+ * a host the project has left, or one that is now offline/parked.
  */
 export function resolveHostChoice(
   remembered: string | undefined,
-  project: { hostId: string; hostCwds?: Record<string, string> | null },
+  project: { hostId: string; placement?: string; hostCwds?: Record<string, string> | null },
+  hosts: readonly Host[] = [],
 ): HostChoice {
-  if (remembered === undefined || remembered === project.hostId) return null;
+  const fallback: HostChoice = project.placement === "auto" ? AUTO_VALUE : null;
+  if (remembered === undefined) return fallback;
   if (remembered === AUTO_VALUE) return AUTO_VALUE;
-  return Object.hasOwn(project.hostCwds ?? {}, remembered) ? remembered : null;
+  if (remembered === project.hostId) return project.placement === "auto" ? remembered : null;
+  if (!Object.hasOwn(project.hostCwds ?? {}, remembered)) return fallback;
+  return unavailableState(hosts.find((h) => h.id === remembered)) === null ? remembered : fallback;
 }
 
 /** The "chosen host, reason, excluded" lines under the chip for Auto. */

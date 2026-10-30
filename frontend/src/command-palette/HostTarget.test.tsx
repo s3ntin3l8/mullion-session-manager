@@ -17,6 +17,7 @@ const LAUNCHER: Launcher = { id: "agent:bash", kind: "shell", title: "bash", com
 const MAC = makeHost({ id: "mac", name: "Mac mini", health: "online" });
 const OFFLINE = makeHost({ id: "gone", name: "Old box", health: "offline" });
 const PARKED = makeHost({ id: "parked", name: "Parked box", health: "online", drained: true });
+const OFFLINE_MAC = makeHost({ id: "mac", name: "Mac mini", health: "offline" });
 const MULTI = makeProject({
   id: 5,
   hostId: "local",
@@ -90,6 +91,26 @@ describe("CommandPalette -> launcher host target (#2237)", () => {
     vi.unstubAllGlobals();
   });
 
+  it("an auto project defaults the chip to Auto and can still pick its own host", async () => {
+    const AUTO = makeProject({
+      id: 7,
+      name: "autop",
+      hostId: "local",
+      placement: "auto",
+      hostCwds: { mac: "/p" },
+    });
+    useDashboardStore.setState({ projects: [AUTO], hosts: [MAC] });
+    const user = userEvent.setup();
+    renderPalette(AUTO.id);
+    const select = (await screen.findByLabelText("Target host")) as HTMLSelectElement;
+    expect(select.value).toBe("auto");
+    await user.selectOptions(select, "__own__");
+    await user.click((await screen.findAllByText("bash"))[0]);
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).toMatchObject({ targetHostId: "local" });
+    expect(posted[0]).not.toHaveProperty("placement");
+  });
+
   it("shows no chip for a single-host project", async () => {
     renderPalette(SINGLE.id);
     await screen.findAllByText("bash");
@@ -145,7 +166,7 @@ describe("CommandPalette -> launcher host target (#2237)", () => {
     expect(posted[0]).not.toHaveProperty("targetHostId");
   });
 
-  it("remembers the choice per project and drops a host that left the project", async () => {
+  it("remembers the choice per project across a remount", async () => {
     const user = userEvent.setup();
     const first = renderPalette(MULTI.id);
     await user.selectOptions(await screen.findByLabelText("Target host"), "mac");
@@ -164,6 +185,12 @@ describe("hostTarget helpers", () => {
     expect(resolveHostChoice("mac", project)).toBe("mac");
     expect(resolveHostChoice("auto", project)).toBe("auto");
     expect(resolveHostChoice("removed", project)).toBeNull();
+    expect(resolveHostChoice("mac", project, [OFFLINE_MAC])).toBeNull();
+    // An auto project defaults to Auto; its own host is an explicit choice.
+    const auto = { ...project, placement: "auto" };
+    expect(resolveHostChoice(undefined, auto)).toBe("auto");
+    expect(resolveHostChoice("local", auto)).toBe("local");
+    expect(resolveHostChoice("removed", auto)).toBe("auto");
     expect(resolveHostChoice("local", project)).toBeNull();
     expect(resolveHostChoice(undefined, project)).toBeNull();
   });

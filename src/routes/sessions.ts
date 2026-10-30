@@ -732,7 +732,10 @@ export async function sessionsRoute(app: FastifyInstance) {
       if (
         body.kind === "dock" &&
         body.targetHostId === undefined &&
-        body.targetPlatform === undefined
+        body.targetPlatform === undefined &&
+        // Auto may move the session off this (busy) local host, so the
+        // loopback port probe would refuse a launch that never lands here.
+        body.placement === undefined
       ) {
         const conflict = await checkDockPortConflict(app, body.projectId, body.command);
         if (conflict) {
