@@ -331,12 +331,39 @@ each project records where it lives on the hosts it may be placed on:
 That map is `hostCwds` on the project. Set it in the **Edit project** dialog
 (the **Also lives on** rows, one per other host — leave a host's path empty if
 the project is not there) or over the API (`POST`/`PATCH /api/projects`; PATCH
-replaces the whole map). The checkout must already exist on that host — Mullion
-does not clone it. The
+replaces the whole map). The checkout has to exist on that host: either you
+made it, or Mullion cloned it (below). The
 project's **own** host is not in it — `projects.cwd` _is_ its path there, and
 `projects.hostId` is its host. A host with no entry in the map does not have
 the project, so it is never a candidate and the session stays where it
 would have been.
+
+**Cloning a checkout (`POST /internal/git-clone`).** Mullion can create the
+checkout itself on a host. There is **no separate checkout root**: the roots
+validator refuses anything that overlaps Mullion's own data, and a directory
+outside `PROJECTS_ROOTS` would be unreachable by the git and file routes. A clone
+goes into the host's **first `PROJECTS_ROOTS` entry** as `<root>/<repo-name>`.
+
+- The agent takes `{url, name, token?}`. `url` must be **https** (ssh remotes only
+  work where the user's keys are registered with the forge); `name` is a single
+  path segment. It answers `{ok: true, cwd, defaultBranch, reused}` or
+  `{ok: false, reason, detail}` with `reason` one of `auth`, `no-roots` (the host
+  has no roots), `unreachable` or `failed` (including a target that resolves
+  outside the roots).
+- **Idempotent.** If `<root>/<name>` is already a git repo whose normalised
+  `origin` matches, it is reused (`reused: true`). A different repo, a non-empty
+  non-git directory or a file moves on to `<name>-2`, `-3`, …; Mullion never
+  writes into a non-empty directory.
+- **Auth.** The primary resolves a **read** token for a github.com URL and sends it
+  in the signed request body (the channel `/internal/git-push` uses). The agent
+  hands it to git as `-c http.extraHeader=…` for that one command, strips it from
+  all output, and it is never written to `.git/config`.
+- An agent too old to have the route answers 404, which the primary reports as
+  "unsupported" (update the agent).
+
+This only adds the endpoint and the `managed` list on `hostCwdsMeta` (the hosts
+whose `hostCwds` entry is a Mullion-created clone; an operator re-mapping or
+clearing that host removes it). When a clone happens is a separate feature.
 
 **Detecting the checkout (#2090).** You do not have to find and type those paths.
 `GET /api/projects/:id/host-suggestions` asks every other host that is online and not

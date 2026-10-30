@@ -246,6 +246,7 @@ function commitAutoFill(
         hostCwdsMeta: serializeHostCwdsMeta({
           auto: [...new Set([...meta.auto, hostId])],
           declined: meta.declined,
+          managed: meta.managed,
         }),
       })
       .where(eq(projects.id, projectId))
@@ -291,6 +292,7 @@ export function attachHostCheckout(
         hostCwdsMeta: serializeHostCwdsMeta({
           auto: meta.auto.filter((h) => h !== hostId),
           declined: meta.declined.filter((h) => h !== hostId),
+          managed: meta.managed.filter((h) => h !== hostId),
         }),
       })
       .where(eq(projects.id, projectId))

@@ -18,7 +18,9 @@ import { getGitStatus, isGitRepo, type GitStatus } from "./git-status.js";
 import { listBranches, resolveDefaultBaseRef, resolveCommitSha } from "./git-refs.js";
 import type { GitBranchInfo } from "../shared/types.js";
 import { pushBranch, type PushResult } from "./git-push.js";
-import { parseGitRemote, type GitHubRepoRef } from "./git-remote.js";
+import { parseGitRemote, parseRemoteUrl, type GitHubRepoRef } from "./git-remote.js";
+import { cloneCheckout, type CloneResult } from "./git-clone.js";
+import { resolveGitHubToken } from "./github-integration.js";
 import { getFileDiff } from "./git-diff.js";
 import type { CommitDetail, CommitLogEntry } from "./git-log.js";
 import { commitWipChanges, type CommitWipChangesResult } from "./git-worktree.js";
@@ -216,6 +218,34 @@ export async function pushHostBranch(
     return { ok: true, value };
   }
   return viaRemote(app, hostId, (client) => client.resolvePushBranch(cwd, branch, token));
+}
+
+/**
+ * Clones `url` into `<first PROJECTS_ROOTS entry>/<name>` on `hostId` —
+ * `cloneCheckout` locally, `/internal/git-clone` remotely (a 404 `unsupported`
+ * means the agent predates the endpoint). For a github.com URL the primary
+ * resolves a read token (public repos clone without one) and sends it in the
+ * body, the same signed channel as `pushHostBranch`; it is never written to
+ * the clone's `.git/config`.
+ */
+export async function cloneHostCheckout(
+  app: FastifyInstance,
+  hostId: string,
+  opts: { url: string; name: string },
+): Promise<HostGitResult<CloneResult>> {
+  const repo = parseRemoteUrl(opts.url);
+  let token: string | undefined;
+  if (repo) {
+    try {
+      token = (await resolveGitHubToken(app, repo, "read")) ?? undefined;
+    } catch {
+      token = undefined;
+    }
+  }
+  if (hostId === LOCAL_HOST_ID) {
+    return { ok: true, value: await cloneCheckout(app, { ...opts, token }) };
+  }
+  return viaRemote(app, hostId, (client) => client.resolveGitClone(opts.url, opts.name, token));
 }
 
 /**

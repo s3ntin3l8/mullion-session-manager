@@ -39,7 +39,7 @@ describe("host checkout detection routes", () => {
     const all = (await app.inject({ method: "GET", url: "/api/projects" })).json() as Array<{
       id: number;
       hostCwds: Record<string, string>;
-      hostCwdsMeta: { auto: string[]; declined: string[] };
+      hostCwdsMeta: { auto: string[]; declined: string[]; managed: string[] };
     }>;
     return all.find((p) => p.id === projectId)!;
   }
@@ -137,7 +137,7 @@ describe("host checkout detection routes", () => {
       });
       const project = await listed();
       expect(project.hostCwds).toEqual({ [macId]: "/Users/x/app" });
-      expect(project.hostCwdsMeta).toEqual({ auto: [macId], declined: [] });
+      expect(project.hostCwdsMeta).toEqual({ auto: [macId], declined: [], managed: [] });
     });
 
     it("404s an unknown host", async () => {
@@ -153,7 +153,7 @@ describe("host checkout detection routes", () => {
     }
 
     it("a new project starts with an empty meta", async () => {
-      expect((await listed()).hostCwdsMeta).toEqual({ auto: [], declined: [] });
+      expect((await listed()).hostCwdsMeta).toEqual({ auto: [], declined: [], managed: [] });
     });
 
     it("saving a kept entry clears its auto flag", async () => {
@@ -166,7 +166,7 @@ describe("host checkout detection routes", () => {
       });
 
       expect(res.statusCode).toBe(200);
-      expect(res.json().hostCwdsMeta).toEqual({ auto: [], declined: [] });
+      expect(res.json().hostCwdsMeta).toEqual({ auto: [], declined: [], managed: [] });
     });
 
     it("removing an auto-filled entry declines the host, and auto-detect never re-adds it", async () => {
@@ -177,7 +177,7 @@ describe("host checkout detection routes", () => {
         url: `/api/projects/${projectId}`,
         payload: { hostCwds: {} },
       });
-      expect(patched.json().hostCwdsMeta).toEqual({ auto: [], declined: [macId] });
+      expect(patched.json().hostCwdsMeta).toEqual({ auto: [], declined: [macId], managed: [] });
 
       const again = await app.inject({
         method: "POST",
@@ -208,7 +208,7 @@ describe("host checkout detection routes", () => {
         payload: { hostCwds: { [macId]: "/Users/x/app" } },
       });
 
-      expect(res.json().hostCwdsMeta).toEqual({ auto: [], declined: [] });
+      expect(res.json().hostCwdsMeta).toEqual({ auto: [], declined: [], managed: [] });
     });
 
     it("a PATCH that does not carry hostCwds leaves the meta alone", async () => {
@@ -220,7 +220,7 @@ describe("host checkout detection routes", () => {
         payload: { name: "renamed" },
       });
 
-      expect(res.json().hostCwdsMeta).toEqual({ auto: [macId], declined: [] });
+      expect(res.json().hostCwdsMeta).toEqual({ auto: [macId], declined: [], managed: [] });
     });
   });
 });

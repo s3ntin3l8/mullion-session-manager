@@ -13,6 +13,9 @@ export const MAX_DECLINED_HOSTS = 64;
 export interface HostCwdsMeta {
   auto: string[];
   declined: string[];
+  /** Hosts whose `hostCwds` entry is a Mullion-created clone (written by the
+   * materialization step, not by the clone endpoint itself). */
+  managed: string[];
 }
 
 function strings(value: unknown): string[] {
@@ -22,23 +25,25 @@ function strings(value: unknown): string[] {
 
 /** Parses the stored column; anything unreadable is the empty meta. */
 export function parseHostCwdsMeta(raw: string | null | undefined): HostCwdsMeta {
-  if (!raw) return { auto: [], declined: [] };
+  if (!raw) return { auto: [], declined: [], managed: [] };
   try {
     const parsed = JSON.parse(raw) as unknown;
     if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
-      return { auto: [], declined: [] };
+      return { auto: [], declined: [], managed: [] };
     }
     const o = parsed as Record<string, unknown>;
-    return { auto: strings(o.auto), declined: strings(o.declined) };
+    return { auto: strings(o.auto), declined: strings(o.declined), managed: strings(o.managed) };
   } catch {
-    return { auto: [], declined: [] };
+    return { auto: [], declined: [], managed: [] };
   }
 }
 
-/** The column value for `meta`: null when both lists are empty. */
+/** The column value for `meta`: null when all three lists are empty. */
 export function serializeHostCwdsMeta(meta: HostCwdsMeta): string | null {
-  if (meta.auto.length === 0 && meta.declined.length === 0) return null;
-  return JSON.stringify({ auto: meta.auto, declined: meta.declined });
+  if (meta.auto.length === 0 && meta.declined.length === 0 && meta.managed.length === 0) {
+    return null;
+  }
+  return JSON.stringify({ auto: meta.auto, declined: meta.declined, managed: meta.managed });
 }
 
 /**
@@ -51,6 +56,9 @@ export function serializeHostCwdsMeta(meta: HostCwdsMeta): string | null {
  *   chose it.
  * - A decline for a host that no longer exists is dropped (`knownHostIds`), and
  *   the list is capped at MAX_DECLINED_HOSTS, so it cannot grow without bound.
+ * - `managed` keeps a host only while its entry still exists AND still holds
+ *   the same path: an operator re-mapping a host to another path means the
+ *   checkout is theirs now, not a Mullion-created clone.
  * - `auto` ends EMPTY: every entry is now operator-saved (so no longer
  *   "auto-detected"), and an auto-filled one that was removed is just gone.
  *
@@ -72,5 +80,8 @@ export function metaAfterOperatorSave(
   }
   for (const hostId of after) declined.delete(hostId);
   const kept = [...declined].filter((hostId) => !knownHostIds || knownHostIds.has(hostId));
-  return { auto: [], declined: kept.slice(-MAX_DECLINED_HOSTS) };
+  const managed = prev.managed.filter(
+    (hostId) => afterMap[hostId] !== undefined && afterMap[hostId] === beforeMap[hostId],
+  );
+  return { auto: [], declined: kept.slice(-MAX_DECLINED_HOSTS), managed };
 }

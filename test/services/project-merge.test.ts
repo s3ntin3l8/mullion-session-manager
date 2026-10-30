@@ -169,7 +169,7 @@ describe("project-merge", () => {
       expect(merge().ok).toBe(true);
       const s = app.db.select().from(projects).where(eq(projects.id, survivorId)).get()!;
       expect(parseHostCwds(s.hostCwds)[macId]).toBe(dupCwd);
-      expect(parseHostCwdsMeta(s.hostCwdsMeta)).toEqual({ auto: [], declined: [] });
+      expect(parseHostCwdsMeta(s.hostCwdsMeta)).toEqual({ auto: [], declined: [], managed: [] });
       expect(app.db.select().from(projects).where(eq(projects.id, dupId)).get()).toBeUndefined();
     });
 

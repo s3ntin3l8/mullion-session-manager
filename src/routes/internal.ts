@@ -131,6 +131,7 @@ import { runGitPull } from "../services/git-pull.js";
 import { checkoutBranch, createBranch, rebaseBranch } from "../services/git-branch-ops.js";
 import type { GitBranchOpResult } from "../services/git-branch-ops.js";
 import { pushBranch } from "../services/git-push.js";
+import { cloneCheckout } from "../services/git-clone.js";
 import { compileOutputMatcher, waitForOutput } from "../services/output-wait.js";
 import {
   effectiveProjectsRoots,
@@ -223,6 +224,7 @@ import {
   gitBranchCreateSchema,
   gitRebaseSchema,
   gitPushSchema,
+  gitCloneSchema,
   gitRepairSchema,
   gitWorktreeResumeSchema,
   readFilesSchema,
@@ -262,6 +264,7 @@ import type {
   GitBranchCreateBody,
   GitRebaseBody,
   GitPushBody,
+  GitCloneBody,
   GitRepairBody,
   GitWorktreeResumeBody,
   ReadFilesBody,
@@ -302,6 +305,11 @@ const INTERNAL_RATE_LIMIT = { config: { rateLimit: { max: 1000, timeWindow: "1 m
 // instead of INTERNAL_RATE_LIMIT's 1000/min: a person edits this a few times,
 // never in a loop.
 const PROJECTS_ROOTS_RATE_LIMIT = { config: { rateLimit: { max: 5, timeWindow: "1 minute" } } };
+
+// A clone is the heaviest thing an agent runs on request (up to 10 minutes of
+// git over the network and a directory it creates), so it gets a tight limit
+// like PROJECTS_ROOTS_RATE_LIMIT rather than INTERNAL_RATE_LIMIT's 1000/min.
+const GIT_CLONE_RATE_LIMIT = { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } };
 
 const GENERATION_TURN_RATE_LIMIT = { config: { rateLimit: { max: 5, timeWindow: "10 minutes" } } };
 
@@ -1682,6 +1690,16 @@ export async function internalRoutes(app: FastifyInstance) {
       if (resolvedCwd === null) return;
       return await pushBranch(resolvedCwd, branch, token);
     },
+  );
+
+  // Mullion-owned checkout: clones into this agent's first PROJECTS_ROOTS
+  // entry (git-clone.ts). The target is derived from the validated `name`
+  // and checked against the roots there, so no `cwd` crosses the wire. The
+  // token is never logged and git-run.ts's redact() strips it from `detail`.
+  app.post<{ Body: GitCloneBody }>(
+    "/internal/git-clone",
+    { ...GIT_CLONE_RATE_LIMIT, schema: gitCloneSchema },
+    async (request) => cloneCheckout(app, request.body),
   );
 
   // Issue #895 — reads `paths`' current content directly off this agent's
