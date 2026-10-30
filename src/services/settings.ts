@@ -566,6 +566,16 @@ export interface AppSettings {
      * is refused.
      */
     reReviewAfterApproval: "refuse" | "allow";
+    /**
+     * Whether Task Master may use this Hermes connection as a review agent
+     * (`hermes` as a task's, project's or install-wide default review agent,
+     * #2369). Independent of `provider`, which turns on the GitHub-side relay
+     * (`mullion review`) — a Task Master review is dispatched by Mullion and
+     * ingested by it, with nothing posted to GitHub by Hermes. Off by default;
+     * it also needs `apiUrl` and the stored key to count as usable
+     * (`hermesTaskReviewerUsable`).
+     */
+    taskMasterReviewer: boolean;
   };
   /**
    * The Runway quota integration (issue #29).
@@ -785,6 +795,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     reviewerBotLogin: "s3ntin3l8-hermes[bot]",
     ledgerName: "Hermes review",
     reReviewAfterApproval: "refuse",
+    taskMasterReviewer: false,
   },
   runway: {
     apiUrl: "",
@@ -1469,6 +1480,9 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
         .slice(0, 100),
       reReviewAfterApproval:
         settings.reviewRelay.reReviewAfterApproval === "allow" ? "allow" : "refuse",
+      // Only a literal `true` enables it — the object is rebuilt field by
+      // field above, so a field not named here would be dropped on every read.
+      taskMasterReviewer: settings.reviewRelay.taskMasterReviewer === true,
     },
     runway: {
       apiUrl: safeString(settings.runway.apiUrl, DEFAULT_SETTINGS.runway.apiUrl),

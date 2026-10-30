@@ -2683,6 +2683,13 @@ export interface AppSettings {
      * round) or "allow" (re-review every new head). `force` bypasses it.
      */
     reReviewAfterApproval: "refuse" | "allow";
+    /**
+     * Whether Task Master may use this Hermes connection as a review agent
+     * (`hermes` as a task's, project's or install-wide default review agent).
+     * Independent of `provider`, which turns on the GitHub-side relay. It also
+     * needs the API URL and key to count as usable.
+     */
+    taskMasterReviewer: boolean;
   };
   /**
    * The Runway quota integration (issue #29) — the non-secret half. The
