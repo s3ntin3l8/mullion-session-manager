@@ -1080,9 +1080,8 @@ export function resolveTargetHost(
 
   // Issue #2306 — a capability is a requirement: always applied, even to a
   // Task Master directive (which overrides only the platform flag).
-  const requiredCapabilities = parsePlacementConstraints(
-    opts.project.placementConstraints,
-  ).capabilities;
+  const constraints = parsePlacementConstraints(opts.project.placementConstraints);
+  const requiredCapabilities = constraints.capabilities;
 
   let collected: CollectedCandidates;
   try {
@@ -1099,9 +1098,7 @@ export function resolveTargetHost(
 
   const wantedPlatform = opts.target.platform?.toLowerCase();
   const wantedHost = "hostId" in opts.target ? opts.target.hostId : null;
-  const flagPlatforms = opts.checkProjectFlags
-    ? parsePlacementConstraints(opts.project.placementConstraints).platform
-    : [];
+  const flagPlatforms = opts.checkProjectFlags ? constraints.platform : [];
   const targeted = collected.candidates.filter(
     (candidate) =>
       (wantedHost === null || candidate.hostId === wantedHost) &&

@@ -876,7 +876,7 @@ export function CreateProjectModal({
           </label>
           <span className="create-modal-field-hint">
             Burst hosts (laptops that are not always on) stay out of Auto and unattended Task Master
-            unless this is on. A task's Platform:/Host: line overrides these flags.
+            unless this is on. A task's Platform:/Host: line overrides the platform and burst flags.
           </span>
           {PLACEMENT_CAPABILITIES.map((c) => (
             <label key={c} className="create-modal-dir-confirm-checkbox">
@@ -895,8 +895,10 @@ export function CreateProjectModal({
             </label>
           ))}
           <span className="create-modal-field-hint">
-            A host that lacks a needed capability is never used, even for a task's Platform:/Host:
-            line. A host that has not reported its capabilities is still tried.
+            A host known to lack a needed capability is never used for a targeted launch or a task's
+            Platform:/Host: line
+            {placement === "auto" ? ", nor by automatic placement" : ""}. A host that has not
+            reported its capabilities is still tried.
           </span>
         </fieldset>
       )}
