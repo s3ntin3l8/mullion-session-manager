@@ -155,3 +155,41 @@ describe("persisted Issues UI state", () => {
     expect(ui[2]).toBeUndefined();
   });
 });
+
+describe("refreshGithubProject", () => {
+  beforeEach(() => {
+    __resetGithubCacheForTests();
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("marks only that project's cache stale, drops its in-flight requests, bumps the trigger and refreshes git refs", async () => {
+    const refreshGitRefs = vi.fn().mockResolvedValue(undefined);
+    useDashboardStore.setState({ refreshGitRefs, prsRefreshTriggerByProject: { 1: 4 } });
+    await fetchCached("1:prs", () => Promise.resolve("a"));
+    await fetchCached("1:pr:7", () => Promise.resolve("detail"));
+    await fetchCached("2:prs", () => Promise.resolve("b"));
+    const staleResult = new Promise<string>((resolve) => setTimeout(() => resolve("old"), 1000));
+    void fetchCached("1:status", () => staleResult, true);
+
+    useDashboardStore.getState().refreshGithubProject(1);
+
+    const cache = useDashboardStore.getState().githubCache;
+    expect(cache["1:prs"]?.fetchedAt).toBe(0);
+    expect(cache["1:pr:7"]?.fetchedAt).toBe(0);
+    expect(cache["2:prs"]?.fetchedAt).toBeGreaterThan(0);
+    expect(useDashboardStore.getState().prsRefreshTriggerByProject[1]).toBe(5);
+    expect(useDashboardStore.getState().prsRefreshTriggerByProject[2]).toBeUndefined();
+
+    // The pre-refresh request's late response is dropped, not cached.
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(useDashboardStore.getState().githubCache["1:status"]).toBeUndefined();
+
+    // refreshGitRefs is debounced and scoped to the project.
+    expect(refreshGitRefs).toHaveBeenCalledTimes(1);
+    expect(refreshGitRefs).toHaveBeenCalledWith([1]);
+  });
+});

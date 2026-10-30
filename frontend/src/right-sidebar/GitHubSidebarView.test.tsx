@@ -80,6 +80,15 @@ const renderView = (projectId = 4) =>
   render(<GitHubSidebarView projectId={projectId} actions={actions} />);
 
 describe("GitHubSidebarView", () => {
+  it("toolbar Refresh button calls refreshGithubProject for the selected project", async () => {
+    const refresh = vi.fn();
+    useDashboardStore.setState({ refreshGithubProject: refresh });
+    renderView(4);
+    await screen.findByText("PR title 1");
+    await userEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    expect(refresh).toHaveBeenCalledWith(4);
+  });
+
   it("embeds the real GitHub panel: repo, PR cards and issues", async () => {
     const { container } = renderView();
 
