@@ -316,6 +316,9 @@ export interface GithubSlice {
   githubFetch: <T>(key: string, fetcher: () => Promise<T>, force?: boolean) => Promise<T>;
   // Warm the cache for a project's panel (status, PRs, first issues page).
   prefetchGithubProject: (projectId: number) => void;
+  // Drop a project's in-flight requests, mark its cache stale and bump its
+  // refresh trigger. The WS handler and the sidebar Refresh button share it.
+  refreshGithubProject: (projectId: number) => void;
   // Warm one PR's detail (PR row hover).
   prefetchGithubPr: (projectId: number, number: number) => void;
   // The Issues view's filters/paging and open issue, kept across drill-in/back.

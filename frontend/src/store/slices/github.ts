@@ -140,6 +140,54 @@ export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice
         },
       })),
 
+    refreshGithubProject: (projectId: number) => {
+      // Requests already in flight predate this refresh: unregister them so
+      // their (pre-refresh) responses are dropped, and the views'
+      // revalidation below starts a fresh fetch.
+      const prefix = `${projectId}:`;
+      for (const key of [...inFlight.keys()]) {
+        if (key.startsWith(prefix)) inFlight.delete(key);
+      }
+      // Scoped to one project, and its cached entries are marked stale so
+      // every mounted view (list, release status, open PR/issue detail)
+      // revalidates.
+      set((state) => {
+        const githubCache: Record<string, GithubCacheEntry> = {};
+        for (const [key, entry] of Object.entries(state.githubCache)) {
+          githubCache[key] = key.startsWith(prefix) ? { ...entry, fetchedAt: 0 } : entry;
+        }
+        return {
+          githubCache,
+          prsRefreshTriggerByProject: {
+            ...state.prsRefreshTriggerByProject,
+            [projectId]: (state.prsRefreshTriggerByProject[projectId] ?? 0) + 1,
+          },
+        };
+      });
+      // prsRefreshTrigger alone only reaches GitHubPanel (its own
+      // effect dependency) — prsByProject itself, which every OTHER
+      // consumer (Sidebar's SessionRow, UnifiedBoard's TaskCard,
+      // TaskDetail) reads directly, stays on refreshGitRefs' own
+      // ~60s throttle otherwise. Refreshing it here too means a real
+      // GitHub push (a check completing, a new PR) reaches every
+      // consumer within one WS round trip, not up to a minute later.
+      // Debounced (not called directly) — refreshGitRefs itself has
+      // no time throttle of its own, only in-flight dedup, so a check
+      // suite's burst of started/completed events would otherwise
+      // fire one refetch per event. Scoped to the project ids seen
+      // since the last fire (see gitRefsEventProjectIds' own doc
+      // comment above) — an event about one project's CI run has no
+      // reason to refetch every OTHER project too.
+      gitRefsEventProjectIds.add(projectId);
+      if (gitRefsEventRefreshTimer) clearTimeout(gitRefsEventRefreshTimer);
+      gitRefsEventRefreshTimer = setTimeout(() => {
+        gitRefsEventRefreshTimer = null;
+        const projectIds = Array.from(gitRefsEventProjectIds);
+        gitRefsEventProjectIds = new Set();
+        void get().refreshGitRefs(projectIds);
+      }, GIT_REFS_EVENT_REFRESH_DEBOUNCE_MS);
+    },
+
     githubWSConnected: false,
 
     connectGitHubWS: () => {
@@ -179,50 +227,7 @@ export const createGithubSlice: StateCreator<DashboardState, [], [], GithubSlice
           const data = JSON.parse(event.data as string) as GitHubWSEvent;
           if (data.projectId != null) {
             const projectId = Number(data.projectId);
-            // Requests already in flight predate this event: unregister them
-            // so their (pre-event) responses are dropped, and the views'
-            // revalidation below starts a fresh fetch.
-            for (const key of [...inFlight.keys()]) {
-              if (key.startsWith(`${projectId}:`)) inFlight.delete(key);
-            }
-            // Scoped to the project whose event fired, and its cached
-            // entries are marked stale so every mounted view revalidates.
-            set((state) => {
-              const prefix = `${projectId}:`;
-              const githubCache: Record<string, GithubCacheEntry> = {};
-              for (const [key, entry] of Object.entries(state.githubCache)) {
-                githubCache[key] = key.startsWith(prefix) ? { ...entry, fetchedAt: 0 } : entry;
-              }
-              return {
-                githubCache,
-                prsRefreshTriggerByProject: {
-                  ...state.prsRefreshTriggerByProject,
-                  [projectId]: (state.prsRefreshTriggerByProject[projectId] ?? 0) + 1,
-                },
-              };
-            });
-            // prsRefreshTrigger alone only reaches GitHubPanel (its own
-            // effect dependency) — prsByProject itself, which every OTHER
-            // consumer (Sidebar's SessionRow, UnifiedBoard's TaskCard,
-            // TaskDetail) reads directly, stays on refreshGitRefs' own
-            // ~60s throttle otherwise. Refreshing it here too means a real
-            // GitHub push (a check completing, a new PR) reaches every
-            // consumer within one WS round trip, not up to a minute later.
-            // Debounced (not called directly) — refreshGitRefs itself has
-            // no time throttle of its own, only in-flight dedup, so a check
-            // suite's burst of started/completed events would otherwise
-            // fire one refetch per event. Scoped to the project ids seen
-            // since the last fire (see gitRefsEventProjectIds' own doc
-            // comment above) — an event about one project's CI run has no
-            // reason to refetch every OTHER project too.
-            gitRefsEventProjectIds.add(projectId);
-            if (gitRefsEventRefreshTimer) clearTimeout(gitRefsEventRefreshTimer);
-            gitRefsEventRefreshTimer = setTimeout(() => {
-              gitRefsEventRefreshTimer = null;
-              const projectIds = Array.from(gitRefsEventProjectIds);
-              gitRefsEventProjectIds = new Set();
-              void get().refreshGitRefs(projectIds);
-            }, GIT_REFS_EVENT_REFRESH_DEBOUNCE_MS);
+            get().refreshGithubProject(projectId);
           }
         } catch (err) {
           console.warn("[GitHubWS] failed to parse message:", err);

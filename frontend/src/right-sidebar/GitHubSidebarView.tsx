@@ -2,7 +2,8 @@ import { useState } from "react";
 import { GitHubPanel } from "../GitHubPanel.js";
 import { SidebarToolbar } from "./SidebarToolbar.js";
 import { TaskMasterSection } from "./TaskMasterSection.js";
-import { DockIcon, GitHubIcon } from "../ui/icons.js";
+import { useDashboardStore } from "../store/index.js";
+import { DockIcon, GitHubIcon, RefreshIcon } from "../ui/icons.js";
 import { ExternalLinkOwnedContext } from "../ui/sidebar/index.js";
 import type { RightSidebarViewProps } from "./views.js";
 
@@ -23,6 +24,12 @@ export function GitHubSidebarView({ projectId, actions }: RightSidebarViewProps)
             onClick: () => {
               if (link) window.open(link.url, "_blank", "noopener,noreferrer");
             },
+          },
+          {
+            key: "refresh",
+            label: "Refresh",
+            icon: RefreshIcon,
+            onClick: () => useDashboardStore.getState().refreshGithubProject(projectId),
           },
           {
             key: "open-panel",
