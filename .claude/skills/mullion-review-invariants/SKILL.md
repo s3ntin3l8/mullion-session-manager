@@ -18,7 +18,7 @@ each adapter's own `commandTransform` (Claude Code's appends `--settings`/
 `--mcp-config`/`--plugin-dir`; Codex's and agy's append their own MCP/model
 flags the same way) inspects and rewrites the launch command at spawn time.
 Alongside that, a narrow set of helpers inspects `session.command` from
-outside the adapters: `commandIsOpencode`/`commandModelCli`
+outside the adapters: `commandIsOpencode`/`commandModelCli`/`commandAgentBin`
 (`hook-adapters/index.ts`) and `buildModelFlag` (`hook-adapters/shared.ts`),
 plus `validateModel`/`validateCliModel` (`services/task-model-resolve.ts`)
 `commandSupportsSeed` (`services/task-agent-resolve.ts`), and

@@ -6,7 +6,11 @@ import { sql } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts } from "../../src/db/schema.js";
-import { previewPlacement, resolvePlacement } from "../../src/services/placement.js";
+import {
+  previewPlacement,
+  resolvePlacement,
+  resolveTargetHost,
+} from "../../src/services/placement.js";
 import * as listHostsModule from "../../src/services/host-registry.js";
 import type { HostCapacity } from "../../src/services/host-capacity.js";
 
@@ -267,6 +271,7 @@ describe("previewPlacement — the same decision, announced to nobody (issue #17
     // deleted NOTHING and the per-test cleanup never happened.
     app.db.delete(hosts).where(sql.raw("id != 'local'")).run();
     app.hostCapacityTracker?.pruneMissing(new Set());
+    app.hostAgentTracker?.pruneMissing(new Set());
   });
 
   async function registerHost(name: string): Promise<string> {
@@ -363,6 +368,52 @@ describe("previewPlacement — the same decision, announced to nobody (issue #17
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it("excludes a host known to lack the launch's CLI, and fails open on an unknown list (#2240)", async () => {
+    const lacking = await registerHost("no-codex");
+    const unknown = await registerHost("not-fetched");
+    for (const id of [lacking, unknown]) {
+      app.hostHeartbeatTracker?.recordSuccess(id);
+      app.hostCapacityTracker?.record(id, capacity(0.1, 8));
+    }
+    app.hostAgentTracker?.record(lacking, { agents: ["claude"], mullionVersion: "0.1.0" });
+    // The primary's own list is read on demand (a real login-shell probe);
+    // record it so this test never launches one.
+    app.hostAgentTracker?.record("local", { agents: [], mullionVersion: null });
+    const project = {
+      hostId: "remote-x",
+      placement: "auto" as const,
+      hostCwds: JSON.stringify({ [lacking]: REMOTE_CWD, [unknown]: REMOTE_CWD }),
+    };
+
+    const decision = previewPlacement(app, { project, requiredAgent: "codex" });
+    expect(decision.excluded).toContainEqual({
+      hostId: lacking,
+      reason: "no codex CLI on this host",
+    });
+    expect(decision.considered.map((c) => c.hostId)).toContain(unknown);
+    expect(decision.hostId).toBe(unknown);
+    expect(decision.reason).toContain("agent list unknown");
+
+    // No required CLI: the same host is a candidate again.
+    const unfiltered = previewPlacement(app, { project });
+    expect(unfiltered.considered.map((c) => c.hostId)).toContain(lacking);
+
+    // A NAMED host known to lack the CLI is refused for good (not held: it
+    // never gains the CLI by waiting), and the refusal says which CLI.
+    const refused = resolveTargetHost(app, {
+      project,
+      target: { hostId: lacking },
+      unattended: true,
+      requiredAgent: "codex",
+    });
+    expect(refused).toMatchObject({ ok: false, transient: false });
+    expect(refused.ok === false && refused.detail).toContain("a matching host has no codex CLI");
+    // Without the requirement the same target places fine.
+    expect(
+      resolveTargetHost(app, { project, target: { hostId: lacking }, unattended: true }).ok,
+    ).toBe(true);
   });
 
   it("answers for a project that does not exist yet (the create modal's preview)", async () => {

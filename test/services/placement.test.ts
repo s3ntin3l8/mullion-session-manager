@@ -465,3 +465,65 @@ describe("excluded hosts and host roles (issue #2239)", () => {
     expect(chooseHost([candidate()], context()).hostId).toBe("remote-a");
   });
 });
+
+describe("required agent CLI (issue #2240)", () => {
+  it("excludes a host KNOWN to lack the CLI, naming the CLI", () => {
+    const decision = chooseHost(
+      [
+        candidate({ hostId: "a", agents: ["codex"], capacity: capacity(0, 8) }),
+        candidate({ hostId: "b", agents: ["claude"], capacity: capacity(4, 8) }),
+      ],
+      context({ requiredAgent: "claude" }),
+    );
+    expect(decision.hostId).toBe("b");
+    expect(decision.excluded).toEqual([{ hostId: "a", reason: "no claude CLI on this host" }]);
+    expect(decision.reason).not.toContain("agent list unknown");
+  });
+
+  it("fails OPEN on an unknown list and says so in the reason", () => {
+    for (const agents of [null, undefined]) {
+      const decision = chooseHost(
+        [candidate({ hostId: "a", agents })],
+        context({ requiredAgent: "claude" }),
+      );
+      expect(decision.hostId).toBe("a");
+      expect(decision.excluded).toEqual([]);
+      expect(decision.reason).toContain("agent list unknown");
+    }
+  });
+
+  it("requires every CLI when given several (worker and reviewer)", () => {
+    const decision = chooseHost(
+      [
+        candidate({ hostId: "a", agents: ["claude"], capacity: capacity(0, 8) }),
+        candidate({ hostId: "b", agents: ["claude", "codex"], capacity: capacity(4, 8) }),
+      ],
+      context({ requiredAgent: ["claude", "codex"] }),
+    );
+    expect(decision.hostId).toBe("b");
+    expect(decision.excluded).toEqual([{ hostId: "a", reason: "no codex CLI on this host" }]);
+  });
+
+  it("applies no filter without a required CLI, and falls back when every host lacks it", () => {
+    const hosts = [candidate({ hostId: "a", agents: [] })];
+    expect(chooseHost(hosts, context()).hostId).toBe("a");
+    const none = chooseHost(hosts, context({ requiredAgent: "claude" }));
+    expect(none.fellBack).toBe(true);
+    expect(none.hostId).toBe("local");
+  });
+
+  it("flags a chosen agent older than the primary, and nothing else", () => {
+    const old = chooseHost(
+      [candidate({ mullionVersion: "0.3.40" })],
+      context({ primaryVersion: "0.3.50" }),
+    );
+    expect(old.reason).toContain("(agent v0.3.40, older than the primary)");
+    for (const v of ["0.3.50", "0.4.0", null]) {
+      const ok = chooseHost(
+        [candidate({ mullionVersion: v })],
+        context({ primaryVersion: "0.3.50" }),
+      );
+      expect(ok.reason).not.toContain("older than the primary");
+    }
+  });
+});

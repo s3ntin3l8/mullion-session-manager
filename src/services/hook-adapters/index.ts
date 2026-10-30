@@ -228,6 +228,22 @@ export function commandModelCli(command: string): ModelInjectingCli | null {
 }
 
 /**
+ * The CLI binary (a `KNOWN_AGENTS` entry — `claude`, not `claude-code`) that
+ * `command` launches, so placement can ask whether a host has it installed.
+ * `null` for a shell, a KNOWN_AGENTS binary with no adapter (gemini, pi) and
+ * anything unmatched: no CLI to require. Pure lookup, no I/O.
+ */
+export function commandAgentBin(command: string): string | null {
+  const adapter = ADAPTERS.find((candidate) => candidate.matches(command));
+  if (adapter === claudeCodeAdapter) return "claude";
+  if (adapter === openCodeAdapter) return "opencode";
+  if (adapter === codexAdapter) return "codex";
+  if (adapter === agyAdapter) return "agy";
+  if (adapter === mcodeAdapter) return "mcode";
+  return null;
+}
+
+/**
  * Finds the first adapter matching `command`, runs its launch plan's I/O
  * side effects (settings-file writes, managed installs), and returns the
  * possibly-transformed command plus any env additions. Deliberately

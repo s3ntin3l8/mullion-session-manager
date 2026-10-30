@@ -38,6 +38,7 @@ import { deriveTaskBranchName, deriveWorktreePath } from "./git-worktree.js";
 import { CONCURRENCY_CAPPED_STATUSES, recordTaskTransition } from "./task-state.js";
 import {
   resolveAgentCommand,
+  resolveReviewAgentCommand,
   commandSupportsSeed,
   resolveSeedDelivered,
 } from "./task-agent-resolve.js";
@@ -47,7 +48,7 @@ import {
   resolveOpenCodeModel,
   resolveOpenCodeSmallModel,
 } from "./task-model-resolve.js";
-import { commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
+import { commandAgentBin, commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 import { broadcastTaskEvent } from "./task-events.js";
 import { buildWorkerPrompt, taskCommitTitlePath } from "./task-prompt.js";
@@ -477,6 +478,17 @@ export async function dispatchClaimedTask(
     return { ok: false, reason: "placement-held", detail };
   }
 
+  // Issue #2240 — the worker's CLI AND the reviewer's must both be on the host
+  // the task lands on (the reviewer reads the worker's worktree).
+  const reviewCommand = resolveReviewAgentCommand(app, {
+    taskReviewAgent: task.reviewAgent,
+    issueBody: task.body,
+    projectDefaultReviewAgent: project.defaultReviewAgent,
+  });
+  const requiredAgent = [command, reviewCommand]
+    .map((c) => (c === null ? null : commandAgentBin(c)))
+    .filter((bin, i, all): bin is string => bin !== null && all.indexOf(bin) === i);
+
   let placement: PlacementDecision;
   if (requirement !== null) {
     const targeted = resolveTargetHost(app, {
@@ -484,6 +496,7 @@ export async function dispatchClaimedTask(
       target: requirement,
       unattended: true,
       requestedBy: "the task's requirement",
+      requiredAgent,
     });
     if (!targeted.ok && targeted.transient) {
       const requires = `this task requires ${describeTarget(requirement)} (from ${describeRequirementSource(requirement)})`;
@@ -499,7 +512,8 @@ export async function dispatchClaimedTask(
         `this task requires ${describeTarget(requirement)} (from ${describeRequirementSource(requirement)}), ` +
           "but no eligible host matches: a host " +
           "has to be online, not parked, report its capacity, and have a path for this project " +
-          "(Edit project → Also lives on). Fix that, then move the task back to ready.",
+          `(Edit project → Also lives on), and have the agent CLIs the task needs. Placement said: ${targeted.detail}. ` +
+          "Fix that, then move the task back to ready.",
         null,
         // The failure came before any worktree was cut, so the branch and
         // path stamped at claim time name nothing that exists; clearing them
@@ -509,7 +523,11 @@ export async function dispatchClaimedTask(
     }
     placement = targeted.decision;
   } else {
-    placement = resolvePlacement(app, { project: placementProject, unattended: true });
+    placement = resolvePlacement(app, {
+      project: placementProject,
+      unattended: true,
+      requiredAgent,
+    });
   }
   // Placement succeeded, so a hold recorded earlier (the host was not eligible)
   // no longer describes the task — it may now wait for a worker slot instead,

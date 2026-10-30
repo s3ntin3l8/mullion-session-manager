@@ -40,10 +40,14 @@ export const projectsApi = {
   // asks is "what would happen if this project were AUTO?" — usually NOT the
   // mode the project is stored as (turning the mode on is the point of the
   // control). Omit it and the server answers for the stored mode.
-  getPlacementPreview: (id: number, placement?: PlacementMode) =>
-    request<PlacementPreview>(
-      `/api/projects/${id}/placement-preview${placement ? `?placement=${placement}` : ""}`,
-    ),
+  getPlacementPreview: (id: number, placement?: PlacementMode, command?: string) => {
+    // Issue #2240 — `command` makes the preview exclude hosts without its CLI.
+    const params = new URLSearchParams();
+    if (placement) params.set("placement", placement);
+    if (command) params.set("command", command);
+    const qs = params.toString();
+    return request<PlacementPreview>(`/api/projects/${id}/placement-preview${qs ? `?${qs}` : ""}`);
+  },
 
   previewPlacement: (opts: { hostId: string; placement: PlacementMode }) =>
     request<PlacementPreview>("/api/projects/placement-preview", {

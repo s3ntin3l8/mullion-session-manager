@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { LOCAL_HOST_ID, listHosts } from "./host-registry.js";
 import { HostCapacityTracker } from "./host-capacity.js";
+import { HostAgentTracker, agentsTtlMs, refreshRemoteHostAgents } from "./host-agents.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
 import { resolveHeartbeatSeconds } from "./runtime-config.js";
 import { getStoredSettings } from "./settings.js";
@@ -212,6 +213,18 @@ async function sweepHost(
   if (!reachable) return { recovered: false, cameOnline: false };
   const cameOnline = wasPending || recovered;
 
+  // Issue #2240 — the agent CLI list is re-read when its TTL lapses. A host
+  // that just came online is refreshed by `onHostOnline` instead, so the two
+  // never both fire for the same contact.
+  const agentTracker = app.hostAgentTracker;
+  if (agentTracker && !cameOnline && agentTracker.isStale(hostId, agentsTtlMs(app))) {
+    // Fire-and-forget: the probe runs a login shell per CLI on the host, and a
+    // wedged remote must not delay this host's capacity read below.
+    void refreshRemoteHostAgents(app, hostId).catch((err: unknown) => {
+      app.log.debug({ err, hostId }, "[host-heartbeat] the agent list refresh failed");
+    });
+  }
+
   try {
     const report = await getRemoteHostClient(app, hostId).resolveCapacity();
     if (report === null) {
@@ -256,6 +269,7 @@ async function sweep(
   const hostIds = new Set(allHosts.map((h) => h.id));
   tracker.pruneMissing(hostIds);
   capacityTracker.pruneMissing(hostIds);
+  app.hostAgentTracker?.pruneMissing(hostIds);
 
   // A host row with baseUrl === null is an enrollment-created row (#245)
   // still awaiting its first registration call — pinging it would just
@@ -327,6 +341,8 @@ export function startHostHeartbeat(
   // services/host-capacity.ts's own comment for why.
   const hostCapacityTracker = capacityTracker ?? new HostCapacityTracker();
   app.hostCapacityTracker = hostCapacityTracker;
+  // Issue #2240 — the agent-CLI cache, refreshed by the same sweep.
+  app.hostAgentTracker = new HostAgentTracker();
 
   let timer: ReturnType<typeof setInterval> | null = null;
   // Reentrancy guard (Hermes review, PR #524): each ping already has its
@@ -397,6 +413,7 @@ export function startHostHeartbeat(
     if (timer) clearInterval(timer);
     app.hostHeartbeatTracker = undefined;
     app.hostCapacityTracker = undefined;
+    app.hostAgentTracker = undefined;
     app.reconfigureHostHeartbeat = undefined;
   };
 }

@@ -477,6 +477,10 @@ export interface Host {
   // UI is #1726; this is the same deliberate forward-plumbing as
   // lastSeenAt above.
   platform?: string | null;
+  // Issue #2240 — the agent CLIs (claude, codex, …) the host has, null while
+  // unknown (an old agent, or not read yet), and the Mullion version it runs.
+  agents?: string[] | null;
+  mullionVersion?: string | null;
   // The host's CAPACITY — how busy it is, in numbers comparable across
   // hosts. Null when the host does not report capacity (an agent build
   // without the route) or has not been polled yet. `sampledAt` is when the
