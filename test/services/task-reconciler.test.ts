@@ -4706,6 +4706,34 @@ describe("reconcileTasks", () => {
         await app.close();
       });
 
+      it("does not return the worker for an `unstable` red check while the Actions runs are still in progress", async () => {
+        const app = await buildApp();
+        const { taskId } = await createRedCiCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "unstable" }));
+        mockFetchRunsForHead.mockResolvedValue([
+          {
+            name: "CI/CD",
+            status: "in_progress" as const,
+            conclusion: null,
+            htmlUrl: "https://x/1",
+            headSha: "sha-head",
+          },
+        ]);
+        mockFetchCheckRunsForHead.mockResolvedValue([
+          { name: "codecov/patch", conclusion: "failure" },
+        ]);
+
+        await reconcileTasks(app);
+
+        // A push mid-run would cancel and restart the head's Actions runs.
+        expect(mockFetchCheckRunsForHead).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        expect(row.autoReturnRounds).toBe(0);
+
+        await app.close();
+      });
+
       it("leaves the task alone when the merge state is unstable but no check run is actually red (only pending)", async () => {
         const app = await buildApp();
         const { taskId } = await createRedCiCandidate(app);

@@ -705,6 +705,7 @@ describe("fetchCheckRunsForHead", () => {
             output: { title: "66.66% of diff hit (target 75.00%)" },
           },
           { name: "no-title", conclusion: "success", output: { title: null } },
+          { name: "linked", conclusion: "failure", details_url: "https://ci.example/1" },
         ],
       }),
     );
@@ -716,6 +717,7 @@ describe("fetchCheckRunsForHead", () => {
         detail: "66.66% of diff hit (target 75.00%)",
       },
       { name: "no-title", conclusion: "success" },
+      { name: "linked", conclusion: "failure", url: "https://ci.example/1" },
     ]);
   });
 
@@ -826,8 +828,9 @@ describe("default-branch CI cache", () => {
 });
 
 describe("isRedCheckConclusion", () => {
-  it.each(["failure", "timed_out", "action_required", "startup_failure"])("treats %s as red", (c) =>
-    expect(isRedCheckConclusion(c)).toBe(true),
+  it.each(["failure", "timed_out", "action_required", "stale", "startup_failure"])(
+    "treats %s as red",
+    (c) => expect(isRedCheckConclusion(c)).toBe(true),
   );
   it.each([null, "success", "skipped", "cancelled", "neutral"])("does not treat %s as red", (c) =>
     expect(isRedCheckConclusion(c)).toBe(false),

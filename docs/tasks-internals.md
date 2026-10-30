@@ -722,7 +722,7 @@ re-broken, evidence}` for each earlier finding; `verified`/`notes`/
   and `taskMaster.enabled`: the task flips back to `in_progress` and the
   worker is re-seeded with the findings as its prompt — via `autoReturnTask`
   (`task-reconciler.ts`), the mechanism shared by every automatic
-  "reviewing → in_progress" trigger (`#756`; a red required CI check and an
+  "reviewing → in_progress" trigger (`#756`; a red CI check and an
   unresolved PR review comment are later triggers on the same model — see
   `AUTO_RETURN_VIA`'s three `via` tags: `review-feedback`, `ci-feedback`,
   `pr-comment-feedback` — and [Auto-approve](#auto-approve) below). That
@@ -1649,9 +1649,15 @@ signal for a red check from another app, which never turns the Actions status
 red. Either way the task's check runs are then read
 (`fetchCheckRunsForHead`, `github.ts`, `GET /commits/{sha}/check-runs`) and
 the worker is returned only if one has a red conclusion
-(`isRedCheckConclusion`: `failure`, but also `timed_out` and
-`action_required`). An `unstable` PR with only _pending_ checks is left
-alone. A red check whose shape matches the PR-title-lint pattern above is
+(`isRedCheckConclusion`: anything other than `success`, `skipped`,
+`cancelled` or `neutral` — GitHub's own not-passing set, so `timed_out`,
+`action_required`, `stale` and `startup_failure` count too). An `unstable` PR
+with only _pending_ checks is left alone, and the `unstable` trigger also waits
+for the head's Actions runs to finish (`unstable` means "failing or still
+running", and a push mid-run would cancel and restart them). The gate is
+name-agnostic, so a red check no commit can fix (a CLA gate, say) spends rounds
+until the cap and then parks the task with a comment naming it; "Merge now" is
+the override. A red check whose shape matches the PR-title-lint pattern above is
 self-healed instead of returned to the worker — see "Exception — PR-title
 lint self-heals" above. The failing checks, with each check's own one-line
 summary (e.g. codecov's "66.66% of diff hit (target 75.00%)"), are listed in

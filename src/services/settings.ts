@@ -703,7 +703,7 @@ export interface AppSettings {
     // immediately, never wait) to be reachable without env-var surgery.
     reviewCiWaitMinutes: number;
     // Install-wide cap on the automatic fix-up rounds a task may spend
-    // (a changes-requested review, a red required CI check, an unresolved PR
+    // (a changes-requested review, a red CI check, an unresolved PR
     // review comment — an approved review's suggestions round spends none).
     // 0 = unlimited. A project's own `maxAutoReturnRounds` overrides it; an
     // unset project inherits this. Plain number, no "inherit" sentinel and no

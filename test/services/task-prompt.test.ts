@@ -1418,6 +1418,25 @@ describe("buildCiFailurePrompt", () => {
     expect(buildCiFailurePrompt(base)).not.toContain("Failing checks:");
   });
 
+  it("prints a failing check's URL, and does not say CI is SUCCESS above a red non-Actions check", () => {
+    const out = buildCiFailurePrompt({
+      ...base,
+      ci: { headSha: "abc1234", status: "success" as const, runs: [] },
+      failingChecks: [{ name: "codecov/patch", url: "https://app.codecov.io/pr/1" }],
+    });
+    expect(out).toContain("- codecov/patch — https://app.codecov.io/pr/1");
+    expect(out).toContain("All GitHub Actions runs on this PR's head commit abc1234 are green");
+    expect(out).not.toContain("is SUCCESS");
+  });
+
+  it("keeps the Actions summary when the Actions runs are the failure", () => {
+    const out = buildCiFailurePrompt({
+      ...base,
+      failingChecks: [{ name: "test-e2e" }],
+    });
+    expect(out).toContain("is FAILURE");
+  });
+
   it("offers the re-review request file only when the approval is carried through the fix", () => {
     expect(buildCiFailurePrompt(base)).not.toContain("second pair of eyes");
     const out = buildCiFailurePrompt({

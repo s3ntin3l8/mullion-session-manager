@@ -2548,8 +2548,8 @@ async function processReleaseRequests(app: FastifyInstance): Promise<void> {
 // Anything else — no review agent configured (never ingests a verdict at
 // all), "changes-requested", "inconclusive", CI red/still running/absent —
 // leaves the task in "reviewing" for a human, exactly today's behavior...
-// EXCEPT one case #755 now closes: a red REQUIRED check (per
-// `fetchRequiredStatusContexts`, github.ts) returns the task to the worker
+// EXCEPT one case #755 now closes: a red check (required or not — see
+// `attemptReturnRedCiToWorker`) returns the task to the worker
 // automatically, same as a "changes-requested" review round — even for a
 // project with no review agent configured at all (gate 2 would otherwise
 // never pass for those) and even when the verdict is "inconclusive" (gate 3
@@ -2631,7 +2631,7 @@ const PR_TITLE_LINT_CHECK_NAMES = new Set([
 
 /**
  * #1035 — the actual self-heal, shared by both `attemptReturnRedCiToWorker`
- * (required-check path: a red required title-lint check burns a round on a
+ * (red-check path: a red title-lint check burns a round on a
  * fix the worker can't make) and the `attemptMerge` `case "unstable"`
  * branch below (non-required path: a red non-required title-lint check
  * strands the task in `unstable` forever with no auto-merge, and no
@@ -2703,7 +2703,11 @@ async function attemptReturnRedCiToWorker(
   // (codecov/patch, ...) never turns it to "failure" — GitHub's own `unstable`
   // merge state ("a non-required check is failing or still running") is the
   // cheap signal that something outside Actions is not green.
-  if (current.status !== "failure" && current.mergeableState !== "unstable") {
+  // The `unstable` arm also waits for the Actions runs to finish: `unstable`
+  // means "failing OR still running", and a worker's push while Actions is
+  // mid-run would cancel and restart it.
+  const unstableOnly = current.mergeableState === "unstable" && current.status !== "in_progress";
+  if (current.status !== "failure" && !unstableOnly) {
     clearCiGatingUnavailable(app, task);
     return false;
   }
@@ -2781,7 +2785,7 @@ async function attemptReturnRedCiToWorker(
     }
     ciCapCommentedRounds.set(task.id, task.autoReturnRounds);
     // #737 — deliberately no `verdict` here: this is a notice about EXTERNAL
-    // state (a required CI check), not the review agent's own verdict on
+    // state (a CI check), not the review agent's own verdict on
     // the diff, so it stays a plain COMMENT regardless of a reviewer App
     // being configured.
     await postReviewFindingsComment(app, task, project, {
@@ -2823,7 +2827,7 @@ async function attemptReturnRedCiToWorker(
     worktreePath: task.worktreePath,
     budgetMinutes: resolvedTaskMaster.budgetMinutes,
     ci: { headSha: current.headSha, status: current.status, runs: current.runs },
-    failingChecks: redChecks.map((c) => ({ name: c.name, detail: c.detail })),
+    failingChecks: redChecks.map((c) => ({ name: c.name, detail: c.detail, url: c.url })),
     commitTitlePath,
     agentCommand: task.agentCommand,
     rereviewRequestPath:
@@ -3651,7 +3655,7 @@ const REVIEW_FINDINGS_GRACE_MS = 30 * 60_000;
 // verdict alone. This is the shared model every automatic "send it back to
 // the worker" trigger now registers against, so the cap/give-up posture and
 // the DB write itself exist in exactly one place rather than drifting
-// across a growing list of triggers (review feedback here; a red required
+// across a growing list of triggers (review feedback here; a red
 // CI check and an unresolved PR review comment are later triggers on the
 // same model — see the roadmap plan).
 export type AutoReturnReason = "review" | "ci" | "pr-comment" | "suggestions";

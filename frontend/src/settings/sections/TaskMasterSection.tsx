@@ -177,7 +177,7 @@ export function TaskMasterSection() {
       </Row>
       <Row
         label="Automatic fix-up rounds"
-        desc="How many times a task may be sent back to its worker automatically — a review that requested changes, a red required CI check, or an unresolved PR comment. An approved review's suggestions are applied once and never count. 0 means unlimited; a project can set its own."
+        desc="How many times a task may be sent back to its worker automatically — a review that requested changes, a red CI check, or an unresolved PR comment. An approved review's suggestions are applied once and never count. 0 means unlimited; a project can set its own."
       >
         <NumberField
           value={roundsDraft ?? resolved.maxAutoReturnRounds}
