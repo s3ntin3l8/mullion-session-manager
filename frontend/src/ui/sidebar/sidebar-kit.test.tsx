@@ -366,8 +366,13 @@ describe("SidebarRow hover actions do not shift layout", () => {
   });
 
   it("overlays .sb-row-actions out of flow instead of toggling display", () => {
-    const rule = (sel: string) =>
-      css.match(new RegExp(`(?:^|\\n)${sel.replace(/[.]/g, "\\.")} \\{([^}]*)\\}`))![1];
+    // Plain string search (no regex built from the selector, so nothing to escape).
+    const rule = (sel: string) => {
+      const start = css.indexOf(`\n${sel} {`);
+      expect(start).toBeGreaterThanOrEqual(0);
+      const open = css.indexOf("{", start);
+      return css.slice(open + 1, css.indexOf("}", open));
+    };
     const base = rule(".sb-row-actions");
     expect(base).toContain("position: absolute");
     expect(base).toContain("right: 100%");
