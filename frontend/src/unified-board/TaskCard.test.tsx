@@ -879,6 +879,14 @@ describe("UnifiedBoard task columns", () => {
     );
   });
 
+  it("#2364 — shows which issue a claimed task is waiting for", () => {
+    tasks = [makeTask({ id: 1, status: "claimed", failureReason: "Waiting for #2346 to close" })];
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    expect(document.querySelector(".task-card-dispatch-reason")?.textContent).toBe(
+      "Not dispatched yet: Waiting for #2346 to close",
+    );
+  });
+
   it("#1997 — a failed card keeps the terminal treatment, not the dispatch note", () => {
     tasks = [makeTask({ id: 1, status: "failed", failureReason: "budget exceeded" })];
     render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);

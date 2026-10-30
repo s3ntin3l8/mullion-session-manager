@@ -21,6 +21,18 @@ status: the seven-state lifecycle ([`tasks.md`](tasks.md#lifecycle)) is
 unchanged, and a blocked task un-blocks itself with no transition once its
 last blocker closes.
 
+A **manual** claim of a blocked task is accepted but queued and held (#2364):
+`dispatchClaimedTask` consults the same gate and returns `blocked-held`, so the
+task stays `claimed` (no worktree, session or `in_progress` transition) with
+"Waiting for #N to close" in `failureReason`, which the card's "Not dispatched
+yet" notice shows. It takes no `maxConcurrent` slot, never delays the tasks
+behind it, and has no backoff or give-up clock. Never-observed blockers are
+refreshed once; if that fails the task dispatches anyway (fail-open). The
+blocker-close and `blocked_by_*` webhooks run a dispatch sweep right after
+refreshing, and the watcher tick's sweep re-checks a held task's blockers at
+most every 5 minutes. A worker that still ends with no commits while the task
+has open blockers records "blocked by #N" in its failure reason.
+
 The gate is a three-way read off two columns on `tasks`:
 `dependencyCount` (GitHub's `issue_dependencies_summary.total_blocked_by`,
 captured on every ingest) and `blockedBy` (a JSON array of currently-open

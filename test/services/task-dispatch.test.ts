@@ -342,6 +342,76 @@ describe("task-dispatch (opportunistic hook + dispatchQueuedTasks)", () => {
     delete process.env.MULLION_TASK_MAX_CONCURRENT;
   });
 
+  // Issue #2364 — a claimed task with an open GitHub blocker waits.
+  describe("holding a claimed task until its blockers close (#2364)", () => {
+    const blocker = JSON.stringify([
+      { owner: "o", repo: "r", number: 2346, title: "dep", htmlUrl: null },
+    ]);
+
+    function blockTask(app: Awaited<ReturnType<typeof buildApp>>, id: number) {
+      app.db
+        .update(tasks)
+        .set({ dependencyCount: 1, blockedBy: blocker, blockedByCheckedAt: new Date() })
+        .where(eq(tasks.id, id))
+        .run();
+    }
+
+    it("holds a blocked task without failing it, dispatches the one behind, then starts it once the blocker closes", async () => {
+      process.env.MULLION_TASK_MAX_CONCURRENT = "1";
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const projectId = await createProject(app, cwd);
+      const blocked = insertReadyTask(app, projectId, 50, 0);
+      const behind = insertReadyTask(app, projectId, 51, 1);
+      expect((await enqueueTask(app, blocked.id, { auto: false })).ok).toBe(true);
+      blockTask(app, blocked.id);
+      expect((await enqueueTask(app, behind.id, { auto: false })).ok).toBe(true);
+
+      await dispatchQueuedTasks(app);
+      const held = getTask(app, blocked.id);
+      expect(held.status).toBe("claimed");
+      expect(held.sessionId).toBeNull();
+      expect(held.failureReason).toBe("Waiting for #2346 to close");
+      // The hold took no slot (maxConcurrent 1): the later task still ran.
+      expect(getTask(app, behind.id).sessionId).not.toBeNull();
+
+      // Blocker closes and the slot frees: the held task starts by itself.
+      app.db
+        .update(tasks)
+        .set({ blockedBy: "[]", dependencyCount: 0 })
+        .where(eq(tasks.id, blocked.id))
+        .run();
+      app.db.update(tasks).set({ status: "done" }).where(eq(tasks.id, behind.id)).run();
+      await dispatchQueuedTasks(app);
+      const started = getTask(app, blocked.id);
+      expect(started.sessionId).not.toBeNull();
+      expect(started.failureReason).toBeNull();
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+      delete process.env.MULLION_TASK_MAX_CONCURRENT;
+    });
+
+    it("dispatches anyway when the blockers were never observed and cannot be refreshed", async () => {
+      process.env.MULLION_TASK_MAX_CONCURRENT = "5";
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const projectId = await createProject(app, cwd);
+      const task = insertReadyTask(app, projectId, 52, 0);
+      expect((await enqueueTask(app, task.id, { auto: false })).ok).toBe(true);
+      // dependencyCount null + an issue number: "unresolved". The temp repo
+      // has no GitHub remote, so the refresh cannot run.
+      app.db.update(tasks).set({ dependencyCount: null }).where(eq(tasks.id, task.id)).run();
+
+      await dispatchQueuedTasks(app);
+      expect(getTask(app, task.id).sessionId).not.toBeNull();
+
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+      delete process.env.MULLION_TASK_MAX_CONCURRENT;
+    });
+  });
+
   // Issue #1997 — a dispatch that has been failing for 6 hours stops retrying
   // and fails the task with the last reason.
   describe("giving up on a task that cannot be dispatched (#1997)", () => {

@@ -198,6 +198,13 @@ async function runOneSweep(app: FastifyInstance): Promise<void> {
       // this task's own dispatch, no backoff, just move on.
       continue;
     }
+    if (outcome.reason === "blocked-held") {
+      // Issue #2364 — waiting on an open GitHub blocker. `continue`, never
+      // `return`: it holds no slot and must not delay a later unblocked
+      // task. No backoff and no give-up clock: it records no transition,
+      // and a blocker can stay open for days.
+      continue;
+    }
     if (outcome.reason === "placement-held") {
       // Issue #2006 — waiting for a required host. `continue`, never `return`:
       // a held task at the top of the board must not block the rest of the
