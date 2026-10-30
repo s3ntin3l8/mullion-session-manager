@@ -2481,11 +2481,11 @@ describe("projects route", () => {
         openIssues: 1,
         openPRs: 1,
       });
-      // The issue list is fetched with the dedicated "issues" token scope,
-      // and that scope's token (not the read one) reaches the /issues call.
-      expect(vi.mocked(resolveGitHubToken).mock.calls.map((c) => c[2])).toContain("issues");
+      // #2321 — the issue list is the user's view: it is fetched with the
+      // connected account, never an App "issues"-scope token.
+      expect(vi.mocked(resolveGitHubToken).mock.calls.map((c) => c[2])).not.toContain("issues");
       const issuesCall = fetchMock.mock.calls.find(([u]) => String(u).includes("/issues?"));
-      expect(issuesCall?.[1]?.headers?.Authorization).toBe("Bearer issues-sentinel");
+      expect(issuesCall?.[1]?.headers?.Authorization).toBe("Bearer ghp_connected");
 
       vi.mocked(resolveGitHubToken).mockImplementation(realResolve);
       fs.rmSync(projectCwd, { recursive: true, force: true });
@@ -2880,7 +2880,7 @@ describe("projects route", () => {
           url: `/api/projects/${id}/github/issues/7/queue`,
         });
         expect(res.statusCode).toBe(502);
-        expect(res.json().message).toMatch(/write access/);
+        expect(res.json().message).toMatch(/not connected/);
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 
@@ -4103,7 +4103,7 @@ describe("projects route", () => {
           payload: { headSha: "sha50" },
         });
         expect(res.statusCode).toBe(502);
-        expect(res.json().message).toMatch(/write access/);
+        expect(res.json().message).toMatch(/not connected/);
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 

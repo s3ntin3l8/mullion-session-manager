@@ -185,7 +185,7 @@ export function GitHubSection() {
         testId="github-app-section"
         rowTestId="github-app-row"
         title="GitHub App"
-        desc="Optional. Use a GitHub App's short-lived, repository-scoped tokens instead of the account above for Task Master and status checks. Repositories without the App installed keep using the account."
+        desc="Optional. Task Master and status checks use a GitHub App's short-lived, repository-scoped tokens; everything you do yourself (issues, pull requests, comments, merges, release runs) always uses the account above. Repositories without the App installed use the account for Task Master too."
         notConfiguredSubtitle="Using the connected account"
         githubApp={integration?.githubApp ?? null}
         setApp={api.setGitHubApp}

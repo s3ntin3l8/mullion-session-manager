@@ -487,31 +487,51 @@ describe("GitHub sidebar write routes (#1672)", () => {
       expect(calls.some((c) => c.url.endsWith("/pulls/7/reviews"))).toBe(true);
     });
 
-    // #2283 — the issue detail names the identity a comment from its box posts as.
-    it("reports the App, with its login, on the issue detail when no account is connected", async () => {
+    // #2321 — who is acting decides the identity: user clicks run as the account.
+    it("runs the issue list, queue label and branch update as the account, not the App", async () => {
       mockGetInstallationToken.mockResolvedValue({ token: "ghs_app", installationsChecked: null });
       mockGithub({
-        rest: (url) => {
-          if (url.includes("/issues/9/comments")) return jsonResponse(200, []);
-          if (url.endsWith("/issues/9")) {
-            return jsonResponse(200, {
-              number: 9,
-              title: "issue 9",
-              html_url: "https://github.com/acme/widgets/issues/9",
-              user: { login: "a" },
-              labels: [],
-              assignees: [],
-              comments: 0,
-              milestone: null,
-              created_at: "2026-01-01T00:00:00Z",
-              updated_at: "2026-01-02T00:00:00Z",
-              body_html: "<p>b</p>",
-              state: "open",
-            });
+        rest: (url, method) => {
+          if (url.includes("/issues?")) return jsonResponse(200, []);
+          if (url.endsWith("/issues/7/labels") && method === "POST") return jsonResponse(200, []);
+          if (url.endsWith("/pulls/7/update-branch") && method === "PUT") {
+            return jsonResponse(202, { message: "ok" });
           }
           return null;
         },
       });
+      const app = await makeApp();
+      const { setGitHubApp } = await import("../../src/services/github-integration.js");
+      setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
+      app.config.MULLION_TASK_MASTER_ENABLED = true;
+      const id = await connectedProject(app);
+      await app.inject({ method: "GET", url: `/api/projects/${id}/github/issues` });
+      await app.inject({ method: "POST", url: `/api/projects/${id}/github/issues/7/queue` });
+      await app.inject({
+        method: "POST",
+        url: `/api/projects/${id}/github/prs/7/update-branch`,
+        payload: { headSha: "abc1234" },
+      });
+      const scopes = mockGetInstallationToken.mock.calls.map((c) => c[4]);
+      for (const scope of ["issues", "write", "dispatch"]) expect(scopes).not.toContain(scope);
+      const auth = (needle: string) =>
+        fetchMock.mock.calls
+          .filter(([u]) => String(u).includes(needle))
+          .map(([, init]) => (init as RequestInit | undefined)?.headers);
+      for (const needle of ["/issues?", "/issues/7/labels", "/pulls/7/update-branch"]) {
+        const headers = auth(needle);
+        expect(headers.length, needle).toBeGreaterThan(0);
+        for (const h of headers) {
+          expect(JSON.stringify(h), needle).toContain("ghp_connected");
+        }
+      }
+    });
+
+    // #2321 — the issue detail is the user's view: no account means "GitHub is
+    // not connected", never a silent fall back to the App's token.
+    it("refuses the issue detail when no account is connected, even with an App installed", async () => {
+      mockGetInstallationToken.mockResolvedValue({ token: "ghs_app", installationsChecked: null });
+      mockGithub({ rest: () => null });
       const app = await makeApp();
       const { setGitHubApp, resetSidebarIdentityCache } =
         await import("../../src/services/github-integration.js");
@@ -520,13 +540,8 @@ describe("GitHub sidebar write routes (#1672)", () => {
       const id = await connectedProject(app);
       await app.inject({ method: "DELETE", url: "/api/integrations/github" });
       const res = await app.inject({ method: "GET", url: `/api/projects/${id}/github/issues/9` });
-      expect(res.statusCode).toBe(200);
-      expect(res.json().writeIdentity).toEqual({
-        kind: "app",
-        login: "mullion-session-manager",
-        canWrite: null,
-        canPush: null,
-      });
+      expect(res.statusCode).toBe(502);
+      expect(res.json().message).toMatch(/not connected/);
     });
 
     it("lets the App comment but refuses its verdicts when no account is connected", async () => {
