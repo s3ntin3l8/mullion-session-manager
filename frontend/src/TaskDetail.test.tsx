@@ -1630,6 +1630,49 @@ describe("TaskDetail delete action", () => {
     expect(deleteTask).toHaveBeenCalledWith(1);
   });
 
+  it("calls onDeleted once after a successful delete, and not before confirming", async () => {
+    tasks = [makeTask({ id: 1, status: "backlog", issueNumber: null })];
+    const onDeleted = vi.fn();
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} onDeleted={onDeleted} />);
+
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+    expect(onDeleted).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    expect(onDeleted).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not call onDeleted when the delete fails", async () => {
+    deleteTask.mockRejectedValueOnce(new Error("still claimed"));
+    tasks = [makeTask({ id: 1, status: "backlog", issueNumber: null })];
+    const onDeleted = vi.fn();
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} onDeleted={onDeleted} />);
+
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+
+    expect(screen.getByText("Failed to delete task")).toBeInTheDocument();
+    expect(onDeleted).not.toHaveBeenCalled();
+  });
+
+  it("skips onDeleted on a 409, then calls it once after the forced Abandon succeeds", async () => {
+    deleteTask.mockRejectedValueOnce(new ApiError("tracked", 409));
+    tasks = [makeTask({ id: 1, status: "backlog", issueNumber: null })];
+    const onDeleted = vi.fn();
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} onDeleted={onDeleted} />);
+
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+    expect(onDeleted).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Abandon task" }));
+    expect(deleteTask).toHaveBeenLastCalledWith(1, { force: true });
+    expect(onDeleted).toHaveBeenCalledTimes(1);
+  });
+
   it("cancels back to the single Delete button without calling deleteTask", async () => {
     tasks = [makeTask({ id: 1, status: "ready", issueNumber: null })];
     const user = userEvent.setup();

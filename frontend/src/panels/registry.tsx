@@ -571,6 +571,7 @@ function TaskDetailWrapper(props: IDockviewPanelProps<TaskDetailParams>) {
         onOpenSession={(session) => {
           openSessionPanel(props.containerApi, session, layout, projects);
         }}
+        onDeleted={() => props.api.close()}
       />
     </ErrorBoundary>
   );
