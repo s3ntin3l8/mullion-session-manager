@@ -51,6 +51,16 @@ export function PinIcon(props: IconProps) {
   );
 }
 
+// "Following the active panel" — a crosshair, as opposed to PinIcon's pinned.
+export function FollowIcon(props: IconProps) {
+  return (
+    <Svg strokeLinecap="round" strokeLinejoin="round" {...props}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M12 2v4M12 18v4M2 12h4M18 12h4" />
+    </Svg>
+  );
+}
+
 export function BellIcon(props: IconProps) {
   return (
     <Svg {...props}>

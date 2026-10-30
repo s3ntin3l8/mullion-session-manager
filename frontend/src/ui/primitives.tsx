@@ -375,6 +375,7 @@ export function Dropdown<T extends string>({
   onChange,
   small = false,
   ariaLabel,
+  title,
 }: {
   options: Array<{ value: T; label: string; disabled?: boolean }>;
   value: T;
@@ -382,11 +383,17 @@ export function Dropdown<T extends string>({
   small?: boolean;
   // Overrides the name the enclosing Row would otherwise supply.
   ariaLabel?: string;
+  title?: string;
 }) {
   const label = useControlLabel(ariaLabel);
   return (
     <div className={`settings-dropdown${small ? " small" : ""}`}>
-      <select value={value} onChange={(e) => onChange(e.target.value as T)} {...label}>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as T)}
+        title={title}
+        {...label}
+      >
         {options.map((opt) => (
           <option key={opt.value} value={opt.value} disabled={opt.disabled}>
             {opt.label}

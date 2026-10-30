@@ -129,7 +129,7 @@ export function useFollowedProject(
   const followSourceId = derivedId ?? usableLastDerivedId;
   const followedName = projects.find((p) => p.id === followSourceId)?.name;
   const followLabel =
-    pinnedProjectId == null && followedName ? `Following: ${followedName}` : "Follow active panel";
+    pinnedProjectId == null && followedName ? `◎ ${followedName}` : "Follow active panel";
   const dropdownOptions = [
     { value: FOLLOW_SENTINEL, label: followLabel },
     ...scopedProjects.map((p) => ({ value: String(p.id), label: p.name })),
