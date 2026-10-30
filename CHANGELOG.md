@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.3.53](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.52...v0.3.53) (2026-10-30)
+
+
+### Features
+
+* **github:** count a strict-protection behind PR in the right-rail attention badge ([#2302](https://github.com/s3ntin3l8/mullion-session-manager/issues/2302)) ([715d29e](https://github.com/s3ntin3l8/mullion-session-manager/commit/715d29e3dd1a99bea1722a4f2fea76990ba9b801)), closes [#2287](https://github.com/s3ntin3l8/mullion-session-manager/issues/2287)
+* **github:** count unresolved conversations in the attention badge ([#2288](https://github.com/s3ntin3l8/mullion-session-manager/issues/2288)) ([baf6429](https://github.com/s3ntin3l8/mullion-session-manager/commit/baf64292a2e6069fb8b26b516146209862fd6624))
+* **github:** warn before the sidebar posts with a token that can't write ([#2301](https://github.com/s3ntin3l8/mullion-session-manager/issues/2301)) ([9d0164b](https://github.com/s3ntin3l8/mullion-session-manager/commit/9d0164b25da8a3585c410f5fb08f995a9fb64090)), closes [#2285](https://github.com/s3ntin3l8/mullion-session-manager/issues/2285)
+* **placement:** only place on hosts that have the agent CLI ([#2308](https://github.com/s3ntin3l8/mullion-session-manager/issues/2308)) ([f8bfa04](https://github.com/s3ntin3l8/mullion-session-manager/commit/f8bfa044dd90f2ccda29ee9be229b076ec59fb61))
+* **placement:** report excluded hosts; host roles steer automatic placement ([#2304](https://github.com/s3ntin3l8/mullion-session-manager/issues/2304)) ([666789e](https://github.com/s3ntin3l8/mullion-session-manager/commit/666789e54b106911ce9acb780d7df70473a6206a))
+* **projects:** coordinator target list and target-project consent for cross-project children ([#2295](https://github.com/s3ntin3l8/mullion-session-manager/issues/2295)) ([44899c5](https://github.com/s3ntin3l8/mullion-session-manager/commit/44899c557a797cd542727717f3eb8fe53192cc9a))
+* **projects:** name each project's host in the merge banner, check duplicates automatically ([#2293](https://github.com/s3ntin3l8/mullion-session-manager/issues/2293)) ([8eca4c3](https://github.com/s3ntin3l8/mullion-session-manager/commit/8eca4c3ddff53adefc4da14957a09cca1064d67e))
+* **projects:** placement steering flags (platform, allow burst) ([#2309](https://github.com/s3ntin3l8/mullion-session-manager/issues/2309)) ([2058408](https://github.com/s3ntin3l8/mullion-session-manager/commit/2058408509f15b3551a428ae41de20a01fb72e83))
+* **sessions:** launcher host target (project host, another host, or Auto) ([#2307](https://github.com/s3ntin3l8/mullion-session-manager/issues/2307)) ([db8e91e](https://github.com/s3ntin3l8/mullion-session-manager/commit/db8e91ec8f01021f2800bd7dce2794d64c2f32ce))
+* **sessions:** let a coordinator message an existing top-level session, with the target's consent ([#2305](https://github.com/s3ntin3l8/mullion-session-manager/issues/2305)) ([160088b](https://github.com/s3ntin3l8/mullion-session-manager/commit/160088b95d84dd6223073e10567cc2afd5cbb89c))
+* **sessions:** read a session's conversation as plain text (session transcript) ([#2294](https://github.com/s3ntin3l8/mullion-session-manager/issues/2294)) ([c4ae0aa](https://github.com/s3ntin3l8/mullion-session-manager/commit/c4ae0aa477bec79420088c655e2da9d20ecf8eaa))
+* **sessions:** streaming ops (events subscribe, attach) over the control relay ([#2298](https://github.com/s3ntin3l8/mullion-session-manager/issues/2298)) ([f81af1e](https://github.com/s3ntin3l8/mullion-session-manager/commit/f81af1ee5072782419b6c56f4f9558b340fad2db))
+* **sidebar:** host badge on every session once a project spans hosts ([#2303](https://github.com/s3ntin3l8/mullion-session-manager/issues/2303)) ([08c7c67](https://github.com/s3ntin3l8/mullion-session-manager/commit/08c7c670a344b990f79c1cd91294d9078f20c5c5))
+* **windows:** serve the control relay on a named pipe for Windows agent hosts ([#2299](https://github.com/s3ntin3l8/mullion-session-manager/issues/2299)) ([3fc7e13](https://github.com/s3ntin3l8/mullion-session-manager/commit/3fc7e13bf7bfd31fe81eca6c14f064fd3542d8fe))
+
+
+### Bug Fixes
+
+* **github:** the PR list checks ancestry before saying a PR is behind ([#2297](https://github.com/s3ntin3l8/mullion-session-manager/issues/2297)) ([f152b2e](https://github.com/s3ntin3l8/mullion-session-manager/commit/f152b2eb5e812131ec1a37e8c104a2dc2d2c8bdc)), closes [#2284](https://github.com/s3ntin3l8/mullion-session-manager/issues/2284)
+* **tasks:** never auto-claim an archived task ([#2291](https://github.com/s3ntin3l8/mullion-session-manager/issues/2291)) ([143f7a2](https://github.com/s3ntin3l8/mullion-session-manager/commit/143f7a20089e43ba7bf95b50a11934a34d9f1806))
+* **terminal:** forward the terminal palette to remote agent hosts ([#2290](https://github.com/s3ntin3l8/mullion-session-manager/issues/2290)) ([45dee70](https://github.com/s3ntin3l8/mullion-session-manager/commit/45dee70c0e8357468339bd623a81c6e4eee034e7))
+
 ## [0.3.52](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.51...v0.3.52) (2026-10-29)
 
 
