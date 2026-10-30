@@ -663,7 +663,7 @@ describe("computeScaffold", () => {
       }
       expect(contributing.match(/step one/g)).toHaveLength(1);
       expect(contributing).not.toContain("\r\r");
-      expect(outputs[3]).toBe(outputs[1]);
+      for (const out of outputs) expect(out).toBe(outputs[0]);
     });
 
     it("keeps one pointer region and one import when CLAUDE.md has a lone pointer marker", () => {

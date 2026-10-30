@@ -54,6 +54,13 @@ export function clampToBytes(text: string, maxBytes: number, sourceLabel: string
   return `${truncated}\n\n[mullion: truncated at ${maxBytes} bytes — full text at ${sourceLabel}]`;
 }
 
+/** The marked region as it is written into a file whose line endings are
+ * `eol`. The body's own endings are normalized first so a CRLF body never
+ * becomes `\r\r\n`. */
+function buildRegion(startMarker: string, endMarker: string, body: string, eol: string): string {
+  return `${startMarker}\n${body.trim().replace(/\r\n/g, "\n")}\n${endMarker}`.replace(/\n/g, eol);
+}
+
 /**
  * PR-6 (scaffold Mullion integration as a PR) — the write-side counterpart
  * `extractMarkedRegion` above never needed: every EXISTING caller
@@ -91,10 +98,7 @@ export function upsertMarkedRegion(
   // A CRLF file gets a CRLF region on every path, so a re-run replacing it in
   // place writes back the same bytes instead of flipping the endings.
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
-  const region = `${startMarker}\n${body.trim().replace(/\r\n/g, "\n")}\n${endMarker}`.replace(
-    /\n/g,
-    eol,
-  );
+  const region = buildRegion(startMarker, endMarker, body, eol);
   const startIdx = text.indexOf(startMarker);
   const endIdx = startIdx === -1 ? -1 : text.indexOf(endMarker, startIdx + startMarker.length);
   if (startIdx !== -1 && endIdx !== -1) {
@@ -211,7 +215,7 @@ export function upsertMarkedRegionAfterIntro(
   // must run on the cleaned text, so the strip happens here first.
   text = withoutOrphanMarkers(text, [startMarker, endMarker]);
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
-  const region = `${startMarker}\n${body.trim()}\n${endMarker}`.replace(/\n/g, eol);
+  const region = buildRegion(startMarker, endMarker, body, eol);
   const lines = text.split("\n");
   const top = topLevelLines(lines);
   let offset = 0;

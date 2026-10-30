@@ -136,6 +136,13 @@ describe("upsertMarkedRegion", () => {
     expect(result.replace(/\r\n/g, "")).not.toContain("\n");
   });
 
+  it("upsertMarkedRegionAfterIntro does not double a CR in a CRLF body either", () => {
+    const text = "# T\r\n\r\n## A\r\nx\r\n";
+    const once = upsertMarkedRegionAfterIntro(text, START, END, "a\r\nb");
+    expect(once).not.toContain("\r\r");
+    expect(upsertMarkedRegionAfterIntro(once, START, END, "a\r\nb")).toBe(once);
+  });
+
   it("is stable on a second run over a CRLF file", () => {
     const once = upsertMarkedRegion(`# T\r\n${START}\r\nhand\r\n`, START, END, "a\nb");
     expect(upsertMarkedRegion(once, START, END, "a\nb")).toBe(once);
