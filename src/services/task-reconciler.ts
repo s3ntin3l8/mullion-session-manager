@@ -4487,7 +4487,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           resolvedTaskMaster,
           // The joined session IS `task.reviewSessionId` (see the query's
           // inner join), which is what the ingest marker has to equal.
-          latchSessionId: session.id,
+          latch: { kind: "session", sessionId: session.id },
           cleanupFindingsFile: () =>
             unlinkFindingsFileIfPresent(app, backend, task.id, task.autoReturnRounds),
         });
@@ -4505,12 +4505,18 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
  * `parsed` is null when the reviewer produced nothing usable (the verdict is
  * then `inconclusive`, worded with `noFindingsReason`). `finished` says the
  * review ended deliberately — a finished turn, not a crash or a timeout — and
- * gates both auto-return paths. `latchSessionId` is the review session this
- * outcome belongs to — it must be the task's current `reviewSessionId`, since
- * it becomes the ingest marker `hasIngestedCurrentReview` compares against
- * (a mismatch would never latch, and every tick would ingest and comment
- * again). `cleanupFindingsFile` runs once the outcome is durable, and also
- * when a concurrent decision beat this write to it.
+ * gates both auto-return paths. `latch` names the review this outcome belongs
+ * to — a local session or a run on an external reviewer — and must be the
+ * task's CURRENT one, since it becomes the ingest marker
+ * `hasIngestedCurrentReview` compares against (a mismatch would never latch,
+ * and every tick would ingest and comment again). For a run the durable write
+ * is also guarded on that run still being the task's, so an outcome that
+ * arrives after the task moved to a fresh run is dropped rather than recorded
+ * against it. `reviewedHeadSha`, when the reviewer knows which head it was
+ * asked to review, is what `lastReviewedHeadSha` records; without it the PR
+ * head the poller last saw is used. `cleanupFindingsFile` runs once the
+ * outcome is durable, and also when a concurrent decision beat this write to
+ * it.
  */
 async function ingestReviewOutcome(
   app: FastifyInstance,
@@ -4523,7 +4529,8 @@ async function ingestReviewOutcome(
     now: number;
     backend: SessionBackend;
     resolvedTaskMaster: ReturnType<typeof resolveTaskMasterConfig>;
-    latchSessionId: number;
+    latch: { kind: "session"; sessionId: number } | { kind: "run"; runId: string };
+    reviewedHeadSha?: string;
     cleanupFindingsFile: () => Promise<void>;
   },
 ): Promise<void> {
@@ -4536,7 +4543,7 @@ async function ingestReviewOutcome(
     now,
     backend,
     resolvedTaskMaster,
-    latchSessionId,
+    latch,
     cleanupFindingsFile,
   } = input;
   // A suggestions round spends no round, so a re-review after one (the
@@ -4681,18 +4688,22 @@ async function ingestReviewOutcome(
   // (zero-cost, no GitHub call from this reconcile tick). Best-effort:
   // a cache miss (poller hasn't hit this repo yet, or no prNumber)
   // just leaves the column at its previous value, same as any other
-  // best-effort lookup in this loop.
-  let cachedHeadSha: string | undefined;
-  if (task.prNumber !== null) {
+  // best-effort lookup in this loop. A reviewer that was told which head to
+  // review (a run) already knows the answer, which is more exact than whatever
+  // the poller has cached by now.
+  let reviewedHeadSha: string | undefined = input.reviewedHeadSha;
+  if (reviewedHeadSha === undefined && task.prNumber !== null) {
     const repoRef = await resolveRepoRef(app, project);
     const cached = repoRef ? getPRsStatus(repoRef.owner, repoRef.repo) : null;
-    cachedHeadSha = cached?.prs.find((p) => p.number === task.prNumber)?.headSha;
+    reviewedHeadSha = cached?.prs.find((p) => p.number === task.prNumber)?.headSha;
   }
   const updated = app.db
     .update(tasks)
     .set({
       reviewFindings: appendedFindings,
-      reviewFindingsIngestedSessionId: latchSessionId,
+      ...(latch.kind === "session"
+        ? { reviewFindingsIngestedSessionId: latch.sessionId }
+        : { reviewRunIngestedId: latch.runId }),
       lastReviewVerdict: verdict,
       // A fresh review of the current head supersedes any carried
       // approval — the verdict above is now earned, not inherited.
@@ -4701,9 +4712,15 @@ async function ingestReviewOutcome(
       // grace window; see that column's own doc comment in schema.ts.
       lastReviewVerdictAt: new Date(now),
       ...(announcingCap ? { autoReturnCapAnnouncedAt: new Date(), needsHumanReason } : {}),
-      ...(cachedHeadSha !== undefined ? { lastReviewedHeadSha: cachedHeadSha } : {}),
+      ...(reviewedHeadSha !== undefined ? { lastReviewedHeadSha: reviewedHeadSha } : {}),
     })
-    .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
+    .where(
+      and(
+        eq(tasks.id, task.id),
+        eq(tasks.status, "reviewing"),
+        ...(latch.kind === "run" ? [eq(tasks.reviewRunId, latch.runId)] : []),
+      ),
+    )
     .run();
   // Lost the race — the findings file is still stale for whatever
   // reconcile this task next (a rejected task keeps the same
