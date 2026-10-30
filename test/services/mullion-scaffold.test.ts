@@ -1228,22 +1228,37 @@ describe("computeScaffold — restructured instructions (issue #2316)", () => {
     expect(c).not.toContain("mullion:pointer");
   });
 
-  it("creates CONTRIBUTING.md when it did not exist, and re-runs replace (not duplicate) the moved region", () => {
+  it("creates CONTRIBUTING.md when it did not exist, and the same moved text twice is a no-op", () => {
     const opts = {
       slug: "demo",
       generated: { agentsMdBody: body, contributingAppend: "## Moved\nv1\n" },
     };
     const once = get(computeScaffold({}, opts), "CONTRIBUTING.md")!;
-    const twice = get(
+    const twice = get(computeScaffold({ "CONTRIBUTING.md": once }, opts), "CONTRIBUTING.md")!;
+    expect(twice).toBe(once);
+    expect(once.match(/mullion:moved:start/g)).toHaveLength(1);
+  });
+
+  it("adds to the moved region on a later run, never replacing text already there", () => {
+    const first = get(
       computeScaffold(
-        { "CONTRIBUTING.md": once },
-        { ...opts, generated: { ...opts.generated, contributingAppend: "## Moved\nv2\n" } },
+        {},
+        { slug: "demo", generated: { agentsMdBody: body, contributingAppend: "## Moved\nv1\n" } },
       ),
       "CONTRIBUTING.md",
     )!;
-    expect(twice.match(/mullion:moved:start/g)).toHaveLength(1);
-    expect(twice).toContain("v2");
-    expect(twice).not.toContain("v1");
+    // A person edits inside the region, then a later run moves something else.
+    const edited = first.replace("v1", "v1 (hand-edited)");
+    const later = get(
+      computeScaffold(
+        { "CONTRIBUTING.md": edited },
+        { slug: "demo", generated: { agentsMdBody: body, contributingAppend: "## Other\nv2\n" } },
+      ),
+      "CONTRIBUTING.md",
+    )!;
+    expect(later.match(/mullion:moved:start/g)).toHaveLength(1);
+    expect(later).toContain("v1 (hand-edited)");
+    expect(later).toContain("## Other");
   });
 
   it("combines the pointer and the moved region in one CONTRIBUTING.md entry", () => {

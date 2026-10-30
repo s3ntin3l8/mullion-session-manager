@@ -1500,6 +1500,105 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
       await app.close();
     });
 
+    it("a keep generate after a restructure does not commit the earlier restructured AGENTS.md", async () => {
+      commitAgentsMd(repoDir, "# P\n\n## Workflow rules\n- original rule\n");
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+      vi.mocked(generateScaffoldContent).mockResolvedValueOnce({
+        skill: "---\nname: demo\n---\nS\n",
+        reviewer: "---\nname: demo-reviewer\n---\nRead .claude/skills/demo/SKILL.md first.\n",
+        scaffoldRegion: "Pointer.",
+        sandboxed: true,
+        possiblyGeneric: false,
+        agentsMdBody: "# P\n\n<<<MULLION_REGION>>>\n\n## Repo specifics\n- restructured\n",
+        contributingAppend: "## Moved\nx\n",
+      });
+      const first = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "demo", existingInstructions: "restructure" },
+      });
+      expect(first.statusCode).toBe(200);
+
+      mockValidGeneration("demo");
+      const second = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "demo", existingInstructions: "keep" },
+      });
+      expect(second.statusCode).toBe(200);
+      const wt = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+      const agentsMd = fs.readFileSync(path.join(wt, "AGENTS.md"), "utf8");
+      expect(agentsMd).toContain("- original rule");
+      expect(agentsMd).not.toContain("- restructured");
+      expect(fs.existsSync(path.join(wt, "CONTRIBUTING.md"))).toBe(false);
+      // The first preview's id was dropped with its worktree.
+      const stale = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/apply`,
+        payload: { previewId: first.json().previewId },
+      });
+      expect(stale.statusCode).toBe(400);
+      await app.close();
+    });
+
+    it("a plain preview after a restructure starts from the repo's real files too", async () => {
+      commitAgentsMd(repoDir, "# P\n\n## Workflow rules\n- original rule\n");
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+      vi.mocked(generateScaffoldContent).mockResolvedValueOnce({
+        skill: "---\nname: demo\n---\nS\n",
+        reviewer: "---\nname: demo-reviewer\n---\nRead .claude/skills/demo/SKILL.md first.\n",
+        scaffoldRegion: "Pointer.",
+        sandboxed: true,
+        possiblyGeneric: false,
+        agentsMdBody: "# P\n\n<<<MULLION_REGION>>>\n\n## Repo specifics\n- restructured\n",
+      });
+      await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "demo", existingInstructions: "restructure" },
+      });
+      const preview = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/preview`,
+        payload: { slug: "demo" },
+      });
+      expect(preview.statusCode).toBe(200);
+      const agentsMd = fs.readFileSync(
+        path.join(repoDir, ".mullion-worktrees", "setup-demo", "AGENTS.md"),
+        "utf8",
+      );
+      expect(agentsMd).toContain("- original rule");
+      expect(agentsMd).not.toContain("- restructured");
+      await app.close();
+    });
+
+    it("passes the repo's real AGENTS.md (not a previous rewrite) as the lossiness baseline on a second restructure", async () => {
+      commitAgentsMd(repoDir, "# P\n\n## Workflow rules\n- original rule\n");
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+      vi.mocked(generateScaffoldContent).mockResolvedValue({
+        skill: "---\nname: demo\n---\nS\n",
+        reviewer: "---\nname: demo-reviewer\n---\nRead .claude/skills/demo/SKILL.md first.\n",
+        scaffoldRegion: "Pointer.",
+        sandboxed: true,
+        possiblyGeneric: false,
+        agentsMdBody: "# P\n\n<<<MULLION_REGION>>>\n\n## Repo specifics\n- restructured\n",
+      });
+      for (let i = 0; i < 2; i++) {
+        await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/setup/generate`,
+          payload: { slug: "demo", existingInstructions: "restructure" },
+        });
+      }
+      const calls = vi.mocked(generateScaffoldContent).mock.calls;
+      expect(calls[1][0].originalAgentsMd).toContain("- original rule");
+      expect(calls[1][0].originalAgentsMd).not.toContain("- restructured");
+      await app.close();
+    });
+
     it("does not 409 an instructions pass when the skill and reviewer already exist", async () => {
       const app = await buildApp();
       commitBothScaffoldFiles(repoDir, "demo");

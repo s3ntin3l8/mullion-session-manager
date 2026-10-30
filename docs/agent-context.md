@@ -322,11 +322,18 @@ forbids) keep being obeyed. Three modes:
   commands. The body is rejected (the turn fails, nothing is committed) unless
   it has exactly one placeholder, no Mullion markers and no
   `## Workflow Conventions` section of its own. The moved text goes into a
-  `mullion:moved` region in `CONTRIBUTING.md`, replaced wholesale on a re-run
-  and never touching what is already there. A `possiblyLossy` warning shows
+  `mullion:moved` region in `CONTRIBUTING.md`: a later run adds to that region
+  (the same text twice is a no-op) and never replaces it or anything else
+  already in the file. A `possiblyLossy` warning shows
   when the rewrite plus the moved text is under 30% of the original's size, or
   more than 60% of its `##` sections are gone from both. Dropping the workflow
   rules is the point, so one missing section is expected.
+
+A `report`/`restructure` turn always starts from a clean checkout of the base
+ref, and so does the next request after one, so switching the choice back to
+**Leave it** never commits an earlier rewrite and the lossiness check compares
+against the repo's real `AGENTS.md`; an earlier preview id for that slug stops
+working.
 
 Either non-`keep` mode counts as worth an agent turn even when the skill and
 reviewer already exist, so it does not 409. Everything the agent returns still

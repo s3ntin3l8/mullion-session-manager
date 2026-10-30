@@ -1,6 +1,7 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
 import {
+  extractMarkedRegion,
   topLevelLines,
   upsertMarkedRegion,
   upsertMarkedRegionAfterIntro,
@@ -55,8 +56,9 @@ export const MULLION_REGION_PLACEHOLDER = "<<<MULLION_REGION>>>";
 // Issue #2316 — wraps text a restructuring generation turn moved out of
 // AGENTS.md into CONTRIBUTING.md. A third, distinct pair (not the pointer pair
 // above, which holds a one-line pointer and is rewritten wholesale on every
-// scaffold): this region is the moved text itself and is likewise replaced
-// wholesale on a re-run, so it can never accumulate duplicates.
+// scaffold): this region is the moved text itself: a re-run adds new moved text
+// after what is there (never replacing it) and skips text already present, so
+// it can't accumulate duplicates either.
 export const MOVED_MARKER_START = "<!-- mullion:moved:start -->";
 export const MOVED_MARKER_END = "<!-- mullion:moved:end -->";
 
@@ -854,12 +856,15 @@ export function computeScaffold(
       );
     }
     if (movedText) {
-      contributing = upsertMarkedRegion(
-        contributing,
-        MOVED_MARKER_START,
-        MOVED_MARKER_END,
-        movedText,
-      );
+      // The agent never sees an earlier run's moved text (the prompt tells it
+      // to ignore every `mullion:*` region), so a later run must ADD to the
+      // region rather than replace it, or text a person has since edited or
+      // an earlier run moved would be destroyed. The same text twice is a
+      // no-op, which keeps a re-run byte-identical.
+      const prior = extractMarkedRegion(contributing, MOVED_MARKER_START, MOVED_MARKER_END);
+      const wanted = movedText.trim();
+      const body = !prior ? wanted : prior.includes(wanted) ? prior : `${prior}\n\n${wanted}`;
+      contributing = upsertMarkedRegion(contributing, MOVED_MARKER_START, MOVED_MARKER_END, body);
     }
     entries.push({ path: "CONTRIBUTING.md", kind: "file", contents: contributing });
   }

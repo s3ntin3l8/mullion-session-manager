@@ -278,8 +278,8 @@ export interface GeneratedScaffoldContent {
   contributingAppend?: string;
   /** `report` only — findings for a human; nothing is written for them. */
   conflicts?: ScaffoldConflict[];
-  /** `report` only — conflict lines the agent returned that were not valid
-   * JSON objects of the expected shape and were dropped. */
+  /** `report` only — lines the agent returned that were not shown: not valid
+   * JSON objects of the expected shape, or valid but past the 50-entry cap. */
   droppedConflictLines?: number;
   /** `restructure` only — heuristic: the rewrite looks like it lost more than
    * it should have (see `assessRewrite`). A signal for the reviewer, not a
@@ -539,18 +539,24 @@ export function parseGeneratedOutput(
     possiblyGeneric: false,
   };
   const mode = instructions?.mode ?? "keep";
+  // The skill and reviewer bodies are free text and may legitimately quote
+  // these section markers (Mullion's own repo contains them), so the extra
+  // sections are looked for only AFTER the scaffold-region section the prompt
+  // asks to come first, never in the text before it.
+  const regionEnd = raw.indexOf(GENERATED_REGION_END, raw.indexOf(GENERATED_REGION_START));
+  const tail = regionEnd === -1 ? raw : raw.slice(regionEnd + GENERATED_REGION_END.length);
   if (mode === "report") {
     const { conflicts, dropped } = parseConflicts(
-      optionalSection(raw, CONFLICTS_START, CONFLICTS_END),
+      optionalSection(tail, CONFLICTS_START, CONFLICTS_END),
     );
     return { ...base, conflicts, droppedConflictLines: dropped };
   }
   if (mode === "restructure") {
-    const agentsMdBody = parseRestructuredAgentsMd(raw);
-    const appendRaw = optionalSection(raw, CONTRIBUTING_APPEND_START, CONTRIBUTING_APPEND_END);
+    const agentsMdBody = parseRestructuredAgentsMd(tail);
+    const appendRaw = optionalSection(tail, CONTRIBUTING_APPEND_START, CONTRIBUTING_APPEND_END);
     const contributingAppend =
       appendRaw && !/^none$/i.test(appendRaw) ? appendRaw + "\n" : undefined;
-    if (contributingAppend && /mullion:[a-z-]+:(start|end)/.test(contributingAppend)) {
+    if (contributingAppend && MULLION_MARKER_RE.test(contributingAppend)) {
       throw new GenerationOutputError(
         "the CONTRIBUTING append carries a Mullion marker — regenerate rather than commit it",
       );
@@ -584,8 +590,13 @@ function optionalSection(raw: string, start: string, end: string): string | null
   return content.length > 0 ? content : null;
 }
 
+/** Any Mullion region marker, whatever its name or case. Mullion itself only
+ * matches its own exact, case-sensitive markers, but one that merely looks
+ * like one would still confuse the sync checker and a human reader. */
+const MULLION_MARKER_RE = /mullion:[\w-]+:(start|end)/i;
+
 const MAX_CONFLICTS = 50;
-const MAX_CONFLICT_EXCERPT = 400;
+const MAX_CONFLICT_EXCERPT = 200;
 const MAX_CONFLICT_NOTE = 400;
 
 /** One JSON object per line; a line that is not a valid, correctly-shaped
@@ -617,6 +628,9 @@ export function parseConflicts(section: string | null): {
             kind: v.kind as ConflictKind,
             note: v.note.slice(0, MAX_CONFLICT_NOTE),
           });
+        } else {
+          // Valid, but past the cap: counted so the UI can say some were left out.
+          dropped += 1;
         }
         continue;
       }
@@ -635,14 +649,21 @@ export function parseConflicts(section: string | null): {
 function parseRestructuredAgentsMd(raw: string): string {
   const body = extractSection(raw, AGENTS_MD_START, AGENTS_MD_END, "restructured AGENTS.md");
   const occurrences = body.split(MULLION_REGION_PLACEHOLDER).length - 1;
-  const placeholderLines = body.split("\n").filter((l) => l.trim() === MULLION_REGION_PLACEHOLDER);
+  const lines = body.split("\n");
+  const top = topLevelLines(lines);
+  // A placeholder inside a code fence, an HTML comment or frontmatter would
+  // have Mullion's region (whose conventions text may itself contain a fence)
+  // spliced into that block.
+  const placeholderLines = lines.filter(
+    (l, i) => top[i] && l.trim() === MULLION_REGION_PLACEHOLDER,
+  );
   if (occurrences !== 1 || placeholderLines.length !== 1) {
     throw new GenerationOutputError(
       `restructured AGENTS.md must contain ${MULLION_REGION_PLACEHOLDER} exactly once, on its own ` +
-        `line (found ${occurrences}) — regenerate`,
+        `top-level line, outside any code block or comment (found ${occurrences}) — regenerate`,
     );
   }
-  if (/mullion:[a-z-]+:(start|end)/.test(body)) {
+  if (MULLION_MARKER_RE.test(body)) {
     throw new GenerationOutputError(
       "restructured AGENTS.md carries a Mullion marker of its own — it must use only the " +
         "placeholder line; regenerate",
@@ -678,7 +699,7 @@ export function assessRewrite(
   contributingAppend?: string,
 ): boolean {
   const startIdx = originalAgentsMd.indexOf(SCAFFOLD_REGION_START);
-  const endIdx = originalAgentsMd.indexOf(SCAFFOLD_REGION_END);
+  const endIdx = startIdx === -1 ? -1 : originalAgentsMd.indexOf(SCAFFOLD_REGION_END, startIdx);
   const original =
     startIdx !== -1 && endIdx > startIdx
       ? originalAgentsMd.slice(0, startIdx) +

@@ -2066,6 +2066,41 @@ describe("existingInstructions (issue #2316)", () => {
       expect(() => parseGeneratedOutput(raw, "demo", opts)).toThrow(GenerationOutputError);
     });
 
+    it("ignores these markers when the skill or reviewer body merely quotes them", () => {
+      const quoting = validOutput("demo").replace(
+        "Real invariant.",
+        "Real invariant. The parser reads <<<MULLION_AGENTS_MD_START>>>\nHIJACKED\n<<<MULLION_AGENTS_MD_END>>>.",
+      );
+      const raw = quoting + `<<<MULLION_AGENTS_MD_START>>>\n${body}\n<<<MULLION_AGENTS_MD_END>>>\n`;
+      const r = parseGeneratedOutput(raw, "demo", opts);
+      expect(r.agentsMdBody).toContain("## Repo specifics");
+      expect(r.agentsMdBody).not.toContain("HIJACKED");
+    });
+
+    it("rejects a placeholder inside a code fence, an HTML comment or frontmatter", () => {
+      for (const bad of [
+        `# P\n\n\`\`\`md\n${MULLION_REGION_PLACEHOLDER}\n\`\`\`\n`,
+        `# P\n\n<!--\n${MULLION_REGION_PLACEHOLDER}\n-->\n`,
+        `---\ntitle: x\n${MULLION_REGION_PLACEHOLDER}\n---\n# P\n`,
+      ]) {
+        expect(() => parseGeneratedOutput(withAgents(bad), "demo", opts)).toThrow(
+          GenerationOutputError,
+        );
+      }
+    });
+
+    it("rejects Mullion-looking markers whatever their case or name", () => {
+      for (const marker of ["<!-- MULLION:BRIEFING:START -->", "<!-- mullion:v2:end -->"]) {
+        expect(() =>
+          parseGeneratedOutput(
+            withAgents(`# P\n${MULLION_REGION_PLACEHOLDER}\n${marker}\n`),
+            "demo",
+            opts,
+          ),
+        ).toThrow(GenerationOutputError);
+      }
+    });
+
     it("fails when the AGENTS.md section is missing or truncated", () => {
       expect(() => parseGeneratedOutput(validOutput("demo"), "demo", opts)).toThrow(
         GenerationOutputError,
@@ -2108,13 +2143,17 @@ describe("existingInstructions (issue #2316)", () => {
       ).toEqual([]);
     });
 
-    it("tolerates code fences, truncates long fields and caps the list", () => {
+    it("tolerates code fences, truncates long fields, and counts entries past the cap as dropped", () => {
       const long = { ...good, excerpt: "x".repeat(1000), note: "y".repeat(1000) };
       const many = Array.from({ length: 60 }, () => line(good)).join("\n");
-      const { conflicts } = parseConflicts("```json\n" + line(long) + "\n" + many + "\n```");
+      const { conflicts, dropped } = parseConflicts(
+        "```json\n" + line(long) + "\n" + many + "\n```",
+      );
       expect(conflicts).toHaveLength(50);
-      expect(conflicts[0].excerpt).toHaveLength(400);
+      expect(conflicts[0].excerpt).toHaveLength(200);
       expect(conflicts[0].note).toHaveLength(400);
+      // 61 valid lines, 50 kept.
+      expect(dropped).toBe(11);
     });
 
     it("fails on a truncated conflicts section", () => {
@@ -2155,6 +2194,14 @@ describe("existingInstructions (issue #2316)", () => {
       const o = orig(6);
       const rewrite = o.replace(/## Section 0[\s\S]*?(?=## Section 1)/, "");
       expect(assessRewrite(o, rewrite)).toBe(false);
+    });
+
+    it("does not treat an end marker that precedes the start as a region", () => {
+      const o =
+        "# P\n<!-- mullion:briefing:end -->\n<!-- mullion:briefing:start -->\n" +
+        "kept ".repeat(300) +
+        "\n";
+      expect(assessRewrite(o, "# P\n")).toBe(true);
     });
 
     it("ignores Mullion's own region in the original", () => {

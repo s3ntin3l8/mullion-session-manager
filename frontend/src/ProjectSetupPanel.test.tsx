@@ -209,6 +209,12 @@ describe("ProjectSetupPanel", () => {
         ).toBeInTheDocument();
       });
 
+      it("report where every line was unreadable is not an all-clear", async () => {
+        await generateWith("Tell me about conflicts", { conflicts: [], droppedConflictLines: 3 });
+        expect(screen.getByText(/3 lines that could not be read/)).toBeInTheDocument();
+        expect(screen.queryByText(/No existing instructions conflict/)).not.toBeInTheDocument();
+      });
+
       it("report with nothing found says so", async () => {
         await generateWith("Tell me about conflicts", { conflicts: [] });
         expect(screen.getByText(/No existing instructions conflict/)).toBeInTheDocument();

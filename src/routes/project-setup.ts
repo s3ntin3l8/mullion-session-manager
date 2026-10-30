@@ -434,6 +434,12 @@ interface PreviewRecord {
   // would make the drift badge wrong from the moment it ships. Same
   // "resolved once, read back unchanged" posture as `slug` itself.
   workflowConventionsText: string;
+  // Issue #2316 — true when this preview came from /setup/generate in a mode
+  // that rewrites instruction files (report/restructure). Its worktree then
+  // holds content (a rewritten AGENTS.md, moved CONTRIBUTING.md text) that a
+  // later request with different options must NOT read back as "the repo's
+  // current files" — see ensureSetupWorktree's `fresh`.
+  rewroteInstructions?: boolean;
 }
 
 // In-memory only, primary-only, short-lived — a preview is a "here's what
@@ -521,9 +527,27 @@ async function ensureSetupWorktree(
   project: { cwd: string; hostId: string },
   projectId: number,
   slug: string,
+  opts: { fresh?: boolean } = {},
 ): Promise<{ ok: true; worktree: ReadyWorktree } | { ok: false; message: string }> {
   const seed = `setup-${slug}`;
-  const liveSlugPreview = findLiveSlugPreview(projectId, slug);
+  let liveSlugPreview = findLiveSlugPreview(projectId, slug);
+  // Issue #2316 — a reused worktree carries the previous request's uncommitted
+  // writes, and existingFiles is read from it. That is deliberate for a plain
+  // re-preview (toggling a checkbox keeps the window), but a generate turn
+  // that rewrote instruction files would leak into the next request: switch
+  // the radio from "Restructure" back to "Leave it" and the restructured
+  // AGENTS.md would still be committed, and assessRewrite would compare
+  // against the previous rewrite instead of the real original. So a generate
+  // always starts from a clean checkout of the base ref, and so does any
+  // request that follows a generate which rewrote instructions. Older preview
+  // records for the slug are dropped with the worktree they pointed at, so an
+  // old previewId can never apply content it was not computed for.
+  if (opts.fresh || liveSlugPreview?.rewroteInstructions) {
+    for (const [id, record] of previews) {
+      if (record.projectId === projectId && record.slug === slug) previews.delete(id);
+    }
+    liveSlugPreview = null;
+  }
   const worktreeResult = await reuseOrCreateWorktree(
     app,
     project.hostId,
@@ -557,6 +581,7 @@ async function finishPreview(
   options: ScaffoldOptions,
   worktree: ReadyWorktree,
   existingFiles: Record<string, string | undefined>,
+  rewroteInstructions = false,
 ): Promise<PreviewComputation> {
   let entries;
   try {
@@ -610,6 +635,7 @@ async function finishPreview(
     // — the `?? ""` only guards ScaffoldOptions's own optional typing, it's
     // never actually reached with undefined in practice.
     workflowConventionsText: options.workflowConventionsText ?? "",
+    ...(rewroteInstructions ? { rewroteInstructions: true } : {}),
   });
 
   return {
@@ -738,9 +764,11 @@ export async function projectSetupRoute(app: FastifyInstance) {
       // independent read against `project.cwd` could answer a DIFFERENT
       // question if the live checkout and the scratch worktree's resolved
       // base ref ever disagree).
-      const ensured = await ensureSetupWorktree(app, project, projectId, options.slug);
-      if (!ensured.ok) return reply.internalServerError(ensured.message);
       const existingInstructions = request.body.existingInstructions ?? "keep";
+      const ensured = await ensureSetupWorktree(app, project, projectId, options.slug, {
+        fresh: existingInstructions !== "keep",
+      });
+      if (!ensured.ok) return reply.internalServerError(ensured.message);
       const relPaths = scaffoldableRelPaths(options.slug, options);
       // Issue #2316 — a restructure may append moved text to CONTRIBUTING.md,
       // which must be read so the append is an upsert into the real file and
@@ -871,6 +899,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
         { ...options, generated },
         ensured.worktree,
         writeExistingFiles,
+        existingInstructions !== "keep",
       );
       if (!result.ok) return sendPreviewComputation(reply, result);
       // Hermes review, PR #1200 round 1 (suggestion) — `hasAgentsOverride`

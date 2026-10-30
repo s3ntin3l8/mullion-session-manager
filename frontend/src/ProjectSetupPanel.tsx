@@ -56,6 +56,17 @@ const INSTRUCTION_MODES: Array<{ id: ExistingInstructionsMode; label: string; de
 
 function ConflictList({ conflicts, dropped }: { conflicts: ScaffoldConflict[]; dropped: number }) {
   if (conflicts.length === 0) {
+    // "Nothing found" is only true if nothing was lost: lines the agent
+    // returned but we could not read must not read as an all-clear.
+    if (dropped > 0) {
+      return (
+        <div className="agent-rules-panel-notice warning">
+          The agent returned {dropped} line{dropped === 1 ? "" : "s"} that could not be read, so
+          this scaffold cannot say whether existing instructions conflict with the conventions.
+          Generate again, or check AGENTS.md by hand.
+        </div>
+      );
+    }
     return (
       <div className="agent-rules-panel-notice">
         No existing instructions conflict with the conventions.
@@ -76,7 +87,8 @@ function ConflictList({ conflicts, dropped }: { conflicts: ScaffoldConflict[]; d
       </ul>
       {dropped > 0 && (
         <div>
-          {dropped} more line{dropped === 1 ? "" : "s"} from the agent could not be read.
+          {dropped} more line{dropped === 1 ? "" : "s"} from the agent could not be read or were
+          left out.
         </div>
       )}
     </div>
@@ -555,14 +567,21 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
       )}
       <div className="settings-row">
         <div className="settings-row-text">
-          <label className="settings-row-label">Instructions this repo already has</label>
+          <div className="settings-row-label" id="setup-existing-instructions-label">
+            Instructions this repo already has
+          </div>
           <div className="settings-row-desc">
             Only used by “Generate with agent”. If this repo already has its own workflow rules,
             they can contradict the conventions Mullion commits, and agents will follow whichever is
             in the file.
           </div>
         </div>
-        <div className="settings-row-control" role="radiogroup" aria-label="Existing instructions">
+        <div
+          className="settings-row-control"
+          role="radiogroup"
+          aria-labelledby="setup-existing-instructions-label"
+          aria-describedby="setup-existing-instructions-desc"
+        >
           {INSTRUCTION_MODES.map((m) => (
             <label key={m.id} style={{ display: "block" }} title={m.desc}>
               <input
@@ -570,12 +589,13 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
                 name="setup-existing-instructions"
                 value={m.id}
                 checked={existingInstructions === m.id}
+                disabled={generating}
                 onChange={() => setExistingInstructions(m.id)}
               />{" "}
               {m.label}
             </label>
           ))}
-          <div className="settings-row-desc">
+          <div className="settings-row-desc" id="setup-existing-instructions-desc">
             {INSTRUCTION_MODES.find((m) => m.id === existingInstructions)?.desc}
           </div>
         </div>
