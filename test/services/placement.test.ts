@@ -532,20 +532,78 @@ describe("required agent CLI (issue #2240)", () => {
 
 describe("project steering flags (issue #2241)", () => {
   it("parses the column leniently and serializes default flags to null", () => {
-    expect(parsePlacementConstraints(null)).toEqual({ platform: [], allowBurst: false });
-    expect(parsePlacementConstraints("not json")).toEqual({ platform: [], allowBurst: false });
-    expect(parsePlacementConstraints("[1]")).toEqual({ platform: [], allowBurst: false });
+    const none = { platform: [], allowBurst: false, capabilities: [] };
+    expect(parsePlacementConstraints(null)).toEqual(none);
+    expect(parsePlacementConstraints("not json")).toEqual(none);
+    expect(parsePlacementConstraints("[1]")).toEqual(none);
     expect(
       parsePlacementConstraints('{"platform":["win32","plan9","darwin"],"allowBurst":true}'),
-    ).toEqual({ platform: ["darwin", "win32"], allowBurst: true });
+    ).toEqual({ platform: ["darwin", "win32"], allowBurst: true, capabilities: [] });
     expect(serializePlacementConstraints(null)).toBeNull();
     expect(serializePlacementConstraints({ platform: [], allowBurst: false })).toBeNull();
     expect(serializePlacementConstraints({ platform: ["linux"] })).toBe(
-      '{"platform":["linux"],"allowBurst":false}',
+      '{"platform":["linux"],"allowBurst":false,"capabilities":[]}',
     );
     expect(serializePlacementConstraints({ allowBurst: true })).toBe(
-      '{"platform":[],"allowBurst":true}',
+      '{"platform":[],"allowBurst":true,"capabilities":[]}',
     );
+  });
+
+  it("round-trips capabilities, dropping unknown ones (issue #2306)", () => {
+    const raw = serializePlacementConstraints({ capabilities: ["android-emulator", "xcode"] });
+    expect(raw).toBe(
+      '{"platform":[],"allowBurst":false,"capabilities":["xcode","android-emulator"]}',
+    );
+    expect(parsePlacementConstraints(raw).capabilities).toEqual(["xcode", "android-emulator"]);
+    // Only capabilities set: still not the all-default null.
+    expect(serializePlacementConstraints({ capabilities: ["xcode"] })).not.toBeNull();
+    expect(serializePlacementConstraints({ capabilities: ["gpu"] })).toBeNull();
+    // A column from before the field, or with a junk value, reads as none.
+    expect(parsePlacementConstraints('{"platform":[],"allowBurst":false}').capabilities).toEqual(
+      [],
+    );
+    expect(parsePlacementConstraints('{"capabilities":["gpu","xcode"]}').capabilities).toEqual([
+      "xcode",
+    ]);
+    expect(parsePlacementConstraints('{"capabilities":"xcode"}').capabilities).toEqual([]);
+  });
+
+  it("excludes a host KNOWN to lack a required capability, naming it", () => {
+    const decision = chooseHost(
+      [
+        candidate({ hostId: "a", capabilities: [], capacity: capacity(0, 8) }),
+        candidate({ hostId: "b", capabilities: ["xcode"], capacity: capacity(4, 8) }),
+      ],
+      context({ requiredCapabilities: ["xcode"] }),
+    );
+    expect(decision.hostId).toBe("b");
+    expect(decision.excluded).toEqual([{ hostId: "a", reason: "host lacks capability: xcode" }]);
+    expect(decision.reason).not.toContain("capabilities unknown");
+  });
+
+  it("fails OPEN on unknown capabilities and notes it", () => {
+    for (const capabilities of [null, undefined]) {
+      const decision = chooseHost(
+        [candidate({ hostId: "a", capabilities })],
+        context({ requiredCapabilities: ["xcode"] }),
+      );
+      expect(decision.hostId).toBe("a");
+      expect(decision.reason).toContain("capabilities unknown");
+    }
+    // Nothing required: no note, no filter.
+    const plain = chooseHost([candidate({ capabilities: [] })], context());
+    expect(plain.excluded).toEqual([]);
+    expect(plain.reason).not.toContain("capabilities unknown");
+  });
+
+  it("requires every capability, and falls back when every host lacks one", () => {
+    const hosts = [candidate({ hostId: "a", capabilities: ["xcode"] })];
+    const none = chooseHost(
+      hosts,
+      context({ requiredCapabilities: ["xcode", "android-emulator"] }),
+    );
+    expect(none.fellBack).toBe(true);
+    expect(none.excluded[0].reason).toBe("host lacks capability: android-emulator");
   });
 
   it("excludes hosts outside the platform allow-list, naming the flag", () => {

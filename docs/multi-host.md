@@ -269,10 +269,10 @@ Mullion than the primary is flagged `(agent vX, older than the primary)`.
 **Placement flags (#2241).** A project can bound where Auto may place its work,
 in **Edit project → Placement flags** or `placementConstraints` on
 `POST`/`PATCH /api/projects` (stored in `projects.placement_constraints`; `null`
-clears it; the object replaces the stored one, so send both fields):
+clears it; the object replaces the stored one, so send every field):
 
 ```json
-{ "platform": ["darwin"], "allowBurst": false }
+{ "platform": ["darwin"], "allowBurst": false, "capabilities": ["xcode"] }
 ```
 
 - `platform` — an allow-list of `darwin`, `linux` and `win32`. Empty or absent
@@ -282,32 +282,42 @@ clears it; the object replaces the stored one, so send both fields):
   reported a platform yet says so).
 - `allowBurst` — `false` by default. Burst hosts are out of Auto and unattended
   Task Master unless the project sets this to `true`.
+- `capabilities` (#2306) — host capabilities the project **requires**: `xcode`
+  (the iOS Simulator) and `android-emulator`. Empty or absent means none. A host
+  KNOWN to lack one (see "Host capabilities") is excluded as
+  `host lacks capability: xcode`; a host that has not reported its capabilities
+  is still tried, and the preview notes `capabilities unknown`.
 
 The flags steer **automatic** placement: an Auto launch (including a per-launch
 Auto on a pinned project) and unattended Task Master. A `pinned` project still
 runs on its own host. Where they meet an explicit request:
 
-- **A task's `Platform:` / `Host:` directive overrides the flags.** The task
-  named exactly what it needs, so the project's flags do not apply to it.
+- **A task's `Platform:` / `Host:` directive overrides `platform` and
+  `allowBurst`, but not `capabilities`.** A capability is a requirement, applied
+  like the agent CLI a session needs: Auto, an explicit launcher/caller target
+  and a task directive all check it, so `Platform: darwin` on an `xcode` project
+  is refused on a Mac without Xcode. (A pinned project still checks nothing for
+  an untargeted launch.)
 - **An explicit launcher host or `targetHostId` / `targetPlatform` is checked
-  against `platform`.** The launcher's host chip disables a host the flag rules
-  out and says why. Naming a burst host stays the opt-in to burst hosts, so
+  against `platform` and `capabilities`.** The launcher's host chip disables a
+  host a flag rules out and says why. Naming a burst host stays the opt-in to burst hosts, so
   `allowBurst` does not apply to an explicit target.
   This holds for a pinned project too: the flag is checked whenever a host is
   named, but a launch that names nothing on a pinned project is not steered.
-- **No host satisfies `platform`.** An Auto launch is refused with `409` and the
+- **No host satisfies the flags.** An Auto launch is refused with `409` and the
   reason; it never falls back to the project's own host (which may not satisfy
   the flag). Task Master follows the same rule as for directives: it **holds**
   the task while a host that could satisfy the flag is registered but not
   eligible right now (offline, parked, no capacity reading yet, or its platform
-  not reported yet) and **fails** it when none could. The refusal names the
-  flags, never other hosts.
+  not reported yet) and **fails** it when none could; a host known to lack a
+  required capability never counts as one that could (waiting does not install
+  Xcode). If the hosts cannot be read at all, a capability flag refuses
+  (transiently) rather than falling back. The refusal names the flags, never
+  other hosts.
 
 When two projects are merged (**Settings → Projects**), the survivor takes the
-duplicate's flags only if it has none of its own.
-
-Hosts' capabilities (an emulator, Xcode) are not flags yet; no host reports
-them.
+duplicate's flags only if it has none of its own; the whole column moves as one,
+so a survivor that already has flags does not gain the duplicate's capabilities.
 
 **A host has to have the project.** A session runs in a directory, so a host
 that does not have the project cannot host a session for it: the checkout

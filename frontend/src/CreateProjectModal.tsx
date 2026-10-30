@@ -11,7 +11,12 @@ import type {
   PlacementMode,
   PlacementPreview,
 } from "./api/index.js";
-import { PLACEMENT_PLATFORMS, type PlacementPlatform } from "../../src/shared/constants.js";
+import {
+  PLACEMENT_CAPABILITIES,
+  PLACEMENT_PLATFORMS,
+  type PlacementCapability,
+  type PlacementPlatform,
+} from "../../src/shared/constants.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { useDashboardStore } from "./store/index.js";
 import { Dropdown } from "./ui/primitives.js";
@@ -21,6 +26,11 @@ const PLATFORM_LABELS: Record<PlacementPlatform, string> = {
   darwin: "macOS",
   linux: "Linux",
   win32: "Windows",
+};
+
+const CAPABILITY_LABELS: Record<PlacementCapability, string> = {
+  xcode: "Needs Xcode (iOS Simulator)",
+  "android-emulator": "Needs an Android emulator",
 };
 
 // Empty string represents "unset" (fall through to the next precedence
@@ -241,6 +251,9 @@ export function CreateProjectModal({
   );
   const [flagAllowBurst, setFlagAllowBurst] = useState(
     initialPlacementConstraints?.allowBurst ?? false,
+  );
+  const [flagCapabilities, setFlagCapabilities] = useState<PlacementCapability[]>(
+    initialPlacementConstraints?.capabilities ?? [],
   );
   const [preview, setPreview] = useState<PlacementPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -536,7 +549,8 @@ export function CreateProjectModal({
     // Issue #2241 — only a changed set of flags is sent.
     const flagsChanged =
       flagAllowBurst !== (initialPlacementConstraints?.allowBurst ?? false) ||
-      flagPlatforms.join(",") !== (initialPlacementConstraints?.platform ?? []).join(",");
+      flagPlatforms.join(",") !== (initialPlacementConstraints?.platform ?? []).join(",") ||
+      flagCapabilities.join(",") !== (initialPlacementConstraints?.capabilities ?? []).join(",");
     setSubmitting(true);
     setError(null);
     try {
@@ -622,7 +636,13 @@ export function CreateProjectModal({
         placement,
         ...(hostCwdsToSend ? { hostCwds: hostCwdsToSend } : {}),
         ...(isEdit && flagsChanged
-          ? { placementConstraints: { platform: flagPlatforms, allowBurst: flagAllowBurst } }
+          ? {
+              placementConstraints: {
+                platform: flagPlatforms,
+                allowBurst: flagAllowBurst,
+                capabilities: flagCapabilities,
+              },
+            }
           : {}),
         ...(opts?.createDir ? { createDir: true, gitInit } : {}),
         ...(opts?.allowDuplicate ? { allowDuplicate: true } : {}),
@@ -856,7 +876,29 @@ export function CreateProjectModal({
           </label>
           <span className="create-modal-field-hint">
             Burst hosts (laptops that are not always on) stay out of Auto and unattended Task Master
-            unless this is on. A task's Platform:/Host: line overrides these flags.
+            unless this is on. A task's Platform:/Host: line overrides the platform and burst flags.
+          </span>
+          {PLACEMENT_CAPABILITIES.map((c) => (
+            <label key={c} className="create-modal-dir-confirm-checkbox">
+              <input
+                type="checkbox"
+                checked={flagCapabilities.includes(c)}
+                onChange={(e) =>
+                  setFlagCapabilities(
+                    PLACEMENT_CAPABILITIES.filter((q) =>
+                      q === c ? e.target.checked : flagCapabilities.includes(q),
+                    ),
+                  )
+                }
+              />
+              {CAPABILITY_LABELS[c]}
+            </label>
+          ))}
+          <span className="create-modal-field-hint">
+            A host known to lack a needed capability is never used for a targeted launch or a task's
+            Platform:/Host: line
+            {placement === "auto" ? ", nor by automatic placement" : ""}. A host that has not
+            reported its capabilities is still tried.
           </span>
         </fieldset>
       )}

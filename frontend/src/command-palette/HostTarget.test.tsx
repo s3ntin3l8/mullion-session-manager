@@ -272,6 +272,41 @@ describe("project placement flags in the host chip (#2241)", () => {
     ).toBe(false);
   });
 
+  it("disables a host KNOWN to lack a required capability, with the reason (#2306)", () => {
+    const HAS = makeHost({
+      id: "has",
+      name: "Has Xcode",
+      health: "online",
+      capabilities: ["xcode"],
+    });
+    const LACKS = makeHost({ id: "lacks", name: "No Xcode", health: "online", capabilities: [] });
+    const UNKNOWN = makeHost({ id: "unk", name: "Unknown", health: "online", capabilities: null });
+    const project = {
+      hostId: "local",
+      placement: "pinned",
+      hostCwds: { has: "/a", lacks: "/b", unk: "/c" },
+      placementConstraints: { platform: [], allowBurst: false, capabilities: ["xcode" as const] },
+    };
+    const opts = buildHostTargetOptions(project, [HAS, LACKS, UNKNOWN]);
+    expect(opts.find((o) => o.value === "has")?.disabled).toBe(false);
+    expect(opts.find((o) => o.value === "unk")?.disabled).toBe(false);
+    expect(opts.find((o) => o.value === "lacks")).toMatchObject({
+      disabled: true,
+      label: "No Xcode (host lacks capability: xcode)",
+    });
+    // A remembered choice that now lacks the capability falls back.
+    expect(resolveHostChoice("lacks", project, [HAS, LACKS, UNKNOWN])).toBeNull();
+    expect(resolveHostChoice("has", project, [HAS, LACKS, UNKNOWN])).toBe("has");
+
+    // The project's own host is disabled only where choosing it is an explicit target.
+    const own = makeHost({ id: "local", name: "local", isLocal: true, capabilities: [] });
+    expect(buildHostTargetOptions(project, [own])[0].disabled).toBe(false);
+    expect(buildHostTargetOptions({ ...project, placement: "auto" }, [own])[0]).toMatchObject({
+      disabled: true,
+      label: "this server (host lacks capability: xcode)",
+    });
+  });
+
   it("words a refused Auto preview without naming a host as the choice", () => {
     const text = describeAutoPreview(
       {

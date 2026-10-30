@@ -49,7 +49,9 @@ import {
   DOCKER_STACK_SESSION_NAME_PREFIX,
   MAX_HOST_CWDS,
   PLACEMENT_MODES,
+  PLACEMENT_CAPABILITIES,
   PLACEMENT_PLATFORMS,
+  type PlacementCapability,
   type PlacementMode,
   type PlacementPlatform,
 } from "../shared/constants.js";
@@ -236,14 +238,17 @@ const PROJECT_ID_LIST_SCHEMA = {
 interface PlacementConstraintsBody {
   platform?: PlacementPlatform[];
   allowBurst?: boolean;
+  capabilities?: PlacementCapability[];
 }
 
 /** Issue #2241 — a project's placement steering flags (see schema.ts). */
 const PLACEMENT_CONSTRAINTS_SCHEMA = {
   type: ["object", "null"],
   additionalProperties: false,
-  // Replaced wholesale on PATCH, so a caller must state both fields: a partial
-  // object would silently reset the other one.
+  // Replaced wholesale on PATCH, so a caller must state the platform and burst
+  // fields: a partial object would silently reset the other one. `capabilities`
+  // (issue #2306) is optional so a client that predates it keeps working; an
+  // omitted list reads as none.
   required: ["platform", "allowBurst"],
   properties: {
     // An allow-list; empty = any platform.
@@ -254,6 +259,13 @@ const PLACEMENT_CONSTRAINTS_SCHEMA = {
       uniqueItems: true,
     },
     allowBurst: { type: "boolean" },
+    // Host capabilities the project requires; empty = none.
+    capabilities: {
+      type: "array",
+      items: { type: "string", enum: [...PLACEMENT_CAPABILITIES] },
+      maxItems: PLACEMENT_CAPABILITIES.length,
+      uniqueItems: true,
+    },
   },
 } as const;
 

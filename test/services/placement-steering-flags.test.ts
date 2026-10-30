@@ -22,6 +22,7 @@ const { closeDb } = await import("../../src/db/client.js");
 const sessionBackendModule = await import("../../src/services/session-backend.js");
 const { createSessionRecord } = await import("../../src/services/session-lifecycle.js");
 const { previewPlacement, resolveTargetHost } = await import("../../src/services/placement.js");
+const hostCapacityModule = await import("../../src/services/host-capacity.js");
 
 // Issue #2241 — a project's steering flags (platform allow-list, allowBurst)
 // bound where Auto may place work. Task Master's side is in task-claim.test.ts.
@@ -274,5 +275,145 @@ describe("a project's placement steering flags (issue #2241)", () => {
 
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.row.hostId).toBe("local");
+  });
+
+  // Issue #2306 — a capability is a REQUIREMENT: unlike `platform`, a task
+  // directive does not override it.
+  describe("capability flag (issue #2306)", () => {
+    /** Records what a host reports; a fresh local entry also stops the background refresh. */
+    function setCapabilities(hostId: string, capabilities: string[] | null) {
+      app.hostAgentTracker?.record(hostId, { agents: null, capabilities, mullionVersion: null });
+    }
+    const preview = (project: ReturnType<typeof addProject>) =>
+      previewPlacement(app, {
+        project: {
+          hostId: project.hostId,
+          placement: "auto",
+          cwd: project.cwd,
+          hostCwds: project.hostCwds,
+          placementConstraints: project.placementConstraints,
+        },
+      });
+    const asTargetBase = (project: ReturnType<typeof addProject>) => ({
+      project: {
+        hostId: project.hostId,
+        placement: project.placement,
+        cwd: project.cwd,
+        hostCwds: project.hostCwds,
+        placementConstraints: project.placementConstraints,
+      },
+      unattended: true,
+    });
+    const XCODE = { platform: [], allowBurst: false, capabilities: ["xcode"] };
+
+    it("sends Auto to the host that has it, excluding the one known to lack it", async () => {
+      const host = await addHost(OTHER);
+      setCapabilities("local", []);
+      setCapabilities(host, ["xcode"]);
+      const project = addProject({ [host]: REMOTE_CWD }, XCODE);
+
+      const decision = preview(project);
+      expect(decision.hostId).toBe(host);
+      expect(decision.excluded).toContainEqual({
+        hostId: "local",
+        reason: "host lacks capability: xcode",
+      });
+
+      const res = await createSessionRecord(app, { projectId: project.id, command: "bash" });
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.row.hostId).toBe(host);
+    });
+
+    it("fails open on a host that has not reported its capabilities, and says so", async () => {
+      const host = await addHost(OTHER);
+      setCapabilities("local", []);
+      setCapabilities(host, null);
+      const project = addProject({ [host]: REMOTE_CWD }, XCODE);
+
+      const decision = preview(project);
+      expect(decision.hostId).toBe(host);
+      expect(decision.refusal).toBeUndefined();
+      expect(decision.reason).toContain("capabilities unknown");
+    });
+
+    it("refuses non-transiently when no host has it — never the pinned host", async () => {
+      const host = await addHost(OTHER);
+      setCapabilities("local", []);
+      setCapabilities(host, []);
+      const project = addProject({ [host]: REMOTE_CWD }, XCODE);
+
+      const decision = preview(project);
+      expect(decision.refusal).toMatchObject({ transient: false });
+      expect(decision.refusal?.detail).toContain("project requires xcode");
+      expect(decision.refusal?.detail).toContain("a matching host lacks xcode");
+      expect(decision.refusal?.detail).not.toContain(host);
+
+      const res = await createSessionRecord(app, { projectId: project.id, command: "bash" });
+      expect(res).toMatchObject({ ok: false, reason: "no-target-host" });
+      expect(app.db.select().from(sessions).all()).toHaveLength(0);
+    });
+
+    it("refuses transiently when the host that has it is not eligible right now", async () => {
+      const host = await addHost(OTHER);
+      app.db.update(hosts).set({ drained: true }).where(eq(hosts.id, host)).run();
+      setCapabilities("local", []);
+      setCapabilities(host, ["xcode"]);
+      const project = addProject({ [host]: REMOTE_CWD }, XCODE);
+
+      const decision = preview(project);
+      expect(decision.refusal?.transient).toBe(true);
+      expect(decision.refusal?.detail).toContain("parked/drained");
+    });
+
+    it("refuses transiently, with no fallback, when the hosts cannot be read", async () => {
+      vi.spyOn(hostCapacityModule, "measureHostCapacity").mockImplementation(() => {
+        throw new Error("boom");
+      });
+      const project = addProject({}, XCODE);
+
+      const decision = preview(project);
+      expect(decision.refusal).toMatchObject({ transient: true, unreadable: true });
+      expect(decision.refusal?.detail).toContain("project requires xcode");
+    });
+
+    it("checks an explicit launcher target AND a task directive against it", async () => {
+      const host = await addHost(OTHER);
+      setCapabilities("local", []);
+      setCapabilities(host, ["xcode"]);
+      const project = addProject({ [host]: REMOTE_CWD }, XCODE);
+
+      // The host with Xcode is fine for both paths.
+      const okTarget = { hostId: host };
+      expect(resolveTargetHost(app, { ...asTargetBase(project), target: okTarget })).toMatchObject({
+        ok: true,
+      });
+
+      // Naming the primary (no Xcode) is refused, directive or not.
+      for (const checkProjectFlags of [true, undefined]) {
+        const refused = resolveTargetHost(app, {
+          ...asTargetBase(project),
+          target: { hostId: "local" },
+          checkProjectFlags,
+        });
+        expect(refused).toMatchObject({ ok: false, transient: false });
+        if (!refused.ok) expect(refused.detail).toContain("a matching host lacks xcode");
+      }
+
+      // A directive for the primary's platform is refused too (unlike the platform flag).
+      const byPlatform = resolveTargetHost(app, {
+        ...asTargetBase(project),
+        target: { platform: process.platform },
+      });
+      expect(byPlatform).toMatchObject({ ok: false, transient: false });
+    });
+
+    it("leaves a pinned project alone", async () => {
+      setCapabilities("local", []);
+      const project = addProject({}, XCODE, "pinned");
+
+      const res = await createSessionRecord(app, { projectId: project.id, command: "bash" });
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.row.hostId).toBe("local");
+    });
   });
 });
