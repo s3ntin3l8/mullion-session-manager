@@ -807,19 +807,16 @@ describe("ProjectBriefingPanel", () => {
     });
   });
 
-  // Issue #895 — Scaffold Mullion is local-host projects only, so the
-  // scaffold-recommendation/staleness copy needs a different, still-
-  // actionable message for a remote-hosted project instead of pointing at
-  // an action that 501s. Reads `project.hostId` off the store like the
-  // "session injection overrides" describe block above.
-  describe("remote-hosted project scaffold copy (issue #895)", () => {
+  // Scaffold Mullion works for remote-hosted projects too (#895, #1101), so
+  // the recommendation and re-scaffold staleness copy must not branch on host.
+  describe("scaffold copy for a remote-hosted project", () => {
     const originalState = useDashboardStore.getState();
 
     afterEach(() => {
       useDashboardStore.setState(originalState, true);
     });
 
-    it("shows the remote-project recommendation and staleness copy instead of the local one", async () => {
+    it("shows the same recommendation and re-scaffold copy as a local project", async () => {
       useDashboardStore.setState({
         projects: [makeProject({ id: 1, hostId: "some-remote-host" })],
       });
@@ -841,42 +838,10 @@ describe("ProjectBriefingPanel", () => {
       await user.click(screen.getByText("Skill"));
 
       expect(
-        await screen.findByText(/only supports local-host projects today/),
-      ).toBeInTheDocument();
-      expect(
-        screen.queryByText(/Recommended: use Scaffold Mullion \(Command Palette/),
-      ).not.toBeInTheDocument();
-      expect(
-        screen.getByText(/there's currently no way to deliver this content to codex\/agy/),
-      ).toBeInTheDocument();
-      expect(
-        screen.queryByText(/won't change what codex\/agy actually see until you re-scaffold/),
-      ).not.toBeInTheDocument();
-    });
-
-    it("still shows the local-project copy for a local-hosted project", async () => {
-      useDashboardStore.setState({
-        projects: [makeProject({ id: 1, hostId: "local" })],
-      });
-      vi.stubGlobal(
-        "fetch",
-        mockFetch({
-          get: () =>
-            jsonResponse(200, {
-              briefing: null,
-              skill: "---\nname: s\ndescription: d\n---\nbody",
-              reviewerAgent: null,
-            }),
-        }),
-      );
-      const user = userEvent.setup();
-      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
-
-      await screen.findByPlaceholderText(/No pinned note set/);
-      await user.click(screen.getByText("Skill"));
-
-      expect(
         await screen.findByText(/won't change what codex\/agy actually see until you re-scaffold/),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/Recommended: use Scaffold Mullion \(Command Palette/),
       ).toBeInTheDocument();
       expect(screen.queryByText(/only supports local-host projects/)).not.toBeInTheDocument();
     });
