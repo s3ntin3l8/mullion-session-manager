@@ -12,6 +12,7 @@ import {
   BotIcon,
   ClockIcon,
   GitHubIcon,
+  GitBranchIcon,
   TerminalPromptIcon,
   WarningTriangleIcon,
 } from "./ui/icons.js";
@@ -19,6 +20,10 @@ import { formatRelativeAge } from "./relativeTime.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { matchSessionPr } from "./github/matchSessionPr.js";
 import { sessionPrDotClass } from "./lib/sidebarStatus.js";
+import { useStartSessionFrom } from "./hooks/useStartSessionFrom.js";
+import { sessionBranch } from "./hooks/useMullionLinks.js";
+import type { MullionLinkEntry } from "./hooks/useMullionLinks.js";
+import { decideSessionAction } from "./ui/sidebar/linkDecisions.js";
 import { Markdown } from "./ui/Markdown.js";
 import { STATUS_PRESENTATION, formatStatusLabel } from "./sessionStatus.js";
 import { approvalStateText, ciGatingUnavailableText, needsHumanText } from "./needsHuman.js";
@@ -64,6 +69,85 @@ function SessionAttentionBanner({
       <button className="task-detail-link" onClick={() => onOpenSession(session)}>
         open it
       </button>
+    </div>
+  );
+}
+
+// The sidebar PR view's "Hand off", offered from the drawer: a plain ad-hoc
+// session on the PR's branch, seeded with what is wrong with the PR. It is
+// not the task's worker session, so it never touches the task's status,
+// autoReturnRounds or worker/reviewer slots. `prNumber` is the open PR (the
+// caller only renders this for one); an existing session on the branch is
+// reused via the same decideSessionAction rule PrDetailView uses, ignoring
+// the task's own worker/review sessions.
+function FixInSessionAction({
+  task,
+  prNumber,
+  branch,
+}: {
+  task: Task;
+  prNumber: number;
+  branch: string | null;
+}) {
+  const sessions = useDashboardStore((s) => s.sessions);
+  const requestOpenSession = useDashboardStore((s) => s.requestOpenSession);
+  const startSessionFrom = useStartSessionFrom(task.projectId);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const entry = {
+    sessions: sessions
+      .filter(
+        (s) =>
+          s.projectId === task.projectId &&
+          s.kind === "terminal" &&
+          s.status !== "killed" &&
+          s.id !== task.sessionId &&
+          s.id !== task.reviewSessionId &&
+          branch !== null &&
+          sessionBranch(s) === branch,
+      )
+      .map((session) => ({
+        session,
+        severity: session.sessionStatusSeverity,
+        attention: session.sessionStatusAttentionRequired,
+        children: [],
+      })),
+  } as unknown as MullionLinkEntry;
+  const action = decideSessionAction(entry);
+
+  const onClick = async () => {
+    if (action.kind === "open-existing") {
+      requestOpenSession(action.sessionId);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const { prompt, branch: prBranch } = await api.getProjectPrHandoff(task.projectId, prNumber);
+      await startSessionFrom({ worktree: { branch: prBranch }, seedPrompt: prompt });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to start a fix session");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="task-detail-fix-session">
+      <button
+        className="task-detail-meta-row task-detail-link"
+        disabled={busy}
+        title={busy ? "Preparing the fix session…" : undefined}
+        onClick={() => void onClick()}
+      >
+        <GitBranchIcon size={12} />{" "}
+        {action.kind === "open-existing" ? "Open existing session" : "Fix in a session"}
+      </button>
+      <span className="task-detail-hint">
+        Starts an ordinary session on the PR branch — it does not change this task.
+      </span>
+      {error && <span className="task-detail-error">{error}</span>}
     </div>
   );
 }
@@ -178,6 +262,11 @@ export function TaskDetail({
   // Branch only (no taskPrNumber): the card below deliberately prefers the
   // branch-matched PR as the CURRENT one over task.prNumber.
   const matchedPr = matchSessionPr(prsStatus?.prs, { branch: task.branchName });
+  // prsByProject only lists OPEN PRs, so a match is what "the PR is open" means.
+  const matchedOpenPr = matchSessionPr(prsStatus?.prs, {
+    branch: task.branchName,
+    taskPrNumber: task.prNumber,
+  });
   // #701 — sibling tasks that are themselves Task Master tasks (i.e. also
   // carry the task label) and list this task as their parent. Hermes
   // review — issue numbers are per-repo, and cross-repo parents are
@@ -418,6 +507,14 @@ export function TaskDetail({
           </button>
         )}
       </div>
+
+      {task.prNumber !== null && task.mergedAt === null && matchedOpenPr && (
+        <FixInSessionAction
+          task={task}
+          prNumber={matchedOpenPr.number}
+          branch={matchedOpenPr.headBranch}
+        />
+      )}
 
       {task.body && <div className="task-detail-body">{task.body}</div>}
 
