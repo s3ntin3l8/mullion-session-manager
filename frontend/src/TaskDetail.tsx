@@ -903,36 +903,44 @@ function DeleteTaskAction({
         ? "Delete this task? The branch is untouched. This can't be undone."
         : "Delete this task? This can't be undone.";
 
+  // The buttons keep the right-aligned slot "Delete task" occupied (same
+  // wrapper class), and the hint/error go in a following full-width sibling so
+  // a long hint wraps on its own line instead of pushing the buttons around
+  // the action row.
   return (
-    <div className="task-detail-actions task-detail-actions-delete">
-      <span className="task-detail-hint">{hint}</span>
-      <button
-        className="notif-gate-btn notif-gate-deny-confirm"
-        disabled={submitting}
-        onClick={async () => {
-          setSubmitting(true);
-          setError(null);
-          try {
-            if (needsForce) await deleteTask(taskId, { force: true });
-            else await deleteTask(taskId);
-          } catch (err) {
-            if (!needsForce && err instanceof ApiError && err.statusCode === 409) {
-              setNeedsForce(true);
+    <>
+      <div className="task-detail-actions task-detail-actions-delete">
+        <button className="notif-gate-btn" disabled={submitting} onClick={cancel}>
+          Cancel
+        </button>
+        <button
+          className="notif-gate-btn notif-gate-deny-confirm"
+          disabled={submitting}
+          onClick={async () => {
+            setSubmitting(true);
+            setError(null);
+            try {
+              if (needsForce) await deleteTask(taskId, { force: true });
+              else await deleteTask(taskId);
+            } catch (err) {
+              if (!needsForce && err instanceof ApiError && err.statusCode === 409) {
+                setNeedsForce(true);
+                setSubmitting(false);
+                return;
+              }
+              setError(err instanceof ApiError ? err.message : "Failed to delete task");
               setSubmitting(false);
-              return;
             }
-            setError(err instanceof ApiError ? err.message : "Failed to delete task");
-            setSubmitting(false);
-          }
-        }}
-      >
-        {needsForce ? "Abandon task" : "Confirm delete"}
-      </button>
-      <button className="notif-gate-btn" disabled={submitting} onClick={cancel}>
-        Cancel
-      </button>
-      {error && <span className="task-detail-error">{error}</span>}
-    </div>
+          }}
+        >
+          {needsForce ? "Abandon task" : "Confirm delete"}
+        </button>
+      </div>
+      <div className="task-detail-actions-note">
+        <span className="task-detail-hint">{hint}</span>
+        {error && <span className="task-detail-error">{error}</span>}
+      </div>
+    </>
   );
 }
 

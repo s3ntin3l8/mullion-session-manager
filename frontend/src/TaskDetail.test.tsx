@@ -1816,6 +1816,48 @@ describe("TaskDetail delete action", () => {
     expect(deleteTask).toHaveBeenLastCalledWith(1);
   });
 
+  // The confirm/cancel buttons stay in the action row where "Delete task" was;
+  // the hint (and any error) is the full-width element right after them.
+  it("keeps confirm/cancel in the action row with the plain hint on the next element", async () => {
+    tasks = [makeTask({ id: 1, status: "failed", issueNumber: 42 })];
+    const user = userEvent.setup();
+    const { container } = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+
+    const row = container.querySelector(".task-detail-actions-row") as HTMLElement;
+    const confirm = screen.getByRole("button", { name: "Confirm delete" });
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    expect(row).toContainElement(confirm);
+    expect(row).toContainElement(cancel);
+    const buttons = confirm.parentElement as HTMLElement;
+    expect(buttons).toContainElement(cancel);
+    expect(buttons).not.toHaveTextContent(/can't be undone/);
+    expect(cancel.compareDocumentPosition(confirm) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const note = buttons.nextElementSibling as HTMLElement;
+    expect(note).toHaveClass("task-detail-actions-note");
+    expect(note).toHaveTextContent("Delete this task? This can't be undone.");
+  });
+
+  it("keeps Abandon/Cancel in the action row with the needsForce hint on the next element", async () => {
+    deleteTask.mockRejectedValueOnce(new ApiError("Cannot delete: preserved branch", 409));
+    tasks = [makeTask({ id: 1, status: "failed", issueNumber: 42, branchName: "mullion/task-1" })];
+    const user = userEvent.setup();
+    const { container } = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Delete task" }));
+    await user.click(screen.getByRole("button", { name: "Confirm delete" }));
+    const abandon = await screen.findByRole("button", { name: "Abandon task" });
+
+    const row = container.querySelector(".task-detail-actions-row") as HTMLElement;
+    expect(row).toContainElement(abandon);
+    const buttons = abandon.parentElement as HTMLElement;
+    expect(buttons).toContainElement(screen.getByRole("button", { name: "Cancel" }));
+    const note = buttons.nextElementSibling as HTMLElement;
+    expect(note).toHaveClass("task-detail-actions-note");
+    expect(note).toHaveTextContent(/Abandoning it removes the mullion-task label/);
+  });
+
   // #746 — done tasks (local and GitHub-linked) get the same Delete
   // affordance, with confirm copy noting the branch is untouched (and, for
   // GitHub-linked, that the closed issue and its PR stay on GitHub — not
