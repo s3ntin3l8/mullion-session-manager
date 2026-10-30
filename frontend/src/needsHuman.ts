@@ -14,6 +14,24 @@ export function needsHumanText(reason: NeedsHumanReason | null | undefined): str
   }
 }
 
+// #2327 — the red-CI auto-return can't tell required checks from optional
+// ones when branch protection is unreadable, so it never fires. Shared by the
+// board card and the drawer. Null when there is nothing to say.
+export function ciGatingUnavailableText(
+  reason: "forbidden" | "not-found" | "other" | null | undefined,
+  source: "app" | "account" | null | undefined,
+): string | null {
+  if (!reason) return null;
+  const why =
+    reason === "forbidden"
+      ? "permission denied"
+      : reason === "not-found"
+        ? "no branch protection"
+        : "lookup failed";
+  const via = source === "app" ? " (GitHub App)" : source === "account" ? " (account token)" : "";
+  return `CI gating unavailable: required checks unreadable — ${why}${via}`;
+}
+
 // #2234 — a task whose last review approved and is waiting on its approval.
 // Shared by the board card and the task drawer so the two can't drift.
 export type ApprovalState = "awaiting-human" | "auto-pending";

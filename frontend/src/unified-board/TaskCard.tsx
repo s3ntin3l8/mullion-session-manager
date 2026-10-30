@@ -10,7 +10,7 @@ import { sessionPrDotClass } from "../lib/sidebarStatus.js";
 import { rowClassNameForSeverity } from "../sessionStatus.js";
 import { BlockedIcon, BotIcon, ClockIcon, GitHubIcon, WarningTriangleIcon } from "../ui/icons.js";
 import { formatRelativeAge } from "../relativeTime.js";
-import { approvalStateText, needsHumanText } from "../needsHuman.js";
+import { approvalStateText, ciGatingUnavailableText, needsHumanText } from "../needsHuman.js";
 import { describeTaskHost } from "../lib/hostBadge.js";
 import { parseWorkflowChange, visibleTaskSyncError } from "../workflowChange.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
@@ -480,6 +480,15 @@ export function TaskCard({
               : `Round ${task.autoReturnRounds} · returned to worker`}
         </div>
       )}
+      {task.status === "reviewing" &&
+        ciGatingUnavailableText(task.ciGatingUnavailableReason, task.ciGatingUnavailableSource) && (
+          <div className="task-card-review-round task-card-review-round-capped">
+            {ciGatingUnavailableText(
+              task.ciGatingUnavailableReason,
+              task.ciGatingUnavailableSource,
+            )}
+          </div>
+        )}
       {task.sessionId !== null && (
         <TaskSessionSlot
           session={workerSession ?? undefined}

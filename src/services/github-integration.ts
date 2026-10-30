@@ -710,6 +710,7 @@ const SCOPE_PERMISSION: Record<string, string> = {
   dispatch: "Actions: write",
   review: "Pull requests: write",
   workflows: "Workflows: write",
+  "branch-protection": "Administration: read (optional)",
 };
 
 /** #2104 — the last mint result for one token scope. */
