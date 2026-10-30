@@ -4833,6 +4833,78 @@ describe("reconcileTasks", () => {
           await app.close();
         });
 
+        // #2327 — the unreadable lookup is visible on the task, still fails
+        // closed, and clears once a later lookup succeeds.
+        it("flags the task with the reason and source, then clears it on a later successful lookup", async () => {
+          const app = await buildApp();
+          const { taskId } = await createRedCiCandidate(app);
+          mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+          mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
+          mockFetchRequiredStatusContexts.mockResolvedValue(null);
+          mockGetRequiredStatusContextsFailureReason.mockReturnValue("forbidden");
+
+          await reconcileTasks(app);
+
+          let row = await getTask(app, taskId);
+          expect(row.status).toBe("reviewing");
+          expect(row.ciGatingUnavailableReason).toBe("forbidden");
+          expect(row.ciGatingUnavailableSource).toBe("app");
+
+          mockFetchRequiredStatusContexts.mockResolvedValue(["test-node / test-merge"]);
+          mockFetchCheckRunsForHead.mockResolvedValue([
+            { name: "test-node / test-merge", conclusion: "success" },
+          ]);
+          // Past the failed attempt's own retry backoff, so the second tick
+          // actually reaches the lookup again.
+          vi.useFakeTimers();
+          try {
+            vi.setSystemTime(Date.now() + 30 * 60_000);
+            await reconcileTasks(app);
+          } finally {
+            vi.useRealTimers();
+          }
+
+          row = await getTask(app, taskId);
+          expect(row.ciGatingUnavailableReason).toBeNull();
+          expect(row.ciGatingUnavailableSource).toBeNull();
+
+          await app.close();
+        });
+
+        it("flags a 404 as 'not-found' too", async () => {
+          const app = await buildApp();
+          const { taskId } = await createRedCiCandidate(app);
+          mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+          mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
+          mockFetchRequiredStatusContexts.mockResolvedValue(null);
+          mockGetRequiredStatusContextsFailureReason.mockReturnValue("not-found");
+
+          await reconcileTasks(app);
+
+          const row = await getTask(app, taskId);
+          expect(row.status).toBe("reviewing");
+          expect(row.ciGatingUnavailableReason).toBe("not-found");
+
+          await app.close();
+        });
+
+        it("asks for the branch-protection scope for the lookup only", async () => {
+          const app = await buildApp();
+          await createRedCiCandidate(app);
+          mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+          mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
+          mockFetchRequiredStatusContexts.mockResolvedValue(null);
+          mockGetRequiredStatusContextsFailureReason.mockReturnValue(null);
+
+          await reconcileTasks(app);
+
+          const scopes = mockResolveGitHubToken.mock.calls.map((c) => c[2]);
+          expect(scopes).toContain("branch-protection");
+          expect(scopes).toContain("read");
+
+          await app.close();
+        });
+
         it("does NOT warn when the reason is 'not-found' — an ordinary, unremarkable 404", async () => {
           const app = await buildApp();
           await createRedCiCandidate(app);

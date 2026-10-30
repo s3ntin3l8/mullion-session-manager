@@ -143,6 +143,8 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     approvalState: null,
     autoReturnCapAnnouncedAt: null,
     needsHumanReason: null,
+    ciGatingUnavailableReason: null,
+    ciGatingUnavailableSource: null,
     worktreePath: null,
     branchName: null,
     baseSha: null,

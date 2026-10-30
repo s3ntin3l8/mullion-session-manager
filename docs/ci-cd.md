@@ -263,9 +263,8 @@ Both workspaces shard their test run, so **both** `test-merge` contexts are
 required — see the "Test sharding" note above for why dropping one is not
 safe.
 
-Verify the current contexts via (this repo's App installation token cannot read
-this endpoint — it never requests `administration` at mint time; see Issue
-#1360 below):
+Verify the current contexts via (an App installation token reads this endpoint only if the App has the optional
+Administration: Read-only grant; see Issues #1360 / #2327 below):
 
 ```bash
 gh api repos/s3ntin3l8/mullion-session-manager/branches/main/protection --jq '.required_status_checks.contexts'
@@ -282,43 +281,26 @@ first and preserve every other field (`strict`, `enforce_admins`,
 `required_conversation_resolution`, ...) — a PUT replaces the whole object,
 so a PUT that sends only the contexts silently drops the rest.
 
-**Issue #1360 — this same lookup is a silent no-op for Task Master's own
-CI-auto-return (`#755`, `attemptReturnRedCiToWorker`) on every install,
-with no operator-side fix.** That feature needs to read exactly this
+**Issues #1360 / #2327 — the same lookup behind Task Master's CI-auto-return
+(`#755`, `attemptReturnRedCiToWorker`).** That feature reads exactly this
 endpoint (`fetchRequiredStatusContexts`, `src/services/github.ts`) to tell
 a red _required_ check apart from a red _non-required_ one (this repo's own
-`test-e2e` above is a real example) — but the endpoint requires the
-`administration` permission, and the token Mullion mints for this lookup
-never requests it: `mintInstallationToken` (`src/services/github-app.ts`)
-sends only `READ_PERMISSIONS` (`actions`/`metadata`/`pull_requests`) in the
-token-exchange request body, deliberately, to avoid unrequested scope creep
-for one feature. **For GitHub App installation tokens, granting the App
-installation broader permissions on GitHub's own side does nothing here**
-— an installation token can only ever carry what's both granted AND
-explicitly requested at mint time, and `administration` is never
-requested. Closing this gap needs a Mullion code change (widening
-`READ_PERMISSIONS` for this scope, or a new dedicated scope), which is an
-open decision, not something this repo has done. **For PAT-backed installs
-(no App configured), the situation is different** — a scope-starved PAT
-403s this endpoint too, and that case IS fixable in the GitHub UI: a
-classic PAT needs the `repo` scope to read branch protection on a private
-repository (GitHub's own documented requirement for this endpoint;
-verified empirically against this repo's own `repo`-scoped token — a
-public repo, so this doesn't itself prove the private-repo case, but
-`admin:repo_hook` was NOT among that token's granted scopes and the call
-still succeeded, which is inconsistent with `admin:repo_hook` being a
-requirement here). `admin:repo_hook` is a **different** scope this repo
-also uses, for **webhook registration** specifically (see
-[`github-integration.md`](github-integration.md#webhook-delivery) and its
-[Troubleshooting webhooks](github-integration.md#troubleshooting-webhooks)
-section) — not for reading branch protection; widening a PAT's scope to
-fix this 403 only needs `repo`. Without resolving the underlying
-permission issue, a required check can sit red on a `clean`-verdict task's
-PR indefinitely with no automatic return-to-worker and (as of #1360) one
-throttled warning in the reconcile log — a human still has to notice and
-act. The command above returning a 403 (rather than the contexts list, or a
-404 for "no protection configured") is the same signal Mullion's own code
-sees.
+`test-e2e` above is a real example). The endpoint needs `administration:
+read`, which the read token (`READ_PERMISSIONS`) never carries, so before
+`#2327` it was a silent no-op on every App-backed install. It now resolves a
+dedicated `"branch-protection"` token (`BRANCH_PROTECTION_PERMISSIONS`,
+`src/services/github-app.ts`): an installation that has been granted the
+optional Repository permission **Administration: Read-only** (and approved by
+the installation owner) mints it; one that has not 422s that mint alone and
+the lookup falls back to the account token, which needs admin access to the
+repo (a classic PAT needs the `repo` scope for a private repo; `admin:repo_hook`
+is a different scope, for webhook registration, and is not needed here). If
+neither source can read it, the gate still fails closed, but the task
+now shows "CI gating unavailable: required checks unreadable" with the
+reason and which credential answered, and the reconcile log carries a
+throttled warning naming the source. The `gh api` command above returning a
+403 (rather than the contexts list, or a 404 for "no protection configured")
+is the same signal Mullion's own code sees.
 
 ### PRs are not required to be up to date with `main` (`strict: false`)
 
@@ -369,7 +351,7 @@ targeted sub-endpoint, which changes only that field:
 — copy this, not a PUT (see the warning above). It was confirmed by a
 GET of the protection object with the maintainer's own `gh` login, which read
 back `strict: false` with the five contexts unchanged (the Mullion App token
-cannot read the policy; see Issue #1360 above), and by an open PR one commit
+cannot read the policy; see Issues #1360 / #2327 above), and by an open PR one commit
 behind `main` reporting `mergeStateStatus: CLEAN`.
 
 Related: required approval (#1912, open), `dependency-review` as a required

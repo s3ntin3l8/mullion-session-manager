@@ -1042,12 +1042,16 @@ extensive design comments.
   [`tasks-internals.md`](tasks-internals.md#auto-rebase-758) if the project
   has `autoApprove` on and the PR is `dirty`.
 - **A required CI check never seems to trigger an automatic return to the
-  worker.** This is very likely `#1360`'s known gap, not a bug in your
-  project: the branch-protection lookup CI-auto-return depends on is a
-  silent no-op for a GitHub App-backed install unless `READ_PERMISSIONS`
-  has been widened for it. See [`ci-cd.md`](ci-cd.md)'s "Branch protection"
-  section, and the "Red required CI returns the task to the worker" bullet
-  in [`tasks-internals.md`](tasks-internals.md#auto-approve).
+  worker.** Look for "CI gating unavailable: required checks unreadable" on
+  the task card or drawer (`#2327`): the branch-protection lookup the gate
+  depends on could not be read, so it fails closed. The reason says whether
+  it was a permission problem or no branch protection, and which credential
+  answered (GitHub App or account token). For an App-backed install, grant the
+  App the optional Repository permission **Administration: Read-only** and
+  approve it on the installation, or make sure the account token has admin
+  access to the repo — see
+  [`github-integration.md`](github-integration.md) and
+  [`tasks-internals.md`](tasks-internals.md#auto-approve).
 - **Retry says `no-worktree` and refuses.** The task failed before it ever
   had a branch/worktree (e.g. it failed while still `backlog`/`ready`, or
   it's a `#729`-deleted-and-recreated GitHub-linked task) — there's nothing

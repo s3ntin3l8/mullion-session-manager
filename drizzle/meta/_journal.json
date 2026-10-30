@@ -673,6 +673,13 @@
       "when": 1793345971626,
       "tag": "0095_watery_lionheart",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "6",
+      "when": 1793384157689,
+      "tag": "0096_plain_vargas",
+      "breakpoints": true
     }
   ]
 }

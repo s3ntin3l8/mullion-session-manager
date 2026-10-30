@@ -265,6 +265,17 @@ export const ISSUES_READ_PERMISSIONS = {
   pull_requests: "read",
   metadata: "read",
 } as const;
+// #2327 — reading branch protection (`GET /branches/:b/protection`), which
+// the red-CI auto-return (#755) needs to tell a required check from a
+// non-required one. That endpoint wants `administration: read`, which is far
+// too broad for READ_PERMISSIONS and is an OPTIONAL App grant: an
+// installation that has not approved it 422s this mint alone, and
+// resolveGitHubToken falls back to the account token for just that call
+// (which works when the account has admin access to the repo).
+export const BRANCH_PROTECTION_PERMISSIONS = {
+  administration: "read",
+  metadata: "read",
+} as const;
 // #737 — the reviewer App's permission set. Only `pull_requests: write`
 // (needed to submit a review at all, including a gating `APPROVE`/
 // `REQUEST_CHANGES` event) and `metadata: read` (GitHub's own minimum for
@@ -319,7 +330,15 @@ export const WORKFLOW_WRITE_PERMISSIONS = {
 } as const;
 
 export type InstallationTokenScope =
-  "write" | "read" | "issues" | "dispatch" | "review" | "checks" | "checks-read" | "workflows";
+  | "write"
+  | "read"
+  | "issues"
+  | "dispatch"
+  | "review"
+  | "checks"
+  | "checks-read"
+  | "workflows"
+  | "branch-protection";
 
 function permissionsForScope(scope: InstallationTokenScope): Record<string, string> {
   switch (scope) {
@@ -339,6 +358,8 @@ function permissionsForScope(scope: InstallationTokenScope): Record<string, stri
       return CHECKS_READ_PERMISSIONS;
     case "workflows":
       return WORKFLOW_WRITE_PERMISSIONS;
+    case "branch-protection":
+      return BRANCH_PROTECTION_PERMISSIONS;
   }
 }
 

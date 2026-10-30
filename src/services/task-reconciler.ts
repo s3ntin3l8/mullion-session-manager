@@ -71,6 +71,7 @@ import { commitHostWipChanges, resolveHostGitStatus, resolveRepoRef } from "./ho
 import { deriveTaskBranchName, deriveWorktreePath } from "./git-worktree.js";
 import type { GitHubRepoRef } from "./git-remote.js";
 import {
+  getToken,
   resolveGitHubToken,
   resolveReviewerToken,
   resolveMullionReviewLogins,
@@ -2717,47 +2718,76 @@ async function attemptSelfHealPrTitle(
   }
 }
 
+/** #2327 — write the visible "required checks unreadable" flag, only when it
+ * changed (this runs every tick for every red-CI task). */
+function setCiGatingUnavailable(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  reason: "forbidden" | "not-found" | "other",
+  source: "app" | "account",
+): void {
+  if (task.ciGatingUnavailableReason === reason && task.ciGatingUnavailableSource === source)
+    return;
+  app.db
+    .update(tasks)
+    .set({ ciGatingUnavailableReason: reason, ciGatingUnavailableSource: source })
+    .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
+    .run();
+}
+
+function clearCiGatingUnavailable(app: FastifyInstance, task: typeof tasks.$inferSelect): void {
+  if (task.ciGatingUnavailableReason === null && task.ciGatingUnavailableSource === null) return;
+  app.db
+    .update(tasks)
+    .set({ ciGatingUnavailableReason: null, ciGatingUnavailableSource: null })
+    .where(eq(tasks.id, task.id))
+    .run();
+}
+
 async function attemptReturnRedCiToWorker(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
   current: NonNullable<Awaited<ReturnType<typeof fetchCurrentCiStatus>>>,
 ): Promise<boolean> {
-  if (current.status !== "failure") return false;
+  if (current.status !== "failure") {
+    clearCiGatingUnavailable(app, task);
+    return false;
+  }
   if (task.worktreePath === null || task.agentCommand === null) return false;
   if (!commandSupportsSeed(task.agentCommand)) return false;
 
   const token = await resolveGitHubToken(app, current.repoRef, "read");
   if (!token) return false;
+  // #2327 — branch protection needs `administration: read`, which the read
+  // token never carries. A dedicated narrow scope: an installation without
+  // that optional grant fails the mint alone and resolveGitHubToken falls
+  // back to the account token for just this lookup; `token` above (check
+  // runs, PR reads) is unaffected.
+  const protectionToken =
+    (await resolveGitHubToken(app, current.repoRef, "branch-protection")) ?? token;
+  const gatingSource: "app" | "account" = protectionToken === getToken(app) ? "account" : "app";
   const requiredContexts = await fetchRequiredStatusContexts(
-    token,
+    protectionToken,
     current.repoRef.owner,
     current.repoRef.repo,
     current.baseRef,
   );
   // Fail closed — see this function's own doc comment.
   if (requiredContexts === null) {
-    // #1360 — distinguish the permanent, install-wide "the App's read
-    // token lacks administration" case from an ordinary transient/
-    // not-configured one, and surface ONLY the former: a 404 (no branch
-    // protection configured) is an expected, unremarkable outcome this
-    // function already handles correctly by returning `false` here, and
-    // warning about it would just be noise about nothing being wrong.
-    // Wrapped in try/catch (self-review finding) — this block used to be a
-    // single infallible comparison; Map operations plus a logger call
-    // aren't guaranteed to stay that way, and this function's only caller
-    // chain (attemptAutoApprove -> the sequential loop in
-    // processAutoApprovals -> reconcileTasks) has no per-task catch of its
-    // own, so an uncaught throw here would abort the ENTIRE reconcile tick,
-    // not just this one task's return-to-worker check.
+    // #2327 — fail closed, but say so on the task. A 404 (no protection) is
+    // flagged too: the gate still has no opinion, and the card should say why.
     try {
-      if (
+      const failure =
         getRequiredStatusContextsFailureReason(
           current.repoRef.owner,
           current.repoRef.repo,
           current.baseRef,
-        ) === "forbidden"
-      ) {
+        ) ?? "other";
+      setCiGatingUnavailable(app, task, failure, gatingSource);
+      // #1360 — the throttled log line stays for the permission case: a
+      // permanent, install-wide condition must not warn on every tick.
+      if (failure === "forbidden") {
         const key = `${current.repoRef.owner}/${current.repoRef.repo}/${current.baseRef}`;
         const lastWarnedAt = requiredStatusContextsForbiddenWarnedAt.get(key);
         if (
@@ -2765,50 +2795,29 @@ async function attemptReturnRedCiToWorker(
           Date.now() - lastWarnedAt >= REQUIRED_STATUS_CONTEXTS_WARN_INTERVAL_MS
         ) {
           setRequiredStatusContextsForbiddenWarnedAt(key, Date.now());
-          // Self-review finding — this used to say "grant the App
-          // administration:read and it'll work," which is false for App
-          // installation tokens: mintInstallationToken (github-app.ts)
-          // only ever requests READ_PERMISSIONS for this token, which
-          // never includes administration regardless of what's granted
-          // on the installation itself. **For App installation tokens,
-          // there is currently no operator-side fix** — only a Mullion
-          // code change (deliberately out of scope here, per #755's own
-          // original design notes) closes this. The warning says so
-          // plainly rather than sending an operator on a fix that does
-          // nothing.
-          //
-          // Hermes review, PR #1361 — qualified for PAT installs:
-          // resolveGitHubToken("read") falls back to a PAT on installs
-          // with no App configured, and a scope-starved PAT 403s this
-          // endpoint too — but that case IS fixable in the GitHub UI by
-          // widening the PAT's scope. The parenthetical in the warning
-          // below tells a PAT-backed operator what to actually do,
-          // instead of telling them a Mullion code change is required.
           app.log.warn(
             {
               taskId: task.id,
               owner: current.repoRef.owner,
               repo: current.repoRef.repo,
-              // Second self-review pass — the throttle key and the
-              // underlying condition are both owner/repo/BRANCH, not just
-              // owner/repo; omitting it made two tasks on the same repo
-              // but different base branches (main vs. a release branch,
-              // say) produce textually identical log lines, undermining
-              // the whole point of a visibility fix.
               branch: current.baseRef,
+              source: gatingSource,
             },
-            "task reconcile: CI-auto-return (#755) can't tell a required check apart from a non-required one — for an App installation token, the read-scope token never requests the `administration` permission this needs, by design (see docs/ci-cd.md's Branch protection section); granting the GitHub App installation broader permissions on GitHub does NOT fix this for App installs — it needs a Mullion code change. (For a PAT-backed install, the same 403 fires when the PAT's own scope lacks `repo`/`admin:repo_hook`; that case IS fixable in the GitHub UI by widening the PAT's scope.) A red CI check on this task's PR will never auto-return the worker until that ships.",
+            gatingSource === "app"
+              ? "task reconcile: CI-auto-return (#755) can't read branch protection to tell a required check from a non-required one — the GitHub App token was refused the `administration` permission. Grant the App the optional Repository permission Administration: Read-only and approve it on the installation (docs/github-integration.md); until then the account token is the fallback, and it needs admin access to the repo. A red CI check on this task's PR will not auto-return the worker meanwhile."
+              : "task reconcile: CI-auto-return (#755) can't read branch protection to tell a required check from a non-required one — the account token was refused the `administration` permission (it needs admin access to the repo, or `repo` scope for a PAT). Grant the GitHub App the optional Administration: Read-only permission, or widen the account (docs/github-integration.md). A red CI check on this task's PR will not auto-return the worker meanwhile.",
           );
         }
       }
     } catch (err) {
       app.log.warn(
         { err, taskId: task.id },
-        "task reconcile: #1360's forbidden-permission warning check itself failed — ignoring, the red-CI-return gate still fails closed",
+        "task reconcile: recording the unreadable required-checks lookup failed — ignoring, the red-CI-return gate still fails closed",
       );
     }
     return false;
   }
+  clearCiGatingUnavailable(app, task);
   if (requiredContexts.length === 0) return false;
 
   const checkRuns = await fetchCheckRunsForHead(

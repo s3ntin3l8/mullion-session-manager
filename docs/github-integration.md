@@ -246,20 +246,24 @@ individual issue, only a repository):
 - **write** — Issues, Pull requests, Contents — used for Task Master's own
   writes and its issue-label ingest reads.
 - **read** — Actions, Metadata, Pull requests — used for the repo-status
-  widget and PR/CI poller. Deliberately excludes `administration` — a call
-  needing `GET /repos/{owner}/{repo}/branches/{branch}/protection` (branch
-  protection contexts) 403s on this App's read-scope token, and that 403
-  is read as fail-closed, not as "nothing is required." [Task Master](tasks.md)'s
-  red-required-CI-return gate (`#755`) depends on exactly that lookup. On any
-  repo where this App is configured and installed — `resolveGitHubToken`
-  tries the App's token before ever falling back to the PAT/OAuth token —
-  `#755` is a no-op, surfaced only as a throttled reconcile-log warning
-  since `#1360`/`#1361` (not on the task itself). Granting the App broader
-  permissions on GitHub doesn't help: `READ_PERMISSIONS` in `github-app.ts`
-  is what actually gets requested when the token is minted, regardless of
-  what the App is allowed to hold — only widening that constant (a code
-  change) fixes it. See [`tasks.md`](tasks.md#auto-approve) for the full
-  mechanics.
+  widget and PR/CI poller. Deliberately excludes `administration`.
+- **branch-protection** (`#2327`) — Administration (read), Metadata — used
+  only to read a branch's required status checks (`GET
+/repos/{owner}/{repo}/branches/{branch}/protection`), which
+  [Task Master](tasks.md)'s red-required-CI-return gate (`#755`) needs to tell
+  a required check from a non-required one. **This is an optional App
+  permission.** To enable it, add Repository permissions → **Administration:
+  Read-only** to the App on GitHub (Settings → Developer settings → GitHub
+  Apps → your App → Permissions & events), then have each installation owner
+  approve the new permission request (the installation page shows a "review
+  request" banner). Until then the mint fails (422) for this scope alone, and
+  `resolveGitHubToken` falls back to the account (PAT/OAuth) token for just
+  that lookup — which works when the account has admin access to the repo —
+  so the gate still functions and the **read** token is unaffected. If neither
+  source can read branch protection, the lookup fails closed and the task
+  shows "CI gating unavailable: required checks unreadable" (reason and
+  which credential answered) until a lookup succeeds. See
+  [`tasks.md`](tasks.md#auto-approve) for the full mechanics.
 - **issues** — Issues, Pull requests, Metadata (all read) — used only to
   list a repo's open issues for the sidebar's Issues count (`GET
 /repos/{owner}/{repo}/issues`). A token without Issues access gets only

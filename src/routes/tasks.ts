@@ -211,6 +211,8 @@ const TASK_ROW_COLUMNS = {
   // three-state distinction (see TaskCard.tsx/TaskDetail.tsx).
   autoReturnCapAnnouncedAt: tasks.autoReturnCapAnnouncedAt,
   needsHumanReason: tasks.needsHumanReason,
+  ciGatingUnavailableReason: tasks.ciGatingUnavailableReason,
+  ciGatingUnavailableSource: tasks.ciGatingUnavailableSource,
   // Task 258971's investigation: declared on the frontend Task type
   // (api/types.ts) but never selected here — the same TASK_ROW_COLUMNS
   // silent-drop that bit #816/#818 (see that PR's own doc comment above).

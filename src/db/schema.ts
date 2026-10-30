@@ -1074,6 +1074,20 @@ export const tasks = sqliteTable(
     needsHumanReason: text("needs_human_reason", {
       enum: ["cap", "no-progress", "finding-persisted"],
     }),
+    // #2327 — why the required-checks lookup behind the red-CI auto-return
+    // (#755) could not be read, so the gate failed closed: `forbidden` (403,
+    // a permission problem), `not-found` (404, no branch protection) or
+    // `other`. Null = the lookup works (or has not been needed yet). Cleared
+    // the next time the lookup succeeds or CI is no longer red.
+    ciGatingUnavailableReason: text("ci_gating_unavailable_reason", {
+      enum: ["forbidden", "not-found", "other"],
+    }),
+    // Which credential answered that lookup — `app` (installation token) or
+    // `account` (the shared PAT/OAuth token). Only meaningful with the
+    // reason above.
+    ciGatingUnavailableSource: text("ci_gating_unavailable_source", {
+      enum: ["app", "account"],
+    }),
     // Issue #1039 — the PR head SHA a review round's ingested findings were
     // actually about, recorded at every ingest write alongside
     // reviewFindingsIngestedSessionId above (task-reconciler.ts's
