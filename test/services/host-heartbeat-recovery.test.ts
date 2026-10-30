@@ -13,6 +13,8 @@ import type * as SettingsModule from "../../src/services/settings.js";
 
 const mockListHosts = vi.hoisted(() => vi.fn(() => [] as unknown[]));
 const pingMock = vi.hoisted(() => vi.fn(async () => true));
+const detectAgentsMock = vi.hoisted(() => vi.fn(async () => [] as unknown[]));
+const resolveConfigMock = vi.hoisted(() => vi.fn(async () => ({ version: "0.3.40" })));
 
 vi.mock("../../src/services/host-registry.js", () => ({
   LOCAL_HOST_ID: "local",
@@ -23,7 +25,16 @@ vi.mock("../../src/services/remote-host-client.js", () => ({
   // The capacity poll (issue #1721) rides on the same client; a null report
   // means "an agent build without the capacity route" and keeps the sweep
   // free of noise.
-  getRemoteHostClient: () => ({ ping: pingMock, resolveCapacity: async () => null }),
+  getRemoteHostClient: () => ({
+    ping: pingMock,
+    resolveCapacity: async () => null,
+    // Issue #2240 — the agent-CLI list rides on the same client.
+    detectAgents: detectAgentsMock,
+    resolveConfig: resolveConfigMock,
+  }),
+  HostRequestError: class HostRequestError extends Error {
+    statusCode = 0;
+  },
 }));
 
 vi.mock("../../src/services/settings.js", async (importOriginal) => {
@@ -367,5 +378,60 @@ describe("hostHeartbeatPlugin: force-reconnect on recovery", () => {
     await waitForAssertion(() => expect(pushPalette).toHaveBeenCalledWith(app, "h1"));
 
     await app.close();
+  });
+});
+
+// Issue #2240 — the agent-CLI cache is re-read by the sweep once its TTL
+// lapses (a host that just came online is filled by `onHostOnline` instead).
+describe("startHostHeartbeat: agent list refresh", () => {
+  const fakeApp = () =>
+    ({
+      db: {},
+      log: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+      config: { HOST_HEARTBEAT_INTERVAL_SECONDS: 30, HOST_AGENTS_TTL_SECONDS: 600 },
+    }) as unknown as FastifyInstance;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListHosts.mockReset();
+    pingMock.mockReset();
+    detectAgentsMock.mockReset();
+    mockListHosts.mockReturnValue([fakeHost("h1")]);
+    pingMock.mockResolvedValue(true);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("leaves a first contact to onHostOnline, then fills a still-empty cache on the next sweep", async () => {
+    detectAgentsMock.mockResolvedValue([
+      { id: "agent:claude", title: "claude", command: "claude", kind: "agent", available: true },
+    ]);
+    const app = fakeApp();
+    const cleanup = startHostHeartbeat(app, undefined, undefined, undefined, vi.fn());
+    await waitForAssertion(() => expect(pingMock).toHaveBeenCalledTimes(1));
+    expect(detectAgentsMock).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(31_000);
+    await waitForAssertion(() =>
+      expect(app.hostAgentTracker?.get("h1")).toMatchObject({
+        agents: ["claude"],
+        mullionVersion: "0.3.40",
+      }),
+    );
+    cleanup();
+    expect(app.hostAgentTracker).toBeUndefined();
+  });
+
+  it("keeps sweeping when the refresh fails", async () => {
+    detectAgentsMock.mockRejectedValue(new Error("boom"));
+    const app = fakeApp();
+    const cleanup = startHostHeartbeat(app, undefined, undefined, undefined, vi.fn());
+    await vi.advanceTimersByTimeAsync(31_000);
+    await waitForAssertion(() => expect(detectAgentsMock).toHaveBeenCalled());
+    expect(app.hostAgentTracker?.get("h1")).toBeUndefined();
+    expect(pingMock.mock.calls.length).toBeGreaterThan(1);
+    cleanup();
   });
 });

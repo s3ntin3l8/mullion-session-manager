@@ -464,6 +464,57 @@ describe("projects route", () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
+  it("excludes a host without the CLI of the previewed launch command (#2240)", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-preview-cli-"));
+    const host = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "no-claude", baseUrl: "http://127.0.0.1:1", token: "t" },
+    });
+    const hostId = host.json().id as string;
+    app.hostHeartbeatTracker?.recordSuccess(hostId);
+    app.hostCapacityTracker?.record(hostId, {
+      platform: "linux",
+      logicalCores: 8,
+      loadAverage1m: 0,
+      memory: { totalBytes: 1000, freeBytes: 500 },
+      sessions: { tracked: 0, alive: 0 },
+    });
+    app.hostAgentTracker?.record(hostId, { agents: ["codex"], mullionVersion: null });
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: {
+        allowDuplicate: true,
+        name: "preview-cli",
+        cwd,
+        placement: "auto",
+        hostCwds: { [hostId]: "/srv/x" },
+      },
+    });
+    const { id } = created.json();
+
+    const withCommand = await app.inject({
+      method: "GET",
+      url: `/api/projects/${id}/placement-preview?command=${encodeURIComponent("claude --model opus")}`,
+    });
+    expect(withCommand.json().excluded).toContainEqual({
+      hostId,
+      reason: "no claude CLI on this host",
+    });
+    const withShell = await app.inject({
+      method: "GET",
+      url: `/api/projects/${id}/placement-preview?command=bash`,
+    });
+    expect(withShell.json().excluded.map((e: { hostId: string }) => e.hostId)).not.toContain(
+      hostId,
+    );
+
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
   it("previews a PINNED project as pinned, without scoring anything", async () => {
     const app = await buildApp();
     const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-preview-"));

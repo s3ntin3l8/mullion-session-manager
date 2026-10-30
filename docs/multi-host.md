@@ -223,6 +223,17 @@ placement preview (`GET /api/projects/:id/placement-preview`,
 dialog's Auto preview shows it as "Not considered: …". It is never put in a
 refusal a session-scoped caller can read.
 
+**The agent CLI.** A session needs its own CLI (`claude`, `codex`, …) on the
+host it runs on. The primary reads each host's installed CLIs and Mullion
+version when the host comes online and again every `HOST_AGENTS_TTL_SECONDS`
+(`agents` and `mullionVersion` in `GET /api/hosts`). A host **known** to lack
+the launch command's CLI is excluded with `no <cli> CLI on this host`; the
+preview takes the command as `?command=`. Task Master requires both the
+worker's and the reviewer's CLI on the host. A host whose list is **unknown**
+(an agent too old to answer, or not read yet) is never excluded — the
+placement reason says `agent list unknown`. A chosen agent running an older
+Mullion than the primary is flagged `(agent vX, older than the primary)`.
+
 **Host roles.** Each host has a role, set in **Settings → Hosts** or with
 `PATCH /api/hosts/:id` `{"role": "worker" | "burst"}`:
 

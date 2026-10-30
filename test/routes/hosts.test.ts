@@ -256,6 +256,26 @@ describe("hosts route (issue #26)", () => {
     await app.close();
   });
 
+  it("exposes a host's agent CLIs and Mullion version, null while unknown (#2240)", async () => {
+    const app = await buildApp();
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/hosts",
+      payload: { name: "agents", baseUrl: "http://127.0.0.1:4004", token: "t" },
+    });
+    const { id } = created.json();
+    const list = async () =>
+      (
+        (await app.inject({ method: "GET", url: "/api/hosts" })).json() as Array<
+          Record<string, unknown>
+        >
+      ).find((h) => h.id === id);
+    expect(await list()).toMatchObject({ agents: null, mullionVersion: null });
+    app.hostAgentTracker?.record(id, { agents: ["claude"], mullionVersion: "0.3.40" });
+    expect(await list()).toMatchObject({ agents: ["claude"], mullionVersion: "0.3.40" });
+    await app.close();
+  });
+
   it("reports a remote host's cached capacity, with the age of the reading", async () => {
     const app = await buildApp();
     const created = await app.inject({

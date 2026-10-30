@@ -206,7 +206,7 @@ How this repo applies the conventions above — facts and commands, not rules.
   and agy's append their own MCP/model flags the same way) inspects and
   rewrites the launch command at spawn time. The same is true of a narrow
   set of helpers that inspect `session.command` from outside the adapters
-  themselves: `commandIsOpencode`/`commandModelCli` (`hook-adapters/index.ts`)
+  themselves: `commandIsOpencode`/`commandModelCli`/`commandAgentBin` (`hook-adapters/index.ts`)
   and `buildModelFlag` (`hook-adapters/shared.ts`), plus `validateModel`/
   `validateCliModel` (`services/task-model-resolve.ts`) and
   `commandSupportsSeed` (`services/task-agent-resolve.ts`), and the pure

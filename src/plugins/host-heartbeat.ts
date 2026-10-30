@@ -3,6 +3,7 @@ import type { FastifyInstance } from "fastify";
 import { startHostHeartbeat } from "../services/host-heartbeat.js";
 import { pushTerminalPaletteToHost } from "../services/terminal-palette-sync.js";
 import { autoFillHostCwds } from "../services/host-checkout-detect.js";
+import { refreshRemoteHostAgents } from "../services/host-agents.js";
 
 // Primary-only, same role gate as githubPRPollerPlugin/gitFetcherPlugin —
 // an agent has no `hosts` table to sweep (see src/app.ts's agent branch).
@@ -46,6 +47,11 @@ export const hostHeartbeatPlugin = fp(async (app: FastifyInstance) => {
     // A host that was asleep, offline or restarted has lost (or never got) the
     // palette its sessions' startup color queries are answered from.
     void pushTerminalPaletteToHost(app, hostId);
+    // Issue #2240 — a host that came back may have been updated or had a CLI
+    // installed while it was away: re-read its agent list and version.
+    void refreshRemoteHostAgents(app, hostId).catch((err: unknown) => {
+      app.log.warn({ err, hostId }, "[host-heartbeat] reading the host's agent list failed");
+    });
     // One run per host at a time: a run that outlasts the sweep interval must
     // not be stacked on by the next "came online".
     if (detecting.has(hostId)) return;

@@ -42,6 +42,7 @@ import {
   type PlacementTarget,
 } from "./placement.js";
 import { isReservedSessionEnvKey } from "./session-env-keys.js";
+import { commandAgentBin } from "./hook-adapters/index.js";
 import {
   readProjectBriefing,
   readProjectSkill,
@@ -1000,6 +1001,7 @@ function resolveSessionPlacement(
       },
       target: params.target,
       unattended: params.unattended === true,
+      requiredAgent: commandAgentBin(params.command) ?? undefined,
     });
     if (!targeted.ok) {
       return { ok: false, reason: "no-target-host", detail: targeted.detail };
@@ -1055,6 +1057,7 @@ function resolveSessionPlacement(
       hostCwds: project.hostCwds,
     },
     unattended: params.unattended === true,
+    requiredAgent: commandAgentBin(params.command) ?? undefined,
   });
 
   return {

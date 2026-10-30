@@ -22,6 +22,7 @@ import { forwardHostRequestError } from "../services/host-error-reply.js";
 import { MAX_PROJECTS_ROOTS } from "../services/agent-projects-roots.js";
 import { buildAgentConfig } from "./internal.js";
 import { appVersion } from "./server-info.js";
+import { refreshLocalAgents } from "../services/host-agents.js";
 import { resolveReleaseByTag, UpdateCheckError } from "../services/update-checker.js";
 import type { ReleaseByTagResult } from "../services/update-checker.js";
 import type { UpdateStatus } from "../services/update-apply.js";
@@ -108,6 +109,7 @@ function onHostCredentialsChanged(app: FastifyInstance, id: string): void {
   // agent, so they are dropped here rather than lingering for up to a
   // sweep interval as if they were this host's.
   app.hostCapacityTracker?.invalidateHost(id);
+  app.hostAgentTracker?.invalidateHost(id);
   // Same staleness reasoning as invalidateHost above, applied to the
   // events subscription: an open socket built from the old
   // baseUrl/token must not be left running until it happens to error
@@ -182,8 +184,16 @@ export async function hostsRoute(app: FastifyInstance) {
               const sampledAt = Number.isFinite(entry.sampledAt) ? entry.sampledAt : Date.now();
               return { ...entry.capacity, sampledAt: new Date(sampledAt).toISOString() };
             })();
+      // Issue #2240 — the agent CLIs this host has (null = not known yet) and
+      // the Mullion version it runs. The local host's list is warmed in the
+      // background rather than probed inside this request.
+      if (host.id === LOCAL_HOST_ID) refreshLocalAgents(app);
+      const agentEntry = app.hostAgentTracker?.get(host.id);
       return {
         ...host,
+        agents: agentEntry?.agents ?? null,
+        mullionVersion:
+          host.id === LOCAL_HOST_ID ? appVersion : (agentEntry?.mullionVersion ?? null),
         // The LOCAL host's platform is this process's own — the row simply
         // never had one, because nothing self-reported it. Reporting it
         // here keeps one fact in one place: without it, the same response

@@ -57,6 +57,7 @@ import {
   HostUnreachableError,
 } from "../services/remote-host-client.js";
 import { previewPlacement } from "../services/placement.js";
+import { commandAgentBin } from "../services/hook-adapters/index.js";
 import { portFromUrl } from "../plugins/preview-proxy.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { resolveSessionHostId } from "../services/session-live-info.js";
@@ -1441,7 +1442,7 @@ export async function projectsRoute(app: FastifyInstance) {
   //
   // The answer is a NOW reading: load moves between the preview and the
   // spawn, so the UI labels it as such.
-  app.get<{ Params: { id: string }; Querystring: { placement?: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { placement?: string; command?: string } }>(
     "/api/projects/:id/placement-preview",
     {
       config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
@@ -1453,6 +1454,9 @@ export async function projectsRoute(app: FastifyInstance) {
             // create/PATCH schemas use, so a preview can never be asked
             // about a mode the project could not actually be set to.
             placement: { type: "string", enum: [...PLACEMENT_MODES] },
+            // Issue #2240 — the launch command the preview is for, so a host
+            // without its agent CLI is shown as excluded.
+            command: { type: "string", maxLength: 4096 },
           },
         },
       },
@@ -1478,6 +1482,10 @@ export async function projectsRoute(app: FastifyInstance) {
           cwd: project.cwd,
           hostCwds: project.hostCwds,
         },
+        requiredAgent:
+          request.query.command === undefined
+            ? undefined
+            : (commandAgentBin(request.query.command) ?? undefined),
       });
       return { placement, ...decision };
     },

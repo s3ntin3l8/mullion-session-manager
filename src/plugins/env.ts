@@ -195,6 +195,13 @@ export const schema = {
       default: 30,
       minimum: 0,
     },
+    // Issue #2240 — how long a host's detected agent CLIs (and its Mullion
+    // version) are trusted before the heartbeat sweep re-reads them.
+    HOST_AGENTS_TTL_SECONDS: {
+      type: "number",
+      default: 600,
+      minimum: 30,
+    },
     // Issue #1637 — age (days) after which entries in a project's
     // `.mullion-uploads/` (drag & drop / paste uploads) are pruned, checked
     // whenever an upload lands there. An env var rather than a Setting so
@@ -1076,6 +1083,7 @@ declare module "fastify" {
       MULLION_ROLE: "primary" | "agent";
       MULLION_AGENT_TOKEN: string;
       HOST_HEARTBEAT_INTERVAL_SECONDS: number;
+      HOST_AGENTS_TTL_SECONDS: number;
       MULLION_UPLOAD_RETENTION_DAYS: number;
       FILE_TRANSFER_MAX_BYTES: number;
       MULLION_PRIMARY_URL: string;

@@ -1139,6 +1139,48 @@ describe("claimTask", () => {
       await app.close();
     });
 
+    // Issue #2240 — the worker's CLI and the reviewer's must both be on the host.
+    it("skips the idle host that lacks the worker's CLI (#2240)", async () => {
+      const { app, mac, linux, task } = await setup("cli-worker", "Agent: codex\nDo the work.");
+      app.hostAgentTracker?.record(linux, { agents: ["claude"], mullionVersion: null });
+      app.hostAgentTracker?.record(mac, { agents: ["claude", "codex"], mullionVersion: null });
+
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(outcome.ok).toBe(true);
+      expect((await sessionOf(app, task.id))?.hostId).toBe(mac);
+      await app.close();
+    });
+
+    it("skips a host that lacks the REVIEWER's CLI too (#2240)", async () => {
+      const { app, mac, linux, task } = await setup(
+        "cli-reviewer",
+        "Agent: claude\nReviewAgent: codex\nDo the work.",
+      );
+      app.hostAgentTracker?.record(linux, { agents: ["claude"], mullionVersion: null });
+      app.hostAgentTracker?.record(mac, { agents: ["claude", "codex"], mullionVersion: null });
+
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(outcome.ok).toBe(true);
+      expect((await sessionOf(app, task.id))?.hostId).toBe(mac);
+      await app.close();
+    });
+
+    it("fails open on a host whose agent list is unknown (#2240)", async () => {
+      const { app, linux, task } = await setup("cli-unknown", "Agent: codex\nDo the work.");
+      // The idle Linux box has not reported; the Mac is known to lack codex.
+      app.hostAgentTracker?.record(linux, { agents: null, mullionVersion: null });
+
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(outcome.ok).toBe(true);
+      const session = await sessionOf(app, task.id);
+      expect(session?.hostId).toBe(linux);
+      expect(session?.placementReason).toContain("agent list unknown");
+      await app.close();
+    });
+
     it("honours the requirement for a PINNED project too", async () => {
       const { app, mac, task } = await setup("req-pinned", "Platform: darwin", {
         placement: "pinned",

@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { LOCAL_HOST_ID, type HostRole, type PlacementMode } from "../shared/constants.js";
 import { listHosts } from "./host-registry.js";
 import { measureHostCapacity, type HostCapacity } from "./host-capacity.js";
+import { isOlderVersion, refreshLocalAgents } from "./host-agents.js";
+import { appVersion } from "../routes/server-info.js";
 
 /**
  * The PLACEMENT policy — which host should a new session run on (issue
@@ -77,6 +79,15 @@ export interface PlacementCandidate {
    * candidate built without it reads as a plain worker.
    */
   role?: HostRole;
+  /**
+   * The agent CLIs (`claude`, `codex`, …) this host has (issue #2240). Null or
+   * absent = UNKNOWN (an old agent without the route, or not fetched yet),
+   * which is not "has none": placement only excludes a host it knows lacks the
+   * CLI a session needs.
+   */
+  agents?: string[] | null;
+  /** The host's Mullion version, for flagging an agent older than the primary. */
+  mullionVersion?: string | null;
 }
 
 /** What the caller knows about the session being placed. */
@@ -105,6 +116,15 @@ export interface PlacementContext {
    * platform asked for exactly that machine.
    */
   allowBurst?: boolean;
+  /**
+   * The agent CLI(s) the session needs on its host (issue #2240), as
+   * `KNOWN_AGENTS` binaries. A host KNOWN to lack one is excluded; a host
+   * whose list is unknown stays eligible (fail open). Absent = no CLI filter
+   * (a shell, or an unrecognised command).
+   */
+  requiredAgent?: string | readonly string[];
+  /** The primary's own version, to flag a chosen agent that runs an older one. */
+  primaryVersion?: string;
 }
 
 /** One eligible host, with the numbers the policy compared. */
@@ -283,6 +303,36 @@ export function chooseHost(
   candidates: PlacementCandidate[],
   context: PlacementContext,
 ): PlacementDecision {
+  const decision = decideHost(candidates, context);
+  const notes: string[] = [];
+  const chosen = candidates.find((candidate) => candidate.hostId === decision.hostId);
+  if (chosen !== undefined && !decision.fellBack) {
+    // Issue #2240 — the session needs a CLI and this host never told us
+    // whether it has it: say so rather than imply it was checked.
+    if (requiredAgents(context).length > 0 && !chosen.agents) notes.push("agent list unknown");
+  }
+  if (
+    chosen?.mullionVersion &&
+    context.primaryVersion &&
+    isOlderVersion(chosen.mullionVersion, context.primaryVersion)
+  ) {
+    notes.push(`agent v${chosen.mullionVersion}, older than the primary`);
+  }
+  return notes.length === 0
+    ? decision
+    : { ...decision, reason: `${decision.reason} (${notes.join("; ")})` };
+}
+
+function requiredAgents(context: Pick<PlacementContext, "requiredAgent">): readonly string[] {
+  const { requiredAgent } = context;
+  if (requiredAgent === undefined) return [];
+  return typeof requiredAgent === "string" ? [requiredAgent] : requiredAgent;
+}
+
+function decideHost(
+  candidates: PlacementCandidate[],
+  context: PlacementContext,
+): PlacementDecision {
   // The local host's capacity is not on its candidate — it is measured on
   // demand (issue #1721) and arrives in the context; every other host
   // carries its own reading.
@@ -377,7 +427,19 @@ function exclusionReason(candidate: PlacementCandidate, context: PlacementContex
   // Issue #1724 — the host must have the project: a session runs in a
   // directory, and this host's directory does not have it.
   if (candidate.projectCwd === null) return "the project has no path on this host";
+  // Issue #2240 — a host KNOWN to lack the CLI cannot run the session. An
+  // unknown list does not exclude (fail open); `chooseHost` notes it instead.
+  const missing = missingAgent(candidate, context);
+  if (missing !== null) return `no ${missing} CLI on this host`;
   return null;
+}
+
+function missingAgent(
+  candidate: PlacementCandidate,
+  context: Pick<PlacementContext, "requiredAgent">,
+): string | null {
+  if (!candidate.agents) return null;
+  return requiredAgents(context).find((bin) => !candidate.agents!.includes(bin)) ?? null;
 }
 
 function capacityOf(candidate: PlacementCandidate, context: PlacementContext): HostCapacity {
@@ -456,8 +518,15 @@ interface PlacementProject {
  * a failure means (fall back to the project's host), because only the caller
  * knows whether this was a real placement or a preview.
  */
-function collectCandidates(app: FastifyInstance, project: PlacementProject): CollectedCandidates {
+function collectCandidates(
+  app: FastifyInstance,
+  project: PlacementProject,
+  needsAgents = false,
+): CollectedCandidates {
   const localCapacity = measureHostCapacity(app);
+  // Issue #2240 — warm the primary's own CLI list in the background; until it
+  // lands the local host reads as unknown and placement fails open.
+  if (needsAgents) refreshLocalAgents(app);
   // Issue #1724 — the per-host cwd map, parsed ONCE (the keys are
   // operator-supplied and become property names, so it is parsed into a
   // null-prototype object; see parseHostCwds).
@@ -485,6 +554,11 @@ function collectCandidates(app: FastifyInstance, project: PlacementProject): Col
       projectCwd: projectCwdOnHost(project, host.id, hostCwds),
       // Issue #2239 — what the host is for (burst hosts stay out of Auto).
       role: host.role,
+      // Issue #2240 — the CLIs this host has (null while unknown) and its version.
+      agents: app.hostAgentTracker?.get(host.id)?.agents ?? null,
+      mullionVersion: isLocal
+        ? appVersion
+        : (app.hostAgentTracker?.get(host.id)?.mullionVersion ?? null),
       // Issue #1951 — what a targeted spawn matches `platform` against: the
       // host's self-reported platform, else its cached capacity reading's,
       // else (the local host) this process's own.
@@ -527,6 +601,7 @@ function decide(
   project: PlacementProject,
   unattended: boolean,
   announce: boolean,
+  requiredAgent?: string | readonly string[],
 ): PlacementDecision {
   if (project.placement !== "auto") {
     const decision: PlacementDecision = {
@@ -547,7 +622,7 @@ function decide(
 
   let collected: CollectedCandidates;
   try {
-    collected = collectCandidates(app, project);
+    collected = collectCandidates(app, project, requiredAgent !== undefined);
   } catch (err) {
     // The seam must never fail a spawn, not just the policy: the DB read
     // or the measurement threw BEFORE chooseHost() was reached, and a
@@ -574,6 +649,8 @@ function decide(
     pinnedHostId: project.hostId,
     unattended,
     localCapacity: collected.localCapacity,
+    requiredAgent,
+    primaryVersion: appVersion,
   });
 
   if (announce) {
@@ -615,9 +692,11 @@ export function resolvePlacement(
     project: PlacementProject;
     /** True for an unattended session (a Task Master worker or reviewer). */
     unattended: boolean;
+    /** The agent CLI(s) the session needs on its host (issue #2240). */
+    requiredAgent?: string | readonly string[];
   },
 ): PlacementDecision {
-  return decide(app, opts.project, opts.unattended, true);
+  return decide(app, opts.project, opts.unattended, true, opts.requiredAgent);
 }
 
 /**
@@ -732,6 +811,8 @@ export function resolveTargetHost(
      * (an explicit child spawn); Task Master passes "the task's requirement"
      * so a past placement reads right (#1954/#1852). */
     requestedBy?: string;
+    /** The agent CLI(s) the session needs on its host (issue #2240). */
+    requiredAgent?: string | readonly string[];
   },
 ): TargetPlacementResult {
   const refusal = (
@@ -747,7 +828,7 @@ export function resolveTargetHost(
 
   let collected: CollectedCandidates;
   try {
-    collected = collectCandidates(app, opts.project);
+    collected = collectCandidates(app, opts.project, opts.requiredAgent !== undefined);
   } catch (err) {
     app.log.warn({ err, target: opts.target }, "placement: could not evaluate a targeted spawn");
     // Could not read the fleet: nothing says a retry would fail too.
@@ -762,12 +843,15 @@ export function resolveTargetHost(
       (wantedPlatform === undefined || (candidate.platform ?? "").toLowerCase() === wantedPlatform),
   );
 
+  const agentContext = { requiredAgent: opts.requiredAgent };
   const decision = chooseHost(matching, {
     pinnedHostId: opts.project.hostId,
     unattended: opts.unattended,
     localCapacity: collected.localCapacity,
     // The caller NAMED this host or platform, so a burst host is in scope.
     allowBurst: true,
+    requiredAgent: opts.requiredAgent,
+    primaryVersion: appVersion,
   });
   // chooseHost falls back to the pinned host when nothing is eligible; for a
   // target that is exactly the case to refuse.
@@ -782,22 +866,25 @@ export function resolveTargetHost(
     const mightMatch = collected.candidates.some(
       (candidate) =>
         candidate.projectCwd !== null &&
+        // A host known to lack the CLI never gains it by waiting.
+        missingAgent(candidate, agentContext) === null &&
         (wantedHost === null || candidate.hostId === wantedHost) &&
         (wantedPlatform === undefined ||
           (candidate.platform ?? "").toLowerCase() === wantedPlatform ||
           (candidate.platform ?? "") === ""),
     );
-    return refusal(
-      mightMatch,
-      false,
-      refusalReasons(
-        matching,
-        collected.localCapacity,
-        collected.candidates,
-        wantedPlatform,
-        wantedHost,
-      ),
+    const why = refusalReasons(
+      matching,
+      collected.localCapacity,
+      collected.candidates,
+      wantedPlatform,
+      wantedHost,
     );
+    for (const candidate of matching) {
+      const bin = missingAgent(candidate, agentContext);
+      if (bin !== null) why.push(`a matching host has no ${bin} CLI`);
+    }
+    return refusal(mightMatch, false, [...new Set(why)]);
   }
 
   const decorated: PlacementDecision = {
@@ -835,7 +922,9 @@ export function previewPlacement(
      * and a human creates an interactive session.
      */
     unattended?: boolean;
+    /** The agent CLI the launch would need on its host (issue #2240). */
+    requiredAgent?: string | readonly string[];
   },
 ): PlacementDecision {
-  return decide(app, opts.project, opts.unattended ?? false, false);
+  return decide(app, opts.project, opts.unattended ?? false, false, opts.requiredAgent);
 }
