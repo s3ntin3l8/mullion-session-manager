@@ -176,9 +176,9 @@ function parseRemoteParts(
   const cleaned = pathPart
     .replace(/\\/g, "/")
     .replace(/\/{2,}/g, "/")
-    .replace(/^\/+|\/+$/g, "")
+    .replace(/^\/|\/$/g, "")
     .replace(/\.git$/i, "")
-    .replace(/\/+$/g, "");
+    .replace(/\/$/, "");
   if (host === "" || cleaned === "") return null;
   return { host: host.toLowerCase(), port, protocol, path: cleaned.toLowerCase() };
 }
