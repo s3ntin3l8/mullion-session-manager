@@ -73,7 +73,10 @@ const CAPABILITY_LABELS: Record<PlacementCapability, string> = {
 function HostCapabilitiesLine({ host }: { host: Host }) {
   if (!host.capabilities) return <span>capabilities unknown</span>;
   if (host.capabilities.length === 0) return <span>no extra capabilities</span>;
-  return <span>{host.capabilities.map((c) => CAPABILITY_LABELS[c]).join(" · ")}</span>;
+  // The wire value is runtime data: a newer agent may report an id this build
+  // does not know yet, which renders as its raw id rather than "undefined".
+  const labels: Record<string, string | undefined> = CAPABILITY_LABELS;
+  return <span>{host.capabilities.map((c) => labels[c] ?? c).join(" · ")}</span>;
 }
 
 export function HostsSection() {

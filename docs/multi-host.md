@@ -1046,8 +1046,9 @@ and the primary keeps it beside the agent list (same TTL, same invalidation).
 - `android-emulator`: the device panel's emulator support is enabled and
   `DEVICE_EMULATOR_PATH` is set to an executable file. That is exactly what
   the device manager launches, so there is no `PATH` or SDK-root fallback.
-- `null` means unknown (an older agent without the route, or a failed read),
-  which is not the same as `[]` (known to have none).
+- `null` means unknown (an older agent whose route answers 404, or nothing
+  read yet), which is not the same as `[]` (known to have none). A failed
+  read keeps the previous reading.
 
 Enrollment's `capabilities` / `hosts.agentMetadata` is a static snapshot that
 goes stale, so it is intentionally **not** read.

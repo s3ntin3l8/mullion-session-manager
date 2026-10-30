@@ -55,7 +55,7 @@ describe("host capability detection (issue #2306)", () => {
     expect(execFile).toHaveBeenCalledWith(
       "xcrun",
       ["--find", "simctl"],
-      expect.objectContaining({ timeout: expect.any(Number) }),
+      expect.objectContaining({ timeout: 2000 }),
       expect.any(Function),
     );
   });
