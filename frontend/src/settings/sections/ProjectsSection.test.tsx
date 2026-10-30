@@ -215,3 +215,72 @@ describe("ProjectsSection: auto-detect checkouts", () => {
     await waitFor(() => expect(screen.getByText("No host answered")).toBeInTheDocument());
   });
 });
+
+describe("ProjectsSection: root path inputs", () => {
+  const updateSettings = vi.fn();
+
+  beforeEach(() => {
+    updateSettings.mockReset();
+    vi.mocked(api.getServerInfo).mockRejectedValue(new Error("no server info in this test"));
+    useDashboardStore.setState({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        projectRoots: ["~/work"],
+        externalReadRoots: ["~/.codex/plans"],
+      },
+      projects: [],
+      hosts: [makeHost({ id: "local", name: "Local", isLocal: true })],
+      updateSettings,
+    });
+  });
+
+  it("adds a project root on Enter, trimmed", async () => {
+    const user = userEvent.setup();
+    render(<ProjectsSection />);
+
+    await user.click(screen.getByRole("button", { name: /Add a root directory/ }));
+    await user.type(screen.getByPlaceholderText("~/work"), "  ~/src  {Enter}");
+
+    expect(updateSettings).toHaveBeenCalledWith({ projectRoots: ["~/work", "~/src"] });
+    expect(screen.queryByPlaceholderText("~/work")).not.toBeInTheDocument();
+  });
+
+  it("discards a half-typed project root on Escape", async () => {
+    const user = userEvent.setup();
+    render(<ProjectsSection />);
+
+    await user.click(screen.getByRole("button", { name: /Add a root directory/ }));
+    await user.type(screen.getByPlaceholderText("~/work"), "~/src{Escape}");
+
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: /Add a root directory/ })).toBeInTheDocument();
+  });
+
+  it("adds a readable root on Enter but ignores a duplicate", async () => {
+    const user = userEvent.setup();
+    render(<ProjectsSection />);
+
+    const addReadable = () => screen.getAllByRole("button", { name: /^Add/ }).at(-1)!;
+    await user.click(addReadable());
+    await user.type(screen.getByPlaceholderText("~/.codex/plans"), "~/notes{Enter}");
+    expect(updateSettings).toHaveBeenCalledWith({
+      externalReadRoots: ["~/.codex/plans", "~/notes"],
+    });
+
+    updateSettings.mockClear();
+    await user.click(addReadable());
+    await user.type(screen.getByPlaceholderText("~/.codex/plans"), "~/.codex/plans{Enter}");
+    expect(updateSettings).not.toHaveBeenCalled();
+  });
+
+  it("discards a half-typed readable root on Escape", async () => {
+    const user = userEvent.setup();
+    render(<ProjectsSection />);
+
+    await user.click(screen.getAllByRole("button", { name: /^Add/ }).at(-1)!);
+    await user.type(screen.getByPlaceholderText("~/.codex/plans"), "~/x{Escape}");
+
+    expect(updateSettings).not.toHaveBeenCalled();
+    expect(screen.queryByPlaceholderText("~/.codex/plans")).not.toBeInTheDocument();
+  });
+});
