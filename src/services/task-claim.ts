@@ -31,7 +31,9 @@ import {
   type SessionBackend,
 } from "./session-backend.js";
 import { HostRequestError } from "./remote-host-client.js";
-import { resolveHostBaseRef } from "./host-git.js";
+import { resolveHostBaseRef, resolveRepoRef } from "./host-git.js";
+import { resolveGitHubToken } from "./github-integration.js";
+import { dependencyGate, parseBlockedBy, refreshTaskBlockers } from "./task-dependencies.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { deriveTaskBranchName, deriveWorktreePath } from "./git-worktree.js";
@@ -85,7 +87,10 @@ export type DispatchTaskOutcome =
         | "placement-refused"
         // Issue #2006 — the task's required host exists but is not eligible
         // right now; the task stays `claimed` and is looked at again.
-        | "placement-held";
+        | "placement-held"
+        // Issue #2364 — an open GitHub `blocked_by` dependency; the task
+        // stays `claimed` until the blocker closes.
+        | "blocked-held";
       detail?: string;
       /** Only set for "cap" — the concurrency limit that was hit. */
       limit?: number;
@@ -332,6 +337,103 @@ export function failQueuedTask(
   return true;
 }
 
+// Issue #2364 — a hold's reason starts with this, so the card and the clear
+// below can tell it from a failed attempt's reason.
+const BLOCKED_HOLD_PREFIX = "Waiting for ";
+
+// A blocked hold re-reads GitHub at most this often; the webhook refresh and
+// the watcher's display pass keep the stored blockers current in between.
+const BLOCKED_HOLD_RECHECK_MS = 5 * 60 * 1000;
+
+function blockedHoldDetail(blockedBy: string | null): string {
+  const blockers = parseBlockedBy(blockedBy) ?? [];
+  const names = blockers.map((b) => (b.number > 0 ? `#${b.number}` : b.title));
+  return `${BLOCKED_HOLD_PREFIX}${names.join(", ")} to close`;
+}
+
+/**
+ * Issue #2364 — the dependency gate for a task that is already `claimed`.
+ * Returns a "blocked-held" outcome while the issue has an open blocker, else
+ * null (dispatch proceeds). Never-observed blockers are refreshed once; if
+ * that cannot be done the task is dispatched anyway (fail-open, logged) so a
+ * GitHub outage cannot strand a claimed task.
+ */
+async function blockedHold(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+): Promise<DispatchTaskOutcome | null> {
+  let current = task;
+  let gate = dependencyGate(current);
+  const stale =
+    current.blockedByCheckedAt === null ||
+    Date.now() - current.blockedByCheckedAt.getTime() >= BLOCKED_HOLD_RECHECK_MS;
+  if (gate !== "clear" && (gate === "unresolved" || stale) && current.issueNumber !== null) {
+    try {
+      const repoRef = await resolveRepoRef(app, project);
+      const token = repoRef ? await resolveGitHubToken(app, repoRef) : null;
+      if (repoRef && token) {
+        await refreshTaskBlockers(app, {
+          taskId: current.id,
+          projectId: project.id,
+          owner: repoRef.owner,
+          repo: repoRef.repo,
+          issueNumber: current.issueNumber,
+          dependencyCount: current.dependencyCount,
+          token,
+        });
+        const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+        if (row) current = row;
+        gate = dependencyGate(current);
+      }
+    } catch (err) {
+      app.log.warn({ err, taskId: task.id }, "task dispatch: blocker refresh failed");
+    }
+    if (gate === "unresolved") {
+      app.log.warn(
+        { taskId: task.id },
+        "task dispatch: blockers could not be resolved — dispatching anyway",
+      );
+      return null;
+    }
+  }
+  if (gate === "blocked") {
+    const detail = blockedHoldDetail(current.blockedBy);
+    if (task.failureReason !== detail) {
+      const written = app.db
+        .update(tasks)
+        .set({ failureReason: detail })
+        .where(and(eq(tasks.id, task.id), eq(tasks.status, "claimed")))
+        .run();
+      if (written.changes > 0) {
+        app.log.info({ taskId: task.id }, `task dispatch: ${detail} — holding the task`);
+        broadcastTaskEvent({
+          taskId: task.id,
+          projectId: project.id,
+          kind: "dispatch",
+          ts: Date.now(),
+        });
+      }
+    }
+    return { ok: false, reason: "blocked-held", detail };
+  }
+  // Gate is clear: drop a hold text left by an earlier sweep.
+  if (task.failureReason?.startsWith(BLOCKED_HOLD_PREFIX)) {
+    app.db
+      .update(tasks)
+      .set({ failureReason: null })
+      .where(and(eq(tasks.id, task.id), eq(tasks.status, "claimed")))
+      .run();
+    broadcastTaskEvent({
+      taskId: task.id,
+      projectId: project.id,
+      kind: "dispatch",
+      ts: Date.now(),
+    });
+  }
+  return null;
+}
+
 /**
  * Task-claim queueing (rate-limit-storm fix) — the half of the old
  * `claimTask` that actually spawns a worker: reservation (now JUST the
@@ -376,6 +478,10 @@ export async function dispatchClaimedTask(
 
   const [project] = app.db.select().from(projects).where(eq(projects.id, task.projectId)).all();
   if (!project) return { ok: false, reason: "not-queued" };
+
+  // Issue #2364 — before any worktree, placement or session work.
+  const held = await blockedHold(app, task, project);
+  if (held) return held;
 
   // Re-resolved here, not carried from enqueue time: task.agent/reviewAgent
   // were already persisted onto the row by enqueueTask (or predate it, for

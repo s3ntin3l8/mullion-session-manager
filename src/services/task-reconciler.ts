@@ -37,6 +37,7 @@ import {
   resolveOpenCodeSmallModel,
 } from "./task-model-resolve.js";
 import { commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
+import { parseBlockedBy } from "./task-dependencies.js";
 import {
   syncTaskTransition,
   computeTaskDiffStat,
@@ -988,9 +989,16 @@ async function checkReviewingGate(
     Date.now() - task.lastRateLimitAt.getTime() < MAX_GRACE_MIN * 60_000;
   const rateLimitPrefix =
     liveRateLimit || persistedRateLimit ? "rate_limit quota exhausted — " : "";
+  // #2364 — an open blocker is the likelier cause of an empty turn: the
+  // worker found what it depends on missing. Name it rather than hide it.
+  const openBlockers = (parseBlockedBy(task.blockedBy) ?? []).filter((b) => b.number > 0);
+  const blockedNote =
+    openBlockers.length > 0
+      ? ` — blocked by ${openBlockers.map((b) => `#${b.number}`).join(", ")}`
+      : "";
   return {
     ok: false,
-    failureReason: `${rateLimitPrefix}agent ended its turn with no commits on ${task.branchName}${detail}`,
+    failureReason: `${rateLimitPrefix}agent ended its turn with no commits on ${task.branchName}${detail}${blockedNote}`,
   };
 }
 

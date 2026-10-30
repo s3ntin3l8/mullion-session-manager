@@ -16,6 +16,7 @@ import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { pickRepoOwners, repoKey as repoKeyOf, resolveRepoKeys } from "../services/repo-key.js";
 import { syncClosedIssueToLocal, syncUnlabeledIssueToLocal } from "../services/task-github-sync.js";
 import { refreshTaskBlockers } from "../services/task-dependencies.js";
+import { dispatchQueuedTasks } from "../services/task-dispatch.js";
 
 const HUB_SIGNATURE_256 = "x-hub-signature-256";
 const HUB_EVENT = "x-github-event";
@@ -540,6 +541,8 @@ export async function webhookRoutes(app: FastifyInstance) {
                   token,
                 });
               })
+              // #2364 — a claimed task held on this blocker starts now.
+              .then(() => dispatchQueuedTasks(app))
               // Not awaited, same "stay under GitHub's ~10s delivery
               // timeout" posture as the closed/unlabeled sync above —
               // refreshTaskBlockers never throws on its own, this only
@@ -619,6 +622,8 @@ export async function webhookRoutes(app: FastifyInstance) {
               });
             }
           }
+          // #2364 — a claimed task held on this blocker starts now.
+          await dispatchQueuedTasks(app);
         })().catch((err) => {
           app.log.warn(
             { err, owner, repo, issueNumber: closedIssueNumber },
