@@ -190,4 +190,59 @@ describe("git deep-link requests", () => {
     expect(s.rightSidebarView).toBe("github");
     expect(s.githubOpenPrByProject[5]).toBe(42);
   });
+
+  describe("GitHub drill-in reset", () => {
+    const drill = () => {
+      const st = useDashboardStore.getState();
+      st.openRightSidebarView("github", 5);
+      st.setGithubOpenPr(5, 42);
+    };
+
+    it("open PR, close, reopen lands on the list", () => {
+      drill();
+      useDashboardStore.getState().closeRightSidebar();
+      useDashboardStore.getState().toggleRightSidebar();
+      expect(useDashboardStore.getState().githubOpenPrByProject).toEqual({});
+    });
+
+    it("open PR, switch to Git, close, reopen via toggleRightSidebarView lists", () => {
+      drill();
+      useDashboardStore.getState().openRightSidebarView("git");
+      useDashboardStore.getState().closeRightSidebar();
+      useDashboardStore.getState().toggleRightSidebarView("github");
+      expect(useDashboardStore.getState().githubOpenPrByProject).toEqual({});
+    });
+
+    it("open PR, switch to Git, switch back lists (PR and issue)", () => {
+      drill();
+      useDashboardStore.setState({ githubOpenIssueByProject: { 5: 7 } });
+      useDashboardStore.getState().openRightSidebarView("git");
+      useDashboardStore.getState().openRightSidebarView("github");
+      const s = useDashboardStore.getState();
+      expect(s.githubOpenPrByProject).toEqual({});
+      expect(s.githubOpenIssueByProject).toEqual({});
+    });
+
+    it("a PR opened elsewhere while the sidebar is closed on github is cleared on reopen", () => {
+      drill();
+      useDashboardStore.getState().closeRightSidebar();
+      useDashboardStore.getState().setGithubOpenPr(5, 9);
+      useDashboardStore.getState().toggleRightSidebar();
+      expect(useDashboardStore.getState().githubOpenPrByProject).toEqual({});
+    });
+
+    it("openRightSidebarPr lands on the PR, also from git and when already on github", () => {
+      useDashboardStore.getState().openRightSidebarView("git");
+      useDashboardStore.getState().openRightSidebarPr(5, 11);
+      expect(useDashboardStore.getState().githubOpenPrByProject[5]).toBe(11);
+      useDashboardStore.getState().openRightSidebarPr(5, 12);
+      expect(useDashboardStore.getState().githubOpenPrByProject[5]).toBe(12);
+    });
+
+    it("the in-PR back button (setGithubOpenPr null) returns to the list", () => {
+      drill();
+      useDashboardStore.getState().setGithubOpenPr(5, null);
+      expect(useDashboardStore.getState().githubOpenPrByProject[5]).toBeNull();
+    });
+  });
 });
