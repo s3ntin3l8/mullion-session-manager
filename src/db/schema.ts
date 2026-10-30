@@ -1232,7 +1232,12 @@ export const tasks = sqliteTable(
     // a signal one is still working. A timestamp older than
     // REBASE_ATTEMPT_STALE_MS is treated as abandoned, mirroring
     // REVIEW_SPAWN_CLAIM_STALE_MS's own reclaim reasoning. Cleared once the
-    // merge sweep leaves the `dirty` state (clearMergeState).
+    // merge sweep leaves the `dirty` state (clearMergeState). The review
+    // hold-back it drives ends early, too: once the PR is mergeable again and
+    // the rebase worker's `workFinishedAt` (#1735 — "work done", not "turn
+    // ended") is newer than this stamp with a derived `finished` status, the
+    // reviewing sweep clears it. Session status alone was never safe (a
+    // finished worker stays "active"); `workFinishedAt` is the signal.
     rebaseStartedAt: integer("rebase_started_at", { mode: "timestamp" }),
     // #744 — durable intent to cut a release covering this task, armed by
     // task-reconciler.ts's attemptMerge the moment this task's OWN PR
