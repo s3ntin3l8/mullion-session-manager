@@ -49,7 +49,9 @@ import {
   DOCKER_STACK_SESSION_NAME_PREFIX,
   MAX_HOST_CWDS,
   PLACEMENT_MODES,
+  PLACEMENT_PLATFORMS,
   type PlacementMode,
+  type PlacementPlatform,
 } from "../shared/constants.js";
 import {
   getRemoteHostClient,
@@ -214,7 +216,12 @@ import { createSessionRecord } from "../services/session-lifecycle.js";
 import { resolveWorkflowConventionsText } from "../services/workflow-conventions.js";
 import { hashWorkflowConventionsSection } from "../services/mullion-scaffold.js";
 import { RESUMABLE_TASK_STATUSES, sessionsUsingWorktree } from "../services/worktree-usage.js";
-import { parseHostCwds, serializeHostCwds } from "../services/placement.js";
+import {
+  parseHostCwds,
+  parsePlacementConstraints,
+  serializeHostCwds,
+  serializePlacementConstraints,
+} from "../services/placement.js";
 import { listHosts } from "../services/host-registry.js";
 
 /** Issues #2123 / #2124 — a list of project ids (an empty one is stored as null). */
@@ -223,6 +230,28 @@ const PROJECT_ID_LIST_SCHEMA = {
   items: { type: "integer", minimum: 1 },
   maxItems: MAX_PROJECT_LIST,
   uniqueItems: true,
+} as const;
+
+/** Issue #2241 — what the API accepts for `placementConstraints`. */
+interface PlacementConstraintsBody {
+  platform?: PlacementPlatform[];
+  allowBurst?: boolean;
+}
+
+/** Issue #2241 — a project's placement steering flags (see schema.ts). */
+const PLACEMENT_CONSTRAINTS_SCHEMA = {
+  type: ["object", "null"],
+  additionalProperties: false,
+  properties: {
+    // An allow-list; empty = any platform.
+    platform: {
+      type: "array",
+      items: { type: "string", enum: [...PLACEMENT_PLATFORMS] },
+      maxItems: PLACEMENT_PLATFORMS.length,
+      uniqueItems: true,
+    },
+    allowBurst: { type: "boolean" },
+  },
 } as const;
 
 interface CreateProjectBody {
@@ -238,6 +267,8 @@ interface CreateProjectBody {
   // project, so it is not a placement candidate. Absent means "this project
   // lives on its own host and nowhere else".
   hostCwds?: Record<string, string> | null;
+  // Issue #2241 — placement steering flags; see PLACEMENT_CONSTRAINTS_SCHEMA.
+  placementConstraints?: PlacementConstraintsBody | null;
   // Confirm-first directory creation (leaf-only — see project-dir.ts):
   // the initial POST without this flag 400s with code PROJECT_DIR_MISSING
   // when `cwd` doesn't exist yet; the modal re-submits with `createDir:
@@ -276,6 +307,8 @@ interface UpdateProjectBody {
   // lives on its own host and nowhere else). The paths are ABSOLUTE paths ON
   // THAT HOST — the same directory the session will be spawned in.
   hostCwds?: Record<string, string> | null;
+  // Issue #2241 — placement steering flags; `null` clears them.
+  placementConstraints?: PlacementConstraintsBody | null;
   // Per-project only, no install-wide tier — same posture as
   // defaultReviewAgent above. `null`/`false` = off; default-off matters,
   // see schema.ts's own doc comment on these two columns.
@@ -458,6 +491,7 @@ const createProjectSchema = {
         additionalProperties: { type: "string", minLength: 1, pattern: "^/" },
         maxProperties: MAX_HOST_CWDS,
       },
+      placementConstraints: PLACEMENT_CONSTRAINTS_SCHEMA,
       createDir: { type: "boolean" },
       gitInit: { type: "boolean" },
       allowDuplicate: { type: "boolean" },
@@ -482,6 +516,7 @@ const updateProjectSchema = {
         additionalProperties: { type: "string", minLength: 1, pattern: "^/" },
         maxProperties: MAX_HOST_CWDS,
       },
+      placementConstraints: PLACEMENT_CONSTRAINTS_SCHEMA,
       devServerUrl: { type: ["string", "null"], minLength: 1 },
       autoFetch: { type: ["boolean", "null"] },
       defaultAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
@@ -1283,6 +1318,7 @@ export async function projectsRoute(app: FastifyInstance) {
           // Issue #2090 — which entries were auto-detected, which hosts the
           // operator declined: an OBJECT on the way out, like hostCwds.
           hostCwdsMeta: parseHostCwdsMeta(row.hostCwdsMeta),
+          placementConstraints: parsePlacementConstraints(row.placementConstraints),
           ...crossProjectFieldsOut(row),
           currentBranch,
           ruleFiles,
@@ -1481,6 +1517,7 @@ export async function projectsRoute(app: FastifyInstance) {
           placement,
           cwd: project.cwd,
           hostCwds: project.hostCwds,
+          placementConstraints: project.placementConstraints,
         },
         requiredAgent:
           request.query.command === undefined
@@ -4832,7 +4869,16 @@ export async function projectsRoute(app: FastifyInstance) {
     "/api/projects",
     { schema: createProjectSchema, config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
-      const { name, cwd, createDir, gitInit, placement, hostCwds, allowDuplicate } = request.body;
+      const {
+        name,
+        cwd,
+        createDir,
+        gitInit,
+        placement,
+        hostCwds,
+        placementConstraints,
+        allowDuplicate,
+      } = request.body;
       const unknownHost = unknownHostInCwds(app, hostCwds);
       if (unknownHost !== null) {
         return reply.badRequest(unknownHostMessage(app, unknownHost));
@@ -4938,6 +4984,8 @@ export async function projectsRoute(app: FastifyInstance) {
           // Issue #1724 — the per-host cwd map, serialized. Null/empty means
           // "this project lives on its own host and nowhere else".
           hostCwds: serializeHostCwds(hostCwds),
+          // Issue #2241 — the steering flags; null/default flags store as null.
+          placementConstraints: serializePlacementConstraints(placementConstraints),
           // Issue #1723 / roadmap 8.9 — absent means "pinned" (the
           // column's default), so an existing project is untouched.
           ...(placement === undefined ? {} : { placement }),
@@ -4961,6 +5009,9 @@ export async function projectsRoute(app: FastifyInstance) {
         ...withReleasePleaseDefault,
         hostCwds: { ...parseHostCwds(withReleasePleaseDefault.hostCwds) },
         hostCwdsMeta: parseHostCwdsMeta(withReleasePleaseDefault.hostCwdsMeta),
+        placementConstraints: parsePlacementConstraints(
+          withReleasePleaseDefault.placementConstraints,
+        ),
         ...crossProjectFieldsOut(withReleasePleaseDefault),
       };
       return createDir ? { ...response, dirCreated, gitInitialized } : response;
@@ -5022,6 +5073,7 @@ export async function projectsRoute(app: FastifyInstance) {
           ...row,
           hostCwds: { ...parseHostCwds(row.hostCwds) },
           hostCwdsMeta: parseHostCwdsMeta(row.hostCwdsMeta),
+          placementConstraints: parsePlacementConstraints(row.placementConstraints),
           ...crossProjectFieldsOut(row),
         },
         counts: result.counts,
@@ -5077,6 +5129,7 @@ export async function projectsRoute(app: FastifyInstance) {
         ...row,
         hostCwds: { ...parseHostCwds(row.hostCwds) },
         hostCwdsMeta: parseHostCwdsMeta(row.hostCwdsMeta),
+        placementConstraints: parsePlacementConstraints(row.placementConstraints),
         ...crossProjectFieldsOut(row),
       };
     },
@@ -5123,6 +5176,7 @@ export async function projectsRoute(app: FastifyInstance) {
         createDir,
         gitInit,
         hostCwds,
+        placementConstraints,
         allowDuplicate,
       } = request.body;
       // Issues #2123 / #2124 — the project lists must name real projects, and a
@@ -5222,6 +5276,7 @@ export async function projectsRoute(app: FastifyInstance) {
         defaultReviewAgent === undefined &&
         placement === undefined &&
         hostCwds === undefined &&
+        placementConstraints === undefined &&
         mergeOnApprove === undefined &&
         autoApprove === undefined &&
         allowCrossProjectSpawn === undefined &&
@@ -5239,7 +5294,7 @@ export async function projectsRoute(app: FastifyInstance) {
         suppressConventionsInjectionAfterScaffold === undefined
       ) {
         return reply.badRequest(
-          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, placement, hostCwds, mergeOnApprove, autoApprove, allowCrossProjectSpawn, crossProjectTargets, acceptsChildrenFrom, acceptsChildrenFromList, acceptsMessagesFrom, acceptsMessagesFromList, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
+          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, placement, hostCwds, placementConstraints, mergeOnApprove, autoApprove, allowCrossProjectSpawn, crossProjectTargets, acceptsChildrenFrom, acceptsChildrenFromList, acceptsMessagesFrom, acceptsMessagesFromList, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
         );
       }
 
@@ -5312,6 +5367,10 @@ export async function projectsRoute(app: FastifyInstance) {
           ...(defaultReviewAgent !== undefined ? { defaultReviewAgent } : {}),
           // Issue #1723 / roadmap 8.9 — the placement opt-in.
           ...(placement !== undefined ? { placement } : {}),
+          // Issue #2241 — the steering flags. `null` (or default flags) clears them.
+          ...(placementConstraints !== undefined
+            ? { placementConstraints: serializePlacementConstraints(placementConstraints) }
+            : {}),
           // Issue #1724 — the per-host cwd map. `null` clears it.
           ...(hostCwds !== undefined
             ? {
@@ -5384,6 +5443,7 @@ export async function projectsRoute(app: FastifyInstance) {
         ...updated[0],
         hostCwds: { ...parseHostCwds(updated[0].hostCwds) },
         hostCwdsMeta: parseHostCwdsMeta(updated[0].hostCwdsMeta),
+        placementConstraints: parsePlacementConstraints(updated[0].placementConstraints),
         ...crossProjectFieldsOut(updated[0]),
       };
       return createDir ? { ...response, dirCreated, gitInitialized } : response;

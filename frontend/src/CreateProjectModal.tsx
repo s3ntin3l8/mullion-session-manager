@@ -7,13 +7,21 @@ import type {
   HostCheckoutSuggestion,
   HostCwdsMeta,
   Launcher,
+  PlacementConstraints,
   PlacementMode,
   PlacementPreview,
 } from "./api/index.js";
+import { PLACEMENT_PLATFORMS, type PlacementPlatform } from "../../src/shared/constants.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { useDashboardStore } from "./store/index.js";
 import { Dropdown } from "./ui/primitives.js";
 import { Modal } from "./ui/Modal.js";
+
+const PLATFORM_LABELS: Record<PlacementPlatform, string> = {
+  darwin: "macOS",
+  linux: "Linux",
+  win32: "Windows",
+};
 
 // Empty string represents "unset" (fall through to the next precedence
 // tier) in the Dropdown below, which is string-only — converted to/from
@@ -99,6 +107,9 @@ interface CreateProjectModalProps {
     // `undefined` ("leave it alone") must stay distinguishable from `{}`
     // ("it lives nowhere else").
     hostCwds?: Record<string, string>;
+    // Issue #2241 — the placement steering flags. Edit mode only, and only
+    // present when they changed (a PATCH replaces them wholesale).
+    placementConstraints?: PlacementConstraints;
   }) => Promise<{ dirCreated?: boolean; gitInitialized?: boolean } | undefined>;
   // Phase 4d: this same modal doubles as "Edit project" (kebab menu on a
   // project row), pre-filled with the project's current name/cwd — a
@@ -142,6 +153,9 @@ interface CreateProjectModalProps {
   // default), so a project opened without this prop behaves exactly as
   // before.
   initialPlacement?: PlacementMode;
+  // Issue #2241 — the project's steering flags. Absent = none (any platform,
+  // no burst hosts).
+  initialPlacementConstraints?: PlacementConstraints;
   // Issue #1951 follow-up — edit mode only. The project's own host (its path
   // is `initialPath`, so it never gets a row of its own) and the per-host
   // paths it already has on others.
@@ -207,6 +221,7 @@ export function CreateProjectModal({
   initialConventionalCommitTitles = null,
   initialAutoTagRelease = null,
   initialPlacement = "pinned",
+  initialPlacementConstraints,
   projectHostId = LOCAL_HOST_ID,
   initialHostCwds = {},
   initialHostCwdsMeta,
@@ -220,6 +235,13 @@ export function CreateProjectModal({
   // now-reading, not a promise: load moves between the preview and the
   // spawn, which is why the UI says "right now".
   const [placement, setPlacement] = useState<PlacementMode>(initialPlacement);
+  // Issue #2241 — the steering flags being edited. An empty platform set = any.
+  const [flagPlatforms, setFlagPlatforms] = useState<PlacementPlatform[]>(
+    initialPlacementConstraints?.platform ?? [],
+  );
+  const [flagAllowBurst, setFlagAllowBurst] = useState(
+    initialPlacementConstraints?.allowBurst ?? false,
+  );
   const [preview, setPreview] = useState<PlacementPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   // Issue #1951 follow-up — the per-host paths being edited, keyed by host id.
@@ -511,6 +533,10 @@ export function CreateProjectModal({
       // reads as removed and declined.
       ([...autoDetectedHostIds].some((id) => knownHostIds.has(id)) ||
         !sameHostPaths(editedHostPaths, normalizeHostPaths(initialHostCwds)));
+    // Issue #2241 — only a changed set of flags is sent.
+    const flagsChanged =
+      flagAllowBurst !== (initialPlacementConstraints?.allowBurst ?? false) ||
+      flagPlatforms.join(",") !== (initialPlacementConstraints?.platform ?? []).join(",");
     setSubmitting(true);
     setError(null);
     try {
@@ -595,6 +621,9 @@ export function CreateProjectModal({
         // createDir/gitInit, on edit it is a plain patch field.
         placement,
         ...(hostCwdsToSend ? { hostCwds: hostCwdsToSend } : {}),
+        ...(isEdit && flagsChanged
+          ? { placementConstraints: { platform: flagPlatforms, allowBurst: flagAllowBurst } }
+          : {}),
         ...(opts?.createDir ? { createDir: true, gitInit } : {}),
         ...(opts?.allowDuplicate ? { allowDuplicate: true } : {}),
       });
@@ -785,6 +814,50 @@ export function CreateProjectModal({
           </span>
         )}
       </label>
+
+      {/* Issue #2241 — steering flags: where Auto may place this project's
+              work. Edit mode only. A task's Platform:/Host: line overrides
+              them, and they only bite on automatic placement. */}
+      {isEdit && (
+        <fieldset className="create-modal-field" aria-label="Placement flags">
+          <span className="create-modal-field-label">Placement flags</span>
+          <span className="create-modal-input-row">
+            {PLACEMENT_PLATFORMS.map((p) => (
+              <label key={p} className="create-modal-dir-confirm-checkbox">
+                <input
+                  type="checkbox"
+                  checked={flagPlatforms.includes(p)}
+                  onChange={(e) =>
+                    setFlagPlatforms(
+                      PLACEMENT_PLATFORMS.filter((q) =>
+                        q === p ? e.target.checked : flagPlatforms.includes(q),
+                      ),
+                    )
+                  }
+                />
+                {PLATFORM_LABELS[p]}
+              </label>
+            ))}
+          </span>
+          <span className="create-modal-field-hint">
+            {flagPlatforms.length === 0
+              ? "Automatic placement may use a host of any platform."
+              : `Automatic placement only uses ${flagPlatforms.join(" or ")} hosts. If none is online, a launch is refused and Task Master holds the task.`}
+          </span>
+          <label className="create-modal-dir-confirm-checkbox">
+            <input
+              type="checkbox"
+              checked={flagAllowBurst}
+              onChange={(e) => setFlagAllowBurst(e.target.checked)}
+            />
+            Allow burst hosts
+          </label>
+          <span className="create-modal-field-hint">
+            Burst hosts (laptops that are not always on) stay out of Auto and unattended Task Master
+            unless this is on. A task's Platform:/Host: line overrides these flags.
+          </span>
+        </fieldset>
+      )}
 
       {/* Issue #1951 follow-up — where the project's checkout lives on the
               OTHER hosts. This is what makes a host a candidate at all, for

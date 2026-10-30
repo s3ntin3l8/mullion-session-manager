@@ -205,6 +205,15 @@ export const projects = sqliteTable("projects", {
   // host and nowhere else" — which is every project as of this migration, so
   // nothing changes until an operator fills it in.
   hostCwds: text("host_cwds"),
+  // Issue #2241 — placement STEERING flags, a JSON object
+  // `{ "platform": ["darwin", ...], "allowBurst": true }`. They bound where
+  // AUTOMATIC placement (Auto launches, unattended Task Master) may go:
+  // `platform` is an allow-list (empty/absent = any), `allowBurst` lets "burst"
+  // hosts (#2239) take Auto work (absent = false). A task's `Platform:` /
+  // `Host:` directive overrides them; an explicit launcher host is checked
+  // against `platform`. Nullable: null = no flags, which is every project as of
+  // this migration. Read it through `parsePlacementConstraints`.
+  placementConstraints: text("placement_constraints"),
   // Issue #2090 — bookkeeping for the DETECTED (not hand-entered) side of
   // `hostCwds`: a JSON object `{ "auto": ["<hostId>", ...], "declined":
   // ["<hostId>", ...] }`.

@@ -467,7 +467,8 @@ export type CreateSessionResult =
   | { ok: false; reason: "host-unknown-project"; detail?: string }
   // Issue #1951 — a targeted spawn (`params.target`) found no host that is
   // eligible AND matches. `detail` names only the target the caller asked
-  // for, never the rest of the fleet.
+  // for, never the rest of the fleet. Issue #2241 — also an Auto launch that
+  // the project's platform flag leaves no host for (`detail` names the flag).
   | { ok: false; reason: "no-target-host"; detail: string }
   | { ok: false; reason: "child-cap-exceeded" }
   // Hermes review, this PR — validated here (not just dock-config.ts's write
@@ -1003,10 +1004,14 @@ function resolveSessionPlacement(
         placement: project.placement,
         cwd: project.cwd,
         hostCwds: project.hostCwds,
+        placementConstraints: project.placementConstraints,
       },
       target: params.target,
       unattended: params.unattended === true,
       requiredAgent: commandAgentBin(params.command) ?? undefined,
+      // Issue #2241 — an explicit launcher/caller target must satisfy the
+      // project's platform flag (a Task Master directive does not come here).
+      checkProjectFlags: true,
     });
     if (!targeted.ok) {
       return { ok: false, reason: "no-target-host", detail: targeted.detail };
@@ -1061,10 +1066,17 @@ function resolveSessionPlacement(
       placement: params.placement ?? project.placement,
       cwd: project.cwd,
       hostCwds: project.hostCwds,
+      placementConstraints: project.placementConstraints,
     },
     unattended: params.unattended === true,
     requiredAgent: commandAgentBin(params.command) ?? undefined,
   });
+
+  // Issue #2241 — the project's platform flag leaves no host: refuse (409)
+  // rather than fall back to the project's own host, which may not satisfy it.
+  if (decision.refusal !== undefined) {
+    return { ok: false, reason: "no-target-host", detail: decision.refusal.detail };
+  }
 
   return {
     ok: true,

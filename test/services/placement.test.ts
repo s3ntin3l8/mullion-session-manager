@@ -2,8 +2,10 @@ import { describe, it, expect } from "vitest";
 import {
   chooseHost,
   parseHostCwds,
+  parsePlacementConstraints,
   projectCwdOnHost,
   serializeHostCwds,
+  serializePlacementConstraints,
   type PlacementCandidate,
   type PlacementContext,
 } from "../../src/services/placement.js";
@@ -525,5 +527,64 @@ describe("required agent CLI (issue #2240)", () => {
       );
       expect(ok.reason).not.toContain("older than the primary");
     }
+  });
+});
+
+describe("project steering flags (issue #2241)", () => {
+  it("parses the column leniently and serializes default flags to null", () => {
+    expect(parsePlacementConstraints(null)).toEqual({ platform: [], allowBurst: false });
+    expect(parsePlacementConstraints("not json")).toEqual({ platform: [], allowBurst: false });
+    expect(parsePlacementConstraints("[1]")).toEqual({ platform: [], allowBurst: false });
+    expect(
+      parsePlacementConstraints('{"platform":["win32","plan9","darwin"],"allowBurst":true}'),
+    ).toEqual({ platform: ["darwin", "win32"], allowBurst: true });
+    expect(serializePlacementConstraints(null)).toBeNull();
+    expect(serializePlacementConstraints({ platform: [], allowBurst: false })).toBeNull();
+    expect(serializePlacementConstraints({ platform: ["linux"] })).toBe(
+      '{"platform":["linux"],"allowBurst":false}',
+    );
+    expect(serializePlacementConstraints({ allowBurst: true })).toBe(
+      '{"platform":[],"allowBurst":true}',
+    );
+  });
+
+  it("excludes hosts outside the platform allow-list, naming the flag", () => {
+    const decision = chooseHost(
+      [
+        candidate({ hostId: "lin", platform: "linux", capacity: capacity(0, 8) }),
+        candidate({ hostId: "mac", platform: "darwin", capacity: capacity(4, 8) }),
+        candidate({ hostId: "new", platform: null }),
+      ],
+      context({ platforms: ["darwin"] }),
+    );
+    expect(decision.hostId).toBe("mac");
+    expect(decision.excluded).toEqual([
+      { hostId: "lin", reason: "project allows only darwin hosts" },
+      {
+        hostId: "new",
+        reason: "project allows only darwin hosts (this host has not reported its platform)",
+      },
+    ]);
+  });
+
+  it("joins several allowed platforms and ignores an empty list", () => {
+    const decision = chooseHost(
+      [candidate({ hostId: "win", platform: "win32" })],
+      context({ platforms: ["darwin", "linux"] }),
+    );
+    expect(decision.excluded).toEqual([
+      { hostId: "win", reason: "project allows only darwin or linux hosts" },
+    ]);
+    expect(chooseHost([candidate({ platform: "win32" })], context({ platforms: [] })).hostId).toBe(
+      "remote-a",
+    );
+  });
+
+  it("reports the platform before the host being offline", () => {
+    const decision = chooseHost(
+      [candidate({ hostId: "lin", platform: "linux", online: false })],
+      context({ platforms: ["darwin"] }),
+    );
+    expect(decision.excluded[0].reason).toBe("project allows only darwin hosts");
   });
 });

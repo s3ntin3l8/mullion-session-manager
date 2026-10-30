@@ -1,5 +1,10 @@
 import type { FastifyInstance } from "fastify";
-import { LOCAL_HOST_ID, type HostRole, type PlacementMode } from "../shared/constants.js";
+import {
+  LOCAL_HOST_ID,
+  PLACEMENT_PLATFORMS,
+  type HostRole,
+  type PlacementMode,
+} from "../shared/constants.js";
 import { listHosts } from "./host-registry.js";
 import { measureHostCapacity, type HostCapacity } from "./host-capacity.js";
 import { isOlderVersion, refreshLocalAgents } from "./host-agents.js";
@@ -117,6 +122,13 @@ export interface PlacementContext {
    */
   allowBurst?: boolean;
   /**
+   * The project's `platform` allow-list (issue #2241): a host that does not
+   * report one of these platforms is excluded. Empty/absent = any. Only the
+   * policy path sets it — a task `Platform:`/`Host:` directive overrides the
+   * project's flags, so `resolveTargetHost` never passes it for Task Master.
+   */
+  platforms?: readonly string[];
+  /**
    * The agent CLI(s) the session needs on its host (issue #2240), as
    * `KNOWN_AGENTS` binaries. A host KNOWN to lack one is excluded; a host
    * whose list is unknown stays eligible (fail open). Absent = no CLI filter
@@ -162,6 +174,15 @@ export interface PlacementDecision {
   excluded: ExcludedHost[];
   /** True when the fallback was used (no eligible host at all). */
   fellBack: boolean;
+  /**
+   * Issue #2241 — set INSTEAD of the fallback when the project's `platform`
+   * flag is active and no host satisfies it: the caller must not run the work
+   * on `hostId` (the pinned host, kept only so the shape stays total). `detail`
+   * names only the flags and the state of hosts that passed them, never other
+   * hosts; `transient` = a host that satisfies the flags exists or could (it
+   * is offline/parked/unreported), so waiting can help.
+   */
+  refusal?: { detail: string; transient: boolean; unreadable?: boolean };
 }
 
 /**
@@ -229,6 +250,77 @@ export function serializeHostCwds(map: Record<string, string> | null | undefined
   // Object.fromEntries defines own properties, so a key of "__proto__" stays
   // an ordinary property — it is never handed to a prototype setter.
   return JSON.stringify(Object.fromEntries(entries));
+}
+
+/**
+ * A project's placement steering flags (issue #2241), parsed.
+ *
+ * `platform` is an allow-list (empty = any platform); `allowBurst` lets
+ * "burst" hosts take Auto work (false = they stay out, the default).
+ */
+export interface PlacementConstraints {
+  platform: string[];
+  allowBurst: boolean;
+}
+
+/**
+ * `projects.placementConstraints`, parsed. Malformed, absent or unknown-valued
+ * input reads as "no flags" — a bad column can only ever LOOSEN placement back
+ * to its default, never wedge a project. Unknown platforms are dropped, so a
+ * value the route schema would have rejected cannot narrow the set.
+ */
+export function parsePlacementConstraints(raw: string | null | undefined): PlacementConstraints {
+  const out: PlacementConstraints = { platform: [], allowBurst: false };
+  if (raw === null || raw === undefined || raw.trim() === "") return out;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return out;
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return out;
+  const { platform, allowBurst } = parsed as Record<string, unknown>;
+  if (Array.isArray(platform)) {
+    out.platform = PLACEMENT_PLATFORMS.filter((p) => platform.includes(p));
+  }
+  out.allowBurst = allowBurst === true;
+  return out;
+}
+
+/**
+ * The flags, serialized for the column. Default flags (no platform list,
+ * burst off) serialize to null — "no flags", which is what an absent column
+ * means — so a cleared form never leaves a stray `{}` behind.
+ */
+export function serializePlacementConstraints(
+  input: { platform?: readonly string[] | null; allowBurst?: boolean | null } | null | undefined,
+): string | null {
+  if (input === null || input === undefined) return null;
+  const platform = PLACEMENT_PLATFORMS.filter((p) => input.platform?.includes(p));
+  const allowBurst = input.allowBurst === true;
+  if (platform.length === 0 && !allowBurst) return null;
+  return JSON.stringify({ platform, allowBurst });
+}
+
+/** `project allows only darwin hosts` / `darwin or linux hosts` — the reason a host is excluded. */
+export function describePlatformFlag(platforms: readonly string[]): string {
+  return `project allows only ${platforms.join(" or ")} hosts`;
+}
+
+/**
+ * How a host's platform sits against a project's `platform` allow-list:
+ * "ok" (listed, or no list), "unknown" (the host has not reported one — it may
+ * turn out to match, so a refusal for it is transient), "forbidden" (reports
+ * another platform).
+ */
+function platformFlagState(
+  platform: string | null | undefined,
+  allowed: readonly string[] | undefined,
+): "ok" | "unknown" | "forbidden" {
+  if (allowed === undefined || allowed.length === 0) return "ok";
+  const reported = (platform ?? "").toLowerCase();
+  if (reported === "") return "unknown";
+  return allowed.includes(reported) ? "ok" : "forbidden";
 }
 
 /**
@@ -421,6 +513,13 @@ function exclusionReason(candidate: PlacementCandidate, context: PlacementContex
   if (candidate.role === "burst" && context.allowBurst !== true) {
     return "burst host (only an explicit target uses it)";
   }
+  // Issue #2241 — the project's platform allow-list; static like the role, so
+  // it too is reported ahead of "offline".
+  const platformState = platformFlagState(candidate.platform, context.platforms);
+  if (platformState === "forbidden") return describePlatformFlag(context.platforms!);
+  if (platformState === "unknown") {
+    return `${describePlatformFlag(context.platforms!)} (this host has not reported its platform)`;
+  }
   if (!candidate.online) return "offline";
   if (candidate.drained) return "parked";
   if (capacity === null) return "no capacity reported";
@@ -509,6 +608,11 @@ interface PlacementProject {
    * host.
    */
   hostCwds?: string | null;
+  /**
+   * The project's steering flags (issue #2241), the raw column: a JSON object,
+   * read with `parsePlacementConstraints`. Null/absent = no flags.
+   */
+  placementConstraints?: string | null;
 }
 
 /**
@@ -603,6 +707,10 @@ function decide(
   announce: boolean,
   requiredAgent?: string | readonly string[],
 ): PlacementDecision {
+  // Issue #2241 — the project's steering flags only bite on the "auto" path:
+  // a pinned project goes to its own host whatever they say.
+  const constraints = parsePlacementConstraints(project.placementConstraints);
+  const platformFlag = constraints.platform.length > 0;
   if (project.placement !== "auto") {
     const decision: PlacementDecision = {
       hostId: project.hostId,
@@ -635,6 +743,17 @@ function decide(
       considered: [],
       excluded: [],
       fellBack: true,
+      // A platform flag forbids the silent fallback: the project's host may not
+      // satisfy it, and nothing says a retry would fail too.
+      ...(platformFlag
+        ? {
+            refusal: {
+              detail: `${describePlatformFlag(constraints.platform)}, but the hosts could not be checked just now`,
+              transient: true,
+              unreadable: true,
+            },
+          }
+        : {}),
     };
     // A FAILURE, not an announcement — so it is logged either way. The
     // `preview` flag only says which caller was asking.
@@ -645,13 +764,19 @@ function decide(
     return decision;
   }
 
-  const decision = chooseHost(collected.candidates, {
+  const context: PlacementContext = {
     pinnedHostId: project.hostId,
     unattended,
     localCapacity: collected.localCapacity,
+    allowBurst: constraints.allowBurst,
+    platforms: constraints.platform,
     requiredAgent,
     primaryVersion: appVersion,
-  });
+  };
+  let decision = chooseHost(collected.candidates, context);
+  if (decision.fellBack && platformFlag) {
+    decision = refuseForFlags(decision, collected, context);
+  }
 
   if (announce) {
     app.log.info(
@@ -668,6 +793,57 @@ function decide(
     );
   }
   return decision;
+}
+
+/**
+ * Issue #2241 — the platform flag is active and no host is eligible: turn the
+ * silent fallback into a refusal.
+ *
+ * The reasons are built ONLY from hosts that satisfy the flags (plus a note
+ * when none does), so a refusal that reaches a session-scoped caller says no
+ * more about the fleet than a `Platform:` directive refusal does.
+ */
+function refuseForFlags(
+  decision: PlacementDecision,
+  collected: CollectedCandidates,
+  context: PlacementContext,
+): PlacementDecision {
+  const flag = describePlatformFlag(context.platforms!);
+  // Hosts the flags let through, whatever else is wrong with them right now.
+  const byPlatform = collected.candidates.filter(
+    (candidate) => platformFlagState(candidate.platform, context.platforms) !== "forbidden",
+  );
+  const passing = byPlatform.filter(
+    (candidate) => candidate.role !== "burst" || context.allowBurst === true,
+  );
+  const why = new Set<string>();
+  for (const candidate of passing) {
+    const capacity = candidate.isLocal ? collected.localCapacity : candidate.capacity;
+    if (platformFlagState(candidate.platform, context.platforms) === "unknown") {
+      why.add("a host that has not reported its platform yet may match once it is online");
+    }
+    if (!candidate.online) why.add("a matching host is offline");
+    else if (candidate.drained) why.add("a matching host is parked/drained");
+    else if (capacity === null) why.add("a matching host has no capacity reading yet");
+    if (candidate.projectCwd === null) why.add("the project has no checkout on a matching host");
+    const bin = missingAgent(candidate, context);
+    if (bin !== null) why.add(`a matching host has no ${bin} CLI`);
+  }
+  if (passing.length < byPlatform.length) {
+    why.add("a matching host is a burst host (this project does not allow burst hosts)");
+  }
+  if (byPlatform.length === 0) why.add("no host reports a matching platform");
+  // Waiting helps when a passing host has the project and the CLI, and is only
+  // temporarily unavailable (or has not reported its platform yet).
+  const transient = passing.some(
+    (candidate) => candidate.projectCwd !== null && missingAgent(candidate, context) === null,
+  );
+  const detail = `no eligible host satisfies this project's placement flags (${flag}; ${[...why].join("; ")})`;
+  return {
+    ...decision,
+    reason: `${detail} — not placed`,
+    refusal: { detail, transient },
+  };
 }
 
 /**
@@ -813,6 +989,13 @@ export function resolveTargetHost(
     requestedBy?: string;
     /** The agent CLI(s) the session needs on its host (issue #2240). */
     requiredAgent?: string | readonly string[];
+    /**
+     * Issue #2241 — check the target against the PROJECT's `platform` flag. Set
+     * by an explicit launcher/caller target; left off for a Task Master
+     * directive, which overrides the project's flags. (`allowBurst` never
+     * applies here: naming a host or platform is the opt-in to burst hosts.)
+     */
+    checkProjectFlags?: boolean;
   },
 ): TargetPlacementResult {
   const refusal = (
@@ -837,10 +1020,17 @@ export function resolveTargetHost(
 
   const wantedPlatform = opts.target.platform?.toLowerCase();
   const wantedHost = "hostId" in opts.target ? opts.target.hostId : null;
-  const matching = collected.candidates.filter(
+  const flagPlatforms = opts.checkProjectFlags
+    ? parsePlacementConstraints(opts.project.placementConstraints).platform
+    : [];
+  const targeted = collected.candidates.filter(
     (candidate) =>
       (wantedHost === null || candidate.hostId === wantedHost) &&
       (wantedPlatform === undefined || (candidate.platform ?? "").toLowerCase() === wantedPlatform),
+  );
+  // Issue #2241 — a target the project's platform flag forbids is not matched.
+  const matching = targeted.filter(
+    (candidate) => platformFlagState(candidate.platform, flagPlatforms) === "ok",
   );
 
   const agentContext = { requiredAgent: opts.requiredAgent };
@@ -866,6 +1056,7 @@ export function resolveTargetHost(
     const mightMatch = collected.candidates.some(
       (candidate) =>
         candidate.projectCwd !== null &&
+        platformFlagState(candidate.platform, flagPlatforms) !== "forbidden" &&
         // A host known to lack the CLI never gains it by waiting.
         missingAgent(candidate, agentContext) === null &&
         (wantedHost === null || candidate.hostId === wantedHost) &&
@@ -884,6 +1075,9 @@ export function resolveTargetHost(
       const bin = missingAgent(candidate, agentContext);
       if (bin !== null) why.push(`a matching host has no ${bin} CLI`);
     }
+    // The target exists but the project's flag rules it out; the caller named
+    // it, so saying what the project allows leaks nothing.
+    if (targeted.length > matching.length) why.push(describePlatformFlag(flagPlatforms));
     return refusal(mightMatch, false, [...new Set(why)]);
   }
 

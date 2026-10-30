@@ -100,6 +100,8 @@ const FILLABLE_SETTINGS = [
   "injectWorkflowConventions",
   "devServerUrl",
   "autoFetch",
+  // Issue #2241 — the placement steering flags; null = unset on the survivor.
+  "placementConstraints",
 ] as const satisfies readonly (keyof ProjectRow)[];
 
 function byAge(a: ProjectRow, b: ProjectRow): number {

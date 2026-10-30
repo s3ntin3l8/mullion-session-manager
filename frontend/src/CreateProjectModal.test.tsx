@@ -563,6 +563,54 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
     expect(onCreate.mock.calls[0][0].hostCwds).toEqual({});
   });
 
+  // Issue #2241 — the steering flags in Edit project → Placement.
+  it("opens with the project's placement flags and sends them once changed", async () => {
+    const user = userEvent.setup();
+    const onCreate = renderEdit({
+      initialPlacementConstraints: { platform: ["darwin"], allowBurst: false },
+    });
+    expect(screen.getByRole("checkbox", { name: "macOS" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Linux" })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Allow burst hosts" })).not.toBeChecked();
+
+    await user.click(screen.getByRole("checkbox", { name: "Linux" }));
+    await user.click(screen.getByRole("checkbox", { name: "Allow burst hosts" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onCreate.mock.calls[0][0].placementConstraints).toEqual({
+      platform: ["darwin", "linux"],
+      allowBurst: true,
+    });
+  });
+
+  it("leaves the flags out of the save when unchanged", async () => {
+    const user = userEvent.setup();
+    const unchanged = renderEdit({});
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(unchanged).toHaveBeenCalled());
+    expect(unchanged.mock.calls[0][0]).not.toHaveProperty("placementConstraints");
+  });
+
+  it("sends an emptied platform list when the last platform is unticked", async () => {
+    const user = userEvent.setup();
+    const onCreate = renderEdit({
+      initialPlacementConstraints: { platform: ["win32"], allowBurst: false },
+    });
+    await user.click(screen.getByRole("checkbox", { name: "Windows" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onCreate.mock.calls[0][0].placementConstraints).toEqual({
+      platform: [],
+      allowBurst: false,
+    });
+  });
+
+  it("does not show the flags when creating a project", () => {
+    render(<CreateProjectModal onClose={vi.fn()} onCreate={vi.fn()} />);
+    expect(screen.queryByRole("checkbox", { name: "macOS" })).toBeNull();
+  });
+
   it("leaves hostCwds out entirely when nothing changed", async () => {
     const user = userEvent.setup();
     const onCreate = renderEdit({ initialHostCwds: { "mac-1": "/Users/x/mullion" } });

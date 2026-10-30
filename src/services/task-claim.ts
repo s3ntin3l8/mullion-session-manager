@@ -417,6 +417,7 @@ export async function dispatchClaimedTask(
     placement: project.placement,
     cwd: project.cwd,
     hostCwds: project.hostCwds,
+    placementConstraints: project.placementConstraints,
   };
 
   // Refuses the claim: fails the still-`claimed` task with the reason on the
@@ -523,11 +524,29 @@ export async function dispatchClaimedTask(
     }
     placement = targeted.decision;
   } else {
-    placement = resolvePlacement(app, {
+    const auto = resolvePlacement(app, {
       project: placementProject,
       unattended: true,
       requiredAgent,
     });
+    // Issue #2241 — the project's platform flag leaves no host. Same rule as a
+    // directive: hold while a host that satisfies it could come online, fail
+    // otherwise. (A task WITH a directive never gets here: it overrides the flags.)
+    if (auto.refusal !== undefined) {
+      if (auto.refusal.transient) {
+        return holdClaim(
+          auto.refusal.unreadable
+            ? `this project's placement flags restrict where tasks may run, but the hosts could not be checked just now. It will be tried again shortly.`
+            : `this project's placement flags restrict where tasks may run, and a host that satisfies them is registered but not eligible right now (offline, parked, or no capacity reading yet). It will start once one is.`,
+        );
+      }
+      return refuseClaim(
+        `${auto.refusal.detail}. Change the flags (Edit project → Placement), or add a matching host with a path for this project, then move the task back to ready.`,
+        null,
+        { placementRequirement: requirementJson, worktreePath: null, branchName: null },
+      );
+    }
+    placement = auto;
   }
   // Placement succeeded, so a hold recorded earlier (the host was not eligible)
   // no longer describes the task — it may now wait for a worker slot instead,

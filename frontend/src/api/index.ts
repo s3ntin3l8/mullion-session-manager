@@ -133,6 +133,7 @@ export type {
   Host,
   HostCapacity,
   PlacementPreview,
+  PlacementConstraints,
   HostConfig,
   HostUpdateStatus,
   SshAuthSockSource,
