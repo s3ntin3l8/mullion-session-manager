@@ -55,8 +55,9 @@ export default defineConfig({
     reporters,
     // Vitest replaces every imported .css with an empty module by default,
     // `?raw` included. styles/tokens.contrast.test.ts reads tokens.css as
-    // text, so that one file opts back in.
-    css: { include: [/styles\/tokens\.css/] },
+    // text, so those files opt back in (sidebar-kit.css: the hover-actions
+    // overlay contract in ui/sidebar/sidebar-kit.test.tsx).
+    css: { include: [/styles\/tokens\.css/, /styles\/sidebar-kit\.css/] },
     maxWorkers,
   },
 });

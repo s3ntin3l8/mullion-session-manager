@@ -12,6 +12,7 @@ import {
   StatusTriad,
   ViewHeader,
 } from "./index.js";
+import css from "../../styles/sidebar-kit.css?raw";
 
 beforeEach(() => localStorage.clear());
 
@@ -345,6 +346,38 @@ describe("SidebarRow", () => {
     fireEvent.click(screen.getByRole("button", { name: "Delete" }));
     expect(onAct).toHaveBeenCalledTimes(1);
     expect(onClick).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("SidebarRow hover actions do not shift layout", () => {
+  it("keeps the body markup identical across hover and focus", () => {
+    const { container } = render(
+      <SidebarRow title="row" meta="m" actions={<button>Act</button>} trailing={<span>3</span>} />,
+    );
+    const row = container.querySelector(".sb-row")!;
+    const body = container.querySelector(".sb-row-body")!;
+    const before = body.outerHTML;
+    fireEvent.mouseEnter(row);
+    fireEvent.focus(screen.getByRole("button", { name: "Act" }));
+    expect(body.outerHTML).toBe(before);
+    // Actions stay rendered (Tab-reachable) and sit before the trailing content.
+    const actions = container.querySelector(".sb-row-trail > .sb-row-actions")!;
+    expect(actions.nextElementSibling?.textContent).toBe("3");
+  });
+
+  it("overlays .sb-row-actions out of flow instead of toggling display", () => {
+    // Plain string search (no regex built from the selector, so nothing to escape).
+    const rule = (sel: string) => {
+      const start = css.indexOf(`\n${sel} {`);
+      expect(start).toBeGreaterThanOrEqual(0);
+      const open = css.indexOf("{", start);
+      return css.slice(open + 1, css.indexOf("}", open));
+    };
+    const base = rule(".sb-row-actions");
+    expect(base).toContain("position: absolute");
+    expect(base).toContain("right: 100%");
+    expect(base).not.toContain("display: none");
+    expect(css).not.toMatch(/\.sb-row:hover \.sb-row-actions[^{]*\{[^}]*display:/);
   });
 });
 
