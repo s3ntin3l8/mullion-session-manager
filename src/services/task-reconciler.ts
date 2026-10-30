@@ -3974,6 +3974,10 @@ export async function autoReturnTask(
     .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
     .run();
   if (updated.changes === 0) return { ok: false };
+  // The auto-approve retry backoff is per review round: attempts made while
+  // the previous round was still waiting on its verdict/CI must not carry
+  // into the next `reviewing` stint.
+  resetAutoApproveBackoff(task.id);
 
   recordTaskTransition(app, {
     taskId: task.id,
@@ -4616,6 +4620,10 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
         // autoReturnRounds unchanged) to re-ingest THIS round's content as
         // if it were fresh.
         await unlinkFindingsFileIfPresent(app, backend, task.id, task.autoReturnRounds);
+        // A freshly ingested verdict deserves an immediate auto-approve
+        // attempt, not the wait built up by earlier rounds' not-yet-eligible
+        // visits.
+        resetAutoApproveBackoff(task.id);
         // #756 — a task that wanted another round but had none left gets one
         // extra sentence folded into the SAME comment, rather than a second
         // post: today's single-comment-per-round shape stays exactly that,
