@@ -224,8 +224,10 @@ dialog's Auto preview shows it as "Not considered: …". It is never put in a
 refusal a session-scoped caller can read.
 
 **The agent CLI.** A session needs its own CLI (`claude`, `codex`, …) on the
-host it runs on. The primary reads each host's installed CLIs and Mullion
+host it runs on. The primary reads each remote host's installed CLIs and Mullion
 version when the host comes online and again every `HOST_AGENTS_TTL_SECONDS`
+(its own list is read on demand, so the very first launch on the primary can
+read `agent list unknown`)
 (`agents` and `mullionVersion` in `GET /api/hosts`). A host **known** to lack
 the launch command's CLI is excluded with `no <cli> CLI on this host`; the
 preview takes the command as `?command=`. Task Master requires both the

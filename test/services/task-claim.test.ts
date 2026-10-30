@@ -1140,16 +1140,24 @@ describe("claimTask", () => {
     });
 
     // Issue #2240 — the worker's CLI and the reviewer's must both be on the host.
+    // The primary competes on live load, so each case records what IT has too:
+    // the winner must not depend on how busy the runner is.
+    const NO_VERSION = { mullionVersion: null };
+
     it("skips the idle host that lacks the worker's CLI (#2240)", async () => {
       const { app, mac, linux, task } = await setup("cli-worker", "Agent: codex\nDo the work.");
-      app.hostAgentTracker?.record(linux, { agents: ["claude"], mullionVersion: null });
-      app.hostAgentTracker?.record(mac, { agents: ["claude", "codex"], mullionVersion: null });
+      try {
+        app.hostAgentTracker?.record("local", { agents: [], ...NO_VERSION });
+        app.hostAgentTracker?.record(linux, { agents: ["claude"], ...NO_VERSION });
+        app.hostAgentTracker?.record(mac, { agents: ["claude", "codex"], ...NO_VERSION });
 
-      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+        const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
-      expect(outcome.ok).toBe(true);
-      expect((await sessionOf(app, task.id))?.hostId).toBe(mac);
-      await app.close();
+        expect(outcome.ok).toBe(true);
+        expect((await sessionOf(app, task.id))?.hostId).toBe(mac);
+      } finally {
+        await app.close();
+      }
     });
 
     it("skips a host that lacks the REVIEWER's CLI too (#2240)", async () => {
@@ -1157,28 +1165,57 @@ describe("claimTask", () => {
         "cli-reviewer",
         "Agent: claude\nReviewAgent: codex\nDo the work.",
       );
-      app.hostAgentTracker?.record(linux, { agents: ["claude"], mullionVersion: null });
-      app.hostAgentTracker?.record(mac, { agents: ["claude", "codex"], mullionVersion: null });
+      try {
+        app.hostAgentTracker?.record("local", { agents: ["claude"], ...NO_VERSION });
+        app.hostAgentTracker?.record(linux, { agents: ["claude"], ...NO_VERSION });
+        app.hostAgentTracker?.record(mac, { agents: ["claude", "codex"], ...NO_VERSION });
 
-      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+        const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
-      expect(outcome.ok).toBe(true);
-      expect((await sessionOf(app, task.id))?.hostId).toBe(mac);
-      await app.close();
+        expect(outcome.ok).toBe(true);
+        expect((await sessionOf(app, task.id))?.hostId).toBe(mac);
+      } finally {
+        await app.close();
+      }
     });
 
     it("fails open on a host whose agent list is unknown (#2240)", async () => {
-      const { app, linux, task } = await setup("cli-unknown", "Agent: codex\nDo the work.");
-      // The idle Linux box has not reported; the Mac is known to lack codex.
-      app.hostAgentTracker?.record(linux, { agents: null, mullionVersion: null });
+      const { app, mac, linux, task } = await setup("cli-unknown", "Agent: codex\nDo the work.");
+      try {
+        // Only the Linux box has not reported; every other host is known to lack codex.
+        app.hostAgentTracker?.record("local", { agents: [], ...NO_VERSION });
+        app.hostAgentTracker?.record(mac, { agents: ["claude"], ...NO_VERSION });
+        app.hostAgentTracker?.record(linux, { agents: null, ...NO_VERSION });
 
-      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+        const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
-      expect(outcome.ok).toBe(true);
-      const session = await sessionOf(app, task.id);
-      expect(session?.hostId).toBe(linux);
-      expect(session?.placementReason).toContain("agent list unknown");
-      await app.close();
+        expect(outcome.ok).toBe(true);
+        const session = await sessionOf(app, task.id);
+        expect(session?.hostId).toBe(linux);
+        expect(session?.placementReason).toContain("agent list unknown");
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("refuses for good, and says why, when the only matching host lacks the reviewer's CLI (#2240)", async () => {
+      const { app, mac, linux, task } = await setup(
+        "cli-refuse",
+        "Platform: linux\nAgent: claude\nReviewAgent: codex\nDo the work.",
+      );
+      try {
+        app.hostAgentTracker?.record("local", { agents: ["claude"], ...NO_VERSION });
+        app.hostAgentTracker?.record(linux, { agents: ["claude"], ...NO_VERSION });
+        app.hostAgentTracker?.record(mac, { agents: ["claude", "codex"], ...NO_VERSION });
+
+        const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+        // Not held: a host known to lack the CLI never gains it by waiting.
+        expect(outcome).toMatchObject({ ok: false, reason: "placement-refused" });
+        expect(getTask(app, task.id).failureReason).toContain("has no codex CLI");
+      } finally {
+        await app.close();
+      }
     });
 
     it("honours the requirement for a PINNED project too", async () => {

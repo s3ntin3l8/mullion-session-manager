@@ -119,6 +119,21 @@ describe("host agent tracker (issue #2240)", () => {
     expect(tracker.get("mac")).toMatchObject({ agents: ["codex"], mullionVersion: null });
   });
 
+  it("does not stack a second refresh on a host that is still being read", async () => {
+    const tracker = new HostAgentTracker();
+    let release!: () => void;
+    client.detectAgents.mockReturnValue(
+      new Promise<DetectedAgent[]>((r) => (release = () => r([]))),
+    );
+    client.resolveConfig.mockResolvedValue({ version: "1" });
+    const first = refreshRemoteHostAgents(fakeApp(tracker), "mac");
+    await refreshRemoteHostAgents(fakeApp(tracker), "mac");
+    expect(client.detectAgents).toHaveBeenCalledTimes(1);
+    release();
+    await first;
+    expect(tracker.refreshing.has("mac")).toBe(false);
+  });
+
   it("does nothing without a tracker (an agent process)", async () => {
     await refreshRemoteHostAgents(fakeApp(undefined), "mac");
     refreshLocalAgents(fakeApp(undefined));

@@ -33,6 +33,8 @@ export function availableAgentBins(detected: readonly DetectedAgent[]): string[]
 
 export class HostAgentTracker {
   private entries = new Map<string, HostAgentEntry>();
+  /** Hosts with a refresh in flight, so a slow host is never stacked on. */
+  readonly refreshing = new Set<string>();
 
   get(hostId: string): HostAgentEntry | undefined {
     return this.entries.get(hostId);
@@ -75,7 +77,20 @@ export function agentsTtlMs(app: FastifyInstance): number {
  */
 export async function refreshRemoteHostAgents(app: FastifyInstance, hostId: string): Promise<void> {
   const tracker = app.hostAgentTracker;
-  if (!tracker) return;
+  if (!tracker || tracker.refreshing.has(hostId)) return;
+  tracker.refreshing.add(hostId);
+  try {
+    await readRemoteHostAgents(app, tracker, hostId);
+  } finally {
+    tracker.refreshing.delete(hostId);
+  }
+}
+
+async function readRemoteHostAgents(
+  app: FastifyInstance,
+  tracker: HostAgentTracker,
+  hostId: string,
+): Promise<void> {
   const client = getRemoteHostClient(app, hostId);
   let agents: string[] | null;
   try {
@@ -93,7 +108,8 @@ export async function refreshRemoteHostAgents(app: FastifyInstance, hostId: stri
   tracker.record(hostId, { agents, mullionVersion });
 }
 
-const localRefreshing = { current: false };
+// Per app: tests (and nothing else) build many Fastify instances in one process.
+const localRefreshing = new WeakSet<FastifyInstance>();
 
 /**
  * Fire-and-forget refresh of the primary's own list from `getCachedAgents()`
@@ -102,9 +118,9 @@ const localRefreshing = { current: false };
  */
 export function refreshLocalAgents(app: FastifyInstance): void {
   const tracker = app.hostAgentTracker;
-  if (!tracker || localRefreshing.current) return;
+  if (!tracker || localRefreshing.has(app)) return;
   if (!tracker.isStale(LOCAL_HOST_ID, agentsTtlMs(app))) return;
-  localRefreshing.current = true;
+  localRefreshing.add(app);
   getCachedAgents()
     .then((detected) => {
       tracker.record(LOCAL_HOST_ID, {
@@ -116,7 +132,7 @@ export function refreshLocalAgents(app: FastifyInstance): void {
       app.log.debug({ err }, "[host-agents] local agent detection failed");
     })
     .finally(() => {
-      localRefreshing.current = false;
+      localRefreshing.delete(app);
     });
 }
 

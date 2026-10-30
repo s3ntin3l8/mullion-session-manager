@@ -218,11 +218,11 @@ async function sweepHost(
   // never both fire for the same contact.
   const agentTracker = app.hostAgentTracker;
   if (agentTracker && !cameOnline && agentTracker.isStale(hostId, agentsTtlMs(app))) {
-    try {
-      await refreshRemoteHostAgents(app, hostId);
-    } catch (err) {
+    // Fire-and-forget: the probe runs a login shell per CLI on the host, and a
+    // wedged remote must not delay this host's capacity read below.
+    void refreshRemoteHostAgents(app, hostId).catch((err: unknown) => {
       app.log.debug({ err, hostId }, "[host-heartbeat] the agent list refresh failed");
-    }
+    });
   }
 
   try {

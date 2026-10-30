@@ -512,7 +512,8 @@ export async function dispatchClaimedTask(
         `this task requires ${describeTarget(requirement)} (from ${describeRequirementSource(requirement)}), ` +
           "but no eligible host matches: a host " +
           "has to be online, not parked, report its capacity, and have a path for this project " +
-          "(Edit project → Also lives on). Fix that, then move the task back to ready.",
+          `(Edit project → Also lives on), and have the agent CLIs the task needs. Placement said: ${targeted.detail}. ` +
+          "Fix that, then move the task back to ready.",
         null,
         // The failure came before any worktree was cut, so the branch and
         // path stamped at claim time name nothing that exists; clearing them
