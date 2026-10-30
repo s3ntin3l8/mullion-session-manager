@@ -139,8 +139,11 @@ as the [GitHub App](#github-app-opt-in-layers-on-top-of-the-patoauth-token)'s bo
 Approve or Request changes must be your own verdict, not the App's, so the
 server refuses it (409). There is no silent fallback
 from your account to the App: if GitHub refuses your token's write the box says
-so rather than posting as the bot. Task Master, the merge route and the review
-relay keep the App identity. GitHub also does not let a pull request's author
+so rather than posting as the bot. Merging, labelling an issue for Task Master, updating a PR branch, release
+runs, the issue list and the scaffold push are your actions too and run as your
+account; with none connected they answer "GitHub is not connected" rather than
+falling back to the App. Task Master, the pollers and the review relay keep the
+App identity. GitHub also does not let a pull request's author
 approve it or request changes on it, so **Approve** and **Request changes** are
 hidden on a PR you opened; **Comment** always works.
 
@@ -193,7 +196,9 @@ new one supersedes any pending attempt.
 Everything above — the PAT and device-flow paths — is a **classic OAuth
 App**, not a GitHub App (see the note above). This section is a deliberate,
 narrower-scoped addition on top of that connection, not a replacement for
-it: a genuine GitHub App, used for both [Task Master](tasks.md)'s own writes
+it: a genuine GitHub App. **Who is acting decides the identity**: what you do
+yourself (sidebar issues, PRs, comments, merges, release runs) uses your
+account; the App serves Task Master and status checks. It is used for both [Task Master](tasks.md)'s own writes
 (sync comments/labels, PR promotion, the branch push, issue ingest) and,
 read-only, for the base GitHub integration's own polling (repo-status
 widget, PR/CI poller). Everything else — including webhook registration,

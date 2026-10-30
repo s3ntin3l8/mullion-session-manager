@@ -29,7 +29,7 @@ import {
 import { readHostFiles, writeHostFiles } from "../services/host-files.js";
 import { HostRequestError } from "../services/remote-host-client.js";
 import { PathEscapeError, resolveWithin } from "../services/safe-path.js";
-import { resolveGitHubToken } from "../services/github-integration.js";
+import { getToken } from "../services/github-integration.js";
 import { createPullRequest, findPullRequestByHead } from "../services/github-write.js";
 import { GitHubApiError } from "../services/github.js";
 import { getStoredSettings } from "../services/settings.js";
@@ -947,14 +947,15 @@ export async function projectSetupRoute(app: FastifyInstance) {
         };
       }
 
-      const token = await resolveGitHubToken(app, repoRef);
+      // #2321 — applying a scaffold is the user's action: push as their account.
+      const token = getToken(app);
       if (!token) {
         previews.delete(request.body.previewId);
         return {
           ok: true,
           mode: "local-branch",
           branch: record.branch,
-          detail: "No GitHub App/PAT configured — committed locally, push it yourself when ready.",
+          detail: "No GitHub account connected — committed locally, push it yourself when ready.",
         };
       }
 

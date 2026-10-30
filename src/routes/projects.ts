@@ -1182,6 +1182,11 @@ function remoteHostFailureMessage(
 const DUPLICATE_PRIME_DELAY_MS = 30_000;
 
 export async function projectsRoute(app: FastifyInstance) {
+  // #2321 — who is acting decides the identity: a click by the user runs as
+  // their connected account, never silently as the GitHub App. The App stays
+  // with Task Master and unattended work (`resolveGitHubToken`).
+  const accountToken = (): Promise<string | null> => Promise.resolve(getToken(app));
+  const NOT_CONNECTED = "GitHub is not connected — connect your account in Settings → Integrations";
   // detectedDevServerPort is derived, not persisted (see dev-server-detect.ts):
   // a project's own devServerUrl column is the sole authoritative value, this
   // is only ever a suggestion the frontend may offer to pre-fill it with.
@@ -2340,7 +2345,9 @@ export async function projectsRoute(app: FastifyInstance) {
       try {
         // The read-scoped App token has no Issues permission; list issues with
         // the dedicated "issues" scope (PAT fallback if it can't be minted).
-        const issuesToken = (await resolveGitHubToken(app, repoRef, "issues")) ?? token;
+        // The issue list is what the user sees, so it uses their account when
+        // one is connected (#2321); the read token only backs the PR half.
+        const issuesToken = getToken(app) ?? token;
         return await getRepoStatus(token, repoRef.owner, repoRef.repo, issuesToken);
       } catch (err) {
         if (!(err instanceof GitHubApiError)) throw err;
@@ -2393,7 +2400,7 @@ export async function projectsRoute(app: FastifyInstance) {
       // silently normalized by this refactor.
       const ctx = await loadProjectRepoContext(app, reply, projectId, {
         unavailableLabel: "github prs status",
-        resolveToken: () => Promise.resolve(getToken(app)),
+        resolveToken: accountToken,
       });
       if (!ctx) return;
       const { repoRef } = ctx;
@@ -2445,6 +2452,8 @@ export async function projectsRoute(app: FastifyInstance) {
       const projectId = Number(request.params.id);
       const ctx = await loadProjectRepoContext(app, reply, projectId, {
         unavailableLabel: "issues",
+        resolveToken: accountToken,
+        noTokenMessage: NOT_CONNECTED,
       });
       if (!ctx) return;
       const { repoRef, token } = ctx;
@@ -2457,8 +2466,7 @@ export async function projectsRoute(app: FastifyInstance) {
         return reply.badRequest("page must be an integer between 1 and 50");
       }
       try {
-        const issuesToken = (await resolveGitHubToken(app, repoRef, "issues")) ?? token;
-        const result = await listIssues(issuesToken, repoRef.owner, repoRef.repo, {
+        const result = await listIssues(token, repoRef.owner, repoRef.repo, {
           labels,
           assignee,
           sort,
@@ -2500,14 +2508,15 @@ export async function projectsRoute(app: FastifyInstance) {
       const projectId = Number(request.params.id);
       const ctx = await loadProjectRepoContext(app, reply, projectId, {
         unavailableLabel: "issue detail",
+        resolveToken: accountToken,
+        noTokenMessage: NOT_CONNECTED,
       });
       if (!ctx) return;
       const { repoRef, token } = ctx;
       const number = Number(request.params.number);
       if (!Number.isInteger(number) || number < 1) return reply.badRequest("Invalid issue number");
       try {
-        const issuesToken = (await resolveGitHubToken(app, repoRef, "issues")) ?? token;
-        const detail = await getIssueDetail(issuesToken, repoRef.owner, repoRef.repo, number);
+        const detail = await getIssueDetail(token, repoRef.owner, repoRef.repo, number);
         const taskRow = app.db
           .select({ status: tasks.status })
           .from(tasks)
@@ -2545,8 +2554,8 @@ export async function projectsRoute(app: FastifyInstance) {
       const projectId = Number(request.params.id);
       const ctx = await loadProjectRepoContext(app, reply, projectId, {
         unavailableLabel: "issue queue",
-        resolveToken: (ref) => resolveGitHubToken(app, ref, "write"),
-        noTokenMessage: "No GitHub token with write access is available to label this issue",
+        resolveToken: accountToken,
+        noTokenMessage: NOT_CONNECTED,
       });
       if (!ctx) return;
       const { repoRef, token } = ctx;
@@ -2850,8 +2859,8 @@ export async function projectsRoute(app: FastifyInstance) {
       const projectId = Number(request.params.id);
       const ctx = await loadProjectRepoContext(app, reply, projectId, {
         unavailableLabel: "pr merge",
-        resolveToken: (ref) => resolveGitHubToken(app, ref, "write"),
-        noTokenMessage: "No GitHub token with write access is available to merge this pull request",
+        resolveToken: accountToken,
+        noTokenMessage: NOT_CONNECTED,
       });
       if (!ctx) return;
       const number = Number(request.params.number);
@@ -2914,8 +2923,8 @@ export async function projectsRoute(app: FastifyInstance) {
       const projectId = Number(request.params.id);
       const ctx = await loadProjectRepoContext(app, reply, projectId, {
         unavailableLabel: "pr update branch",
-        resolveToken: (ref) => resolveGitHubToken(app, ref, "write"),
-        noTokenMessage: "No GitHub token with write access is available to update this branch",
+        resolveToken: accountToken,
+        noTokenMessage: NOT_CONNECTED,
       });
       if (!ctx) return;
       const number = Number(request.params.number);
@@ -3231,7 +3240,8 @@ export async function projectsRoute(app: FastifyInstance) {
       const projectId = Number(request.params.id);
       const ctx = await loadProjectRepoContext(app, reply, projectId, {
         unavailableLabel: "release run",
-        resolveToken: (ref) => resolveGitHubToken(app, ref, "dispatch"),
+        resolveToken: accountToken,
+        noTokenMessage: NOT_CONNECTED,
       });
       if (!ctx) return;
       const { repoRef, token } = ctx;
