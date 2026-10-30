@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { api } from "../api/index.js";
 import type { Session } from "../api/types.js";
+import { resolveSkipPermissions } from "../launchers/skipPermissions.js";
 import { useDashboardStore } from "../store/index.js";
 
 /** Where the new session's worktree comes from: an existing branch (a PR head)
@@ -41,6 +42,7 @@ export function useStartSessionFrom(projectId: number) {
       const session = await state.createSession(projectId, launcher.command, {
         worktree: target,
         seedPrompt,
+        skipPermissions: resolveSkipPermissions(launcher, state.settings),
       });
       state.requestOpenSession(session.id);
       return session;

@@ -50,4 +50,41 @@ describe("useStartSessionFrom", () => {
     );
     expect(createSession).not.toHaveBeenCalled();
   });
+
+  it("passes skipPermissions for an agent the settings list", async () => {
+    const { createSession } = setup([{ id: "agent:claude", kind: "agent", command: "claude" }]);
+    // A Response body can only be read once; hand out a fresh one per call.
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockImplementation(async () =>
+          jsonResponse(200, [{ id: "agent:claude", kind: "agent", command: "claude" }]),
+        ),
+    );
+    useDashboardStore.setState({
+      settings: {
+        ...useDashboardStore.getState().settings,
+        launchers: {
+          ...useDashboardStore.getState().settings.launchers,
+          defaultAgent: "claude",
+          skipPermissionsAgents: ["claude"],
+        },
+      },
+    });
+    const { result } = renderHook(() => useStartSessionFrom(1));
+    await result.current({ worktree: { branch: "b" }, seedPrompt: "p" });
+    expect(createSession.mock.calls[0][2].skipPermissions).toBe(true);
+    useDashboardStore.setState({
+      settings: {
+        ...useDashboardStore.getState().settings,
+        launchers: {
+          ...useDashboardStore.getState().settings.launchers,
+          skipPermissionsAgents: [],
+        },
+      },
+    });
+    await result.current({ worktree: { branch: "b" }, seedPrompt: "p" });
+    expect(createSession.mock.calls[1][2].skipPermissions).toBe(false);
+  });
 });
