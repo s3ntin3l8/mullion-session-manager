@@ -109,8 +109,9 @@ export function runShellCapture(options: ShellSpawnOptions): Promise<string | nu
       // backstop for whatever this does not cover.
       stdio: ["ignore", "pipe", "ignore"],
       // Windows: the agent has no console, so without this every probe opens
-      // (and closes) a visible console window. The host-agent refresh runs ~9
-      // probes every few minutes. A no-op elsewhere.
+      // (and closes) a visible console window. Each detection pass runs ~9
+      // probes, repeated whenever the 60 s agent cache lapses and an agents
+      // read arrives. A no-op elsewhere.
       windowsHide: true,
     });
 
