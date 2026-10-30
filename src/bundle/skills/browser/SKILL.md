@@ -18,7 +18,7 @@ isn't available.
   third-party sites (GitHub UI, Gmail, admin consoles).
 
 If `mullion browser <action>` (or the MCP tools) reply that the browser
-feature is disabled (`BROWSER_ENABLED` off), that's the reason, not a bug —
+feature is disabled (Settings → Browser → Enable browser is off, or `BROWSER_ENABLED` is unset), that's the reason, not a bug —
 fall back to another browser tool then.
 
 ## Actions

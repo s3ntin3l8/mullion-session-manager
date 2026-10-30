@@ -102,11 +102,12 @@ export async function serverInfoRoute(app: FastifyInstance) {
       // What this process booted with for the restart-required settings, so
       // the UI can flag a saved value that differs.
       running: {
+        browserEnabled: app.browserEnabled,
         browserMaxInstances: app.bootBrowserMaxInstances,
         deviceDiscoveryEnabled: app.bootDeviceDiscoveryEnabled,
       },
       features: {
-        browser: app.config.BROWSER_ENABLED,
+        browser: app.browserEnabled,
         // The EFFECTIVE device-panel gate, not the raw flag: on a platform
         // that can run no device kind at all (issue #1720), the UI must not
         // offer it. The frontend already keys the Devices

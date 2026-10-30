@@ -2076,6 +2076,7 @@ export interface ServerInfo {
     hostHeartbeatSeconds: number;
     browserFramerate: number;
     browserMaxInstances: number;
+    browserEnabled: boolean;
     deviceDiscoveryEnabled: boolean;
     deviceEmulatorHeadless: boolean;
     deviceEmulatorGpu: string;
@@ -2084,6 +2085,7 @@ export interface ServerInfo {
   // What this process booted with for the restart-required settings; a saved
   // value that differs takes effect after a restart.
   running: {
+    browserEnabled: boolean;
     browserMaxInstances: number;
     deviceDiscoveryEnabled: boolean;
   };
@@ -2670,6 +2672,8 @@ export interface AppSettings {
     pollSeconds: number;
   };
   browser: {
+    // Read once at boot: a change needs a restart.
+    enabled: "inherit" | "on" | "off";
     framerate: number;
     // Read once at boot: a change needs a restart.
     maxInstances: number;

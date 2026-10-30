@@ -757,11 +757,12 @@ export async function browserAutomationRoute(app: FastifyInstance): Promise<void
     | { ok: true; page: Page; projectId: number }
     | { ok: false; status: 400 | 404 | 502; message: string }
   > {
-    if (!app.config.BROWSER_ENABLED) {
+    if (!app.browserEnabled) {
       return {
         ok: false,
         status: 400,
-        message: "Browser feature is disabled (set BROWSER_ENABLED=true)",
+        message:
+          "Browser feature is disabled — turn it on in Settings → Browser (or set BROWSER_ENABLED=true), then restart the Mullion server.",
       };
     }
     const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();

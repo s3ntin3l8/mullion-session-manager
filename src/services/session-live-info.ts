@@ -147,7 +147,7 @@ export function withLiveInfo(
   const live = buildLiveInfo(info);
   let browserUrl = live.browserUrl;
 
-  if (hostId === LOCAL_HOST_ID && app.config.BROWSER_ENABLED) {
+  if (hostId === LOCAL_HOST_ID && app.browserEnabled) {
     const managed = app.browser.get(row.projectId);
     if (managed && managed.browser.isConnected()) {
       try {

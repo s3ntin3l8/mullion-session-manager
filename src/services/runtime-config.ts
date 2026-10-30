@@ -14,6 +14,7 @@ export interface RuntimeEnvDefaults {
   hostHeartbeatSeconds: number;
   browserFramerate: number;
   browserMaxInstances: number;
+  browserEnabled: boolean;
   deviceDiscoveryEnabled: boolean;
   deviceEmulatorHeadless: boolean;
   deviceEmulatorGpu: string;
@@ -30,6 +31,7 @@ export function runtimeEnvDefaults(app: ConfigSource): RuntimeEnvDefaults {
     hostHeartbeatSeconds: app.config.HOST_HEARTBEAT_INTERVAL_SECONDS,
     browserFramerate: app.config.BROWSER_FRAMERATE,
     browserMaxInstances: app.config.BROWSER_MAX_INSTANCES,
+    browserEnabled: app.config.BROWSER_ENABLED,
     deviceDiscoveryEnabled: app.config.DEVICE_DISCOVERY_ENABLED,
     deviceEmulatorHeadless: app.config.DEVICE_EMULATOR_HEADLESS,
     deviceEmulatorGpu: app.config.DEVICE_EMULATOR_GPU,
@@ -91,6 +93,7 @@ export function resolveLogLevel(settings: AppSettings, app: ConfigSource): LogLe
 // "Restart required" hint.
 export interface BootRuntime {
   browserMaxInstances: number;
+  browserEnabled: boolean;
   deviceDiscoveryEnabled: boolean;
 }
 
@@ -99,6 +102,11 @@ export function resolveBrowserMaxInstances(settings: AppSettings, app: ConfigSou
     1,
     inherit(settings.browser.maxInstances, runtimeEnvDefaults(app).browserMaxInstances),
   );
+}
+
+export function resolveBrowserEnabled(settings: AppSettings, app: ConfigSource): boolean {
+  const saved = settings.browser.enabled;
+  return saved === "inherit" ? runtimeEnvDefaults(app).browserEnabled : saved === "on";
 }
 
 export function resolveDeviceDiscoveryEnabled(settings: AppSettings, app: ConfigSource): boolean {

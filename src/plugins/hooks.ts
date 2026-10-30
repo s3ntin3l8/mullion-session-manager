@@ -541,11 +541,7 @@ function handleConnection(
           // presence doesn't).
           const guideBlock =
             effectiveInjectAgentGuide && agentGuideSourceExists()
-              ? buildAgentGuideBlock(
-                  guidePath,
-                  isAuthEnabled(app.config),
-                  app.config.BROWSER_ENABLED,
-                )
+              ? buildAgentGuideBlock(guidePath, isAuthEnabled(app.config), app.browserEnabled)
               : null;
           // Issue #937 — this Mullion install's own workflow-conventions
           // text (settings.sessions.workflowConventionsText), gated by BOTH
@@ -644,7 +640,7 @@ function handleConnection(
             continue;
           }
 
-          if (!app.config.BROWSER_ENABLED) {
+          if (!app.browserEnabled) {
             if (socket.writable) {
               socket.write(`${JSON.stringify({ error: "Browser feature is disabled" })}\n`);
             }

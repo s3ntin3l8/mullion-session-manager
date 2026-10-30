@@ -393,8 +393,9 @@ export async function buildApp() {
     // agent-guide setting lookup), but only conditionally (`app.db ? ... :
     // DEFAULT_SETTINGS`) — it still has no hard role-specific gate, it just
     // falls back to defaults when there's no settings DB to read.
-    await app.register(ptyPlugin);
+    // browserPlugin first: ptyPlugin/hooksPlugin read app.browserEnabled.
     await app.register(browserPlugin);
+    await app.register(ptyPlugin);
     // No ordering dependency beyond ptyPlugin having already registered
     // (device.ts calls the same pure ensureSessionsDir() pty.ts exports —
     // see that function's own comment). Stays inert unless DEVICE_ENABLED.
@@ -444,6 +445,9 @@ export async function buildApp() {
   // app.db (via getStoredSettings) as soon as it's registered.
   await app.register(dbPlugin);
   await app.register(runtimeSettingsPlugin);
+  // browserPlugin before ptyPlugin/hooksPlugin: they read app.browserEnabled,
+  // resolved once at boot from the env default + the stored Settings override.
+  await app.register(browserPlugin);
   await app.register(ptyPlugin);
   // Must register after BOTH dbPlugin (needs app.db) and ptyPlugin (needs
   // app.pty.onEvent() to subscribe to) — same ordering logic as the
@@ -453,10 +457,6 @@ export async function buildApp() {
   // Same ordering requirement as eventStorePlugin just above (needs both
   // app.db and app.pty.onEvent) — see plugins/push.ts's own doc comment.
   await app.register(pushPlugin);
-  // No ordering dependency on db/pty — registered here just to group
-  // session/runtime-infra plugins together. See src/plugins/browser.ts;
-  // stays inert (BrowserManager throws on every call) unless BROWSER_ENABLED.
-  await app.register(browserPlugin);
   // Same posture as browserPlugin just above — see the agent-role branch's
   // own comment on devicePlugin for its ordering requirement.
   await app.register(devicePlugin);

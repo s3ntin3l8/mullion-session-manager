@@ -605,6 +605,8 @@ export interface AppSettings {
     pollSeconds: number;
   };
   browser: {
+    // BROWSER_ENABLED. Read once at boot: a change needs a restart.
+    enabled: "inherit" | "on" | "off";
     // BROWSER_FRAMERATE. Applied to the next browser stream that opens.
     framerate: number;
     // BROWSER_MAX_INSTANCES. Read once at boot: a change needs a restart.
@@ -838,6 +840,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     pollSeconds: 60,
   },
   browser: {
+    enabled: "inherit",
     framerate: -1,
     maxInstances: -1,
   },
@@ -1315,6 +1318,10 @@ export function sanitizeSettings(settings: AppSettings): AppSettings {
       }),
     },
     browser: {
+      enabled:
+        settings.browser.enabled === "on" || settings.browser.enabled === "off"
+          ? settings.browser.enabled
+          : DEFAULT_SETTINGS.browser.enabled,
       framerate: safeSentinelNumber(settings.browser.framerate, {
         sentinel: -1,
         min: 1,

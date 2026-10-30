@@ -275,6 +275,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     pollSeconds: 60,
   },
   browser: {
+    enabled: "inherit",
     framerate: -1,
     maxInstances: -1,
   },
