@@ -2190,6 +2190,12 @@ export interface Task {
   // approve/reject, or there was never a review agent at all. See
   // TaskCard.tsx's "review in flight" label.
   reviewFindingsIngestedSessionId: number | null;
+  // #2369 — the external-reviewer (Hermes) counterpart of the two session
+  // fields above: a review that is an HTTP run, not a session. Same pairing:
+  // `reviewRunIngestedId === reviewRunId` means its verdict is in.
+  reviewRunId: string | null;
+  reviewRunIngestedId: string | null;
+  reviewRunDispatchedAt: string | null;
   // The review agent's own findings, captured once its session finishes —
   // appended across rounds under a "## Round N" header, never replaced.
   // Null until the first round is ingested (no review agent configured,

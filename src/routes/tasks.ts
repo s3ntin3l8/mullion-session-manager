@@ -198,6 +198,13 @@ const TASK_ROW_COLUMNS = {
   // against reviewSessionId (see TaskCard.tsx); wasn't previously exposed
   // to any API response.
   reviewFindingsIngestedSessionId: tasks.reviewFindingsIngestedSessionId,
+  // #2369 — an external reviewer's run, paired like the session columns above:
+  // the run, when it was dispatched, and the run whose verdict is ingested.
+  // deriveApprovalState reads these off this same row, so they must be named
+  // here or they arrive as `undefined`.
+  reviewRunId: tasks.reviewRunId,
+  reviewRunIngestedId: tasks.reviewRunIngestedId,
+  reviewRunDispatchedAt: tasks.reviewRunDispatchedAt,
   reviewFindings: tasks.reviewFindings,
   // How many auto-rebases the task has been through (the drawer says so).
   // `rebaseStartedAt`, which `reviewPhase`/`reReviewAt` are derived from, is
