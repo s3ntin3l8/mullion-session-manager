@@ -87,6 +87,13 @@ export const sessionsApi = {
       // Delivered as the new session's first-turn prompt (when the agent
       // supports it) — e.g. a GitHub issue to start work on.
       seedPrompt?: string;
+      // Issue #2237 — the launcher's host target: run on this host (it must
+      // have a path for the project), or `placement: "auto"` to apply the
+      // Auto policy to this launch only. Mutually exclusive; `isolate` is a
+      // server-chosen worktree on the placed host (excludes worktree/cwd).
+      targetHostId?: string;
+      placement?: "auto";
+      isolate?: boolean;
     },
   ) =>
     request<Session>("/api/sessions", {

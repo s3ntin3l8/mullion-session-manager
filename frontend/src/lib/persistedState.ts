@@ -28,6 +28,9 @@ export const STORAGE_KEYS = {
   // Sidebar kit SidebarSection open/closed state: Record<persistKey, boolean>.
   sidebarKitSections: "crs.sidebarKitSections",
   lastLaunchProjectId: "crs.lastLaunchProjectId",
+  // Issue #2237 — launcher host target per project: JSON map of project id ->
+  // "auto" | a host id. Absent = the project's own host (the default).
+  lastLaunchHostByProject: "crs.lastLaunchHostByProject",
   activeWorkspaceId: "crs.activeWorkspaceId",
   sidebarCollapsed: "crs.sidebarCollapsed",
   // Sidebar declutter (issue #1465) — collapses WorkspaceSwitcher.tsx's own

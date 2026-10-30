@@ -198,6 +198,10 @@ export interface SessionsSlice {
       model?: string;
       // See api/sessions.ts's createSession opts.
       seedPrompt?: string;
+      // Issue #2237 — the launcher's host target; see api/sessions.ts.
+      targetHostId?: string;
+      placement?: "auto";
+      isolate?: boolean;
     },
   ) => Promise<Session>;
   renameSession: (id: number, name: string) => Promise<void>;
