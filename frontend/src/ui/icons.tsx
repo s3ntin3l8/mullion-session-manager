@@ -321,17 +321,17 @@ export function SplitDownIcon(props: IconProps) {
   );
 }
 
-// Ported verbatim from the design's empty/connection states doc
-// (Cmux States.dc.html, sections 03/04). Fill-based (a solid white glyph
-// inside an accent-tinted square), not stroke-based like the rest of this
-// module — used only inside the "welcome" empty state's icon badge.
+// Fill-based "start a session" glyph. It takes its colour from the
+// surrounding text (`currentColor`) so it stays readable on light and dark
+// surfaces and when disabled; a surface that wants a white glyph (e.g. an
+// accent badge) sets `color` on the wrapper.
 export function PlayTriangleIcon(props: IconProps) {
   return (
     <svg
       width={props.size ?? 15}
       height={props.size ?? 15}
       viewBox="0 0 24 24"
-      fill="#fff"
+      fill="currentColor"
       {...props}
     >
       <polygon points="7 5 18 12 7 19" />
@@ -728,8 +728,8 @@ export function DeviceIcon(props: IconProps) {
 // Device lifecycle controls (Settings -> Devices rows + the sidebar's
 // Devices section). Deliberately stroke-based to sit next to KillIcon/
 // RefreshIcon in a 22x22 action box, and deliberately NOT reusing
-// PlayTriangleIcon above (fill-based, hardcodes fill="#fff" for the empty
-// state's accent badge — wrong color model for a button glyph) nor
+// PlayTriangleIcon above (a solid fill-based triangle — a different glyph
+// style from this stroke set) nor
 // KillIcon for stop (a circle-slash reads as "prohibited", not "stop", and
 // it's already load-bearing as the terminal/session kill affordance).
 export function PlayIcon(props: IconProps) {
