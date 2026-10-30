@@ -3,7 +3,7 @@ import type { FastifyInstance } from "fastify";
 import path from "node:path";
 import { BrowserManager } from "../services/browser-manager.js";
 import { loadStoredCookiesForProject } from "../services/browser-cookies.js";
-import { resolveBrowserMaxInstances } from "../services/runtime-config.js";
+import { resolveBrowserEnabled, resolveBrowserMaxInstances } from "../services/runtime-config.js";
 import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
 
 // Cheap, idempotent housekeeping — see BrowserManager.healthCheck's own
@@ -23,13 +23,16 @@ export const browserPlugin = fp(async (app: FastifyInstance) => {
   // Pool size is fixed at boot: a Settings override (read here, after
   // dbPlugin) only applies after a restart. Agent hosts have no settings DB
   // and use the env value.
-  const maxInstances = resolveBrowserMaxInstances(
-    app.db ? getStoredSettings(app.db) : DEFAULT_SETTINGS,
-    app,
-  );
+  const settings = app.db ? getStoredSettings(app.db) : DEFAULT_SETTINGS;
+  const maxInstances = resolveBrowserMaxInstances(settings, app);
   app.decorate("bootBrowserMaxInstances", maxInstances);
+  // The one runtime source of truth for "is the browser on" (env default or
+  // Settings override), resolved once at boot. Everything else reads this,
+  // never app.config.BROWSER_ENABLED, so routes, manager and session env agree.
+  const enabled = resolveBrowserEnabled(settings, app);
+  app.decorate("browserEnabled", enabled);
   const manager = new BrowserManager({
-    enabled: app.config.BROWSER_ENABLED,
+    enabled,
     maxInstances,
     dataDir: path.isAbsolute(dataDir) ? dataDir : path.resolve(dataDir),
     loadCookies: app.db ? (projectId) => loadStoredCookiesForProject(app, projectId) : undefined,
@@ -54,7 +57,7 @@ export const browserPlugin = fp(async (app: FastifyInstance) => {
   app.decorate("browser", manager);
 
   let healthTimer: ReturnType<typeof setInterval> | null = null;
-  if (app.config.BROWSER_ENABLED) {
+  if (enabled) {
     healthTimer = setInterval(() => {
       manager.healthCheck();
     }, HEALTH_CHECK_INTERVAL_MS);
@@ -79,5 +82,7 @@ declare module "fastify" {
   interface FastifyInstance {
     /** Pool size this process booted with (env default or Settings override). */
     bootBrowserMaxInstances: number;
+    /** Whether the browser feature is on for this process (env default or Settings override), fixed at boot. */
+    browserEnabled: boolean;
   }
 }

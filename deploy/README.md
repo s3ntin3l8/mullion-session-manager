@@ -203,7 +203,8 @@ feeds the PR pipeline directly), logging a one-time warning naming the gap.
 **Playwright / Chromium (Phase 3, issue #179):** `install.sh` and
 `scripts/self-update.sh` both run `npx playwright install chromium` after
 `npm ci --omit=dev`, unconditionally — regardless of whether you ever turn
-on `BROWSER_ENABLED` (schema default: `false`, see `src/plugins/env.ts`), so
+on the feature (Settings → Browser → "Enable browser", or `BROWSER_ENABLED`;
+schema default: `false`, see `src/plugins/env.ts`; either needs a server restart), so
 enabling the feature later needs no reinstall. This is a one-time
 download (~150–300MB) into `$MULLION_HOME/browsers`
 (`PLAYWRIGHT_BROWSERS_PATH`, kept outside any release dir so it survives

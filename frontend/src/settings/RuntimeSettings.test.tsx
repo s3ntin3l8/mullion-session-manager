@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {
+  BrowserEnabledSetting,
   BrowserFramerateSetting,
   BrowserPoolSizeSetting,
   DeviceDiscoverySetting,
@@ -143,6 +144,19 @@ describe("runtime settings controls", () => {
     setSettings({ browser: { ...DEFAULT_SETTINGS.browser, maxInstances: 4 } });
     render(<BrowserPoolSizeSetting />);
     await waitFor(() => expect(screen.getByText(/Server default: 4 browsers/)).toBeInTheDocument());
+    expect(screen.queryByText(/Restart required/)).toBeNull();
+  });
+
+  it("hints that a restart is needed only when the effective browser switch differs from the running one", async () => {
+    setSettings({ browser: { ...DEFAULT_SETTINGS.browser, enabled: "on" } });
+    const { unmount } = render(<BrowserEnabledSetting />);
+    expect(await screen.findByText(/Restart required/)).toBeInTheDocument();
+    unmount();
+
+    setSettings({ browser: { ...DEFAULT_SETTINGS.browser, enabled: "inherit" } });
+    render(<BrowserEnabledSetting />);
+    await waitFor(() => expect(screen.getByText("Enable browser")).toBeInTheDocument());
+    expect(screen.getByDisplayValue("Server default (Off)")).toBeInTheDocument();
     expect(screen.queryByText(/Restart required/)).toBeNull();
   });
 

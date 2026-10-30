@@ -637,7 +637,7 @@ function renderPane(
         providerMap: { anthropic: "claude", opencode: "opencode" },
         pollSeconds: 60,
       },
-      browser: { framerate: -1, maxInstances: -1 },
+      browser: { enabled: "inherit", framerate: -1, maxInstances: -1 },
       devices: { discoveryEnabled: "inherit", emulatorHeadless: "inherit", emulatorGpu: null },
       server: { logLevel: "inherit" },
       claudeCode: { defaultModel: null, reviewerModel: null, smallModel: null },

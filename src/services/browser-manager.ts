@@ -120,7 +120,7 @@ function sanitizeDownloadFilename(name: string): string {
 }
 
 const BROWSER_DISABLED_MESSAGE =
-  "Browser feature is disabled — set BROWSER_ENABLED=true to enable the Playwright-driven browser pane (Phase 3, issue #179).";
+  "Browser feature is disabled — turn it on in Settings → Browser (or set BROWSER_ENABLED=true), then restart the Mullion server.";
 
 export class BrowserManager {
   private readonly enabled: boolean;

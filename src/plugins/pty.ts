@@ -705,7 +705,7 @@ export const ptyPlugin = fp(async (app: FastifyInstance) => {
     // BROWSER_ENABLED is likewise an env-derived boot constant; it gates the
     // agent-facing "use Mullion's browser" steering text so a host with the
     // feature off never tells an agent to use a browser that will refuse it.
-    browserEnabled: app.config.BROWSER_ENABLED,
+    browserEnabled: app.browserEnabled,
     // An agent's sessions reach the primary through the local relay socket
     // (#1656); the primary's own control socket is not served on this host.
     controlSocketPath: controlRelayExpected

@@ -80,6 +80,7 @@ export const FALLBACK_RUNTIME_ENV: ServerInfo["runtimeEnv"] = {
   hostHeartbeatSeconds: 30,
   browserFramerate: 10,
   browserMaxInstances: 4,
+  browserEnabled: false,
   deviceDiscoveryEnabled: true,
   deviceEmulatorHeadless: true,
   deviceEmulatorGpu: "swiftshader_indirect",

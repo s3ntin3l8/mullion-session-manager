@@ -587,9 +587,9 @@ export async function browserRoute(app: FastifyInstance): Promise<void> {
       websocket: true,
       // Same "reject before upgrade" posture as terminal.ts's route.
       preValidation: async (request, reply) => {
-        if (!app.config.BROWSER_ENABLED) {
+        if (!app.browserEnabled) {
           return reply.badRequest(
-            "Browser feature is disabled — set BROWSER_ENABLED=true (see issue #179).",
+            "Browser feature is disabled — turn it on in Settings → Browser (or set BROWSER_ENABLED=true), then restart the Mullion server.",
           );
         }
 

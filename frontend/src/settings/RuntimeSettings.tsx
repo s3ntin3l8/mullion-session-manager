@@ -105,6 +105,37 @@ export function BrowserPoolSizeSetting() {
   );
 }
 
+export function BrowserEnabledSetting() {
+  const { settings, updateSettings } = useDashboardStore();
+  const info = useServerInfo();
+  const env = info?.runtimeEnv ?? FALLBACK_RUNTIME_ENV;
+  const saved = settings.browser.enabled;
+  const effective = saved === "inherit" ? env.browserEnabled : saved === "on";
+  const pending = info !== null && effective !== info.running.browserEnabled;
+  return (
+    <>
+      <Row
+        label="Enable browser"
+        desc="Lets you and agents open a controllable Chromium per project. Each running browser uses memory. Takes effect after a server restart."
+      >
+        <Dropdown<"inherit" | "on" | "off">
+          value={saved}
+          onChange={(v) => updateSettings({ browser: { enabled: v } })}
+          options={[
+            {
+              value: "inherit",
+              label: `Server default (${env.browserEnabled ? "On" : "Off"})`,
+            },
+            { value: "on", label: "On" },
+            { value: "off", label: "Off" },
+          ]}
+        />
+      </Row>
+      {pending && <RestartRequiredHint />}
+    </>
+  );
+}
+
 export function DeviceDiscoverySetting() {
   const { settings, updateSettings } = useDashboardStore();
   const info = useServerInfo();

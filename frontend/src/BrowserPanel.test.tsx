@@ -64,7 +64,7 @@ const SERVER_INFO_BASE = {
     pollIntervalSeconds: 60,
   },
   runtimeEnv: FALLBACK_RUNTIME_ENV,
-  running: { browserMaxInstances: 4, deviceDiscoveryEnabled: true },
+  running: { browserEnabled: false, browserMaxInstances: 4, deviceDiscoveryEnabled: true },
   features: { browser: true, devices: false, deviceDiscovery: true },
   previewAuthRequired: false,
 };

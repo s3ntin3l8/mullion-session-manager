@@ -23,7 +23,7 @@ const info = {
   previewAuthRequired: false,
   taskMasterEnabled: false,
   taskMasterEnv: {},
-  running: { browserMaxInstances: 4, deviceDiscoveryEnabled: true },
+  running: { browserEnabled: false, browserMaxInstances: 4, deviceDiscoveryEnabled: true },
   features: { browser: true, devices: false, deviceDiscovery: false },
 } as ServerInfo;
 

@@ -587,7 +587,7 @@ export function buildAgentConfig(app: FastifyInstance): AgentConfig {
     projectsRootsOverrideIgnored: projectsRoots.overrideIgnored,
     sessionsDir: app.config.SESSIONS_DIR,
     crsConfigDir: app.config.CRS_CONFIG_DIR,
-    browserEnabled: app.config.BROWSER_ENABLED,
+    browserEnabled: app.browserEnabled,
     // existsSync, not fs.stat — this stays synchronous so neither of this
     // function's two callers (this route, and hosts.ts's `local` branch)
     // needs to change shape. A dangling socket is expected, not an error
@@ -2606,7 +2606,7 @@ export async function internalRoutes(app: FastifyInstance) {
       const result = new Map<string, SessionInfo | null>();
       for (const id of ids) {
         const info = app.pty.get(id)?.toInfo(idleThresholdMs) ?? null;
-        if (info && app.config.BROWSER_ENABLED && sessionProjectIds) {
+        if (info && app.browserEnabled && sessionProjectIds) {
           const projectId = sessionProjectIds[id];
           if (projectId !== undefined) {
             const managed = app.browser.get(projectId);
@@ -3416,7 +3416,7 @@ export async function internalRoutes(app: FastifyInstance) {
         return reply.badRequest("Invalid session id or project id");
       }
 
-      if (!app.config.BROWSER_ENABLED) {
+      if (!app.browserEnabled) {
         return reply.badRequest("Browser feature is disabled");
       }
 
@@ -3452,7 +3452,7 @@ export async function internalRoutes(app: FastifyInstance) {
         return reply.badRequest("Invalid session id or project id");
       }
 
-      if (!app.config.BROWSER_ENABLED) {
+      if (!app.browserEnabled) {
         return reply.badRequest("Browser feature is disabled");
       }
 
@@ -3487,7 +3487,7 @@ export async function internalRoutes(app: FastifyInstance) {
       websocket: true,
       config: INTERNAL_RATE_LIMIT.config,
       preValidation: async (request, reply) => {
-        if (!app.config.BROWSER_ENABLED) {
+        if (!app.browserEnabled) {
           return reply.badRequest("Browser feature is disabled");
         }
         const sessionId = Number(request.params.sessionId);

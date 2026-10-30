@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { DEFAULT_SETTINGS, type AppSettings } from "../../src/services/settings.js";
 import {
+  resolveBrowserEnabled,
   resolveBrowserFramerate,
   resolveBrowserMaxInstances,
   resolveDeviceDiscoveryEnabled,
@@ -21,6 +22,7 @@ const app = {
     HOST_HEARTBEAT_INTERVAL_SECONDS: 30,
     BROWSER_FRAMERATE: 10,
     BROWSER_MAX_INSTANCES: 4,
+    BROWSER_ENABLED: false,
     DEVICE_DISCOVERY_ENABLED: true,
     DEVICE_EMULATOR_HEADLESS: true,
     DEVICE_EMULATOR_GPU: "swiftshader_indirect",
@@ -41,6 +43,7 @@ describe("runtime-config", () => {
       hostHeartbeatSeconds: 30,
       browserFramerate: 10,
       browserMaxInstances: 4,
+      browserEnabled: false,
       deviceDiscoveryEnabled: true,
       deviceEmulatorHeadless: true,
       deviceEmulatorGpu: "swiftshader_indirect",
@@ -63,7 +66,7 @@ describe("runtime-config", () => {
     const s = withOverrides({
       github: { pollActiveSeconds: 20, pollQuietSeconds: 120, pollStaleThresholdSeconds: 600 },
       hosts: { heartbeatSeconds: 0 },
-      browser: { framerate: 24, maxInstances: 8 },
+      browser: { ...DEFAULT_SETTINGS.browser, framerate: 24, maxInstances: 8 },
       devices: { ...DEFAULT_SETTINGS.devices, discoveryEnabled: "off" },
       server: { logLevel: "debug" },
     });
@@ -94,7 +97,7 @@ describe("runtime-config", () => {
     expect(resolveBrowserMaxInstances(DEFAULT_SETTINGS, app)).toBe(4);
     expect(resolveDeviceDiscoveryEnabled(DEFAULT_SETTINGS, app)).toBe(true);
     const s = withOverrides({
-      browser: { framerate: -1, maxInstances: 8 },
+      browser: { ...DEFAULT_SETTINGS.browser, maxInstances: 8 },
       devices: { ...DEFAULT_SETTINGS.devices, discoveryEnabled: "off" },
     });
     expect(resolveBrowserMaxInstances(s, app)).toBe(8);
@@ -107,6 +110,19 @@ describe("runtime-config", () => {
         config: { ...app.config, DEVICE_DISCOVERY_ENABLED: false },
       } as unknown as FastifyInstance),
     ).toBe(true);
+  });
+
+  it.each([
+    ["inherit", false, false],
+    ["inherit", true, true],
+    ["on", false, true],
+    ["on", true, true],
+    ["off", false, false],
+    ["off", true, false],
+  ] as const)("resolveBrowserEnabled: %s with env %s -> %s", (saved, env, expected) => {
+    const s = withOverrides({ browser: { ...DEFAULT_SETTINGS.browser, enabled: saved } });
+    const a = { config: { ...app.config, BROWSER_ENABLED: env } } as unknown as FastifyInstance;
+    expect(resolveBrowserEnabled(s, a)).toBe(expected);
   });
 
   it("resolves emulator launch flags from settings, then env", () => {
