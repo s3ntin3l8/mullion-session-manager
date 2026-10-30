@@ -269,7 +269,7 @@ Mullion than the primary is flagged `(agent vX, older than the primary)`.
 **Placement flags (#2241).** A project can bound where Auto may place its work,
 in **Edit project → Placement flags** or `placementConstraints` on
 `POST`/`PATCH /api/projects` (stored in `projects.placement_constraints`; `null`
-clears it):
+clears it; the object replaces the stored one, so send both fields):
 
 ```json
 { "platform": ["darwin"], "allowBurst": false }

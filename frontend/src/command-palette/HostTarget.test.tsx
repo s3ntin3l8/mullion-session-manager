@@ -251,6 +251,16 @@ describe("project placement flags in the host chip (#2241)", () => {
     });
   });
 
+  it("falls back when a remembered host is ruled out by a newly-set flag", () => {
+    const project = {
+      ...flagged,
+      placement: "auto",
+      placementConstraints: flagged.placementConstraints,
+    };
+    expect(resolveHostChoice("lin", project, [LINUX, DARWIN])).toBe("auto");
+    expect(resolveHostChoice("mac", project, [LINUX, DARWIN])).toBe("mac");
+  });
+
   it("changes nothing without flags, or with an empty platform list", () => {
     const base = { hostId: "local", hostCwds: { lin: "/a" } };
     expect(buildHostTargetOptions(base, [LINUX])[1].disabled).toBe(false);

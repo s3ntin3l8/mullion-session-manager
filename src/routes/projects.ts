@@ -242,6 +242,9 @@ interface PlacementConstraintsBody {
 const PLACEMENT_CONSTRAINTS_SCHEMA = {
   type: ["object", "null"],
   additionalProperties: false,
+  // Replaced wholesale on PATCH, so a caller must state both fields: a partial
+  // object would silently reset the other one.
+  required: ["platform", "allowBurst"],
   properties: {
     // An allow-list; empty = any platform.
     platform: {

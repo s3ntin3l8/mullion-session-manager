@@ -345,7 +345,7 @@ describe("projects route", () => {
     const patched = await app.inject({
       method: "PATCH",
       url: `/api/projects/${id}`,
-      payload: { placementConstraints: { platform: ["linux", "win32"] } },
+      payload: { placementConstraints: { platform: ["linux", "win32"], allowBurst: false } },
     });
     expect(patched.statusCode).toBe(200);
     expect(patched.json().placementConstraints).toEqual({
@@ -378,7 +378,8 @@ describe("projects route", () => {
     for (const bad of [
       { platform: ["freebsd"] },
       { platform: ["darwin", "darwin"] },
-      { allowBurst: "yes" },
+      { platform: [], allowBurst: "yes" },
+      { platform: ["darwin"] },
     ]) {
       const res = await app.inject({
         method: "PATCH",

@@ -103,7 +103,12 @@ export function buildHostTargetOptions(
  */
 export function resolveHostChoice(
   remembered: string | undefined,
-  project: { hostId: string; placement?: string; hostCwds?: Record<string, string> | null },
+  project: {
+    hostId: string;
+    placement?: string;
+    hostCwds?: Record<string, string> | null;
+    placementConstraints?: PlacementConstraints;
+  },
   hosts: readonly Host[] = [],
 ): HostChoice {
   const fallback: HostChoice = project.placement === "auto" ? AUTO_VALUE : null;
@@ -111,7 +116,12 @@ export function resolveHostChoice(
   if (remembered === AUTO_VALUE) return AUTO_VALUE;
   if (remembered === project.hostId) return project.placement === "auto" ? remembered : null;
   if (!Object.hasOwn(project.hostCwds ?? {}, remembered)) return fallback;
-  return unavailableState(hosts.find((h) => h.id === remembered)) === null ? remembered : fallback;
+  const host = hosts.find((h) => h.id === remembered);
+  // Issue #2241 — a host the project's platform flag now forbids is as gone as an offline one.
+  const usable =
+    unavailableState(host) === null &&
+    platformFlagViolation(host, project.placementConstraints) === null;
+  return usable ? remembered : fallback;
 }
 
 /** The "chosen host, reason, excluded" lines under the chip for Auto. */

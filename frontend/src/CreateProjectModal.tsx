@@ -842,7 +842,9 @@ export function CreateProjectModal({
           <span className="create-modal-field-hint">
             {flagPlatforms.length === 0
               ? "Automatic placement may use a host of any platform."
-              : `Automatic placement only uses ${flagPlatforms.join(" or ")} hosts. If none is online, a launch is refused and Task Master holds the task.`}
+              : placement === "auto"
+                ? `Automatic placement only uses ${flagPlatforms.join(" or ")} hosts. If none is online, a launch is refused and Task Master holds the task.`
+                : `Only ${flagPlatforms.join(" or ")} hosts can be chosen for a launch. This project is pinned to its own host, so the flag does not steer untargeted launches.`}
           </span>
           <label className="create-modal-dir-confirm-checkbox">
             <input
