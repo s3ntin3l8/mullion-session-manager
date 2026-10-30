@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
 import { appVersion } from "../routes/server-info.js";
 import { getCachedAgents, type DetectedAgent } from "./agent-detect.js";
+import { getCachedCapabilities } from "./host-capabilities.js";
 import { getRemoteHostClient, HostRequestError } from "./remote-host-client.js";
 
 /**
@@ -21,6 +22,8 @@ import { getRemoteHostClient, HostRequestError } from "./remote-host-client.js";
 export interface HostAgentEntry {
   /** `KNOWN_AGENTS` binaries the host has on its PATH; null when unknown. */
   agents: string[] | null;
+  /** `PLACEMENT_CAPABILITIES` the host has (issue #2306); null when unknown. */
+  capabilities: string[] | null;
   /** The host's Mullion version; null when it could not be read. */
   mullionVersion: string | null;
   checkedAt: number;
@@ -107,6 +110,15 @@ async function readRemoteHostAgents(
     if (!(err instanceof HostRequestError && err.statusCode === 404)) throw err;
     agents = null;
   }
+  // A capabilities failure must not discard the agent list. An older agent's
+  // 404 is "unknown" (null); any other failure keeps the previous reading
+  // (stale, but real), like the agent list does.
+  let capabilities: string[] | null = tracker.get(hostId)?.capabilities ?? null;
+  try {
+    capabilities = (await client.detectCapabilities()).capabilities;
+  } catch (err) {
+    if (err instanceof HostRequestError && err.statusCode === 404) capabilities = null;
+  }
   let mullionVersion: string | null = null;
   try {
     mullionVersion = (await client.resolveConfig()).version ?? null;
@@ -116,7 +128,7 @@ async function readRemoteHostAgents(
   // The host's address or token changed while we were reading: this list
   // describes the OLD agent, so it must not be recorded as fresh.
   if (tracker.epoch(hostId) !== epoch) return;
-  tracker.record(hostId, { agents, mullionVersion });
+  tracker.record(hostId, { agents, capabilities, mullionVersion });
 }
 
 // Per app: tests (and nothing else) build many Fastify instances in one process.
@@ -133,9 +145,15 @@ export function refreshLocalAgents(app: FastifyInstance): void {
   if (!tracker.isStale(LOCAL_HOST_ID, agentsTtlMs(app))) return;
   localRefreshing.add(app);
   getCachedAgents()
-    .then((detected) => {
+    .then(async (detected) => {
+      // A capabilities failure must not discard the agent list.
+      const capabilities = await getCachedCapabilities(app).catch((err: unknown) => {
+        app.log.debug({ err }, "[host-agents] local capability detection failed");
+        return null;
+      });
       tracker.record(LOCAL_HOST_ID, {
         agents: availableAgentBins(detected),
+        capabilities,
         mullionVersion: appVersion,
       });
     })

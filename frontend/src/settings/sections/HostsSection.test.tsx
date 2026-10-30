@@ -6,6 +6,7 @@ import { HostsSection } from "./HostsSection.js";
 import { useDashboardStore } from "../../store/index.js";
 import { jsonResponse } from "../../test/jsonResponse.js";
 import { makeHost } from "../../test/fixtures.js";
+import type { PlacementCapability } from "../../../../src/shared/constants.js";
 
 // Token rotation and the "waiting for the agent" row state. The rest of the
 // section is exercised through its own components' tests.
@@ -51,6 +52,28 @@ describe("HostsSection token rotation", () => {
     stubFetch({});
     render(<HostsSection />);
     expect(screen.getByText(/waiting for the agent to register/)).toBeInTheDocument();
+  });
+
+  it("shows capability chips, or says capabilities are unknown", () => {
+    stubFetch({});
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({ id: "h1", name: "mac", capabilities: ["xcode", "android-emulator"] }),
+        makeHost({ id: "h2", name: "old", capabilities: null }),
+        makeHost({ id: "h3", name: "bare", capabilities: [] }),
+        // A newer agent may report an id this build has no label for.
+        makeHost({
+          id: "h4",
+          name: "newer",
+          capabilities: ["xcode", "future-cap"] as unknown as PlacementCapability[],
+        }),
+      ],
+    });
+    render(<HostsSection />);
+    expect(screen.getByText("Xcode · future-cap")).toBeInTheDocument();
+    expect(screen.getByText("Xcode · Android emulator")).toBeInTheDocument();
+    expect(screen.getByText("capabilities unknown")).toBeInTheDocument();
+    expect(screen.getByText("no extra capabilities")).toBeInTheDocument();
   });
 
   it("rotates after a second click and shows the new token once", async () => {

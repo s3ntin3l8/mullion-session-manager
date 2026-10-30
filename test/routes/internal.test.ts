@@ -4135,6 +4135,22 @@ describe("internal routes (agent role, issue #26)", () => {
     await app.close();
   });
 
+  // Issue #2306 — on this (linux) test host nothing is spawned, and the device
+  // panel is off, so the list is empty, but the shape is the contract.
+  it("returns this host's capabilities behind the same gate", async () => {
+    const app = await buildApp();
+    const denied = await app.inject({ method: "GET", url: "/internal/capabilities" });
+    expect(denied.statusCode).toBe(401);
+    const res = await app.inject({
+      method: "GET",
+      url: "/internal/capabilities",
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ capabilities: [] });
+    await app.close();
+  });
+
   it("spawns a session, reports its live status/liveness, and terminates it", async () => {
     const app = await buildApp();
     const before = fakePtyChildren.length;

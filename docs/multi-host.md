@@ -1032,6 +1032,27 @@ in-memory state only, never written to the `hosts` table — an unreachable
 primary restart resets every host back to "pending" until the next sweep,
 same as a fresh boot.
 
+## Host capabilities
+
+Issue [#2306](https://github.com/s3ntin3l8/mullion-session-manager/issues/2306)
+— a host reports what it can do beyond running agent CLIs: `xcode` (the iOS
+Simulator toolchain) and `android-emulator` (an emulator Mullion can start).
+`GET /internal/capabilities` on the agent answers `{ "capabilities": [...] }`,
+and the primary keeps it beside the agent list (same TTL, same invalidation).
+`GET /api/hosts` exposes it as `capabilities`; Settings → Hosts shows chips.
+
+- `xcode`: darwin only, and `xcrun --find simctl` must exit 0 (Command Line
+  Tools alone do not have it). Nothing is spawned on any other platform.
+- `android-emulator`: the device panel's emulator support is enabled and
+  `DEVICE_EMULATOR_PATH` is set to an executable file. That is exactly what
+  the device manager launches, so there is no `PATH` or SDK-root fallback.
+- `null` means unknown (an older agent whose route answers 404, or nothing
+  read yet), which is not the same as `[]` (known to have none). A failed
+  read keeps the previous reading.
+
+Enrollment's `capabilities` / `hosts.agentMetadata` is a static snapshot that
+goes stale, so it is intentionally **not** read.
+
 ## Capacity reporting
 
 Issue [#1721](https://github.com/s3ntin3l8/mullion-session-manager/issues/1721)

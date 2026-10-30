@@ -192,6 +192,7 @@ export async function hostsRoute(app: FastifyInstance) {
       return {
         ...host,
         agents: agentEntry?.agents ?? null,
+        capabilities: agentEntry?.capabilities ?? null,
         mullionVersion:
           host.id === LOCAL_HOST_ID ? appVersion : (agentEntry?.mullionVersion ?? null),
         // The LOCAL host's platform is this process's own — the row simply

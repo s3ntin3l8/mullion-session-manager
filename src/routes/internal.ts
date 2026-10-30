@@ -142,6 +142,7 @@ import {
 import { deliverPrompt, REMOTE_WAIT_CHUNK_MS } from "../services/session-prompt.js";
 import { FILE_STREAM_CONTENT_TYPE } from "../shared/constants.js";
 import { getCachedAgents } from "../services/agent-detect.js";
+import { getCachedCapabilities } from "../services/host-capabilities.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { attachSocketToSession } from "./terminal.js";
 import { attachLocalEventsSocket, attachCursorsAndSeenBroadcast } from "./events.js";
@@ -1227,6 +1228,12 @@ export async function internalRoutes(app: FastifyInstance) {
 
   app.get("/internal/agents", INTERNAL_RATE_LIMIT, async () => {
     return getCachedAgents();
+  });
+
+  // Issue #2306 — what this host can do beyond agent CLIs (Xcode, an Android
+  // emulator). Its own route: /internal/agents answers a bare array.
+  app.get("/internal/capabilities", INTERNAL_RATE_LIMIT, async () => {
+    return { capabilities: await getCachedCapabilities(app) };
   });
 
   // Owner/repo derivation for a remote-host project's GitHub widget (issue

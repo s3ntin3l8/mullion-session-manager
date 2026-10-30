@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { HostEditableRole } from "../../../../src/shared/constants.js";
+import type { HostEditableRole, PlacementCapability } from "../../../../src/shared/constants.js";
 import { useDashboardStore, LIVE_REFRESH_INTERVAL_MS } from "../../store/index.js";
 import { api, ApiError, LOCAL_HOST_ID } from "../../api/index.js";
 import { hasRemoteHosts } from "../../lib/hostBadge.js";
@@ -62,6 +62,21 @@ function HostCapacityLine({ host }: { host: Host }) {
       {capacity.stale && age ? ` (reading from ${age})` : ""}
     </span>
   );
+}
+
+const CAPABILITY_LABELS: Record<PlacementCapability, string> = {
+  xcode: "Xcode",
+  "android-emulator": "Android emulator",
+};
+
+/** Issue #2306 — null is "unknown" (an older agent), which is not "has none". */
+function HostCapabilitiesLine({ host }: { host: Host }) {
+  if (!host.capabilities) return <span>capabilities unknown</span>;
+  if (host.capabilities.length === 0) return <span>no extra capabilities</span>;
+  // The wire value is runtime data: a newer agent may report an id this build
+  // does not know yet, which renders as its raw id rather than "undefined".
+  const labels: Record<string, string | undefined> = CAPABILITY_LABELS;
+  return <span>{host.capabilities.map((c) => labels[c] ?? c).join(" · ")}</span>;
 }
 
 export function HostsSection() {
@@ -370,6 +385,8 @@ export function HostsSection() {
                     {host.baseUrl ?? "waiting for the agent to register"}
                     {" · "}
                     <HostCapacityLine host={host} />
+                    {" · "}
+                    <HostCapabilitiesLine host={host} />
                   </>
                 }
                 trailing={
