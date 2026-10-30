@@ -24,6 +24,7 @@ import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.j
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { deriveApprovalState } from "./task-approval-state.js";
+import { hasIngestedCurrentReview, hasReviewHandle } from "./task-review-handle.js";
 import { notifyTaskNeedsAttention } from "./push-delivery.js";
 import {
   resolveReviewAgentCommand,
@@ -189,11 +190,7 @@ async function detectReviewStall(
  * (a CI fix, a reviewer's inline suggestions) can carry it instead of
  * re-reviewing. */
 function hasCurrentApproval(task: typeof tasks.$inferSelect): boolean {
-  return (
-    isApprovingVerdict(task.lastReviewVerdict) &&
-    task.reviewSessionId !== null &&
-    task.reviewFindingsIngestedSessionId === task.reviewSessionId
-  );
+  return isApprovingVerdict(task.lastReviewVerdict) && hasIngestedCurrentReview(task);
 }
 
 /**
@@ -3415,12 +3412,7 @@ async function attemptAutoApprove(
     resetAutoApproveBackoff(task.id);
   }
 
-  if (
-    task.reviewFindingsIngestedSessionId === null ||
-    task.reviewFindingsIngestedSessionId !== task.reviewSessionId
-  ) {
-    return;
-  }
+  if (!hasIngestedCurrentReview(task)) return;
   if (!isApprovingVerdict(task.lastReviewVerdict)) return;
 
   if (current.mergeable === false || current.mergeableState === "dirty") {
@@ -4261,7 +4253,12 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
       for (const row of hostRows) {
         const { task, session, project } = row;
 
-        if (task.reviewFindingsIngestedSessionId === task.reviewSessionId) continue;
+        // Every row here has a review session — the query inner-joins
+        // `sessions` on `tasks.reviewSessionId`. That matters: unlike the bare
+        // equality this replaced, `hasIngestedCurrentReview` is false for a
+        // task with no review session, so a row that slipped in without one
+        // (an outer join, a hand-built row) would fall through to ingestion.
+        if (hasIngestedCurrentReview(task)) continue;
 
         const info = liveMap[String(session.id)];
         if (info === undefined) continue;
@@ -4420,11 +4417,6 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
                 now - session.createdAt.getTime() >= REVIEW_FINDINGS_GRACE_MS);
         if (!isUsableSignal) continue;
 
-        // A suggestions round spends no round, so a re-review after one (the
-        // worker asked for it) shares its counter with the review before it.
-        const roundLabel = `## Round ${task.autoReturnRounds + 1}${
-          task.lastAutoReturnReason === "suggestions" ? " (re-review after suggestions)" : ""
-        }`;
         // Hermes review, PR #754 — wording keyed on `derived.status`
         // itself, not just "was it exited," so a session ingested via the
         // grace-elapsed branch above (which — per the comment on
@@ -4439,308 +4431,369 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
             : derived.status === "finished"
               ? "Review agent finished but wrote no findings file"
               : "Review agent produced no findings file within the expected time";
-        const commentBody = parsed
-          ? `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed)}`
-          : `${roundLabel}\n\n${noFindingsReason} — treat this review as inconclusive.`;
-
-        const appendedFindings = task.reviewFindings
-          ? `${task.reviewFindings}\n\n${commentBody}`
-          : commentBody;
-
-        // Hermes review, PR #576 — a non-seed-capable worker adapter (e.g.
-        // gemini/pi — every registered adapter, including OpenCode,
-        // has initialPromptArgs by now; see getAdapterInitialPromptArgs's
-        // own doc comment for the current list) can't receive the findings
-        // as an initial prompt at all (reseedTaskIfSessionExited delivers
-        // argv-only, same as every other Task Master spawn). Auto-returning
-        // anyway would burn the task's
-        // one round, flip it to in_progress, and spawn a fresh session with
-        // NO instructions — one that never ends a turn, so the task just
-        // rides its budget out and fails. Recording + commenting the
-        // findings still happens; only the auto-return (and the round it
-        // would spend) is skipped, leaving a human to act on what's now
-        // visible on the task and the PR.
-        // Hermes review, PR #580 — a review agent that crashes mid-review
-        // AFTER writing a partial findings file also derives "exited" with
-        // a non-null file, so accepting "exited" for INGESTION (above)
-        // would also let a half-written review consume the task's one
-        // auto-return round. Only a genuine "finished" (a deliberate,
-        // complete turn end) is trustworthy enough to act on automatically
-        // — "exited" findings are still ingested and commented, just not
-        // auto-returned.
-        //
-        // `parsed?.verdict === "changes-requested"` (not `findings !== null`)
-        // is the regression guard this verdict contract exists for: a
-        // reviewer that writes JSON with `verdict: "clean"` must NOT
-        // auto-return. Under the old "findings !== null means act on it"
-        // rule, always writing a file (this PR's whole point — see
-        // buildReviewPrompt) would have made a clean review indistinguishable
-        // from one requesting changes, spending the task's one auto-return
-        // round respawning the worker with nothing to do.
-        // #756 — "wants to" is now distinct from "is allowed to": a verdict
-        // of "changes-requested" alone no longer decides the outcome, the
-        // resolved per-project cap does too. Split so a capped task can
-        // still be told WHY it's stuck (see cappedNote below) rather than
-        // silently doing nothing, which was the pre-#756 behavior once a
-        // task had already spent its one round.
-        const wantsAutoReturn =
-          derived.status === "finished" &&
-          parsed !== null &&
-          parsed.verdict === "changes-requested" &&
-          resolvedTaskMaster.enabled &&
-          task.worktreePath !== null &&
-          task.agentCommand !== null &&
-          commandSupportsSeed(task.agentCommand);
-        const maxRounds = resolveMaxAutoReturnRounds(
-          project,
-          resolvedTaskMaster.maxAutoReturnRounds,
-        );
-        const capReached = task.autoReturnRounds >= maxRounds;
-        // A loop that has stopped converging asks a human rather than
-        // running out the cap on the same defect. Only worth a lookup when a
-        // return was otherwise about to happen.
-        const stall =
-          wantsAutoReturn && !capReached
-            ? await detectReviewStall(app, task, project, parsed!)
-            : null;
-        const shouldAutoReturn = wantsAutoReturn && !capReached && stall === null;
-        // An approval that left only suggestions: same preconditions as any
-        // auto-return (a finished review, a worker that can take a seed) but
-        // NOT capped — the round it sends costs nothing.
-        const wantsSuggestionsRound =
-          derived.status === "finished" &&
-          parsed !== null &&
-          parsed.verdict === "approved-with-suggestions" &&
-          resolvedTaskMaster.enabled &&
-          task.worktreePath !== null &&
-          task.agentCommand !== null &&
-          commandSupportsSeed(task.agentCommand);
-
-        // Hermes review, PR #576 — record BEFORE posting the PR comment
-        // (previously the reverse), and CAS on `status = "reviewing"` even
-        // for the non-transitioning write: a concurrent approve/reject/
-        // give-up racing this same tick should win outright — this loop
-        // then does neither the DB write nor the PR comment for a decision
-        // the task no longer reflects, rather than a comment landing with
-        // no matching DB write behind it.
-        //
-        // lastReviewVerdict rides this same write (durable, not re-derived
-        // from the rendered reviewFindings prose) — the auto-approve sweep
-        // (processAutoApprovals) reads it back later to gate approving a
-        // task with no human in the loop. Written here regardless of
-        // whether auto-approve exists/is enabled on this project: the write
-        // is inert until read, and landing it now means real verdict data
-        // has already accumulated by the time auto-approve ships.
-        //
-        // #756 — no longer bundles the round-increment fields (autoReturnRounds/
-        // status/lastAutoReturnReason): those now live in autoReturnTask's own
-        // CAS write, shared with every other auto-return trigger, not just this
-        // one. This write stays CAS'd on `status = "reviewing"` on its own —
-        // splitting the two writes narrows, but doesn't remove, the same
-        // "a concurrent decision wins outright" guarantee: if THIS write's CAS
-        // succeeds and a concurrent approve/reject/give-up lands before
-        // autoReturnTask's own CAS runs, that second CAS simply fails and
-        // autoReturnTask returns `{ ok: false }` — no round is spent, no
-        // transition is recorded.
-        // #737 — one local, not two independent `parsed?.verdict ??
-        // "inconclusive"` expressions: this is both the durable column
-        // value AND the verdict `postReviewFindingsComment` maps onto a
-        // gating review event below, and they can't be allowed to drift.
-        const verdict = parsed?.verdict ?? "inconclusive";
-        // Issue #1038 — folded into this same durable write, not a
-        // follow-up write after the GitHub comment post below: this column
-        // is the ground truth "the machine actually stopped" signal the
-        // board reads, and this write IS the moment a capped task's
-        // findings are durably ingested (reviewFindingsIngestedSessionId
-        // below), regardless of what the verdict turned out to be. Setting
-        // it here, ahead of the post, means a crash between this write and
-        // the post (reached only when wantsAutoReturn, i.e. changes were
-        // requested — see cappedNote below) leaves the banner CORRECT
-        // (needs a human) with only the notice comment missing.
-        //
-        // Hermes review (PR #1040) — deliberately `capReached` alone, NOT
-        // `wantsAutoReturn && capReached`: a capped task whose FINAL review
-        // comes back clean or inconclusive is just as genuinely parked as
-        // one that wanted (and was denied) another round — nothing
-        // auto-returns a non-"changes-requested" verdict either way — but
-        // gating on wantsAutoReturn left that case never announced, so the
-        // board kept claiming "review in flight" on a task nothing further
-        // would ever touch. This durable write only runs when a review's
-        // output is being ingested (isUsableSignal above), so `capReached`
-        // alone already means "a capped task's findings were just
-        // ingested" — no separate ingest-pointer comparison needed here.
-        const announcingCap = (capReached || stall !== null) && !wantsSuggestionsRound;
-        const needsHumanReason: "cap" | ReviewStallReason | null = announcingCap
-          ? capReached
-            ? "cap"
-            : stall
-          : null;
-        // Issue #1039 — the PR head SHA this round's ingested findings are
-        // actually about, read from the existing github-pr-poller.ts cache
-        // (zero-cost, no GitHub call from this reconcile tick). Best-effort:
-        // a cache miss (poller hasn't hit this repo yet, or no prNumber)
-        // just leaves the column at its previous value, same as any other
-        // best-effort lookup in this loop.
-        let cachedHeadSha: string | undefined;
-        if (task.prNumber !== null) {
-          const repoRef = await resolveRepoRef(app, project);
-          const cached = repoRef ? getPRsStatus(repoRef.owner, repoRef.repo) : null;
-          cachedHeadSha = cached?.prs.find((p) => p.number === task.prNumber)?.headSha;
-        }
-        const updated = app.db
-          .update(tasks)
-          .set({
-            reviewFindings: appendedFindings,
-            reviewFindingsIngestedSessionId: task.reviewSessionId,
-            lastReviewVerdict: verdict,
-            // A fresh review of the current head supersedes any carried
-            // approval — the verdict above is now earned, not inherited.
-            approvalCarriedAt: null,
-            // Task 409707 — anchors reannounceInconclusiveReviewsAfterGrace's
-            // grace window; see that column's own doc comment in schema.ts.
-            lastReviewVerdictAt: new Date(now),
-            ...(announcingCap ? { autoReturnCapAnnouncedAt: new Date(), needsHumanReason } : {}),
-            ...(cachedHeadSha !== undefined ? { lastReviewedHeadSha: cachedHeadSha } : {}),
-          })
-          .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
-          .run();
-        // Lost the race — the findings file is still stale for whatever
-        // reconcile this task next (a rejected task keeps the same
-        // autoReturnRounds, so its next review reuses this exact
-        // round-suffixed path), so unlink it here too, before giving up on
-        // this row.
-        if (updated.changes === 0) {
-          await unlinkFindingsFileIfPresent(app, backend, task.id, task.autoReturnRounds);
-          continue;
-        }
-
-        // The DB write above is now durable — the file has nothing left to
-        // offer a later reconcile pass, and leaving it in place is exactly
-        // what would cause a same-round re-review (reject keeps
-        // autoReturnRounds unchanged) to re-ingest THIS round's content as
-        // if it were fresh.
-        await unlinkFindingsFileIfPresent(app, backend, task.id, task.autoReturnRounds);
-        // A freshly ingested verdict deserves an immediate auto-approve
-        // attempt, not the wait built up by earlier rounds' not-yet-eligible
-        // visits.
-        resetAutoApproveBackoff(task.id);
-        // #756 — a task that wanted another round but had none left gets one
-        // extra sentence folded into the SAME comment, rather than a second
-        // post: today's single-comment-per-round shape stays exactly that,
-        // shape, just occasionally longer. This is also the only place a
-        // human ever learns the round cap was the reason nothing moved —
-        // without it, a capped task looks identical to one that was never
-        // going to auto-return in the first place.
-        //
-        // Task 258971's investigation: this note must be appended to
-        // `reviewSummary` too, not just `body` — `postReviewFindingsComment`
-        // posts `reviewSummary` as the review's own text whenever there are
-        // anchored findings (`params.findings !== undefined && anchored.length
-        // > 0`), which is the common case for a real changes-requested
-        // verdict. Appending only to `body` meant the note was silently
-        // dropped on every review that actually had findings to anchor —
-        // exactly the capped-and-parked case this exists to surface.
-        const cappedNote =
-          wantsAutoReturn && capReached
-            ? `\n\n_Automatic round cap (${maxRounds}) reached for this task — it needs a human to take it from here._`
-            : stall === "finding-persisted"
-              ? "\n\n_The same earlier finding is still open after two rounds — the automatic loop has stopped; this task needs a human to take it from here._"
-              : stall === "no-progress"
-                ? "\n\n_The worker returned without pushing a change — the automatic loop has stopped; this task needs a human to take it from here._"
-                : "";
-        await postReviewFindingsComment(
-          app,
+        await ingestReviewOutcome(app, {
           task,
           project,
-          parsed
-            ? {
-                body: commentBody + cappedNote,
-                reviewSummary: `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed, "review-body")}${cappedNote}`,
-                findings: parsed.findings,
-                verdict,
-              }
-            : { body: commentBody + cappedNote, verdict },
-        );
-
-        // D1 — a "clean" verdict is corroborating evidence any of Mullion's
-        // own earlier anchored findings on this PR were actually addressed;
-        // resolve them now so a repo requiring conversation resolution
-        // doesn't deadlock on a self-inflicted stale thread. Never fires on
-        // "changes-requested" (there's nothing to corroborate yet) or
-        // "inconclusive" (a crashed/silent reviewer confirms nothing).
-        if (isApprovingVerdict(verdict)) {
-          await resolveMullionOwnThreadsIfClean(app, task, project);
-        }
-
-        if (wantsSuggestionsRound) {
-          const issueContext = await resolveTaskIssueContextSafe(app, task, project);
-          const sessionsDir = await resolveSessionsDirWithFallback(app, backend, {
-            taskId: task.id,
-            hostId: resolveTaskWorkerHost(app, task),
-          });
-          await autoReturnTask(app, task, project, {
-            reason: "suggestions",
-            seedPrompt: buildSuggestionsPrompt({
-              task: {
-                ...task,
-                comments: issueContext?.comments,
-                parent: issueContext?.parent,
-                siblings: issueContext?.siblings,
-              },
-              branchName: task.branchName ?? deriveTaskBranchName(task),
-              worktreePath: task.worktreePath!,
-              budgetMinutes: resolvedTaskMaster.budgetMinutes,
-              agentCommand: task.agentCommand,
-              suggestions: renderReviewFindingsMarkdown(parsed!, "worker-prompt"),
-              rereviewRequestPath: taskRereviewRequestPath(
-                sessionsDir,
-                task.id,
-                rereviewRequestKey(new Date(now)),
-              ),
-              commitTitlePath: project.conventionalCommitTitles
-                ? taskCommitTitlePath(sessionsDir, task.id)
-                : undefined,
-            }),
-          });
-          continue;
-        }
-
-        if (!shouldAutoReturn) continue;
-
-        // #939/#1016 — resolved once per spawn, fail-open — see
-        // task-issue-context.ts's own doc comment.
-        const issueContext = await resolveTaskIssueContextSafe(app, task, project);
-        const prompt = buildReviewFeedbackPrompt({
-          task: {
-            ...task,
-            comments: issueContext?.comments,
-            parent: issueContext?.parent,
-            siblings: issueContext?.siblings,
-          },
-          branchName: task.branchName ?? deriveTaskBranchName(task),
-          worktreePath: task.worktreePath!,
-          budgetMinutes: resolvedTaskMaster.budgetMinutes,
-          agentCommand: task.agentCommand,
-          // Rendered, not the raw findings-file content — `shouldAutoReturn`
-          // guarantees `parsed !== null` here, but `parsed` may be JSON; the
-          // worker should read prose, not the wire format Mullion parses.
-          findings: renderReviewFindingsMarkdown(parsed!, "worker-prompt"),
-          // #778 — resolved against the OWNING host's own sessionsDir; see
-          // spawnReviewAgentNow's own comment for the full rationale.
-          commitTitlePath: project.conventionalCommitTitles
-            ? taskCommitTitlePath(
-                await resolveSessionsDirWithFallback(app, backend, {
-                  taskId: task.id,
-                  hostId: resolveTaskWorkerHost(app, task),
-                }),
-                task.id,
-              )
-            : undefined,
+          parsed,
+          finished: derived.status === "finished",
+          noFindingsReason,
+          now,
+          backend,
+          resolvedTaskMaster,
+          // The joined session IS `task.reviewSessionId` (see the query's
+          // inner join), which is what the ingest marker has to equal.
+          latchSessionId: session.id,
+          cleanupFindingsFile: () =>
+            unlinkFindingsFileIfPresent(app, backend, task.id, task.autoReturnRounds),
         });
-        await autoReturnTask(app, task, project, { reason: "review", seedPrompt: prompt });
       }
     }),
   );
+}
+
+/**
+ * Everything that happens once a review's outcome is known, whoever produced
+ * it: the round comment, the durable verdict write, the PR review, the
+ * suggestions round or the auto-return. Split out of `processReviewingTasks`
+ * so a review that is not a local session can finish through the same path.
+ *
+ * `parsed` is null when the reviewer produced nothing usable (the verdict is
+ * then `inconclusive`, worded with `noFindingsReason`). `finished` says the
+ * review ended deliberately — a finished turn, not a crash or a timeout — and
+ * gates both auto-return paths. `latchSessionId` is the review session this
+ * outcome belongs to — it must be the task's current `reviewSessionId`, since
+ * it becomes the ingest marker `hasIngestedCurrentReview` compares against
+ * (a mismatch would never latch, and every tick would ingest and comment
+ * again). `cleanupFindingsFile` runs once the outcome is durable, and also
+ * when a concurrent decision beat this write to it.
+ */
+async function ingestReviewOutcome(
+  app: FastifyInstance,
+  input: {
+    task: typeof tasks.$inferSelect;
+    project: typeof projects.$inferSelect;
+    parsed: ReturnType<typeof parseReviewFindings> | null;
+    finished: boolean;
+    noFindingsReason: string;
+    now: number;
+    backend: SessionBackend;
+    resolvedTaskMaster: ReturnType<typeof resolveTaskMasterConfig>;
+    latchSessionId: number;
+    cleanupFindingsFile: () => Promise<void>;
+  },
+): Promise<void> {
+  const {
+    task,
+    project,
+    parsed,
+    finished,
+    noFindingsReason,
+    now,
+    backend,
+    resolvedTaskMaster,
+    latchSessionId,
+    cleanupFindingsFile,
+  } = input;
+  // A suggestions round spends no round, so a re-review after one (the
+  // worker asked for it) shares its counter with the review before it.
+  const roundLabel = `## Round ${task.autoReturnRounds + 1}${
+    task.lastAutoReturnReason === "suggestions" ? " (re-review after suggestions)" : ""
+  }`;
+
+  const commentBody = parsed
+    ? `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed)}`
+    : `${roundLabel}\n\n${noFindingsReason} — treat this review as inconclusive.`;
+
+  const appendedFindings = task.reviewFindings
+    ? `${task.reviewFindings}\n\n${commentBody}`
+    : commentBody;
+
+  // Hermes review, PR #576 — a non-seed-capable worker adapter (e.g.
+  // gemini/pi — every registered adapter, including OpenCode,
+  // has initialPromptArgs by now; see getAdapterInitialPromptArgs's
+  // own doc comment for the current list) can't receive the findings
+  // as an initial prompt at all (reseedTaskIfSessionExited delivers
+  // argv-only, same as every other Task Master spawn). Auto-returning
+  // anyway would burn the task's
+  // one round, flip it to in_progress, and spawn a fresh session with
+  // NO instructions — one that never ends a turn, so the task just
+  // rides its budget out and fails. Recording + commenting the
+  // findings still happens; only the auto-return (and the round it
+  // would spend) is skipped, leaving a human to act on what's now
+  // visible on the task and the PR.
+  // Hermes review, PR #580 — a review agent that crashes mid-review
+  // AFTER writing a partial findings file also derives "exited" with
+  // a non-null file, so accepting "exited" for INGESTION (above)
+  // would also let a half-written review consume the task's one
+  // auto-return round. Only a genuine "finished" (a deliberate,
+  // complete turn end) is trustworthy enough to act on automatically
+  // — "exited" findings are still ingested and commented, just not
+  // auto-returned.
+  //
+  // `parsed?.verdict === "changes-requested"` (not `findings !== null`)
+  // is the regression guard this verdict contract exists for: a
+  // reviewer that writes JSON with `verdict: "clean"` must NOT
+  // auto-return. Under the old "findings !== null means act on it"
+  // rule, always writing a file (this PR's whole point — see
+  // buildReviewPrompt) would have made a clean review indistinguishable
+  // from one requesting changes, spending the task's one auto-return
+  // round respawning the worker with nothing to do.
+  // #756 — "wants to" is now distinct from "is allowed to": a verdict
+  // of "changes-requested" alone no longer decides the outcome, the
+  // resolved per-project cap does too. Split so a capped task can
+  // still be told WHY it's stuck (see cappedNote below) rather than
+  // silently doing nothing, which was the pre-#756 behavior once a
+  // task had already spent its one round.
+  const wantsAutoReturn =
+    finished &&
+    parsed !== null &&
+    parsed.verdict === "changes-requested" &&
+    resolvedTaskMaster.enabled &&
+    task.worktreePath !== null &&
+    task.agentCommand !== null &&
+    commandSupportsSeed(task.agentCommand);
+  const maxRounds = resolveMaxAutoReturnRounds(project, resolvedTaskMaster.maxAutoReturnRounds);
+  const capReached = task.autoReturnRounds >= maxRounds;
+  // A loop that has stopped converging asks a human rather than
+  // running out the cap on the same defect. Only worth a lookup when a
+  // return was otherwise about to happen.
+  const stall =
+    wantsAutoReturn && !capReached ? await detectReviewStall(app, task, project, parsed!) : null;
+  const shouldAutoReturn = wantsAutoReturn && !capReached && stall === null;
+  // An approval that left only suggestions: same preconditions as any
+  // auto-return (a finished review, a worker that can take a seed) but
+  // NOT capped — the round it sends costs nothing.
+  const wantsSuggestionsRound =
+    finished &&
+    parsed !== null &&
+    parsed.verdict === "approved-with-suggestions" &&
+    resolvedTaskMaster.enabled &&
+    task.worktreePath !== null &&
+    task.agentCommand !== null &&
+    commandSupportsSeed(task.agentCommand);
+
+  // Hermes review, PR #576 — record BEFORE posting the PR comment
+  // (previously the reverse), and CAS on `status = "reviewing"` even
+  // for the non-transitioning write: a concurrent approve/reject/
+  // give-up racing this same tick should win outright — this loop
+  // then does neither the DB write nor the PR comment for a decision
+  // the task no longer reflects, rather than a comment landing with
+  // no matching DB write behind it.
+  //
+  // lastReviewVerdict rides this same write (durable, not re-derived
+  // from the rendered reviewFindings prose) — the auto-approve sweep
+  // (processAutoApprovals) reads it back later to gate approving a
+  // task with no human in the loop. Written here regardless of
+  // whether auto-approve exists/is enabled on this project: the write
+  // is inert until read, and landing it now means real verdict data
+  // has already accumulated by the time auto-approve ships.
+  //
+  // #756 — no longer bundles the round-increment fields (autoReturnRounds/
+  // status/lastAutoReturnReason): those now live in autoReturnTask's own
+  // CAS write, shared with every other auto-return trigger, not just this
+  // one. This write stays CAS'd on `status = "reviewing"` on its own —
+  // splitting the two writes narrows, but doesn't remove, the same
+  // "a concurrent decision wins outright" guarantee: if THIS write's CAS
+  // succeeds and a concurrent approve/reject/give-up lands before
+  // autoReturnTask's own CAS runs, that second CAS simply fails and
+  // autoReturnTask returns `{ ok: false }` — no round is spent, no
+  // transition is recorded.
+  // #737 — one local, not two independent `parsed?.verdict ??
+  // "inconclusive"` expressions: this is both the durable column
+  // value AND the verdict `postReviewFindingsComment` maps onto a
+  // gating review event below, and they can't be allowed to drift.
+  const verdict = parsed?.verdict ?? "inconclusive";
+  // Issue #1038 — folded into this same durable write, not a
+  // follow-up write after the GitHub comment post below: this column
+  // is the ground truth "the machine actually stopped" signal the
+  // board reads, and this write IS the moment a capped task's
+  // findings are durably ingested (reviewFindingsIngestedSessionId
+  // below), regardless of what the verdict turned out to be. Setting
+  // it here, ahead of the post, means a crash between this write and
+  // the post (reached only when wantsAutoReturn, i.e. changes were
+  // requested — see cappedNote below) leaves the banner CORRECT
+  // (needs a human) with only the notice comment missing.
+  //
+  // Hermes review (PR #1040) — deliberately `capReached` alone, NOT
+  // `wantsAutoReturn && capReached`: a capped task whose FINAL review
+  // comes back clean or inconclusive is just as genuinely parked as
+  // one that wanted (and was denied) another round — nothing
+  // auto-returns a non-"changes-requested" verdict either way — but
+  // gating on wantsAutoReturn left that case never announced, so the
+  // board kept claiming "review in flight" on a task nothing further
+  // would ever touch. This durable write only runs when a review's
+  // output is being ingested (isUsableSignal above), so `capReached`
+  // alone already means "a capped task's findings were just
+  // ingested" — no separate ingest-pointer comparison needed here.
+  const announcingCap = (capReached || stall !== null) && !wantsSuggestionsRound;
+  const needsHumanReason: "cap" | ReviewStallReason | null = announcingCap
+    ? capReached
+      ? "cap"
+      : stall
+    : null;
+  // Issue #1039 — the PR head SHA this round's ingested findings are
+  // actually about, read from the existing github-pr-poller.ts cache
+  // (zero-cost, no GitHub call from this reconcile tick). Best-effort:
+  // a cache miss (poller hasn't hit this repo yet, or no prNumber)
+  // just leaves the column at its previous value, same as any other
+  // best-effort lookup in this loop.
+  let cachedHeadSha: string | undefined;
+  if (task.prNumber !== null) {
+    const repoRef = await resolveRepoRef(app, project);
+    const cached = repoRef ? getPRsStatus(repoRef.owner, repoRef.repo) : null;
+    cachedHeadSha = cached?.prs.find((p) => p.number === task.prNumber)?.headSha;
+  }
+  const updated = app.db
+    .update(tasks)
+    .set({
+      reviewFindings: appendedFindings,
+      reviewFindingsIngestedSessionId: latchSessionId,
+      lastReviewVerdict: verdict,
+      // A fresh review of the current head supersedes any carried
+      // approval — the verdict above is now earned, not inherited.
+      approvalCarriedAt: null,
+      // Task 409707 — anchors reannounceInconclusiveReviewsAfterGrace's
+      // grace window; see that column's own doc comment in schema.ts.
+      lastReviewVerdictAt: new Date(now),
+      ...(announcingCap ? { autoReturnCapAnnouncedAt: new Date(), needsHumanReason } : {}),
+      ...(cachedHeadSha !== undefined ? { lastReviewedHeadSha: cachedHeadSha } : {}),
+    })
+    .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
+    .run();
+  // Lost the race — the findings file is still stale for whatever
+  // reconcile this task next (a rejected task keeps the same
+  // autoReturnRounds, so its next review reuses this exact
+  // round-suffixed path), so unlink it here too, before giving up on
+  // this row.
+  if (updated.changes === 0) {
+    await cleanupFindingsFile();
+    return;
+  }
+
+  // The DB write above is now durable — the file has nothing left to
+  // offer a later reconcile pass, and leaving it in place is exactly
+  // what would cause a same-round re-review (reject keeps
+  // autoReturnRounds unchanged) to re-ingest THIS round's content as
+  // if it were fresh.
+  await cleanupFindingsFile();
+  // A freshly ingested verdict deserves an immediate auto-approve
+  // attempt, not the wait built up by earlier rounds' not-yet-eligible
+  // visits.
+  resetAutoApproveBackoff(task.id);
+  // #756 — a task that wanted another round but had none left gets one
+  // extra sentence folded into the SAME comment, rather than a second
+  // post: today's single-comment-per-round shape stays exactly that,
+  // shape, just occasionally longer. This is also the only place a
+  // human ever learns the round cap was the reason nothing moved —
+  // without it, a capped task looks identical to one that was never
+  // going to auto-return in the first place.
+  //
+  // Task 258971's investigation: this note must be appended to
+  // `reviewSummary` too, not just `body` — `postReviewFindingsComment`
+  // posts `reviewSummary` as the review's own text whenever there are
+  // anchored findings (`params.findings !== undefined && anchored.length
+  // > 0`), which is the common case for a real changes-requested
+  // verdict. Appending only to `body` meant the note was silently
+  // dropped on every review that actually had findings to anchor —
+  // exactly the capped-and-parked case this exists to surface.
+  const cappedNote =
+    wantsAutoReturn && capReached
+      ? `\n\n_Automatic round cap (${maxRounds}) reached for this task — it needs a human to take it from here._`
+      : stall === "finding-persisted"
+        ? "\n\n_The same earlier finding is still open after two rounds — the automatic loop has stopped; this task needs a human to take it from here._"
+        : stall === "no-progress"
+          ? "\n\n_The worker returned without pushing a change — the automatic loop has stopped; this task needs a human to take it from here._"
+          : "";
+  await postReviewFindingsComment(
+    app,
+    task,
+    project,
+    parsed
+      ? {
+          body: commentBody + cappedNote,
+          reviewSummary: `${roundLabel}\n\n${renderReviewFindingsMarkdown(parsed, "review-body")}${cappedNote}`,
+          findings: parsed.findings,
+          verdict,
+        }
+      : { body: commentBody + cappedNote, verdict },
+  );
+
+  // D1 — a "clean" verdict is corroborating evidence any of Mullion's
+  // own earlier anchored findings on this PR were actually addressed;
+  // resolve them now so a repo requiring conversation resolution
+  // doesn't deadlock on a self-inflicted stale thread. Never fires on
+  // "changes-requested" (there's nothing to corroborate yet) or
+  // "inconclusive" (a crashed/silent reviewer confirms nothing).
+  if (isApprovingVerdict(verdict)) {
+    await resolveMullionOwnThreadsIfClean(app, task, project);
+  }
+
+  if (wantsSuggestionsRound) {
+    const issueContext = await resolveTaskIssueContextSafe(app, task, project);
+    const sessionsDir = await resolveSessionsDirWithFallback(app, backend, {
+      taskId: task.id,
+      hostId: resolveTaskWorkerHost(app, task),
+    });
+    await autoReturnTask(app, task, project, {
+      reason: "suggestions",
+      seedPrompt: buildSuggestionsPrompt({
+        task: {
+          ...task,
+          comments: issueContext?.comments,
+          parent: issueContext?.parent,
+          siblings: issueContext?.siblings,
+        },
+        branchName: task.branchName ?? deriveTaskBranchName(task),
+        worktreePath: task.worktreePath!,
+        budgetMinutes: resolvedTaskMaster.budgetMinutes,
+        agentCommand: task.agentCommand,
+        suggestions: renderReviewFindingsMarkdown(parsed!, "worker-prompt"),
+        rereviewRequestPath: taskRereviewRequestPath(
+          sessionsDir,
+          task.id,
+          rereviewRequestKey(new Date(now)),
+        ),
+        commitTitlePath: project.conventionalCommitTitles
+          ? taskCommitTitlePath(sessionsDir, task.id)
+          : undefined,
+      }),
+    });
+    return;
+  }
+
+  if (!shouldAutoReturn) return;
+
+  // #939/#1016 — resolved once per spawn, fail-open — see
+  // task-issue-context.ts's own doc comment.
+  const issueContext = await resolveTaskIssueContextSafe(app, task, project);
+  const prompt = buildReviewFeedbackPrompt({
+    task: {
+      ...task,
+      comments: issueContext?.comments,
+      parent: issueContext?.parent,
+      siblings: issueContext?.siblings,
+    },
+    branchName: task.branchName ?? deriveTaskBranchName(task),
+    worktreePath: task.worktreePath!,
+    budgetMinutes: resolvedTaskMaster.budgetMinutes,
+    agentCommand: task.agentCommand,
+    // Rendered, not the raw findings-file content — `shouldAutoReturn`
+    // guarantees `parsed !== null` here, but `parsed` may be JSON; the
+    // worker should read prose, not the wire format Mullion parses.
+    findings: renderReviewFindingsMarkdown(parsed!, "worker-prompt"),
+    // #778 — resolved against the OWNING host's own sessionsDir; see
+    // spawnReviewAgentNow's own comment for the full rationale.
+    commitTitlePath: project.conventionalCommitTitles
+      ? taskCommitTitlePath(
+          await resolveSessionsDirWithFallback(app, backend, {
+            taskId: task.id,
+            hostId: resolveTaskWorkerHost(app, task),
+          }),
+          task.id,
+        )
+      : undefined,
+  });
+  await autoReturnTask(app, task, project, { reason: "review", seedPrompt: prompt });
 }
 
 /**
@@ -5435,7 +5488,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
             let rereviewRequested = false;
             let carryApproval =
               task.approvalCarriedAt !== null &&
-              task.reviewSessionId !== null &&
+              hasReviewHandle(task) &&
               task.lastReviewVerdictAt !== null &&
               isApprovingVerdict(task.lastReviewVerdict);
             if (carryApproval) {

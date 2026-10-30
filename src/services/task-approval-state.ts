@@ -1,4 +1,5 @@
 import { isApprovingVerdict } from "./task-prompt.js";
+import { hasIngestedCurrentReview } from "./task-review-handle.js";
 
 export type ApprovalState = "awaiting-human" | "auto-pending";
 
@@ -26,8 +27,7 @@ export function deriveApprovalState(
 ): ApprovalState | null {
   const approved =
     row.status === "reviewing" &&
-    row.reviewSessionId !== null &&
-    row.reviewFindingsIngestedSessionId === row.reviewSessionId &&
+    hasIngestedCurrentReview(row) &&
     isApprovingVerdict(row.lastReviewVerdict);
   if (!approved) return null;
   const sweepWillApprove = !!row.projectAutoApprove && row.prNumber !== null && taskMasterEnabled;
