@@ -163,9 +163,13 @@ function FixInSessionAction({
 export function TaskDetail({
   params,
   onOpenSession,
+  onDeleted,
 }: {
   params: TaskDetailParams;
   onOpenSession: (session: Session) => void;
+  // Called once after this panel's own task is deleted, so the host can close
+  // it. Without it "Task not found." renders until the host closes the panel.
+  onDeleted?: () => void;
 }) {
   const task = useDashboardStore((s) => s.tasks.find((t) => t.id === params.taskId));
   // #701 — the full list, only for deriving this task's own children below
@@ -362,6 +366,7 @@ export function TaskDetail({
             isGithubLinked={task.issueNumber !== null}
             branchName={task.branchName}
             worktreePath={task.worktreePath}
+            onDeleted={onDeleted}
           />
         )}
       </div>
@@ -818,22 +823,25 @@ function ArchiveTaskAction({ taskId, archivedAt }: { taskId: number; archivedAt:
 // GateActions/notif-gate-* idiom as TaskActions below (not ConfirmButton.tsx,
 // which is styled for its own specific parent contexts, e.g.
 // .ws-group-actions .danger — dropping it in bare here would render
-// unstyled). No explicit "close this panel" on success: once the store's
-// task list no longer contains this id, TaskDetail's own `if (!task)` guard
-// above already renders "Task not found." — the same no-optimistic-state,
-// let-the-poll-reconcile posture the rest of this file follows.
+// unstyled). On success it calls `onDeleted` so the host closes the panel;
+// a host that passes none (or a task that vanishes for any other reason)
+// falls through to TaskDetail's own `if (!task)` guard, which renders
+// "Task not found." — the no-optimistic-state posture the rest of this file
+// follows.
 function DeleteTaskAction({
   taskId,
   isDone,
   isGithubLinked,
   branchName,
   worktreePath,
+  onDeleted,
 }: {
   taskId: number;
   isDone: boolean;
   isGithubLinked: boolean;
   branchName: string | null;
   worktreePath: string | null;
+  onDeleted?: () => void;
 }) {
   const deleteTask = useDashboardStore((s) => s.deleteTask);
   // #1014 (Abandon), review fix — the label name is configurable
@@ -922,6 +930,7 @@ function DeleteTaskAction({
             try {
               if (needsForce) await deleteTask(taskId, { force: true });
               else await deleteTask(taskId);
+              onDeleted?.();
             } catch (err) {
               if (!needsForce && err instanceof ApiError && err.statusCode === 409) {
                 setNeedsForce(true);

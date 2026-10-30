@@ -433,9 +433,9 @@ export function UnifiedBoard({
   // The detail drawer, inline in the board rather than a dockview panel —
   // TaskDetail.tsx already takes { params: { taskId }, onOpenSession } with
   // every read a store selector, so it renders standalone with zero changes.
-  // No auto-close when the task disappears: TaskDetail's own
-  // `if (!task) return "Task not found."` already covers that, matching its
-  // documented no-optimistic-state posture.
+  // Deleting from the drawer closes it (onDeleted below). A task that
+  // vanishes any other way still gets TaskDetail's own
+  // `if (!task) return "Task not found."`.
   const [detailTaskId, setDetailTaskId] = useState<number | null>(null);
   const drawerRef = useRef<HTMLElement>(null);
   const drawerCloseButtonRef = useRef<HTMLButtonElement>(null);
@@ -984,7 +984,11 @@ export function UnifiedBoard({
                   <CloseIcon size={18} />
                 </button>
               </div>
-              <TaskDetail params={{ taskId: detailTaskId }} onOpenSession={onOpenSession} />
+              <TaskDetail
+                params={{ taskId: detailTaskId }}
+                onOpenSession={onOpenSession}
+                onDeleted={() => setDetailTaskId(null)}
+              />
             </aside>
           </>
         )}

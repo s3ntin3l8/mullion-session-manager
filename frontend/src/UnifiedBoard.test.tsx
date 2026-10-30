@@ -116,11 +116,14 @@ vi.mock("./TaskDetail.js", () => ({
   TaskDetail: ({
     params,
     onOpenSession,
+    onDeleted,
   }: {
     params: { taskId: number };
     onOpenSession: (session: Session) => void;
+    onDeleted?: () => void;
   }) => (
     <div data-testid="task-detail-stub" data-task-id={params.taskId}>
+      <button onClick={() => onDeleted?.()}>stub delete task</button>
       <button onClick={() => onOpenSession({ id: params.taskId } as Session)}>
         stub open session
       </button>
@@ -1104,6 +1107,18 @@ describe("UnifiedBoard detail drawer", () => {
     expect(stub.dataset.taskId).toBe("5");
 
     await user.click(screen.getByLabelText("Close task detail"));
+    expect(screen.queryByTestId("task-detail-stub")).toBeNull();
+  });
+
+  it("closes the drawer once TaskDetail reports its task was deleted", async () => {
+    tasks = [makeTask({ id: 5, status: "ready", title: "Delete me" })];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByText("Delete me"));
+    expect(screen.getByTestId("task-detail-stub")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "stub delete task" }));
+
     expect(screen.queryByTestId("task-detail-stub")).toBeNull();
   });
 

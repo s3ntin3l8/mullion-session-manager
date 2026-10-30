@@ -628,3 +628,32 @@ describe("KanbanBoardOverlay", () => {
     expect(container.querySelector(".kanban-board-overlay")).toBeNull();
   });
 });
+
+// A saved layout can still hold a `task-detail-<id>` dockview panel. Deleting
+// the task from inside it must close that panel rather than leave it on
+// "Task not found." — TaskDetail's real delete flow is covered in
+// TaskDetail.test.tsx; here a stand-in fires `onDeleted` to prove the wrapper
+// wires it to dockview's own `api.close()`.
+vi.mock("../TaskDetail.js", () => ({
+  TaskDetail: ({ onDeleted }: { onDeleted?: () => void }) => (
+    <button onClick={onDeleted}>delete task</button>
+  ),
+}));
+
+describe("components['task-detail'] — close on delete", () => {
+  it("closes its own dockview panel once the task is deleted", async () => {
+    const TaskDetailWrapper = components["task-detail"];
+    const close = vi.fn();
+    const props = {
+      params: { taskId: 1 },
+      api: { close },
+      containerApi: {},
+    } as unknown as IDockviewPanelProps<{ taskId: number }>;
+
+    render(<TaskDetailWrapper {...props} />);
+    expect(close).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "delete task" }));
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+});
