@@ -171,6 +171,11 @@ export const PLACEMENT_MODES = ["pinned", "auto"] as const;
 // import path for the list and the type it yields.
 export type PlacementMode = (typeof PLACEMENT_MODES)[number];
 
+// Issue #2241 — the platforms a project's `placementConstraints.platform`
+// allow-list may name. The values are `process.platform`'s, as hosts report them.
+export const PLACEMENT_PLATFORMS = ["darwin", "linux", "win32"] as const;
+export type PlacementPlatform = (typeof PLACEMENT_PLATFORMS)[number];
+
 // ---------------------------------------------------------------------------
 // db/schema.ts — HOST_ROLES / HostRole (issue #2239, epic #2228)
 // ---------------------------------------------------------------------------

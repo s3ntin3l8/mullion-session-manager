@@ -105,6 +105,8 @@ export const projectsApi = {
         | "placement"
         // Issue #1724 / roadmap 8.10 — the per-host cwd map is writable too.
         | "hostCwds"
+        // Issue #2241 — the placement steering flags are writable too.
+        | "placementConstraints"
       >
     > & { autoFetch?: boolean | null } & CreateProjectDirOptions,
   ) =>

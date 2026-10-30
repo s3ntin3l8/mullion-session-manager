@@ -131,6 +131,8 @@ export interface ProjectsSlice {
         | "placement"
         // Issue #1951 follow-up — per-host paths of the project's checkout.
         | "hostCwds"
+        // Issue #2241 — the placement steering flags are writable too.
+        | "placementConstraints"
       >
     > &
       CreateProjectDirOptions,

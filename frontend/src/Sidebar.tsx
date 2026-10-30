@@ -1412,6 +1412,7 @@ function ProjectHeader({
               projectHostId={project.hostId}
               initialHostCwds={project.hostCwds}
               initialHostCwdsMeta={project.hostCwdsMeta}
+              initialPlacementConstraints={project.placementConstraints}
               onClose={() => setEditOpen(false)}
               onCreate={({
                 name,
@@ -1434,6 +1435,7 @@ function ProjectHeader({
                 gitInit,
                 placement,
                 hostCwds,
+                placementConstraints,
                 allowDuplicate,
               }) =>
                 useDashboardStore.getState().updateProject(project.id, {
@@ -1460,6 +1462,7 @@ function ProjectHeader({
                   // accepts it).
                   placement,
                   hostCwds,
+                  placementConstraints,
                   allowDuplicate,
                 })
               }

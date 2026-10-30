@@ -43,7 +43,12 @@ import type {
   ReviewSummary,
   ReviewSummaryEntry,
 } from "../../../src/shared/types.js";
-import type { HostRole, PlacementMode, TaskStatus } from "../../../src/shared/constants.js";
+import type {
+  HostRole,
+  PlacementMode,
+  PlacementPlatform,
+  TaskStatus,
+} from "../../../src/shared/constants.js";
 
 export type { GitPullReason, GitPullResult, CloneHealth, RepairOutcome, RepairPlan };
 export type { GitBranchOpReason, GitBranchOpResult };
@@ -330,6 +335,10 @@ export interface Project {
   // (and the many hand-built test fixtures) still type-checks; the current API
   // always sends it.
   hostCwdsMeta?: HostCwdsMeta;
+  // Issue #2241 — the placement steering flags (Edit project → Placement).
+  // Optional only so a response from an older server (and hand-built test
+  // fixtures) still type-checks; the current API always sends it.
+  placementConstraints?: PlacementConstraints;
   // Where this project's dev server listens (issue #28) — a bare port
   // ("5173") or a full URL. The authoritative, manually-set fallback the
   // preview proxy resolves against; null when unconfigured.
@@ -544,6 +553,11 @@ export interface PlacementPreview {
   excluded: { hostId: string; reason: string }[];
   /** True when the fallback was used (no eligible host at all). */
   fellBack: boolean;
+  /**
+   * Issue #2241 — set when the project's platform flag leaves no host: Auto
+   * would refuse the launch (409) rather than use `hostId`.
+   */
+  refusal?: { detail: string; transient: boolean; unreadable?: boolean };
 }
 
 // Mirrors src/services/ssh-agent-socket.ts's SshAuthSockSource 1:1 — issue
@@ -1278,6 +1292,15 @@ export interface DiscoveredProject {
 // Issue #2090 — mirrors src/services/host-cwds-meta.ts's HostCwdsMeta: which
 // `hostCwds` entries were auto-detected (and not yet saved by an operator), and
 // which hosts the operator declined (auto-detect never re-adds those).
+// Issue #2241 — where Auto may place a project's work. `platform` is an
+// allow-list (empty = any platform); `allowBurst` lets "burst" hosts take Auto
+// work (they stay out by default). A task `Platform:`/`Host:` directive
+// overrides both.
+export interface PlacementConstraints {
+  platform: PlacementPlatform[];
+  allowBurst: boolean;
+}
+
 export interface HostCwdsMeta {
   auto: string[];
   declined: string[];

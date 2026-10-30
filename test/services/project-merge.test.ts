@@ -123,6 +123,7 @@ describe("project-merge", () => {
           devServerUrl: "5173",
           injectAgentGuide: false,
           placement: "auto",
+          placementConstraints: JSON.stringify({ platform: ["darwin"], allowBurst: false }),
         })
         .where(eq(projects.id, dupId))
         .run();
@@ -135,6 +136,28 @@ describe("project-merge", () => {
       expect(s.devServerUrl).toBe("5173");
       expect(s.injectAgentGuide).toBe(false);
       expect(s.placement).toBe("pinned");
+      // Issue #2241 — the survivor had no steering flags, so it takes the duplicate's.
+      expect(s.placementConstraints).toBe(
+        JSON.stringify({ platform: ["darwin"], allowBurst: false }),
+      );
+    });
+
+    it("keeps the survivor's own placement flags", () => {
+      app.db
+        .update(projects)
+        .set({ placementConstraints: JSON.stringify({ platform: ["linux"], allowBurst: true }) })
+        .where(eq(projects.id, survivorId))
+        .run();
+      app.db
+        .update(projects)
+        .set({ placementConstraints: JSON.stringify({ platform: ["darwin"], allowBurst: false }) })
+        .where(eq(projects.id, dupId))
+        .run();
+      expect(merge().ok).toBe(true);
+      const s = app.db.select().from(projects).where(eq(projects.id, survivorId)).get()!;
+      expect(s.placementConstraints).toBe(
+        JSON.stringify({ platform: ["linux"], allowBurst: true }),
+      );
     });
 
     it("maps the duplicate's host+cwd, clears a decline, and deletes the duplicate", () => {

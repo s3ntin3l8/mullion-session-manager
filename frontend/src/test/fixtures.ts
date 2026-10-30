@@ -95,6 +95,7 @@ export function makeProject(overrides: Partial<Project> = {}): Project {
     // Issue #1724 — no per-host paths by default: the project lives on its
     // own host and nowhere else.
     hostCwds: {},
+    placementConstraints: { platform: [], allowBurst: false },
     devServerUrl: null,
     detectedDevServerPort: null,
     currentBranch: null,

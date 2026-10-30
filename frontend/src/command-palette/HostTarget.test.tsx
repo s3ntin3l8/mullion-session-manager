@@ -217,3 +217,75 @@ describe("hostTarget helpers", () => {
     ).toBe("x: r");
   });
 });
+
+describe("project placement flags in the host chip (#2241)", () => {
+  const LINUX = makeHost({ id: "lin", name: "Linux box", health: "online", platform: "linux" });
+  const DARWIN = makeHost({ id: "mac", name: "Mac mini", health: "online", platform: "darwin" });
+  const NOT_REPORTED = makeHost({ id: "new", name: "New box", health: "online", platform: null });
+  const flagged = {
+    hostId: "local",
+    hostCwds: { lin: "/a", mac: "/b", new: "/c" },
+    placementConstraints: { platform: ["darwin" as const], allowBurst: false },
+  };
+
+  it("disables a host the platform flag forbids, with the reason, and keeps the others", () => {
+    const opts = buildHostTargetOptions(flagged, [LINUX, DARWIN, NOT_REPORTED]);
+    expect(opts.find((o) => o.value === "lin")).toMatchObject({
+      label: "Linux box (project allows only darwin hosts)",
+      disabled: true,
+    });
+    expect(opts.find((o) => o.value === "mac")?.disabled).toBe(false);
+    // Not reported yet: the server decides.
+    expect(opts.find((o) => o.value === "new")?.disabled).toBe(false);
+    expect(opts.find((o) => o.value === "auto")?.disabled).toBe(false);
+  });
+
+  it("disables the own host only where choosing it sends an explicit target (an auto project)", () => {
+    const local = makeHost({ id: "local", name: "local", isLocal: true, platform: "linux" });
+    const pinned = buildHostTargetOptions(flagged, [local, DARWIN]);
+    expect(pinned[0]).toMatchObject({ label: "this server", disabled: false });
+    const auto = buildHostTargetOptions({ ...flagged, placement: "auto" }, [local, DARWIN]);
+    expect(auto[0]).toMatchObject({
+      label: "this server (project allows only darwin hosts)",
+      disabled: true,
+    });
+  });
+
+  it("falls back when a remembered host is ruled out by a newly-set flag", () => {
+    const project = {
+      ...flagged,
+      placement: "auto",
+      placementConstraints: flagged.placementConstraints,
+    };
+    expect(resolveHostChoice("lin", project, [LINUX, DARWIN])).toBe("auto");
+    expect(resolveHostChoice("mac", project, [LINUX, DARWIN])).toBe("mac");
+  });
+
+  it("changes nothing without flags, or with an empty platform list", () => {
+    const base = { hostId: "local", hostCwds: { lin: "/a" } };
+    expect(buildHostTargetOptions(base, [LINUX])[1].disabled).toBe(false);
+    expect(
+      buildHostTargetOptions(
+        { ...base, placementConstraints: { platform: [], allowBurst: false } },
+        [LINUX],
+      )[1].disabled,
+    ).toBe(false);
+  });
+
+  it("words a refused Auto preview without naming a host as the choice", () => {
+    const text = describeAutoPreview(
+      {
+        placement: "auto",
+        hostId: "local",
+        reason: "no eligible host satisfies this project's placement flags — not placed",
+        considered: [],
+        excluded: [{ hostId: "lin", reason: "project allows only darwin hosts" }],
+        fellBack: true,
+        refusal: { detail: "x", transient: false },
+      },
+      [LINUX],
+    );
+    expect(text).toMatch(/^Auto cannot place this: no eligible host/);
+    expect(text).toContain("Linux box (project allows only darwin hosts)");
+  });
+});

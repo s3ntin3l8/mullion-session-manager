@@ -1354,6 +1354,141 @@ describe("claimTask", () => {
     });
   });
 
+  // Issue #2241 — the project's steering flags bound Auto for unattended work;
+  // a task's own directive overrides them.
+  describe("a project's placement flags (#2241)", () => {
+    const MAC_CWD = "/Users/me/proj";
+    const LINUX_CWD = "/srv/proj";
+
+    async function setup(body: string | null, constraints: object) {
+      const app = await buildApp();
+      const addHost = async (name: string, platform: string, load: number) => {
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/hosts",
+          payload: { name, baseUrl: "http://127.0.0.1:1", token: "t" },
+        });
+        const hostId = res.json().id as string;
+        app.hostHeartbeatTracker?.recordSuccess(hostId);
+        app.hostCapacityTracker?.record(hostId, {
+          platform,
+          logicalCores: 8,
+          loadAverage1m: load,
+          memory: { totalBytes: 1000, freeBytes: 500 },
+          sessions: { tracked: 0, alive: 0 },
+        });
+        return hostId;
+      };
+      const mac = await addHost("flag-mac", "darwin", 3);
+      const linux = await addHost("flag-linux", "linux", 0);
+      const [project] = app.db
+        .insert(projects)
+        .values({
+          name: "flags",
+          cwd: "/srv/local-proj",
+          hostId: "local",
+          placement: "auto",
+          hostCwds: JSON.stringify({ [mac]: MAC_CWD, [linux]: LINUX_CWD }),
+          placementConstraints: JSON.stringify(constraints),
+        })
+        .returning()
+        .all();
+      const task = insertReadyTask(app, project.id, 90 + Math.floor(Math.random() * 1000), body);
+      const fakeBackend = fakeSessionBackend({
+        spawn: vi.fn().mockResolvedValue({ initialPromptApplied: true }),
+        createWorktree: vi.fn(async (baseCwd: string) => ({
+          created: true,
+          path: `${baseCwd}/.mullion-worktrees/mullion-task-x`,
+          branch: "x",
+        })),
+      });
+      vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(fakeBackend);
+      vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
+        ok: true,
+        value: { baseRef: "origin/main", sha: "deadbeefcafe" },
+      });
+      return { app, mac, linux, task, fakeBackend };
+    }
+
+    it("places an unattended task only on a host the platform flag allows, though another is less loaded", async () => {
+      const { app, mac, task } = await setup(null, { platform: ["darwin"], allowBurst: false });
+
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(outcome.ok).toBe(true);
+      const row = getTask(app, task.id);
+      expect(row.placementRequirement).toBeNull();
+      const { sessions } = await import("../../src/db/schema.js");
+      const [session] = app.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, row.sessionId as number))
+        .all();
+      expect(session?.hostId).toBe(mac);
+
+      await app.close();
+    });
+
+    it("lets the task's Platform: directive override the project's flag", async () => {
+      const { app, linux, task } = await setup("Platform: linux\nDo the work.", {
+        platform: ["darwin"],
+        allowBurst: false,
+      });
+
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(outcome.ok).toBe(true);
+      const { sessions } = await import("../../src/db/schema.js");
+      const [session] = app.db
+        .select()
+        .from(sessions)
+        .where(eq(sessions.id, getTask(app, task.id).sessionId as number))
+        .all();
+      expect([linux, "local"]).toContain(session?.hostId);
+
+      await app.close();
+    });
+
+    it("holds the task while a host the flag allows is parked, then starts it when it returns", async () => {
+      const { app, mac, task, fakeBackend } = await setup(null, { platform: ["darwin"] });
+      app.db.update(hosts).set({ drained: true }).where(eq(hosts.id, mac)).run();
+
+      const held = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(held).toMatchObject({ ok: false, reason: "placement-held" });
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("claimed");
+      expect(row.dispatchHeld).toBe(true);
+      expect(row.failureReason).toContain("placement flags");
+      // It does not name the fleet.
+      expect(row.failureReason).not.toContain(mac);
+      expect(fakeBackend.createWorktree).not.toHaveBeenCalled();
+
+      app.db.update(hosts).set({ drained: false }).where(eq(hosts.id, mac)).run();
+      const started = await dispatchClaimedTask(app, task.id);
+      expect(started.ok).toBe(true);
+      expect(getTask(app, task.id).dispatchHeld).toBe(false);
+
+      await app.close();
+    });
+
+    it("fails the task for good when no host could ever satisfy the flag, instead of using the project's host", async () => {
+      const { app, task, fakeBackend } = await setup(null, { platform: ["win32"] });
+
+      const outcome = await claimAndDispatch(app, task.id, { auto: false });
+
+      expect(outcome).toMatchObject({ ok: false, reason: "placement-refused" });
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toContain("project allows only win32 hosts");
+      expect(row.failureReason).toContain("Edit project");
+      expect(row.sessionId).toBeNull();
+      expect(fakeBackend.createWorktree).not.toHaveBeenCalled();
+
+      await app.close();
+    });
+  });
+
   // Issue #2006 / #1997 — a required host that EXISTS but is not eligible yet
   // holds the task (still `claimed`, reason on it) instead of failing it; a
   // dispatch that fails keeps the start of its failure run on the row.

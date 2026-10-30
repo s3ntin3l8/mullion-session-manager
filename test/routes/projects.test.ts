@@ -315,6 +315,83 @@ describe("projects route", () => {
     fs.rmSync(cwd, { recursive: true, force: true });
   });
 
+  // Issue #2241 — placement steering flags.
+  it("round-trips placementConstraints, reads back defaults, and clears them with null", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-constraints-"));
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: {
+        allowDuplicate: true,
+        createDir: true,
+        name: "steered-project",
+        cwd,
+        placementConstraints: { platform: ["darwin"], allowBurst: true },
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    expect(created.json().placementConstraints).toEqual({ platform: ["darwin"], allowBurst: true });
+    const { id } = created.json();
+
+    const listed = await app.inject({ method: "GET", url: "/api/projects" });
+    expect(listed.json().find((p: { id: number }) => p.id === id).placementConstraints).toEqual({
+      platform: ["darwin"],
+      allowBurst: true,
+    });
+
+    // A partial object fills the defaults.
+    const patched = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${id}`,
+      payload: { placementConstraints: { platform: ["linux", "win32"], allowBurst: false } },
+    });
+    expect(patched.statusCode).toBe(200);
+    expect(patched.json().placementConstraints).toEqual({
+      platform: ["linux", "win32"],
+      allowBurst: false,
+    });
+
+    // null (and default-valued flags) clear them: no flags, the column's default.
+    const cleared = await app.inject({
+      method: "PATCH",
+      url: `/api/projects/${id}`,
+      payload: { placementConstraints: null },
+    });
+    expect(cleared.statusCode).toBe(200);
+    expect(cleared.json().placementConstraints).toEqual({ platform: [], allowBurst: false });
+
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it("rejects placementConstraints with an unknown or repeated platform, or a non-boolean allowBurst", async () => {
+    const app = await buildApp();
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-constraints-"));
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/projects",
+      payload: { allowDuplicate: true, createDir: true, name: "steer-bad", cwd },
+    });
+    const { id } = created.json();
+    for (const bad of [
+      { platform: ["freebsd"] },
+      { platform: ["darwin", "darwin"] },
+      { platform: [], allowBurst: "yes" },
+      { platform: ["darwin"] },
+    ]) {
+      const res = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { placementConstraints: bad },
+      });
+      expect(res.statusCode).toBe(400);
+    }
+    await app.close();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  });
+
   it("rejects a hostCwds path that is not absolute", async () => {
     // The paths become a session's working directory on THAT host, so a
     // relative one would resolve against whatever the agent's cwd
