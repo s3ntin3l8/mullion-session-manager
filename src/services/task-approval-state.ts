@@ -8,6 +8,8 @@ export interface ApprovalStateRow {
   prNumber: number | null;
   reviewSessionId: number | null;
   reviewFindingsIngestedSessionId: number | null;
+  reviewRunId: string | null;
+  reviewRunIngestedId: string | null;
   lastReviewVerdict: string | null;
   projectAutoApprove: boolean | null;
 }
