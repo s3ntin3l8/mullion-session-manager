@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   Button,
@@ -16,7 +16,7 @@ import {
 beforeEach(() => localStorage.clear());
 
 describe("IconButton", () => {
-  it("names itself with aria-label and tooltip", () => {
+  it("names itself with aria-label only (no native title)", () => {
     const onClick = vi.fn();
     render(
       <IconButton label="Fetch" onClick={onClick}>
@@ -24,9 +24,84 @@ describe("IconButton", () => {
       </IconButton>,
     );
     const btn = screen.getByRole("button", { name: "Fetch" });
-    expect(btn).toHaveAttribute("title", "Fetch");
+    expect(btn).not.toHaveAttribute("title");
     fireEvent.click(btn);
     expect(onClick).toHaveBeenCalled();
+  });
+
+  describe("tooltip", () => {
+    it("shows on focus immediately and hides on blur", () => {
+      render(
+        <IconButton label="Fetch">
+          <i />
+        </IconButton>,
+      );
+      const btn = screen.getByRole("button", { name: "Fetch" });
+      expect(screen.queryByRole("tooltip")).toBeNull();
+      fireEvent.focus(btn);
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Fetch");
+      expect(btn.getAttribute("aria-describedby")).toBe(screen.getByRole("tooltip").id);
+      fireEvent.blur(btn);
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    it("hides on Escape", () => {
+      render(
+        <IconButton label="Fetch">
+          <i />
+        </IconButton>,
+      );
+      fireEvent.focus(screen.getByRole("button", { name: "Fetch" }));
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    it("shows after the hover delay and hides on pointer leave", () => {
+      vi.useFakeTimers();
+      try {
+        render(
+          <IconButton label="Open" href="https://github.com/o/r">
+            <i />
+          </IconButton>,
+        );
+        const a = screen.getByRole("link", { name: "Open" });
+        expect(a).not.toHaveAttribute("title");
+        fireEvent.pointerEnter(a);
+        act(() => {
+          vi.advanceTimersByTime(150);
+        });
+        expect(screen.queryByRole("tooltip")).toBeNull();
+        act(() => {
+          vi.advanceTimersByTime(60);
+        });
+        expect(screen.getByRole("tooltip")).toHaveTextContent("Open");
+        fireEvent.pointerLeave(a);
+        expect(screen.queryByRole("tooltip")).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("cancels a pending hover on pointer leave and ignores touch", () => {
+      vi.useFakeTimers();
+      try {
+        render(
+          <IconButton label="Fetch">
+            <i />
+          </IconButton>,
+        );
+        const btn = screen.getByRole("button", { name: "Fetch" });
+        fireEvent.pointerEnter(btn);
+        fireEvent.pointerLeave(btn);
+        fireEvent.pointerEnter(btn, { pointerType: "touch" });
+        act(() => {
+          vi.advanceTimersByTime(500);
+        });
+        expect(screen.queryByRole("tooltip")).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
   });
 
   it("renders a safe external link and a status dot", () => {

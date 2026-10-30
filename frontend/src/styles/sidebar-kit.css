@@ -949,3 +949,20 @@ button.sb-chip--label[aria-pressed="true"] {
 .sc-detail .mono {
   font-family: "Geist Mono", monospace;
 }
+
+/* ───────── Tooltip (IconButton) ───────── */
+.sb-tooltip {
+  position: fixed;
+  z-index: 1000;
+  max-width: 220px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  background: var(--fg);
+  color: var(--bg);
+  font-size: 11px;
+  line-height: 1.3;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+}

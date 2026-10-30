@@ -1,4 +1,5 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { useTooltip } from "./useTooltip.js";
 
 interface BaseProps {
   /** Required: an icon-only control must name itself. Also the tooltip. */
@@ -21,6 +22,10 @@ export type IconButtonProps = ButtonProps | LinkProps;
 
 export function IconButton(props: IconButtonProps) {
   const { label, children, external, dot, className } = props;
+  // Instant-on-focus, 200ms-on-hover tooltip instead of the native `title`
+  // (browser-controlled ~1s delay, no keyboard-focus display). The name for
+  // assistive tech stays `aria-label`.
+  const { setAnchor, triggerProps, tooltip, tooltipId, open } = useTooltip<HTMLElement>(label);
   const cls = ["sb-ibtn", external ? "sb-ibtn--ext" : "", className ?? ""]
     .filter(Boolean)
     .join(" ");
@@ -35,10 +40,13 @@ export function IconButton(props: IconButtonProps) {
         target="_blank"
         rel="noopener noreferrer"
         aria-label={label}
-        title={label}
+        aria-describedby={open ? tooltipId : undefined}
+        ref={setAnchor}
+        {...triggerProps}
       >
         {children}
         {dotEl}
+        {tooltip}
       </a>
     );
   }
@@ -52,9 +60,37 @@ export function IconButton(props: IconButtonProps) {
     ...rest
   } = props;
   return (
-    <button type="button" {...rest} className={cls} aria-label={label} title={label}>
+    <button
+      type="button"
+      {...rest}
+      className={cls}
+      aria-label={label}
+      aria-describedby={open ? tooltipId : undefined}
+      ref={setAnchor}
+      onPointerEnter={(e) => {
+        rest.onPointerEnter?.(e);
+        triggerProps.onPointerEnter(e);
+      }}
+      onPointerLeave={(e) => {
+        rest.onPointerLeave?.(e);
+        triggerProps.onPointerLeave(e);
+      }}
+      onPointerDown={(e) => {
+        rest.onPointerDown?.(e);
+        triggerProps.onPointerDown(e);
+      }}
+      onFocus={(e) => {
+        rest.onFocus?.(e);
+        triggerProps.onFocus(e);
+      }}
+      onBlur={(e) => {
+        rest.onBlur?.(e);
+        triggerProps.onBlur(e);
+      }}
+    >
       {children}
       {dotEl}
+      {tooltip}
     </button>
   );
 }
