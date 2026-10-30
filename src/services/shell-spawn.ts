@@ -108,6 +108,10 @@ export function runShellCapture(options: ShellSpawnOptions): Promise<string | nu
       // forever with nothing here ever reading it. The timeout below is a
       // backstop for whatever this does not cover.
       stdio: ["ignore", "pipe", "ignore"],
+      // Windows: the agent has no console, so without this every probe opens
+      // (and closes) a visible console window. The host-agent refresh runs ~9
+      // probes every few minutes. A no-op elsewhere.
+      windowsHide: true,
     });
 
     const onStdoutData = (chunk: Buffer) => {

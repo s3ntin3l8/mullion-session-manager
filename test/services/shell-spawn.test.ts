@@ -79,6 +79,21 @@ describe("runShellCapture", () => {
     expect(await promise).toBe("hello");
   });
 
+  it("spawns with windowsHide so a Windows agent never flashes a console window", async () => {
+    const { child, handlers } = fakeChild();
+    spawnMock.mockImplementation(() => child);
+
+    const promise = runShellCapture(baseOptions);
+    handlers.close?.();
+    await promise;
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      baseOptions.shell,
+      baseOptions.args,
+      expect.objectContaining({ windowsHide: true }),
+    );
+  });
+
   it("resolves the RAW stdout when trim is off", async () => {
     // The interactive-shell resolver needs the raw text: it carries its
     // sentinel markers.
