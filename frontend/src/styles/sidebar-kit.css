@@ -296,17 +296,39 @@
   align-items: center;
   gap: 4px;
 }
+/* Actions overlay the title line instead of taking width: toggling display
+   made .sb-row-body shrink on hover and re-wrap its title and chips. They stay
+   rendered (so Tab reaches them) and are only faded in on hover/focus. The
+   trail is the containing block and the overlay's right edge sits on the
+   trail's left edge (right: 100%), so the row's trailing content (e.g. the
+   unresolved-threads count) is never covered. */
+.sb-row-trail {
+  position: relative;
+}
 .sb-row-actions {
-  display: none;
+  position: absolute;
+  top: 0;
+  right: 100%;
+  display: flex;
   gap: 2px;
+  padding-left: 14px;
+  background: linear-gradient(to right, transparent, var(--surface-hover) 14px);
+  opacity: 0;
+  pointer-events: none;
 }
 .sb-row:hover .sb-row-actions,
 .sb-row:focus-within .sb-row-actions {
-  display: flex;
+  opacity: 1;
+  pointer-events: auto;
 }
 @media (hover: none) {
+  /* Touch has no hover: always visible and back in flow, so nothing shifts. */
   .sb-row-actions {
-    display: flex;
+    position: static;
+    padding-left: 0;
+    background: none;
+    opacity: 1;
+    pointer-events: auto;
   }
 }
 
