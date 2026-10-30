@@ -88,9 +88,10 @@ to be.
 // shown for the pinned note — that field has no Scaffold Mullion equivalent
 // at all (a live note, not a repo-committable artifact).
 const SCAFFOLD_RECOMMENDATION_NOTICE =
-  "Recommended: use Scaffold Mullion (Command Palette → “Scaffold Mullion: <project>”) " +
-  "to generate this from your actual codebase — a real agent turn analyzing this project " +
-  "produces higher-quality, project-specific content than a blank text box. Edit the field " +
+  "Recommended: use Scaffold Mullion (Command Palette → “Scaffold Mullion: <project>”) and " +
+  "choose “Generate with agent” to write this from your actual codebase — a sandboxed agent " +
+  "turn analyzing this project produces higher-quality, project-specific content than a " +
+  "blank text box (“Preview” alone only writes starter placeholders). Edit the field " +
   "below directly only if you need a manual override.";
 
 // Issue #895 — Scaffold Mullion is local-host projects only (a remote

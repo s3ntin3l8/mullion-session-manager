@@ -622,6 +622,78 @@ describe("computeScaffold", () => {
   // AGENTS.md, not opt-in like CONTRIBUTING.md's pointer:
   // without it, Claude Code (which does not read AGENTS.md natively) gets
   // nothing from this scaffold at all.
+  describe("existing hand-written instruction files", () => {
+    it("places a new region after AGENTS.md's intro, above its existing ## sections", () => {
+      const existing = "# Proj\n\nIntro.\n\n## Workflow rules\n- do a thing\n";
+      const entries = computeScaffold({ "AGENTS.md": existing }, { slug: "demo" });
+      const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
+      expect(agentsMd.contents.indexOf(SCAFFOLD_REGION_START)).toBeLessThan(
+        agentsMd.contents.indexOf("## Workflow rules"),
+      );
+      expect(agentsMd.contents).toContain("- do a thing");
+    });
+
+    it("leaves exactly one @AGENTS.md import when CLAUDE.md already had a hand-written one", () => {
+      const existing =
+        "# CLAUDE.md\n\n<!-- The line below is a Claude Code import, not a link: AGENTS.md\n     is the source of truth. -->\n@AGENTS.md\n\n## Claude Code only\n\n- keep me\n";
+      const entries = computeScaffold({ "CLAUDE.md": existing }, { slug: "demo" });
+      const claudeMd = entries.find((e) => e.path === "CLAUDE.md") as { contents: string };
+      expect(claudeMd.contents.match(/^@AGENTS\.md$/gm)).toHaveLength(1);
+      expect(claudeMd.contents).toContain("<!-- mullion:pointer:start -->");
+      expect(claudeMd.contents).not.toContain("The line below is a Claude Code import");
+      expect(claudeMd.contents).toContain("- keep me");
+    });
+
+    it("returns a CLAUDE.md with no hand-written import untouched outside the pointer region", () => {
+      const existing = "# P\n\n```\na\n\n\n\nb\n```\n\n## Rules\n- x\n";
+      const claudeMd = computeScaffold({ "CLAUDE.md": existing }, { slug: "demo" }).find(
+        (e) => e.path === "CLAUDE.md",
+      ) as { contents: string };
+      expect(claudeMd.contents.startsWith(existing.trimEnd())).toBe(true);
+      expect(claudeMd.contents).toContain("a\n\n\n\nb");
+    });
+
+    it("leaves an @AGENTS.md example inside a code fence alone", () => {
+      const existing = "# P\n\n```md\n@AGENTS.md\n```\n";
+      const claudeMd = computeScaffold({ "CLAUDE.md": existing }, { slug: "demo" }).find(
+        (e) => e.path === "CLAUDE.md",
+      ) as { contents: string };
+      expect(claudeMd.contents).toContain("```md\n@AGENTS.md\n```");
+    });
+
+    it("only removes a comment directly above the import, and keeps one that is not", () => {
+      const existing =
+        "<!-- note about AGENTS.md -->\n\nprose\n\n<!-- explains AGENTS.md import -->\n@AGENTS.md\n\ntail\n";
+      const claudeMd = computeScaffold({ "CLAUDE.md": existing }, { slug: "demo" }).find(
+        (e) => e.path === "CLAUDE.md",
+      ) as { contents: string };
+      expect(claudeMd.contents).toContain("<!-- note about AGENTS.md -->");
+      expect(claudeMd.contents).not.toContain("explains AGENTS.md import");
+      expect(claudeMd.contents).toContain("tail");
+      expect(claudeMd.contents.match(/^@AGENTS\.md$/gm)).toHaveLength(1);
+    });
+
+    it("handles a CRLF CLAUDE.md with a hand-written import", () => {
+      const existing = "# P\r\n\r\n<!-- AGENTS.md import -->\r\n@AGENTS.md\r\n\r\nrules\r\n";
+      const claudeMd = computeScaffold({ "CLAUDE.md": existing }, { slug: "demo" }).find(
+        (e) => e.path === "CLAUDE.md",
+      ) as { contents: string };
+      expect(claudeMd.contents).toContain("rules");
+      expect(claudeMd.contents).not.toContain("AGENTS.md import");
+      expect(claudeMd.contents.match(/^@AGENTS\.md$/gm)).toHaveLength(1);
+    });
+
+    it("is idempotent for CLAUDE.md on a re-run", () => {
+      const first = computeScaffold({}, { slug: "demo" }).find((e) => e.path === "CLAUDE.md") as {
+        contents: string;
+      };
+      const second = computeScaffold({ "CLAUDE.md": first.contents }, { slug: "demo" }).find(
+        (e) => e.path === "CLAUDE.md",
+      ) as { contents: string };
+      expect(second.contents).toBe(first.contents);
+    });
+  });
+
   describe("CLAUDE.md @AGENTS.md import (issue #942)", () => {
     it("creates a fresh CLAUDE.md containing the @AGENTS.md import when none exists", () => {
       const entries = computeScaffold({}, { slug: "demo" });

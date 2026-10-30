@@ -1,6 +1,10 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { upsertMarkedRegion } from "./marked-region.js";
+import {
+  topLevelLines,
+  upsertMarkedRegion,
+  upsertMarkedRegionAfterIntro,
+} from "./marked-region.js";
 import { isDangerousSkillName } from "./hook-adapters/skill-name.js";
 import { parseSkillFrontmatter } from "./skills.js";
 import type { DockControl } from "./project-config.js";
@@ -628,6 +632,49 @@ function stripLegacyScaffoldRegionMirror(text: string): string {
   return text.slice(0, startIdx) + text.slice(endIdx + SCAFFOLD_REGION_END.length);
 }
 
+/** Removes a hand-written bare `@AGENTS.md` import line (and the HTML comment
+ * block directly above it that mentions AGENTS.md) from the parts of a
+ * CLAUDE.md outside the scaffold's own pointer region, so the pointer region
+ * the scaffold upserts is the file's only import rather than a second one
+ * under it. Line-based and fence/comment/frontmatter-aware (an example import
+ * quoted in a code block is left alone); text inside the pointer markers is
+ * left alone (an idempotent re-run replaces it wholesale anyway); line endings
+ * are preserved. Returns the input untouched, byte for byte, when there is no
+ * such line. */
+function stripHandWrittenAgentsImport(text: string): string {
+  const lines = text.split("\n");
+  const top = topLevelLines(lines);
+  // Pointer-region lines are not "outside" it.
+  let inPointer = false;
+  const outside = lines.map((l, i) => {
+    if (l.includes(POINTER_MARKER_START)) inPointer = true;
+    const keep = top[i] && !inPointer;
+    if (l.includes(POINTER_MARKER_END)) inPointer = false;
+    return keep;
+  });
+  const drop = new Set<number>();
+  for (let j = 0; j < lines.length; j++) {
+    if (!outside[j] || lines[j].replace(/\r$/, "").trim() !== "@AGENTS.md") continue;
+    drop.add(j);
+    let start = j;
+    const above = j - 1;
+    if (above >= 0 && lines[above].replace(/\r$/, "").trimEnd().endsWith("-->")) {
+      let s = above;
+      while (s >= 0 && !lines[s].includes("<!--") && !(s < above && lines[s].includes("-->"))) s--;
+      if (s >= 0 && lines[s].includes("<!--")) {
+        const block = lines.slice(s, above + 1).join("\n");
+        if (block.includes("AGENTS.md")) start = s;
+      }
+    }
+    for (let k = start; k < j; k++) drop.add(k);
+    // One blank line separated this import from what follows; don't leave two.
+    const blankBefore = start === 0 || lines[start - 1].trim() === "";
+    if (blankBefore && j + 1 < lines.length && lines[j + 1].trim() === "") drop.add(j + 1);
+  }
+  if (drop.size === 0) return text;
+  return lines.filter((_, i) => !drop.has(i)).join("\n");
+}
+
 /**
  * Computes the target file set for scaffolding Mullion's tooling into a
  * project — pure, no I/O (see this module's own header for the full
@@ -694,7 +741,7 @@ export function computeScaffold(
   entries.push({
     path: "AGENTS.md",
     kind: "file",
-    contents: upsertMarkedRegion(
+    contents: upsertMarkedRegionAfterIntro(
       existingFiles["AGENTS.md"] ?? "",
       SCAFFOLD_REGION_START,
       SCAFFOLD_REGION_END,
@@ -715,7 +762,9 @@ export function computeScaffold(
     path: "CLAUDE.md",
     kind: "file",
     contents: upsertMarkedRegion(
-      stripLegacyScaffoldRegionMirror(existingFiles["CLAUDE.md"] ?? ""),
+      stripHandWrittenAgentsImport(
+        stripLegacyScaffoldRegionMirror(existingFiles["CLAUDE.md"] ?? ""),
+      ),
       POINTER_MARKER_START,
       POINTER_MARKER_END,
       claudeMdImportBody(),

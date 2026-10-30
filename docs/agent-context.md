@@ -82,8 +82,9 @@ note, a skill, and a reviewer subagent per project, stored as one row in the
 write**:
 
 **For skill/reviewer specifically, prefer Scaffold Mullion instead**
-(issue #1082(b)) — since #956 shipped agent-assisted scaffold-content
-generation (a real agent turn analyzing the actual codebase), free-text
+(issue #1082(b)) — its **Generate with agent** button runs agent-assisted
+scaffold-content generation (#956: a real, sandboxed agent turn analyzing the
+actual codebase; plain **Preview** only writes starter placeholders), so free-text
 authoring here produces lower-quality, generic content by comparison, and
 the ProjectBriefingPanel UI itself now leads with a "use Scaffold Mullion"
 recommendation on those two fields. These two fields remain fully
@@ -289,6 +290,16 @@ author it per-project in Mullion's own UI, the **Scaffold Mullion**
 panel (Command Palette → "Scaffold Mullion: \<project\>") turns the same
 three artifacts into a real, reviewable pull request:
 
+**Preview vs. Generate.** The panel offers two ways to compute the file set
+below. **Preview** writes starter placeholders (no agent). **Generate with
+agent** (`POST /api/projects/:id/setup/generate`) first runs one read-only,
+bwrap-sandboxed agent turn on your default agent (up to ~5 minutes, 5 per 10
+minutes) that reads the repo and writes the skill, the reviewer and the
+`AGENTS.md` pointer paragraph; the result goes through the same diff view and
+**Apply**. It warns when the turn ran unsandboxed or looks generic, and when a
+skill and reviewer already exist it asks which to regenerate rather than
+overwriting hand edits.
+
 1. **Preview** computes the target file set — a scaffolded `AGENTS.md`
    scaffold region (created fresh, or upserted in place if the file
    already has one), a **`CLAUDE.md` `@AGENTS.md` import** (unconditional,
@@ -317,10 +328,18 @@ three artifacts into a real, reviewable pull request:
    designed for repeated safe upserts (that's the whole point of the marker
    delimiters, and each pointer/import touches nothing outside its own
    marked region) — including a target repo that already has its own
-   `CLAUDE.md`/`AGENTS.md` content with real overlap: the import is
-   appended, so the agent then loads both in full, and the preview diff is
-   what lets a reviewer catch and drop that if it's unwanted before
-   merging; the skill, reviewer, and an optional starter `.crs/dock.json`
+   `CLAUDE.md`/`AGENTS.md` content with real overlap: a new `AGENTS.md` region
+   is placed right after the file's title/intro (before its first `## `
+   section, not at the end of the file, so the conventions are read before
+   the rules they have to outrank — only for a file with no region yet: a
+   repo scaffolded earlier keeps its region where it is and it is replaced in
+   place, and a half-edited region has its orphan marker removed first), a hand-written bare `@AGENTS.md` line in
+   `CLAUDE.md` (and the comment block directly above it) is replaced by the
+   scaffold's own pointer region so there is exactly one import, and
+   everything else in either file stays — so the agent still loads any
+   workflow rules the repo wrote itself, and **those can contradict the
+   committed conventions**: the preview diff is what lets a reviewer catch
+   and drop them before merging; the skill, reviewer, and an optional starter `.crs/dock.json`
    (see [`dock.md`](dock.md)) are each "create once, never overwrite" — a
    re-scaffold over a repo that already committed or hand-edited them
    leaves that content alone. Every freshly-written skill/reviewer file

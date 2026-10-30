@@ -3,6 +3,8 @@ import {
   clampToBytes,
   extractMarkedRegion,
   upsertMarkedRegion,
+  topLevelLines,
+  upsertMarkedRegionAfterIntro,
 } from "../../src/services/marked-region.js";
 
 const START = "<!-- start -->";
@@ -110,5 +112,154 @@ describe("upsertMarkedRegion", () => {
   it("round-trips through extractMarkedRegion", () => {
     const result = upsertMarkedRegion("# Doc", START, END, "round trip body");
     expect(extractMarkedRegion(result, START, END)).toBe("round trip body");
+  });
+});
+
+describe("upsertMarkedRegionAfterIntro", () => {
+  it("replaces an existing region in place, like upsertMarkedRegion", () => {
+    const text = `# T\n\n${START}\nold\n${END}\n\n## A\nbody`;
+    expect(upsertMarkedRegionAfterIntro(text, START, END, "new")).toBe(
+      upsertMarkedRegion(text, START, END, "new"),
+    );
+  });
+
+  it("inserts a new region right before the first ## heading", () => {
+    const text = "# T\n\nintro prose\n\n## Workflow rules\nrule\n\n## Other\nx\n";
+    const result = upsertMarkedRegionAfterIntro(text, START, END, "body");
+    expect(result).toBe(
+      `# T\n\nintro prose\n\n${START}\nbody\n${END}\n\n## Workflow rules\nrule\n\n## Other\nx\n`,
+    );
+    expect(extractMarkedRegion(result, START, END)).toBe("body");
+  });
+
+  it("does not treat a ## line inside a fenced code block as a heading", () => {
+    const text = "# T\n\n```md\n## not a heading\n```\n\n## Real\nx";
+    const result = upsertMarkedRegionAfterIntro(text, START, END, "body");
+    expect(result.indexOf(START)).toBeGreaterThan(result.indexOf("```\n\n"));
+    expect(result.indexOf(START)).toBeLessThan(result.indexOf("## Real"));
+  });
+
+  it("puts the region first when the file starts with a ## heading", () => {
+    const result = upsertMarkedRegionAfterIntro("## A\nx", START, END, "body");
+    expect(result).toBe(`${START}\nbody\n${END}\n\n## A\nx`);
+  });
+
+  it("appends when the file has no ## heading", () => {
+    const result = upsertMarkedRegionAfterIntro("# T\n\nonly prose", START, END, "body");
+    expect(result).toBe(`# T\n\nonly prose\n\n${START}\nbody\n${END}\n`);
+  });
+
+  it("creates the region for an empty file", () => {
+    expect(upsertMarkedRegionAfterIntro("", START, END, "body")).toBe(`${START}\nbody\n${END}\n`);
+  });
+
+  it("skips a ## inside leading YAML frontmatter", () => {
+    const text = "---\ntitle: x\n## k\n---\n# T\n\n## A\nx";
+    const result = upsertMarkedRegionAfterIntro(text, START, END, "body");
+    expect(result.startsWith("---\ntitle: x\n## k\n---\n# T")).toBe(true);
+    expect(result.indexOf(START)).toBeLessThan(result.indexOf("## A"));
+    expect(result.indexOf(START)).toBeGreaterThan(result.indexOf("# T"));
+  });
+
+  it("matches fences by character and length, so a ``` line inside a ~~~ block does not close it", () => {
+    const text = "# T\n~~~\n```\n## no\n~~~\n\n## Real\nx";
+    const result = upsertMarkedRegionAfterIntro(text, START, END, "body");
+    expect(result.indexOf(START)).toBeGreaterThan(result.indexOf("~~~\n\n"));
+    expect(result.indexOf(START)).toBeLessThan(result.indexOf("## Real"));
+    const longer = "# T\n````\n```\n## no\n````\n\n## Real\nx";
+    const r2 = upsertMarkedRegionAfterIntro(longer, START, END, "body");
+    expect(r2.indexOf(START)).toBeGreaterThan(r2.indexOf("````\n\n"));
+  });
+
+  it("skips a ## inside a multi-line HTML comment", () => {
+    const text = "# T\n\n<!--\n## hidden\n-->\n\n## Real\nx";
+    const result = upsertMarkedRegionAfterIntro(text, START, END, "body");
+    expect(result.indexOf(START)).toBeGreaterThan(result.indexOf("-->"));
+    expect(result.indexOf(START)).toBeLessThan(result.indexOf("## Real"));
+  });
+
+  it("drops a lone start marker (end deleted), keeps the text and places ONE fresh region", () => {
+    const text = `# T\n\nintro\n${START}\nhand-written\n\n## A\nx\n`;
+    const result = upsertMarkedRegionAfterIntro(text, START, END, "body");
+    expect(result.match(new RegExp(START, "g"))).toHaveLength(1);
+    expect(result.match(new RegExp(END, "g"))).toHaveLength(1);
+    expect(result).toContain("hand-written");
+    expect(result.indexOf(START)).toBeLessThan(result.indexOf("## A"));
+    // The next run replaces only the region, never the text around it.
+    const again = upsertMarkedRegionAfterIntro(result, START, END, "body2");
+    expect(again).toContain("hand-written");
+    expect(again).toContain("body2");
+    expect(again).not.toContain("\nbody\n");
+  });
+
+  it("drops a lone end marker the same way", () => {
+    const result = upsertMarkedRegionAfterIntro(`# T\nold\n${END}\n## A\nx`, START, END, "body");
+    expect(result.match(new RegExp(END, "g"))).toHaveLength(1);
+    expect(result).toContain("old");
+  });
+
+  it("treats an end marker before the start marker as half-edited, not as a region", () => {
+    const result = upsertMarkedRegionAfterIntro(
+      `# T\n${END}\nmid\n${START}\n## A\nx`,
+      START,
+      END,
+      "body",
+    );
+    expect(result.match(new RegExp(START, "g"))).toHaveLength(1);
+    expect(result.match(new RegExp(END, "g"))).toHaveLength(1);
+    expect(result).toContain("mid");
+  });
+
+  it("replaces a complete region in place and does not move it (a repo scaffolded earlier keeps its placement)", () => {
+    const text = `# T\n\n## A\nx\n\n${START}\nold\n${END}\n\n## B\ny\n`;
+    const result = upsertMarkedRegionAfterIntro(text, START, END, "new");
+    expect(result).toBe(`# T\n\n## A\nx\n\n${START}\nnew\n${END}\n\n## B\ny\n`);
+  });
+
+  it("does not mistake a leading thematic break for frontmatter", () => {
+    const text = "---\n\nSome intro prose.\n\n---\n\n## Real\nx";
+    const result = upsertMarkedRegionAfterIntro(text, START, END, "body");
+    expect(result.indexOf(START)).toBeLessThan(result.indexOf("## Real"));
+    expect(result.indexOf(START)).toBeGreaterThan(result.indexOf("Some intro prose."));
+  });
+
+  it("keeps a CRLF file CRLF", () => {
+    const text = "# T\r\n\r\nintro\r\n\r\n## A\r\nx\r\n";
+    const result = upsertMarkedRegionAfterIntro(text, START, END, "a\nb");
+    expect(result).toBe(
+      `# T\r\n\r\nintro\r\n\r\n${START}\r\na\r\nb\r\n${END}\r\n\r\n## A\r\nx\r\n`,
+    );
+    expect(result).not.toMatch(/[^\r]\n/);
+  });
+});
+
+describe("topLevelLines", () => {
+  it("flags frontmatter, fences and multi-line comments as not top level", () => {
+    const lines = ["---", "a: 1", "---", "p", "```", "c", "```", "<!--", "x", "-->", "q"];
+    expect(topLevelLines(lines)).toEqual([
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+    ]);
+  });
+
+  it("treats an empty frontmatter block as frontmatter", () => {
+    expect(topLevelLines(["---", "---", "p"])).toEqual([false, false, true]);
+  });
+
+  it("does not treat an unclosed leading --- as frontmatter", () => {
+    expect(topLevelLines(["---", "a"])).toEqual([true, true]);
+  });
+
+  it("ignores a single-line comment", () => {
+    expect(topLevelLines(["<!-- c -->", "p"])).toEqual([true, true]);
   });
 });

@@ -95,3 +95,119 @@ export function upsertMarkedRegion(
   if (trimmedText.length === 0) return `${region}\n`;
   return `${trimmedText}\n\n${region}\n`;
 }
+
+/**
+ * Per line of a markdown document: true when the line is "top level" prose,
+ * false when it sits inside a leading YAML frontmatter block, a fenced code
+ * block (matched on fence character and length, at most 3 spaces of indent,
+ * as CommonMark does) or a multi-line HTML comment. Used to find structure
+ * (a `## ` heading, a bare import line) without being fooled by examples
+ * quoted inside code or comments. Deliberately small, not a markdown parser:
+ * callers fall back to the safe behavior (append, leave alone) when nothing
+ * qualifies.
+ */
+export function topLevelLines(lines: string[]): boolean[] {
+  const out: boolean[] = new Array<boolean>(lines.length).fill(true);
+  let i = 0;
+  if (/^---\s*$/.test(lines[0] ?? "")) {
+    const close = lines.findIndex((l, idx) => idx > 0 && /^(---|\.\.\.)\s*$/.test(l));
+    // A `---` first line is frontmatter only if what follows looks like YAML
+    // (empty, or the first non-blank line is `key:`, a list item or a
+    // comment). Otherwise it is a thematic break, and a second `---` further
+    // down would wrongly hide every heading in between.
+    const firstBody = lines.slice(1, close === -1 ? 1 : close).find((l) => l.trim() !== "");
+    const looksYaml = firstBody === undefined || /^([\w.-]+\s*:|- |#)/.test(firstBody.trim());
+    if (close > 0 && looksYaml) {
+      for (let k = 0; k <= close; k++) out[k] = false;
+      i = close + 1;
+    }
+  }
+  let fence: { ch: string; len: number } | null = null;
+  let inComment = false;
+  for (; i < lines.length; i++) {
+    const line = lines[i].replace(/\r$/, "");
+    if (fence) {
+      out[i] = false;
+      const m = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
+      if (m && m[1][0] === fence.ch && m[1].length >= fence.len) fence = null;
+      continue;
+    }
+    if (inComment) {
+      out[i] = false;
+      if (line.includes("-->")) inComment = false;
+      continue;
+    }
+    const f = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (f) {
+      fence = { ch: f[1][0], len: f[1].length };
+      out[i] = false;
+      continue;
+    }
+    const open = line.lastIndexOf("<!--");
+    if (open !== -1 && !line.includes("-->", open)) {
+      out[i] = false;
+      inComment = true;
+    }
+  }
+  return out;
+}
+
+/** Removes each marker from `text`: a line holding nothing but the marker is
+ * dropped whole, an inline occurrence is just cut out. Everything else stays. */
+function withoutOrphanMarkers(text: string, markers: string[]): string {
+  let out = text;
+  for (const marker of markers) {
+    const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(new RegExp(`^[ \\t]*${escaped}[ \\t]*\\r?\\n?`, "gm"), "");
+    out = out.split(marker).join("");
+  }
+  return out;
+}
+
+/**
+ * Like `upsertMarkedRegion`, but when the markers are absent the new region
+ * goes right after the document's leading title/intro (immediately before the
+ * first top-level `## ` heading) instead of at the end of the file. A scaffold's
+ * conventions are what every agent must read first; appended after a long
+ * hand-written file they land below the rules they have to outrank. A complete
+ * region already in the file is replaced IN PLACE, exactly as
+ * `upsertMarkedRegion` does, so a repo scaffolded before this placement
+ * existed keeps its region where it is (moving it would make a re-scaffold's
+ * diff noisy for no benefit). A half-edited file (one marker, or the end
+ * before the start) has its orphan marker removed, keeping the text around
+ * it, and then gets a fresh region placed as for a new file; appending a
+ * second region next to the orphan would leave two start markers, and the
+ * next run would then replace everything between them. A file with no
+ * top-level `## ` heading falls back to appending. Headings inside
+ * frontmatter, fenced code or HTML comments are skipped. Setext (underlined) headings are not
+ * recognised, so a region may land after one; that is cosmetic. A CRLF file
+ * gets a CRLF region.
+ */
+export function upsertMarkedRegionAfterIntro(
+  text: string,
+  startMarker: string,
+  endMarker: string,
+  body: string,
+): string {
+  const startIdx = text.indexOf(startMarker);
+  if (startIdx !== -1 && text.indexOf(endMarker, startIdx + startMarker.length) !== -1) {
+    return upsertMarkedRegion(text, startMarker, endMarker, body);
+  }
+  text = withoutOrphanMarkers(text, [startMarker, endMarker]);
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const region = `${startMarker}\n${body.trim()}\n${endMarker}`.replace(/\n/g, eol);
+  const lines = text.split("\n");
+  const top = topLevelLines(lines);
+  let offset = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (top[i] && /^## /.test(lines[i])) {
+      const head = text.slice(0, offset).trimEnd();
+      const tail = text.slice(offset);
+      return head.length === 0
+        ? `${region}${eol}${eol}${tail}`
+        : `${head}${eol}${eol}${region}${eol}${eol}${tail}`;
+    }
+    offset += lines[i].length + 1;
+  }
+  return upsertMarkedRegion(text, startMarker, endMarker, body);
+}
