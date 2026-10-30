@@ -24,6 +24,7 @@ import {
   SecondaryButton,
   Segmented,
   StyledList,
+  TextInput,
 } from "../../ui/primitives.js";
 import { ConfirmButton } from "../../ui/ConfirmButton.js";
 import { ErrorText } from "../../ui/ErrorText.js";
@@ -795,18 +796,16 @@ export function DevicesSection() {
                     label="New address"
                     desc="The IP address and port shown under Developer options → Wireless debugging on the phone. If the phone needs a new pairing code, delete it and pair it again."
                   >
-                    <div className="settings-numberfield" style={{ width: 220 }}>
-                      <input
-                        style={{ flex: 1, textAlign: "left", width: "auto" }}
-                        placeholder="192.168.1.23:37251"
-                        value={editAddress}
-                        onChange={(e) => setEditAddress(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") submitEdit(device);
-                        }}
-                        autoFocus
-                      />
-                    </div>
+                    <TextInput
+                      style={{ width: 220 }}
+                      placeholder="192.168.1.23:37251"
+                      value={editAddress}
+                      onChange={(e) => setEditAddress(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") submitEdit(device);
+                      }}
+                      autoFocus
+                    />
                   </Row>
                   <div style={{ marginTop: 8 }}>
                     <SecondaryButton
@@ -899,18 +898,16 @@ export function DevicesSection() {
                 label="New virtual device name"
                 desc="Letters, digits, periods, underscores, and hyphens only."
               >
-                <div className="settings-numberfield" style={{ width: 220 }}>
-                  <input
-                    style={{ flex: 1, textAlign: "left", width: "auto" }}
-                    placeholder="Pixel_8_API_35"
-                    value={newAvdName}
-                    onChange={(e) => setNewAvdName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") submitCreateAvd();
-                    }}
-                    aria-invalid={avdNameError !== null}
-                  />
-                </div>
+                <TextInput
+                  style={{ width: 220 }}
+                  placeholder="Pixel_8_API_35"
+                  value={newAvdName}
+                  onChange={(e) => setNewAvdName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") submitCreateAvd();
+                  }}
+                  aria-invalid={avdNameError !== null}
+                />
               </Row>
               {/* The Row desc above states the allowed set; this error
                       names what's wrong with *this* value so Create AVD's
@@ -960,40 +957,34 @@ export function DevicesSection() {
                 label="SD card"
                 desc="Optional. A size like 2048M or 2G. Blank keeps the SDK default."
               >
-                <div className="settings-numberfield" style={{ width: 160 }}>
-                  <input
-                    aria-label="SD card size"
-                    style={{ flex: 1, textAlign: "left", width: "auto" }}
-                    placeholder="2048M"
-                    value={sdcardSize}
-                    onChange={(e) => setSdcardSize(e.target.value)}
-                  />
-                </div>
+                <TextInput
+                  style={{ width: 160 }}
+                  aria-label="SD card size"
+                  placeholder="2048M"
+                  value={sdcardSize}
+                  onChange={(e) => setSdcardSize(e.target.value)}
+                />
               </Row>
               <Row label="RAM" desc="Optional. Megabytes, or a size like 2048M or 2G.">
-                <div className="settings-numberfield" style={{ width: 160 }}>
-                  <input
-                    aria-label="RAM"
-                    style={{ flex: 1, textAlign: "left", width: "auto" }}
-                    placeholder="2048"
-                    value={ramSize}
-                    onChange={(e) => setRamSize(e.target.value)}
-                  />
-                </div>
+                <TextInput
+                  style={{ width: 160 }}
+                  aria-label="RAM"
+                  placeholder="2048"
+                  value={ramSize}
+                  onChange={(e) => setRamSize(e.target.value)}
+                />
               </Row>
               <Row
                 label="Data partition"
                 desc="Optional. A size like 6G or 800M. Blank keeps the SDK default."
               >
-                <div className="settings-numberfield" style={{ width: 160 }}>
-                  <input
-                    aria-label="Data partition"
-                    style={{ flex: 1, textAlign: "left", width: "auto" }}
-                    placeholder="6G"
-                    value={dataPartitionSize}
-                    onChange={(e) => setDataPartitionSize(e.target.value)}
-                  />
-                </div>
+                <TextInput
+                  style={{ width: 160 }}
+                  aria-label="Data partition"
+                  placeholder="6G"
+                  value={dataPartitionSize}
+                  onChange={(e) => setDataPartitionSize(e.target.value)}
+                />
               </Row>
               <div style={{ marginTop: 8 }}>
                 <SecondaryButton
@@ -1014,17 +1005,15 @@ export function DevicesSection() {
 
           <div style={{ marginTop: 14 }}>
             <Row label="Name" desc="Optional. Defaults to the virtual device name.">
-              <div className="settings-numberfield" style={{ width: 220 }}>
-                <input
-                  style={{ flex: 1, textAlign: "left", width: "auto" }}
-                  placeholder="Pixel 8"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") submitCreate();
-                  }}
-                />
-              </div>
+              <TextInput
+                style={{ width: 220 }}
+                placeholder="Pixel 8"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") submitCreate();
+                }}
+              />
             </Row>
           </div>
           <div style={{ marginTop: 8 }}>

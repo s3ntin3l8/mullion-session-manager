@@ -283,18 +283,6 @@
   gap: 6px;
   margin: 6px 0;
 }
-.dock-config-env-key,
-.dock-config-env-value {
-  flex: 1;
-  min-width: 0;
-  background: var(--field);
-  border: 1px solid var(--border-soft);
-  color: var(--fg);
-  padding: 5px 9px;
-  border-radius: 7px;
-  font-family: inherit;
-  font-size: 0.78125rem;
-}
 .dock-config-env-remove {
   flex-shrink: 0;
   display: flex;
@@ -355,16 +343,6 @@
 }
 .file-editor-new-input {
   width: 100%;
-  background: color-mix(in srgb, var(--fg) 4%, transparent);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  padding: 4px 6px;
-  color: var(--fg);
-  font-size: 0.75rem;
-}
-.file-editor-new-input:focus {
-  outline: none;
-  border-color: var(--accent-solid);
 }
 .file-editor-main {
   overflow: hidden;
@@ -414,14 +392,6 @@
 .file-editor-rootbar {
   padding: 6px 14px;
   border-bottom: 1px solid var(--border);
-}
-.file-editor-root-select {
-  background: color-mix(in srgb, var(--fg) 4%, transparent);
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  color: var(--fg);
-  font-size: 0.75rem;
-  padding: 2px 4px;
 }
 
 /* Tree row = main button + a hover/focus-revealed actions cluster (a button

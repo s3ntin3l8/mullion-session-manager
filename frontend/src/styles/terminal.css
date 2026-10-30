@@ -113,30 +113,8 @@
   flex-shrink: 0;
 }
 .pane-tab-rename-input {
-  /* Hermes review, PR #1366, line 117 — `width: 100%; box-sizing: border-box`
-     added in PR #1366 are inert (`flex: 1` here sets `flex-basis: 0%`,
-     which overrides `width`) and the matching `size={1}` JSX is also
-     inert (`min-width: 0` below overrides the UA `min-width: auto`,
-     so the input can already shrink below the size-attribute preferred
-     width). The original user-reported "input field stays this small
-     size" repro couldn't be reproduced in jsdom or any browser
-     viewport tested — these were cargo-culted defensive declarations
-     rather than fixes. Reverting both rather than shipping no-op CSS.
-     If the bug resurfaces, the next step is to capture a real DOM
-     snapshot first (Playwright's `BoundingBox`) so the cause isn't
-     guesswork. */
   flex: 1;
-  min-width: 0;
-  font-family: inherit;
-  font-size: 0.78125rem;
   font-weight: 500;
-  color: var(--fg);
-  background: var(--term);
-  border: 1px solid var(--accent-solid);
-  border-radius: 6px;
-  padding: 3px 7px;
-  outline: none;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-solid) 22%, transparent);
 }
 .pane-tab-badge {
   font-size: 0.59375rem;
@@ -746,14 +724,6 @@
 }
 .notif-gate-deny-reason {
   flex: 1;
-  min-width: 0;
-  font-size: 0.6875rem;
-  padding: 3px 6px;
-  border-radius: 5px;
-  border: 1px solid color-mix(in srgb, var(--fg) 20%, transparent);
-  background: var(--bg);
-  color: var(--fg);
-  font-family: inherit;
 }
 
 /* Shared KebabMenu trigger (group/workspace/project rows) — same box as

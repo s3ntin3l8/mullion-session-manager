@@ -1,4 +1,5 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { SearchInput } from "./primitives.js";
 
 export interface ProjectOption {
   id: number;
@@ -111,8 +112,8 @@ export function ProjectMultiSelect({
       {open && (
         <div className="project-multiselect-panel" id={panelId} role="group" aria-label={ariaLabel}>
           {options.length > 8 && (
-            <input
-              type="text"
+            <SearchInput
+              small
               className="project-multiselect-filter"
               placeholder="Filter projects"
               aria-label="Filter projects"

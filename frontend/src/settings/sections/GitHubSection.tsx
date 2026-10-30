@@ -11,6 +11,7 @@ import {
   SecondaryButton,
   StyledList,
   Toggle,
+  TextInput,
 } from "../../ui/primitives.js";
 import { ConfirmButton } from "../../ui/ConfirmButton.js";
 import { ErrorText } from "../../ui/ErrorText.js";
@@ -136,19 +137,17 @@ export function GitHubSection() {
               align="start"
             >
               <div className="settings-form-field-actions">
-                <div className="settings-numberfield">
-                  <input
-                    type="password"
-                    autoComplete="off"
-                    style={{ flex: 1, textAlign: "left", width: "auto" }}
-                    placeholder="github_pat_…"
-                    value={token}
-                    onChange={(e) => setToken(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") connect();
-                    }}
-                  />
-                </div>
+                <TextInput
+                  className="ui-input-fill"
+                  type="password"
+                  autoComplete="off"
+                  placeholder="github_pat_…"
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") connect();
+                  }}
+                />
                 <SecondaryButton onClick={connect} disabled={connecting || !token.trim()}>
                   {connecting ? "Connecting…" : "Connect"}
                 </SecondaryButton>
@@ -427,17 +426,14 @@ function GitHubAppSection({
       {formOpen && (
         <div style={{ marginTop: 10 }}>
           <Row label="App ID" desc="The number shown on the App's settings page." align="start">
-            <div className="settings-numberfield">
-              <input
-                type="text"
-                autoComplete="off"
-                inputMode="numeric"
-                style={{ flex: 1, textAlign: "left", width: "auto" }}
-                placeholder="123456"
-                value={appId}
-                onChange={(e) => setAppId(e.target.value)}
-              />
-            </div>
+            <TextInput
+              className="ui-input-fill"
+              autoComplete="off"
+              inputMode="numeric"
+              placeholder="123456"
+              value={appId}
+              onChange={(e) => setAppId(e.target.value)}
+            />
           </Row>
           <Row
             label="Private key"

@@ -11,6 +11,7 @@ import {
 // The workspace a row's session lives in — owned by the picker, which is what
 // decides it, and rendered here (issue #1882).
 import type { PickerWorkspace } from "./lib/mobileSessionPicker.js";
+import { SearchInput, TextInput } from "./ui/primitives.js";
 
 // An OPEN pane — what the trigger's `n/N` counter and swipe cycle through.
 export interface MobileSessionItem {
@@ -277,8 +278,7 @@ export function MobileSessionSwitcher({
         }}
       >
         {showSearch && (
-          <input
-            type="search"
+          <SearchInput
             className="mobile-session-search"
             aria-label="Search sessions"
             placeholder="Search sessions"
@@ -312,7 +312,7 @@ export function MobileSessionSwitcher({
                       }`}
                     >
                       {!pinned && renamingId !== null && renamingId === row.panelId ? (
-                        <input
+                        <TextInput
                           ref={renameInputRef}
                           className="mobile-session-rename-input"
                           aria-label="Session name"

@@ -1,6 +1,7 @@
 import type { RefObject } from "react";
 import { ChevronDownIcon, CloseIcon, ListIcon, SearchIcon } from "../ui/icons.js";
 import { formatMatchCount } from "../lib/terminalKeys.js";
+import { TextInput } from "../ui/primitives.js";
 
 // Terminal scrollback search (U1) find bar — opened via Ctrl+Shift+F (see
 // TerminalPane.tsx's attachKeyConflictHandler for why that chord and not
@@ -47,9 +48,9 @@ export function TerminalFindBar({
   return (
     <div className="terminal-find-bar" role="search">
       <SearchIcon size={13} className="terminal-find-icon" />
-      <input
+      <TextInput
         ref={findInputRef}
-        type="text"
+        small
         className="terminal-find-input"
         placeholder="Find in scrollback…"
         aria-label="Find in scrollback"

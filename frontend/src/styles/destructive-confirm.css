@@ -303,23 +303,6 @@
 }
 .terminal-find-input {
   flex: 1;
-  min-width: 0;
-  border: none;
-  background: transparent;
-  color: var(--fg);
-  font-size: 0.75rem;
-  font-family: inherit;
-  padding: 2px 0;
-}
-.terminal-find-input:focus {
-  outline: none;
-}
-/* Same specificity as the `:focus` rule above, and later in the cascade, so
-   this wins for keyboard focus — the base rule had removed the focus
-   indicator without replacing it. */
-.terminal-find-input:focus-visible {
-  outline: 2px solid var(--accent-solid);
-  outline-offset: 1px;
 }
 .terminal-find-count {
   flex-shrink: 0;

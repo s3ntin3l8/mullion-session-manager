@@ -9,6 +9,7 @@ import {
   Row,
   SecondaryButton,
   StyledList,
+  TextInput,
 } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 
@@ -193,14 +194,12 @@ export function BrowserCookiesSection() {
                 desc="Path to the profile's Cookies file (Chrome) or cookies.sqlite (Firefox)."
                 align="start"
               >
-                <div className="settings-numberfield" style={{ width: 260 }}>
-                  <input
-                    style={{ flex: 1, textAlign: "left", width: "auto" }}
-                    placeholder="~/.config/google-chrome/Default/Cookies"
-                    value={profilePath}
-                    onChange={(e) => setProfilePath(e.target.value)}
-                  />
-                </div>
+                <TextInput
+                  style={{ width: 260 }}
+                  placeholder="~/.config/google-chrome/Default/Cookies"
+                  value={profilePath}
+                  onChange={(e) => setProfilePath(e.target.value)}
+                />
               </Row>
             ) : (
               <Row
@@ -227,17 +226,15 @@ export function BrowserCookiesSection() {
               </Row>
             )}
             <Row label="Label">
-              <div className="settings-numberfield" style={{ width: 260 }}>
-                <input
-                  style={{ flex: 1, textAlign: "left", width: "auto" }}
-                  placeholder="work"
-                  value={label}
-                  onChange={(e) => setLabel(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") doImport();
-                  }}
-                />
-              </div>
+              <TextInput
+                style={{ width: 260 }}
+                placeholder="work"
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") doImport();
+                }}
+              />
             </Row>
             <div style={{ marginTop: 8 }}>
               <SecondaryButton

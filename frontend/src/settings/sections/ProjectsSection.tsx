@@ -12,6 +12,7 @@ import {
   SecondaryButton,
   StyledList,
   Toggle,
+  TextInput,
 } from "../../ui/primitives.js";
 
 export function ProjectsSection() {
@@ -157,23 +158,21 @@ export function ProjectsSection() {
       </StyledList>
       <div style={{ marginTop: 7 }}>
         {addingRoot ? (
-          <div className="settings-numberfield" style={{ width: "100%" }}>
-            <input
-              autoFocus
-              style={{ flex: 1, textAlign: "left", width: "auto" }}
-              placeholder="~/work"
-              value={newRootPath}
-              onChange={(e) => setNewRootPath(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commitAddRoot();
-                if (e.key === "Escape") {
-                  setNewRootPath("");
-                  setAddingRoot(false);
-                }
-              }}
-              onBlur={commitAddRoot}
-            />
-          </div>
+          <TextInput
+            className="ui-input-fill"
+            autoFocus
+            placeholder="~/work"
+            value={newRootPath}
+            onChange={(e) => setNewRootPath(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitAddRoot();
+              if (e.key === "Escape") {
+                setNewRootPath("");
+                setAddingRoot(false);
+              }
+            }}
+            onBlur={commitAddRoot}
+          />
         ) : (
           <button className="settings-add-btn" onClick={() => setAddingRoot(true)}>
             <PlusIcon size={13} />
@@ -217,23 +216,21 @@ export function ProjectsSection() {
       </StyledList>
       <div style={{ marginTop: 7 }}>
         {addingReadable ? (
-          <div className="settings-numberfield" style={{ width: "100%" }}>
-            <input
-              autoFocus
-              style={{ flex: 1, textAlign: "left", width: "auto" }}
-              placeholder="~/.codex/plans"
-              value={newReadablePath}
-              onChange={(e) => setNewReadablePath(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") commitAddReadable();
-                if (e.key === "Escape") {
-                  setNewReadablePath("");
-                  setAddingReadable(false);
-                }
-              }}
-              onBlur={commitAddReadable}
-            />
-          </div>
+          <TextInput
+            className="ui-input-fill"
+            autoFocus
+            placeholder="~/.codex/plans"
+            value={newReadablePath}
+            onChange={(e) => setNewReadablePath(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") commitAddReadable();
+              if (e.key === "Escape") {
+                setNewReadablePath("");
+                setAddingReadable(false);
+              }
+            }}
+            onBlur={commitAddReadable}
+          />
         ) : (
           <button className="settings-add-btn" onClick={() => setAddingReadable(true)}>
             <PlusIcon size={13} />

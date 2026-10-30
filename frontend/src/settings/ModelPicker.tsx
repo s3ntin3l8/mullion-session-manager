@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { ReactNode } from "react";
-import { Dropdown, Row } from "../ui/primitives.js";
+import { Dropdown, Row, TextInput } from "../ui/primitives.js";
 import { ErrorText } from "../ui/ErrorText.js";
 import { CLI_MODEL_RE } from "../cliModel.js";
 
@@ -137,20 +137,18 @@ export function ModelSelect({
         ]}
       />
       {customMode && (
-        <div className="settings-numberfield" style={{ width: "100%" }}>
-          <input
-            aria-label={`${ariaLabel} (custom model ID)`}
-            style={{ flex: 1, textAlign: "left", width: "auto" }}
-            value={draft}
-            placeholder="model ID"
-            spellCheck={false}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={commit}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") commit();
-            }}
-          />
-        </div>
+        <TextInput
+          className="ui-input-fill"
+          aria-label={`${ariaLabel} (custom model ID)`}
+          value={draft}
+          placeholder="model ID"
+          spellCheck={false}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+          }}
+        />
       )}
       {error && <ErrorText style={{ paddingLeft: 6 }}>{error}</ErrorText>}
     </div>

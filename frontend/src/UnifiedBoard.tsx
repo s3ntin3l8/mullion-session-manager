@@ -29,6 +29,7 @@ import {
   CloseIcon,
   LayersIcon,
 } from "./ui/icons.js";
+import { Dropdown } from "./ui/primitives.js";
 import { useDragResize } from "./hooks/useDragResize.js";
 import { usePhoneBackStack } from "./hooks/usePhoneBackStack.js";
 import {
@@ -689,20 +690,18 @@ export function UnifiedBoard({
           <label className="tasks-panel-parent-filter-label" htmlFor="tasks-panel-parent-filter">
             Phase
           </label>
-          <select
+          <Dropdown
+            small
             id="tasks-panel-parent-filter"
             className="tasks-panel-parent-filter"
             value={selectedParentKey}
-            onChange={(e) => setSelectedParentKey(e.target.value)}
-          >
-            <option value="">All</option>
-            {parentOptions.map((o) => (
-              <option key={o.key} value={o.key}>
-                {o.label} ({o.count})
-              </option>
-            ))}
-            <option value={PARENT_FILTER_NONE}>(no parent) ({noParentCount})</option>
-          </select>
+            onChange={setSelectedParentKey}
+            options={[
+              { value: "", label: "All" },
+              ...parentOptions.map((o) => ({ value: o.key, label: `${o.label} (${o.count})` })),
+              { value: PARENT_FILTER_NONE, label: `(no parent) (${noParentCount})` },
+            ]}
+          />
           {selectedParentKey !== "" && (
             <button
               type="button"

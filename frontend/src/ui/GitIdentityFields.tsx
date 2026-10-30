@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api } from "../api/index.js";
-import { SecondaryButton } from "./primitives.js";
+import { SecondaryButton, TextInput } from "./primitives.js";
 
 export interface GitIdentityValue {
   name: string;
@@ -40,26 +40,22 @@ export function GitIdentityFields({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-      <div className="settings-numberfield" style={{ width: "100%" }}>
-        <input
-          aria-label="Git author name"
-          placeholder="Name"
-          style={{ flex: 1, textAlign: "left", width: "auto" }}
-          value={value.name}
-          onChange={(e) => onChange({ ...value, name: e.target.value })}
-          onBlur={() => onCommit?.(value)}
-        />
-      </div>
-      <div className="settings-numberfield" style={{ width: "100%" }}>
-        <input
-          aria-label="Git author email"
-          placeholder="Email"
-          style={{ flex: 1, textAlign: "left", width: "auto" }}
-          value={value.email}
-          onChange={(e) => onChange({ ...value, email: e.target.value })}
-          onBlur={() => onCommit?.(value)}
-        />
-      </div>
+      <TextInput
+        className="ui-input-fill"
+        aria-label="Git author name"
+        placeholder="Name"
+        value={value.name}
+        onChange={(e) => onChange({ ...value, name: e.target.value })}
+        onBlur={() => onCommit?.(value)}
+      />
+      <TextInput
+        className="ui-input-fill"
+        aria-label="Git author email"
+        placeholder="Email"
+        value={value.email}
+        onChange={(e) => onChange({ ...value, email: e.target.value })}
+        onBlur={() => onCommit?.(value)}
+      />
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <SecondaryButton onClick={() => void prefill()}>
           Use this server's git config

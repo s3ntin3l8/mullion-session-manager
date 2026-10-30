@@ -4,6 +4,7 @@ import type { ProjectFileContent } from "./api/index.js";
 import { CodeEditor } from "./components/CodeEditor.js";
 import { FileTextIcon } from "./ui/icons.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
+import { TextInput } from "./ui/primitives.js";
 
 export interface ExternalFilePanelParams {
   projectId: number;
@@ -90,8 +91,9 @@ export function ExternalFilePanel({ params }: { params: ExternalFilePanelParams 
             void open(input);
           }}
         >
-          <input
-            className="file-editor-new-input"
+          <TextInput
+            small
+            className="ui-input-fill"
             style={{ flex: 1 }}
             autoFocus={!params.path}
             value={input}

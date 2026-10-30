@@ -359,32 +359,8 @@
   flex-direction: column;
 }
 .settings-nav-search {
-  display: flex;
-  align-items: center;
-  gap: 9px;
   margin: 12px 12px 8px;
-  padding: 8px 11px;
-  border: 1px solid var(--border-soft);
-  border-radius: 9px;
-  background: var(--field);
-  color: var(--dim);
   flex-shrink: 0;
-}
-.settings-nav-search input {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  background: transparent;
-  color: var(--fg);
-  font-family: inherit;
-  font-size: 0.78125rem;
-  outline: none;
-}
-/* The settings rail's search input suppressed the UA outline and its wrapper
-   does not react to focus — no visible indicator for keyboard users. */
-.settings-nav-search input:focus-visible {
-  outline: 2px solid var(--accent-solid);
-  outline-offset: 1px;
 }
 .settings-nav-items {
   display: flex;
@@ -1700,15 +1676,6 @@ summary.space-row {
   border: 1px solid var(--border);
   border-radius: 4px;
 }
-.project-multiselect-filter {
-  height: 26px;
-  padding: 0 8px;
-  font-size: 0.75rem;
-  color: var(--fg);
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-}
 .project-multiselect-clear {
   align-self: flex-start;
   padding: 0;
@@ -1761,4 +1728,32 @@ summary.space-row {
 .ui-input[type="search"]::-webkit-search-cancel-button {
   cursor: pointer;
   opacity: 0.6;
+}
+/* Fills its container's width (a settings row control, a flex row). */
+.ui-input.ui-input-fill {
+  flex: 1 1 auto;
+  width: 100%;
+}
+/* A field with a leading glyph (search icon, "from" label) drawn inside it:
+   the glyph is overlaid, the input keeps the primitive's border/background/
+   focus ring and just reserves room for it. */
+.ui-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.ui-input-wrap > svg:first-child,
+.ui-input-wrap > .ui-input-adorn {
+  position: absolute;
+  left: 10px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.ui-input-wrap > .ui-input {
+  flex: 1;
+  padding-left: 30px;
+}
+.ui-input-wrap > .ui-input.small {
+  padding-left: 28px;
 }

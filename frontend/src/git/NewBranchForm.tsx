@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api } from "../api/index.js";
 import { Button } from "../ui/sidebar/index.js";
 import { runBranchOp } from "./branchOps.js";
+import { TextInput } from "../ui/primitives.js";
 
 export interface NewBranchFormProps {
   projectId: number;
@@ -47,8 +48,9 @@ export function NewBranchForm({ projectId, defaultFrom, onDone, onCancel }: NewB
         void submit();
       }}
     >
-      <label className="sc-search">
-        <input
+      <label className="sc-search ui-input-wrap">
+        <TextInput
+          small
           aria-label="New branch name"
           placeholder="new-branch-name"
           value={name}
@@ -56,9 +58,14 @@ export function NewBranchForm({ projectId, defaultFrom, onDone, onCancel }: NewB
           onChange={(e) => setName(e.target.value)}
         />
       </label>
-      <label className="sc-search">
-        <span className="sc-dim">from</span>
-        <input aria-label="Start point" value={from} onChange={(e) => setFrom(e.target.value)} />
+      <label className="sc-search ui-input-wrap">
+        <span className="sc-dim ui-input-adorn">from</span>
+        <TextInput
+          small
+          aria-label="Start point"
+          value={from}
+          onChange={(e) => setFrom(e.target.value)}
+        />
       </label>
       <div className="sc-new-branch-row">
         <label className="sc-check">

@@ -30,6 +30,7 @@ import {
 import { SidebarToolbar } from "./SidebarToolbar.js";
 import { EmptyStateNote } from "../ui/EmptyState.js";
 import type { RightSidebarViewProps } from "./views.js";
+import { TextInput } from "../ui/primitives.js";
 
 // Same set the backend's quick-open search skips (SEARCH_SKIP_DIRS in
 // services/project-files.ts): listing them is just noise in a compact tree.
@@ -398,7 +399,8 @@ export function FilesSidebarView({
             const hot = dropKey === entryPath;
             const rowProps = isDir ? dropProps(entryPath, { folder: true }) : dropProps(dirPath);
             const mainRow = isRenaming ? (
-              <input
+              <TextInput
+                small
                 className="file-editor-new-input"
                 style={indent}
                 autoFocus
@@ -568,7 +570,8 @@ export function FilesSidebarView({
         </div>
       )}
       {newEntry && (
-        <input
+        <TextInput
+          small
           className="file-editor-new-input"
           autoFocus
           placeholder={`New ${newEntry.kind === "file" ? "file" : "folder"} in ${selectedDir || "/"}`}

@@ -10,6 +10,7 @@ import {
   GitBranchIcon,
   RenameIcon,
 } from "../ui/icons.js";
+import { TextInput } from "../ui/primitives.js";
 
 // SessionRow's row 1 — the `.session-item-row` strip (status dot, agent
 // logo/name, rename-in-place, status label, git-details toggle, kebab menu,
@@ -136,7 +137,8 @@ export function Header({
       )}
       {showAgentFallback && <span className="session-agent-text">{agentBinary}</span>}
       {renaming ? (
-        <input
+        <TextInput
+          small
           ref={renameInputRef}
           className="session-rename-input"
           value={draftName}

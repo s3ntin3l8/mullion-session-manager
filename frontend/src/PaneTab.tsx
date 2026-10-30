@@ -14,6 +14,7 @@ import { PaneActionsMenu } from "./PaneActionsMenu.js";
 import { panelSessionId } from "./panelUtils.js";
 import { describeError } from "./lib/describeError.js";
 import { sameCwd } from "./lib/sameCwd.js";
+import { TextInput } from "./ui/primitives.js";
 
 // Below this tab width the status badge ("Working"/"Idle"/"Attention") no
 // longer fits alongside the dot, name, and the two action buttons, and would
@@ -373,7 +374,8 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
           <img src={agentLogo} alt="" width={14} height={14} className="pane-tab-agent-logo" />
         )}
         {renaming ? (
-          <input
+          <TextInput
+            small
             ref={renameInputRef}
             className="pane-tab-rename-input"
             // Hermes review, PR #1366, line 117 — `size={1}` was added in

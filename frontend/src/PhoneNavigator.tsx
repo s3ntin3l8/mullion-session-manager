@@ -7,6 +7,7 @@ import { useDashboardStore } from "./store/index.js";
 import { KanbanBoardOverlay } from "./panels/registry.js";
 import type { Session } from "./api/index.js";
 import type { ReactNode } from "react";
+import { SearchInput } from "./ui/primitives.js";
 
 // Chrome for the compact-tier navigator (App.tsx renders it inside
 // `.sidebar-wrapper`, which mobile.css stretches to the whole viewport below
@@ -80,10 +81,9 @@ export function PhoneSettingsList({ onSelect }: { onSelect: (section: SettingsSe
   const sections = filterSettingsSections(phoneSections(), query);
   return (
     <div className="phone-nav-settings">
-      <div className="phone-nav-settings-search">
+      <div className="phone-nav-settings-search ui-input-wrap">
         <SearchIcon size={15} strokeWidth={1.9} />
-        <input
-          type="search"
+        <SearchInput
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search settings…"
