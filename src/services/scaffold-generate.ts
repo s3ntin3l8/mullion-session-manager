@@ -347,8 +347,8 @@ export function buildGenerationPrompt(opts: {
   instructionsOnly?: boolean;
 }): string {
   const { slug, seed, hasSkill, hasReviewer, hasScaffoldRegion } = opts;
-  if (opts.instructionsOnly) return buildInstructionsOnlyPrompt(opts);
   const mode = opts.existingInstructions ?? "keep";
+  if (opts.instructionsOnly && mode !== "keep") return buildInstructionsOnlyPrompt(opts);
   const skillPath = scaffoldSkillPath(slug);
   const reviewerPath = scaffoldReviewerPath(slug);
 
@@ -2027,10 +2027,9 @@ export async function generateScaffoldContent(
     originalAgentsMd: opts.originalAgentsMd,
     instructionsOnly,
   });
-  // Nothing to judge on an instructions-only pass: the committed skill and
-  // reviewer were not regenerated.
-  const possiblyGeneric = instructionsOnly
-    ? false
-    : validateGenerationOutput(parsed, opts.cwd).possiblyGeneric;
+  // On an instructions-only pass only the region paragraph is agent-produced
+  // (the skill and reviewer fields are absent), and it is still worth checking
+  // for fabricated paths.
+  const possiblyGeneric = validateGenerationOutput(parsed, opts.cwd).possiblyGeneric;
   return { ...parsed, sandboxed, possiblyGeneric };
 }

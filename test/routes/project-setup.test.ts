@@ -1695,6 +1695,9 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
       expect(fs.readFileSync(path.join(wt, ".agents/skills/demo/SKILL.md"), "utf8")).toBe(
         HAND_WRITTEN_SKILL,
       );
+      expect(fs.readFileSync(path.join(wt, ".claude/agents/demo-reviewer.md"), "utf8")).toBe(
+        fs.readFileSync(path.join(repoDir, ".claude/agents/demo-reviewer.md"), "utf8"),
+      );
       expect(res.json().possiblyGeneric).toBeFalsy();
       await app.close();
     });

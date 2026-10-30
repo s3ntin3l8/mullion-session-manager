@@ -2100,6 +2100,12 @@ describe("existingInstructions (issue #2316)", () => {
       expect(p).not.toContain("<<<MULLION_SKILL_START>>>");
     });
 
+    it("falls back to the full prompt when no instructions mode is set", () => {
+      const p = buildGenerationPrompt({ ...onlyOpts });
+      expect(p).toContain("three things");
+      expect(p).toContain("<<<MULLION_SKILL_START>>>");
+    });
+
     it("is ignored for the full shape: keep-mode and non-only prompts are unchanged", () => {
       const plain = buildGenerationPrompt(baseOpts);
       expect(buildGenerationPrompt({ ...baseOpts, existingInstructions: "keep" })).toBe(plain);

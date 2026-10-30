@@ -818,13 +818,8 @@ export async function projectSetupRoute(app: FastifyInstance) {
       // path doesn't need to touch at all.
       // Issue #2316 — an instructions-only pass (report/restructure) is worth
       // the turn even when nothing else would be regenerated.
-      if (
-        hasSkill &&
-        hasReviewer &&
-        !refreshSkill &&
-        !refreshReviewer &&
-        existingInstructions === "keep"
-      ) {
+      const nothingToRegenerate = hasSkill && hasReviewer && !refreshSkill && !refreshReviewer;
+      if (nothingToRegenerate && existingInstructions === "keep") {
         return reply.conflict(
           `.claude/skills/${options.slug}/SKILL.md and .claude/agents/${options.slug}-reviewer.md ` +
             // "already exist" — NOT "are already committed": `hasSkill`/
@@ -869,12 +864,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
           originalAgentsMd: existingFiles["AGENTS.md"],
           // Issue #2320 — nothing of the skill or reviewer would be written,
           // so the turn is not asked for them.
-          instructionsOnly:
-            hasSkill &&
-            hasReviewer &&
-            !refreshSkill &&
-            !refreshReviewer &&
-            existingInstructions !== "keep",
+          instructionsOnly: nothingToRegenerate && existingInstructions !== "keep",
           // Issue #1133 — this primary's own opt-out; only takes effect for
           // a LOCAL_HOST_ID project (generateScaffoldContent's own doc
           // comment). A remote-hosted project's own
