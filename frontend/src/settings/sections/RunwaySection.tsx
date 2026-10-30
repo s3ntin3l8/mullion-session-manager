@@ -11,6 +11,7 @@ import {
   Row,
   SecondaryButton,
   StyledList,
+  TextInput,
 } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 
@@ -45,21 +46,18 @@ function TextSettingRow({
   };
   return (
     <Row label={label} desc={desc} align="start">
-      <div className="settings-numberfield">
-        <input
-          type="text"
-          autoComplete="off"
-          style={{ flex: 1, textAlign: "left", width: "auto" }}
-          placeholder={placeholder}
-          value={draft}
-          aria-label={label}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") e.currentTarget.blur();
-          }}
-        />
-      </div>
+      <TextInput
+        className="ui-input-fill"
+        autoComplete="off"
+        placeholder={placeholder}
+        value={draft}
+        aria-label={label}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+        }}
+      />
     </Row>
   );
 }
@@ -125,21 +123,18 @@ function ProviderMapField({
 
   return (
     <div className="settings-form-field-stack">
-      <div className="settings-numberfield" style={{ width: "100%" }}>
-        <input
-          type="text"
-          autoComplete="off"
-          style={{ flex: 1, textAlign: "left", width: "auto" }}
-          placeholder='{"anthropic": "claude"}'
-          value={draft}
-          aria-label="Provider map"
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={commit}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") e.currentTarget.blur();
-          }}
-        />
-      </div>
+      <TextInput
+        className="ui-input-fill"
+        autoComplete="off"
+        placeholder='{"anthropic": "claude"}'
+        value={draft}
+        aria-label="Provider map"
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") e.currentTarget.blur();
+        }}
+      />
       {error && <ErrorText>{error}</ErrorText>}
     </div>
   );
@@ -267,20 +262,18 @@ export function RunwaySection() {
           align="start"
         >
           <div className="settings-form-field-actions">
-            <div className="settings-numberfield">
-              <input
-                type="password"
-                autoComplete="off"
-                style={{ flex: 1, textAlign: "left", width: "auto" }}
-                placeholder={integration?.hasKey ? "Replace key…" : "Runway admin key"}
-                value={key}
-                aria-label="Admin key"
-                onChange={(e) => setKey(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") saveKey();
-                }}
-              />
-            </div>
+            <TextInput
+              className="ui-input-fill"
+              type="password"
+              autoComplete="off"
+              placeholder={integration?.hasKey ? "Replace key…" : "Runway admin key"}
+              value={key}
+              aria-label="Admin key"
+              onChange={(e) => setKey(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") saveKey();
+              }}
+            />
             <SecondaryButton onClick={saveKey} disabled={saving || !key.trim()}>
               {saving ? "Saving…" : "Save key"}
             </SecondaryButton>

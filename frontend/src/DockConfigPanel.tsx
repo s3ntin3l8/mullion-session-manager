@@ -4,7 +4,7 @@ import { api, ApiError } from "./api/index.js";
 import type { DockControlInput } from "./api/index.js";
 import { PlusIcon, CloseIcon, DockIcon } from "./ui/icons.js";
 import { ConfirmButton } from "./ui/ConfirmButton.js";
-import { Row } from "./ui/primitives.js";
+import { Row, TextInput } from "./ui/primitives.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { useDashboardStore } from "./store/index.js";
 
@@ -488,10 +488,9 @@ function MonitorsEditor({ params }: { params: DockConfigPanelParams }) {
                   <div className="settings-row-label">Environment variables</div>
                   {envEntries.map(([key, value], i) => (
                     <div className="dock-config-env-row" key={i}>
-                      <input
-                        type="text"
+                      <TextInput
                         placeholder="KEY"
-                        className="dock-config-env-key"
+                        className="ui-input-fill"
                         value={key}
                         onChange={(e) => {
                           const next = [...envEntries];
@@ -499,10 +498,9 @@ function MonitorsEditor({ params }: { params: DockConfigPanelParams }) {
                           setEnvEntries(next);
                         }}
                       />
-                      <input
-                        type="text"
+                      <TextInput
                         placeholder="value"
-                        className="dock-config-env-value"
+                        className="ui-input-fill"
                         value={value}
                         onChange={(e) => {
                           const next = [...envEntries];

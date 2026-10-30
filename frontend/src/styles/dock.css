@@ -553,18 +553,11 @@ button.dock-group-empty:hover {
   gap: 12px;
   margin: 12px 0;
 }
-.preview-targets-editor input,
-.preview-targets-editor select {
-  min-width: 0;
+.preview-targets-editor .ui-input,
+.preview-targets-editor .settings-dropdown,
+.preview-targets-editor .settings-dropdown select {
   width: 100%;
-  box-sizing: border-box;
-  min-height: 36px;
-  background: var(--field);
-  color: var(--fg);
-  border: 1px solid var(--border-soft);
-  border-radius: 6px;
-  padding: 6px 9px;
-  font: inherit;
+  min-width: 0;
 }
 .preview-targets-editor p {
   color: var(--muted);

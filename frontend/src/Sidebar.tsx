@@ -26,7 +26,7 @@ import {
   STATUS_PRESENTATION,
 } from "./sessionStatus.js";
 import { MullionMark } from "./assets/MullionMark.js";
-import { Dropdown } from "./ui/primitives.js";
+import { Dropdown, TextInput } from "./ui/primitives.js";
 import {
   EmptyState,
   EmptyStateActions,
@@ -668,8 +668,8 @@ export function Sidebar({
             <div className="sidebar-filter-bar">
               <div className="sidebar-filter-search">
                 <SearchIcon size={13} strokeWidth={1.9} />
-                <input
-                  type="text"
+                <TextInput
+                  small
                   placeholder="Filter sessions…"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}

@@ -30,6 +30,7 @@ import { DevicesSection } from "./settings/sections/DevicesSection.js";
 import { InputSection } from "./settings/sections/InputSection.js";
 import { AgentContextSection } from "./settings/sections/AgentContextSection.js";
 import { BrowserSection } from "./settings/sections/BrowserSection.js";
+import { SearchInput } from "./ui/primitives.js";
 
 export type { SettingsSection, SettingsSectionLink } from "./settings/settingsSections.js";
 
@@ -221,9 +222,9 @@ export function Settings({
           className={`settings-modal-body${mobileNavOpen ? "" : " settings-modal-body-showing-content"}`}
         >
           <div className="settings-nav">
-            <div className="settings-nav-search">
+            <div className="settings-nav-search ui-input-wrap">
               <SearchIcon size={15} strokeWidth={1.9} />
-              <input
+              <SearchInput
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search settings…"

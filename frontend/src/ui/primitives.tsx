@@ -9,7 +9,7 @@
 // `.settings-*` rules in styles.css for a file move is pure
 // visual-regression risk for zero functional gain.
 import { createContext, useContext, useId, useRef } from "react";
-import type { InputHTMLAttributes, ReactNode } from "react";
+import type { ComponentPropsWithRef, ReactNode } from "react";
 
 /**
  * What a control inside a Row needs in order to name itself.
@@ -376,6 +376,9 @@ export function Dropdown<T extends string>({
   small = false,
   ariaLabel,
   title,
+  className,
+  id,
+  disabled,
 }: {
   options: Array<{ value: T; label: string; disabled?: boolean }>;
   value: T;
@@ -384,11 +387,18 @@ export function Dropdown<T extends string>({
   // Overrides the name the enclosing Row would otherwise supply.
   ariaLabel?: string;
   title?: string;
+  // Layout modifier for the wrapper (width, flex) — never colours.
+  className?: string;
+  // Forwarded to the <select>, so an external <label htmlFor> can name it.
+  id?: string;
+  disabled?: boolean;
 }) {
   const label = useControlLabel(ariaLabel);
   return (
-    <div className={`settings-dropdown${small ? " small" : ""}`}>
+    <div className={`settings-dropdown${small ? " small" : ""}${className ? ` ${className}` : ""}`}>
       <select
+        id={id}
+        disabled={disabled}
         value={value}
         onChange={(e) => onChange(e.target.value as T)}
         title={title}
@@ -404,7 +414,7 @@ export function Dropdown<T extends string>({
   );
 }
 
-type InputProps = Omit<InputHTMLAttributes<HTMLInputElement>, "size"> & {
+type InputProps = Omit<ComponentPropsWithRef<"input">, "size"> & {
   small?: boolean;
 };
 

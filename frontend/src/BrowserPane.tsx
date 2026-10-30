@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { RefreshIcon, WifiOffIcon } from "./ui/icons.js";
 import { Spinner } from "./ui/Spinner.js";
 import { isMacPlatform, macChordPress } from "./browserKeyMap.js";
+import { TextInput } from "./ui/primitives.js";
 
 export interface BrowserPaneParams {
   sessionId: number;
@@ -376,7 +377,8 @@ export function BrowserPane(props: {
         >
           ›
         </button>
-        <input
+        <TextInput
+          small
           className="browser-panel-address mono"
           value={addressInput}
           onChange={(event) => setAddressInput(event.target.value)}

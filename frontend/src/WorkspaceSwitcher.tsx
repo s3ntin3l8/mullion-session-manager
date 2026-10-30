@@ -20,6 +20,7 @@ import {
   RenameIcon,
 } from "./ui/icons.js";
 import { WORKSPACE_FOCUS_FALLBACK } from "./paletteFocusTargets.js";
+import { TextInput } from "./ui/primitives.js";
 
 // Workspaces (named, persistent split-layouts — Mullion's own "tab" concept)
 // and Projects/Sessions (the folder-grouped inventory of durable terminals
@@ -539,7 +540,8 @@ function GroupSection({
           }}
         />
         {editingName ? (
-          <input
+          <TextInput
+            small
             autoFocus
             className="workspace-rename-input"
             value={draftName}
@@ -869,7 +871,8 @@ function WorkspaceItem({
       </span>
       <GridIcon size={14} className="workspace-item-icon" />
       {editing ? (
-        <input
+        <TextInput
+          small
           autoFocus
           className="workspace-rename-input"
           value={draftName}
@@ -968,7 +971,8 @@ function NewWorkspaceForm({
         void createWorkspace(name.trim()).then(onCreated);
       }}
     >
-      <input
+      <TextInput
+        small
         autoFocus
         className="workspace-rename-input"
         value={name}

@@ -28,6 +28,7 @@ import { isMacPlatform } from "./browserKeyMap.js";
 import { ConfirmButton } from "./ui/ConfirmButton.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { useDashboardStore } from "./store/index.js";
+import { Dropdown, TextInput } from "./ui/primitives.js";
 
 export interface FileEditorPanelParams {
   projectId: number;
@@ -572,7 +573,8 @@ function FileEditorBody({
           const affectsDirtyFile = hasDirtyFileUnder(projectId, sessionId, entryPath);
           const isRenaming = renaming?.path === entryPath;
           const mainRow = isRenaming ? (
-            <input
+            <TextInput
+              small
               className="file-editor-new-input"
               style={indent}
               autoFocus
@@ -790,7 +792,8 @@ function FileEditorBody({
             onCancel={tree.uploads.cancel}
             onDismiss={tree.uploads.dismissErrors}
           />
-          <input
+          <TextInput
+            small
             ref={searchInputRef}
             className="file-editor-new-input file-editor-search"
             value={query}
@@ -816,7 +819,8 @@ function FileEditorBody({
           />
           {newEntry !== null && (
             <div className="file-editor-new">
-              <input
+              <TextInput
+                small
                 className="file-editor-new-input"
                 autoFocus
                 value={newEntry.name}
@@ -1017,25 +1021,24 @@ export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
         <div className="file-editor-rootbar">
           <label>
             <span className="agent-rules-panel-row-meta">Root</span>{" "}
-            <select
-              className="file-editor-root-select"
-              value={sessionId ?? ""}
+            <Dropdown
+              small
+              ariaLabel="Root"
               disabled={dirty}
+              value={sessionId === undefined ? "" : String(sessionId)}
               title={dirty ? "Save or discard your changes first" : undefined}
-              onChange={(e) =>
-                setSessionId(e.target.value === "" ? undefined : Number(e.target.value))
-              }
-            >
-              <option value="">Project</option>
-              {roots.map((r) => (
-                <option key={r.sessionId} value={r.sessionId}>
-                  Worktree: {r.label}
-                </option>
-              ))}
-              {sessionId !== undefined && !roots.some((r) => r.sessionId === sessionId) && (
-                <option value={sessionId}>Session {sessionId}</option>
-              )}
-            </select>
+              onChange={(v) => setSessionId(v === "" ? undefined : Number(v))}
+              options={[
+                { value: "", label: "Project" },
+                ...roots.map((r) => ({
+                  value: String(r.sessionId),
+                  label: `Worktree: ${r.label}`,
+                })),
+                ...(sessionId !== undefined && !roots.some((r) => r.sessionId === sessionId)
+                  ? [{ value: String(sessionId), label: `Session ${sessionId}` }]
+                  : []),
+              ]}
+            />
           </label>
         </div>
       )}

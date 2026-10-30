@@ -4,6 +4,7 @@ import { ApiError } from "../api/index.js";
 import type { ClearDoneResult } from "../api/index.js";
 import { PlusIcon } from "../ui/icons.js";
 import { BottomSheet } from "../ui/BottomSheet.js";
+import { Dropdown, TextInput } from "../ui/primitives.js";
 
 // Split out of UnifiedBoard.tsx (Wave 5 / PR 28 of
 // .claude/plans/can-we-do-a-warm-cocke.md) — the board's own "New task"
@@ -257,18 +258,16 @@ export function TasksToolbar({
   );
   const newForm = creating && (
     <div className="tasks-panel-new-form">
-      <select
+      <Dropdown
+        small
         className="tasks-panel-new-project"
-        value={projectId ?? ""}
-        onChange={(e) => setManualProjectId(Number(e.target.value))}
-      >
-        {projects.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name}
-          </option>
-        ))}
-      </select>
-      <input
+        ariaLabel="Project"
+        value={String(projectId ?? "")}
+        onChange={(v) => setManualProjectId(Number(v))}
+        options={projects.map((p) => ({ value: String(p.id), label: p.name }))}
+      />
+      <TextInput
+        small
         className="tasks-panel-new-title"
         placeholder="Task title"
         value={title}

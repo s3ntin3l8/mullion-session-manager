@@ -140,7 +140,7 @@ describe("ProjectMultiSelect (#2123, #2124)", () => {
       />,
     );
     await user.click(screen.getByRole("button", { name: "targets" }));
-    await user.type(screen.getByRole("textbox", { name: "Filter projects" }), "proj-10");
+    await user.type(screen.getByRole("searchbox", { name: "Filter projects" }), "proj-10");
     expect(screen.getAllByRole("checkbox")).toHaveLength(1);
     rerender(
       <ProjectMultiSelect

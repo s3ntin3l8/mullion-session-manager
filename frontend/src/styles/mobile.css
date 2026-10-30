@@ -494,36 +494,11 @@
    Same shape as the desktop's `.settings-nav-search`, sized for a phone:
    the input is 16px so iOS does not zoom the page on focus. */
 .phone-nav-settings-search {
-  display: flex;
-  align-items: center;
-  gap: 9px;
   margin: 10px 12px 8px;
-  padding: 8px 11px;
-  border: 1px solid var(--border-soft);
-  border-radius: 9px;
-  background: var(--field);
-  color: var(--dim);
 }
-.phone-nav-settings-search input {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  background: transparent;
-  color: var(--fg);
-  font-family: inherit;
-  /* 16px, not smaller: iOS zooms the page on focusing a smaller input. */
+/* 16px, not smaller: iOS zooms the page on focusing a smaller input. */
+.phone-nav-settings-search > .ui-input {
   font-size: 1rem;
-  outline: none;
-  /* `type="search"` gives the field the UA's own search chrome on WebKit
-     (an inset, rounded field and a clear button). The app styles its
-     inputs itself, so the UA's is taken back — the same
-     `appearance: none` the settings dropdown uses (modals.css). */
-  appearance: none;
-  -webkit-appearance: none;
-}
-.phone-nav-settings-search input:focus-visible {
-  outline: 2px solid var(--accent-solid);
-  outline-offset: 1px;
 }
 .phone-nav-settings-empty {
   padding: 16px;

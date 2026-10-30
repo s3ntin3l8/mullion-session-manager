@@ -312,14 +312,7 @@
   color: var(--muted);
   flex-shrink: 0;
 }
-.tasks-panel-parent-filter {
-  font-size: 0.71875rem;
-  padding: 4px 7px;
-  border-radius: 5px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg);
-  font-family: inherit;
+.settings-dropdown.tasks-panel-parent-filter select {
   max-width: 260px;
 }
 .tasks-panel-new-btn {
@@ -347,19 +340,8 @@
   flex: 1;
   min-width: 240px;
 }
-.tasks-panel-new-project,
-.tasks-panel-new-title {
-  font-size: 0.71875rem;
-  padding: 4px 7px;
-  border-radius: 5px;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg);
-  font-family: inherit;
-}
 .tasks-panel-new-title {
   flex: 1;
-  min-width: 0;
 }
 .tasks-panel-new-submit {
   flex-shrink: 0;
@@ -2632,13 +2614,6 @@ button.github-panel-row.gh-issue-row {
 .session-timeline-search {
   flex: 1;
   min-width: 140px;
-  font-size: 0.75rem;
-  padding: 5px 9px;
-  border-radius: 6px;
-  border: 1px solid color-mix(in srgb, var(--fg) 18%, transparent);
-  background: var(--bg);
-  color: var(--fg);
-  font-family: inherit;
 }
 .session-timeline-kinds {
   display: flex;
@@ -2910,13 +2885,6 @@ button.github-panel-row.gh-issue-row {
    display for a project's own dev server URL; this is its editable sibling. */
 .browser-panel-address {
   flex: 1;
-  min-width: 0;
-  font-size: 0.71875rem;
-  padding: 3px 7px;
-  border-radius: 5px;
-  border: 1px solid var(--border-soft);
-  background: color-mix(in srgb, var(--fg) 4%, transparent);
-  color: var(--fg);
 }
 .browser-panel-go {
   flex-shrink: 0;
@@ -3199,17 +3167,6 @@ button.github-panel-row.gh-issue-row {
 }
 .saved-url-input {
   flex: 1;
-  min-width: 0;
-  font-size: 0.75rem;
-  padding: 6px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--border-soft);
-  background: color-mix(in srgb, var(--fg) 4%, transparent);
-  color: var(--fg);
-}
-.saved-url-input:focus {
-  outline: none;
-  border-color: var(--ring);
 }
 .saved-url-add-btn {
   flex-shrink: 0;

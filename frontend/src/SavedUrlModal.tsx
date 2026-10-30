@@ -3,6 +3,7 @@ import { api } from "./api/index.js";
 import { useDashboardStore } from "./store/index.js";
 import { CloseIcon } from "./ui/icons.js";
 import { Modal } from "./ui/Modal.js";
+import { TextInput } from "./ui/primitives.js";
 
 interface SavedUrlModalProps {
   projectId: number;
@@ -121,14 +122,14 @@ export function SavedUrlModal({ projectId, projectName, onClose }: SavedUrlModal
       }
     >
       <div className="saved-url-form">
-        <input
+        <TextInput
           className="saved-url-input mono"
           value={newLabel}
           onChange={(e) => setNewLabel(e.target.value)}
           placeholder="Label (e.g. Production)"
           aria-label="Label for the new URL"
         />
-        <input
+        <TextInput
           className="saved-url-input mono"
           value={newUrl}
           onChange={(e) => setNewUrl(e.target.value)}
@@ -169,13 +170,13 @@ export function SavedUrlModal({ projectId, projectName, onClose }: SavedUrlModal
             </div>
             {editingId === u.id ? (
               <div className="saved-url-edit-fields">
-                <input
+                <TextInput
                   className="saved-url-input mono"
                   value={editLabel}
                   onChange={(e) => setEditLabel(e.target.value)}
                   aria-label={`Label for ${u.label}`}
                 />
-                <input
+                <TextInput
                   className="saved-url-input mono"
                   value={editUrl}
                   onChange={(e) => setEditUrl(e.target.value)}

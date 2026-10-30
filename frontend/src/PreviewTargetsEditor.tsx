@@ -3,6 +3,7 @@ import { api } from "./api/index.js";
 import type { ProjectPreviewConfig } from "./api/index.js";
 import { useDashboardStore } from "./store/index.js";
 import { ErrorText } from "./ui/ErrorText.js";
+import { Dropdown, TextInput } from "./ui/primitives.js";
 
 export function PreviewTargetsEditor({ projectId }: { projectId: number }) {
   const [draft, setDraft] = useState<ProjectPreviewConfig>();
@@ -99,7 +100,7 @@ export function PreviewTargetsEditor({ projectId }: { projectId: number }) {
             <legend>Dev server</legend>
             <label>
               Dev server destination
-              <input
+              <TextInput
                 value={draft.devServerUrl ?? ""}
                 placeholder="5173 or http://host:5173"
                 onChange={(e) => setDraft({ ...draft, devServerUrl: e.target.value || null })}
@@ -122,7 +123,7 @@ export function PreviewTargetsEditor({ projectId }: { projectId: number }) {
               <legend>{target.name || "New target"}</legend>
               <label>
                 Target name
-                <input
+                <TextInput
                   aria-label={`Target ${index + 1} name`}
                   value={target.name}
                   onChange={(e) =>
@@ -137,7 +138,7 @@ export function PreviewTargetsEditor({ projectId }: { projectId: number }) {
               </label>
               <label>
                 Destination
-                <input
+                <TextInput
                   aria-label={`Target ${index + 1} destination`}
                   value={target.destination}
                   placeholder="192.168.1.20:8080 or https://example.com/docs"
@@ -153,23 +154,23 @@ export function PreviewTargetsEditor({ projectId }: { projectId: number }) {
               </label>
               <label>
                 Connect from
-                <select
-                  aria-label={`Target ${index + 1} connection origin`}
+                <Dropdown
+                  small
+                  ariaLabel={`Target ${index + 1} connection origin`}
                   value={target.connectionOrigin}
-                  onChange={(e) =>
+                  onChange={(v) =>
                     setDraft({
                       ...draft,
                       targets: draft.targets.map((t) =>
-                        t.id === target.id
-                          ? { ...t, connectionOrigin: e.target.value as "project" | "primary" }
-                          : t,
+                        t.id === target.id ? { ...t, connectionOrigin: v } : t,
                       ),
                     })
                   }
-                >
-                  <option value="project">Project host</option>
-                  <option value="primary">Main Mullion server</option>
-                </select>
+                  options={[
+                    { value: "project" as const, label: "Project host" },
+                    { value: "primary" as const, label: "Main Mullion server" },
+                  ]}
+                />
               </label>
               <p>
                 Localhost refers to the selected machine. Opening this target does not start a

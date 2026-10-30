@@ -8,6 +8,7 @@ import {
   Row,
   SecondaryButton,
   Toggle,
+  TextInput,
 } from "../../ui/primitives.js";
 import { clampNumberFieldOnCommit, clampTaskMasterFieldMax } from "../clamp.js";
 import { AGENT_OPTIONS, REVIEW_AGENT_OPTIONS } from "../agentOptions.js";
@@ -208,29 +209,26 @@ export function TaskMasterSection() {
         desc="Task Master only picks up issues (and reads comments) from repo owners, members and collaborators. List extra logins to trust — e.g. a bot account — separated by commas."
         align="start"
       >
-        <div className="settings-numberfield" style={{ width: 260 }}>
-          <input
-            type="text"
-            autoComplete="off"
-            style={{ flex: 1, textAlign: "left", width: "auto" }}
-            placeholder="octocat, my-bot"
-            aria-label="Trusted GitHub logins"
-            value={trustedDraft ?? tm.trustedLogins.join(", ")}
-            onChange={(e) => setTrustedDraft(e.target.value)}
-            onBlur={() => {
-              if (trustedDraft === null) return;
-              updateSettings({
-                taskMaster: {
-                  trustedLogins: trustedDraft
-                    .split(",")
-                    .map((l) => l.trim())
-                    .filter((l) => l !== ""),
-                },
-              });
-              setTrustedDraft(null);
-            }}
-          />
-        </div>
+        <TextInput
+          style={{ width: 260 }}
+          autoComplete="off"
+          placeholder="octocat, my-bot"
+          aria-label="Trusted GitHub logins"
+          value={trustedDraft ?? tm.trustedLogins.join(", ")}
+          onChange={(e) => setTrustedDraft(e.target.value)}
+          onBlur={() => {
+            if (trustedDraft === null) return;
+            updateSettings({
+              taskMaster: {
+                trustedLogins: trustedDraft
+                  .split(",")
+                  .map((l) => l.trim())
+                  .filter((l) => l !== ""),
+              },
+            });
+            setTrustedDraft(null);
+          }}
+        />
       </Row>
       <Row
         label="Default agent"

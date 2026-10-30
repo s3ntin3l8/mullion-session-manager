@@ -7,7 +7,7 @@ import { api, ApiError, normalizeAgentId } from "./api/index.js";
 import type { Launcher, Session, Task, TaskBlocker } from "./api/index.js";
 import { commandToBinary } from "./cliLogos.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
-import { Dropdown } from "./ui/primitives.js";
+import { Dropdown, TextInput } from "./ui/primitives.js";
 import {
   BlockedIcon,
   BotIcon,
@@ -1138,7 +1138,8 @@ function TaskActions({ task }: { task: Task }) {
     const isGiveUp = pendingAction === "give-up";
     return (
       <div className="task-detail-actions">
-        <input
+        <TextInput
+          small
           className="notif-gate-deny-reason"
           placeholder={isGiveUp ? "Reason (optional)" : "Feedback (optional)"}
           value={reason}

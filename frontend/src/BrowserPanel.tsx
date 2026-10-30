@@ -8,6 +8,7 @@ import { ChevronDownIcon, RefreshIcon, StarIcon } from "./ui/icons.js";
 import { SavedUrlModal } from "./SavedUrlModal.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import { describeError } from "./lib/describeError.js";
+import { TextInput } from "./ui/primitives.js";
 
 export interface BrowserPanelParams {
   projectId?: number;
@@ -820,7 +821,8 @@ export function BrowserPanel({
         >
           ›
         </button>
-        <input
+        <TextInput
+          small
           className="browser-panel-address mono"
           value={addressInput}
           onChange={(e) => setAddressInput(e.target.value)}

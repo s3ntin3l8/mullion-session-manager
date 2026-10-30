@@ -16,6 +16,7 @@ import { fromLiveEvent, mergeTimelineEvents, toTimelineEvent } from "./eventHist
 import type { TimelineEvent } from "./eventHistory.js";
 import { truncateHead } from "./lib/truncatePath.js";
 import { STORAGE_KEYS, readJSON, readBool, writeJSON, writeBool } from "./lib/persistedState.js";
+import { SearchInput } from "./ui/primitives.js";
 
 export interface SessionTimelineParams {
   // Phase 6 (6.5/#218) widened this from a single required `sessionId` to
@@ -577,9 +578,9 @@ export function SessionTimeline({
   return (
     <div className="session-timeline">
       <div className="session-timeline-controls">
-        <input
+        <SearchInput
+          small
           className="session-timeline-search"
-          type="text"
           placeholder="Search timeline…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}

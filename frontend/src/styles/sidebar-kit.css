@@ -723,28 +723,14 @@ button.sb-chip--label[aria-pressed="true"] {
   outline: 1.5px solid var(--accent);
 }
 .sc-search {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   margin: 2px 10px 6px;
-  padding: 0 8px;
-  height: 26px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--muted);
 }
-.sc-search input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  outline: 0;
-  background: none;
-  color: var(--fg);
-  font: inherit;
+/* "from" label drawn inside the field (git/NewBranchForm). */
+.sc-search > .ui-input-adorn {
   font-size: 0.75rem;
 }
-.sc-search:focus-within {
-  border-color: var(--accent);
+.sc-search > .ui-input-adorn + .ui-input {
+  padding-left: 44px;
 }
 /* Branches header → New branch (issue #1672). */
 .sc-new-branch {

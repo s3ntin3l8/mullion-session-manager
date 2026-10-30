@@ -40,7 +40,7 @@ import {
   resolveHostChoice,
 } from "./command-palette/hostTarget.js";
 import type { PlacementPreview } from "./api/types.js";
-import { Dropdown } from "./ui/primitives.js";
+import { Dropdown, TextInput } from "./ui/primitives.js";
 import { useFocusTrap, isVisible } from "./hooks/useFocusTrap.js";
 import { useCoarsePointer } from "./lib/layoutTier.js";
 import { dockUnavailableReason } from "./lib/dockAvailability.js";
@@ -1058,7 +1058,7 @@ export function CommandPalette({
       >
         <div className="cmd-palette-search">
           <SearchIcon size={17} strokeWidth={1.9} />
-          <input
+          <TextInput
             ref={inputRef}
             value={query}
             onChange={(e) => {

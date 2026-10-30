@@ -32,6 +32,7 @@ import { FORCEABLE_REASONS, isDefaultBranchName, reasonMessage } from "./gitReas
 import { NewBranchForm } from "./NewBranchForm.js";
 import { openSessionOn } from "./sessionLaunch.js";
 import { refreshGitEverywhere } from "./useSourceControl.js";
+import { SearchInput } from "../ui/primitives.js";
 
 interface RowError {
   message: string;
@@ -207,10 +208,10 @@ export function BranchesSection({
           onCancel={() => setCreating(false)}
         />
       )}
-      <label className="sc-search">
+      <label className="sc-search ui-input-wrap">
         <SearchIcon size={13} />
-        <input
-          type="search"
+        <SearchInput
+          small
           aria-label="Filter branches"
           placeholder="Filter branches…"
           value={filter}

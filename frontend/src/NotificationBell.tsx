@@ -22,6 +22,7 @@ import { useVisualViewportChange } from "./hooks/useVisualViewportChange.js";
 import { truncateHead } from "./lib/truncatePath.js";
 import { formatStatusLabel, STATUS_PRESENTATION } from "./sessionStatus.js";
 import { panelPosition } from "./lib/notifPanelPosition.js";
+import { TextInput } from "./ui/primitives.js";
 
 // The toolbar bell, upgraded for issue #169 from a per-session "who's
 // currently ringing" list into an actual event feed: one row per buffered
@@ -1152,7 +1153,8 @@ function GateActions({ sessionId, gateId }: { sessionId: number; gateId: string 
         // the whole notifications panel mid-keystroke.
         onKeyDown={(e) => e.stopPropagation()}
       >
-        <input
+        <TextInput
+          small
           className="notif-gate-deny-reason"
           placeholder="Reason (optional)"
           value={reason}
