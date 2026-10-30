@@ -1638,6 +1638,67 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
         "utf8",
       );
       expect(skill).toBe(HAND_WRITTEN_SKILL);
+      // Issue #2320 — the turn is told it need not write them.
+      expect(vi.mocked(generateScaffoldContent).mock.calls[0][0].instructionsOnly).toBe(true);
+      await app.close();
+    });
+
+    it("an instructions pass that also refreshes the skill is not instructions-only", async () => {
+      const app = await buildApp();
+      commitBothScaffoldFiles(repoDir, "demo");
+      const projectId = await createProject(app, repoDir);
+      mockValidGeneration("demo");
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "demo", existingInstructions: "report", refresh: ["skill"] },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(vi.mocked(generateScaffoldContent).mock.calls[0][0].instructionsOnly).toBe(false);
+      await app.close();
+    });
+
+    it("an instructions pass with no skill yet is not instructions-only", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+      mockValidGeneration("demo");
+      await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "demo", existingInstructions: "report" },
+      });
+      expect(vi.mocked(generateScaffoldContent).mock.calls[0][0].instructionsOnly).toBe(false);
+      await app.close();
+    });
+
+    it("a short result (no skill or reviewer) leaves both committed files byte-identical", async () => {
+      const app = await buildApp();
+      commitBothScaffoldFiles(repoDir, "demo");
+      const projectId = await createProject(app, repoDir);
+      vi.mocked(generateScaffoldContent).mockResolvedValue({
+        scaffoldRegion: "Pointer.",
+        sandboxed: true,
+        possiblyGeneric: false,
+        conflicts: [],
+        droppedConflictLines: 0,
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "demo", existingInstructions: "report" },
+      });
+      expect(res.statusCode).toBe(200);
+      const wt = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+      expect(fs.readFileSync(path.join(wt, ".claude/skills/demo/SKILL.md"), "utf8")).toBe(
+        HAND_WRITTEN_SKILL,
+      );
+      expect(fs.readFileSync(path.join(wt, ".agents/skills/demo/SKILL.md"), "utf8")).toBe(
+        HAND_WRITTEN_SKILL,
+      );
+      expect(fs.readFileSync(path.join(wt, ".claude/agents/demo-reviewer.md"), "utf8")).toBe(
+        fs.readFileSync(path.join(repoDir, ".claude/agents/demo-reviewer.md"), "utf8"),
+      );
+      expect(res.json().possiblyGeneric).toBeFalsy();
       await app.close();
     });
   });

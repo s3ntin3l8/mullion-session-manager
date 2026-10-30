@@ -247,8 +247,10 @@ export interface ScaffoldConflict {
 }
 
 export interface GeneratedScaffoldContent {
-  skill: string;
-  reviewer: string;
+  /** Absent on an instructions-only pass (the skill and reviewer already exist
+   * and are not being refreshed, so the turn was not asked for them). */
+  skill?: string;
+  reviewer?: string;
   scaffoldRegion: string;
   /** Issue #1144, #1159 — whether the generation turn actually ran inside a
    * bwrap sandbox. `false` when sandboxing was opted out via
@@ -339,9 +341,14 @@ export function buildGenerationPrompt(opts: {
   /** The text Mullion will commit as `## Workflow Conventions`; shown to the
    * agent in `report`/`restructure` so it can tell what contradicts it. */
   conventionsText?: string;
+  /** Issue #2320 — the skill and reviewer already exist and are not being
+   * refreshed, so only the region paragraph and the instructions output are
+   * asked for. Requires a non-"keep" `existingInstructions`. */
+  instructionsOnly?: boolean;
 }): string {
   const { slug, seed, hasSkill, hasReviewer, hasScaffoldRegion } = opts;
   const mode = opts.existingInstructions ?? "keep";
+  if (opts.instructionsOnly && mode !== "keep") return buildInstructionsOnlyPrompt(opts);
   const skillPath = scaffoldSkillPath(slug);
   const reviewerPath = scaffoldReviewerPath(slug);
 
@@ -403,12 +410,52 @@ export function buildGenerationPrompt(opts: {
   );
 }
 
+/** Issue #2320 — the prompt for a report/restructure pass over a repo whose
+ * skill and reviewer already exist: just the region paragraph (which names
+ * them) and the instructions item. */
+function buildInstructionsOnlyPrompt(opts: {
+  slug: string;
+  seed: GenerationSeed;
+  hasScaffoldRegion: boolean;
+  existingInstructions?: ExistingInstructionsMode;
+  conventionsText?: string;
+}): string {
+  const mode = opts.existingInstructions ?? "keep";
+  const skillPath = scaffoldSkillPath(opts.slug);
+  const reviewerPath = scaffoldReviewerPath(opts.slug);
+  const briefing =
+    !opts.hasScaffoldRegion && opts.seed.briefing
+      ? `\n\nA short pinned briefing note already exists for this project — you may draw on it, ` +
+        `but the AGENTS.md region you write is a different, longer-lived thing:\n---\n${opts.seed.briefing}\n---`
+      : "";
+  return (
+    `You have READ-ONLY access to this repository. Do not create, edit, or delete any file — ` +
+    `your entire job is to READ the codebase (source, tests, docs, config) and report back ` +
+    `text; nothing you do in this session is committed or kept.\n\n` +
+    `Read this codebase and write content for two things Mullion (the tool hosting this ` +
+    `session) will commit on your behalf. The repo's skill (\`${skillPath}\`) and reviewer ` +
+    `(\`${reviewerPath}\`) already exist; do not write them, but read them first so ` +
+    `the paragraph describes what they actually say.\n\n` +
+    `1. A short AGENTS.md scaffold-region paragraph naming where that skill and reviewer live ` +
+    `and when to use them. Do NOT include a "## Workflow Conventions" section or any branching/` +
+    `review/commit-convention content — Mullion appends its own Workflow Conventions section ` +
+    `after your paragraph, sourced from this install's own configured conventions, not from ` +
+    `you. Report back the pointer paragraph only.` +
+    `${instructionsItem(mode, opts.conventionsText, 2)}${briefing}\n\n` +
+    `Report back EXACTLY this shape and nothing else outside these markers — no preamble, no ` +
+    `commentary, no markdown fences around the markers themselves:\n\n` +
+    `${GENERATED_REGION_START}\n(the scaffold-region paragraph only)\n${GENERATED_REGION_END}\n` +
+    instructionsOutputShape(mode)
+  );
+}
+
 /** Issue #2316 — the fourth item of the prompt, only for `report` and
  * `restructure`. Kept as its own function so the keep-mode prompt stays
  * byte-identical to what it was before this option existed. */
 function instructionsItem(
   mode: ExistingInstructionsMode,
   conventionsText: string | undefined,
+  itemNumber = 4,
 ): string {
   if (mode === "keep") return "";
   const conventions =
@@ -424,7 +471,7 @@ function instructionsItem(
     `above, not to the repo's own instructions.`;
   if (mode === "report") {
     return (
-      `\n4. A conflicts report. ${scope} List every passage outside those regions that ` +
+      `\n${itemNumber}. A conflicts report. ${scope} List every passage outside those regions that ` +
       `contradicts the conventions (kind "contradicts"), restates them (kind "duplicates"), ` +
       `or is a workflow rule that does not belong in the repo's own instructions ` +
       `(kind "misplaced"). One JSON object per line, with exactly the keys ` +
@@ -433,7 +480,7 @@ function instructionsItem(
     );
   }
   return (
-    `\n4. A restructured AGENTS.md. ${scope} Return the COMPLETE proposed AGENTS.md. Its ` +
+    `\n${itemNumber}. A restructured AGENTS.md. ${scope} Return the COMPLETE proposed AGENTS.md. Its ` +
     `layout: the title and a short intro; then a line containing only ` +
     `${MULLION_REGION_PLACEHOLDER} (Mullion replaces that line with its own region — write ` +
     `it exactly once, replace any existing Mullion region with it, and never write ` +
@@ -491,10 +538,18 @@ function extractSection(raw: string, start: string, end: string, label: string):
 export function parseGeneratedOutput(
   raw: string,
   slug: string,
-  instructions?: { mode?: ExistingInstructionsMode; originalAgentsMd?: string },
+  instructions?: {
+    mode?: ExistingInstructionsMode;
+    originalAgentsMd?: string;
+    /** Issue #2320 — the turn was not asked for a skill or reviewer. */
+    instructionsOnly?: boolean;
+  },
 ): GeneratedScaffoldContent {
-  const skill = extractSection(raw, SKILL_START, SKILL_END, "skill");
-  const reviewer = extractSection(raw, REVIEWER_START, REVIEWER_END, "reviewer");
+  const instructionsOnly = instructions?.instructionsOnly === true;
+  const skill = instructionsOnly ? undefined : extractSection(raw, SKILL_START, SKILL_END, "skill");
+  const reviewer = instructionsOnly
+    ? undefined
+    : extractSection(raw, REVIEWER_START, REVIEWER_END, "reviewer");
   const scaffoldRegion = extractSection(
     raw,
     GENERATED_REGION_START,
@@ -503,7 +558,7 @@ export function parseGeneratedOutput(
   );
 
   const skillPath = scaffoldSkillPath(slug);
-  if (!reviewer.includes(skillPath)) {
+  if (reviewer !== undefined && !reviewer.includes(skillPath)) {
     throw new GenerationOutputError(
       `reviewer content never references the skill's own path (${skillPath}) — ` +
         `regenerate rather than commit a reviewer with no real cross-reference`,
@@ -523,8 +578,11 @@ export function parseGeneratedOutput(
   // would silently drop the codex mirror downstream regardless of what
   // its body says (mullion-scaffold.ts's own doc comment on
   // deriveCodexReviewerSkillContent).
-  const parsedReviewer = parseSkillFrontmatter(reviewer);
-  if (!parsedReviewer || !parsedReviewer.description.includes(CODEX_REVIEWER_DELEGATION_CLAUSE)) {
+  const parsedReviewer = reviewer === undefined ? null : parseSkillFrontmatter(reviewer);
+  if (
+    reviewer !== undefined &&
+    (!parsedReviewer || !parsedReviewer.description.includes(CODEX_REVIEWER_DELEGATION_CLAUSE))
+  ) {
     throw new GenerationOutputError(
       `reviewer content's description frontmatter field never includes the required ` +
         `codex-delegation clause ("${CODEX_REVIEWER_DELEGATION_CLAUSE}") — regenerate rather ` +
@@ -776,7 +834,7 @@ export function validateGenerationOutput(
   // Match file path references: src/foo.ts, lib/bar.js, test/baz.test.ts, etc.
   const pathPattern =
     /(?:^|\s|`|\()([A-Za-z0-9_/.-]+\.(?:ts|js|mjs|tsx|jsx|json|md|yaml|yml|toml|sh))\b/g;
-  const allText = `${content.skill}\n${content.reviewer}\n${content.scaffoldRegion}`;
+  const allText = `${content.skill ?? ""}\n${content.reviewer ?? ""}\n${content.scaffoldRegion}`;
   const referencedPaths = new Set<string>();
   let match;
   while ((match = pathPattern.exec(allText)) !== null) {
@@ -1841,6 +1899,10 @@ export interface GenerateScaffoldContentOptions {
   conventionsText?: string;
   /** The repo's current AGENTS.md, for `assessRewrite`. */
   originalAgentsMd?: string;
+  /** Issue #2320 — skill and reviewer already exist and are not being
+   * refreshed: ask only for the region paragraph and the instructions output.
+   * Ignored (treated as false) for `keep`. */
+  instructionsOnly?: boolean;
   timeoutMs?: number;
   /** Issue #1133 — LOCAL_HOST_ID only. The route resolves this from ITS
    * OWN `app.config.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED` and passes
@@ -1888,6 +1950,11 @@ export async function generateScaffoldContent(
   const baseRef =
     baseRefResult.ok && baseRefResult.value.baseRef ? baseRefResult.value.baseRef : "HEAD";
 
+  const instructionsOnly =
+    opts.instructionsOnly === true &&
+    opts.hasSkill &&
+    opts.hasReviewer &&
+    (opts.existingInstructions ?? "keep") !== "keep";
   const prompt = buildGenerationPrompt({
     slug: opts.slug,
     seed: opts.seed,
@@ -1896,6 +1963,7 @@ export async function generateScaffoldContent(
     hasScaffoldRegion: opts.hasScaffoldRegion,
     existingInstructions: opts.existingInstructions,
     conventionsText: opts.conventionsText,
+    instructionsOnly,
   });
 
   let raw: string;
@@ -1957,7 +2025,11 @@ export async function generateScaffoldContent(
   const parsed = parseGeneratedOutput(raw, opts.slug, {
     mode: opts.existingInstructions,
     originalAgentsMd: opts.originalAgentsMd,
+    instructionsOnly,
   });
-  const validation = validateGenerationOutput(parsed, opts.cwd);
-  return { ...parsed, sandboxed, possiblyGeneric: validation.possiblyGeneric };
+  // On an instructions-only pass only the region paragraph is agent-produced
+  // (the skill and reviewer fields are absent), and it is still worth checking
+  // for fabricated paths.
+  const possiblyGeneric = validateGenerationOutput(parsed, opts.cwd).possiblyGeneric;
+  return { ...parsed, sandboxed, possiblyGeneric };
 }
