@@ -24,7 +24,7 @@ import type {
   Session,
   Task,
 } from "./api/index.js";
-import { makeProject, makeTask } from "./test/fixtures.js";
+import { makeProject, makeSession, makeTask } from "./test/fixtures.js";
 import { resetPhoneBackStackForTests } from "./hooks/usePhoneBackStack.js";
 
 // Merges KanbanBoard.test.tsx's and TasksPanel.test.tsx's own store mocks —
@@ -88,6 +88,7 @@ function storeState() {
     gitDiffStats,
     gitBranchesByProject,
     prsByProject,
+    mutedSessionIds: [] as number[],
   };
 }
 
@@ -1534,6 +1535,31 @@ describe("UnifiedBoard phone layout", () => {
     expect(screen.getByText(/Ad-hoc sessions/)).toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Task status" })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Filter/ })).toBeNull();
+  });
+
+  it("starts with the ad-hoc sessions lane collapsed, keeps the count, and toggles it open and closed", async () => {
+    sessions = [
+      makeSession({ id: 11, projectId: 1, name: "adhoc-one" }),
+      makeSession({ id: 12, projectId: 1, name: "adhoc-two" }),
+    ];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    const toggle = screen.getByRole("button", { name: /Ad-hoc sessions/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(document.querySelector(".kanban-lane-count")?.textContent).toBe("2");
+    expect(document.getElementById("kanban-lane-body")).toBeNull();
+    expect(document.querySelectorAll(".kanban-card")).toHaveLength(0);
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(document.getElementById("kanban-lane-body")).not.toBeNull();
+    expect(document.querySelectorAll(".kanban-card")).toHaveLength(2);
+
+    await user.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(document.querySelectorAll(".kanban-card")).toHaveLength(0);
+    expect(document.querySelector(".kanban-lane-count")?.textContent).toBe("2");
   });
 
   describe("Android back closes the task detail", () => {

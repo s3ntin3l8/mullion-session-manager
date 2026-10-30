@@ -388,7 +388,7 @@ export function UnifiedBoard({
     }
   };
 
-  const [laneCollapsed, setLaneCollapsed] = useState(false);
+  const [laneCollapsed, setLaneCollapsed] = useState(true);
   // Hermes review — dragover can only see dataTransfer.types, not the
   // dragged id itself (getData is drop-only), so a card can't tell on its
   // own whether an incoming x-mullion-session drag belongs to its own
