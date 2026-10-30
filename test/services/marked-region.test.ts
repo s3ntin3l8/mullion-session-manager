@@ -130,6 +130,18 @@ describe("upsertMarkedRegion", () => {
     expect(upsertMarkedRegion(once, START, END, "hello")).toBe(once);
   });
 
+  it("follows a CRLF file's line endings when it removes an orphan marker", () => {
+    const result = upsertMarkedRegion(`# T\r\n${START}\r\nhand\r\n`, START, END, "a\nb");
+    expect(result).toBe(`# T\r\nhand\r\n\r\n${START}\r\na\r\nb\r\n${END}\r\n`);
+    expect(result.replace(/\r\n/g, "")).not.toContain("\n");
+  });
+
+  it("leaves a marker-free CRLF file's append exactly as before", () => {
+    expect(upsertMarkedRegion("# T\r\nhand\r\n", START, END, "x")).toBe(
+      `# T\r\nhand\n\n${START}\nx\n${END}\n`,
+    );
+  });
+
   it("handles #-style markers like the .gitignore region", () => {
     const m1 = "# mullion:worktrees:start";
     const m2 = "# mullion:worktrees:end";

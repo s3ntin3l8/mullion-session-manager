@@ -97,8 +97,14 @@ export function upsertMarkedRegion(
   // No complete, correctly ordered pair: a lone marker (or an end before the
   // start) is a half-edited region. Drop it, keeping the text around it, or
   // the appended region would sit next to it and leave two start markers.
-  const trimmedText = withoutOrphanMarkers(text, [startMarker, endMarker]).trim();
+  const cleaned = withoutOrphanMarkers(text, [startMarker, endMarker]);
+  const trimmedText = cleaned.trim();
   if (trimmedText.length === 0) return `${region}\n`;
+  // Only when an orphan was removed (a file with no markers is appended to
+  // exactly as before): follow a CRLF file's line endings rather than mixing.
+  if (cleaned !== text && text.includes("\r\n")) {
+    return `${trimmedText}\r\n\r\n${region.replace(/\n/g, "\r\n")}\r\n`;
+  }
   return `${trimmedText}\n\n${region}\n`;
 }
 
