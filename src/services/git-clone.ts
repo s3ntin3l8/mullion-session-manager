@@ -57,7 +57,12 @@ async function currentBranch(cwd: string): Promise<string | null> {
 type Occupant = "free" | "reuse" | "taken";
 
 /** What is at `target`: nothing (or an empty dir) to clone into, the same repo, or something else. */
-function inspectTarget(target: string, wantedOrigin: string | null): Occupant {
+function inspectTarget(root: string, dirName: string, wantedOrigin: string | null): Occupant {
+  // Re-anchor under the root right where the filesystem is touched: the
+  // directory name derives from request input, so refuse anything that
+  // resolves outside `root` (also what lets static analysis see the guard).
+  const target = path.resolve(root, dirName);
+  if (!target.startsWith(root + path.sep)) return "taken";
   let stat;
   try {
     stat = lstatSync(target);
@@ -118,7 +123,8 @@ export async function cloneCheckout(
   }
 
   for (let attempt = 1; attempt <= MAX_NAME_ATTEMPTS; attempt++) {
-    const target = path.join(resolvedRoot, attempt === 1 ? name : `${name}-${attempt}`);
+    const dirName = attempt === 1 ? name : `${name}-${attempt}`;
+    const target = path.join(resolvedRoot, dirName);
     // The name is one validated segment, but a pre-planted symlink at the
     // target could still point out of the roots — check the real location.
     let realTarget: string;
@@ -135,7 +141,7 @@ export async function cloneCheckout(
       };
     }
 
-    const occupant = inspectTarget(target, wantedOrigin);
+    const occupant = inspectTarget(resolvedRoot, dirName, wantedOrigin);
     if (occupant === "taken") continue;
     if (occupant === "reuse") {
       return { ok: true, cwd: target, defaultBranch: await currentBranch(target), reused: true };
