@@ -61,6 +61,7 @@ export function NewBranchForm({ projectId, defaultFrom, onDone, onCancel }: NewB
       <label className="sc-search ui-input-wrap">
         <span className="sc-dim ui-input-adorn">from</span>
         <TextInput
+          small
           aria-label="Start point"
           value={from}
           onChange={(e) => setFrom(e.target.value)}

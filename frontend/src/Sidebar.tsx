@@ -666,7 +666,7 @@ export function Sidebar({
         to filter. */}
           {treeProjects.length > 0 && (
             <div className="sidebar-filter-bar">
-              <div className="sidebar-filter-search">
+              <div className="sidebar-filter-search ui-input-wrap">
                 <SearchIcon size={13} strokeWidth={1.9} />
                 <TextInput
                   small
