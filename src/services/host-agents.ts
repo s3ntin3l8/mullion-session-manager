@@ -110,13 +110,14 @@ async function readRemoteHostAgents(
     if (!(err instanceof HostRequestError && err.statusCode === 404)) throw err;
     agents = null;
   }
-  // A capabilities failure must not discard the agent list: 404 or any error
-  // reads as unknown (null) and the agents above are still recorded.
-  let capabilities: string[] | null = null;
+  // A capabilities failure must not discard the agent list. An older agent's
+  // 404 is "unknown" (null); any other failure keeps the previous reading
+  // (stale, but real), like the agent list does.
+  let capabilities: string[] | null = tracker.get(hostId)?.capabilities ?? null;
   try {
     capabilities = (await client.detectCapabilities()).capabilities;
-  } catch {
-    // Unknown, including an older agent's 404.
+  } catch (err) {
+    if (err instanceof HostRequestError && err.statusCode === 404) capabilities = null;
   }
   let mullionVersion: string | null = null;
   try {

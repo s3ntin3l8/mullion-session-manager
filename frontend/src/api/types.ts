@@ -45,6 +45,7 @@ import type {
 } from "../../../src/shared/types.js";
 import type {
   HostRole,
+  PlacementCapability,
   PlacementMode,
   PlacementPlatform,
   TaskStatus,
@@ -490,7 +491,7 @@ export interface Host {
   // unknown (an old agent, or not read yet), and the Mullion version it runs.
   agents?: string[] | null;
   // Issue #2306 — "xcode" / "android-emulator"; null while unknown (an old agent).
-  capabilities?: string[] | null;
+  capabilities?: PlacementCapability[] | null;
   mullionVersion?: string | null;
   // The host's CAPACITY — how busy it is, in numbers comparable across
   // hosts. Null when the host does not report capacity (an agent build

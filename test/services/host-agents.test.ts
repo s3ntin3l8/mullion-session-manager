@@ -204,6 +204,16 @@ describe("host agent tracker (issue #2240)", () => {
     expect(tracker.get("mac")).toMatchObject({ agents: ["claude"], capabilities: null });
   });
 
+  it("keeps the previous capabilities when a later read fails (not a 404)", async () => {
+    const tracker = new HostAgentTracker();
+    tracker.record("mac", { agents: [], capabilities: ["xcode"], mullionVersion: null });
+    client.detectAgents.mockResolvedValue([agent("claude", true)]);
+    client.detectCapabilities.mockRejectedValue(new HostRequestError("mac", 502, ""));
+    client.resolveConfig.mockResolvedValue({ version: "1" });
+    await refreshRemoteHostAgents(fakeApp(tracker), "mac");
+    expect(tracker.get("mac")).toMatchObject({ agents: ["claude"], capabilities: ["xcode"] });
+  });
+
   it("keeps the agent list when the capabilities read fails", async () => {
     const tracker = new HostAgentTracker();
     client.detectAgents.mockResolvedValue([agent("codex", true)]);

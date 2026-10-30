@@ -10,7 +10,9 @@ import { PLACEMENT_CAPABILITIES, type PlacementCapability } from "../shared/cons
  * static `capabilities` snapshot goes stale and is deliberately not read.
  */
 
-const XCRUN_TIMEOUT_MS = 5000;
+// Well under the primary's request timeout, so a slow xcrun cannot make every
+// read time out (the capacity probe uses the same 2s budget).
+const XCRUN_TIMEOUT_MS = 2000;
 
 /** `xcrun --find simctl` exits 0 only with full Xcode (Command Line Tools alone lack it). */
 function xcodeAvailable(): Promise<boolean> {
@@ -43,11 +45,12 @@ async function androidEmulatorAvailable(app: FastifyInstance): Promise<boolean> 
 
 /** Pure, uncached probe. Never spawns anything off darwin. */
 export async function detectCapabilities(app: FastifyInstance): Promise<PlacementCapability[]> {
-  const [xcode, emulator] = await Promise.all([
-    process.platform === "darwin" ? xcodeAvailable() : Promise.resolve(false),
-    androidEmulatorAvailable(app),
-  ]);
-  return PLACEMENT_CAPABILITIES.filter((c) => (c === "xcode" ? xcode : emulator));
+  const probes: Record<PlacementCapability, () => Promise<boolean>> = {
+    xcode: () => (process.platform === "darwin" ? xcodeAvailable() : Promise.resolve(false)),
+    "android-emulator": () => androidEmulatorAvailable(app),
+  };
+  const found = await Promise.all(PLACEMENT_CAPABILITIES.map((c) => probes[c]()));
+  return PLACEMENT_CAPABILITIES.filter((_, i) => found[i]);
 }
 
 interface CacheEntry {

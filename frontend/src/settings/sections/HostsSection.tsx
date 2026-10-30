@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { HostEditableRole } from "../../../../src/shared/constants.js";
+import type { HostEditableRole, PlacementCapability } from "../../../../src/shared/constants.js";
 import { useDashboardStore, LIVE_REFRESH_INTERVAL_MS } from "../../store/index.js";
 import { api, ApiError, LOCAL_HOST_ID } from "../../api/index.js";
 import { hasRemoteHosts } from "../../lib/hostBadge.js";
@@ -64,7 +64,7 @@ function HostCapacityLine({ host }: { host: Host }) {
   );
 }
 
-const CAPABILITY_LABELS: Record<string, string> = {
+const CAPABILITY_LABELS: Record<PlacementCapability, string> = {
   xcode: "Xcode",
   "android-emulator": "Android emulator",
 };
@@ -73,7 +73,7 @@ const CAPABILITY_LABELS: Record<string, string> = {
 function HostCapabilitiesLine({ host }: { host: Host }) {
   if (!host.capabilities) return <span>capabilities unknown</span>;
   if (host.capabilities.length === 0) return <span>no extra capabilities</span>;
-  return <span>{host.capabilities.map((c) => CAPABILITY_LABELS[c] ?? c).join(" · ")}</span>;
+  return <span>{host.capabilities.map((c) => CAPABILITY_LABELS[c]).join(" · ")}</span>;
 }
 
 export function HostsSection() {
