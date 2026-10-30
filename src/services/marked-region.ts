@@ -86,7 +86,10 @@ export function upsertMarkedRegion(
   endMarker: string,
   body: string,
 ): string {
-  const region = `${startMarker}\n${body.trim()}\n${endMarker}`;
+  // A CRLF file gets a CRLF region on every path, so a re-run replacing it in
+  // place writes back the same bytes instead of flipping the endings.
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const region = `${startMarker}\n${body.trim()}\n${endMarker}`.replace(/\n/g, eol);
   const startIdx = text.indexOf(startMarker);
   const endIdx = startIdx === -1 ? -1 : text.indexOf(endMarker, startIdx + startMarker.length);
   if (startIdx !== -1 && endIdx !== -1) {
@@ -97,15 +100,9 @@ export function upsertMarkedRegion(
   // No complete, correctly ordered pair: a lone marker (or an end before the
   // start) is a half-edited region. Drop it, keeping the text around it, or
   // the appended region would sit next to it and leave two start markers.
-  const cleaned = withoutOrphanMarkers(text, [startMarker, endMarker]);
-  const trimmedText = cleaned.trim();
-  if (trimmedText.length === 0) return `${region}\n`;
-  // Only when an orphan was removed (a file with no markers is appended to
-  // exactly as before): follow a CRLF file's line endings rather than mixing.
-  if (cleaned !== text && text.includes("\r\n")) {
-    return `${trimmedText}\r\n\r\n${region.replace(/\n/g, "\r\n")}\r\n`;
-  }
-  return `${trimmedText}\n\n${region}\n`;
+  const trimmedText = withoutOrphanMarkers(text, [startMarker, endMarker]).trim();
+  if (trimmedText.length === 0) return `${region}${eol}`;
+  return `${trimmedText}${eol}${eol}${region}${eol}`;
 }
 
 /**

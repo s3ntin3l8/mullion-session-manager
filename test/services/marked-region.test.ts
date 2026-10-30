@@ -136,10 +136,15 @@ describe("upsertMarkedRegion", () => {
     expect(result.replace(/\r\n/g, "")).not.toContain("\n");
   });
 
-  it("leaves a marker-free CRLF file's append exactly as before", () => {
-    expect(upsertMarkedRegion("# T\r\nhand\r\n", START, END, "x")).toBe(
-      `# T\r\nhand\n\n${START}\nx\n${END}\n`,
-    );
+  it("is stable on a second run over a CRLF file", () => {
+    const once = upsertMarkedRegion(`# T\r\n${START}\r\nhand\r\n`, START, END, "a\nb");
+    expect(upsertMarkedRegion(once, START, END, "a\nb")).toBe(once);
+  });
+
+  it("gives a marker-free CRLF file a CRLF region, and a re-run is byte-identical", () => {
+    const once = upsertMarkedRegion("# T\r\nhand\r\n", START, END, "x");
+    expect(once).toBe(`# T\r\nhand\r\n\r\n${START}\r\nx\r\n${END}\r\n`);
+    expect(upsertMarkedRegion(once, START, END, "x")).toBe(once);
   });
 
   it("handles #-style markers like the .gitignore region", () => {
