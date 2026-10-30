@@ -645,6 +645,41 @@ describe("computeScaffold", () => {
       expect(claudeMd.contents).toContain("- keep me");
     });
 
+    it("does not grow the moved-text region on re-runs in a CRLF CONTRIBUTING.md", () => {
+      const generated = {
+        scaffoldRegion: "Pointer.",
+        sandboxed: true,
+        contributingAppend: "## Moved\nstep one\nstep two\n",
+      };
+      let contributing = "# Contributing\r\n\r\nHello.\r\n";
+      const outputs: string[] = [];
+      for (let i = 0; i < 4; i++) {
+        const entry = computeScaffold(
+          { "CONTRIBUTING.md": contributing },
+          { slug: "demo", generated },
+        ).find((e) => e.path === "CONTRIBUTING.md") as { contents: string };
+        contributing = entry.contents;
+        outputs.push(contributing);
+      }
+      expect(contributing.match(/step one/g)).toHaveLength(1);
+      expect(contributing).not.toContain("\r\r");
+      for (const out of outputs) expect(out).toBe(outputs[0]);
+    });
+
+    it("keeps one pointer region and one import when CLAUDE.md has a lone pointer marker", () => {
+      const existing = `# CLAUDE.md\n\n${POINTER_MARKER_START}\n\n## Mine\n\n- keep me\n`;
+      const once = computeScaffold({ "CLAUDE.md": existing }, { slug: "demo" }).find(
+        (e) => e.path === "CLAUDE.md",
+      ) as { contents: string };
+      expect(once.contents.split(POINTER_MARKER_START)).toHaveLength(2);
+      expect(once.contents.match(/^@AGENTS\.md$/gm)).toHaveLength(1);
+      expect(once.contents).toContain("- keep me");
+      const twice = computeScaffold({ "CLAUDE.md": once.contents }, { slug: "demo" }).find(
+        (e) => e.path === "CLAUDE.md",
+      ) as { contents: string };
+      expect(twice.contents).toBe(once.contents);
+    });
+
     it("returns a CLAUDE.md with no hand-written import untouched outside the pointer region", () => {
       const existing = "# P\n\n```\na\n\n\n\nb\n```\n\n## Rules\n- x\n";
       const claudeMd = computeScaffold({ "CLAUDE.md": existing }, { slug: "demo" }).find(

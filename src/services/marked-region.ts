@@ -54,6 +54,13 @@ export function clampToBytes(text: string, maxBytes: number, sourceLabel: string
   return `${truncated}\n\n[mullion: truncated at ${maxBytes} bytes — full text at ${sourceLabel}]`;
 }
 
+/** The marked region as it is written into a file whose line endings are
+ * `eol`. The body's own endings are normalized first so a CRLF body never
+ * becomes `\r\r\n`. */
+function buildRegion(startMarker: string, endMarker: string, body: string, eol: string): string {
+  return `${startMarker}\n${body.trim().replace(/\r\n/g, "\n")}\n${endMarker}`.replace(/\n/g, eol);
+}
+
 /**
  * PR-6 (scaffold Mullion integration as a PR) — the write-side counterpart
  * `extractMarkedRegion` above never needed: every EXISTING caller
@@ -67,15 +74,20 @@ export function clampToBytes(text: string, maxBytes: number, sourceLabel: string
  * or a repo that already committed a region by hand), replaces everything
  * from `startMarker` through `endMarker` in place — the surrounding
  * document is left untouched, and a pre-existing region's content is fully
- * superseded, not merged with. If either marker is missing, appends a new
- * region to the end of `text` instead (separated by a blank line from
+ * superseded, not merged with. If there is no complete, correctly ordered
+ * pair, any orphan marker (a lone one, or an end before the start) is first
+ * removed, keeping the text around it, so a half-edited file never ends up with
+ * two start markers; then a new region is appended to the end of `text`
+ * instead (separated by a blank line from
  * whatever's already there), rather than refusing or guessing where to
  * insert into unfamiliar prose — this mirrors `check-scaffold-region-sync.mjs`'s
  * own byte-identical-region assumption: a fresh region always starts
  * unambiguous only when appended, never spliced mid-paragraph. `body` is
  * trimmed before being placed between the markers, so callers don't need
  * to worry about leading/trailing whitespace producing a visually
- * inconsistent region across repeated calls.
+ * inconsistent region across repeated calls. A CRLF file (one containing
+ * `\r\n`) gets a CRLF region on every path, with `body`'s own line endings
+ * normalized first, so a re-run writes back the same bytes.
  */
 export function upsertMarkedRegion(
   text: string,
@@ -83,7 +95,10 @@ export function upsertMarkedRegion(
   endMarker: string,
   body: string,
 ): string {
-  const region = `${startMarker}\n${body.trim()}\n${endMarker}`;
+  // A CRLF file gets a CRLF region on every path, so a re-run replacing it in
+  // place writes back the same bytes instead of flipping the endings.
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const region = buildRegion(startMarker, endMarker, body, eol);
   const startIdx = text.indexOf(startMarker);
   const endIdx = startIdx === -1 ? -1 : text.indexOf(endMarker, startIdx + startMarker.length);
   if (startIdx !== -1 && endIdx !== -1) {
@@ -91,9 +106,12 @@ export function upsertMarkedRegion(
     const after = text.slice(endIdx + endMarker.length);
     return `${before}${region}${after}`;
   }
-  const trimmedText = text.trim();
-  if (trimmedText.length === 0) return `${region}\n`;
-  return `${trimmedText}\n\n${region}\n`;
+  // No complete, correctly ordered pair: a lone marker (or an end before the
+  // start) is a half-edited region. Drop it, keeping the text around it, or
+  // the appended region would sit next to it and leave two start markers.
+  const trimmedText = withoutOrphanMarkers(text, [startMarker, endMarker]).trim();
+  if (trimmedText.length === 0) return `${region}${eol}`;
+  return `${trimmedText}${eol}${eol}${region}${eol}`;
 }
 
 /**
@@ -193,9 +211,11 @@ export function upsertMarkedRegionAfterIntro(
   if (startIdx !== -1 && text.indexOf(endMarker, startIdx + startMarker.length) !== -1) {
     return upsertMarkedRegion(text, startMarker, endMarker, body);
   }
+  // upsertMarkedRegion drops orphan markers too, but the heading search below
+  // must run on the cleaned text, so the strip happens here first.
   text = withoutOrphanMarkers(text, [startMarker, endMarker]);
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
-  const region = `${startMarker}\n${body.trim()}\n${endMarker}`.replace(/\n/g, eol);
+  const region = buildRegion(startMarker, endMarker, body, eol);
   const lines = text.split("\n");
   const top = topLevelLines(lines);
   let offset = 0;
