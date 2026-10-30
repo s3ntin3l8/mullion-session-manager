@@ -1,3 +1,4 @@
+import { GIT_CLONE_TIMEOUT_MS } from "../../src/services/git-run.js";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { Readable } from "node:stream";
 import {
@@ -919,6 +920,38 @@ describe("RemoteHostClient", () => {
           body: JSON.stringify({ cwd: "/x/y", branch: "mullion/task-1", token: "ghp_token" }),
         }),
       );
+    });
+
+    it("resolveGitClone POSTs {url, name, token} to /internal/git-clone with a request timeout above the agent's clone budget", async () => {
+      const timeout = vi.spyOn(AbortSignal, "timeout");
+      fetchMock.mockImplementation(async () =>
+        jsonResponse(200, { ok: true, cwd: "/r/w", defaultBranch: "main", reused: false }),
+      );
+      try {
+        await expect(client().resolveGitClone("https://h/o/w.git", "w", "tok")).resolves.toEqual({
+          ok: true,
+          cwd: "/r/w",
+          defaultBranch: "main",
+          reused: false,
+        });
+        expect(fetchMock).toHaveBeenCalledWith(
+          "http://example.invalid:1234/internal/git-clone",
+          expect.objectContaining({
+            method: "POST",
+            body: JSON.stringify({ url: "https://h/o/w.git", name: "w", token: "tok" }),
+          }),
+        );
+        expect(timeout).toHaveBeenCalledWith(GIT_CLONE_TIMEOUT_MS + 60_000);
+        await client().resolveGitClone("https://h/o/w.git", "w");
+        expect(fetchMock).toHaveBeenLastCalledWith(
+          expect.any(String),
+          expect.objectContaining({
+            body: JSON.stringify({ url: "https://h/o/w.git", name: "w" }),
+          }),
+        );
+      } finally {
+        timeout.mockRestore();
+      }
     });
 
     it("resolveTaskWorktreeDirs unwraps /internal/git-worktree/task-dirs's { dirs } envelope to a bare string[]", async () => {

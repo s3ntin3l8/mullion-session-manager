@@ -19,6 +19,8 @@ import {
 } from "./request-signature.js";
 import type { HostCapacityReport } from "./host-capacity.js";
 import { DEFAULT_GENERATION_TIMEOUT_MS } from "./scaffold-generate.js";
+import { GIT_CLONE_TIMEOUT_MS } from "./git-run.js";
+import type { CloneResult } from "./git-clone.js";
 import type { DiscoveredCandidate, Launcher, DockControl } from "./project-config.js";
 import type { AgentRuleTarget } from "./agent-rules.js";
 import type { DockConfigReadResult } from "./dock-config.js";
@@ -241,6 +243,10 @@ export function overrideTransferIdleTimeoutForTests(ms: number): () => void {
  * push-failed/host-unreachable on a remote push that's still legitimately
  * running. */
 const GIT_PUSH_REQUEST_TIMEOUT_MS = 140_000;
+/** git-clone.ts's GIT_CLONE_TIMEOUT_MS is 10 min (one `git clone`), plus the
+ * round-trip and the post-clone branch lookup. Its own constant: nothing else
+ * in this file runs anywhere near that long. */
+const GIT_CLONE_REQUEST_TIMEOUT_MS = GIT_CLONE_TIMEOUT_MS + 60_000;
 /** git-refs.ts's GIT_TIMEOUT_MS is 10s, and resolveDefaultBaseRef can run up
  * to 4 sequential git calls (fetch, symbolic-ref, 2x rev-parse candidates)
  * before this route's own resolveCommitSha adds a 5th. */
@@ -1301,6 +1307,23 @@ export class RemoteHostClient {
         body: JSON.stringify({ cwd, branch, token }),
       },
       GIT_PUSH_REQUEST_TIMEOUT_MS,
+    );
+  }
+
+  /** Clones `url` into the first PROJECTS_ROOTS entry of this agent's
+   * filesystem as `<root>/<name>` — mirrors /internal/git-clone's
+   * `CloneResult` shape. The optional read token crosses once, over this
+   * already-signed, IP-pinned channel; never logged by this method or the
+   * route it calls. */
+  resolveGitClone(url: string, name: string, token?: string): Promise<CloneResult> {
+    return this.request(
+      "/internal/git-clone",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ url, name, ...(token ? { token } : {}) }),
+      },
+      GIT_CLONE_REQUEST_TIMEOUT_MS,
     );
   }
 

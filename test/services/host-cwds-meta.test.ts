@@ -12,19 +12,23 @@ import {
 describe("parseHostCwdsMeta / serializeHostCwdsMeta", () => {
   it("reads the empty meta from null, empty and malformed values", () => {
     for (const raw of [null, undefined, "", "not json", "[]", '"x"', "null", "42"]) {
-      expect(parseHostCwdsMeta(raw as string | null)).toEqual({ auto: [], declined: [] });
+      expect(parseHostCwdsMeta(raw as string | null)).toEqual({
+        auto: [],
+        declined: [],
+        managed: [],
+      });
     }
   });
 
   it("keeps only non-empty strings, once each", () => {
     const raw = JSON.stringify({ auto: ["a", "a", 3, "", "b"], declined: "nope" });
-    expect(parseHostCwdsMeta(raw)).toEqual({ auto: ["a", "b"], declined: [] });
+    expect(parseHostCwdsMeta(raw)).toEqual({ auto: ["a", "b"], declined: [], managed: [] });
   });
 
   it("round-trips, and stores nothing at all for an empty meta", () => {
-    const meta = { auto: ["a"], declined: ["b"] };
+    const meta = { auto: ["a"], declined: ["b"], managed: ["c"] };
     expect(parseHostCwdsMeta(serializeHostCwdsMeta(meta))).toEqual(meta);
-    expect(serializeHostCwdsMeta({ auto: [], declined: [] })).toBeNull();
+    expect(serializeHostCwdsMeta({ auto: [], declined: [], managed: [] })).toBeNull();
   });
 });
 
@@ -33,7 +37,7 @@ describe("metaAfterOperatorSave", () => {
 
   it("declines a host whose entry the operator removed", () => {
     const meta = metaAfterOperatorSave({ hostCwds, meta: null }, { mac: "/Users/x/app" });
-    expect(meta).toEqual({ auto: [], declined: ["box"] });
+    expect(meta).toEqual({ auto: [], declined: ["box"], managed: [] });
   });
 
   it("clears the auto flag of every entry the operator saved, and un-declines a re-added host", () => {
@@ -46,7 +50,7 @@ describe("metaAfterOperatorSave", () => {
       box: "/srv/app",
       old: "/opt/app",
     });
-    expect(meta).toEqual({ auto: [], declined: [] });
+    expect(meta).toEqual({ auto: [], declined: [], managed: [] });
   });
 
   it("declines every host when the whole map is cleared", () => {
@@ -80,6 +84,28 @@ describe("metaAfterOperatorSave", () => {
     expect(metaAfterOperatorSave(before, { mac: "/Users/x/app" })).toEqual({
       auto: [],
       declined: ["box"],
+      managed: [],
     });
+  });
+
+  it("keeps a managed host only while its entry exists at the same path", () => {
+    const before = {
+      hostCwds,
+      meta: JSON.stringify({ auto: [], declined: [], managed: ["mac", "box"] }),
+    };
+    // mac untouched; box re-mapped by the operator -> theirs now.
+    expect(metaAfterOperatorSave(before, { mac: "/Users/x/app", box: "/other" }).managed).toEqual([
+      "mac",
+    ]);
+    // box removed -> no longer managed (and declined).
+    const removed = metaAfterOperatorSave(before, { mac: "/Users/x/app" });
+    expect(removed.managed).toEqual(["mac"]);
+    expect(removed.declined).toEqual(["box"]);
+  });
+
+  it("reads only strings from a malformed managed list, and a managed-only meta is stored", () => {
+    expect(parseHostCwdsMeta(JSON.stringify({ managed: ["a", 1, "a"] })).managed).toEqual(["a"]);
+    expect(parseHostCwdsMeta(JSON.stringify({ managed: "x" })).managed).toEqual([]);
+    expect(serializeHostCwdsMeta({ auto: [], declined: [], managed: ["a"] })).not.toBeNull();
   });
 });

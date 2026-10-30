@@ -39,7 +39,7 @@ const HTTPS_REMOTE = new RegExp(
   `^https?://(?:[^@/]+@)?github\\.com/(${GH_OWNER})/(${GH_REPO})(?:\\.git)?/?$`,
 );
 
-function parseRemoteUrl(url: string): GitHubRepoRef | null {
+export function parseRemoteUrl(url: string): GitHubRepoRef | null {
   const ssh = url.match(SSH_REMOTE);
   if (ssh) return { owner: ssh[1], repo: ssh[2] };
   const https = url.match(HTTPS_REMOTE);

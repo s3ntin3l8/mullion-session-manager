@@ -1309,6 +1309,9 @@ export interface PlacementConstraints {
 export interface HostCwdsMeta {
   auto: string[];
   declined: string[];
+  // Hosts whose entry is a Mullion-created clone. Optional so older responses
+  // and hand-built fixtures still type-check.
+  managed?: string[];
 }
 
 // Mirrors src/services/host-checkout-detect.ts: a clone of the project on

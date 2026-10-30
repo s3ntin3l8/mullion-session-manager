@@ -447,6 +447,7 @@ export function mergeProjects(
         hostCwdsMeta: serializeHostCwdsMeta({
           auto: meta.auto.filter((h) => h !== duplicate.hostId),
           declined: meta.declined.filter((h) => h !== duplicate.hostId),
+          managed: meta.managed.filter((h) => h !== duplicate.hostId),
         }),
       })
       .where(eq(projects.id, to))

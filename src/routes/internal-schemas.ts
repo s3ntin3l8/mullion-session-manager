@@ -352,6 +352,8 @@ const GIT_FIELD_DEFS = {
   seed: { type: "string", minLength: 1 },
   name: { type: "string", minLength: 1 },
   token: { type: "string", minLength: 1 },
+  // Managed clones are https-only (git-clone.ts); the service re-checks.
+  url: { type: "string", minLength: 1, maxLength: 2048 },
   force: { type: "boolean" },
   orphanPaths: {
     type: "array",
@@ -643,6 +645,29 @@ export const gitRepairSchema = schemaFor({
 // and is only ever echoed back redacted, via pushBranch's own redact().
 export const gitPushSchema = schemaFor({
   required: ["cwd", "branch", "token"],
+});
+
+export interface GitCloneBody {
+  url: string;
+  name: string;
+  token?: string;
+}
+
+// Mullion-owned checkout root — the agent-side half of cloneHostCheckout. `name`
+// is one path segment (the repo name), so it can never carry a separator or
+// a leading dot out of the first PROJECTS_ROOTS entry. `token` is optional (a
+// public repo needs none) and, like git-push's, only ever echoed back redacted.
+export const gitCloneSchema = schemaFor({
+  required: ["url", "name"],
+  optional: ["token"],
+  overrides: {
+    name: {
+      type: "string",
+      minLength: 1,
+      maxLength: 100,
+      pattern: "^[A-Za-z0-9_][A-Za-z0-9._-]*$",
+    },
+  },
 });
 
 export interface GitWorktreeResumeBody {
