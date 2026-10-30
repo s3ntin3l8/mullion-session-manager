@@ -3,7 +3,8 @@ import { sortPrsByAttention } from "./github/prPhase.js";
 import { PrDetailView } from "./github/PrDetailView.js";
 import { PrRow } from "./github/PrRow.js";
 import { IssueDetailView, IssuesSection } from "./github/IssuesView.js";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useContext, useEffect, useState } from "react";
+import { SidebarRepoTitleContext } from "./right-sidebar/sidebarToolbarSlot.js";
 import { api } from "./api/index.js";
 import type { ProjectReleaseStatus, ReleaseRunReason, ReleaseMergeReason } from "./api/index.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
@@ -12,7 +13,13 @@ import { useMullionLinks } from "./hooks/useMullionLinks.js";
 import { useDashboardStore } from "./store/index.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { Skeleton, SkeletonRegion } from "./ui/Skeleton.js";
-import { Button, SidebarRow, SidebarSection, ViewHeader } from "./ui/sidebar/index.js";
+import {
+  Button,
+  ExternalLinkOwnedContext,
+  SidebarRow,
+  SidebarSection,
+  ViewHeader,
+} from "./ui/sidebar/index.js";
 
 export interface GitHubPanelParams {
   projectId: number;
@@ -287,6 +294,16 @@ export function GitHubPanel({
 
   // The store's live PRs (kept fresh by the WS) win over the cached fetch.
   const status = useGitHubStatus(params.projectId);
+  // In the sidebar the project picker is the header: the repo card is dropped
+  // and `owner/repo` moves into the picker's tooltip.
+  const inSidebar = useContext(ExternalLinkOwnedContext);
+  const setRepoTitle = useContext(SidebarRepoTitleContext);
+  const repoTitle = status ? `${status.repo.owner}/${status.repo.repo}` : null;
+  useEffect(() => {
+    if (!setRepoTitle) return;
+    setRepoTitle(repoTitle);
+    return () => setRepoTitle(null);
+  }, [setRepoTitle, repoTitle]);
   const effectivePrs = usePrList(params.projectId);
   // Sessions / task / review run per PR (B7); the list's own PRs feed the join.
   const links = useMullionLinks(params.projectId, { prs: effectivePrs?.prs });
@@ -382,7 +399,7 @@ export function GitHubPanel({
 
   return (
     <div className={embedded ? "github-panel embedded" : "github-panel cmux-scroll"}>
-      {status && (
+      {status && !inSidebar && (
         // The repo's own open-on-GitHub icon; a PR's detail view owns its header
         // (and the PR's URL) while it is open, an issue's does the same.
         <ViewHeader

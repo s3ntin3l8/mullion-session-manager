@@ -145,19 +145,20 @@
 .right-sidebar-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
   min-height: 30px;
   padding: 8px var(--rs-pad-x) 4px;
 }
-.right-sidebar-title {
-  font-size: 0.6875rem;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+.right-sidebar-follow-glyph {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 16px;
   color: var(--muted);
 }
 .right-sidebar-header-actions {
   display: inline-flex;
+  margin-left: auto;
   gap: 2px;
 }
 .right-sidebar-icon-btn {
@@ -178,26 +179,20 @@
   background: var(--seg);
 }
 
-/* One row: project chip (left) + the active view's toolbar icons (right,
-   portaled in by SidebarToolbar). */
-.right-sidebar-subbar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px var(--rs-pad-x) 6px;
-}
-.right-sidebar-subbar > .settings-dropdown {
+/* The header's project picker (title) fills the row; the active view's toolbar
+   icons are portaled in by SidebarToolbar, pin and close sit at the end. */
+.right-sidebar-header > .settings-dropdown {
   flex: 1;
   min-width: 0;
 }
-.right-sidebar-subbar .settings-dropdown select {
+.right-sidebar-header .settings-dropdown select {
   width: 100%;
   background-color: transparent;
   border-color: transparent;
   text-overflow: ellipsis;
   font-weight: 600;
 }
-.right-sidebar-subbar .settings-dropdown select:hover {
+.right-sidebar-header .settings-dropdown select:hover {
   background-color: var(--seg);
 }
 .right-sidebar-toolbar-slot {

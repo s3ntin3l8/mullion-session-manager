@@ -92,6 +92,16 @@ describe("GitHubSidebarView", () => {
     expect(container.querySelector(".github-panel.cmux-scroll")).toBeNull();
   });
 
+  it("drops the repo card in the sidebar and keeps the open-PR count on the section", async () => {
+    const { container } = renderView();
+    await screen.findByText("PR title 1");
+    expect(container.querySelector(".sb-vh")).toBeNull();
+    expect(screen.queryByText("o/r")).toBeNull();
+    expect(screen.queryByText("1 open PR")).toBeNull();
+    const header = screen.getByText("Pull requests").closest("button, div")!;
+    expect(header.textContent).toContain("1");
+  });
+
   it("falls back to the live status' PRs when the PR cache is empty", async () => {
     vi.mocked(api.getProjectGitHubPRs).mockResolvedValue(null as unknown as GitHubPRsStatus);
     vi.mocked(api.getProjectGitHub).mockResolvedValue(

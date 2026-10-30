@@ -87,13 +87,20 @@ describe("RightSidebar", () => {
     expect(screen.queryByRole("complementary")).toBeNull();
   });
 
-  it("shows the Source Control header under the project picker", async () => {
+  it("puts the project picker in the single header row, with pin and close", async () => {
     const user = userEvent.setup();
     renderSidebar();
     await user.click(screen.getByRole("button", { name: "Git" }));
 
-    const subbar = document.querySelector(".right-sidebar-subbar")!;
-    expect(subbar.contains(screen.getByRole("combobox", { name: "Project" }))).toBe(true);
+    const header = document.querySelector(".right-sidebar-header")!;
+    expect(header.contains(screen.getByRole("combobox", { name: "Project" }))).toBe(true);
+    expect(header.contains(screen.getByRole("button", { name: "Close sidebar" }))).toBe(true);
+    expect(document.querySelector(".right-sidebar-subbar")).toBeNull();
+    expect(header.contains(screen.getByRole("img", { name: "Following the active panel" }))).toBe(
+      true,
+    );
+    // The view label is the panel's accessible name, not a rendered title.
+    expect(screen.getByRole("complementary", { name: "Git sidebar" })).toBeTruthy();
     expect(screen.getByText("Source Control")).toBeTruthy();
     expect(screen.getByRole("button", { name: "Fetch" })).toBeTruthy();
   });

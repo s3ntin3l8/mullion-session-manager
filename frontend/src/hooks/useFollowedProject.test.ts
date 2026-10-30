@@ -37,7 +37,7 @@ describe("useFollowedProject", () => {
     const { result } = renderHook(() => useFollowedProject());
 
     expect(result.current.effectiveProjectId).toBe(2);
-    expect(result.current.dropdownOptions[0].label).toBe("Following: b");
+    expect(result.current.dropdownOptions[0].label).toBe("◎ b");
   });
 
   it("a pin wins over the focused panel until it is cleared via the sentinel", () => {
@@ -132,7 +132,7 @@ describe("useFollowedProject", () => {
         useDashboardStore.setState({ sessions: [session(30, 3)], activePanelId: "session-30" }),
       );
       expect(result.current.effectiveProjectId).toBe(3);
-      expect(result.current.dropdownOptions[0].label).toBe("Following: c");
+      expect(result.current.dropdownOptions[0].label).toBe("◎ c");
     });
 
     it("pin → workspace switch → still pinned", () => {
