@@ -28,10 +28,9 @@ import {
   SidebarSection,
   StatusChip,
 } from "../ui/sidebar/index.js";
-import { decideSessionAction, taskTone } from "../ui/sidebar/linkDecisions.js";
+import { decideSessionAction, splitTaskSessions, taskTone } from "../ui/sidebar/linkDecisions.js";
 import { SearchInput } from "../ui/primitives.js";
 import { SessionPills } from "../ui/sidebar/SessionPills.js";
-import { splitTaskSessions } from "../ui/sidebar/linkDecisions.js";
 import { TaskChip } from "../ui/sidebar/TaskChip.js";
 
 // The Issues half of the GitHub sidebar: a filterable list (label chips,
