@@ -96,7 +96,10 @@ function useGitHubBadge(projectId: number | null): RailBadge | null {
     if (n) reasons.push(`${n} PR${n === 1 ? "" : "s"}: ${PHASE_LABEL[phase].toLowerCase()}`);
   }
   if (defaultBranchFailing) reasons.push("default branch CI failing");
-  if (needsYou > 0) reasons.push(`${needsYou} task${needsYou === 1 ? "" : "s"} need you`);
+  if (needsYou > 0)
+    reasons.push(
+      `${needsYou} task${needsYou === 1 ? "" : "s"} ${needsYou === 1 ? "needs" : "need"} you`,
+    );
   return { kind: "alert", title: reasons.join(", ") };
 }
 

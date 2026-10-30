@@ -41,6 +41,7 @@ describe("countTasks", () => {
       task(4, { status: "claimed", failureReason: "host offline" }),
       task(5, { status: "reviewing", approvalState: "awaiting-human" }),
       task(6, { status: "failed" }),
+      task(7, { status: "reviewing" }),
     ]);
     expect(c).toEqual({
       ready: 1,
@@ -96,7 +97,7 @@ describe("GitHub rail badge", () => {
     set([task(1, { status: "failed" })]);
     expect(renderHook(() => useBadge(4)).result.current).toEqual({
       kind: "alert",
-      title: "1 task need you",
+      title: "1 task needs you",
     });
   });
 });

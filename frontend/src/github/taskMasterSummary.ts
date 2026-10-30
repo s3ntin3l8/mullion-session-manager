@@ -28,7 +28,7 @@ export function countTasks(tasks: Task[]): TaskMasterCounts {
   for (const t of tasks) {
     if (t.approvalState === "awaiting-human") c.awaitingApproval++;
     if (t.status === "ready") c.ready++;
-    else if (t.status === "reviewing") c.reviewing++;
+    else if (t.status === "reviewing" && t.approvalState !== "awaiting-human") c.reviewing++;
     else if (t.status === "failed") c.failed++;
     else if (isWaiting(t)) c.waiting++;
     else if (t.status === "claimed" || t.status === "in_progress") c.running++;
