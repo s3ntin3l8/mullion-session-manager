@@ -105,7 +105,7 @@ describe("host agent tracker (issue #2240)", () => {
     await refreshRemoteHostAgents(fakeApp(tracker), "mac");
     expect(tracker.get("mac")).toMatchObject({
       agents: ["claude"],
-      capabilities: null,
+      capabilities: [],
       mullionVersion: "0.3.40",
     });
   });
