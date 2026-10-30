@@ -97,15 +97,67 @@ export function upsertMarkedRegion(
 }
 
 /**
+ * Per line of a markdown document: true when the line is "top level" prose,
+ * false when it sits inside a leading YAML frontmatter block, a fenced code
+ * block (matched on fence character and length, at most 3 spaces of indent,
+ * as CommonMark does) or a multi-line HTML comment. Used to find structure
+ * (a `## ` heading, a bare import line) without being fooled by examples
+ * quoted inside code or comments. Deliberately small, not a markdown parser:
+ * callers fall back to the safe behavior (append, leave alone) when nothing
+ * qualifies.
+ */
+export function topLevelLines(lines: string[]): boolean[] {
+  const out: boolean[] = new Array<boolean>(lines.length).fill(true);
+  let i = 0;
+  if (/^---\s*$/.test(lines[0] ?? "")) {
+    const close = lines.findIndex((l, idx) => idx > 0 && /^(---|\.\.\.)\s*$/.test(l));
+    if (close > 0) {
+      for (let k = 0; k <= close; k++) out[k] = false;
+      i = close + 1;
+    }
+  }
+  let fence: { ch: string; len: number } | null = null;
+  let inComment = false;
+  for (; i < lines.length; i++) {
+    const line = lines[i].replace(/\r$/, "");
+    if (fence) {
+      out[i] = false;
+      const m = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
+      if (m && m[1][0] === fence.ch && m[1].length >= fence.len) fence = null;
+      continue;
+    }
+    if (inComment) {
+      out[i] = false;
+      if (line.includes("-->")) inComment = false;
+      continue;
+    }
+    const f = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (f) {
+      fence = { ch: f[1][0], len: f[1].length };
+      out[i] = false;
+      continue;
+    }
+    const open = line.lastIndexOf("<!--");
+    if (open !== -1 && !line.includes("-->", open)) {
+      out[i] = false;
+      inComment = true;
+    }
+  }
+  return out;
+}
+
+/**
  * Like `upsertMarkedRegion`, but when the markers are absent the new region
  * goes right after the document's leading title/intro (immediately before the
- * first `## ` heading) instead of at the end of the file. A scaffold's
+ * first top-level `## ` heading) instead of at the end of the file. A scaffold's
  * conventions are what every agent must read first; appended after a long
- * hand-written file they land below the rules they have to outrank. When the
- * markers are present the region is replaced in place, exactly as
- * `upsertMarkedRegion` does, and a file with no `## ` heading falls back to
- * appending. Fenced code blocks are skipped, so a `## ` inside one is not
- * mistaken for a heading.
+ * hand-written file they land below the rules they have to outrank. Whenever
+ * EITHER marker is already present (a complete region, or a half-edited one)
+ * this is exactly `upsertMarkedRegion`, and a file with no top-level `## `
+ * heading also falls back to appending. Headings inside frontmatter, fenced
+ * code or HTML comments are skipped. Setext (underlined) headings are not
+ * recognised, so a region may land after one; that is cosmetic. A CRLF file
+ * gets a CRLF region.
  */
 export function upsertMarkedRegionAfterIntro(
   text: string,
@@ -113,22 +165,23 @@ export function upsertMarkedRegionAfterIntro(
   endMarker: string,
   body: string,
 ): string {
-  const startIdx = text.indexOf(startMarker);
-  if (startIdx !== -1 && text.indexOf(endMarker, startIdx + startMarker.length) !== -1) {
+  if (text.includes(startMarker) || text.includes(endMarker)) {
     return upsertMarkedRegion(text, startMarker, endMarker, body);
   }
-  const region = `${startMarker}\n${body.trim()}\n${endMarker}`;
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  const region = `${startMarker}\n${body.trim()}\n${endMarker}`.replace(/\n/g, eol);
   const lines = text.split("\n");
-  let inFence = false;
+  const top = topLevelLines(lines);
   let offset = 0;
-  for (const line of lines) {
-    if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
-    else if (!inFence && /^## /.test(line)) {
+  for (let i = 0; i < lines.length; i++) {
+    if (top[i] && /^## /.test(lines[i])) {
       const head = text.slice(0, offset).trimEnd();
       const tail = text.slice(offset);
-      return head.length === 0 ? `${region}\n\n${tail}` : `${head}\n\n${region}\n\n${tail}`;
+      return head.length === 0
+        ? `${region}${eol}${eol}${tail}`
+        : `${head}${eol}${eol}${region}${eol}${eol}${tail}`;
     }
-    offset += line.length + 1;
+    offset += lines[i].length + 1;
   }
   return upsertMarkedRegion(text, startMarker, endMarker, body);
 }

@@ -3,6 +3,7 @@ import {
   clampToBytes,
   extractMarkedRegion,
   upsertMarkedRegion,
+  topLevelLines,
   upsertMarkedRegionAfterIntro,
 } from "../../src/services/marked-region.js";
 
@@ -150,5 +151,73 @@ describe("upsertMarkedRegionAfterIntro", () => {
 
   it("creates the region for an empty file", () => {
     expect(upsertMarkedRegionAfterIntro("", START, END, "body")).toBe(`${START}\nbody\n${END}\n`);
+  });
+
+  it("skips a ## inside leading YAML frontmatter", () => {
+    const text = "---\ntitle: x\n## k\n---\n# T\n\n## A\nx";
+    const result = upsertMarkedRegionAfterIntro(text, START, END, "body");
+    expect(result.startsWith("---\ntitle: x\n## k\n---\n# T")).toBe(true);
+    expect(result.indexOf(START)).toBeLessThan(result.indexOf("## A"));
+    expect(result.indexOf(START)).toBeGreaterThan(result.indexOf("# T"));
+  });
+
+  it("matches fences by character and length, so a ``` line inside a ~~~ block does not close it", () => {
+    const text = "# T\n~~~\n```\n## no\n~~~\n\n## Real\nx";
+    const result = upsertMarkedRegionAfterIntro(text, START, END, "body");
+    expect(result.indexOf(START)).toBeGreaterThan(result.indexOf("~~~\n\n"));
+    expect(result.indexOf(START)).toBeLessThan(result.indexOf("## Real"));
+    const longer = "# T\n````\n```\n## no\n````\n\n## Real\nx";
+    const r2 = upsertMarkedRegionAfterIntro(longer, START, END, "body");
+    expect(r2.indexOf(START)).toBeGreaterThan(r2.indexOf("````\n\n"));
+  });
+
+  it("skips a ## inside a multi-line HTML comment", () => {
+    const text = "# T\n\n<!--\n## hidden\n-->\n\n## Real\nx";
+    const result = upsertMarkedRegionAfterIntro(text, START, END, "body");
+    expect(result.indexOf(START)).toBeGreaterThan(result.indexOf("-->"));
+    expect(result.indexOf(START)).toBeLessThan(result.indexOf("## Real"));
+  });
+
+  it("falls back to upsertMarkedRegion when only one marker is present (no second start marker)", () => {
+    const text = `# T\n${START}\nold\n## A`;
+    expect(upsertMarkedRegionAfterIntro(text, START, END, "body")).toBe(
+      upsertMarkedRegion(text, START, END, "body"),
+    );
+  });
+
+  it("keeps a CRLF file CRLF", () => {
+    const text = "# T\r\n\r\nintro\r\n\r\n## A\r\nx\r\n";
+    const result = upsertMarkedRegionAfterIntro(text, START, END, "a\nb");
+    expect(result).toBe(
+      `# T\r\n\r\nintro\r\n\r\n${START}\r\na\r\nb\r\n${END}\r\n\r\n## A\r\nx\r\n`,
+    );
+    expect(result).not.toMatch(/[^\r]\n/);
+  });
+});
+
+describe("topLevelLines", () => {
+  it("flags frontmatter, fences and multi-line comments as not top level", () => {
+    const lines = ["---", "a: 1", "---", "p", "```", "c", "```", "<!--", "x", "-->", "q"];
+    expect(topLevelLines(lines)).toEqual([
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+    ]);
+  });
+
+  it("does not treat an unclosed leading --- as frontmatter", () => {
+    expect(topLevelLines(["---", "a"])).toEqual([true, true]);
+  });
+
+  it("ignores a single-line comment", () => {
+    expect(topLevelLines(["<!-- c -->", "p"])).toEqual([true, true]);
   });
 });

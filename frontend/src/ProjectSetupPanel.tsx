@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, RateLimitedError } from "./api/index.js";
 import { parseUnifiedDiff } from "./diffUtils.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
@@ -149,7 +149,19 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
     }
   }, [params.projectId, slug, includeContributingPointer, symlinkAgentsSkills, includeDockConfig]);
 
+  const generateInFlight = useRef(false);
+  // A refresh choice belongs to the slug it was made for.
+  const resetRefreshChoice = useCallback(() => {
+    setOfferRefresh(false);
+    setRefreshSkill(false);
+    setRefreshReviewer(false);
+  }, []);
+
   const handleGenerate = useCallback(async () => {
+    // State alone can't stop two clicks in one tick; each call is a real,
+    // costly agent turn.
+    if (generateInFlight.current) return;
+    generateInFlight.current = true;
     setGenerating(true);
     setError(null);
     setApplyResult(null);
@@ -165,7 +177,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
         ...(refresh.length > 0 ? { refresh } : {}),
       });
       setPreview({ ...result, generated: true });
-      setOfferRefresh(false);
+      resetRefreshChoice();
     } catch (err) {
       if (err instanceof ApiError && err.statusCode === 409) {
         setOfferRefresh(true);
@@ -176,6 +188,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
       }
       setPreview(null);
     } finally {
+      generateInFlight.current = false;
       setGenerating(false);
     }
   }, [
@@ -186,6 +199,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
     includeDockConfig,
     refreshSkill,
     refreshReviewer,
+    resetRefreshChoice,
   ]);
 
   const handleApply = useCallback(async () => {
@@ -213,10 +227,11 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
   }, [params.projectId, preview, refreshProjects]);
 
   const handleBack = useCallback(() => {
+    resetRefreshChoice();
     setPreview(null);
     setApplyResult(null);
     setError(null);
-  }, []);
+  }, [resetRefreshChoice]);
 
   if (applyResult) {
     return (
@@ -349,7 +364,10 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
             id="setup-slug"
             type="text"
             value={slug}
-            onChange={(e) => setSlug(e.target.value)}
+            onChange={(e) => {
+              setSlug(e.target.value);
+              resetRefreshChoice();
+            }}
             placeholder="my-project"
           />
         </div>

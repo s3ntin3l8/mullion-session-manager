@@ -1,6 +1,10 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { upsertMarkedRegion, upsertMarkedRegionAfterIntro } from "./marked-region.js";
+import {
+  topLevelLines,
+  upsertMarkedRegion,
+  upsertMarkedRegionAfterIntro,
+} from "./marked-region.js";
 import { isDangerousSkillName } from "./hook-adapters/skill-name.js";
 import { parseSkillFrontmatter } from "./skills.js";
 import type { DockControl } from "./project-config.js";
@@ -629,25 +633,46 @@ function stripLegacyScaffoldRegionMirror(text: string): string {
 }
 
 /** Removes a hand-written bare `@AGENTS.md` import line (and the HTML comment
- * block directly above it that explains that import) from the parts of a
+ * block directly above it that mentions AGENTS.md) from the parts of a
  * CLAUDE.md outside the scaffold's own pointer region, so the pointer region
  * the scaffold upserts is the file's only import rather than a second one
- * under it. Text inside the pointer markers is left alone (an idempotent
- * re-run replaces it wholesale anyway). A no-op when there is no such line. */
+ * under it. Line-based and fence/comment/frontmatter-aware (an example import
+ * quoted in a code block is left alone); text inside the pointer markers is
+ * left alone (an idempotent re-run replaces it wholesale anyway); line endings
+ * are preserved. Returns the input untouched, byte for byte, when there is no
+ * such line. */
 function stripHandWrittenAgentsImport(text: string): string {
-  const startIdx = text.indexOf(POINTER_MARKER_START);
-  const endIdx =
-    startIdx === -1 ? -1 : text.indexOf(POINTER_MARKER_END, startIdx + POINTER_MARKER_START.length);
-  const strip = (part: string): string =>
-    part
-      .replace(
-        /(?:<!--(?:(?!-->)[\s\S])*?AGENTS\.md(?:(?!-->)[\s\S])*?-->[ \t]*\r?\n)?^@AGENTS\.md[ \t]*\r?\n?/gm,
-        "",
-      )
-      .replace(/\n{3,}/g, "\n\n");
-  if (startIdx === -1 || endIdx === -1) return strip(text);
-  const end = endIdx + POINTER_MARKER_END.length;
-  return strip(text.slice(0, startIdx)) + text.slice(startIdx, end) + strip(text.slice(end));
+  const lines = text.split("\n");
+  const top = topLevelLines(lines);
+  // Pointer-region lines are not "outside" it.
+  let inPointer = false;
+  const outside = lines.map((l, i) => {
+    if (l.includes(POINTER_MARKER_START)) inPointer = true;
+    const keep = top[i] && !inPointer;
+    if (l.includes(POINTER_MARKER_END)) inPointer = false;
+    return keep;
+  });
+  const drop = new Set<number>();
+  for (let j = 0; j < lines.length; j++) {
+    if (!outside[j] || lines[j].replace(/\r$/, "").trim() !== "@AGENTS.md") continue;
+    drop.add(j);
+    let start = j;
+    const above = j - 1;
+    if (above >= 0 && lines[above].replace(/\r$/, "").trimEnd().endsWith("-->")) {
+      let s = above;
+      while (s >= 0 && !lines[s].includes("<!--") && !(s < above && lines[s].includes("-->"))) s--;
+      if (s >= 0 && lines[s].includes("<!--")) {
+        const block = lines.slice(s, above + 1).join("\n");
+        if (block.includes("AGENTS.md")) start = s;
+      }
+    }
+    for (let k = start; k < j; k++) drop.add(k);
+    // One blank line separated this import from what follows; don't leave two.
+    const blankBefore = start === 0 || lines[start - 1].trim() === "";
+    if (blankBefore && j + 1 < lines.length && lines[j + 1].trim() === "") drop.add(j + 1);
+  }
+  if (drop.size === 0) return text;
+  return lines.filter((_, i) => !drop.has(i)).join("\n");
 }
 
 /**

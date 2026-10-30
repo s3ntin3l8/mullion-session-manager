@@ -128,6 +128,40 @@ describe("ProjectSetupPanel", () => {
       ]);
     });
 
+    it("drops the regenerate choice when the slug changes", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({ generate: () => jsonResponse(409, { message: "already exist" }) }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      await user.type(screen.getByPlaceholderText("my-project"), "a");
+      await user.click(screen.getByText("Generate with agent"));
+      await user.click(await screen.findByLabelText("Regenerate the skill"));
+
+      await user.type(screen.getByPlaceholderText("my-project"), "b");
+      expect(screen.queryByLabelText("Regenerate the skill")).not.toBeInTheDocument();
+      expect(screen.getByText("Generate with agent")).toBeEnabled();
+    });
+
+    it("starts only one agent turn for a double click", async () => {
+      let release!: (r: Response) => void;
+      const fetchMock = mockFetch({
+        generate: () => new Promise<Response>((resolve) => (release = resolve)) as never,
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      await user.type(screen.getByPlaceholderText("my-project"), "demo");
+      const button = screen.getByText("Generate with agent");
+      await user.dblClick(button);
+      release(generated());
+      await screen.findByText("Preview — 2 files");
+      expect(
+        fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/setup/generate")),
+      ).toHaveLength(1);
+    });
+
     it("shows an error and stays on the form when generation fails", async () => {
       vi.stubGlobal(
         "fetch",

@@ -644,6 +644,45 @@ describe("computeScaffold", () => {
       expect(claudeMd.contents).toContain("- keep me");
     });
 
+    it("returns a CLAUDE.md with no hand-written import untouched outside the pointer region", () => {
+      const existing = "# P\n\n```\na\n\n\n\nb\n```\n\n## Rules\n- x\n";
+      const claudeMd = computeScaffold({ "CLAUDE.md": existing }, { slug: "demo" }).find(
+        (e) => e.path === "CLAUDE.md",
+      ) as { contents: string };
+      expect(claudeMd.contents.startsWith(existing.trimEnd())).toBe(true);
+      expect(claudeMd.contents).toContain("a\n\n\n\nb");
+    });
+
+    it("leaves an @AGENTS.md example inside a code fence alone", () => {
+      const existing = "# P\n\n```md\n@AGENTS.md\n```\n";
+      const claudeMd = computeScaffold({ "CLAUDE.md": existing }, { slug: "demo" }).find(
+        (e) => e.path === "CLAUDE.md",
+      ) as { contents: string };
+      expect(claudeMd.contents).toContain("```md\n@AGENTS.md\n```");
+    });
+
+    it("only removes a comment directly above the import, and keeps one that is not", () => {
+      const existing =
+        "<!-- note about AGENTS.md -->\n\nprose\n\n<!-- explains AGENTS.md import -->\n@AGENTS.md\n\ntail\n";
+      const claudeMd = computeScaffold({ "CLAUDE.md": existing }, { slug: "demo" }).find(
+        (e) => e.path === "CLAUDE.md",
+      ) as { contents: string };
+      expect(claudeMd.contents).toContain("<!-- note about AGENTS.md -->");
+      expect(claudeMd.contents).not.toContain("explains AGENTS.md import");
+      expect(claudeMd.contents).toContain("tail");
+      expect(claudeMd.contents.match(/^@AGENTS\.md$/gm)).toHaveLength(1);
+    });
+
+    it("handles a CRLF CLAUDE.md with a hand-written import", () => {
+      const existing = "# P\r\n\r\n<!-- AGENTS.md import -->\r\n@AGENTS.md\r\n\r\nrules\r\n";
+      const claudeMd = computeScaffold({ "CLAUDE.md": existing }, { slug: "demo" }).find(
+        (e) => e.path === "CLAUDE.md",
+      ) as { contents: string };
+      expect(claudeMd.contents).toContain("rules");
+      expect(claudeMd.contents).not.toContain("AGENTS.md import");
+      expect(claudeMd.contents.match(/^@AGENTS\.md$/gm)).toHaveLength(1);
+    });
+
     it("is idempotent for CLAUDE.md on a re-run", () => {
       const first = computeScaffold({}, { slug: "demo" }).find((e) => e.path === "CLAUDE.md") as {
         contents: string;
