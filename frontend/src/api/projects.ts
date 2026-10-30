@@ -3,6 +3,7 @@
 // — both are always reached through a projectId path segment and have no
 // other natural home in the domain list. Split out of the former flat
 // frontend/src/api.ts (PR 22 of the refactoring roadmap).
+import type { ExistingInstructionsMode } from "../../../src/shared/constants.js";
 import { request } from "./client.js";
 import type {
   Project,
@@ -20,7 +21,7 @@ import type {
 import type { Launcher } from "../../../src/shared/types.js";
 import type { PlacementMode } from "../../../src/shared/constants.js";
 
-export type ExistingInstructionsMode = "keep" | "report" | "restructure";
+export type { ExistingInstructionsMode };
 
 export interface ScaffoldConflict {
   file: string;

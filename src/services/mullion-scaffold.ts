@@ -197,6 +197,16 @@ function stampScaffoldBody(contents: string, slug: string): string {
 // silently re-diffing against contents that already changed underneath
 // it).
 
+export class MissingRegionPlaceholderError extends Error {
+  constructor() {
+    super(
+      `a restructured AGENTS.md body has no ${MULLION_REGION_PLACEHOLDER} line to put ` +
+        `Mullion's region on`,
+    );
+    this.name = "MissingRegionPlaceholderError";
+  }
+}
+
 export class InvalidScaffoldSlugError extends Error {
   constructor(slug: string) {
     super(`"${slug}" is not a safe slug for a scaffolded project`);
@@ -661,13 +671,15 @@ function stripLegacyScaffoldRegionMirror(text: string): string {
  * commit: Mullion's region replaces the body's single placeholder line. The
  * line endings follow the repo's existing AGENTS.md (the agent's text is
  * LF). The caller guarantees exactly one placeholder (scaffold-generate.ts
- * rejects anything else); a body without one is returned unchanged rather
- * than guessed at. */
+ * rejects anything else); a body without one throws
+ * `MissingRegionPlaceholderError` rather than being committed unchanged. */
 function spliceRegionIntoRewrite(body: string, region: string, existingAgentsMd: string): string {
   const block = `${SCAFFOLD_REGION_START}\n${region.trim()}\n${SCAFFOLD_REGION_END}`;
   const lines = body.split("\n");
   const at = lines.findIndex((l) => l.trim() === MULLION_REGION_PLACEHOLDER);
-  if (at === -1) return body;
+  // Fail closed like every sibling input: committing the body as-is would
+  // leave an AGENTS.md with no Mullion region at all.
+  if (at === -1) throw new MissingRegionPlaceholderError();
   lines[at] = block;
   let out = lines.join("\n").trimEnd() + "\n";
   if (existingAgentsMd.includes("\r\n")) out = out.replace(/\r?\n/g, "\r\n");

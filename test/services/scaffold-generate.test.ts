@@ -2029,6 +2029,14 @@ describe("existingInstructions (issue #2316)", () => {
       expect(r.contributingAppend).toBe("## Moved\nsteps\n");
     });
 
+    it("treats 'None.' as nothing moved too, never as text to commit", () => {
+      const raw = withAgents(
+        body,
+        "<<<MULLION_CONTRIBUTING_APPEND_START>>>\nNone.\n<<<MULLION_CONTRIBUTING_APPEND_END>>>\n",
+      );
+      expect(parseGeneratedOutput(raw, "demo", opts).contributingAppend).toBeUndefined();
+    });
+
     it("treats an absent or 'none' append as nothing moved", () => {
       expect(
         parseGeneratedOutput(withAgents(body), "demo", opts).contributingAppend,
@@ -2134,13 +2142,26 @@ describe("existingInstructions (issue #2316)", () => {
       expect(r.droppedConflictLines).toBe(3);
     });
 
-    it("returns an empty list for 'none' or a missing section", () => {
-      const none =
-        validOutput("demo") + "<<<MULLION_CONFLICTS_START>>>\nnone\n<<<MULLION_CONFLICTS_END>>>\n";
-      expect(parseGeneratedOutput(none, "demo", { mode: "report" }).conflicts).toEqual([]);
-      expect(
-        parseGeneratedOutput(validOutput("demo"), "demo", { mode: "report" }).conflicts,
-      ).toEqual([]);
+    it("returns an empty list for 'none' (with or without a full stop)", () => {
+      for (const word of ["none", "None.", "NONE"]) {
+        const raw =
+          validOutput("demo") +
+          `<<<MULLION_CONFLICTS_START>>>\n${word}\n<<<MULLION_CONFLICTS_END>>>\n`;
+        const r = parseGeneratedOutput(raw, "demo", { mode: "report" });
+        expect(r.conflicts).toEqual([]);
+        expect(r.droppedConflictLines).toBe(0);
+      }
+    });
+
+    it("fails the turn when the conflicts section is absent or empty, instead of reading it as 'no conflicts'", () => {
+      expect(() => parseGeneratedOutput(validOutput("demo"), "demo", { mode: "report" })).toThrow(
+        GenerationOutputError,
+      );
+      const empty =
+        validOutput("demo") + "<<<MULLION_CONFLICTS_START>>>\n\n<<<MULLION_CONFLICTS_END>>>\n";
+      expect(() => parseGeneratedOutput(empty, "demo", { mode: "report" })).toThrow(
+        GenerationOutputError,
+      );
     });
 
     it("tolerates code fences, truncates long fields, and counts entries past the cap as dropped", () => {

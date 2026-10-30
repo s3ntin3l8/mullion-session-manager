@@ -19,6 +19,7 @@ import {
 } from "./mullion-scaffold.js";
 import { parseSkillFrontmatter } from "./skills.js";
 import { topLevelLines } from "./marked-region.js";
+import type { ExistingInstructionsMode } from "../shared/constants.js";
 
 // Issue #956 — replaces mullion-scaffold.ts's static placeholder skill/
 // reviewer/AGENTS.md-region text with genuinely codebase-specific content, by
@@ -233,7 +234,7 @@ export class GenerationOutputError extends Error {
  * that contradict or duplicate the committed conventions, for a human to act
  * on. `restructure` also returns a rewritten AGENTS.md (and, optionally, text
  * moved out of it into CONTRIBUTING.md) for the human to review in the diff. */
-export type ExistingInstructionsMode = "keep" | "report" | "restructure";
+export type { ExistingInstructionsMode };
 
 export const CONFLICT_KINDS = ["contradicts", "duplicates", "misplaced"] as const;
 export type ConflictKind = (typeof CONFLICT_KINDS)[number];
@@ -546,16 +547,24 @@ export function parseGeneratedOutput(
   const regionEnd = raw.indexOf(GENERATED_REGION_END, raw.indexOf(GENERATED_REGION_START));
   const tail = regionEnd === -1 ? raw : raw.slice(regionEnd + GENERATED_REGION_END.length);
   if (mode === "report") {
-    const { conflicts, dropped } = parseConflicts(
-      optionalSection(tail, CONFLICTS_START, CONFLICTS_END),
-    );
+    // The prompt always asks for this section (the word `none` when there is
+    // nothing), so an absent or empty one is a protocol violation, not "no
+    // conflicts": reading it as an empty list would show an all-clear.
+    const conflictsSection = optionalSection(tail, CONFLICTS_START, CONFLICTS_END);
+    if (conflictsSection === null) {
+      throw new GenerationOutputError(
+        "the conflicts section is missing or empty (the agent should have written `none` if " +
+          "there were none) — regenerate rather than read that as 'no conflicts'",
+      );
+    }
+    const { conflicts, dropped } = parseConflicts(conflictsSection);
     return { ...base, conflicts, droppedConflictLines: dropped };
   }
   if (mode === "restructure") {
     const agentsMdBody = parseRestructuredAgentsMd(tail);
     const appendRaw = optionalSection(tail, CONTRIBUTING_APPEND_START, CONTRIBUTING_APPEND_END);
     const contributingAppend =
-      appendRaw && !/^none$/i.test(appendRaw) ? appendRaw + "\n" : undefined;
+      appendRaw && !/^none\.?$/i.test(appendRaw) ? appendRaw + "\n" : undefined;
     if (contributingAppend && MULLION_MARKER_RE.test(contributingAppend)) {
       throw new GenerationOutputError(
         "the CONTRIBUTING append carries a Mullion marker — regenerate rather than commit it",

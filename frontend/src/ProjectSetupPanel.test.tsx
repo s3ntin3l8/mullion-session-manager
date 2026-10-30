@@ -181,9 +181,18 @@ describe("ProjectSetupPanel", () => {
       }
 
       it("defaults to leaving existing content alone and sends no mode", async () => {
-        expect(screen.queryByLabelText("Leave it")).not.toBeInTheDocument();
-        const sent = await generateWith(null);
-        expect(sent.existingInstructions).toBeUndefined();
+        const fetchMock = mockFetch({ generate: () => generated() });
+        vi.stubGlobal("fetch", fetchMock);
+        const user = userEvent.setup();
+        render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+        expect(screen.getByLabelText("Leave it")).toBeChecked();
+        await user.type(screen.getByPlaceholderText("my-project"), "demo");
+        await user.click(screen.getByText("Generate with agent"));
+        await screen.findByText("Preview — 2 files");
+        const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/setup/generate"));
+        expect(JSON.parse((call![1] as RequestInit).body as string).existingInstructions).toBe(
+          undefined,
+        );
       });
 
       it("sends the chosen mode", async () => {

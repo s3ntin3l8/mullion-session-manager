@@ -210,3 +210,17 @@ export type HostEditableRole = (typeof HOST_EDITABLE_ROLES)[number];
  * application/octet-stream: /internal/uploads buffers that type, and a plugin
  * context allows one parser per type. */
 export const FILE_STREAM_CONTENT_TYPE = "application/vnd.mullion.file-stream";
+
+// ---------------------------------------------------------------------------
+// routes/project-setup.ts — EXISTING_INSTRUCTIONS_MODES (issue #2316)
+// ---------------------------------------------------------------------------
+//
+// What the scaffold's generation turn does with instruction content a repo
+// already has outside Mullion's own regions: "keep" (leave it alone, the
+// default), "report" (list what contradicts the committed conventions), or
+// "restructure" (propose a rewritten AGENTS.md). One list: the backend's type,
+// the route's JSON-schema enum and the frontend's type all derive from it, the
+// PLACEMENT_MODES precedent above, so a fourth mode can't be added to one and
+// silently missed by another.
+export const EXISTING_INSTRUCTIONS_MODES = ["keep", "report", "restructure"] as const;
+export type ExistingInstructionsMode = (typeof EXISTING_INSTRUCTIONS_MODES)[number];

@@ -1405,6 +1405,27 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
       await app.close();
     });
 
+    it("answers 500 (not a crash, nothing written) when a body without a placeholder gets past the parser", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+      vi.mocked(generateScaffoldContent).mockResolvedValue({
+        skill: "---\nname: demo\n---\nS\n",
+        reviewer: "---\nname: demo-reviewer\n---\nRead .claude/skills/demo/SKILL.md first.\n",
+        scaffoldRegion: "Pointer.",
+        sandboxed: true,
+        possiblyGeneric: false,
+        agentsMdBody: "# P\n\nno placeholder\n",
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "demo", existingInstructions: "restructure" },
+      });
+      expect(res.statusCode).toBe(500);
+      expect(res.json().message).toContain("<<<MULLION_REGION>>>");
+      await app.close();
+    });
+
     it("keep (the default) passes the mode through and returns no report fields", async () => {
       const app = await buildApp();
       const projectId = await createProject(app, repoDir);

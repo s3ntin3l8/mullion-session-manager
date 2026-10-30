@@ -1,3 +1,4 @@
+import { EXISTING_INSTRUCTIONS_MODES } from "../shared/constants.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { existsSync } from "node:fs";
 import path from "node:path";
@@ -10,6 +11,7 @@ import {
   conventionsUseWtDirectory,
   isValidScaffoldSlug,
   InvalidScaffoldSlugError,
+  MissingRegionPlaceholderError,
   scaffoldSkillPath,
   scaffoldReviewerPath,
   hashWorkflowConventionsSection,
@@ -144,7 +146,7 @@ const generateSchema = {
       // Issue #2316 — what the generation turn does with instruction content
       // that already exists outside Mullion's own regions. Absent means
       // "keep" (leave it alone), the historical behavior.
-      existingInstructions: { type: "string", enum: ["keep", "report", "restructure"] },
+      existingInstructions: { type: "string", enum: [...EXISTING_INSTRUCTIONS_MODES] },
     },
   },
 };
@@ -589,6 +591,11 @@ async function finishPreview(
   } catch (err) {
     if (err instanceof InvalidScaffoldSlugError)
       return { ok: false, status: 400, message: err.message };
+    // An agent body that slipped past the parser without a placeholder: the
+    // turn's output can't be used, which is a server-side failure, not a bad
+    // request.
+    if (err instanceof MissingRegionPlaceholderError)
+      return { ok: false, status: 500, message: err.message };
     throw err;
   }
   // `stage: true` — `git diff HEAD` never shows an untracked file, staged

@@ -6,6 +6,7 @@ import {
   computeScaffold,
   isValidScaffoldSlug,
   InvalidScaffoldSlugError,
+  MissingRegionPlaceholderError,
   POINTER_MARKER_START,
   POINTER_MARKER_END,
   SCAFFOLD_REGION_START,
@@ -1181,6 +1182,12 @@ describe("computeScaffold — restructured instructions (issue #2316)", () => {
     );
     expect(agents).toContain("## Workflow Conventions");
     expect(agents.endsWith("\n")).toBe(true);
+  });
+
+  it("fails closed when the body has no placeholder line, instead of committing it without a region", () => {
+    expect(() =>
+      computeScaffold({}, { slug: "demo", generated: { agentsMdBody: "# P\n\nno placeholder\n" } }),
+    ).toThrow(MissingRegionPlaceholderError);
   });
 
   it("is idempotent: re-running over its own output with the same body gives the same bytes", () => {
