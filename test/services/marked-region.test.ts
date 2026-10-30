@@ -103,10 +103,38 @@ describe("upsertMarkedRegion", () => {
     expect(result).toBe(`${START}\nreplaced\n${END}\nmiddle\n${START}\nsecond\n${END}`);
   });
 
-  it("appends a new region when the end marker precedes the start marker (same 'no valid region' case extractMarkedRegion treats as absent)", () => {
+  it("drops an orphan end marker that precedes the start marker instead of leaving two", () => {
     const text = `${END}\nold\n${START}`;
     const result = upsertMarkedRegion(text, START, END, "hello");
-    expect(result).toBe(`${text}\n\n${START}\nhello\n${END}\n`);
+    expect(result).toBe(`old\n\n${START}\nhello\n${END}\n`);
+  });
+
+  it("drops a lone start marker line, keeping the text around it", () => {
+    const result = upsertMarkedRegion(`intro\n${START}\nhand written\n`, START, END, "hello");
+    expect(result).toBe(`intro\nhand written\n\n${START}\nhello\n${END}\n`);
+    expect(result.split(START)).toHaveLength(2);
+  });
+
+  it("drops a lone end marker line, keeping the text around it", () => {
+    const result = upsertMarkedRegion(`intro\n${END}\nhand written\n`, START, END, "hello");
+    expect(result).toBe(`intro\nhand written\n\n${START}\nhello\n${END}\n`);
+  });
+
+  it("cuts only the marker when it sits inline in prose", () => {
+    const result = upsertMarkedRegion(`keep ${START} this`, START, END, "hello");
+    expect(result).toBe(`keep  this\n\n${START}\nhello\n${END}\n`);
+  });
+
+  it("is stable on a second run over a half-edited file", () => {
+    const once = upsertMarkedRegion(`intro\n${START}\nhand written\n`, START, END, "hello");
+    expect(upsertMarkedRegion(once, START, END, "hello")).toBe(once);
+  });
+
+  it("handles #-style markers like the .gitignore region", () => {
+    const m1 = "# mullion:worktrees:start";
+    const m2 = "# mullion:worktrees:end";
+    const result = upsertMarkedRegion(`node_modules\n${m1}\n`, m1, m2, ".wt/");
+    expect(result).toBe(`node_modules\n\n${m1}\n.wt/\n${m2}\n`);
   });
 
   it("round-trips through extractMarkedRegion", () => {

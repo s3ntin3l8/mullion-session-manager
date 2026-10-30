@@ -67,8 +67,11 @@ export function clampToBytes(text: string, maxBytes: number, sourceLabel: string
  * or a repo that already committed a region by hand), replaces everything
  * from `startMarker` through `endMarker` in place — the surrounding
  * document is left untouched, and a pre-existing region's content is fully
- * superseded, not merged with. If either marker is missing, appends a new
- * region to the end of `text` instead (separated by a blank line from
+ * superseded, not merged with. If there is no complete, correctly ordered
+ * pair, any orphan marker (a lone one, or an end before the start) is first
+ * removed, keeping the text around it, so a half-edited file never ends up with
+ * two start markers; then a new region is appended to the end of `text`
+ * instead (separated by a blank line from
  * whatever's already there), rather than refusing or guessing where to
  * insert into unfamiliar prose — this mirrors `check-scaffold-region-sync.mjs`'s
  * own byte-identical-region assumption: a fresh region always starts
@@ -91,7 +94,10 @@ export function upsertMarkedRegion(
     const after = text.slice(endIdx + endMarker.length);
     return `${before}${region}${after}`;
   }
-  const trimmedText = text.trim();
+  // No complete, correctly ordered pair: a lone marker (or an end before the
+  // start) is a half-edited region. Drop it, keeping the text around it, or
+  // the appended region would sit next to it and leave two start markers.
+  const trimmedText = withoutOrphanMarkers(text, [startMarker, endMarker]).trim();
   if (trimmedText.length === 0) return `${region}\n`;
   return `${trimmedText}\n\n${region}\n`;
 }
@@ -193,6 +199,8 @@ export function upsertMarkedRegionAfterIntro(
   if (startIdx !== -1 && text.indexOf(endMarker, startIdx + startMarker.length) !== -1) {
     return upsertMarkedRegion(text, startMarker, endMarker, body);
   }
+  // upsertMarkedRegion drops orphan markers too, but the heading search below
+  // must run on the cleaned text, so the strip happens here first.
   text = withoutOrphanMarkers(text, [startMarker, endMarker]);
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
   const region = `${startMarker}\n${body.trim()}\n${endMarker}`.replace(/\n/g, eol);
