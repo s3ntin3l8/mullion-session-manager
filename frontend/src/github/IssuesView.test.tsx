@@ -572,4 +572,46 @@ describe("Issues list ↔ detail round trip", () => {
     await userEvent.click(screen.getByRole("button", { name: "Open session" }));
     expect(requestOpenSession).toHaveBeenCalledWith(31);
   });
+
+  it("shows the task as a bot chip and folds its sessions out of the pills", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, LIST)));
+    useDashboardStore.setState({
+      projects: [makeProject({ id: 1 })],
+      tasks: [
+        makeTask({
+          id: 4,
+          projectId: 1,
+          issueNumber: 7,
+          status: "in_progress",
+          sessionId: 41,
+          reviewSessionId: 42,
+        }),
+      ],
+      sessions: [
+        makeSession({ id: 41, projectId: 1, name: "task-worker" }),
+        makeSession({ id: 42, projectId: 1, name: "task-reviewer" }),
+        makeSession({ id: 43, projectId: 1, name: "hand-started", liveBranch: "issue-7-crash" }),
+      ],
+    });
+    render(
+      <IssuesSection projectId={1} openIssues={1} issuesHidden={false} onOpenIssue={vi.fn()} />,
+    );
+    const chip = await screen.findByRole("button", { name: /#4 · in_progress/ });
+    expect(chip.querySelector("svg")).not.toBeNull();
+    expect(chip.querySelector('[data-testid="task-session-dot"]')).not.toBeNull();
+    expect(screen.queryByText("task-worker")).toBeNull();
+    expect(screen.queryByText("task-reviewer")).toBeNull();
+    expect(screen.getByText("hand-started")).toBeInTheDocument();
+    useDashboardStore.setState({ tasks: [], sessions: [] });
+  });
+
+  it("gives the taskStatus-only fallback chip the bot badge", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, LIST)));
+    useDashboardStore.setState({ projects: [makeProject({ id: 1 })], tasks: [], sessions: [] });
+    render(
+      <IssuesSection projectId={1} openIssues={1} issuesHidden={false} onOpenIssue={vi.fn()} />,
+    );
+    const chip = (await screen.findByText(/Task: in_progress/)).closest(".sb-chip--task");
+    expect(chip?.querySelector("svg")).not.toBeNull();
+  });
 });

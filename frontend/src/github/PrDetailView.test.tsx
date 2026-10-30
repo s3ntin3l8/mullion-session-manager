@@ -1003,7 +1003,7 @@ describe("PrDetailView", () => {
       // The Mullion card: session pill, task chip, the PR's own recent events only.
       const mullion = screen.getByRole("region", { name: "Mullion" });
       expect(within(mullion).getByRole("button", { name: /thing worker/ })).toBeInTheDocument();
-      expect(mullion).toHaveTextContent("task #5 · in_progress");
+      expect(mullion).toHaveTextContent("#5 · in_progress");
       const events = within(mullion).getByRole("list", { name: "Recent PR events" });
       expect(events).toHaveTextContent("#12: CI failed");
       expect(events).not.toHaveTextContent("#99");
@@ -1097,7 +1097,7 @@ describe("PrDetailView", () => {
       const card = await screen.findByRole("region", { name: "Mullion" });
       expect(within(card).queryByRole("button", { name: "Approve task" })).toBeNull();
       expect(within(card).getByText("Needs workflow approval — open task")).toBeInTheDocument();
-      await userEvent.click(within(card).getByRole("button", { name: "task #5 · reviewing" }));
+      await userEvent.click(within(card).getByRole("button", { name: "#5 · reviewing" }));
       expect(requestOpenTask).toHaveBeenCalledWith(5);
       act(() => useDashboardStore.setState({ tasks: [{ ...task, workflowChange: null }] }));
       expect(within(card).getByRole("button", { name: "Approve task" })).toBeEnabled();

@@ -8,7 +8,7 @@ import type * as ApiModule from "../api/index.js";
 import type { GitHubPROrWithChecks } from "../api/types.js";
 import type { MullionLinkEntry } from "../hooks/useMullionLinks.js";
 import { useDashboardStore } from "../store/index.js";
-import { makeProject } from "../test/fixtures.js";
+import { makeProject, makeSession } from "../test/fixtures.js";
 
 vi.mock("../api/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof ApiModule>();
@@ -115,5 +115,29 @@ describe("PrRow preview action (#2018)", () => {
           .join(" "),
       ).toMatch(/from a fork isn't supported/),
     );
+  });
+});
+
+describe("PrRow task vs sessions", () => {
+  const link = (id: number, name: string) => ({
+    session: makeSession({ id, name }),
+    severity: "busy" as const,
+    attention: false,
+    children: [],
+  });
+
+  it("shows a bot-badged task chip and folds the task's sessions out of the pills", () => {
+    const links: MullionLinkEntry = {
+      ...entry(null),
+      task: { id: 5, status: "in_progress", sessionId: 1, reviewSessionId: 2 } as never,
+      sessions: [link(1, "worker-sess"), link(2, "reviewer-sess"), link(3, "hand-sess")],
+    };
+    render(<PrRow pr={PR} projectId={1} links={links} onOpen={vi.fn()} />);
+    const chip = screen.getByRole("button", { name: /#5 · in_progress/ });
+    expect(chip.querySelector("svg")).not.toBeNull();
+    expect(chip.querySelector('[data-testid="task-session-dot"]')).not.toBeNull();
+    expect(screen.queryByText("worker-sess")).toBeNull();
+    expect(screen.queryByText("reviewer-sess")).toBeNull();
+    expect(screen.getByText("hand-sess")).toBeInTheDocument();
   });
 });

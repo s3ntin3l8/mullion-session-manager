@@ -1,4 +1,4 @@
-import type { Session, SessionSeverity } from "../../api/index.js";
+import type { Session, SessionSeverity, Task } from "../../api/index.js";
 import type { MullionLinkEntry, SessionLink } from "../../hooks/useMullionLinks.js";
 import type { Tone } from "../../lib/statusTone.js";
 
@@ -61,4 +61,54 @@ export function taskTone(status: string): Tone {
     default:
       return "neutral";
   }
+}
+
+type TaskSessionIds = Partial<Pick<Task, "sessionId" | "reviewSessionId">>;
+
+/**
+ * Splits a session list into what a task owns (its worker and reviewer, and
+ * everything nested under them) and what it doesn't, so a row shows the task
+ * as one bot chip and keeps session pills for hand-started sessions only.
+ */
+export function splitTaskSessions(
+  links: readonly SessionLink[],
+  task: TaskSessionIds | null | undefined,
+): { owned: SessionLink[]; rest: SessionLink[] } {
+  const ids = new Set(
+    [task?.sessionId, task?.reviewSessionId].filter((id): id is number => id != null),
+  );
+  if (ids.size === 0) return { owned: [], rest: [...links] };
+  const owned: SessionLink[] = [];
+  const keep = (ls: readonly SessionLink[]): SessionLink[] => {
+    const out: SessionLink[] = [];
+    for (const l of ls) {
+      if (ids.has(l.session.id)) owned.push(l);
+      else out.push({ ...l, children: keep(l.children) });
+    }
+    return out;
+  };
+  return { owned, rest: keep(links) };
+}
+
+/**
+ * The session a task chip's live dot tracks: the reviewer while the task is
+ * `reviewing` and a review is in flight, otherwise the worker.
+ */
+export function taskActiveSession(
+  task: TaskSessionIds & Pick<Task, "status">,
+  owned: readonly SessionLink[],
+  reviewInFlight: boolean | undefined,
+): SessionLink | null {
+  const flat: SessionLink[] = [];
+  const walk = (ls: readonly SessionLink[]) =>
+    ls.forEach((l) => {
+      flat.push(l);
+      walk(l.children);
+    });
+  walk(owned);
+  const find = (id: number | null | undefined) =>
+    id == null ? undefined : flat.find((l) => l.session.id === id);
+  const reviewer =
+    task.status === "reviewing" && reviewInFlight ? find(task.reviewSessionId) : undefined;
+  return reviewer ?? find(task.sessionId) ?? null;
 }

@@ -7,6 +7,8 @@ export {
   decideSessionAction,
   gatedSessions,
   severityTone,
+  splitTaskSessions,
+  taskActiveSession,
   type SessionAction,
 } from "./linkDecisions.js";
 export { ReviewGateChip, type ReviewGateChipProps } from "./ReviewGateChip.js";
