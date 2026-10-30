@@ -52,6 +52,7 @@ describe("buildHandoffPrompt", () => {
     expect(text).not.toContain("src/c.ts");
     expect(text).toContain("Changes requested by hermes: Fix the race");
     expect(text).toContain("Failing checks: CI, CodeQL");
+    expect(text).toContain("not required for merging still counts");
     expect(text).toContain("`feat-thing`");
   });
 

@@ -1404,6 +1404,20 @@ describe("buildCiFailurePrompt", () => {
     ci: { headSha: "abc1234", status: "failure" as const, runs: [] },
   };
 
+  it("lists the failing checks and says an optional one still counts", () => {
+    const out = buildCiFailurePrompt({
+      ...base,
+      failingChecks: [
+        { name: "codecov/patch", detail: "66.66% of diff hit (target 75.00%)" },
+        { name: "test-e2e" },
+      ],
+    });
+    expect(out).toContain("- codecov/patch — 66.66% of diff hit (target 75.00%)");
+    expect(out).toContain("- test-e2e");
+    expect(out).toContain("not required for merging still counts");
+    expect(buildCiFailurePrompt(base)).not.toContain("Failing checks:");
+  });
+
   it("offers the re-review request file only when the approval is carried through the fix", () => {
     expect(buildCiFailurePrompt(base)).not.toContain("second pair of eyes");
     const out = buildCiFailurePrompt({

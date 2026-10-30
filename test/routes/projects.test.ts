@@ -3665,6 +3665,51 @@ describe("projects route", () => {
         fs.rmSync(projectCwd, { recursive: true, force: true });
       });
 
+      it("hand-off lists a failing non-Actions check (codecov/patch) so the session is not told nothing is outstanding", async () => {
+        mockGithub(
+          gqlPr(43, {
+            headCommit: {
+              nodes: [
+                {
+                  commit: {
+                    statusCheckRollup: {
+                      state: "FAILURE",
+                      contexts: {
+                        totalCount: 1,
+                        nodes: [
+                          {
+                            __typename: "CheckRun",
+                            name: "codecov/patch",
+                            status: "COMPLETED",
+                            conclusion: "FAILURE",
+                            detailsUrl: "https://codecov.example/43",
+                            checkSuite: { app: { slug: "codecov" } },
+                          },
+                        ],
+                      },
+                    },
+                  },
+                },
+              ],
+            },
+          }),
+          (url) =>
+            url.includes("/actions/runs?head_sha=")
+              ? jsonResponse(200, { workflow_runs: [] })
+              : null,
+        );
+        const app = await makeApp();
+        const { projectCwd, id } = await connectedProject(app);
+        const res = await app.inject({
+          method: "GET",
+          url: `/api/projects/${id}/github/prs/43/handoff`,
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().prompt).toContain("Failing checks: codecov/patch");
+        expect(res.json().prompt).not.toContain("nothing outstanding");
+        fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
       it("PR preview starts the head branch's preview, refusing forks and previews-off (#2018)", async () => {
         const branchPreview = await import("../../src/services/branch-preview.js");
         const start = vi.spyOn(branchPreview, "getOrCreateBranchPreview").mockResolvedValue({

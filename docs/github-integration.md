@@ -247,23 +247,14 @@ individual issue, only a repository):
   writes and its issue-label ingest reads.
 - **read** — Actions, Metadata, Pull requests — used for the repo-status
   widget and PR/CI poller. Deliberately excludes `administration`.
-- **branch-protection** (`#2327`) — Administration (read), Metadata — used
-  only to read a branch's required status checks (`GET
-/repos/{owner}/{repo}/branches/{branch}/protection`), which
-  [Task Master](tasks.md)'s red-required-CI-return gate (`#755`) needs to tell
-  a required check from a non-required one. **This is an optional App
-  permission.** To enable it, add Repository permissions → **Administration:
-  Read-only** to the App on GitHub (Settings → Developer settings → GitHub
-  Apps → your App → Permissions & events), then have each installation owner
-  approve the new permission request (the installation page shows a "review
-  request" banner). Until then the mint fails (422) for this scope alone, and
-  `resolveGitHubToken` falls back to the account (PAT/OAuth) token for just
-  that lookup — which works when the account has admin access to the repo —
-  so the gate still functions and the **read** token is unaffected. If neither
-  source can read branch protection, the lookup fails closed and the task
-  shows "CI gating unavailable: required checks unreadable" (reason and
-  which credential answered) until a lookup succeeds. See
-  [`tasks.md`](tasks.md#auto-approve) for the full mechanics.
+- **branch-protection** (`#2327`) — Administration (read), Metadata — reads a
+  branch's required status checks (`GET
+/repos/{owner}/{repo}/branches/{branch}/protection`). **No longer needed by
+  Task Master:** its red-CI-return gate (`#755`) now treats every red check as
+  work to fix, required or not, so it no longer reads branch protection and the
+  "CI gating unavailable" flag is no longer set. The scope and the optional
+  App permission remain defined but nothing in the gate depends on them; see
+  [`tasks.md`](tasks.md#auto-approve) for the current mechanics.
 - **issues** — Issues, Pull requests, Metadata (all read) — used only to
   list a repo's open issues for the sidebar's Issues count (`GET
 /repos/{owner}/{repo}/issues`). A token without Issues access gets only

@@ -1045,6 +1045,25 @@ export async function fetchRunsForHeadChecked(
 export interface CheckRunResult {
   name: string;
   conclusion: string | null;
+  /** The check's own one-line summary (`output.title`), e.g. codecov's "66.66% of diff hit (target 75.00%)". */
+  detail?: string;
+}
+
+/**
+ * A finished check run that is neither a pass nor a deliberate non-result:
+ * a bare `failure`, but also `timed_out` and `action_required`, which GitHub's
+ * own merge gate blocks on just the same. One definition for every "is this
+ * check red" question (title-lint self-heal, the red-CI return to the worker),
+ * required or not.
+ */
+export function isRedCheckConclusion(conclusion: string | null): boolean {
+  return (
+    conclusion !== null &&
+    conclusion !== "success" &&
+    conclusion !== "skipped" &&
+    conclusion !== "cancelled" &&
+    conclusion !== "neutral"
+  );
 }
 
 /**
@@ -1105,9 +1124,17 @@ export async function fetchCheckRunsForHead(
     );
     if (!res.ok) return [];
     const data = (await res.json()) as {
-      check_runs?: { name: string; conclusion: string | null }[];
+      check_runs?: {
+        name: string;
+        conclusion: string | null;
+        output?: { title?: string | null } | null;
+      }[];
     };
-    return (data.check_runs ?? []).map((c) => ({ name: c.name, conclusion: c.conclusion }));
+    return (data.check_runs ?? []).map((c) => ({
+      name: c.name,
+      conclusion: c.conclusion,
+      ...(c.output?.title ? { detail: c.output.title } : {}),
+    }));
   } catch {
     return [];
   }

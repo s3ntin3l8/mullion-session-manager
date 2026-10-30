@@ -3001,9 +3001,17 @@ export async function projectsRoute(app: FastifyInstance) {
       if (!Number.isInteger(number) || number < 1) return reply.badRequest("Invalid PR number");
       try {
         const { detail, actionsRuns } = await loadPrDetail(projectId, number, ctx);
-        const failing = actionsRuns
-          .filter((r) => r.status === "completed" && r.conclusion === "failure")
-          .map((r) => r.name);
+        // Actions runs AND the head's other checks (codecov/patch, ...): a
+        // non-Actions check is only in the rollup, and leaving it out told the
+        // session "nothing is outstanding" on a PR whose merge it blocks.
+        const failing = [
+          ...new Set([
+            ...actionsRuns
+              .filter((r) => r.status === "completed" && r.conclusion === "failure")
+              .map((r) => r.name),
+            ...(detail.otherChecks ?? []).filter((c) => c.state === "failure").map((c) => c.name),
+          ]),
+        ];
         return { prompt: buildHandoffPrompt(detail, failing), branch: detail.headBranch };
       } catch (err) {
         if (!(err instanceof GitHubApiError)) throw err;

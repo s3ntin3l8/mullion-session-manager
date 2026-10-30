@@ -389,7 +389,6 @@ const {
   notifyApprovalsAwaitingHuman,
   retryPermanentPushFailuresNow,
   DEFAULT_MAX_AUTO_RETURN_ROUNDS,
-  resetRequiredStatusContextsForbiddenWarningsForTests,
   autoReturnTask,
 } = await import("../../src/services/task-reconciler.js");
 const { tasks, sessions, projects } = await import("../../src/db/schema.js");
@@ -2294,6 +2293,29 @@ describe("reconcileTasks", () => {
       const row = await getTask(app, taskId);
       expect(row.mergeRequestedAt).not.toBeNull();
       expect(row.mergeError).toContain("non-required check");
+
+      await app.close();
+    });
+
+    it("names the red check in the merge hold so a human knows what to fix or override", async () => {
+      const app = await buildApp();
+      const { taskId } = await createDoneTaskWithPendingMerge(app);
+      mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "unstable" }));
+      mockFetchCheckRunsForHead.mockResolvedValue([
+        {
+          name: "codecov/patch",
+          conclusion: "failure",
+          detail: "66.66% of diff hit (target 75.00%)",
+        },
+        { name: "test-node / lint-and-test", conclusion: "success" },
+      ]);
+
+      await reconcileTasks(app);
+
+      expect(mockMergePullRequest).not.toHaveBeenCalled();
+      const row = await getTask(app, taskId);
+      expect(row.mergeError).toContain("codecov/patch: 66.66% of diff hit (target 75.00%)");
+      expect(row.mergeError).toContain("Merge now");
 
       await app.close();
     });
@@ -4638,14 +4660,11 @@ describe("reconcileTasks", () => {
         await app.close();
       });
 
-      it("does NOT return the task when the red check is not in the required set (this repo's own test-e2e)", async () => {
+      it("returns the task for a red check that is NOT in the required set (this repo's own test-e2e) — a red check is work to fix", async () => {
         const app = await buildApp();
         const { taskId } = await createRedCiCandidate(app);
         mockGetPullRequestByNumber.mockResolvedValue(mockPr());
         mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
-        mockFetchRequiredStatusContexts.mockResolvedValue(["test-node / lint-and-test"]);
-        // "test-e2e" is red, but it's not in the required set above —
-        // exactly this repo's own real branch protection.
         mockFetchCheckRunsForHead.mockResolvedValue([
           { name: "test-node / lint-and-test", conclusion: "success" },
           { name: "test-e2e", conclusion: "failure" },
@@ -4653,7 +4672,49 @@ describe("reconcileTasks", () => {
 
         await reconcileTasks(app);
 
-        expect(mockPromoteTaskToPR).not.toHaveBeenCalled();
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.autoReturnRounds).toBe(1);
+        expect(row.lastAutoReturnReason).toBe("ci");
+
+        await app.close();
+      });
+
+      it("returns the task for a red non-Actions check seen only through an `unstable` merge state (codecov/patch)", async () => {
+        const app = await buildApp();
+        const { taskId } = await createRedCiCandidate(app);
+        // Every Actions run is green, so the coarse status is not "failure":
+        // only GitHub's own `unstable` says something else is not passing.
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "unstable" }));
+        mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "success"));
+        mockFetchCheckRunsForHead.mockResolvedValue([
+          { name: "test-node / lint-and-test", conclusion: "success" },
+          {
+            name: "codecov/patch",
+            conclusion: "failure",
+            detail: "66.66% of diff hit (target 75.00%)",
+          },
+        ]);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.status).toBe("in_progress");
+        expect(row.autoReturnRounds).toBe(1);
+        expect(row.lastAutoReturnReason).toBe("ci");
+
+        await app.close();
+      });
+
+      it("leaves the task alone when the merge state is unstable but no check run is actually red (only pending)", async () => {
+        const app = await buildApp();
+        const { taskId } = await createRedCiCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "unstable" }));
+        mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "success"));
+        mockFetchCheckRunsForHead.mockResolvedValue([{ name: "codecov/patch", conclusion: null }]);
+
+        await reconcileTasks(app);
+
         const row = await getTask(app, taskId);
         expect(row.status).toBe("reviewing");
         expect(row.autoReturnRounds).toBe(0);
@@ -4735,7 +4796,9 @@ describe("reconcileTasks", () => {
           "r",
           9,
           expect.objectContaining({
-            body: expect.stringContaining(`round cap (${DEFAULT_MAX_AUTO_RETURN_ROUNDS})`),
+            body: expect.stringContaining(
+              `(test-node / lint-and-test), but it has already reached its automatic round cap (${DEFAULT_MAX_AUTO_RETURN_ROUNDS})`,
+            ),
           }),
         );
         const row = await getTask(app, taskId);
@@ -4876,238 +4939,6 @@ describe("reconcileTasks", () => {
         expect(row.lastAutoReturnReason).toBe("ci");
 
         await app.close();
-      });
-
-      // Issue #1360 — a `null` from fetchRequiredStatusContexts (the same
-      // fail-closed outcome #1035/companion regression guards above already
-      // cover from the OTHER side) used to be completely silent regardless
-      // of WHY it happened. Found live: task 410656 sat with a clean review
-      // verdict and a red REQUIRED CI check for 2+ hours with no auto-return
-      // and no operator-facing signal at all, because the GitHub App's own
-      // "read" token can never carry the `administration` permission this
-      // lookup needs (see fetchRequiredStatusContexts's own doc comment,
-      // github.ts). This warns ONCE the underlying cause is confirmed to be
-      // that permanent 403, not the ordinary "no protection configured" 404.
-      describe("warns once when the null is a permission 403, not a 404 (#1360)", () => {
-        // Every test in this whole file resolves owner/repo/branch to the
-        // same fixed "o"/"r"/"main" (a real git-remote lookup against a
-        // shared /tmp fixture cwd — see createAutoApproveCandidate above),
-        // so the module-scope throttle map this feature adds
-        // (requiredStatusContextsForbiddenWarnedAt, task-reconciler.ts)
-        // would otherwise carry a "just warned" state from one test's
-        // assertions into the next, in the same process. Same reasoning as
-        // this file's mockFetchRequiredStatusContexts.mockClear() calls
-        // above, just for a cache this feature owns rather than a mock.
-        beforeEach(() => {
-          resetRequiredStatusContextsForbiddenWarningsForTests();
-        });
-
-        it("warns when getRequiredStatusContextsFailureReason says 'forbidden'", async () => {
-          const app = await buildApp();
-          const { taskId } = await createRedCiCandidate(app);
-          mockGetPullRequestByNumber.mockResolvedValue(mockPr());
-          mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
-          mockFetchRequiredStatusContexts.mockResolvedValue(null);
-          mockGetRequiredStatusContextsFailureReason.mockReturnValue("forbidden");
-          const warnSpy = vi.spyOn(app.log, "warn");
-
-          await reconcileTasks(app);
-
-          expect(warnSpy).toHaveBeenCalledWith(
-            expect.objectContaining({ taskId, owner: "o", repo: "r" }),
-            expect.stringContaining("administration"),
-          );
-          // Still fails closed exactly like before this issue — this is a
-          // visibility fix, not a behavior change to the gate itself.
-          const row = await getTask(app, taskId);
-          expect(row.status).toBe("reviewing");
-          expect(row.autoReturnRounds).toBe(0);
-
-          await app.close();
-        });
-
-        // #2327 — the unreadable lookup is visible on the task, still fails
-        // closed, and clears once a later lookup succeeds.
-        it("flags the task with the reason and source, then clears it on a later successful lookup", async () => {
-          const app = await buildApp();
-          const { taskId } = await createRedCiCandidate(app);
-          mockGetPullRequestByNumber.mockResolvedValue(mockPr());
-          mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
-          mockFetchRequiredStatusContexts.mockResolvedValue(null);
-          mockGetRequiredStatusContextsFailureReason.mockReturnValue("forbidden");
-
-          await reconcileTasks(app);
-
-          let row = await getTask(app, taskId);
-          expect(row.status).toBe("reviewing");
-          expect(row.ciGatingUnavailableReason).toBe("forbidden");
-          expect(row.ciGatingUnavailableSource).toBe("app");
-
-          mockFetchRequiredStatusContexts.mockResolvedValue(["test-node / test-merge"]);
-          mockFetchCheckRunsForHead.mockResolvedValue([
-            { name: "test-node / test-merge", conclusion: "success" },
-          ]);
-          // Past the failed attempt's own retry backoff, so the second tick
-          // actually reaches the lookup again.
-          vi.useFakeTimers();
-          try {
-            vi.setSystemTime(Date.now() + 30 * 60_000);
-            await reconcileTasks(app);
-          } finally {
-            vi.useRealTimers();
-          }
-
-          row = await getTask(app, taskId);
-          expect(row.ciGatingUnavailableReason).toBeNull();
-          expect(row.ciGatingUnavailableSource).toBeNull();
-
-          await app.close();
-        });
-
-        it("flags a 404 as 'not-found' too", async () => {
-          const app = await buildApp();
-          const { taskId } = await createRedCiCandidate(app);
-          mockGetPullRequestByNumber.mockResolvedValue(mockPr());
-          mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
-          mockFetchRequiredStatusContexts.mockResolvedValue(null);
-          mockGetRequiredStatusContextsFailureReason.mockReturnValue("not-found");
-
-          await reconcileTasks(app);
-
-          const row = await getTask(app, taskId);
-          expect(row.status).toBe("reviewing");
-          expect(row.ciGatingUnavailableReason).toBe("not-found");
-
-          await app.close();
-        });
-
-        it("asks for the branch-protection scope for the lookup only", async () => {
-          const app = await buildApp();
-          await createRedCiCandidate(app);
-          mockGetPullRequestByNumber.mockResolvedValue(mockPr());
-          mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
-          mockFetchRequiredStatusContexts.mockResolvedValue(null);
-          mockGetRequiredStatusContextsFailureReason.mockReturnValue(null);
-
-          await reconcileTasks(app);
-
-          const scopes = mockResolveGitHubToken.mock.calls.map((c) => c[2]);
-          expect(scopes).toContain("branch-protection");
-          expect(scopes).toContain("read");
-
-          await app.close();
-        });
-
-        it("does NOT warn when the reason is 'not-found' — an ordinary, unremarkable 404", async () => {
-          const app = await buildApp();
-          await createRedCiCandidate(app);
-          mockGetPullRequestByNumber.mockResolvedValue(mockPr());
-          mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
-          mockFetchRequiredStatusContexts.mockResolvedValue(null);
-          mockGetRequiredStatusContextsFailureReason.mockReturnValue("not-found");
-          const warnSpy = vi.spyOn(app.log, "warn");
-
-          await reconcileTasks(app);
-
-          expect(warnSpy).not.toHaveBeenCalledWith(
-            expect.anything(),
-            expect.stringContaining("administration"),
-          );
-
-          await app.close();
-        });
-
-        it("does NOT warn when no failure reason was recorded at all (the pre-#1360 default)", async () => {
-          const app = await buildApp();
-          await createRedCiCandidate(app);
-          mockGetPullRequestByNumber.mockResolvedValue(mockPr());
-          mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
-          mockFetchRequiredStatusContexts.mockResolvedValue(null);
-          mockGetRequiredStatusContextsFailureReason.mockReturnValue(null);
-          const warnSpy = vi.spyOn(app.log, "warn");
-
-          await reconcileTasks(app);
-
-          expect(warnSpy).not.toHaveBeenCalledWith(
-            expect.anything(),
-            expect.stringContaining("administration"),
-          );
-
-          await app.close();
-        });
-
-        it("does not re-warn for the same repo/branch within the throttle window, across two different tasks", async () => {
-          const app = await buildApp();
-          const first = await createRedCiCandidate(app);
-          const second = await createRedCiCandidate(app);
-          mockGetPullRequestByNumber.mockResolvedValue(mockPr());
-          mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
-          mockFetchRequiredStatusContexts.mockResolvedValue(null);
-          mockGetRequiredStatusContextsFailureReason.mockReturnValue("forbidden");
-          const warnSpy = vi.spyOn(app.log, "warn");
-
-          await reconcileTasks(app);
-
-          const adminWarnings = warnSpy.mock.calls.filter(
-            (call) => typeof call[1] === "string" && call[1].includes("administration"),
-          );
-          // Both tasks share the same repo/branch (createAutoApproveCandidate's
-          // own default project/repo), so this is keyed by repo/branch, not
-          // by task id — exactly one warning for both, not two.
-          expect(adminWarnings).toHaveLength(1);
-          expect(first.taskId).not.toBe(second.taskId);
-
-          await app.close();
-        });
-
-        // Self-review finding — every other test in this describe block
-        // mocks fetchRequiredStatusContexts and
-        // getRequiredStatusContextsFailureReason independently, which
-        // proves this function's OWN consumption of a "forbidden" signal
-        // but not that the two real github.ts functions actually agree
-        // with each other end-to-end (github.test.ts covers that pairing
-        // in isolation from this file's own consumption of it). This test
-        // un-mocks both back to their real implementations and drives a
-        // genuine 403 through the real HTTP layer (stubbed at the global
-        // `fetch`, the same boundary github.test.ts's own tests stub),
-        // proving the full wire from a real 403 to the operator-facing
-        // warning, not just each half in isolation.
-        it("fires the warning end-to-end against the REAL fetchRequiredStatusContexts + getRequiredStatusContextsFailureReason pairing, given a genuine 403", async () => {
-          const fetchMock = vi.fn().mockResolvedValue(new Response("nope", { status: 403 }));
-          vi.stubGlobal("fetch", fetchMock);
-          mockFetchRequiredStatusContexts.mockImplementation(
-            actualGithubModule.fetchRequiredStatusContexts,
-          );
-          mockGetRequiredStatusContextsFailureReason.mockImplementation(
-            actualGithubModule.getRequiredStatusContextsFailureReason,
-          );
-          try {
-            const app = await buildApp();
-            const { taskId } = await createRedCiCandidate(app);
-            mockGetPullRequestByNumber.mockResolvedValue(mockPr());
-            mockFetchRunsForHead.mockResolvedValue(workflowRun("CI/CD", "failure"));
-            const warnSpy = vi.spyOn(app.log, "warn");
-
-            await reconcileTasks(app);
-
-            expect(warnSpy).toHaveBeenCalledWith(
-              expect.objectContaining({ taskId, owner: "o", repo: "r" }),
-              expect.stringContaining("administration"),
-            );
-            expect(fetchMock).toHaveBeenCalledWith(
-              expect.stringContaining("/branches/main/protection"),
-              expect.anything(),
-            );
-
-            await app.close();
-          } finally {
-            vi.unstubAllGlobals();
-            // Restore this file's own fail-closed defaults for every test
-            // after this one (see this mock's own declaration comment).
-            mockFetchRequiredStatusContexts.mockReset().mockResolvedValue(null);
-            mockGetRequiredStatusContextsFailureReason.mockReset().mockReturnValue(null);
-          }
-        });
       });
     });
 
