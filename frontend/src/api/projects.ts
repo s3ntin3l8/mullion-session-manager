@@ -233,6 +233,34 @@ export const projectsApi = {
       { method: "POST", body: JSON.stringify(options) },
     ),
 
+  // The agent-assisted twin of previewProjectSetup (routes/project-setup.ts's
+  // /setup/generate): runs a sandboxed, read-only agent turn over the repo
+  // (up to ~5 minutes, rate limited to 5 per 10) and feeds what it wrote into
+  // the same preview → apply flow, so the caller's diff view and
+  // applyProjectSetup are shared. `refresh` is the explicit opt-in to
+  // regenerating an already-committed skill/reviewer (otherwise a 409).
+  generateProjectSetup: (
+    projectId: number,
+    options: {
+      slug: string;
+      includeContributingPointer?: boolean;
+      symlinkAgentsSkills?: boolean;
+      includeDockConfig?: boolean;
+      refresh?: Array<"skill" | "reviewer">;
+    },
+  ) =>
+    request<{
+      previewId: string;
+      diff: string;
+      files: string[];
+      hasAgentsOverride: boolean;
+      sandboxed: boolean;
+      possiblyGeneric?: boolean;
+    }>(`/api/projects/${projectId}/setup/generate`, {
+      method: "POST",
+      body: JSON.stringify(options),
+    }),
+
   applyProjectSetup: (projectId: number, previewId: string) =>
     request<{
       ok: boolean;

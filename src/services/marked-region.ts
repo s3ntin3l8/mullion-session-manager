@@ -95,3 +95,40 @@ export function upsertMarkedRegion(
   if (trimmedText.length === 0) return `${region}\n`;
   return `${trimmedText}\n\n${region}\n`;
 }
+
+/**
+ * Like `upsertMarkedRegion`, but when the markers are absent the new region
+ * goes right after the document's leading title/intro (immediately before the
+ * first `## ` heading) instead of at the end of the file. A scaffold's
+ * conventions are what every agent must read first; appended after a long
+ * hand-written file they land below the rules they have to outrank. When the
+ * markers are present the region is replaced in place, exactly as
+ * `upsertMarkedRegion` does, and a file with no `## ` heading falls back to
+ * appending. Fenced code blocks are skipped, so a `## ` inside one is not
+ * mistaken for a heading.
+ */
+export function upsertMarkedRegionAfterIntro(
+  text: string,
+  startMarker: string,
+  endMarker: string,
+  body: string,
+): string {
+  const startIdx = text.indexOf(startMarker);
+  if (startIdx !== -1 && text.indexOf(endMarker, startIdx + startMarker.length) !== -1) {
+    return upsertMarkedRegion(text, startMarker, endMarker, body);
+  }
+  const region = `${startMarker}\n${body.trim()}\n${endMarker}`;
+  const lines = text.split("\n");
+  let inFence = false;
+  let offset = 0;
+  for (const line of lines) {
+    if (/^\s*(```|~~~)/.test(line)) inFence = !inFence;
+    else if (!inFence && /^## /.test(line)) {
+      const head = text.slice(0, offset).trimEnd();
+      const tail = text.slice(offset);
+      return head.length === 0 ? `${region}\n\n${tail}` : `${head}\n\n${region}\n\n${tail}`;
+    }
+    offset += line.length + 1;
+  }
+  return upsertMarkedRegion(text, startMarker, endMarker, body);
+}

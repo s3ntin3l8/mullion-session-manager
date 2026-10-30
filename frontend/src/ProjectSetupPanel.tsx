@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, ApiError } from "./api/index.js";
+import { api, ApiError, RateLimitedError } from "./api/index.js";
 import { parseUnifiedDiff } from "./diffUtils.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { FileTextIcon } from "./ui/icons.js";
@@ -20,6 +20,12 @@ interface PreviewState {
   // for this specific project — surfaced here so that's a decision the
   // user makes with the fact in front of them, not a silent gap.
   hasAgentsOverride: boolean;
+  // Only set by the agent-assisted path (/setup/generate). `sandboxed`
+  // false means the host ran the turn without bwrap; `possiblyGeneric`
+  // means the turn finished without evidence it actually read the repo.
+  generated?: boolean;
+  sandboxed?: boolean;
+  possiblyGeneric?: boolean;
 }
 
 interface ApplyResult {
@@ -78,6 +84,9 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
   const project = useDashboardStore((s) => s.projects.find((p) => p.id === params.projectId));
   const injectWorkflowConventions = project?.injectWorkflowConventions ?? true;
   const refreshProjects = useDashboardStore((s) => s.refreshProjects);
+  // Same resolution as the route's `project.defaultAgent ?? launchers.defaultAgent`.
+  const launcherDefaultAgent = useDashboardStore((s) => s.settings.launchers?.defaultAgent);
+  const defaultAgent = project?.defaultAgent ?? launcherDefaultAgent ?? "the default agent";
   // Hermes review, PR #1200 round 3 (suggestion) — the disclosure used to
   // hand-copy a prose paraphrase of mullion-scaffold.ts's
   // SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS ("always branch + PR, Conventional
@@ -111,6 +120,12 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
   const [preview, setPreview] = useState<PreviewState | null>(null);
   const [applyResult, setApplyResult] = useState<ApplyResult | null>(null);
   const [previewing, setPreviewing] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  // Set after /setup/generate answered 409 (skill and reviewer already
+  // exist): the user then picks which to regenerate and tries again.
+  const [offerRefresh, setOfferRefresh] = useState(false);
+  const [refreshSkill, setRefreshSkill] = useState(false);
+  const [refreshReviewer, setRefreshReviewer] = useState(false);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -133,6 +148,45 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
       setPreviewing(false);
     }
   }, [params.projectId, slug, includeContributingPointer, symlinkAgentsSkills, includeDockConfig]);
+
+  const handleGenerate = useCallback(async () => {
+    setGenerating(true);
+    setError(null);
+    setApplyResult(null);
+    try {
+      const refresh: Array<"skill" | "reviewer"> = [];
+      if (refreshSkill) refresh.push("skill");
+      if (refreshReviewer) refresh.push("reviewer");
+      const result = await api.generateProjectSetup(params.projectId, {
+        slug,
+        includeContributingPointer,
+        symlinkAgentsSkills,
+        includeDockConfig,
+        ...(refresh.length > 0 ? { refresh } : {}),
+      });
+      setPreview({ ...result, generated: true });
+      setOfferRefresh(false);
+    } catch (err) {
+      if (err instanceof ApiError && err.statusCode === 409) {
+        setOfferRefresh(true);
+      } else if (err instanceof RateLimitedError) {
+        setError("Generation is rate limited (5 per 10 minutes) — try again shortly.");
+      } else {
+        setError(err instanceof ApiError ? err.message : "Failed to generate");
+      }
+      setPreview(null);
+    } finally {
+      setGenerating(false);
+    }
+  }, [
+    params.projectId,
+    slug,
+    includeContributingPointer,
+    symlinkAgentsSkills,
+    includeDockConfig,
+    refreshSkill,
+    refreshReviewer,
+  ]);
 
   const handleApply = useCallback(async () => {
     if (!preview) return;
@@ -214,6 +268,19 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
           configured) — nothing is written until you click Apply.
         </div>
         {error && <div className="agent-rules-panel-notice error">{error}</div>}
+        {preview.generated && preview.sandboxed === false && (
+          <div className="agent-rules-panel-notice warning">
+            The agent turn ran <strong>without a sandbox</strong> on this host (bwrap unavailable or
+            disabled). Nothing it wrote outside the parsed output reaches this diff, but it could
+            have touched the host&apos;s files.
+          </div>
+        )}
+        {preview.generated && preview.possiblyGeneric && (
+          <div className="agent-rules-panel-notice warning">
+            The agent may not have read this repo — the generated skill and reviewer look generic.
+            Review them carefully, or go back and generate again.
+          </div>
+        )}
         {preview.hasAgentsOverride && (
           <div className="agent-rules-panel-notice warning">
             This repo already has its own <code>AGENTS.override.md</code> — codex reads that file
@@ -370,12 +437,53 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
           </div>
         </div>
       </div>
+      {offerRefresh && (
+        <div className="agent-rules-panel-notice warning">
+          The skill and reviewer for this slug already exist, and generation never overwrites a file
+          by default. Pick what to regenerate (this discards hand edits to it), then generate again.
+          <div>
+            <label>
+              <input
+                type="checkbox"
+                checked={refreshSkill}
+                onChange={(e) => setRefreshSkill(e.target.checked)}
+              />{" "}
+              Regenerate the skill
+            </label>{" "}
+            <label>
+              <input
+                type="checkbox"
+                checked={refreshReviewer}
+                onChange={(e) => setRefreshReviewer(e.target.checked)}
+              />{" "}
+              Regenerate the reviewer
+            </label>
+          </div>
+        </div>
+      )}
+      <div className="settings-row-desc">
+        Preview writes starter placeholders. Generate runs your default agent ({defaultAgent}) in a
+        read-only sandbox over this repo to write a skill and reviewer specific to it — this can
+        take up to ~5 minutes.
+      </div>
       <button
         className="git-panel-fetch-btn"
         onClick={handlePreview}
-        disabled={previewing || slug.trim().length === 0}
+        disabled={previewing || generating || slug.trim().length === 0}
       >
         {previewing ? "Previewing…" : "Preview"}
+      </button>{" "}
+      <button
+        className="git-panel-fetch-btn"
+        onClick={handleGenerate}
+        disabled={
+          previewing ||
+          generating ||
+          slug.trim().length === 0 ||
+          (offerRefresh && !refreshSkill && !refreshReviewer)
+        }
+      >
+        {generating ? "Generating…" : "Generate with agent"}
       </button>
     </div>
   );

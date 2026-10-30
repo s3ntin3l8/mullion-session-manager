@@ -1,6 +1,6 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { upsertMarkedRegion } from "./marked-region.js";
+import { upsertMarkedRegion, upsertMarkedRegionAfterIntro } from "./marked-region.js";
 import { isDangerousSkillName } from "./hook-adapters/skill-name.js";
 import { parseSkillFrontmatter } from "./skills.js";
 import type { DockControl } from "./project-config.js";
@@ -628,6 +628,28 @@ function stripLegacyScaffoldRegionMirror(text: string): string {
   return text.slice(0, startIdx) + text.slice(endIdx + SCAFFOLD_REGION_END.length);
 }
 
+/** Removes a hand-written bare `@AGENTS.md` import line (and the HTML comment
+ * block directly above it that explains that import) from the parts of a
+ * CLAUDE.md outside the scaffold's own pointer region, so the pointer region
+ * the scaffold upserts is the file's only import rather than a second one
+ * under it. Text inside the pointer markers is left alone (an idempotent
+ * re-run replaces it wholesale anyway). A no-op when there is no such line. */
+function stripHandWrittenAgentsImport(text: string): string {
+  const startIdx = text.indexOf(POINTER_MARKER_START);
+  const endIdx =
+    startIdx === -1 ? -1 : text.indexOf(POINTER_MARKER_END, startIdx + POINTER_MARKER_START.length);
+  const strip = (part: string): string =>
+    part
+      .replace(
+        /(?:<!--(?:(?!-->)[\s\S])*?AGENTS\.md(?:(?!-->)[\s\S])*?-->[ \t]*\r?\n)?^@AGENTS\.md[ \t]*\r?\n?/gm,
+        "",
+      )
+      .replace(/\n{3,}/g, "\n\n");
+  if (startIdx === -1 || endIdx === -1) return strip(text);
+  const end = endIdx + POINTER_MARKER_END.length;
+  return strip(text.slice(0, startIdx)) + text.slice(startIdx, end) + strip(text.slice(end));
+}
+
 /**
  * Computes the target file set for scaffolding Mullion's tooling into a
  * project — pure, no I/O (see this module's own header for the full
@@ -694,7 +716,7 @@ export function computeScaffold(
   entries.push({
     path: "AGENTS.md",
     kind: "file",
-    contents: upsertMarkedRegion(
+    contents: upsertMarkedRegionAfterIntro(
       existingFiles["AGENTS.md"] ?? "",
       SCAFFOLD_REGION_START,
       SCAFFOLD_REGION_END,
@@ -715,7 +737,9 @@ export function computeScaffold(
     path: "CLAUDE.md",
     kind: "file",
     contents: upsertMarkedRegion(
-      stripLegacyScaffoldRegionMirror(existingFiles["CLAUDE.md"] ?? ""),
+      stripHandWrittenAgentsImport(
+        stripLegacyScaffoldRegionMirror(existingFiles["CLAUDE.md"] ?? ""),
+      ),
       POINTER_MARKER_START,
       POINTER_MARKER_END,
       claudeMdImportBody(),

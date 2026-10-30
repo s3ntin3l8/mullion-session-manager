@@ -3,6 +3,7 @@ import {
   clampToBytes,
   extractMarkedRegion,
   upsertMarkedRegion,
+  upsertMarkedRegionAfterIntro,
 } from "../../src/services/marked-region.js";
 
 const START = "<!-- start -->";
@@ -110,5 +111,44 @@ describe("upsertMarkedRegion", () => {
   it("round-trips through extractMarkedRegion", () => {
     const result = upsertMarkedRegion("# Doc", START, END, "round trip body");
     expect(extractMarkedRegion(result, START, END)).toBe("round trip body");
+  });
+});
+
+describe("upsertMarkedRegionAfterIntro", () => {
+  it("replaces an existing region in place, like upsertMarkedRegion", () => {
+    const text = `# T\n\n${START}\nold\n${END}\n\n## A\nbody`;
+    expect(upsertMarkedRegionAfterIntro(text, START, END, "new")).toBe(
+      upsertMarkedRegion(text, START, END, "new"),
+    );
+  });
+
+  it("inserts a new region right before the first ## heading", () => {
+    const text = "# T\n\nintro prose\n\n## Workflow rules\nrule\n\n## Other\nx\n";
+    const result = upsertMarkedRegionAfterIntro(text, START, END, "body");
+    expect(result).toBe(
+      `# T\n\nintro prose\n\n${START}\nbody\n${END}\n\n## Workflow rules\nrule\n\n## Other\nx\n`,
+    );
+    expect(extractMarkedRegion(result, START, END)).toBe("body");
+  });
+
+  it("does not treat a ## line inside a fenced code block as a heading", () => {
+    const text = "# T\n\n```md\n## not a heading\n```\n\n## Real\nx";
+    const result = upsertMarkedRegionAfterIntro(text, START, END, "body");
+    expect(result.indexOf(START)).toBeGreaterThan(result.indexOf("```\n\n"));
+    expect(result.indexOf(START)).toBeLessThan(result.indexOf("## Real"));
+  });
+
+  it("puts the region first when the file starts with a ## heading", () => {
+    const result = upsertMarkedRegionAfterIntro("## A\nx", START, END, "body");
+    expect(result).toBe(`${START}\nbody\n${END}\n\n## A\nx`);
+  });
+
+  it("appends when the file has no ## heading", () => {
+    const result = upsertMarkedRegionAfterIntro("# T\n\nonly prose", START, END, "body");
+    expect(result).toBe(`# T\n\nonly prose\n\n${START}\nbody\n${END}\n`);
+  });
+
+  it("creates the region for an empty file", () => {
+    expect(upsertMarkedRegionAfterIntro("", START, END, "body")).toBe(`${START}\nbody\n${END}\n`);
   });
 });

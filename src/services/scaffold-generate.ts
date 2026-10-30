@@ -241,11 +241,10 @@ export interface GeneratedScaffoldContent {
    * follow-up once confidence is high. Absent (undefined) when validation
    * was not run.
    *
-   * Currently only surfaced via `/setup/generate`'s response. The
-   * frontend's scaffold flow (`ProjectSetupPanel` →
-   * `api.previewProjectSetup`) calls `/setup/preview`, whose client type
-   * is `{previewId, diff, files}` and never reads this — the preview
-   * step runs before generation, so it can't know the output yet. */
+   * Only surfaced via `/setup/generate`'s response — ProjectSetupPanel's
+   * "Generate with agent" button shows it as a warning. `/setup/preview`
+   * never carries it: the preview step runs no generation, so it can't know
+   * the output yet. */
   possiblyGeneric?: boolean;
 }
 

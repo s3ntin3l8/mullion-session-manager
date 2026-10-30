@@ -35,3 +35,34 @@ describe("projectsApi.updateProject", () => {
     });
   });
 });
+
+describe("projectsApi.generateProjectSetup", () => {
+  it("POSTs the options, including an explicit refresh list, to /setup/generate", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        previewId: "p1",
+        diff: "",
+        files: [],
+        hasAgentsOverride: false,
+        sandboxed: true,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await projectsApi.generateProjectSetup(7, {
+      slug: "demo",
+      symlinkAgentsSkills: true,
+      refresh: ["skill"],
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/projects/7/setup/generate");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({
+      slug: "demo",
+      symlinkAgentsSkills: true,
+      refresh: ["skill"],
+    });
+    expect(result.sandboxed).toBe(true);
+  });
+});

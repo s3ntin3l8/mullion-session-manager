@@ -10,6 +10,7 @@ import { makeProject } from "./test/fixtures.js";
 function mockFetch(opts: {
   preview?: (body: unknown) => Response | Promise<Response>;
   apply?: (body: unknown) => Response | Promise<Response>;
+  generate?: (body: unknown) => Response | Promise<Response>;
   // Hermes review, PR #1200 round 3 (suggestion) — the panel now fetches
   // this on mount to drive its "(see the exact defaults)" disclosure;
   // defaults to a fixed literal here so every EXISTING test (which never
@@ -22,6 +23,11 @@ function mockFetch(opts: {
     if (url.endsWith("/setup/preview") && init?.method === "POST") {
       return Promise.resolve(
         opts.preview ? opts.preview(body) : new Response(null, { status: 500 }),
+      );
+    }
+    if (url.endsWith("/setup/generate") && init?.method === "POST") {
+      return Promise.resolve(
+        opts.generate ? opts.generate(body) : new Response(null, { status: 500 }),
       );
     }
     if (url.endsWith("/setup/apply") && init?.method === "POST") {
@@ -39,6 +45,119 @@ function mockFetch(opts: {
 describe("ProjectSetupPanel", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  describe("Generate with agent", () => {
+    const generated = (extra: Record<string, unknown> = {}) =>
+      jsonResponse(200, {
+        previewId: "gen1",
+        diff: "diff --git a/AGENTS.md b/AGENTS.md\n+generated line\n",
+        files: ["AGENTS.md", ".claude/skills/demo/SKILL.md"],
+        hasAgentsOverride: false,
+        sandboxed: true,
+        ...extra,
+      });
+
+    it("is disabled until a slug is entered", () => {
+      vi.stubGlobal("fetch", mockFetch({}));
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      expect(screen.getByText("Generate with agent")).toBeDisabled();
+    });
+
+    it("posts the entered options to /setup/generate and shows the same diff view", async () => {
+      const fetchMock = mockFetch({ generate: () => generated() });
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      await user.type(screen.getByPlaceholderText("my-project"), "demo");
+      await user.click(screen.getByText("Generate with agent"));
+
+      expect(await screen.findByText("Preview — 2 files")).toBeInTheDocument();
+      expect(screen.getByText(/\+generated line/)).toBeInTheDocument();
+      const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/setup/generate"));
+      expect(JSON.parse((call![1] as RequestInit).body as string)).toEqual({
+        slug: "demo",
+        includeContributingPointer: false,
+        symlinkAgentsSkills: false,
+        includeDockConfig: false,
+      });
+      expect(screen.queryByText(/without a sandbox/)).not.toBeInTheDocument();
+    });
+
+    it("warns when the turn ran unsandboxed and when it looks generic", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({ generate: () => generated({ sandboxed: false, possiblyGeneric: true }) }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      await user.type(screen.getByPlaceholderText("my-project"), "demo");
+      await user.click(screen.getByText("Generate with agent"));
+      expect(await screen.findByText(/without a sandbox/)).toBeInTheDocument();
+      expect(screen.getByText(/may not have read this repo/)).toBeInTheDocument();
+    });
+
+    it("on a 409 offers regenerate checkboxes and retries with refresh", async () => {
+      let calls = 0;
+      const fetchMock = mockFetch({
+        generate: () => {
+          calls += 1;
+          return calls === 1 ? jsonResponse(409, { message: "already exist" }) : generated();
+        },
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      await user.type(screen.getByPlaceholderText("my-project"), "demo");
+      await user.click(screen.getByText("Generate with agent"));
+
+      expect(await screen.findByText(/already exist/)).toBeInTheDocument();
+      // Retrying with nothing ticked would just 409 again.
+      expect(screen.getByText("Generate with agent")).toBeDisabled();
+      await user.click(screen.getByLabelText("Regenerate the skill"));
+      await user.click(screen.getByLabelText("Regenerate the reviewer"));
+      await user.click(screen.getByText("Generate with agent"));
+
+      expect(await screen.findByText("Preview — 2 files")).toBeInTheDocument();
+      const generateCalls = fetchMock.mock.calls.filter(([url]) =>
+        String(url).endsWith("/setup/generate"),
+      );
+      expect(JSON.parse((generateCalls[1][1] as RequestInit).body as string).refresh).toEqual([
+        "skill",
+        "reviewer",
+      ]);
+    });
+
+    it("shows an error and stays on the form when generation fails", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({ generate: () => jsonResponse(500, { message: "agent exploded" }) }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      await user.type(screen.getByPlaceholderText("my-project"), "demo");
+      await user.click(screen.getByText("Generate with agent"));
+      expect(await screen.findByText(/agent exploded/)).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("my-project")).toBeInTheDocument();
+    });
+
+    it("explains a rate limit instead of showing the raw error", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          generate: () =>
+            new Response(JSON.stringify({ message: "Rate limit exceeded" }), {
+              status: 429,
+              headers: { "Retry-After": "600", "Content-Type": "application/json" },
+            }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      await user.type(screen.getByPlaceholderText("my-project"), "demo");
+      await user.click(screen.getByText("Generate with agent"));
+      expect(await screen.findByText(/rate limited \(5 per 10 minutes\)/)).toBeInTheDocument();
+    });
   });
 
   it("disables Preview until a slug is entered", () => {

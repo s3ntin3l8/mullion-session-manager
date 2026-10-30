@@ -846,14 +846,10 @@ export async function projectSetupRoute(app: FastifyInstance) {
       );
       if (!result.ok) return sendPreviewComputation(reply, result);
       // Hermes review, PR #1200 round 1 (suggestion) — `hasAgentsOverride`
-      // here is computed and returned, same as `possiblyGeneric` below, but
-      // no frontend caller of /setup/generate exists yet at all (the
-      // documented gap `scaffold-generate.ts:244-248` already notes for
-      // `possiblyGeneric`) — so this field is currently dead on arrival for
-      // this route specifically. It's still correct to compute and return:
-      // /setup/preview's own caller (ProjectSetupPanel.tsx) already reads
-      // it, and whichever caller eventually wires up /setup/generate should
-      // get the identical shape for free.
+      // is computed and returned here, same as `possiblyGeneric` below, so
+      // /setup/generate's response has the identical shape to /setup/preview's
+      // plus the generation-only fields. ProjectSetupPanel's "Generate with
+      // agent" button reads all of them.
       const response: {
         previewId: string;
         diff: string;
