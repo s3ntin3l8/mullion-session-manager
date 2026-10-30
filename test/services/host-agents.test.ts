@@ -134,6 +134,20 @@ describe("host agent tracker (issue #2240)", () => {
     expect(tracker.refreshing.has("mac")).toBe(false);
   });
 
+  it("drops a read that raced with a credential change", async () => {
+    const tracker = new HostAgentTracker();
+    let release!: () => void;
+    client.detectAgents.mockReturnValue(
+      new Promise<DetectedAgent[]>((r) => (release = () => r([agent("claude", true)]))),
+    );
+    client.resolveConfig.mockResolvedValue({ version: "1" });
+    const pending = refreshRemoteHostAgents(fakeApp(tracker), "mac");
+    tracker.invalidateHost("mac");
+    release();
+    await pending;
+    expect(tracker.get("mac")).toBeUndefined();
+  });
+
   it("does nothing without a tracker (an agent process)", async () => {
     await refreshRemoteHostAgents(fakeApp(undefined), "mac");
     refreshLocalAgents(fakeApp(undefined));

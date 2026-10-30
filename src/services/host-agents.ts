@@ -35,6 +35,12 @@ export class HostAgentTracker {
   private entries = new Map<string, HostAgentEntry>();
   /** Hosts with a refresh in flight, so a slow host is never stacked on. */
   readonly refreshing = new Set<string>();
+  /** Bumped by `invalidateHost`, so a read started before it cannot record. */
+  private epochs = new Map<string, number>();
+
+  epoch(hostId: string): number {
+    return this.epochs.get(hostId) ?? 0;
+  }
 
   get(hostId: string): HostAgentEntry | undefined {
     return this.entries.get(hostId);
@@ -58,6 +64,7 @@ export class HostAgentTracker {
 
   /** Call when the host's baseUrl/token changes: the list described another agent. */
   invalidateHost(hostId: string): void {
+    this.epochs.set(hostId, this.epoch(hostId) + 1);
     this.entries.delete(hostId);
   }
 
@@ -91,6 +98,7 @@ async function readRemoteHostAgents(
   tracker: HostAgentTracker,
   hostId: string,
 ): Promise<void> {
+  const epoch = tracker.epoch(hostId);
   const client = getRemoteHostClient(app, hostId);
   let agents: string[] | null;
   try {
@@ -105,6 +113,9 @@ async function readRemoteHostAgents(
   } catch {
     // The version is advisory; the agent list above is what gates placement.
   }
+  // The host's address or token changed while we were reading: this list
+  // describes the OLD agent, so it must not be recorded as fresh.
+  if (tracker.epoch(hostId) !== epoch) return;
   tracker.record(hostId, { agents, mullionVersion });
 }
 
