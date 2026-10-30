@@ -34,6 +34,7 @@ const actions = {
   onOpenProjectSetup: vi.fn(),
   onOpenDockConfig: vi.fn(),
   onOpenSkills: vi.fn(),
+  onOpenTasks: vi.fn(),
 };
 
 function renderSidebar(tier: LayoutTier = "desktop") {

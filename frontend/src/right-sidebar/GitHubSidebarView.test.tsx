@@ -56,6 +56,7 @@ const actions = {
   onOpenProjectSetup: vi.fn(),
   onOpenDockConfig: vi.fn(),
   onOpenSkills: vi.fn(),
+  onOpenTasks: vi.fn(),
 };
 const subscribe = vi.fn();
 const unsubscribe = vi.fn();
