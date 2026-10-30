@@ -41,10 +41,21 @@ const deleteTask = vi.fn(async () => {});
 const updateTask = vi.fn(async () => makeTask({}));
 
 const openRightSidebarPr = vi.fn();
+const requestOpenSession = vi.fn();
+const startSessionFrom = vi.fn(async (_opts: unknown) => makeSession({ id: 50 }));
+const getProjectPrHandoff = vi.fn(async (_p: number, _n: number) => ({
+  prompt: "Fix the red checks",
+  branch: "mullion/task-1",
+}));
+
+vi.mock("./hooks/useStartSessionFrom.js", () => ({
+  useStartSessionFrom: () => startSessionFrom,
+}));
 
 function storeState() {
   return {
     openRightSidebarPr,
+    requestOpenSession,
     tasks,
     sessions,
     hosts,
@@ -81,6 +92,7 @@ vi.mock("./api/index.js", async () => {
     ...actual,
     api: {
       ...actual.api,
+      getProjectPrHandoff: (p: number, n: number) => getProjectPrHandoff(p, n),
       listProjectActions: vi.fn(async () => [
         { id: "agent:claude", title: "Claude Code", kind: "agent" },
         { id: "agent:codex", title: "Codex", kind: "agent" },
@@ -240,6 +252,9 @@ beforeEach(() => {
   refreshTasks.mockClear();
   deleteTask.mockClear();
   updateTask.mockClear();
+  requestOpenSession.mockClear();
+  startSessionFrom.mockClear();
+  getProjectPrHandoff.mockClear();
 });
 
 describe("TaskDetail", () => {
@@ -2150,5 +2165,99 @@ describe("TaskDetail approval state, latest round and host (#2234 #2235 #2236)",
     hosts = [makeHost({ id: "local", name: "local" })];
     const second = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(second.container.querySelector(".task-detail-host")).toBeNull();
+  });
+});
+
+describe("TaskDetail fix-in-a-session action", () => {
+  const openPr = {
+    number: 7,
+    title: "fix: the thing",
+    htmlUrl: "https://github.com/o/r/pull/7",
+    author: "mullion-bot",
+    headSha: "abc123",
+    headBranch: "mullion/task-1",
+    baseBranch: "main",
+    ciStatus: "failure" as const,
+    actionsRuns: [],
+  };
+  const withOpenPr = () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        sessionId: 7,
+        prNumber: 7,
+        prUrl: "https://github.com/o/r/pull/7",
+        branchName: "mullion/task-1",
+      }),
+    ];
+    sessions = [makeSession({ id: 7, liveBranch: "mullion/task-1" })];
+    prsByProject = {
+      1: {
+        prs: [openPr],
+        prSummary: { total: 1, pass: 0, fail: 1, pending: 0, unknown: 0 },
+      },
+    };
+  };
+
+  it("is hidden when the task has no PR or the PR is not open", () => {
+    tasks = [makeTask({ id: 1, status: "in_progress" })];
+    const { unmount } = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /Fix in a session/ })).toBeNull();
+    unmount();
+
+    // PR recorded on the task but absent from the open-PR list (merged/closed).
+    withOpenPr();
+    prsByProject = {};
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /Fix in a session/ })).toBeNull();
+  });
+
+  it("fetches the handoff then starts a session on the PR branch with the seed prompt", async () => {
+    withOpenPr();
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText(/does not change this task/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /Fix in a session/ }));
+    expect(getProjectPrHandoff).toHaveBeenCalledWith(1, 7);
+    expect(startSessionFrom).toHaveBeenCalledWith({
+      worktree: { branch: "mullion/task-1" },
+      seedPrompt: "Fix the red checks",
+    });
+  });
+
+  it("offers Open existing session when a non-worker session is on the branch", async () => {
+    withOpenPr();
+    sessions.push(makeSession({ id: 20, liveBranch: "mullion/task-1" }));
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: /Open existing session/ }));
+    expect(requestOpenSession).toHaveBeenCalledWith(20);
+    expect(getProjectPrHandoff).not.toHaveBeenCalled();
+    expect(startSessionFrom).not.toHaveBeenCalled();
+  });
+
+  it("disables the button while the handoff is in flight", async () => {
+    withOpenPr();
+    let release: (v: { prompt: string; branch: string }) => void = () => {};
+    getProjectPrHandoff.mockImplementationOnce(() => new Promise((resolve) => (release = resolve)));
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: /Fix in a session/ }));
+    expect(screen.getByRole("button", { name: /Fix in a session/ })).toBeDisabled();
+    release({ prompt: "p", branch: "mullion/task-1" });
+    await screen.findByRole("button", { name: /Fix in a session/ });
+  });
+
+  it("shows an endpoint error inline", async () => {
+    withOpenPr();
+    getProjectPrHandoff.mockRejectedValueOnce(new Error("handoff exploded"));
+    const user = userEvent.setup();
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: /Fix in a session/ }));
+    expect(await screen.findByText("handoff exploded")).toBeInTheDocument();
+    expect(startSessionFrom).not.toHaveBeenCalled();
   });
 });
