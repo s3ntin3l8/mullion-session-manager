@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.3.54](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.53...v0.3.54) (2026-10-30)
+
+
+### Features
+
+* **hosts:** detect and report host capabilities (Xcode, Android emulator) ([#2310](https://github.com/s3ntin3l8/mullion-session-manager/issues/2310)) ([15ffd3c](https://github.com/s3ntin3l8/mullion-session-manager/commit/15ffd3ceb2030fb19c0b0dad2cc3e59b8573b9f6))
+* **placement:** capability flags — a project can require Xcode or an Android emulator ([#2315](https://github.com/s3ntin3l8/mullion-session-manager/issues/2315)) ([5100b02](https://github.com/s3ntin3l8/mullion-session-manager/commit/5100b0269cc2473281b6b44c3d8c1e33359d6eca))
+* **scaffold:** let generation restructure or report on existing instruction files ([#2323](https://github.com/s3ntin3l8/mullion-session-manager/issues/2323)) ([dde02ec](https://github.com/s3ntin3l8/mullion-session-manager/commit/dde02ec0e6ce5753db891a2cfede9c94617f9a0b))
+* **scaffold:** offer the agent generation turn in the Scaffold panel ([#2318](https://github.com/s3ntin3l8/mullion-session-manager/issues/2318)) ([181efcf](https://github.com/s3ntin3l8/mullion-session-manager/commit/181efcf8f9de4a95993ee91fee4eee7a62ccbad3))
+
+
+### Bug Fixes
+
+* **github:** use the account for user-initiated GitHub actions, the App only for Task Master ([343288d](https://github.com/s3ntin3l8/mullion-session-manager/commit/343288d66ee8b3125ab8e41dbc4beb71d9499209))
+* **scaffold:** drop the stale local-host-only notices for remote projects ([#2329](https://github.com/s3ntin3l8/mullion-session-manager/issues/2329)) ([8a61f49](https://github.com/s3ntin3l8/mullion-session-manager/commit/8a61f49b64fad16ac815a40c48c2bf97b7aa3d00)), closes [#2317](https://github.com/s3ntin3l8/mullion-session-manager/issues/2317)
+* **tasks:** read branch protection with a dedicated App scope and flag unreadable required checks ([4f5da17](https://github.com/s3ntin3l8/mullion-session-manager/commit/4f5da1786a17ba4c00efb51502c38eebb4b7c185))
+* **windows:** hide the console windows the agent-CLI probe opens ([#2313](https://github.com/s3ntin3l8/mullion-session-manager/issues/2313)) ([4b90846](https://github.com/s3ntin3l8/mullion-session-manager/commit/4b90846813fb8fa6a0c7791efc7da24e2a18c5e0))
+
 ## [0.3.53](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.52...v0.3.53) (2026-10-30)
 
 
