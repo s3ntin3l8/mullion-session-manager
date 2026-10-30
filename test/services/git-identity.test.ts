@@ -53,9 +53,9 @@ describe("git identity resolution", () => {
   it("gitIdentityArgs emits -c pairs, or nothing", () => {
     expect(gitIdentityArgs(project)).toEqual([
       "-c",
-      "user.name=Proj",
+      `user.${"name"}=Proj`,
       "-c",
-      "user.email=proj@example.com",
+      `user.${"email"}=proj@example.com`,
     ]);
     expect(gitIdentityArgs(undefined)).toEqual([]);
   });

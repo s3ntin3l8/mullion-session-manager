@@ -104,6 +104,15 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
           // Hermes review, PR #966 — Task Master marker, see
           // CreateSessionOptions.taskId's own doc comment (pty-manager.ts).
           taskId: { type: "integer" },
+          gitIdentity: {
+            type: "object",
+            additionalProperties: false,
+            required: ["name", "email"],
+            properties: {
+              name: { type: "string", minLength: 1, maxLength: 256 },
+              email: { type: "string", minLength: 1, maxLength: 256 },
+            },
+          },
         },
       },
     });
@@ -414,6 +423,15 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
         properties: {
           cwd: { type: "string", minLength: 1 },
           message: { type: "string" },
+          gitIdentity: {
+            type: "object",
+            additionalProperties: false,
+            required: ["name", "email"],
+            properties: {
+              name: { type: "string", minLength: 1, maxLength: 256 },
+              email: { type: "string", minLength: 1, maxLength: 256 },
+            },
+          },
         },
       },
     });
