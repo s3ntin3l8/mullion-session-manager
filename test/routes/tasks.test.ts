@@ -2602,6 +2602,63 @@ describe("tasks route", () => {
       await app.close();
     });
 
+    // #2369 — a review by an external reviewer is a run, not a session: the
+    // route has to re-arm it by the run columns, with no session to kill.
+    describe("an external reviewer's run (#2369)", () => {
+      const run = {
+        reviewRunId: "run_stuck",
+        reviewRunDispatchedAt: new Date(Date.now() - 2 * 60 * 60_000),
+        reviewRunHeadSha: "sha-1",
+        reviewRunIngestedId: "run_stuck",
+      };
+
+      async function createInconclusiveRunTask(
+        app: Awaited<ReturnType<typeof buildApp>>,
+        overrides: Partial<typeof tasks.$inferInsert> = {},
+      ) {
+        const { task } = await createInconclusiveReviewingTask(app, { reviewSessionId: null });
+        app.db
+          .update(tasks)
+          .set({ ...run, ...overrides })
+          .where(eq(tasks.id, task.id))
+          .run();
+        return task;
+      }
+
+      it("re-arms a run stuck on inconclusive: clears every run column and counts the re-arm", async () => {
+        const app = await buildApp();
+        const task = await createInconclusiveRunTask(app);
+
+        const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/re-review` });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({
+          status: "reviewing",
+          reviewRunId: null,
+          reviewRunIngestedId: null,
+          reviewRunDispatchedAt: null,
+          inconclusiveReviewRearmCount: 1,
+        });
+        const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+        expect(row.reviewRunHeadSha).toBeNull();
+
+        await app.close();
+      });
+
+      it("409s while the current run's verdict is not in yet, even though the verdict still reads inconclusive from before", async () => {
+        const app = await buildApp();
+        const task = await createInconclusiveRunTask(app, { reviewRunIngestedId: null });
+
+        const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/re-review` });
+
+        expect(res.statusCode).toBe(409);
+        const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+        expect(row.reviewRunId).toBe("run_stuck");
+
+        await app.close();
+      });
+    });
+
     // Hermes review finding — a prior re-review (this route, or the
     // automatic sweep) nulls reviewFindingsIngestedSessionId and kills the
     // stale session; the reconciler later spawns a FRESH review session

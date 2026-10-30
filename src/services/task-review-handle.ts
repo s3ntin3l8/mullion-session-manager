@@ -20,6 +20,23 @@ export interface ReviewHandleRow {
 // a query forgot to select arrives as `undefined`, which must read as "no run"
 // — `undefined !== null` would claim a run that is not there.
 
+/**
+ * The run columns of the review handle, all nulled. Spread it next to the
+ * session columns at every site that resets a review (a new round, a rebase, a
+ * re-arm, a re-review) so the next round dispatches a fresh run — and so a
+ * site cannot null the run id yet leave a stale ingest marker or dispatch time
+ * behind. Each site keeps its own subset of the SESSION columns: they differ on
+ * purpose (some leave `reviewFindingsIngestedSessionId` to stop matching on its
+ * own once the next spawn gets a fresh session id); the run columns have no
+ * such luck and are always cleared together.
+ */
+export const CLEARED_REVIEW_RUN = {
+  reviewRunId: null,
+  reviewRunDispatchedAt: null,
+  reviewRunHeadSha: null,
+  reviewRunIngestedId: null,
+} as const;
+
 /** Does the task have a review at all — spawned or dispatched and not cleared
  * since? */
 export function hasReviewHandle(

@@ -24,7 +24,11 @@ import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.j
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { canSpawnReviewer, deriveApprovalState } from "./task-approval-state.js";
-import { hasIngestedCurrentReview, hasReviewHandle } from "./task-review-handle.js";
+import {
+  CLEARED_REVIEW_RUN,
+  hasIngestedCurrentReview,
+  hasReviewHandle,
+} from "./task-review-handle.js";
 import { notifyTaskNeedsAttention } from "./push-delivery.js";
 import {
   resolveReviewAgentCommand,
@@ -1786,8 +1790,12 @@ async function attemptAutoRebase(
 
   const worktree = await backend.resumeTaskWorktree(workerCwd, branchName);
   if (!worktree) {
-    if (task.reviewSessionId !== null) {
-      app.db.update(tasks).set({ reviewSessionId: null }).where(eq(tasks.id, task.id)).run();
+    if (hasReviewHandle(task)) {
+      app.db
+        .update(tasks)
+        .set({ reviewSessionId: null, ...CLEARED_REVIEW_RUN })
+        .where(eq(tasks.id, task.id))
+        .run();
     }
     // Branch missing or checked out elsewhere — not retryable by spawning
     // again. Surface for a human rather than looping (mirrors the plan's
@@ -1853,8 +1861,12 @@ async function attemptAutoRebase(
     hostId: workerHostId,
   });
   if (!result.ok) {
-    if (task.reviewSessionId !== null) {
-      app.db.update(tasks).set({ reviewSessionId: null }).where(eq(tasks.id, task.id)).run();
+    if (hasReviewHandle(task)) {
+      app.db
+        .update(tasks)
+        .set({ reviewSessionId: null, ...CLEARED_REVIEW_RUN })
+        .where(eq(tasks.id, task.id))
+        .run();
     }
     recordMergeError(
       app,
@@ -1877,6 +1889,7 @@ async function attemptAutoRebase(
       sessionId: result.row.id,
       reviewSessionId: null,
       reviewFindingsIngestedSessionId: null,
+      ...CLEARED_REVIEW_RUN,
       worktreePath: worktree.path,
       branchName: worktree.branch,
       seedDelivered,
@@ -1887,8 +1900,12 @@ async function attemptAutoRebase(
     .where(and(eq(tasks.id, task.id), inArray(tasks.status, ["done", "reviewing"])))
     .run();
   if (updated.changes === 0) {
-    if (task.reviewSessionId !== null) {
-      app.db.update(tasks).set({ reviewSessionId: null }).where(eq(tasks.id, task.id)).run();
+    if (hasReviewHandle(task)) {
+      app.db
+        .update(tasks)
+        .set({ reviewSessionId: null, ...CLEARED_REVIEW_RUN })
+        .where(eq(tasks.id, task.id))
+        .run();
     }
     app.log.warn(
       { taskId: task.id, newSessionId: result.row.id },
@@ -4974,6 +4991,7 @@ async function reannounceCappedTasksAfterHumanPush(app: FastifyInstance): Promis
         reviewSessionId: null,
         reviewSeedDelivered: null,
         reviewSpawnClaimedAt: null,
+        ...CLEARED_REVIEW_RUN,
         lastReviewedHeadSha: pr.headSha,
       })
       .where(
@@ -5026,12 +5044,16 @@ async function reannounceInconclusiveReviewsAfterGrace(app: FastifyInstance): Pr
       and(
         eq(tasks.status, "reviewing"),
         eq(tasks.lastReviewVerdict, "inconclusive"),
-        isNotNull(tasks.reviewFindingsIngestedSessionId),
         // Nothing stalled left to re-arm otherwise — also keeps this bound
-        // an "attempts," not "ticks": right after a successful re-arm this
-        // is null again until the next spawn, so a second tick landing
-        // before that spawn can't double-fire even at a higher MAX than 1.
-        isNotNull(tasks.reviewSessionId),
+        // an "attempts," not "ticks": right after a successful re-arm the
+        // review handle is null again until the next spawn or dispatch, so a
+        // second tick landing before that can't double-fire even at a higher
+        // MAX than 1. The review is either a session or an external run (#2369);
+        // either pair must be complete — a handle AND its ingested marker.
+        or(
+          and(isNotNull(tasks.reviewFindingsIngestedSessionId), isNotNull(tasks.reviewSessionId)),
+          and(isNotNull(tasks.reviewRunIngestedId), isNotNull(tasks.reviewRunId)),
+        ),
         // A capped, announced task is reannounceCappedTasksAfterHumanPush's
         // own territory — it requires an actual human push, not a timer;
         // excluded here so the two sweeps never both touch the same row.
@@ -5043,7 +5065,7 @@ async function reannounceInconclusiveReviewsAfterGrace(app: FastifyInstance): Pr
   if (rows.length === 0) return;
 
   for (const { task, project } of rows) {
-    if (task.reviewSessionId === null) continue; // guaranteed by the query above; narrows the type only
+    if (!hasReviewHandle(task)) continue; // guaranteed by the query above
     if (task.lastReviewVerdictAt === null) continue;
     if (now - task.lastReviewVerdictAt.getTime() < INCONCLUSIVE_REVIEW_REARM_GRACE_MS) continue;
     // Defensive, independent of the query's own isNull(autoReturnCapAnnouncedAt)
@@ -5056,7 +5078,9 @@ async function reannounceInconclusiveReviewsAfterGrace(app: FastifyInstance): Pr
     )
       continue;
 
+    // Whichever handle the stalled review has — one of the two is null.
     const staleReviewSessionId = task.reviewSessionId;
+    const staleReviewRunId = task.reviewRunId;
     const updated = app.db
       .update(tasks)
       .set({
@@ -5064,6 +5088,7 @@ async function reannounceInconclusiveReviewsAfterGrace(app: FastifyInstance): Pr
         reviewFindingsIngestedSessionId: null,
         reviewSeedDelivered: null,
         reviewSpawnClaimedAt: null,
+        ...CLEARED_REVIEW_RUN,
         inconclusiveReviewRearmCount: task.inconclusiveReviewRearmCount + 1,
       })
       .where(
@@ -5071,7 +5096,12 @@ async function reannounceInconclusiveReviewsAfterGrace(app: FastifyInstance): Pr
           eq(tasks.id, task.id),
           eq(tasks.status, "reviewing"),
           eq(tasks.lastReviewVerdict, "inconclusive"),
-          eq(tasks.reviewSessionId, staleReviewSessionId),
+          staleReviewSessionId === null
+            ? isNull(tasks.reviewSessionId)
+            : eq(tasks.reviewSessionId, staleReviewSessionId),
+          staleReviewRunId === null
+            ? isNull(tasks.reviewRunId)
+            : eq(tasks.reviewRunId, staleReviewRunId),
           eq(tasks.inconclusiveReviewRearmCount, task.inconclusiveReviewRearmCount),
         ),
       )
@@ -5084,12 +5114,14 @@ async function reannounceInconclusiveReviewsAfterGrace(app: FastifyInstance): Pr
     // AFTER the CAS succeeds, not before: a lost race against a concurrent
     // approve/reject/give-up must not leave a session killed out from under
     // a row this sweep no longer actually touched.
-    void killSession(app, staleReviewSessionId).catch((err) => {
-      app.log.warn(
-        { err, taskId: task.id, reviewSessionId: staleReviewSessionId },
-        "task reconcile: failed to kill the stalled review session",
-      );
-    });
+    if (staleReviewSessionId !== null) {
+      void killSession(app, staleReviewSessionId).catch((err) => {
+        app.log.warn(
+          { err, taskId: task.id, reviewSessionId: staleReviewSessionId },
+          "task reconcile: failed to kill the stalled review session",
+        );
+      });
+    }
   }
 }
 
@@ -5601,6 +5633,10 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                       reviewSessionId: null,
                       reviewSeedDelivered: null,
                       reviewSpawnClaimedAt: null,
+                      // An external reviewer's run (#2369) is cleared whole,
+                      // marker included: unlike a session id, a run has no
+                      // fresh number to make the old marker stop matching.
+                      ...CLEARED_REVIEW_RUN,
                       approvalCarriedAt: null,
                       // Task 409707 — a fresh review round earns its own
                       // automatic inconclusive-rearm attempt, same reasoning

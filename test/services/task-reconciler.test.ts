@@ -1051,6 +1051,68 @@ describe("reconcileTasks", () => {
     await app.close();
   });
 
+  // #2369 — a review by an external reviewer is a run, not a session, so it
+  // has no fresh session id to make its ingest marker stop matching: the whole
+  // handle has to be cleared, or the next round would read as already reviewed.
+  describe("re-entering reviewing with an external reviewer's run (#2369)", () => {
+    const priorRun = {
+      reviewRunId: "run_prior",
+      reviewRunDispatchedAt: new Date(Date.now() - 60 * 60_000),
+      reviewRunHeadSha: "sha-prior",
+      reviewRunIngestedId: "run_prior",
+    } as const;
+
+    it("clears the prior round's run, marker included, so the next round dispatches a fresh one", async () => {
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTask(app, "in_progress");
+      app.db.update(tasks).set(priorRun).where(eq(tasks.id, taskId)).run();
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewRunId).toBeNull();
+      expect(row.reviewRunDispatchedAt).toBeNull();
+      expect(row.reviewRunHeadSha).toBeNull();
+      expect(row.reviewRunIngestedId).toBeNull();
+
+      await app.close();
+    });
+
+    it("keeps the run when the task's approval is carried through the worker's return", async () => {
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTask(app, "in_progress");
+      app.db
+        .update(tasks)
+        .set({
+          ...priorRun,
+          lastReviewVerdict: "approved-with-suggestions",
+          lastReviewVerdictAt: new Date(Date.now() - 30 * 60_000),
+          approvalCarriedAt: new Date(Date.now() - 20 * 60_000),
+        })
+        .where(eq(tasks.id, taskId))
+        .run();
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      // The approval still stands for the same review, so the handle stays and
+      // the auto-approve gate keeps seeing the verdict it already trusted.
+      expect(row.reviewRunId).toBe("run_prior");
+      expect(row.reviewRunIngestedId).toBe("run_prior");
+      expect(row.approvalCarriedAt).not.toBeNull();
+
+      await app.close();
+    });
+  });
+
   it("leaves in_progress alone while the session is still actively working", async () => {
     const app = await buildApp();
     const { taskId } = await createSessionAndTask(app, "in_progress");
@@ -3791,7 +3853,14 @@ describe("reconcileTasks", () => {
         title: string;
         prTitle: string | null;
         lastReviewVerdict: string | null;
+        // The review is a local session by default; a test about an external
+        // reviewer (#2369) overrides these to null and sets the run columns.
+        reviewSessionId: number | null;
         reviewFindingsIngestedSessionId: number | null;
+        reviewRunId: string | null;
+        reviewRunDispatchedAt: Date | null;
+        reviewRunHeadSha: string | null;
+        reviewRunIngestedId: string | null;
         prNumber: number | null;
         autoApprove: boolean;
         worktreePath: string | null;
@@ -4245,6 +4314,44 @@ describe("reconcileTasks", () => {
         .all();
       expect(reviewSessionRow.status).toBe("killed");
       expect(row.reviewSessionId).toBeNull();
+
+      await app.close();
+    });
+
+    // #2369 — the auto-approve gate must see an external reviewer's run as an
+    // ingested review (or it never reaches the conflict branch at all), and the
+    // rebase must clear the whole run handle so the next round dispatches fresh.
+    it("auto-rebases a reviewing task whose approved review is an external run, and clears the run (#2369)", async () => {
+      const app = await buildApp();
+      vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+      const { taskId } = await createAutoApproveCandidate(app, {
+        branchName: "mullion/task-x",
+        agentCommand: "claude",
+        reviewSessionId: null,
+        reviewFindingsIngestedSessionId: null,
+        reviewRunId: "run_approved",
+        reviewRunDispatchedAt: new Date(Date.now() - 60 * 60_000),
+        reviewRunHeadSha: "sha-1",
+        reviewRunIngestedId: "run_approved",
+      });
+      mockGetPullRequestByNumber.mockResolvedValue(
+        mockPr({ mergeable: false, mergeableState: "dirty" }),
+      );
+      mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+      mockResumeTaskWorktree.mockResolvedValue({
+        path: "/tmp/.mullion-worktrees/mullion-task-x",
+        branch: "mullion/task-x",
+      });
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.rebaseAttempts).toBe(1);
+      expect(row.rebaseStartedAt).not.toBeNull();
+      expect(row.reviewRunId).toBeNull();
+      expect(row.reviewRunDispatchedAt).toBeNull();
+      expect(row.reviewRunHeadSha).toBeNull();
+      expect(row.reviewRunIngestedId).toBeNull();
 
       await app.close();
     });
@@ -9620,6 +9727,31 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    it("clears an external reviewer's run too when it re-arms (#2369)", async () => {
+      const app = await buildApp();
+      const { task } = await createCappedAnnouncedTask(app, {
+        reviewSessionId: null,
+        reviewFindingsIngestedSessionId: null,
+        reviewRunId: "run_capped",
+        reviewRunDispatchedAt: new Date(Date.now() - 60 * 60_000),
+        reviewRunHeadSha: "sha-old",
+        reviewRunIngestedId: "run_capped",
+      });
+      setRepoPRsStatus("o", "r", prStatus(9, "sha-new"));
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.autoReturnCapAnnouncedAt).toBeNull();
+      expect(row.reviewRunId).toBeNull();
+      expect(row.reviewRunDispatchedAt).toBeNull();
+      expect(row.reviewRunHeadSha).toBeNull();
+      expect(row.reviewRunIngestedId).toBeNull();
+      expect(row.lastReviewedHeadSha).toBe("sha-new");
+
+      await app.close();
+    });
+
     it("does not re-arm when the PR's head SHA matches what was last reviewed", async () => {
       const app = await buildApp();
       const { task } = await createCappedAnnouncedTask(app);
@@ -9775,6 +9907,76 @@ describe("reconcileTasks", () => {
 
       killSpy.mockRestore();
       await app.close();
+    });
+
+    describe("an external reviewer's run (#2369)", () => {
+      // A review by an external reviewer: a run, with no review session.
+      const stalledRun = {
+        reviewSessionId: null,
+        reviewFindingsIngestedSessionId: null,
+        reviewRunId: "run_stalled",
+        reviewRunDispatchedAt: new Date(Date.now() - 2 * 60 * 60_000),
+        reviewRunHeadSha: "sha-1",
+        reviewRunIngestedId: "run_stalled",
+      } as const;
+
+      it("re-arms a stalled inconclusive run once the grace period has elapsed, clearing every run column", async () => {
+        const app = await buildApp();
+        const { task } = await createStalledInconclusiveTask(app, stalledRun);
+        const sessionsModule = await import("../../src/services/session-lifecycle.js");
+        const killSpy = vi.spyOn(sessionsModule, "killSession").mockResolvedValue(null);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, task.id);
+        expect(row.reviewRunId).toBeNull();
+        expect(row.reviewRunDispatchedAt).toBeNull();
+        expect(row.reviewRunHeadSha).toBeNull();
+        expect(row.reviewRunIngestedId).toBeNull();
+        expect(row.inconclusiveReviewRearmCount).toBe(1);
+        expect(row.status).toBe("reviewing");
+        expect(row.autoReturnRounds).toBe(0);
+        expect(row.lastReviewVerdict).toBe("inconclusive");
+        // There is no review session to kill.
+        expect(killSpy).not.toHaveBeenCalled();
+
+        killSpy.mockRestore();
+        await app.close();
+      });
+
+      it("does not re-arm a run whose verdict has not been ingested yet", async () => {
+        // The verdict column still holds the previous round's "inconclusive"
+        // while the fresh run is out — re-arming now would stop a healthy run.
+        const app = await buildApp();
+        const { task } = await createStalledInconclusiveTask(app, {
+          ...stalledRun,
+          reviewRunIngestedId: null,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, task.id);
+        expect(row.reviewRunId).toBe("run_stalled");
+        expect(row.inconclusiveReviewRearmCount).toBe(0);
+
+        await app.close();
+      });
+
+      it("does not re-arm a run within the grace period", async () => {
+        const app = await buildApp();
+        const { task } = await createStalledInconclusiveTask(app, {
+          ...stalledRun,
+          lastReviewVerdictAt: new Date(Date.now() - 60_000),
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, task.id);
+        expect(row.reviewRunId).toBe("run_stalled");
+        expect(row.inconclusiveReviewRearmCount).toBe(0);
+
+        await app.close();
+      });
     });
 
     // Same reasoning as the in_progress -> reviewing transition's own kill

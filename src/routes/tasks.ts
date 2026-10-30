@@ -47,6 +47,7 @@ import { killSession } from "../services/session-lifecycle.js";
 
 import { KNOWN_AGENTS } from "../services/agent-detect.js";
 import { HERMES_REVIEW_AGENT, hermesReviewAgentRefusal } from "../services/task-agent-resolve.js";
+import { CLEARED_REVIEW_RUN, hasReviewHandle } from "../services/task-review-handle.js";
 
 // A review agent is a CLI, "hermes" (the external reviewer, #2369 — not a CLI,
 // so not in KNOWN_AGENTS), or "none"; null falls through to the next tier.
@@ -1818,9 +1819,12 @@ export async function tasksRoute(app: FastifyInstance) {
         `Cannot re-review a task whose last review verdict is "${existing.lastReviewVerdict ?? "none"}", not "inconclusive"`,
       );
     }
-    if (existing.reviewSessionId === null) {
+    if (!hasReviewHandle(existing)) {
       return reply.conflict("Task has no review session to re-arm");
     }
+    // The review is either a local session or a run on an external reviewer
+    // (#2369); whichever it is decides which ingest marker to look at below.
+    const reviewIsRun = typeof existing.reviewRunId === "string";
     // Hermes review finding — the automatic sweep's own eligibility query
     // (reannounceInconclusiveReviewsAfterGrace, task-reconciler.ts)
     // requires isNotNull(reviewFindingsIngestedSessionId), and this route
@@ -1834,12 +1838,18 @@ export async function tasksRoute(app: FastifyInstance) {
     // before — the two columns go stale independently. Without this check,
     // a second click during that window passes every other gate here and
     // kills a legitimately-running review agent for no reason.
-    if (existing.reviewFindingsIngestedSessionId === null) {
+    if (
+      reviewIsRun
+        ? existing.reviewRunIngestedId === null
+        : existing.reviewFindingsIngestedSessionId === null
+    ) {
       return reply.conflict(
         "Task's review session hasn't produced a result yet — nothing stale to re-arm",
       );
     }
+    // One of these is null: the stale review is a session or a run, not both.
     const staleReviewSessionId = existing.reviewSessionId;
+    const staleReviewRunId = existing.reviewRunId;
     const [updated] = app.db
       .update(tasks)
       .set({
@@ -1847,6 +1857,7 @@ export async function tasksRoute(app: FastifyInstance) {
         reviewFindingsIngestedSessionId: null,
         reviewSeedDelivered: null,
         reviewSpawnClaimedAt: null,
+        ...CLEARED_REVIEW_RUN,
         inconclusiveReviewRearmCount: existing.inconclusiveReviewRearmCount + 1,
       })
       .where(
@@ -1854,13 +1865,20 @@ export async function tasksRoute(app: FastifyInstance) {
           eq(tasks.id, taskId),
           eq(tasks.status, "reviewing"),
           eq(tasks.lastReviewVerdict, "inconclusive"),
-          eq(tasks.reviewSessionId, staleReviewSessionId),
+          staleReviewSessionId === null
+            ? isNull(tasks.reviewSessionId)
+            : eq(tasks.reviewSessionId, staleReviewSessionId),
+          staleReviewRunId === null
+            ? isNull(tasks.reviewRunId)
+            : eq(tasks.reviewRunId, staleReviewRunId),
           // Same reasoning as the read-time check above, re-applied at the
           // write for the same defense-in-depth reason the other three CAS
           // conditions already are — a concurrent write between the read
           // and this write could otherwise still let a stale
-          // reviewSessionId match while an ingest raced in behind it.
-          isNotNull(tasks.reviewFindingsIngestedSessionId),
+          // review handle match while an ingest raced in behind it.
+          reviewIsRun
+            ? isNotNull(tasks.reviewRunIngestedId)
+            : isNotNull(tasks.reviewFindingsIngestedSessionId),
         ),
       )
       .returning()
@@ -1873,12 +1891,14 @@ export async function tasksRoute(app: FastifyInstance) {
     // (task-reconciler.ts): a lost race against a concurrent approve/
     // reject/give-up must not leave a session killed out from under a row
     // this route no longer actually touched.
-    void killSession(app, staleReviewSessionId).catch((err) => {
-      app.log.warn(
-        { err, taskId, reviewSessionId: staleReviewSessionId },
-        "re-review: failed to kill the stale review session",
-      );
-    });
+    if (staleReviewSessionId !== null) {
+      void killSession(app, staleReviewSessionId).catch((err) => {
+        app.log.warn(
+          { err, taskId, reviewSessionId: staleReviewSessionId },
+          "re-review: failed to kill the stale review session",
+        );
+      });
+    }
     return updated;
   });
 
