@@ -6,6 +6,7 @@ import {
   ReviewGateChip,
   SessionPills,
   TaskChip,
+  splitTaskSessions,
   decideSessionAction,
   gatedSessions,
   severityTone,
@@ -87,7 +88,7 @@ describe("TaskChip", () => {
   it("shows status, lock variant and opens the task", () => {
     const onOpen = vi.fn();
     render(<TaskChip task={{ id: 7, status: "reviewing" }} locked onOpen={onOpen} />);
-    const chip = screen.getByRole("button", { name: /task #7 · reviewing/ });
+    const chip = screen.getByRole("button", { name: /#7 · reviewing/ });
     expect(chip.textContent).toContain("🔒");
     expect(chip.className).toContain("sb-chip--warn");
     fireEvent.click(chip);
@@ -104,12 +105,51 @@ describe("TaskChip", () => {
     expect(container.querySelector(`.sb-chip--${tone}`)).not.toBeNull();
   });
 
+  it("renders the bot badge and a status-toned label", () => {
+    const { container } = render(<TaskChip task={{ id: 9, status: "done" }} />);
+    expect(container.querySelector("svg")).not.toBeNull();
+    expect(container.querySelector(".sb-chip--task.sb-chip--success")).not.toBeNull();
+    expect(container.textContent).toBe("#9 · done");
+  });
+
+  describe("live dot", () => {
+    const link = (id: number, severity: "busy" | "failed") =>
+      ({
+        session: makeSession({ id, sessionStatus: "working" }),
+        severity,
+        attention: false,
+        children: [],
+      }) as never;
+    const task = { id: 3, status: "reviewing", sessionId: 10, reviewSessionId: 11 } as const;
+    const dotClass = (c: HTMLElement) =>
+      c.querySelector('[data-testid="task-session-dot"]')?.className;
+
+    it("tracks the reviewer while reviewing with a review in flight", () => {
+      const { container } = render(
+        <TaskChip task={task} sessions={[link(10, "busy"), link(11, "failed")]} reviewInFlight />,
+      );
+      expect(dotClass(container)).toContain("sb-task-dot--danger");
+    });
+
+    it("tracks the worker otherwise", () => {
+      const { container } = render(
+        <TaskChip task={task} sessions={[link(10, "busy"), link(11, "failed")]} />,
+      );
+      expect(dotClass(container)).toContain("sb-task-dot--info");
+    });
+
+    it("has no dot when the task's sessions aren't among the row's", () => {
+      const { container } = render(<TaskChip task={task} sessions={[link(99, "busy")]} />);
+      expect(dotClass(container)).toBeUndefined();
+    });
+  });
+
   // #2020 — with no onOpen, a click asks the app shell to open the task.
   it("dispatches requestOpenTask when no onOpen is given", () => {
     const requestOpenTask = vi.fn();
     useDashboardStore.setState({ requestOpenTask });
     render(<TaskChip task={{ id: 4, status: "in_progress" }} />);
-    fireEvent.click(screen.getByRole("button", { name: /task #4/ }));
+    fireEvent.click(screen.getByRole("button", { name: /#4 · in_progress/ }));
     expect(requestOpenTask).toHaveBeenCalledWith(4);
   });
 });
@@ -213,5 +253,25 @@ describe("LinkedActions", () => {
     const e = entryFor([], { reviewRun: { runId: "r1", state: "landed", kind: "pull_request" } });
     render(<LinkedActions entry={e} />);
     expect(screen.queryByRole("button", { name: "Stop review" })).toBeNull();
+  });
+});
+
+describe("splitTaskSessions", () => {
+  const l = (id: number, children: unknown[] = []) =>
+    ({ session: makeSession({ id }), severity: "busy", attention: false, children }) as never;
+
+  it("folds out the worker, reviewer and their children, keeping others", () => {
+    const hand = l(3, [l(4)]);
+    const { owned, rest } = splitTaskSessions([l(1, [l(5)]), l(2), hand], {
+      sessionId: 1,
+      reviewSessionId: 2,
+    });
+    expect(owned.map((o) => o.session.id)).toEqual([1, 2]);
+    expect(rest.map((r) => r.session.id)).toEqual([3]);
+    expect(rest[0]!.children.map((c) => c.session.id)).toEqual([4]);
+  });
+
+  it("keeps everything when there is no task", () => {
+    expect(splitTaskSessions([l(1)], null).rest).toHaveLength(1);
   });
 });

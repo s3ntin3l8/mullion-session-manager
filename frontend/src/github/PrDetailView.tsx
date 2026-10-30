@@ -23,6 +23,7 @@ import {
   DetailHeader,
   IconButton,
   SessionPills,
+  splitTaskSessions,
   SidebarSection,
   StatusChip,
   TaskChip,
@@ -412,6 +413,7 @@ export function PrDetailView({
     });
   // Task Master's own actions on this PR's task (Merge is the sticky bar's).
   const taskStatus = entry?.task?.status;
+  const detailPills = splitTaskSessions(entry?.sessions ?? [], entry?.task).rest;
   const workflowHold = parseWorkflowChange(entry?.task?.workflowChange);
   const taskId = entry?.task?.id;
   const approveTask = () =>
@@ -708,11 +710,15 @@ export function PrDetailView({
             </Button>
           </div>
           <div className="pr-card-b">
-            {entry && entry.sessions.length > 0 && <SessionPills links={entry.sessions} />}
+            {detailPills.length > 0 && <SessionPills links={detailPills} />}
             <ReviewGateActions sessions={gatedSessions(entry?.sessions)} />
             {entry?.task && (
               <div className="pr-pin-foot">
-                <TaskChip task={entry.task} />
+                <TaskChip
+                  task={entry.task}
+                  sessions={entry.sessions}
+                  reviewInFlight={entry.reviewRun?.state === "requested"}
+                />
                 {taskStatus === "reviewing" && !workflowHold && (
                   <Button size="sm" disabled={busy !== null} onClick={approveTask}>
                     Approve task

@@ -10,7 +10,14 @@ import { issueBranchName, issueSeedPrompt } from "./issueWork.js";
 import { CommentComposer } from "./Composer.js";
 import { EmptyStateNote } from "../ui/EmptyState.js";
 import { ErrorText } from "../ui/ErrorText.js";
-import { BoltIcon, FilterIcon, MessageIcon, PlayTriangleIcon, SortIcon } from "../ui/icons.js";
+import {
+  BoltIcon,
+  BotIcon,
+  FilterIcon,
+  MessageIcon,
+  PlayTriangleIcon,
+  SortIcon,
+} from "../ui/icons.js";
 import { SafeHtml } from "../ui/SafeHtml.js";
 import {
   Button,
@@ -24,6 +31,7 @@ import {
 import { decideSessionAction, taskTone } from "../ui/sidebar/linkDecisions.js";
 import { SearchInput } from "../ui/primitives.js";
 import { SessionPills } from "../ui/sidebar/SessionPills.js";
+import { splitTaskSessions } from "../ui/sidebar/linkDecisions.js";
 import { TaskChip } from "../ui/sidebar/TaskChip.js";
 
 // The Issues half of the GitHub sidebar: a filterable list (label chips,
@@ -315,13 +323,9 @@ function IssueRow({
   const showQueue = canQueue && !issue.taskStatus && !queued;
   const action = decideSessionAction(link);
   const task = link?.task;
+  const pills = splitTaskSessions(link?.sessions ?? [], task).rest;
   const hasChips =
-    issue.labels.length > 0 ||
-    issue.taskStatus ||
-    task ||
-    issue.triage ||
-    link?.sessions.length ||
-    queued;
+    issue.labels.length > 0 || issue.taskStatus || task || issue.triage || pills.length || queued;
   return (
     <SidebarRow
       lead={<span className={`gh-issue-glyph${done ? " gh-issue-glyph--done" : ""}`} aria-hidden />}
@@ -347,10 +351,17 @@ function IssueRow({
               <LabelChip key={l.name} label={l} />
             ))}
             {task ? (
-              <TaskChip task={task} />
+              <TaskChip
+                task={task}
+                sessions={link?.sessions}
+                reviewInFlight={link?.reviewRun?.state === "requested"}
+              />
             ) : (
               issue.taskStatus && (
-                <StatusChip tone={taskTone(issue.taskStatus)}>Task: {issue.taskStatus}</StatusChip>
+                <StatusChip tone={taskTone(issue.taskStatus)} className="sb-chip--task">
+                  <BotIcon size={11} aria-hidden="true" />
+                  Task: {issue.taskStatus}
+                </StatusChip>
               )
             )}
             {queued && !issue.taskStatus && !task && <StatusChip tone="info">Queued</StatusChip>}
@@ -359,7 +370,7 @@ function IssueRow({
                 Triage
               </StatusChip>
             )}
-            <SessionPills links={link?.sessions ?? []} />
+            <SessionPills links={pills} />
           </div>
         ) : undefined
       }
@@ -409,6 +420,7 @@ export function IssueDetailView({
   const [queued, setQueued] = useState(false);
   const startSessionFrom = useStartSessionFrom(projectId);
   const link = useMullionLinks(projectId).byIssue.get(number);
+  const detailPills = splitTaskSessions(link?.sessions ?? [], link?.task).rest;
   const action = decideSessionAction(link);
   // A linked task, or the task status the detail response carries, means it
   // is already queued (survives a remount).
@@ -503,10 +515,16 @@ export function IssueDetailView({
               </Button>
             )}
           </div>
-          {link && (link.sessions.length > 0 || link.task) && (
+          {link && (detailPills.length > 0 || link.task) && (
             <div className="gh-issue-card">
-              {link.task && <TaskChip task={link.task} />}
-              <SessionPills links={link.sessions} />
+              {link.task && (
+                <TaskChip
+                  task={link.task}
+                  sessions={link.sessions}
+                  reviewInFlight={link.reviewRun?.state === "requested"}
+                />
+              )}
+              <SessionPills links={detailPills} />
             </div>
           )}
           {notice && (

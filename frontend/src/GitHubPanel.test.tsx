@@ -835,7 +835,7 @@ describe("GitHubPanel", () => {
       render(<GitHubPanel params={{ projectId: 1 }} />);
       await screen.findByText("Fix attention race");
       expect(screen.getByRole("button", { name: /attn worker/ })).toBeInTheDocument();
-      expect(screen.getByText("task #7 · reviewing")).toBeInTheDocument();
+      expect(screen.getByText("#7 · reviewing")).toBeInTheDocument();
       expect(screen.getByText("review running")).toBeInTheDocument();
       expect(chipLabel("Review")).toBe("Commented · relay running");
       useDashboardStore.setState({ projects: [], sessions: [], tasks: [] });
@@ -864,7 +864,7 @@ describe("GitHubPanel", () => {
       await screen.findByText("Fix attention race");
       const badge = screen.getByText("review gate");
       expect(badge.title).toContain("attn worker: Push to origin?");
-      await userEvent.click(screen.getByRole("button", { name: "task #7 · in_progress" }));
+      await userEvent.click(screen.getByRole("button", { name: "#7 · in_progress" }));
       expect(requestOpenTask).toHaveBeenCalledWith(7);
       // The chip's click stays on the chip: the PR detail did not open.
       expect(screen.queryByRole("region", { name: "Mullion" })).toBeNull();
@@ -874,7 +874,7 @@ describe("GitHubPanel", () => {
     it("falls back to the task fields the list carries when the store has no task", async () => {
       setup({ ...failingPr, taskId: 7, taskStatus: "in_progress" });
       render(<GitHubPanel params={{ projectId: 1 }} />);
-      expect(await screen.findByText("task #7 · in_progress")).toBeInTheDocument();
+      expect(await screen.findByText("#7 · in_progress")).toBeInTheDocument();
     });
 
     it("opens the PR from the row, and the header link follows the selection", async () => {

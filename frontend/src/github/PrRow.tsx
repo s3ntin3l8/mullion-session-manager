@@ -10,6 +10,7 @@ import {
   ReviewGateChip,
   IconButton,
   SessionPills,
+  splitTaskSessions,
   SidebarRow,
   StatusChip,
   StatusTriad,
@@ -74,9 +75,11 @@ export function PrRow({
   const threads = pr.unresolvedThreads ?? 0;
 
   const branchPreview = useBranchPreview(projectId);
-  const sessions = links?.sessions ?? [];
+  const allSessions = links?.sessions ?? [];
+  // The task's own worker/reviewer show on its chip, not as session pills.
+  const sessions = splitTaskSessions(allSessions, links?.task ?? null).rest;
   const showLinks = sessions.length > 0 || !!task || !!run;
-  const gated = gatedSessions(sessions);
+  const gated = gatedSessions(allSessions);
 
   return (
     <div
@@ -128,7 +131,13 @@ export function PrRow({
             {showLinks && (
               <div className="pr-row-links">
                 {sessions.length > 0 && <SessionPills links={sessions} />}
-                {task && <TaskChip task={task} />}
+                {task && (
+                  <TaskChip
+                    task={task}
+                    sessions={allSessions}
+                    reviewInFlight={run?.state === "requested"}
+                  />
+                )}
                 <ReviewGateChip sessions={gated} />
                 {run && (
                   <StatusChip

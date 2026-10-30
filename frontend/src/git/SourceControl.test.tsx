@@ -329,7 +329,7 @@ describe("Branches", () => {
     renderView();
     await ready();
     const row = rowOf("mullion/task-7-x");
-    expect(within(row).getByText(/task #7/)).toBeInTheDocument();
+    expect(within(row).getByText(/#7 · /)).toBeInTheDocument();
     expect(within(row).getByRole("button", { name: /Owned by task #7/ })).toBeDisabled();
   });
 
@@ -916,7 +916,7 @@ describe("Branch detail", () => {
     m.getProjectGitBranch.mockResolvedValue(detail({ name: "mullion/task-7-x", taskId: 7 }));
     await openDetail("mullion/task-7-x");
     expect(screen.getByRole("button", { name: /Delete…/ })).toBeDisabled();
-    expect(screen.getAllByText(/task #7/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/#7 · /).length).toBeGreaterThan(0);
   });
 
   it("shows the merge-state reason and the squash PR", async () => {

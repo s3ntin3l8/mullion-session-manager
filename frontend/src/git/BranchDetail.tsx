@@ -218,7 +218,12 @@ export function BranchDetail({
               <dt>Task</dt>
               <dd>
                 {owningTask ? (
-                  <TaskChip task={owningTask} locked={taskId != null || entry?.taskOwned} />
+                  <TaskChip
+                    task={owningTask}
+                    locked={taskId != null || entry?.taskOwned}
+                    sessions={entry?.sessions}
+                    reviewInFlight={entry?.reviewRun?.state === "requested"}
+                  />
                 ) : (
                   "— none —"
                 )}
