@@ -6953,18 +6953,7 @@ describe("signature verification (issue #249 / roadmap 7.5)", () => {
       const seed = path.join(scratch, "seed");
       fs.mkdirSync(seed);
       sh(seed, "init", "-q", "-b", "trunk");
-      sh(
-        seed,
-        "-c",
-        "user.name=t",
-        "-c",
-        "user.email=t@t",
-        "commit",
-        "-q",
-        "--allow-empty",
-        "-m",
-        "i",
-      );
+      sh(seed, "commit", "-q", "--allow-empty", "-m", "i");
       sh(scratch, "clone", "-q", "--bare", seed, bare);
       fs.writeFileSync(
         path.join(scratch, ".gitconfig"),

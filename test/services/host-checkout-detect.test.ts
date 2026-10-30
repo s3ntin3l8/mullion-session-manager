@@ -137,7 +137,7 @@ describe("host-checkout-detect", () => {
         [macId]: "/Users/x/app",
         [boxId]: "/srv/app",
       });
-      expect(parseHostCwdsMeta(after.hostCwdsMeta)).toEqual({ auto: [], declined: [] });
+      expect(parseHostCwdsMeta(after.hostCwdsMeta)).toEqual({ auto: [], declined: [], managed: [] });
       // A different path for a mapped host is never replaced; the same one is a no-op.
       expect(attachHostCheckout(app, project.id, macId, "/elsewhere")).toBe("mapped");
       expect(attachHostCheckout(app, project.id, macId, "/Users/x/app")).toBe("attached");

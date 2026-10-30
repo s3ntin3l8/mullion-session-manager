@@ -141,11 +141,8 @@ export async function cloneCheckout(
       };
     }
 
-    const occupant = inspectTarget(resolvedRoot, dirName, wantedOrigin);
-    if (occupant === "taken") continue;
-    if (occupant === "reuse") {
-      return { ok: true, cwd: target, defaultBranch: await currentBranch(target), reused: true };
-    }
+    // Checked first: an in-flight clone leaves a partial tree that reads as
+    // "taken", which would send a concurrent request to `<name>-2`.
     if (isCloneBusy(LOCAL_HOST_ID, target)) {
       return {
         ok: false,
@@ -153,7 +150,11 @@ export async function cloneCheckout(
         detail: "a clone into this directory is already running",
       };
     }
-
+    const occupant = inspectTarget(resolvedRoot, dirName, wantedOrigin);
+    if (occupant === "taken") continue;
+    if (occupant === "reuse") {
+      return { ok: true, cwd: target, defaultBranch: await currentBranch(target), reused: true };
+    }
     markCloneBusy(LOCAL_HOST_ID, target);
     try {
       const result = await runGitCommand(
