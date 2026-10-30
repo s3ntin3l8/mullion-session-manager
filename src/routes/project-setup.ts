@@ -46,6 +46,8 @@ import {
   GenerationSpawnError,
   GenerationOutputError,
   type GeneratedScaffoldContent,
+  type ExistingInstructionsMode,
+  type ScaffoldConflict,
 } from "../services/scaffold-generate.js";
 
 // Issue: apply Mullion tooling to other repos, Layer 3 (PR-6) — the
@@ -139,6 +141,10 @@ const generateSchema = {
         maxItems: 2,
         uniqueItems: true,
       },
+      // Issue #2316 — what the generation turn does with instruction content
+      // that already exists outside Mullion's own regions. Absent means
+      // "keep" (leave it alone), the historical behavior.
+      existingInstructions: { type: "string", enum: ["keep", "report", "restructure"] },
     },
   },
 };
@@ -691,7 +697,11 @@ export async function projectSetupRoute(app: FastifyInstance) {
 
   app.post<{
     Params: { id: string };
-    Body: { slug: string; refresh?: Array<"skill" | "reviewer"> } & Omit<ScaffoldOptions, "slug">;
+    Body: {
+      slug: string;
+      refresh?: Array<"skill" | "reviewer">;
+      existingInstructions?: ExistingInstructionsMode;
+    } & Omit<ScaffoldOptions, "slug">;
   }>(
     "/api/projects/:id/setup/generate",
     { ...GENERATE_RATE_LIMIT, schema: generateSchema },
@@ -730,7 +740,14 @@ export async function projectSetupRoute(app: FastifyInstance) {
       // base ref ever disagree).
       const ensured = await ensureSetupWorktree(app, project, projectId, options.slug);
       if (!ensured.ok) return reply.internalServerError(ensured.message);
+      const existingInstructions = request.body.existingInstructions ?? "keep";
       const relPaths = scaffoldableRelPaths(options.slug, options);
+      // Issue #2316 — a restructure may append moved text to CONTRIBUTING.md,
+      // which must be read so the append is an upsert into the real file and
+      // never an overwrite of it (same reasoning as scaffoldableRelPaths').
+      if (existingInstructions === "restructure" && !relPaths.includes("CONTRIBUTING.md")) {
+        relPaths.push("CONTRIBUTING.md");
+      }
       const read = await readScaffoldableFiles(
         app,
         project.hostId,
@@ -764,7 +781,15 @@ export async function projectSetupRoute(app: FastifyInstance) {
       // is worth spending on — the short-circuit below now only fires when
       // nothing was asked to change, which is the one case a real refresh
       // path doesn't need to touch at all.
-      if (hasSkill && hasReviewer && !refreshSkill && !refreshReviewer) {
+      // Issue #2316 — an instructions-only pass (report/restructure) is worth
+      // the turn even when nothing else would be regenerated.
+      if (
+        hasSkill &&
+        hasReviewer &&
+        !refreshSkill &&
+        !refreshReviewer &&
+        existingInstructions === "keep"
+      ) {
         return reply.conflict(
           `.claude/skills/${options.slug}/SKILL.md and .claude/agents/${options.slug}-reviewer.md ` +
             // "already exist" — NOT "are already committed": `hasSkill`/
@@ -804,6 +829,9 @@ export async function projectSetupRoute(app: FastifyInstance) {
           hasSkill,
           hasReviewer,
           hasScaffoldRegion,
+          existingInstructions,
+          conventionsText: options.workflowConventionsText,
+          originalAgentsMd: existingFiles["AGENTS.md"],
           // Issue #1133 — this primary's own opt-out; only takes effect for
           // a LOCAL_HOST_ID project (generateScaffoldContent's own doc
           // comment). A remote-hosted project's own
@@ -857,6 +885,9 @@ export async function projectSetupRoute(app: FastifyInstance) {
         sandboxed: boolean;
         hasAgentsOverride: boolean;
         possiblyGeneric?: boolean;
+        conflicts?: ScaffoldConflict[];
+        droppedConflictLines?: number;
+        possiblyLossy?: boolean;
       } = {
         previewId: result.previewId,
         diff: result.diff,
@@ -867,6 +898,12 @@ export async function projectSetupRoute(app: FastifyInstance) {
       if (generated.possiblyGeneric) {
         response.possiblyGeneric = true;
       }
+      // Issue #2316 — present only for the mode that produced them.
+      if (generated.conflicts) response.conflicts = generated.conflicts;
+      if (generated.droppedConflictLines) {
+        response.droppedConflictLines = generated.droppedConflictLines;
+      }
+      if (generated.possiblyLossy) response.possiblyLossy = true;
       return response;
     },
   );

@@ -10,6 +10,8 @@ import { LOCAL_HOST_ID } from "../../src/services/host-registry.js";
 import {
   buildGenerationPrompt,
   parseGeneratedOutput,
+  parseConflicts,
+  assessRewrite,
   generateScaffoldContent,
   defaultSpawnGenerationTurn,
   scaffoldGenerateBaseDir,
@@ -31,7 +33,10 @@ import {
   type SpawnGenerationTurn,
   type SandboxCapabilityProbe,
 } from "../../src/services/scaffold-generate.js";
-import { CODEX_REVIEWER_DELEGATION_CLAUSE } from "../../src/services/mullion-scaffold.js";
+import {
+  CODEX_REVIEWER_DELEGATION_CLAUSE,
+  MULLION_REGION_PLACEHOLDER,
+} from "../../src/services/mullion-scaffold.js";
 import { parseSkillFrontmatter } from "../../src/services/skills.js";
 
 const execFileAsync = promisify(execFile);
@@ -1961,5 +1966,203 @@ describe("validateGenerationOutput", () => {
     // config.json and placeholder.ts are bare filenames — filtered out
     expect(result.referencedPaths).not.toContain("config.json");
     expect(result.referencedPaths).not.toContain("placeholder.ts");
+  });
+});
+
+describe("existingInstructions (issue #2316)", () => {
+  const baseOpts = {
+    slug: "demo",
+    seed: {},
+    hasSkill: false,
+    hasReviewer: false,
+    hasScaffoldRegion: false,
+  };
+  const withAgents = (body: string, extra = "") =>
+    validOutput("demo") +
+    `<<<MULLION_AGENTS_MD_START>>>\n${body}\n<<<MULLION_AGENTS_MD_END>>>\n` +
+    extra;
+
+  describe("buildGenerationPrompt", () => {
+    it("is unchanged for keep (absent and explicit)", () => {
+      const plain = buildGenerationPrompt(baseOpts);
+      expect(buildGenerationPrompt({ ...baseOpts, existingInstructions: "keep" })).toBe(plain);
+      expect(plain).toContain("three things");
+      expect(plain).not.toContain("MULLION_AGENTS_MD");
+      expect(plain).not.toContain("MULLION_CONFLICTS");
+    });
+
+    it("report asks for a conflicts section and shows the conventions, but no rewrite", () => {
+      const p = buildGenerationPrompt({
+        ...baseOpts,
+        existingInstructions: "report",
+        conventionsText: "Never re-trigger a review with an @mention.",
+      });
+      expect(p).toContain("four things");
+      expect(p).toContain("<<<MULLION_CONFLICTS_START>>>");
+      expect(p).toContain("Never re-trigger a review with an @mention.");
+      expect(p).not.toContain("<<<MULLION_AGENTS_MD_START>>>");
+    });
+
+    it("restructure asks for the complete AGENTS.md with one placeholder and an optional append", () => {
+      const p = buildGenerationPrompt({ ...baseOpts, existingInstructions: "restructure" });
+      expect(p).toContain("<<<MULLION_AGENTS_MD_START>>>");
+      expect(p).toContain("<<<MULLION_CONTRIBUTING_APPEND_START>>>");
+      expect(p).toContain(MULLION_REGION_PLACEHOLDER);
+      expect(p).toContain("## Repo specifics");
+      expect(p).not.toContain("<<<MULLION_CONFLICTS_START>>>");
+      // The READ-ONLY promise still holds in every mode.
+      expect(p).toContain("READ-ONLY");
+    });
+  });
+
+  describe("parseGeneratedOutput — restructure", () => {
+    const body = `# P\n\nIntro.\n\n${MULLION_REGION_PLACEHOLDER}\n\n## Repo specifics\n- x\n`;
+    const opts = { mode: "restructure" as const, originalAgentsMd: "# P\n\n## A\nx\n" };
+
+    it("returns the body and an optional CONTRIBUTING append", () => {
+      const raw = withAgents(
+        body,
+        "<<<MULLION_CONTRIBUTING_APPEND_START>>>\n## Moved\nsteps\n<<<MULLION_CONTRIBUTING_APPEND_END>>>\n",
+      );
+      const r = parseGeneratedOutput(raw, "demo", opts);
+      expect(r.agentsMdBody).toContain("## Repo specifics");
+      expect(r.contributingAppend).toBe("## Moved\nsteps\n");
+    });
+
+    it("treats an absent or 'none' append as nothing moved", () => {
+      expect(
+        parseGeneratedOutput(withAgents(body), "demo", opts).contributingAppend,
+      ).toBeUndefined();
+      const none = withAgents(
+        body,
+        "<<<MULLION_CONTRIBUTING_APPEND_START>>>\nnone\n<<<MULLION_CONTRIBUTING_APPEND_END>>>\n",
+      );
+      expect(parseGeneratedOutput(none, "demo", opts).contributingAppend).toBeUndefined();
+    });
+
+    it.each([
+      ["no placeholder", "# P\n\ntext\n"],
+      ["two placeholders", `# P\n${MULLION_REGION_PLACEHOLDER}\n${MULLION_REGION_PLACEHOLDER}\n`],
+      ["an inline placeholder", `# P\n\nsee ${MULLION_REGION_PLACEHOLDER} here\n`],
+      [
+        "a Mullion marker",
+        `# P\n${MULLION_REGION_PLACEHOLDER}\n<!-- mullion:briefing:start -->\nx\n<!-- mullion:briefing:end -->\n`,
+      ],
+      [
+        "its own Workflow Conventions section",
+        `# P\n${MULLION_REGION_PLACEHOLDER}\n## Workflow Conventions\nx\n`,
+      ],
+    ])("rejects a body with %s", (_label, bad) => {
+      expect(() => parseGeneratedOutput(withAgents(bad), "demo", opts)).toThrow(
+        GenerationOutputError,
+      );
+    });
+
+    it("rejects a CONTRIBUTING append that carries a Mullion marker", () => {
+      const raw = withAgents(
+        body,
+        "<<<MULLION_CONTRIBUTING_APPEND_START>>>\n<!-- mullion:moved:start -->\n<<<MULLION_CONTRIBUTING_APPEND_END>>>\n",
+      );
+      expect(() => parseGeneratedOutput(raw, "demo", opts)).toThrow(GenerationOutputError);
+    });
+
+    it("fails when the AGENTS.md section is missing or truncated", () => {
+      expect(() => parseGeneratedOutput(validOutput("demo"), "demo", opts)).toThrow(
+        GenerationOutputError,
+      );
+      const truncated = validOutput("demo") + "<<<MULLION_AGENTS_MD_START>>>\n# P\n";
+      expect(() => parseGeneratedOutput(truncated, "demo", opts)).toThrow(GenerationOutputError);
+    });
+
+    it("does not look for restructure output in keep mode", () => {
+      const r = parseGeneratedOutput(validOutput("demo"), "demo");
+      expect(r.agentsMdBody).toBeUndefined();
+      expect(r.conflicts).toBeUndefined();
+    });
+  });
+
+  describe("parseGeneratedOutput — report", () => {
+    const line = (o: object) => JSON.stringify(o);
+    const good = {
+      file: "AGENTS.md",
+      excerpt: "comment @bot Review",
+      kind: "contradicts",
+      note: "forbidden",
+    };
+
+    it("parses conflicts and counts malformed lines", () => {
+      const raw =
+        validOutput("demo") +
+        `<<<MULLION_CONFLICTS_START>>>\n${line(good)}\nnot json\n${line({ ...good, kind: "weird" })}\n${line({ file: "x" })}\n<<<MULLION_CONFLICTS_END>>>\n`;
+      const r = parseGeneratedOutput(raw, "demo", { mode: "report" });
+      expect(r.conflicts).toEqual([good]);
+      expect(r.droppedConflictLines).toBe(3);
+    });
+
+    it("returns an empty list for 'none' or a missing section", () => {
+      const none =
+        validOutput("demo") + "<<<MULLION_CONFLICTS_START>>>\nnone\n<<<MULLION_CONFLICTS_END>>>\n";
+      expect(parseGeneratedOutput(none, "demo", { mode: "report" }).conflicts).toEqual([]);
+      expect(
+        parseGeneratedOutput(validOutput("demo"), "demo", { mode: "report" }).conflicts,
+      ).toEqual([]);
+    });
+
+    it("tolerates code fences, truncates long fields and caps the list", () => {
+      const long = { ...good, excerpt: "x".repeat(1000), note: "y".repeat(1000) };
+      const many = Array.from({ length: 60 }, () => line(good)).join("\n");
+      const { conflicts } = parseConflicts("```json\n" + line(long) + "\n" + many + "\n```");
+      expect(conflicts).toHaveLength(50);
+      expect(conflicts[0].excerpt).toHaveLength(400);
+      expect(conflicts[0].note).toHaveLength(400);
+    });
+
+    it("fails on a truncated conflicts section", () => {
+      const raw = validOutput("demo") + "<<<MULLION_CONFLICTS_START>>>\n" + line(good);
+      expect(() => parseGeneratedOutput(raw, "demo", { mode: "report" })).toThrow(
+        GenerationOutputError,
+      );
+    });
+  });
+
+  describe("assessRewrite", () => {
+    const orig = (n: number) =>
+      "# P\n\n" +
+      Array.from({ length: n }, (_, i) => `## Section ${i}\n${"content ".repeat(40)}\n`).join("\n");
+
+    it("is false for an empty original", () => {
+      expect(assessRewrite("", "# P\n")).toBe(false);
+    });
+
+    it("is true when the rewrite is a small fraction of the original", () => {
+      expect(assessRewrite(orig(6), "# P\n")).toBe(true);
+    });
+
+    it("counts text moved to CONTRIBUTING as kept", () => {
+      const o = orig(6);
+      const movedSections = o.slice(o.indexOf("## Section 1"));
+      expect(assessRewrite(o, "# P\n\n## Section 0\n", movedSections)).toBe(false);
+      // The same rewrite without the moved text looks like wholesale loss.
+      expect(assessRewrite(o, "# P\n\n## Section 0\n")).toBe(true);
+    });
+
+    it("is true when most sections vanish even if the size is similar", () => {
+      const padded = "# P\n\n" + "unrelated filler text ".repeat(300);
+      expect(assessRewrite(orig(6), padded)).toBe(true);
+    });
+
+    it("is false when one expected section (the dropped workflow rules) is gone", () => {
+      const o = orig(6);
+      const rewrite = o.replace(/## Section 0[\s\S]*?(?=## Section 1)/, "");
+      expect(assessRewrite(o, rewrite)).toBe(false);
+    });
+
+    it("ignores Mullion's own region in the original", () => {
+      const o =
+        "# P\n\n<!-- mullion:briefing:start -->\n" +
+        "region ".repeat(500) +
+        "\n<!-- mullion:briefing:end -->\n\n## A\nshort\n";
+      expect(assessRewrite(o, "# P\n\n## A\nshort\n")).toBe(false);
+    });
   });
 });

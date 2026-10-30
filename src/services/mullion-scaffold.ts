@@ -47,6 +47,19 @@ export const SCAFFOLD_REGION_END = "<!-- mullion:briefing:end -->";
 export const POINTER_MARKER_START = "<!-- mullion:pointer:start -->";
 export const POINTER_MARKER_END = "<!-- mullion:pointer:end -->";
 
+/** Issue #2316 — the single line of a restructured AGENTS.md body (produced by
+ * a generation turn, see scaffold-generate.ts) that computeScaffold replaces
+ * with Mullion's own `mullion:briefing` region. Exactly one is required. */
+export const MULLION_REGION_PLACEHOLDER = "<<<MULLION_REGION>>>";
+
+// Issue #2316 — wraps text a restructuring generation turn moved out of
+// AGENTS.md into CONTRIBUTING.md. A third, distinct pair (not the pointer pair
+// above, which holds a one-line pointer and is rewritten wholesale on every
+// scaffold): this region is the moved text itself and is likewise replaced
+// wholesale on a re-run, so it can never accumulate duplicates.
+export const MOVED_MARKER_START = "<!-- mullion:moved:start -->";
+export const MOVED_MARKER_END = "<!-- mullion:moved:end -->";
+
 // The worktree convention names `.wt/<branch>` as the place worktrees live
 // (workflow-conventions.ts's `worktree` option), so a repo whose committed
 // conventions say so must also ignore that directory, or every worktree shows
@@ -273,6 +286,16 @@ export interface ScaffoldOptions {
     skill?: string;
     reviewer?: string;
     scaffoldRegion?: string;
+    /** Issue #2316 — a complete proposed AGENTS.md with exactly one
+     * `MULLION_REGION_PLACEHOLDER` line (scaffold-generate.ts validates
+     * that). When set, AGENTS.md is this body with Mullion's region spliced
+     * over that line, instead of the region being inserted into whatever the
+     * repo already had. */
+    agentsMdBody?: string;
+    /** Issue #2316 — text moved out of AGENTS.md. Appended to CONTRIBUTING.md
+     * inside its own `mullion:moved` region; nothing already there is
+     * touched. */
+    contributingAppend?: string;
   };
   /** This Mullion install's own `settings.sessions.workflowConventionsText`
    * (issue #937's Settings → Sessions field, resolved by the caller —
@@ -632,6 +655,23 @@ function stripLegacyScaffoldRegionMirror(text: string): string {
   return text.slice(0, startIdx) + text.slice(endIdx + SCAFFOLD_REGION_END.length);
 }
 
+/** Issue #2316 — turns a restructuring turn's AGENTS.md body into the file to
+ * commit: Mullion's region replaces the body's single placeholder line. The
+ * line endings follow the repo's existing AGENTS.md (the agent's text is
+ * LF). The caller guarantees exactly one placeholder (scaffold-generate.ts
+ * rejects anything else); a body without one is returned unchanged rather
+ * than guessed at. */
+function spliceRegionIntoRewrite(body: string, region: string, existingAgentsMd: string): string {
+  const block = `${SCAFFOLD_REGION_START}\n${region.trim()}\n${SCAFFOLD_REGION_END}`;
+  const lines = body.split("\n");
+  const at = lines.findIndex((l) => l.trim() === MULLION_REGION_PLACEHOLDER);
+  if (at === -1) return body;
+  lines[at] = block;
+  let out = lines.join("\n").trimEnd() + "\n";
+  if (existingAgentsMd.includes("\r\n")) out = out.replace(/\r?\n/g, "\r\n");
+  return out;
+}
+
 /** Removes a hand-written bare `@AGENTS.md` import line (and the HTML comment
  * block directly above it that mentions AGENTS.md) from the parts of a
  * CLAUDE.md outside the scaffold's own pointer region, so the pointer region
@@ -738,15 +778,18 @@ export function computeScaffold(
       : scaffoldRegionPointerBody(slug)
   ).trimEnd();
   const region = `${pointerBody}\n\n${workflowConventionsSection(options.workflowConventionsText)}`;
+  const existingAgentsMd = existingFiles["AGENTS.md"] ?? "";
   entries.push({
     path: "AGENTS.md",
     kind: "file",
-    contents: upsertMarkedRegionAfterIntro(
-      existingFiles["AGENTS.md"] ?? "",
-      SCAFFOLD_REGION_START,
-      SCAFFOLD_REGION_END,
-      region,
-    ),
+    contents: options.generated?.agentsMdBody
+      ? spliceRegionIntoRewrite(options.generated.agentsMdBody, region, existingAgentsMd)
+      : upsertMarkedRegionAfterIntro(
+          existingAgentsMd,
+          SCAFFOLD_REGION_START,
+          SCAFFOLD_REGION_END,
+          region,
+        ),
   });
 
   // Issue #942 (this restructure) — CLAUDE.md gets an `@AGENTS.md` IMPORT,
@@ -799,17 +842,26 @@ export function computeScaffold(
   // requires — there's no separate, second opt-in), or upserts just the
   // marked region into an existing file, leaving Code-of-Conduct/dev-setup
   // content completely alone.
-  if (options.includeContributingPointer) {
-    entries.push({
-      path: "CONTRIBUTING.md",
-      kind: "file",
-      contents: upsertMarkedRegion(
-        existingFiles["CONTRIBUTING.md"] ?? "",
+  const movedText = options.generated?.contributingAppend;
+  if (options.includeContributingPointer || movedText) {
+    let contributing = existingFiles["CONTRIBUTING.md"] ?? "";
+    if (options.includeContributingPointer) {
+      contributing = upsertMarkedRegion(
+        contributing,
         POINTER_MARKER_START,
         POINTER_MARKER_END,
         contributingPointerBody(),
-      ),
-    });
+      );
+    }
+    if (movedText) {
+      contributing = upsertMarkedRegion(
+        contributing,
+        MOVED_MARKER_START,
+        MOVED_MARKER_END,
+        movedText,
+      );
+    }
+    entries.push({ path: "CONTRIBUTING.md", kind: "file", contents: contributing });
   }
 
   // Hermes review, PR #896 round 2 — this used to emit the starter

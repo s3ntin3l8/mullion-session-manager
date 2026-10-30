@@ -20,6 +20,15 @@ import type {
 import type { Launcher } from "../../../src/shared/types.js";
 import type { PlacementMode } from "../../../src/shared/constants.js";
 
+export type ExistingInstructionsMode = "keep" | "report" | "restructure";
+
+export interface ScaffoldConflict {
+  file: string;
+  excerpt: string;
+  kind: "contradicts" | "duplicates" | "misplaced";
+  note: string;
+}
+
 export const projectsApi = {
   listProjects: () => request<Project[]>("/api/projects"),
 
@@ -247,6 +256,9 @@ export const projectsApi = {
       symlinkAgentsSkills?: boolean;
       includeDockConfig?: boolean;
       refresh?: Array<"skill" | "reviewer">;
+      // What the turn does with instruction content already in the repo
+      // outside Mullion's regions (absent = "keep").
+      existingInstructions?: ExistingInstructionsMode;
     },
   ) =>
     request<{
@@ -256,6 +268,9 @@ export const projectsApi = {
       hasAgentsOverride: boolean;
       sandboxed: boolean;
       possiblyGeneric?: boolean;
+      conflicts?: ScaffoldConflict[];
+      droppedConflictLines?: number;
+      possiblyLossy?: boolean;
     }>(`/api/projects/${projectId}/setup/generate`, {
       method: "POST",
       body: JSON.stringify(options),

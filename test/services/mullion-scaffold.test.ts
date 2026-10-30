@@ -1161,3 +1161,112 @@ describe("computeScaffold — scaffold stamp (issue #1123)", () => {
     expect(skill.contents).not.toMatch(/[^\r]\n/);
   });
 });
+
+describe("computeScaffold — restructured instructions (issue #2316)", () => {
+  const body = "# P\n\nIntro.\n\n<<<MULLION_REGION>>>\n\n## Repo specifics\n- make install\n";
+  const get = (entries: ReturnType<typeof computeScaffold>, p: string) =>
+    (entries.find((e) => e.path === p) as { contents: string } | undefined)?.contents;
+
+  it("replaces the placeholder line with Mullion's region and keeps the rest of the body", () => {
+    const entries = computeScaffold(
+      { "AGENTS.md": "# P\n\n## Old rules\n- @bot Review\n" },
+      { slug: "demo", generated: { agentsMdBody: body } },
+    );
+    const agents = get(entries, "AGENTS.md")!;
+    expect(agents).not.toContain("<<<MULLION_REGION>>>");
+    expect(agents).not.toContain("Old rules");
+    expect(agents.startsWith("# P\n\nIntro.\n\n<!-- mullion:briefing:start -->")).toBe(true);
+    expect(agents).toContain(
+      "<!-- mullion:briefing:end -->\n\n## Repo specifics\n- make install\n",
+    );
+    expect(agents).toContain("## Workflow Conventions");
+    expect(agents.endsWith("\n")).toBe(true);
+  });
+
+  it("is idempotent: re-running over its own output with the same body gives the same bytes", () => {
+    const first = get(
+      computeScaffold({}, { slug: "demo", generated: { agentsMdBody: body } }),
+      "AGENTS.md",
+    )!;
+    const second = get(
+      computeScaffold({ "AGENTS.md": first }, { slug: "demo", generated: { agentsMdBody: body } }),
+      "AGENTS.md",
+    )!;
+    expect(second).toBe(first);
+  });
+
+  it("writes CRLF when the existing AGENTS.md is CRLF", () => {
+    const agents = get(
+      computeScaffold(
+        { "AGENTS.md": "# P\r\n\r\nx\r\n" },
+        { slug: "demo", generated: { agentsMdBody: body } },
+      ),
+      "AGENTS.md",
+    )!;
+    expect(agents).not.toMatch(/[^\r]\n/);
+  });
+
+  it("does not touch AGENTS.md insertion logic when no body is given", () => {
+    const agents = get(
+      computeScaffold({ "AGENTS.md": "# P\n\n## A\nx\n" }, { slug: "demo" }),
+      "AGENTS.md",
+    )!;
+    expect(agents).toContain("## A\nx");
+  });
+
+  it("appends moved text to CONTRIBUTING.md in its own region, keeping what is there", () => {
+    const entries = computeScaffold(
+      { "CONTRIBUTING.md": "# Contributing\n\nExisting.\n" },
+      { slug: "demo", generated: { agentsMdBody: body, contributingAppend: "## Moved\nsteps\n" } },
+    );
+    const c = get(entries, "CONTRIBUTING.md")!;
+    expect(c).toContain("Existing.");
+    expect(c).toContain(
+      "<!-- mullion:moved:start -->\n## Moved\nsteps\n<!-- mullion:moved:end -->",
+    );
+    // The opt-in pointer is not added unless asked for.
+    expect(c).not.toContain("mullion:pointer");
+  });
+
+  it("creates CONTRIBUTING.md when it did not exist, and re-runs replace (not duplicate) the moved region", () => {
+    const opts = {
+      slug: "demo",
+      generated: { agentsMdBody: body, contributingAppend: "## Moved\nv1\n" },
+    };
+    const once = get(computeScaffold({}, opts), "CONTRIBUTING.md")!;
+    const twice = get(
+      computeScaffold(
+        { "CONTRIBUTING.md": once },
+        { ...opts, generated: { ...opts.generated, contributingAppend: "## Moved\nv2\n" } },
+      ),
+      "CONTRIBUTING.md",
+    )!;
+    expect(twice.match(/mullion:moved:start/g)).toHaveLength(1);
+    expect(twice).toContain("v2");
+    expect(twice).not.toContain("v1");
+  });
+
+  it("combines the pointer and the moved region in one CONTRIBUTING.md entry", () => {
+    const entries = computeScaffold(
+      {},
+      {
+        slug: "demo",
+        includeContributingPointer: true,
+        generated: { agentsMdBody: body, contributingAppend: "## Moved\nx\n" },
+      },
+    );
+    expect(entries.filter((e) => e.path === "CONTRIBUTING.md")).toHaveLength(1);
+    const c = get(entries, "CONTRIBUTING.md")!;
+    expect(c).toContain("mullion:pointer:start");
+    expect(c).toContain("mullion:moved:start");
+  });
+
+  it("emits no CONTRIBUTING.md entry when there is neither a pointer nor moved text", () => {
+    expect(
+      get(
+        computeScaffold({}, { slug: "demo", generated: { agentsMdBody: body } }),
+        "CONTRIBUTING.md",
+      ),
+    ).toBeUndefined();
+  });
+});

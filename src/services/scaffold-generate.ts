@@ -13,8 +13,12 @@ import {
   scaffoldSkillPath,
   scaffoldReviewerPath,
   CODEX_REVIEWER_DELEGATION_CLAUSE,
+  SCAFFOLD_REGION_START,
+  SCAFFOLD_REGION_END,
+  MULLION_REGION_PLACEHOLDER,
 } from "./mullion-scaffold.js";
 import { parseSkillFrontmatter } from "./skills.js";
+import { topLevelLines } from "./marked-region.js";
 
 // Issue #956 — replaces mullion-scaffold.ts's static placeholder skill/
 // reviewer/AGENTS.md-region text with genuinely codebase-specific content, by
@@ -223,6 +227,24 @@ export class GenerationOutputError extends Error {
   }
 }
 
+/** How the generation turn treats instruction content that already exists in
+ * the repo outside Mullion's own marked regions (issue #2316). `keep` is the
+ * historical behavior: leave it alone. `report` also returns a list of lines
+ * that contradict or duplicate the committed conventions, for a human to act
+ * on. `restructure` also returns a rewritten AGENTS.md (and, optionally, text
+ * moved out of it into CONTRIBUTING.md) for the human to review in the diff. */
+export type ExistingInstructionsMode = "keep" | "report" | "restructure";
+
+export const CONFLICT_KINDS = ["contradicts", "duplicates", "misplaced"] as const;
+export type ConflictKind = (typeof CONFLICT_KINDS)[number];
+
+export interface ScaffoldConflict {
+  file: string;
+  excerpt: string;
+  kind: ConflictKind;
+  note: string;
+}
+
 export interface GeneratedScaffoldContent {
   skill: string;
   reviewer: string;
@@ -246,6 +268,23 @@ export interface GeneratedScaffoldContent {
    * never carries it: the preview step runs no generation, so it can't know
    * the output yet. */
   possiblyGeneric?: boolean;
+  /** `existingInstructions: "restructure"` only — the agent's proposed
+   * AGENTS.md, containing exactly one `MULLION_REGION_PLACEHOLDER` line.
+   * computeScaffold splices Mullion's region over that line. */
+  agentsMdBody?: string;
+  /** `restructure` only — procedural text the agent moved out of AGENTS.md,
+   * appended to CONTRIBUTING.md inside its own marked region. Never replaces
+   * anything already in CONTRIBUTING.md. */
+  contributingAppend?: string;
+  /** `report` only — findings for a human; nothing is written for them. */
+  conflicts?: ScaffoldConflict[];
+  /** `report` only — conflict lines the agent returned that were not valid
+   * JSON objects of the expected shape and were dropped. */
+  droppedConflictLines?: number;
+  /** `restructure` only — heuristic: the rewrite looks like it lost more than
+   * it should have (see `assessRewrite`). A signal for the reviewer, not a
+   * failure. */
+  possiblyLossy?: boolean;
 }
 
 /** `project_tooling.skill`/`.reviewerAgent`/`.briefing` DB drafts (see
@@ -274,6 +313,14 @@ const REVIEWER_END = "<<<MULLION_REVIEWER_END>>>";
 // AGENTS.md and can't be renamed. This one carries no such history.
 const GENERATED_REGION_START = "<<<MULLION_SCAFFOLD_REGION_START>>>";
 const GENERATED_REGION_END = "<<<MULLION_SCAFFOLD_REGION_END>>>";
+// Issue #2316 — request-scoped like the pairs above; only requested when
+// `existingInstructions` is not "keep".
+const AGENTS_MD_START = "<<<MULLION_AGENTS_MD_START>>>";
+const AGENTS_MD_END = "<<<MULLION_AGENTS_MD_END>>>";
+const CONTRIBUTING_APPEND_START = "<<<MULLION_CONTRIBUTING_APPEND_START>>>";
+const CONTRIBUTING_APPEND_END = "<<<MULLION_CONTRIBUTING_APPEND_END>>>";
+const CONFLICTS_START = "<<<MULLION_CONFLICTS_START>>>";
+const CONFLICTS_END = "<<<MULLION_CONFLICTS_END>>>";
 
 /** The generation agent never writes files itself (see this module's own
  * header) — it reports back by printing exactly these three delimited
@@ -286,8 +333,14 @@ export function buildGenerationPrompt(opts: {
   hasSkill: boolean;
   hasReviewer: boolean;
   hasScaffoldRegion: boolean;
+  /** Issue #2316 — absent means "keep". */
+  existingInstructions?: ExistingInstructionsMode;
+  /** The text Mullion will commit as `## Workflow Conventions`; shown to the
+   * agent in `report`/`restructure` so it can tell what contradicts it. */
+  conventionsText?: string;
 }): string {
   const { slug, seed, hasSkill, hasReviewer, hasScaffoldRegion } = opts;
+  const mode = opts.existingInstructions ?? "keep";
   const skillPath = scaffoldSkillPath(slug);
   const reviewerPath = scaffoldReviewerPath(slug);
 
@@ -316,7 +369,8 @@ export function buildGenerationPrompt(opts: {
     `You have READ-ONLY access to this repository. Do not create, edit, or delete any file — ` +
     `your entire job is to READ the codebase (source, tests, docs, config) and report back ` +
     `text; nothing you do in this session is committed or kept.\n\n` +
-    `Analyze this codebase and write genuinely specific content for three things Mullion ` +
+    `Analyze this codebase and write genuinely specific content for ` +
+    `${mode === "keep" ? "three things" : "four things"} Mullion ` +
     `(the tool hosting this session) will commit on your behalf:\n\n` +
     `1. A skill file at \`${skillPath}\` — this repo's own non-obvious correctness invariants: ` +
     `the kind of mistake that looks reasonable in isolation but breaks an assumption another ` +
@@ -337,13 +391,72 @@ export function buildGenerationPrompt(opts: {
     `and when to use them. Do NOT include a "## Workflow Conventions" section or any branching/` +
     `review/commit-convention content — Mullion appends its own Workflow Conventions section ` +
     `after your paragraph, sourced from this install's own configured conventions, not from ` +
-    `you. Report back the pointer paragraph only.${seedSection}\n\n` +
+    `you. Report back the pointer paragraph only.` +
+    `${instructionsItem(mode, opts.conventionsText)}${seedSection}\n\n` +
     `Report back EXACTLY this shape and nothing else outside these markers — no preamble, no ` +
     `commentary, no markdown fences around the markers themselves:\n\n` +
     `${SKILL_START}\n(full skill file contents, including YAML frontmatter with name/description)\n${SKILL_END}\n` +
     `${REVIEWER_START}\n(full reviewer file contents, including YAML frontmatter with name/description/tools/model)\n${REVIEWER_END}\n` +
-    `${GENERATED_REGION_START}\n(the scaffold-region paragraph only)\n${GENERATED_REGION_END}\n`
+    `${GENERATED_REGION_START}\n(the scaffold-region paragraph only)\n${GENERATED_REGION_END}\n` +
+    instructionsOutputShape(mode)
   );
+}
+
+/** Issue #2316 — the fourth item of the prompt, only for `report` and
+ * `restructure`. Kept as its own function so the keep-mode prompt stays
+ * byte-identical to what it was before this option existed. */
+function instructionsItem(
+  mode: ExistingInstructionsMode,
+  conventionsText: string | undefined,
+): string {
+  if (mode === "keep") return "";
+  const conventions =
+    conventionsText && conventionsText.trim().length > 0
+      ? `\n\nThe workflow conventions Mullion will commit into AGENTS.md (inside its own ` +
+        `region) are:\n---\n${conventionsText.trim()}\n---`
+      : "";
+  const scope =
+    `Look at AGENTS.md, CLAUDE.md and CONTRIBUTING.md (whichever exist), ignoring anything ` +
+    `between \`<!-- mullion:...:start -->\` and \`<!-- mullion:...:end -->\` markers — ` +
+    `Mullion owns those. Workflow rules (branching, commit/PR titles, merging, reviews, ` +
+    `review-bot handling, issue filing, cleanup, pre-push checks) belong to the conventions ` +
+    `above, not to the repo's own instructions.`;
+  if (mode === "report") {
+    return (
+      `\n4. A conflicts report. ${scope} List every passage outside those regions that ` +
+      `contradicts the conventions (kind "contradicts"), restates them (kind "duplicates"), ` +
+      `or is a workflow rule that does not belong in the repo's own instructions ` +
+      `(kind "misplaced"). One JSON object per line, with exactly the keys ` +
+      `"file", "excerpt" (the passage, at most 200 characters), "kind", "note" (one ` +
+      `sentence on why). If there are none, write the single word none.${conventions}`
+    );
+  }
+  return (
+    `\n4. A restructured AGENTS.md. ${scope} Return the COMPLETE proposed AGENTS.md. Its ` +
+    `layout: the title and a short intro; then a line containing only ` +
+    `${MULLION_REGION_PLACEHOLDER} (Mullion replaces that line with its own region — write ` +
+    `it exactly once, replace any existing Mullion region with it, and never write ` +
+    `workflow conventions yourself); then \`## Repo specifics\` (how THIS repo applies those ` +
+    `conventions: its real commands, gates, CI quirks and footguns, stated as facts, not ` +
+    `rules); then the repo's existing invariants and command sections. Drop passages that ` +
+    `contradict or restate the conventions. Do not delete anything else that is repo-specific: ` +
+    `procedural detail that is not a rule (long how-tos, tool-pinning procedures) goes to ` +
+    `CONTRIBUTING.md instead — return it verbatim as a CONTRIBUTING append, with a short ` +
+    `pointer left in AGENTS.md. Keep wording of kept passages unchanged.${conventions}`
+  );
+}
+
+function instructionsOutputShape(mode: ExistingInstructionsMode): string {
+  if (mode === "report") {
+    return `${CONFLICTS_START}\n(one JSON object per line, or the word none)\n${CONFLICTS_END}\n`;
+  }
+  if (mode === "restructure") {
+    return (
+      `${AGENTS_MD_START}\n(the complete proposed AGENTS.md)\n${AGENTS_MD_END}\n` +
+      `${CONTRIBUTING_APPEND_START}\n(text moved to CONTRIBUTING.md, or omit this section)\n${CONTRIBUTING_APPEND_END}\n`
+    );
+  }
+  return "";
 }
 
 function extractSection(raw: string, start: string, end: string, label: string): string {
@@ -374,7 +487,11 @@ function extractSection(raw: string, start: string, end: string, label: string):
  * verbatim (issue #943) — without it, the generated reviewer's codex
  * mirror exists on disk but is never actually discoverable by codex's
  * `spawn_agent` delegation. */
-export function parseGeneratedOutput(raw: string, slug: string): GeneratedScaffoldContent {
+export function parseGeneratedOutput(
+  raw: string,
+  slug: string,
+  instructions?: { mode?: ExistingInstructionsMode; originalAgentsMd?: string },
+): GeneratedScaffoldContent {
   const skill = extractSection(raw, SKILL_START, SKILL_END, "skill");
   const reviewer = extractSection(raw, REVIEWER_START, REVIEWER_END, "reviewer");
   const scaffoldRegion = extractSection(
@@ -414,7 +531,172 @@ export function parseGeneratedOutput(raw: string, slug: string): GeneratedScaffo
     );
   }
 
-  return { skill, reviewer, scaffoldRegion, sandboxed: false, possiblyGeneric: false };
+  const base: GeneratedScaffoldContent = {
+    skill,
+    reviewer,
+    scaffoldRegion,
+    sandboxed: false,
+    possiblyGeneric: false,
+  };
+  const mode = instructions?.mode ?? "keep";
+  if (mode === "report") {
+    const { conflicts, dropped } = parseConflicts(
+      optionalSection(raw, CONFLICTS_START, CONFLICTS_END),
+    );
+    return { ...base, conflicts, droppedConflictLines: dropped };
+  }
+  if (mode === "restructure") {
+    const agentsMdBody = parseRestructuredAgentsMd(raw);
+    const appendRaw = optionalSection(raw, CONTRIBUTING_APPEND_START, CONTRIBUTING_APPEND_END);
+    const contributingAppend =
+      appendRaw && !/^none$/i.test(appendRaw) ? appendRaw + "\n" : undefined;
+    if (contributingAppend && /mullion:[a-z-]+:(start|end)/.test(contributingAppend)) {
+      throw new GenerationOutputError(
+        "the CONTRIBUTING append carries a Mullion marker — regenerate rather than commit it",
+      );
+    }
+    return {
+      ...base,
+      agentsMdBody,
+      contributingAppend,
+      possiblyLossy: assessRewrite(
+        instructions?.originalAgentsMd ?? "",
+        agentsMdBody,
+        contributingAppend,
+      ),
+    };
+  }
+  return base;
+}
+
+/** Like `extractSection`, but a section that is absent or empty is `null`
+ * rather than an error. A section that STARTS and never ends is still an
+ * error: it means the output was cut off mid-way. */
+function optionalSection(raw: string, start: string, end: string): string | null {
+  const startIdx = raw.indexOf(start);
+  if (startIdx === -1) return null;
+  const contentStart = startIdx + start.length;
+  const endIdx = raw.indexOf(end, contentStart);
+  if (endIdx === -1) {
+    throw new GenerationOutputError(`unterminated section (no matching ${end} marker found)`);
+  }
+  const content = raw.slice(contentStart, endIdx).trim();
+  return content.length > 0 ? content : null;
+}
+
+const MAX_CONFLICTS = 50;
+const MAX_CONFLICT_EXCERPT = 400;
+const MAX_CONFLICT_NOTE = 400;
+
+/** One JSON object per line; a line that is not a valid, correctly-shaped
+ * object is counted and dropped rather than failing a turn that already spent
+ * minutes of agent time. */
+export function parseConflicts(section: string | null): {
+  conflicts: ScaffoldConflict[];
+  dropped: number;
+} {
+  const conflicts: ScaffoldConflict[] = [];
+  let dropped = 0;
+  if (!section || /^none\.?$/i.test(section.trim())) return { conflicts, dropped };
+  for (const line of section.split("\n")) {
+    const text = line.trim();
+    if (text.length === 0 || /^```/.test(text)) continue;
+    try {
+      const v = JSON.parse(text) as Record<string, unknown>;
+      if (
+        typeof v.file === "string" &&
+        typeof v.excerpt === "string" &&
+        typeof v.note === "string" &&
+        typeof v.kind === "string" &&
+        (CONFLICT_KINDS as readonly string[]).includes(v.kind)
+      ) {
+        if (conflicts.length < MAX_CONFLICTS) {
+          conflicts.push({
+            file: v.file.slice(0, 200),
+            excerpt: v.excerpt.slice(0, MAX_CONFLICT_EXCERPT),
+            kind: v.kind as ConflictKind,
+            note: v.note.slice(0, MAX_CONFLICT_NOTE),
+          });
+        }
+        continue;
+      }
+    } catch {
+      // fall through to the drop below
+    }
+    dropped += 1;
+  }
+  return { conflicts, dropped };
+}
+
+/** Validates the agent's proposed AGENTS.md. The prompt asks for these
+ * properties; a prompt alone can't guarantee them, so they are checked here
+ * and a violation fails the turn loudly instead of committing a file that
+ * would carry two regions or no region. */
+function parseRestructuredAgentsMd(raw: string): string {
+  const body = extractSection(raw, AGENTS_MD_START, AGENTS_MD_END, "restructured AGENTS.md");
+  const occurrences = body.split(MULLION_REGION_PLACEHOLDER).length - 1;
+  const placeholderLines = body.split("\n").filter((l) => l.trim() === MULLION_REGION_PLACEHOLDER);
+  if (occurrences !== 1 || placeholderLines.length !== 1) {
+    throw new GenerationOutputError(
+      `restructured AGENTS.md must contain ${MULLION_REGION_PLACEHOLDER} exactly once, on its own ` +
+        `line (found ${occurrences}) — regenerate`,
+    );
+  }
+  if (/mullion:[a-z-]+:(start|end)/.test(body)) {
+    throw new GenerationOutputError(
+      "restructured AGENTS.md carries a Mullion marker of its own — it must use only the " +
+        "placeholder line; regenerate",
+    );
+  }
+  if (/^##\s+Workflow Conventions\s*$/im.test(body)) {
+    throw new GenerationOutputError(
+      "restructured AGENTS.md has its own '## Workflow Conventions' section — Mullion's region " +
+        "supplies that; regenerate",
+    );
+  }
+  return body;
+}
+
+function normalizeForCompare(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/** Heuristic (issue #2316): did the rewrite lose more than a restructure
+ * should? True when the rewrite plus anything moved to CONTRIBUTING.md is
+ * under 30% of the original's size (Mullion's own region, which the original
+ * may already carry, is excluded from the original), or when the original
+ * has at least four `##` sections and more than 60% of their titles appear
+ * nowhere in the rewrite or the moved text. Dropping the workflow rules is
+ * the point of a restructure, so a single vanished section is expected; this
+ * only catches wholesale loss. A signal for the reviewer, never a failure. */
+export function assessRewrite(
+  originalAgentsMd: string,
+  rewrite: string,
+  contributingAppend?: string,
+): boolean {
+  const startIdx = originalAgentsMd.indexOf(SCAFFOLD_REGION_START);
+  const endIdx = originalAgentsMd.indexOf(SCAFFOLD_REGION_END);
+  const original =
+    startIdx !== -1 && endIdx > startIdx
+      ? originalAgentsMd.slice(0, startIdx) +
+        originalAgentsMd.slice(endIdx + SCAFFOLD_REGION_END.length)
+      : originalAgentsMd;
+  if (original.trim().length === 0) return false;
+  const kept = rewrite.replace(MULLION_REGION_PLACEHOLDER, "") + (contributingAppend ?? "");
+  if (kept.trim().length < original.trim().length * 0.3) return true;
+  const lines = original.split("\n");
+  const top = topLevelLines(lines);
+  const titles = lines
+    .filter((l, i) => top[i] && /^##\s+\S/.test(l))
+    .map((l) => normalizeForCompare(l.replace(/^##\s+/, "")))
+    .filter((t) => t.length > 0);
+  if (titles.length < 4) return false;
+  const haystack = normalizeForCompare(kept);
+  const vanished = titles.filter((t) => !haystack.includes(t)).length;
+  return vanished / titles.length > 0.6;
 }
 
 /**
@@ -1506,6 +1788,13 @@ export interface GenerateScaffoldContentOptions {
   hasSkill: boolean;
   hasReviewer: boolean;
   hasScaffoldRegion: boolean;
+  /** Issue #2316 — absent means "keep" (the historical behavior). */
+  existingInstructions?: ExistingInstructionsMode;
+  /** The conventions text Mullion will commit; shown to the agent in
+   * `report`/`restructure`. */
+  conventionsText?: string;
+  /** The repo's current AGENTS.md, for `assessRewrite`. */
+  originalAgentsMd?: string;
   timeoutMs?: number;
   /** Issue #1133 — LOCAL_HOST_ID only. The route resolves this from ITS
    * OWN `app.config.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED` and passes
@@ -1559,6 +1848,8 @@ export async function generateScaffoldContent(
     hasSkill: opts.hasSkill,
     hasReviewer: opts.hasReviewer,
     hasScaffoldRegion: opts.hasScaffoldRegion,
+    existingInstructions: opts.existingInstructions,
+    conventionsText: opts.conventionsText,
   });
 
   let raw: string;
@@ -1617,7 +1908,10 @@ export async function generateScaffoldContent(
     sandboxed = turn.sandboxed ?? false;
   }
 
-  const parsed = parseGeneratedOutput(raw, opts.slug);
+  const parsed = parseGeneratedOutput(raw, opts.slug, {
+    mode: opts.existingInstructions,
+    originalAgentsMd: opts.originalAgentsMd,
+  });
   const validation = validateGenerationOutput(parsed, opts.cwd);
   return { ...parsed, sandboxed, possiblyGeneric: validation.possiblyGeneric };
 }

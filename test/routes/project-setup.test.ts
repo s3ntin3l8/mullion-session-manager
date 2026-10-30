@@ -1382,6 +1382,146 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
   // absent an explicit `refresh`, both files already committed still means
   // "don't spend a real agent turn on content computeScaffold would throw
   // away anyway."
+  describe("existingInstructions (issue #2316)", () => {
+    function commitAgentsMd(cwd: string, text: string) {
+      fs.writeFileSync(path.join(cwd, "AGENTS.md"), text);
+      execFileSync("git", ["add", "-A"], { cwd, env: gitEnv() });
+      execFileSync("git", ["commit", "-m", "add AGENTS.md", "--no-verify"], {
+        cwd,
+        env: gitEnv(),
+      });
+    }
+
+    it("rejects an unknown mode", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "demo", existingInstructions: "rewrite-everything" },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(generateScaffoldContent).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("keep (the default) passes the mode through and returns no report fields", async () => {
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+      mockValidGeneration("demo");
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "demo" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(vi.mocked(generateScaffoldContent).mock.calls[0][0].existingInstructions).toBe("keep");
+      expect(res.json().conflicts).toBeUndefined();
+      expect(res.json().possiblyLossy).toBeUndefined();
+      await app.close();
+    });
+
+    it("report returns the conflicts and the dropped-line count, and writes no AGENTS.md rewrite", async () => {
+      commitAgentsMd(repoDir, "# P\n\n## Workflow rules\n- comment @bot Review\n");
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+      vi.mocked(generateScaffoldContent).mockResolvedValue({
+        skill: "---\nname: demo\n---\nS\n",
+        reviewer: "---\nname: demo-reviewer\n---\nRead .claude/skills/demo/SKILL.md first.\n",
+        scaffoldRegion: "Pointer.",
+        sandboxed: true,
+        possiblyGeneric: false,
+        conflicts: [
+          { file: "AGENTS.md", excerpt: "comment @bot Review", kind: "contradicts", note: "n" },
+        ],
+        droppedConflictLines: 2,
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "demo", existingInstructions: "report" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().conflicts).toHaveLength(1);
+      expect(res.json().droppedConflictLines).toBe(2);
+      const call = vi.mocked(generateScaffoldContent).mock.calls[0][0];
+      expect(call.existingInstructions).toBe("report");
+      expect(call.originalAgentsMd).toContain("## Workflow rules");
+      const agentsMd = fs.readFileSync(
+        path.join(repoDir, ".mullion-worktrees", "setup-demo", "AGENTS.md"),
+        "utf8",
+      );
+      // Original content is kept (report never rewrites), region inserted before it.
+      expect(agentsMd).toContain("- comment @bot Review");
+      await app.close();
+    });
+
+    it("restructure splices Mullion's region over the placeholder and writes the moved text to CONTRIBUTING.md", async () => {
+      commitAgentsMd(repoDir, "# P\n\n## Workflow rules\n- comment @bot Review\n");
+      fs.writeFileSync(path.join(repoDir, "CONTRIBUTING.md"), "# Contributing\n\nExisting.\n");
+      execFileSync("git", ["add", "-A"], { cwd: repoDir, env: gitEnv() });
+      execFileSync("git", ["commit", "-m", "add contributing", "--no-verify"], {
+        cwd: repoDir,
+        env: gitEnv(),
+      });
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+      vi.mocked(generateScaffoldContent).mockResolvedValue({
+        skill: "---\nname: demo\n---\nS\n",
+        reviewer: "---\nname: demo-reviewer\n---\nRead .claude/skills/demo/SKILL.md first.\n",
+        scaffoldRegion: "Pointer.",
+        sandboxed: true,
+        possiblyGeneric: false,
+        agentsMdBody:
+          "# P\n\nIntro.\n\n<<<MULLION_REGION>>>\n\n## Repo specifics\n- make install\n",
+        contributingAppend: "## Pinning actions\nSteps.\n",
+        possiblyLossy: true,
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "demo", existingInstructions: "restructure" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().possiblyLossy).toBe(true);
+      expect(res.json().files).toContain("CONTRIBUTING.md");
+
+      const wt = path.join(repoDir, ".mullion-worktrees", "setup-demo");
+      const agentsMd = fs.readFileSync(path.join(wt, "AGENTS.md"), "utf8");
+      expect(agentsMd).not.toContain("<<<MULLION_REGION>>>");
+      expect(agentsMd).not.toContain("@bot Review");
+      expect(agentsMd.indexOf("<!-- mullion:briefing:start -->")).toBeLessThan(
+        agentsMd.indexOf("## Repo specifics"),
+      );
+      const contributing = fs.readFileSync(path.join(wt, "CONTRIBUTING.md"), "utf8");
+      expect(contributing).toContain("Existing.");
+      expect(contributing).toContain("<!-- mullion:moved:start -->");
+      expect(contributing).toContain("## Pinning actions");
+      await app.close();
+    });
+
+    it("does not 409 an instructions pass when the skill and reviewer already exist", async () => {
+      const app = await buildApp();
+      commitBothScaffoldFiles(repoDir, "demo");
+      const projectId = await createProject(app, repoDir);
+      mockValidGeneration("demo");
+      const res = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "demo", existingInstructions: "report" },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(generateScaffoldContent).toHaveBeenCalledTimes(1);
+      // The pre-existing skill is still not overwritten.
+      const skill = fs.readFileSync(
+        path.join(repoDir, ".mullion-worktrees", "setup-demo", ".claude/skills/demo/SKILL.md"),
+        "utf8",
+      );
+      expect(skill).toBe(HAND_WRITTEN_SKILL);
+      await app.close();
+    });
+  });
+
   it("both files already committed, no refresh requested -> 409, no agent turn spawned", async () => {
     const app = await buildApp();
     commitBothScaffoldFiles(repoDir, "demo");

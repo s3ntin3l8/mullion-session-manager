@@ -166,6 +166,72 @@ describe("ProjectSetupPanel", () => {
       ).toHaveLength(1);
     });
 
+    describe("existing instructions choice", () => {
+      async function generateWith(mode: string | null, extra: Record<string, unknown> = {}) {
+        const fetchMock = mockFetch({ generate: () => generated(extra) });
+        vi.stubGlobal("fetch", fetchMock);
+        const user = userEvent.setup();
+        render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+        await user.type(screen.getByPlaceholderText("my-project"), "demo");
+        if (mode) await user.click(screen.getByLabelText(mode));
+        await user.click(screen.getByText("Generate with agent"));
+        await screen.findByText("Preview — 2 files");
+        const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/setup/generate"));
+        return JSON.parse((call![1] as RequestInit).body as string) as Record<string, unknown>;
+      }
+
+      it("defaults to leaving existing content alone and sends no mode", async () => {
+        expect(screen.queryByLabelText("Leave it")).not.toBeInTheDocument();
+        const sent = await generateWith(null);
+        expect(sent.existingInstructions).toBeUndefined();
+      });
+
+      it("sends the chosen mode", async () => {
+        expect((await generateWith("Restructure it")).existingInstructions).toBe("restructure");
+      });
+
+      it("report lists the conflicts, with the count of unreadable lines", async () => {
+        await generateWith("Tell me about conflicts", {
+          conflicts: [
+            {
+              file: "AGENTS.md",
+              excerpt: "comment @bot Review",
+              kind: "contradicts",
+              note: "re-review by @mention is forbidden",
+            },
+          ],
+          droppedConflictLines: 2,
+        });
+        expect(screen.getByText(/1 passage outside Mullion/)).toBeInTheDocument();
+        expect(screen.getByText(/comment @bot Review/)).toBeInTheDocument();
+        expect(
+          screen.getByText(/2 more lines from the agent could not be read/),
+        ).toBeInTheDocument();
+      });
+
+      it("report with nothing found says so", async () => {
+        await generateWith("Tell me about conflicts", { conflicts: [] });
+        expect(screen.getByText(/No existing instructions conflict/)).toBeInTheDocument();
+      });
+
+      it("restructure warns about a lossy rewrite and otherwise asks for a check", async () => {
+        await generateWith("Restructure it", { possiblyLossy: true });
+        expect(screen.getByText(/much shorter than the original/)).toBeInTheDocument();
+      });
+
+      it("restructure without the lossy signal still prompts a review", async () => {
+        await generateWith("Restructure it");
+        expect(screen.getByText(/AGENTS.md is restructured below/)).toBeInTheDocument();
+        expect(screen.queryByText(/much shorter than the original/)).not.toBeInTheDocument();
+      });
+
+      it("shows no conflict or restructure notices for a plain generate", async () => {
+        await generateWith(null);
+        expect(screen.queryByText(/outside Mullion/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/restructured below/)).not.toBeInTheDocument();
+      });
+    });
+
     it("shows an error and stays on the form when generation fails", async () => {
       vi.stubGlobal(
         "fetch",
