@@ -158,6 +158,51 @@ beforeEach(() => {
 });
 
 describe("UnifiedBoard task columns", () => {
+  describe("awaiting-merge badge", () => {
+    const base = { status: "done" as const, prNumber: 9, prUrl: "https://github.com/o/r/pull/9" };
+    const BADGE = "PR open — needs merge";
+
+    it("shows for done + PR + no mergedAt, with the merge-on-approve-off reason", () => {
+      tasks = [makeTask({ id: 1, ...base, mergedAt: null, mergeRequestedAt: null })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.getByText(BADGE)).toHaveAttribute(
+        "title",
+        "Merge on approve is off for this project",
+      );
+    });
+
+    it("is absent for merged and PR-less done tasks", () => {
+      tasks = [
+        makeTask({ id: 1, ...base, mergedAt: "2026-01-01T00:00:00.000Z" }),
+        makeTask({ id: 2, status: "done", prNumber: null, prUrl: null }),
+      ];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.queryByText(BADGE)).toBeNull();
+    });
+
+    it("reads 'waiting' when a merge is requested with no error", () => {
+      tasks = [
+        makeTask({ id: 1, ...base, mergedAt: null, mergeRequestedAt: "2026-01-01T00:00:00.000Z" }),
+      ];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.getByText(BADGE)).toHaveAttribute("title", "Merge requested, waiting");
+    });
+
+    it("carries mergeError text when present", () => {
+      tasks = [
+        makeTask({
+          id: 1,
+          ...base,
+          mergedAt: null,
+          mergeRequestedAt: "2026-01-01T00:00:00.000Z",
+          mergeError: "PR is unstable",
+        }),
+      ];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.getByText(BADGE)).toHaveAttribute("title", "PR is unstable");
+    });
+  });
+
   it("shows the project name, issue number, and agent on a card", () => {
     tasks = [
       makeTask({

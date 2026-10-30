@@ -13,6 +13,7 @@ import { formatRelativeAge } from "../relativeTime.js";
 import { approvalStateText, ciGatingUnavailableText, needsHumanText } from "../needsHuman.js";
 import { describeTaskHost } from "../lib/hostBadge.js";
 import { parseWorkflowChange, visibleTaskSyncError } from "../workflowChange.js";
+import { awaitingMergeReason, isAwaitingMerge } from "./awaitingMerge.js";
 import { TASK_DRAG_MIME } from "./dragTypes.js";
 import { TaskSessionSlot } from "./TaskSessionSlot.js";
 
@@ -43,7 +44,8 @@ export function TaskCard({
   onDragFinish,
 }: {
   task: Task;
-  project: { id: number; name: string; hostId?: string } | undefined;
+  project:
+    { id: number; name: string; hostId?: string; mergeOnApprove?: boolean | null } | undefined;
   // null = task.sessionId/reviewSessionId is null (no session was ever
   // linked); undefined = a session WAS linked but is no longer in
   // store.sessions (killed/reaped) — TaskSessionSlot renders differently
@@ -295,6 +297,14 @@ export function TaskCard({
         {/* #1015 (archive) — hidden by default (UnifiedBoard.tsx's
             showArchived toggle), so this badge only ever renders once the
             user has explicitly asked to see archived tasks. */}
+        {isAwaitingMerge(task) && (
+          <span
+            className="task-card-awaiting-merge"
+            title={awaitingMergeReason(task, project?.mergeOnApprove)}
+          >
+            PR open — needs merge
+          </span>
+        )}
         {task.archivedAt !== null && (
           <span className="task-card-archived" title="Archived">
             Archived

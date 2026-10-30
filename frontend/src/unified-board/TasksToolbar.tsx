@@ -20,6 +20,9 @@ export function TasksToolbar({
   onToggleHideDone,
   showArchived,
   onToggleShowArchived,
+  awaitingMergeOnly,
+  onToggleAwaitingMergeOnly,
+  awaitingMergeCount,
   activeProjectIds,
   clearDoneTasks,
   phone = false,
@@ -46,6 +49,12 @@ export function TasksToolbar({
   // own comment), so toggling it also changes the column counts.
   showArchived: boolean;
   onToggleShowArchived: () => void;
+  // Show only done tasks whose PR is still open. The count is of those
+  // tasks (in the project filter): Clear done would orphan their PRs from
+  // the board, so its confirmation names them.
+  awaitingMergeOnly: boolean;
+  onToggleAwaitingMergeOnly: () => void;
+  awaitingMergeCount: number;
   // Empty array means "no project filter active" — mirrors
   // UnifiedBoard.tsx's own activeProjectIds semantics (visibleTasks treats
   // [] as "show every project" too), passed through as `undefined` to the
@@ -161,6 +170,16 @@ export function TasksToolbar({
       Show archived
     </button>
   );
+  const awaitingMergeBtn = (
+    <button
+      type="button"
+      className={`sidebar-filter-chip tasks-panel-awaiting-merge-toggle${awaitingMergeOnly ? " active" : ""}`}
+      aria-pressed={awaitingMergeOnly}
+      onClick={onToggleAwaitingMergeOnly}
+    >
+      Awaiting merge{awaitingMergeCount > 0 ? ` (${awaitingMergeCount})` : ""}
+    </button>
+  );
   const clearDoneUi = (
     <>
       {!clearConfirming ? (
@@ -180,6 +199,8 @@ export function TasksToolbar({
           <span className="task-detail-hint">
             Delete every done task{activeProjectIds.length > 0 ? " in the current filter" : ""}?
             This can't be undone.
+            {awaitingMergeCount > 0 &&
+              ` ${awaitingMergeCount} of them still ${awaitingMergeCount === 1 ? "has an open PR" : "have open PRs"} awaiting merge — clearing only deletes Mullion's record, the PR${awaitingMergeCount === 1 ? "" : "s"} would drop off the board.`}
           </span>
           <label className="tasks-panel-clear-done-branches">
             <input
@@ -296,6 +317,7 @@ export function TasksToolbar({
             <div className="tasks-phone-filter-chips">
               {hideDoneBtn}
               {showArchivedBtn}
+              {awaitingMergeBtn}
             </div>
             {filterSheetContent}
             <div className="tasks-phone-filter-danger">{clearDoneUi}</div>
@@ -310,6 +332,7 @@ export function TasksToolbar({
       {newBtn}
       {hideDoneBtn}
       {showArchivedBtn}
+      {awaitingMergeBtn}
       {clearDoneUi}
       {newForm}
     </div>

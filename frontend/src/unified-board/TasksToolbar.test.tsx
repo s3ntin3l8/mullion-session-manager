@@ -334,3 +334,45 @@ describe("UnifiedBoard clear-done", () => {
     expect(await screen.findByText("Failed to clear done tasks")).toBeInTheDocument();
   });
 });
+
+describe("awaiting-merge filter and Clear done warning", () => {
+  const open = (id: number) =>
+    makeTask({ id, status: "done", prNumber: id, mergedAt: null, title: `open-${id}` });
+
+  it("filters the board to done tasks with an open PR", async () => {
+    tasks = [
+      open(1),
+      makeTask({
+        id: 2,
+        status: "done",
+        prNumber: 2,
+        mergedAt: "2026-01-01T00:00:00.000Z",
+        title: "merged-2",
+      }),
+      makeTask({ id: 3, status: "ready", title: "ready-3" }),
+    ];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Awaiting merge (1)" }));
+    expect(screen.getByText("open-1")).toBeInTheDocument();
+    expect(screen.queryByText("merged-2")).toBeNull();
+    expect(screen.queryByText("ready-3")).toBeNull();
+    expect(localStorage.getItem("crs.taskAwaitingMergeOnly")).toBe("1");
+  });
+
+  it("Clear done confirmation names the awaiting-merge tasks", async () => {
+    tasks = [open(1), open(2)];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Clear done" }));
+    expect(screen.getByText(/2 of them still have open PRs awaiting merge/)).toBeInTheDocument();
+  });
+
+  it("omits the warning when none are awaiting merge", async () => {
+    tasks = [makeTask({ id: 1, status: "done", prNumber: null })];
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+    await user.click(screen.getByRole("button", { name: "Clear done" }));
+    expect(screen.queryByText(/awaiting merge/)).toBeNull();
+  });
+});

@@ -1,3 +1,4 @@
+import { awaitingMergeReason, isAwaitingMerge } from "./unified-board/awaitingMerge.js";
 import { useEffect, useState } from "react";
 import { useDashboardStore } from "./store/index.js";
 import { statusLabel, computeTaskReorder, orderTasksForColumn } from "./tasksBoard.js";
@@ -1409,6 +1410,9 @@ function WorkflowChangeApproval({ task }: { task: Task }) {
 // sweep's backoff, it doesn't retry the SAME failed state any faster).
 function TaskMergeStatus({ task }: { task: Task }) {
   const { taskMasterEnabled, mergeTask } = useDashboardStore();
+  const mergeOnApprove = useDashboardStore(
+    (s) => s.projects?.find((p) => p.id === task.projectId)?.mergeOnApprove,
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -1424,8 +1428,20 @@ function TaskMergeStatus({ task }: { task: Task }) {
     ? "Task Master is disabled — enable it to use this action."
     : null;
 
+  const awaiting = isAwaitingMerge(task);
+
   return (
     <div className="task-detail-actions">
+      {awaiting && (
+        <span className="task-detail-hint task-detail-awaiting-merge">
+          <strong>PR open — needs merge.</strong> {awaitingMergeReason(task, mergeOnApprove)}.{" "}
+          {task.prUrl && (
+            <a href={task.prUrl} target="_blank" rel="noreferrer">
+              PR #{task.prNumber}
+            </a>
+          )}
+        </span>
+      )}
       <button
         className="notif-gate-btn notif-gate-approve"
         disabled={submitting || !taskMasterEnabled}

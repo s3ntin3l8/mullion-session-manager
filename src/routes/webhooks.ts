@@ -1,3 +1,4 @@
+import { broadcastTaskEvent } from "../services/task-events.js";
 import crypto from "node:crypto";
 import type { FastifyInstance } from "fastify";
 import { eq, and, isNull } from "drizzle-orm";
@@ -294,6 +295,13 @@ export async function webhookRoutes(app: FastifyInstance) {
                   )
                   .where(eq(tasks.id, matchedTask.id))
                   .run();
+                // Clears the board's "PR open — needs merge" badge live.
+                broadcastTaskEvent({
+                  taskId: matchedTask.id,
+                  projectId,
+                  kind: "ingested",
+                  ts: Date.now(),
+                });
               }
             }
             // #2103 — a PR closed under a REVIEWING task (merged by hand, or

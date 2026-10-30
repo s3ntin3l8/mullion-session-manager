@@ -1,3 +1,4 @@
+import { broadcastTaskEvent } from "./task-events.js";
 import { and, eq, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { resolveGitIdentity } from "./git-identity.js";
 import type { FastifyInstance } from "fastify";
@@ -1520,11 +1521,24 @@ function recordMergeError(app: FastifyInstance, taskId: number, message: string)
 // "reviewing" and must check status itself. `isNull(tasks.mergedAt)` makes
 // this idempotent against attemptMerge's own retry/backoff behavior.
 function markTaskMerged(app: FastifyInstance, taskId: number): void {
-  app.db
+  const { changes } = app.db
     .update(tasks)
     .set({ mergedAt: new Date(), archivedAt: new Date() })
     .where(and(eq(tasks.id, taskId), isNull(tasks.mergedAt)))
     .run();
+  // The board's "PR open — needs merge" badge clears off this write, so tell
+  // it to refetch ("ingested" is the generic refetch kind).
+  if (changes > 0) notifyTaskMerged(app, taskId);
+}
+
+function notifyTaskMerged(app: FastifyInstance, taskId: number): void {
+  const row = app.db
+    .select({ projectId: tasks.projectId })
+    .from(tasks)
+    .where(eq(tasks.id, taskId))
+    .get();
+  if (row)
+    broadcastTaskEvent({ taskId, projectId: row.projectId, kind: "ingested", ts: Date.now() });
 }
 
 // #758 — bounds how many times attemptAutoRebase spawns a worker for the

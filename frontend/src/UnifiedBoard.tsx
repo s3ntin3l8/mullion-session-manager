@@ -1,3 +1,4 @@
+import { isAwaitingMerge } from "./unified-board/awaitingMerge.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent } from "react";
 import { useDashboardStore } from "./store/index.js";
@@ -228,6 +229,14 @@ export function UnifiedBoard({
     writeBool(STORAGE_KEYS.taskHideDone, hideDone);
   }, [hideDone]);
   const toggleHideDone = () => setHideDone((prev) => !prev);
+  // Only done tasks whose PR is still open — a pile of approved-but-unmerged
+  // PRs is otherwise hard to find. Filters visibleTasks like showArchived.
+  const [awaitingMergeOnly, setAwaitingMergeOnly] = useState(() =>
+    readBool(STORAGE_KEYS.taskAwaitingMergeOnly, false),
+  );
+  useEffect(() => {
+    writeBool(STORAGE_KEYS.taskAwaitingMergeOnly, awaitingMergeOnly);
+  }, [awaitingMergeOnly]);
   // #1015 (archive) — unlike hideDone above, this DOES route through the
   // visibleTasks filter below rather than a column's `collapsed` prop: an
   // archived task should vanish from the column COUNT too, not just be
@@ -313,8 +322,29 @@ export function UnifiedBoard({
       );
     }
     if (!showArchived) result = result.filter((t) => t.archivedAt === null);
+    if (awaitingMergeOnly) result = result.filter(isAwaitingMerge);
     return result;
-  }, [tasks, activeProjectIds, blockedOnly, hasBlockedTask, selectedParentKey, showArchived]);
+  }, [
+    tasks,
+    activeProjectIds,
+    blockedOnly,
+    hasBlockedTask,
+    selectedParentKey,
+    showArchived,
+    awaitingMergeOnly,
+  ]);
+
+  // Done tasks Clear done would drop that still have an open PR (in the
+  // current project filter) — surfaced in its confirmation.
+  const awaitingMergeCount = useMemo(
+    () =>
+      tasks.filter(
+        (t) =>
+          isAwaitingMerge(t) &&
+          (activeProjectIds.length === 0 || activeProjectIds.includes(t.projectId)),
+      ).length,
+    [tasks, activeProjectIds],
+  );
 
   const linkedSessionIds = useMemo(() => taskLinkedSessionIds(tasks), [tasks]);
   const laneColumns = useMemo(
@@ -722,6 +752,9 @@ export function UnifiedBoard({
             onToggleHideDone={toggleHideDone}
             showArchived={showArchived}
             onToggleShowArchived={toggleShowArchived}
+            awaitingMergeOnly={awaitingMergeOnly}
+            onToggleAwaitingMergeOnly={() => setAwaitingMergeOnly((v) => !v)}
+            awaitingMergeCount={awaitingMergeCount}
             activeProjectIds={activeProjectIds}
             clearDoneTasks={(opts) => useDashboardStore.getState().clearDoneTasks(opts)}
             phone={phone}
@@ -729,6 +762,7 @@ export function UnifiedBoard({
             activeFilterCount={
               (hideDone ? 1 : 0) +
               (showArchived ? 1 : 0) +
+              (awaitingMergeOnly ? 1 : 0) +
               (blockedOnly ? 1 : 0) +
               (activeProjectIds.length > 0 ? 1 : 0) +
               (selectedParentKey !== "" ? 1 : 0)
