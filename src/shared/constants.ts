@@ -176,6 +176,12 @@ export type PlacementMode = (typeof PLACEMENT_MODES)[number];
 export const PLACEMENT_PLATFORMS = ["darwin", "linux", "win32"] as const;
 export type PlacementPlatform = (typeof PLACEMENT_PLATFORMS)[number];
 
+// Issue #2306 — the host capabilities a host can report (and, in a follow-up, a
+// project can require). `android-emulator`, not plain `emulator`: the iOS
+// Simulator is an emulator too, and it is `xcode`'s.
+export const PLACEMENT_CAPABILITIES = ["xcode", "android-emulator"] as const;
+export type PlacementCapability = (typeof PLACEMENT_CAPABILITIES)[number];
+
 // ---------------------------------------------------------------------------
 // db/schema.ts — HOST_ROLES / HostRole (issue #2239, epic #2228)
 // ---------------------------------------------------------------------------

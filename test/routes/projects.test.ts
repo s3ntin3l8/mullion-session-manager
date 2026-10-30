@@ -558,9 +558,17 @@ describe("projects route", () => {
       memory: { totalBytes: 1000, freeBytes: 500 },
       sessions: { tracked: 0, alive: 0 },
     });
-    app.hostAgentTracker?.record(hostId, { agents: ["codex"], mullionVersion: null });
+    app.hostAgentTracker?.record(hostId, {
+      capabilities: null,
+      agents: ["codex"],
+      mullionVersion: null,
+    });
     // The primary's own list is read on demand (a real login-shell probe).
-    app.hostAgentTracker?.record("local", { agents: ["claude"], mullionVersion: null });
+    app.hostAgentTracker?.record("local", {
+      capabilities: null,
+      agents: ["claude"],
+      mullionVersion: null,
+    });
     const created = await app.inject({
       method: "POST",
       url: "/api/projects",

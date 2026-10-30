@@ -64,6 +64,18 @@ function HostCapacityLine({ host }: { host: Host }) {
   );
 }
 
+const CAPABILITY_LABELS: Record<string, string> = {
+  xcode: "Xcode",
+  "android-emulator": "Android emulator",
+};
+
+/** Issue #2306 — null is "unknown" (an older agent), which is not "has none". */
+function HostCapabilitiesLine({ host }: { host: Host }) {
+  if (!host.capabilities) return <span>capabilities unknown</span>;
+  if (host.capabilities.length === 0) return <span>no extra capabilities</span>;
+  return <span>{host.capabilities.map((c) => CAPABILITY_LABELS[c] ?? c).join(" · ")}</span>;
+}
+
 export function HostsSection() {
   const { hosts, refreshHosts, createHost, updateHost, deleteHost, pingHost, rotateHostToken } =
     useDashboardStore();
@@ -370,6 +382,8 @@ export function HostsSection() {
                     {host.baseUrl ?? "waiting for the agent to register"}
                     {" · "}
                     <HostCapacityLine host={host} />
+                    {" · "}
+                    <HostCapabilitiesLine host={host} />
                   </>
                 }
                 trailing={

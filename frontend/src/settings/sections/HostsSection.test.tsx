@@ -53,6 +53,21 @@ describe("HostsSection token rotation", () => {
     expect(screen.getByText(/waiting for the agent to register/)).toBeInTheDocument();
   });
 
+  it("shows capability chips, or says capabilities are unknown", () => {
+    stubFetch({});
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({ id: "h1", name: "mac", capabilities: ["xcode", "android-emulator"] }),
+        makeHost({ id: "h2", name: "old", capabilities: null }),
+        makeHost({ id: "h3", name: "bare", capabilities: [] }),
+      ],
+    });
+    render(<HostsSection />);
+    expect(screen.getByText("Xcode · Android emulator")).toBeInTheDocument();
+    expect(screen.getByText("capabilities unknown")).toBeInTheDocument();
+    expect(screen.getByText("no extra capabilities")).toBeInTheDocument();
+  });
+
   it("rotates after a second click and shows the new token once", async () => {
     const user = userEvent.setup();
     const calls = stubFetch({ rotate: () => jsonResponse(200, { token: "new-token-abc" }) });

@@ -489,6 +489,8 @@ export interface Host {
   // Issue #2240 — the agent CLIs (claude, codex, …) the host has, null while
   // unknown (an old agent, or not read yet), and the Mullion version it runs.
   agents?: string[] | null;
+  // Issue #2306 — "xcode" / "android-emulator"; null while unknown (an old agent).
+  capabilities?: string[] | null;
   mullionVersion?: string | null;
   // The host's CAPACITY — how busy it is, in numbers comparable across
   // hosts. Null when the host does not report capacity (an agent build

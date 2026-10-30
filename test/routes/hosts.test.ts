@@ -271,8 +271,17 @@ describe("hosts route (issue #26)", () => {
         >
       ).find((h) => h.id === id);
     expect(await list()).toMatchObject({ agents: null, mullionVersion: null });
-    app.hostAgentTracker?.record(id, { agents: ["claude"], mullionVersion: "0.3.40" });
-    expect(await list()).toMatchObject({ agents: ["claude"], mullionVersion: "0.3.40" });
+    expect(await list()).toMatchObject({ capabilities: null });
+    app.hostAgentTracker?.record(id, {
+      agents: ["claude"],
+      capabilities: ["xcode"],
+      mullionVersion: "0.3.40",
+    });
+    expect(await list()).toMatchObject({
+      agents: ["claude"],
+      capabilities: ["xcode"],
+      mullionVersion: "0.3.40",
+    });
     await app.close();
   });
 

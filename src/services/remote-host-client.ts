@@ -850,6 +850,11 @@ export class RemoteHostClient {
     return this.request("/internal/agents");
   }
 
+  // Issue #2306 — an agent build without the route answers 404 (unknown).
+  detectCapabilities(): Promise<{ capabilities: string[] }> {
+    return this.request("/internal/capabilities");
+  }
+
   // Issue #432 — the client half of the skills-discovery triple; see
   // routes/internal.ts's /internal/skills for the agent-side resolveWithinRoots
   // containment this relies on, same as resolveAgentRules above.

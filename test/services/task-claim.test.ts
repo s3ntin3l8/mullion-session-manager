@@ -1147,9 +1147,17 @@ describe("claimTask", () => {
     it("skips the idle host that lacks the worker's CLI (#2240)", async () => {
       const { app, mac, linux, task } = await setup("cli-worker", "Agent: codex\nDo the work.");
       try {
-        app.hostAgentTracker?.record("local", { agents: [], ...NO_VERSION });
-        app.hostAgentTracker?.record(linux, { agents: ["claude"], ...NO_VERSION });
-        app.hostAgentTracker?.record(mac, { agents: ["claude", "codex"], ...NO_VERSION });
+        app.hostAgentTracker?.record("local", { capabilities: null, agents: [], ...NO_VERSION });
+        app.hostAgentTracker?.record(linux, {
+          capabilities: null,
+          agents: ["claude"],
+          ...NO_VERSION,
+        });
+        app.hostAgentTracker?.record(mac, {
+          capabilities: null,
+          agents: ["claude", "codex"],
+          ...NO_VERSION,
+        });
 
         const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
@@ -1166,9 +1174,21 @@ describe("claimTask", () => {
         "Agent: claude\nReviewAgent: codex\nDo the work.",
       );
       try {
-        app.hostAgentTracker?.record("local", { agents: ["claude"], ...NO_VERSION });
-        app.hostAgentTracker?.record(linux, { agents: ["claude"], ...NO_VERSION });
-        app.hostAgentTracker?.record(mac, { agents: ["claude", "codex"], ...NO_VERSION });
+        app.hostAgentTracker?.record("local", {
+          capabilities: null,
+          agents: ["claude"],
+          ...NO_VERSION,
+        });
+        app.hostAgentTracker?.record(linux, {
+          capabilities: null,
+          agents: ["claude"],
+          ...NO_VERSION,
+        });
+        app.hostAgentTracker?.record(mac, {
+          capabilities: null,
+          agents: ["claude", "codex"],
+          ...NO_VERSION,
+        });
 
         const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
@@ -1183,9 +1203,13 @@ describe("claimTask", () => {
       const { app, mac, linux, task } = await setup("cli-unknown", "Agent: codex\nDo the work.");
       try {
         // Only the Linux box has not reported; every other host is known to lack codex.
-        app.hostAgentTracker?.record("local", { agents: [], ...NO_VERSION });
-        app.hostAgentTracker?.record(mac, { agents: ["claude"], ...NO_VERSION });
-        app.hostAgentTracker?.record(linux, { agents: null, ...NO_VERSION });
+        app.hostAgentTracker?.record("local", { capabilities: null, agents: [], ...NO_VERSION });
+        app.hostAgentTracker?.record(mac, {
+          capabilities: null,
+          agents: ["claude"],
+          ...NO_VERSION,
+        });
+        app.hostAgentTracker?.record(linux, { capabilities: null, agents: null, ...NO_VERSION });
 
         const outcome = await claimAndDispatch(app, task.id, { auto: false });
 
@@ -1204,9 +1228,21 @@ describe("claimTask", () => {
         "Platform: linux\nAgent: claude\nReviewAgent: codex\nDo the work.",
       );
       try {
-        app.hostAgentTracker?.record("local", { agents: ["claude"], ...NO_VERSION });
-        app.hostAgentTracker?.record(linux, { agents: ["claude"], ...NO_VERSION });
-        app.hostAgentTracker?.record(mac, { agents: ["claude", "codex"], ...NO_VERSION });
+        app.hostAgentTracker?.record("local", {
+          capabilities: null,
+          agents: ["claude"],
+          ...NO_VERSION,
+        });
+        app.hostAgentTracker?.record(linux, {
+          capabilities: null,
+          agents: ["claude"],
+          ...NO_VERSION,
+        });
+        app.hostAgentTracker?.record(mac, {
+          capabilities: null,
+          agents: ["claude", "codex"],
+          ...NO_VERSION,
+        });
 
         const outcome = await claimAndDispatch(app, task.id, { auto: false });
 

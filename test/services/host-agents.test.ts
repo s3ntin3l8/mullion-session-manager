@@ -5,10 +5,14 @@ import type { DetectedAgent } from "../../src/services/agent-detect.js";
 // Local detection and the remote client are stubbed (no login shell, no
 // network), the way test/services/agent-detect.test.ts stubs child_process.
 const getCachedAgents = vi.fn();
+const getCachedCapabilities = vi.fn();
+vi.mock("../../src/services/host-capabilities.js", () => ({
+  getCachedCapabilities: (...args: unknown[]) => getCachedCapabilities(...args),
+}));
 vi.mock("../../src/services/agent-detect.js", () => ({
   getCachedAgents: (...args: unknown[]) => getCachedAgents(...args),
 }));
-const client = { detectAgents: vi.fn(), resolveConfig: vi.fn() };
+const client = { detectAgents: vi.fn(), detectCapabilities: vi.fn(), resolveConfig: vi.fn() };
 vi.mock("../../src/services/remote-host-client.js", async () => {
   class HostRequestError extends Error {
     constructor(
@@ -51,7 +55,11 @@ function fakeApp(tracker: InstanceType<typeof HostAgentTracker> | undefined) {
 }
 
 describe("host agent tracker (issue #2240)", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client.detectCapabilities.mockResolvedValue({ capabilities: [] });
+    getCachedCapabilities.mockResolvedValue([]);
+  });
 
   it("keeps only available agents, never shells", () => {
     expect(
@@ -66,7 +74,7 @@ describe("host agent tracker (issue #2240)", () => {
   it("goes stale after the TTL, and when nothing is cached", () => {
     const tracker = new HostAgentTracker();
     expect(tracker.isStale("h", 1000)).toBe(true);
-    tracker.record("h", { agents: [], mullionVersion: null }, 1000);
+    tracker.record("h", { agents: [], capabilities: null, mullionVersion: null }, 1000);
     expect(tracker.isStale("h", 500, 1400)).toBe(false);
     expect(tracker.isStale("h", 500, 1500)).toBe(true);
     tracker.invalidateHost("h");
@@ -75,8 +83,8 @@ describe("host agent tracker (issue #2240)", () => {
 
   it("prunes deleted hosts but keeps the local entry", () => {
     const tracker = new HostAgentTracker();
-    tracker.record("local", { agents: [], mullionVersion: "1" });
-    tracker.record("gone", { agents: [], mullionVersion: "1" });
+    tracker.record("local", { agents: [], capabilities: null, mullionVersion: "1" });
+    tracker.record("gone", { agents: [], capabilities: null, mullionVersion: "1" });
     tracker.pruneMissing(new Set(["kept"]));
     expect(tracker.get("gone")).toBeUndefined();
     expect(tracker.get("local")).toBeDefined();
@@ -95,7 +103,11 @@ describe("host agent tracker (issue #2240)", () => {
     client.detectAgents.mockResolvedValue([agent("claude", true), agent("codex", false)]);
     client.resolveConfig.mockResolvedValue({ version: "0.3.40" });
     await refreshRemoteHostAgents(fakeApp(tracker), "mac");
-    expect(tracker.get("mac")).toMatchObject({ agents: ["claude"], mullionVersion: "0.3.40" });
+    expect(tracker.get("mac")).toMatchObject({
+      agents: ["claude"],
+      capabilities: null,
+      mullionVersion: "0.3.40",
+    });
   });
 
   it("records an old agent (404 on the list) as unknown, not as having none", async () => {
@@ -108,7 +120,7 @@ describe("host agent tracker (issue #2240)", () => {
 
   it("keeps the previous entry when the host is unreachable, and survives a version failure", async () => {
     const tracker = new HostAgentTracker();
-    tracker.record("mac", { agents: ["claude"], mullionVersion: "0.3.40" });
+    tracker.record("mac", { agents: ["claude"], capabilities: null, mullionVersion: "0.3.40" });
     client.detectAgents.mockRejectedValue(new HostRequestError("mac", 502, ""));
     await expect(refreshRemoteHostAgents(fakeApp(tracker), "mac")).rejects.toThrow();
     expect(tracker.get("mac")?.agents).toEqual(["claude"]);
@@ -172,5 +184,52 @@ describe("host agent tracker (issue #2240)", () => {
     await vi.waitFor(() => expect(getCachedAgents).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 0));
     expect(tracker.get("local")).toBeUndefined();
+  });
+
+  it("records a remote host's capabilities beside its agents", async () => {
+    const tracker = new HostAgentTracker();
+    client.detectAgents.mockResolvedValue([agent("claude", true)]);
+    client.detectCapabilities.mockResolvedValue({ capabilities: ["xcode"] });
+    client.resolveConfig.mockResolvedValue({ version: "1" });
+    await refreshRemoteHostAgents(fakeApp(tracker), "mac");
+    expect(tracker.get("mac")).toMatchObject({ agents: ["claude"], capabilities: ["xcode"] });
+  });
+
+  it("records an older agent (404 on capabilities) as unknown and keeps its agents", async () => {
+    const tracker = new HostAgentTracker();
+    client.detectAgents.mockResolvedValue([agent("claude", true)]);
+    client.detectCapabilities.mockRejectedValue(new HostRequestError("mac", 404, ""));
+    client.resolveConfig.mockResolvedValue({ version: "1" });
+    await refreshRemoteHostAgents(fakeApp(tracker), "mac");
+    expect(tracker.get("mac")).toMatchObject({ agents: ["claude"], capabilities: null });
+  });
+
+  it("keeps the agent list when the capabilities read fails", async () => {
+    const tracker = new HostAgentTracker();
+    client.detectAgents.mockResolvedValue([agent("codex", true)]);
+    client.detectCapabilities.mockRejectedValue(new Error("boom"));
+    client.resolveConfig.mockResolvedValue({ version: "1" });
+    await refreshRemoteHostAgents(fakeApp(tracker), "mac");
+    expect(tracker.get("mac")).toMatchObject({ agents: ["codex"], capabilities: null });
+  });
+
+  it("fills the local host's capabilities, and keeps its agents if that fails", async () => {
+    const tracker = new HostAgentTracker();
+    getCachedAgents.mockResolvedValue([agent("claude", true)]);
+    getCachedCapabilities.mockResolvedValue(["android-emulator"]);
+    refreshLocalAgents(fakeApp(tracker));
+    await vi.waitFor(() =>
+      expect(tracker.get("local")).toMatchObject({
+        agents: ["claude"],
+        capabilities: ["android-emulator"],
+      }),
+    );
+
+    const failing = new HostAgentTracker();
+    getCachedCapabilities.mockRejectedValue(new Error("probe"));
+    refreshLocalAgents(fakeApp(failing));
+    await vi.waitFor(() =>
+      expect(failing.get("local")).toMatchObject({ agents: ["claude"], capabilities: null }),
+    );
   });
 });

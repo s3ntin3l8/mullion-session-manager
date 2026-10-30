@@ -377,10 +377,14 @@ describe("previewPlacement — the same decision, announced to nobody (issue #17
       app.hostHeartbeatTracker?.recordSuccess(id);
       app.hostCapacityTracker?.record(id, capacity(0.1, 8));
     }
-    app.hostAgentTracker?.record(lacking, { agents: ["claude"], mullionVersion: "0.1.0" });
+    app.hostAgentTracker?.record(lacking, {
+      capabilities: null,
+      agents: ["claude"],
+      mullionVersion: "0.1.0",
+    });
     // The primary's own list is read on demand (a real login-shell probe);
     // record it so this test never launches one.
-    app.hostAgentTracker?.record("local", { agents: [], mullionVersion: null });
+    app.hostAgentTracker?.record("local", { capabilities: null, agents: [], mullionVersion: null });
     const project = {
       hostId: "remote-x",
       placement: "auto" as const,
