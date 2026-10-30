@@ -3341,6 +3341,69 @@ async function attemptReturnPrCommentsToWorker(
   return true;
 }
 
+/**
+ * True when the rebase worker's own work finished after the rebase began.
+ * Same comparison as turnFinishedSinceClaim, anchored on `rebaseStartedAt`;
+ * `workFinishedAt` (not `lastTurnEndedAt`) for the same #1735 reason.
+ */
+function rebaseWorkerFinished(
+  info: SessionInfo | null,
+  task: { rebaseStartedAt: Date | null },
+): boolean {
+  if (info === null || info.workFinishedAt === null || task.rebaseStartedAt === null) {
+    return false;
+  }
+  return info.workFinishedAt >= task.rebaseStartedAt.getTime() - CLOCK_SKEW_TOLERANCE_MS;
+}
+
+/**
+ * Ends the auto-rebase review hold-back (clears `rebaseStartedAt`) once the
+ * rebase worker (`task.sessionId`) has finished its work, so the next
+ * processPendingReviewSpawns sweep spawns the reviewer instead of idling out
+ * REBASE_ATTEMPT_STALE_MS. Any missing signal — unreachable host, no live
+ * info, no `workFinishedAt`, a session still working — leaves the stamp
+ * alone, so the time-based window stays the fallback. Never throws.
+ */
+async function clearRebaseHoldIfWorkerFinished(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+): Promise<void> {
+  if (task.rebaseStartedAt === null || task.sessionId === null) return;
+  const [session] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
+  if (session === undefined) return;
+  const hostId = resolveSessionHostId(app, session);
+  const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
+  let info: SessionInfo | null | undefined;
+  try {
+    const liveMap = await resolveBackend(app, hostId).liveStatus(
+      [String(session.id)],
+      idleThresholdMs,
+    );
+    info = liveMap[String(session.id)];
+  } catch (err) {
+    app.log.warn(
+      { hostId, err, taskId: task.id },
+      "task reconcile: host unreachable, keeping the auto-rebase review hold-back",
+    );
+    return;
+  }
+  if (!info || !rebaseWorkerFinished(info, task)) return;
+  const derived = deriveSessionStatus({
+    dbStatus: session.status,
+    info: defaultDeriveStatusInfo(info),
+  });
+  const settled =
+    derived.status === "finished" ||
+    isShellTailHandoff(derived.status, info, { claimedAt: task.rebaseStartedAt }, Date.now());
+  if (!settled) return;
+  app.db.update(tasks).set({ rebaseStartedAt: null }).where(eq(tasks.id, task.id)).run();
+  task.rebaseStartedAt = null;
+  app.log.info(
+    { taskId: task.id, sessionId: session.id },
+    "task reconcile: rebase worker finished — ending the auto-rebase review hold-back",
+  );
+}
+
 async function attemptAutoApprove(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
@@ -3392,22 +3455,26 @@ async function attemptAutoApprove(
   // task gets an immediate attempt without being throttled by the
   // dirty-period backoff.
   //
-  // Deliberately does NOT also clear rebaseStartedAt here. GitHub can
-  // compute mergeable: true before the rebase worker's own session actually
-  // exits — it may still be running post-push verification in the same
-  // worktree a freshly-spawned reviewer would target (processPendingReviewSpawns
-  // gates its spawn on rebaseStartedAt being null/stale, exactly to keep a
-  // reviewer out of that worktree while a rebase attempt might still be in
-  // flight). Clearing it the instant mergeable flips true would reopen that
-  // gate before the worker is actually done, racing two agent PTYs into one
-  // worktree — the hazard rebaseStartedAt exists to prevent. Session status
-  // can't substitute for this check either (see REBASE_ATTEMPT_STALE_MS's own
-  // doc comment: a Task Master worker stays "active" long after finishing).
-  // So rebaseStartedAt is left to age out via REBASE_ATTEMPT_STALE_MS, the
-  // same time-based signal every other "is an attempt still in flight" check
-  // in this file already trusts; approveTask clears it for good once the
-  // task is actually approved. Cost: up to REBASE_ATTEMPT_STALE_MS of extra
-  // latency before the fresh reviewer spawns, not a correctness gap.
+  // Deliberately does NOT clear rebaseStartedAt the instant mergeable flips
+  // true. GitHub can compute mergeable: true before the rebase worker's own
+  // session actually finishes — it may still be running post-push
+  // verification in the same worktree a freshly-spawned reviewer would target
+  // (processPendingReviewSpawns gates its spawn on rebaseStartedAt being
+  // null/stale, exactly to keep a reviewer out of that worktree while a
+  // rebase attempt might still be in flight). Clearing it then would race two
+  // agent PTYs into one worktree — the hazard rebaseStartedAt exists to
+  // prevent. Session status alone can't substitute for this check either (see
+  // REBASE_ATTEMPT_STALE_MS's own doc comment: a Task Master worker stays
+  // "active" long after finishing).
+  //
+  // What CAN end the wait early is the worker's own `workFinishedAt` stamp
+  // (#1735) — "the agent's work is done", unlike "a turn ended" — newer than
+  // rebaseStartedAt, with the derived status settled at `finished` (or a
+  // stuck shell tail). See clearRebaseHoldIfWorkerFinished. Without that
+  // signal rebaseStartedAt ages out via REBASE_ATTEMPT_STALE_MS, the
+  // time-based fallback every other "is an attempt still in flight" check in
+  // this file trusts; approveTask clears it for good once the task is
+  // approved.
   if (
     task.rebaseStartedAt !== null &&
     current.mergeable === true &&
@@ -3418,6 +3485,7 @@ async function attemptAutoApprove(
     // Reset the backoff so the auto-approve attempt on the next tick is not
     // throttled by the attempts accumulated during the dirty/rebase period.
     resetAutoApproveBackoff(task.id);
+    await clearRebaseHoldIfWorkerFinished(app, task);
   }
 
   if (!hasIngestedCurrentReview(task)) return;

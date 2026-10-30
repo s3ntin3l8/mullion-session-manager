@@ -1383,6 +1383,12 @@ the task's branch to fix the conflict instead of just backing off:
   (30 minutes) so consecutive sweep ticks don't spawn a second worker into
   the same worktree — deliberately NOT session-exit detection, since a Task
   Master worker is told to keep the session running after it finishes.
+  The fresh reviewer of a `reviewing` task waits out that window too, but the
+  wait ends earlier: once the PR is mergeable again and the rebase worker's
+  `workFinishedAt` (#1735) is newer than `rebaseStartedAt` with a derived
+  `finished` status (or a stuck shell tail), the reviewing sweep clears
+  `rebaseStartedAt`. No signal (host unreachable, no `workFinishedAt`) keeps
+  the 30-minute fallback.
 - If `resumeTaskWorktree` can't recreate the worktree (branch deleted or
   checked out elsewhere), or the attempt cap is spent, the sweep falls back to
   today's plain `dirty` backoff — surfaced in `tasks.mergeError` for a human,

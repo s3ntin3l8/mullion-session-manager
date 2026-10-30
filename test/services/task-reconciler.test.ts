@@ -4328,6 +4328,157 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    describe("ending the auto-rebase review hold-back early", () => {
+      // Drives tick one (dirty PR → rebase worker spawned, rebaseStartedAt
+      // set), then flips the PR to cleanly mergeable. Returns the task id.
+      async function rebasedTask(app: Awaited<ReturnType<typeof buildApp>>) {
+        vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+        const { taskId } = await createAutoApproveCandidate(app, {
+          branchName: "mullion/task-x",
+          agentCommand: "claude",
+          reviewAgent: "claude",
+        });
+        mockGetPullRequestByNumber.mockResolvedValue(
+          mockPr({ mergeable: false, mergeableState: "dirty" }),
+        );
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockResumeTaskWorktree.mockResolvedValue({
+          path: "/tmp/.mullion-worktrees/mullion-task-x",
+          branch: "mullion/task-x",
+        });
+        await reconcileTasks(app);
+        const row = await getTask(app, taskId);
+        expect(row.rebaseStartedAt).not.toBeNull();
+        mockGetPullRequestByNumber.mockResolvedValue(
+          mockPr({ mergeable: true, mergeableState: "clean" }),
+        );
+        return taskId;
+      }
+
+      it("clears rebaseStartedAt and spawns the reviewer once the rebase worker's work finished", async () => {
+        const app = await buildApp();
+        const taskId = await rebasedTask(app);
+        vi.spyOn(app.pty, "get").mockReturnValue({
+          toInfo: () =>
+            fakeInfo({ lastTurnEndedAt: Date.now() + 1000, workFinishedAt: Date.now() + 1000 }),
+        } as never);
+
+        await reconcileTasks(app);
+        let row = await getTask(app, taskId);
+        expect(row.rebaseStartedAt).toBeNull();
+
+        await reconcileTasks(app);
+        row = await getTask(app, taskId);
+        expect(row.reviewSessionId).not.toBeNull();
+        await app.close();
+      });
+
+      it("keeps rebaseStartedAt when workFinishedAt predates the rebase", async () => {
+        const app = await buildApp();
+        const taskId = await rebasedTask(app);
+        vi.spyOn(app.pty, "get").mockReturnValue({
+          toInfo: () =>
+            fakeInfo({ lastTurnEndedAt: Date.now(), workFinishedAt: Date.now() - 60_000 }),
+        } as never);
+
+        await reconcileTasks(app);
+        await reconcileTasks(app);
+        const row = await getTask(app, taskId);
+        expect(row.rebaseStartedAt).not.toBeNull();
+        expect(row.reviewSessionId).toBeNull();
+        await app.close();
+      });
+
+      it("keeps rebaseStartedAt while the PR is still dirty", async () => {
+        const app = await buildApp();
+        const taskId = await rebasedTask(app);
+        mockGetPullRequestByNumber.mockResolvedValue(
+          mockPr({ mergeable: false, mergeableState: "dirty" }),
+        );
+        vi.spyOn(app.pty, "get").mockReturnValue({
+          toInfo: () =>
+            fakeInfo({ lastTurnEndedAt: Date.now() + 1000, workFinishedAt: Date.now() + 1000 }),
+        } as never);
+
+        await reconcileTasks(app);
+        const row = await getTask(app, taskId);
+        expect(row.rebaseStartedAt).not.toBeNull();
+        expect(row.reviewSessionId).toBeNull();
+        await app.close();
+      });
+
+      it("keeps rebaseStartedAt and does not throw when liveStatus rejects", async () => {
+        const app = await buildApp();
+        const taskId = await rebasedTask(app);
+        const sessionBackendModule = await import("../../src/services/session-backend.js");
+        const realResolveBackend = sessionBackendModule.resolveBackend;
+        const warnSpy = vi.spyOn(app.log, "warn");
+        vi.spyOn(sessionBackendModule, "resolveBackend").mockImplementation((appArg, hId) => {
+          const real = realResolveBackend(appArg, hId);
+          return new Proxy(real, {
+            get(target, prop, receiver) {
+              if (prop === "liveStatus")
+                return async () => Promise.reject(new Error("unreachable"));
+              return Reflect.get(target, prop, receiver);
+            },
+          });
+        });
+
+        await expect(reconcileTasks(app)).resolves.not.toThrow();
+        const row = await getTask(app, taskId);
+        expect(row.rebaseStartedAt).not.toBeNull();
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.objectContaining({ taskId }),
+          "task reconcile: host unreachable, keeping the auto-rebase review hold-back",
+        );
+        vi.restoreAllMocks();
+        await app.close();
+      });
+
+      it("keeps rebaseStartedAt while the derived status is not finished", async () => {
+        const app = await buildApp();
+        const taskId = await rebasedTask(app);
+        vi.spyOn(app.pty, "get").mockReturnValue({
+          toInfo: () =>
+            fakeInfo({
+              lastTurnEndedAt: Date.now() + 1000,
+              workFinishedAt: Date.now() + 1000,
+              outstandingBackgroundTasks: ["bg-1"],
+            }),
+        } as never);
+
+        await reconcileTasks(app);
+        const row = await getTask(app, taskId);
+        expect(row.rebaseStartedAt).not.toBeNull();
+        expect(row.reviewSessionId).toBeNull();
+        await app.close();
+      });
+
+      it("falls back to the 30-minute window when no finish signal exists", async () => {
+        const app = await buildApp();
+        const taskId = await rebasedTask(app);
+        vi.spyOn(app.pty, "get").mockReturnValue({
+          toInfo: () => fakeInfo({ lastTurnEndedAt: null, workFinishedAt: null }),
+        } as never);
+
+        await reconcileTasks(app);
+        let row = await getTask(app, taskId);
+        expect(row.rebaseStartedAt).not.toBeNull();
+        expect(row.reviewSessionId).toBeNull();
+
+        const { tasks } = await import("../../src/db/schema.js");
+        app.db
+          .update(tasks)
+          .set({ rebaseStartedAt: new Date(Date.now() - 31 * 60_000) })
+          .where(eq(tasks.id, taskId))
+          .run();
+        await reconcileTasks(app);
+        row = await getTask(app, taskId);
+        expect(row.reviewSessionId).not.toBeNull();
+        await app.close();
+      });
+    });
+
     it("aborts auto-rebase when terminating the active review session fails", async () => {
       const app = await buildApp();
       vi.spyOn(app.pty, "terminate").mockRejectedValueOnce(new Error("pty kill failed"));
