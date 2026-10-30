@@ -545,12 +545,24 @@ export function parseGeneratedOutput(
   // sections are looked for only AFTER the scaffold-region section the prompt
   // asks to come first, never in the text before it.
   const regionEnd = raw.indexOf(GENERATED_REGION_END, raw.indexOf(GENERATED_REGION_START));
-  const tail = regionEnd === -1 ? raw : raw.slice(regionEnd + GENERATED_REGION_END.length);
+  const afterRegion = regionEnd === -1 ? raw : raw.slice(regionEnd + GENERATED_REGION_END.length);
+  // Where to look for one of the extra sections. Normally after the scaffold
+  // region. A complete but misordered answer (the section placed earlier) is
+  // still found when its start marker occurs exactly once in the whole output:
+  // that loses nothing, and a skill that merely quotes the markers still can't
+  // outrank a section the agent wrote itself, because then the marker occurs
+  // in `afterRegion` too (or twice overall).
+  const haystackFor = (start: string): string =>
+    afterRegion.includes(start) || raw.split(start).length - 1 !== 1 ? afterRegion : raw;
   if (mode === "report") {
     // The prompt always asks for this section (the word `none` when there is
     // nothing), so an absent or empty one is a protocol violation, not "no
     // conflicts": reading it as an empty list would show an all-clear.
-    const conflictsSection = optionalSection(tail, CONFLICTS_START, CONFLICTS_END);
+    const conflictsSection = optionalSection(
+      haystackFor(CONFLICTS_START),
+      CONFLICTS_START,
+      CONFLICTS_END,
+    );
     if (conflictsSection === null) {
       throw new GenerationOutputError(
         "the conflicts section is missing or empty (the agent should have written `none` if " +
@@ -561,8 +573,12 @@ export function parseGeneratedOutput(
     return { ...base, conflicts, droppedConflictLines: dropped };
   }
   if (mode === "restructure") {
-    const agentsMdBody = parseRestructuredAgentsMd(tail);
-    const appendRaw = optionalSection(tail, CONTRIBUTING_APPEND_START, CONTRIBUTING_APPEND_END);
+    const agentsMdBody = parseRestructuredAgentsMd(haystackFor(AGENTS_MD_START));
+    const appendRaw = optionalSection(
+      haystackFor(CONTRIBUTING_APPEND_START),
+      CONTRIBUTING_APPEND_START,
+      CONTRIBUTING_APPEND_END,
+    );
     const contributingAppend =
       appendRaw && !/^none\.?$/i.test(appendRaw) ? appendRaw + "\n" : undefined;
     if (contributingAppend && MULLION_MARKER_RE.test(contributingAppend)) {

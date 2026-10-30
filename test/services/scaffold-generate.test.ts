@@ -2164,6 +2164,24 @@ describe("existingInstructions (issue #2316)", () => {
       );
     });
 
+    it("still finds a complete but misordered conflicts section (placed before the region)", () => {
+      const sec = `<<<MULLION_CONFLICTS_START>>>\n${line(good)}\n<<<MULLION_CONFLICTS_END>>>\n`;
+      const r = parseGeneratedOutput(sec + validOutput("demo"), "demo", { mode: "report" });
+      expect(r.conflicts).toEqual([good]);
+    });
+
+    it("does not let a quoted marker outrank the agent's own section when both exist", () => {
+      const quoted = validOutput("demo").replace(
+        "Real invariant.",
+        "Quotes <<<MULLION_CONFLICTS_START>>>\nnot json\n<<<MULLION_CONFLICTS_END>>>.",
+      );
+      const raw =
+        quoted + `<<<MULLION_CONFLICTS_START>>>\n${line(good)}\n<<<MULLION_CONFLICTS_END>>>\n`;
+      const r = parseGeneratedOutput(raw, "demo", { mode: "report" });
+      expect(r.conflicts).toEqual([good]);
+      expect(r.droppedConflictLines).toBe(0);
+    });
+
     it("tolerates code fences, truncates long fields, and counts entries past the cap as dropped", () => {
       const long = { ...good, excerpt: "x".repeat(1000), note: "y".repeat(1000) };
       const many = Array.from({ length: 60 }, () => line(good)).join("\n");
