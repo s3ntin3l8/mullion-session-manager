@@ -867,6 +867,14 @@ export async function projectSetupRoute(app: FastifyInstance) {
           existingInstructions,
           conventionsText: options.workflowConventionsText,
           originalAgentsMd: existingFiles["AGENTS.md"],
+          // Issue #2320 — nothing of the skill or reviewer would be written,
+          // so the turn is not asked for them.
+          instructionsOnly:
+            hasSkill &&
+            hasReviewer &&
+            !refreshSkill &&
+            !refreshReviewer &&
+            existingInstructions !== "keep",
           // Issue #1133 — this primary's own opt-out; only takes effect for
           // a LOCAL_HOST_ID project (generateScaffoldContent's own doc
           // comment). A remote-hosted project's own

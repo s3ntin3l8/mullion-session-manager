@@ -336,7 +336,10 @@ against the repo's real `AGENTS.md`; an earlier preview id for that slug stops
 working.
 
 Either non-`keep` mode counts as worth an agent turn even when the skill and
-reviewer already exist, so it does not 409. Everything the agent returns still
+reviewer already exist, so it does not 409. In that case (and when neither is
+being refreshed) the turn is an instructions-only pass: it is asked only for the
+region paragraph and the report or rewrite, not for a skill or reviewer that
+would be thrown away. Everything the agent returns still
 flows through the same diff and **Apply** step, and the agent never writes to
 the repo itself.
 

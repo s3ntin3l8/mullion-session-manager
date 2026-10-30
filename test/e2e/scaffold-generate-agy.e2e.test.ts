@@ -141,7 +141,7 @@ describeIfAgy("agy generation turn actually reads the repo (issue #1130)", () =>
       // producible by having actually read that file, and never leaked
       // into the agent's context any other way (see FIXTURE_SOURCE's own
       // comment on why the slug shares no vocabulary with it).
-      expect(result.skill.toLowerCase()).toContain("computezorblatency");
+      expect(result.skill!.toLowerCase()).toContain("computezorblatency");
       // parseGeneratedOutput's own cross-file invariant (the reviewer
       // must name the skill's real path) already held, or
       // generateScaffoldContent would have thrown GenerationOutputError

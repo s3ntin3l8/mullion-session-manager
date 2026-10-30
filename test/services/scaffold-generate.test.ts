@@ -237,7 +237,7 @@ describe("parseGeneratedOutput", () => {
   // depends on downstream.
   it("accepts well-formed output whose parsed description carries the codex-delegation clause", () => {
     const result = parseGeneratedOutput(validOutput("demo"), "demo");
-    const parsed = parseSkillFrontmatter(result.reviewer);
+    const parsed = parseSkillFrontmatter(result.reviewer!);
     expect(parsed).not.toBeNull();
     expect(parsed!.description).toContain(CODEX_REVIEWER_DELEGATION_CLAUSE);
   });
@@ -362,6 +362,58 @@ describe("generateScaffoldContent", () => {
     // persists, and it was never the same directory as any preview/apply
     // worktree.
     expect(fs.existsSync(capturedCwd)).toBe(false);
+  });
+
+  describe("instructionsOnly (issue #2320)", () => {
+    const region =
+      "<<<MULLION_SCAFFOLD_REGION_START>>>\nPointer.\n<<<MULLION_SCAFFOLD_REGION_END>>>\n";
+    const none = "<<<MULLION_CONFLICTS_START>>>\nnone\n<<<MULLION_CONFLICTS_END>>>\n";
+    const run = (
+      over: Partial<Parameters<typeof generateScaffoldContent>[0]>,
+      out: string,
+      seen: { prompt?: string } = {},
+    ) =>
+      generateScaffoldContent({
+        app: fakeApp,
+        hostId: LOCAL_HOST_ID,
+        cwd: repoDir,
+        slug: "demo",
+        agentCommand: "claude",
+        seed: {},
+        hasSkill: true,
+        hasReviewer: true,
+        hasScaffoldRegion: true,
+        existingInstructions: "report",
+        instructionsOnly: true,
+        spawn: async (o) => {
+          seen.prompt = o.prompt;
+          return out;
+        },
+        ...over,
+      });
+
+    it("sends the short prompt, accepts the short output and reports possiblyGeneric false", async () => {
+      const seen: { prompt?: string } = {};
+      const r = await run({}, region + none, seen);
+      expect(seen.prompt).toContain("two things");
+      expect(r.skill).toBeUndefined();
+      expect(r.reviewer).toBeUndefined();
+      expect(r.possiblyGeneric).toBe(false);
+    });
+
+    it("is ignored when only the skill exists: the full shape is asked for and required", async () => {
+      const seen: { prompt?: string } = {};
+      await expect(run({ hasReviewer: false }, region + none, seen)).rejects.toThrow(/skill/);
+      expect(seen.prompt).toContain("four things");
+    });
+
+    it("is ignored for keep", async () => {
+      const seen: { prompt?: string } = {};
+      await expect(run({ existingInstructions: "keep" }, region + none, seen)).rejects.toThrow(
+        /skill/,
+      );
+      expect(seen.prompt).toContain("three things");
+    });
   });
 
   it("tears the scratch worktree down even when the spawn throws", async () => {
@@ -2012,6 +2064,94 @@ describe("existingInstructions (issue #2316)", () => {
       expect(p).not.toContain("<<<MULLION_CONFLICTS_START>>>");
       // The READ-ONLY promise still holds in every mode.
       expect(p).toContain("READ-ONLY");
+    });
+  });
+
+  describe("instructions-only pass (issue #2320)", () => {
+    const shortOutput = (extra: string) =>
+      `<<<MULLION_SCAFFOLD_REGION_START>>>\nThe skill lives at .claude/skills/demo/SKILL.md.\n<<<MULLION_SCAFFOLD_REGION_END>>>\n` +
+      extra;
+    const onlyOpts = {
+      ...baseOpts,
+      hasSkill: true,
+      hasReviewer: true,
+      hasScaffoldRegion: true,
+      instructionsOnly: true,
+    };
+
+    it("asks for two things: the region paragraph and the instructions item", () => {
+      const p = buildGenerationPrompt({ ...onlyOpts, existingInstructions: "report" });
+      expect(p).toContain("two things");
+      expect(p).not.toContain("<<<MULLION_SKILL_START>>>");
+      expect(p).not.toContain("<<<MULLION_REVIEWER_START>>>");
+      expect(p).toContain("<<<MULLION_SCAFFOLD_REGION_START>>>");
+      expect(p).toContain("<<<MULLION_CONFLICTS_START>>>");
+      expect(p).toContain("\n1. A short AGENTS.md scaffold-region paragraph");
+      expect(p).toContain("\n2. A conflicts report.");
+      expect(p).toContain(".claude/skills/demo/SKILL.md");
+      expect(p).toContain(".claude/agents/demo-reviewer.md");
+      expect(p).toContain("READ-ONLY");
+    });
+
+    it("restructure numbers its item 2 and keeps the AGENTS.md output shape", () => {
+      const p = buildGenerationPrompt({ ...onlyOpts, existingInstructions: "restructure" });
+      expect(p).toContain("\n2. A restructured AGENTS.md.");
+      expect(p).toContain("<<<MULLION_AGENTS_MD_START>>>");
+      expect(p).not.toContain("<<<MULLION_SKILL_START>>>");
+    });
+
+    it("is ignored for the full shape: keep-mode and non-only prompts are unchanged", () => {
+      const plain = buildGenerationPrompt(baseOpts);
+      expect(buildGenerationPrompt({ ...baseOpts, existingInstructions: "keep" })).toBe(plain);
+      const full = buildGenerationPrompt({ ...baseOpts, existingInstructions: "report" });
+      expect(full).toContain("four things");
+      expect(full).toContain("\n4. A conflicts report.");
+    });
+
+    it("parses the short shape for report, with no skill or reviewer", () => {
+      const raw = shortOutput(
+        '<<<MULLION_CONFLICTS_START>>>\n{"file":"AGENTS.md","excerpt":"x","kind":"contradicts","note":"n"}\n<<<MULLION_CONFLICTS_END>>>\n',
+      );
+      const r = parseGeneratedOutput(raw, "demo", { mode: "report", instructionsOnly: true });
+      expect(r.skill).toBeUndefined();
+      expect(r.reviewer).toBeUndefined();
+      expect(r.conflicts).toHaveLength(1);
+      expect(r.scaffoldRegion).toContain("SKILL.md");
+    });
+
+    it("parses the short shape for restructure", () => {
+      const body = `# P\n\n${MULLION_REGION_PLACEHOLDER}\n\n## Repo specifics\n- x\n`;
+      const raw = shortOutput(
+        `<<<MULLION_AGENTS_MD_START>>>\n${body}\n<<<MULLION_AGENTS_MD_END>>>\n`,
+      );
+      const r = parseGeneratedOutput(raw, "demo", {
+        mode: "restructure",
+        instructionsOnly: true,
+        originalAgentsMd: "# P\n",
+      });
+      expect(r.agentsMdBody).toContain("## Repo specifics");
+      expect(r.skill).toBeUndefined();
+    });
+
+    it("still requires the region paragraph", () => {
+      expect(() =>
+        parseGeneratedOutput("nothing", "demo", { mode: "report", instructionsOnly: true }),
+      ).toThrow(/scaffold region/);
+    });
+
+    it("does not accept the short shape when the full shape was asked for", () => {
+      const raw = shortOutput("<<<MULLION_CONFLICTS_START>>>\nnone\n<<<MULLION_CONFLICTS_END>>>\n");
+      expect(() => parseGeneratedOutput(raw, "demo", { mode: "report" })).toThrow(/skill/);
+    });
+
+    it("does not validate a malformed reviewer it was not asked for", () => {
+      const raw =
+        validOutput("demo").replace(CODEX_REVIEWER_DELEGATION_CLAUSE, "") +
+        "<<<MULLION_CONFLICTS_START>>>\nnone\n<<<MULLION_CONFLICTS_END>>>\n";
+      expect(() => parseGeneratedOutput(raw, "demo", { mode: "report" })).toThrow(/codex/);
+      expect(
+        parseGeneratedOutput(raw, "demo", { mode: "report", instructionsOnly: true }).conflicts,
+      ).toEqual([]);
     });
   });
 
