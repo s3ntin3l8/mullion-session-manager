@@ -1613,6 +1613,13 @@ for a human... with one exception below (`#755`). Auto-approving records
 the transition with `via: "auto-approve"`, distinct from a human's `via:
 "approve"` in the task timeline and on `/ws/tasks`.
 
+**Retry backoff.** `processAutoApprovals` retries a not-yet-eligible task with
+a process-local exponential backoff (1 min doubling to a 30 min cap). The
+backoff is per review round: it resets whenever a new verdict is ingested and
+whenever the task returns to the worker (`autoReturnTask`), so a fresh verdict
+gets an immediate attempt. Only repeated failed attempts within one round
+(CI pending, `mergeable` unknown, dirty tree) keep backing off.
+
 This gate is Mullion's own, enforced before a merge is ever requested — a
 GitHub required-review is a separate, independent gate. **#737 — now
 shipped**: when a reviewer App is configured, the same approving verdict

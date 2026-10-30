@@ -390,6 +390,7 @@ const {
   retryPermanentPushFailuresNow,
   DEFAULT_MAX_AUTO_RETURN_ROUNDS,
   resetRequiredStatusContextsForbiddenWarningsForTests,
+  autoReturnTask,
 } = await import("../../src/services/task-reconciler.js");
 const { tasks, sessions, projects } = await import("../../src/db/schema.js");
 const { DEFAULT_SETTINGS } = await import("../../src/services/settings.js");
@@ -4383,6 +4384,98 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    describe("retry backoff is per review round", () => {
+      function inProgressRun() {
+        return [
+          {
+            name: "CI",
+            status: "in_progress" as const,
+            conclusion: null,
+            htmlUrl: "https://x/1",
+            headSha: "sha-head",
+          },
+        ];
+      }
+
+      it("keeps backing off across repeated CI-pending attempts within one round", async () => {
+        const app = await buildApp();
+        const { taskId } = await createAutoApproveCandidate(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(inProgressRun());
+
+        await reconcileTasks(app);
+        const callsAfterFirst = mockFetchRunsForHead.mock.calls.length;
+        expect(callsAfterFirst).toBeGreaterThan(0);
+
+        // Second tick inside the 1-minute window: skipped, no new CI lookup.
+        await reconcileTasks(app);
+        expect(mockFetchRunsForHead.mock.calls.length).toBe(callsAfterFirst);
+        expect((await getTask(app, taskId)).status).toBe("reviewing");
+
+        await app.close();
+      });
+
+      it("starts the next reviewing stint from zero attempts after autoReturnTask", async () => {
+        const app = await buildApp();
+        const { taskId, reviewSessionId } = await createAutoApproveCandidate(app, {
+          worktreePath: "/tmp",
+          agentCommand: "claude",
+        });
+        const workerSession = await app.inject({
+          method: "POST",
+          url: "/api/sessions",
+          payload: { projectId: (await getTask(app, taskId)).projectId, command: "bash" },
+        });
+        app.db
+          .update(tasks)
+          .set({ sessionId: workerSession.json().id })
+          .where(eq(tasks.id, taskId))
+          .run();
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr());
+        mockFetchRunsForHead.mockResolvedValue(inProgressRun());
+
+        // Tick 1 records an attempt (CI pending), so the task is now backed off.
+        await reconcileTasks(app);
+        const callsAfterFirst = mockFetchRunsForHead.mock.calls.length;
+
+        // Bounce through the worker, then straight back to reviewing.
+        const [row] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
+        const [project] = app.db
+          .select()
+          .from(projects)
+          .where(eq(projects.id, row.projectId))
+          .all();
+        const returned = await autoReturnTask(app, row, project, {
+          reason: "suggestions",
+          seedPrompt: "apply the nits",
+        });
+        expect(returned.ok).toBe(true);
+        app.db
+          .update(tasks)
+          .set({
+            status: "reviewing",
+            reviewSessionId,
+            reviewFindingsIngestedSessionId: reviewSessionId,
+            lastReviewVerdict: "clean",
+          })
+          .where(eq(tasks.id, taskId))
+          .run();
+        mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+        mockPromoteTaskToPR.mockResolvedValueOnce({
+          ok: true,
+          prUrl: "https://github.com/o/r/pull/9",
+          prNumber: 9,
+        });
+
+        await reconcileTasks(app);
+
+        expect(mockFetchRunsForHead.mock.calls.length).toBeGreaterThan(callsAfterFirst);
+        expect((await getTask(app, taskId)).status).toBe("done");
+
+        await app.close();
+      });
+    });
+
     it("records mergeError when reviewing task has merge conflicts and rebaseAttempts has reached maximum", async () => {
       const app = await buildApp();
       const { taskId } = await createAutoApproveCandidate(app, {
@@ -7293,6 +7386,71 @@ describe("reconcileTasks", () => {
       // Capture is gated on `errorDetail === "rate_limit"`, so a
       // different classification never writes the column.
       expect(row.lastRateLimitAt).toBeNull();
+
+      await app.close();
+    });
+
+    it("auto-approves on the very next sweep after an approving verdict is ingested, not after the backoff built up while waiting", async () => {
+      const app = await buildApp();
+      const { taskId, reviewSessionId } = await claimIntoReviewing(app, "codex");
+      const [row0] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
+      await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${row0.projectId}`,
+        payload: { autoApprove: true },
+      });
+      app.db.update(tasks).set({ prNumber: 9 }).where(eq(tasks.id, taskId)).run();
+      mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
+      mockResolveGitHubToken.mockResolvedValue("tok");
+      mockGetPullRequestByNumber.mockResolvedValue({
+        number: 9,
+        htmlUrl: "https://github.com/o/r/pull/9",
+        nodeId: "PR_node9",
+        draft: false,
+        headSha: "sha-head",
+        headRef: "mullion/task-x",
+        baseRef: "main",
+        title: "feat: do the thing",
+        state: "open",
+        merged: false,
+        mergeable: true,
+        mergeableState: "clean",
+      });
+      mockFetchRunsForHead.mockResolvedValue([
+        {
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          htmlUrl: "https://x/1",
+          headSha: "sha-head",
+        },
+      ]);
+      mockPromoteTaskToPR.mockResolvedValueOnce({
+        ok: true,
+        prUrl: "https://github.com/o/r/pull/9",
+        prNumber: 9,
+      });
+      vi.spyOn(app.pty, "get").mockImplementation(
+        (id: string) =>
+          ({
+            toInfo: () =>
+              String(id) === String(reviewSessionId)
+                ? fakeInfo({ lastTurnEndedAt: Date.now() })
+                : fakeInfo(),
+          }) as never,
+      );
+
+      // Tick 1: no findings file yet, so the sweep visits the task, records
+      // an attempt and bails out (verdict not ingested) — a 1-minute backoff.
+      await reconcileTasks(app);
+      expect((await getTask(app, taskId)).status).toBe("reviewing");
+
+      // Tick 2: the approving verdict lands and ingestion must reset the
+      // backoff so the same tick's sweep approves.
+      writeFindings(app, taskId, 0, JSON.stringify({ verdict: "clean", summary: "All good." }));
+      await reconcileTasks(app);
+
+      expect((await getTask(app, taskId)).status).toBe("done");
 
       await app.close();
     });
