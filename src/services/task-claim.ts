@@ -49,6 +49,7 @@ import {
   resolveReviewAgentCommand,
   commandSupportsSeed,
   resolveSeedDelivered,
+  workerAgentPinned,
 } from "./task-agent-resolve.js";
 import {
   resolveCliModel,
@@ -1581,9 +1582,17 @@ function agentChangeModelClears(
     });
     if ("patch" in resolved) Object.assign(patch, resolved.patch);
   }
-  if (task.agentCommand !== null && (task.modelOverride || task.smallModelOverride)) {
+  // Drift only happens when no explicit agent pins the worker: a pinned agent
+  // means the stored override was validated against it (the PATCH route), so
+  // `agentCommand` (the LAST run's worker) being stale must not wipe it.
+  const effectiveAgent = opts.agent !== undefined ? opts.agent : task.agent;
+  if (
+    task.agentCommand !== null &&
+    (task.modelOverride || task.smallModelOverride) &&
+    !workerAgentPinned(effectiveAgent, task.body)
+  ) {
     const next = resolveAgentCommand(app, {
-      taskAgent: opts.agent !== undefined ? opts.agent : task.agent,
+      taskAgent: effectiveAgent,
       issueBody: task.body,
       projectDefaultAgent: project.defaultAgent,
     });

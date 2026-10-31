@@ -127,6 +127,17 @@ describe("retryTask task-level model (#2491)", () => {
     expect(load(drifted).modelOverride).toBeNull();
     app.db.update(projects).set({ defaultAgent: null }).where(eq(projects.id, projectId)).run();
 
+    // PATCH agent=codex then model: the row pins codex while agentCommand still
+    // records the LAST run (claude). A bare retry must keep the chosen model.
+    const pinned = await failedTask(74, "codex");
+    app.db
+      .update(tasks)
+      .set({ agentCommand: "claude", modelOverride: "gpt-5" })
+      .where(eq(tasks.id, pinned))
+      .run();
+    expect((await retryTask(app, pinned)).ok).toBe(true);
+    expect(load(pinned)).toMatchObject({ agent: "codex", modelOverride: "gpt-5", model: "gpt-5" });
+
     const changed = await failedTask(72, "claude");
     expect((await retryTask(app, changed, { agent: "codex" })).ok).toBe(true);
     expect(load(changed)).toMatchObject({ agent: "codex", modelOverride: null });

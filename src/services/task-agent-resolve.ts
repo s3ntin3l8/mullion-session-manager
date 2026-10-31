@@ -23,6 +23,16 @@ function parseDirectiveLine(body: string | null, re: RegExp): string | null {
   return match ? match[1] : null;
 }
 
+/** True when the task's own `agent` or the issue body's `Agent:` line names
+ * a known agent — i.e. the worker is pinned and neither the project nor the
+ * install default can move it (issue #2491's family-drift guard keys off it). */
+export function workerAgentPinned(taskAgent: string | null, issueBody: string | null): boolean {
+  const known = KNOWN_AGENTS as readonly string[];
+  if (taskAgent && known.includes(taskAgent)) return true;
+  const fromIssue = parseDirectiveLine(issueBody, AGENT_LINE_RE);
+  return fromIssue !== null && known.includes(fromIssue);
+}
+
 /**
  * Resolution precedence for the worker agent, most specific wins:
  * 1. The task's own `agent` column (manual per-task override).
