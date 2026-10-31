@@ -516,7 +516,7 @@ export type CreateSessionResult =
   // `app.pty.isMasterAliveState(...)` liveness check `findActiveStackSession`
   // already trusts (sessions.status records intent, not live process
   // state — AGENTS.md's session-model invariant), and that check belongs
-  // in the caller that actually holds `withStackLock` (projects.ts's
+  // in the caller that actually holds `withStackLock` (project-docker.ts's
   // `startStackSession`), not buried in this generic helper.
   | { ok: false; reason: "unique-conflict" };
 

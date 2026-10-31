@@ -141,7 +141,7 @@ vi.mock("../../src/services/docker-service-detect.js", () => ({
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
-const { createKeyedLock } = await import("../../src/routes/projects.js");
+const { createKeyedLock } = await import("../../src/routes/project-docker.js");
 
 const tmpDb = path.join(os.tmpdir(), `projects-docker-test-${process.pid}.db`);
 

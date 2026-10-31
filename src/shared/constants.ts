@@ -120,15 +120,15 @@ export const UPLOAD_IMAGE_EXTENSIONS = {
 export const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
 
 // ---------------------------------------------------------------------------
-// routes/projects.ts's stackSessionName() / frontend/src/dock/dockHelpers.ts —
+// routes/project-docker.ts's stackSessionName() / frontend/src/dock/dockHelpers.ts —
 // DOCKER_STACK_SESSION_NAME_PREFIX
 // ---------------------------------------------------------------------------
 //
 // Dock log-streaming resize fix (symptom 3) — a stack-wide action
 // (restart/apply/pull-and-restart/rebuild-and-restart/stop) spawns a
 // `kind: "dock"` session named `${DOCKER_STACK_SESSION_NAME_PREFIX}
-// <composeProject>`, `nameLocked: true` (startStackSession, routes/
-// projects.ts). That name is a stable, recoverable identity for "is a stack
+// <composeProject>`, `nameLocked: true` (startStackSession,
+// routes/project-docker.ts). That name is a stable, recoverable identity for "is a stack
 // action currently running against this compose project" — but the
 // frontend's own record of it (Dock.tsx's `ephemeralControls`) was
 // component-local `useState`, populated only from the POST response that

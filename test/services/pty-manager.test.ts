@@ -2592,7 +2592,7 @@ describe("PtyManager", () => {
     // construction, so only a stub can produce the omission — and the guard
     // has to be pinned by one, because an omitted id that read as anything
     // other than "unknown" would fall through BOTH guards in
-    // routes/projects.ts's startStackSession conflict check and land in its
+    // routes/project-docker.ts's startStackSession conflict check and land in its
     // "confirmed dead" branch, which marks a live session exited and
     // orphans its scope for good.
     it('resolves "unknown" for an id the backend\'s answer omits', async () => {
