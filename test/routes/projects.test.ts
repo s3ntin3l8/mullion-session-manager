@@ -12,6 +12,7 @@ import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import type * as GithubIntegration from "../../src/services/github-integration.js";
 import type * as HermesReview from "../../src/services/hermes-review.js";
+import type * as TaskReconciler from "../../src/services/task-reconciler.js";
 import type { RelayReviewState } from "../../src/shared/types.js";
 import type { SessionBackend } from "../../src/services/session-backend.js";
 // The mocked module's own value import (see the vi.mock above) — a test
@@ -75,6 +76,13 @@ vi.mock("../../src/services/hermes-review.js", async (importOriginal) => {
     assertReviewerConfigured: vi.fn(actual.assertReviewerConfigured),
     requestHermesReview: vi.fn(actual.requestHermesReview),
   };
+});
+
+// Passthrough wrapper so a test can make the sidebar merge's task bookkeeping
+// throw without touching the real implementation for every other test.
+vi.mock("../../src/services/task-reconciler.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof TaskReconciler>();
+  return { ...actual, finishTaskForMergedPr: vi.fn(actual.finishTaskForMergedPr) };
 });
 
 // Marker substring a target cwd can contain to make runGitInit's own `git
@@ -3747,6 +3755,99 @@ describe("projects route", () => {
         expect(ok.json()).toEqual({ merged: true, sha: "mergesha" });
         expect(merged).toMatchObject({ merge_method: "squash", sha: "sha43" });
         fs.rmSync(projectCwd, { recursive: true, force: true });
+      });
+
+      describe("merge finishes the linked task", () => {
+        async function mergeSetup(n: number) {
+          const { invalidatePrDetail } = await import("../../src/services/github-pr-detail.js");
+          invalidatePrDetail("acme", "widgets", n);
+          mockGithub(gqlPr(n), (url) =>
+            url.endsWith(`/pulls/${n}/merge`)
+              ? jsonResponse(200, { merged: true, sha: "m" })
+              : null,
+          );
+          await warmCiCache(n, "success", true);
+          const app = await makeApp();
+          const { projectCwd, id } = await connectedProject(app);
+          const merge = () =>
+            app.inject({
+              method: "POST",
+              url: `/api/projects/${id}/github/prs/${n}/merge`,
+              payload: { headSha: `sha${n}` },
+            });
+          return { app, id, projectCwd, merge };
+        }
+        const readTask = async (app: Awaited<ReturnType<typeof makeApp>>, taskId: number) => {
+          const { tasks } = await import("../../src/db/schema.js");
+          const { eq } = await import("drizzle-orm");
+          return app.db.select().from(tasks).where(eq(tasks.id, taskId)).get()!;
+        };
+
+        it("archives a done task, clears its merge state, and is idempotent", async () => {
+          const { app, id, projectCwd, merge } = await mergeSetup(81);
+          const { tasks } = await import("../../src/db/schema.js");
+          const [task] = app.db
+            .insert(tasks)
+            .values({
+              projectId: id,
+              title: "d",
+              status: "done",
+              prNumber: 81,
+              mergeRequestedAt: new Date(),
+            })
+            .returning()
+            .all();
+          expect((await merge()).statusCode).toBe(200);
+          const after = await readTask(app, task.id);
+          expect(after.mergedAt).toBeTruthy();
+          expect(after.archivedAt).toBeTruthy();
+          expect(after.mergeRequestedAt).toBeNull();
+
+          // A second call (or the webhook) finds nothing left to do.
+          const { finishTaskForMergedPr } = await import("../../src/services/task-reconciler.js");
+          const project = app.db
+            .select()
+            .from((await import("../../src/db/schema.js")).projects)
+            .all()[0]!;
+          await finishTaskForMergedPr(app, project, 81);
+          const again = await readTask(app, task.id);
+          expect(again.mergedAt?.getTime()).toBe(after.mergedAt?.getTime());
+          expect(again.archivedAt?.getTime()).toBe(after.archivedAt?.getTime());
+          fs.rmSync(projectCwd, { recursive: true, force: true });
+        });
+
+        it("ends a reviewing task as done and archived", async () => {
+          const { app, id, projectCwd, merge } = await mergeSetup(82);
+          const { tasks } = await import("../../src/db/schema.js");
+          const [task] = app.db
+            .insert(tasks)
+            .values({ projectId: id, title: "r", status: "reviewing", prNumber: 82 })
+            .returning()
+            .all();
+          expect((await merge()).statusCode).toBe(200);
+          const after = await readTask(app, task.id);
+          expect(after.status).toBe("done");
+          expect(after.archivedAt).toBeTruthy();
+          fs.rmSync(projectCwd, { recursive: true, force: true });
+        });
+
+        it("leaves the response unchanged when no task is linked", async () => {
+          const { projectCwd, merge } = await mergeSetup(83);
+          const res = await merge();
+          expect(res.statusCode).toBe(200);
+          expect(res.json()).toEqual({ merged: true, sha: "m" });
+          fs.rmSync(projectCwd, { recursive: true, force: true });
+        });
+
+        it("still returns the merge when the task bookkeeping throws", async () => {
+          const { finishTaskForMergedPr } = await import("../../src/services/task-reconciler.js");
+          vi.mocked(finishTaskForMergedPr).mockRejectedValueOnce(new Error("boom"));
+          const { projectCwd, merge } = await mergeSetup(84);
+          const res = await merge();
+          expect(res.statusCode).toBe(200);
+          expect(res.json()).toEqual({ merged: true, sha: "m" });
+          fs.rmSync(projectCwd, { recursive: true, force: true });
+        });
       });
 
       // Issue #1672 — GitHub's "Update branch", pinned to the head the user saw.

@@ -199,6 +199,7 @@ import { replyReviewError, reviewReader } from "./review-relay.js";
 import { getIssueDetail, listIssues } from "../services/github-issues.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { resolveReleaseMerge } from "../services/release-merge.js";
+import { finishTaskForMergedPr } from "../services/task-reconciler.js";
 import type {
   ProjectReleaseStatus,
   ReleaseDetectionResult,
@@ -2923,6 +2924,17 @@ export async function projectsRoute(app: FastifyInstance) {
           { sha: detail.headSha, commitTitle: `${detail.title} (#${number})` },
         );
         invalidatePrDetail(ctx.repoRef.owner, ctx.repoRef.repo, number);
+        // The merge already happened: finishing the linked task must never
+        // turn it into an error response. Not gated on Task Master being
+        // enabled, same as the webhook.
+        try {
+          await finishTaskForMergedPr(app, ctx.project, number);
+        } catch (finishErr) {
+          app.log.warn(
+            { err: finishErr, projectId, prNumber: number },
+            "pr merge: finishing the linked task failed",
+          );
+        }
         return result;
       } catch (err) {
         if (err instanceof GitHubWriteScopeError) {
