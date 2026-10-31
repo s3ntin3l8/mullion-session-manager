@@ -23,6 +23,17 @@ import {
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
+// #2416 — the three-state "did the worker commit past the base" verdict.
+// "unknown" (the worktree could not be read) is a state of its own here, not
+// a synonym for "no commits"; see the module's header.
+import { resolveCommitsPastBase } from "./commits-past-base.js";
+// #2416 — one throttle policy for the reconciler's "this state is stuck"
+// warnings, instead of a copy per lookup.
+import { createThrottledWarn } from "./throttled-warn.js";
+// #2416 — the PR's check runs, and whether GitHub answered the lookup. The
+// unstable path needs to tell "no checks" from "couldn't ask"; see the
+// module's header.
+import { readPrCheckRuns } from "./pr-check-runs.js";
 import { canSpawnReviewer, deriveApprovalState } from "./task-approval-state.js";
 import {
   CLEARED_REVIEW_RUN,
@@ -107,7 +118,6 @@ import {
 import {
   computeCiStatus,
   fetchRunsForHeadChecked,
-  fetchCheckRunsForHead,
   isRedCheckConclusion,
   getPRsStatus,
   GitHubApiError,
@@ -1419,45 +1429,6 @@ async function checkReviewingGate(
   };
 }
 
-// #1015 follow-up — minimal inline version of "has the worker moved HEAD
-// past baseSha". Mirrors checkReviewingGate's git-status check above so the
-// grace-window lookup uses the same source of truth (and the same fail-open
-// posture: any error resolving status returns false, meaning "no commits"
-// — the safer failure mode, since the alternative is letting a transient
-// git-status blip kick a recoverable rate_limit task straight into the
-// no-commits failure path).
-async function hasCommitsPastBase(
-  app: FastifyInstance,
-  project: typeof projects.$inferSelect,
-  task: typeof tasks.$inferSelect,
-  // Issue #1724 — the host that HOLDS the task's worktree, which after
-  // placement is the worker's own host and not necessarily the project's.
-  // Resolving the worktree against the project's host would ask the wrong
-  // machine about a directory it does not have — always false, so the
-  // salvage never fires and a placed worker with commits stays in grace.
-  hostId: string,
-): Promise<boolean> {
-  if (!task.baseSha || !task.worktreePath) return false;
-  // No more host restriction here (issue #1100 — resolveHostGitStatus is
-  // already fully proxied for a remote host; the old local-only guard
-  // existed only to mirror checkReviewingGate's, which is gone for the same
-  // reason). The try/catch below still defaults to false — meaning grace
-  // MAY apply — on any error, including a remote host that can't be
-  // reached: "failing the task is worse than keeping it alive" is the same
-  // fail-safe regardless of host.
-  try {
-    const statusResult = await resolveHostGitStatus(app, hostId, task.worktreePath);
-    if (!statusResult.ok || !statusResult.value.isRepo || statusResult.value.status === null) {
-      return false;
-    }
-    const { hash } = statusResult.value.status;
-    if (hash === null) return false;
-    return !task.baseSha.startsWith(hash);
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Executes the #722 "no commits ahead of base" failure found by
  * `checkReviewingGate`: probes `commitHostWipChanges` FIRST (issue #1100),
@@ -2483,12 +2454,20 @@ async function attemptMerge(
         // mergeable_state and may now be "clean"). Failure: fall through to
         // the original backoff behavior so a non-title-lint unstable state
         // is unchanged.
-        const unstableCheckRuns = await fetchCheckRunsForHead(
+        // #2416 — "no checks" and "couldn't ask" are different answers. The
+        // lookup says which one it is, so a red TITLE-LINT check is not
+        // silently never healed, and the operator is told why the PR is held.
+        // The PR is held either way: an unreadable check list never becomes a
+        // merge (the merge gate reads GitHub's own mergeable_state).
+        const checkRuns = await readPrCheckRuns(
+          app,
+          task,
           token,
-          repoRef.owner,
-          repoRef.repo,
+          repoRef,
           pr.headSha,
-        ).catch(() => []);
+          "unstable-merge",
+        );
+        const unstableCheckRuns = checkRuns.ok ? checkRuns.runs : [];
         if (
           unstableCheckRuns.length > 0 &&
           (await attemptSelfHealPrTitle(app, task, repoRef, token, pr.title, unstableCheckRuns))
@@ -2499,14 +2478,18 @@ async function attemptMerge(
         // sends a human hunting, while "codecov/patch: 66.66% of diff hit
         // (target 75.00%)" says what to fix — or what "Merge now" overrides.
         const redUnstable = unstableCheckRuns.filter((c) => isRedCheckConclusion(c.conclusion));
-        recordMergeError(
-          app,
-          task.id,
+        const heldReason =
           redUnstable.length > 0
             ? `Held: a non-required check is red — ${redUnstable
                 .map((c) => (c.detail ? `${c.name}: ${c.detail}` : c.name))
                 .join("; ")}. Fix it, or use "Merge now" to override.`
-            : "A non-required check is failing or still running",
+            : "A non-required check is failing or still running";
+        recordMergeError(
+          app,
+          task.id,
+          checkRuns.ok
+            ? heldReason
+            : `${heldReason} The check list could not be read, so the title-lint self-heal did not run — use "Merge now" to override, or wait for the lookup to answer.`,
         );
         return;
       }
@@ -3238,31 +3221,11 @@ async function attemptSelfHealPrTitle(
 // lookup did not answer, so a repo whose `/actions/runs` never answers (a
 // permanent 403/404, not a blip) could never open it with nothing in the log
 // saying so. Warn once per task per hour: this runs every sweep tick.
-const UNSTABLE_RUNS_UNREADABLE_WARN_INTERVAL_MS = 60 * 60_000;
-const MAX_UNSTABLE_RUNS_UNREADABLE_WARN_ENTRIES = 500;
-const unstableRunsUnreadableWarnedAt = new Map<number, number>();
-
-function warnUnstableRunsUnreadable(app: FastifyInstance, taskId: number): void {
-  const now = Date.now();
-  const last = unstableRunsUnreadableWarnedAt.get(taskId);
-  if (last !== undefined && now - last < UNSTABLE_RUNS_UNREADABLE_WARN_INTERVAL_MS) return;
-  if (
-    last === undefined &&
-    unstableRunsUnreadableWarnedAt.size >= MAX_UNSTABLE_RUNS_UNREADABLE_WARN_ENTRIES
-  ) {
-    const oldest = unstableRunsUnreadableWarnedAt.keys().next().value;
-    if (oldest !== undefined) unstableRunsUnreadableWarnedAt.delete(oldest);
-  }
-  unstableRunsUnreadableWarnedAt.set(taskId, now);
-  app.log.warn(
-    { taskId },
-    "task reconcile: the PR is `unstable` but the Actions runs lookup did not answer, so the red-CI return stands down (it would risk pushing while Actions is mid-run); a failing non-Actions check will not return the worker until the lookup answers",
-  );
-}
+const warnUnstableRunsUnreadable = createThrottledWarn(60 * 60_000);
 
 /** Exported for tests only — the throttle state is module-scope. */
 export function resetUnstableRunsUnreadableWarningsForTests(): void {
-  unstableRunsUnreadableWarnedAt.clear();
+  warnUnstableRunsUnreadable.reset();
 }
 
 async function attemptReturnRedCiToWorker(
@@ -3285,7 +3248,12 @@ async function attemptReturnRedCiToWorker(
     current.runsAnswered &&
     current.status !== "in_progress";
   if (current.mergeableState === "unstable" && !current.runsAnswered) {
-    warnUnstableRunsUnreadable(app, task.id);
+    warnUnstableRunsUnreadable(
+      app,
+      task.id,
+      { taskId: task.id },
+      "task reconcile: the PR is `unstable` but the Actions runs lookup did not answer, so the red-CI return stands down (it would risk pushing while Actions is mid-run); a failing non-Actions check will not return the worker until the lookup answers",
+    );
   }
   if (current.status !== "failure" && !unstableOnly) return false;
   if (task.worktreePath === null || task.agentCommand === null) return false;
@@ -3297,16 +3265,23 @@ async function attemptReturnRedCiToWorker(
   // check is work to fix whether or not it gates the merge, because the merge
   // sweep holds on an `unstable` PR anyway (attemptMerge's `case "unstable"`).
 
-  const checkRuns = await fetchCheckRunsForHead(
+  // #2416 — `readPrCheckRuns` owns this lookup (and its throttled warning),
+  // because "no red checks" and "couldn't ask" are different answers: the
+  // old empty-list answer stood the red-CI return down silently, and an
+  // unanswered lookup now says so. The stand-down itself is unchanged.
+  const checkRuns = await readPrCheckRuns(
+    app,
+    task,
     token,
-    current.repoRef.owner,
-    current.repoRef.repo,
+    current.repoRef,
     current.headSha,
+    "red-ci-return",
   );
+  const allCheckRuns = checkRuns.ok ? checkRuns.runs : [];
   // `isRedCheckConclusion` is the one definition of "red" (a bare `failure`,
   // but also `timed_out` and `action_required`, which GitHub's merge gate
   // blocks on just the same) — see its own doc comment.
-  const redChecks = checkRuns.filter((c) => isRedCheckConclusion(c.conclusion));
+  const redChecks = allCheckRuns.filter((c) => isRedCheckConclusion(c.conclusion));
   if (redChecks.length === 0) return false;
 
   // #1035 — BEFORE the auto-return-cap check: if the only failing required
@@ -3324,7 +3299,7 @@ async function attemptReturnRedCiToWorker(
   ).catch(() => null);
   if (
     pr !== null &&
-    (await attemptSelfHealPrTitle(app, task, current.repoRef, token, pr.title, checkRuns))
+    (await attemptSelfHealPrTitle(app, task, current.repoRef, token, pr.title, allCheckRuns))
   ) {
     return true;
   }
@@ -5744,11 +5719,20 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 // The handoff below only fires with Task Master enabled —
                 // salvaging without it would skip the budget failure and
                 // then never hand off, looping the task past its budget.
+                //
+                // #2416 — the verdict is three-state. "unknown" (the worktree
+                // could not be read) is NOT "ahead", so a task whose commits
+                // cannot be verified is not salvaged — the same outcome as
+                // before this change, except that the module now logs the
+                // unreadable worktree instead of reporting it as "no
+                // commits". Failing it here would throw away completed work;
+                // keeping it alive instead needs a bounded-retry policy and
+                // is tracked separately.
                 salvage =
                   resolvedTaskMaster.enabled &&
                   ((liveDerived.status === "finished" && turnFinishedSinceClaim(liveInfo, task)) ||
                     isShellTailHandoff(liveDerived.status, liveInfo, task, now.getTime())) &&
-                  (await hasCommitsPastBase(app, project, task, hostId));
+                  (await resolveCommitsPastBase(app, task, hostId)).state === "ahead";
               }
             }
             if (now > deadline && !salvage) {
@@ -5965,8 +5949,15 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                   resolvedTaskMaster.rateLimitGraceMinutes,
                 );
                 if (inGrace) {
-                  const hasCommits = await hasCommitsPastBase(app, project, task, hostId);
-                  if (!hasCommits) {
+                  // #2416 — "none" (resolved: no commits) and "unknown" (the
+                  // worktree could not be read) keep the task inside the
+                  // grace window alike: "failing the task is worse than
+                  // keeping it alive" is the same fail-safe regardless of
+                  // why there are no commits. What changed is that the
+                  // unreadable case is logged instead of being folded into
+                  // "no commits".
+                  const commits = await resolveCommitsPastBase(app, task, hostId);
+                  if (commits.state !== "ahead") {
                     // Durable signal + no live api_error + no commits =
                     // stay in grace. The agent's quota may still
                     // recover; checkReviewingGate would only fail us
