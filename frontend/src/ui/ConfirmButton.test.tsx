@@ -27,6 +27,24 @@ describe("ui/ConfirmButton", () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
+  it("compact keeps the armed button icon-only, with the countdown in the title", async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    render(
+      <ConfirmButton compact onConfirm={onConfirm} title="Delete branch">
+        x
+      </ConfirmButton>,
+    );
+
+    await user.click(screen.getByTitle("Delete branch"));
+
+    const armed = screen.getByRole("button", { name: /click again to confirm \(6s\)/ });
+    expect(armed).toHaveClass("confirm-compact", "armed");
+    expect(armed).not.toHaveTextContent("6s");
+    await user.click(armed);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+  });
+
   it("confirms a literal double-click when enabled", async () => {
     const user = userEvent.setup();
     const onConfirm = vi.fn();

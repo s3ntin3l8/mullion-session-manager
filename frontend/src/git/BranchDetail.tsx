@@ -27,7 +27,7 @@ import {
 import { mergeChip } from "./branchGroups.js";
 import { rebaseNotice, runBranchOp } from "./branchOps.js";
 import { prTriad } from "./prTriad.js";
-import { FORCEABLE_REASONS, reasonMessage } from "./gitReasons.js";
+import { deleteBranchTitle, FORCEABLE_REASONS, reasonMessage } from "./gitReasons.js";
 import { openSessionOn } from "./sessionLaunch.js";
 import { refreshGitEverywhere } from "./useSourceControl.js";
 import { useRepoUrl } from "./useRepoUrl.js";
@@ -102,9 +102,7 @@ export function BranchDetail({
       ? "Cannot delete the default branch"
       : detail?.worktreePath
         ? `Checked out in ${detail.worktreePath.split("/").pop()}`
-        : taskId != null || entry?.taskOwned
-          ? `Owned by task${taskId != null ? ` #${taskId}` : ""} — can't be deleted here`
-          : null;
+        : null;
 
   const remove = async (force = false) => {
     try {
@@ -365,7 +363,7 @@ export function BranchDetail({
               <ConfirmButton
                 title="Force delete"
                 onConfirm={() => void remove(true)}
-                armedLabel="Force delete"
+                armedLabel="Confirm"
               >
                 Force
               </ConfirmButton>
@@ -417,9 +415,9 @@ export function BranchDetail({
           )
         )}
         <ConfirmButton
-          title={blocked ?? "Delete branch"}
+          title={blocked ?? deleteBranchTitle(detail?.mergeState, taskId)}
           disabled={blocked !== null}
-          onConfirm={() => void remove()}
+          onConfirm={() => void remove(true)}
           armedLabel="Delete"
         >
           <TrashIcon size={12} /> Delete…

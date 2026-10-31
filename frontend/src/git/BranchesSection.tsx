@@ -28,7 +28,12 @@ import { isTaskBranch, type MullionLinks } from "../hooks/useMullionLinks.js";
 import { useBranchPreview } from "../hooks/useBranchPreview.js";
 import { groupBranches, isPrunable, mergeChip } from "./branchGroups.js";
 import { rebaseNotice, runBranchOp } from "./branchOps.js";
-import { FORCEABLE_REASONS, isDefaultBranchName, reasonMessage } from "./gitReasons.js";
+import {
+  deleteBranchTitle,
+  FORCEABLE_REASONS,
+  isDefaultBranchName,
+  reasonMessage,
+} from "./gitReasons.js";
 import { NewBranchForm } from "./NewBranchForm.js";
 import { openSessionOn } from "./sessionLaunch.js";
 import { refreshGitEverywhere } from "./useSourceControl.js";
@@ -252,9 +257,7 @@ export function BranchesSection({
                 ? "Cannot delete the default branch"
                 : worktree
                   ? `Checked out in ${worktree.path.split("/").pop()}`
-                  : taskOwned
-                    ? `Owned by task${entry?.task ? ` #${entry.task.id}` : ""} — can't be deleted here`
-                    : null;
+                  : null;
             return (
               <SidebarRow
                 key={b.name}
@@ -324,7 +327,7 @@ export function BranchesSection({
                             <ConfirmButton
                               title="Force delete"
                               onConfirm={() => void deleteBranch(b.name, true)}
-                              armedLabel="Force delete"
+                              armedLabel="Confirm"
                             >
                               Force
                             </ConfirmButton>
@@ -339,8 +342,8 @@ export function BranchesSection({
                     {b.isCurrent ? (
                       <ConfirmButton
                         variant="neutral"
+                        compact
                         title="Rebase onto its upstream (or the default branch)"
-                        armedLabel="Rebase"
                         disabled={moving}
                         onConfirm={() => void moveHead(b.name, "rebase")}
                       >
@@ -388,10 +391,16 @@ export function BranchesSection({
                     >
                       <HistoryIcon size={13} />
                     </IconButton>
+                    {/* One arm-and-confirm, always forced: the title says what is
+                        at stake, so a refusal-then-Force second round trip adds
+                        nothing. A task-owned branch is deletable too — the
+                        backend only guards a still-resumable one, and the title
+                        names it. */}
                     <ConfirmButton
-                      title={blocked ?? "Delete branch"}
+                      compact
+                      title={blocked ?? deleteBranchTitle(b.mergeState, entry?.task?.id)}
                       disabled={blocked !== null}
-                      onConfirm={() => void deleteBranch(b.name)}
+                      onConfirm={() => void deleteBranch(b.name, true)}
                     >
                       <TrashIcon size={13} />
                     </ConfirmButton>

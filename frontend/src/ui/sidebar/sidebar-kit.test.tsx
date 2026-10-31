@@ -375,7 +375,10 @@ describe("SidebarRow hover actions do not shift layout", () => {
     };
     const base = rule(".sb-row-actions");
     expect(base).toContain("position: absolute");
-    expect(base).toContain("right: 100%");
+    // Pinned to the row's right edge (not hung off the trail's left edge), so
+    // the actions sit in one place whatever badges the row carries.
+    expect(base).toContain("right: 10px");
+    expect(base).not.toContain("right: 100%");
     expect(base).not.toContain("display: none");
     expect(css).not.toMatch(/\.sb-row:hover \.sb-row-actions[^{]*\{[^}]*display:/);
   });

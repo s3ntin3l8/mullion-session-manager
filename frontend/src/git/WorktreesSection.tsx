@@ -201,7 +201,7 @@ export function WorktreesSection({
                     <ConfirmButton
                       title="Force remove"
                       onConfirm={() => void remove(w.path, true)}
-                      armedLabel="Force remove"
+                      armedLabel="Confirm"
                     >
                       Force
                     </ConfirmButton>
@@ -221,7 +221,7 @@ export function WorktreesSection({
               <PlayTriangleIcon size={13} />
             </IconButton>
             {!w.isMain && (
-              <ConfirmButton title="Remove worktree" onConfirm={() => void remove(w.path)}>
+              <ConfirmButton compact title="Remove worktree" onConfirm={() => void remove(w.path)}>
                 <TrashIcon size={13} />
               </ConfirmButton>
             )}

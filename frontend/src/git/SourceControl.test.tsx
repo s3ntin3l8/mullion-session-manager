@@ -322,7 +322,8 @@ describe("Branches", () => {
     expect(screen.getByText("No branch matches the filter.")).toBeInTheDocument();
   });
 
-  it("locks a task branch up front, with the owning task, instead of failing on Delete", async () => {
+  it("lets a task branch be deleted, naming the task whose Retry it breaks", async () => {
+    m.deleteProjectGitBranch.mockResolvedValue({ deleted: true });
     seed({
       tasks: [
         makeTask({ id: 7, projectId: 1, branchName: "mullion/task-7-x", status: "in_progress" }),
@@ -332,7 +333,13 @@ describe("Branches", () => {
     await ready();
     const row = rowOf("mullion/task-7-x");
     expect(within(row).getByText(/#7 · /)).toBeInTheDocument();
-    expect(within(row).getByRole("button", { name: /Owned by task #7/ })).toBeDisabled();
+    const del = within(row).getByRole("button", { name: /owned by task #7; its Retry will break/ });
+    expect(del).toBeEnabled();
+    await userEvent.click(del);
+    await userEvent.click(within(row).getByRole("button", { name: /click again to confirm/ }));
+    await waitFor(() =>
+      expect(m.deleteProjectGitBranch).toHaveBeenCalledWith(1, "mullion/task-7-x", true),
+    );
   });
 
   it("renders session pills with status and opens the session", async () => {
@@ -362,13 +369,15 @@ describe("Branches", () => {
     m.deleteProjectGitBranch.mockResolvedValue({ deleted: true });
     renderView();
     await ready();
-    const del = within(rowOf("misc")).getByRole("button", { name: "Delete branch" });
+    const del = within(rowOf("misc")).getByRole("button", { name: /^Delete branch/ });
+    // Not known to be merged: the tooltip (and so the armed state) says so.
+    expect(del).toHaveAttribute("title", expect.stringContaining("may have unmerged commits"));
     await userEvent.click(del);
     expect(m.deleteProjectGitBranch).not.toHaveBeenCalled();
     await userEvent.click(
       within(rowOf("misc")).getByRole("button", { name: /click again to confirm/ }),
     );
-    await waitFor(() => expect(m.deleteProjectGitBranch).toHaveBeenCalledWith(1, "misc", false));
+    await waitFor(() => expect(m.deleteProjectGitBranch).toHaveBeenCalledWith(1, "misc", true));
     await waitFor(() => expect(m.getProjectGitBranches.mock.calls.length).toBeGreaterThan(1));
   });
 
@@ -378,13 +387,13 @@ describe("Branches", () => {
       .mockResolvedValueOnce({ deleted: true });
     renderView();
     await ready();
-    await userEvent.click(within(rowOf("misc")).getByRole("button", { name: "Delete branch" }));
+    await userEvent.click(within(rowOf("misc")).getByRole("button", { name: /^Delete branch/ }));
     await userEvent.click(
       within(rowOf("misc")).getByRole("button", { name: /click again to confirm/ }),
     );
     expect(await screen.findByText(/commits not merged/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Force" }));
-    await userEvent.click(screen.getByRole("button", { name: "Force delete" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
     await waitFor(() => expect(m.deleteProjectGitBranch).toHaveBeenLastCalledWith(1, "misc", true));
   });
 
@@ -392,7 +401,7 @@ describe("Branches", () => {
     m.deleteProjectGitBranch.mockRejectedValue(new Error("503 unreachable"));
     renderView();
     await ready();
-    await userEvent.click(within(rowOf("misc")).getByRole("button", { name: "Delete branch" }));
+    await userEvent.click(within(rowOf("misc")).getByRole("button", { name: /^Delete branch/ }));
     await userEvent.click(
       within(rowOf("misc")).getByRole("button", { name: /click again to confirm/ }),
     );
@@ -445,8 +454,10 @@ describe("Branches", () => {
     ).toBeDisabled();
     await userEvent.click(within(rowOf("main")).getByRole("button", { name: /Rebase onto/ }));
     expect(m.rebaseProjectGitBranch).not.toHaveBeenCalled();
-    // Armed, the button reads its confirm label.
-    await userEvent.click(within(rowOf("main")).getByRole("button", { name: "Rebase" }));
+    // Armed, the icon-sized button announces the confirm step in its title.
+    await userEvent.click(
+      within(rowOf("main")).getByRole("button", { name: /click again to confirm/ }),
+    );
     expect(
       await screen.findByText(/onto origin\/main conflicts in src\/a\.ts — aborted/),
     ).toBeInTheDocument();
@@ -711,7 +722,7 @@ describe("Worktrees", () => {
     await userEvent.click(within(section).getByRole("button", { name: /click again to confirm/ }));
     expect(await screen.findByText(/uncommitted changes/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Force" }));
-    await userEvent.click(screen.getByRole("button", { name: "Force remove" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
     await waitFor(() =>
       expect(m.removeProjectGitWorktree).toHaveBeenLastCalledWith(1, "/repo/.wt/old-done", true),
     );
@@ -875,7 +886,7 @@ describe("Branch detail", () => {
     await openDetail("misc");
     await userEvent.click(screen.getByRole("button", { name: /Delete…/ }));
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
-    await waitFor(() => expect(m.deleteProjectGitBranch).toHaveBeenCalledWith(1, "misc", false));
+    await waitFor(() => expect(m.deleteProjectGitBranch).toHaveBeenCalledWith(1, "misc", true));
     expect(await screen.findByText("Changes")).toBeInTheDocument();
   });
 
@@ -914,10 +925,12 @@ describe("Branch detail", () => {
     expect(screen.getByRole("button", { name: /Checkout/ })).toBeDisabled();
   });
 
-  it("locks delete for a task-owned branch and shows the owning task", async () => {
+  it("lets a task-owned branch be deleted, with the owning task in the warning", async () => {
     m.getProjectGitBranch.mockResolvedValue(detail({ name: "mullion/task-7-x", taskId: 7 }));
     await openDetail("mullion/task-7-x");
-    expect(screen.getByRole("button", { name: /Delete…/ })).toBeDisabled();
+    const del = screen.getByRole("button", { name: /Delete…/ });
+    expect(del).toBeEnabled();
+    expect(del).toHaveAttribute("title", expect.stringContaining("owned by task #7"));
     expect(screen.getAllByText(/#7 · /).length).toBeGreaterThan(0);
   });
 

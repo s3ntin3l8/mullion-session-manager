@@ -1,4 +1,4 @@
-import type { GitBranchOpReason, GitPullReason } from "../api/types.js";
+import type { GitBranchMergeState, GitBranchOpReason, GitPullReason } from "../api/types.js";
 
 // Issue #442 — reasons a branch-delete/worktree-remove refusal is worth
 // offering a Force retry for. Every other reason (invalid-name, no-such-
@@ -26,6 +26,23 @@ export function isDefaultBranchName(
 ): boolean {
   const resolved = defaultBranch?.replace(/^refs\/remotes\//, "").replace(/^origin\//, "");
   return resolved ? branchName === resolved : branchName === "main" || branchName === "master";
+}
+
+/**
+ * The delete-branch button's tooltip, which is also what the armed state
+ * shows on the second click. Deleting is a two-click force delete, so this is
+ * where the user is told what they are about to lose: a branch not known to be
+ * merged may hold commits that exist nowhere else, and a branch a resumable
+ * task still references loses that task's Retry.
+ */
+export function deleteBranchTitle(
+  mergeState: GitBranchMergeState | null | undefined,
+  taskId: number | null | undefined,
+): string {
+  const known =
+    mergeState === "ancestor" || mergeState === "pr-merged" || mergeState === "upstream-gone";
+  const base = known ? "Delete branch" : "Delete branch — it may have unmerged commits";
+  return taskId == null ? base : `${base} (owned by task #${taskId}; its Retry will break)`;
 }
 
 export function reasonMessage(reason: string | undefined, detail: string | undefined): string {
