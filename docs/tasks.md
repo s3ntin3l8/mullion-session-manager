@@ -647,7 +647,12 @@ are stored on the task (`model_override`, `reviewer_model`,
 `small_model_override`) and outrank every directive above, then the project
 default, then the install-wide default. Picking "Default" clears the choice.
 A choice is bound to an agent family: changing the agent (in the panel, or at
-claim/retry time) to another family clears it. A retry runs with the chosen
+claim/retry time) to another family clears it. Picking a model also records
+the agent that will run it (`agent` / `review_agent`, so the Agent dropdown
+flips from "Default" to that agent): later changes to the issue body's
+`Agent:` line, the project default or the install default no longer move the
+task until the agent is reset. For the same reason an explicit `agent: null`
+(or `reviewAgent: null`) sent in the same PATCH as a model is ignored. A retry runs with the chosen
 model. A small-model choice only reaches the reviewer when worker and
 reviewer run the same CLI family.
 

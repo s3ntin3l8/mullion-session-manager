@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { tasks } from "../db/schema.js";
+import { KNOWN_AGENTS } from "./agent-detect.js";
 import { commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
 import {
   resolveAgentCommand,
@@ -77,9 +78,9 @@ export function resolveTaskModelPatch(
   const effectiveAgent = body.agent !== undefined ? body.agent : existing.agent;
   const newWorker = workerFor(effectiveAgent);
   const oldReviewer = reviewerFor(existing.reviewAgent);
-  const newReviewer = reviewerFor(
-    body.reviewAgent !== undefined ? body.reviewAgent : existing.reviewAgent,
-  );
+  const effectiveReviewAgent =
+    body.reviewAgent !== undefined ? body.reviewAgent : existing.reviewAgent;
+  const newReviewer = reviewerFor(effectiveReviewAgent);
 
   const patch: Partial<typeof tasks.$inferInsert> = {};
   const settle = (
@@ -108,9 +109,13 @@ export function resolveTaskModelPatch(
       // The choice was validated against the agent that will run (body /
       // project / install tier when the column is unset). Pin that agent into
       // the column so a later drift of those tiers cannot silently drop the
-      // choice on retry (`workerAgentPinned`). Worker models only: the
-      // reviewer column has its own agent.
-      if (column !== "reviewerModel" && !workerAgentPinned(effectiveAgent)) {
+      // choice on retry (`workerAgentPinned`). The reviewer model pins
+      // `reviewAgent` the same way.
+      if (column === "reviewerModel") {
+        if (!(KNOWN_AGENTS as readonly string[]).includes(effectiveReviewAgent ?? "")) {
+          patch.reviewAgent = newCommand;
+        }
+      } else if (!workerAgentPinned(effectiveAgent)) {
         patch.agent = newCommand;
       }
       return null;

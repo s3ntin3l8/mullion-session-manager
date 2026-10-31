@@ -131,6 +131,18 @@ describe("PATCH /api/tasks/:id task-level models (#2491)", () => {
     await app.close();
   });
 
+  it("pins the review agent a reviewerModel was validated against", async () => {
+    const { app, id } = await setup("/tmp/task-models-pin-rev", {
+      body: "Do X.\n\nReviewAgent: codex\n",
+    });
+    const res = await patch(app, id, { reviewerModel: "gpt-5" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ reviewAgent: "codex", reviewerModel: "gpt-5" });
+    const again = await patch(app, id, { reviewAgent: null, reviewerModel: "gpt-5-mini" });
+    expect(again.json()).toMatchObject({ reviewAgent: "codex", reviewerModel: "gpt-5-mini" });
+    await app.close();
+  });
+
   it("409s once the task is past backlog/ready", async () => {
     const { app, id } = await setup("/tmp/task-models-6", { agent: "opencode" });
     app.db.update(tasks).set({ status: "in_progress" }).where(eq(tasks.id, id)).run();
