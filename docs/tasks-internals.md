@@ -899,9 +899,9 @@ push, post or comment anywhere, so a Hermes skill's posting how-to is never
 triggered. Mullion posts the one review, as `mullion-reviewer[bot]`. A reply
 that is not the findings JSON is **inconclusive** (see above), never a verdict.
 Observed against the review-bot profile with no extra skill: first and
-follow-up (changes-requested) rounds both ran, each 1-8 minutes and well inside
-the profile's 75-call turn budget, and nothing was posted under a Hermes
-identity. If a run ever does post, or stops answering in JSON, the fix belongs
+follow-up (changes-requested) rounds both ran, each 1-8 minutes and within the
+profile's 75-call turn budget (the worst observed was 67 calls, on a four-round
+task), and nothing was posted under a Hermes identity. If a run ever does post, or stops answering in JSON, the fix belongs
 in the Hermes host's own configuration (a contract skill delivered by its
 Ansible role), not in this repo.
 
