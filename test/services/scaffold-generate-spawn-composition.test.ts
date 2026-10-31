@@ -103,6 +103,52 @@ describe("defaultSpawnGenerationTurn — sandbox composition (issue #1081 covera
     expect(mainArgs).toContain("generate scaffold content");
   });
 
+  // Issue #2430 — an open, silent stdin pipe makes `claude -p` wait 3 s and
+  // print a "no stdin data received" warning on every turn.
+  it("closes the child's stdin so the agent never waits for input", async () => {
+    const end = vi.fn();
+    execFileMock.mockImplementationOnce((_f, _a, _o, cb) => {
+      cb(null, "", ""); // the capability probe
+      return {} as ChildProcess;
+    });
+    execFileMock.mockImplementationOnce((_f, _a, _o, cb) => {
+      cb(null, "generated output", "");
+      return { stdin: { end } } as unknown as ChildProcess;
+    });
+    await defaultSpawnGenerationTurn({
+      agentCommand: "claude",
+      cwd: scratchDir,
+      prompt: "p",
+      timeoutMs: 5000,
+    });
+    expect(end).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the exit code and the stdout tail of a failed turn, not just the stderr warning", async () => {
+    execFileMock.mockImplementationOnce((_f, _a, _o, cb) => {
+      cb(null, "", "");
+      return {} as ChildProcess;
+    });
+    execFileMock.mockImplementationOnce((_f, _a, _o, cb) => {
+      const err = Object.assign(new Error("Command failed: bwrap …"), { code: 1 });
+      cb(
+        err,
+        "Not logged in · Please run /login\n",
+        "Warning: no stdin data received in 3s, proceeding without it.\n",
+      );
+      return {} as ChildProcess;
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(
+      defaultSpawnGenerationTurn({
+        agentCommand: "claude",
+        cwd: scratchDir,
+        prompt: "p",
+        timeoutMs: 5000,
+      }),
+    ).rejects.toThrow(/exit code 1.*Not logged in/s);
+  });
+
   it("falls back to the unwrapped invocation when the capability probe reports unusable", async () => {
     smokeProbeSucceeds = false;
 

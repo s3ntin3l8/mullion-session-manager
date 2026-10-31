@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, type ExecException } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -1045,7 +1045,21 @@ function buildBwrapBaseArgs(
     // HOME. This is the mechanism that makes the narrowed binds actually
     // work: without it, the CLI would write to the real ~/.codex/ or
     // ~/.local/share/opencode/ regardless of what --bind-try targets.
-    ...(fakeHome ? ["--bind", fakeHome, fakeHome, "--setenv", "HOME", fakeHome] : []),
+    ...(fakeHome
+      ? [
+          "--bind",
+          fakeHome,
+          fakeHome,
+          "--setenv",
+          "HOME",
+          fakeHome,
+          // /tmp is read-only here (--ro-bind / /); point TMPDIR at a directory
+          // inside the writable fake HOME instead.
+          "--setenv",
+          "TMPDIR",
+          path.join(fakeHome, "tmp"),
+        ]
+      : []),
     "--die-with-parent",
   ];
 }
@@ -1185,6 +1199,13 @@ export function agentSandboxWritablePaths(
         ],
       };
     }
+    case "claude": {
+      // Claude Code's OAuth login. Without it the sandboxed turn starts logged
+      // out ("Not logged in · Please run /login", exit 1). Only this one file is
+      // seeded: the operator's real ~/.claude (settings, hooks, session
+      // history) is never bound into the sandbox.
+      return { dirs: [], files: [path.join(home, ".claude", ".credentials.json")] };
+    }
     default:
       return { dirs: [], files: [] };
   }
@@ -1247,6 +1268,8 @@ export function ensureSandboxWritablePathsExist(
     if (!p.startsWith(rootPrefix)) continue;
     try {
       fs.mkdirSync(path.dirname(p), { recursive: true });
+      // A symlink checked out of the repo must not redirect the placeholder.
+      if (!resolvesInside(root, path.dirname(p))) continue;
       // createFile if missing — not writeFileSync (which would clobber
       // existing content). `wx` fails with EEXIST if the file already
       // exists, which is the desired outcome.
@@ -1255,6 +1278,25 @@ export function ensureSandboxWritablePathsExist(
       // Best-effort — same degradation as the dir case above.
     }
   }
+}
+
+/** The credential files `createAgentSandboxHome` seeds into the disposable
+ * HOME and `persistAgentSandboxAuth` copies back (codex/opencode `auth.json`,
+ * claude `.credentials.json`). */
+/** True when `dir`, with every symlink resolved, is still inside `root`. */
+function resolvesInside(root: string, dir: string): boolean {
+  try {
+    const realRoot = fs.realpathSync(root);
+    const realDir = fs.realpathSync(dir);
+    return realDir === realRoot || realDir.startsWith(realRoot + path.sep);
+  } catch {
+    return false;
+  }
+}
+
+function isSeededCredentialFile(file: string): boolean {
+  const base = path.basename(file);
+  return base === "auth.json" || base === ".credentials.json";
 }
 
 /** Creates a disposable HOME directory inside the scratch worktree for a
@@ -1292,9 +1334,9 @@ export function createAgentSandboxHome(
   const fakeHome = path.join(worktreePath, ".agent-home");
   // MUST materialize .agent-home unconditionally — bwrap's `--bind`
   // (unlike `--bind-try`) refuses to start when its source is missing.
-  // For claude/agy the writablePaths list is empty (confirmed live to need
-  // none), so ensureSandboxWritablePathsExist alone wouldn't create it
-  // and every sandboxed claude/agy turn would hard-fail at bwrap startup.
+  // For agy the writablePaths list is empty (confirmed live to need none),
+  // so ensureSandboxWritablePathsExist alone wouldn't create it and every
+  // sandboxed agy turn would hard-fail at bwrap startup.
   // Best-effort: if the parent worktree doesn't exist or isn't writable
   // (e.g. in tests that pass a nonexistent cwd to exercise error paths),
   // bwrap's own spawn will surface the real failure — we don't mask it
@@ -1309,26 +1351,61 @@ export function createAgentSandboxHome(
     // Fall through — bwrap's --bind will produce the real error.
     homeReady = (err as NodeJS.ErrnoException).code === "EEXIST";
   }
+  // The scratch worktree is a checkout of the project repo, so `.agent-home`
+  // could be a tracked symlink. Seeding follows links, which would write the
+  // operator's credentials into a directory the repo chose: only a real
+  // directory is used as the sandbox HOME.
+  if (homeReady) {
+    try {
+      homeReady = fs.lstatSync(fakeHome).isDirectory();
+    } catch {
+      homeReady = false;
+    }
+  }
   const writablePaths = agentSandboxWritablePaths(agentCommand, fakeHome);
-  if (homeReady) ensureSandboxWritablePathsExist(writablePaths, fakeHome);
-  // Seed auth.json from the operator's real HOME if it exists — the CLI
-  // needs valid credentials to reach its model API. If the real auth
-  // doesn't exist (fresh host), the CLI will re-prompt or fail at auth,
-  // which is the correct degradation.
+  // Seed the real credentials BEFORE ensureSandboxWritablePathsExist: that call
+  // creates an empty placeholder for every file in `writablePaths.files` (bwrap
+  // needs a bind source), and the COPYFILE_EXCL copy below then fails with
+  // EEXIST on it, leaving a 0-byte credential file and an unauthenticated agent.
+  // The real credentials, if the agent has any, must win.
+  //
+  // Seed the real credentials from the operator's real HOME if they exist — the
+  // CLI needs valid credentials to reach its model API. If the real file doesn't
+  // exist (fresh host, or an API key in the environment instead), the CLI will
+  // re-prompt or fail at auth, which is the correct degradation; it is logged.
   const realHome = os.homedir();
-  for (const f of writablePaths.files) {
-    if (f.endsWith("auth.json")) {
-      const realAuth = f.replace(fakeHome, realHome);
+  if (homeReady) {
+    for (const f of writablePaths.files) {
+      if (!isSeededCredentialFile(f)) continue;
+      const realAuth = f.replace(fakeHome, () => realHome);
       try {
+        fs.mkdirSync(path.dirname(f), { recursive: true });
+        if (!resolvesInside(fakeHome, path.dirname(f))) continue;
         // COPYFILE_EXCL instead of an existsSync pre-check (CodeQL
-        // js/file-system-race, alert #301): a missing real auth throws
-        // ENOENT and an already-seeded sandbox copy throws EEXIST, both
-        // swallowed below — no check-then-use window.
+        // js/file-system-race, alert #301): a missing real file throws
+        // ENOENT and an already-seeded sandbox copy throws EEXIST — no
+        // check-then-use window.
         fs.copyFileSync(realAuth, f, fs.constants.COPYFILE_EXCL);
-      } catch {
-        // Best-effort — auth seeding failure degrades to auth error at
-        // CLI level, not a sandbox error.
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
+          console.warn(
+            "[scaffold-generate] no credentials seeded for %s from %s: %s",
+            agentCommand,
+            realAuth,
+            (err as Error).message,
+          );
+        }
       }
+    }
+    ensureSandboxWritablePathsExist(writablePaths, fakeHome);
+    // The sandboxed command's TMPDIR (see buildBwrapBaseArgs): /tmp is
+    // read-only inside the sandbox, and tools such as `tac` (used by the nvm
+    // CLI wrapper) write temp files there.
+    try {
+      const tmpDir = path.join(fakeHome, "tmp");
+      fs.mkdirSync(tmpDir, { recursive: true });
+    } catch {
+      // Best-effort — bwrap's own spawn surfaces a real failure.
     }
   }
   return { fakeHome, writablePaths };
@@ -1377,8 +1454,8 @@ export function persistAgentSandboxAuth(
 ): void {
   const realHome = os.homedir();
   for (const f of writablePaths.files) {
-    if (!f.endsWith("auth.json")) continue;
-    const realAuth = f.replace(fakeHome, realHome);
+    if (!isSeededCredentialFile(f)) continue;
+    const realAuth = f.replace(fakeHome, () => realHome);
     try {
       // Read both files first — no pre-flight existsSync check, which
       // would open a TOCTOU window (CodeQL js/file-system-race flagged
@@ -1574,6 +1651,67 @@ export function scaffoldGenerateBaseDir(): string {
   return path.join(os.tmpdir(), "mullion-scaffold-generate");
 }
 
+const FAILURE_LOG_TAIL_CHARS = 2000;
+const FAILURE_MESSAGE_TAIL_CHARS = 300;
+
+/** Noise an agent CLI prints that says nothing about why the turn failed. */
+const HARMLESS_STDERR_LINE = /^Warning: no stdin data received in \d+s/i;
+
+/** Credentials an agent turn could echo (it can read its own credentials file).
+ * Applied to every tail that is logged or put in the 502 message. */
+const SECRET_PATTERNS: RegExp[] = [
+  /sk-ant-[\w-]+/g,
+  /\beyJ[\w-]+\.[\w-]+\.[\w-]+/g,
+  /("?(?:access|refresh|id)_?[Tt]oken"?\s*[:=]\s*)"?[^"\s,}]+"?/g,
+  /\bBearer\s+[\w.~+/=-]+/gi,
+];
+
+export function redactSecrets(text: string): string {
+  let out = text;
+  for (const re of SECRET_PATTERNS) {
+    out = out.replace(re, (m, prefix) =>
+      typeof prefix === "string" ? `${prefix}"[redacted]"` : "[redacted]",
+    );
+  }
+  return out;
+}
+
+function tail(text: string | Buffer | undefined, max: number): string {
+  const t = redactSecrets((text ?? "").toString()).trim();
+  return t.length > max ? `…${t.slice(-max)}` : t;
+}
+
+type ExecFailure = Pick<ExecException, "code" | "killed" | "signal" | "message">;
+
+function describeExit(err: ExecFailure): string {
+  if (err.killed || err.signal) return `killed by ${err.signal ?? "a signal"}`;
+  if (typeof err.code === "number") return `exit code ${err.code}`;
+  // A spawn error (ENOENT, EACCES, …): the code alone says nothing, the message does.
+  return (err.message ?? "unknown error").split("\n")[0].slice(0, 200);
+}
+
+/** The message of a failed generation turn: how it ended, then the tail of what
+ * the CLI printed. stdout is included because `claude -p` reports its errors
+ * there ("Not logged in"), and known-harmless stderr lines are dropped so they
+ * cannot mask the real cause. Bounded: the message ends up in a 502 body. */
+export function describeSpawnFailure(
+  err: ExecFailure,
+  stdout: string | Buffer | undefined,
+  stderr: string | Buffer | undefined,
+): string {
+  const cleanedStderr = (stderr ?? "")
+    .toString()
+    .split("\n")
+    .filter((line) => !HARMLESS_STDERR_LINE.test(line.trim()))
+    .join("\n");
+  const parts = [describeExit(err)];
+  const out = tail(stdout, FAILURE_MESSAGE_TAIL_CHARS);
+  const errText = tail(cleanedStderr, FAILURE_MESSAGE_TAIL_CHARS);
+  if (out) parts.push(`stdout: ${out}`);
+  if (errText) parts.push(`stderr: ${errText}`);
+  return parts.join(" — ");
+}
+
 /** The real, production spawn — a bare, argv-array `execFile` (never a
  * shell string: the prompt embeds arbitrary repo-derived and DB-seed text,
  * so this avoids shell-injection risk entirely rather than relying on
@@ -1733,7 +1871,7 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
     maxBuffer: 16 * 1024 * 1024,
   };
   return new Promise<string>((resolve, reject) => {
-    execFile(invocation.bin, invocation.args, execOptions, (err, stdout, stderr) => {
+    const child = execFile(invocation.bin, invocation.args, execOptions, (err, stdout, stderr) => {
       // Copy back any rotated auth.json from the disposable HOME to the
       // real HOME — see persistAgentSandboxAuth's own comment for why
       // this matters for single-use refresh tokens. Done on both success
@@ -1743,11 +1881,24 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
         persistAgentSandboxAuth(sandboxHome.fakeHome, sandboxHome.writablePaths);
       }
       if (err) {
-        reject(new GenerationSpawnError(agentCommand, stderr?.trim() || err.message));
+        console.warn(
+          "[scaffold-generate] %s generation turn failed (%s)\nstdout tail: %s\nstderr tail: %s",
+          agentCommand,
+          describeExit(err),
+          tail(stdout, FAILURE_LOG_TAIL_CHARS),
+          tail(stderr, FAILURE_LOG_TAIL_CHARS),
+        );
+        reject(new GenerationSpawnError(agentCommand, describeSpawnFailure(err, stdout, stderr)));
         return;
       }
       resolve(stdout);
     });
+    // The child is never given input. An open, silent stdin pipe makes
+    // `claude -p` wait 3 s and print a "no stdin data received" warning.
+    // An instantly-dead child makes the write end of stdin fail with EPIPE;
+    // without a listener that surfaces as an unhandled 'error' event.
+    child?.stdin?.on?.("error", () => {});
+    child?.stdin?.end();
   });
 };
 
