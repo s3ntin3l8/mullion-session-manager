@@ -31,6 +31,15 @@ import {
 } from "./task-review-handle.js";
 import { notifyTaskNeedsAttention } from "./push-delivery.js";
 import {
+  dispatchTaskReview,
+  extractFindingsJson,
+  isUnsentRunId,
+  pollTaskReview,
+  stopHermesRunQuietly,
+  unsentRunId,
+} from "./hermes-task-review.js";
+import {
+  resolveReviewer,
   resolveReviewAgentCommand,
   commandSupportsSeed,
   resolveSeedDelivered,
@@ -677,6 +686,8 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
       and(
         eq(tasks.status, "reviewing"),
         isNull(tasks.reviewSessionId),
+        // A review dispatched to an external reviewer (#2369) is not "missing".
+        isNull(tasks.reviewRunId),
         // Exclude tasks with an in-flight auto-rebase attempt (which runs a worker
         // in task.worktreePath). Spawning a reviewer concurrently would put two autonomous
         // agent PTYs writing to one worktree simultaneously.
@@ -809,6 +820,7 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
               eq(tasks.id, task.id),
               eq(tasks.status, "reviewing"),
               isNull(tasks.reviewSessionId),
+              isNull(tasks.reviewRunId),
               or(
                 isNull(tasks.reviewSpawnClaimedAt),
                 lt(tasks.reviewSpawnClaimedAt, new Date(now - REVIEW_SPAWN_CLAIM_STALE_MS)),
@@ -828,6 +840,369 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
           reviewModel,
           reviewSmallModel,
         );
+      }
+    }),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Hermes as the review agent (#2369). A review there is an HTTP run stored on
+// the task (`reviewRunId`), not a session: `processHermesDispatch` starts it,
+// `processHermesRuns` polls it and feeds the reply through the same
+// `ingestReviewOutcome` a session review ends in.
+// ---------------------------------------------------------------------------
+
+// Dispatch keeps retrying while Hermes is unreachable; this long after the task
+// entered `reviewing` it gives up and records an inconclusive review, so the
+// one automatic re-arm (and then a human) takes over. No CLI fallback.
+const HERMES_DISPATCH_GIVE_UP_MS = 30 * 60_000;
+// A run that has not finished this long after it was dispatched is stopped.
+const HERMES_RUN_MAX_MS = 60 * 60_000;
+// Hermes forgets a run after its window; one "gone" answer could be a blip.
+const HERMES_GONE_POLLS = 3;
+// Process-local, like the draft-PR retry state: a restart only restarts the count.
+const HERMES_STATE_MAX_ENTRIES = 500;
+const hermesGonePolls = new Map<string, number>();
+const hermesDispatchFailures = new Map<number, number>();
+
+function bumpBounded<K>(map: Map<K, number>, key: K): number {
+  const next = (map.get(key) ?? 0) + 1;
+  if (!map.has(key) && map.size >= HERMES_STATE_MAX_ENTRIES) {
+    const oldest = map.keys().next();
+    if (!oldest.done) map.delete(oldest.value);
+  }
+  map.set(key, next);
+  return next;
+}
+
+/** Ends a round whose run never produced a reply, as an inconclusive review. */
+async function ingestHermesInconclusive(
+  app: FastifyInstance,
+  row: { task: typeof tasks.$inferSelect; project: typeof projects.$inferSelect },
+  runId: string,
+  reason: string,
+  now: number,
+): Promise<void> {
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  await ingestReviewOutcome(app, {
+    ...row,
+    parsed: null,
+    finished: false,
+    noFindingsReason: reason,
+    now,
+    backend: resolveBackend(app, resolveTaskWorkerHost(app, row.task)),
+    resolvedTaskMaster,
+    latch: { kind: "run", runId },
+    reviewedHeadSha: row.task.reviewRunHeadSha ?? undefined,
+    cleanupFindingsFile: async () => {},
+  });
+}
+
+/**
+ * Starts the review run for every `reviewing` task whose reviewer resolves to
+ * Hermes and which has none yet. Awaited AFTER `processPendingReviewSpawns`
+ * (same CI wait, same rebase hold-back, same claim slot), so a task that
+ * entered `reviewing` earlier in this tick is dispatched in it.
+ */
+async function processHermesDispatch(app: FastifyInstance): Promise<void> {
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  if (!resolvedTaskMaster.enabled) return;
+  const now = Date.now();
+  const rows = app.db
+    .select({ task: tasks, project: projects })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(
+      and(
+        eq(tasks.status, "reviewing"),
+        isNull(tasks.reviewSessionId),
+        isNull(tasks.reviewRunId),
+        isNotNull(tasks.prNumber),
+        or(
+          isNull(tasks.rebaseStartedAt),
+          lte(tasks.rebaseStartedAt, new Date(now - REBASE_ATTEMPT_STALE_MS)),
+        ),
+      ),
+    )
+    .all();
+  if (rows.length === 0) return;
+
+  await Promise.all(
+    rows.map(async ({ task, project }) => {
+      if (!task.worktreePath || task.prNumber === null) return;
+      const reviewer = resolveReviewer(app, {
+        taskReviewAgent: task.reviewAgent,
+        issueBody: task.body,
+        projectDefaultReviewAgent: project.defaultReviewAgent,
+      });
+      if (reviewer?.kind !== "hermes") return;
+
+      const ci = await resolveReviewCi(
+        app,
+        task,
+        project,
+        resolvedTaskMaster.reviewCiWaitMinutes,
+        now,
+      );
+      if (ci === "wait") return;
+
+      // Same claim slot and stale rule as the session spawn.
+      const claimed = app.db
+        .update(tasks)
+        .set({ reviewSpawnClaimedAt: new Date(now) })
+        .where(
+          and(
+            eq(tasks.id, task.id),
+            eq(tasks.status, "reviewing"),
+            isNull(tasks.reviewSessionId),
+            isNull(tasks.reviewRunId),
+            or(
+              isNull(tasks.reviewSpawnClaimedAt),
+              lt(tasks.reviewSpawnClaimedAt, new Date(now - REVIEW_SPAWN_CLAIM_STALE_MS)),
+            ),
+          ),
+        )
+        .run();
+      if (claimed.changes === 0) return;
+
+      const releaseClaim = (): void => {
+        app.db
+          .update(tasks)
+          .set({ reviewSpawnClaimedAt: null })
+          .where(and(eq(tasks.id, task.id), isNull(tasks.reviewRunId)))
+          .run();
+      };
+      try {
+        const repoRef = await resolveRepoRef(app, project);
+        if (!repoRef) throw new Error("the project's GitHub repository could not be resolved");
+        const headSha =
+          ci?.headSha ??
+          (await (async () => {
+            const token = await resolveGitHubToken(app, repoRef, "read");
+            if (!token) throw new Error("no GitHub token to read the pull request head");
+            return (
+              await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber!)
+            ).headSha;
+          })());
+        const priorRound = priorRoundFor(task);
+        const roundsRemaining = Math.max(
+          0,
+          resolveMaxAutoReturnRounds(project, resolvedTaskMaster.maxAutoReturnRounds) -
+            task.autoReturnRounds,
+        );
+        const prompt = buildReviewPrompt({
+          task,
+          ci,
+          roundsRemaining,
+          priorRound,
+          output: "reply",
+          workspace: "clone",
+          remote: {
+            owner: repoRef.owner,
+            repo: repoRef.repo,
+            headSha,
+            baseSha: priorRound?.reviewedSha ?? undefined,
+            prNumber: task.prNumber,
+          },
+        });
+        const run = await dispatchTaskReview(app, {
+          taskId: task.id,
+          round: task.autoReturnRounds,
+          rearms: task.inconclusiveReviewRearmCount,
+          target: {
+            owner: repoRef.owner,
+            repo: repoRef.repo,
+            prNumber: task.prNumber,
+            headSha,
+            baseSha: priorRound?.reviewedSha ?? undefined,
+          },
+          prompt,
+        });
+        const attached = app.db
+          .update(tasks)
+          .set({
+            reviewRunId: run.runId,
+            reviewRunDispatchedAt: new Date(now),
+            reviewRunHeadSha: headSha,
+            reviewSpawnClaimedAt: null,
+          })
+          .where(
+            and(
+              eq(tasks.id, task.id),
+              eq(tasks.status, "reviewing"),
+              isNull(tasks.reviewSessionId),
+              isNull(tasks.reviewRunId),
+            ),
+          )
+          .run();
+        if (attached.changes === 0) {
+          // The task moved on while the dispatch was in flight; nothing will
+          // ever read this run, so stop it rather than let it review for no one.
+          app.log.warn(
+            { taskId: task.id, runId: run.runId },
+            "task reconcile: task left 'reviewing' while its Hermes review was dispatching — stopping the orphaned run",
+          );
+          stopHermesRunQuietly(app, run.runId);
+          return;
+        }
+        hermesDispatchFailures.delete(task.id);
+        app.log.info(
+          { taskId: task.id, runId: run.runId, replayed: run.replayed },
+          "task reconcile: Hermes review dispatched",
+        );
+      } catch (err) {
+        releaseClaim();
+        const failures = bumpBounded(hermesDispatchFailures, task.id);
+        // First failure and then every tenth: a down Hermes would otherwise
+        // log once per task per tick.
+        if (failures === 1 || failures % 10 === 0) {
+          app.log.warn(
+            { err, taskId: task.id, failures },
+            "task reconcile: Hermes review dispatch failed — will retry",
+          );
+        }
+        const waitedMs = now - (task.reviewingAt?.getTime() ?? now);
+        if (waitedMs < HERMES_DISPATCH_GIVE_UP_MS) return;
+
+        // Give up: record an inconclusive review against a stand-in run id so
+        // the one automatic re-arm retries it.
+        const standIn = unsentRunId({
+          taskId: task.id,
+          round: task.autoReturnRounds,
+          rearms: task.inconclusiveReviewRearmCount,
+        });
+        const written = app.db
+          .update(tasks)
+          .set({
+            reviewRunId: standIn,
+            reviewRunDispatchedAt: new Date(now),
+            reviewRunHeadSha: null,
+          })
+          .where(
+            and(
+              eq(tasks.id, task.id),
+              eq(tasks.status, "reviewing"),
+              isNull(tasks.reviewSessionId),
+              isNull(tasks.reviewRunId),
+            ),
+          )
+          .run();
+        if (written.changes === 0) return;
+        hermesDispatchFailures.delete(task.id);
+        await ingestHermesInconclusive(
+          app,
+          { task: { ...task, reviewRunId: standIn, reviewRunHeadSha: null }, project },
+          standIn,
+          `Hermes could not be reached to start the review (${err instanceof Error ? err.message : String(err)})`,
+          now,
+        );
+      }
+    }),
+  );
+}
+
+/**
+ * Polls every in-flight Hermes review run and, once it has an outcome, ingests
+ * it. Awaited immediately BEFORE `processReviewingTasks`, so the auto-approve
+ * pass later in the same tick sees the verdict. Ungated by the setting and by
+ * the Task Master switch's reviewer choice: a run already in flight finishes
+ * even if Hermes was turned off since, and the poll needs only the stored URL
+ * and key. An unreadable run keeps waiting; the 60-minute cap bounds it.
+ */
+async function processHermesRuns(app: FastifyInstance): Promise<void> {
+  const now = Date.now();
+  const rows = app.db
+    .select({ task: tasks, project: projects })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(
+      and(
+        eq(tasks.status, "reviewing"),
+        isNotNull(tasks.reviewRunId),
+        or(isNull(tasks.reviewRunIngestedId), ne(tasks.reviewRunIngestedId, tasks.reviewRunId)),
+      ),
+    )
+    .all();
+  if (rows.length === 0) return;
+
+  await Promise.all(
+    rows.map(async (row) => {
+      const { task } = row;
+      const runId = task.reviewRunId;
+      if (runId === null || isUnsentRunId(runId)) return;
+      const dispatchedMs = task.reviewRunDispatchedAt?.getTime() ?? now;
+      const overdue = now - dispatchedMs >= HERMES_RUN_MAX_MS;
+      try {
+        const poll = await pollTaskReview(app, runId);
+
+        if (poll.gone) {
+          const seen = bumpBounded(hermesGonePolls, runId);
+          if (seen < HERMES_GONE_POLLS) return;
+          hermesGonePolls.delete(runId);
+          await ingestHermesInconclusive(
+            app,
+            row,
+            runId,
+            "Hermes no longer knows the review run",
+            now,
+          );
+          return;
+        }
+        hermesGonePolls.delete(runId);
+
+        if (!poll.terminal) {
+          if (!overdue) return;
+          stopHermesRunQuietly(app, runId);
+          await ingestHermesInconclusive(
+            app,
+            row,
+            runId,
+            "The Hermes review did not finish within 60 minutes",
+            now,
+          );
+          return;
+        }
+
+        let parsed: ReturnType<typeof parseReviewFindings> | null = null;
+        let reason = `The Hermes review ${poll.status}${poll.error ? `: ${poll.error}` : ""}`;
+        if (poll.status === "completed") {
+          const json = extractFindingsJson(poll.output ?? "");
+          if (json !== null) {
+            const candidate = parseReviewFindings(json, {
+              ignorePrevious: task.lastReviewVerdict === "approved-with-suggestions",
+            });
+            // An unstructured reply parses as a freeform changes-requested;
+            // from an external reviewer that is noise, not a verdict.
+            if (candidate.structured) parsed = candidate;
+          }
+          if (parsed === null) reason = "The Hermes reply was not the findings JSON";
+        }
+        await ingestReviewOutcome(app, {
+          ...row,
+          parsed,
+          finished: poll.status === "completed",
+          noFindingsReason: reason,
+          now,
+          backend: resolveBackend(app, resolveTaskWorkerHost(app, task)),
+          resolvedTaskMaster: resolveTaskMasterConfig(app),
+          latch: { kind: "run", runId },
+          reviewedHeadSha: task.reviewRunHeadSha ?? undefined,
+          cleanupFindingsFile: async () => {},
+        });
+      } catch (err) {
+        // Unreachable or erroring Hermes: keep waiting, unless the cap is up.
+        app.log.warn({ err, taskId: task.id, runId }, "task reconcile: Hermes review poll failed");
+        if (!overdue) return;
+        stopHermesRunQuietly(app, runId);
+        await ingestHermesInconclusive(
+          app,
+          row,
+          runId,
+          "The Hermes review could not be read within 60 minutes",
+          now,
+        ).catch((ingestErr: unknown) => {
+          app.log.warn({ err: ingestErr, taskId: task.id }, "task reconcile: Hermes ingest failed");
+        });
       }
     }),
   );
@@ -1738,6 +2113,9 @@ async function attemptAutoRebase(
   // the worktree it is running in. On a reviewing task's first auto-rebase,
   // rebaseStartedAt is null, but task.reviewSessionId points to the active reviewer.
   // Terminating it before removeWorktree avoids removing the cwd from under a live process.
+  // A Hermes review run is of the pre-rebase head and every path below clears
+  // its columns, so it is stopped here; it holds no worktree to wait for.
+  stopHermesRunQuietly(app, task.reviewRunId);
   if (task.reviewSessionId !== null) {
     const [reviewSession] = app.db
       .select()
@@ -5114,6 +5492,7 @@ async function reannounceInconclusiveReviewsAfterGrace(app: FastifyInstance): Pr
     // AFTER the CAS succeeds, not before: a lost race against a concurrent
     // approve/reject/give-up must not leave a session killed out from under
     // a row this sweep no longer actually touched.
+    stopHermesRunQuietly(app, staleReviewRunId);
     if (staleReviewSessionId !== null) {
       void killSession(app, staleReviewSessionId).catch((err) => {
         app.log.warn(
@@ -5181,6 +5560,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // its own `rows.length === 0` early return, or a reviewing task's
   // findings would never be processed on a tick with no claimed/in_progress
   // work at all.
+  await processHermesRuns(app);
   await processReviewingTasks(app);
   // Runs right after processReviewingTasks, same tick — both re-read from
   // the DB, so a verdict ingested earlier in this pass is already visible
@@ -5686,6 +6066,9 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                   );
                 });
               }
+              // A Hermes review run is superseded the same way (the write above
+              // nulled its columns unless the approval was carried).
+              if (!carryApproval) stopHermesRunQuietly(app, task.reviewRunId);
               recordTaskTransition(app, {
                 taskId: task.id,
                 projectId: project.id,
@@ -5729,4 +6112,5 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // previous tick decided to "wait" on (still `reviewSessionId IS NULL`
   // either way) — no separate leftover-specific pass needed.
   await processPendingReviewSpawns(app);
+  await processHermesDispatch(app);
 }

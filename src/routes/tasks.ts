@@ -26,6 +26,7 @@ import {
 import { deriveTaskBranchName } from "../services/git-worktree.js";
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
 import { resolveReviewer } from "../services/task-agent-resolve.js";
+import { stopHermesRunQuietly } from "../services/hermes-task-review.js";
 import { closeDraftPRForTask } from "../services/task-promote.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "../services/task-approve.js";
 import {
@@ -419,7 +420,9 @@ function withApprovalState<
   // for every row of the polled task list (done and archived included), so the
   // cheap checks come first.
   const canCarryPhase =
-    row.status === "reviewing" && row.reviewSessionId === null && typeof row.reviewRunId !== "string";
+    row.status === "reviewing" &&
+    row.reviewSessionId === null &&
+    typeof row.reviewRunId !== "string";
   return {
     ...rest,
     approvalState: deriveApprovalState(row, taskMasterEnabled),
@@ -886,6 +889,7 @@ export async function tasksRoute(app: FastifyInstance) {
     task: typeof tasks.$inferSelect,
     project: typeof projects.$inferSelect,
   ): Promise<{ worktreeRemoved: boolean; branchDeleted: boolean }> {
+    stopHermesRunQuietly(app, task.reviewRunId);
     for (const sessionId of new Set([task.sessionId, task.reviewSessionId])) {
       if (sessionId === null) continue;
       try {

@@ -6,6 +6,7 @@ import {
   isTerminal,
   postRun,
   resolveHermesConfig,
+  stopRun,
 } from "./hermes-client.js";
 import type { HermesRun, PostRunResult } from "./hermes-client.js";
 import { buildRelayTargetLines } from "./hermes-review.js";
@@ -167,4 +168,37 @@ export function extractFindingsJson(text: string): string | null {
     if (candidate !== null && parsesAsObject(candidate)) return candidate;
   }
   return null;
+}
+
+const UNSENT_RUN_PREFIX = "unsent:";
+
+/**
+ * The stand-in run id for a round whose dispatch never got through (Hermes
+ * unreachable past the give-up window). It is stored in `reviewRunId` so the
+ * round can be ingested as inconclusive and re-armed once; there is no run
+ * behind it, so nothing may poll or stop it.
+ */
+export function unsentRunId(r: TaskReviewRound): string {
+  return `${UNSENT_RUN_PREFIX}${r.taskId}:r${r.round}:x${r.rearms}`;
+}
+
+export function isUnsentRunId(runId: string): boolean {
+  return runId.startsWith(UNSENT_RUN_PREFIX);
+}
+
+/**
+ * Stops a review run that nothing points at any more, fire-and-forget like
+ * `killSession`: the caller has already cleared the task's handle, so a
+ * failure here only leaves a Hermes run to finish on its own. Null and
+ * synthetic ids are ignored.
+ */
+export function stopHermesRunQuietly(app: FastifyInstance, runId: string | null | undefined): void {
+  if (typeof runId !== "string" || isUnsentRunId(runId)) return;
+  void (async () => {
+    try {
+      await stopRun(resolveHermesConfig(app, { requireProvider: false }), runId);
+    } catch (err) {
+      app.log.warn({ err, runId }, "task reconcile: failed to stop the Hermes review run");
+    }
+  })();
 }

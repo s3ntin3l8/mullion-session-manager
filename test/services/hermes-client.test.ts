@@ -24,9 +24,12 @@ import {
   buildTaskReviewMessage,
   dispatchTaskReview,
   extractFindingsJson,
+  isUnsentRunId,
   pollTaskReview,
+  stopHermesRunQuietly,
   taskReviewIdempotencyKey,
   taskReviewSessionId,
+  unsentRunId,
 } from "../../src/services/hermes-task-review.js";
 import { reviewIdempotencyKey, reviewSessionId } from "../../src/services/hermes-review.js";
 
@@ -375,5 +378,90 @@ describe("extractFindingsJson", () => {
     expect(extractFindingsJson('{"a": "unterminated}')).toBeNull();
     expect(extractFindingsJson("")).toBeNull();
     expect(extractFindingsJson("   \n ")).toBeNull();
+  });
+});
+
+describe("a review run that never was, and stopping one without waiting (#2369)", () => {
+  let app: Awaited<ReturnType<typeof buildApp>>;
+  const dbFile = path.join(os.tmpdir(), `hermes-stop-test-${process.pid}.db`);
+  const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+  beforeAll(async () => {
+    fs.rmSync(dbFile, { force: true });
+    process.env.DATABASE_URL = `file:${dbFile}`;
+    app = await buildApp();
+  });
+
+  afterAll(async () => {
+    await app.close();
+    closeDb();
+    fs.rmSync(dbFile, { force: true });
+    delete process.env.DATABASE_URL;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    clearHermesKey(app);
+  });
+
+  it("names the stand-in run by task, round and re-arm count, and recognises it", () => {
+    const id = unsentRunId({ taskId: 7, round: 2, rearms: 1 });
+    expect(id).toBe("unsent:7:r2:x1");
+    expect(isUnsentRunId(id)).toBe(true);
+    expect(isUnsentRunId("run_abc")).toBe(false);
+  });
+
+  it("ignores a missing or stand-in run id without touching the network", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    stopHermesRunQuietly(app, null);
+    stopHermesRunQuietly(app, undefined);
+    stopHermesRunQuietly(app, "unsent:7:r0:x0");
+    await flush();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("stops a real run with the stored URL and key, whatever the relay provider is", async () => {
+    applySettingsPatch(app, {
+      reviewRelay: { provider: "none", apiUrl: API, model: "", modelProvider: "" },
+    });
+    setHermesKey(app, "sekret-key"); // pragma: allowlist secret
+    const fetchMock = vi.fn(async () => json({ status: "stopping" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    stopHermesRunQuietly(app, "run_9");
+    await flush();
+    await flush();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((fetchMock.mock.calls[0] as unknown as [string])[0]).toBe(`${API}/v1/runs/run_9/stop`);
+  });
+
+  it("swallows and logs a failure, so the caller's lifecycle step is never blocked", async () => {
+    applySettingsPatch(app, {
+      reviewRelay: { provider: "none", apiUrl: API, model: "", modelProvider: "" },
+    });
+    setHermesKey(app, "sekret-key"); // pragma: allowlist secret
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("", { status: 500 })),
+    );
+    const warn = vi.spyOn(app.log, "warn");
+
+    expect(() => stopHermesRunQuietly(app, "run_9")).not.toThrow();
+    await flush();
+    await flush();
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: "run_9" }),
+      "task reconcile: failed to stop the Hermes review run",
+    );
+  });
+
+  it("swallows a Hermes that is not configured at all", async () => {
+    const warn = vi.spyOn(app.log, "warn");
+    expect(() => stopHermesRunQuietly(app, "run_9")).not.toThrow();
+    await flush();
+    expect(warn).toHaveBeenCalled();
   });
 });
