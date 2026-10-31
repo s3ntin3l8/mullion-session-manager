@@ -79,46 +79,74 @@ describe("mullion-review-invariants reference index", () => {
     }
   });
 
-  it("names only code symbols that still exist (a rename must update the note)", () => {
-    // Line numbers are not cited, so the other way a note rots is a renamed or
-    // removed symbol that it keeps describing. Every identifier-shaped
-    // backticked token (camelCase, UPPER_CASE or snake_case, an optional `()`
-    // dropped) has to appear in the code, with the same loudness as a dead glob.
-    const symbols = new Set<string>();
+  it(
+    "names only code symbols that still exist (a rename must update the note)",
+    { timeout: 60_000 },
+    () => {
+      // Line numbers are not cited, so the other way a note rots is a renamed or
+      // removed symbol that it keeps describing. Every identifier-shaped
+      // backticked token (camelCase, UPPER_CASE or snake_case, an optional `()`
+      // dropped) has to appear in the code, with the same loudness as a dead glob.
+      const symbols = new Set<string>();
+      for (const { ref } of index) {
+        const text = fs.readFileSync(path.join(root, ref), "utf8");
+        for (const m of text.matchAll(/`([^`\n]+)`/g)) {
+          const token = m[1].trim().replace(/\(\)$/, "");
+          if (
+            /^[A-Za-z_]\w*$/.test(token) &&
+            (/[A-Z]/.test(token.slice(1)) || token.includes("_"))
+          ) {
+            symbols.add(token);
+          }
+        }
+      }
+      let found = "";
+      try {
+        found = execFileSync(
+          "git",
+          [
+            "grep",
+            "-h",
+            "-o",
+            "-w",
+            "-F",
+            ...[...symbols].flatMap((s) => ["-e", s]),
+            "--",
+            "src",
+            "scripts",
+            "test",
+            "frontend/src",
+            "drizzle",
+          ],
+          { cwd: root, encoding: "utf8", env: gitEnv(), maxBuffer: 64 * 1024 * 1024 },
+        );
+      } catch {
+        // git grep exits 1 when nothing matched; every symbol is then missing.
+      }
+      const present = new Set(found.split("\n"));
+      expect([...symbols].filter((s) => !present.has(s)).sort()).toEqual([]);
+    },
+  );
+
+  it("cites only file paths that exist (a renamed file must update the note)", () => {
+    // The symbol check does not see a path written in prose: renaming a file
+    // would leave the note pointing at nothing with a green build. Every
+    // backticked token that is a repo-relative file path (a directory prefix
+    // and a source extension; globs, URLs and bare file names are not) has to
+    // be a tracked file.
+    const trackedSet = new Set(tracked);
+    const pathLike = /^[\w.@-]+(\/[\w.@-]+)+\.(ts|tsx|mts|mjs|js|json|md|css|yml|yaml|sh|sql)$/;
+    const missing: string[] = [];
     for (const { ref } of index) {
       const text = fs.readFileSync(path.join(root, ref), "utf8");
       for (const m of text.matchAll(/`([^`\n]+)`/g)) {
-        const token = m[1].trim().replace(/\(\)$/, "");
-        if (/^[A-Za-z_]\w*$/.test(token) && (/[A-Z]/.test(token.slice(1)) || token.includes("_"))) {
-          symbols.add(token);
+        const token = m[1].trim();
+        if (pathLike.test(token) && !trackedSet.has(token)) {
+          missing.push(`${path.basename(ref)}: ${token}`);
         }
       }
     }
-    let found = "";
-    try {
-      found = execFileSync(
-        "git",
-        [
-          "grep",
-          "-h",
-          "-o",
-          "-w",
-          "-F",
-          ...[...symbols].flatMap((s) => ["-e", s]),
-          "--",
-          "src",
-          "scripts",
-          "test",
-          "frontend/src",
-          "drizzle",
-        ],
-        { cwd: root, encoding: "utf8", env: gitEnv(), maxBuffer: 64 * 1024 * 1024 },
-      );
-    } catch {
-      // git grep exits 1 when nothing matched; every symbol is then missing.
-    }
-    const present = new Set(found.split("\n"));
-    expect([...symbols].filter((s) => !present.has(s)).sort()).toEqual([]);
+    expect(missing).toEqual([]);
   });
 
   it("answers a task-reconciler diff with the task-loop references and an unrelated diff with none", () => {
