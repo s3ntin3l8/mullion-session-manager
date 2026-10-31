@@ -268,6 +268,11 @@ describe("ProjectSetupPanel", () => {
         expect(desc).not.toBeNull();
         expect(desc).toHaveTextContent(/everything else stays as written/);
         expect(radiogroup.contains(desc)).toBe(false);
+        const row = radiogroup.closest(".settings-row");
+        expect(row).toHaveStyle({ flexWrap: "wrap" });
+        expect(row?.querySelector(".settings-row-text")).toHaveStyle({
+          minWidth: "min(100%, 230px)",
+        });
 
         await user.click(screen.getByLabelText("Tell me about conflicts"));
         expect(desc).toHaveTextContent(/Nothing is rewritten/);
