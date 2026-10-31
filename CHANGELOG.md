@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.3.56](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.55...v0.3.56) (2026-10-31)
+
+
+### Features
+
+* **git:** keep Mullion-managed checkouts on remote hosts fetched ([0ceb2f0](https://github.com/s3ntin3l8/mullion-session-manager/commit/0ceb2f022e0f77eab228cc2bf45c0742583bb89f))
+* **hosts:** git/GitHub auth for sessions on remote hosts ([631872d](https://github.com/s3ntin3l8/mullion-session-manager/commit/631872d5b567b44909b391ef96b216727bbdd5fb))
+* **placement:** materialize a checkout on first placement to a host ([c96fe20](https://github.com/s3ntin3l8/mullion-session-manager/commit/c96fe20842d672b9c4a96feb7480b177396ca284))
+* **projects:** per-project setup recipe after clone and worktree cut ([#2398](https://github.com/s3ntin3l8/mullion-session-manager/issues/2398)) ([0a43cbe](https://github.com/s3ntin3l8/mullion-session-manager/commit/0a43cbe3efd335af8f1a21b78547892373b2cb4d))
+* **skills:** a review-reference index and lookup script, with the task review loop references ([#2444](https://github.com/s3ntin3l8/mullion-session-manager/issues/2444)) ([2731ea2](https://github.com/s3ntin3l8/mullion-session-manager/commit/2731ea218d0d991f1b52706568768ad2dc8d6575))
+* **skills:** review references for settings, routes, dock and frontend state ([#2462](https://github.com/s3ntin3l8/mullion-session-manager/issues/2462)) ([e4ed7c3](https://github.com/s3ntin3l8/mullion-session-manager/commit/e4ed7c3326cc5efcb2059b86607dc51bc62f6e95))
+* **skills:** review references for the rest of the task loop, boot, sessions and hosts ([#2455](https://github.com/s3ntin3l8/mullion-session-manager/issues/2455)) ([ad81e48](https://github.com/s3ntin3l8/mullion-session-manager/commit/ad81e484388f0df32b1a5acb8c1517a250266d36))
+* **tasks:** a Tasks tab in the right sidebar; fold Task Master into the GitHub rows ([#2463](https://github.com/s3ntin3l8/mullion-session-manager/issues/2463)) ([c760aa5](https://github.com/s3ntin3l8/mullion-session-manager/commit/c760aa572eb968fc088c1cf2772e97bd6a8c4cc6))
+* **tasks:** Hermes as a Task Master review agent ([#2420](https://github.com/s3ntin3l8/mullion-session-manager/issues/2420)) ([81515ec](https://github.com/s3ntin3l8/mullion-session-manager/commit/81515ec825da64d8f148062f7c6188876e43fdb1))
+* **uiux:** show and choose the Hermes reviewer ([ab996ea](https://github.com/s3ntin3l8/mullion-session-manager/commit/ab996eaab99b39886c932938e562f614c515d7a0))
+
+
+### Bug Fixes
+
+* **deploy:** pin the install test's PATH and report a failed other-role plist removal ([6fc4ff1](https://github.com/s3ntin3l8/mullion-session-manager/commit/6fc4ff15346b78298e0ad6d3fc266591225f0746))
+* **github:** the GitHub rail icon opens the list, not the attention PR ([#2445](https://github.com/s3ntin3l8/mullion-session-manager/issues/2445)) ([953337b](https://github.com/s3ntin3l8/mullion-session-manager/commit/953337b67d065d1ba9c7c3137694949a86da643c))
+* **git:** the git-doctor fsck-timeout test races a 1 ms window ([1fb5953](https://github.com/s3ntin3l8/mullion-session-manager/commit/1fb59531558414e18c2f844671cef273af46d709))
+* **scaffold:** make sandboxed generation turns work for claude and codex ([#2436](https://github.com/s3ntin3l8/mullion-session-manager/issues/2436)) ([83b6918](https://github.com/s3ntin3l8/mullion-session-manager/commit/83b691887d228cab70334542ae176a7fa56ac6fb))
+* **tasks:** a Hermes review re-requested at the same head replays the old run ([e96b454](https://github.com/s3ntin3l8/mullion-session-manager/commit/e96b454f31c3a2bae7e82a2d5d715f7c585fd504))
+* **tasks:** an issue closed by a merged PR marks its unclaimed task done, not failed ([6f1e536](https://github.com/s3ntin3l8/mullion-session-manager/commit/6f1e536358bfd8ba858c142b830aa5da05153394))
+* **tasks:** reconcile ambiguous merge timeouts before reporting failure ([f69a57b](https://github.com/s3ntin3l8/mullion-session-manager/commit/f69a57b738dadca8249024f42a5a8ab4ad25a026))
+* **tasks:** review prompt treats defects found by reading as warnings and carries a review method ([ee432fc](https://github.com/s3ntin3l8/mullion-session-manager/commit/ee432fc12a3671bcef0285250f5e0bf3de22beee))
+* **tasks:** stop swallowing the git-status and check-run failures ([#2460](https://github.com/s3ntin3l8/mullion-session-manager/issues/2460)) ([1225278](https://github.com/s3ntin3l8/mullion-session-manager/commit/12252789eb28beccfaed713c2203c916a9db459b))
+
 ## [0.3.55](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.54...v0.3.55) (2026-10-31)
 
 
