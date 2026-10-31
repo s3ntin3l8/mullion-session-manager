@@ -138,6 +138,24 @@ describe("retryTask task-level model (#2491)", () => {
     expect((await retryTask(app, pinned)).ok).toBe(true);
     expect(load(pinned)).toMatchObject({ agent: "codex", modelOverride: "gpt-5", model: "gpt-5" });
 
+    // A body that gains `Agent: codex` (watcher re-sync / plain body PATCH) does
+    // not revalidate the override, so it must not count as a pin: the opencode
+    // model is cleared rather than handed to codex.
+    const bodyDrift = await failedTask(75, "");
+    app.db
+      .update(tasks)
+      .set({
+        agent: null,
+        agentCommand: "opencode",
+        modelOverride: "openrouter/foo",
+        smallModelOverride: "openrouter/bar",
+        body: "Do X.\n\nAgent: codex\n",
+      })
+      .where(eq(tasks.id, bodyDrift))
+      .run();
+    expect((await retryTask(app, bodyDrift)).ok).toBe(true);
+    expect(load(bodyDrift)).toMatchObject({ modelOverride: null, smallModelOverride: null });
+
     const changed = await failedTask(72, "claude");
     expect((await retryTask(app, changed, { agent: "codex" })).ok).toBe(true);
     expect(load(changed)).toMatchObject({ agent: "codex", modelOverride: null });

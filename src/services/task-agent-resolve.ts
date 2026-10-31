@@ -23,14 +23,17 @@ function parseDirectiveLine(body: string | null, re: RegExp): string | null {
   return match ? match[1] : null;
 }
 
-/** True when the task's own `agent` or the issue body's `Agent:` line names
- * a known agent — i.e. the worker is pinned and neither the project nor the
- * install default can move it (issue #2491's family-drift guard keys off it). */
-export function workerAgentPinned(taskAgent: string | null, issueBody: string | null): boolean {
-  const known = KNOWN_AGENTS as readonly string[];
-  if (taskAgent && known.includes(taskAgent)) return true;
-  const fromIssue = parseDirectiveLine(issueBody, AGENT_LINE_RE);
-  return fromIssue !== null && known.includes(fromIssue);
+/** True when the task's own `agent` column names a known agent — i.e. the
+ * worker is pinned and neither the issue body, the project nor the install
+ * default can move it (issue #2491's family-drift guard keys off it).
+ *
+ * Only the `agent` COLUMN counts: its sole writer is the PATCH handler in
+ * routes/tasks.ts (and the claim route's enqueue path), which always runs
+ * `resolveTaskModelPatch`, so a stored override was validated against it. The
+ * issue body's `Agent:` line is re-synced by the watcher and editable by a
+ * plain body PATCH without any model revalidation, so it must not count. */
+export function workerAgentPinned(taskAgent: string | null): boolean {
+  return !!taskAgent && (KNOWN_AGENTS as readonly string[]).includes(taskAgent);
 }
 
 /**

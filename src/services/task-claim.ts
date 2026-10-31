@@ -1589,7 +1589,7 @@ function agentChangeModelClears(
   if (
     task.agentCommand !== null &&
     (task.modelOverride || task.smallModelOverride) &&
-    !workerAgentPinned(effectiveAgent, task.body)
+    !workerAgentPinned(effectiveAgent)
   ) {
     const next = resolveAgentCommand(app, {
       taskAgent: effectiveAgent,
