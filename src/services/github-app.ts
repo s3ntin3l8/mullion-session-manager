@@ -318,8 +318,36 @@ export const WORKFLOW_WRITE_PERMISSIONS = {
   workflows: "write",
 } as const;
 
+// #2246 — what a Task Master WORKER session's own git/gh holds. Issues write
+// (follow-up issues) but contents/pull_requests only read: the credential
+// helper hands this token to any `git` in the session, so it must not be able
+// to push around the task push block (GIT_CONFIG_TASK_PUSH_BLOCK_ENV).
+export const SESSION_WORK_PERMISSIONS = {
+  issues: "write",
+  contents: "read",
+  pull_requests: "read",
+  metadata: "read",
+} as const;
+// #2246 — a REVIEWER session's token: read-only, minted from the reviewer App
+// first and the main App second (`resolveSessionReadToken`).
+export const SESSION_READ_PERMISSIONS = {
+  issues: "read",
+  contents: "read",
+  pull_requests: "read",
+  metadata: "read",
+} as const;
+
 export type InstallationTokenScope =
-  "write" | "read" | "issues" | "dispatch" | "review" | "checks" | "checks-read" | "workflows";
+  | "write"
+  | "read"
+  | "issues"
+  | "dispatch"
+  | "review"
+  | "checks"
+  | "checks-read"
+  | "workflows"
+  | "session-work"
+  | "session-read";
 
 function permissionsForScope(scope: InstallationTokenScope): Record<string, string> {
   switch (scope) {
@@ -339,6 +367,10 @@ function permissionsForScope(scope: InstallationTokenScope): Record<string, stri
       return CHECKS_READ_PERMISSIONS;
     case "workflows":
       return WORKFLOW_WRITE_PERMISSIONS;
+    case "session-work":
+      return SESSION_WORK_PERMISSIONS;
+    case "session-read":
+      return SESSION_READ_PERMISSIONS;
   }
 }
 
@@ -639,6 +671,23 @@ export async function getInstallationToken(
     }
     throw err;
   }
+}
+
+/**
+ * When the cached installation token for this key stops being valid, if it is
+ * the very `token` given (a PAT fallback or a token minted since is not).
+ * Lets the session-credential refresher renew an App token before it expires
+ * without a second return channel on `getInstallationToken`.
+ */
+export function peekInstallationTokenExpiry(
+  appId: string,
+  scope: Exclude<InstallationTokenScope, "workflows">,
+  owner: string,
+  repo: string,
+  token: string,
+): number | undefined {
+  const cached = tokenCache.get(cacheKey(appId, scope, owner, repo));
+  return cached?.ok && cached.token === token ? cached.expiresAt.getTime() : undefined;
 }
 
 /**

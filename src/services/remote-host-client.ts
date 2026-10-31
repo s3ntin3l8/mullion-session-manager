@@ -1,5 +1,6 @@
 import { renderScrollback } from "./scrollback-render.js";
 import type { GitIdentity } from "./git-env.js";
+import type { SessionGithubAuth } from "./session-github-token.js";
 import type { TerminalPalette } from "./terminal-query-reply.js";
 import type { TranscriptQuery, TranscriptResult } from "./session-transcript.js";
 import type { FastifyInstance } from "fastify";
@@ -420,6 +421,8 @@ export interface SessionTarget {
   // and forwarded to a remote host verbatim: it becomes user.name/user.email in
   // the session's numbered GIT_CONFIG_* env (session-env.ts buildGitConfigEnv).
   gitIdentity?: GitIdentity;
+  // #2246 — for spawn() only; see CreateSessionOptions.githubAuth.
+  githubAuth?: SessionGithubAuth;
   projectId?: number;
   // Issue #822 — see CreateSessionBody.env's own doc comment
   // (session-lifecycle.ts). Unlike initialPrompt/seedPrompt, this DOES
@@ -1770,6 +1773,17 @@ export class RemoteHostClient {
       },
       GIT_WORKTREE_RESUME_REQUEST_TIMEOUT_MS,
     );
+  }
+
+  /** #2246 — re-send a session's GitHub token before it expires. The route
+   * 404s for a session the host no longer tracks, which is reported like any
+   * other failed request. */
+  async sendSessionGithubAuth(sessionId: string, auth: SessionGithubAuth): Promise<void> {
+    await this.request(`/internal/sessions/${encodeURIComponent(sessionId)}/github-auth`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(auth),
+    });
   }
 
   async spawn(opts: SpawnSessionOptions): Promise<SpawnResult> {

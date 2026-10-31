@@ -32,7 +32,14 @@ import { resolveBackend, warnHostError, type SpawnOpts } from "./session-backend
 import { reclaimSessionWorktree } from "./session-worktree-reclaim.js";
 import { listWorktrees } from "./git-refs.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
-import { resolveHostBaseRef, viaRemote } from "./host-git.js";
+import { resolveHostBaseRef, resolveRepoRef, viaRemote } from "./host-git.js";
+import {
+  resolveSessionGithubAuth,
+  trackSessionGithubAuth,
+  untrackSessionGithubAuth,
+  type SessionGithubRole,
+} from "./session-github-auth.js";
+import type { SessionGithubAuth } from "./session-github-token.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { resolveSessionHostId } from "./session-live-info.js";
 import {
@@ -390,6 +397,12 @@ export type CreateSessionParams = CreateSessionBody & {
   // is a property of the CALLER (Task Master spawn sites), not of the user.
   // Same posture as `taskId` above.
   unattended?: boolean;
+  // #2246 — which GitHub identity the session's own git/gh acts as, for a
+  // session with a `taskId`: the review agent is `"reviewer"` (read-only,
+  // reviewer App first), every other Task Master session is a `"worker"`
+  // (the default). Without a `taskId` the session is manual (the user's
+  // account). Same posture as `taskId`: set by the spawn sites, never a route.
+  taskRole?: "worker" | "reviewer";
   // Issue #1724 / roadmap 8.10 — "this session MUST run on this host",
   // bypassing the placement policy entirely.
   //
@@ -1256,6 +1269,9 @@ async function createSessionRecordInner(
     sessionSettings,
     placement,
   );
+  // #2246 — resolved here, not in resolveSpawnInputs: it needs the network
+  // (App token mint) and, for a remote host, tracking for refresh.
+  spawnOpts.githubAuth = await resolveSpawnGithubAuth(app, project, params, created.id, placementHost);
   const spawned = await spawnOrRollback(app, project, created.id, spawnOpts, rb, placementHost);
   if (!spawned.ok) return spawned.result;
 
@@ -1681,6 +1697,31 @@ async function resolveSpawnInputs(
   };
 }
 
+// #2246 — the GitHub credential for the session's own git/gh. Never throws: a
+// failure to resolve is a session with no token (the helper then says what to
+// do), not a failed spawn.
+async function resolveSpawnGithubAuth(
+  app: FastifyInstance,
+  project: ProjectRow,
+  params: CreateSessionParams,
+  sessionId: number,
+  placementHost: string,
+): Promise<SessionGithubAuth | undefined> {
+  try {
+    const role: SessionGithubRole =
+      params.taskId === undefined ? "manual" : (params.taskRole ?? "worker");
+    // A repo is only needed for an App token; the user's token is not scoped.
+    const repo = role === "manual" ? null : await resolveRepoRef(app, project);
+    const input = { role, repo };
+    const auth = await resolveSessionGithubAuth(app, input);
+    trackSessionGithubAuth(String(sessionId), placementHost, input, auth);
+    return auth;
+  } catch (err) {
+    app.log.warn({ err, sessionId }, "could not resolve a GitHub credential for the session");
+    return undefined;
+  }
+}
+
 // Spawns the session; on failure unwinds everything this create made (see
 // the catch). On success also logs the version-skew diagnostics.
 async function spawnOrRollback(
@@ -1765,6 +1806,7 @@ async function spawnOrRollback(
     // its hookToken -> id entry until the process restarts. A no-op for the
     // remote case.
     app.pty.kill(String(sessionId));
+    untrackSessionGithubAuth(String(sessionId));
     // B9 — the row itself is deleted right below, so this id is genuinely
     // done: discard any stashed seed too rather than leaking it forever
     // (see PtyManager.discardPendingSeed's own doc comment for why kill()
@@ -1911,6 +1953,8 @@ export async function killSession(
 ): Promise<typeof sessions.$inferSelect | null> {
   const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
   if (!row) return null;
+  // #2246 — the session is ending: stop renewing its GitHub token.
+  untrackSessionGithubAuth(String(sessionId));
 
   if (cascade === "kill") {
     const liveChildren = app.db

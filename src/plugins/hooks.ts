@@ -30,6 +30,8 @@ import { readSessionWorkflowConventions } from "../services/workflow-conventions
 import { isAuthEnabled } from "../services/auth.js";
 import { commandIsMcode } from "../services/hook-adapters/index.js";
 import { reclaimSocketPath } from "../services/unix-socket.js";
+import { buildGithubTokenReply, getSessionGithubAuth } from "../services/session-github-token.js";
+import { recoverLocalSessionGithubAuth } from "../services/session-github-auth.js";
 
 // Issue #271, option 2 — the decision a human ultimately reaches for a
 // pending `promote_request` (POST /api/sessions/:id/promote or
@@ -692,6 +694,26 @@ function handleConnection(
             if (socket.writable) {
               socket.write(`${JSON.stringify({ error: (err as Error).message })}\n`);
             }
+          }
+          continue;
+        }
+
+        // #2246 — a session's git credential helper / `gh` wrapper asking for
+        // ITS OWN GitHub token. Answered inline from the in-memory store and
+        // never emitted as a session event; `sessionId` came from the
+        // handshake token, so another session's entry is unreachable. Always
+        // replies at once (a miss is an actionable `{error}`, never a hang).
+        if (result.message.kind === "github_token") {
+          let auth = getSessionGithubAuth(sessionId);
+          if (!auth) {
+            try {
+              auth = await recoverLocalSessionGithubAuth(app, sessionId);
+            } catch (err) {
+              app.log.warn({ err, sessionId }, "could not recover a session's GitHub token");
+            }
+          }
+          if (socket.writable) {
+            socket.write(`${JSON.stringify(buildGithubTokenReply(auth))}\n`);
           }
           continue;
         }

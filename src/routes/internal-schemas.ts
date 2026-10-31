@@ -1,3 +1,4 @@
+import type { SessionGithubAuth } from "../services/session-github-token.js";
 import type { PromoteDecision } from "../plugins/hooks.js";
 import { DEFAULT_GENERATION_TIMEOUT_MS } from "../services/scaffold-generate.js";
 import { MAX_PROJECTS_ROOTS } from "../services/agent-projects-roots.js";
@@ -113,12 +114,39 @@ export interface SpawnSessionBody {
   // see CreateSessionOptions.gitIdentity (session-types.ts). Bounded like any
   // other free-text value forwarded from the primary.
   gitIdentity?: { name: string; email: string };
+  // #2246 — the session's GitHub credential, resolved on the primary (see
+  // session-github-token.ts). Held in the agent's memory only; an older agent
+  // strips it and the session's git/gh simply have no Mullion token.
+  githubAuth?: SessionGithubAuth;
   // Issue #1337 — opencode model overrides forwarded from spawn_child_session
   // MCP tool. When omitted and parentSessionId is set on the public POST
   // /api/sessions route, the parent session's model/smallModel are inherited.
   model?: string;
   smallModel?: string;
 }
+
+// The wire shape of SessionGithubAuth (session-github-token.ts), shared by the
+// spawn body and the refresh route below. A token is at most a few hundred
+// bytes; the bounds are generous but finite like any forwarded free text.
+const SESSION_GITHUB_AUTH_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["mode"],
+  properties: {
+    mode: { type: "string", enum: ["manual", "task"] },
+    token: { type: "string", minLength: 1, maxLength: 1024 },
+    username: { type: "string", minLength: 1, maxLength: 256 },
+    expiresAt: { type: "integer", minimum: 0 },
+    hint: { type: "string", maxLength: 1024 },
+  },
+} as const;
+
+/** PUT /internal/sessions/:id/github-auth — the primary re-sending a session's
+ * token before it expires. */
+export const sessionGithubAuthSchema = {
+  params: SESSION_ID_PARAMS_SCHEMA,
+  body: SESSION_GITHUB_AUTH_SCHEMA,
+};
 
 export const spawnSessionSchema = {
   body: {
@@ -197,6 +225,7 @@ export const spawnSessionSchema = {
       // bound — it's an opaque positive task id, not a user-controlled
       // field.
       taskId: { type: "integer" },
+      githubAuth: SESSION_GITHUB_AUTH_SCHEMA,
       gitIdentity: {
         type: "object",
         additionalProperties: false,

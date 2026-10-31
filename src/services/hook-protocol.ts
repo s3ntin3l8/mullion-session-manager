@@ -556,6 +556,15 @@ export interface BrowserActionHookMessage {
   clear?: boolean;
 }
 
+/** A session asking its own host's Mullion for its GitHub token (git
+ * credential helper / `gh` wrapper — session-github-token.ts). The reply is
+ * written straight back on this connection: `{token, username, hostFirst}` or
+ * `{error}`. Carries nothing: the session is already identified by the
+ * handshake token, so one can only ever ask for its own. */
+export interface GithubTokenHookMessage {
+  kind: "github_token";
+}
+
 /** A `kind` this file hasn't been taught yet — accepted, not rejected, per
  * the protocol's extensibility rule above. Carries whatever fields the
  * sender included, verbatim, alongside the (string) kind. */
@@ -591,6 +600,7 @@ export type HookMessage =
   | PermissionResolvedHookMessage
   | PlanResolvedHookMessage
   | BrowserActionHookMessage
+  | GithubTokenHookMessage
   | UnknownHookMessage;
 
 // Every KNOWN (non-`UnknownHookMessage`) `kind` literal, listed by hand
@@ -630,7 +640,8 @@ export type HookMessageKind =
   | "session_diff"
   | "permission_resolved"
   | "plan_resolved"
-  | "browser_action";
+  | "browser_action"
+  | "github_token";
 
 export type ParseHookMessageResult =
   { ok: true; message: HookMessage } | { ok: false; error: string };
@@ -1236,6 +1247,8 @@ export function parseHookMessage(line: string): ParseHookMessageResult {
       return { ok: true, message: { kind: "plan_resolved" } };
     case "browser_action":
       return validateBrowserAction(payload);
+    case "github_token":
+      return { ok: true, message: { kind: "github_token" } };
     default:
       return { ok: true, message: payload as UnknownHookMessage };
   }

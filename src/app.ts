@@ -20,6 +20,7 @@ import { githubPRPollerPlugin } from "./plugins/github-pr-poller.js";
 import { taskWatcherPlugin } from "./plugins/task-watcher.js";
 import { webhookReconcilerPlugin } from "./plugins/webhook-reconciler.js";
 import { gitFetcherPlugin } from "./plugins/git-fetcher.js";
+import { sessionGithubRefresherPlugin } from "./plugins/session-github-refresher.js";
 import { sessionWorktreeSweepPlugin } from "./plugins/session-worktree-sweep.js";
 import { hostHeartbeatPlugin } from "./plugins/host-heartbeat.js";
 import { agentEnrollmentPlugin } from "./plugins/agent-enrollment.js";
@@ -488,6 +489,7 @@ export async function buildApp() {
   registerDispatchCleanup(app);
   await app.register(webhookReconcilerPlugin);
   await app.register(gitFetcherPlugin);
+  await app.register(sessionGithubRefresherPlugin);
   await app.register(sessionWorktreeSweepPlugin);
   await app.register(hostHeartbeatPlugin);
   // Issue #1052 — primary-only periodic cleanup of expired `bridges` rows
