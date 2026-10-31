@@ -689,13 +689,14 @@ function spliceRegionIntoRewrite(body: string, region: string, existingAgentsMd:
  * such line. */
 function stripHandWrittenAgentsImport(text: string): string {
   const lines = text.split("\n");
-  const top = topLevelLines(lines);
+  const top = topLevelLines(lines, POINTER_MARKER_START, POINTER_MARKER_END);
   // Pointer-region lines are not "outside" it.
   let inPointer = false;
   const outside = lines.map((l, i) => {
-    if (l.includes(POINTER_MARKER_START)) inPointer = true;
+    const trimmed = l.replace(/\r$/, "").trim();
+    if (top[i] && trimmed === POINTER_MARKER_START) inPointer = true;
     const keep = top[i] && !inPointer;
-    if (l.includes(POINTER_MARKER_END)) inPointer = false;
+    if (top[i] && trimmed === POINTER_MARKER_END) inPointer = false;
     return keep;
   });
   const drop = new Set<number>();

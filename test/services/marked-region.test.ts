@@ -56,6 +56,8 @@ describe("extractMarkedRegion", () => {
   it("extracts a region whose body contains an unclosed fence", () => {
     const text = `${START}\n## Setup\n\`\`\`sh\nnpm install\n${END}\n\n\`\`\`sh\nnpm test\n\`\`\``;
     expect(extractMarkedRegion(text, START, END)).toBe("## Setup\n```sh\nnpm install");
+    const withBareLater = `${START}\n## Setup\n\`\`\`sh\nnpm install\n${END}\n\n## Later\n\`\`\`\nplain\n\`\`\``;
+    expect(extractMarkedRegion(withBareLater, START, END)).toBe("## Setup\n```sh\nnpm install");
   });
 });
 
@@ -404,6 +406,26 @@ describe("upsertMarkedRegionAfterIntro", () => {
     expect(once.match(new RegExp(START, "g"))).toHaveLength(1);
     expect(upsertMarkedRegionAfterIntro(once, START, END, "new region")).toBe(once);
 
+    const withLaterBareFence = `# Proj\n\n\`\`\`bash\nnpm run dev\n\n## Rules\n${START}\nold region\n${END}\n\n## Later\n\`\`\`\nplain\n\`\`\`\n`;
+    const bareOnce = upsertMarkedRegionAfterIntro(withLaterBareFence, START, END, "new region");
+    expect(bareOnce).toBe(
+      `# Proj\n\n\`\`\`bash\nnpm run dev\n\n## Rules\n${START}\nnew region\n${END}\n\n## Later\n\`\`\`\nplain\n\`\`\`\n`,
+    );
+    expect(bareOnce.match(new RegExp(START, "g"))).toHaveLength(1);
+    expect(upsertMarkedRegionAfterIntro(bareOnce, START, END, "new region")).toBe(bareOnce);
+
+    const withBareUnclosedOpener = `# Proj\n\n\`\`\`\nnpm run dev\n\n## Rules\n${START}\nold region\n${END}\n\n## Later\n\`\`\`\n`;
+    const bareOpenerOnce = upsertMarkedRegionAfterIntro(
+      withBareUnclosedOpener,
+      START,
+      END,
+      "new region",
+    );
+    expect(bareOpenerOnce).toBe(
+      `# Proj\n\n\`\`\`\nnpm run dev\n\n## Rules\n${START}\nnew region\n${END}\n\n## Later\n\`\`\`\n`,
+    );
+    expect(bareOpenerOnce.match(new RegExp(START, "g"))).toHaveLength(1);
+
     const withStrayComment = `# Proj\n\n<!-- unclosed\n\n${START}\nold region\n${END}\n`;
     const commentOnce = upsertMarkedRegionAfterIntro(withStrayComment, START, END, "new region");
     expect(commentOnce).toBe(`# Proj\n\n<!-- unclosed\n\n${START}\nnew region\n${END}\n`);
@@ -417,6 +439,23 @@ describe("upsertMarkedRegionAfterIntro", () => {
       `# Proj\n\n${START}\nclean body\n${END}\n\n## Later\n\`\`\`bash\nnpm test\n\`\`\`\n`,
     );
     expect(once.match(new RegExp(START, "g"))).toHaveLength(1);
+
+    const withBareFenceLater = `# Proj\n\n${START}\nbody\n\`\`\`bash\nnpm run dev\n${END}\n\n## Later\n\`\`\`\nplain\n\`\`\`\n`;
+    const bareOnce = upsertMarkedRegionAfterIntro(withBareFenceLater, START, END, "clean body");
+    expect(bareOnce).toBe(
+      `# Proj\n\n${START}\nclean body\n${END}\n\n## Later\n\`\`\`\nplain\n\`\`\`\n`,
+    );
+    expect(bareOnce.match(new RegExp(START, "g"))).toHaveLength(1);
+
+    const withSingleTrailingBareFence = `# Proj\n\n${START}\nbody\n\`\`\`\nnpm run dev\n${END}\n\n\`\`\`\n`;
+    const singleTrailingOnce = upsertMarkedRegionAfterIntro(
+      withSingleTrailingBareFence,
+      START,
+      END,
+      "clean body",
+    );
+    expect(singleTrailingOnce).toBe(`# Proj\n\n${START}\nclean body\n${END}\n\n\`\`\`\n`);
+    expect(singleTrailingOnce.match(new RegExp(START, "g"))).toHaveLength(1);
   });
 });
 
@@ -453,6 +492,14 @@ describe("topLevelLines", () => {
   it("does not hide the rest of the document after an unclosed fence or unclosed comment", () => {
     expect(topLevelLines(["```bash", "npm run dev", "## Heading"])).toEqual([true, true, true]);
     expect(topLevelLines(["```bash", "unclosed", "```sh", "closed", "```", "after"])).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+    ]);
+    expect(topLevelLines(["```bash", "unclosed", "```", "closed", "```", "after"])).toEqual([
       true,
       true,
       false,

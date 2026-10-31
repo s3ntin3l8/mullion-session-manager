@@ -147,6 +147,9 @@ export function upsertMarkedRegion(
   return `${trimmedText}${eol}${eol}${region}${eol}`;
 }
 
+const DEFAULT_START_MARKER_RE = /^[ \t]*<!--\s*(?:\S+:)?start\s*-->[ \t]*$/;
+const DEFAULT_END_MARKER_RE = /^[ \t]*<!--\s*(?:\S+:)?end\s*-->[ \t]*$/;
+
 /**
  * Per line of a markdown document: true when the line is "top level" prose,
  * false when it sits inside a closed leading YAML frontmatter block, a closed
@@ -154,14 +157,28 @@ export function upsertMarkedRegion(
  * of indent, as CommonMark does), or a closed multi-line HTML comment. Only
  * balanced constructs hide the lines inside them — an unclosed fence opener or
  * stray `<!--` leaves the rest of the document top-level so a broken snippet
- * cannot swallow a marked region or heading further down. Used to find
- * structure (a `## ` heading, a bare import line, a standalone region marker)
- * without being fooled by examples quoted inside code or comments.
- * Deliberately small, not a markdown parser: callers fall back to the safe
- * behavior (append, leave alone) when nothing qualifies.
+ * cannot swallow a marked region or heading further down. A fence span may not
+ * extend across a region boundary (only a fence that directly wraps a quoted
+ * marker example hides its marker lines). Used to find structure (a `## `
+ * heading, a bare import line, a standalone region marker) without being
+ * fooled by examples quoted inside code or comments. Deliberately small, not a
+ * markdown parser: callers fall back to the safe behavior (append, leave
+ * alone) when nothing qualifies.
  */
-export function topLevelLines(lines: string[]): boolean[] {
+export function topLevelLines(
+  lines: string[],
+  startMarker?: string,
+  endMarker?: string,
+): boolean[] {
   const out: boolean[] = new Array<boolean>(lines.length).fill(true);
+  const startRe =
+    startMarker !== undefined
+      ? new RegExp(`^[ \\t]*${escapeRegExp(startMarker)}[ \\t]*$`)
+      : DEFAULT_START_MARKER_RE;
+  const endRe =
+    endMarker !== undefined
+      ? new RegExp(`^[ \\t]*${escapeRegExp(endMarker)}[ \\t]*$`)
+      : DEFAULT_END_MARKER_RE;
   let i = 0;
   if (/^---\s*$/.test(lines[0] ?? "")) {
     const close = lines.findIndex((l, idx) => idx > 0 && /^(---|\.\.\.)\s*$/.test(l));
@@ -176,11 +193,21 @@ export function topLevelLines(lines: string[]): boolean[] {
       i = close + 1;
     }
   }
+  let inOpenRegion = false;
   for (; i < lines.length; i++) {
     const line = lines[i].replace(/\r$/, "");
-    const f = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    const f = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
     if (f) {
-      const close = findClosingFenceLine(lines, i + 1, f[1][0], f[1].length);
+      const close = findClosingFenceLine(
+        lines,
+        i,
+        f[1][0],
+        f[1].length,
+        f[2].trim() !== "",
+        startRe,
+        endRe,
+        inOpenRegion,
+      );
       if (close !== -1) {
         for (let k = i; k <= close; k++) out[k] = false;
         i = close;
@@ -193,25 +220,94 @@ export function topLevelLines(lines: string[]): boolean[] {
       if (close !== -1) {
         for (let k = i; k <= close; k++) out[k] = false;
         i = close;
+        continue;
       }
     }
+    if (startRe.test(line)) inOpenRegion = true;
+    else if (endRe.test(line)) inOpenRegion = false;
   }
   return out;
 }
 
-function findClosingFenceLine(lines: string[], from: number, ch: string, len: number): number {
-  for (let k = from; k < lines.length; k++) {
+function findClosingFenceLine(
+  lines: string[],
+  openLine: number,
+  ch: string,
+  len: number,
+  openerHasInfo: boolean,
+  startRe: RegExp,
+  endRe: RegExp,
+  inOpenRegion: boolean,
+): number {
+  let close = -1;
+  let bareCount = 0;
+  for (let k = openLine + 1; k < lines.length; k++) {
     const line = lines[k].replace(/\r$/, "");
+    if (close !== -1 && (startRe.test(line) || endRe.test(line))) break;
     const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
     if (!m || m[1][0] !== ch || m[1].length < len) continue;
-    if (m[2].trim() === "") return k;
+    if (m[2].trim() === "") {
+      if (close === -1) close = k;
+      bareCount++;
+      if (!openerHasInfo) break;
+      continue;
+    }
     // A fence of the same char and length with an info string cannot be nested
     // inside an outer fence of the same char and length (its closing fence
     // would close the outer one first), so seeing one before any closer means
     // the earlier opener was left unclosed.
-    if (m[1].length === len) return -1;
+    if (m[1].length === len) {
+      if (close === -1) return -1;
+      break;
+    }
   }
-  return -1;
+  if (close === -1) return -1;
+  // An info-string opener (` ```bash `) followed by an even number of bare
+  // fences before the next info-string opener or marker boundary was left
+  // unclosed: the bare fences pair with each other (` ```\nplain\n``` `), and
+  // stealing the first one as a closer here would leave the last one dangling.
+  if (openerHasInfo && bareCount % 2 === 0) return -1;
+  if (fenceSwallowsMarker(lines, openLine, close, startRe, endRe, inOpenRegion)) {
+    return -1;
+  }
+  return close;
+}
+
+function fenceSwallowsMarker(
+  lines: string[],
+  openLine: number,
+  closeLine: number,
+  startRe: RegExp,
+  endRe: RegExp,
+  inOpenRegion: boolean,
+): boolean {
+  const isMarker = (idx: number): boolean => {
+    const raw = lines[idx].replace(/\r$/, "");
+    return startRe.test(raw) || endRe.test(raw);
+  };
+  let hasMarker = false;
+  for (let k = openLine + 1; k < closeLine; k++) {
+    if (isMarker(k)) {
+      hasMarker = true;
+      break;
+    }
+  }
+  if (!hasMarker) return false;
+  // A fence opened inside an already-open region cannot close at or after the
+  // region's end marker.
+  if (inOpenRegion) return true;
+  // Outside an open region, a fence may only contain a marker line when the
+  // fence directly wraps a quoted marker example: either a single marker line
+  // (` ```html\n<!-- start -->\n``` `) or a `startMarker ... endMarker` block
+  // with the markers on the first and last lines inside the fence.
+  if (closeLine === openLine + 2) return false;
+  const first = lines[openLine + 1].replace(/\r$/, "");
+  const last = lines[closeLine - 1].replace(/\r$/, "");
+  if (!startRe.test(first) || !endRe.test(last)) return true;
+  for (let k = openLine + 2; k < closeLine - 1; k++) {
+    if (isMarker(k)) return true;
+  }
+  return false;
 }
 
 function findClosingCommentLine(lines: string[], from: number): number {
@@ -257,7 +353,7 @@ function findMarkedRegions(
   const startRe = new RegExp(`^[ \\t]*${escapeRegExp(startMarker)}[ \\t]*$`);
   const endRe = new RegExp(`^[ \\t]*${escapeRegExp(endMarker)}[ \\t]*$`);
   const lines = text.split("\n");
-  const top = topLevelLines(lines);
+  const top = topLevelLines(lines, startMarker, endMarker);
   const pairs: MarkedRegionPair[] = [];
   const orphans: MarkerLine[] = [];
   let openStart: MarkerLine | null = null;
@@ -336,7 +432,7 @@ export function upsertMarkedRegionAfterIntro(
   text = dropMarkerLines(text, orphans);
   const region = buildRegion(startMarker, endMarker, body, eol);
   const lines = text.split("\n");
-  const top = topLevelLines(lines);
+  const top = topLevelLines(lines, startMarker, endMarker);
   let offset = 0;
   for (let i = 0; i < lines.length; i++) {
     if (top[i] && /^## /.test(lines[i])) {

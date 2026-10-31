@@ -17,8 +17,10 @@ import {
   scaffoldReviewerPath,
   hashWorkflowConventionsSection,
   SCAFFOLD_REGION_START,
+  SCAFFOLD_REGION_END,
   type ScaffoldOptions,
 } from "../services/mullion-scaffold.js";
+import { extractMarkedRegion } from "../services/marked-region.js";
 import { deriveWorktreePath, type CreateWorktreeResult } from "../services/git-worktree.js";
 import { resolveBackend } from "../services/session-backend.js";
 import {
@@ -751,7 +753,12 @@ async function prepareScaffoldGeneration(
   const existingFiles = read.files;
   const hasSkill = existingFiles[scaffoldSkillPath(options.slug)] !== undefined;
   const hasReviewer = existingFiles[scaffoldReviewerPath(options.slug)] !== undefined;
-  const hasScaffoldRegion = (existingFiles["AGENTS.md"] ?? "").includes(SCAFFOLD_REGION_START);
+  const hasScaffoldRegion =
+    extractMarkedRegion(
+      existingFiles["AGENTS.md"] ?? "",
+      SCAFFOLD_REGION_START,
+      SCAFFOLD_REGION_END,
+    ) !== null;
 
   // Issue #1082(c) — `refresh` is the caller's explicit, per-target
   // opt-in to regenerating an already-committed file (see the schema's

@@ -18,7 +18,7 @@ import {
   MULLION_REGION_PLACEHOLDER,
 } from "./mullion-scaffold.js";
 import { parseSkillFrontmatter } from "./skills.js";
-import { topLevelLines } from "./marked-region.js";
+import { stripMarkedRegion, topLevelLines } from "./marked-region.js";
 import type { ExistingInstructionsMode } from "../shared/constants.js";
 
 // Issue #956 — replaces mullion-scaffold.ts's static placeholder skill/
@@ -787,13 +787,7 @@ export function assessRewrite(
   rewrite: string,
   contributingAppend?: string,
 ): boolean {
-  const startIdx = originalAgentsMd.indexOf(SCAFFOLD_REGION_START);
-  const endIdx = startIdx === -1 ? -1 : originalAgentsMd.indexOf(SCAFFOLD_REGION_END, startIdx);
-  const original =
-    startIdx !== -1 && endIdx > startIdx
-      ? originalAgentsMd.slice(0, startIdx) +
-        originalAgentsMd.slice(endIdx + SCAFFOLD_REGION_END.length)
-      : originalAgentsMd;
+  const original = stripMarkedRegion(originalAgentsMd, SCAFFOLD_REGION_START, SCAFFOLD_REGION_END);
   if (original.trim().length === 0) return false;
   const kept = rewrite.replace(MULLION_REGION_PLACEHOLDER, "") + (contributingAppend ?? "");
   if (kept.trim().length < original.trim().length * 0.3) return true;

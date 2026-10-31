@@ -1310,7 +1310,7 @@ describe("computeScaffold — restructured instructions (issue #2316)", () => {
   it("preserves prior moved text in CONTRIBUTING.md even when it contains an unclosed fence", () => {
     const first = get(
       computeScaffold(
-        {},
+        { "CONTRIBUTING.md": "# Contributing\n\nExisting.\n" },
         {
           slug: "demo",
           generated: { agentsMdBody: body, contributingAppend: "## Moved\n```sh\nnpm test\n" },
@@ -1318,9 +1318,10 @@ describe("computeScaffold — restructured instructions (issue #2316)", () => {
       ),
       "CONTRIBUTING.md",
     )!;
+    const withLaterBareFence = `${first}\n## Extra\n\`\`\`\nplain\n\`\`\`\n`;
     const second = get(
       computeScaffold(
-        { "CONTRIBUTING.md": first },
+        { "CONTRIBUTING.md": withLaterBareFence },
         {
           slug: "demo",
           generated: { agentsMdBody: body, contributingAppend: "## Second\nmore\n" },

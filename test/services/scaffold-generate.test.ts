@@ -2382,6 +2382,12 @@ describe("existingInstructions (issue #2316)", () => {
         "region ".repeat(500) +
         "\n<!-- mullion:briefing:end -->\n\n## A\nshort\n";
       expect(assessRewrite(o, "# P\n\n## A\nshort\n")).toBe(false);
+      // A region quoted inside a fenced code block is doc content, not Mullion's region.
+      const fencedExample =
+        "# P\n\n```\n<!-- mullion:briefing:start -->\n" +
+        "example ".repeat(500) +
+        "\n<!-- mullion:briefing:end -->\n```\n\n## A\nshort\n";
+      expect(assessRewrite(fencedExample, "# P\n\n## A\nshort\n")).toBe(true);
     });
   });
 });
