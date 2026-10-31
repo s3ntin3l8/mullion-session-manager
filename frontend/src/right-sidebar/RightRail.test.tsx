@@ -42,6 +42,8 @@ describe("RightRail GitHub icon", () => {
 
   it("opens the list, not an attention PR, even when a PR needs attention", async () => {
     seed([pr(1, "ready"), pr(2, "conflicts"), pr(3, "ci_failing")]);
+    // A stale drill-in from an earlier visit must be cleared on open.
+    useDashboardStore.setState({ githubOpenPrByProject: { 4: 3 } });
     render(<RightRail projectId={4} />);
     await userEvent.click(screen.getByRole("button", { name: "GitHub" }));
     const s = useDashboardStore.getState();
