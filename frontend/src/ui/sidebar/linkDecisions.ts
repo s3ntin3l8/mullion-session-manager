@@ -29,6 +29,24 @@ export function decideSessionAction(entry: MullionLinkEntry | undefined): Sessio
   return first ? { kind: "open-existing", sessionId: first.session.id } : { kind: "start" };
 }
 
+/** Task statuses where Task Master owns the issue but no worker session exists yet. */
+const NOT_STARTED_TASK_STATUSES: readonly string[] = ["pending", "ready", "claimed", "backlog"];
+
+export type IssueSessionAction = SessionAction | { kind: "task"; taskId: number; status: string };
+/**
+ * Like decideSessionAction, for an issue: a queued Task Master task that has
+ * no session yet defers to the task, so a plain "Start session" doesn't spin
+ * up an ad-hoc worktree the task worker will then also claim.
+ */
+export function decideIssueSessionAction(entry: MullionLinkEntry | undefined): IssueSessionAction {
+  const action = decideSessionAction(entry);
+  const task = entry?.task;
+  if (action.kind === "start" && task && NOT_STARTED_TASK_STATUSES.includes(task.status)) {
+    return { kind: "task", taskId: task.id, status: task.status };
+  }
+  return action;
+}
+
 /**
  * The linked sessions (children included) held at Mullion's review gate — the
  * session status, not a task state (#2019). Shared so a PR row and its detail

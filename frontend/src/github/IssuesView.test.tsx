@@ -615,3 +615,102 @@ describe("Issues list ↔ detail round trip", () => {
     expect(chip?.querySelector("svg")).not.toBeNull();
   });
 });
+
+describe("Issues with a queued Task Master task but no session", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    useDashboardStore.setState({ tasks: [], sessions: [] });
+  });
+
+  it("row offers Claim and Open task instead of Start session", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, LIST)));
+    const claimTask = vi.fn(async () => makeTask({ id: 4 }));
+    const requestOpenTask = vi.fn();
+    useDashboardStore.setState({
+      claimTask,
+      requestOpenTask,
+      projects: [makeProject({ id: 1 })],
+      tasks: [makeTask({ id: 4, projectId: 1, issueNumber: 7, status: "ready" })],
+    });
+    render(
+      <IssuesSection projectId={1} openIssues={1} issuesHidden={false} onOpenIssue={vi.fn()} />,
+    );
+    await screen.findByText("Crash on start");
+    expect(screen.queryByRole("button", { name: "Start session" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Claim task" }));
+    expect(claimTask).toHaveBeenCalledWith(4);
+    await userEvent.click(screen.getByRole("button", { name: "Open task" }));
+    expect(requestOpenTask).toHaveBeenCalledWith(4);
+  });
+
+  it("row has no Claim for a claimed task", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, LIST)));
+    useDashboardStore.setState({
+      projects: [makeProject({ id: 1 })],
+      tasks: [makeTask({ id: 4, projectId: 1, issueNumber: 7, status: "claimed" })],
+    });
+    render(
+      <IssuesSection projectId={1} openIssues={1} issuesHidden={false} onOpenIssue={vi.fn()} />,
+    );
+    await screen.findByText("Crash on start");
+    expect(screen.queryByRole("button", { name: "Claim task" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Open task" })).toBeInTheDocument();
+  });
+
+  it("detail offers Open task and Claim, and claims through the store", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        Promise.resolve(jsonResponse(200, url.includes("/github/issues/7") ? DETAIL : LIST)),
+      ),
+    );
+    const claimTask = vi.fn(async () => makeTask({ id: 4 }));
+    const requestOpenTask = vi.fn();
+    useDashboardStore.setState({
+      claimTask,
+      requestOpenTask,
+      projects: [makeProject({ id: 1 })],
+      tasks: [makeTask({ id: 4, projectId: 1, issueNumber: 7, status: "backlog" })],
+    });
+    render(
+      <IssueDetailView
+        projectId={1}
+        number={7}
+        onBack={vi.fn()}
+        taskMaster={{ enabled: true, label: "mullion-task" }}
+      />,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Claim" }));
+    expect(claimTask).toHaveBeenCalledWith(4);
+    expect(await screen.findByText("Task #4 claimed")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Start session" })).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Open task" }));
+    expect(requestOpenTask).toHaveBeenCalledWith(4);
+  });
+
+  it("detail shows an error when the claim fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((url: string) =>
+        Promise.resolve(jsonResponse(200, url.includes("/github/issues/7") ? DETAIL : LIST)),
+      ),
+    );
+    useDashboardStore.setState({
+      claimTask: vi.fn(async () => {
+        throw new Error("nope");
+      }),
+      projects: [makeProject({ id: 1 })],
+      tasks: [makeTask({ id: 4, projectId: 1, issueNumber: 7, status: "ready" })],
+    });
+    render(
+      <IssueDetailView
+        projectId={1}
+        number={7}
+        onBack={vi.fn()}
+        taskMaster={{ enabled: true, label: "mullion-task" }}
+      />,
+    );
+    await userEvent.click(await screen.findByRole("button", { name: "Claim" }));
+    expect(await screen.findByText("nope")).toBeInTheDocument();
+  });
+});

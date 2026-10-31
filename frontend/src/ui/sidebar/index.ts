@@ -4,6 +4,7 @@ export { IconPopover } from "./IconPopover.js";
 export { IconButton, type IconButtonProps } from "./IconButton.js";
 export { LinkedActions, type LinkedActionsProps } from "./LinkedActions.js";
 export {
+  decideIssueSessionAction,
   decideSessionAction,
   gatedSessions,
   severityTone,
