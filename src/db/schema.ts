@@ -722,7 +722,7 @@ export const sessions = sqliteTable(
     // column. Without it, every one of those is a full table scan.
     index("sessions_project_id_idx").on(table.projectId),
     // Issue #1223 — DB-level, defense-in-depth guard for the same
-    // (projectId, composeProject) identity that projects.ts's in-process
+    // (projectId, composeProject) identity that project-docker.ts's in-process
     // `withStackLock` mutex (issue #1182) already serializes within one
     // process. The mutex can't protect a second backend process (or any
     // future `kind: "dock"` insert that bypasses it) against creating a

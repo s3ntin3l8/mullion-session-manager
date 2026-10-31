@@ -493,7 +493,7 @@ async function fetchOwnedScopes(
 
   // Issue #1232 — bounded: a wedged `--user` D-Bus bus used to leave this
   // pending forever, and every isMasterAliveStateBatch
-  // caller (including routes/projects.ts's withStackLock-serialized
+  // caller (including routes/project-docker.ts's withStackLock-serialized
   // stack-session mutex, issue #1182) bottoms out here. A timeout, a spawn
   // error and a non-zero exit all map to `failed: true` — the "everything
   // unknown" contract ScopeOwnershipListing documents, never an empty

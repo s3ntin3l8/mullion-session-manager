@@ -163,12 +163,7 @@ import type { GitBranchOpResult } from "../services/git-branch-ops.js";
 import { overlayRelayRuns } from "../services/relay-review-state.js";
 import { annotatePrTasks } from "../services/mullion-links.js";
 import { projectGitHubRoute } from "./project-github.js";
-import {
-  projectDockerRoute,
-  discoveredServicesForProject,
-  localProjectCwds,
-} from "./project-docker.js";
-export { localProjectCwds };
+import { projectDockerRoute, discoveredServicesForProject } from "./project-docker.js";
 import { detectDevServerPortForSessionIds } from "../services/dev-server-detect.js";
 import { toDockControls } from "../services/docker-service-detect.js";
 import { SETUP_RECIPE_MAX_LENGTH } from "../services/setup-recipe-shared.js";

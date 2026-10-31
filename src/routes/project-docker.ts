@@ -106,9 +106,8 @@ export function createKeyedLock(): <T>(key: string, fn: () => Promise<T>) => Pro
 // directories nest (see docker-service-detect.ts's mapServicesToProject
 // doc comment for why the full list is needed rather than just the one
 // project's own cwd).
-export function localProjectCwds(appOrDb: FastifyInstance | FastifyInstance["db"]): string[] {
-  const db = "db" in appOrDb ? appOrDb.db : appOrDb;
-  return db
+export function localProjectCwds(app: FastifyInstance): string[] {
+  return app.db
     .select({ cwd: projects.cwd })
     .from(projects)
     .where(eq(projects.hostId, LOCAL_HOST_ID))
@@ -122,11 +121,11 @@ export function localProjectCwds(appOrDb: FastifyInstance | FastifyInstance["db"
 // so the discovery pass, project-ownership mapping, and dedupe logic
 // all live in exactly one place.
 export async function discoveredServicesForProject(
-  appOrDb: FastifyInstance | FastifyInstance["db"],
+  app: FastifyInstance,
   project: { cwd: string },
 ): Promise<ComposeService[]> {
   const all = await getComposeServices();
-  return mapServicesToProject(all, project.cwd, localProjectCwds(appOrDb));
+  return mapServicesToProject(all, project.cwd, localProjectCwds(app));
 }
 
 export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
