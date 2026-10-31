@@ -136,7 +136,10 @@ import type { ExistingInstructionsMode } from "../shared/constants.js";
 // surfaces (independent of the process-level sandbox). Issue #1081's
 // earlier re-check of the other three (2026-09-05, this repo's own dev
 // sandbox — see that issue's own comments for the exact commands) still
-// holds and is worth keeping as documented context: `codex exec --sandbox
+// holds and is worth keeping as documented context (inside the bwrap wrap
+// codex runs with `--sandbox danger-full-access` instead, #2472: its own
+// nested bwrap cannot start there, so Mullion's ro bind is the only write
+// containment and its shell commands keep network access): `codex exec --sandbox
 // read-only` is a REAL, accepted flag (`codex exec`'s own startup banner
 // echoes back `sandbox: read-only`), but whether it actually blocks a
 // write is still UNVERIFIED — this account's codex usage was rate-limited
@@ -948,7 +951,11 @@ export type SpawnGenerationTurn = (opts: SpawnGenerationTurnOptions) => Promise<
  * `launch-plan.ts` incident is specific to write tool calls, not reads. If
  * a future change to this module's own prompt ever asks the agent to
  * write anything, this reasoning no longer holds and `--mode accept-edits`
- * would need to be re-evaluated the same way. */
+ * would need to be re-evaluated the same way.
+ *
+ * `opts.sandboxed` (#2472): true only when the turn is wrapped in Mullion's
+ * bwrap. Codex then runs with `--sandbox danger-full-access`, since its own
+ * nested sandbox cannot start there; otherwise it keeps `--sandbox read-only`. */
 // Hermes review, PR #1152 — exported (was module-private) so the exact
 // argv can be pinned by a real, CI-enforced unit test rather than relying
 // solely on the agy-gated e2e (test/e2e/scaffold-generate-agy.e2e.test.ts),
@@ -961,6 +968,7 @@ export type SpawnGenerationTurn = (opts: SpawnGenerationTurnOptions) => Promise<
 export function buildInvocation(
   agentCommand: string,
   prompt: string,
+  opts: { sandboxed?: boolean } = {},
 ): { bin: string; args: string[] } {
   switch (agentCommand) {
     case "claude":
@@ -977,7 +985,15 @@ export function buildInvocation(
     case "codex":
       return {
         bin: "codex",
-        args: ["exec", "--sandbox", "read-only", "--", prompt],
+        // Inside Mullion's bwrap, codex's own bwrap-based sandbox cannot start
+        // (nested bwrap: "Read-only file system"; its Landlock mode refuses
+        // too: "filesystem-restricted execution requires bubblewrap"), so
+        // every tool call fails while the turn still exits 0 (#2472). Mullion's
+        // bwrap is the real containment (ro root, only the scratch worktree
+        // writable), so codex's own sandbox is switched off there.
+        args: opts.sandboxed
+          ? ["exec", "--sandbox", "danger-full-access", "--", prompt]
+          : ["exec", "--sandbox", "read-only", "--", prompt],
       };
     case "opencode":
       return {
@@ -1738,6 +1754,14 @@ export function describeSpawnFailure(
   return parts.join(" — ");
 }
 
+/** Codex's own tool-failure text when its sandbox cannot start inside ours
+ * (#2472). The line has no stable prefix (codex quotes it mid-sentence), so
+ * it cannot be anchored; a repo whose files contain these phrases can trip it.
+ * Observed on codex's stderr (its tool transcript), which is the only stream
+ * checked. */
+const NESTED_SANDBOX_ERROR =
+  /error building bubblewrap command|filesystem-restricted execution requires bubblewrap/i;
+
 /** The real, production spawn — a bare, argv-array `execFile` (never a
  * shell string: the prompt embeds arbitrary repo-derived and DB-seed text,
  * so this avoids shell-injection risk entirely rather than relying on
@@ -1770,7 +1794,6 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
       `refusing to run outside the scratch generation worktree root (cwd "${cwd}")`,
     );
   }
-  const { bin, args } = buildInvocation(agentCommand, prompt);
   // `cwd` here is always the scratch generation worktree (see
   // `generateScaffoldContent` below) — never the real project checkout —
   // so it is exactly the path `wrapWithSandbox` should punch a writable
@@ -1794,6 +1817,7 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
   // result would be discarded either way.
   const sandboxRequested = sandbox ?? true;
   const sandboxUsable = sandboxRequested ? await isSandboxCapable() : false;
+  const { bin, args } = buildInvocation(agentCommand, prompt, { sandboxed: sandboxUsable });
   // Hermes review, PR #1152 — `--dangerously-skip-permissions` (added to
   // agy's own argv above, issue #1130) is the only flag here that GRANTS
   // tool access rather than restricting it; claude's `--allowedTools` and
@@ -1918,6 +1942,24 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
           String(tail(stderr, FAILURE_LOG_TAIL_CHARS)).replace(/[\r\n]+/g, " "),
         );
         reject(new GenerationSpawnError(agentCommand, describeSpawnFailure(err, stdout, stderr)));
+        return;
+      }
+      // Codex can exit 0 after every tool call failed because its own
+      // sandbox could not start inside ours (#2472). That output was written
+      // without reading the repo, so refuse it. Only stderr (the tool
+      // transcript) is checked, not stdout: the answer may legitimately quote
+      // the phrase, e.g. a skill for this very repo.
+      if (sandboxUsable && agentCommand === "codex" && NESTED_SANDBOX_ERROR.test(stderr)) {
+        console.warn(
+          "[scaffold-generate] %s generation turn discarded: the agent's own sandbox could not start",
+          agentLogLabel(agentCommand),
+        );
+        reject(
+          new GenerationSpawnError(
+            agentCommand,
+            "the agent's own sandbox could not start inside Mullion's sandbox, so it could not read the repository; the output was discarded",
+          ),
+        );
         return;
       }
       resolve(stdout);
