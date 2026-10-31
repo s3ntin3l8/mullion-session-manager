@@ -5611,6 +5611,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                 .set({
                   status: "failed",
                   failureReason: `budget exceeded after ${budgetMinutes} minutes`,
+                  failureDiagnostics: null,
                   completedAt: now,
                 })
                 .where(
@@ -5644,6 +5645,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                     ...task,
                     status: "failed",
                     failureReason: `budget exceeded after ${budgetMinutes} minutes`,
+                    failureDiagnostics: null,
                     completedAt: now,
                   },
                   project,

@@ -1,5 +1,5 @@
 import { TaskActions } from "./TaskActions.js";
-import { FailureDiagnostics } from "./FailureDiagnostics";
+import { FailureDiagnostics } from "./FailureDiagnostics.js";
 import { useEffect, useState } from "react";
 import { useDashboardStore } from "./store/index.js";
 import { statusLabel } from "./tasksBoard.js";

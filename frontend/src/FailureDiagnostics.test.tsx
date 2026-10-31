@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
 import { render } from "@testing-library/react";
-import { FailureDiagnostics } from "./FailureDiagnostics";
+import { FailureDiagnostics } from "./FailureDiagnostics.js";
 
 describe("FailureDiagnostics", () => {
   it("renders the snapshot text", () => {
