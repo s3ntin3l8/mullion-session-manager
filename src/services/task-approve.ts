@@ -16,6 +16,7 @@ import { recordTaskTransition } from "./task-state.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 import { resolveBackend } from "./session-backend.js";
 import { killSession } from "./session-lifecycle.js";
+import { stopHermesRunQuietly } from "./hermes-task-review.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;
@@ -93,8 +94,10 @@ export function cleanupTaskWorktree(
 // "left reviewing for a terminal state" posture.
 export function cleanupTaskSessions(
   app: FastifyInstance,
-  task: { sessionId: number | null; reviewSessionId: number | null },
+  task: { sessionId: number | null; reviewSessionId: number | null; reviewRunId?: string | null },
 ): void {
+  // An external reviewer's run (#2369) is the review's "session" too.
+  stopHermesRunQuietly(app, task.reviewRunId);
   // A Set, not a plain pair — sessionId and reviewSessionId are never the
   // same column-for-column, but nothing enforces that at the type level,
   // so this stays correct (a single kill, not two) even if that ever

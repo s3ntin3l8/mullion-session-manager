@@ -1039,6 +1039,20 @@ export const tasks = sqliteTable(
     // be re-ingested (and re-commented) on every single tick forever. Null
     // means the current reviewSessionId's output hasn't been processed yet.
     reviewFindingsIngestedSessionId: integer("review_findings_ingested_session_id"),
+    // #2369 — the review handle for an external reviewer (Hermes), whose review
+    // is an HTTP run rather than a local session, so it has no sessions row to
+    // point reviewSessionId at. `reviewRunId` is the run (or an `unsent:` marker
+    // when dispatch gave up — see task-reconciler.ts); `reviewRunIngestedId` is
+    // the run whose verdict has been ingested, the counterpart of
+    // reviewFindingsIngestedSessionId (equal to reviewRunId means "verdict is
+    // in"); `reviewRunDispatchedAt` anchors the poll's give-up window;
+    // `reviewRunHeadSha` is the PR head the run was asked to review. All four
+    // are nulled wherever the session columns are, so a re-armed review
+    // dispatches a fresh run.
+    reviewRunId: text("review_run_id"),
+    reviewRunDispatchedAt: integer("review_run_dispatched_at", { mode: "timestamp" }),
+    reviewRunHeadSha: text("review_run_head_sha"),
+    reviewRunIngestedId: text("review_run_ingested_id"),
     // Task 259314's investigation (issue #1038) — the moment the machine
     // genuinely stopped acting on this task's own initiative, as opposed to
     // autoReturnRounds merely reaching the resolved cap. The two are NOT the

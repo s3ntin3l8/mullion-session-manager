@@ -26,6 +26,8 @@ import {
 // The relay's landed-check memo (issue #1630) — cleared per test so one
 // test's answer is not the next one's.
 import { gitEnv } from "../../src/services/git-env.js";
+import { applySettingsPatch } from "../../src/services/settings.js";
+import { clearHermesKey, setHermesKey } from "../../src/services/hermes-integration.js";
 import { resolveGitHubToken } from "../../src/services/github-integration.js";
 import { PR_REVIEW_DEFAULTS } from "../helpers/pr-review-defaults.js";
 
@@ -1497,6 +1499,57 @@ describe("projects route", () => {
       });
       expect(cleared.statusCode).toBe(200);
       expect(cleared.json().defaultAgent).toBeNull();
+      expect(cleared.json().defaultReviewAgent).toBeNull();
+
+      await app.close();
+    });
+
+    it("400s on hermes as defaultReviewAgent while it isn't set up, accepts it once it is (#2369)", async () => {
+      const app = await buildApp();
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: {
+          createDir: true,
+          allowDuplicate: true,
+          name: "hermes-reviewer",
+          cwd: "/tmp/hermes-reviewer",
+        },
+      });
+      const { id } = created.json();
+
+      const refused = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { defaultReviewAgent: "hermes" },
+      });
+      expect(refused.statusCode).toBe(400);
+      expect(refused.json().message).toContain("Review relay");
+
+      applySettingsPatch(app, {
+        reviewRelay: { apiUrl: "http://hermes.test:8643", taskMasterReviewer: true },
+      });
+      setHermesKey(app, "test-key"); // pragma: allowlist secret
+      try {
+        const accepted = await app.inject({
+          method: "PATCH",
+          url: `/api/projects/${id}`,
+          payload: { defaultReviewAgent: "hermes" },
+        });
+        expect(accepted.statusCode).toBe(200);
+        expect(accepted.json()).toMatchObject({ defaultReviewAgent: "hermes" });
+      } finally {
+        clearHermesKey(app);
+        applySettingsPatch(app, { reviewRelay: { apiUrl: "", taskMasterReviewer: false } });
+      }
+
+      // Clearing it, or moving to a CLI, never needs Hermes.
+      const cleared = await app.inject({
+        method: "PATCH",
+        url: `/api/projects/${id}`,
+        payload: { defaultReviewAgent: null },
+      });
+      expect(cleared.statusCode).toBe(200);
       expect(cleared.json().defaultReviewAgent).toBeNull();
 
       await app.close();

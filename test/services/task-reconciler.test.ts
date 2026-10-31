@@ -26,6 +26,26 @@ vi.mock("../../src/services/push-delivery.js", async (importOriginal) => ({
   notifyTaskNeedsAttention: mockNotifyTaskNeedsAttention,
 }));
 
+// #2369 — Hermes as the review agent. The dispatch/poll/stop calls are the
+// network edge; everything else in these modules runs for real.
+const { mockHermesUsable, mockDispatchTaskReview, mockPollTaskReview, mockStopHermesRun } =
+  vi.hoisted(() => ({
+    mockHermesUsable: vi.fn().mockReturnValue(false),
+    mockDispatchTaskReview: vi.fn(),
+    mockPollTaskReview: vi.fn(),
+    mockStopHermesRun: vi.fn(),
+  }));
+vi.mock("../../src/services/hermes-integration.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  hermesTaskReviewerUsable: mockHermesUsable,
+}));
+vi.mock("../../src/services/hermes-task-review.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  dispatchTaskReview: mockDispatchTaskReview,
+  pollTaskReview: mockPollTaskReview,
+  stopHermesRunQuietly: mockStopHermesRun,
+}));
+
 // Same fakes as session-reconciler.test.ts / test/routes/sessions.test.ts —
 // session creation still spawns real OS processes (systemd-run, dtach) via
 // PtyManager, faked so this file exercises reconcileTasks against a real
@@ -1049,6 +1069,70 @@ describe("reconcileTasks", () => {
 
     killSpy.mockRestore();
     await app.close();
+  });
+
+  // #2369 — a review by an external reviewer is a run, not a session, so it
+  // has no fresh session id to make its ingest marker stop matching: the whole
+  // handle has to be cleared, or the next round would read as already reviewed.
+  describe("re-entering reviewing with an external reviewer's run (#2369)", () => {
+    const priorRun = {
+      reviewRunId: "run_prior",
+      reviewRunDispatchedAt: new Date(Date.now() - 60 * 60_000),
+      reviewRunHeadSha: "sha-prior",
+      reviewRunIngestedId: "run_prior",
+    } as const;
+
+    it("clears the prior round's run, marker included, so the next round dispatches a fresh one", async () => {
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTask(app, "in_progress");
+      app.db.update(tasks).set(priorRun).where(eq(tasks.id, taskId)).run();
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+
+      mockStopHermesRun.mockClear();
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      expect(row.reviewRunId).toBeNull();
+      expect(mockStopHermesRun).toHaveBeenCalledWith(expect.anything(), "run_prior");
+      expect(row.reviewRunDispatchedAt).toBeNull();
+      expect(row.reviewRunHeadSha).toBeNull();
+      expect(row.reviewRunIngestedId).toBeNull();
+
+      await app.close();
+    });
+
+    it("keeps the run when the task's approval is carried through the worker's return", async () => {
+      const app = await buildApp();
+      const { taskId } = await createSessionAndTask(app, "in_progress");
+      app.db
+        .update(tasks)
+        .set({
+          ...priorRun,
+          lastReviewVerdict: "approved-with-suggestions",
+          lastReviewVerdictAt: new Date(Date.now() - 30 * 60_000),
+          approvalCarriedAt: new Date(Date.now() - 20 * 60_000),
+        })
+        .where(eq(tasks.id, taskId))
+        .run();
+      vi.spyOn(app.pty, "get").mockReturnValue({
+        toInfo: () => fakeInfo({ lastTurnEndedAt: Date.now() }),
+      } as never);
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(row.status).toBe("reviewing");
+      // The approval still stands for the same review, so the handle stays and
+      // the auto-approve gate keeps seeing the verdict it already trusted.
+      expect(row.reviewRunId).toBe("run_prior");
+      expect(row.reviewRunIngestedId).toBe("run_prior");
+      expect(row.approvalCarriedAt).not.toBeNull();
+
+      await app.close();
+    });
   });
 
   it("leaves in_progress alone while the session is still actively working", async () => {
@@ -3791,7 +3875,14 @@ describe("reconcileTasks", () => {
         title: string;
         prTitle: string | null;
         lastReviewVerdict: string | null;
+        // The review is a local session by default; a test about an external
+        // reviewer (#2369) overrides these to null and sets the run columns.
+        reviewSessionId: number | null;
         reviewFindingsIngestedSessionId: number | null;
+        reviewRunId: string | null;
+        reviewRunDispatchedAt: Date | null;
+        reviewRunHeadSha: string | null;
+        reviewRunIngestedId: string | null;
         prNumber: number | null;
         autoApprove: boolean;
         worktreePath: string | null;
@@ -4245,6 +4336,46 @@ describe("reconcileTasks", () => {
         .all();
       expect(reviewSessionRow.status).toBe("killed");
       expect(row.reviewSessionId).toBeNull();
+
+      await app.close();
+    });
+
+    // #2369 — the auto-approve gate must see an external reviewer's run as an
+    // ingested review (or it never reaches the conflict branch at all), and the
+    // rebase must clear the whole run handle so the next round dispatches fresh.
+    it("auto-rebases a reviewing task whose approved review is an external run, and clears the run (#2369)", async () => {
+      const app = await buildApp();
+      vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
+      const { taskId } = await createAutoApproveCandidate(app, {
+        branchName: "mullion/task-x",
+        agentCommand: "claude",
+        reviewSessionId: null,
+        reviewFindingsIngestedSessionId: null,
+        reviewRunId: "run_approved",
+        reviewRunDispatchedAt: new Date(Date.now() - 60 * 60_000),
+        reviewRunHeadSha: "sha-1",
+        reviewRunIngestedId: "run_approved",
+      });
+      mockGetPullRequestByNumber.mockResolvedValue(
+        mockPr({ mergeable: false, mergeableState: "dirty" }),
+      );
+      mockFetchRunsForHead.mockResolvedValue(ciRun("success"));
+      mockResumeTaskWorktree.mockResolvedValue({
+        path: "/tmp/.mullion-worktrees/mullion-task-x",
+        branch: "mullion/task-x",
+      });
+
+      mockStopHermesRun.mockClear();
+      await reconcileTasks(app);
+
+      const row = await getTask(app, taskId);
+      expect(mockStopHermesRun).toHaveBeenCalledWith(expect.anything(), "run_approved");
+      expect(row.rebaseAttempts).toBe(1);
+      expect(row.rebaseStartedAt).not.toBeNull();
+      expect(row.reviewRunId).toBeNull();
+      expect(row.reviewRunDispatchedAt).toBeNull();
+      expect(row.reviewRunHeadSha).toBeNull();
+      expect(row.reviewRunIngestedId).toBeNull();
 
       await app.close();
     });
@@ -9620,6 +9751,31 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    it("clears an external reviewer's run too when it re-arms (#2369)", async () => {
+      const app = await buildApp();
+      const { task } = await createCappedAnnouncedTask(app, {
+        reviewSessionId: null,
+        reviewFindingsIngestedSessionId: null,
+        reviewRunId: "run_capped",
+        reviewRunDispatchedAt: new Date(Date.now() - 60 * 60_000),
+        reviewRunHeadSha: "sha-old",
+        reviewRunIngestedId: "run_capped",
+      });
+      setRepoPRsStatus("o", "r", prStatus(9, "sha-new"));
+
+      await reconcileTasks(app);
+
+      const row = await getTask(app, task.id);
+      expect(row.autoReturnCapAnnouncedAt).toBeNull();
+      expect(row.reviewRunId).toBeNull();
+      expect(row.reviewRunDispatchedAt).toBeNull();
+      expect(row.reviewRunHeadSha).toBeNull();
+      expect(row.reviewRunIngestedId).toBeNull();
+      expect(row.lastReviewedHeadSha).toBe("sha-new");
+
+      await app.close();
+    });
+
     it("does not re-arm when the PR's head SHA matches what was last reviewed", async () => {
       const app = await buildApp();
       const { task } = await createCappedAnnouncedTask(app);
@@ -9775,6 +9931,78 @@ describe("reconcileTasks", () => {
 
       killSpy.mockRestore();
       await app.close();
+    });
+
+    describe("an external reviewer's run (#2369)", () => {
+      // A review by an external reviewer: a run, with no review session.
+      const stalledRun = {
+        reviewSessionId: null,
+        reviewFindingsIngestedSessionId: null,
+        reviewRunId: "run_stalled",
+        reviewRunDispatchedAt: new Date(Date.now() - 2 * 60 * 60_000),
+        reviewRunHeadSha: "sha-1",
+        reviewRunIngestedId: "run_stalled",
+      } as const;
+
+      it("re-arms a stalled inconclusive run once the grace period has elapsed, clearing every run column", async () => {
+        const app = await buildApp();
+        const { task } = await createStalledInconclusiveTask(app, stalledRun);
+        const sessionsModule = await import("../../src/services/session-lifecycle.js");
+        const killSpy = vi.spyOn(sessionsModule, "killSession").mockResolvedValue(null);
+
+        mockStopHermesRun.mockClear();
+        await reconcileTasks(app);
+
+        const row = await getTask(app, task.id);
+        expect(row.reviewRunId).toBeNull();
+        expect(row.reviewRunDispatchedAt).toBeNull();
+        expect(row.reviewRunHeadSha).toBeNull();
+        expect(row.reviewRunIngestedId).toBeNull();
+        expect(mockStopHermesRun).toHaveBeenCalledWith(expect.anything(), "run_stalled");
+        expect(row.inconclusiveReviewRearmCount).toBe(1);
+        expect(row.status).toBe("reviewing");
+        expect(row.autoReturnRounds).toBe(0);
+        expect(row.lastReviewVerdict).toBe("inconclusive");
+        // There is no review session to kill.
+        expect(killSpy).not.toHaveBeenCalled();
+
+        killSpy.mockRestore();
+        await app.close();
+      });
+
+      it("does not re-arm a run whose verdict has not been ingested yet", async () => {
+        // The verdict column still holds the previous round's "inconclusive"
+        // while the fresh run is out — re-arming now would stop a healthy run.
+        const app = await buildApp();
+        const { task } = await createStalledInconclusiveTask(app, {
+          ...stalledRun,
+          reviewRunIngestedId: null,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, task.id);
+        expect(row.reviewRunId).toBe("run_stalled");
+        expect(row.inconclusiveReviewRearmCount).toBe(0);
+
+        await app.close();
+      });
+
+      it("does not re-arm a run within the grace period", async () => {
+        const app = await buildApp();
+        const { task } = await createStalledInconclusiveTask(app, {
+          ...stalledRun,
+          lastReviewVerdictAt: new Date(Date.now() - 60_000),
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, task.id);
+        expect(row.reviewRunId).toBe("run_stalled");
+        expect(row.inconclusiveReviewRearmCount).toBe(0);
+
+        await app.close();
+      });
     });
 
     // Same reasoning as the in_progress -> reviewing transition's own kill
@@ -10826,6 +11054,472 @@ describe("reconcileTasks", () => {
       await notifyApprovalsAwaitingHuman(app);
       expect(mockNotifyTaskNeedsAttention).toHaveBeenCalledTimes(21);
       await app.close();
+    });
+  });
+
+  describe("Hermes as the review agent (#2369)", () => {
+    const HOUR = 60 * 60_000;
+
+    beforeEach(() => {
+      mockHermesUsable.mockReset().mockReturnValue(true);
+      mockDispatchTaskReview.mockReset().mockResolvedValue({
+        runId: "run_1",
+        status: "queued",
+        replayed: false,
+        idempotencyKey: "k",
+        sessionId: "s",
+      });
+      mockPollTaskReview.mockReset();
+      mockStopHermesRun.mockReset();
+      mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
+      mockResolveGitHubToken.mockResolvedValue("tok");
+      mockGetPullRequestByNumber.mockResolvedValue({
+        number: 9,
+        htmlUrl: "https://x/pull/9",
+        nodeId: "n",
+        draft: true,
+        headSha: "sha1",
+      });
+      mockFetchRunsForHead.mockResolvedValue([
+        {
+          name: "CI",
+          status: "completed",
+          conclusion: "success",
+          htmlUrl: "https://x/1",
+          headSha: "sha1",
+        },
+      ]);
+    });
+
+    afterEach(() => {
+      mockHermesUsable.mockReset().mockReturnValue(false);
+      mockResolveRepoRef.mockImplementation(
+        actualHostGitModule.resolveRepoRef as (...args: unknown[]) => unknown,
+      );
+      mockResolveGitHubToken.mockImplementation(actualGithubIntegrationModule.resolveGitHubToken);
+      mockGetPullRequestByNumber.mockImplementation(actualGithubWriteModule.getPullRequestByNumber);
+    });
+
+    // A task already in `reviewing` whose project reviews with Hermes.
+    async function createHermesTask(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      overrides: Partial<typeof tasks.$inferInsert> = {},
+    ): Promise<number> {
+      const project = await app.inject({
+        method: "POST",
+        url: "/api/projects",
+        payload: { allowDuplicate: true, createDir: true, name: "p-hermes", cwd: "/tmp" },
+      });
+      const projectId = project.json().id as number;
+      app.db
+        .update(projects)
+        .set({ defaultReviewAgent: "hermes" })
+        .where(eq(projects.id, projectId))
+        .run();
+      const [row] = app.db
+        .insert(tasks)
+        .values({
+          projectId,
+          title: "hermes reviewed",
+          body: "some spec",
+          status: "reviewing",
+          reviewingAt: new Date(),
+          prNumber: 9,
+          worktreePath: "/tmp",
+          agentCommand: "codex",
+          ...overrides,
+        })
+        .returning()
+        .all();
+      return row.id;
+    }
+
+    // A task whose run is already dispatched.
+    function createDispatchedTask(
+      app: Awaited<ReturnType<typeof buildApp>>,
+      overrides: Partial<typeof tasks.$inferInsert> = {},
+    ): Promise<number> {
+      return createHermesTask(app, {
+        reviewRunId: "run_1",
+        reviewRunDispatchedAt: new Date(),
+        reviewRunHeadSha: "sha1",
+        ...overrides,
+      });
+    }
+
+    const cleanReply = JSON.stringify({ verdict: "clean", summary: "All good." });
+
+    describe("dispatch", () => {
+      it("starts one run for a reviewing task and records the run, not a session", async () => {
+        const app = await buildApp();
+        const taskId = await createHermesTask(app);
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.reviewRunId).toBe("run_1");
+        expect(row.reviewRunHeadSha).toBe("sha1");
+        expect(row.reviewRunDispatchedAt).not.toBeNull();
+        expect(row.reviewSessionId).toBeNull();
+        expect(row.reviewSpawnClaimedAt).toBeNull();
+        expect(mockDispatchTaskReview).toHaveBeenCalledTimes(1);
+        const [, call] = mockDispatchTaskReview.mock.calls[0];
+        expect(call.taskId).toBe(taskId);
+        expect(call.target).toMatchObject({ owner: "o", repo: "r", prNumber: 9, headSha: "sha1" });
+        expect(call.prompt).toContain("sha1");
+
+        // The run now exists: a later tick does not dispatch another.
+        mockPollTaskReview.mockResolvedValue({ status: "running", terminal: false, gone: false });
+        await reconcileTasks(app);
+        expect(mockDispatchTaskReview).toHaveBeenCalledTimes(1);
+        await app.close();
+      });
+
+      it("does nothing when Hermes is not usable", async () => {
+        mockHermesUsable.mockReturnValue(false);
+        const app = await buildApp();
+        const taskId = await createHermesTask(app);
+
+        await reconcileTasks(app);
+
+        expect(mockDispatchTaskReview).not.toHaveBeenCalled();
+        expect((await getTask(app, taskId)).reviewRunId).toBeNull();
+        await app.close();
+      });
+
+      it("waits for CI like the session spawn does", async () => {
+        const app = await buildApp();
+        const taskId = await createHermesTask(app);
+        mockFetchRunsForHead.mockResolvedValue([
+          { name: "CI", status: "in_progress", conclusion: null, htmlUrl: "", headSha: "sha1" },
+        ]);
+
+        await reconcileTasks(app);
+
+        expect(mockDispatchTaskReview).not.toHaveBeenCalled();
+        expect((await getTask(app, taskId)).reviewRunId).toBeNull();
+        await app.close();
+      });
+
+      it("leaves a task with no pull request alone", async () => {
+        const app = await buildApp();
+        await createHermesTask(app, { prNumber: null });
+        await reconcileTasks(app);
+        expect(mockDispatchTaskReview).not.toHaveBeenCalled();
+        await app.close();
+      });
+
+      it("holds back while an auto-rebase is in flight", async () => {
+        const app = await buildApp();
+        await createHermesTask(app, { rebaseStartedAt: new Date() });
+        await reconcileTasks(app);
+        expect(mockDispatchTaskReview).not.toHaveBeenCalled();
+        await app.close();
+      });
+
+      it("never lets the session spawn pass take a Hermes task", async () => {
+        const app = await buildApp();
+        const taskId = await createDispatchedTask(app);
+        mockPollTaskReview.mockResolvedValue({ status: "running", terminal: false, gone: false });
+        await reconcileTasks(app);
+        expect((await getTask(app, taskId)).reviewSessionId).toBeNull();
+        await app.close();
+      });
+
+      it("releases the claim and retries when Hermes is unreachable", async () => {
+        const app = await buildApp();
+        const taskId = await createHermesTask(app);
+        mockDispatchTaskReview.mockRejectedValueOnce(new Error("connection refused"));
+
+        await reconcileTasks(app);
+
+        let row = await getTask(app, taskId);
+        expect(row.reviewRunId).toBeNull();
+        expect(row.reviewSpawnClaimedAt).toBeNull();
+        expect(row.lastReviewVerdict).toBeNull();
+
+        await reconcileTasks(app);
+        row = await getTask(app, taskId);
+        expect(row.reviewRunId).toBe("run_1");
+        await app.close();
+      });
+
+      it("gives up after 30 minutes with an inconclusive review on a stand-in run id", async () => {
+        const app = await buildApp();
+        const taskId = await createHermesTask(app, {
+          reviewingAt: new Date(Date.now() - 31 * 60_000),
+        });
+        mockDispatchTaskReview.mockRejectedValue(new Error("connection refused"));
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.reviewRunId).toMatch(/^unsent:/);
+        expect(row.reviewRunIngestedId).toBe(row.reviewRunId);
+        expect(row.lastReviewVerdict).toBe("inconclusive");
+        expect(row.reviewFindings).toContain("Hermes could not be reached");
+
+        // The stand-in is never polled or stopped.
+        await reconcileTasks(app);
+        expect(mockPollTaskReview).not.toHaveBeenCalled();
+        expect(mockStopHermesRun).not.toHaveBeenCalled();
+        await app.close();
+      });
+
+      it("stops the run it just started when the task left reviewing mid-dispatch", async () => {
+        const app = await buildApp();
+        const taskId = await createHermesTask(app);
+        mockDispatchTaskReview.mockImplementationOnce(async () => {
+          app.db.update(tasks).set({ status: "done" }).where(eq(tasks.id, taskId)).run();
+          return { runId: "run_orphan", status: "queued", replayed: false };
+        });
+
+        await reconcileTasks(app);
+
+        expect((await getTask(app, taskId)).reviewRunId).toBeNull();
+        expect(mockStopHermesRun).toHaveBeenCalledWith(expect.anything(), "run_orphan");
+        await app.close();
+      });
+    });
+
+    describe("polling and ingest", () => {
+      it("keeps waiting while the run is in flight", async () => {
+        const app = await buildApp();
+        const taskId = await createDispatchedTask(app);
+        mockPollTaskReview.mockResolvedValue({ status: "running", terminal: false, gone: false });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.reviewRunIngestedId).toBeNull();
+        expect(row.lastReviewVerdict).toBeNull();
+        await app.close();
+      });
+
+      it("ingests a clean reply: verdict, marker, head and a posted review", async () => {
+        const app = await buildApp();
+        const taskId = await createDispatchedTask(app);
+        mockPollTaskReview.mockResolvedValue({
+          status: "completed",
+          output: cleanReply,
+          terminal: true,
+          gone: false,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.lastReviewVerdict).toBe("approved");
+        expect(row.reviewRunIngestedId).toBe("run_1");
+        expect(row.lastReviewedHeadSha).toBe("sha1");
+        expect(row.reviewFindings).toContain("All good.");
+        expect(mockCreatePullRequestReview).toHaveBeenCalled();
+
+        // Ingested once: the next tick neither polls nor posts again.
+        mockPollTaskReview.mockClear();
+        mockCreatePullRequestReview.mockClear();
+        await reconcileTasks(app);
+        expect(mockPollTaskReview).not.toHaveBeenCalled();
+        expect(mockCreatePullRequestReview).not.toHaveBeenCalled();
+        await app.close();
+      });
+
+      it("reads the findings JSON out of a reply that wraps it in prose", async () => {
+        const app = await buildApp();
+        const taskId = await createDispatchedTask(app);
+        mockPollTaskReview.mockResolvedValue({
+          status: "completed",
+          output: `Here is my review:\n\n\`\`\`json\n${cleanReply}\n\`\`\``,
+          terminal: true,
+          gone: false,
+        });
+
+        await reconcileTasks(app);
+
+        expect((await getTask(app, taskId)).lastReviewVerdict).toBe("approved");
+        await app.close();
+      });
+
+      it("returns the findings to the worker on changes-requested", async () => {
+        const app = await buildApp();
+        const taskId = await createDispatchedTask(app);
+        mockPollTaskReview.mockResolvedValue({
+          status: "completed",
+          output: JSON.stringify({
+            verdict: "changes-requested",
+            summary: "Needs work.",
+            findings: [{ path: "src/foo.ts", line: 1, severity: "blocker", body: "Fix this." }],
+          }),
+          terminal: true,
+          gone: false,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.lastReviewVerdict).toBe("changes-requested");
+        expect(row.reviewFindings).toContain("Fix this.");
+        await app.close();
+      });
+
+      it("treats a reply that is not the findings JSON as inconclusive, never changes-requested", async () => {
+        const app = await buildApp();
+        const taskId = await createDispatchedTask(app);
+        mockPollTaskReview.mockResolvedValue({
+          status: "completed",
+          output: "Looks fine to me, nice work!",
+          terminal: true,
+          gone: false,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.lastReviewVerdict).toBe("inconclusive");
+        expect(row.reviewRunIngestedId).toBe("run_1");
+        expect(row.reviewFindings).toContain("not the findings JSON");
+        expect(row.status).toBe("reviewing");
+        await app.close();
+      });
+
+      it("treats a failed run as inconclusive and names the error", async () => {
+        const app = await buildApp();
+        const taskId = await createDispatchedTask(app);
+        mockPollTaskReview.mockResolvedValue({
+          status: "failed",
+          error: "model overloaded",
+          terminal: true,
+          gone: false,
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.lastReviewVerdict).toBe("inconclusive");
+        expect(row.reviewFindings).toContain("model overloaded");
+        await app.close();
+      });
+
+      it("waits for three consecutive gone answers before giving up on a run", async () => {
+        const app = await buildApp();
+        const taskId = await createDispatchedTask(app, { reviewRunId: "run_gone" });
+        mockPollTaskReview.mockResolvedValue({ status: "not_found", terminal: false, gone: true });
+
+        await reconcileTasks(app);
+        await reconcileTasks(app);
+        expect((await getTask(app, taskId)).lastReviewVerdict).toBeNull();
+
+        await reconcileTasks(app);
+        const row = await getTask(app, taskId);
+        expect(row.lastReviewVerdict).toBe("inconclusive");
+        expect(row.reviewFindings).toContain("no longer knows");
+        await app.close();
+      });
+
+      it("a live answer resets the gone count", async () => {
+        const app = await buildApp();
+        const taskId = await createDispatchedTask(app, { reviewRunId: "run_blip" });
+        const gone = { status: "not_found", terminal: false, gone: true };
+        const live = { status: "running", terminal: false, gone: false };
+        mockPollTaskReview
+          .mockResolvedValueOnce(gone)
+          .mockResolvedValueOnce(gone)
+          .mockResolvedValueOnce(live)
+          .mockResolvedValueOnce(gone)
+          .mockResolvedValueOnce(gone);
+
+        for (let i = 0; i < 5; i++) await reconcileTasks(app);
+
+        expect((await getTask(app, taskId)).lastReviewVerdict).toBeNull();
+        await app.close();
+      });
+
+      it("stops a run that is still going after 60 minutes and records it inconclusive", async () => {
+        const app = await buildApp();
+        const taskId = await createDispatchedTask(app, {
+          reviewRunDispatchedAt: new Date(Date.now() - HOUR - 60_000),
+        });
+        mockPollTaskReview.mockResolvedValue({ status: "running", terminal: false, gone: false });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.lastReviewVerdict).toBe("inconclusive");
+        expect(row.reviewFindings).toContain("60 minutes");
+        expect(mockStopHermesRun).toHaveBeenCalledWith(expect.anything(), "run_1");
+        await app.close();
+      });
+
+      it("keeps waiting when Hermes cannot be read, until the 60-minute cap", async () => {
+        const app = await buildApp();
+        const fresh = await createDispatchedTask(app);
+        mockPollTaskReview.mockRejectedValue(new Error("connection refused"));
+
+        await reconcileTasks(app);
+        expect((await getTask(app, fresh)).lastReviewVerdict).toBeNull();
+
+        const stale = await createDispatchedTask(app, {
+          reviewRunId: "run_old",
+          reviewRunDispatchedAt: new Date(Date.now() - HOUR - 60_000),
+        });
+        await reconcileTasks(app);
+        expect((await getTask(app, stale)).lastReviewVerdict).toBe("inconclusive");
+        await app.close();
+      });
+
+      it("records one outcome per run when two passes ingest it at once", async () => {
+        const app = await buildApp();
+        const taskId = await createDispatchedTask(app);
+        mockPollTaskReview.mockResolvedValue({
+          status: "completed",
+          output: cleanReply,
+          terminal: true,
+          gone: false,
+        });
+        mockCreatePullRequestReview.mockClear();
+
+        await Promise.all([reconcileTasks(app), reconcileTasks(app)]);
+
+        const row = await getTask(app, taskId);
+        expect(row.lastReviewVerdict).toBe("approved");
+        expect(row.reviewFindings?.match(/## Round/g)).toHaveLength(1);
+        expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
+        await app.close();
+      });
+
+      it("resumes a run found in the database after a restart", async () => {
+        const app = await buildApp();
+        const taskId = await createDispatchedTask(app, { reviewRunId: "run_survivor" });
+        mockPollTaskReview.mockResolvedValue({
+          status: "completed",
+          output: cleanReply,
+          terminal: true,
+          gone: false,
+        });
+
+        await reconcileTasks(app);
+
+        expect(mockPollTaskReview).toHaveBeenCalledWith(expect.anything(), "run_survivor");
+        expect((await getTask(app, taskId)).lastReviewVerdict).toBe("approved");
+        await app.close();
+      });
+
+      it("still finishes a run when Hermes has since been switched off", async () => {
+        mockHermesUsable.mockReturnValue(false);
+        const app = await buildApp();
+        const taskId = await createDispatchedTask(app);
+        mockPollTaskReview.mockResolvedValue({
+          status: "completed",
+          output: cleanReply,
+          terminal: true,
+          gone: false,
+        });
+
+        await reconcileTasks(app);
+
+        expect((await getTask(app, taskId)).lastReviewVerdict).toBe("approved");
+        await app.close();
+      });
     });
   });
 });

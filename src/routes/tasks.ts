@@ -25,7 +25,8 @@ import {
 } from "../services/task-github-sync.js";
 import { deriveTaskBranchName } from "../services/git-worktree.js";
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
-import { resolveReviewAgentCommand } from "../services/task-agent-resolve.js";
+import { resolveReviewer } from "../services/task-agent-resolve.js";
+import { stopHermesRunQuietly } from "../services/hermes-task-review.js";
 import { closeDraftPRForTask } from "../services/task-promote.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "../services/task-approve.js";
 import {
@@ -46,6 +47,12 @@ import { isGitHubRateLimited } from "../services/github-fetch.js";
 import { killSession } from "../services/session-lifecycle.js";
 
 import { KNOWN_AGENTS } from "../services/agent-detect.js";
+import { HERMES_REVIEW_AGENT, hermesReviewAgentRefusal } from "../services/task-agent-resolve.js";
+import { CLEARED_REVIEW_RUN, hasReviewHandle } from "../services/task-review-handle.js";
+
+// A review agent is a CLI, "hermes" (the external reviewer, #2369 — not a CLI,
+// so not in KNOWN_AGENTS), or "none"; null falls through to the next tier.
+const REVIEW_AGENT_ENUM = [...KNOWN_AGENTS, HERMES_REVIEW_AGENT, "none", null];
 
 // Phase 6 (6.9/#233) — the only two statuses PR1 (this file, pre-6.2) knows
 // how to validate: a locally-created task starts "backlog" and the only
@@ -127,7 +134,7 @@ const createTaskSchema = {
       status: { type: "string", enum: [...LOCAL_CREATABLE_STATUSES] },
       boardOrder: { type: "integer", minimum: 0 },
       agent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
-      reviewAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, "none", null] },
+      reviewAgent: { type: ["string", "null"], enum: REVIEW_AGENT_ENUM },
     },
   },
 };
@@ -143,7 +150,7 @@ const updateTaskSchema = {
       status: { type: "string", enum: [...LOCAL_CREATABLE_STATUSES] },
       boardOrder: { type: "integer", minimum: 0 },
       agent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
-      reviewAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, "none", null] },
+      reviewAgent: { type: ["string", "null"], enum: REVIEW_AGENT_ENUM },
     },
   },
 };
@@ -154,7 +161,7 @@ const claimTaskSchema = {
     additionalProperties: false,
     properties: {
       agent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
-      reviewAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, "none", null] },
+      reviewAgent: { type: ["string", "null"], enum: REVIEW_AGENT_ENUM },
     },
   },
 };
@@ -198,6 +205,13 @@ const TASK_ROW_COLUMNS = {
   // against reviewSessionId (see TaskCard.tsx); wasn't previously exposed
   // to any API response.
   reviewFindingsIngestedSessionId: tasks.reviewFindingsIngestedSessionId,
+  // #2369 — an external reviewer's run, paired like the session columns above:
+  // the run, when it was dispatched, and the run whose verdict is ingested.
+  // deriveApprovalState reads these off this same row, so they must be named
+  // here or they arrive as `undefined`.
+  reviewRunId: tasks.reviewRunId,
+  reviewRunIngestedId: tasks.reviewRunIngestedId,
+  reviewRunDispatchedAt: tasks.reviewRunDispatchedAt,
   reviewFindings: tasks.reviewFindings,
   // How many auto-rebases the task has been through (the drawer says so).
   // `rebaseStartedAt`, which `reviewPhase`/`reReviewAt` are derived from, is
@@ -405,7 +419,10 @@ function withApprovalState<
   // Resolving the reviewer is an uncached settings read per call, and this runs
   // for every row of the polled task list (done and archived included), so the
   // cheap checks come first.
-  const canCarryPhase = row.status === "reviewing" && row.reviewSessionId === null;
+  const canCarryPhase =
+    row.status === "reviewing" &&
+    row.reviewSessionId === null &&
+    typeof row.reviewRunId !== "string";
   return {
     ...rest,
     approvalState: deriveApprovalState(row, taskMasterEnabled),
@@ -414,7 +431,7 @@ function withApprovalState<
       // The same resolution the spawn pass uses (processPendingReviewSpawns).
       reviewerConfigured:
         canCarryPhase &&
-        resolveReviewAgentCommand(app, {
+        resolveReviewer(app, {
           taskReviewAgent: row.reviewAgent,
           issueBody: row.body,
           projectDefaultReviewAgent: row.projectDefaultReviewAgent,
@@ -624,6 +641,8 @@ export async function tasksRoute(app: FastifyInstance) {
     async (request, reply) => {
       const { projectId, title, body, status, boardOrder, agent, reviewAgent } = request.body;
       if (!getProjectOr404(projectId)) return reply.notFound("Project not found");
+      const hermesRefusal = hermesReviewAgentRefusal(app, reviewAgent);
+      if (hermesRefusal) return reply.badRequest(hermesRefusal);
 
       const [created] = app.db
         .insert(tasks)
@@ -668,6 +687,8 @@ export async function tasksRoute(app: FastifyInstance) {
       if (!existing) return reply.notFound();
 
       const { title, body, status, boardOrder, agent, reviewAgent } = request.body;
+      const hermesRefusal = hermesReviewAgentRefusal(app, reviewAgent);
+      if (hermesRefusal) return reply.badRequest(hermesRefusal);
       if ((title !== undefined || body !== undefined) && existing.issueNumber !== null) {
         return reply.conflict(
           "Cannot edit title/body of a task linked to a GitHub issue — edit the issue itself; boardOrder, status, and agents remain editable here",
@@ -868,6 +889,7 @@ export async function tasksRoute(app: FastifyInstance) {
     task: typeof tasks.$inferSelect,
     project: typeof projects.$inferSelect,
   ): Promise<{ worktreeRemoved: boolean; branchDeleted: boolean }> {
+    stopHermesRunQuietly(app, task.reviewRunId);
     for (const sessionId of new Set([task.sessionId, task.reviewSessionId])) {
       if (sessionId === null) continue;
       try {
@@ -1346,6 +1368,8 @@ export async function tasksRoute(app: FastifyInstance) {
       if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
 
       const body = request.body ?? {};
+      const hermesRefusal = hermesReviewAgentRefusal(app, body.reviewAgent);
+      if (hermesRefusal) return reply.badRequest(hermesRefusal);
       const outcome = await enqueueTask(app, taskId, {
         auto: false,
         agent: body.agent,
@@ -1384,6 +1408,8 @@ export async function tasksRoute(app: FastifyInstance) {
       const taskId = Number(request.params.id);
       if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
 
+      const hermesRefusal = hermesReviewAgentRefusal(app, request.body?.reviewAgent);
+      if (hermesRefusal) return reply.badRequest(hermesRefusal);
       const outcome = await retryTask(app, taskId, request.body || undefined);
       if (!outcome.ok) {
         switch (outcome.reason) {
@@ -1798,9 +1824,12 @@ export async function tasksRoute(app: FastifyInstance) {
         `Cannot re-review a task whose last review verdict is "${existing.lastReviewVerdict ?? "none"}", not "inconclusive"`,
       );
     }
-    if (existing.reviewSessionId === null) {
+    if (!hasReviewHandle(existing)) {
       return reply.conflict("Task has no review session to re-arm");
     }
+    // The review is either a local session or a run on an external reviewer
+    // (#2369); whichever it is decides which ingest marker to look at below.
+    const reviewIsRun = typeof existing.reviewRunId === "string";
     // Hermes review finding — the automatic sweep's own eligibility query
     // (reannounceInconclusiveReviewsAfterGrace, task-reconciler.ts)
     // requires isNotNull(reviewFindingsIngestedSessionId), and this route
@@ -1814,12 +1843,18 @@ export async function tasksRoute(app: FastifyInstance) {
     // before — the two columns go stale independently. Without this check,
     // a second click during that window passes every other gate here and
     // kills a legitimately-running review agent for no reason.
-    if (existing.reviewFindingsIngestedSessionId === null) {
+    if (
+      reviewIsRun
+        ? existing.reviewRunIngestedId === null
+        : existing.reviewFindingsIngestedSessionId === null
+    ) {
       return reply.conflict(
         "Task's review session hasn't produced a result yet — nothing stale to re-arm",
       );
     }
+    // One of these is null: the stale review is a session or a run, not both.
     const staleReviewSessionId = existing.reviewSessionId;
+    const staleReviewRunId = existing.reviewRunId;
     const [updated] = app.db
       .update(tasks)
       .set({
@@ -1827,6 +1862,7 @@ export async function tasksRoute(app: FastifyInstance) {
         reviewFindingsIngestedSessionId: null,
         reviewSeedDelivered: null,
         reviewSpawnClaimedAt: null,
+        ...CLEARED_REVIEW_RUN,
         inconclusiveReviewRearmCount: existing.inconclusiveReviewRearmCount + 1,
       })
       .where(
@@ -1834,13 +1870,20 @@ export async function tasksRoute(app: FastifyInstance) {
           eq(tasks.id, taskId),
           eq(tasks.status, "reviewing"),
           eq(tasks.lastReviewVerdict, "inconclusive"),
-          eq(tasks.reviewSessionId, staleReviewSessionId),
+          staleReviewSessionId === null
+            ? isNull(tasks.reviewSessionId)
+            : eq(tasks.reviewSessionId, staleReviewSessionId),
+          staleReviewRunId === null
+            ? isNull(tasks.reviewRunId)
+            : eq(tasks.reviewRunId, staleReviewRunId),
           // Same reasoning as the read-time check above, re-applied at the
           // write for the same defense-in-depth reason the other three CAS
           // conditions already are — a concurrent write between the read
           // and this write could otherwise still let a stale
-          // reviewSessionId match while an ingest raced in behind it.
-          isNotNull(tasks.reviewFindingsIngestedSessionId),
+          // review handle match while an ingest raced in behind it.
+          reviewIsRun
+            ? isNotNull(tasks.reviewRunIngestedId)
+            : isNotNull(tasks.reviewFindingsIngestedSessionId),
         ),
       )
       .returning()
@@ -1853,12 +1896,14 @@ export async function tasksRoute(app: FastifyInstance) {
     // (task-reconciler.ts): a lost race against a concurrent approve/
     // reject/give-up must not leave a session killed out from under a row
     // this route no longer actually touched.
-    void killSession(app, staleReviewSessionId).catch((err) => {
-      app.log.warn(
-        { err, taskId, reviewSessionId: staleReviewSessionId },
-        "re-review: failed to kill the stale review session",
-      );
-    });
+    if (staleReviewSessionId !== null) {
+      void killSession(app, staleReviewSessionId).catch((err) => {
+        app.log.warn(
+          { err, taskId, reviewSessionId: staleReviewSessionId },
+          "re-review: failed to kill the stale review session",
+        );
+      });
+    }
     return updated;
   });
 

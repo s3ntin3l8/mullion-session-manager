@@ -8,6 +8,7 @@ import { applySettingsPatch, mergeSettings } from "../../src/services/settings.j
 import {
   clearHermesKey,
   getHermesKey,
+  hermesTaskReviewerUsable,
   setHermesKey,
 } from "../../src/services/hermes-integration.js";
 
@@ -38,7 +39,7 @@ describe("Hermes review relay integration routes", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     clearHermesKey(app);
-    applySettingsPatch(app, { reviewRelay: { apiUrl: "" } });
+    applySettingsPatch(app, { reviewRelay: { apiUrl: "", taskMasterReviewer: false } });
   });
 
   // Distinct client address per call: these routes are rate-limited per IP.
@@ -246,7 +247,37 @@ describe("Hermes review relay integration routes", () => {
         reviewerBotLogin: "s3ntin3l8-hermes[bot]",
         ledgerName: "Hermes review",
         reReviewAfterApproval: "refuse",
+        taskMasterReviewer: false,
       });
+    });
+
+    it("sanitises taskMasterReviewer: only a stored literal true enables it", () => {
+      // The reviewRelay object is rebuilt field by field when settings are read
+      // or written, so a field that sanitizeSettings doesn't name is dropped.
+      expect(mergeSettings({ reviewRelay: {} }).reviewRelay.taskMasterReviewer).toBe(false);
+      expect(
+        mergeSettings({ reviewRelay: { taskMasterReviewer: true } }).reviewRelay.taskMasterReviewer,
+      ).toBe(true);
+      expect(
+        mergeSettings({ reviewRelay: { taskMasterReviewer: "yes" as unknown as boolean } })
+          .reviewRelay.taskMasterReviewer,
+      ).toBe(false);
+      // Independent of the GitHub-side relay's own switch.
+      expect(
+        mergeSettings({ reviewRelay: { provider: "none", taskMasterReviewer: true } }).reviewRelay
+          .taskMasterReviewer,
+      ).toBe(true);
+    });
+
+    it("persists taskMasterReviewer through a settings patch and back off again", () => {
+      expect(
+        applySettingsPatch(app, { reviewRelay: { taskMasterReviewer: true } }).reviewRelay
+          .taskMasterReviewer,
+      ).toBe(true);
+      expect(
+        applySettingsPatch(app, { reviewRelay: { taskMasterReviewer: false } }).reviewRelay
+          .taskMasterReviewer,
+      ).toBe(false);
     });
 
     it("trims strings and falls back on an out-of-range cooldown", async () => {
@@ -318,6 +349,50 @@ describe("Hermes review relay integration routes", () => {
       ).toBe("Custom ledger");
       // Leave the shared settings as found.
       applySettingsPatch(app, { reviewRelay: { ledgerName: "Hermes review" } });
+    });
+  });
+
+  describe("hermesTaskReviewerUsable (#2369)", () => {
+    const connect = () => {
+      applySettingsPatch(app, {
+        reviewRelay: { apiUrl: "http://h:8643", taskMasterReviewer: true },
+      });
+      setHermesKey(app, "sekret-key"); // pragma: allowlist secret
+    };
+
+    it("is false by default: nothing is configured", () => {
+      expect(hermesTaskReviewerUsable(app)).toBe(false);
+    });
+
+    it("is true once the flag is on and both the URL and the key are set", () => {
+      connect();
+      expect(hermesTaskReviewerUsable(app)).toBe(true);
+    });
+
+    it("does not depend on the GitHub-side relay's provider switch", () => {
+      connect();
+      applySettingsPatch(app, { reviewRelay: { provider: "none" } });
+      expect(hermesTaskReviewerUsable(app)).toBe(true);
+    });
+
+    it("is false while the flag is off, even with a URL and a key", () => {
+      connect();
+      applySettingsPatch(app, { reviewRelay: { taskMasterReviewer: false } });
+      expect(hermesTaskReviewerUsable(app)).toBe(false);
+    });
+
+    it("is false without an API URL, or with only whitespace for one", () => {
+      connect();
+      applySettingsPatch(app, { reviewRelay: { apiUrl: "" } });
+      expect(hermesTaskReviewerUsable(app)).toBe(false);
+      applySettingsPatch(app, { reviewRelay: { apiUrl: "   " } });
+      expect(hermesTaskReviewerUsable(app)).toBe(false);
+    });
+
+    it("is false once the key is removed", () => {
+      connect();
+      clearHermesKey(app);
+      expect(hermesTaskReviewerUsable(app)).toBe(false);
     });
   });
 });

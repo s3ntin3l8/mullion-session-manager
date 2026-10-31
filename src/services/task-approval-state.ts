@@ -8,6 +8,8 @@ export interface ApprovalStateRow {
   prNumber: number | null;
   reviewSessionId: number | null;
   reviewFindingsIngestedSessionId: number | null;
+  reviewRunId: string | null;
+  reviewRunIngestedId: string | null;
   lastReviewVerdict: string | null;
   projectAutoApprove: boolean | null;
 }
@@ -39,6 +41,8 @@ export type ReviewPhase = "rebasing" | "awaiting-review" | "no-reviewer";
 export interface ReviewPhaseRow {
   status: string;
   reviewSessionId: number | null;
+  /** An external reviewer's run (#2369); optional so a row that omits it reads as none. */
+  reviewRunId?: string | null;
   rebaseStartedAt: Date | null;
   worktreePath: string | null;
 }
@@ -94,6 +98,8 @@ export function deriveReviewPhase(
 ): ReviewPhaseResult {
   const none = { reviewPhase: null, reReviewAt: null };
   if (row.status !== "reviewing" || row.reviewSessionId !== null) return none;
+  // A dispatched run is a live review, like a session: nothing is "coming".
+  if (typeof row.reviewRunId === "string") return none;
   if (!canSpawnReviewer(row, ctx)) {
     return ctx.taskMasterEnabled && row.worktreePath !== null
       ? { reviewPhase: "no-reviewer", reReviewAt: null }

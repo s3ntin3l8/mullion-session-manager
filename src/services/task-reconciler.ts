@@ -24,9 +24,22 @@ import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.j
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { canSpawnReviewer, deriveApprovalState } from "./task-approval-state.js";
-import { hasIngestedCurrentReview, hasReviewHandle } from "./task-review-handle.js";
+import {
+  CLEARED_REVIEW_RUN,
+  hasIngestedCurrentReview,
+  hasReviewHandle,
+} from "./task-review-handle.js";
 import { notifyTaskNeedsAttention } from "./push-delivery.js";
 import {
+  dispatchTaskReview,
+  extractFindingsJson,
+  isUnsentRunId,
+  pollTaskReview,
+  stopHermesRunQuietly,
+  unsentRunId,
+} from "./hermes-task-review.js";
+import {
+  resolveReviewer,
   resolveReviewAgentCommand,
   commandSupportsSeed,
   resolveSeedDelivered,
@@ -673,6 +686,8 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
       and(
         eq(tasks.status, "reviewing"),
         isNull(tasks.reviewSessionId),
+        // A review dispatched to an external reviewer (#2369) is not "missing".
+        isNull(tasks.reviewRunId),
         // Exclude tasks with an in-flight auto-rebase attempt (which runs a worker
         // in task.worktreePath). Spawning a reviewer concurrently would put two autonomous
         // agent PTYs writing to one worktree simultaneously.
@@ -805,6 +820,7 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
               eq(tasks.id, task.id),
               eq(tasks.status, "reviewing"),
               isNull(tasks.reviewSessionId),
+              isNull(tasks.reviewRunId),
               or(
                 isNull(tasks.reviewSpawnClaimedAt),
                 lt(tasks.reviewSpawnClaimedAt, new Date(now - REVIEW_SPAWN_CLAIM_STALE_MS)),
@@ -824,6 +840,372 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
           reviewModel,
           reviewSmallModel,
         );
+      }
+    }),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Hermes as the review agent (#2369). A review there is an HTTP run stored on
+// the task (`reviewRunId`), not a session: `processHermesDispatch` starts it,
+// `processHermesRuns` polls it and feeds the reply through the same
+// `ingestReviewOutcome` a session review ends in.
+// ---------------------------------------------------------------------------
+
+// Dispatch keeps retrying while Hermes is unreachable; this long after the task
+// entered `reviewing` it gives up and records an inconclusive review, so the
+// one automatic re-arm (and then a human) takes over. No CLI fallback.
+const HERMES_DISPATCH_GIVE_UP_MS = 30 * 60_000;
+// A run that has not finished this long after it was dispatched is stopped.
+const HERMES_RUN_MAX_MS = 60 * 60_000;
+// Hermes forgets a run after its window; one "gone" answer could be a blip.
+const HERMES_GONE_POLLS = 3;
+// Process-local, like the draft-PR retry state: a restart only restarts the count.
+const HERMES_STATE_MAX_ENTRIES = 500;
+const hermesGonePolls = new Map<string, number>();
+const hermesDispatchFailures = new Map<number, number>();
+
+function bumpBounded<K>(map: Map<K, number>, key: K): number {
+  const next = (map.get(key) ?? 0) + 1;
+  if (!map.has(key) && map.size >= HERMES_STATE_MAX_ENTRIES) {
+    const oldest = map.keys().next();
+    if (!oldest.done) map.delete(oldest.value);
+  }
+  map.set(key, next);
+  return next;
+}
+
+/** Ends a round whose run never produced a reply, as an inconclusive review. */
+async function ingestHermesInconclusive(
+  app: FastifyInstance,
+  row: { task: typeof tasks.$inferSelect; project: typeof projects.$inferSelect },
+  runId: string,
+  reason: string,
+  now: number,
+): Promise<void> {
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  await ingestReviewOutcome(app, {
+    ...row,
+    parsed: null,
+    finished: false,
+    noFindingsReason: reason,
+    now,
+    backend: resolveBackend(app, resolveTaskWorkerHost(app, row.task)),
+    resolvedTaskMaster,
+    latch: { kind: "run", runId },
+    reviewedHeadSha: row.task.reviewRunHeadSha ?? undefined,
+    cleanupFindingsFile: async () => {},
+  });
+}
+
+/**
+ * Starts the review run for every `reviewing` task whose reviewer resolves to
+ * Hermes and which has none yet. Awaited AFTER `processPendingReviewSpawns`
+ * (same CI wait, same rebase hold-back, same claim slot), so a task that
+ * entered `reviewing` earlier in this tick is dispatched in it.
+ */
+async function processHermesDispatch(app: FastifyInstance): Promise<void> {
+  const resolvedTaskMaster = resolveTaskMasterConfig(app);
+  if (!resolvedTaskMaster.enabled) return;
+  const now = Date.now();
+  const rows = app.db
+    .select({ task: tasks, project: projects })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(
+      and(
+        eq(tasks.status, "reviewing"),
+        isNull(tasks.reviewSessionId),
+        isNull(tasks.reviewRunId),
+        isNotNull(tasks.prNumber),
+        or(
+          isNull(tasks.rebaseStartedAt),
+          lte(tasks.rebaseStartedAt, new Date(now - REBASE_ATTEMPT_STALE_MS)),
+        ),
+      ),
+    )
+    .all();
+  if (rows.length === 0) return;
+
+  await Promise.all(
+    rows.map(async ({ task, project }) => {
+      if (!task.worktreePath || task.prNumber === null) return;
+      const reviewer = resolveReviewer(app, {
+        taskReviewAgent: task.reviewAgent,
+        issueBody: task.body,
+        projectDefaultReviewAgent: project.defaultReviewAgent,
+      });
+      if (reviewer?.kind !== "hermes") return;
+
+      const ci = await resolveReviewCi(
+        app,
+        task,
+        project,
+        resolvedTaskMaster.reviewCiWaitMinutes,
+        now,
+      );
+      if (ci === "wait") return;
+
+      // Same claim slot and stale rule as the session spawn.
+      const claimed = app.db
+        .update(tasks)
+        .set({ reviewSpawnClaimedAt: new Date(now) })
+        .where(
+          and(
+            eq(tasks.id, task.id),
+            eq(tasks.status, "reviewing"),
+            isNull(tasks.reviewSessionId),
+            isNull(tasks.reviewRunId),
+            or(
+              isNull(tasks.reviewSpawnClaimedAt),
+              lt(tasks.reviewSpawnClaimedAt, new Date(now - REVIEW_SPAWN_CLAIM_STALE_MS)),
+            ),
+          ),
+        )
+        .run();
+      if (claimed.changes === 0) return;
+
+      const releaseClaim = (): void => {
+        app.db
+          .update(tasks)
+          .set({ reviewSpawnClaimedAt: null })
+          .where(and(eq(tasks.id, task.id), isNull(tasks.reviewRunId)))
+          .run();
+      };
+      try {
+        const repoRef = await resolveRepoRef(app, project);
+        if (!repoRef) throw new Error("the project's GitHub repository could not be resolved");
+        const headSha =
+          ci?.headSha ??
+          (await (async () => {
+            const token = await resolveGitHubToken(app, repoRef, "read");
+            if (!token) throw new Error("no GitHub token to read the pull request head");
+            return (
+              await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber!)
+            ).headSha;
+          })());
+        const priorRound = priorRoundFor(task);
+        const roundsRemaining = Math.max(
+          0,
+          resolveMaxAutoReturnRounds(project, resolvedTaskMaster.maxAutoReturnRounds) -
+            task.autoReturnRounds,
+        );
+        const prompt = buildReviewPrompt({
+          task,
+          ci,
+          roundsRemaining,
+          priorRound,
+          output: "reply",
+          workspace: "clone",
+          remote: {
+            owner: repoRef.owner,
+            repo: repoRef.repo,
+            headSha,
+            baseSha: priorRound?.reviewedSha ?? undefined,
+            prNumber: task.prNumber,
+          },
+        });
+        const run = await dispatchTaskReview(app, {
+          taskId: task.id,
+          round: task.autoReturnRounds,
+          rearms: task.inconclusiveReviewRearmCount,
+          target: {
+            owner: repoRef.owner,
+            repo: repoRef.repo,
+            prNumber: task.prNumber,
+            headSha,
+            baseSha: priorRound?.reviewedSha ?? undefined,
+          },
+          prompt,
+        });
+        const attached = app.db
+          .update(tasks)
+          .set({
+            reviewRunId: run.runId,
+            reviewRunDispatchedAt: new Date(now),
+            reviewRunHeadSha: headSha,
+            reviewSpawnClaimedAt: null,
+          })
+          .where(
+            and(
+              eq(tasks.id, task.id),
+              eq(tasks.status, "reviewing"),
+              isNull(tasks.reviewSessionId),
+              isNull(tasks.reviewRunId),
+            ),
+          )
+          .run();
+        if (attached.changes === 0) {
+          // The task moved on while the dispatch was in flight; nothing will
+          // ever read this run, so stop it rather than let it review for no one.
+          app.log.warn(
+            { taskId: task.id, runId: run.runId },
+            "task reconcile: task left 'reviewing' while its Hermes review was dispatching — stopping the orphaned run",
+          );
+          stopHermesRunQuietly(app, run.runId);
+          return;
+        }
+        hermesDispatchFailures.delete(task.id);
+        app.log.info(
+          { taskId: task.id, runId: run.runId, replayed: run.replayed },
+          "task reconcile: Hermes review dispatched",
+        );
+      } catch (err) {
+        releaseClaim();
+        const failures = bumpBounded(hermesDispatchFailures, task.id);
+        // First failure and then every tenth: a down Hermes would otherwise
+        // log once per task per tick.
+        if (failures === 1 || failures % 10 === 0) {
+          app.log.warn(
+            { err, taskId: task.id, failures },
+            "task reconcile: Hermes review dispatch failed — will retry",
+          );
+        }
+        // Every path into `reviewing` stamps `reviewingAt`; the fallbacks keep the
+        // give-up bound unconditional if one ever does not.
+        const enteredMs = (task.reviewingAt ?? task.claimedAt ?? task.createdAt).getTime();
+        const waitedMs = now - enteredMs;
+        if (waitedMs < HERMES_DISPATCH_GIVE_UP_MS) return;
+
+        // Give up: record an inconclusive review against a stand-in run id so
+        // the one automatic re-arm retries it.
+        const standIn = unsentRunId({
+          taskId: task.id,
+          round: task.autoReturnRounds,
+          rearms: task.inconclusiveReviewRearmCount,
+        });
+        const written = app.db
+          .update(tasks)
+          .set({
+            reviewRunId: standIn,
+            reviewRunDispatchedAt: new Date(now),
+            reviewRunHeadSha: null,
+          })
+          .where(
+            and(
+              eq(tasks.id, task.id),
+              eq(tasks.status, "reviewing"),
+              isNull(tasks.reviewSessionId),
+              isNull(tasks.reviewRunId),
+            ),
+          )
+          .run();
+        if (written.changes === 0) return;
+        hermesDispatchFailures.delete(task.id);
+        await ingestHermesInconclusive(
+          app,
+          { task: { ...task, reviewRunId: standIn, reviewRunHeadSha: null }, project },
+          standIn,
+          `Hermes could not be reached to start the review (${err instanceof Error ? err.message : String(err)})`,
+          now,
+        );
+      }
+    }),
+  );
+}
+
+/**
+ * Polls every in-flight Hermes review run and, once it has an outcome, ingests
+ * it. Awaited immediately BEFORE `processReviewingTasks`, so the auto-approve
+ * pass later in the same tick sees the verdict. Ungated by the setting and by
+ * the Task Master switch's reviewer choice: a run already in flight finishes
+ * even if Hermes was turned off since, and the poll needs only the stored URL
+ * and key. An unreadable run keeps waiting; the 60-minute cap bounds it.
+ */
+async function processHermesRuns(app: FastifyInstance): Promise<void> {
+  const now = Date.now();
+  const rows = app.db
+    .select({ task: tasks, project: projects })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(
+      and(
+        eq(tasks.status, "reviewing"),
+        isNotNull(tasks.reviewRunId),
+        or(isNull(tasks.reviewRunIngestedId), ne(tasks.reviewRunIngestedId, tasks.reviewRunId)),
+      ),
+    )
+    .all();
+  if (rows.length === 0) return;
+
+  await Promise.all(
+    rows.map(async (row) => {
+      const { task } = row;
+      const runId = task.reviewRunId;
+      if (runId === null || isUnsentRunId(runId)) return;
+      const dispatchedMs = task.reviewRunDispatchedAt?.getTime() ?? now;
+      const overdue = now - dispatchedMs >= HERMES_RUN_MAX_MS;
+      try {
+        const poll = await pollTaskReview(app, runId);
+
+        if (poll.gone) {
+          const seen = bumpBounded(hermesGonePolls, runId);
+          if (seen < HERMES_GONE_POLLS) return;
+          hermesGonePolls.delete(runId);
+          await ingestHermesInconclusive(
+            app,
+            row,
+            runId,
+            "Hermes no longer knows the review run",
+            now,
+          );
+          return;
+        }
+        hermesGonePolls.delete(runId);
+
+        if (!poll.terminal) {
+          if (!overdue) return;
+          stopHermesRunQuietly(app, runId);
+          await ingestHermesInconclusive(
+            app,
+            row,
+            runId,
+            "The Hermes review did not finish within 60 minutes",
+            now,
+          );
+          return;
+        }
+
+        let parsed: ReturnType<typeof parseReviewFindings> | null = null;
+        let reason = `The Hermes review ${poll.status}${poll.error ? `: ${poll.error}` : ""}`;
+        if (poll.status === "completed") {
+          const json = extractFindingsJson(poll.output ?? "");
+          if (json !== null) {
+            const candidate = parseReviewFindings(json, {
+              ignorePrevious: task.lastReviewVerdict === "approved-with-suggestions",
+            });
+            // An unstructured reply parses as a freeform changes-requested;
+            // from an external reviewer that is noise, not a verdict.
+            if (candidate.structured) parsed = candidate;
+          }
+          if (parsed === null) reason = "The Hermes reply was not the findings JSON";
+        }
+        await ingestReviewOutcome(app, {
+          ...row,
+          parsed,
+          finished: poll.status === "completed",
+          noFindingsReason: reason,
+          now,
+          backend: resolveBackend(app, resolveTaskWorkerHost(app, task)),
+          resolvedTaskMaster: resolveTaskMasterConfig(app),
+          latch: { kind: "run", runId },
+          reviewedHeadSha: task.reviewRunHeadSha ?? undefined,
+          cleanupFindingsFile: async () => {},
+        });
+      } catch (err) {
+        // Unreachable or erroring Hermes: keep waiting, unless the cap is up.
+        app.log.warn({ err, taskId: task.id, runId }, "task reconcile: Hermes review poll failed");
+        if (!overdue) return;
+        stopHermesRunQuietly(app, runId);
+        await ingestHermesInconclusive(
+          app,
+          row,
+          runId,
+          "The Hermes review could not be read within 60 minutes",
+          now,
+        ).catch((ingestErr: unknown) => {
+          app.log.warn({ err: ingestErr, taskId: task.id }, "task reconcile: Hermes ingest failed");
+        });
       }
     }),
   );
@@ -1734,6 +2116,9 @@ async function attemptAutoRebase(
   // the worktree it is running in. On a reviewing task's first auto-rebase,
   // rebaseStartedAt is null, but task.reviewSessionId points to the active reviewer.
   // Terminating it before removeWorktree avoids removing the cwd from under a live process.
+  // A Hermes review run is of the pre-rebase head and every path below clears
+  // its columns, so it is stopped here; it holds no worktree to wait for.
+  stopHermesRunQuietly(app, task.reviewRunId);
   if (task.reviewSessionId !== null) {
     const [reviewSession] = app.db
       .select()
@@ -1786,8 +2171,12 @@ async function attemptAutoRebase(
 
   const worktree = await backend.resumeTaskWorktree(workerCwd, branchName);
   if (!worktree) {
-    if (task.reviewSessionId !== null) {
-      app.db.update(tasks).set({ reviewSessionId: null }).where(eq(tasks.id, task.id)).run();
+    if (hasReviewHandle(task)) {
+      app.db
+        .update(tasks)
+        .set({ reviewSessionId: null, ...CLEARED_REVIEW_RUN })
+        .where(eq(tasks.id, task.id))
+        .run();
     }
     // Branch missing or checked out elsewhere — not retryable by spawning
     // again. Surface for a human rather than looping (mirrors the plan's
@@ -1853,8 +2242,12 @@ async function attemptAutoRebase(
     hostId: workerHostId,
   });
   if (!result.ok) {
-    if (task.reviewSessionId !== null) {
-      app.db.update(tasks).set({ reviewSessionId: null }).where(eq(tasks.id, task.id)).run();
+    if (hasReviewHandle(task)) {
+      app.db
+        .update(tasks)
+        .set({ reviewSessionId: null, ...CLEARED_REVIEW_RUN })
+        .where(eq(tasks.id, task.id))
+        .run();
     }
     recordMergeError(
       app,
@@ -1877,6 +2270,7 @@ async function attemptAutoRebase(
       sessionId: result.row.id,
       reviewSessionId: null,
       reviewFindingsIngestedSessionId: null,
+      ...CLEARED_REVIEW_RUN,
       worktreePath: worktree.path,
       branchName: worktree.branch,
       seedDelivered,
@@ -1887,8 +2281,12 @@ async function attemptAutoRebase(
     .where(and(eq(tasks.id, task.id), inArray(tasks.status, ["done", "reviewing"])))
     .run();
   if (updated.changes === 0) {
-    if (task.reviewSessionId !== null) {
-      app.db.update(tasks).set({ reviewSessionId: null }).where(eq(tasks.id, task.id)).run();
+    if (hasReviewHandle(task)) {
+      app.db
+        .update(tasks)
+        .set({ reviewSessionId: null, ...CLEARED_REVIEW_RUN })
+        .where(eq(tasks.id, task.id))
+        .run();
     }
     app.log.warn(
       { taskId: task.id, newSessionId: result.row.id },
@@ -4487,7 +4885,7 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
           resolvedTaskMaster,
           // The joined session IS `task.reviewSessionId` (see the query's
           // inner join), which is what the ingest marker has to equal.
-          latchSessionId: session.id,
+          latch: { kind: "session", sessionId: session.id },
           cleanupFindingsFile: () =>
             unlinkFindingsFileIfPresent(app, backend, task.id, task.autoReturnRounds),
         });
@@ -4505,12 +4903,18 @@ async function processReviewingTasks(app: FastifyInstance): Promise<void> {
  * `parsed` is null when the reviewer produced nothing usable (the verdict is
  * then `inconclusive`, worded with `noFindingsReason`). `finished` says the
  * review ended deliberately — a finished turn, not a crash or a timeout — and
- * gates both auto-return paths. `latchSessionId` is the review session this
- * outcome belongs to — it must be the task's current `reviewSessionId`, since
- * it becomes the ingest marker `hasIngestedCurrentReview` compares against
- * (a mismatch would never latch, and every tick would ingest and comment
- * again). `cleanupFindingsFile` runs once the outcome is durable, and also
- * when a concurrent decision beat this write to it.
+ * gates both auto-return paths. `latch` names the review this outcome belongs
+ * to — a local session or a run on an external reviewer — and must be the
+ * task's CURRENT one, since it becomes the ingest marker
+ * `hasIngestedCurrentReview` compares against (a mismatch would never latch,
+ * and every tick would ingest and comment again). For a run the durable write
+ * is also guarded on that run still being the task's, so an outcome that
+ * arrives after the task moved to a fresh run is dropped rather than recorded
+ * against it. `reviewedHeadSha`, when the reviewer knows which head it was
+ * asked to review, is what `lastReviewedHeadSha` records; without it the PR
+ * head the poller last saw is used. `cleanupFindingsFile` runs once the
+ * outcome is durable, and also when a concurrent decision beat this write to
+ * it.
  */
 async function ingestReviewOutcome(
   app: FastifyInstance,
@@ -4523,7 +4927,8 @@ async function ingestReviewOutcome(
     now: number;
     backend: SessionBackend;
     resolvedTaskMaster: ReturnType<typeof resolveTaskMasterConfig>;
-    latchSessionId: number;
+    latch: { kind: "session"; sessionId: number } | { kind: "run"; runId: string };
+    reviewedHeadSha?: string;
     cleanupFindingsFile: () => Promise<void>;
   },
 ): Promise<void> {
@@ -4536,7 +4941,7 @@ async function ingestReviewOutcome(
     now,
     backend,
     resolvedTaskMaster,
-    latchSessionId,
+    latch,
     cleanupFindingsFile,
   } = input;
   // A suggestions round spends no round, so a re-review after one (the
@@ -4681,18 +5086,22 @@ async function ingestReviewOutcome(
   // (zero-cost, no GitHub call from this reconcile tick). Best-effort:
   // a cache miss (poller hasn't hit this repo yet, or no prNumber)
   // just leaves the column at its previous value, same as any other
-  // best-effort lookup in this loop.
-  let cachedHeadSha: string | undefined;
-  if (task.prNumber !== null) {
+  // best-effort lookup in this loop. A reviewer that was told which head to
+  // review (a run) already knows the answer, which is more exact than whatever
+  // the poller has cached by now.
+  let reviewedHeadSha: string | undefined = input.reviewedHeadSha;
+  if (reviewedHeadSha === undefined && task.prNumber !== null) {
     const repoRef = await resolveRepoRef(app, project);
     const cached = repoRef ? getPRsStatus(repoRef.owner, repoRef.repo) : null;
-    cachedHeadSha = cached?.prs.find((p) => p.number === task.prNumber)?.headSha;
+    reviewedHeadSha = cached?.prs.find((p) => p.number === task.prNumber)?.headSha;
   }
   const updated = app.db
     .update(tasks)
     .set({
       reviewFindings: appendedFindings,
-      reviewFindingsIngestedSessionId: latchSessionId,
+      ...(latch.kind === "session"
+        ? { reviewFindingsIngestedSessionId: latch.sessionId }
+        : { reviewRunIngestedId: latch.runId }),
       lastReviewVerdict: verdict,
       // A fresh review of the current head supersedes any carried
       // approval — the verdict above is now earned, not inherited.
@@ -4701,9 +5110,23 @@ async function ingestReviewOutcome(
       // grace window; see that column's own doc comment in schema.ts.
       lastReviewVerdictAt: new Date(now),
       ...(announcingCap ? { autoReturnCapAnnouncedAt: new Date(), needsHumanReason } : {}),
-      ...(cachedHeadSha !== undefined ? { lastReviewedHeadSha: cachedHeadSha } : {}),
+      ...(reviewedHeadSha !== undefined ? { lastReviewedHeadSha: reviewedHeadSha } : {}),
     })
-    .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
+    .where(
+      and(
+        eq(tasks.id, task.id),
+        eq(tasks.status, "reviewing"),
+        // A run must also still be un-ingested: a second outcome for the same
+        // run (e.g. the poll pass's catch after a throw from the post below)
+        // loses instead of overwriting the verdict already recorded.
+        ...(latch.kind === "run"
+          ? [
+              eq(tasks.reviewRunId, latch.runId),
+              or(isNull(tasks.reviewRunIngestedId), ne(tasks.reviewRunIngestedId, latch.runId)),
+            ]
+          : []),
+      ),
+    )
     .run();
   // Lost the race — the findings file is still stale for whatever
   // reconcile this task next (a rejected task keeps the same
@@ -4957,6 +5380,7 @@ async function reannounceCappedTasksAfterHumanPush(app: FastifyInstance): Promis
         reviewSessionId: null,
         reviewSeedDelivered: null,
         reviewSpawnClaimedAt: null,
+        ...CLEARED_REVIEW_RUN,
         lastReviewedHeadSha: pr.headSha,
       })
       .where(
@@ -5009,12 +5433,16 @@ async function reannounceInconclusiveReviewsAfterGrace(app: FastifyInstance): Pr
       and(
         eq(tasks.status, "reviewing"),
         eq(tasks.lastReviewVerdict, "inconclusive"),
-        isNotNull(tasks.reviewFindingsIngestedSessionId),
         // Nothing stalled left to re-arm otherwise — also keeps this bound
-        // an "attempts," not "ticks": right after a successful re-arm this
-        // is null again until the next spawn, so a second tick landing
-        // before that spawn can't double-fire even at a higher MAX than 1.
-        isNotNull(tasks.reviewSessionId),
+        // an "attempts," not "ticks": right after a successful re-arm the
+        // review handle is null again until the next spawn or dispatch, so a
+        // second tick landing before that can't double-fire even at a higher
+        // MAX than 1. The review is either a session or an external run (#2369);
+        // either pair must be complete — a handle AND its ingested marker.
+        or(
+          and(isNotNull(tasks.reviewFindingsIngestedSessionId), isNotNull(tasks.reviewSessionId)),
+          and(isNotNull(tasks.reviewRunIngestedId), isNotNull(tasks.reviewRunId)),
+        ),
         // A capped, announced task is reannounceCappedTasksAfterHumanPush's
         // own territory — it requires an actual human push, not a timer;
         // excluded here so the two sweeps never both touch the same row.
@@ -5026,7 +5454,7 @@ async function reannounceInconclusiveReviewsAfterGrace(app: FastifyInstance): Pr
   if (rows.length === 0) return;
 
   for (const { task, project } of rows) {
-    if (task.reviewSessionId === null) continue; // guaranteed by the query above; narrows the type only
+    if (!hasReviewHandle(task)) continue; // guaranteed by the query above
     if (task.lastReviewVerdictAt === null) continue;
     if (now - task.lastReviewVerdictAt.getTime() < INCONCLUSIVE_REVIEW_REARM_GRACE_MS) continue;
     // Defensive, independent of the query's own isNull(autoReturnCapAnnouncedAt)
@@ -5039,7 +5467,9 @@ async function reannounceInconclusiveReviewsAfterGrace(app: FastifyInstance): Pr
     )
       continue;
 
+    // Whichever handle the stalled review has — one of the two is null.
     const staleReviewSessionId = task.reviewSessionId;
+    const staleReviewRunId = task.reviewRunId;
     const updated = app.db
       .update(tasks)
       .set({
@@ -5047,6 +5477,7 @@ async function reannounceInconclusiveReviewsAfterGrace(app: FastifyInstance): Pr
         reviewFindingsIngestedSessionId: null,
         reviewSeedDelivered: null,
         reviewSpawnClaimedAt: null,
+        ...CLEARED_REVIEW_RUN,
         inconclusiveReviewRearmCount: task.inconclusiveReviewRearmCount + 1,
       })
       .where(
@@ -5054,7 +5485,12 @@ async function reannounceInconclusiveReviewsAfterGrace(app: FastifyInstance): Pr
           eq(tasks.id, task.id),
           eq(tasks.status, "reviewing"),
           eq(tasks.lastReviewVerdict, "inconclusive"),
-          eq(tasks.reviewSessionId, staleReviewSessionId),
+          staleReviewSessionId === null
+            ? isNull(tasks.reviewSessionId)
+            : eq(tasks.reviewSessionId, staleReviewSessionId),
+          staleReviewRunId === null
+            ? isNull(tasks.reviewRunId)
+            : eq(tasks.reviewRunId, staleReviewRunId),
           eq(tasks.inconclusiveReviewRearmCount, task.inconclusiveReviewRearmCount),
         ),
       )
@@ -5067,12 +5503,15 @@ async function reannounceInconclusiveReviewsAfterGrace(app: FastifyInstance): Pr
     // AFTER the CAS succeeds, not before: a lost race against a concurrent
     // approve/reject/give-up must not leave a session killed out from under
     // a row this sweep no longer actually touched.
-    void killSession(app, staleReviewSessionId).catch((err) => {
-      app.log.warn(
-        { err, taskId: task.id, reviewSessionId: staleReviewSessionId },
-        "task reconcile: failed to kill the stalled review session",
-      );
-    });
+    stopHermesRunQuietly(app, staleReviewRunId);
+    if (staleReviewSessionId !== null) {
+      void killSession(app, staleReviewSessionId).catch((err) => {
+        app.log.warn(
+          { err, taskId: task.id, reviewSessionId: staleReviewSessionId },
+          "task reconcile: failed to kill the stalled review session",
+        );
+      });
+    }
   }
 }
 
@@ -5132,6 +5571,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // its own `rows.length === 0` early return, or a reviewing task's
   // findings would never be processed on a tick with no claimed/in_progress
   // work at all.
+  await processHermesRuns(app);
   await processReviewingTasks(app);
   // Runs right after processReviewingTasks, same tick — both re-read from
   // the DB, so a verdict ingested earlier in this pass is already visible
@@ -5584,6 +6024,10 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                       reviewSessionId: null,
                       reviewSeedDelivered: null,
                       reviewSpawnClaimedAt: null,
+                      // An external reviewer's run (#2369) is cleared whole,
+                      // marker included: unlike a session id, a run has no
+                      // fresh number to make the old marker stop matching.
+                      ...CLEARED_REVIEW_RUN,
                       approvalCarriedAt: null,
                       // Task 409707 — a fresh review round earns its own
                       // automatic inconclusive-rearm attempt, same reasoning
@@ -5633,6 +6077,9 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                   );
                 });
               }
+              // A Hermes review run is superseded the same way (the write above
+              // nulled its columns unless the approval was carried).
+              if (!carryApproval) stopHermesRunQuietly(app, task.reviewRunId);
               recordTaskTransition(app, {
                 taskId: task.id,
                 projectId: project.id,
@@ -5676,4 +6123,5 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // previous tick decided to "wait" on (still `reviewSessionId IS NULL`
   // either way) — no separate leftover-specific pass needed.
   await processPendingReviewSpawns(app);
+  await processHermesDispatch(app);
 }

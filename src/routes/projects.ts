@@ -58,6 +58,7 @@ import {
   type RepoMatchReason,
 } from "../services/repo-identity.js";
 import { KNOWN_AGENTS } from "../services/agent-detect.js";
+import { HERMES_REVIEW_AGENT, hermesReviewAgentRefusal } from "../services/task-agent-resolve.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { LOCAL_HOST_ID, getHostRow } from "../services/host-registry.js";
 import {
@@ -591,7 +592,12 @@ const updateProjectSchema = {
       devServerUrl: { type: ["string", "null"], minLength: 1 },
       autoFetch: { type: ["boolean", "null"] },
       defaultAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
-      defaultReviewAgent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
+      // `hermes` is the external reviewer (#2369) — not a CLI, so not in
+      // KNOWN_AGENTS (CLI detection, host placement).
+      defaultReviewAgent: {
+        type: ["string", "null"],
+        enum: [...KNOWN_AGENTS, HERMES_REVIEW_AGENT, null],
+      },
       mergeOnApprove: { type: ["boolean", "null"] },
       autoApprove: { type: ["boolean", "null"] },
       allowCrossProjectSpawn: { type: ["boolean", "null"] },
@@ -5339,6 +5345,11 @@ export async function projectsRoute(app: FastifyInstance) {
         gitIdentity,
         allowDuplicate,
       } = request.body;
+      // #2369 — naming Hermes as the default reviewer needs it set up first; the
+      // resolver re-checks whenever a review agent is picked, since the setting
+      // can change afterwards.
+      const hermesRefusal = hermesReviewAgentRefusal(app, defaultReviewAgent);
+      if (hermesRefusal) return reply.badRequest(hermesRefusal);
       // Issues #2123 / #2124 — the project lists must name real projects, and a
       // "listed" consent needs somebody on the list (an empty "listed" would be
       // "none" under another name).

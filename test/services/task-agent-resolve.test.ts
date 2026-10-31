@@ -2,14 +2,23 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { FastifyInstance } from "fastify";
 
 const mockGetStoredSettings = vi.hoisted(() => vi.fn());
+const mockHermesUsable = vi.hoisted(() => vi.fn());
 
 vi.mock("../../src/services/settings.js", () => ({
   getStoredSettings: mockGetStoredSettings,
 }));
 
+// Only consulted when some tier names `hermes`; the cases that don't must not
+// reach it (their settings mock has no `reviewRelay`).
+vi.mock("../../src/services/hermes-integration.js", () => ({
+  hermesTaskReviewerUsable: mockHermesUsable,
+}));
+
 import {
   resolveAgentCommand,
   resolveReviewAgentCommand,
+  resolveReviewer,
+  hermesReviewAgentRefusal,
   commandSupportsSeed,
   resolveSeedDelivered,
 } from "../../src/services/task-agent-resolve.js";
@@ -238,6 +247,191 @@ describe("resolveReviewAgentCommand", () => {
     });
     expect(command).toBe("agy");
     expect(mockGetStoredSettings).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveReviewer — hermes (#2369)", () => {
+  const settings = (defaultReviewAgent = "none") => ({
+    taskMaster: { defaultAgent: "claude", defaultReviewAgent },
+  });
+  const none = { issueBody: null, projectDefaultReviewAgent: null } as const;
+
+  beforeEach(() => {
+    mockGetStoredSettings.mockReset();
+    mockGetStoredSettings.mockReturnValue(settings());
+    mockHermesUsable.mockReset();
+    mockHermesUsable.mockReturnValue(true);
+  });
+
+  describe("when Hermes is usable", () => {
+    it("is Hermes at the task tier", () => {
+      expect(resolveReviewer(mockApp(), { ...none, taskReviewAgent: "hermes" })).toEqual({
+        kind: "hermes",
+      });
+    });
+
+    it("is Hermes at the issue directive tier", () => {
+      expect(resolveReviewer(mockApp(), { ...none, issueBody: "ReviewAgent: hermes" })).toEqual({
+        kind: "hermes",
+      });
+    });
+
+    it("is Hermes at the project tier", () => {
+      expect(resolveReviewer(mockApp(), { ...none, projectDefaultReviewAgent: "hermes" })).toEqual({
+        kind: "hermes",
+      });
+    });
+
+    it("is Hermes at the install-wide tier", () => {
+      mockGetStoredSettings.mockReturnValue(settings("hermes"));
+      expect(resolveReviewer(mockApp(), none)).toEqual({ kind: "hermes" });
+    });
+
+    it("keeps the usual precedence: the most specific tier wins, either way round", () => {
+      expect(
+        resolveReviewer(mockApp(), {
+          taskReviewAgent: "hermes",
+          issueBody: "ReviewAgent: codex",
+          projectDefaultReviewAgent: "agy",
+        }),
+      ).toEqual({ kind: "hermes" });
+      expect(
+        resolveReviewer(mockApp(), {
+          taskReviewAgent: "agy",
+          issueBody: "ReviewAgent: hermes",
+          projectDefaultReviewAgent: "hermes",
+        }),
+      ).toEqual({ kind: "cli", command: "agy" });
+    });
+
+    it("lets 'none' at a higher tier switch Hermes off", () => {
+      expect(
+        resolveReviewer(mockApp(), {
+          taskReviewAgent: "none",
+          issueBody: null,
+          projectDefaultReviewAgent: "hermes",
+        }),
+      ).toBeNull();
+    });
+  });
+
+  describe("when Hermes is not usable", () => {
+    beforeEach(() => {
+      mockHermesUsable.mockReturnValue(false);
+    });
+
+    it("resolves to no reviewer at the task tier — not to the next tier's CLI", () => {
+      const app = mockApp();
+      expect(
+        resolveReviewer(app, {
+          taskReviewAgent: "hermes",
+          issueBody: "ReviewAgent: codex",
+          projectDefaultReviewAgent: "agy",
+        }),
+      ).toBeNull();
+      expect(app.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ source: "task" }),
+        expect.stringContaining("isn't usable"),
+      );
+    });
+
+    it("resolves to no reviewer at the issue directive tier", () => {
+      expect(
+        resolveReviewer(mockApp(), {
+          issueBody: "ReviewAgent: hermes",
+          projectDefaultReviewAgent: "agy",
+        }),
+      ).toBeNull();
+    });
+
+    it("resolves to no reviewer at the project tier, ignoring the install-wide CLI", () => {
+      mockGetStoredSettings.mockReturnValue(settings("codex"));
+      expect(
+        resolveReviewer(mockApp(), { issueBody: null, projectDefaultReviewAgent: "hermes" }),
+      ).toBeNull();
+    });
+
+    it("resolves to no reviewer at the install-wide tier", () => {
+      mockGetStoredSettings.mockReturnValue(settings("hermes"));
+      const app = mockApp();
+      expect(resolveReviewer(app, none)).toBeNull();
+      expect(app.log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ source: "install-wide" }),
+        expect.stringContaining("isn't usable"),
+      );
+    });
+  });
+
+  it("never consults Hermes when no tier names it", () => {
+    resolveReviewer(mockApp(), { ...none, taskReviewAgent: "agy" });
+    resolveReviewer(mockApp(), { ...none, issueBody: "ReviewAgent: codex" });
+    resolveReviewer(mockApp(), { ...none, projectDefaultReviewAgent: "opencode" });
+    mockGetStoredSettings.mockReturnValue(settings("codex"));
+    resolveReviewer(mockApp(), none);
+    expect(mockHermesUsable).not.toHaveBeenCalled();
+  });
+
+  it("returns a CLI reviewer as { kind: 'cli' } for every known name", () => {
+    expect(resolveReviewer(mockApp(), { ...none, taskReviewAgent: "codex" })).toEqual({
+      kind: "cli",
+      command: "codex",
+    });
+  });
+
+  it("matches the name exactly: 'Hermes' is unrecognised and falls through, like any typo", () => {
+    const app = mockApp();
+    expect(
+      resolveReviewer(app, {
+        ...none,
+        taskReviewAgent: "Hermes",
+        projectDefaultReviewAgent: "agy",
+      }),
+    ).toEqual({ kind: "cli", command: "agy" });
+    expect(app.log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "Hermes" }),
+      expect.stringContaining("unrecognized agent"),
+    );
+    expect(mockHermesUsable).not.toHaveBeenCalled();
+  });
+
+  describe("resolveReviewAgentCommand, the CLI-only view of it", () => {
+    it("is null for Hermes, usable or not, so a CLI spawn or placement never sees it", () => {
+      expect(
+        resolveReviewAgentCommand(mockApp(), { ...none, taskReviewAgent: "hermes" }),
+      ).toBeNull();
+      mockHermesUsable.mockReturnValue(false);
+      expect(
+        resolveReviewAgentCommand(mockApp(), { ...none, taskReviewAgent: "hermes" }),
+      ).toBeNull();
+    });
+
+    it("is the command for a CLI reviewer", () => {
+      expect(resolveReviewAgentCommand(mockApp(), { ...none, taskReviewAgent: "agy" })).toBe("agy");
+    });
+  });
+});
+
+describe("hermesReviewAgentRefusal (#2369)", () => {
+  beforeEach(() => {
+    mockHermesUsable.mockReset();
+  });
+
+  it("refuses 'hermes' while Hermes isn't usable, and says where to fix it", () => {
+    mockHermesUsable.mockReturnValue(false);
+    expect(hermesReviewAgentRefusal(mockApp(), "hermes")).toContain("Settings → Review relay");
+  });
+
+  it("lets 'hermes' through while Hermes is usable", () => {
+    mockHermesUsable.mockReturnValue(true);
+    expect(hermesReviewAgentRefusal(mockApp(), "hermes")).toBeNull();
+  });
+
+  it("has nothing to say about any other name, and never consults Hermes for one", () => {
+    expect(hermesReviewAgentRefusal(mockApp(), "agy")).toBeNull();
+    expect(hermesReviewAgentRefusal(mockApp(), "none")).toBeNull();
+    expect(hermesReviewAgentRefusal(mockApp(), null)).toBeNull();
+    expect(hermesReviewAgentRefusal(mockApp(), undefined)).toBeNull();
+    expect(mockHermesUsable).not.toHaveBeenCalled();
   });
 });
 

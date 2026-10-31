@@ -14,6 +14,13 @@ vi.mock("../../src/services/task-promote.js", () => ({
   promoteTaskToPR: mockPromoteTaskToPR,
 }));
 
+// #2369 — approving a task whose review was a Hermes run stops that run.
+const mockStopHermesRun = vi.fn();
+vi.mock("../../src/services/hermes-task-review.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
+  stopHermesRunQuietly: mockStopHermesRun,
+}));
+
 // #772 — approveTask now kills the task's own sessions via killSession,
 // which spawns real OS processes (systemd-run, dtach) via PtyManager unless
 // faked. Same fakes as task-reconciler.test.ts / task-claim.test.ts.
@@ -277,6 +284,19 @@ describe("approveTask", () => {
     const outcome = await approveTask(app, task, project, "approve");
     expect(outcome.ok).toBe(true);
 
+    await app.close();
+  });
+
+  it("stops the task's Hermes review run when the task is approved (#2369)", async () => {
+    const app = await buildApp();
+    const { task, project } = await createProjectAndReviewingTask(app, false, false);
+    app.db.update(tasks).set({ reviewRunId: "run_77" }).where(eq(tasks.id, task.id)).run();
+    mockStopHermesRun.mockClear();
+
+    const outcome = await approveTask(app, { ...task, reviewRunId: "run_77" }, project, "approve");
+
+    expect(outcome.ok).toBe(true);
+    expect(mockStopHermesRun).toHaveBeenCalledWith(expect.anything(), "run_77");
     await app.close();
   });
 });

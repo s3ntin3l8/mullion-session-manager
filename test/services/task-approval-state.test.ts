@@ -10,6 +10,8 @@ const base = {
   prNumber: 7 as number | null,
   reviewSessionId: 5 as number | null,
   reviewFindingsIngestedSessionId: 5 as number | null,
+  reviewRunId: null as string | null,
+  reviewRunIngestedId: null as string | null,
   lastReviewVerdict: "approved" as string | null,
   projectAutoApprove: false as boolean | null,
 };
@@ -49,6 +51,36 @@ describe("deriveApprovalState (#2252)", () => {
         true,
       ),
     ).toBeNull();
+  });
+
+  describe("an external review run (#2369)", () => {
+    // No review session: the review is a run on the external reviewer.
+    const run = {
+      ...base,
+      reviewSessionId: null,
+      reviewFindingsIngestedSessionId: null,
+      reviewRunId: "run_1" as string | null,
+      reviewRunIngestedId: "run_1" as string | null,
+    };
+
+    it("is awaiting-human once the run's approving verdict is ingested", () => {
+      expect(deriveApprovalState(run, true)).toBe("awaiting-human");
+    });
+
+    it("is auto-pending on an auto-approving project", () => {
+      expect(deriveApprovalState({ ...run, projectAutoApprove: true }, true)).toBe("auto-pending");
+    });
+
+    it("is null while the run's verdict has not been ingested, or an earlier run's was", () => {
+      expect(deriveApprovalState({ ...run, reviewRunIngestedId: null }, true)).toBeNull();
+      expect(deriveApprovalState({ ...run, reviewRunIngestedId: "run_0" }, true)).toBeNull();
+    });
+
+    it("is null for a non-approving run verdict", () => {
+      expect(
+        deriveApprovalState({ ...run, lastReviewVerdict: "changes-requested" }, true),
+      ).toBeNull();
+    });
   });
 
   describe("autoApprove x prNumber x Task Master", () => {
@@ -100,6 +132,12 @@ describe("deriveReviewPhase", () => {
       reviewPhase: "awaiting-review",
       reReviewAt: null,
     });
+  });
+
+  it("is null while an external reviewer's run is in flight", () => {
+    expect(
+      deriveReviewPhase({ ...row, reviewRunId: "run_1" }, STALE, ctx, now).reviewPhase,
+    ).toBeNull();
   });
 
   it("is null while a review session is live", () => {

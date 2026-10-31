@@ -2190,6 +2190,12 @@ export interface Task {
   // approve/reject, or there was never a review agent at all. See
   // TaskCard.tsx's "review in flight" label.
   reviewFindingsIngestedSessionId: number | null;
+  // #2369 — the external-reviewer (Hermes) counterpart of the two session
+  // fields above: a review that is an HTTP run, not a session. Same pairing:
+  // `reviewRunIngestedId === reviewRunId` means its verdict is in.
+  reviewRunId: string | null;
+  reviewRunIngestedId: string | null;
+  reviewRunDispatchedAt: string | null;
   // The review agent's own findings, captured once its session finishes —
   // appended across rounds under a "## Round N" header, never replaced.
   // Null until the first round is ingested (no review agent configured,
@@ -2677,6 +2683,13 @@ export interface AppSettings {
      * round) or "allow" (re-review every new head). `force` bypasses it.
      */
     reReviewAfterApproval: "refuse" | "allow";
+    /**
+     * Whether Task Master may use this Hermes connection as a review agent
+     * (`hermes` as a task's, project's or install-wide default review agent).
+     * Independent of `provider`, which turns on the GitHub-side relay. It also
+     * needs the API URL and key to count as usable.
+     */
+    taskMasterReviewer: boolean;
   };
   /**
    * The Runway quota integration (issue #29) — the non-secret half. The

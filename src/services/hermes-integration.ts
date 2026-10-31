@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { integrations } from "../db/schema.js";
+import { getStoredSettings } from "./settings.js";
 
 // The Hermes review relay's API key, stored in the same `integrations` table
 // as the GitHub credentials (`provider` is a free-text primary key, so a new
@@ -31,6 +32,22 @@ export function getHermesIntegration(app: FastifyInstance): HermesIntegrationSum
   const row = getRow(app);
   const hasKey = !!row?.authTokenEnc;
   return { hasKey, updatedAt: hasKey ? (row!.connectedAt ?? null) : null };
+}
+
+/**
+ * Can Task Master send a review to Hermes right now (#2369)? The operator has
+ * turned `reviewRelay.taskMasterReviewer` on AND the connection is filled in:
+ * an API URL and a stored key. Deliberately NOT `reviewRelay.provider`, which
+ * switches on the GitHub-side relay — see that setting's own comment.
+ *
+ * Checks `hasKey` rather than decrypting the key, so it cannot throw on an
+ * unreadable ciphertext; the dispatch path reads the real key when it needs
+ * it. Re-asked wherever a `hermes` review agent is resolved or written, since
+ * the flag and the key can both change after a task or project named it.
+ */
+export function hermesTaskReviewerUsable(app: FastifyInstance): boolean {
+  const { taskMasterReviewer, apiUrl } = getStoredSettings(app.db).reviewRelay;
+  return taskMasterReviewer === true && apiUrl.trim() !== "" && getHermesIntegration(app).hasKey;
 }
 
 /** Internal use only (services/hermes-review.ts) — decrypts the stored key.

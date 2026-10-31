@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { KNOWN_AGENTS } from "./agent-detect.js";
 import { adapterHasInitialPromptArgs } from "./hook-adapters/index.js";
 import { getStoredSettings } from "./settings.js";
+import { hermesTaskReviewerUsable } from "./hermes-integration.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 
 // Phase 6 Task Master (6.2/#215) — an issue body can override the worker
@@ -74,6 +75,56 @@ export function resolveAgentCommand(
   return getStoredSettings(app.db).taskMaster.defaultAgent;
 }
 
+/** The name that picks Hermes (the external reviewer, #2369) as a review
+ * agent, wherever a review agent is named. It is not a CLI, so it is never in
+ * `KNOWN_AGENTS` — that list drives CLI detection and host placement. */
+export const HERMES_REVIEW_AGENT = "hermes";
+
+/** Who reviews a task: a CLI session Mullion spawns, or Hermes over HTTP. */
+export type ResolvedReviewer = { kind: "cli"; command: string } | { kind: "hermes" } | null;
+
+/**
+ * The reviewer a recognised name stands for, `null` for Hermes when it cannot
+ * be used right now, and `undefined` for a name nobody recognises (the caller
+ * falls through to the next tier, as for any unknown name).
+ *
+ * Hermes is recognised BEFORE the `KNOWN_AGENTS` check on purpose: an unusable
+ * `hermes` resolves to no reviewer rather than falling through, where it would
+ * quietly pick a different CLI reviewer than the one asked for. The flag and
+ * the key can change after a task or project named it, so this is asked at
+ * resolve time, not only when the name is written.
+ */
+function reviewerForName(
+  app: FastifyInstance,
+  name: string,
+  source: string,
+): ResolvedReviewer | undefined {
+  if (name === HERMES_REVIEW_AGENT) {
+    if (hermesTaskReviewerUsable(app)) return { kind: "hermes" };
+    app.log.warn(
+      { source },
+      "[task-agent-resolve] a review agent names hermes but Hermes isn't usable as a Task Master reviewer (setting off, or no API URL or key), resolving to no review agent",
+    );
+    return null;
+  }
+  if ((KNOWN_AGENTS as readonly string[]).includes(name)) return { kind: "cli", command: name };
+  return undefined;
+}
+
+/**
+ * Why a write that names `hermes` as a review agent should be refused, or null
+ * when it may go ahead (any other name, or Hermes while it is usable). Routes
+ * use it to answer 400 at write time; `resolveReviewer` stays the authority
+ * since the setting can change afterwards.
+ */
+export function hermesReviewAgentRefusal(
+  app: FastifyInstance,
+  name: string | null | undefined,
+): string | null {
+  if (name !== HERMES_REVIEW_AGENT || hermesTaskReviewerUsable(app)) return null;
+  return "Hermes isn't set up as a Task Master reviewer — turn on 'Task Master reviews' and set the API URL and key in Settings → Review relay first";
+}
+
 /**
  * Review-agent resolution (6.2/#215) — same shape as the worker-agent
  * precedence above, now with a global-settings fallback tier (#741): the
@@ -84,22 +135,25 @@ export function resolveAgentCommand(
  * additive advisory feature, it's just no longer required to be configured
  * per project to engage install-wide. Returns null when nothing configures
  * one or when explicitly set to "none".
+ *
+ * Any tier may name `hermes` (#2369): the reviewer is then Hermes when it is
+ * usable (`hermesTaskReviewerUsable`) and nothing when it isn't — see
+ * `reviewerForName`.
  */
-export function resolveReviewAgentCommand(
+export function resolveReviewer(
   app: FastifyInstance,
   opts: {
     taskReviewAgent?: string | null;
     issueBody: string | null;
     projectDefaultReviewAgent: string | null;
   },
-): string | null {
+): ResolvedReviewer {
   if (opts.taskReviewAgent !== undefined && opts.taskReviewAgent !== null) {
     if (opts.taskReviewAgent === "none" || opts.taskReviewAgent === "") {
       return null;
     }
-    if ((KNOWN_AGENTS as readonly string[]).includes(opts.taskReviewAgent)) {
-      return opts.taskReviewAgent;
-    }
+    const reviewer = reviewerForName(app, opts.taskReviewAgent, "task");
+    if (reviewer !== undefined) return reviewer;
     app.log.warn(
       { name: opts.taskReviewAgent },
       "[task-agent-resolve] task's reviewAgent names an unrecognized agent, falling through",
@@ -111,7 +165,8 @@ export function resolveReviewAgentCommand(
     if (fromIssue === "none" || fromIssue === "false") {
       return null;
     }
-    if ((KNOWN_AGENTS as readonly string[]).includes(fromIssue)) return fromIssue;
+    const reviewer = reviewerForName(app, fromIssue, "issue");
+    if (reviewer !== undefined) return reviewer;
     app.log.warn(
       { name: fromIssue },
       "[task-agent-resolve] issue body's ReviewAgent: line names an unrecognized agent, falling through",
@@ -119,9 +174,8 @@ export function resolveReviewAgentCommand(
   }
 
   if (opts.projectDefaultReviewAgent !== null) {
-    if ((KNOWN_AGENTS as readonly string[]).includes(opts.projectDefaultReviewAgent)) {
-      return opts.projectDefaultReviewAgent;
-    }
+    const reviewer = reviewerForName(app, opts.projectDefaultReviewAgent, "project");
+    if (reviewer !== undefined) return reviewer;
     app.log.warn(
       { name: opts.projectDefaultReviewAgent },
       "[task-agent-resolve] project's defaultReviewAgent names an unrecognized agent, falling through",
@@ -130,15 +184,33 @@ export function resolveReviewAgentCommand(
 
   const globalDefaultReviewAgent = getStoredSettings(app.db).taskMaster.defaultReviewAgent;
   if (globalDefaultReviewAgent && globalDefaultReviewAgent !== "none") {
-    if ((KNOWN_AGENTS as readonly string[]).includes(globalDefaultReviewAgent)) {
-      return globalDefaultReviewAgent;
-    }
+    const reviewer = reviewerForName(app, globalDefaultReviewAgent, "install-wide");
+    if (reviewer !== undefined) return reviewer;
     app.log.warn(
       { name: globalDefaultReviewAgent },
       "[task-agent-resolve] install-wide defaultReviewAgent names an unrecognized agent, resolving to no review agent",
     );
   }
   return null;
+}
+
+/**
+ * The CLI review agent to spawn, or null when there is none — which includes
+ * a task whose reviewer is Hermes: Hermes is not launched as a session, so
+ * every caller that spawns or places a CLI (the review spawn pass, host
+ * placement) correctly sees "no CLI reviewer". Use `resolveReviewer` where
+ * Hermes needs to be told apart from "no reviewer".
+ */
+export function resolveReviewAgentCommand(
+  app: FastifyInstance,
+  opts: {
+    taskReviewAgent?: string | null;
+    issueBody: string | null;
+    projectDefaultReviewAgent: string | null;
+  },
+): string | null {
+  const reviewer = resolveReviewer(app, opts);
+  return reviewer?.kind === "cli" ? reviewer.command : null;
 }
 
 /**

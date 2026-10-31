@@ -10,6 +10,8 @@ import { deriveTaskBranchName, deriveWorktreePath } from "../../src/services/git
 import type { SessionBackend } from "../../src/services/session-backend.js";
 import { tasks } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
+import { applySettingsPatch } from "../../src/services/settings.js";
+import { clearHermesKey, setHermesKey } from "../../src/services/hermes-integration.js";
 
 // `resolveBackend` returns the WHOLE SessionBackend interface, so a fake
 // remote backend has to satisfy all of it — a fake missing members would
@@ -2600,6 +2602,63 @@ describe("tasks route", () => {
       await app.close();
     });
 
+    // #2369 — a review by an external reviewer is a run, not a session: the
+    // route has to re-arm it by the run columns, with no session to kill.
+    describe("an external reviewer's run (#2369)", () => {
+      const run = {
+        reviewRunId: "run_stuck",
+        reviewRunDispatchedAt: new Date(Date.now() - 2 * 60 * 60_000),
+        reviewRunHeadSha: "sha-1",
+        reviewRunIngestedId: "run_stuck",
+      };
+
+      async function createInconclusiveRunTask(
+        app: Awaited<ReturnType<typeof buildApp>>,
+        overrides: Partial<typeof tasks.$inferInsert> = {},
+      ) {
+        const { task } = await createInconclusiveReviewingTask(app, { reviewSessionId: null });
+        app.db
+          .update(tasks)
+          .set({ ...run, ...overrides })
+          .where(eq(tasks.id, task.id))
+          .run();
+        return task;
+      }
+
+      it("re-arms a run stuck on inconclusive: clears every run column and counts the re-arm", async () => {
+        const app = await buildApp();
+        const task = await createInconclusiveRunTask(app);
+
+        const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/re-review` });
+
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({
+          status: "reviewing",
+          reviewRunId: null,
+          reviewRunIngestedId: null,
+          reviewRunDispatchedAt: null,
+          inconclusiveReviewRearmCount: 1,
+        });
+        const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+        expect(row.reviewRunHeadSha).toBeNull();
+
+        await app.close();
+      });
+
+      it("409s while the current run's verdict is not in yet, even though the verdict still reads inconclusive from before", async () => {
+        const app = await buildApp();
+        const task = await createInconclusiveRunTask(app, { reviewRunIngestedId: null });
+
+        const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/re-review` });
+
+        expect(res.statusCode).toBe(409);
+        const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+        expect(row.reviewRunId).toBe("run_stuck");
+
+        await app.close();
+      });
+    });
+
     // Hermes review finding — a prior re-review (this route, or the
     // automatic sweep) nulls reviewFindingsIngestedSessionId and kills the
     // stale session; the reconciler later spawns a FRESH review session
@@ -3556,6 +3615,172 @@ describe("tasks route", () => {
       expect(res.json()).toMatchObject({ agent: "codex", reviewAgent: "none" });
 
       await app.close();
+    });
+
+    describe("hermes as a review agent (#2369)", () => {
+      type TestApp = Awaited<ReturnType<typeof buildApp>>;
+      // The DB is shared across this file, so every test that sets Hermes up
+      // takes it down again, pass or fail.
+      async function withHermes<T>(app: TestApp, run: () => Promise<T>): Promise<T> {
+        applySettingsPatch(app, {
+          reviewRelay: { apiUrl: "http://hermes.test:8643", taskMasterReviewer: true },
+        });
+        setHermesKey(app, "test-key"); // pragma: allowlist secret
+        try {
+          return await run();
+        } finally {
+          clearHermesKey(app);
+          applySettingsPatch(app, { reviewRelay: { apiUrl: "", taskMasterReviewer: false } });
+        }
+      }
+
+      it("POST /api/tasks 400s on hermes while it isn't set up, and creates nothing", async () => {
+        const app = await buildApp();
+        const projectId = await createProject(app, "/tmp/local-crud-hermes-1");
+        const count = () =>
+          app.db.select().from(tasks).where(eq(tasks.projectId, projectId)).all().length;
+        const before = count();
+
+        const res = await app.inject({
+          method: "POST",
+          url: "/api/tasks",
+          payload: { projectId, title: "Hermes-reviewed", reviewAgent: "hermes" },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(res.json().message).toContain("Review relay");
+        expect(count()).toBe(before);
+
+        await app.close();
+      });
+
+      it("POST /api/tasks stores hermes once it is set up", async () => {
+        const app = await buildApp();
+        const projectId = await createProject(app, "/tmp/local-crud-hermes-2");
+
+        const res = await withHermes(app, () =>
+          app.inject({
+            method: "POST",
+            url: "/api/tasks",
+            payload: { projectId, title: "Hermes-reviewed", reviewAgent: "hermes" },
+          }),
+        );
+        expect(res.statusCode).toBe(201);
+        expect(res.json()).toMatchObject({ reviewAgent: "hermes" });
+
+        await app.close();
+      });
+
+      it("PATCH /api/tasks/:id 400s on hermes while it isn't set up, and accepts it once it is", async () => {
+        const app = await buildApp();
+        const projectId = await createProject(app, "/tmp/local-crud-hermes-3");
+        const created = (
+          await app.inject({
+            method: "POST",
+            url: "/api/tasks",
+            payload: { projectId, title: "Task to point at hermes" },
+          })
+        ).json();
+
+        const refused = await app.inject({
+          method: "PATCH",
+          url: `/api/tasks/${created.id}`,
+          payload: { reviewAgent: "hermes" },
+        });
+        expect(refused.statusCode).toBe(400);
+        expect(
+          app.db.select().from(tasks).where(eq(tasks.id, created.id)).all()[0].reviewAgent,
+        ).toBeNull();
+
+        const accepted = await withHermes(app, () =>
+          app.inject({
+            method: "PATCH",
+            url: `/api/tasks/${created.id}`,
+            payload: { reviewAgent: "hermes" },
+          }),
+        );
+        expect(accepted.statusCode).toBe(200);
+        expect(accepted.json()).toMatchObject({ reviewAgent: "hermes" });
+
+        await app.close();
+      });
+
+      it("PATCH /api/tasks/:id still switches a task off hermes after Hermes stopped being usable", async () => {
+        const app = await buildApp();
+        const projectId = await createProject(app, "/tmp/local-crud-hermes-4");
+        const [row] = app.db
+          .insert(tasks)
+          .values({ projectId, title: "named hermes earlier", reviewAgent: "hermes" })
+          .returning()
+          .all();
+
+        const res = await app.inject({
+          method: "PATCH",
+          url: `/api/tasks/${row.id}`,
+          payload: { reviewAgent: "agy" },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json()).toMatchObject({ reviewAgent: "agy" });
+
+        await app.close();
+      });
+
+      it("POST /api/tasks/:id/claim 400s on a hermes override while it isn't set up", async () => {
+        const app = await buildApp();
+        const projectId = await createProject(app, "/tmp/local-crud-hermes-5");
+        const [task] = app.db
+          .insert(tasks)
+          .values({ projectId, title: "Claim with hermes", status: "ready" })
+          .returning()
+          .all();
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/tasks/${task.id}/claim`,
+          payload: { reviewAgent: "hermes" },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(app.db.select().from(tasks).where(eq(tasks.id, task.id)).all()[0].status).toBe(
+          "ready",
+        );
+
+        await app.close();
+      });
+
+      it("POST /api/tasks/:id/retry 400s on a hermes override while it isn't set up", async () => {
+        const app = await buildApp();
+        const projectId = await createProject(app, "/tmp/local-crud-hermes-6");
+        const [task] = app.db
+          .insert(tasks)
+          .values({ projectId, title: "Retry with hermes", status: "failed" })
+          .returning()
+          .all();
+
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/tasks/${task.id}/retry`,
+          payload: { reviewAgent: "hermes" },
+        });
+        expect(res.statusCode).toBe(400);
+        expect(res.json().message).toContain("Review relay");
+
+        await app.close();
+      });
+
+      it("still rejects a review agent that is neither a known CLI, hermes, nor none", async () => {
+        const app = await buildApp();
+        const projectId = await createProject(app, "/tmp/local-crud-hermes-7");
+
+        for (const reviewAgent of ["not-a-real-agent", "Hermes"]) {
+          const res = await app.inject({
+            method: "POST",
+            url: "/api/tasks",
+            payload: { projectId, title: "Bad reviewer", reviewAgent },
+          });
+          expect(res.statusCode).toBe(400);
+        }
+
+        await app.close();
+      });
     });
 
     it("POST /api/tasks/:id/claim applies agent override from request body", async () => {

@@ -262,6 +262,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     reviewerBotLogin: "s3ntin3l8-hermes[bot]",
     ledgerName: "Hermes review",
     reReviewAfterApproval: "refuse",
+    taskMasterReviewer: false,
   },
   runway: {
     apiUrl: "",
