@@ -193,12 +193,14 @@ import type { AgentAction, FindElementsBody } from "./browser-automation.js";
 import { attachSocketToBrowser } from "./browser.js";
 import { adapterHasInitialPromptArgs } from "../services/hook-adapters/index.js";
 import { explicitModelError } from "../services/task-model-resolve.js";
+import { setSessionGithubAuth, type SessionGithubAuth } from "../services/session-github-token.js";
 import {
   SESSION_ID_PATTERN,
   SESSION_ID_PARAMS_SCHEMA,
   MAX_SESSION_ENV_ENTRIES,
   MAX_SESSION_ENV_VALUE_LENGTH,
   spawnSessionSchema,
+  sessionGithubAuthSchema,
   liveStatusSchema,
   livenessSchema,
   terminateSchema,
@@ -2498,6 +2500,9 @@ export async function internalRoutes(app: FastifyInstance) {
         // An older agent build strips it (additionalProperties: false) and
         // the session simply commits with the host's own identity.
         gitIdentity,
+        // #2246 — the session's GitHub credential; getOrCreate stores it in
+        // this agent's memory (session-github-token.ts) and never persists it.
+        githubAuth,
         // Issue #1337 — opencode model overrides forwarded from spawn_child_session
         // MCP tool. When omitted, the parent session's model/smallModel are inherited
         // by the POST /api/sessions route handler (server-side fallback).
@@ -2536,6 +2541,7 @@ export async function internalRoutes(app: FastifyInstance) {
         injectMullionBundle,
         taskId,
         gitIdentity,
+        githubAuth,
         model,
         smallModel,
       });
@@ -2721,6 +2727,19 @@ export async function internalRoutes(app: FastifyInstance) {
     { ...INTERNAL_RATE_LIMIT, schema: terminateSchema },
     async (request, reply) => {
       await app.pty.terminate(request.params.id);
+      reply.code(204);
+    },
+  );
+
+  // #2246 — the primary re-sending a session's App token before it expires.
+  // Accepts any valid id, tracked or not: the store is memory-only, an agent
+  // restart (sessions survive it) empties it, and the next refresh is what
+  // refills it. Expired entries are pruned on every set.
+  app.put<{ Params: { id: string }; Body: SessionGithubAuth }>(
+    "/internal/sessions/:id/github-auth",
+    { ...INTERNAL_RATE_LIMIT, schema: sessionGithubAuthSchema },
+    async (request, reply) => {
+      setSessionGithubAuth(request.params.id, request.body);
       reply.code(204);
     },
   );

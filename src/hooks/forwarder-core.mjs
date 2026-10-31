@@ -1549,6 +1549,7 @@ export const REPLY_ELICITING_KINDS = new Set([
   "session_start",
   "promote_request",
   "browser_action",
+  "github_token",
 ]);
 
 /** Splits `messages` into the siblings that should be sent ahead of

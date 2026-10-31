@@ -1,5 +1,6 @@
 // Extracted from pty-manager.ts (issue #1522) — pure type declarations, no runtime code.
 import type { GitIdentity } from "./git-env.js";
+import type { SessionGithubAuth } from "./session-github-token.js";
 import type { HookMessageKind, BackgroundTask } from "./hook-protocol.js";
 import type { AttentionSignalKind } from "./attention-detect.js";
 
@@ -159,6 +160,10 @@ export interface CreateSessionOptions {
   taskId?: number;
   /** The git identity for this session's commits — see LaunchPlanSession.gitIdentity. */
   gitIdentity?: GitIdentity;
+  /** #2246 — the GitHub credential this session's own git/gh may use, resolved
+   * on the primary (session-github-auth.ts). getOrCreate keeps it in memory
+   * (session-github-token.ts); only its `mode` reaches the launch plan. */
+  githubAuth?: SessionGithubAuth;
 }
 
 /** Phase 5 (Track A) — one subagent's identity and activity, built from the

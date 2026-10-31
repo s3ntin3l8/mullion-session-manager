@@ -1,0 +1,58 @@
+#!/bin/sh
+# Mullion's `gh` wrapper (issue #2246): runs the REAL gh with GH_TOKEN set for
+# this one invocation only — the token is fetched from the host's Mullion over
+# the session's hook socket each time and lives in no file and no exported
+# variable.
+#
+#   manual session:   the host's own `gh` login first (when `gh auth token`
+#                     succeeds), Mullion's user-account token otherwise
+#   task session:     always Mullion's token, never the host's login
+#
+# With no token it prints Mullion's actionable message and exits non-zero
+# instead of letting gh prompt.
+
+self_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+# The real gh: the first `gh` on PATH that is not this wrapper's directory.
+real_gh=
+old_ifs=$IFS
+IFS=:
+for dir in $PATH; do
+  [ -n "$dir" ] || continue
+  [ "$(CDPATH= cd -- "$dir" 2>/dev/null && pwd)" = "$self_dir" ] && continue
+  if [ -x "$dir/gh" ] && [ ! -d "$dir/gh" ]; then
+    real_gh="$dir/gh"
+    break
+  fi
+done
+IFS=$old_ifs
+if [ -z "$real_gh" ]; then
+  echo "mullion: the real 'gh' CLI is not installed on this host" >&2
+  exit 127
+fi
+
+if [ -n "$MULLION_FORWARDER_PATH" ]; then
+  helper="$(dirname -- "$MULLION_FORWARDER_PATH")/git-credential-mullion.mjs"
+else
+  # This wrapper lives in <hooks>/bin; the helper sits one level up.
+  helper="$(dirname -- "$self_dir")/git-credential-mullion.mjs"
+fi
+line=$("${MULLION_FORWARDER_NODE:-node}" "$helper" gh-token 2>/dev/null)
+IFS=' ' read -r kind host_first rest <<EOF2
+$line
+EOF2
+
+if [ "$kind" = "ok" ]; then
+  # A manual session keeps the host's own login when it has one.
+  if [ "$host_first" = "true" ] && "$real_gh" auth token >/dev/null 2>&1; then
+    exec "$real_gh" "$@"
+  fi
+  GH_TOKEN="$rest" exec "$real_gh" "$@"
+fi
+
+# No Mullion token: only a manual session may still use the host's login.
+if [ "$host_first" = "true" ] && "$real_gh" auth token >/dev/null 2>&1; then
+  exec "$real_gh" "$@"
+fi
+echo "mullion: ${rest:-no GitHub token available}" >&2
+exit 1

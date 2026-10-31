@@ -30,6 +30,8 @@ import { readSessionWorkflowConventions } from "../services/workflow-conventions
 import { isAuthEnabled } from "../services/auth.js";
 import { commandIsMcode } from "../services/hook-adapters/index.js";
 import { reclaimSocketPath } from "../services/unix-socket.js";
+import { buildGithubTokenReply, getSessionGithubAuth } from "../services/session-github-token.js";
+import { recoverLocalSessionGithubAuth } from "../services/session-github-auth.js";
 
 // Issue #271, option 2 — the decision a human ultimately reaches for a
 // pending `promote_request` (POST /api/sessions/:id/promote or
@@ -239,6 +241,28 @@ function resolvePendingGate(
     decision.reason,
   );
   return true;
+}
+
+/** #2246 — answer a session's `github_token` ask with its OWN entry (the
+ * session id is the handshake's, never the message's). Lookup, local recovery
+ * and reply live here so the connection handler holds no branch on the
+ * credential itself; a miss still gets an actionable `{error}` reply. */
+async function replyWithSessionGithubToken(
+  app: FastifyInstance,
+  socket: net.Socket,
+  sessionId: string,
+): Promise<void> {
+  const held = await Promise.resolve(getSessionGithubAuth(sessionId))
+    .then(async (found) => {
+      // An expired entry is as good as none for a local session: re-derive it.
+      if (found && (found.expiresAt === undefined || found.expiresAt > Date.now())) return found;
+      return (await recoverLocalSessionGithubAuth(app, sessionId)) ?? found;
+    })
+    .catch((err: unknown) => {
+      app.log.warn({ err, sessionId }, "could not recover a session's GitHub token");
+      return undefined;
+    });
+  if (socket.writable) socket.write(`${JSON.stringify(buildGithubTokenReply(held))}\n`);
 }
 
 function handleConnection(
@@ -693,6 +717,16 @@ function handleConnection(
               socket.write(`${JSON.stringify({ error: (err as Error).message })}\n`);
             }
           }
+          continue;
+        }
+
+        // #2246 — a session's git credential helper / `gh` wrapper asking for
+        // ITS OWN GitHub token. Answered inline from the in-memory store and
+        // never emitted as a session event; `sessionId` came from the
+        // handshake token, so another session's entry is unreachable. Always
+        // replies at once (a miss is an actionable `{error}`, never a hang).
+        if (result.message.kind === "github_token") {
+          await replyWithSessionGithubToken(app, socket, sessionId);
           continue;
         }
 

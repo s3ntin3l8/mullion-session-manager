@@ -961,6 +961,44 @@ export async function resolveReviewerToken(
   }
 }
 
+/**
+ * #2246 — a read-only installation token from the *reviewer* App for a review
+ * session's own git/gh (`session-read`: contents/issues/pull_requests read).
+ * Same no-PAT-fallback contract as `resolveReviewerToken`; the caller falls
+ * back to the main App's read token. The reviewer App is never used for a
+ * write from a session — this scope has none.
+ */
+export async function resolveReviewerSessionReadToken(
+  app: FastifyInstance,
+  repo: { owner: string; repo: string },
+): Promise<string | null> {
+  try {
+    const appCreds = getGitHubAppCredentials(app, GITHUB_REVIEWER_PROVIDER);
+    if (!appCreds) return null;
+    const result = await getInstallationToken(
+      appCreds.appId,
+      appCreds.privateKeyPem,
+      repo.owner,
+      repo.repo,
+      "session-read",
+    );
+    return result.token;
+  } catch (err) {
+    if (!(
+      err instanceof GitHubAppError ||
+      err instanceof DecryptionError ||
+      err instanceof GitHubApiError
+    )) {
+      throw err;
+    }
+    app.log.debug(
+      { err, owner: repo.owner, repo: repo.repo },
+      "[github-integration] reviewer App session-read token unavailable — falling back to the main App read token",
+    );
+    return null;
+  }
+}
+
 /** Who a sidebar write posts as (#2049). */
 export interface SidebarWriteIdentity {
   token: string;

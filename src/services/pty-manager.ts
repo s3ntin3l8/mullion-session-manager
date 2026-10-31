@@ -110,6 +110,11 @@ export type { NotificationEvent };
 // coverage script otherwise counts every interface member line as uncovered.
 export * from "./session-types.js";
 import type { GitIdentity } from "./git-env.js";
+import {
+  dropSessionGithubAuth,
+  setSessionGithubAuth,
+  type SessionGithubMode,
+} from "./session-github-token.js";
 import type { CreateSessionOptions, SubagentInfo, SessionInfo } from "./session-types.js";
 
 type DataListener = (chunk: Buffer) => void;
@@ -580,6 +585,9 @@ export class Session {
   // Spawn-time snapshot of the resolved git identity — see
   // LaunchPlanSession.gitIdentity (launch-plan.ts).
   private readonly gitIdentity: GitIdentity | undefined;
+  // #2246 — which GitHub credential chain the launch plan sets up (the token
+  // itself lives in session-github-token.ts, never on the Session).
+  private readonly githubAuthMode: SessionGithubMode | undefined;
   // Set ONLY for Task Master worker/review/retry/re-seed sessions. Same
   // "spawn-time snapshot, consumed once in bootstrapMaster()" posture as
   // initialPrompt/seedPrompt/resumeAgentSessionId above; threaded through
@@ -1029,6 +1037,7 @@ export class Session {
     smallModel?: string;
     taskId?: number;
     gitIdentity?: GitIdentity;
+    githubAuthMode?: SessionGithubMode;
   }) {
     // Issue #1521 — validate BEFORE anything below builds a path from the id
     // (hook token file, state file, ...): a non-digit id must never reach the
@@ -1069,6 +1078,7 @@ export class Session {
     this.model = opts.model;
     this.smallModel = opts.smallModel;
     this.gitIdentity = opts.gitIdentity;
+    this.githubAuthMode = opts.githubAuthMode;
     this.taskId = opts.taskId;
     this.env = opts.env ?? {};
     this.projectId = opts.projectId ?? null;
@@ -1636,6 +1646,7 @@ export class Session {
       smallModel: this.smallModel,
       taskId: this.taskId,
       gitIdentity: this.gitIdentity,
+      githubAuthMode: this.githubAuthMode,
     });
     this.hooksActive = plan.hooksActive;
     this.hookEmits = plan.hookEmits;
@@ -4272,7 +4283,11 @@ export class PtyManager {
         smallModel: opts.smallModel,
         taskId: opts.taskId,
         gitIdentity: opts.gitIdentity,
+        githubAuthMode: opts.githubAuth?.mode,
       });
+      // #2246 — after the Session exists (a throwing constructor must not
+      // leave a token behind), before its process can ask for it.
+      if (opts.githubAuth) setSessionGithubAuth(opts.id, opts.githubAuth);
       // Subscribed exactly once, at creation — re-emits every event this
       // brand-new session ever produces into the manager-level fan-out
       // above, for as long as this process runs (never unsubscribed; a
@@ -4752,6 +4767,9 @@ export class PtyManager {
     const session = this.sessions.get(id);
     this.kill(id);
     this.discardPendingSeed(id);
+    // #2246 — the session is done for good: drop its GitHub token. (kill()
+    // alone keeps it: a restart's kill leaves the program running.)
+    dropSessionGithubAuth(id);
     // H5 — a spawn still in flight (awaiting bootstrapMaster's systemd-run)
     // would otherwise land its scope AFTER stopScope below ran, leaking an
     // orphan. kill() above retired the Session, so the attempt will stop at

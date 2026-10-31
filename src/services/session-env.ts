@@ -189,10 +189,26 @@ export const GIT_CONFIG_TASK_PUSH_BLOCK_ENV = {
 
 /**
  * The most numbered GIT_CONFIG_* entries a session can carry: gc.auto,
- * the task push block, user.name and user.email. session-env-keys.ts reserves
- * this many KEY_n/VALUE_n pairs against a caller's own `env`.
+ * the task push block, user.name, user.email and up to two `credential.helper`
+ * entries (the reset plus Mullion's). session-env-keys.ts reserves this many
+ * KEY_n/VALUE_n pairs against a caller's own `env`.
  */
-export const GIT_CONFIG_MAX_ENTRIES = 4;
+export const GIT_CONFIG_MAX_ENTRIES = 6;
+
+/**
+ * #2246 — how Mullion's git credential helper joins the host's helper chain.
+ * - `manual`: appended, so every credential the host already has (ssh, a
+ *   `gh auth setup-git` helper, a keychain) is tried first and Mullion's
+ *   user-account token last.
+ * - `task`: the chain is reset first (`credential.helper=` with an empty
+ *   value clears every helper configured so far), so Mullion's token is the
+ *   only one a Task Master session's git ever offers.
+ * `command` is a complete helper value (`!node '/path/helper.mjs'`).
+ */
+export interface GitCredentialHelperConfig {
+  mode: "manual" | "task";
+  command: string;
+}
 
 /**
  * Merges every git config entry a session gets into ONE numbered
@@ -202,18 +218,25 @@ export const GIT_CONFIG_MAX_ENTRIES = 4;
  * overwrite each other's indices.
  *
  * Order is fixed: gc.auto (always), the task push block (`taskPushBlock`),
- * then user.name/user.email (`identity`, when set). With neither option the
+ * user.name/user.email (`identity`, when set), then the credential helper
+ * entries (`credentialHelper`, last so its reset only affects helpers that
+ * come from config files, never anything in this list). With no option the
  * result equals GIT_CONFIG_NO_AUTO_GC_ENV; with only `taskPushBlock` it equals
  * GIT_CONFIG_TASK_PUSH_BLOCK_ENV. An unset identity injects no user.* keys.
  */
 export function buildGitConfigEnv(opts: {
   taskPushBlock?: boolean;
   identity?: GitIdentity;
+  credentialHelper?: GitCredentialHelperConfig;
 }): Record<string, string> {
   const entries: Array<[string, string]> = [[...GIT_CONFIG_ENTRY_GC]];
   if (opts.taskPushBlock) entries.push([...GIT_CONFIG_ENTRY_PUSH_BLOCK]);
   if (opts.identity) {
     entries.push(["user.name", opts.identity.name], ["user.email", opts.identity.email]);
+  }
+  if (opts.credentialHelper) {
+    if (opts.credentialHelper.mode === "task") entries.push(["credential.helper", ""]);
+    entries.push(["credential.helper", opts.credentialHelper.command]);
   }
   const env: Record<string, string> = { [GIT_CONFIG_COUNT_KEY]: String(entries.length) };
   entries.forEach(([key, value], i) => {

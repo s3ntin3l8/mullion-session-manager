@@ -70,6 +70,8 @@ vi.mock("../../src/services/hook-adapters/index.js", () => ({
 
 const { buildLaunchPlan } = await import("../../src/services/launch-plan.js");
 const { SERVER_ENV_KEYS } = await import("../../src/services/session-env.js");
+const { setSessionGithubAuth, clearSessionGithubAuthForTests } =
+  await import("../../src/services/session-github-token.js");
 
 const tmpDirs: string[] = [];
 function mkTmpDir(prefix: string): string {
@@ -750,6 +752,63 @@ describe("buildLaunchPlan — shell/argv/constraints shape", () => {
       ).env;
       expect(env.GIT_CONFIG_VALUE_1).toBe(identity.name);
       expect(env.GIT_CONFIG_KEY_2).toBe("user.email");
+    });
+  });
+
+  describe("GitHub credential helper (issue #2246)", () => {
+    const entries = (env: Record<string, string | undefined>) =>
+      Array.from({ length: Number(env.GIT_CONFIG_COUNT) }, (_, i) => [
+        env[`GIT_CONFIG_KEY_${i}`],
+        env[`GIT_CONFIG_VALUE_${i}`],
+      ]);
+
+    it("a manual session appends the helper, so the host's own helpers come first", () => {
+      const env = buildLaunchPlan(baseSession({ githubAuthMode: "manual" })).env;
+      const list = entries(env);
+      expect(list.map(([k]) => k)).toEqual(["gc.auto", "credential.helper"]);
+      expect(list[1][1]).toMatch(/^!'.+' '.+git-credential-mullion\.mjs'$/);
+    });
+
+    it("a task session resets the helper chain, then adds Mullion's", () => {
+      const env = buildLaunchPlan(
+        baseSession({
+          taskId: 7,
+          githubAuthMode: "task",
+          gitIdentity: { name: "A", email: "a@b" },
+        }),
+      ).env;
+      const list = entries(env);
+      expect(list.map(([k]) => k)).toEqual([
+        "gc.auto",
+        "remote.origin.pushurl",
+        "user.name",
+        "user.email",
+        "credential.helper",
+        "credential.helper",
+      ]);
+      expect(list[4][1]).toBe("");
+      expect(list[5][1]).toMatch(/git-credential-mullion\.mjs'$/);
+      expect(Number(env.GIT_CONFIG_COUNT)).toBeLessThanOrEqual(6);
+    });
+
+    it("puts the gh wrapper dir first on PATH, only when a credential mode is set", () => {
+      const withMode = buildLaunchPlan(baseSession({ githubAuthMode: "manual" })).env;
+      expect(withMode.PATH?.split(path.delimiter)[0]).toMatch(/hooks[\\/]bin$/);
+      expect(buildLaunchPlan(baseSession()).env.PATH?.split(path.delimiter)[0]).not.toMatch(
+        /hooks[\\/]bin$/,
+      );
+      expect(buildLaunchPlan(baseSession()).env.GIT_CONFIG_COUNT).toBe("1");
+    });
+
+    it("never puts a token in the env, and a caller's env cannot take the helper slots", () => {
+      // The session's token sits in the store; nothing in the plan may carry it.
+      setSessionGithubAuth("42", { mode: "manual", token: "ghs_SENTINEL_never_in_env" });
+      const plan = buildLaunchPlan(
+        baseSession({ githubAuthMode: "manual", env: { GIT_CONFIG_VALUE_1: "evil" } }),
+      );
+      expect(entries(plan.env)[1][1]).not.toBe("evil");
+      expect(JSON.stringify(plan)).not.toContain("ghs_SENTINEL_never_in_env");
+      clearSessionGithubAuthForTests();
     });
   });
 

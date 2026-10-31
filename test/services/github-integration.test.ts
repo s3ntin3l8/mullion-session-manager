@@ -40,6 +40,7 @@ import {
   clearGitHubApp,
   resolveGitHubToken,
   resolveReviewerToken,
+  resolveReviewerSessionReadToken,
   resolveChecksToken,
   resolveChecksReadToken,
   resolveMarkerTokens,
@@ -524,6 +525,48 @@ describe("github-integration service", () => {
       expect(getConfiguredAppId(app)).toBe("111");
       expect(getConfiguredAppId(app, GITHUB_REVIEWER_PROVIDER)).toBe("222");
       expect(fetchMock).not.toHaveBeenCalled();
+      await app.close();
+    });
+  });
+
+  describe("resolveReviewerSessionReadToken (#2246)", () => {
+    const repo = { owner: "acme", repo: "widgets" };
+
+    it("is null (never the PAT) with no reviewer App configured", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
+      const app = await buildApp();
+      await setPat(app, "ghp_shared");
+      expect(await resolveReviewerSessionReadToken(app, repo)).toBeNull();
+      expect(mockGetInstallationToken).not.toHaveBeenCalled();
+      await app.close();
+    });
+
+    it("mints the read-only 'session-read' scope from the reviewer row", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "111", FAKE_APP_PRIVATE_KEY);
+      setGitHubApp(app, "222", FAKE_APP_PRIVATE_KEY, GITHUB_REVIEWER_PROVIDER);
+      mockGetInstallationToken.mockResolvedValue({
+        token: "ghs_rev_read",
+        installationsChecked: null,
+      });
+      expect(await resolveReviewerSessionReadToken(app, repo)).toBe("ghs_rev_read");
+      expect(mockGetInstallationToken).toHaveBeenCalledWith(
+        "222",
+        expect.any(String),
+        "acme",
+        "widgets",
+        "session-read",
+      );
+      await app.close();
+    });
+
+    it("is null when the mint fails, and rethrows an unexpected error", async () => {
+      const app = await buildApp();
+      setGitHubApp(app, "222", FAKE_APP_PRIVATE_KEY, GITHUB_REVIEWER_PROVIDER);
+      mockGetInstallationToken.mockRejectedValueOnce(new GitHubAppError("GitHub is down"));
+      expect(await resolveReviewerSessionReadToken(app, repo)).toBeNull();
+      mockGetInstallationToken.mockRejectedValueOnce(new TypeError("bug"));
+      await expect(resolveReviewerSessionReadToken(app, repo)).rejects.toThrow(TypeError);
       await app.close();
     });
   });

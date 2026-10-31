@@ -445,11 +445,20 @@ describe("buildGitConfigEnv", () => {
       GIT_CONFIG_KEY_2: "user.email",
       GIT_CONFIG_VALUE_2: "ada@example.com",
     });
-    const all = buildGitConfigEnv({ taskPushBlock: true, identity });
-    expect(all.GIT_CONFIG_COUNT).toBe("4");
+    const all = buildGitConfigEnv({
+      taskPushBlock: true,
+      identity,
+      credentialHelper: { mode: "task", command: "!helper" },
+    });
+    expect(all.GIT_CONFIG_COUNT).toBe("6");
     expect(all.GIT_CONFIG_KEY_1).toBe("remote.origin.pushurl");
     expect(all.GIT_CONFIG_KEY_2).toBe("user.name");
     expect(all.GIT_CONFIG_KEY_3).toBe("user.email");
+    expect([all.GIT_CONFIG_KEY_4, all.GIT_CONFIG_VALUE_4]).toEqual(["credential.helper", ""]);
+    expect([all.GIT_CONFIG_KEY_5, all.GIT_CONFIG_VALUE_5]).toEqual([
+      "credential.helper",
+      "!helper",
+    ]);
     expect(Object.keys(all)).toHaveLength(1 + 2 * GIT_CONFIG_MAX_ENTRIES);
   });
 });

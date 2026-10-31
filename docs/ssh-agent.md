@@ -248,6 +248,15 @@ a file at `<SESSIONS_DIR>/ssh-agent.sock` naming a port on `127.0.0.1` and a
   cannot use that pipe either. Remove the variable for the Mullion process to
   use the bridge.
 
+## Not the GitHub auth path
+
+The bridge exists mainly for server-to-server `ssh`. It only helps git over ssh
+when your key is registered on GitHub, needs the Helper connected, and never
+helps `https` remotes or `gh`. Giving a session's own `git fetch` / `gh` GitHub
+access is a separate mechanism — a session-scoped token served over the
+session's hook socket; see
+[GitHub auth for sessions on a remote host](multi-host.md#github-auth-for-sessions-on-a-remote-host).
+
 ## Troubleshooting
 
 - `ssh-add -l` reports no agent: start a new session after connecting the

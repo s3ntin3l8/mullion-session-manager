@@ -20,7 +20,10 @@
 import os from "node:os";
 import { mkdirSync } from "node:fs";
 import type { HookMessageKind } from "./hook-protocol.js";
+import path from "node:path";
 import { buildGitConfigEnv, buildSessionEnv } from "./session-env.js";
+import type { SessionGithubMode } from "./session-github-token.js";
+import { githubCredentialHelperCommand, githubWrapperBinDir } from "./session-github-helper.js";
 import type { GitIdentity } from "./git-env.js";
 import { applyShellIntegrationEnv } from "./shell-integration.js";
 import { writeSessionAgentGuide } from "./agent-guide.js";
@@ -150,6 +153,10 @@ export interface LaunchPlanSession {
    * `settings.sessions.gitIdentity`), resolved on the primary and forwarded
    * to a remote host verbatim. Undefined injects no user.* config. */
   readonly gitIdentity?: GitIdentity;
+  /** #2246 — which GitHub credential chain this session gets (the token is
+   * held separately, session-github-token.ts, and never enters this plan or
+   * the session env). Undefined: none configured (an older primary). */
+  readonly githubAuthMode?: SessionGithubMode;
   readonly injectAgentGuide: boolean;
   readonly injectProjectBriefing: boolean;
   /** See HookAdapterContext.injectMullionBundle's own doc comment
@@ -291,8 +298,20 @@ export function buildLaunchPlan(session: LaunchPlanSession): LaunchPlan {
     buildGitConfigEnv({
       taskPushBlock: session.taskId !== undefined,
       identity: session.gitIdentity,
+      credentialHelper: session.githubAuthMode && {
+        mode: session.githubAuthMode,
+        command: githubCredentialHelperCommand(),
+      },
     }),
   );
+  // #2246 — the `gh` wrapper dir leads PATH so `gh` resolves to it; it asks
+  // this host's Mullion for the token per invocation (hook socket) and runs
+  // the real gh with GH_TOKEN set for that one process only.
+  if (session.githubAuthMode) {
+    sessionEnv.PATH = [githubWrapperBinDir(), sessionEnv.PATH ?? ""]
+      .filter((entry) => entry !== "")
+      .join(path.delimiter);
+  }
   // Issue: sidebar worktree display — injects the OSC 7 shell-integration
   // hook (ZDOTDIR shim for zsh, PROMPT_COMMAND for bash) so this session's
   // shell announces its cwd on every prompt draw, feeding Session.liveCwd.

@@ -362,6 +362,8 @@ async function spawnReviewAgentNow(
       // tasks #66 / #67. Mark as a Task Master session so the opencode
       // and codex adapters deny the same three skills.
       taskId: task.id,
+      // #2246 — a review agent's own git/gh holds a read-only token.
+      taskRole: "reviewer",
       // Issue #1724 — an unattended session (the placement policy scores it
       // with no local bonus) AND pinned to the worker's host: the review
       // reads that worktree, so it cannot be placed anywhere else.

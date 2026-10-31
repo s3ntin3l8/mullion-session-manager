@@ -318,8 +318,36 @@ export const WORKFLOW_WRITE_PERMISSIONS = {
   workflows: "write",
 } as const;
 
+// #2246 — what a Task Master WORKER session's own git/gh holds. Issues write
+// (follow-up issues) but contents/pull_requests only read: the credential
+// helper hands this token to any `git` in the session, so it must not be able
+// to push around the task push block (GIT_CONFIG_TASK_PUSH_BLOCK_ENV).
+export const SESSION_WORK_PERMISSIONS = {
+  issues: "write",
+  contents: "read",
+  pull_requests: "read",
+  metadata: "read",
+} as const;
+// #2246 — a REVIEWER session's token: read-only, minted from the reviewer App
+// first and the main App second (`resolveSessionReadToken`).
+export const SESSION_READ_PERMISSIONS = {
+  issues: "read",
+  contents: "read",
+  pull_requests: "read",
+  metadata: "read",
+} as const;
+
 export type InstallationTokenScope =
-  "write" | "read" | "issues" | "dispatch" | "review" | "checks" | "checks-read" | "workflows";
+  | "write"
+  | "read"
+  | "issues"
+  | "dispatch"
+  | "review"
+  | "checks"
+  | "checks-read"
+  | "workflows"
+  | "session-work"
+  | "session-read";
 
 function permissionsForScope(scope: InstallationTokenScope): Record<string, string> {
   switch (scope) {
@@ -339,6 +367,10 @@ function permissionsForScope(scope: InstallationTokenScope): Record<string, stri
       return CHECKS_READ_PERMISSIONS;
     case "workflows":
       return WORKFLOW_WRITE_PERMISSIONS;
+    case "session-work":
+      return SESSION_WORK_PERMISSIONS;
+    case "session-read":
+      return SESSION_READ_PERMISSIONS;
   }
 }
 
@@ -467,6 +499,11 @@ interface CachedTokenFailure {
 }
 const tokenCache = new Map<string, CachedToken | CachedTokenFailure>();
 const CACHE_SAFETY_MARGIN_MS = 60_000;
+/** The session-credential refresher renews an App token this far ahead of expiry. */
+export const SESSION_TOKEN_RENEW_BEFORE_MS = 10 * 60 * 1000;
+// A session-scope token is served from cache only while the refresher would not
+// yet renew it; otherwise a renewal inside its window would get the same token back.
+const SESSION_CACHE_SAFETY_MARGIN_MS = SESSION_TOKEN_RENEW_BEFORE_MS + CACHE_SAFETY_MARGIN_MS;
 // Same TTL as the installation-id negative cache below — GitHub gives no
 // cheaper signal for "did this App's granted permissions change" than
 // re-attempting the mint, so this is a deliberate cap on how often a
@@ -595,7 +632,10 @@ export async function getInstallationToken(
   const key = cacheKey(appId, scope, owner, repo);
   const cached = tokenCache.get(key);
   if (cached) {
-    if (cached.ok && cached.expiresAt.getTime() - CACHE_SAFETY_MARGIN_MS > Date.now()) {
+    const margin = scope.startsWith("session-")
+      ? SESSION_CACHE_SAFETY_MARGIN_MS
+      : CACHE_SAFETY_MARGIN_MS;
+    if (cached.ok && cached.expiresAt.getTime() - margin > Date.now()) {
       return { token: cached.token, installationsChecked: null };
     }
     if (!cached.ok && cached.expiresAt > Date.now()) {
@@ -639,6 +679,23 @@ export async function getInstallationToken(
     }
     throw err;
   }
+}
+
+/**
+ * When the cached installation token for this key stops being valid, if it is
+ * the very `token` given (a PAT fallback or a token minted since is not).
+ * Lets the session-credential refresher renew an App token before it expires
+ * without a second return channel on `getInstallationToken`.
+ */
+export function peekInstallationTokenExpiry(
+  appId: string,
+  scope: Exclude<InstallationTokenScope, "workflows">,
+  owner: string,
+  repo: string,
+  token: string,
+): number | undefined {
+  const cached = tokenCache.get(cacheKey(appId, scope, owner, repo));
+  return cached?.ok && cached.token === token ? cached.expiresAt.getTime() : undefined;
 }
 
 /**

@@ -104,6 +104,18 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
           // Hermes review, PR #966 — Task Master marker, see
           // CreateSessionOptions.taskId's own doc comment (pty-manager.ts).
           taskId: { type: "integer" },
+          githubAuth: {
+            type: "object",
+            additionalProperties: false,
+            required: ["mode"],
+            properties: {
+              mode: { type: "string", enum: ["manual", "task"] },
+              token: { type: "string", minLength: 1, maxLength: 1024 },
+              username: { type: "string", minLength: 1, maxLength: 256 },
+              expiresAt: { type: "integer", minimum: 0 },
+              hint: { type: "string", maxLength: 1024 },
+            },
+          },
           gitIdentity: {
             type: "object",
             additionalProperties: false,
@@ -510,5 +522,19 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
         },
       },
     });
+  });
+});
+
+describe("githubAuth (issue #2246)", () => {
+  it("spawnSessionSchema accepts the session's GitHub credential, bounded", () => {
+    const props = spawnSessionSchema.body.properties as Record<string, { properties?: object }>;
+    expect(props.githubAuth).toBeDefined();
+    expect(Object.keys(props.githubAuth.properties ?? {}).sort()).toEqual([
+      "expiresAt",
+      "hint",
+      "mode",
+      "token",
+      "username",
+    ]);
   });
 });

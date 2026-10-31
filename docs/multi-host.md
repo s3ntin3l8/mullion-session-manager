@@ -1493,3 +1493,51 @@ that the primary itself placed on that host, and none of it reaches full scope.
   primary's connections when the host wakes, but only the operator's own
   `pmset` settings can keep a **closed-lid** host running. See "macOS agents:
   sleep and wake" above.
+
+## GitHub auth for sessions on a remote host
+
+A session's own `git fetch` and `gh` need GitHub credentials, and a remote host
+has none unless someone set it up by hand (a local session works because it runs
+as your Unix user and finds your `gh` login). Mullion supplies them, and
+**GitHub identity follows who is acting**:
+
+| Session                | Token Mullion holds                                                      | Order                                             |
+| ---------------------- | ------------------------------------------------------------------------ | ------------------------------------------------- |
+| One you drive (manual) | Your connected account's token — activity shows as you                   | The host's own credentials first, Mullion's last  |
+| Task Master worker     | The main GitHub App, scoped to the repo: issues write, contents/PRs read | Mullion's first; the host's helper chain is reset |
+| Task Master reviewer   | The reviewer App, read-only; the main App's read token otherwise         | Mullion's first                                   |
+
+Task Master's own writes (push, PR, merge, review) stay server-side and never
+use these tokens, and a task session's `git push` stays blocked
+(`GIT_CONFIG_TASK_PUSH_BLOCK_ENV`) — which is why the worker token cannot write
+contents. The reviewer App is never used for a write from a session.
+
+How it works:
+
+- **Delivery.** The primary resolves the token at launch and sends it in the
+  spawn body over the same signed `/internal/*` channel as everything else; the
+  agent keeps it **in memory** keyed by session id. For an App token (~1h) the
+  primary re-sends it (`PUT /internal/sessions/:id/github-auth`) ten minutes
+  before it expires, and the agent refuses to serve an expired one. The agent
+  drops it when the session is terminated. A local session uses the same
+  in-process store (and, after a primary restart, is re-resolved on demand).
+  The token is never written to `.git/config`, the session env or any file.
+- **In the session.** git config comes from the numbered `GIT_CONFIG_*` env:
+  a manual session appends `credential.helper=<mullion>` (so it is tried last);
+  a task session first sets `credential.helper=` (empty — clears the chain) and
+  then Mullion's. The helper (`src/hooks/git-credential-mullion.mjs`) answers
+  only for `https://github.com`, asking the host's Mullion for the token over
+  the session's own hook socket (`MULLION_HOOK_SOCKET` / `MULLION_HOOK_TOKEN`) —
+  a session can only ever read its own. A `gh` wrapper (`src/hooks/bin/gh`)
+  leads the session's `PATH` and runs the real `gh` with `GH_TOKEN` set for that
+  one invocation; a manual session uses the host's own `gh` login when
+  `gh auth token` succeeds.
+- **No token.** If no GitHub is connected (manual) or no App is installed on the
+  repo (task), the helper and the wrapper print an actionable message — connect
+  GitHub in Settings, or install the Mullion GitHub App — and fail instead of
+  hanging or prompting.
+- **Version skew.** An agent that predates this strips the new spawn field: its
+  sessions simply have no Mullion credentials, as before.
+
+The SSH agent bridge is **not** this path — see
+[`ssh-agent.md`](ssh-agent.md#not-the-github-auth-path).
