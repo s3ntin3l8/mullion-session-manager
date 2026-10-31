@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProjectSetupPanel } from "./ProjectSetupPanel.js";
 import { __resetRateLimitBreakerForTests } from "./api/client.js";
@@ -43,6 +43,12 @@ function mockFetch(opts: {
   });
 }
 
+// The panel opens on the agent path; the starter-template Preview lives behind
+// the path switch (#2428).
+async function toTemplatePath(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("radio", { name: "Starter template" }));
+}
+
 describe("ProjectSetupPanel", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -65,7 +71,7 @@ describe("ProjectSetupPanel", () => {
     it("is disabled until a slug is entered", () => {
       vi.stubGlobal("fetch", mockFetch({}));
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
-      expect(screen.getByText("Generate with agent")).toBeDisabled();
+      expect(screen.getByRole("button", { name: /^Generate with / })).toBeDisabled();
     });
 
     it("posts the entered options to /setup/generate and shows the same diff view", async () => {
@@ -74,7 +80,7 @@ describe("ProjectSetupPanel", () => {
       const user = userEvent.setup();
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
       await user.type(screen.getByPlaceholderText("my-project"), "demo");
-      await user.click(screen.getByText("Generate with agent"));
+      await user.click(screen.getByRole("button", { name: /^Generate with / }));
 
       expect(await screen.findByText("Preview — 2 files")).toBeInTheDocument();
       expect(screen.getByText(/\+generated line/)).toBeInTheDocument();
@@ -96,7 +102,7 @@ describe("ProjectSetupPanel", () => {
       const user = userEvent.setup();
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
       await user.type(screen.getByPlaceholderText("my-project"), "demo");
-      await user.click(screen.getByText("Generate with agent"));
+      await user.click(screen.getByRole("button", { name: /^Generate with / }));
       expect(await screen.findByText(/without a sandbox/)).toBeInTheDocument();
       expect(screen.getByText(/may not have read this repo/)).toBeInTheDocument();
     });
@@ -113,14 +119,14 @@ describe("ProjectSetupPanel", () => {
       const user = userEvent.setup();
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
       await user.type(screen.getByPlaceholderText("my-project"), "demo");
-      await user.click(screen.getByText("Generate with agent"));
+      await user.click(screen.getByRole("button", { name: /^Generate with / }));
 
       expect(await screen.findByText(/already exist/)).toBeInTheDocument();
       // Retrying with nothing ticked would just 409 again.
-      expect(screen.getByText("Generate with agent")).toBeDisabled();
+      expect(screen.getByRole("button", { name: /^Generate with / })).toBeDisabled();
       await user.click(screen.getByLabelText("Regenerate the skill"));
       await user.click(screen.getByLabelText("Regenerate the reviewer"));
-      await user.click(screen.getByText("Generate with agent"));
+      await user.click(screen.getByRole("button", { name: /^Generate with / }));
 
       expect(await screen.findByText("Preview — 2 files")).toBeInTheDocument();
       const generateCalls = fetchMock.mock.calls.filter(([url]) =>
@@ -140,12 +146,12 @@ describe("ProjectSetupPanel", () => {
       const user = userEvent.setup();
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
       await user.type(screen.getByPlaceholderText("my-project"), "a");
-      await user.click(screen.getByText("Generate with agent"));
+      await user.click(screen.getByRole("button", { name: /^Generate with / }));
       await user.click(await screen.findByLabelText("Regenerate the skill"));
 
       await user.type(screen.getByPlaceholderText("my-project"), "b");
       expect(screen.queryByLabelText("Regenerate the skill")).not.toBeInTheDocument();
-      expect(screen.getByText("Generate with agent")).toBeEnabled();
+      expect(screen.getByRole("button", { name: /^Generate with / })).toBeEnabled();
     });
 
     it("starts only one agent turn for a double click", async () => {
@@ -157,7 +163,7 @@ describe("ProjectSetupPanel", () => {
       const user = userEvent.setup();
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
       await user.type(screen.getByPlaceholderText("my-project"), "demo");
-      const button = screen.getByText("Generate with agent");
+      const button = screen.getByRole("button", { name: /^Generate with / });
       await user.dblClick(button);
       release(generated());
       await screen.findByText("Preview — 2 files");
@@ -174,7 +180,7 @@ describe("ProjectSetupPanel", () => {
         render(<ProjectSetupPanel params={{ projectId: 1 }} />);
         await user.type(screen.getByPlaceholderText("my-project"), "demo");
         if (mode) await user.click(screen.getByLabelText(mode));
-        await user.click(screen.getByText("Generate with agent"));
+        await user.click(screen.getByRole("button", { name: /^Generate with / }));
         await screen.findByText("Preview — 2 files");
         const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/setup/generate"));
         return JSON.parse((call![1] as RequestInit).body as string) as Record<string, unknown>;
@@ -187,7 +193,7 @@ describe("ProjectSetupPanel", () => {
         render(<ProjectSetupPanel params={{ projectId: 1 }} />);
         expect(screen.getByLabelText("Leave it")).toBeChecked();
         await user.type(screen.getByPlaceholderText("my-project"), "demo");
-        await user.click(screen.getByText("Generate with agent"));
+        await user.click(screen.getByRole("button", { name: /^Generate with / }));
         await screen.findByText("Preview — 2 files");
         const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/setup/generate"));
         expect(JSON.parse((call![1] as RequestInit).body as string).existingInstructions).toBe(
@@ -278,8 +284,8 @@ describe("ProjectSetupPanel", () => {
         expect(desc).toHaveTextContent(/Nothing is rewritten/);
 
         await user.type(screen.getByPlaceholderText("my-project"), "demo");
-        await user.click(screen.getByText("Generate with agent"));
-        for (const radio of screen.getAllByRole("radio")) {
+        await user.click(screen.getByRole("button", { name: /^Generate with / }));
+        for (const radio of within(radiogroup).getAllByRole("radio")) {
           expect(radio).toBeDisabled();
         }
         release(generated());
@@ -295,7 +301,7 @@ describe("ProjectSetupPanel", () => {
       const user = userEvent.setup();
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
       await user.type(screen.getByPlaceholderText("my-project"), "demo");
-      await user.click(screen.getByText("Generate with agent"));
+      await user.click(screen.getByRole("button", { name: /^Generate with / }));
       expect(await screen.findByText(/agent exploded/)).toBeInTheDocument();
       expect(screen.getByPlaceholderText("my-project")).toBeInTheDocument();
     });
@@ -314,17 +320,18 @@ describe("ProjectSetupPanel", () => {
       const user = userEvent.setup();
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
       await user.type(screen.getByPlaceholderText("my-project"), "demo");
-      await user.click(screen.getByText("Generate with agent"));
+      await user.click(screen.getByRole("button", { name: /^Generate with / }));
       expect(
         await screen.findByText(/rate limited — try again in about 10 minute/),
       ).toBeInTheDocument();
     });
   });
 
-  it("disables Preview until a slug is entered", () => {
+  it("disables Preview until a slug is entered", async () => {
     vi.stubGlobal("fetch", mockFetch({}));
     render(<ProjectSetupPanel params={{ projectId: 1 }} />);
-    expect(screen.getByText("Preview")).toBeDisabled();
+    await toTemplatePath(userEvent.setup());
+    expect(screen.getByText("Preview starter template")).toBeDisabled();
   });
 
   // Issue #942 (this restructure) — CLAUDE.md is unconditional (no
@@ -351,7 +358,8 @@ describe("ProjectSetupPanel", () => {
     render(<ProjectSetupPanel params={{ projectId: 1 }} />);
 
     await user.type(screen.getByPlaceholderText("my-project"), "demo");
-    await user.click(screen.getByText("Preview"));
+    await toTemplatePath(user);
+    await user.click(screen.getByText("Preview starter template"));
 
     expect(await screen.findByText("Preview — 2 files")).toBeInTheDocument();
     const previewCall = fetchMock.mock.calls.find(([url]) =>
@@ -377,7 +385,8 @@ describe("ProjectSetupPanel", () => {
     render(<ProjectSetupPanel params={{ projectId: 1 }} />);
 
     await user.type(screen.getByPlaceholderText("my-project"), "x");
-    await user.click(screen.getByText("Preview"));
+    await toTemplatePath(user);
+    await user.click(screen.getByText("Preview starter template"));
 
     expect(await screen.findByText('"x" is not a safe slug')).toBeInTheDocument();
     expect(screen.getByPlaceholderText("my-project")).toBeInTheDocument();
@@ -394,7 +403,8 @@ describe("ProjectSetupPanel", () => {
     render(<ProjectSetupPanel params={{ projectId: 1 }} />);
 
     await user.type(screen.getByPlaceholderText("my-project"), "demo");
-    await user.click(screen.getByText("Preview"));
+    await toTemplatePath(user);
+    await user.click(screen.getByText("Preview starter template"));
     await screen.findByText("Preview — 1 file");
 
     await user.click(screen.getByText("Back"));
@@ -419,7 +429,8 @@ describe("ProjectSetupPanel", () => {
     render(<ProjectSetupPanel params={{ projectId: 1 }} />);
 
     await user.type(screen.getByPlaceholderText("my-project"), "demo");
-    await user.click(screen.getByText("Preview"));
+    await toTemplatePath(user);
+    await user.click(screen.getByText("Preview starter template"));
     await screen.findByText("Preview — 1 file");
     await user.click(screen.getByText("Apply"));
 
@@ -445,7 +456,8 @@ describe("ProjectSetupPanel", () => {
     render(<ProjectSetupPanel params={{ projectId: 1 }} />);
 
     await user.type(screen.getByPlaceholderText("my-project"), "demo");
-    await user.click(screen.getByText("Preview"));
+    await toTemplatePath(user);
+    await user.click(screen.getByText("Preview starter template"));
     await screen.findByText("Preview — 1 file");
     await user.click(screen.getByText("Apply"));
 
@@ -480,7 +492,8 @@ describe("ProjectSetupPanel", () => {
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
 
       await user.type(screen.getByPlaceholderText("my-project"), "demo");
-      await user.click(screen.getByText("Preview"));
+      await toTemplatePath(user);
+      await user.click(screen.getByText("Preview starter template"));
       await screen.findByText("Preview — 1 file");
       expect(refreshProjects).not.toHaveBeenCalled();
 
@@ -505,7 +518,8 @@ describe("ProjectSetupPanel", () => {
     render(<ProjectSetupPanel params={{ projectId: 1 }} />);
 
     await user.type(screen.getByPlaceholderText("my-project"), "demo");
-    await user.click(screen.getByText("Preview"));
+    await toTemplatePath(user);
+    await user.click(screen.getByText("Preview starter template"));
     await screen.findByText("Preview — 1 file");
     await user.click(screen.getByText("Apply"));
 
@@ -635,7 +649,8 @@ describe("ProjectSetupPanel", () => {
     render(<ProjectSetupPanel params={{ projectId: 1 }} />);
 
     await user.type(screen.getByPlaceholderText("my-project"), "demo");
-    await user.click(screen.getByText("Preview"));
+    await toTemplatePath(user);
+    await user.click(screen.getByText("Preview starter template"));
 
     // The warning text mentions AGENTS.override.md twice (once in a <code>
     // element, once in plain prose) — findAllByText, not findByText, since
@@ -662,7 +677,8 @@ describe("ProjectSetupPanel", () => {
     render(<ProjectSetupPanel params={{ projectId: 1 }} />);
 
     await user.type(screen.getByPlaceholderText("my-project"), "demo");
-    await user.click(screen.getByText("Preview"));
+    await toTemplatePath(user);
+    await user.click(screen.getByText("Preview starter template"));
     await screen.findByText("Preview — 1 file");
 
     expect(screen.queryByText(/AGENTS\.override\.md/)).not.toBeInTheDocument();
@@ -699,6 +715,95 @@ describe("ProjectSetupPanel", () => {
       expect(
         screen.queryByText(/re-run Preview and Apply below to update the committed text/),
       ).not.toBeInTheDocument();
+    });
+  });
+  // Issue #2428 — the instructions choice and the agent belong to one path.
+  describe("agent and template paths", () => {
+    const generated = () =>
+      jsonResponse(200, {
+        previewId: "gen1",
+        diff: "diff --git a/AGENTS.md b/AGENTS.md\n+x\n",
+        files: ["AGENTS.md"],
+        hasAgentsOverride: false,
+        sandboxed: true,
+      });
+
+    it("opens on the agent path: the radio, the agent line and a Generate button naming the agent", () => {
+      vi.stubGlobal("fetch", mockFetch({}));
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 1, defaultAgent: "codex" })],
+      });
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      expect(screen.getByRole("radio", { name: "Write it with an agent" })).toBeChecked();
+      expect(
+        screen.getByRole("radiogroup", { name: "Instructions this repo already has" }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Generate with codex" })).toBeInTheDocument();
+      expect(screen.queryByText("Preview starter template")).not.toBeInTheDocument();
+    });
+
+    it("the template path hides the instructions choice and offers only the starter Preview", async () => {
+      vi.stubGlobal("fetch", mockFetch({}));
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      await toTemplatePath(user);
+      expect(
+        screen.queryByRole("radiogroup", { name: "Instructions this repo already has" }),
+      ).not.toBeInTheDocument();
+      expect(screen.getByText("Preview starter template")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: /^Generate with / })).not.toBeInTheDocument();
+    });
+
+    it("keeps the chosen instructions mode when switching away and back", async () => {
+      vi.stubGlobal("fetch", mockFetch({}));
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      await user.click(screen.getByLabelText("Restructure it"));
+      await toTemplatePath(user);
+      await user.click(screen.getByRole("radio", { name: "Write it with an agent" }));
+      expect(screen.getByLabelText("Restructure it")).toBeChecked();
+    });
+
+    it("says on the form that a pull request is opened and nothing is overwritten", () => {
+      vi.stubGlobal("fetch", mockFetch({}));
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      expect(screen.getByText(/nothing in your checkout is overwritten/)).toBeInTheDocument();
+    });
+
+    it("names the source of a generated preview, with the agent and the mode", async () => {
+      vi.stubGlobal("fetch", mockFetch({ generate: () => generated() }));
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 1, defaultAgent: "codex" })],
+      });
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      await user.type(screen.getByPlaceholderText("my-project"), "demo");
+      await user.click(screen.getByLabelText("Restructure it"));
+      await user.click(screen.getByRole("button", { name: "Generate with codex" }));
+      expect(await screen.findByTestId("preview-source")).toHaveTextContent(
+        "Generated by codex · Restructure it",
+      );
+    });
+
+    it("names a starter-template preview as such", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          preview: () =>
+            jsonResponse(200, {
+              previewId: "p1",
+              diff: "diff --git a/AGENTS.md b/AGENTS.md\n+x\n",
+              files: ["AGENTS.md"],
+              hasAgentsOverride: false,
+            }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      await user.type(screen.getByPlaceholderText("my-project"), "demo");
+      await toTemplatePath(user);
+      await user.click(screen.getByText("Preview starter template"));
+      expect(await screen.findByTestId("preview-source")).toHaveTextContent("Starter template");
     });
   });
 });
