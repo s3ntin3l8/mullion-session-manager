@@ -6,13 +6,15 @@ import {
   withCurrentReviewAgent,
 } from "./agentOptions.js";
 
-const relay = { provider: "hermes", apiUrl: "http://h:1", taskMasterReviewer: true };
+const relay = { provider: "hermes" as string, apiUrl: "http://h:1", taskMasterReviewer: true };
 
 describe("hermesReviewerAvailable", () => {
-  it("is on only with the setting, the hermes provider and a URL", () => {
+  const noProvider = { ...relay, provider: "none" };
+  it("is on only with the setting and a URL, whatever the relay provider is", () => {
     expect(hermesReviewerAvailable(relay)).toBe(true);
     expect(hermesReviewerAvailable({ ...relay, taskMasterReviewer: false })).toBe(false);
-    expect(hermesReviewerAvailable({ ...relay, provider: "none" })).toBe(false);
+    expect(hermesReviewerAvailable(noProvider)).toBe(true);
+    expect(hermesReviewerAvailable({ ...relay, apiUrl: "  " })).toBe(false);
     expect(hermesReviewerAvailable({ ...relay, apiUrl: "" })).toBe(false);
     expect(hermesReviewerAvailable(undefined)).toBe(false);
   });

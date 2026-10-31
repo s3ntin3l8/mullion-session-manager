@@ -332,8 +332,8 @@ export function TaskActions({ task }: { task: Task }) {
           so this fires directly on click rather than opening the
           pendingAction confirm flow. */}
       {task.lastReviewVerdict === "inconclusive" &&
-        task.reviewSessionId !== null &&
-        task.reviewFindingsIngestedSessionId !== null && (
+        ((task.reviewSessionId !== null && task.reviewFindingsIngestedSessionId !== null) ||
+          (task.reviewRunId !== null && task.reviewRunIngestedId !== null)) && (
           <button
             className="notif-gate-btn"
             disabled={submitting}

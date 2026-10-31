@@ -26,14 +26,15 @@ export const REVIEW_AGENT_OPTIONS = [{ value: "none", label: "None" }, ...AGENT_
 
 // The Hermes reviewer is not a local CLI: it is an HTTP run on the review
 // relay's Hermes connection, so it is only offered when Task Master reviews
-// are switched on there and the connection has a URL. A stored "hermes" value
+// are switched on there and the connection has a URL (independent of the
+// GitHub-side relay provider switch). A stored "hermes" value
 // stays readable when this goes false (see withCurrentReviewAgent).
 export const HERMES_REVIEW_OPTION = { value: "hermes", label: "Hermes" };
 
 export function hermesReviewerAvailable(
-  relay: { provider: string; apiUrl: string; taskMasterReviewer: boolean } | undefined,
+  relay: { apiUrl: string; taskMasterReviewer: boolean } | undefined,
 ): boolean {
-  return !!relay && relay.taskMasterReviewer && relay.provider === "hermes" && relay.apiUrl !== "";
+  return !!relay && relay.taskMasterReviewer && relay.apiUrl.trim() !== "";
 }
 
 export function reviewAgentOptions(hermesAvailable: boolean) {

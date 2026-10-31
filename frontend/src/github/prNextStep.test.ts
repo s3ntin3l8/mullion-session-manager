@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nextStep } from "./prNextStep.js";
+import { nextStep, taskReReviewEligible } from "./prNextStep.js";
 
 describe("nextStep", () => {
   it("names the one thing each phase needs", () => {
@@ -96,5 +96,36 @@ describe("nextStep", () => {
         kind: "checks",
       });
     });
+  });
+});
+
+describe("taskReReviewEligible", () => {
+  const base = {
+    status: "reviewing",
+    lastReviewVerdict: "inconclusive",
+    reviewSessionId: null,
+    reviewFindingsIngestedSessionId: null,
+    reviewRunId: null,
+    reviewRunIngestedId: null,
+  } as const;
+  it("accepts an ingested session review or an ingested Hermes run", () => {
+    expect(
+      taskReReviewEligible({ ...base, reviewSessionId: 1, reviewFindingsIngestedSessionId: 1 }),
+    ).toBe(true);
+    expect(taskReReviewEligible({ ...base, reviewRunId: "r1", reviewRunIngestedId: "r1" })).toBe(
+      true,
+    );
+  });
+  it("refuses while neither review has been ingested", () => {
+    expect(taskReReviewEligible({ ...base, reviewSessionId: 1 })).toBe(false);
+    expect(taskReReviewEligible({ ...base, reviewRunId: "r1" })).toBe(false);
+    expect(
+      taskReReviewEligible({
+        ...base,
+        reviewRunId: "r1",
+        reviewRunIngestedId: "r1",
+        lastReviewVerdict: "approved",
+      }),
+    ).toBe(false);
   });
 });
