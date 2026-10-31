@@ -277,6 +277,9 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
       // check below needs this to tell "newly detected" from "already known,"
       // see that check's own doc comment for why.
       subIssueTotal: tasks.subIssueTotal,
+      // The pre-update body — the manual-directive-removal promotion below
+      // compares it against this sighting's body.
+      body: tasks.body,
     })
     .from(tasks)
     .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, issue.number)))
@@ -420,6 +423,44 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
         from: "ready",
         to: "backlog",
         via: "github-sync-epic-detected",
+        context: { issueNumber: issue.number },
+      });
+    }
+  }
+
+  // Manual-directive removal — an issue ingested to `backlog` because its
+  // body carried `Manual: true` stays parked after the line is deleted
+  // (the upsert never touches `status`). The edit itself is the evidence a
+  // human wanted it claimable: the PREVIOUS body had the directive and this
+  // one doesn't. A later re-sighting can't promote (the old body no longer
+  // has it), so a task a human moved back to `backlog` stays put. Epics with
+  // open sub-issues stay parked, and the guarded UPDATE leaves anything that
+  // moved or already has a session alone. Promotion only makes the task
+  // claimable; dispatch gates (dependencies, caps) still apply.
+  if (
+    existingRow !== undefined &&
+    isManualOnly(existingRow.body) &&
+    !isManualOnly(issue.body) &&
+    !isEpicIssue(issue)
+  ) {
+    const promoted = app.db
+      .update(tasks)
+      .set({ status: "ready" satisfies TaskStatus })
+      .where(
+        and(
+          eq(tasks.id, existingRow.id),
+          eq(tasks.status, "backlog" satisfies TaskStatus),
+          isNull(tasks.sessionId),
+        ),
+      )
+      .run();
+    if (promoted.changes > 0) {
+      recordTaskTransition(app, {
+        taskId: existingRow.id,
+        projectId,
+        from: "backlog",
+        to: "ready",
+        via: "github-sync-manual-removed",
         context: { issueNumber: issue.number },
       });
     }

@@ -769,6 +769,62 @@ describe("webhook routes", () => {
       fs.rmSync(cwd, { recursive: true, force: true });
     });
 
+    it("promotes a Manual: true backlog task to ready when a delivery removes the directive", async () => {
+      const cwd = createMatchingGitRepo("acme", "widgets-manual-removed");
+      const app = await buildApp();
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: "webhook-manual-p1", cwd })
+        .returning()
+        .all();
+      app.db
+        .insert(tasks)
+        .values({
+          projectId: project.id,
+          issueNumber: 48,
+          title: "Parked",
+          body: "Spec.\nManual: true\n",
+          status: "backlog",
+        })
+        .run();
+
+      const payload = issuesPayload({
+        // Webhook ingest only reacts to labeled/opened; a body edit reaches
+        // upsertIssueTask via the poll sweep, or here on a re-label.
+        action: "labeled",
+        repository: { full_name: "acme/widgets-manual-removed", open_issues_count: 1 },
+        issue: {
+          number: 48,
+          title: "Parked",
+          body: "Spec.\n",
+          html_url: "https://github.com/acme/widgets-manual-removed/issues/48",
+          author_association: "OWNER",
+          labels: [{ name: "mullion-task" }],
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+          "x-github-event": "issues",
+        },
+        payload,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const [task] = app.db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 48)))
+        .all();
+      expect(task.status).toBe("ready");
+
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
     // The `issue.state !== "closed"` guard added alongside the resurrection
     // check must ALSO cover this case: a "labeled" delivery on an issue
     // that's meanwhile closed must not spring a previously label-lost
