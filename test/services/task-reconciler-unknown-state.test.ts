@@ -107,6 +107,8 @@ const { closeDb, getDb } = await import("../../src/db/client.js");
 const { reconcileTasks } = await import("../../src/services/task-reconciler.js");
 const { resolveCommitsPastBase } = await import("../../src/services/commits-past-base.js");
 const { resetPrCheckRunsWarningsForTests } = await import("../../src/services/pr-check-runs.js");
+const { resetUnknownVerdictWarningsForTests } =
+  await import("../../src/services/commits-past-base.js");
 const { tasks } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
 
@@ -200,6 +202,7 @@ describe("#2416 — the states that used to be swallowed", () => {
     mockUpdatePullRequestTitle.mockReset().mockResolvedValue(undefined);
     mockFetchCheckRunsForHead.mockReset().mockResolvedValue([]);
     resetPrCheckRunsWarningsForTests();
+    resetUnknownVerdictWarningsForTests();
   });
 
   afterEach(() => {
@@ -402,13 +405,10 @@ describe("#2416 — the states that used to be swallowed", () => {
         const { taskId } = await createSessionAndTaskWithBase(app, "in_progress");
         // The durable rate-limit capture is what opens the grace window; the
         // session's own error state has already TTL-cleared (the durable
-        // signal is the one that survives).
-        app.db.update(tasks).set({ lastRateLimitAt: new Date() }).where(eq(tasks.id, taskId)).run();
-        vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
-        // The durable rate-limit capture is what opens the grace window; the
-        // session's own error state has already TTL-cleared (the durable
         // signal is the one that survives), so the session derives to
         // "idle" — which is the branch that consults the worktree's commits.
+        app.db.update(tasks).set({ lastRateLimitAt: new Date() }).where(eq(tasks.id, taskId)).run();
+        vi.spyOn(app.pty, "terminate").mockResolvedValue(undefined);
         vi.spyOn(app.pty, "get").mockReturnValue({
           toInfo: () => fakeInfo(),
         } as never);

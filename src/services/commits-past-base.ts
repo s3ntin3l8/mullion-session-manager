@@ -41,6 +41,12 @@ import { resolveHostGitStatus } from "./host-git.js";
 export type CommitsPastBase =
   { state: "ahead" } | { state: "none" } | { state: "unknown"; detail: string };
 
+/** Once per task per hour — see `unknownVerdict`. */
+const UNKNOWN_WARN_INTERVAL_MS = 60 * 60_000;
+/** The throttle map is in-memory only; this bounds it. */
+const MAX_UNKNOWN_WARN_ENTRIES = 500;
+const unknownWarnedAt = new Map<number, number>();
+
 /**
  * Whether the task's worktree has commits past the task's base SHA.
  *
@@ -95,6 +101,12 @@ export async function resolveCommitsPastBase(
  *
  * The log carries what an operator needs to act on it: which task, in which
  * project, on which host, at which worktree — and why the lookup failed.
+ *
+ * Throttled to once per task per hour, the way the sibling lookup's warning
+ * is (`warnUnstableRunsUnreadable` in task-reconciler.ts): the reconcile tick
+ * is 30s by default and a task can sit in a rate-limit grace window for
+ * hours, so an unthrottled warning here would be one line per tick for the
+ * whole outage.
  */
 function unknownVerdict(
   app: FastifyInstance,
@@ -102,15 +114,30 @@ function unknownVerdict(
   hostId: string,
   detail: string,
 ): CommitsPastBase {
-  app.log.warn(
-    {
-      taskId: task.id,
-      projectId: task.projectId,
-      hostId,
-      worktreePath: task.worktreePath,
-      detail,
-    },
-    "task reconcile: could not read the worktree's git status — the commits are unknown, not 'no commits'",
-  );
+  const now = Date.now();
+  const last = unknownWarnedAt.get(task.id);
+  if (last === undefined && unknownWarnedAt.size >= MAX_UNKNOWN_WARN_ENTRIES) {
+    const oldest = unknownWarnedAt.keys().next().value;
+    if (oldest !== undefined) unknownWarnedAt.delete(oldest);
+  }
+  if (last === undefined || now - last >= UNKNOWN_WARN_INTERVAL_MS) {
+    unknownWarnedAt.set(task.id, now);
+    app.log.warn(
+      {
+        taskId: task.id,
+        projectId: task.projectId,
+        hostId,
+        worktreePath: task.worktreePath,
+        detail,
+      },
+      "task reconcile: could not read the worktree's git status — the commits are unknown, not 'no commits'",
+    );
+  }
   return { state: "unknown", detail };
+}
+
+/** Test-only reset — the throttle map is module-level and would otherwise
+ * leak state between test cases. */
+export function resetUnknownVerdictWarningsForTests(): void {
+  unknownWarnedAt.clear();
 }

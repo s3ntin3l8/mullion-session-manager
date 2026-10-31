@@ -115,7 +115,6 @@ import {
 import {
   computeCiStatus,
   fetchRunsForHeadChecked,
-  fetchCheckRunsForHead,
   isRedCheckConclusion,
   getPRsStatus,
   GitHubApiError,
@@ -3271,30 +3270,16 @@ async function attemptReturnRedCiToWorker(
   // check is work to fix whether or not it gates the merge, because the merge
   // sweep holds on an `unstable` PR anyway (attemptMerge's `case "unstable"`).
 
-  // #2416 — the lookup THROWS when GitHub does not answer (it used to
-  // degrade to [], which read as "no red checks" — indistinguishable from a
-  // resolved "nothing is red"). An unanswered lookup stands the red-CI
-  // return down, exactly as the old empty-list answer did; what changes is
-  // that it says so instead of passing for a resolved answer.
-  let checkRuns: Awaited<ReturnType<typeof fetchCheckRunsForHead>>;
-  try {
-    checkRuns = await fetchCheckRunsForHead(
-      token,
-      current.repoRef.owner,
-      current.repoRef.repo,
-      current.headSha,
-    );
-  } catch (err) {
-    app.log.warn(
-      { err, taskId: task.id, prNumber: task.prNumber },
-      "task reconcile: could not read the PR's check runs — the red-CI return stands down",
-    );
-    return false;
-  }
+  // #2416 — `readPrCheckRuns` owns this lookup (and its throttled warning),
+  // because "no red checks" and "couldn't ask" are different answers: the
+  // old empty-list answer stood the red-CI return down silently, and an
+  // unanswered lookup now says so. The stand-down itself is unchanged.
+  const checkRuns = await readPrCheckRuns(app, task, token, current.repoRef, current.headSha);
+  const allCheckRuns = checkRuns.ok ? checkRuns.runs : [];
   // `isRedCheckConclusion` is the one definition of "red" (a bare `failure`,
   // but also `timed_out` and `action_required`, which GitHub's merge gate
   // blocks on just the same) — see its own doc comment.
-  const redChecks = checkRuns.filter((c) => isRedCheckConclusion(c.conclusion));
+  const redChecks = allCheckRuns.filter((c) => isRedCheckConclusion(c.conclusion));
   if (redChecks.length === 0) return false;
 
   // #1035 — BEFORE the auto-return-cap check: if the only failing required
@@ -3312,7 +3297,7 @@ async function attemptReturnRedCiToWorker(
   ).catch(() => null);
   if (
     pr !== null &&
-    (await attemptSelfHealPrTitle(app, task, current.repoRef, token, pr.title, checkRuns))
+    (await attemptSelfHealPrTitle(app, task, current.repoRef, token, pr.title, allCheckRuns))
   ) {
     return true;
   }

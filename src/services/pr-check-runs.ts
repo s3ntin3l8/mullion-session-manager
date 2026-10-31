@@ -11,8 +11,10 @@
 // This is the same shape as the Workflow Runs path's `runsAnswered` flag
 // (the `warnUnstableRunsUnreadable` helper in task-reconciler.ts): the
 // lookup says whether GitHub answered, and the CALLER decides what an
-// unanswered lookup means. Here the caller holds the PR either way, so the
-// only thing an unanswered lookup changes is what the operator is told.
+// unanswered lookup means. Two callers share it — the unstable-PR path
+// (which holds the PR either way and only changes what the operator is
+// told) and the red-CI return (which stands down on an unanswered lookup,
+// exactly as it stood down on the old empty-list answer).
 //
 // The warning is throttled the same way — once per task per hour — because
 // this runs on every sweep tick (60s) and an unstable PR that cannot be read
@@ -94,7 +96,7 @@ function warnUnreadable(
       repo: repoRef.repo,
       detail,
     },
-    "task reconcile: could not read the PR's check runs — the title-lint self-heal did not run, and the PR stays unstable until the lookup answers",
+    "task reconcile: could not read the PR's check runs — the checks are unknown, not 'no checks'",
   );
 }
 
