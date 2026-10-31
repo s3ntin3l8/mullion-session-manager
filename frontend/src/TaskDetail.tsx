@@ -787,7 +787,14 @@ export function TaskDetail({
                 <span className="task-detail-review-summary-round">
                   Latest: round {reviewRounds.latest.round}
                 </span>
-                {reviewRounds.latest.verdict && <span>{reviewRounds.latest.verdict}</span>}
+                {reviewRounds.latest.verdict && (
+                  <span
+                    className="task-detail-review-summary-verdict"
+                    title={reviewRounds.latest.verdict}
+                  >
+                    {reviewRounds.latest.verdict}
+                  </span>
+                )}
                 {reviewRounds.latest.counts && (
                   <span className="task-detail-review-summary-counts">
                     {reviewRounds.latest.counts.critical} critical ·{" "}

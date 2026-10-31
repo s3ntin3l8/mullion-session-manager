@@ -909,6 +909,14 @@
 .task-detail-review-summary-round {
   font-weight: 600;
 }
+/* The verdict sentence is the reviewer's own and can run long; the full text
+   is the span's title and the Markdown body below. */
+.task-detail-review-summary-verdict {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
 .task-detail-review-summary-counts {
   color: var(--dim);
 }
