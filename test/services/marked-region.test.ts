@@ -395,7 +395,9 @@ describe("upsertMarkedRegionAfterIntro", () => {
     const twice = upsertMarkedRegionAfterIntro(once, START, END, "body2");
     expect(twice).toContain(`Use ${START} or \`${START}\`.`);
     expect(extractMarkedRegion(twice, START, END)).toBe("body2");
+  });
 
+  it("ignores a bare fence quoting a marker pair when preceded by an info-string fence", () => {
     const withBashBeforeBareQuote = `# Project\n\n\`\`\`bash\nnpm test\n\`\`\`\n\n\`\`\`\n${START}\nexample\n${END}\n\`\`\`\n`;
     expect(extractMarkedRegion(withBashBeforeBareQuote, START, END)).toBeNull();
     const afterBashQuote = upsertMarkedRegionAfterIntro(
@@ -406,7 +408,9 @@ describe("upsertMarkedRegionAfterIntro", () => {
     );
     expect(afterBashQuote).toContain(`\`\`\`\n${START}\nexample\n${END}\n\`\`\``);
     expect(extractMarkedRegion(afterBashQuote, START, END)).toBe("new region");
+  });
 
+  it("preserves a fenced example quoting the marker pair inside the marked region itself", () => {
     const regionQuotingPair = `# Proj\n\n${START}\n## Setup\n\n\`\`\`html\n${START}\nexample\n${END}\n\`\`\`\n\n## More\n${END}\n`;
     expect(extractMarkedRegion(regionQuotingPair, START, END)).toBe(
       `## Setup\n\n\`\`\`html\n${START}\nexample\n${END}\n\`\`\`\n\n## More`,
@@ -421,6 +425,14 @@ describe("upsertMarkedRegionAfterIntro", () => {
     expect(
       upsertMarkedRegionAfterIntro(updatedRegionQuotingPair, START, END, "replaced body"),
     ).toBe(updatedRegionQuotingPair);
+  });
+
+  it("treats a marker pair surrounded by extra lines inside a fence as a real region", () => {
+    const text = `# Doc\n\n\`\`\`html\nintro\n${START}\nexample\n${END}\n\`\`\`\n\n## Real\nx`;
+    expect(extractMarkedRegion(text, START, END)).toBe("example");
+    expect(upsertMarkedRegionAfterIntro(text, START, END, "NEW")).toBe(
+      `# Doc\n\n\`\`\`html\nintro\n${START}\nNEW\n${END}\n\`\`\`\n\n## Real\nx`,
+    );
   });
 
   it("replaces an existing region in place when an unclosed fence or stray comment precedes it", () => {

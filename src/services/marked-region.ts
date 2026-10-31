@@ -289,7 +289,10 @@ function fenceSwallowsMarker(
   // A fence may only contain a marker line when the fence directly wraps a
   // quoted marker example: either a single marker line
   // (` ```html\n<!-- start -->\n``` `) or a `startMarker ... endMarker` block
-  // with the markers on the first and last lines inside the fence.
+  // with the markers on the first and last lines inside the fence. A pair with
+  // surrounding lines inside the fence is deliberately treated as a real
+  // region swallowed by an unclosed fence rather than a quoted example, so an
+  // unclosed bare fence before the region cannot hide it.
   if (closeLine === openLine + 2) return false;
   const first = lines[openLine + 1].replace(/\r$/, "");
   const last = lines[closeLine - 1].replace(/\r$/, "");
