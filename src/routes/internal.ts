@@ -2105,6 +2105,7 @@ export async function internalRoutes(app: FastifyInstance) {
         recipe,
         logKey,
         sessionsDir: app.config.SESSIONS_DIR,
+        withinRoots: effectiveProjectsRoots(app),
       });
     },
   );

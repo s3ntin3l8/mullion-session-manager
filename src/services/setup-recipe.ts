@@ -18,7 +18,6 @@ import {
   fstatSync,
   mkdirSync,
   openSync,
-  readdirSync,
   readSync,
   realpathSync,
   statSync,
@@ -77,20 +76,23 @@ export function setupLogPath(sessionsDir: string, logKey: string): string {
 const inFlight = new Set<string>();
 
 /** The canonical, existing directory `cwd` names, or null. The recipe only ever
- * runs in a directory that resolves (symlinks followed) to a real one: callers
- * gate `cwd` on the host's project roots first, and this re-derives the value
- * actually handed to `spawn` from the filesystem rather than from the request. */
-function canonicalCwd(cwd: string): string | null {
+ * runs in a directory that resolves (symlinks followed) to a real one. When
+ * `roots` is given (the remote route: a DB-less agent's only trust anchor) the
+ * real path must also sit inside one of the real roots — the explicit
+ * `startsWith(root + sep)` guard is the containment check on the value that
+ * reaches `spawn`, not just on the request's string. */
+function canonicalCwd(cwd: string, roots?: string[]): string | null {
   if (typeof cwd !== "string" || cwd.includes("\0") || !path.isAbsolute(cwd)) return null;
   try {
     const real = realpathSync(cwd);
-    // Rebuild the path from names the filesystem itself reports, so the value
-    // handed on is one the directory listing produced, not the request's string.
-    const parent = path.dirname(real);
-    const name = readdirSync(parent).find((entry) => entry === path.basename(real));
-    if (name === undefined) return null;
-    const listed = path.join(parent, name);
-    return statSync(listed).isDirectory() ? listed : null;
+    if (roots !== undefined) {
+      const inside = roots.some((r) => {
+        const root = realpathSync(path.resolve(r));
+        return real === root || real.startsWith(root + path.sep);
+      });
+      if (!inside) return null;
+    }
+    return statSync(real).isDirectory() ? real : null;
   } catch {
     return null;
   }
@@ -106,6 +108,8 @@ export interface ExecSetupOptions {
   recipe: string;
   logKey: string;
   sessionsDir: string;
+  /** Real-path containment for `cwd`; omit for a trusted in-process caller. */
+  withinRoots?: string[];
 }
 
 /** Runs `recipe` with `sh -c` in `cwd`, output to the log. Never throws. */
@@ -121,7 +125,7 @@ export async function execSetupRecipe(opts: ExecSetupOptions): Promise<SetupRunR
       detail: err instanceof Error ? err.message : String(err),
     };
   }
-  const key = canonicalCwd(opts.cwd);
+  const key = canonicalCwd(opts.cwd, opts.withinRoots);
   if (key === null) {
     return {
       outcome: "failed",
@@ -193,6 +197,11 @@ function spawnRecipe(
       }
       resolve(result);
     };
+    // The recipe IS a shell command by design (a project setting, set by the
+    // authenticated operator); the request-reachable path is the token-gated
+    // `/internal/run-setup`. CodeQL's js/command-line-injection on this spawn is
+    // the feature itself, not an injection: `cwd` is containment-checked above
+    // and the recipe never gets interpolated into anything else.
     // `detached` puts the shell in its own process group so a timeout can kill
     // the whole install tree (npm and its children), not just `sh`.
     const child = spawn("sh", ["-c", opts.recipe], {
