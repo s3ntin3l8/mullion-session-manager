@@ -402,6 +402,7 @@ const {
   notifyApprovalsAwaitingHuman,
   retryPermanentPushFailuresNow,
   DEFAULT_MAX_AUTO_RETURN_ROUNDS,
+  resetUnstableRunsUnreadableWarningsForTests,
   autoReturnTask,
 } = await import("../../src/services/task-reconciler.js");
 const { tasks, sessions, projects } = await import("../../src/db/schema.js");
@@ -4754,15 +4755,26 @@ describe("reconcileTasks", () => {
         // A failed lookup degrades to "no runs" -> status null; without
         // runsAnswered that reads as idle and would push mid-run.
         runsLookup.failed = true;
+        resetUnstableRunsUnreadableWarningsForTests();
+        const warnSpy = vi.spyOn(app.log, "warn");
         mockFetchCheckRunsForHead.mockResolvedValue([
           { name: "codecov/patch", conclusion: "failure" },
         ]);
 
         try {
           await reconcileTasks(app);
+          // The gate stands down loudly, once: a repo whose /actions/runs
+          // never answers must be diagnosable, but not warned about every tick.
+          await reconcileTasks(app);
         } finally {
           runsLookup.failed = false;
         }
+        const standDownWarnings = warnSpy.mock.calls.filter(
+          ([ctx, msg]) =>
+            (ctx as { taskId?: number }).taskId === taskId &&
+            String(msg).includes("red-CI return stands down"),
+        );
+        expect(standDownWarnings).toHaveLength(1);
 
         expect(mockFetchCheckRunsForHead).not.toHaveBeenCalled();
         const row = await getTask(app, taskId);

@@ -452,8 +452,10 @@ function clearReviewSpawnClaim(app: FastifyInstance, taskId: number): void {
  * every "nothing to check yet" case (no PR, no resolvable repo/token) with
  * no logging, since that's an ordinary, expected state for plenty of tasks,
  * not a failure. Can still throw on a real lookup failure (a thrown
- * `getPullRequestByNumber`/`fetchRunsForHead` call) — callers decide their
- * own retry/deadline posture around that.
+ * `getPullRequestByNumber` call) — callers decide their own retry/deadline
+ * posture around that. The Actions-runs lookup itself never throws: a failed
+ * one comes back as `runsAnswered: false` with `status: null`, which reads the
+ * same as "no Actions runs" unless the caller checks the flag.
  */
 async function fetchCurrentCiStatus(
   app: FastifyInstance,
@@ -535,8 +537,10 @@ async function fetchCurrentCiStatus(
  * `reconcileTasks`), so the very first lookup here almost always lands
  * within a second or two of the push that created the head commit —
  * GitHub's Actions runs for a just-pushed commit routinely aren't registered
- * yet, so `fetchRunsForHead` returns `[]` and `computeCiStatus` returns
- * `null` indistinguishably from "this repo genuinely has no CI." Treating
+ * yet, so the runs lookup answers `[]` and `computeCiStatus` returns
+ * `null` indistinguishably from "this repo genuinely has no CI" (a lookup that
+ * did not answer at all also gives `null`, but carries `runsAnswered: false`,
+ * which only changes the wording of the note below). Treating
  * `null` as "proceed" on that very first check reproduces the #213782
  * incident this whole change exists to fix: the reviewer spawns before a
  * real check has even registered, let alone failed. Waiting on `null` the
@@ -557,7 +561,7 @@ async function resolveReviewCi(
   try {
     const current = await fetchCurrentCiStatus(app, task, project);
     if (!current) return undefined;
-    const { headSha, status, runs: runSummaries } = current;
+    const { headSha, status, runs: runSummaries, runsAnswered } = current;
 
     if (status !== "in_progress" && status !== null) {
       return { headSha, status, runs: runSummaries };
@@ -576,9 +580,13 @@ async function resolveReviewCi(
       headSha,
       status,
       runs: runSummaries,
+      // `status: null` is "no runs" only when GitHub actually answered; a failed
+      // lookup must not tell the reviewer there is no CI (`runsAnswered`).
       note:
         status === null
-          ? `no CI checks found after the ${waitMinutes}-minute wait`
+          ? runsAnswered
+            ? `no CI checks found after the ${waitMinutes}-minute wait`
+            : `CI status could not be read after the ${waitMinutes}-minute wait (the Actions lookup failed)`
           : `still running after the ${waitMinutes}-minute wait`,
     };
   } catch (err) {
@@ -2703,6 +2711,37 @@ function clearCiGatingUnavailable(app: FastifyInstance, task: typeof tasks.$infe
     .run();
 }
 
+// The `unstable` arm of the red-CI gate stands down when the Actions-runs
+// lookup did not answer, so a repo whose `/actions/runs` never answers (a
+// permanent 403/404, not a blip) could never open it with nothing in the log
+// saying so. Warn once per task per hour: this runs every sweep tick.
+const UNSTABLE_RUNS_UNREADABLE_WARN_INTERVAL_MS = 60 * 60_000;
+const MAX_UNSTABLE_RUNS_UNREADABLE_WARN_ENTRIES = 500;
+const unstableRunsUnreadableWarnedAt = new Map<number, number>();
+
+function warnUnstableRunsUnreadable(app: FastifyInstance, taskId: number): void {
+  const now = Date.now();
+  const last = unstableRunsUnreadableWarnedAt.get(taskId);
+  if (last !== undefined && now - last < UNSTABLE_RUNS_UNREADABLE_WARN_INTERVAL_MS) return;
+  if (
+    last === undefined &&
+    unstableRunsUnreadableWarnedAt.size >= MAX_UNSTABLE_RUNS_UNREADABLE_WARN_ENTRIES
+  ) {
+    const oldest = unstableRunsUnreadableWarnedAt.keys().next().value;
+    if (oldest !== undefined) unstableRunsUnreadableWarnedAt.delete(oldest);
+  }
+  unstableRunsUnreadableWarnedAt.set(taskId, now);
+  app.log.warn(
+    { taskId },
+    "task reconcile: the PR is `unstable` but the Actions runs lookup did not answer, so the red-CI return stands down (it would risk pushing while Actions is mid-run); a failing non-Actions check will not return the worker until the lookup answers",
+  );
+}
+
+/** Exported for tests only — the throttle state is module-scope. */
+export function resetUnstableRunsUnreadableWarningsForTests(): void {
+  unstableRunsUnreadableWarnedAt.clear();
+}
+
 async function attemptReturnRedCiToWorker(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
@@ -2722,6 +2761,9 @@ async function attemptReturnRedCiToWorker(
     current.mergeableState === "unstable" &&
     current.runsAnswered &&
     current.status !== "in_progress";
+  if (current.mergeableState === "unstable" && !current.runsAnswered) {
+    warnUnstableRunsUnreadable(app, task.id);
+  }
   if (current.status !== "failure" && !unstableOnly) {
     clearCiGatingUnavailable(app, task);
     return false;
