@@ -1062,9 +1062,9 @@ button.sb-chip--label[aria-pressed="true"] {
   outline-offset: -1.5px;
 }
 /* Left-edge marker: blue = a Task Master task, grey = a hand-started session. */
-.sb-row--tm::before,
-.sb-row--manual::before,
-.sb-row--attn::before {
+.sb-row--tm:not(.sb-row--sel)::before,
+.sb-row--manual:not(.sb-row--sel)::before,
+.sb-row--attn:not(.sb-row--sel)::before {
   content: "";
   position: absolute;
   left: 0;
@@ -1073,20 +1073,20 @@ button.sb-chip--label[aria-pressed="true"] {
   width: 2px;
   border-radius: 2px;
 }
-.sb-row--tm::before {
+.sb-row--tm:not(.sb-row--sel)::before {
   background: var(--status-info-fg);
 }
-.sb-row--manual::before {
+.sb-row--manual:not(.sb-row--sel)::before {
   background: var(--muted);
 }
 /* A PR that wants the user: a red tint and edge, over (not instead of) the origin. */
-.sb-row--attn {
+.sb-row--attn:not(.sb-row--sel) {
   background: color-mix(in srgb, var(--r) 7%, transparent);
 }
-.sb-row--attn::before {
+.sb-row--attn:not(.sb-row--sel)::before {
   background: var(--status-danger-fg);
 }
-.sb-row--attn.sb-row--tm::before {
+.sb-row--attn.sb-row--tm:not(.sb-row--sel)::before {
   background: linear-gradient(var(--status-danger-fg) 50%, var(--status-info-fg) 50%);
 }
 /* Tasks view: the status chips are filters. */

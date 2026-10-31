@@ -216,7 +216,11 @@ export function IssuesSection({
       persistKey="github-issues"
       actions={
         tmOn ? (
-          <OriginFilter label="Filter issues" value={originFilter} onChange={setOriginFilter} />
+          <OriginFilter
+            label="Filter issues by origin"
+            value={originFilter}
+            onChange={setOriginFilter}
+          />
         ) : undefined
       }
     >

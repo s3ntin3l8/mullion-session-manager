@@ -24,6 +24,17 @@ const FILTERS: Array<{ key: TaskBucket; label: string; status: Task["status"] }>
   { key: "attention", label: "needs attention", status: "failed" },
 ];
 
+// The dot matches the chip's tone: red for what is broken, amber for what waits on you.
+const DOT_TONE: Record<TaskBucket, "danger" | "warn" | "info" | "success"> = {
+  failed: "danger",
+  attention: "danger",
+  awaitingApproval: "warn",
+  waiting: "warn",
+  reviewing: "info",
+  running: "info",
+  ready: "success",
+};
+
 const BUCKET_LABEL: Record<TaskBucket, string> = Object.fromEntries(
   FILTERS.map((f) => [f.key, f.label]),
 ) as Record<TaskBucket, string>;
@@ -55,13 +66,13 @@ export function TasksSidebarView({ projectId, actions }: RightSidebarViewProps) 
     return c;
   }, [rows]);
   const needsYou = rows.filter((r) => r.reason !== null).length;
-  const shown = filter === "all" ? rows : rows.filter((r) => r.bucket === filter);
+  // A chip disappears once its bucket empties (Retry on the last failed task,
+  // a project switch): drop back to All rather than filter into a blank list.
+  const active: StatusFilter = filter === "all" || counts[filter] ? filter : "all";
+  const shown = active === "all" ? rows : rows.filter((r) => r.bucket === active);
 
-  const openIssue = (issueNumber: number) => {
-    const st = useDashboardStore.getState();
-    st.openRightSidebarView("github", projectId);
-    st.setGithubOpenIssue(projectId, issueNumber);
-  };
+  const openIssue = (issueNumber: number) =>
+    useDashboardStore.getState().openRightSidebarIssue(projectId, issueNumber);
 
   return (
     <div className="tasks-sidebar-view">
@@ -93,7 +104,7 @@ export function TasksSidebarView({ projectId, actions }: RightSidebarViewProps) 
       ) : (
         <>
           <div className="tasks-sidebar-chips" role="group" aria-label="Filter tasks by status">
-            <StatusChip tone="neutral" pressed={filter === "all"} onClick={() => setFilter("all")}>
+            <StatusChip tone="neutral" selected={active === "all"} onClick={() => setFilter("all")}>
               All {rows.length}
             </StatusChip>
             {FILTERS.filter((f) => counts[f.key]).map((f) => (
@@ -102,25 +113,21 @@ export function TasksSidebarView({ projectId, actions }: RightSidebarViewProps) 
                 tone={
                   f.key === "awaitingApproval" || f.key === "waiting" ? "warn" : taskTone(f.status)
                 }
-                pressed={filter === f.key}
-                onClick={() => setFilter(filter === f.key ? "all" : f.key)}
+                selected={active === f.key}
+                onClick={() => setFilter(active === f.key ? "all" : f.key)}
               >
                 {counts[f.key]} {f.label}
               </StatusChip>
             ))}
           </div>
+          {shown.length === 0 && <EmptyStateNote>No tasks match this filter.</EmptyStateNote>}
           {shown.map(({ task, bucket, reason }) => {
             const open = openId === task.id;
             return (
               <SidebarRow
                 key={task.id}
                 className="sb-row--tm"
-                lead={
-                  <span
-                    className={`sb-dot sb-dot--${bucket === "failed" ? "danger" : "info"}`}
-                    aria-hidden="true"
-                  />
-                }
+                lead={<span className={`sb-dot sb-dot--${DOT_TONE[bucket]}`} aria-hidden="true" />}
                 title={`#${task.issueNumber ?? task.id} ${task.title}`}
                 meta={reason ?? BUCKET_LABEL[bucket]}
                 expanded={open}

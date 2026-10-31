@@ -408,6 +408,13 @@ export const createUiSlice: StateCreator<DashboardState, [], [], UiSlice> = (set
       get().setGithubOpenPr(projectId, number);
     },
 
+    openRightSidebarIssue: (projectId, number) => {
+      // Same ordering as openRightSidebarPr: entering GitHub resets the
+      // drill-in, so the issue is set after the view switch.
+      get().openRightSidebarView("github", projectId);
+      get().setGithubOpenIssue(projectId, number);
+    },
+
     toggleRightSidebar: () => {
       if (get().rightSidebarOpen) {
         get().closeRightSidebar();

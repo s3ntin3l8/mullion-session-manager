@@ -90,19 +90,13 @@ describe("TasksSidebarView", () => {
   it("opens the linked PR and issue in the GitHub view", async () => {
     const user = userEvent.setup();
     const openPr = vi.fn();
-    const openView = vi.fn();
-    const setIssue = vi.fn();
-    useDashboardStore.setState({
-      openRightSidebarPr: openPr,
-      openRightSidebarView: openView,
-      setGithubOpenIssue: setIssue,
-    });
+    const openIssue = vi.fn();
+    useDashboardStore.setState({ openRightSidebarPr: openPr, openRightSidebarIssue: openIssue });
     renderView();
     await user.click(screen.getByRole("button", { name: "PR #22" }));
     expect(openPr).toHaveBeenCalledWith(4, 22);
     await user.click(screen.getByRole("button", { name: "Issue #11" }));
-    expect(openView).toHaveBeenCalledWith("github", 4);
-    expect(setIssue).toHaveBeenCalledWith(4, 11);
+    expect(openIssue).toHaveBeenCalledWith(4, 11);
   });
 
   it("opens a task and the board from the row action and the ⋯ menu", async () => {
@@ -154,5 +148,52 @@ describe("TasksSidebarView", () => {
     expect(title.getAttribute("aria-expanded")).toBe("false");
     await user.click(title);
     expect(title.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("marks the selected status chip as pressed, not expanded", async () => {
+    const user = userEvent.setup();
+    renderView();
+    const all = screen.getByRole("button", { name: "All 2" });
+    const ready = screen.getByRole("button", { name: "1 ready" });
+    expect(all.getAttribute("aria-pressed")).toBe("true");
+    expect(ready.getAttribute("aria-pressed")).toBe("false");
+    await user.click(ready);
+    expect(ready.getAttribute("aria-pressed")).toBe("true");
+    expect(ready.getAttribute("aria-expanded")).toBeNull();
+    expect(ready.className).toContain("sb-chip--open");
+    expect(all.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("falls back to All when the filtered status empties, instead of a blank list", async () => {
+    const user = userEvent.setup();
+    renderView();
+    await user.click(screen.getByRole("button", { name: "1 failed" }));
+    expect(screen.queryByText(/Fresh work/)).toBeNull();
+    // The failed task is retried and leaves the bucket.
+    useDashboardStore.setState({
+      tasks: [
+        task({ id: 1, title: "Fresh work", status: "ready", issueNumber: 11 }),
+        task({ id: 2, title: "Broken job", status: "in_progress", prNumber: 22 }),
+      ],
+    });
+    expect(await screen.findByText(/Fresh work/)).toBeTruthy();
+    expect(screen.getByText(/Broken job/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "All 2" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("matches the dot to the chip tone: red for a failed task, amber for one awaiting approval", () => {
+    useDashboardStore.setState({
+      tasks: [
+        task({ id: 1, title: "Broken", status: "failed", failureReason: "x" }),
+        task({ id: 2, title: "Needs OK", status: "reviewing", approvalState: "awaiting-human" }),
+        task({ id: 3, title: "Going", status: "in_progress" }),
+      ],
+    });
+    renderView();
+    const dot = (title: string) =>
+      screen.getByText(new RegExp(title)).closest(".sb-row")?.querySelector(".sb-dot")?.className;
+    expect(dot("Broken")).toContain("sb-dot--danger");
+    expect(dot("Needs OK")).toContain("sb-dot--warn");
+    expect(dot("Going")).toContain("sb-dot--info");
   });
 });
