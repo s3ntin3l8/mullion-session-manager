@@ -56,8 +56,12 @@ vi.mock("node:child_process", async (importOriginal) => {
 // Imported AFTER the mock is declared (vi.mock is hoisted by vitest to the
 // top of the file regardless of declaration order, so this is safe, but
 // kept below for readability).
-const { defaultSpawnGenerationTurn, resetSandboxCapabilityCache, scaffoldGenerateBaseDir } =
-  await import("../../src/services/scaffold-generate.js");
+const {
+  buildInvocation,
+  defaultSpawnGenerationTurn,
+  resetSandboxCapabilityCache,
+  scaffoldGenerateBaseDir,
+} = await import("../../src/services/scaffold-generate.js");
 
 describe("defaultSpawnGenerationTurn — sandbox composition (issue #1081 coverage gap)", () => {
   let scratchDir: string;
@@ -175,6 +179,86 @@ describe("defaultSpawnGenerationTurn — sandbox composition (issue #1081 covera
     const logged = warn.mock.calls.find((c) => String(c[0]).includes("generation turn failed"));
     expect(logged).toBeDefined();
     for (const arg of logged!) expect(String(arg)).not.toMatch(/[\r\n]/);
+  });
+
+  // Issue #2472 — codex's own bwrap sandbox cannot start inside Mullion's.
+  describe("codex inside and outside Mullion's sandbox (issue #2472)", () => {
+    const mockTurn = (out: string, errOut: string) => {
+      execFileMock.mockImplementationOnce((_f, _a, _o, cb) => {
+        cb(null, "", "");
+        return {} as ChildProcess;
+      });
+      execFileMock.mockImplementationOnce((_f, _a, _o, cb) => {
+        cb(null, out, errOut);
+        return {} as ChildProcess;
+      });
+    };
+    const runCodex = () =>
+      defaultSpawnGenerationTurn({
+        agentCommand: "codex",
+        cwd: scratchDir,
+        prompt: "p",
+        timeoutMs: 5000,
+      });
+
+    it("pins the codex argv for the sandboxed and unsandboxed cases", () => {
+      expect(buildInvocation("codex", "p")).toEqual({
+        bin: "codex",
+        args: ["exec", "--sandbox", "read-only", "--", "p"],
+      });
+      expect(buildInvocation("codex", "p", { sandboxed: true })).toEqual({
+        bin: "codex",
+        args: ["exec", "--sandbox", "danger-full-access", "--", "p"],
+      });
+      expect(buildInvocation("claude", "p", { sandboxed: true })).toEqual(
+        buildInvocation("claude", "p"),
+      );
+    });
+
+    it("drops codex's own sandbox when wrapped in bwrap, keeps it when not", async () => {
+      await defaultSpawnGenerationTurn({
+        agentCommand: "codex",
+        cwd: scratchDir,
+        prompt: "p",
+        timeoutMs: 5000,
+      });
+      expect(execFileMock.mock.calls[1][1]).toEqual(expect.arrayContaining(["danger-full-access"]));
+
+      resetSandboxCapabilityCache();
+      execFileMock.mockClear();
+      await defaultSpawnGenerationTurn({
+        agentCommand: "codex",
+        cwd: scratchDir,
+        prompt: "p",
+        timeoutMs: 5000,
+        sandbox: false,
+      });
+      const [bin, args] = execFileMock.mock.calls[0];
+      expect(bin).toBe("codex");
+      expect(args).toEqual(["exec", "--sandbox", "read-only", "--", "p"]);
+    });
+
+    it.each([
+      "tool failed: error building bubblewrap command: Read-only file system",
+      "filesystem-restricted execution requires bubblewrap to isolate sockets",
+    ])("rejects an exit-0 codex turn whose tools could not start: %s", async (errOut) => {
+      mockTurn("", errOut);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      await expect(runCodex()).rejects.toThrow(/could not read the repository/);
+      expect(warn).toHaveBeenCalledWith(expect.any(String), "codex");
+    });
+
+    it("keeps an answer that merely quotes the error on stdout", async () => {
+      mockTurn("the skill says: error building bubblewrap command", "");
+      await expect(runCodex()).resolves.toContain("error building bubblewrap command");
+    });
+
+    it("uses read-only when bwrap was requested but the probe says unusable", async () => {
+      smokeProbeSucceeds = false;
+      await runCodex();
+      expect(execFileMock.mock.calls[1][0]).toBe("codex");
+      expect(execFileMock.mock.calls[1][1]).toEqual(["exec", "--sandbox", "read-only", "--", "p"]);
+    });
   });
 
   it("falls back to the unwrapped invocation when the capability probe reports unusable", async () => {

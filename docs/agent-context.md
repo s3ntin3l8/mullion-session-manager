@@ -301,7 +301,14 @@ default agent (up to ~5 minutes, 5 per 10 minutes) that reads the repo and
 writes the skill, the reviewer and the `AGENTS.md` pointer paragraph; the
 result goes through the same diff view and **Apply**. It warns when the turn
 ran unsandboxed or looks generic, and when a skill and reviewer already exist
-it asks which to regenerate rather than overwriting hand edits.
+it asks which to regenerate rather than overwriting hand edits. Inside the bwrap sandbox
+codex runs with its own sandbox switched off (`--sandbox danger-full-access`),
+because codex's bwrap cannot start nested; Mullion's read-only root is the write
+containment there. The turn can still read any file the server user can (the
+real `~/.ssh`, `auth.json`, the app's `.env`) and codex's shell commands keep
+network access; hiding the real home is tracked in #2489. A codex turn that
+reports its own sandbox could not start is rejected instead of shown as a
+preview.
 
 **Background job lifecycle.** `POST /api/projects/:id/setup/generate/start`
 validates the request, checks for the 409 "skill and reviewer already exist"
