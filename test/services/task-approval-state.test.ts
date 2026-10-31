@@ -134,6 +134,12 @@ describe("deriveReviewPhase", () => {
     });
   });
 
+  it("is null while an external reviewer's run is in flight", () => {
+    expect(
+      deriveReviewPhase({ ...row, reviewRunId: "run_1" }, STALE, ctx, now).reviewPhase,
+    ).toBeNull();
+  });
+
   it("is null while a review session is live", () => {
     expect(
       deriveReviewPhase({ ...row, reviewSessionId: 9 }, STALE, ctx, now).reviewPhase,

@@ -25,7 +25,7 @@ import {
 } from "../services/task-github-sync.js";
 import { deriveTaskBranchName } from "../services/git-worktree.js";
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
-import { resolveReviewAgentCommand } from "../services/task-agent-resolve.js";
+import { resolveReviewer } from "../services/task-agent-resolve.js";
 import { closeDraftPRForTask } from "../services/task-promote.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "../services/task-approve.js";
 import {
@@ -418,7 +418,8 @@ function withApprovalState<
   // Resolving the reviewer is an uncached settings read per call, and this runs
   // for every row of the polled task list (done and archived included), so the
   // cheap checks come first.
-  const canCarryPhase = row.status === "reviewing" && row.reviewSessionId === null;
+  const canCarryPhase =
+    row.status === "reviewing" && row.reviewSessionId === null && typeof row.reviewRunId !== "string";
   return {
     ...rest,
     approvalState: deriveApprovalState(row, taskMasterEnabled),
@@ -427,7 +428,7 @@ function withApprovalState<
       // The same resolution the spawn pass uses (processPendingReviewSpawns).
       reviewerConfigured:
         canCarryPhase &&
-        resolveReviewAgentCommand(app, {
+        resolveReviewer(app, {
           taskReviewAgent: row.reviewAgent,
           issueBody: row.body,
           projectDefaultReviewAgent: row.projectDefaultReviewAgent,
