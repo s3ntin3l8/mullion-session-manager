@@ -631,6 +631,10 @@
   color: var(--fg);
   font-weight: 600;
 }
+.settings-segmented-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 
 /* ---------------------------------------------------------------- */
 /* Slider (Font size, Idle threshold)                                */

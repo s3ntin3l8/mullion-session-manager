@@ -805,7 +805,7 @@ describe("ProjectSetupPanel", () => {
       await user.click(screen.getByText("Preview starter template"));
       expect(await screen.findByTestId("preview-source")).toHaveTextContent("Starter template");
     });
-    it("ignores a path switch while a turn is running", async () => {
+    it("disables the path switch while a turn is running", async () => {
       let release: (r: Response) => void = () => {};
       vi.stubGlobal(
         "fetch",
@@ -817,6 +817,7 @@ describe("ProjectSetupPanel", () => {
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
       await user.type(screen.getByPlaceholderText("my-project"), "demo");
       await user.click(screen.getByRole("button", { name: /^Generate with / }));
+      expect(screen.getByRole("radio", { name: "Starter template" })).toBeDisabled();
       await toTemplatePath(user);
       expect(screen.getByRole("radio", { name: "Write it with an agent" })).toBeChecked();
       release(generated());

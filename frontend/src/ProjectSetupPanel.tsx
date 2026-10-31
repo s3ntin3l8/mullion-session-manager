@@ -471,10 +471,8 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
       <Segmented
         options={PATH_OPTIONS}
         value={path}
-        onChange={(next) => {
-          // A running turn belongs to the path it was started on.
-          if (!generating && !previewing) setPath(next);
-        }}
+        onChange={setPath}
+        disabled={generating || previewing}
         ariaLabel="Scaffold path"
       />
       <Row
