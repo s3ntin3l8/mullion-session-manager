@@ -48,6 +48,7 @@ function makeTask(overrides: Partial<Task>): Task {
     mergeError: null,
     releaseRequestedAt: null,
     releaseError: null,
+    rebaseStartedAt: null,
     lastReviewVerdict: null,
     assignee: null,
     failureReason: null,

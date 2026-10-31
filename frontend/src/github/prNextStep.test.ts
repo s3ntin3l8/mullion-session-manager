@@ -37,4 +37,64 @@ describe("nextStep", () => {
     expect(nextStep("ci_pending", 0)).toMatchObject({ kind: "none", disabled: true });
     expect(nextStep(undefined, 0)).toMatchObject({ kind: "none", disabled: true });
   });
+
+  describe("for a Task Master task's PR", () => {
+    const task = (over = {}) => ({
+      status: "reviewing" as const,
+      rebaseStartedAt: null,
+      mergeError: null,
+      ...over,
+    });
+
+    it("sends a reviewing task back to its worker", () => {
+      for (const phase of ["changes_requested", "conflicts"] as const) {
+        expect(nextStep(phase, 0, { task: task(), workerLive: false })).toEqual({
+          kind: "sendBack",
+          label: "Send back to worker",
+          disabled: false,
+        });
+      }
+    });
+
+    it("opens a live worker session instead of starting one", () => {
+      expect(
+        nextStep("changes_requested", 0, {
+          task: task({ status: "in_progress" }),
+          workerLive: true,
+        }),
+      ).toMatchObject({ kind: "openWorker", disabled: false });
+    });
+
+    it("says auto-rebase owns a done task's conflicts", () => {
+      const done = (over = {}) => ({
+        task: task({ status: "done", ...over }),
+        workerLive: false,
+      });
+      expect(nextStep("conflicts", 0, done({ rebaseStartedAt: "2026-01-01" }))).toEqual({
+        kind: "none",
+        label: "Auto-rebase in progress",
+        disabled: true,
+      });
+      expect(nextStep("conflicts", 0, done({ mergeError: "conflicts" }))).toMatchObject({
+        label: "Auto-rebase will retry",
+        disabled: true,
+      });
+      expect(nextStep("conflicts", 0, done())).toMatchObject({
+        label: "Auto-rebase will fix conflicts",
+        disabled: true,
+      });
+    });
+
+    it("never offers an ad-hoc session for any other task state", () => {
+      expect(
+        nextStep("changes_requested", 0, { task: task({ status: "done" }), workerLive: false }),
+      ).toMatchObject({ kind: "none", disabled: true });
+    });
+
+    it("leaves non-handoff steps alone", () => {
+      expect(nextStep("ci_failing", 0, { task: task(), workerLive: false })).toMatchObject({
+        kind: "checks",
+      });
+    });
+  });
 });

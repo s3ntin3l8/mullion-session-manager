@@ -101,6 +101,12 @@ const REVIEW_STATE_LABEL: Record<string, string> = {
   COMMENTED: "Commented",
 };
 
+function hasLiveSession(links: readonly SessionLink[] | undefined, id: number): boolean {
+  return (links ?? []).some(
+    (l) => (l.session.id === id && l.session.alive) || hasLiveSession(l.children, id),
+  );
+}
+
 /** How far the head has moved past the reviewed commit, when the commits show it. */
 function staleLabel(entry: ReviewSummaryEntry, commits: GitHubPrDetail["commits"]) {
   const sha = entry.reviewedSha.slice(0, 7);
@@ -403,6 +409,17 @@ export function PrDetailView({
       return "Session started on the PR branch";
     });
 
+  // A task PR's "Address changes" goes back through Task Master: the handoff
+  // prompt (open threads, failing checks) becomes the reject feedback, so the
+  // task's own worker picks it up instead of a competing ad-hoc session.
+  const sendBackToWorker = (taskId: number) =>
+    run("handoff", async () => {
+      const { prompt } = await api.getProjectPrHandoff(projectId, number);
+      await useDashboardStore.getState().rejectTask(taskId, prompt);
+      reload();
+      return `Task #${taskId} sent back to its worker`;
+    });
+
   const backHeader = (title: string) => <DetailHeader onBack={onBack} title={title} />;
 
   if (error && !pr) {
@@ -538,7 +555,12 @@ export function PrDetailView({
     });
 
   const toggleStatus = (k: StatusKey) => setOpenStatus((cur) => (cur === k ? null : k));
-  const step = nextStepForTask(nextStep(pr.prPhase, unresolved), entry?.task);
+  const workerSessionId = entry?.task?.sessionId ?? null;
+  const workerLive = workerSessionId != null && hasLiveSession(entry?.sessions, workerSessionId);
+  const step = nextStepForTask(
+    nextStep(pr.prPhase, unresolved, entry?.task ? { task: entry.task, workerLive } : null),
+    entry?.task,
+  );
   const runStep = () => {
     switch (step.kind) {
       case "merge":
@@ -550,6 +572,12 @@ export function PrDetailView({
         break;
       case "handoff":
         void handoff();
+        break;
+      case "sendBack":
+        if (entry?.task) void sendBackToWorker(entry.task.id);
+        break;
+      case "openWorker":
+        if (workerSessionId != null) requestOpenSession(workerSessionId);
         break;
       case "checks":
         setOpenStatus("ci");

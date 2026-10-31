@@ -23,6 +23,7 @@ const task = (id: number, over: Partial<Task> = {}): Task =>
     needsHumanReason: null,
     mergeError: null,
     releaseError: null,
+    rebaseStartedAt: null,
     ...over,
   }) as Task;
 
