@@ -890,6 +890,21 @@ re-arm, approve / give-up / merge cleanup (`cleanupTaskSessions`) and the
 abandon teardown. Task Master never uses the GitHub relay's
 `stopHermesReview` / `getHermesReviewStatus` for these runs.
 
+**What Hermes must do.** Nothing is installed on the Hermes host for this: the
+run message (`buildTaskReviewMessage` plus `buildReviewPrompt` in `reply`
+mode) carries the whole contract. Hermes checks out the PR head, reviews, and
+answers with only the findings JSON. Unlike the GitHub relay's message
+(`buildRelayMessage`), it contains no instruction to post, and says not to
+push, post or comment anywhere, so a Hermes skill's posting how-to is never
+triggered. Mullion posts the one review, as `mullion-reviewer[bot]`. A reply
+that is not the findings JSON is **inconclusive** (see above), never a verdict.
+Observed against the review-bot profile with no extra skill: first and
+follow-up (changes-requested) rounds both ran, each 1-8 minutes and within the
+profile's 75-call turn budget (the worst observed was 67 calls, on a four-round
+task), and nothing was posted under a Hermes identity. If a run ever does post, or stops answering in JSON, the fix belongs
+in the Hermes host's own configuration (a contract skill delivered by its
+Ansible role), not in this repo.
+
 ## Seed delivery
 
 **A claim/retry/review spawn delivers its prompt as the agent's own
