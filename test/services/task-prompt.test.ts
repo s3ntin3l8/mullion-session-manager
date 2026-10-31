@@ -1492,6 +1492,49 @@ describe("buildCiFailurePrompt", () => {
     ci: { headSha: "abc1234", status: "failure" as const, runs: [] },
   };
 
+  it("lists the failing checks and says an optional one still counts", () => {
+    const out = buildCiFailurePrompt({
+      ...base,
+      failingChecks: [
+        { name: "codecov/patch", detail: "66.66% of diff hit (target 75.00%)" },
+        { name: "test-e2e" },
+      ],
+    });
+    expect(out).toContain("- codecov/patch — 66.66% of diff hit (target 75.00%)");
+    expect(out).toContain("- test-e2e");
+    expect(out).toContain("not required for merging still counts");
+    expect(buildCiFailurePrompt(base)).not.toContain("Failing checks:");
+  });
+
+  it("prints a failing check's URL, and does not say CI is SUCCESS above a red non-Actions check", () => {
+    const out = buildCiFailurePrompt({
+      ...base,
+      ci: { headSha: "abc1234", status: "success" as const, runs: [] },
+      failingChecks: [{ name: "codecov/patch", url: "https://app.codecov.io/pr/1" }],
+    });
+    expect(out).toContain("- codecov/patch — https://app.codecov.io/pr/1");
+    expect(out).toContain("All GitHub Actions runs on this PR's head commit abc1234 are green");
+    expect(out).not.toContain("is SUCCESS");
+  });
+
+  it("says Actions gave no signal, instead of 'review without it', above a failing check", () => {
+    const out = buildCiFailurePrompt({
+      ...base,
+      ci: { headSha: "abc1234", status: null, runs: [] },
+      failingChecks: [{ name: "codecov/patch" }],
+    });
+    expect(out).toContain("GitHub Actions gave no signal for this PR's head commit abc1234");
+    expect(out).not.toContain("review the diff without it");
+  });
+
+  it("keeps the Actions summary when the Actions runs are the failure", () => {
+    const out = buildCiFailurePrompt({
+      ...base,
+      failingChecks: [{ name: "test-e2e" }],
+    });
+    expect(out).toContain("is FAILURE");
+  });
+
   it("offers the re-review request file only when the approval is carried through the fix", () => {
     expect(buildCiFailurePrompt(base)).not.toContain("second pair of eyes");
     const out = buildCiFailurePrompt({

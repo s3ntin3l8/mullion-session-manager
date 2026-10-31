@@ -296,7 +296,7 @@ waiting for a free concurrency slot. It never holds a session; see the
   automatic one is the review-findings loop's own auto-return (a
   `changes-requested` review, or an approval that left suggestions for the
   worker to apply — the latter spends no round and is not re-reviewed), and a
-  red required CI check or an unresolved PR review comment can trigger the
+  red CI check (required or not) or an unresolved PR review comment can trigger the
   same transition too — see
   [`tasks-internals.md`](tasks-internals.md#review-agent-mechanics) and
   [`tasks-internals.md`](tasks-internals.md#auto-approve). Both land on the
@@ -1046,16 +1046,15 @@ extensive design comments.
   `mergeable_state` means and what the sweep does about it, and
   [`tasks-internals.md`](tasks-internals.md#auto-rebase-758) if the project
   has `autoApprove` on and the PR is `dirty`.
-- **A required CI check never seems to trigger an automatic return to the
-  worker.** Look for "CI gating unavailable: required checks unreadable" on
-  the task card or drawer (`#2327`): the branch-protection lookup the gate
-  depends on could not be read, so it fails closed. The reason says whether
-  it was a permission problem or no branch protection, and which credential
-  answered (GitHub App or account token). For an App-backed install, grant the
-  App the optional Repository permission **Administration: Read-only** and
-  approve it on the installation, or make sure the account token has admin
-  access to the repo — see
-  [`github-integration.md`](github-integration.md) and
+- **A red CI check never seems to trigger an automatic return to the
+  worker.** Any red check on the head counts, required or not, so branch
+  protection is not the cause. Check, in order: the project has `autoApprove`
+  on and Task Master is enabled; the task's agent can take a seeded prompt;
+  the task still has a worktree; and the automatic round cap
+  (`maxAutoReturnRounds`) is not already spent — once it is, the task stays in
+  Reviewing with one PR comment naming the failing check(s), and "Merge now"
+  is the override. A check that is only _pending_ never returns the worker, and
+  neither does a red check while the head's Actions runs are still going. See
   [`tasks-internals.md`](tasks-internals.md#auto-approve).
 - **Retry says `no-worktree` and refuses.** The task failed before it ever
   had a branch/worktree (e.g. it failed while still `backlog`/`ready`, or

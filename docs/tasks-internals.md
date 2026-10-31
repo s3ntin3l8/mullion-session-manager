@@ -734,7 +734,7 @@ re-broken, evidence}` for each earlier finding; `verified`/`notes`/
   and `taskMaster.enabled`: the task flips back to `in_progress` and the
   worker is re-seeded with the findings as its prompt — via `autoReturnTask`
   (`task-reconciler.ts`), the mechanism shared by every automatic
-  "reviewing → in_progress" trigger (`#756`; a red required CI check and an
+  "reviewing → in_progress" trigger (`#756`; a red CI check and an
   unresolved PR review comment are later triggers on the same model — see
   `AUTO_RETURN_VIA`'s three `via` tags: `review-feedback`, `ci-feedback`,
   `pr-comment-feedback` — and [Auto-approve](#auto-approve) below). That
@@ -1648,60 +1648,41 @@ a human to separately approve on GitHub too. See "Post as an actual GitHub
 PR review" in [Review agent mechanics](#review-agent-mechanics) and
 `blocked`'s review-decision breakdown above for the mechanism.
 
-**Red required CI returns the task to the worker (`#755`).** The CI lookup
+**A red CI check returns the task to the worker (`#755`).** The CI lookup
 (step 4 above) is fetched _before_ steps 2/3, not after: a project with no
 review agent configured never writes a verdict at all (step 2 never
 passes), and an `inconclusive` verdict never satisfies step 3 either — so a
-red **required** check on either of those would otherwise stall in
-`reviewing` forever, exactly the gap this closes. "Required" means a name
-present in `required_status_checks.contexts` from
-`GET /repos/{owner}/{repo}/branches/{branch}/protection`
-(`fetchRequiredStatusContexts`, `github.ts`, cached per repo/branch for an
-hour — branch protection changes about never). The protection lookup needs
-`administration: read`, which `READ_PERMISSIONS` deliberately excludes; it
-resolves its own token with the dedicated `"branch-protection"` scope
-(`BRANCH_PROTECTION_PERMISSIONS`, `github-app.ts`, `#2327`) while the check
-runs and PR reads keep the read token. That grant is optional on the App: an
-installation without it 422s that mint alone, and `resolveGitHubToken` falls
-back to the account token for this one call (it needs repo admin access). A
-403/404 still fails **closed** — "don't know" is never read as "nothing is
-required," and the task is left in `reviewing` — but it is no longer
-silent: `attemptReturnRedCiToWorker` writes
-`tasks.ciGatingUnavailableReason` (`forbidden` | `not-found` | `other`, from
-`getRequiredStatusContextsFailureReason`, `github.ts`) and
-`ciGatingUnavailableSource` (`app` | `account`, which credential answered),
-which the card and drawer render as "CI gating unavailable: required checks
-unreadable". The flag is cleared the next time the lookup succeeds or CI is
-no longer red. The throttled reconcile-log warning (`#1360`, once per
-repo/branch/hour) stays for the 403 case and names the source. See
-[`docs/ci-cd.md`](ci-cd.md)'s "Branch protection" section for the full
-writeup. A red required check whose shape
-matches the PR-title-lint pattern above is self-healed instead of returned
-to the worker — see "Exception — PR-title lint self-heals" above.
+red check on either of those would otherwise stall in `reviewing` forever.
 
-**Matched against Check Runs, not Workflow Runs — a fresh-review catch on
-the first version of this feature.** `required_status_checks.contexts`
-names live in a different GitHub API namespace than
-`fetchRunsForHead`'s Workflow Run names: a single workflow run (`"CI/CD"`,
-`"CodeQL"`) fans out into many per-job Check Runs
-(`"test-node / lint-and-test"`, `"analyze / Analyze
-(javascript-typescript)"`, ...), and it's the check-run name GitHub itself
-compares against the required set — verified live against this repo's own
-protection. The two namespaces share no names at all for a repo using
-GitHub's standard "require these specific job checks" protection (the
-common case, not an edge case), so the original implementation, which
-compared `fetchRunsForHead`'s names against the required set, could never
-match anything. The fix: `fetchCheckRunsForHead` (`github.ts`) reads
-`GET /commits/{sha}/check-runs` directly, in the same namespace as the
-required set, and that's what's actually matched. `fetchRunsForHead`
-(unchanged) still supplies the coarse "is anything red at all" pre-filter —
-a red workflow run and a red one of its constituent check runs are
-correlated in practice (a job failure fails its parent workflow run too),
-so this avoids a second GitHub call on the ordinary green-CI tick, at the
-cost of not accounting for a `continue-on-error: true` job (out of scope).
-A red run whose name isn't in the required set (this repo's own
-`test-e2e`) is left alone either way, since the merge sweep itself doesn't
-gate on it.
+**Optional checks count too.** A red check is work to fix whether or not
+branch protection requires it: the merge sweep holds on an `unstable` PR
+(see "Why `unstable` doesn't merge" above), so an unfixed optional check
+(`codecov/patch`, this repo's `test-e2e`) strands the task exactly like a
+required one. Branch protection is therefore **not read** by this gate, and an
+unreadable required-checks list can no longer stall it. (`#2327`'s "CI gating
+unavailable" flag is no longer set; a value left by an earlier version is
+cleared on the next tick.) The trigger is a red Actions run (the coarse
+`fetchRunsForHead` status) **or** GitHub's `unstable` merge state — the cheap
+signal for a red check from another app, which never turns the Actions status
+red. Either way the task's check runs are then read
+(`fetchCheckRunsForHead`, `github.ts`, `GET /commits/{sha}/check-runs`) and
+the worker is returned only if one has a red conclusion
+(`isRedCheckConclusion`: anything other than `success`, `skipped`,
+`cancelled` or `neutral` — GitHub's own not-passing set, so `timed_out`,
+`action_required`, `stale` and `startup_failure` count too). An `unstable` PR
+with only _pending_ checks is left alone, and the `unstable` trigger also waits
+for the head's Actions runs to finish (`unstable` means "failing or still
+running", and a push mid-run would cancel and restart them). The gate is
+name-agnostic, so a red check no commit can fix (a CLA gate, say) spends rounds
+until the cap and then parks the task with a comment naming it; "Merge now" is
+the override. A red check whose shape matches the PR-title-lint pattern above is
+self-healed instead of returned to the worker — see "Exception — PR-title
+lint self-heals" above. The failing checks, with each check's own one-line
+summary (e.g. codecov's "66.66% of diff hit (target 75.00%)"), are listed in
+the worker's prompt (`buildCiFailurePrompt`) and in the sidebar's hand-off
+prompt (`buildHandoffPrompt`), which also reads the non-Actions checks from
+the PR detail's `otherChecks`. A task that is already `done` and waiting on a
+merge cannot be returned; its `mergeError` names the red checks instead.
 
 **`mergeableState === "blocked"` was considered and rejected** for the same
 reason the original #755 design doc already ruled it out: this repo (like
@@ -1711,7 +1692,7 @@ unresolved inline PR comment thread — a false positive unrelated to CI.
 
 Shares `tasks.autoReturnRounds`/`maxAutoReturnRounds` — the same counter and
 cap every other auto-return trigger uses (`reason: "ci"`). Once the cap is
-spent, one PR comment names it (the same `postReviewFindingsComment`
+spent, one PR comment names it and the red checks (the same `postReviewFindingsComment`
 mechanism the review-feedback loop's own cap-reached note uses) and the
 task stays in `reviewing` — deduped per round (`ciCapCommentedRounds`,
 `task-reconciler.ts`) so a task stuck red-and-capped gets exactly one

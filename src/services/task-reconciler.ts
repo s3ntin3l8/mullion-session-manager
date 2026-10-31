@@ -75,7 +75,6 @@ import { commitHostWipChanges, resolveHostGitStatus, resolveRepoRef } from "./ho
 import { deriveTaskBranchName, deriveWorktreePath } from "./git-worktree.js";
 import type { GitHubRepoRef } from "./git-remote.js";
 import {
-  getToken,
   resolveGitHubToken,
   resolveReviewerToken,
   resolveMullionReviewLogins,
@@ -94,10 +93,9 @@ import {
 } from "./github-write.js";
 import {
   computeCiStatus,
-  fetchRunsForHead,
-  fetchRequiredStatusContexts,
-  getRequiredStatusContextsFailureReason,
+  fetchRunsForHeadChecked,
   fetchCheckRunsForHead,
+  isRedCheckConclusion,
   getPRsStatus,
 } from "./github.js";
 import { isGitHubRateLimited, githubRateLimitRemainingMs } from "./github-fetch.js";
@@ -452,8 +450,10 @@ function clearReviewSpawnClaim(app: FastifyInstance, taskId: number): void {
  * every "nothing to check yet" case (no PR, no resolvable repo/token) with
  * no logging, since that's an ordinary, expected state for plenty of tasks,
  * not a failure. Can still throw on a real lookup failure (a thrown
- * `getPullRequestByNumber`/`fetchRunsForHead` call) — callers decide their
- * own retry/deadline posture around that.
+ * `getPullRequestByNumber` call) — callers decide their own retry/deadline
+ * posture around that. The Actions-runs lookup itself never throws: a failed
+ * one comes back as `runsAnswered: false` with `status: null`, which reads the
+ * same as "no Actions runs" unless the caller checks the flag.
  */
 async function fetchCurrentCiStatus(
   app: FastifyInstance,
@@ -471,6 +471,10 @@ async function fetchCurrentCiStatus(
   baseRef: string;
   mergeable: boolean | null;
   mergeableState: string;
+  // False when the Actions-runs lookup itself failed (a non-2xx or a network
+  // error): `status` is then `null`, which reads the same as "no Actions runs".
+  // Only the red-CI gate's `unstable` arm needs to tell the two apart.
+  runsAnswered: boolean;
   // #2103 — the PR's own lifecycle state, already in the payload: a closed or
   // merged PR is the end of a reviewing task, not something to keep polling.
   prState: "open" | "closed";
@@ -485,7 +489,12 @@ async function fetchCurrentCiStatus(
   const token = await resolveGitHubToken(app, repoRef, "read");
   if (!token) return null;
   const pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
-  const runs = await fetchRunsForHead(token, repoRef.owner, repoRef.repo, pr.headSha);
+  const { ok: runsAnswered, runs } = await fetchRunsForHeadChecked(
+    token,
+    repoRef.owner,
+    repoRef.repo,
+    pr.headSha,
+  );
   const status = computeCiStatus(runs);
   const runSummaries = runs.map((r) => ({
     name: r.name,
@@ -500,6 +509,7 @@ async function fetchCurrentCiStatus(
     baseRef: pr.baseRef,
     mergeable: pr.mergeable,
     mergeableState: pr.mergeableState,
+    runsAnswered,
     prState: pr.state,
     merged: pr.merged,
     mergedAt: pr.mergedAt,
@@ -525,8 +535,10 @@ async function fetchCurrentCiStatus(
  * `reconcileTasks`), so the very first lookup here almost always lands
  * within a second or two of the push that created the head commit —
  * GitHub's Actions runs for a just-pushed commit routinely aren't registered
- * yet, so `fetchRunsForHead` returns `[]` and `computeCiStatus` returns
- * `null` indistinguishably from "this repo genuinely has no CI." Treating
+ * yet, so the runs lookup answers `[]` and `computeCiStatus` returns
+ * `null` indistinguishably from "this repo genuinely has no CI" (a lookup that
+ * did not answer at all also gives `null`, but carries `runsAnswered: false`,
+ * which only changes the wording of the note below). Treating
  * `null` as "proceed" on that very first check reproduces the #213782
  * incident this whole change exists to fix: the reviewer spawns before a
  * real check has even registered, let alone failed. Waiting on `null` the
@@ -547,7 +559,7 @@ async function resolveReviewCi(
   try {
     const current = await fetchCurrentCiStatus(app, task, project);
     if (!current) return undefined;
-    const { headSha, status, runs: runSummaries } = current;
+    const { headSha, status, runs: runSummaries, runsAnswered } = current;
 
     if (status !== "in_progress" && status !== null) {
       return { headSha, status, runs: runSummaries };
@@ -566,9 +578,13 @@ async function resolveReviewCi(
       headSha,
       status,
       runs: runSummaries,
+      // `status: null` is "no runs" only when GitHub actually answered; a failed
+      // lookup must not tell the reviewer there is no CI (`runsAnswered`).
       note:
         status === null
-          ? `no CI checks found after the ${waitMinutes}-minute wait`
+          ? runsAnswered
+            ? `no CI checks found after the ${waitMinutes}-minute wait`
+            : `CI status could not be read after the ${waitMinutes}-minute wait (the Actions lookup failed)`
           : `still running after the ${waitMinutes}-minute wait`,
     };
   } catch (err) {
@@ -2041,7 +2057,19 @@ async function attemptMerge(
         ) {
           return;
         }
-        recordMergeError(app, task.id, "A non-required check is failing or still running");
+        // Name the red checks when there are any: "failing or still running"
+        // sends a human hunting, while "codecov/patch: 66.66% of diff hit
+        // (target 75.00%)" says what to fix — or what "Merge now" overrides.
+        const redUnstable = unstableCheckRuns.filter((c) => isRedCheckConclusion(c.conclusion));
+        recordMergeError(
+          app,
+          task.id,
+          redUnstable.length > 0
+            ? `Held: a non-required check is red — ${redUnstable
+                .map((c) => (c.detail ? `${c.name}: ${c.detail}` : c.name))
+                .join("; ")}. Fix it, or use "Merge now" to override.`
+            : "A non-required check is failing or still running",
+        );
         return;
       }
       case "dirty": {
@@ -2589,8 +2617,8 @@ async function processReleaseRequests(app: FastifyInstance): Promise<void> {
 // Anything else — no review agent configured (never ingests a verdict at
 // all), "changes-requested", "inconclusive", CI red/still running/absent —
 // leaves the task in "reviewing" for a human, exactly today's behavior...
-// EXCEPT one case #755 now closes: a red REQUIRED check (per
-// `fetchRequiredStatusContexts`, github.ts) returns the task to the worker
+// EXCEPT one case #755 now closes: a red check (required or not — see
+// `attemptReturnRedCiToWorker`) returns the task to the worker
 // automatically, same as a "changes-requested" review round — even for a
 // project with no review agent configured at all (gate 2 would otherwise
 // never pass for those) and even when the verdict is "inconclusive" (gate 3
@@ -2619,7 +2647,7 @@ export function resetAutoApproveBackoff(taskId: number): void {
 }
 
 /**
- * #755 — a red REQUIRED check on a task's PR sends it back to the worker
+ * #755 — a red check (required or not) on a task's PR sends it back to the worker
  * for one automatic round, same mechanism as a "changes-requested" review
  * (`autoReturnTask`, `reason: "ci"`). Deliberately hoisted ABOVE
  * `attemptAutoApprove`'s gates 2/3 (the ingested-verdict and "clean"
@@ -2629,18 +2657,16 @@ export function resetAutoApproveBackoff(taskId: number): void {
  * so red-required-CI-plus-either-of-those would otherwise stall in
  * "reviewing" forever, exactly the failure class #755 exists to close.
  *
- * Matches against `required_status_checks.contexts`
- * (`fetchRequiredStatusContexts`, github.ts) by CHECK RUN name
+ * Matches by CHECK RUN name
  * (`fetchCheckRunsForHead`) — NOT `current.runs`, which is Workflow Run
  * data from a different GitHub API namespace that never overlaps with the
  * required set (fresh-review finding; see `fetchCheckRunsForHead`'s own
- * doc comment for the full story). A red NON-required check (this repo's
- * own `test-e2e`) is not a reason to return the worker, since the merge
- * sweep itself doesn't gate on it either. `null` from the required-contexts
- * lookup (a 403/404 — no `administration` scope, or no protection
- * configured) is a fail-closed "don't know", not "nothing is required":
- * returns `false` without returning the worker, same as `current.status
- * !== "failure"`.
+ * doc comment for the full story). A red NON-required check (codecov/patch,
+ * this repo's own `test-e2e`) now counts too: the merge sweep holds on an
+ * `unstable` PR (attemptMerge's `case "unstable"`), so leaving it unfixed
+ * strands the task, and a red check is work to fix whether or not branch
+ * protection requires it. Branch protection is therefore not read here at
+ * all — an unreadable required-checks list can no longer stall this gate.
  *
  * Shares `autoReturnTask`'s round counter/cap with every other trigger
  * (#756's model). When the cap is already spent, posts one PR comment
@@ -2662,63 +2688,6 @@ export function resetAutoApproveBackoff(taskId: number): void {
 const MAX_CI_CAP_COMMENTED_ENTRIES = 500;
 const ciCapCommentedRounds = new Map<number, number>();
 
-// #1360 — `fetchRequiredStatusContexts` returning `null` because the GitHub
-// App's read-scope token lacks `administration`
-// (`getRequiredStatusContextsFailureReason` === "forbidden") is a
-// permanent, install-wide condition, not a per-task blip — warning on
-// every reconcile tick for every red-CI candidate task would spam the log
-// forever for one static fact. Keyed by `owner/repo/branch` (the same key
-// `fetchRequiredStatusContexts` itself uses) rather than by task id — this
-// condition belongs to the repo/branch, not to any one task, so two
-// different tasks on the same repo should share one warning, not each emit
-// their own. Re-warns once per REQUIRED_STATUS_CONTEXTS_WARN_INTERVAL_MS
-// (matching the underlying lookup's own hour-long success-cache TTL,
-// github.ts) rather than only ever once — a regression (a genuinely new
-// permission problem after this was previously working) should still
-// surface again eventually, not go silent forever after the first
-// occurrence. Self-review finding — given the same eviction-cap treatment
-// `ciCapCommentedRounds` above has: that map is keyed by task id, which
-// can genuinely grow large over an install's lifetime; this one is keyed
-// by owner/repo/branch, bounded by how many distinct repos one install
-// actually manages (realistically a handful) — the cap is a defense-in-
-// depth belt-and-suspenders rather than a realistic overflow guard.
-const REQUIRED_STATUS_CONTEXTS_WARN_INTERVAL_MS = 60 * 60_000;
-// Hermes review, PR #1361 — capped the same way the sibling failure map
-// in github.ts is (MAX_REQUIRED_STATUS_CONTEXTS_FAILURE_ENTRIES=200):
-// even though the throttle key space (owner/repo/branch) is realistically
-// small on any one install, the install-wide 403 means entries accumulate
-// per probed owner/repo/branch and are never cleared except by this map's
-// own next-write eviction. Without a cap, an install that scans many
-// distinct repos over its lifetime could grow this without bound.
-const MAX_REQUIRED_STATUS_CONTEXTS_FORBIDDEN_WARN_ENTRIES = 200;
-const requiredStatusContextsForbiddenWarnedAt = new Map<string, number>();
-
-/** Single write site for `requiredStatusContextsForbiddenWarnedAt` —
- * factored so the eviction-then-set sequence can't drift between this
- * helper's callers. Mirrors `setRequiredStatusContextsFailure` (github.ts)
- * exactly. */
-function setRequiredStatusContextsForbiddenWarnedAt(key: string, at: number): void {
-  if (
-    !requiredStatusContextsForbiddenWarnedAt.has(key) &&
-    requiredStatusContextsForbiddenWarnedAt.size >=
-      MAX_REQUIRED_STATUS_CONTEXTS_FORBIDDEN_WARN_ENTRIES
-  ) {
-    const oldestKey = requiredStatusContextsForbiddenWarnedAt.keys().next().value;
-    if (oldestKey !== undefined) requiredStatusContextsForbiddenWarnedAt.delete(oldestKey);
-  }
-  requiredStatusContextsForbiddenWarnedAt.set(key, at);
-}
-
-/** Exported for tests only — production never needs to clear this. Every
- * test in this file resolves `owner/repo/branch` to the same fixed value
- * (a real git-remote lookup against a shared fixture cwd), so without this
- * a warning fired by one test's assertions would still be inside this map's
- * throttle window by the time a later, unrelated test's own assertions run
- * in the same process. */
-export function resetRequiredStatusContextsForbiddenWarningsForTests(): void {
-  requiredStatusContextsForbiddenWarnedAt.clear();
-}
-
 // #1035 — curated set of CI check names that flag a non-conventional PR
 // title. Curated short list (not substring/heuristic match) — see
 // `attemptSelfHealPrTitle`'s JSDoc for the full behavior contract.
@@ -2731,7 +2700,7 @@ const PR_TITLE_LINT_CHECK_NAMES = new Set([
 
 /**
  * #1035 — the actual self-heal, shared by both `attemptReturnRedCiToWorker`
- * (required-check path: a red required title-lint check burns a round on a
+ * (red-check path: a red title-lint check burns a round on a
  * fix the worker can't make) and the `attemptMerge` `case "unstable"`
  * branch below (non-required path: a red non-required title-lint check
  * strands the task in `unstable` forever with no auto-merge, and no
@@ -2761,13 +2730,7 @@ async function attemptSelfHealPrTitle(
   checkRuns: { name: string; conclusion: string | null }[],
 ): Promise<boolean> {
   const failingTitleLint = checkRuns.some(
-    (c) =>
-      c.conclusion !== null &&
-      c.conclusion !== "success" &&
-      c.conclusion !== "skipped" &&
-      c.conclusion !== "cancelled" &&
-      c.conclusion !== "neutral" &&
-      PR_TITLE_LINT_CHECK_NAMES.has(c.name),
+    (c) => isRedCheckConclusion(c.conclusion) && PR_TITLE_LINT_CHECK_NAMES.has(c.name),
   );
   if (!failingTitleLint) return false;
 
@@ -2790,23 +2753,6 @@ async function attemptSelfHealPrTitle(
   }
 }
 
-/** #2327 — write the visible "required checks unreadable" flag, only when it
- * changed (this runs every tick for every red-CI task). */
-function setCiGatingUnavailable(
-  app: FastifyInstance,
-  task: typeof tasks.$inferSelect,
-  reason: "forbidden" | "not-found" | "other",
-  source: "app" | "account",
-): void {
-  if (task.ciGatingUnavailableReason === reason && task.ciGatingUnavailableSource === source)
-    return;
-  app.db
-    .update(tasks)
-    .set({ ciGatingUnavailableReason: reason, ciGatingUnavailableSource: source })
-    .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
-    .run();
-}
-
 function clearCiGatingUnavailable(app: FastifyInstance, task: typeof tasks.$inferSelect): void {
   if (task.ciGatingUnavailableReason === null && task.ciGatingUnavailableSource === null) return;
   app.db
@@ -2816,13 +2762,60 @@ function clearCiGatingUnavailable(app: FastifyInstance, task: typeof tasks.$infe
     .run();
 }
 
+// The `unstable` arm of the red-CI gate stands down when the Actions-runs
+// lookup did not answer, so a repo whose `/actions/runs` never answers (a
+// permanent 403/404, not a blip) could never open it with nothing in the log
+// saying so. Warn once per task per hour: this runs every sweep tick.
+const UNSTABLE_RUNS_UNREADABLE_WARN_INTERVAL_MS = 60 * 60_000;
+const MAX_UNSTABLE_RUNS_UNREADABLE_WARN_ENTRIES = 500;
+const unstableRunsUnreadableWarnedAt = new Map<number, number>();
+
+function warnUnstableRunsUnreadable(app: FastifyInstance, taskId: number): void {
+  const now = Date.now();
+  const last = unstableRunsUnreadableWarnedAt.get(taskId);
+  if (last !== undefined && now - last < UNSTABLE_RUNS_UNREADABLE_WARN_INTERVAL_MS) return;
+  if (
+    last === undefined &&
+    unstableRunsUnreadableWarnedAt.size >= MAX_UNSTABLE_RUNS_UNREADABLE_WARN_ENTRIES
+  ) {
+    const oldest = unstableRunsUnreadableWarnedAt.keys().next().value;
+    if (oldest !== undefined) unstableRunsUnreadableWarnedAt.delete(oldest);
+  }
+  unstableRunsUnreadableWarnedAt.set(taskId, now);
+  app.log.warn(
+    { taskId },
+    "task reconcile: the PR is `unstable` but the Actions runs lookup did not answer, so the red-CI return stands down (it would risk pushing while Actions is mid-run); a failing non-Actions check will not return the worker until the lookup answers",
+  );
+}
+
+/** Exported for tests only — the throttle state is module-scope. */
+export function resetUnstableRunsUnreadableWarningsForTests(): void {
+  unstableRunsUnreadableWarnedAt.clear();
+}
+
 async function attemptReturnRedCiToWorker(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
   current: NonNullable<Awaited<ReturnType<typeof fetchCurrentCiStatus>>>,
 ): Promise<boolean> {
-  if (current.status !== "failure") {
+  // `current.status` folds Actions runs only, so a red check from another app
+  // (codecov/patch, ...) never turns it to "failure" — GitHub's own `unstable`
+  // merge state ("a non-required check is failing or still running") is the
+  // cheap signal that something outside Actions is not green.
+  // The `unstable` arm also waits for the Actions runs to finish: `unstable`
+  // means "failing OR still running", and a worker's push while Actions is
+  // mid-run would cancel and restart it. A failed runs lookup also reads as
+  // `status: null` (same as "no Actions runs"), so it must not open the gate:
+  // an API blip would reproduce the mid-run push this guard prevents.
+  const unstableOnly =
+    current.mergeableState === "unstable" &&
+    current.runsAnswered &&
+    current.status !== "in_progress";
+  if (current.mergeableState === "unstable" && !current.runsAnswered) {
+    warnUnstableRunsUnreadable(app, task.id);
+  }
+  if (current.status !== "failure" && !unstableOnly) {
     clearCiGatingUnavailable(app, task);
     return false;
   }
@@ -2831,66 +2824,12 @@ async function attemptReturnRedCiToWorker(
 
   const token = await resolveGitHubToken(app, current.repoRef, "read");
   if (!token) return false;
-  // #2327 — branch protection needs `administration: read`, which the read
-  // token never carries. A dedicated narrow scope: an installation without
-  // that optional grant fails the mint alone and resolveGitHubToken falls
-  // back to the account token for just this lookup; `token` above (check
-  // runs, PR reads) is unaffected.
-  const protectionToken =
-    (await resolveGitHubToken(app, current.repoRef, "branch-protection")) ?? token;
-  const gatingSource: "app" | "account" = protectionToken === getToken(app) ? "account" : "app";
-  const requiredContexts = await fetchRequiredStatusContexts(
-    protectionToken,
-    current.repoRef.owner,
-    current.repoRef.repo,
-    current.baseRef,
-  );
-  // Fail closed — see this function's own doc comment.
-  if (requiredContexts === null) {
-    // #2327 — fail closed, but say so on the task. A 404 (no protection) is
-    // flagged too: the gate still has no opinion, and the card should say why.
-    try {
-      const failure =
-        getRequiredStatusContextsFailureReason(
-          current.repoRef.owner,
-          current.repoRef.repo,
-          current.baseRef,
-        ) ?? "other";
-      setCiGatingUnavailable(app, task, failure, gatingSource);
-      // #1360 — the throttled log line stays for the permission case: a
-      // permanent, install-wide condition must not warn on every tick.
-      if (failure === "forbidden") {
-        const key = `${current.repoRef.owner}/${current.repoRef.repo}/${current.baseRef}`;
-        const lastWarnedAt = requiredStatusContextsForbiddenWarnedAt.get(key);
-        if (
-          lastWarnedAt === undefined ||
-          Date.now() - lastWarnedAt >= REQUIRED_STATUS_CONTEXTS_WARN_INTERVAL_MS
-        ) {
-          setRequiredStatusContextsForbiddenWarnedAt(key, Date.now());
-          app.log.warn(
-            {
-              taskId: task.id,
-              owner: current.repoRef.owner,
-              repo: current.repoRef.repo,
-              branch: current.baseRef,
-              source: gatingSource,
-            },
-            gatingSource === "app"
-              ? "task reconcile: CI-auto-return (#755) can't read branch protection to tell a required check from a non-required one — the GitHub App token was refused the `administration` permission. Grant the App the optional Repository permission Administration: Read-only and approve it on the installation (docs/github-integration.md); until then the account token is the fallback, and it needs admin access to the repo. A red CI check on this task's PR will not auto-return the worker meanwhile."
-              : "task reconcile: CI-auto-return (#755) can't read branch protection to tell a required check from a non-required one — the account token was refused the `administration` permission (it needs admin access to the repo, or `repo` scope for a PAT). Grant the GitHub App the optional Administration: Read-only permission, or widen the account (docs/github-integration.md). A red CI check on this task's PR will not auto-return the worker meanwhile.",
-          );
-        }
-      }
-    } catch (err) {
-      app.log.warn(
-        { err, taskId: task.id },
-        "task reconcile: recording the unreadable required-checks lookup failed — ignoring, the red-CI-return gate still fails closed",
-      );
-    }
-    return false;
-  }
+  // Which checks branch protection requires no longer matters here: a red
+  // check is work to fix whether or not it gates the merge, because the merge
+  // sweep holds on an `unstable` PR anyway (attemptMerge's `case "unstable"`).
+  // So the "required checks unreadable" condition (#2327) can no longer stall
+  // this gate — clear any flag an earlier version left on the task.
   clearCiGatingUnavailable(app, task);
-  if (requiredContexts.length === 0) return false;
 
   const checkRuns = await fetchCheckRunsForHead(
     token,
@@ -2898,26 +2837,11 @@ async function attemptReturnRedCiToWorker(
     current.repoRef.repo,
     current.headSha,
   );
-  // Fresh-review finding: a bare `=== "failure"` missed `timed_out` and
-  // `action_required` — conclusions GitHub's own merge gate blocks on just
-  // like a plain failure, but which the coarse Workflow-Run pre-filter
-  // above (`computeCiStatus`) already treats as "not passing." Matching
-  // the same "not success, not skipped, not cancelled, not still-running"
-  // definition here keeps the two checks consistent — a required check
-  // that fails BOTH ways it can fail (a bare "failure", or one of these)
-  // now returns the worker either way, rather than reintroducing the
-  // exact "stalls in reviewing forever" gap #755 exists to close, just at
-  // a different conclusion value.
-  const redRequired = checkRuns.some(
-    (c) =>
-      requiredContexts.includes(c.name) &&
-      c.conclusion !== null &&
-      c.conclusion !== "success" &&
-      c.conclusion !== "skipped" &&
-      c.conclusion !== "cancelled" &&
-      c.conclusion !== "neutral",
-  );
-  if (!redRequired) return false;
+  // `isRedCheckConclusion` is the one definition of "red" (a bare `failure`,
+  // but also `timed_out` and `action_required`, which GitHub's merge gate
+  // blocks on just the same) — see its own doc comment.
+  const redChecks = checkRuns.filter((c) => isRedCheckConclusion(c.conclusion));
+  if (redChecks.length === 0) return false;
 
   // #1035 — BEFORE the auto-return-cap check: if the only failing required
   // check is a title-lint one, self-heal the title instead of burning a
@@ -2969,11 +2893,11 @@ async function attemptReturnRedCiToWorker(
     }
     ciCapCommentedRounds.set(task.id, task.autoReturnRounds);
     // #737 — deliberately no `verdict` here: this is a notice about EXTERNAL
-    // state (a required CI check), not the review agent's own verdict on
+    // state (a CI check), not the review agent's own verdict on
     // the diff, so it stays a plain COMMENT regardless of a reviewer App
     // being configured.
     await postReviewFindingsComment(app, task, project, {
-      body: `A required CI check is failing on this task's PR, but it has already reached its automatic round cap (${maxRounds}) — it needs a human to take it from here.`,
+      body: `A CI check is failing on this task's PR (${redChecks.map((c) => c.name).join(", ")}), but it has already reached its automatic round cap (${maxRounds}) — it needs a human to take it from here.`,
     });
     return true;
   }
@@ -3011,6 +2935,7 @@ async function attemptReturnRedCiToWorker(
     worktreePath: task.worktreePath,
     budgetMinutes: resolvedTaskMaster.budgetMinutes,
     ci: { headSha: current.headSha, status: current.status, runs: current.runs },
+    failingChecks: redChecks.map((c) => ({ name: c.name, detail: c.detail, url: c.url })),
     commitTitlePath,
     agentCommand: task.agentCommand,
     rereviewRequestPath:
@@ -3901,7 +3826,7 @@ const REVIEW_FINDINGS_GRACE_MS = 30 * 60_000;
 // verdict alone. This is the shared model every automatic "send it back to
 // the worker" trigger now registers against, so the cap/give-up posture and
 // the DB write itself exist in exactly one place rather than drifting
-// across a growing list of triggers (review feedback here; a red required
+// across a growing list of triggers (review feedback here; a red
 // CI check and an unresolved PR review comment are later triggers on the
 // same model — see the roadmap plan).
 export type AutoReturnReason = "review" | "ci" | "pr-comment" | "suggestions";

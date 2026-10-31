@@ -78,7 +78,11 @@ export function buildHandoffPrompt(
     lines.push(`${verb} ${r.author ?? "a reviewer"}: ${clip(htmlToText(r.bodyHtml))}`, "");
   }
   if (failingChecks.length > 0) {
-    lines.push(`Failing checks: ${failingChecks.join(", ")}`, "");
+    lines.push(
+      `Failing checks: ${failingChecks.join(", ")}`,
+      "A check that is not required for merging still counts — a red one holds the merge, so fix it too (for a coverage check, add tests for the uncovered lines).",
+      "",
+    );
   }
   if (open.length === 0 && changes.length === 0 && failingChecks.length === 0) {
     lines.push("There is nothing outstanding — check the PR for anything left to do.", "");

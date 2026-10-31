@@ -1333,7 +1333,7 @@ export function CreateProjectModal({
           </label>
           <span className="create-modal-field-hint">
             How many times a task may be sent back to its worker automatically — a review that
-            requested changes, a red required CI check, or an unresolved PR comment. An approved
+            requested changes, a red CI check, or an unresolved PR comment. An approved
             review&apos;s suggestions never count. Blank uses the install default (Settings → Task
             Master); tick Unlimited (or type 0) for no cap.
           </span>

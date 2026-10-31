@@ -196,7 +196,7 @@ const TASK_ROW_COLUMNS = {
   reviewFindingsIngestedSessionId: tasks.reviewFindingsIngestedSessionId,
   reviewFindings: tasks.reviewFindings,
   // #756 — renamed from reviewRounds: this counter is no longer
-  // review-verdict-only (a red required CI check and an unresolved PR
+  // review-verdict-only (a red CI check and an unresolved PR
   // review comment are later auto-return triggers on the same model — see
   // task-reconciler.ts's AutoReturnReason). lastAutoReturnReason names
   // which trigger most recently spent a round.

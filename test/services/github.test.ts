@@ -10,6 +10,7 @@ import {
   fetchRequiredStatusContexts,
   getRequiredStatusContextsFailureReason,
   fetchCheckRunsForHead,
+  isRedCheckConclusion,
   getDefaultBranch,
   detectReleasePleaseConfig,
   clearReleasePleaseConfigCacheForTests,
@@ -694,6 +695,32 @@ describe("fetchCheckRunsForHead", () => {
     );
   });
 
+  it("carries a check's own one-line summary as `detail`, only when it has one", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, {
+        check_runs: [
+          {
+            name: "codecov/patch",
+            conclusion: "failure",
+            output: { title: "66.66% of diff hit (target 75.00%)" },
+          },
+          { name: "no-title", conclusion: "success", output: { title: null } },
+          { name: "linked", conclusion: "failure", details_url: "https://ci.example/1" },
+        ],
+      }),
+    );
+    const result = await fetchCheckRunsForHead("tok", "o", "check-runs-detail-repo", "sha-head");
+    expect(result).toEqual([
+      {
+        name: "codecov/patch",
+        conclusion: "failure",
+        detail: "66.66% of diff hit (target 75.00%)",
+      },
+      { name: "no-title", conclusion: "success" },
+      { name: "linked", conclusion: "failure", url: "https://ci.example/1" },
+    ]);
+  });
+
   it("degrades to [] on a non-ok response, never throws", async () => {
     fetchMock.mockResolvedValue(new Response("nope", { status: 404 }));
     await expect(
@@ -798,4 +825,14 @@ describe("default-branch CI cache", () => {
     expect(getCachedDefaultBranchCi("dbci-cap-0", "r")).toBeUndefined();
     expect(getCachedDefaultBranchCi(`dbci-cap-${MAX_CACHE_ENTRIES + 2}`, "r")).toBe("success");
   });
+});
+
+describe("isRedCheckConclusion", () => {
+  it.each(["failure", "timed_out", "action_required", "stale", "startup_failure"])(
+    "treats %s as red",
+    (c) => expect(isRedCheckConclusion(c)).toBe(true),
+  );
+  it.each([null, "success", "skipped", "cancelled", "neutral"])("does not treat %s as red", (c) =>
+    expect(isRedCheckConclusion(c)).toBe(false),
+  );
 });

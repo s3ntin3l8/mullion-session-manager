@@ -2179,7 +2179,7 @@ export interface Task {
   reviewFindings: string | null;
   // How many times this task has already driven an automatic
   // "reviewing -> in_progress" round back to the worker — not just from a
-  // changes-requested review verdict anymore (a red required CI check and
+  // changes-requested review verdict anymore (a red CI check and
   // an unresolved PR review comment are later triggers on the same model).
   // Bounded by a resolved cap (the project's, else the install-wide setting;
   // default 10, 0 = unlimited) and never reset —

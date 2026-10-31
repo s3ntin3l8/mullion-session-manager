@@ -1287,14 +1287,39 @@ export function buildReviewPrompt(opts: {
 export function buildCiFailurePrompt(
   opts: WorkerPreambleOptions & {
     ci: ReviewCiInfo;
+    /** The red check runs on the head, required or not — Actions runs are in
+     * `ci`, but a check from another app (codecov/patch) is only here. */
+    failingChecks?: { name: string; detail?: string; url?: string }[];
     /** Set when the task's approval is carried through this fix (no
      * re-review): where the worker writes a line to ask for one anyway. */
     rereviewRequestPath?: string;
   },
 ): string {
   const preamble = buildTaskMasterPreamble(opts);
+  const checks =
+    opts.failingChecks && opts.failingChecks.length > 0
+      ? `Failing checks:\n${opts.failingChecks
+          .map((c) => `- ${c.name}${c.detail ? ` — ${c.detail}` : ""}${c.url ? ` — ${c.url}` : ""}`)
+          .join(
+            "\n",
+          )}\n\nA check that is not required for merging still counts: Mullion holds the merge while it is red, so fix it too (for a coverage check, add tests for the uncovered lines).\n\n`
+      : "";
+  // When the Actions runs are all green the red check is not one of them (it
+  // was reached through GitHub's `unstable` merge state): printing "CI ... is
+  // SUCCESS" straight above the failing-check list told the worker the opposite
+  // of why it was returned.
+  // Likewise for `null` (Actions disabled, or its lookup failed): "could not be
+  // determined ... review the diff without it" above a failing-check list
+  // would tell the worker to ignore the one thing it was returned for.
+  const hasFailingChecks = opts.failingChecks !== undefined && opts.failingChecks.length > 0;
+  const actionsSummary =
+    hasFailingChecks && opts.ci.status === "success"
+      ? `All GitHub Actions runs on this PR's head commit ${opts.ci.headSha.slice(0, 7)} are green; the failing check below is from another app.`
+      : hasFailingChecks && opts.ci.status === null
+        ? `GitHub Actions gave no signal for this PR's head commit ${opts.ci.headSha.slice(0, 7)}; the failing check below is the one to fix.`
+        : renderCiSummary(opts.ci);
   const failure =
-    `A required CI check failed on this task's PR after it reached review.\n\n${renderCiSummary(opts.ci)}\n\n` +
+    `A CI check failed on this task's PR after it reached review.\n\n${actionsSummary}\n\n${checks}` +
     "Pull the latest changes, read the failing check's log, and fix it — then commit and finish " +
     "again. Mullion pushes the branch itself when you do; do not `git push`." +
     (opts.rereviewRequestPath

@@ -1045,6 +1045,29 @@ export async function fetchRunsForHeadChecked(
 export interface CheckRunResult {
   name: string;
   conclusion: string | null;
+  /** The check's own one-line summary (`output.title`), e.g. codecov's "66.66% of diff hit (target 75.00%)". */
+  detail?: string;
+  /** Where to read the check's result (`details_url`) — a non-Actions check has no run URL anywhere else. */
+  url?: string;
+}
+
+/**
+ * A finished check run that did not pass. The rule is a denylist, not a list of
+ * known-bad conclusions: anything other than `success`, `skipped`, `cancelled`
+ * or `neutral` is red (so `failure`, `timed_out`, `action_required`, `stale`,
+ * `startup_failure`, and whatever GitHub adds next) — the set GitHub's own
+ * merge gate treats as not-passing. `null` is a check still running, not red.
+ * One definition for every "is this check red" question (title-lint self-heal,
+ * the red-CI return to the worker), required or not.
+ */
+export function isRedCheckConclusion(conclusion: string | null): boolean {
+  return (
+    conclusion !== null &&
+    conclusion !== "success" &&
+    conclusion !== "skipped" &&
+    conclusion !== "cancelled" &&
+    conclusion !== "neutral"
+  );
 }
 
 /**
@@ -1084,8 +1107,8 @@ export interface CheckRunResult {
  * whose branch protection requires a Statuses-API context would see that
  * context invisible to this lookup, and `attemptReturnRedCiToWorker` would
  * never fire for it (fails safe — the task just stays in `reviewing`, same
- * as any other `redRequired === false`). Not fixed here; would need a
- * second, differently-shaped call merged against the same required set.
+ * as any other run list with no red conclusion). Not fixed here; would need a
+ * second, differently-shaped call (`GET /commits/{sha}/status`) merged in.
  */
 export async function fetchCheckRunsForHead(
   token: string,
@@ -1105,9 +1128,19 @@ export async function fetchCheckRunsForHead(
     );
     if (!res.ok) return [];
     const data = (await res.json()) as {
-      check_runs?: { name: string; conclusion: string | null }[];
+      check_runs?: {
+        name: string;
+        conclusion: string | null;
+        output?: { title?: string | null } | null;
+        details_url?: string | null;
+      }[];
     };
-    return (data.check_runs ?? []).map((c) => ({ name: c.name, conclusion: c.conclusion }));
+    return (data.check_runs ?? []).map((c) => ({
+      name: c.name,
+      conclusion: c.conclusion,
+      ...(c.output?.title ? { detail: c.output.title } : {}),
+      ...(c.details_url ? { url: c.details_url } : {}),
+    }));
   } catch {
     return [];
   }
