@@ -1,4 +1,3 @@
-import { broadcastTaskEvent } from "./task-events.js";
 import { and, eq, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
@@ -98,6 +97,8 @@ import {
 import { openDraftPRForTask } from "./task-promote.js";
 import { maybeAutoEnableConventionalTitles } from "./project-release-please.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "./task-approve.js";
+import { markTaskMerged, notifyTaskMerged } from "./task-merged.js";
+import { cleanupMergedTaskBranch } from "./task-approve.js";
 import { reseedTaskIfSessionExited } from "./task-reseed.js";
 import { resolveHostGitStatus, resolveRepoRef } from "./host-git.js";
 import { deriveTaskBranchName, deriveWorktreePath } from "./git-worktree.js";
@@ -1777,36 +1778,6 @@ function isAmbiguousTransportFailure(err: unknown): boolean {
   return err instanceof GitHubApiError && err.statusCode === 0;
 }
 
-// #1015 (archive) — called only where the caller has already confirmed
-// `pr.merged` is true (never on a PR closed WITHOUT merging — see this
-// function's two call sites' own comments on why that distinction matters).
-// Every task reaching attemptMerge came from processMergeRequests' own
-// `status = "done"` sweep candidate query, so archivedAt is set
-// unconditionally here — unlike the `pull_request` webhook handler
-// (routes/webhooks.ts), which can observe a merge before the task has left
-// "reviewing" and must check status itself. `isNull(tasks.mergedAt)` makes
-// this idempotent against attemptMerge's own retry/backoff behavior.
-function markTaskMerged(app: FastifyInstance, taskId: number, mergedAt: Date = new Date()): void {
-  const { changes } = app.db
-    .update(tasks)
-    .set({ mergedAt, archivedAt: new Date() })
-    .where(and(eq(tasks.id, taskId), isNull(tasks.mergedAt)))
-    .run();
-  // The board's "PR open — needs merge" badge clears off this write, so tell
-  // it to refetch ("ingested" is the generic refetch kind).
-  if (changes > 0) notifyTaskMerged(app, taskId);
-}
-
-function notifyTaskMerged(app: FastifyInstance, taskId: number): void {
-  const row = app.db
-    .select({ projectId: tasks.projectId })
-    .from(tasks)
-    .where(eq(tasks.id, taskId))
-    .get();
-  if (row)
-    broadcastTaskEvent({ taskId, projectId: row.projectId, kind: "ingested", ts: Date.now() });
-}
-
 // #758 — bounds how many times attemptAutoRebase spawns a worker for the
 // SAME task across its whole lifecycle. A separate counter/cap from
 // autoReturnRounds/maxAutoReturnRounds on purpose: this task is `done` and
@@ -2165,7 +2136,7 @@ function finishMergedDoneTask(
   project: typeof projects.$inferSelect,
   mergedAt?: Date,
 ): void {
-  markTaskMerged(app, task.id, mergedAt);
+  markTaskMerged(app, task, project, mergedAt);
   if (project.autoTagRelease) {
     app.db.update(tasks).set({ releaseRequestedAt: new Date() }).where(eq(tasks.id, task.id)).run();
   }
@@ -2204,9 +2175,10 @@ export async function finishTaskForMergedPr(
     app.db
       .update(tasks)
       .set({ mergedAt: mergedAt ? new Date(mergedAt) : new Date() })
-      .where(eq(tasks.id, task.id))
+      .where(and(eq(tasks.id, task.id), isNull(tasks.mergedAt)))
       .run();
     notifyTaskMerged(app, task.id);
+    cleanupMergedTaskBranch(app, task, project);
   }
 }
 
@@ -2242,7 +2214,7 @@ async function attemptMerge(
         // comment below already relies on: "already-done" collapses merged
         // and closed-without-merging into one verdict, and only the former
         // should archive.
-        if (pr.merged) markTaskMerged(app, task.id);
+        if (pr.merged) markTaskMerged(app, task, project);
         clearMergeState(app, task, project);
         return;
       }

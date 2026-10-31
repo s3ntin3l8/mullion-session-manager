@@ -13,7 +13,11 @@ import { getDiffStats, getDefaultBaseRef } from "./git-diff.js";
 import { resolveCommitSha } from "./git-refs.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { resolveTaskWorkerHost } from "./session-live-info.js";
-import { cleanupTaskSessions, cleanupTaskWorktree } from "./task-approve.js";
+import {
+  cleanupMergedTaskBranch,
+  cleanupTaskSessions,
+  cleanupTaskWorktree,
+} from "./task-approve.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 import { recordTaskTransition } from "./task-state.js";
 
@@ -130,7 +134,8 @@ export async function endReviewingTask(
   await syncTaskTransition(app, updated, project, terminal, {
     prUrl: updated.prUrl ?? undefined,
   });
-  cleanupTaskWorktree(app, updated, project);
+  if (end === "merged") cleanupMergedTaskBranch(app, updated, project);
+  else cleanupTaskWorktree(app, updated, project);
   cleanupTaskSessions(app, updated);
   app.log.info(
     { taskId: task.id, prNumber: task.prNumber, end },
