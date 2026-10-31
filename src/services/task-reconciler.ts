@@ -1525,10 +1525,10 @@ function recordMergeError(app: FastifyInstance, taskId: number, message: string)
 // (routes/webhooks.ts), which can observe a merge before the task has left
 // "reviewing" and must check status itself. `isNull(tasks.mergedAt)` makes
 // this idempotent against attemptMerge's own retry/backoff behavior.
-function markTaskMerged(app: FastifyInstance, taskId: number): void {
+function markTaskMerged(app: FastifyInstance, taskId: number, mergedAt: Date = new Date()): void {
   const { changes } = app.db
     .update(tasks)
-    .set({ mergedAt: new Date(), archivedAt: new Date() })
+    .set({ mergedAt, archivedAt: new Date() })
     .where(and(eq(tasks.id, taskId), isNull(tasks.mergedAt)))
     .run();
   // The board's "PR open — needs merge" badge clears off this write, so tell
@@ -1873,6 +1873,66 @@ async function attemptAutoRebase(
   );
 }
 
+/**
+ * The bookkeeping for a `done` task whose PR was just really merged, shared by
+ * attemptMerge's `clean` case and `finishTaskForMergedPr` so the two paths
+ * cannot drift: archive it (#1015), arm autorelease (#744), clear merge state.
+ *
+ * Autorelease is armed HERE ONLY, never inside clearMergeState: that helper is
+ * also reached from `already-done`, which covers a PR CLOSED without merging —
+ * arming there would tag a release for code that never landed.
+ */
+function finishMergedDoneTask(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+  mergedAt?: Date,
+): void {
+  markTaskMerged(app, task.id, mergedAt);
+  if (project.autoTagRelease) {
+    app.db.update(tasks).set({ releaseRequestedAt: new Date() }).where(eq(tasks.id, task.id)).run();
+  }
+  clearMergeState(app, task, project);
+}
+
+/**
+ * A PR was merged outside the task sweep (the GitHub sidebar's "Squash &
+ * merge"): finish the linked task now instead of waiting for the
+ * `pull_request` webhook or a sweep. No linked, un-merged task is a no-op,
+ * which also makes a later webhook for the same merge find nothing to do.
+ */
+export async function finishTaskForMergedPr(
+  app: FastifyInstance,
+  project: typeof projects.$inferSelect,
+  prNumber: number,
+  mergedAt?: string | null,
+): Promise<void> {
+  const task = app.db
+    .select()
+    .from(tasks)
+    .where(
+      and(eq(tasks.projectId, project.id), eq(tasks.prNumber, prNumber), isNull(tasks.mergedAt)),
+    )
+    .get();
+  if (!task) return;
+  if (task.status === "done") {
+    finishMergedDoneTask(app, task, project, mergedAt ? new Date(mergedAt) : undefined);
+  } else if (task.status === "reviewing") {
+    await endReviewingFromPr(app, task, project, {
+      prState: "closed",
+      merged: true,
+      mergedAt: mergedAt ?? null,
+    });
+  } else {
+    app.db
+      .update(tasks)
+      .set({ mergedAt: mergedAt ? new Date(mergedAt) : new Date() })
+      .where(eq(tasks.id, task.id))
+      .run();
+    notifyTaskMerged(app, task.id);
+  }
+}
+
 async function attemptMerge(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
@@ -1914,9 +1974,6 @@ async function attemptMerge(
           sha: pr.headSha,
           commitTitle: pr.title,
         });
-        // #1015 (archive) — the merge call above just succeeded, so this is
-        // unconditionally a real merge (unlike "already-done").
-        markTaskMerged(app, task.id);
         // Best-effort: a failure here must not undo the merge that just
         // succeeded, nor re-arm the sweep to retry a merge that's already
         // done. delete_branch_on_merge is false on this repo, so without
@@ -1929,20 +1986,9 @@ async function attemptMerge(
             "task reconcile: merged the PR but failed to delete its remote branch",
           );
         }
-        // #744 — arm autorelease HERE ONLY, after the merge call above has
-        // actually succeeded. Deliberately not inside clearMergeState below:
-        // that helper is also reached from case "already-done", which covers
-        // a PR CLOSED without merging (classifyMergeReadiness collapses
-        // `pr.merged || pr.state === "closed"` into one state) — arming
-        // there would tag a release for code that never landed.
-        if (project.autoTagRelease) {
-          app.db
-            .update(tasks)
-            .set({ releaseRequestedAt: new Date() })
-            .where(eq(tasks.id, task.id))
-            .run();
-        }
-        clearMergeState(app, task, project);
+        // The merge call above just succeeded, so this is unconditionally a
+        // real merge (unlike "already-done").
+        finishMergedDoneTask(app, task, project);
         return;
       }
       case "behind": {
