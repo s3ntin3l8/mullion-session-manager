@@ -11467,6 +11467,26 @@ describe("reconcileTasks", () => {
         await app.close();
       });
 
+      it("records one outcome per run when two passes ingest it at once", async () => {
+        const app = await buildApp();
+        const taskId = await createDispatchedTask(app);
+        mockPollTaskReview.mockResolvedValue({
+          status: "completed",
+          output: cleanReply,
+          terminal: true,
+          gone: false,
+        });
+        mockCreatePullRequestReview.mockClear();
+
+        await Promise.all([reconcileTasks(app), reconcileTasks(app)]);
+
+        const row = await getTask(app, taskId);
+        expect(row.lastReviewVerdict).toBe("approved");
+        expect(row.reviewFindings?.match(/## Round/g)).toHaveLength(1);
+        expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
+        await app.close();
+      });
+
       it("resumes a run found in the database after a restart", async () => {
         const app = await buildApp();
         const taskId = await createDispatchedTask(app, { reviewRunId: "run_survivor" });

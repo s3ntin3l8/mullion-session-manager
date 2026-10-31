@@ -1061,7 +1061,10 @@ async function processHermesDispatch(app: FastifyInstance): Promise<void> {
             "task reconcile: Hermes review dispatch failed — will retry",
           );
         }
-        const waitedMs = now - (task.reviewingAt?.getTime() ?? now);
+        // Every path into `reviewing` stamps `reviewingAt`; the fallbacks keep the
+        // give-up bound unconditional if one ever does not.
+        const enteredMs = (task.reviewingAt ?? task.claimedAt ?? task.createdAt).getTime();
+        const waitedMs = now - enteredMs;
         if (waitedMs < HERMES_DISPATCH_GIVE_UP_MS) return;
 
         // Give up: record an inconclusive review against a stand-in run id so
@@ -5113,7 +5116,15 @@ async function ingestReviewOutcome(
       and(
         eq(tasks.id, task.id),
         eq(tasks.status, "reviewing"),
-        ...(latch.kind === "run" ? [eq(tasks.reviewRunId, latch.runId)] : []),
+        // A run must also still be un-ingested: a second outcome for the same
+        // run (e.g. the poll pass's catch after a throw from the post below)
+        // loses instead of overwriting the verdict already recorded.
+        ...(latch.kind === "run"
+          ? [
+              eq(tasks.reviewRunId, latch.runId),
+              or(isNull(tasks.reviewRunIngestedId), ne(tasks.reviewRunIngestedId, latch.runId)),
+            ]
+          : []),
       ),
     )
     .run();
