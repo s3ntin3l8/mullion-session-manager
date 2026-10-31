@@ -895,6 +895,25 @@ describe("ProjectSetupPanel", () => {
       expect(screen.getByRole("radio", { name: "Restructure it" })).toBeChecked();
     });
 
+    it("does not resurrect the server's preview after Back and a remount", async () => {
+      const active = vi.fn(() =>
+        jsonResponse(200, {
+          previewId: "srv1",
+          diff: "+from server\n",
+          files: ["AGENTS.md"],
+          hasAgentsOverride: false,
+          slug: "demo",
+          createdAt: Date.now() - 1000,
+        }),
+      );
+      vi.stubGlobal("fetch", mockFetch({ active }));
+      useDashboardStore.getState().patchScaffoldDraft(1, { slug: "edited", preview: null });
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      expect(screen.getByPlaceholderText("my-project")).toHaveValue("edited");
+      expect(active).not.toHaveBeenCalled();
+      expect(screen.queryByRole("button", { name: "Apply" })).not.toBeInTheDocument();
+    });
+
     it("keeps one project's draft apart from another's", () => {
       useDashboardStore.getState().patchScaffoldDraft(1, { slug: "one" });
       vi.stubGlobal("fetch", mockFetch({}));

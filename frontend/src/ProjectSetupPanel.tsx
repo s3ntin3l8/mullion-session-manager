@@ -214,7 +214,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
   // it still holds a preview for this project.
   useEffect(() => {
     const current = useDashboardStore.getState().scaffoldDrafts[projectId];
-    if (current?.preview || current?.applyResult) return;
+    if (current) return;
     let cancelled = false;
     void api
       .getActiveProjectSetupPreview(projectId)
@@ -222,7 +222,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
         if (cancelled || !active) return;
         // A generation or apply may have landed while this was in flight.
         const now = useDashboardStore.getState().scaffoldDrafts[projectId];
-        if (now?.preview || now?.applyResult) return;
+        if (now) return;
         const { slug: activeSlug, createdAt, ...restored } = active;
         patchScaffoldDraft(projectId, {
           preview: restored,
