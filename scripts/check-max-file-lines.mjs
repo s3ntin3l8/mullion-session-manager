@@ -63,10 +63,14 @@
 // numbers this enforces are the same numbers.
 //
 // Usage:
-//   node scripts/check-max-file-lines.mjs [root] [--baseline <path>]
+//   node scripts/check-max-file-lines.mjs [root] [--baseline <path>] [--strict]
 //
 //   root       the tree to check (default: the repo this script lives in)
 //   --baseline the baseline file to read (default: the one beside this script)
+//   --strict   fail when the check abstains. CI passes it: there, an
+//              abstention is not "nothing to check", it is "the guard stopped
+//              guarding", and that must fail the build rather than pass it
+//              quietly.
 
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -85,22 +89,40 @@ const FALLBACK_LIMIT = 1200;
 
 /**
  * @param {string[]} argv
- * @returns {{root: string, baseline: string}}
+ * @returns {{root: string, baseline: string, strict: boolean}}
  */
 function parseArgs(argv) {
-  const options = { root: DEFAULT_ROOT, baseline: DEFAULT_BASELINE };
+  const options = { root: DEFAULT_ROOT, baseline: DEFAULT_BASELINE, strict: false };
   const positional = [];
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--baseline") {
       if (argv[i + 1]) options.baseline = path.resolve(argv[i + 1]);
       i += 1;
+    } else if (arg === "--strict") {
+      // CI passes --strict: there, an abstention is not "nothing to check",
+      // it is "the guard stopped guarding", and that must fail the build.
+      options.strict = true;
     } else {
       positional.push(arg);
     }
   }
   if (positional.length > 0) options.root = path.resolve(positional[0]);
   return options;
+}
+
+/**
+ * Say something where a human will see it. A line on stderr is one line in a
+ * 400-line CI log; a GitHub Actions annotation shows on the pull request, next
+ * to the decision to merge.
+ *
+ * @param {string} message
+ */
+function warn(message) {
+  console.warn(`WARNING — ${message}`);
+  if (process.env.GITHUB_ACTIONS) {
+    console.warn(`::warning title=file-size guardrail::${message}`);
+  }
 }
 
 /**
@@ -255,13 +277,21 @@ if (reference === null && isGitCheckout(options.root)) {
   // because a guard that silently stops guarding is worse than one that
   // says so.
   const over = counts.filter((c) => c.code > baseline.limit);
-  console.warn(
-    `WARNING — no reference commit could be resolved (no default-branch ref, ` +
-      `and HEAD is not a merge commit), so this check ABSTAINS: it cannot tell ` +
-      `what this change did, and a stale snapshot would blame it for the ` +
-      `default branch's own growth. ${over.length} file(s) are over the ` +
+  warn(
+    `no reference commit could be resolved (no default-branch ref, and HEAD ` +
+      `is not a merge commit), so this check ABSTAINS: it cannot tell what ` +
+      `this change did, and a stale snapshot would blame it for the default ` +
+      `branch's own growth. ${over.length} file(s) are over the ` +
       `${baseline.limit}-line ceiling; the baseline records ${Object.keys(baseline.files).length}.`,
   );
+  if (options.strict) {
+    console.error(
+      "The guard could not determine what this change did, and --strict is on, " +
+        "so this fails. Run it with a default-branch ref available, or without " +
+        "--strict to accept the abstention.",
+    );
+    process.exit(1);
+  }
   console.log("OK — abstained: see the warning above.");
   process.exit(0);
 }
@@ -270,9 +300,9 @@ if (reference === null) {
   // Not a git checkout at all: there is no default branch whose growth could
   // be mistaken for this change's, so the recorded baseline is the reference.
   // Still worth saying out loud — it is a degraded mode.
-  console.warn(
-    `WARNING — this tree is not a git checkout, so there is no default ` +
-      `branch to measure against; the recorded baseline is the only reference.`,
+  warn(
+    `this tree is not a git checkout, so there is no default branch to ` +
+      `measure against; the recorded baseline is the only reference.`,
   );
 }
 

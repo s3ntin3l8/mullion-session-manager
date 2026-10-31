@@ -237,6 +237,13 @@ deliberately: the audit's central finding is that the monolithic test files
 are what makes the monolithic sources expensive to change, so a ceiling that
 let them grow freely would leave the real problem unaddressed.
 
+The guard abstains rather than guessing when it cannot determine what the
+change did — a git checkout with no default-branch ref and no merge commit to
+take the base side from. That is a degraded mode, and it says so on stderr and
+as a `::warning` annotation in CI. Under `--strict` — which CI passes — an
+abstention is a failure, not a pass: "the guard stopped guarding" must not
+look like "there was nothing to guard".
+
 The counting is shared with the audit that motivates the guardrail
 (`scripts/lib/audit-loc-core.mjs`), so the numbers the reports quote and the
 numbers the guardrail enforces are the same numbers. The script is wired into

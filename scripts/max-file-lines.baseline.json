@@ -1,7 +1,7 @@
 {
   "limit": 1200,
-  "note": "The ratchet. Each entry is a file ALREADY over the ceiling, recorded at its current size: a baselined file fails only when it grows past its own number here, and a file with no entry fails when it passes the global limit. Sizes are as of the commit named below. The policy is that ceilings only go DOWN (the giants must shrink); the check enforces that growth cannot happen quietly, and a size that goes UP is caught by the diff on this committed file, which is why it is committed rather than generated. When `main` grows one of these files, refresh the baseline: run `node scripts/audit-loc.mjs`, then re-record the entries for the files whose sizes changed.",
-  "recordedAt": "c96fe208",
+  "note": "The ratchet. Each entry is a file ALREADY over the ceiling, recorded at its current size. What the baseline is FOR: it is the record of which files are giants, it is the fallback reference when there is no git reference commit to measure against, and it is the place a ceiling is LOWERED — the ratchet turning over, a deliberate reviewable act visible in the diff. What it is NOT for: it is not what the guard measures against when a reference commit is available, so it does NOT need refreshing when the default branch grows one of these files — the reference commit already absorbs that growth, and re-recording it upward would be the one edit that RAISES a ceiling, which this ratchet forbids.",
+  "recordedAt": "0ceb2f02",
   "counts": {
     "production": 14,
     "test": 43,
@@ -66,5 +66,6 @@
     "test/services/task-promote.test.ts": 1517,
     "test/services/task-prompt.test.ts": 1365,
     "test/services/task-reconciler.test.ts": 8069
-  }
+  },
+  "recordedAtMeaning": "the commit whose tree these sizes were measured from — the fork point this branch started from. The baseline is a RECORD of the giants and the fallback reference when there is no git reference commit; when there is one, the guard measures against the reference commit instead, and that already absorbs the default branch own growth."
 }

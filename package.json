@@ -49,7 +49,7 @@
     "check:phone-palette": "node scripts/check-phone-palette.mjs",
     "check:aria-haspopup": "node scripts/check-aria-haspopup.mjs",
     "check:timestamp-format": "node scripts/check-timestamp-format.mjs",
-    "check:max-file-lines": "node scripts/check-max-file-lines.mjs"
+    "check:max-file-lines": "node scripts/check-max-file-lines.mjs --strict"
   },
   "dependencies": {
     "@fastify/compress": "^9.2.2",

@@ -320,6 +320,45 @@ describe("check-max-file-lines.mjs: the repository's own baseline", () => {
       expect(AUDIT_ROOTS.some((root) => file.startsWith(`${root}/`))).toBe(true);
       expect(SOURCE_EXTENSIONS.has(path.extname(file))).toBe(true);
     }
+
+    // And the split itself, classified the way the audit classifies it — so
+    // the counts the report quotes are pinned, and a block claiming "57
+    // production, 0 test" cannot pass.
+    const split = { production: 0, test: 0, tooling: 0 };
+    for (const file of names) {
+      if (file.startsWith("test/") || /\.test\.tsx?$/.test(file)) split.test += 1;
+      else if (file.startsWith("scripts/")) split.tooling += 1;
+      else split.production += 1;
+    }
+    expect(split.production).toBe(baseline.counts.production);
+    expect(split.test).toBe(baseline.counts.test);
+    expect(split.tooling).toBe(baseline.counts.tooling);
+  });
+
+  it("names the commit its sizes were measured from", () => {
+    const baseline = JSON.parse(fs.readFileSync(BASELINE, "utf8")) as {
+      recordedAt: string;
+      files: Record<string, number>;
+    };
+    expect(baseline.recordedAt).toMatch(/^[0-9a-f]{7,40}$/);
+    // Every recorded size is the size that file had at that commit — the
+    // label has to name the tree the numbers actually came from, or it is
+    // decoration.
+    for (const [file, size] of Object.entries(baseline.files)) {
+      let content: string;
+      try {
+        content = execFileSync("git", ["show", `${baseline.recordedAt}:${file}`], {
+          cwd: REPO_ROOT,
+          encoding: "utf8",
+          env: gitEnv(),
+          maxBuffer: 64 * 1024 * 1024,
+          stdio: ["ignore", "pipe", "ignore"],
+        });
+      } catch {
+        throw new Error(`${file} does not exist at ${baseline.recordedAt}`);
+      }
+      expect(countFileLines(content, file).code).toBe(size);
+    }
   });
 });
 
@@ -362,7 +401,9 @@ describe("check-max-file-lines.mjs: the ceiling is measured against the default 
     });
   }
 
-  async function runCheck(): Promise<{ code: number; stdout: string; stderr: string }> {
+  async function runCheck(
+    extraArgs: string[] = [],
+  ): Promise<{ code: number; stdout: string; stderr: string }> {
     const baselinePath = path.join(repo, "baseline.json");
     fs.writeFileSync(
       baselinePath,
@@ -374,6 +415,7 @@ describe("check-max-file-lines.mjs: the ceiling is measured against the default 
         repo,
         "--baseline",
         baselinePath,
+        ...extraArgs,
       ]);
       return { code: 0, stdout, stderr };
     } catch (err) {
@@ -518,6 +560,19 @@ describe("check-max-file-lines.mjs: the ceiling is measured against the default 
     expect(result.stdout).toContain("abstained");
     // The degraded mode says so on stderr — a guard that stops guarding
     // quietly is worse than one that stops guarding loudly.
+    expect(result.stderr).toContain("WARNING");
+  });
+
+  // On a pull request, "the guard could not determine what this change did"
+  // is not "nothing to check" — it is "the guard stopped guarding", and that
+  // must fail the build rather than pass it quietly.
+  it("fails the abstention under --strict", async () => {
+    git(["init", "-q", "-b", "trunk"]);
+    write("src/big.ts", LIMIT + 200);
+    commit("base");
+
+    const result = await runCheck(["--strict"]);
+    expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("WARNING");
   });
 });
