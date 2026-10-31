@@ -284,5 +284,29 @@ describe("scaffold-generate-jobs registry", () => {
     expect(modeLogLabel("report")).toBe("report");
     expect(modeLogLabel("restructure")).toBe("restructure");
     expect(modeLogLabel("evil\ninjected")).toBe("keep");
+
+    // If the logger's `info` throws after the runner's `try/catch`, the terminal
+    // `.catch()` handler logs the crash via `log.error` instead of letting an
+    // unhandled rejection escape.
+    const error = vi.fn();
+    startGenerateJob({
+      projectId: 9,
+      slug: "demo",
+      agent: "claude",
+      mode: "keep",
+      log: {
+        info: () => {
+          throw new Error("logger sink broke");
+        },
+        error,
+      },
+      now: () => now,
+      run: async () => ({ ok: true, response: sampleResponse("p-log-err") }),
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(error.mock.calls[0]?.[1]).toBe("[scaffold-generate] generation job runner crashed");
   });
 });

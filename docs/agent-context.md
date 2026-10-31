@@ -292,14 +292,16 @@ three artifacts into a real, reviewable pull request:
 
 **Preview vs. Generate.** The panel offers two ways to compute the file set
 below. **Preview** writes starter placeholders (no agent). **Generate with
-agent** (`POST /api/projects/:id/setup/generate/start`, or the synchronous
-`POST /api/projects/:id/setup/generate` for direct API callers and tests) first
-runs one read-only, bwrap-sandboxed agent turn on your default agent (up to ~5
-minutes, 5 per 10 minutes) that reads the repo and writes the skill, the
-reviewer and the `AGENTS.md` pointer paragraph; the result goes through the
-same diff view and **Apply**. It warns when the turn ran unsandboxed or looks
-generic, and when a skill and reviewer already exist it asks which to
-regenerate rather than overwriting hand edits.
+agent** (`POST /api/projects/:id/setup/generate/start` is the background-job
+server route that the panel will call once its progress/reattach UI lands in
+issue #2479; the panel still calls the synchronous
+`POST /api/projects/:id/setup/generate`, which also remains for direct API
+callers and tests) first runs one read-only, bwrap-sandboxed agent turn on your
+default agent (up to ~5 minutes, 5 per 10 minutes) that reads the repo and
+writes the skill, the reviewer and the `AGENTS.md` pointer paragraph; the
+result goes through the same diff view and **Apply**. It warns when the turn
+ran unsandboxed or looks generic, and when a skill and reviewer already exist
+it asks which to regenerate rather than overwriting hand edits.
 
 **Background job lifecycle.** `POST /api/projects/:id/setup/generate/start`
 validates the request, checks for the 409 "skill and reviewer already exist"

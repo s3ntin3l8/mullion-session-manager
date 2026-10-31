@@ -51,7 +51,8 @@ export interface GenerateJobRunnerControls {
   setPhase: (phase: RunningGenerateJobPhase) => void;
 }
 
-export type GenerateJobLogger = Pick<FastifyBaseLogger, "info">;
+export type GenerateJobLogger = Pick<FastifyBaseLogger, "info"> &
+  Partial<Pick<FastifyBaseLogger, "error">>;
 
 const jobsById = new Map<string, GenerateJob>();
 const jobIdByProject = new Map<number, string>();
@@ -228,6 +229,8 @@ export function startGenerateJob(opts: {
   jobsById.set(job.id, job);
   jobIdByProject.set(opts.projectId, job.id);
 
-  void runGenerateJob(job, opts.run, opts.log, now);
+  void runGenerateJob(job, opts.run, opts.log, now).catch((err) => {
+    opts.log?.error?.({ err }, "[scaffold-generate] generation job runner crashed");
+  });
   return { job, attached: false };
 }
