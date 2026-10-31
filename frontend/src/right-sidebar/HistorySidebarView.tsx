@@ -3,7 +3,8 @@ import { GitHistorySection } from "../git/GitHistorySection.js";
 import type { HistoryScope } from "../api/types.js";
 import { useDashboardStore } from "../store/index.js";
 import { Dropdown } from "../ui/primitives.js";
-import { ViewHeader } from "../ui/sidebar/index.js";
+import { SidebarHeader } from "./SidebarHeader.js";
+import { VIEW_TITLES } from "./viewTitles.js";
 import type { RightSidebarViewProps } from "./views.js";
 
 const ROOT = "";
@@ -58,11 +59,20 @@ export function HistorySidebarView({ projectId }: RightSidebarViewProps) {
 
   return (
     <div className="history-sidebar-view">
-      <ViewHeader
-        title="History"
-        subtitle={branch}
-        externalUrl={githubUrl}
-        externalLabel="Open commits on GitHub"
+      <SidebarHeader
+        label={VIEW_TITLES.history}
+        context={branch}
+        overflow={
+          githubUrl
+            ? [
+                {
+                  key: "open-commits",
+                  label: "Open commits on GitHub",
+                  onClick: () => window.open(githubUrl, "_blank", "noopener,noreferrer"),
+                },
+              ]
+            : []
+        }
       />
       {others.length > 0 && (
         <div className="history-worktree-filter">

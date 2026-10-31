@@ -172,15 +172,17 @@ describe("Source Control header", () => {
   it("shows branch, ahead/behind, changes and the repo link", async () => {
     renderView();
     await ready();
-    const header = document.querySelector(".sb-vh") as HTMLElement;
-    expect(within(header).getByText("Source Control")).toBeInTheDocument();
-    expect(header).toHaveTextContent("main");
-    expect(header).toHaveTextContent("↓3");
-    expect(header).toHaveTextContent("2 changed");
-    expect(within(header).getByRole("link", { name: "Open repository on GitHub" })).toHaveAttribute(
-      "href",
-      "https://github.com/o/r",
-    );
+    const strip = document.querySelector(".sb-strip") as HTMLElement;
+    expect(within(strip).getByText("Source Control")).toBeInTheDocument();
+    expect(strip).toHaveTextContent("main");
+    expect(strip).toHaveTextContent("↓3");
+    expect(strip).toHaveTextContent("2 changed");
+    // The repo link sits behind the header's ⋯ menu.
+    const open = vi.spyOn(window, "open").mockReturnValue(null);
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Open repository on GitHub" }));
+    expect(open).toHaveBeenCalledWith("https://github.com/o/r", "_blank", "noopener,noreferrer");
+    open.mockRestore();
   });
 
   it("fetches, then pulls, refreshing the status", async () => {
@@ -1106,7 +1108,7 @@ describe("Promote request and remote host", () => {
     m.getProjectGitBranches.mockRejectedValue(new Error("Host h-1 is unreachable"));
     renderView();
     expect(await screen.findByText("Host mac-mini is unreachable")).toBeInTheDocument();
-    expect(document.querySelector(".sb-vh")).toHaveTextContent("on mac-mini");
+    expect(document.querySelector(".sb-strip")).toHaveTextContent("on mac-mini");
     expect(screen.queryByText("No branches.")).toBeNull();
     m.getProjectGitBranches.mockResolvedValue(refs());
     await userEvent.click(screen.getByRole("button", { name: "Retry" }));

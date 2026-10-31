@@ -201,6 +201,43 @@
   gap: 2px;
   flex-shrink: 0;
 }
+/* The thin context strip under the header row, and the slot a pushed detail
+   view's header fills. While the detail slot has content it replaces the picker,
+   toolbar and strip, so a detail never stacks a second header bar. */
+.right-sidebar-detail-slot {
+  display: none;
+  flex: 1;
+  min-width: 0;
+}
+.right-sidebar-header:has(.right-sidebar-detail-slot > *) > .right-sidebar-detail-slot {
+  display: flex;
+}
+.right-sidebar-header:has(.right-sidebar-detail-slot > *)
+  > :is(.right-sidebar-follow-glyph, .settings-dropdown, .right-sidebar-toolbar-slot) {
+  display: none;
+}
+.right-sidebar-header:has(.right-sidebar-detail-slot > *) + .right-sidebar-strip-slot {
+  display: none;
+}
+.right-sidebar-strip-slot:empty {
+  display: none;
+}
+.right-sidebar-overflow {
+  display: inline-flex;
+}
+/* The ⋯ trigger matches the header's own 24px icon buttons. */
+.right-sidebar-overflow .kebab-trigger-btn {
+  width: 24px;
+  height: 24px;
+  color: var(--muted);
+}
+.right-sidebar-overflow .kebab-trigger-btn:hover {
+  color: var(--fg);
+  background: var(--seg);
+}
+.right-sidebar-icon-btn {
+  position: relative;
+}
 .right-sidebar-body {
   flex: 1;
   min-height: 0;

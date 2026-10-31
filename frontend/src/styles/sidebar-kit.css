@@ -154,6 +154,38 @@
   gap: 2px;
   flex: none;
 }
+/* A detail header living inside the drawer's header row: the row is the bar. */
+.sb-vh--bare {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border-bottom: 0;
+}
+/* The context strip under the drawer's header row (SidebarHeader). */
+.sb-strip {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 5px var(--rs-pad-x, 12px) 7px;
+  background: var(--pane-hd);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.6875rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+}
+.sb-strip b {
+  color: var(--fg);
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.sb-strip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .sb-vh-sep {
   width: 1px;
   height: 16px;

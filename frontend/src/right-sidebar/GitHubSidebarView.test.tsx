@@ -92,9 +92,10 @@ describe("GitHubSidebarView", () => {
   it("embeds the real GitHub panel: repo, PR cards and issues", async () => {
     const { container } = renderView();
 
-    // The toolbar owns the GitHub link; the panel's own header does not repeat it.
-    const repo = await screen.findByRole("button", { name: "Open repository on GitHub" });
-    expect(repo).toBeTruthy();
+    // The header's ⋯ menu owns the GitHub link; the panel's own header does not repeat it.
+    expect(await screen.findByText("PR title 1")).toBeTruthy();
+    await userEvent.click(screen.getByRole("button", { name: "More actions" }));
+    expect(await screen.findByRole("menuitem", { name: "Open repository on GitHub" })).toBeTruthy();
     expect(screen.queryByRole("link", { name: "Open repository on GitHub" })).toBeNull();
     expect(await screen.findByText("PR title 1")).toBeTruthy();
     // Embedded: the drawer scrolls, not the panel.
@@ -107,7 +108,9 @@ describe("GitHubSidebarView", () => {
     await screen.findByText("PR title 1");
     expect(container.querySelector(".sb-vh")).toBeNull();
     expect(screen.queryByText("o/r")).toBeNull();
-    expect(screen.queryByText("1 open PR")).toBeNull();
+    // The count lives in the header strip, once, not in a repo card.
+    expect(screen.getAllByText("1 open PR")).toHaveLength(1);
+    expect(container.querySelector(".sb-strip")).toHaveTextContent("GitHub1 open PR");
     const header = screen.getByText("Pull requests").closest("button, div")!;
     expect(header.textContent).toContain("1");
   });
@@ -145,27 +148,26 @@ describe("GitHubSidebarView", () => {
     const user = userEvent.setup();
     renderView();
 
-    await user.click(screen.getByRole("button", { name: "Open GitHub panel" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Open GitHub panel" }));
     expect(actions.onOpenGitHub).toHaveBeenCalledWith(4);
   });
 
-  it("the GitHub toolbar button opens the repo, and a different glyph from pop-out", async () => {
+  it("the ⋯ menu opens the repo on GitHub", async () => {
     const open = vi.spyOn(window, "open").mockReturnValue(null);
     const user = userEvent.setup();
     renderView();
 
-    const gh = await screen.findByRole("button", { name: "Open repository on GitHub" });
-    await user.click(gh);
+    await screen.findByText("PR title 1");
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(await screen.findByRole("menuitem", { name: "Open repository on GitHub" }));
     expect(open).toHaveBeenCalledWith("https://github.com/o/r", "_blank", "noopener,noreferrer");
-    expect(gh.querySelector("svg")?.innerHTML).not.toEqual(
-      screen.getByRole("button", { name: "Open GitHub panel" }).querySelector("svg")?.innerHTML,
-    );
     open.mockRestore();
   });
 
   it("subscribes to live updates while mounted and unsubscribes on unmount", async () => {
     const { unmount } = renderView();
-    await screen.findByRole("button", { name: "Open repository on GitHub" });
+    await screen.findByText("PR title 1");
 
     expect(subscribe).toHaveBeenCalledWith(4);
     expect(unsubscribe).not.toHaveBeenCalled();
