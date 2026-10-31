@@ -1398,9 +1398,9 @@ export function createAgentSandboxHome(
         // starts unauthenticated, so say so.
         console.warn(
           "[scaffold-generate] no credentials seeded for %s from %s: %s",
-          forLog(agentCommand),
-          forLog(realAuth),
-          forLog((err as Error).message),
+          String(agentCommand).replace(/[\r\n]+/g, " "),
+          String(realAuth).replace(/[\r\n]+/g, " "),
+          String((err as Error).message).replace(/[\r\n]+/g, " "),
         );
       }
     }
@@ -1684,12 +1684,6 @@ export function redactSecrets(text: string): string {
   return out;
 }
 
-/** A value for a log line: no line breaks, so an agent- or repo-controlled
- * string cannot forge extra log entries (CodeQL js/log-injection). */
-function forLog(value: unknown): string {
-  return String(value).replace(/[\r\n]+/g, " ⏎ ");
-}
-
 function tail(text: string | Buffer | undefined, max: number): string {
   const t = redactSecrets((text ?? "").toString()).trim();
   return t.length > max ? `…${t.slice(-max)}` : t;
@@ -1900,10 +1894,10 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
       if (err) {
         console.warn(
           "[scaffold-generate] %s generation turn failed (%s) stdout tail: %s | stderr tail: %s",
-          forLog(agentCommand),
-          forLog(describeExit(err)),
-          forLog(tail(stdout, FAILURE_LOG_TAIL_CHARS)),
-          forLog(tail(stderr, FAILURE_LOG_TAIL_CHARS)),
+          String(agentCommand).replace(/[\r\n]+/g, " "),
+          String(describeExit(err)).replace(/[\r\n]+/g, " "),
+          String(tail(stdout, FAILURE_LOG_TAIL_CHARS)).replace(/[\r\n]+/g, " "),
+          String(tail(stderr, FAILURE_LOG_TAIL_CHARS)).replace(/[\r\n]+/g, " "),
         );
         reject(new GenerationSpawnError(agentCommand, describeSpawnFailure(err, stdout, stderr)));
         return;
