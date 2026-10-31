@@ -13,6 +13,7 @@ import {
   ViewHeader,
 } from "./index.js";
 import css from "../../styles/sidebar-kit.css?raw";
+import { useDashboardStore } from "../../store/index.js";
 
 beforeEach(() => localStorage.clear());
 
@@ -44,6 +45,31 @@ describe("IconButton", () => {
       expect(btn.getAttribute("aria-describedby")).toBe(screen.getByRole("tooltip").id);
       fireEvent.blur(btn);
       expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    it("carries the theme classes, since it portals outside .cmux-root", () => {
+      const { unmount } = render(
+        <IconButton label="Fetch">
+          <i />
+        </IconButton>,
+      );
+      fireEvent.focus(screen.getByRole("button", { name: "Fetch" }));
+      expect(screen.getByRole("tooltip")).toHaveClass("cmux-root");
+      expect(screen.getByRole("tooltip")).not.toHaveClass("light");
+      unmount();
+
+      useDashboardStore.setState({ theme: "light" });
+      try {
+        render(
+          <IconButton label="Fetch">
+            <i />
+          </IconButton>,
+        );
+        fireEvent.focus(screen.getByRole("button", { name: "Fetch" }));
+        expect(screen.getByRole("tooltip")).toHaveClass("cmux-root", "light");
+      } finally {
+        useDashboardStore.setState({ theme: "dark" });
+      }
     });
 
     it("hides on Escape", () => {
