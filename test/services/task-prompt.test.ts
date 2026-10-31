@@ -622,6 +622,50 @@ describe("buildReviewPrompt", () => {
     expect(out.indexOf("CI on this PR")).toBeLessThan(out.indexOf(`Task: ${TASK.title}`));
   });
 
+  // #2372: the method is always on, and ahead of the CI summary so CI does
+  // not anchor the review.
+  it("carries the always-on review method, even with no CI summary", () => {
+    const out = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+    });
+    expect(out).toContain("Read each changed file in full");
+    expect(out).toContain("find its callers");
+    expect(out).toContain(".claude/skills/mullion-review-invariants/SKILL.md");
+    expect(out).toContain("concurrency");
+    expect(out).toContain("Verify before you flag");
+  });
+
+  it("promotes a defect found by reading to a warning when it is a concrete failing scenario", () => {
+    const out = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+    });
+    expect(out).toContain("concrete failing scenario");
+    expect(out).toContain("even if you found it by reading");
+    expect(out).toContain("do not inflate a preference into a warning");
+    expect(out).not.toContain("could only find by reading and not reproduce");
+    expect(out).not.toContain("Approving\nis the default");
+    expect(out).not.toContain("default whenever nothing must be fixed");
+  });
+
+  it("states the CI summary is authoritative and puts it after the method", () => {
+    const ci: ReviewCiInfo = { headSha: "abc1234", status: "success", runs: [] };
+    const out = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+      ci,
+    });
+    expect(out).toContain("authoritative for what CI covers");
+    expect(out).toContain("Do not re-run the full");
+    expect(out.indexOf("Read each changed file in full")).toBeLessThan(
+      out.indexOf("CI on this PR"),
+    );
+  });
+
   // Issue #955 — spawnReviewAgentNow (task-reconciler.ts) threads this
   // through from resolveMaxAutoReturnRounds(project) - task.autoReturnRounds.
   it("omits any rounds-remaining line when roundsRemaining is not given", () => {

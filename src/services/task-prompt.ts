@@ -1053,6 +1053,24 @@ export function renderRoundsRemaining(roundsRemaining: number): string {
   ].join("\n");
 }
 
+/** The always-on review method (#2372). Lives in the prompt, not only in the
+ * `task-reviewer` skill: the review step has one task, so the method must be
+ * applied whether or not the agent opens the skill. Placed BEFORE the CI
+ * summary so CI does not anchor the review on whatever CI already reports. */
+const REVIEW_METHOD_LINES = [
+  "How to review — apply this to every review:",
+  "- Read each changed file in full, not only the diff hunk.",
+  "- For each changed function or exported symbol, find its callers and the",
+  "  invariants it relies on. AGENTS.md and any repo skill it points to (for this",
+  "  repo, .claude/skills/mullion-review-invariants/SKILL.md) are the repo's own",
+  "  checklist.",
+  "- Review against correctness (edge cases, error paths, concurrency), security,",
+  "  testing, performance and docs.",
+  "- Verify before you flag: re-read the head-side code and grep for the claim",
+  "  you are about to make.",
+  "",
+];
+
 /**
  * The review agent's prompt (`task-reconciler.ts`).
  *
@@ -1166,7 +1184,16 @@ export function buildReviewPrompt(opts: {
     "Review this task's diff. You are not expected to make changes.",
     "",
     ...workspaceLines,
-    ...(opts.ci ? [renderCiSummary(opts.ci), ""] : []),
+    ...REVIEW_METHOD_LINES,
+    ...(opts.ci
+      ? [
+          renderCiSummary(opts.ci),
+          "That summary is authoritative for what CI covers. Do not re-run the full",
+          "lint, typecheck or test suites; run only targeted checks CI does not run (a",
+          "test the diff adds, a repro of a defect you suspect).",
+          "",
+        ]
+      : []),
     ...outputLines,
     "{",
     '  "verdict": "approved" | "approved-with-suggestions" | "changes-requested",',
@@ -1191,15 +1218,18 @@ export function buildReviewPrompt(opts: {
     "",
     "Severity is what decides the outcome, so assign it honestly:",
     "- critical — security, data loss, a crash, or broken core behavior.",
-    "- warning — a defect or missed case that must be fixed before this merges.",
-    "- suggestion — a preference, a refactor idea, a style point, or a defect you",
-    "  could only find by reading and not reproduce (say so in the body).",
+    "- warning — a defect or missed case that must be fixed before this merges. A",
+    "  defect you can state as a concrete failing scenario (the input or state, then",
+    "  the wrong output or crash) is a warning even if you found it by reading and",
+    "  did not reproduce it; say in the body how you established it.",
+    "- suggestion — a preference, a refactor idea, a style point, or a genuinely",
+    "  speculative concern you cannot turn into a failing scenario.",
     "Any critical or warning finding sends the task back to the worker and earns",
     "another review. If you only have suggestions the work is APPROVED: the worker",
     "applies them once and nobody reviews that again — so do not hold back a real",
-    "defect as a suggestion, and do not inflate a preference into a warning. Approving",
-    "is the default whenever nothing must be fixed. Mullion derives the final",
-    "verdict from your findings, so keep `verdict` consistent with them.",
+    "defect as a suggestion, and do not inflate a preference into a warning. Mullion",
+    "derives the final verdict from your findings, so keep `verdict` consistent",
+    "with them.",
     "",
     ...(reply
       ? [
