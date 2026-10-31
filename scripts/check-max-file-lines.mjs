@@ -2,8 +2,8 @@
 // The file-size guardrail: no source file may grow past the size ceiling.
 //
 // WHY this exists: Mullion's codebase has 59 source files over 1,200 code
-// lines — 15 of them production, the largest of which hold 59 and 93 route
-// handlers respectively. A file that size does not fail loudly — it just gets
+// lines — 15 of them production, the largest of which hold 59 and 95 route
+// registrations respectively. A file that size does not fail loudly — it just gets
 // slower to change safely, one edit at a time, until the next change to it
 // touches something nobody remembers. The ceiling turns that slow decay into
 // a build failure at the moment it happens.
