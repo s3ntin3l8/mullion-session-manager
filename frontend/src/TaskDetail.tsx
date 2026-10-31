@@ -261,6 +261,14 @@ export function TaskDetail({
   // the dropdown label so it reads as "no review agent", not as an agent name.
   const projectDefaultReviewAgentLabel =
     projectDefaultReviewAgent === "none" ? "None" : projectDefaultReviewAgent;
+  // Same order the backend resolves in (task field, issue directive, project
+  // default): with no task value, an unset entry reads as the directive.
+  const unsetAgentLabel = task.issueAgent
+    ? `${task.issueAgent} (from issue)`
+    : `Project default (${projectDefaultAgent})`;
+  const unsetReviewAgentLabel = task.issueReviewAgent
+    ? `${task.issueReviewAgent === "none" ? "None (disabled)" : task.issueReviewAgent} (from issue)`
+    : `Project default (${projectDefaultReviewAgentLabel})`;
   const isEditableStatus =
     task.status === "backlog" ||
     (task.status === "ready" && task.agentCommand === null) ||
@@ -472,7 +480,7 @@ export function TaskDetail({
                   [
                     {
                       value: UNSET_AGENT,
-                      label: `Project default (${projectDefaultAgent})`,
+                      label: unsetAgentLabel,
                     },
                     ...agentOptions,
                   ],
@@ -493,7 +501,7 @@ export function TaskDetail({
                   [
                     {
                       value: UNSET_AGENT,
-                      label: `Project default (${projectDefaultReviewAgentLabel})`,
+                      label: unsetReviewAgentLabel,
                     },
                     { value: "none", label: "None (disabled)" },
                     ...(hermesAvailable ? [HERMES_REVIEW_OPTION] : []),

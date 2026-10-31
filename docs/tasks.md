@@ -586,6 +586,18 @@ Two independent choices are resolved per task, most-specific tier wins:
    Settings → Models never lists it: its model is Review relay → Review
    policy → Model.
 
+   The drawer's Agent and Review agent pickers show the effective choice in
+   resolution order: a task value, else the issue body's `Agent:` /
+   `ReviewAgent:` directive (the unset entry then reads "<agent> (from
+   issue)"; for ReviewAgent, `none`/`false` reads "None (disabled) (from
+   issue)"), else
+   "Project default (<x>)". The server computes this (`issueAgent`,
+   `issueReviewAgent` on the task); an unknown name falls through to the
+   project default. A directive `ReviewAgent: hermes` while Hermes is
+   unusable resolves to no reviewer, so it reads "None (disabled) (from
+   issue)", unlike a stored `hermes`, which shows as "Hermes (Task Master
+   reviews off)".
+
    This becomes load-bearing, not just advisory, once a project's
    `autoApprove` setting is on (see
    [`tasks-internals.md`](tasks-internals.md#auto-approve)): auto-approve's
