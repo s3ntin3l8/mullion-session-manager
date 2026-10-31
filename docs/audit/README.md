@@ -6,7 +6,11 @@ evidence is local. Structure, naming and rules: the `audit` skill
 
 ## This repo
 
-- **Scope token:** `frontend` (the React UI in `frontend/`).
+- **Scope tokens:** `backend` (the Fastify backend in `src/`) and `frontend`
+  (the React UI in `frontend/src/`). A report's slug is
+  `YYYY-MM-<scope>-<topic>`, so the same topic can be audited per surface.
+- **Code-health audits need no capture.** They are static: the evidence is a
+  committed command (`node scripts/audit-loc.mjs`), not a screenshot run.
 - **Capture:** from the repo root, with a checkout of
   [`ai-agent-skills`](https://github.com/s3ntin3l8/ai-agent-skills) (the `audit` plugin):
 
@@ -30,6 +34,8 @@ evidence is local. Structure, naming and rules: the `audit` skill
 
 ## Index
 
-| Audit                                                  | Scope                                                                         | Outcome                                                                                                                                                          |
-| ------------------------------------------------------ | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [2026-10-frontend-ui-ux.md](2026-10-frontend-ui-ux.md) | Frontend UI/UX: accessibility, interaction feedback, information architecture | 48 findings: 3 blockers, 21 major and 14 minor fixed (#1895, #1897, #1898, #1923, #1926, #1927, #1930, #1933, #1934, #1935, #1938, #1957); 10 deferred as issues |
+| Audit                                                              | Scope                                                                         | Outcome                                                                                                                                                                                    |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| [2026-10-backend-code-health.md](2026-10-backend-code-health.md)   | Backend code health: module size, layering, duplication, dead code            | 13 findings, all deferred as issues (#2399, #2400, #2401, #2402, #2403, #2404, #2405, #2413, #2414, #2415, #2416, #2417, #2418); one guardrail landed (`scripts/check-max-file-lines.mjs`) |
+| [2026-10-frontend-code-health.md](2026-10-frontend-code-health.md) | Frontend code health: component size, duplication, dead code                  | 9 findings, all deferred as issues (#2406, #2407, #2408, #2409, #2410, #2411, #2412, #2414, #2415); one guardrail landed (`scripts/check-max-file-lines.mjs`)                              |
+| [2026-10-frontend-ui-ux.md](2026-10-frontend-ui-ux.md)             | Frontend UI/UX: accessibility, interaction feedback, information architecture | 48 findings: 3 blockers, 21 major and 14 minor fixed (#1895, #1897, #1898, #1923, #1926, #1927, #1930, #1933, #1934, #1935, #1938, #1957); 10 deferred as issues                           |
