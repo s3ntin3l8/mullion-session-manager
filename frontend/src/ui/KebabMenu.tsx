@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useDashboardStore } from "../store/index.js";
@@ -73,10 +73,10 @@ export function KebabMenu({
   // "top" grows the portaled menu upward from the trigger instead of
   // dropping it down — for a trigger pinned near the bottom of the
   // viewport (the Dock), a downward menu can run off-screen with no way to
-  // scroll to its lower items. Same union/default as CustomSelect's own
-  // menuPlacement; deliberately no measured auto-flip (see getMenuStyle
-  // below) — a caller in that position simply always wants "top".
-  menuPlacement?: "bottom" | "top";
+  // scroll to its lower items. "auto" measures the rendered menu and opens
+  // upward when it cannot fit below and there is more room above — useful
+  // for sidebar rows whose position changes as the user scrolls.
+  menuPlacement?: "bottom" | "top" | "auto";
   menuAlign?: "left" | "right";
 }) {
   const theme = useDashboardStore((s) => s.theme);
@@ -85,6 +85,7 @@ export function KebabMenu({
   // — getMenuStyle below needs rect.top for the "top" placement's `bottom:`
   // calc, which the old {top,right} shape didn't carry.
   const [triggerRect, setTriggerRect] = useState<DOMRect | null>(null);
+  const [menuHeight, setMenuHeight] = useState(0);
   const [armedKey, setArmedKey] = useState<string | null>(null);
   // Ticks 3 -> 2 -> 1 in the "3s"-style hint below rather than sitting static
   // for the whole arm window — a countdown that doesn't move reads as stuck.
@@ -186,6 +187,16 @@ export function KebabMenu({
     if (btnRef.current) setTriggerRect(btnRef.current.getBoundingClientRect());
   });
 
+  // Re-clamp after rendering, as PaneActionsMenu does for its measured
+  // width. scrollHeight includes content hidden by maxHeight; measuring the
+  // capped bounding rect would mistake a tiny scroll box for a menu that fits.
+  // A layout effect corrects the first placement before the browser paints.
+  useLayoutEffect(() => {
+    if (open && menuPlacement === "auto" && menuRef.current) {
+      setMenuHeight(menuRef.current.scrollHeight);
+    }
+  }, [open, menuPlacement, triggerRect, items, armedKey, armSecondsLeft]);
+
   const handleItemClick = (item: KebabMenuItem) => {
     if (item.disabled) return;
     // The action is about to take focus somewhere else (another overlay).
@@ -220,8 +231,7 @@ export function KebabMenu({
     item.onClick();
   };
 
-  // Matches CustomSelect.tsx's own getMenuStyle: always right-aligned to the
-  // trigger (KebabMenu never offers a menuAlign). Both `top` and `bottom` are
+  // Matches CustomSelect.tsx's own getMenuStyle. Both `top` and `bottom` are
   // always set explicitly (to `"auto"` on the unused axis) rather than just
   // omitting the one the active placement doesn't need — the portaled node
   // carries `.pane-tab-overflow-menu` (terminal.css), which hard-codes its own
@@ -253,14 +263,19 @@ export function KebabMenu({
       overflowY: "auto",
     };
     const visible = visibleViewport();
-    if (menuPlacement === "top") {
+    const spaceAbove = rect.top - visible.top - 8;
+    const spaceBelow = visible.bottom - rect.bottom - 8;
+    const opensUpward =
+      menuPlacement === "top" ||
+      (menuPlacement === "auto" && menuHeight > spaceBelow && spaceAbove > spaceBelow);
+    if (opensUpward) {
       style.bottom = window.innerHeight - rect.top + 4;
       style.top = "auto";
-      style.maxHeight = menuMaxHeight(rect.top - visible.top - 8);
+      style.maxHeight = menuMaxHeight(spaceAbove);
     } else {
       style.top = rect.bottom + 4;
       style.bottom = "auto";
-      style.maxHeight = menuMaxHeight(visible.bottom - rect.bottom - 8);
+      style.maxHeight = menuMaxHeight(spaceBelow);
     }
     return style;
   };

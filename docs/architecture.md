@@ -351,9 +351,12 @@ PR).
   (`GET`/`PUT`/`DELETE /api/projects/:id/tooling[/skill|/reviewer-agent]` —
   a project's DB-authored pinned note/skill/reviewer subagent, primary-only,
   no host branching — see [`agent-context.md`](agent-context.md)),
-  `project-setup` (`POST /api/projects/:id/setup/preview`/`apply`/`generate` —
+  `project-setup` (`POST /api/projects/:id/setup/preview`/`apply`/`generate`,
+  plus `POST .../setup/generate/start`, `GET .../setup/generate/jobs/:jobId`
+  and `GET .../setup/generate/active` to run and poll Generate as a background
+  job —
   scaffold a committed briefing region + starter skill/reviewer into a
-  project's own repo as a real pull request; all three work for local AND
+  project's own repo as a real pull request; all work for local AND
   remote-hosted projects. `preview`/`apply` (issue #895) use
   `host-files.ts`'s `readHostFiles`/`writeHostFiles`, `host-git.ts`'s
   `resolveHostFileDiff`/`commitHostWipChanges`. `generate` (real
