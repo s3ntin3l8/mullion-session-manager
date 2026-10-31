@@ -42,6 +42,24 @@ import {
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * Is this commit in the checkout's object database at all? A shallow clone
+ * has no history, so "the commit is not here" and "the baseline names the
+ * wrong commit" are different facts and must not look alike.
+ */
+function hasCommit(root: string, sha: string): boolean {
+  try {
+    execFileSync("git", ["cat-file", "-e", `${sha}^{commit}`], {
+      cwd: root,
+      env: gitEnv(),
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const REPO_ROOT = fileURLToPath(new URL("../../", import.meta.url));
 const SCRIPT = path.join(REPO_ROOT, "scripts", "check-max-file-lines.mjs");
 const BASELINE = path.join(REPO_ROOT, "scripts", "max-file-lines.baseline.json");
@@ -341,6 +359,14 @@ describe("check-max-file-lines.mjs: the repository's own baseline", () => {
       files: Record<string, number>;
     };
     expect(baseline.recordedAt).toMatch(/^[0-9a-f]{7,40}$/);
+
+    // The commit may simply not be in this checkout's object database: CI's
+    // test job clones shallow, so there is no history to look at. That is NOT
+    // the baseline naming the wrong commit — it is the commit not being here.
+    // So ask whether the commit exists before comparing anything, or a
+    // shallow clone reads as "the baseline names the wrong files".
+    if (!hasCommit(REPO_ROOT, baseline.recordedAt)) return;
+
     // Every recorded size is the size that file had at that commit — the
     // label has to name the tree the numbers actually came from, or it is
     // decoration.

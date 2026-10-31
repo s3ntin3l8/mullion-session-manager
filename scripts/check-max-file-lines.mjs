@@ -51,6 +51,13 @@
 // A tree that is not a git checkout has no default branch to have grown
 // anything, so there the recorded baseline is the reference.
 //
+// ONE MORE SHAPE, for the record: a `git clone --depth 1` of the default
+// branch resolves the reference to HEAD itself, so every file's ceiling is
+// its own current size and nothing can fail — and `--strict` cannot see it,
+// because there is no abstention to escalate. It is inherent to merge-base
+// semantics, and it does not bite CI: a merge-ref checkout resolves HEAD^2,
+// and the reusable lint job fetches full history.
+//
 // A ceiling can still be LOWERED — that is the ratchet turning over, a
 // deliberate reviewable act visible in the diff, and it is how the 59
 // existing offenders get fixed. The script cannot see the baseline's PREVIOUS
