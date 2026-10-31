@@ -384,12 +384,54 @@ describe("SidebarRow hover actions do not shift layout", () => {
     // containing block — drop this and every row's actions stack in one place.
     expect(rule(".sb-row")).toContain("position: relative");
     // The overlay hides the chips it covers rather than sitting on live ones,
-    // keyed like the reveal (hover AND focus-within) and scoped to the siblings
+    // on hover or focus in the actions (not row focus-within, which would hide
+    // a focused chip), and scoped to the siblings
     // after the actions: a trailing-only row has no overlay, so its badge stays.
     expect(css).toContain(".sb-row:hover .sb-row-trail > .sb-row-actions ~ *");
-    expect(css).toContain(".sb-row:focus-within .sb-row-trail > .sb-row-actions ~ *");
+    expect(css).toContain(
+      ".sb-row:has(.sb-row-actions :focus) .sb-row-trail > .sb-row-actions ~ *",
+    );
     expect(css).not.toMatch(/\.sb-row:hover \.sb-row-trail > :not\(/);
     expect(css).not.toMatch(/\.sb-row:hover \.sb-row-actions[^{]*\{[^}]*display:/);
+  });
+});
+
+describe("SidebarRow chips under the hover actions", () => {
+  // jsdom cannot hover, so drive the rule through the focus half, with the
+  // hover-media wrapper stripped. The injected sheet is the real one's rule.
+  const hideRule = /@media \(hover: hover\) \{([\s\S]*?)\n\}\n/.exec(css)?.[1] ?? "";
+  const renderRow = (withActions: boolean) => {
+    const style = document.createElement("style");
+    style.textContent = hideRule;
+    document.head.append(style);
+    const view = render(
+      <SidebarRow
+        title="row"
+        trailing={<button>chip</button>}
+        actions={withActions ? <button>act</button> : undefined}
+      />,
+    );
+    return {
+      chip: screen.getByRole("button", { name: "chip" }),
+      cleanup: () => style.remove(),
+      view,
+    };
+  };
+
+  it("hides a chip while an action holds focus, but never while the chip itself does", () => {
+    const { chip, cleanup } = renderRow(true);
+    screen.getByRole("button", { name: "act" }).focus();
+    expect(getComputedStyle(chip).opacity).toBe("0");
+    chip.focus();
+    expect(getComputedStyle(chip).opacity).not.toBe("0");
+    cleanup();
+  });
+
+  it("leaves a trailing-only row's chip alone", () => {
+    const { chip, cleanup } = renderRow(false);
+    chip.focus();
+    expect(getComputedStyle(chip).opacity).not.toBe("0");
+    cleanup();
   });
 });
 
