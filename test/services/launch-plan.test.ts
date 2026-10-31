@@ -99,6 +99,14 @@ beforeEach(() => {
   // I/O needed) — individual tests override SHELL when they need the zsh
   // branch specifically.
   process.env.SHELL = "/bin/bash";
+  // A Mullion-hosted session (where an agent runs this suite) exports its own
+  // GIT_CONFIG_COUNT / KEY_n / VALUE_n, e.g. a credential.helper at index 1.
+  // buildLaunchPlan carries ambient KEY_n/VALUE_n through, so the
+  // GIT_CONFIG_* assertions below must start from an empty ambient env.
+  // afterEach restores ORIGINAL_ENV.
+  for (const key of Object.keys(process.env)) {
+    if (/^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/.test(key)) delete process.env[key];
+  }
 });
 
 afterEach(() => {
