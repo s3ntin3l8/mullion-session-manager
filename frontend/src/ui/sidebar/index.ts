@@ -10,6 +10,7 @@ export {
   severityTone,
   splitTaskSessions,
   taskActiveSession,
+  type IssueSessionAction,
   type SessionAction,
 } from "./linkDecisions.js";
 export { ReviewGateChip, type ReviewGateChipProps } from "./ReviewGateChip.js";
