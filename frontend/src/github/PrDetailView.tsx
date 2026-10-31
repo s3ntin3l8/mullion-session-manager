@@ -45,6 +45,7 @@ import { prStatuses, reviewerRows, runIdFromUrl, type DimStatus } from "./prPhas
 import { ReviewGateActions } from "./ReviewGateActions.js";
 import { usePrThreadWrites } from "./usePrThreadWrites.js";
 import { parseWorkflowChange } from "../workflowChange.js";
+import { TaskActions } from "../TaskActions.js";
 
 // The PR drill-in: status first (Checks / Reviews / Merge, each an expandable
 // row), then the pinned latest review, the Mullion links, the change summary
@@ -437,19 +438,6 @@ export function PrDetailView({
   const taskStatus = entry?.task?.status;
   const detailPills = splitTaskSessions(entry?.sessions ?? [], entry?.task).rest;
   const workflowHold = parseWorkflowChange(entry?.task?.workflowChange);
-  const taskId = entry?.task?.id;
-  const approveTask = () =>
-    run("task", async () => {
-      if (taskId == null) return;
-      await useDashboardStore.getState().approveTask(taskId);
-      return `Task #${taskId} approved`;
-    });
-  const retryTask = () =>
-    run("task", async () => {
-      if (taskId == null) return;
-      await useDashboardStore.getState().retryTask(taskId);
-      return `Task #${taskId} retried`;
-    });
   const threads = threadWrites.patch(pr.threads);
   const openThreads = threads.filter((t) => !t.isResolved);
   const resolvedThreads = threads.filter((t) => t.isResolved);
@@ -743,18 +731,13 @@ export function PrDetailView({
                   sessions={entry.sessions}
                   reviewInFlight={entry.reviewRun?.state === "requested"}
                 />
-                {taskStatus === "reviewing" && !workflowHold && (
-                  <Button size="sm" disabled={busy !== null} onClick={approveTask}>
-                    Approve task
-                  </Button>
-                )}
                 {taskStatus === "reviewing" && workflowHold && (
                   <span className="gh-detail-meta">Needs workflow approval — open task</span>
                 )}
-                {taskStatus === "failed" && (
-                  <Button size="sm" disabled={busy !== null} onClick={retryTask}>
-                    Retry task
-                  </Button>
+                {(taskStatus === "reviewing" ||
+                  taskStatus === "failed" ||
+                  (taskStatus === "done" && entry.task.prNumber !== null)) && (
+                  <TaskActions task={entry.task} />
                 )}
               </div>
             )}
