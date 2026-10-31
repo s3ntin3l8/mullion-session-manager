@@ -43,6 +43,7 @@ import {
   readProjectBriefing,
 } from "../services/project-tooling.js";
 import {
+  buildInvocation,
   generateScaffoldContent,
   UnsupportedGenerationAgentError,
   GenerationWorktreeError,
@@ -50,8 +51,20 @@ import {
   GenerationOutputError,
   type GeneratedScaffoldContent,
   type ExistingInstructionsMode,
-  type ScaffoldConflict,
 } from "../services/scaffold-generate.js";
+import {
+  PREVIEW_TTL_MS,
+  startGenerateJob,
+  getGenerateJob,
+  getActiveGenerateJob,
+  getInFlightGenerateJob,
+  sweepExpiredGenerateJobs,
+  deleteGenerateJobByPreviewId,
+  type GenerateJob,
+  type GenerateJobOutcome,
+  type RunningGenerateJobPhase,
+  type ScaffoldGenerateResponse,
+} from "../services/scaffold-generate-jobs.js";
 
 // Issue: apply Mullion tooling to other repos, Layer 3 (PR-6) — the
 // zero-repo-change delivery mechanisms PR-1 through PR-5 built only ever
@@ -119,6 +132,10 @@ const SETUP_RATE_LIMIT = { config: { rateLimit: { max: 10, timeWindow: "1 minute
 // (that check only compares a per-route max against `RATE_LIMIT_MAX`, the
 // global default, never between two different routes' own limiters).
 const GENERATE_RATE_LIMIT = { config: { rateLimit: { max: 5, timeWindow: "10 minutes" } } };
+// Issue #2429 — polling routes (`generate/jobs/:jobId`, `generate/active`) get
+// their own bucket (120/min) because `SETUP_RATE_LIMIT` (10/min) would be
+// exceeded by 2-second progress polling.
+const GENERATE_POLL_RATE_LIMIT = { config: { rateLimit: { max: 120, timeWindow: "1 minute" } } };
 
 const generateSchema = {
   body: {
@@ -451,17 +468,25 @@ interface PreviewRecord {
 // ephemeral server-side state a restart is fine to drop). Evicted lazily on
 // access rather than a timer, since nothing else ever needs to enumerate
 // live previews.
-const PREVIEW_TTL_MS = 15 * 60 * 1000;
 const previews = new Map<string, PreviewRecord>();
 
-function getLivePreview(previewId: string): PreviewRecord | null {
-  const record = previews.get(previewId);
-  if (!record) return null;
-  if (Date.now() - record.createdAt > PREVIEW_TTL_MS) {
-    previews.delete(previewId);
-    return null;
+function deletePreview(previewId: string): void {
+  previews.delete(previewId);
+  deleteGenerateJobByPreviewId(previewId);
+}
+
+function sweepExpiredPreviews(now = Date.now()): void {
+  sweepExpiredGenerateJobs(now);
+  for (const [previewId, record] of previews) {
+    if (now - record.createdAt > PREVIEW_TTL_MS) {
+      deletePreview(previewId);
+    }
   }
-  return record;
+}
+
+function getLivePreview(previewId: string): PreviewRecord | null {
+  sweepExpiredPreviews();
+  return previews.get(previewId) ?? null;
 }
 
 /** Finds an unexpired preview already covering this exact project+slug —
@@ -472,12 +497,9 @@ function getLivePreview(previewId: string): PreviewRecord | null {
  * short-lived, so the O(n) cost here is never worth a second data
  * structure to keep in sync. */
 function findLiveSlugPreview(projectId: number, slug: string): PreviewRecord | null {
-  for (const [previewId, record] of previews) {
+  sweepExpiredPreviews();
+  for (const record of previews.values()) {
     if (record.projectId !== projectId || record.slug !== slug) continue;
-    if (Date.now() - record.createdAt > PREVIEW_TTL_MS) {
-      previews.delete(previewId);
-      continue;
-    }
     return record;
   }
   return null;
@@ -547,7 +569,7 @@ async function ensureSetupWorktree(
   // old previewId can never apply content it was not computed for.
   if (opts.fresh || liveSlugPreview?.rewroteInstructions) {
     for (const [id, record] of previews) {
-      if (record.projectId === projectId && record.slug === slug) previews.delete(id);
+      if (record.projectId === projectId && record.slug === slug) deletePreview(id);
     }
     liveSlugPreview = null;
   }
@@ -669,6 +691,309 @@ async function computeAndStorePreview(
   return finishPreview(app, project.hostId, projectId, options, ensured.worktree, read.files);
 }
 
+type GenerateRequestBody = {
+  slug: string;
+  refresh?: Array<"skill" | "reviewer">;
+  existingInstructions?: ExistingInstructionsMode;
+} & Omit<ScaffoldOptions, "slug">;
+
+interface PreparedScaffoldGeneration {
+  options: ScaffoldOptions;
+  existingInstructions: ExistingInstructionsMode;
+  worktree: ReadyWorktree;
+  existingFiles: Record<string, string | undefined>;
+  hasSkill: boolean;
+  hasReviewer: boolean;
+  hasScaffoldRegion: boolean;
+  refreshSkill: boolean;
+  refreshReviewer: boolean;
+  nothingToRegenerate: boolean;
+  agentCommand: string;
+}
+
+type PrepareScaffoldGenerationResult =
+  | { ok: true; prepared: PreparedScaffoldGeneration }
+  | { ok: false; status: 400 | 409 | 500; message: string };
+
+/** Synchronous preparation shared by `/setup/generate` and `/setup/generate/start`:
+ * stands up (or reuses) the scratch worktree, reads current scaffoldable files,
+ * checks the 409 "skill and reviewer already exist" conflict, and resolves and
+ * validates the generating agent command. */
+async function prepareScaffoldGeneration(
+  app: FastifyInstance,
+  project: { id: number; cwd: string; hostId: string; defaultAgent: string | null },
+  projectId: number,
+  options: ScaffoldOptions,
+  body: GenerateRequestBody,
+): Promise<PrepareScaffoldGenerationResult> {
+  // Stood up (or reused) FIRST, and its own `existingFiles` read used
+  // for both the hasSkill/hasReviewer/hasScaffoldRegion decision below
+  // AND, later, computeScaffold's own entries — one worktree, one
+  // read, one consistent answer to "does a committed file already
+  // exist" (see ensureSetupWorktree's own doc comment: a second,
+  // independent read against `project.cwd` could answer a DIFFERENT
+  // question if the live checkout and the scratch worktree's resolved
+  // base ref ever disagree).
+  const existingInstructions = body.existingInstructions ?? "keep";
+  const ensured = await ensureSetupWorktree(app, project, projectId, options.slug, {
+    fresh: existingInstructions !== "keep",
+  });
+  if (!ensured.ok) return { ok: false, status: 500, message: ensured.message };
+  const relPaths = scaffoldableRelPaths(options.slug, options);
+  // Issue #2316 — a restructure may append moved text to CONTRIBUTING.md,
+  // which must be read so the append is an upsert into the real file and
+  // never an overwrite of it (same reasoning as scaffoldableRelPaths').
+  if (existingInstructions === "restructure" && !relPaths.includes("CONTRIBUTING.md")) {
+    relPaths.push("CONTRIBUTING.md");
+  }
+  const read = await readScaffoldableFiles(app, project.hostId, ensured.worktree.path, relPaths);
+  if (!read.ok) return { ok: false, status: 500, message: read.message };
+  const existingFiles = read.files;
+  const hasSkill = existingFiles[scaffoldSkillPath(options.slug)] !== undefined;
+  const hasReviewer = existingFiles[scaffoldReviewerPath(options.slug)] !== undefined;
+  const hasScaffoldRegion = (existingFiles["AGENTS.md"] ?? "").includes(SCAFFOLD_REGION_START);
+
+  // Issue #1082(c) — `refresh` is the caller's explicit, per-target
+  // opt-in to regenerating an already-committed file (see the schema's
+  // own doc comment above). Computed from the RAW request body, not
+  // re-derived from hasSkill/hasReviewer, so naming a target that
+  // doesn't exist yet is simply a no-op (computeScaffold already
+  // creates a missing file unconditionally — nothing left to "refresh"
+  // there).
+  const refreshTargets = new Set(body.refresh ?? []);
+  const refreshSkill = refreshTargets.has("skill");
+  const refreshReviewer = refreshTargets.has("reviewer");
+
+  // Issue #956 review follow-up, narrowed by issue #1082(c) — this used
+  // to be an unconditional 409 whenever both files already existed,
+  // since computeScaffold's own "create once, never overwrite" rule
+  // (mullion-scaffold.ts) would silently throw away generation's entire
+  // output for them, wasting a real agent turn (real tokens, real time,
+  // real spend) for nothing but the AGENTS.md region. Naming either
+  // target in `refresh` is the caller's explicit signal that THIS turn
+  // is worth spending on — the short-circuit below now only fires when
+  // nothing was asked to change, which is the one case a real refresh
+  // path doesn't need to touch at all.
+  // Issue #2316 — an instructions-only pass (report/restructure) is worth
+  // the turn even when nothing else would be regenerated.
+  const nothingToRegenerate = hasSkill && hasReviewer && !refreshSkill && !refreshReviewer;
+  if (nothingToRegenerate && existingInstructions === "keep") {
+    return {
+      ok: false,
+      status: 409,
+      message:
+        `.claude/skills/${options.slug}/SKILL.md and .claude/agents/${options.slug}-reviewer.md ` +
+        // "already exist" — NOT "are already committed": `hasSkill`/
+        // `hasReviewer` come from the scratch worktree's OWN working
+        // tree (readScaffoldableFiles), which a reused, still-uncommitted
+        // preview window (reuseOrCreateWorktree's own doc comment) can
+        // already show as present even before `/setup/apply` ever
+        // commits anything — mullion-reviewer review, issue #1082(c).
+        "already exist — generation only replaces placeholder content, it never " +
+        'overwrites an existing file by default. Pass refresh: ["skill"] and/or ' +
+        '["reviewer"] in the request body to explicitly regenerate one or both.',
+    };
+  }
+
+  // Issue #956 — "resolve via the existing chain, project.defaultAgent
+  // ?? settings.launchers.defaultAgent". Deliberately NOT
+  // task-agent-resolve.ts's resolveAgentCommand: that helper also
+  // parses an issue body's `Agent:` directive (meaningless here, there
+  // is no issue) and falls back to `settings.taskMaster.defaultAgent`
+  // — a DIFFERENT install-wide tier (settings.ts) than the one this
+  // issue explicitly names.
+  const agentCommand = project.defaultAgent ?? getStoredSettings(app.db).launchers.defaultAgent;
+  try {
+    buildInvocation(agentCommand, "");
+  } catch (err) {
+    if (err instanceof UnsupportedGenerationAgentError) {
+      return { ok: false, status: 400, message: err.message };
+    }
+    throw err;
+  }
+
+  return {
+    ok: true,
+    prepared: {
+      options,
+      existingInstructions,
+      worktree: ensured.worktree,
+      existingFiles,
+      hasSkill,
+      hasReviewer,
+      hasScaffoldRegion,
+      refreshSkill,
+      refreshReviewer,
+      nothingToRegenerate,
+      agentCommand,
+    },
+  };
+}
+
+/** Runs the agent turn and composes the resulting preview from a prepared
+ * generation context. Used by both `runScaffoldGeneration` (synchronous route)
+ * and `POST /setup/generate/start` (background job runner). */
+async function executeScaffoldGeneration(
+  app: FastifyInstance,
+  project: { id: number; cwd: string; hostId: string },
+  projectId: number,
+  prepared: PreparedScaffoldGeneration,
+  onPhase?: (phase: RunningGenerateJobPhase) => void,
+): Promise<GenerateJobOutcome> {
+  const {
+    options,
+    existingInstructions,
+    worktree,
+    existingFiles,
+    hasSkill,
+    hasReviewer,
+    hasScaffoldRegion,
+    refreshSkill,
+    refreshReviewer,
+    nothingToRegenerate,
+    agentCommand,
+  } = prepared;
+
+  onPhase?.("agent");
+  let generated: GeneratedScaffoldContent;
+  try {
+    generated = await generateScaffoldContent({
+      app,
+      hostId: project.hostId,
+      cwd: project.cwd,
+      slug: options.slug,
+      agentCommand,
+      seed: {
+        skill: readProjectSkill(app.db, project.id),
+        reviewerAgent: readProjectReviewerAgent(app.db, project.id),
+        briefing: readProjectBriefing(app.db, project.id),
+      },
+      hasSkill,
+      hasReviewer,
+      hasScaffoldRegion,
+      existingInstructions,
+      conventionsText: options.workflowConventionsText,
+      originalAgentsMd: existingFiles["AGENTS.md"],
+      // Issue #2320 — nothing of the skill or reviewer would be written,
+      // so the turn is not asked for them.
+      instructionsOnly: nothingToRegenerate && existingInstructions !== "keep",
+      // Issue #1133 — this primary's own opt-out; only takes effect for
+      // a LOCAL_HOST_ID project (generateScaffoldContent's own doc
+      // comment). A remote-hosted project's own
+      // /internal/run-generation-turn handler reads the REMOTE agent's
+      // config for this instead, independently.
+      sandbox: app.config.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED,
+    });
+  } catch (err) {
+    if (err instanceof UnsupportedGenerationAgentError) {
+      return { ok: false, status: 400, message: err.message };
+    }
+    if (err instanceof GenerationWorktreeError) {
+      return { ok: false, status: 500, message: err.message };
+    }
+    if (err instanceof GenerationSpawnError || err instanceof GenerationOutputError) {
+      return { ok: false, status: 502, message: err.message };
+    }
+    throw err;
+  }
+
+  onPhase?.("composing");
+  // Issue #1082(c) — the refreshed target(s), and ONLY those, are
+  // stripped from the view computeScaffold's write pass sees; every
+  // other path (including a non-refreshed skill/reviewer that already
+  // exists) is left exactly as `existingFiles` reported it, so
+  // computeScaffold's own "create once, never overwrite" rule leaves it
+  // untouched. `hasSkill`/`hasReviewer` above were already computed off
+  // the UNMODIFIED `existingFiles` — generateScaffoldContent's seed
+  // logic (does a DB draft still apply?) must reflect what's actually
+  // PRESENT right now (committed, or just an uncommitted write from a
+  // reused preview window — see the 409 message's own comment above),
+  // not what this request is about to overwrite.
+  const refreshedPaths: string[] = [];
+  if (refreshSkill) refreshedPaths.push(scaffoldSkillPath(options.slug));
+  if (refreshReviewer) refreshedPaths.push(scaffoldReviewerPath(options.slug));
+  const writeExistingFiles = withoutRefreshedPaths(existingFiles, refreshedPaths);
+
+  const result = await finishPreview(
+    app,
+    project.hostId,
+    projectId,
+    { ...options, generated },
+    worktree,
+    writeExistingFiles,
+    existingInstructions !== "keep",
+  );
+  if (!result.ok) {
+    return { ok: false, status: result.status, message: result.message };
+  }
+  // Hermes review, PR #1200 round 1 (suggestion) — `hasAgentsOverride`
+  // is computed and returned here, same as `possiblyGeneric` below, so
+  // /setup/generate's response has the identical shape to /setup/preview's
+  // plus the generation-only fields. ProjectSetupPanel's "Generate with
+  // agent" button reads all of them.
+  const response: ScaffoldGenerateResponse = {
+    previewId: result.previewId,
+    diff: result.diff,
+    files: result.files,
+    sandboxed: generated.sandboxed,
+    hasAgentsOverride: result.hasAgentsOverride,
+  };
+  if (generated.possiblyGeneric) {
+    response.possiblyGeneric = true;
+  }
+  // Issue #2316 — present only for the mode that produced them.
+  if (generated.conflicts) response.conflicts = generated.conflicts;
+  if (generated.droppedConflictLines) {
+    response.droppedConflictLines = generated.droppedConflictLines;
+  }
+  if (generated.possiblyLossy) response.possiblyLossy = true;
+  return { ok: true, response };
+}
+
+/** Issue #2429 — extracted body of `/setup/generate` (after request validation)
+ * returning `{ ok: true, response } | { ok: false, status, message }`. */
+async function runScaffoldGeneration(
+  app: FastifyInstance,
+  project: { id: number; cwd: string; hostId: string; defaultAgent: string | null },
+  projectId: number,
+  options: ScaffoldOptions,
+  body: GenerateRequestBody,
+  onPhase?: (phase: RunningGenerateJobPhase) => void,
+): Promise<GenerateJobOutcome> {
+  onPhase?.("preparing");
+  const prepared = await prepareScaffoldGeneration(app, project, projectId, options, body);
+  if (!prepared.ok) return prepared;
+  return executeScaffoldGeneration(app, project, projectId, prepared.prepared, onPhase);
+}
+
+function sendGenerateOutcome(reply: FastifyReply, outcome: GenerateJobOutcome) {
+  if (outcome.ok) return outcome.response;
+  switch (outcome.status) {
+    case 400:
+      return reply.badRequest(outcome.message);
+    case 409:
+      return reply.conflict(outcome.message);
+    case 502:
+      return reply.badGateway(outcome.message);
+    default:
+      return reply.internalServerError(outcome.message);
+  }
+}
+
+function serializeGenerateJob(job: GenerateJob) {
+  return {
+    jobId: job.id,
+    slug: job.slug,
+    phase: job.phase,
+    agent: job.agent,
+    mode: job.mode,
+    startedAt: job.startedAt,
+    ...(job.finishedAt !== undefined ? { finishedAt: job.finishedAt } : {}),
+    ...(job.result !== undefined ? { result: job.result } : {}),
+    ...(job.error !== undefined ? { error: job.error } : {}),
+  };
+}
+
 function sendPreviewComputation(reply: FastifyReply, result: PreviewComputation) {
   if (!result.ok) {
     return result.status === 400
@@ -731,11 +1056,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
 
   app.post<{
     Params: { id: string };
-    Body: {
-      slug: string;
-      refresh?: Array<"skill" | "reviewer">;
-      existingInstructions?: ExistingInstructionsMode;
-    } & Omit<ScaffoldOptions, "slug">;
+    Body: GenerateRequestBody;
   }>(
     "/api/projects/:id/setup/generate",
     { ...GENERATE_RATE_LIMIT, schema: generateSchema },
@@ -764,182 +1085,93 @@ export async function projectSetupRoute(app: FastifyInstance) {
         return reply.badRequest(`"${options.slug}" is not a safe slug`);
       }
 
-      // Stood up (or reused) FIRST, and its own `existingFiles` read used
-      // for both the hasSkill/hasReviewer/hasScaffoldRegion decision below
-      // AND, later, computeScaffold's own entries — one worktree, one
-      // read, one consistent answer to "does a committed file already
-      // exist" (see ensureSetupWorktree's own doc comment: a second,
-      // independent read against `project.cwd` could answer a DIFFERENT
-      // question if the live checkout and the scratch worktree's resolved
-      // base ref ever disagree).
-      const existingInstructions = request.body.existingInstructions ?? "keep";
-      const ensured = await ensureSetupWorktree(app, project, projectId, options.slug, {
-        fresh: existingInstructions !== "keep",
-      });
-      if (!ensured.ok) return reply.internalServerError(ensured.message);
-      const relPaths = scaffoldableRelPaths(options.slug, options);
-      // Issue #2316 — a restructure may append moved text to CONTRIBUTING.md,
-      // which must be read so the append is an upsert into the real file and
-      // never an overwrite of it (same reasoning as scaffoldableRelPaths').
-      if (existingInstructions === "restructure" && !relPaths.includes("CONTRIBUTING.md")) {
-        relPaths.push("CONTRIBUTING.md");
-      }
-      const read = await readScaffoldableFiles(
-        app,
-        project.hostId,
-        ensured.worktree.path,
-        relPaths,
-      );
-      if (!read.ok) return reply.internalServerError(read.message);
-      const existingFiles = read.files;
-      const hasSkill = existingFiles[scaffoldSkillPath(options.slug)] !== undefined;
-      const hasReviewer = existingFiles[scaffoldReviewerPath(options.slug)] !== undefined;
-      const hasScaffoldRegion = (existingFiles["AGENTS.md"] ?? "").includes(SCAFFOLD_REGION_START);
+      const outcome = await runScaffoldGeneration(app, project, projectId, options, request.body);
+      return sendGenerateOutcome(reply, outcome);
+    },
+  );
 
-      // Issue #1082(c) — `refresh` is the caller's explicit, per-target
-      // opt-in to regenerating an already-committed file (see the schema's
-      // own doc comment above). Computed from the RAW request body, not
-      // re-derived from hasSkill/hasReviewer, so naming a target that
-      // doesn't exist yet is simply a no-op (computeScaffold already
-      // creates a missing file unconditionally — nothing left to "refresh"
-      // there).
-      const refreshTargets = new Set(request.body.refresh ?? []);
-      const refreshSkill = refreshTargets.has("skill");
-      const refreshReviewer = refreshTargets.has("reviewer");
+  app.post<{
+    Params: { id: string };
+    Body: GenerateRequestBody;
+  }>(
+    "/api/projects/:id/setup/generate/start",
+    { ...GENERATE_RATE_LIMIT, schema: generateSchema },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const project = getProjectOr404(projectId);
+      if (!project) return reply.notFound();
 
-      // Issue #956 review follow-up, narrowed by issue #1082(c) — this used
-      // to be an unconditional 409 whenever both files already existed,
-      // since computeScaffold's own "create once, never overwrite" rule
-      // (mullion-scaffold.ts) would silently throw away generation's entire
-      // output for them, wasting a real agent turn (real tokens, real time,
-      // real spend) for nothing but the AGENTS.md region. Naming either
-      // target in `refresh` is the caller's explicit signal that THIS turn
-      // is worth spending on — the short-circuit below now only fires when
-      // nothing was asked to change, which is the one case a real refresh
-      // path doesn't need to touch at all.
-      // Issue #2316 — an instructions-only pass (report/restructure) is worth
-      // the turn even when nothing else would be regenerated.
-      const nothingToRegenerate = hasSkill && hasReviewer && !refreshSkill && !refreshReviewer;
-      if (nothingToRegenerate && existingInstructions === "keep") {
-        return reply.conflict(
-          `.claude/skills/${options.slug}/SKILL.md and .claude/agents/${options.slug}-reviewer.md ` +
-            // "already exist" — NOT "are already committed": `hasSkill`/
-            // `hasReviewer` come from the scratch worktree's OWN working
-            // tree (readScaffoldableFiles), which a reused, still-uncommitted
-            // preview window (reuseOrCreateWorktree's own doc comment) can
-            // already show as present even before `/setup/apply` ever
-            // commits anything — mullion-reviewer review, issue #1082(c).
-            "already exist — generation only replaces placeholder content, it never " +
-            'overwrites an existing file by default. Pass refresh: ["skill"] and/or ' +
-            '["reviewer"] in the request body to explicitly regenerate one or both.',
-        );
-      }
-
-      // Issue #956 — "resolve via the existing chain, project.defaultAgent
-      // ?? settings.launchers.defaultAgent". Deliberately NOT
-      // task-agent-resolve.ts's resolveAgentCommand: that helper also
-      // parses an issue body's `Agent:` directive (meaningless here, there
-      // is no issue) and falls back to `settings.taskMaster.defaultAgent`
-      // — a DIFFERENT install-wide tier (settings.ts) than the one this
-      // issue explicitly names.
-      const agentCommand = project.defaultAgent ?? getStoredSettings(app.db).launchers.defaultAgent;
-
-      let generated: GeneratedScaffoldContent;
-      try {
-        generated = await generateScaffoldContent({
-          app,
-          hostId: project.hostId,
-          cwd: project.cwd,
-          slug: options.slug,
-          agentCommand,
-          seed: {
-            skill: readProjectSkill(app.db, project.id),
-            reviewerAgent: readProjectReviewerAgent(app.db, project.id),
-            briefing: readProjectBriefing(app.db, project.id),
-          },
-          hasSkill,
-          hasReviewer,
-          hasScaffoldRegion,
-          existingInstructions,
-          conventionsText: options.workflowConventionsText,
-          originalAgentsMd: existingFiles["AGENTS.md"],
-          // Issue #2320 — nothing of the skill or reviewer would be written,
-          // so the turn is not asked for them.
-          instructionsOnly: nothingToRegenerate && existingInstructions !== "keep",
-          // Issue #1133 — this primary's own opt-out; only takes effect for
-          // a LOCAL_HOST_ID project (generateScaffoldContent's own doc
-          // comment). A remote-hosted project's own
-          // /internal/run-generation-turn handler reads the REMOTE agent's
-          // config for this instead, independently.
-          sandbox: app.config.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED,
-        });
-      } catch (err) {
-        if (err instanceof UnsupportedGenerationAgentError) return reply.badRequest(err.message);
-        if (err instanceof GenerationWorktreeError) return reply.internalServerError(err.message);
-        if (err instanceof GenerationSpawnError || err instanceof GenerationOutputError) {
-          return reply.badGateway(err.message);
-        }
-        throw err;
-      }
-
-      // Issue #1082(c) — the refreshed target(s), and ONLY those, are
-      // stripped from the view computeScaffold's write pass sees; every
-      // other path (including a non-refreshed skill/reviewer that already
-      // exists) is left exactly as `existingFiles` reported it, so
-      // computeScaffold's own "create once, never overwrite" rule leaves it
-      // untouched. `hasSkill`/`hasReviewer` above were already computed off
-      // the UNMODIFIED `existingFiles` — generateScaffoldContent's seed
-      // logic (does a DB draft still apply?) must reflect what's actually
-      // PRESENT right now (committed, or just an uncommitted write from a
-      // reused preview window — see the 409 message's own comment above),
-      // not what this request is about to overwrite.
-      const refreshedPaths: string[] = [];
-      if (refreshSkill) refreshedPaths.push(scaffoldSkillPath(options.slug));
-      if (refreshReviewer) refreshedPaths.push(scaffoldReviewerPath(options.slug));
-      const writeExistingFiles = withoutRefreshedPaths(existingFiles, refreshedPaths);
-
-      const result = await finishPreview(
-        app,
-        project.hostId,
-        projectId,
-        { ...options, generated },
-        ensured.worktree,
-        writeExistingFiles,
-        existingInstructions !== "keep",
-      );
-      if (!result.ok) return sendPreviewComputation(reply, result);
-      // Hermes review, PR #1200 round 1 (suggestion) — `hasAgentsOverride`
-      // is computed and returned here, same as `possiblyGeneric` below, so
-      // /setup/generate's response has the identical shape to /setup/preview's
-      // plus the generation-only fields. ProjectSetupPanel's "Generate with
-      // agent" button reads all of them.
-      const response: {
-        previewId: string;
-        diff: string;
-        files: string[];
-        sandboxed: boolean;
-        hasAgentsOverride: boolean;
-        possiblyGeneric?: boolean;
-        conflicts?: ScaffoldConflict[];
-        droppedConflictLines?: number;
-        possiblyLossy?: boolean;
-      } = {
-        previewId: result.previewId,
-        diff: result.diff,
-        files: result.files,
-        sandboxed: generated.sandboxed,
-        hasAgentsOverride: result.hasAgentsOverride,
+      const options: ScaffoldOptions = {
+        slug: request.body.slug,
+        includeContributingPointer: request.body.includeContributingPointer,
+        symlinkAgentsSkills: request.body.symlinkAgentsSkills,
+        includeDockConfig: request.body.includeDockConfig,
+        workflowConventionsText: resolveScaffoldWorkflowConventionsText(app, project),
       };
-      if (generated.possiblyGeneric) {
-        response.possiblyGeneric = true;
+      if (!isValidScaffoldSlug(options.slug)) {
+        return reply.badRequest(`"${options.slug}" is not a safe slug`);
       }
-      // Issue #2316 — present only for the mode that produced them.
-      if (generated.conflicts) response.conflicts = generated.conflicts;
-      if (generated.droppedConflictLines) {
-        response.droppedConflictLines = generated.droppedConflictLines;
+
+      sweepExpiredPreviews();
+      const inFlight = getInFlightGenerateJob(projectId);
+      if (inFlight) {
+        return reply.code(202).send({ jobId: inFlight.id });
       }
-      if (generated.possiblyLossy) response.possiblyLossy = true;
-      return response;
+
+      const prepared = await prepareScaffoldGeneration(
+        app,
+        project,
+        projectId,
+        options,
+        request.body,
+      );
+      if (!prepared.ok) {
+        return sendGenerateOutcome(reply, prepared);
+      }
+
+      const { job } = startGenerateJob({
+        projectId,
+        slug: options.slug,
+        agent: prepared.prepared.agentCommand,
+        mode: prepared.prepared.existingInstructions,
+        log: app.log,
+        run: ({ setPhase }) =>
+          executeScaffoldGeneration(app, project, projectId, prepared.prepared, setPhase),
+      });
+      return reply.code(202).send({ jobId: job.id });
+    },
+  );
+
+  app.get<{ Params: { id: string; jobId: string } }>(
+    "/api/projects/:id/setup/generate/jobs/:jobId",
+    GENERATE_POLL_RATE_LIMIT,
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const project = getProjectOr404(projectId);
+      if (!project) return reply.notFound();
+
+      sweepExpiredPreviews();
+      const job = getGenerateJob(request.params.jobId);
+      if (!job || job.projectId !== projectId) return reply.notFound();
+      return serializeGenerateJob(job);
+    },
+  );
+
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/setup/generate/active",
+    GENERATE_POLL_RATE_LIMIT,
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const project = getProjectOr404(projectId);
+      if (!project) return reply.notFound();
+
+      sweepExpiredPreviews();
+      const job = getActiveGenerateJob(projectId);
+      if (!job) return reply.code(204).send();
+      return serializeGenerateJob(job);
     },
   );
 
@@ -1011,7 +1243,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
 
       const repoRef = await resolveRepoRef(app, project);
       if (!repoRef) {
-        previews.delete(request.body.previewId);
+        deletePreview(request.body.previewId);
         return {
           ok: true,
           mode: "local-branch",
@@ -1023,7 +1255,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
       // #2321 — applying a scaffold is the user's action: push as their account.
       const token = getToken(app);
       if (!token) {
-        previews.delete(request.body.previewId);
+        deletePreview(request.body.previewId);
         return {
           ok: true,
           mode: "local-branch",
@@ -1060,7 +1292,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
           base,
           body: "Adds a Mullion briefing region to AGENTS.md, a CLAUDE.md @AGENTS.md import (Claude Code does not read AGENTS.md natively — the import is what loads it), a project skill, a reviewer subagent, and (if opted in) a CONTRIBUTING.md pointer — scaffolded by Mullion's setup flow, not hand-written. Review and edit the placeholder sections before merging.",
         });
-        previews.delete(request.body.previewId);
+        deletePreview(request.body.previewId);
         return { ok: true, mode: "pull-request", prUrl: pr.htmlUrl, prNumber: pr.number };
       } catch (err) {
         if (err instanceof GitHubApiError && err.statusCode === 422) {
@@ -1071,7 +1303,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
             `${repoRef.owner}:${record.branch}`,
           ).catch(() => null);
           if (existing) {
-            previews.delete(request.body.previewId);
+            deletePreview(request.body.previewId);
             return {
               ok: true,
               mode: "pull-request",
