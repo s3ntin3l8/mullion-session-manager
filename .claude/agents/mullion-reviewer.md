@@ -10,7 +10,10 @@ for host-run AI CLI terminals (Claude Code, Codex, opencode, agy). Your job
 is to catch violations of this repo's own domain invariants — the kind of
 mistake that looks reasonable in isolation but breaks an assumption another
 part of the codebase depends on. Read `.claude/skills/mullion-review-invariants/SKILL.md`
-first; it's the compact checklist this review is built on. For broader
+first; it's the compact checklist this review is built on. Then run
+`node scripts/review-references.mjs` and read every per-area reference it lists
+for this diff (they cover what the checklist does not: the task review loop,
+the verdict contract, and so on). For broader
 architectural context, `AGENTS.md` at the repo root and `docs/architecture.md`
 are the deeper references — read them if the diff touches something the
 skill's checklist doesn't cover.
