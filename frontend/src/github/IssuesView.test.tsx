@@ -92,6 +92,29 @@ describe("IssuesSection", () => {
     expect(onOpen).toHaveBeenCalledWith(7);
   });
 
+  it("Manual lists the issues Task Master is not working, even with no session on them", async () => {
+    const plain = { ...LIST.issues[0], number: 8, title: "Plain issue", taskStatus: null };
+    const list = { ...LIST, issues: [LIST.issues[0], plain] };
+    // The origin filter only shows while Task Master is on.
+    const wasEnabled = useDashboardStore.getState().taskMasterEnabled;
+    useDashboardStore.setState({ taskMasterEnabled: true });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(200, list))),
+    );
+    render(
+      <IssuesSection projectId={1} openIssues={2} issuesHidden={false} onOpenIssue={vi.fn()} />,
+    );
+    expect(await screen.findByText("Plain issue")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Manual" }));
+    expect(screen.getByText("Plain issue")).toBeInTheDocument();
+    expect(screen.queryByText("Crash on start")).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Task Master" }));
+    expect(screen.getByText("Crash on start")).toBeInTheDocument();
+    expect(screen.queryByText("Plain issue")).toBeNull();
+    useDashboardStore.setState({ taskMasterEnabled: wasEnabled });
+  });
+
   it("sorts through the sort popover and refetches with the new sort", async () => {
     const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, LIST)));
     vi.stubGlobal("fetch", fetchMock);

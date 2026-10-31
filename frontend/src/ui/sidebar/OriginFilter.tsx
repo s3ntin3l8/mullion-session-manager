@@ -6,7 +6,8 @@ const OPTIONS: Array<{ value: OriginFilterValue; label: string }> = [
   { value: "manual", label: "Manual" },
 ];
 
-/** All / Task Master / Manual, in a section header: who is working these rows. */
+/** All / Task Master / Manual, in a section header. Manual is everything Task Master is
+ *  not working — a hand-started session on the row is not required. */
 export function OriginFilter({
   value,
   onChange,

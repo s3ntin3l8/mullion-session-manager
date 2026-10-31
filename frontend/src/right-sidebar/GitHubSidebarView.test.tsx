@@ -218,8 +218,10 @@ describe("GitHubSidebarView", () => {
     expect(screen.queryByText("PR title 1")).toBeNull();
     expect(screen.getByText("PR title 2")).toBeTruthy();
 
+    // Manual is "not Task Master's": the human PR stays with no live session on it.
     await user.click(within(prFilter).getByRole("button", { name: "Manual" }));
-    expect(screen.getByText("No pull requests match this filter")).toBeTruthy();
+    expect(screen.getByText("PR title 1")).toBeTruthy();
+    expect(screen.queryByText("PR title 2")).toBeNull();
     unmount();
 
     // Turning Task Master off removes the control and must drop the filter with it.
