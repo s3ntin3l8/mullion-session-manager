@@ -98,7 +98,6 @@ import { openDraftPRForTask } from "./task-promote.js";
 import { maybeAutoEnableConventionalTitles } from "./project-release-please.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "./task-approve.js";
 import { markTaskMerged, notifyTaskMerged } from "./task-merged.js";
-import { cleanupMergedTaskBranch } from "./task-approve.js";
 import { reseedTaskIfSessionExited } from "./task-reseed.js";
 import { resolveHostGitStatus, resolveRepoRef } from "./host-git.js";
 import { deriveTaskBranchName, deriveWorktreePath } from "./git-worktree.js";
@@ -1724,6 +1723,10 @@ function clearMergeState(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
+  // True when markTaskMerged just won the merge write: its branch cleanup
+  // already owns the worktree removal, and a second concurrent
+  // removeWorktreeIfClean would make that chain lose and keep the branch.
+  worktreeHandled = false,
 ): void {
   app.db
     .update(tasks)
@@ -1752,7 +1755,7 @@ function clearMergeState(
   // removeWorktreeIfClean returns "not-a-repo" on an already-gone
   // directory, and killSession is a safe no-op on an already-"killed"
   // session.
-  cleanupTaskWorktree(app, task, project);
+  if (!worktreeHandled) cleanupTaskWorktree(app, task, project);
   cleanupTaskSessions(app, task);
 }
 
@@ -2136,11 +2139,11 @@ function finishMergedDoneTask(
   project: typeof projects.$inferSelect,
   mergedAt?: Date,
 ): void {
-  markTaskMerged(app, task, project, mergedAt);
+  const won = markTaskMerged(app, task, project, mergedAt);
   if (project.autoTagRelease) {
     app.db.update(tasks).set({ releaseRequestedAt: new Date() }).where(eq(tasks.id, task.id)).run();
   }
-  clearMergeState(app, task, project);
+  clearMergeState(app, task, project, won);
 }
 
 /**
@@ -2172,13 +2175,14 @@ export async function finishTaskForMergedPr(
       mergedAt: mergedAt ?? null,
     });
   } else {
-    app.db
+    // A claimed/in_progress task can hold a live worktree (a follow-up
+    // round), so only record the merge here; its own end-of-task path cleans up.
+    const { changes } = app.db
       .update(tasks)
       .set({ mergedAt: mergedAt ? new Date(mergedAt) : new Date() })
       .where(and(eq(tasks.id, task.id), isNull(tasks.mergedAt)))
       .run();
-    notifyTaskMerged(app, task.id);
-    cleanupMergedTaskBranch(app, task, project);
+    if (changes > 0) notifyTaskMerged(app, task.id);
   }
 }
 
@@ -2214,8 +2218,8 @@ async function attemptMerge(
         // comment below already relies on: "already-done" collapses merged
         // and closed-without-merging into one verdict, and only the former
         // should archive.
-        if (pr.merged) markTaskMerged(app, task, project);
-        clearMergeState(app, task, project);
+        const won = pr.merged && markTaskMerged(app, task, project);
+        clearMergeState(app, task, project, won);
         return;
       }
       case "clean": {

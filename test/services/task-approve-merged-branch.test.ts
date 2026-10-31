@@ -86,6 +86,14 @@ describe("cleanupMergedTaskBranch", () => {
     expect(log.debug).toHaveBeenCalled();
   });
 
+  it("keeps the branch when removing the worktree throws", async () => {
+    removeWorktreeIfClean.mockRejectedValue(new Error("boom"));
+    cleanupMergedTaskBranch(app, task, project);
+    await settle();
+    expect(deleteBranch).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalled();
+  });
+
   it("swallows a backend failure", async () => {
     deleteBranch.mockRejectedValue(new Error("boom"));
     cleanupMergedTaskBranch(app, task, project);

@@ -16,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import type * as HermesReview from "../../src/services/hermes-review.js";
+import type * as TaskApprove from "../../src/services/task-approve.js";
 import type * as TaskReconciler from "../../src/services/task-reconciler.js";
 import { assertReviewerConfigured, requestHermesReview } from "../../src/services/hermes-review.js";
 import { PR_REVIEW_DEFAULTS } from "../helpers/pr-review-defaults.js";
@@ -34,6 +35,12 @@ vi.mock("../../src/services/hermes-review.js", async (importOriginal) => {
     assertReviewerConfigured: vi.fn(actual.assertReviewerConfigured),
     requestHermesReview: vi.fn(actual.requestHermesReview),
   };
+});
+
+// Passthrough wrapper so a test can assert a merge did not start branch cleanup.
+vi.mock("../../src/services/task-approve.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof TaskApprove>();
+  return { ...actual, cleanupMergedTaskBranch: vi.fn(actual.cleanupMergedTaskBranch) };
 });
 
 // Passthrough wrapper so a test can make the sidebar merge's task bookkeeping
@@ -305,6 +312,24 @@ describe("projects route", () => {
           const after = await readTask(app, task.id);
           expect(after.status).toBe("done");
           expect(after.archivedAt).toBeTruthy();
+          fs.rmSync(projectCwd, { recursive: true, force: true });
+        });
+
+        it("records the merge on an in_progress task without cleaning up its worktree", async () => {
+          const { app, id, projectCwd, merge } = await mergeSetup(84);
+          const { tasks } = await import("../../src/db/schema.js");
+          const { cleanupMergedTaskBranch } = await import("../../src/services/task-approve.js");
+          vi.mocked(cleanupMergedTaskBranch).mockClear();
+          const [task] = app.db
+            .insert(tasks)
+            .values({ projectId: id, title: "w", status: "in_progress", prNumber: 84 })
+            .returning()
+            .all();
+          expect((await merge()).statusCode).toBe(200);
+          const after = await readTask(app, task.id);
+          expect(after.mergedAt).toBeTruthy();
+          expect(after.status).toBe("in_progress");
+          expect(cleanupMergedTaskBranch).not.toHaveBeenCalled();
           fs.rmSync(projectCwd, { recursive: true, force: true });
         });
 

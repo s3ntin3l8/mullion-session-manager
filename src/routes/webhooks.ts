@@ -292,14 +292,14 @@ export async function webhookRoutes(app: FastifyInstance) {
                 // before a human merges the PR). A PR merged early, while
                 // the task still sits in reviewing, only gets mergedAt here;
                 // the reviewing-task ending just below moves it to done.
-                app.db
+                const { changes } = app.db
                   .update(tasks)
                   .set(
                     matchedTask.status === "done"
                       ? { mergedAt: now, archivedAt: now }
                       : { mergedAt: now },
                   )
-                  .where(eq(tasks.id, matchedTask.id))
+                  .where(and(eq(tasks.id, matchedTask.id), isNull(tasks.mergedAt)))
                   .run();
                 // Clears the board's "PR open — needs merge" badge live.
                 broadcastTaskEvent({
@@ -310,7 +310,7 @@ export async function webhookRoutes(app: FastifyInstance) {
                 });
                 // A reviewing task's merge is cleaned up by endReviewingTask
                 // just below; only an already-done task needs it here.
-                if (matchedTask.status === "done") {
+                if (changes > 0 && matchedTask.status === "done") {
                   const mergedProject = app.db
                     .select()
                     .from(projects)
