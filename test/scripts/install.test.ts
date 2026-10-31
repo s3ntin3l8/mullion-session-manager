@@ -340,7 +340,19 @@ describeOnLinux("deploy/install.sh", () => {
     );
 
     baseEnv = scrubbedEnv();
-    baseEnv.PATH = `${binDir}:${process.env.PATH}`;
+    // Pinned, not inherited: the sandbox needs only the shim dir (which holds
+    // node, npm, dtach, curl, ... ) plus the trusted system dirs. A caller's
+    // PATH can put a non-GNU `rm` (a recoverable-delete shim) ahead of
+    // /bin/rm and change what the installer's removals actually do.
+    baseEnv.PATH = [
+      binDir,
+      "/usr/local/sbin",
+      "/usr/local/bin",
+      "/usr/sbin",
+      "/usr/bin",
+      "/sbin",
+      "/bin",
+    ].join(":");
     // The actual safety-critical override: install.sh's ~/.config and
     // ~/.local/bin writes are bash tilde-expansions of $HOME.
     baseEnv.HOME = fakeHome;
@@ -1253,6 +1265,36 @@ sed -n "/<key>$LEAF<\\/key>/{n;s/.*<string>\\(.*\\)<\\/string>.*/\\1/p;}" "$FILE
       expect(log).toContainEqual(`bootout ${domain}/com.mullion.agent`);
       // Same install root, same .env, same PORT — the definition goes too.
       expect(fs.existsSync(otherPlist)).toBe(false);
+    });
+
+    it("warns on stderr, naming the plist, when removing the other role's plist fails", async () => {
+      // A shim `rm` FIRST on PATH that fails (and unlinks nothing) for the
+      // other role's plist only, delegating everything else to /bin/rm. The
+      // file surviving alone is ambiguous ("never ran" vs "failed"); the
+      // warning text is what proves the failure was reported.
+      writeDarwinShim();
+      writeLoadedLaunchctlShim();
+      const mullionHome = freshMullionHome();
+      skipDownload(mullionHome);
+      const otherPlist = seedOtherLaunchdJob("com.mullion.agent", mullionHome);
+      const failDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-failrm-"));
+      try {
+        const shim = path.join(failDir, "rm");
+        fs.writeFileSync(
+          shim,
+          `#!/bin/bash\nfor a in "$@"; do\n  if [ "$a" = "$FAIL_RM_PATH" ]; then exit 1; fi\ndone\nexec /bin/rm "$@"\n`,
+          { mode: 0o755 },
+        );
+
+        const { stderr } = await runScript(["--role", "primary", mullionHome], {
+          env: { PATH: `${failDir}:${baseEnv.PATH}`, FAIL_RM_PATH: otherPlist },
+        });
+
+        expect(fs.existsSync(otherPlist)).toBe(true);
+        expect(stderr).toContain(`WARNING: failed to remove ${otherPlist}`);
+      } finally {
+        fs.rmSync(failDir, { recursive: true, force: true });
+      }
     });
 
     it("boots the other role's job out when its install root cannot be determined", async () => {
