@@ -2297,9 +2297,10 @@ export interface Task {
   prTitleFallback: boolean;
   // Server-computed from the issue body's `Agent:` / `ReviewAgent:` lines
   // (routes/tasks.ts's withIssueDirectives): the usable directive value, or
-  // null when absent/unknown/unusable. `issueReviewAgent` may be "none".
-  issueAgent?: string | null;
-  issueReviewAgent?: string | null;
+  // null when absent/unknown. `issueReviewAgent` may be "none" (also for
+  // hermes while unusable, which resolves to no reviewer).
+  issueAgent: string | null;
+  issueReviewAgent: string | null;
   // Merge-on-approve — set at approve time when the project's
   // mergeOnApprove is on, or by a manual "Merge now"/"Retry merge" click.
   // The reconciler's merge sweep clears this once the PR merges (or is

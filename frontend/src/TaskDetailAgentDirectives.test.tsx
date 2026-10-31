@@ -10,7 +10,11 @@ import type { Task } from "./api/index.js";
 // The Agent / Review agent dropdowns show the effective choice in the
 // backend's resolution order: task value, issue-body directive, project default.
 let tasks: Task[];
-const updateTask = vi.fn(async () => makeTask({}));
+const updateTask = vi.fn(async (id: number, patch: Partial<Task>) => {
+  tasks = tasks.map((t) => (t.id === id ? { ...t, ...patch } : t));
+  return tasks[0];
+});
+let rerender: () => void;
 
 vi.mock("./store/index.js", () => ({
   useDashboardStore: (selector?: (s: unknown) => unknown) => {
@@ -50,7 +54,10 @@ vi.mock("./api/index.js", async () => {
 
 async function renderTask(overrides: Partial<Task>) {
   tasks = [makeTask({ id: 1, status: "backlog", ...overrides })];
-  render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+  const ui = () => <TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />;
+  const r = render(ui());
+  // A fresh element each time: re-rendering the same element object bails out.
+  rerender = () => r.rerender(ui());
   await screen.findAllByRole("option", { name: "Claude Code" });
   return screen.getAllByRole("combobox");
 }
@@ -75,6 +82,8 @@ describe("TaskDetail agent dropdowns and issue directives", () => {
     expect(agent).toHaveValue("claude");
     await user.selectOptions(agent, "");
     expect(updateTask).toHaveBeenCalledWith(1, { agent: null });
+    rerender();
+    expect(screen.getAllByRole("combobox")[0]).toHaveDisplayValue("codex (from issue)");
   });
 
   it("writes the task field when picking a value over the directive", async () => {
@@ -82,6 +91,11 @@ describe("TaskDetail agent dropdowns and issue directives", () => {
     const [, review] = await renderTask({ issueReviewAgent: "claude" });
     await user.selectOptions(review, "none");
     expect(updateTask).toHaveBeenCalledWith(1, { reviewAgent: "none" });
+  });
+
+  it("labels a directive hermes (usable or already reported as none) from the server value", async () => {
+    const [, review] = await renderTask({ issueReviewAgent: "hermes" });
+    expect(review).toHaveDisplayValue("hermes (from issue)");
   });
 
   it("falls back to the project default when there is no usable directive", async () => {

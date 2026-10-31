@@ -27,8 +27,9 @@ function parseDirectiveLine(body: string | null, re: RegExp): string | null {
  * The issue body's usable `Agent:` / `ReviewAgent:` directives, for display
  * (the task detail dropdowns). Applies the same validity checks the resolvers
  * use, so a value that would fall through there is `null` here: an unknown
- * agent, or `hermes` while Hermes isn't usable. `ReviewAgent: none`/`false`
- * is reported as "none".
+ * agent (falls through). `ReviewAgent: none`/`false` is reported as "none", and
+ * so is `hermes` while Hermes isn't usable, since the resolver yields no
+ * reviewer for it rather than falling through.
  */
 export function issueDirectiveAgents(
   app: FastifyInstance,
@@ -41,9 +42,11 @@ export function issueDirectiveAgents(
   let issueReviewAgent: string | null = null;
   if (review === "none" || review === "false") issueReviewAgent = "none";
   else if (review !== null) {
-    const known = (KNOWN_AGENTS as readonly string[]).includes(review);
-    if (known || (review === HERMES_REVIEW_AGENT && hermesTaskReviewerUsable(app))) {
-      issueReviewAgent = review;
+    if ((KNOWN_AGENTS as readonly string[]).includes(review)) issueReviewAgent = review;
+    else if (review === HERMES_REVIEW_AGENT) {
+      // An unusable hermes does NOT fall through (resolveReviewer): it
+      // resolves to no reviewer, so report that, not the project default.
+      issueReviewAgent = hermesTaskReviewerUsable(app) ? review : "none";
     }
   }
   return { issueAgent, issueReviewAgent };

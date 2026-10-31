@@ -54,9 +54,9 @@ describe("GET /api/tasks/:id issue directives", () => {
     expect(list.find((t: { id: number }) => t.id === id)).toMatchObject({ issueAgent: "codex" });
   });
 
-  it("hides hermes until Hermes is usable", async () => {
+  it("reports hermes as none until Hermes is usable (no reviewer, no fall-through)", async () => {
     const id = insert("ReviewAgent: hermes");
-    expect(await get(id)).toMatchObject({ issueReviewAgent: null });
+    expect(await get(id)).toMatchObject({ issueReviewAgent: "none" });
     applySettingsPatch(app, {
       reviewRelay: { apiUrl: "http://hermes.test:8643", taskMasterReviewer: true },
     });
