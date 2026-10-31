@@ -8,6 +8,7 @@ import type * as ChildProcess from "node:child_process";
 import { gitEnv } from "../../src/services/git-env.js";
 import type { SessionBackend } from "../../src/services/session-backend.js";
 import { tasks } from "../../src/db/schema.js";
+import { eq } from "drizzle-orm";
 
 // POST /api/tasks/:id/reject on a task whose worker is still running (the
 // normal state of a task in review): the feedback is typed into that session,
@@ -142,6 +143,8 @@ describe("POST /api/tasks/:id/reject on a task with a live worker", () => {
     return {
       res,
       activeSessionId,
+      taskId: task.id,
+      app,
       cleanup: async () => {
         resolveBackendSpy.mockRestore();
         fs.rmSync(cwd, { recursive: true, force: true });
@@ -189,6 +192,29 @@ describe("POST /api/tasks/:id/reject on a task with a live worker", () => {
     expect(res.json().sessionId).toBe(activeSessionId);
     expect(prompt).not.toHaveBeenCalled();
     expect(terminate).not.toHaveBeenCalled();
+    await cleanup();
+  });
+
+  it("refuses with a 409, changing nothing and killing nothing, while the worker is blocked on a dialog", async () => {
+    const prompt = vi.fn();
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    const liveStatus = vi.fn((ids: string[]) =>
+      Promise.resolve({ [ids[0]]: { permissionState: "pending" } }),
+    );
+    const { res, activeSessionId, taskId, app, cleanup } = await rejectActiveWorker({
+      prompt,
+      terminate,
+      liveStatus: liveStatus as never,
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(res.json().message).toMatch(/awaiting permission/);
+    expect(prompt).not.toHaveBeenCalled();
+    expect(terminate).not.toHaveBeenCalled();
+    // Still in review, with the same worker: the human can reject again later.
+    const [row] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
+    expect(row.status).toBe("reviewing");
+    expect(row.sessionId).toBe(activeSessionId);
     await cleanup();
   });
 

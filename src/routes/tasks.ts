@@ -30,6 +30,7 @@ import {
 import { approveWorkflowChange } from "../services/task-workflow-gate.js";
 import { resolveTaskWorkerHost } from "../services/session-live-info.js";
 import { deliverRejectFeedback } from "../services/task-reject.js";
+import { readLiveWorkerState } from "../services/task-reseed.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { resolveRepoRef } from "../services/host-git.js";
@@ -1540,6 +1541,18 @@ export async function tasksRoute(app: FastifyInstance) {
       // through to a misleading "no longer in reviewing" 409 below.
       if (existing.status !== "reviewing") {
         return reply.conflict(`Cannot reject a task in status "${existing.status}"`);
+      }
+      // A worker that is blocked on a dialog or busy mid-turn can't take the
+      // feedback now, and the only other way to deliver it is to terminate the
+      // worker and lose its context. Refuse BEFORE the transition instead, so
+      // nothing changes and the human can reject again once it is idle. (An
+      // unreachable host, an exited session, or an agent that takes no typed
+      // prompt is handled after it, by deliverRejectFeedback.)
+      const worker = await readLiveWorkerState(app, existing);
+      if (worker.kind === "occupied") {
+        return reply.conflict(
+          `The task's agent is ${worker.status.replace(/_/g, " ")} — wait for it to settle (or answer its prompt), then reject again`,
+        );
       }
       const [updated] = app.db
         .update(tasks)

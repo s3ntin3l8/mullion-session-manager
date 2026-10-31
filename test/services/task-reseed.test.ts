@@ -29,7 +29,7 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { tasks, sessions } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
-const { reseedTaskIfSessionExited, promptLiveTaskWorker } =
+const { reseedTaskIfSessionExited, promptLiveTaskWorker, readLiveWorkerState } =
   await import("../../src/services/task-reseed.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-reseed-test-${process.pid}.db`);
@@ -336,6 +336,34 @@ describe("reseedTaskIfSessionExited", () => {
     const [updated] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
     expect(updated.sessionId).toBe(task.sessionId);
     expect(updated.status).toBe("done");
+  });
+
+  describe("readLiveWorkerState", () => {
+    it("is quiet for an idle live worker, and names the host that owns it", async () => {
+      const { task: taskRow } = insertTaskWithSession("active");
+      expect(await readLiveWorkerState(app, taskRow)).toMatchObject({ kind: "quiet" });
+    });
+
+    it.each([
+      ["a permission dialog", { permissionState: "pending" }, "awaiting_permission"],
+      ["a turn in flight", { activity: "working" }, "working"],
+    ])("is occupied while the worker waits on %s", async (_label, info, status) => {
+      const { task: taskRow, sessionId } = insertTaskWithSession("active");
+      mockLiveStatus.mockResolvedValue({ [String(sessionId)]: info });
+      expect(await readLiveWorkerState(app, taskRow)).toEqual({ kind: "occupied", status });
+    });
+
+    it("is none for no session, and for one that has exited", async () => {
+      expect(await readLiveWorkerState(app, { sessionId: null })).toEqual({ kind: "none" });
+      const { task: exited } = insertTaskWithSession("exited");
+      expect(await readLiveWorkerState(app, exited)).toEqual({ kind: "none" });
+    });
+
+    it("is unreachable when the host cannot be read", async () => {
+      const { task: taskRow } = insertTaskWithSession("active");
+      mockLiveStatus.mockRejectedValue(new Error("connect ETIMEDOUT"));
+      expect(await readLiveWorkerState(app, taskRow)).toEqual({ kind: "unreachable" });
+    });
   });
 
   describe("promptLiveTaskWorker", () => {

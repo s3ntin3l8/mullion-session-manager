@@ -1276,9 +1276,12 @@ task in `reviewing`, untouched and safely retryable — never half-promoted.
 
 On reject (`reviewing → in_progress`): the feedback is typed into the
 task's still-running worker (`promptLiveTaskWorker`, `task-reseed.ts`), so it
-keeps its context; its next turn end sends the task back to review. If the
-worker is blocked on a dialog, busy mid-turn, or its agent takes no typed
-prompt, it is terminated and re-seeded (`force: true`, as the review-feedback
+keeps its context; its next turn end sends the task back to review. A worker
+that is blocked on a dialog or busy mid-turn is refused up front with a 409 —
+nothing changes and nothing is killed, and the human rejects again once it is
+idle. A worker whose host does not answer is left as it was. If the worker's
+agent takes no typed prompt (or the prompt fails after the check passed), it
+is terminated and re-seeded (`force: true`, as the review-feedback
 auto-return does); if its session had already exited, a fresh one is
 re-seeded the same way. Either re-seed is in the **same** worktree (never a
 new one) with the feedback as its prompt. A draft PR, if

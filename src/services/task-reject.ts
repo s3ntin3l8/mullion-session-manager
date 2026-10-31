@@ -5,10 +5,12 @@
 // its prompt, so the feedback is typed into that session
 // (promptLiveTaskWorker, task-reseed.ts) — keeping its context and
 // scrollback — and its next turn end sends the task back to review. When
-// the session can't take it (blocked on a dialog, busy mid-turn, an agent
-// with no typed-prompt support) the still-active worker is terminated and
-// re-seeded the way task-reconciler.ts's review-feedback auto-return does
-// (`force: true`): a stuck worker must not leave the feedback undelivered.
+// the session can't take it (an agent with no typed-prompt support, or a
+// prompt that failed after the route's idle check passed) the still-active
+// worker is terminated and re-seeded the way task-reconciler.ts's
+// review-feedback auto-return does (`force: true`): a stuck worker must not
+// leave the feedback undelivered. A worker that is busy or blocked never gets
+// this far — the route refuses with a 409 first, so its context is kept.
 // When the session had already exited, a fresh one is spawned in the SAME
 // worktree, seeded with the feedback, so a reject doesn't strand the task
 // with no agent attached. The spawn-or-not mechanics are shared with that

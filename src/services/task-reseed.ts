@@ -43,6 +43,54 @@ export type LiveWorkerPrompt =
   /** The worker's host did not answer, so nothing is known about the session. */
   | "unreachable";
 
+/** Where a task's worker stands, as far as typing into it is concerned. */
+export type LiveWorkerState =
+  /** No session that is still running (none recorded, exited, or gone). */
+  | { kind: "none" }
+  /** The worker's host did not answer, so nothing is known about the session. */
+  | { kind: "unreachable" }
+  /** Blocked on a dialog or busy mid-turn: typing would answer it or queue behind it. */
+  | { kind: "occupied"; status: string }
+  /** Idle at its prompt, on the host that owns it. */
+  | { kind: "quiet"; hostId: string };
+
+/**
+ * Reads the task's worker session fresh, from the host that owns it, and says
+ * whether it can be typed into. Never throws: a read that fails is
+ * `"unreachable"`.
+ */
+export async function readLiveWorkerState(
+  app: FastifyInstance,
+  task: Pick<TaskRow, "sessionId">,
+): Promise<LiveWorkerState> {
+  if (!task.sessionId) return { kind: "none" };
+  const [row] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
+  if (!row || row.status !== "active") return { kind: "none" };
+  const hostId = resolveSessionHostId(app, row);
+  const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
+  try {
+    const { info, hostReachable, hostRefusedStatus } = await readSessionLiveInfo(
+      app,
+      row,
+      idleThresholdMs,
+      hostId,
+      { fresh: true },
+    );
+    if (!hostReachable) return { kind: "unreachable" };
+    const { sessionStatus, sessionStatusSeverity } = withLiveInfo(app, row, info, hostId, {
+      hostReachable,
+      hostRefusedStatus,
+    });
+    if (sessionStatusSeverity === "gone") return { kind: "none" };
+    if (sessionStatusSeverity === "blocked" || sessionStatusSeverity === "busy") {
+      return { kind: "occupied", status: sessionStatus };
+    }
+    return { kind: "quiet", hostId };
+  } catch {
+    return { kind: "unreachable" };
+  }
+}
+
 /**
  * Types `prompt` into the task's still-running worker and submits it — the
  * reject path's way of getting a human's feedback to an agent that is idle at
@@ -56,10 +104,10 @@ export type LiveWorkerPrompt =
  * nothing about the session, which may be perfectly healthy, so the caller
  * must NOT terminate it — terminating through that host would fail anyway.
  *
- * The derived status is read fresh right before typing, and the prompt goes
- * through the backend of the host that owns the PTY (local or remote). Unlike
- * the control socket's prompt it does not re-check between typing and Enter
- * (the backend's `prompt` has no such seam for a remote host). That leaves a
+ * The state is read fresh right before typing, and the prompt goes through
+ * the backend of the host that owns the PTY (local or remote). Unlike the
+ * control socket's prompt it does not re-check between typing and Enter (the
+ * backend's `prompt` has no such seam for a remote host). That leaves a
  * `submitDelayMs` window in which a dialog could appear and the Enter would
  * answer it; for a worker that was idle a moment ago the likelier cost is one
  * extra review round.
@@ -70,45 +118,23 @@ export async function promptLiveTaskWorker(
   prompt: string,
   logContext: string,
 ): Promise<LiveWorkerPrompt> {
-  if (!task.sessionId) return "declined";
-  const [row] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
-  if (!row || row.status !== "active") return "declined";
-  const hostId = resolveSessionHostId(app, row);
-  const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
-  try {
-    const { info, hostReachable, hostRefusedStatus } = await readSessionLiveInfo(
-      app,
-      row,
-      idleThresholdMs,
-      hostId,
-      { fresh: true },
+  const state = await readLiveWorkerState(app, task);
+  if (state.kind === "unreachable") {
+    app.log.info(
+      { taskId: task.id, sessionId: task.sessionId },
+      `${logContext}: the worker's host did not answer, leaving the session alone`,
     );
-    if (!hostReachable) {
-      app.log.info(
-        { taskId: task.id, sessionId: task.sessionId, hostId },
-        `${logContext}: the worker's host did not answer, leaving the session alone`,
-      );
-      return "unreachable";
-    }
-    const { sessionStatus, sessionStatusSeverity } = withLiveInfo(app, row, info, hostId, {
-      hostReachable,
-      hostRefusedStatus,
-    });
-    // Only a quiet agent: "blocked" would have Enter answer its dialog, "busy"
-    // would queue the text behind a turn nobody is waiting on, "gone" has no
-    // one to read it.
-    if (
-      sessionStatusSeverity === "blocked" ||
-      sessionStatusSeverity === "gone" ||
-      sessionStatusSeverity === "busy"
-    ) {
-      app.log.info(
-        { taskId: task.id, sessionId: task.sessionId, status: sessionStatus },
-        `${logContext}: worker is ${sessionStatus}, not typing into it`,
-      );
-      return "declined";
-    }
-    const outcome = await resolveBackend(app, hostId).prompt(String(task.sessionId), {
+    return "unreachable";
+  }
+  if (state.kind !== "quiet") {
+    app.log.info(
+      { taskId: task.id, sessionId: task.sessionId, state },
+      `${logContext}: worker is not idle, not typing into it`,
+    );
+    return "declined";
+  }
+  try {
+    const outcome = await resolveBackend(app, state.hostId).prompt(String(task.sessionId), {
       text: prompt,
       submit: true,
     });
