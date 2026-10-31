@@ -686,7 +686,11 @@ re-broken, evidence}` for each earlier finding; `verified`/`notes`/
   when empty — preceded by `### Earlier findings` on a follow-up round and
   followed by `### Verified`/`### Notes`/`### Looks Good` when
   non-empty. A freeform (non-JSON) review renders verbatim instead, since
-  its `summary` holds the whole file, not one sentence.
+  its `summary` holds the whole file, not one sentence. So does a structured
+  review whose `summary` is over 300 characters _and_ whose `findings`,
+  `verified`, `notes`, `looksGood` and `previous` are all empty (the old
+  whole-review-in-`summary` shape); a long `summary` beside any of those
+  still gets the sections.
 
   A missing file is treated as **inconclusive**, not "no findings" and not
   "approved" — but not on the very first tick that observes it missing.
