@@ -179,6 +179,17 @@ describe("TasksSidebarView", () => {
     expect(await screen.findByText(/Fresh work/)).toBeTruthy();
     expect(screen.getByText(/Broken job/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "All 2" }).getAttribute("aria-pressed")).toBe("true");
+
+    // A new failed task must not silently resurrect the filter the user left.
+    useDashboardStore.setState({
+      tasks: [
+        task({ id: 1, title: "Fresh work", status: "ready", issueNumber: 11 }),
+        task({ id: 3, title: "Fresh failure", status: "failed", failureReason: "x" }),
+      ],
+    });
+    expect(await screen.findByText(/Fresh failure/)).toBeTruthy();
+    expect(screen.getByText(/Fresh work/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "All 2" }).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("matches the dot to the chip tone: red for a failed task, amber for one awaiting approval", () => {

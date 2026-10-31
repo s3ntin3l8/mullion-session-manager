@@ -67,8 +67,10 @@ export function TasksSidebarView({ projectId, actions }: RightSidebarViewProps) 
   }, [rows]);
   const needsYou = rows.filter((r) => r.reason !== null).length;
   // A chip disappears once its bucket empties (Retry on the last failed task,
-  // a project switch): drop back to All rather than filter into a blank list.
+  // a project switch): drop back to All, and write that back so the old filter
+  // does not silently return if the bucket refills.
   const active: StatusFilter = filter === "all" || counts[filter] ? filter : "all";
+  if (active !== filter) setFilter(active);
   const shown = active === "all" ? rows : rows.filter((r) => r.bucket === active);
 
   const openIssue = (issueNumber: number) =>
@@ -120,7 +122,6 @@ export function TasksSidebarView({ projectId, actions }: RightSidebarViewProps) 
               </StatusChip>
             ))}
           </div>
-          {shown.length === 0 && <EmptyStateNote>No tasks match this filter.</EmptyStateNote>}
           {shown.map(({ task, bucket, reason }) => {
             const open = openId === task.id;
             return (
