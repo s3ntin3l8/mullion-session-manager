@@ -1531,6 +1531,33 @@ describe("hooksPlugin (issue #172)", () => {
       expect(JSON.stringify(reply)).not.toContain("ghs_session_a");
     });
 
+    it("recovers a local session's credential from the DB after a primary restart", async () => {
+      app = await buildApp();
+      await app.ready();
+      const [projectRow] = app.db
+        .insert(projects)
+        .values({ name: "recover-p", cwd: "/tmp", hostId: "local" })
+        .returning()
+        .all();
+      app.db
+        .insert(sessions)
+        .values({ id: 2249, projectId: projectRow.id, command: "bash", status: "active" })
+        .run();
+      const session = app.pty.getOrCreate({
+        id: "2249",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+        projectId: projectRow.id,
+      });
+      // No store entry (as after a restart) and no GitHub connected: a manual
+      // session is recovered as such, and told what to do.
+      const reply = await ask(session.hookToken);
+      expect(String(reply.error)).toMatch(/connect GitHub/);
+      expect(reply.hostFirst).toBe(true);
+    });
+
     it("replies at once with an actionable error when there is no entry", async () => {
       app = await buildApp();
       await app.ready();

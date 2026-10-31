@@ -533,6 +533,7 @@ describe("github-integration service", () => {
     const repo = { owner: "acme", repo: "widgets" };
 
     it("is null (never the PAT) with no reviewer App configured", async () => {
+      fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
       const app = await buildApp();
       await setPat(app, "ghp_shared");
       expect(await resolveReviewerSessionReadToken(app, repo)).toBeNull();
