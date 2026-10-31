@@ -100,30 +100,21 @@ describe("mullion-review-invariants reference index", () => {
           }
         }
       }
-      let found = "";
-      try {
-        found = execFileSync(
-          "git",
-          [
-            "grep",
-            "-h",
-            "-o",
-            "-w",
-            "-F",
-            ...[...symbols].flatMap((s) => ["-e", s]),
-            "--",
-            "src",
-            "scripts",
-            "test",
-            "frontend/src",
-            "drizzle",
-          ],
-          { cwd: root, encoding: "utf8", env: gitEnv(), maxBuffer: 64 * 1024 * 1024 },
-        );
-      } catch {
-        // git grep exits 1 when nothing matched; every symbol is then missing.
+      // One pass over the tracked source: every identifier that appears anywhere
+      // in it. (A single `git grep -F` with one -e per symbol is superlinear and
+      // timed out once the references passed a hundred symbols.) The extension
+      // list matches what the old grep reached, minus the generated drizzle
+      // snapshots, which are large and only repeat what schema.ts and the SQL say.
+      const present = new Set<string>();
+      const sourceFile =
+        /^(src|scripts|test|frontend\/src|drizzle)\/.*\.(ts|tsx|mts|cts|mjs|cjs|js|sql|css|sh|json)$/;
+      for (const file of tracked.filter(
+        (f) => sourceFile.test(f) && !f.startsWith("drizzle/meta/"),
+      )) {
+        for (const m of fs.readFileSync(path.join(root, file), "utf8").matchAll(/[A-Za-z_]\w*/g)) {
+          present.add(m[0]);
+        }
       }
-      const present = new Set(found.split("\n"));
       expect([...symbols].filter((s) => !present.has(s)).sort()).toEqual([]);
     },
   );

@@ -118,5 +118,97 @@
       "src/plugins/control-socket.ts"
     ],
     "summary": "persisted event identity, the hook protocol and agent payload facts, per-CLI launch flags, control-socket scope enforcement and relay"
+  },
+  {
+    "ref": ".claude/skills/mullion-review-invariants/references/settings-and-schema-threading.md",
+    "paths": [
+      "src/db/schema.ts",
+      "drizzle/**",
+      "src/routes/projects.ts",
+      "src/services/settings.ts",
+      "frontend/src/api/settings.ts",
+      "frontend/src/api/projects.ts",
+      "frontend/src/store/constants.ts",
+      "src/plugins/env.ts",
+      ".env.example",
+      "docs/configuration.md",
+      "src/services/pty-manager.ts"
+    ],
+    "summary": "threading a new per-project field or setting through every layer, independent default copies, env keys that land in three places"
+  },
+  {
+    "ref": ".claude/skills/mullion-review-invariants/references/api-route-contracts.md",
+    "paths": [
+      "src/routes/projects.ts",
+      "src/services/relay-review-state.ts",
+      "src/routes/system-resources.ts",
+      "frontend/src/hooks/useGitHubData.ts",
+      "frontend/src/store/slices/git.ts",
+      "frontend/src/settings/ServerDefaultNumberRow.tsx"
+    ],
+    "summary": "batch GET semantics, PR-row fields on both routes, PATCH with nothing to set, settings keyed by data, destructive endpoints gated on debounced settings"
+  },
+  {
+    "ref": ".claude/skills/mullion-review-invariants/references/scaffold-and-bundle.md",
+    "paths": [
+      "src/services/mullion-scaffold.ts",
+      "src/services/workflow-conventions.ts",
+      "src/routes/project-setup.ts",
+      "src/services/bundle-sync.ts",
+      "src/services/hook-adapters/mullion-bundle.ts",
+      "src/bundle/skills/**"
+    ],
+    "summary": "the scaffold's committed-equals-injected rule and per-project opt-out, bundle skill sources and orphan pruning"
+  },
+  {
+    "ref": ".claude/skills/mullion-review-invariants/references/dockview-layout.md",
+    "paths": [
+      "frontend/src/App.tsx",
+      "frontend/src/panelUtils.ts",
+      "frontend/src/hooks/useWorkspacePersistence.ts",
+      "frontend/src/hooks/useLayoutPresentation.ts",
+      "frontend/src/lib/layoutTier.ts",
+      "frontend/src/styles/sidebar.css"
+    ],
+    "summary": "floating versus tiled groups, shared derived arrays, panelsVersion bumps, floating clamps, breakpoints and coarse pointers"
+  },
+  {
+    "ref": ".claude/skills/mullion-review-invariants/references/dock-docker-lifecycle.md",
+    "paths": [
+      "frontend/src/dock/**",
+      "frontend/src/Dock.tsx",
+      "frontend/src/lib/dockAvailability.ts",
+      "src/services/docker-service-detect.ts",
+      "frontend/src/styles/dock.css"
+    ],
+    "summary": "compose recreate, docker-logs auto-attach, docker route identities, Dock availability CSS and predicate"
+  },
+  {
+    "ref": ".claude/skills/mullion-review-invariants/references/frontend-state-and-effects.md",
+    "paths": [
+      "frontend/src/dock/DockProjectGroup.tsx",
+      "frontend/src/dock/useDockGithubStatus.ts",
+      "frontend/src/GitHubPanel.tsx",
+      "frontend/src/FileEditorPanel.tsx",
+      "frontend/src/ui/Modal.tsx",
+      "frontend/src/hooks/useFocusTrap.ts",
+      "frontend/src/store/slices/sessions.ts",
+      "frontend/src/api/client.ts",
+      "frontend/src/hooks/useGlobalShortcuts.ts",
+      "frontend/src/terminalInputRegistry.ts",
+      "frontend/src/right-sidebar/**"
+    ],
+    "summary": "render-phase setState, effect keys and stale responses, per-project state, busy dialogs, refreshSessions, launch gates and keyboard bytes"
+  },
+  {
+    "ref": ".claude/skills/mullion-review-invariants/references/cross-cutting-patterns.md",
+    "paths": [
+      "src/services/scaffold-generate.ts",
+      "src/plugins/env.ts",
+      "docs/configuration.md",
+      "frontend/src/MobileKeyBar.tsx",
+      "frontend/src/terminalInputRegistry.ts"
+    ],
+    "summary": "a test that pins a fix must redden without it; a changed enumerated rule must update every enumeration"
   }
 ]

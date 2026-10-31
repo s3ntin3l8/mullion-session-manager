@@ -36,6 +36,13 @@ index; the same areas are:
 | [`session-lifecycle.md`](references/session-lifecycle.md)                             | session liveness, kill, spawn rollback, per-session files, session env     |
 | [`pty-host-scope-and-remote-hosts.md`](references/pty-host-scope-and-remote-hosts.md) | the PTY-host protocol, scope ownership, remote hosts, git over a host      |
 | [`events-hooks-and-control.md`](references/events-hooks-and-control.md)               | event history, the hook protocol, adapter launch flags, the control socket |
+| [`settings-and-schema-threading.md`](references/settings-and-schema-threading.md)     | a new per-project field or setting, default copies, env keys               |
+| [`api-route-contracts.md`](references/api-route-contracts.md)                         | batch GET routes, PATCH bodies, destructive endpoints gated on settings    |
+| [`scaffold-and-bundle.md`](references/scaffold-and-bundle.md)                         | the project scaffold, bundled skill sources                                |
+| [`dockview-layout.md`](references/dockview-layout.md)                                 | dockview groups, layout mutations, floating clamps, breakpoints            |
+| [`dock-docker-lifecycle.md`](references/dock-docker-lifecycle.md)                     | the Dock, compose recreate, docker-logs auto-attach, Dock availability     |
+| [`frontend-state-and-effects.md`](references/frontend-state-and-effects.md)           | render-phase state, effects, per-project state, busy dialogs, store errors |
+| [`cross-cutting-patterns.md`](references/cross-cutting-patterns.md)                   | tests that pin a fix, enumerated rules                                     |
 
 Each reference states the invariant, what breaks, and how to check it, and was
 verified against the code when it was written; if one contradicts the code you
