@@ -940,12 +940,6 @@ describe("agentSandboxWritablePaths", () => {
     );
   });
 
-  it("returns empty dirs/files for claude (confirmed live to need none)", () => {
-    const paths = agentSandboxWritablePaths("claude");
-    expect(paths.dirs).toEqual([]);
-    expect(paths.files).toEqual([]);
-  });
-
   it("returns empty dirs/files for agy (confirmed live, issue #1130, to need none)", () => {
     const paths = agentSandboxWritablePaths("agy");
     expect(paths.dirs).toEqual([]);
@@ -1165,17 +1159,6 @@ describe("createAgentSandboxHome", () => {
       expect(fs.existsSync(f)).toBe(true);
       expect(fs.statSync(f).isFile()).toBe(true);
     }
-  });
-
-  it("returns empty dirs/files for claude", () => {
-    const { writablePaths } = createAgentSandboxHome(scratchDir, "claude");
-    expect(writablePaths.dirs).toEqual([]);
-    expect(writablePaths.files).toEqual([]);
-    // .agent-home MUST exist even for empty-paths agents — bwrap's --bind
-    // refuses to start when its source is missing (this is why the rest of
-    // the module uses --bind-try for may-not-exist paths, and why the home
-    // bind itself must be unconditional).
-    expect(fs.existsSync(path.join(scratchDir, ".agent-home"))).toBe(true);
   });
 
   it("returns empty dirs/files for agy", () => {

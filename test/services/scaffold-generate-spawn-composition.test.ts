@@ -103,6 +103,80 @@ describe("defaultSpawnGenerationTurn — sandbox composition (issue #1081 covera
     expect(mainArgs).toContain("generate scaffold content");
   });
 
+  // Issue #2430 — an open, silent stdin pipe makes `claude -p` wait 3 s and
+  // print a "no stdin data received" warning on every turn.
+  it("closes the child's stdin so the agent never waits for input", async () => {
+    const end = vi.fn();
+    execFileMock.mockImplementationOnce((_f, _a, _o, cb) => {
+      cb(null, "", ""); // the capability probe
+      return {} as ChildProcess;
+    });
+    execFileMock.mockImplementationOnce((_f, _a, _o, cb) => {
+      cb(null, "generated output", "");
+      return { stdin: { end } } as unknown as ChildProcess;
+    });
+    await defaultSpawnGenerationTurn({
+      agentCommand: "claude",
+      cwd: scratchDir,
+      prompt: "p",
+      timeoutMs: 5000,
+    });
+    expect(end).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports the exit code and the stdout tail of a failed turn, not just the stderr warning", async () => {
+    execFileMock.mockImplementationOnce((_f, _a, _o, cb) => {
+      cb(null, "", "");
+      return {} as ChildProcess;
+    });
+    execFileMock.mockImplementationOnce((_f, _a, _o, cb) => {
+      const err = Object.assign(new Error("Command failed: bwrap …"), { code: 1 });
+      cb(
+        err,
+        "Not logged in · Please run /login\n",
+        "Warning: no stdin data received in 3s, proceeding without it.\n",
+      );
+      return {} as ChildProcess;
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(
+      defaultSpawnGenerationTurn({
+        agentCommand: "claude",
+        cwd: scratchDir,
+        prompt: "p",
+        timeoutMs: 5000,
+      }),
+    ).rejects.toThrow(/exit code 1.*Not logged in/s);
+  });
+
+  // CodeQL js/log-injection: agent output reaches the log, so it is flattened.
+  it("logs a failed turn on one line even when the agent's output has line breaks", async () => {
+    execFileMock.mockImplementationOnce((_f, _a, _o, cb) => {
+      cb(null, "", "");
+      return {} as ChildProcess;
+    });
+    execFileMock.mockImplementationOnce((_f, _a, _o, cb) => {
+      cb(
+        Object.assign(new Error("x"), { code: 1 }),
+        "line one\nFAKE LOG ENTRY\r\nmore",
+        "err\nline",
+      );
+      return {} as ChildProcess;
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await expect(
+      defaultSpawnGenerationTurn({
+        agentCommand: "claude",
+        cwd: scratchDir,
+        prompt: "p",
+        timeoutMs: 5000,
+      }),
+    ).rejects.toThrow();
+    const logged = warn.mock.calls.find((c) => String(c[0]).includes("generation turn failed"));
+    expect(logged).toBeDefined();
+    for (const arg of logged!) expect(String(arg)).not.toMatch(/[\r\n]/);
+  });
+
   it("falls back to the unwrapped invocation when the capability probe reports unusable", async () => {
     smokeProbeSucceeds = false;
 
