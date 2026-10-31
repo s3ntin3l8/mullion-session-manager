@@ -2912,6 +2912,11 @@ describe("tasks route", () => {
         withReviewSession?: boolean;
         prNumber?: number | null;
         taskMasterEnabled?: boolean;
+        rebaseStartedAt?: Date;
+        // The spawn pass only starts a reviewer for a task with a worktree and
+        // a resolvable review agent; reviewPhase promises nothing otherwise.
+        worktreePath?: string | null;
+        reviewAgent?: string | null;
       }) {
         // resolveTaskMasterConfig reads the env at request time; the describe
         // block's default is on (top-level beforeAll), so restore it after.
@@ -2950,11 +2955,81 @@ describe("tasks route", () => {
             reviewFindingsIngestedSessionId: opts.ingested && withReview ? session.id : null,
             lastReviewVerdict: opts.verdict,
             prNumber: opts.prNumber === undefined ? 12 : opts.prNumber,
+            rebaseStartedAt: opts.rebaseStartedAt ?? null,
+            rebaseAttempts: opts.rebaseStartedAt ? 1 : 0,
+            worktreePath: opts.worktreePath === undefined ? "/tmp/wt-x" : opts.worktreePath,
+            reviewAgent: opts.reviewAgent === undefined ? "claude" : opts.reviewAgent,
           })
           .returning()
           .all();
         return { app, taskId: row.id };
       }
+
+      it("reports reviewPhase=rebasing with a re-review time after an auto-rebase cleared the review", async () => {
+        // the timestamp column stores whole seconds
+        const started = new Date(Math.floor((Date.now() - 5 * 60_000) / 1000) * 1000);
+        const { app, taskId } = await seed({
+          autoApprove: true,
+          verdict: "approved",
+          ingested: false,
+          withReviewSession: false,
+          rebaseStartedAt: started,
+        });
+        const res = await app.inject({ method: "GET", url: `/api/tasks/${taskId}` });
+        const body = res.json();
+        expect(body.approvalState).toBeNull();
+        expect(body.reviewPhase).toBe("rebasing");
+        expect(body.reReviewAt).toBe(started.getTime() + 30 * 60_000);
+        expect(body.rebaseAttempts).toBe(1);
+        // rebaseStartedAt stays in the payload (the PR sidebar reads it); the
+        // reviewer-resolution input does not.
+        expect(body.rebaseStartedAt).toBe(started.toISOString());
+        expect(body).not.toHaveProperty("projectDefaultReviewAgent");
+        await app.close();
+      });
+
+      it("reports no-reviewer when no review agent resolves, and nothing when Task Master is off", async () => {
+        const noReviewer = await seed({
+          autoApprove: true,
+          verdict: null,
+          ingested: false,
+          withReviewSession: false,
+          reviewAgent: "none",
+        });
+        const res = await noReviewer.app.inject({
+          method: "GET",
+          url: `/api/tasks/${noReviewer.taskId}`,
+        });
+        expect(res.json()).toMatchObject({ reviewPhase: "no-reviewer", reReviewAt: null });
+        await noReviewer.app.close();
+
+        try {
+          const off = await seed({
+            autoApprove: true,
+            verdict: null,
+            ingested: false,
+            withReviewSession: false,
+            taskMasterEnabled: false,
+          });
+          const offRes = await off.app.inject({ method: "GET", url: `/api/tasks/${off.taskId}` });
+          expect(offRes.json().reviewPhase).toBeNull();
+          await off.app.close();
+        } finally {
+          process.env.MULLION_TASK_MASTER_ENABLED = "true";
+        }
+      });
+
+      it("reports reviewPhase=awaiting-review for a reviewing task with no reviewer and no rebase", async () => {
+        const { app, taskId } = await seed({
+          autoApprove: true,
+          verdict: null,
+          ingested: false,
+          withReviewSession: false,
+        });
+        const res = await app.inject({ method: "GET", url: `/api/tasks/${taskId}` });
+        expect(res.json()).toMatchObject({ reviewPhase: "awaiting-review", reReviewAt: null });
+        await app.close();
+      });
 
       it("is awaiting-human for an ingested approving verdict on a manual-approve project", async () => {
         const { app, taskId } = await seed({

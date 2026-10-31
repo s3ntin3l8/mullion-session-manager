@@ -23,7 +23,7 @@ import {
 import { defaultDeriveStatusInfo, deriveSessionStatus } from "./session-status.js";
 import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
-import { deriveApprovalState } from "./task-approval-state.js";
+import { canSpawnReviewer, deriveApprovalState } from "./task-approval-state.js";
 import { hasIngestedCurrentReview, hasReviewHandle } from "./task-review-handle.js";
 import { notifyTaskNeedsAttention } from "./push-delivery.js";
 import {
@@ -714,6 +714,7 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
   await Promise.all(
     [...byHost.values()].map(async (hostRows) => {
       for (const { task, project } of hostRows) {
+        // Cheap, before the uncached reviewer resolution below.
         if (!task.worktreePath) continue;
         if (
           task.rebaseStartedAt !== null &&
@@ -726,10 +727,24 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
           issueBody: task.body,
           projectDefaultReviewAgent: project.defaultReviewAgent,
         });
-        // No reviewer configured for this task — never spawn one, exactly
-        // the pre-#738-followup behavior. Cheap check, done before any
-        // network call.
-        if (reviewCommand === null) continue;
+        // No reviewer configured for this task — never spawn one, exactly the
+        // pre-#738-followup behavior. The SAME predicate `deriveReviewPhase`
+        // (task-approval-state.ts) announces a coming review on, called with
+        // the real values rather than relying on call order, so the board
+        // cannot promise what this pass will not do. Cheap check, done before
+        // any network call.
+        const reviewerConfigured = reviewCommand !== null;
+        if (
+          !canSpawnReviewer(task, {
+            taskMasterEnabled: resolvedTaskMaster.enabled,
+            reviewerConfigured,
+          }) ||
+          // Narrows `reviewCommand` for the spawn below; `canSpawnReviewer`
+          // has already refused the null case, so this never fires on its own.
+          reviewCommand === null
+        ) {
+          continue;
+        }
 
         const reviewCliModelAgent = commandModelCli(reviewCommand);
         const reviewModel = commandIsOpencode(reviewCommand)

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { ciGatingUnavailableText, needsHumanText } from "./needsHuman.js";
+import { ciGatingUnavailableText, needsHumanText, reviewPhaseText } from "./needsHuman.js";
 
 describe("needsHumanText", () => {
   it("names each reason the automatic loop stopped", () => {
@@ -27,6 +27,30 @@ describe("ciGatingUnavailableText", () => {
     expect(ciGatingUnavailableText("not-found", "account")).toContain("no branch protection");
     expect(ciGatingUnavailableText("other", null)).toBe(
       "CI gating unavailable: required checks unreadable — lookup failed",
+    );
+  });
+});
+
+describe("reviewPhaseText", () => {
+  it("is null outside a waiting phase", () => {
+    expect(reviewPhaseText(null, null, true)).toBeNull();
+    expect(reviewPhaseText(undefined, undefined, false)).toBeNull();
+  });
+
+  it("says a review is waiting to start", () => {
+    expect(reviewPhaseText("awaiting-review", null, false)).toBe("Waiting for the review to start");
+  });
+
+  it("says nothing will start a review when no review agent is configured", () => {
+    expect(reviewPhaseText("no-reviewer", null, false)).toMatch(/^No review agent is configured/);
+  });
+
+  it("explains the rebase hold-back, with the re-review time when known", () => {
+    expect(reviewPhaseText("rebasing", Date.now() + 12 * 60_000, true)).toBe(
+      "Reviewed, then conflicted with main — auto-rebasing; re-review starts in 12m at the latest",
+    );
+    expect(reviewPhaseText("rebasing", null, false)).toBe(
+      "Conflicted with main — auto-rebasing; re-review starts",
     );
   });
 });

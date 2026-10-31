@@ -122,6 +122,9 @@ function makeTask(overrides: Partial<Task>): Task {
     lastAutoReturnReason: null,
     autoReturnCapped: false,
     approvalState: null,
+    reviewPhase: null,
+    reReviewAt: null,
+    rebaseAttempts: 0,
     autoReturnCapAnnouncedAt: null,
     needsHumanReason: null,
     worktreePath: null,
@@ -2150,6 +2153,53 @@ describe("TaskDetail approval state, latest round and host (#2234 #2235 #2236)",
     expect(screen.getByText("Round 3 · approved, needs your approval")).toBeInTheDocument();
     expect(screen.getByText(/a human has to Approve it above/)).toBeInTheDocument();
     expect(screen.queryByText(/sent back to the worker/)).toBeNull();
+  });
+
+  it("keeps the previous review visible while an auto-rebase holds back the re-review", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "reviewing",
+        reviewSessionId: null,
+        reviewPhase: "rebasing",
+        reReviewAt: Date.now() + 10 * 60_000,
+        rebaseAttempts: 2,
+        reviewFindings: round(1, "approved — ok", "- None"),
+      }),
+    ];
+    const { container } = render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText("Review (previous round)")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      /Reviewed, then conflicted with main — auto-rebasing; re-review starts in 10m at the latest \(rebase attempt 2\)/,
+    );
+    expect(container.querySelector(".task-detail-review-summary")).toHaveTextContent(
+      "Latest: round 1",
+    );
+  });
+
+  it("shows a waiting line, not a missing section, when the review has not started", () => {
+    tasks = [makeTask({ id: 1, status: "reviewing", reviewPhase: "awaiting-review" })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByText("Waiting for the review to start")).toBeInTheDocument();
+  });
+
+  it("explains in the drawer, not by silence, that no review agent will start a review", () => {
+    tasks = [makeTask({ id: 1, status: "reviewing", reviewPhase: "no-reviewer" })];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.getByRole("status")).toHaveTextContent(/No review agent is configured/);
+  });
+
+  it("does not flag a finished auto-rebase worker as needing attention", () => {
+    tasks = [makeTask({ id: 1, status: "reviewing", sessionId: 7, reviewPhase: "rebasing" })];
+    sessions = [
+      makeSession({
+        id: 7,
+        sessionStatus: "finished",
+        sessionStatusAttentionRequired: true,
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+    expect(screen.queryByText(/session needs attention/)).toBeNull();
   });
 
   it("the approval badge's round agrees with the 'Latest: round N' line", () => {

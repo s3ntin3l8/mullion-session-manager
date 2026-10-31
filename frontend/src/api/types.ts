@@ -2202,6 +2202,16 @@ export interface Task {
   // waits on a manual Approve; `auto-pending` = the approve sweep will take it.
   // `null` for every other task.
   approvalState: "awaiting-human" | "auto-pending" | null;
+  // Derived server-side (services/task-approval-state.ts deriveReviewPhase):
+  // a `reviewing` task with no live review session. `rebasing` = an
+  // auto-rebase worker is (or was just) resolving a merge conflict and the
+  // fresh reviewer is held back until `reReviewAt` (epoch ms); `awaiting-review`
+  // = no reviewer yet and nothing holding it back; `no-reviewer` = no review agent
+  // resolves for this task, so nothing will start one. `null` otherwise.
+  reviewPhase: "rebasing" | "awaiting-review" | "no-reviewer" | null;
+  reReviewAt: number | null;
+  // How many auto-rebase workers this task has had.
+  rebaseAttempts: number;
   // Issue #1038 — a capped task is NOT yet "parked for a human" the instant
   // autoReturnCapped flips true: autoReturnRounds reaches the cap at the
   // START of the last permitted round, while a worker session is still
