@@ -2196,6 +2196,10 @@ export interface Task {
   reviewRunId: string | null;
   reviewRunIngestedId: string | null;
   reviewRunDispatchedAt: string | null;
+  // True when `reviewRunId` is a synthetic "never sent" marker (Hermes was
+  // unreachable and the dispatch gave up): there is no run. Derived by the
+  // backend; the UI never inspects the id itself.
+  reviewRunUnsent: boolean;
   // The review agent's own findings, captured once its session finishes —
   // appended across rounds under a "## Round N" header, never replaced.
   // Null until the first round is ingested (no review agent configured,

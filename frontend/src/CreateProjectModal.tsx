@@ -1,4 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  HERMES_REVIEW_OPTION,
+  hermesReviewerAvailable,
+  withCurrentReviewAgent,
+} from "./settings/agentOptions.js";
 import { ProjectMultiSelect } from "./ui/ProjectMultiSelect.js";
 import { FolderIcon, HostsIcon, BotIcon } from "./ui/icons.js";
 import { api, ApiError, LOCAL_HOST_ID, MAX_HOST_CWDS, normalizeAgentId } from "./api/index.js";
@@ -392,6 +397,7 @@ export function CreateProjectModal({
   // #741 — the install-wide review-agent default this project's own unset
   // option falls through to (TaskMasterSection's Default review agent),
   // shown in the "Use global default (…)" label below.
+  const relaySettings = useDashboardStore((s) => s.settings?.reviewRelay);
   const globalDefaultReviewAgent =
     useDashboardStore((s) => s.settings?.taskMaster?.defaultReviewAgent) || "none";
 
@@ -464,7 +470,7 @@ export function CreateProjectModal({
     current: string,
   ): { value: string; label: string }[] {
     if (current === UNSET_AGENT || options.some((o) => o.value === current)) return options;
-    return [...options, { value: current, label: `${current} (not detected)` }];
+    return withCurrentReviewAgent(options, current);
   }
 
   const trailingSegment = (p: string) => p.replace(/\/+$/, "").split("/").pop() || "my-project";
@@ -1208,6 +1214,7 @@ export function CreateProjectModal({
                     value: UNSET_AGENT,
                     label: `Use global default (${globalDefaultReviewAgent})`,
                   },
+                  ...(hermesReviewerAvailable(relaySettings) ? [HERMES_REVIEW_OPTION] : []),
                   ...agentOptions,
                 ],
                 defaultReviewAgent,

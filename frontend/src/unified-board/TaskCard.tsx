@@ -179,10 +179,17 @@ export function TaskCard({
   // task-reconciler.ts's processReviewingTasks); no review agent at all
   // (reviewSessionId null) is pure human review, same "waiting on you" bucket
   // as a finished one.
+  //
+  // An external (Hermes) review is a run, not a session: same "verdict is in"
+  // pairing (reviewRunIngestedId === reviewRunId). An unsent run (dispatch
+  // gave up) never ran, so it is never in flight.
+  const hasReviewRun = task.reviewRunId !== null;
+  const reviewRunFinished = hasReviewRun && task.reviewRunIngestedId === task.reviewRunId;
   const reviewInFlight =
     task.status === "reviewing" &&
-    task.reviewSessionId !== null &&
-    task.reviewFindingsIngestedSessionId !== task.reviewSessionId;
+    ((task.reviewSessionId !== null &&
+      task.reviewFindingsIngestedSessionId !== task.reviewSessionId) ||
+      (hasReviewRun && !task.reviewRunUnsent && !reviewRunFinished));
 
   // Issue #1038 — autoReturnCapped alone answers "has the round budget been
   // spent," not "has the machine actually stopped." autoReturnRounds hits
@@ -519,6 +526,16 @@ export function TaskCard({
           theme={theme}
           onOpenSession={onOpenSession}
         />
+      )}
+      {hasReviewRun && task.reviewSessionId === null && (
+        <span
+          className={`task-card-session-strip${task.reviewRunUnsent ? " is-gone" : ""}`}
+          data-testid="task-card-hermes-review"
+        >
+          {task.reviewRunUnsent
+            ? "Hermes review · could not be sent"
+            : `Hermes review · ${reviewRunFinished ? "finished" : "running"}`}
+        </span>
       )}
       {task.status === "ready" && !taskMasterEnabled && (
         <div className="task-card-hint">Claiming is disabled — Task Master is off</div>

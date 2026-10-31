@@ -28,6 +28,7 @@ let prsByProject: Record<number, GitHubPRsStatus | undefined>;
 // assertions); set per-test to exercise a custom MULLION_TASK_LABEL.
 let taskMasterEnv: ServerInfo["taskMasterEnv"] | null = null;
 
+let settings: unknown = undefined;
 const claimTask = vi.fn(async () => makeSession({ id: 99 }));
 const approveTask = vi.fn(async () => makeTask({}));
 const mergeTask = vi.fn(async () => makeTask({}));
@@ -54,6 +55,7 @@ vi.mock("./hooks/useStartSessionFrom.js", () => ({
 
 function storeState() {
   return {
+    settings,
     openRightSidebarPr,
     requestOpenSession,
     tasks,
@@ -120,6 +122,7 @@ function makeTask(overrides: Partial<Task>): Task {
     reviewRunId: null,
     reviewRunIngestedId: null,
     reviewRunDispatchedAt: null,
+    reviewRunUnsent: false,
     reviewFindings: null,
     autoReturnRounds: 0,
     lastAutoReturnReason: null,
@@ -240,6 +243,7 @@ function makeSession(overrides: Partial<Session>): Session {
 }
 
 beforeEach(() => {
+  settings = undefined;
   sessions = [];
   hosts = [];
   projects = [];
@@ -782,6 +786,56 @@ describe("TaskDetail", () => {
     sessions = [makeSession({ id: 5 })];
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
     expect(screen.getByText(/The retry loop never backs off\./)).toBeInTheDocument();
+  });
+
+  describe("a Hermes review run (no session)", () => {
+    const run = { status: "reviewing" as const, reviewSessionId: null, reviewRunId: "run_1" };
+
+    it("running: shows the Review section with a running line and no session parts", () => {
+      tasks = [makeTask({ id: 1, ...run })];
+      render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+      expect(
+        screen.getByText("Review", { selector: ".task-detail-section-title" }),
+      ).toBeInTheDocument();
+      expect(screen.getByTestId("hermes-review-run")).toHaveTextContent("Hermes review running");
+      expect(screen.queryByText(/started with no initial instructions/)).toBeNull();
+    });
+
+    it("finished approved: shows findings and the approval text", () => {
+      tasks = [
+        makeTask({
+          id: 1,
+          ...run,
+          reviewRunIngestedId: "run_1",
+          reviewFindings: "## Round 1\n\nLooks fine to me.",
+          approvalState: "awaiting-human",
+        }),
+      ];
+      render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+      expect(screen.getByTestId("hermes-review-run")).toHaveTextContent("Hermes review finished");
+      expect(screen.getByText(/Looks fine to me\./)).toBeInTheDocument();
+      expect(screen.getByText(/The review approved this task/)).toBeInTheDocument();
+    });
+
+    it("finished inconclusive: finished line, no approval text", () => {
+      tasks = [makeTask({ id: 1, ...run, reviewRunIngestedId: "run_1" })];
+      render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+      expect(screen.getByTestId("hermes-review-run")).toHaveTextContent("finished");
+      expect(screen.queryByText(/The review approved this task/)).toBeNull();
+    });
+
+    it("unsent: says it could not be sent without showing the id", () => {
+      tasks = [makeTask({ id: 1, ...run, reviewRunId: "unsent:1:r0:x0", reviewRunUnsent: true })];
+      render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+      expect(screen.getByTestId("hermes-review-run")).toHaveTextContent("could not be sent");
+      expect(screen.queryByText(/unsent:/)).toBeNull();
+    });
+
+    it("no run and no session: no Review section", () => {
+      tasks = [makeTask({ id: 1, status: "reviewing" })];
+      render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+      expect(screen.queryByTestId("hermes-review-run")).toBeNull();
+    });
   });
 
   it("does not render a findings block when nothing has been captured yet", () => {

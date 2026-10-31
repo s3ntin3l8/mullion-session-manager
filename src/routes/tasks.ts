@@ -26,7 +26,7 @@ import {
 import { deriveTaskBranchName } from "../services/git-worktree.js";
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
 import { resolveReviewer } from "../services/task-agent-resolve.js";
-import { stopHermesRunQuietly } from "../services/hermes-task-review.js";
+import { isUnsentRunId, stopHermesRunQuietly } from "../services/hermes-task-review.js";
 import { closeDraftPRForTask } from "../services/task-promote.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "../services/task-approve.js";
 import {
@@ -409,6 +409,8 @@ function withApprovalState<
   taskMasterEnabled: boolean,
 ): Omit<T, "projectAutoApprove" | "projectDefaultReviewAgent"> & {
   approvalState: ApprovalState | null;
+  /** The review run id is a synthetic `unsent:` marker: dispatch gave up, no run exists. */
+  reviewRunUnsent: boolean;
 } & ReviewPhaseResult {
   const {
     projectAutoApprove: _projectAutoApprove,
@@ -426,6 +428,7 @@ function withApprovalState<
   return {
     ...rest,
     approvalState: deriveApprovalState(row, taskMasterEnabled),
+    reviewRunUnsent: typeof row.reviewRunId === "string" && isUnsentRunId(row.reviewRunId),
     ...deriveReviewPhase(row, REBASE_ATTEMPT_STALE_MS, {
       taskMasterEnabled,
       // The same resolution the spawn pass uses (processPendingReviewSpawns).

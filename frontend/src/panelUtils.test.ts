@@ -760,6 +760,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     reviewRunId: null,
     reviewRunIngestedId: null,
     reviewRunDispatchedAt: null,
+    reviewRunUnsent: false,
     reviewFindings: null,
     autoReturnRounds: 0,
     lastAutoReturnReason: null,

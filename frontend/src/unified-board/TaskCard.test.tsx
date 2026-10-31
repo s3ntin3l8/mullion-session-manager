@@ -633,6 +633,60 @@ describe("UnifiedBoard task columns", () => {
     });
   });
 
+  describe("a Hermes review run (no session)", () => {
+    const run = { status: "reviewing" as const, reviewSessionId: null, reviewRunId: "run_1" };
+
+    it("running: shows the badge and the in-progress hint", () => {
+      tasks = [makeTask({ id: 1, ...run })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.getByTestId("task-card-hermes-review")).toHaveTextContent(
+        "Hermes review · running",
+      );
+      expect(screen.getByText("Review in progress")).toBeInTheDocument();
+    });
+
+    it("finished and approved: badge says finished and the approval chip shows", () => {
+      tasks = [
+        makeTask({
+          id: 1,
+          ...run,
+          reviewRunIngestedId: "run_1",
+          lastReviewVerdict: "approved",
+          approvalState: "awaiting-human",
+        }),
+      ];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.getByTestId("task-card-hermes-review")).toHaveTextContent(
+        "Hermes review · finished",
+      );
+      expect(screen.getByRole("status")).toHaveTextContent("Approved, needs your approval");
+      expect(screen.queryByText("Review in progress")).toBeNull();
+    });
+
+    it("finished inconclusive: finished badge, no approval chip", () => {
+      tasks = [makeTask({ id: 1, ...run, reviewRunIngestedId: "run_1" })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.getByTestId("task-card-hermes-review")).toHaveTextContent("finished");
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it("unsent: says it could not be sent and never shows the id or in-flight", () => {
+      tasks = [makeTask({ id: 1, ...run, reviewRunId: "unsent:1:r0:x0", reviewRunUnsent: true })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.getByTestId("task-card-hermes-review")).toHaveTextContent(
+        "Hermes review · could not be sent",
+      );
+      expect(screen.queryByText(/unsent:/)).toBeNull();
+      expect(screen.queryByText("Review in progress")).toBeNull();
+    });
+
+    it("no run and no session: no Hermes badge", () => {
+      tasks = [makeTask({ id: 1, status: "reviewing" })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.queryByTestId("task-card-hermes-review")).toBeNull();
+    });
+  });
+
   describe("a reviewing task with no live review session", () => {
     it("explains the auto-rebase hold-back instead of looking idle", () => {
       tasks = [

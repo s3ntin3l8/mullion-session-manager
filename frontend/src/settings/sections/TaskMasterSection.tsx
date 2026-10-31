@@ -11,7 +11,12 @@ import {
   TextInput,
 } from "../../ui/primitives.js";
 import { clampNumberFieldOnCommit, clampTaskMasterFieldMax } from "../clamp.js";
-import { AGENT_OPTIONS, REVIEW_AGENT_OPTIONS } from "../agentOptions.js";
+import {
+  AGENT_OPTIONS,
+  hermesReviewerAvailable,
+  reviewAgentOptions,
+  withCurrentReviewAgent,
+} from "../agentOptions.js";
 
 // Task Master Settings UI follow-up — the first place settings.taskMaster
 // is surfaced at all (it previously only had a backend/API surface). Every
@@ -242,12 +247,15 @@ export function TaskMasterSection() {
       </Row>
       <Row
         label="Default review agent"
-        desc="Agent that reviews a finished task when neither the task nor its project names one. None leaves the review to a person."
+        desc="Agent that reviews a finished task when neither the task nor its project names one. None leaves the review to a person. Hermes (offered once Task Master reviews are on in Review relay) runs the review on your Hermes server instead of a local CLI."
       >
         <Dropdown
           value={tm.defaultReviewAgent}
           onChange={(v) => updateSettings({ taskMaster: { defaultReviewAgent: v } })}
-          options={REVIEW_AGENT_OPTIONS}
+          options={withCurrentReviewAgent(
+            reviewAgentOptions(hermesReviewerAvailable(settings.reviewRelay)),
+            tm.defaultReviewAgent,
+          )}
         />
       </Row>
       <Row

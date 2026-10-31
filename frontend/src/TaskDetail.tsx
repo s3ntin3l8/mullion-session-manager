@@ -29,6 +29,11 @@ import { Markdown } from "./ui/Markdown.js";
 import { STATUS_PRESENTATION, formatStatusLabel } from "./sessionStatus.js";
 import { approvalStateText, needsHumanText, reviewPhaseText } from "./needsHuman.js";
 import { describeTaskHost } from "./lib/hostBadge.js";
+import {
+  HERMES_REVIEW_OPTION,
+  hermesReviewerAvailable,
+  withCurrentReviewAgent,
+} from "./settings/agentOptions.js";
 import { parseReviewRounds } from "./lib/reviewRounds.js";
 import { parseWorkflowChange, visibleTaskSyncError } from "./workflowChange.js";
 
@@ -242,8 +247,9 @@ export function TaskDetail({
     current: string,
   ): { value: string; label: string }[] {
     if (current === UNSET_AGENT || options.some((o) => o.value === current)) return options;
-    return [...options, { value: current, label: `${current} (not detected)` }];
+    return withCurrentReviewAgent(options, current);
   }
+  const hermesAvailable = hermesReviewerAvailable(settings?.reviewRelay);
 
   const project = projects?.find((p) => p.id === task.projectId);
   const projectDefaultAgent =
@@ -489,6 +495,7 @@ export function TaskDetail({
                       label: `Project default (${projectDefaultReviewAgentLabel})`,
                     },
                     { value: "none", label: "None (disabled)" },
+                    ...(hermesAvailable ? [HERMES_REVIEW_OPTION] : []),
                     ...agentOptions,
                   ],
                   task.reviewAgent ?? UNSET_AGENT,
@@ -685,10 +692,15 @@ export function TaskDetail({
         <SessionTimeline params={{ sessionIds: task.sessionId !== null ? [task.sessionId] : [] }} />
       </div>
 
-      {(task.reviewSessionId !== null || task.reviewFindings !== null || task.reviewPhase) && (
+      {(task.reviewSessionId !== null ||
+        task.reviewRunId !== null ||
+        task.reviewFindings !== null ||
+        task.reviewPhase) && (
         <div className="task-detail-section task-detail-review-section">
           <div className="task-detail-section-title">
-            {task.reviewSessionId === null && task.reviewFindings !== null
+            {task.reviewSessionId === null &&
+            task.reviewRunId === null &&
+            task.reviewFindings !== null
               ? "Review (previous round)"
               : "Review"}
           </div>
@@ -721,6 +733,15 @@ export function TaskDetail({
                       ? "Its findings have been sent back to the worker automatically — this is that round's outcome. It still cannot approve, reject, or otherwise transition this task; that's still your call above."
                       : "It cannot approve, reject, or otherwise transition this task — that's still your call above. Non-empty findings may be sent back to the worker automatically before this task is ready for another look."}
           </div>
+          {task.reviewRunId !== null && task.reviewSessionId === null && (
+            <div className="task-detail-review-round" role="status" data-testid="hermes-review-run">
+              {task.reviewRunUnsent
+                ? "Hermes review could not be sent — Hermes was unreachable."
+                : task.reviewRunIngestedId === task.reviewRunId
+                  ? "Hermes review finished."
+                  : "Hermes review running…"}
+            </div>
+          )}
           {task.approvalState && (
             <div className="task-detail-review-round" role="status">
               {approvalStateText(task.approvalState, task.autoReturnRounds)}

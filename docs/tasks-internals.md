@@ -826,8 +826,8 @@ tasks.
 
 `ReviewAgent: hermes` (or the task, project or install-wide default set to
 `hermes`) sends the review to Hermes instead of spawning a CLI session. It is
-opt-in twice: **Settings → Review relay → "Use Hermes as the Task Master
-reviewer"** (`reviewRelay.taskMasterReviewer`) plus a stored Hermes URL and
+opt-in twice: **Settings → Review relay → "Task Master
+reviews"** (`reviewRelay.taskMasterReviewer`) plus a stored Hermes URL and
 key. It does **not** depend on `reviewRelay.provider`, which only switches the
 GitHub-side relay. `hermesTaskReviewerUsable` (`hermes-integration.ts`) is the
 one predicate; the write routes refuse `hermes` with a 400 while it is false,
@@ -860,6 +860,15 @@ has no fresh id per round the way a session does. Two reconcile passes drive it:
   after dispatch is stopped and recorded inconclusive. The outcome finishes
   through the same `ingestReviewOutcome` a session review ends in (round
   comment, posted PR review, auto-return, suggestions round, auto-approve).
+
+The UI never reads the id: a run has no session to open, so the card and drawer
+show a "Hermes review" badge (running while `reviewRunIngestedId` differs from
+`reviewRunId`, finished once equal), and the Review section (findings, approval
+text) shows for a run as it does for a session. The `unsent:` stand-in is
+surfaced as the derived boolean `reviewRunUnsent` on the task payload
+(`withApprovalState`, `routes/tasks.ts`) and rendered as "could not be sent" —
+never pattern-matched client-side. `Hermes` is offered in the pickers only
+while `hermesReviewerAvailable` (`settings/agentOptions.ts`) holds.
 
 A run is stopped (`stopHermesRunQuietly`, fire-and-forget) wherever a review
 session would be killed: re-entering `reviewing`, auto-rebase, the inconclusive

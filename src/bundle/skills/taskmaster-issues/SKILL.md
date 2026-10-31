@@ -171,7 +171,7 @@ claude`") is deliberately not picked up, only a line matching exactly
 | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Manual: true`            | Ingests to `backlog`, not `ready` — never auto-claimed. Still claimable by hand. Deleting the line later moves a still-parked task to `ready` on the next sync; otherwise `backlog` → `ready` is a human action. |
 | `Agent: <name>`           | Which worker agent claims this task.                                                                                                                                                                             |
-| `ReviewAgent: <name>`     | Which agent reviews the diff (`hermes` once enabled in Settings). `none`/`false` disables review.                                                                                                                |
+| `ReviewAgent: <name>`     | Which agent reviews the diff. `hermes` runs it on the Hermes server (offered once Settings → Review relay → "Task Master reviews" is on). `none`/`false` disables review.                                        |
 | `Model: <model>`          | Implementer model override — every claimable agent, not just opencode.                                                                                                                                           |
 | `Reviewer-Model: <model>` | Reviewer model — every agent; falls back to `Model:` if unset.                                                                                                                                                   |
 | `SmallModel: <model>`     | opencode and claude only — lightweight small/fast model; inert on codex/agy.                                                                                                                                     |
@@ -260,7 +260,10 @@ issue — copy-paste-ready, not a placeholder template. It's right-sized
 (one function plus its one caller), self-contained (paths, a quoted
 signature, exact line references), has checkable Scope items and an
 explicit "Out of scope" list, and puts no PR/merge/cleanup step in the
-worker's Scope.
+worker's Scope. Its `ReviewAgent:` names a local CLI; `ReviewAgent: hermes`
+is the other valid shape, but only on an install with "Task Master reviews"
+turned on, and then `Reviewer-Model:` does not apply (Hermes's model is the
+Review relay → Review policy → Model setting).
 
 ## Common mistakes
 
