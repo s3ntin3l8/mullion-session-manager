@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   Button,
   DetailHeader,
@@ -387,7 +387,7 @@ describe("SidebarRow hover actions do not shift layout", () => {
     // on hover or focus in the actions (not row focus-within, which would hide
     // a focused chip), and scoped to the siblings
     // after the actions: a trailing-only row has no overlay, so its badge stays.
-    expect(css).toContain(".sb-row:hover .sb-row-trail > .sb-row-actions ~ *");
+    expect(css).toContain(".sb-row:hover .sb-row-trail > .sb-row-actions ~ *:not(:focus)");
     expect(css).toContain(
       ".sb-row:has(.sb-row-actions :focus) .sb-row-trail > .sb-row-actions ~ *",
     );
@@ -397,41 +397,48 @@ describe("SidebarRow hover actions do not shift layout", () => {
 });
 
 describe("SidebarRow chips under the hover actions", () => {
-  // jsdom cannot hover, so drive the rule through the focus half, with the
-  // hover-media wrapper stripped. The injected sheet is the real one's rule.
-  const hideRule = /@media \(hover: hover\) \{([\s\S]*?)\n\}\n/.exec(css)?.[1] ?? "";
+  // jsdom cannot hover, so the rendered cases drive the rule through its focus
+  // branch, with the hover-media wrapper stripped; the hover branch (and its
+  // `:not(:focus)` exception) is pinned by selector text in the test above.
+  // The block is picked by what it contains, not by position in the file.
+  const hideRule = (() => {
+    const block = css
+      .split("@media (hover: hover) {")
+      .find((chunk) => chunk.includes(".sb-row-actions ~ *"));
+    return block ? block.slice(0, block.indexOf("\n}\n")) : "";
+  })();
+  let style: HTMLStyleElement | undefined;
+  afterEach(() => {
+    style?.remove();
+    style = undefined;
+  });
   const renderRow = (withActions: boolean) => {
-    const style = document.createElement("style");
+    expect(hideRule).not.toBe("");
+    style = document.createElement("style");
     style.textContent = hideRule;
     document.head.append(style);
-    const view = render(
+    render(
       <SidebarRow
         title="row"
         trailing={<button>chip</button>}
         actions={withActions ? <button>act</button> : undefined}
       />,
     );
-    return {
-      chip: screen.getByRole("button", { name: "chip" }),
-      cleanup: () => style.remove(),
-      view,
-    };
+    return screen.getByRole("button", { name: "chip" });
   };
 
   it("hides a chip while an action holds focus, but never while the chip itself does", () => {
-    const { chip, cleanup } = renderRow(true);
+    const chip = renderRow(true);
     screen.getByRole("button", { name: "act" }).focus();
     expect(getComputedStyle(chip).opacity).toBe("0");
     chip.focus();
     expect(getComputedStyle(chip).opacity).not.toBe("0");
-    cleanup();
   });
 
   it("leaves a trailing-only row's chip alone", () => {
-    const { chip, cleanup } = renderRow(false);
+    const chip = renderRow(false);
     chip.focus();
     expect(getComputedStyle(chip).opacity).not.toBe("0");
-    cleanup();
   });
 });
 

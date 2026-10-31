@@ -354,11 +354,12 @@
    overlay, so its badges (a CI run's status, a deleted file's chip) stay.
    Hidden on hover, or while focus is in the actions themselves (mouse or
    keyboard) — NOT on the row's `:focus-within`: tabbing on to a chip moves
-   focus out of the actions, and a chip must never be invisible while it holds
-   focus. Hover-capable pointers only: touch keeps the actions in flow. */
+   focus out of the actions. A chip that itself holds focus is never hidden,
+   on either branch (the pointer may be resting on the row while Tab moves
+   on). Hover-capable pointers only: touch keeps the actions in flow. */
 @media (hover: hover) {
-  .sb-row:hover .sb-row-trail > .sb-row-actions ~ *,
-  .sb-row:has(.sb-row-actions :focus) .sb-row-trail > .sb-row-actions ~ * {
+  .sb-row:hover .sb-row-trail > .sb-row-actions ~ *:not(:focus),
+  .sb-row:has(.sb-row-actions :focus) .sb-row-trail > .sb-row-actions ~ *:not(:focus) {
     opacity: 0;
     pointer-events: none;
   }
