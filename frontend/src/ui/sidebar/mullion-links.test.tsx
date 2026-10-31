@@ -7,6 +7,7 @@ import {
   SessionPills,
   TaskChip,
   splitTaskSessions,
+  decideIssueSessionAction,
   decideSessionAction,
   gatedSessions,
   severityTone,
@@ -14,7 +15,7 @@ import {
 import { buildMullionLinks, type MullionLinkEntry } from "../../hooks/useMullionLinks.js";
 import { api } from "../../api/index.js";
 import { useDashboardStore } from "../../store/index.js";
-import { makeProject, makeSession } from "../../test/fixtures.js";
+import { makeProject, makeSession, makeTask } from "../../test/fixtures.js";
 
 vi.mock("../../api/index.js", async (orig) => {
   const mod = await orig<Record<string, unknown> & { api: Record<string, unknown> }>();
@@ -194,6 +195,26 @@ describe("LinkedActions", () => {
     expect(decideSessionAction(undefined)).toEqual({ kind: "start" });
     expect(decideSessionAction(entryFor([]) as never)).toEqual({ kind: "start" });
     expect(decideSessionAction(entryFor())).toEqual({ kind: "open-existing", sessionId: 1 });
+  });
+
+  it("defers an issue with a not-yet-started task to the task, else keeps today's behaviour", () => {
+    const withTask = (status: string, sessions: unknown[] = []) =>
+      ({ ...entryFor([]), task: makeTask({ id: 9, status: status as never }), sessions }) as never;
+    for (const status of ["pending", "ready", "claimed", "backlog"]) {
+      expect(decideIssueSessionAction(withTask(status))).toEqual({
+        kind: "task",
+        taskId: 9,
+        status,
+      });
+    }
+    expect(decideIssueSessionAction(withTask("in_progress"))).toEqual({ kind: "start" });
+    expect(decideIssueSessionAction(entryFor([]) as never)).toEqual({ kind: "start" });
+    expect(decideIssueSessionAction(undefined)).toEqual({ kind: "start" });
+    const live = { ...(withTask("claimed") as object), sessions: entryFor().sessions };
+    expect(decideIssueSessionAction(live as never)).toEqual({
+      kind: "open-existing",
+      sessionId: 1,
+    });
   });
 
   it("prefers a live session over an exited one that sorts first", () => {

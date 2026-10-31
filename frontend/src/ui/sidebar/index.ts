@@ -4,11 +4,13 @@ export { IconPopover } from "./IconPopover.js";
 export { IconButton, type IconButtonProps } from "./IconButton.js";
 export { LinkedActions, type LinkedActionsProps } from "./LinkedActions.js";
 export {
+  decideIssueSessionAction,
   decideSessionAction,
   gatedSessions,
   severityTone,
   splitTaskSessions,
   taskActiveSession,
+  type IssueSessionAction,
   type SessionAction,
 } from "./linkDecisions.js";
 export { ReviewGateChip, type ReviewGateChipProps } from "./ReviewGateChip.js";

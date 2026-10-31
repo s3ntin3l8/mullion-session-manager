@@ -28,7 +28,11 @@ import {
   SidebarSection,
   StatusChip,
 } from "../ui/sidebar/index.js";
-import { decideSessionAction, splitTaskSessions, taskTone } from "../ui/sidebar/linkDecisions.js";
+import {
+  decideIssueSessionAction,
+  splitTaskSessions,
+  taskTone,
+} from "../ui/sidebar/linkDecisions.js";
 import { SearchInput } from "../ui/primitives.js";
 import { SessionPills } from "../ui/sidebar/SessionPills.js";
 import { TaskChip } from "../ui/sidebar/TaskChip.js";
@@ -182,6 +186,16 @@ export function IssuesSection({
     }
   };
 
+  const claimTask = useDashboardStore((s) => s.claimTask);
+  const claimTaskFor = async (taskId: number) => {
+    setActionError(null);
+    try {
+      await claimTask(taskId);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not claim the task");
+    }
+  };
+
   const filtered = selected.length > 0 || unassigned || debouncedQuery !== "";
 
   return (
@@ -278,6 +292,10 @@ export function IssuesSection({
               onOpen={() => onOpenIssue(issue.number)}
               onStart={() => startIssueSession(issue)}
               onQueue={() => queueIssue(issue)}
+              onClaim={() => {
+                const taskId = links.byIssue.get(issue.number)?.task?.id;
+                if (taskId != null) void claimTaskFor(taskId);
+              }}
             />
           ))}
           {data?.truncated && data.issues.length > 0 && !loading && (
@@ -309,6 +327,7 @@ function IssueRow({
   onOpen,
   onStart,
   onQueue,
+  onClaim,
 }: {
   issue: GitHubIssueListItem;
   link: MullionLinkEntry | undefined;
@@ -317,10 +336,11 @@ function IssueRow({
   onOpen: () => void;
   onStart: () => void;
   onQueue: () => void;
+  onClaim: () => void;
 }) {
   const done = issue.taskStatus === "done";
   const showQueue = canQueue && !issue.taskStatus && !queued;
-  const action = decideSessionAction(link);
+  const action = decideIssueSessionAction(link);
   const task = link?.task;
   const pills = splitTaskSessions(link?.sessions ?? [], task).rest;
   const hasChips =
@@ -380,16 +400,32 @@ function IssueRow({
               <BoltIcon size={14} />
             </IconButton>
           )}
-          <IconButton
-            label={action.kind === "open-existing" ? "Open session" : "Start session"}
-            onClick={
-              action.kind === "open-existing"
-                ? () => useDashboardStore.getState().requestOpenSession(action.sessionId)
-                : onStart
-            }
-          >
-            <PlayTriangleIcon size={14} />
-          </IconButton>
+          {action.kind === "task" ? (
+            <>
+              {canQueue && (action.status === "ready" || action.status === "backlog") && (
+                <IconButton label="Claim task" onClick={onClaim}>
+                  <PlayTriangleIcon size={14} />
+                </IconButton>
+              )}
+              <IconButton
+                label="Open task"
+                onClick={() => useDashboardStore.getState().requestOpenTask(action.taskId)}
+              >
+                <BotIcon size={14} />
+              </IconButton>
+            </>
+          ) : (
+            <IconButton
+              label={action.kind === "open-existing" ? "Open session" : "Start session"}
+              onClick={
+                action.kind === "open-existing"
+                  ? () => useDashboardStore.getState().requestOpenSession(action.sessionId)
+                  : onStart
+              }
+            >
+              <PlayTriangleIcon size={14} />
+            </IconButton>
+          )}
         </>
       }
       onClick={onOpen}
@@ -411,7 +447,7 @@ export function IssueDetailView({
   const { data: issue, error: loadError, refresh } = useIssue(projectId, number);
   const [actionError, setActionError] = useState<string | null>(null);
   const error = actionError ?? loadError;
-  const [busy, setBusy] = useState<"session" | "queue" | null>(null);
+  const [busy, setBusy] = useState<"session" | "queue" | "claim" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   // The comment just posted: the list shows only the first comments, so a
   // new one on a long issue is linked rather than assumed visible.
@@ -420,13 +456,29 @@ export function IssueDetailView({
   const startSessionFrom = useStartSessionFrom(projectId);
   const link = useMullionLinks(projectId).byIssue.get(number);
   const detailPills = splitTaskSessions(link?.sessions ?? [], link?.task).rest;
-  const action = decideSessionAction(link);
+  const action = decideIssueSessionAction(link);
   // A linked task, or the task status the detail response carries, means it
   // is already queued (survives a remount).
   const isQueued = queued || !!link?.task || !!issue?.taskStatus;
 
+  const claimTask = useDashboardStore((s) => s.claimTask);
+  const claim = async () => {
+    if (action.kind !== "task") return;
+    setBusy("claim");
+    setNotice(null);
+    setPostedUrl(null);
+    try {
+      await claimTask(action.taskId);
+      setNotice(`Task #${action.taskId} claimed`);
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : "Could not claim the task");
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const startSession = async () => {
-    if (!issue) return;
+    if (!issue || action.kind === "task") return;
     if (action.kind === "open-existing") {
       useDashboardStore.getState().requestOpenSession(action.sessionId);
       return;
@@ -501,13 +553,31 @@ export function IssueDetailView({
             </div>
           )}
           <div className="gh-detail-actions">
-            <Button variant="primary" disabled={busy !== null} onClick={startSession}>
-              {busy === "session"
-                ? "Starting…"
-                : action.kind === "open-existing"
-                  ? "Open session"
-                  : "Start session"}
-            </Button>
+            {action.kind === "task" ? (
+              <>
+                <Button
+                  variant="primary"
+                  disabled={busy !== null}
+                  onClick={() => useDashboardStore.getState().requestOpenTask(action.taskId)}
+                >
+                  Open task
+                </Button>
+                {taskMaster?.enabled &&
+                  (action.status === "ready" || action.status === "backlog") && (
+                    <Button disabled={busy !== null} onClick={claim}>
+                      {busy === "claim" ? "Claiming…" : "Claim"}
+                    </Button>
+                  )}
+              </>
+            ) : (
+              <Button variant="primary" disabled={busy !== null} onClick={startSession}>
+                {busy === "session"
+                  ? "Starting…"
+                  : action.kind === "open-existing"
+                    ? "Open session"
+                    : "Start session"}
+              </Button>
+            )}
             {taskMaster?.enabled && (
               <Button disabled={busy !== null || isQueued} onClick={queue}>
                 {busy === "queue" ? "Queueing…" : isQueued ? "Queued" : "Queue for Task Master"}
