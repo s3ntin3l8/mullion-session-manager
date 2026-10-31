@@ -2,6 +2,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import {
   extractMarkedRegion,
+  stripMarkedRegion,
   topLevelLines,
   upsertMarkedRegion,
   upsertMarkedRegionAfterIntro,
@@ -18,11 +19,14 @@ import { buildWorkflowConventionsText } from "./workflow-conventions.js";
 
 // Issue #1215 — the marker VALUE is a wire format, not just an identifier:
 // it's already committed into every repo this scaffold has ever run
-// against, and upsertMarkedRegion below locates a region with a plain
-// `text.indexOf(startMarker)` — if the marker is absent it APPENDS a new
-// region instead of failing (see that function's own doc comment), so
-// changing the bytes here would make the next scaffold of any existing
-// repo grow a duplicate region rather than update the one already there.
+// against, and upsertMarkedRegion locates a region by matching `startMarker`
+// and `endMarker` as standalone top-level lines (outside closed frontmatter,
+// fenced code blocks, and multi-line HTML comments; see marked-region.ts) —
+// if no complete pair matches, it APPENDS a new region instead of failing
+// (see that function's own doc comment), so changing the bytes here or
+// narrowing what counts as a top-level marker line would make the next
+// scaffold of any existing repo grow a duplicate region rather than update
+// the one already there.
 // "briefing" is therefore frozen at the wire level while the identifier
 // below says what this actually is: the scaffold's own write-side upsert
 // boundary in a target repo's AGENTS.md, not the operator-authored pinned
@@ -69,14 +73,6 @@ export const MOVED_MARKER_END = "<!-- mullion:moved:end -->";
 // its region carries `#` comment markers.
 export const WORKTREES_IGNORE_MARKER_START = "# mullion:worktrees:start";
 export const WORKTREES_IGNORE_MARKER_END = "# mullion:worktrees:end";
-
-function stripMarkedRegion(text: string, start: string, end: string): string {
-  const startIdx = text.indexOf(start);
-  const endIdx = startIdx === -1 ? -1 : text.indexOf(end, startIdx + start.length);
-  return startIdx === -1 || endIdx === -1
-    ? text
-    : text.slice(0, startIdx) + text.slice(endIdx + end.length);
-}
 
 /** Whether the conventions text that will be committed puts worktrees under `.wt/`. */
 export function conventionsUseWtDirectory(text: string | undefined): boolean {
@@ -660,11 +656,7 @@ function contributingPointerBody(): string {
  * that stale content rather than replacing it. A no-op when the old
  * markers aren't present — the ordinary, post-#942 case. */
 function stripLegacyScaffoldRegionMirror(text: string): string {
-  const startIdx = text.indexOf(SCAFFOLD_REGION_START);
-  if (startIdx === -1) return text;
-  const endIdx = text.indexOf(SCAFFOLD_REGION_END, startIdx + SCAFFOLD_REGION_START.length);
-  if (endIdx === -1) return text;
-  return text.slice(0, startIdx) + text.slice(endIdx + SCAFFOLD_REGION_END.length);
+  return stripMarkedRegion(text, SCAFFOLD_REGION_START, SCAFFOLD_REGION_END);
 }
 
 /** Issue #2316 — turns a restructuring turn's AGENTS.md body into the file to
@@ -697,13 +689,14 @@ function spliceRegionIntoRewrite(body: string, region: string, existingAgentsMd:
  * such line. */
 function stripHandWrittenAgentsImport(text: string): string {
   const lines = text.split("\n");
-  const top = topLevelLines(lines);
+  const top = topLevelLines(lines, POINTER_MARKER_START, POINTER_MARKER_END);
   // Pointer-region lines are not "outside" it.
   let inPointer = false;
   const outside = lines.map((l, i) => {
-    if (l.includes(POINTER_MARKER_START)) inPointer = true;
+    const trimmed = l.replace(/\r$/, "").trim();
+    if (top[i] && trimmed === POINTER_MARKER_START) inPointer = true;
     const keep = top[i] && !inPointer;
-    if (l.includes(POINTER_MARKER_END)) inPointer = false;
+    if (top[i] && trimmed === POINTER_MARKER_END) inPointer = false;
     return keep;
   });
   const drop = new Set<number>();

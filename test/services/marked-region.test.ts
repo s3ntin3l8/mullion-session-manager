@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   clampToBytes,
   extractMarkedRegion,
+  stripMarkedRegion,
   upsertMarkedRegion,
   topLevelLines,
   upsertMarkedRegionAfterIntro,
@@ -42,6 +43,39 @@ describe("extractMarkedRegion", () => {
   it("matches markers across CRLF line endings", () => {
     const text = `${START}\r\nhello\r\n${END}`;
     expect(extractMarkedRegion(text, START, END)).toBe("hello");
+  });
+
+  it("ignores markers inside inline code, fenced blocks, prose, or longer tokens", () => {
+    expect(extractMarkedRegion(`Use \`${START}\` and \`${END}\`.`, START, END)).toBeNull();
+    expect(extractMarkedRegion(`Use ${START} and ${END} in prose.`, START, END)).toBeNull();
+    expect(extractMarkedRegion(`\`\`\`\n${START}\nfenced\n${END}\n\`\`\``, START, END)).toBeNull();
+    const withRealAfterFence = `\`\`\`\n${START}\nfenced\n${END}\n\`\`\`\n${START}\nreal\n${END}`;
+    expect(extractMarkedRegion(withRealAfterFence, START, END)).toBe("real");
+  });
+
+  it("extracts a region whose body contains an unclosed fence", () => {
+    const text = `${START}\n## Setup\n\`\`\`sh\nnpm install\n${END}\n\n\`\`\`sh\nnpm test\n\`\`\``;
+    expect(extractMarkedRegion(text, START, END)).toBe("## Setup\n```sh\nnpm install");
+    const withBareLater = `${START}\n## Setup\n\`\`\`sh\nnpm install\n${END}\n\n## Later\n\`\`\`\nplain\n\`\`\``;
+    expect(extractMarkedRegion(withBareLater, START, END)).toBe("## Setup\n```sh\nnpm install");
+  });
+});
+
+describe("stripMarkedRegion", () => {
+  it("strips the first complete top-level region and leaves surrounding text intact", () => {
+    const text = `before\n${START}\nbody\n${END}\nafter`;
+    expect(stripMarkedRegion(text, START, END)).toBe("before\n\nafter");
+  });
+
+  it("returns the input unchanged when no complete pair is present", () => {
+    expect(stripMarkedRegion(`only\n${START}\nhere`, START, END)).toBe(`only\n${START}\nhere`);
+  });
+
+  it("ignores a marker prefix inside a longer token instead of stripping from it", () => {
+    const m1 = "# mullion:worktrees:start";
+    const m2 = "# mullion:worktrees:end";
+    const text = `# mullion:worktrees:started-by-hand\n.wt/\n${m1}\n.wt/\n${m2}\n`;
+    expect(stripMarkedRegion(text, m1, m2)).toBe("# mullion:worktrees:started-by-hand\n.wt/\n\n");
   });
 });
 
@@ -120,9 +154,70 @@ describe("upsertMarkedRegion", () => {
     expect(result).toBe(`intro\nhand written\n\n${START}\nhello\n${END}\n`);
   });
 
-  it("cuts only the marker when it sits inline in prose", () => {
-    const result = upsertMarkedRegion(`keep ${START} this`, START, END, "hello");
-    expect(result).toBe(`keep  this\n\n${START}\nhello\n${END}\n`);
+  it("leaves a marker mentioned inline in prose untouched and ignores it on re-run", () => {
+    const once = upsertMarkedRegion(`Use ${START} to start.`, START, END, "hello");
+    expect(once).toBe(`Use ${START} to start.\n\n${START}\nhello\n${END}\n`);
+    const twice = upsertMarkedRegion(once, START, END, "updated");
+    expect(twice).toBe(`Use ${START} to start.\n\n${START}\nupdated\n${END}\n`);
+  });
+
+  it("ignores inline start and end markers on the same prose line instead of replacing between them", () => {
+    const once = upsertMarkedRegion(`${START} a ${START} b ${END}`, START, END, "hello");
+    expect(once).toBe(`${START} a ${START} b ${END}\n\n${START}\nhello\n${END}\n`);
+    expect(upsertMarkedRegion(once, START, END, "updated")).toBe(
+      `${START} a ${START} b ${END}\n\n${START}\nupdated\n${END}\n`,
+    );
+  });
+
+  it("does not cut marker text out of a longer token in .gitignore, and ignores it on re-run", () => {
+    const m1 = "# mullion:worktrees:start";
+    const m2 = "# mullion:worktrees:end";
+    const once = upsertMarkedRegion(
+      `node_modules\n# mullion:worktrees:started-by-hand\n`,
+      m1,
+      m2,
+      ".wt/",
+    );
+    expect(once).toBe(`node_modules\n# mullion:worktrees:started-by-hand\n\n${m1}\n.wt/\n${m2}\n`);
+    expect(once).not.toContain("\ned-by-hand");
+    expect(upsertMarkedRegion(once, m1, m2, ".wt/")).toBe(once);
+  });
+
+  it("leaves a quoted marker inside an inline code span untouched and ignores it on re-run", () => {
+    const inlineSpan = upsertMarkedRegion(`Quoted \`${START}\` marker.`, START, END, "hello");
+    expect(inlineSpan).toBe(`Quoted \`${START}\` marker.\n\n${START}\nhello\n${END}\n`);
+    expect(upsertMarkedRegion(inlineSpan, START, END, "updated")).toBe(
+      `Quoted \`${START}\` marker.\n\n${START}\nupdated\n${END}\n`,
+    );
+
+    const loneSpanLine = upsertMarkedRegion(`\`${START}\``, START, END, "hello");
+    expect(loneSpanLine).toBe(`\`${START}\`\n\n${START}\nhello\n${END}\n`);
+    expect(upsertMarkedRegion(loneSpanLine, START, END, "updated")).toBe(
+      `\`${START}\`\n\n${START}\nupdated\n${END}\n`,
+    );
+  });
+
+  it("leaves a marker inside a fenced code block untouched and ignores it on re-run", () => {
+    const fenced = `# Doc\n\n\`\`\`html\n${START}\n\`\`\`\n`;
+    const once = upsertMarkedRegion(fenced, START, END, "hello");
+    expect(once).toBe(`# Doc\n\n\`\`\`html\n${START}\n\`\`\`\n\n${START}\nhello\n${END}\n`);
+    expect(upsertMarkedRegion(once, START, END, "updated")).toBe(
+      `# Doc\n\n\`\`\`html\n${START}\n\`\`\`\n\n${START}\nupdated\n${END}\n`,
+    );
+  });
+
+  it("strips a second orphan start after a complete pair when replacing the pair", () => {
+    const text = `${START}\nold\n${END}\nmid\n${START}\ntail`;
+    const once = upsertMarkedRegion(text, START, END, "new");
+    expect(once).toBe(`${START}\nnew\n${END}\nmid\ntail`);
+    expect(upsertMarkedRegion(once, START, END, "new")).toBe(once);
+  });
+
+  it("strips an orphan start before a complete pair without eating the text between the two starts", () => {
+    const text = `${START}\nkeep me\n${START}\nold\n${END}`;
+    const once = upsertMarkedRegion(text, START, END, "new");
+    expect(once).toBe(`keep me\n${START}\nnew\n${END}`);
+    expect(upsertMarkedRegion(once, START, END, "new")).toBe(once);
   });
 
   it("is stable on a second run over a half-edited file", () => {
@@ -290,6 +385,116 @@ describe("upsertMarkedRegionAfterIntro", () => {
     );
     expect(result).not.toMatch(/[^\r]\n/);
   });
+
+  it("leaves inline and fenced markers alone and ignores them on re-run", () => {
+    const text = `# T\n\nUse ${START} or \`${START}\`.\n\n\`\`\`\n${START}\n${END}\n\`\`\`\n\n## A\nx\n`;
+    const once = upsertMarkedRegionAfterIntro(text, START, END, "body");
+    expect(once).toContain(`Use ${START} or \`${START}\`.`);
+    expect(once).toContain(`\`\`\`\n${START}\n${END}\n\`\`\``);
+    expect(extractMarkedRegion(once, START, END)).toBe("body");
+    const twice = upsertMarkedRegionAfterIntro(once, START, END, "body2");
+    expect(twice).toContain(`Use ${START} or \`${START}\`.`);
+    expect(extractMarkedRegion(twice, START, END)).toBe("body2");
+  });
+
+  it("ignores a bare fence quoting a marker pair when preceded by an info-string fence", () => {
+    const withBashBeforeBareQuote = `# Project\n\n\`\`\`bash\nnpm test\n\`\`\`\n\n\`\`\`\n${START}\nexample\n${END}\n\`\`\`\n`;
+    expect(extractMarkedRegion(withBashBeforeBareQuote, START, END)).toBeNull();
+    const afterBashQuote = upsertMarkedRegionAfterIntro(
+      withBashBeforeBareQuote,
+      START,
+      END,
+      "new region",
+    );
+    expect(afterBashQuote).toContain(`\`\`\`\n${START}\nexample\n${END}\n\`\`\``);
+    expect(extractMarkedRegion(afterBashQuote, START, END)).toBe("new region");
+  });
+
+  it("preserves a fenced example quoting the marker pair inside the marked region itself", () => {
+    const regionQuotingPair = `# Proj\n\n${START}\n## Setup\n\n\`\`\`html\n${START}\nexample\n${END}\n\`\`\`\n\n## More\n${END}\n`;
+    expect(extractMarkedRegion(regionQuotingPair, START, END)).toBe(
+      `## Setup\n\n\`\`\`html\n${START}\nexample\n${END}\n\`\`\`\n\n## More`,
+    );
+    const updatedRegionQuotingPair = upsertMarkedRegionAfterIntro(
+      regionQuotingPair,
+      START,
+      END,
+      "replaced body",
+    );
+    expect(updatedRegionQuotingPair).toBe(`# Proj\n\n${START}\nreplaced body\n${END}\n`);
+    expect(
+      upsertMarkedRegionAfterIntro(updatedRegionQuotingPair, START, END, "replaced body"),
+    ).toBe(updatedRegionQuotingPair);
+  });
+
+  it("treats a marker pair surrounded by extra lines inside a fence as a real region", () => {
+    const text = `# Doc\n\n\`\`\`html\nintro\n${START}\nexample\n${END}\n\`\`\`\n\n## Real\nx`;
+    expect(extractMarkedRegion(text, START, END)).toBe("example");
+    expect(upsertMarkedRegionAfterIntro(text, START, END, "NEW")).toBe(
+      `# Doc\n\n\`\`\`html\nintro\n${START}\nNEW\n${END}\n\`\`\`\n\n## Real\nx`,
+    );
+  });
+
+  it("replaces an existing region in place when an unclosed fence or stray comment precedes it", () => {
+    const text = `# Proj\n\n\`\`\`bash\nnpm run dev\n\n## Rules\n${START}\nold region\n${END}\n`;
+    const once = upsertMarkedRegionAfterIntro(text, START, END, "new region");
+    expect(once).toBe(
+      `# Proj\n\n\`\`\`bash\nnpm run dev\n\n## Rules\n${START}\nnew region\n${END}\n`,
+    );
+    expect(once.match(new RegExp(START, "g"))).toHaveLength(1);
+    expect(upsertMarkedRegionAfterIntro(once, START, END, "new region")).toBe(once);
+
+    const withLaterBareFence = `# Proj\n\n\`\`\`bash\nnpm run dev\n\n## Rules\n${START}\nold region\n${END}\n\n## Later\n\`\`\`\nplain\n\`\`\`\n`;
+    const bareOnce = upsertMarkedRegionAfterIntro(withLaterBareFence, START, END, "new region");
+    expect(bareOnce).toBe(
+      `# Proj\n\n\`\`\`bash\nnpm run dev\n\n## Rules\n${START}\nnew region\n${END}\n\n## Later\n\`\`\`\nplain\n\`\`\`\n`,
+    );
+    expect(bareOnce.match(new RegExp(START, "g"))).toHaveLength(1);
+    expect(upsertMarkedRegionAfterIntro(bareOnce, START, END, "new region")).toBe(bareOnce);
+
+    const withBareUnclosedOpener = `# Proj\n\n\`\`\`\nnpm run dev\n\n## Rules\n${START}\nold region\n${END}\n\n## Later\n\`\`\`\n`;
+    const bareOpenerOnce = upsertMarkedRegionAfterIntro(
+      withBareUnclosedOpener,
+      START,
+      END,
+      "new region",
+    );
+    expect(bareOpenerOnce).toBe(
+      `# Proj\n\n\`\`\`\nnpm run dev\n\n## Rules\n${START}\nnew region\n${END}\n\n## Later\n\`\`\`\n`,
+    );
+    expect(bareOpenerOnce.match(new RegExp(START, "g"))).toHaveLength(1);
+
+    const withStrayComment = `# Proj\n\n<!-- unclosed\n\n${START}\nold region\n${END}\n`;
+    const commentOnce = upsertMarkedRegionAfterIntro(withStrayComment, START, END, "new region");
+    expect(commentOnce).toBe(`# Proj\n\n<!-- unclosed\n\n${START}\nnew region\n${END}\n`);
+    expect(commentOnce.match(new RegExp(START, "g"))).toHaveLength(1);
+  });
+
+  it("replaces a region whose own body contains an unclosed fence without duplicating it", () => {
+    const text = `# Proj\n\n${START}\nbody\n\`\`\`bash\nnpm run dev\n${END}\n\n## Later\n\`\`\`bash\nnpm test\n\`\`\`\n`;
+    const once = upsertMarkedRegionAfterIntro(text, START, END, "clean body");
+    expect(once).toBe(
+      `# Proj\n\n${START}\nclean body\n${END}\n\n## Later\n\`\`\`bash\nnpm test\n\`\`\`\n`,
+    );
+    expect(once.match(new RegExp(START, "g"))).toHaveLength(1);
+
+    const withBareFenceLater = `# Proj\n\n${START}\nbody\n\`\`\`bash\nnpm run dev\n${END}\n\n## Later\n\`\`\`\nplain\n\`\`\`\n`;
+    const bareOnce = upsertMarkedRegionAfterIntro(withBareFenceLater, START, END, "clean body");
+    expect(bareOnce).toBe(
+      `# Proj\n\n${START}\nclean body\n${END}\n\n## Later\n\`\`\`\nplain\n\`\`\`\n`,
+    );
+    expect(bareOnce.match(new RegExp(START, "g"))).toHaveLength(1);
+
+    const withSingleTrailingBareFence = `# Proj\n\n${START}\nbody\n\`\`\`\nnpm run dev\n${END}\n\n\`\`\`\n`;
+    const singleTrailingOnce = upsertMarkedRegionAfterIntro(
+      withSingleTrailingBareFence,
+      START,
+      END,
+      "clean body",
+    );
+    expect(singleTrailingOnce).toBe(`# Proj\n\n${START}\nclean body\n${END}\n\n\`\`\`\n`);
+    expect(singleTrailingOnce.match(new RegExp(START, "g"))).toHaveLength(1);
+  });
 });
 
 describe("topLevelLines", () => {
@@ -320,5 +525,44 @@ describe("topLevelLines", () => {
 
   it("ignores a single-line comment", () => {
     expect(topLevelLines(["<!-- c -->", "p"])).toEqual([true, true]);
+  });
+
+  it("does not hide the rest of the document after an unclosed fence or unclosed comment", () => {
+    expect(topLevelLines(["```bash", "npm run dev", "## Heading"])).toEqual([true, true, true]);
+    expect(topLevelLines(["```bash", "unclosed", "```sh", "closed", "```", "after"])).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+    ]);
+    expect(topLevelLines(["```bash", "unclosed", "```", "closed", "```", "after"])).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+    ]);
+    expect(topLevelLines(["<!-- unclosed", "<!-- single -->", "after"])).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect(topLevelLines(["<!-- unclosed", "after"])).toEqual([true, true]);
+  });
+
+  it("does not treat generic <!-- start --> comments as region markers when default regexes are used", () => {
+    const lines = [
+      "# Doc",
+      "",
+      "```html",
+      "Intro",
+      "<!-- start -->",
+      "<<<MULLION_REGION>>>",
+      "```",
+    ];
+    expect(topLevelLines(lines)).toEqual([true, true, false, false, false, false, false]);
   });
 });
