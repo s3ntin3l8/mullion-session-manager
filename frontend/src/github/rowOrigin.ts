@@ -1,5 +1,5 @@
 import type { GitHubIssueListItem, GitHubPROrWithChecks } from "../api/types.js";
-import type { MullionLinkEntry } from "../hooks/useMullionLinks.js";
+import { isTaskBranch, type MullionLinkEntry } from "../hooks/useMullionLinks.js";
 import { splitTaskSessions } from "../ui/sidebar/linkDecisions.js";
 import { ATTENTION_ORDER } from "./prPhase.js";
 
@@ -11,7 +11,8 @@ const manualCount = (link: MullionLinkEntry | undefined) =>
   splitTaskSessions(link?.sessions ?? [], link?.task ?? null).rest.length;
 
 export function prOrigin(pr: GitHubPROrWithChecks, link: MullionLinkEntry | undefined): RowOrigin {
-  if (link?.task || pr.taskId != null) return "tm";
+  // A `mullion/task-*` branch is Task Master's even when its task row is gone.
+  if (link?.task || pr.taskId != null || isTaskBranch(pr.headBranch)) return "tm";
   return manualCount(link) > 0 ? "manual" : "none";
 }
 
@@ -23,8 +24,12 @@ export function issueOrigin(
   return manualCount(link) > 0 ? "manual" : "none";
 }
 
+/** "Manual" means "not Task Master's" — a human's PR or issue stays under it
+ *  whether or not a hand-started session is live on it right now (`"none"`). */
 export function matchesOrigin(filter: OriginFilterValue, origin: RowOrigin): boolean {
-  return filter === "all" || filter === origin;
+  if (filter === "all") return true;
+  if (filter === "manual") return origin !== "tm";
+  return filter === origin;
 }
 
 /** The row's left-edge marker: blue for Task Master, grey for a manual session. */

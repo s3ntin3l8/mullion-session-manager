@@ -43,7 +43,18 @@ describe("rowOrigin", () => {
     expect(matchesOrigin("all", "none")).toBe(true);
     expect(matchesOrigin("tm", "tm")).toBe(true);
     expect(matchesOrigin("tm", "manual")).toBe(false);
-    expect(matchesOrigin("manual", "none")).toBe(false);
+    expect(matchesOrigin("manual", "tm")).toBe(false);
+  });
+
+  it("keeps a human's row under Manual even with no live session on it", () => {
+    expect(matchesOrigin("manual", "none")).toBe(true);
+    expect(matchesOrigin("manual", "manual")).toBe(true);
+    expect(matchesOrigin("tm", "none")).toBe(false);
+  });
+
+  it("calls a mullion/task-* PR Task Master's even when its task row is gone", () => {
+    expect(prOrigin(pr({ headBranch: "mullion/task-12-fix" }), undefined)).toBe("tm");
+    expect(prOrigin(pr({ headBranch: "fix-git-row-actions" }), undefined)).toBe("none");
   });
 
   it("marks the row edge by origin, and flags PRs that want the user", () => {
