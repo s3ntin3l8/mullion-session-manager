@@ -31,6 +31,7 @@ import { createDevicesSlice } from "./slices/devices.js";
 import { createUiSlice } from "./slices/ui.js";
 import { createToastsSlice } from "./slices/toasts.js";
 import { createPreviewsSlice } from "./slices/previews.js";
+import { createScaffoldSlice } from "./slices/scaffold.js";
 
 export const useDashboardStore = create<DashboardState>()((...a) => ({
   ...createProjectsSlice(...a),
@@ -45,6 +46,7 @@ export const useDashboardStore = create<DashboardState>()((...a) => ({
   ...createUiSlice(...a),
   ...createToastsSlice(...a),
   ...createPreviewsSlice(...a),
+  ...createScaffoldSlice(...a),
 }));
 
 // --- Public re-exports -----------------------------------------------

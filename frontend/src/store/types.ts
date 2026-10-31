@@ -1,4 +1,5 @@
 import type { ProjectPreviewConfig } from "../api/types.js";
+import type { ExistingInstructionsMode, ScaffoldConflict } from "../api/projects.js";
 import type { HostEditableRole } from "../../../src/shared/constants.js";
 import type {
   AppSettings,
@@ -931,6 +932,69 @@ export interface PreviewsSlice {
   clearOpenPreviewRequest: (nonce: number) => void;
 }
 
+/** A scaffold preview as the Scaffold panel shows it (issue #2478). */
+export interface ScaffoldPreview {
+  previewId: string;
+  diff: string;
+  files: string[];
+  // Issue #1201 — true when the target repo already has its own
+  // AGENTS.override.md. computeScaffold never writes to that path (codex
+  // reads it INSTEAD OF AGENTS.md), so the committed Workflow Conventions
+  // would never reach codex sessions for this project.
+  hasAgentsOverride: boolean;
+  // Only set by the agent-assisted path (/setup/generate). `sandboxed`
+  // false means the host ran the turn without bwrap; `possiblyGeneric`
+  // means the turn finished without evidence it actually read the repo.
+  generated?: boolean;
+  // The agent that wrote a generated preview, for the result header.
+  agent?: string;
+  sandboxed?: boolean;
+  possiblyGeneric?: boolean;
+  // What the generation turn was asked to do with existing instructions, and
+  // what came back: a conflicts list (report) or a lossy-rewrite signal
+  // (restructure).
+  instructionsMode?: ExistingInstructionsMode;
+  conflicts?: ScaffoldConflict[];
+  droppedConflictLines?: number;
+  possiblyLossy?: boolean;
+}
+
+export interface ScaffoldApplyResult {
+  ok: boolean;
+  mode?: "pull-request" | "local-branch";
+  prUrl?: string;
+  prNumber?: number;
+  branch?: string;
+  detail?: string;
+}
+
+/** One project's Scaffold panel form and result, kept in the store so it
+ * survives the panel unmounting (issue #2478). */
+export interface ScaffoldDraft {
+  path: "agent" | "template";
+  slug: string;
+  includeContributingPointer: boolean;
+  symlinkAgentsSkills: boolean;
+  includeDockConfig: boolean;
+  existingInstructions: ExistingInstructionsMode;
+  preview: ScaffoldPreview | null;
+  // When the server created `preview` (epoch ms); the server drops it after
+  // PREVIEW_TTL_MS, so a restore older than that discards it.
+  previewCreatedAt: number | null;
+  applyResult: ScaffoldApplyResult | null;
+  offerRefresh: boolean;
+  refreshSkill: boolean;
+  refreshReviewer: boolean;
+  error: string | null;
+}
+
+export interface ScaffoldSlice {
+  scaffoldDrafts: Record<number, ScaffoldDraft>;
+  /** Merges `patch` into the project's draft, creating it from defaults. */
+  patchScaffoldDraft: (projectId: number, patch: Partial<ScaffoldDraft>) => void;
+  clearScaffoldDraft: (projectId: number) => void;
+}
+
 export type DashboardState = ProjectsSlice &
   SessionsSlice &
   GitSlice &
@@ -942,4 +1006,5 @@ export type DashboardState = ProjectsSlice &
   DevicesSlice &
   UiSlice &
   ToastsSlice &
-  PreviewsSlice;
+  PreviewsSlice &
+  ScaffoldSlice;
