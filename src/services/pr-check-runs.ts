@@ -1,12 +1,12 @@
 // A PR's check runs — and whether we could read them.
 //
-// #2416. `fetchCheckRunsForHead` degrades to `[]` when the lookup fails,
-// which is indistinguishable from "this PR has no checks". The unstable-PR
-// path read that empty list as "nothing to self-heal", so a red TITLE-LINT
-// check was silently never healed (#1035's self-heal never ran) and the
-// operator was told only that "a non-required check is failing or still
-// running" — with nothing in the log saying the check list could not even be
-// read.
+// #2416. `fetchCheckRunsForHead` THROWS when the lookup fails — it used to
+// degrade to `[]`, which is indistinguishable from "this PR has no checks".
+// The unstable-PR path read that empty list as "nothing to self-heal", so a
+// red TITLE-LINT check was silently never healed (#1035's self-heal never
+// ran) and the operator was told only that "a non-required check is failing
+// or still running" — with nothing in the log saying the check list could not
+// even be read.
 //
 // This is the same shape as the Workflow Runs path's `runsAnswered` flag
 // (the `warnUnstableRunsUnreadable` helper in task-reconciler.ts): the
