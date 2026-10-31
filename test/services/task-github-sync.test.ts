@@ -779,15 +779,15 @@ describe("task-github-sync", () => {
       "marks a %s task done with the closing PR, no GitHub write-back",
       async (status) => {
         const task = insertTask(status, status === "backlog" ? 701 : 702);
-        mockGetMergedClosingPullRequest.mockResolvedValue(77);
+        mockGetMergedClosingPullRequest.mockResolvedValue({ number: 77, mergedAt: "2026-10-31" });
         const logSpy = vi.spyOn(app.log, "info");
         await syncUnlabeledIssueToLocal(app, task, project, CLOSED);
 
         const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
-        expect(row.status).toBe("done");
-        expect(row.prNumber).toBe(77);
-        expect(row.completedAt).not.toBeNull();
-        expect(row.failureReason).toBeNull();
+        expect(row).toMatchObject({ status: "done", prNumber: 77, failureReason: null });
+        // Recorded as merged + archived, or the board shows "PR open — needs merge".
+        expect(row.mergedAt).toEqual(new Date("2026-10-31"));
+        expect([row.completedAt, row.archivedAt]).not.toContain(null);
         expect(logSpy).toHaveBeenCalledWith(
           expect.objectContaining({
             taskId: task.id,
@@ -824,7 +824,7 @@ describe("task-github-sync", () => {
 
     it("does not look up a closing PR for an unlabeled issue", async () => {
       const task = insertTask("ready", 705);
-      mockGetMergedClosingPullRequest.mockResolvedValue(78);
+      mockGetMergedClosingPullRequest.mockResolvedValue({ number: 78, mergedAt: null });
       await syncUnlabeledIssueToLocal(app, task, project);
       const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
       expect(row.status).toBe("failed");
@@ -835,7 +835,7 @@ describe("task-github-sync", () => {
       "leaves a %s task untouched even with a merged closing PR",
       async (status) => {
         const task = insertTask(status, 710 + status.length);
-        mockGetMergedClosingPullRequest.mockResolvedValue(79);
+        mockGetMergedClosingPullRequest.mockResolvedValue({ number: 79, mergedAt: null });
         await syncUnlabeledIssueToLocal(app, task, project, CLOSED);
         const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
         expect(row.status).toBe(status);

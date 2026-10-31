@@ -1057,7 +1057,7 @@ describe("webhook routes", () => {
     it.each<[string, number | null, string]>([
       ["a merged closing PR marks an unclaimed task done", 88, "done"],
       ["no merged closing PR fails an unclaimed task", null, "failed"],
-    ])("issue closed on a backlog task: %s", async (_label, closingPr, expected) => {
+    ])("issue closed on a backlog task: %s", async (_label, pr, expected) => {
       const cwd = createMatchingGitRepo("acme", `widgets-manual-${expected}`);
       const app = await buildApp();
 
@@ -1074,7 +1074,7 @@ describe("webhook routes", () => {
       const githubWrite = await import("../../src/services/github-write.js");
       const closingSpy = vi
         .spyOn(githubWrite, "getMergedClosingPullRequest")
-        .mockResolvedValue(closingPr);
+        .mockResolvedValue(pr ? { number: pr, mergedAt: null } : null);
       const writeSpy = vi.spyOn(githubWrite, "createComment").mockResolvedValue(undefined as never);
 
       const [project] = app.db
@@ -1118,7 +1118,7 @@ describe("webhook routes", () => {
           .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 47)))
           .all()[0];
       await waitUntil(() => getRow().status === expected);
-      expect(getRow().prNumber).toBe(closingPr);
+      expect(getRow()).toMatchObject({ prNumber: pr, mergedAt: pr && expect.any(Date) });
       if (expected === "done") expect(writeSpy).not.toHaveBeenCalled();
       else expect(getRow().failureReason).toBe("GitHub issue was closed");
 
