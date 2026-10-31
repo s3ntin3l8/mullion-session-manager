@@ -1225,7 +1225,7 @@ export const tasks = sqliteTable(
     // Cleared once the PR is merged (or found already merged/closed) — the
     // rate limiter (backoff between attempts) is intentionally in-memory
     // only, not durable, same reasoning as retryStrandedDraftPRs' own
-    // draftPrRetryState.
+    // draftPrRetryBackoff.
     mergeRequestedAt: integer("merge_requested_at", { mode: "timestamp" }),
     // Merge-on-approve — the last merge-sweep failure reason (conflicts with
     // main, checks blocked, no token, ...), surfaced in the task drawer. A
