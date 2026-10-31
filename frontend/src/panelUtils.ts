@@ -764,8 +764,13 @@ export function openOrFocusPanel(
   const existing = api.getPanel(panelId);
   if (existing) {
     if (spec.retargetParams) existing.api.updateParameters(spec.retargetParams);
-    existing.api.setActive();
-    if (layout?.tier === "phone") maximizeIfTiled(api, existing);
+    // The activate-and-maximize-on-phone rule lives in exactly one place:
+    // focusPanelForTier, the helper the sidebar's own focus paths already go
+    // through (auto-focus on attention, the post-workspace-switch
+    // highlight). Without a tier there is nothing to maximize for — the
+    // drag-and-drop path just activates the panel.
+    if (layout) focusPanelForTier(api, existing, layout.tier);
+    else existing.api.setActive();
     return;
   }
 

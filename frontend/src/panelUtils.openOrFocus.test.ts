@@ -8,7 +8,8 @@
 // positioning — plus the phone maximize and the explicit placement a
 // drag-and-drop brings along.
 import { describe, it, expect, vi } from "vitest";
-import { openOrFocusPanel } from "./panelUtils.js";
+import { openOrFocusPanel, openFileOnlyPanel, openSessionPanel } from "./panelUtils.js";
+import { makeSession } from "./test/fixtures.js";
 import type { DockviewApi, DockviewGroupPanel } from "dockview";
 import type { LayoutContext } from "./lib/layoutTier.js";
 
@@ -62,6 +63,11 @@ const SPEC = {
   title: "a session",
   params: { sessionId: 1 },
 };
+
+const PROJECTS = [
+  { id: 1, name: "project-alpha" },
+  { id: 2, name: null },
+];
 
 describe("openOrFocusPanel", () => {
   it("focuses an already-open panel instead of opening a second one", () => {
@@ -194,5 +200,57 @@ describe("openOrFocusPanel", () => {
     const addCall = (api.addPanel as ReturnType<typeof vi.fn>).mock.calls[1][0];
     expect(addCall).toEqual(expect.objectContaining({ position: { direction: "right" } }));
     expect(api.maximizeGroup).not.toHaveBeenCalled();
+  });
+
+  // Dropping a session onto a grid that already holds that session's panel:
+  // no tier to focus for, so the panel is activated and nothing else — no
+  // maximize, no re-target, no second panel.
+  it("focuses an already-open panel without a layout", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "session-1", component: "terminal", params: {} });
+    const existing = api.getPanel("session-1")!;
+
+    openOrFocusPanel(api, "session-1", { ...SPEC, position: { direction: "right" } });
+
+    expect(existing.api.setActive).toHaveBeenCalledTimes(1);
+    expect(existing.api.updateParameters).not.toHaveBeenCalled();
+    expect(api.maximizeGroup).not.toHaveBeenCalled();
+    expect(api.addPanel).toHaveBeenCalledTimes(1); // only the setup call
+  });
+});
+
+// The other half of the extraction's contract: WHICH openers re-target an
+// already-open panel. Eight of the eleven never did — they focus the open
+// panel exactly as it is — and three (openProjectHubPanel, openFileEditorPanel,
+// openExternalFilePanel) re-target it through updateParameters.
+//
+// The positive half is pinned by panelUtils.test.ts (each of those three
+// asserts the updateParameters call). The NEGATIVE half was pinned nowhere:
+// adding a retargetParams to one of the eight kept every existing test green,
+// because the helper-level test above only ever sees a spec that carries
+// none. These two cases pin the per-site choice the extraction preserves.
+describe("the openers that do not re-target", () => {
+  it("openSessionPanel focuses an already-open session panel without re-targeting it", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "session-1", component: "terminal", params: {} });
+    const existing = api.getPanel("session-1")!;
+
+    openSessionPanel(api, makeSession({ id: 1 }), DESKTOP, PROJECTS);
+
+    expect(existing.api.setActive).toHaveBeenCalledTimes(1);
+    expect(existing.api.updateParameters).not.toHaveBeenCalled();
+    expect(api.addPanel).toHaveBeenCalledTimes(1); // only the setup call
+  });
+
+  it("openFileOnlyPanel focuses an already-open file panel without re-targeting it", () => {
+    const api = mockDockviewApi();
+    api.addPanel({ id: "file-1-a.ts", component: "file-editor", params: {} });
+    const existing = api.getPanel("file-1-a.ts")!;
+
+    openFileOnlyPanel(api, 1, PROJECTS, DESKTOP, "a.ts");
+
+    expect(existing.api.setActive).toHaveBeenCalledTimes(1);
+    expect(existing.api.updateParameters).not.toHaveBeenCalled();
+    expect(api.addPanel).toHaveBeenCalledTimes(1); // only the setup call
   });
 });
