@@ -52,14 +52,14 @@
     "check:max-file-lines": "node scripts/check-max-file-lines.mjs --strict"
   },
   "dependencies": {
-    "@fastify/compress": "^9.2.2",
-    "@fastify/cookie": "^11.1.3",
+    "@fastify/compress": "^9.3.0",
+    "@fastify/cookie": "^11.1.5",
     "@fastify/cors": "^11.3.1",
     "@fastify/env": "^7.0.1",
     "@fastify/helmet": "^13.2.0",
     "@fastify/rate-limit": "^11.2.1",
     "@fastify/sensible": "^6.0.7",
-    "@fastify/static": "^10.1.7",
+    "@fastify/static": "^10.1.8",
     "@fastify/websocket": "^11.3.4",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/headless": "^6.0.0",
@@ -87,7 +87,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/better-sqlite3": "^9.6.0",
-    "@types/node": "^26.6.5",
+    "@types/node": "^26.6.6",
     "@types/web-push": "^3.6.4",
     "@types/ws": "^8.18.2",
     "@vitest/coverage-v8": "^5.0.5",
@@ -99,7 +99,7 @@
     "prettier": "^3.9.10",
     "tsx": "^4.23.15",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.72.0",
+    "typescript-eslint": "^8.72.1",
     "vitest": "^5.0.0",
     "zod": "^4.6.7"
   },
