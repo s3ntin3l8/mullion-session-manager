@@ -1215,6 +1215,7 @@ function ProjectHeader({
         </button>
         <span onClick={(e) => e.stopPropagation()}>
           <KebabMenu
+            menuPlacement="auto"
             title="More…"
             items={[
               {

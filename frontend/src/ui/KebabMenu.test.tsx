@@ -312,3 +312,165 @@ describe("ui/KebabMenu window resize", () => {
     }
   });
 });
+
+describe('ui/KebabMenu menuPlacement="auto"', () => {
+  const items = [{ key: "only", label: "Only item", onClick: vi.fn() }];
+
+  function rectAt(top: number, bottom = top + 20): DOMRect {
+    return {
+      top,
+      bottom,
+      left: 0,
+      right: 100,
+      width: 100,
+      height: bottom - top,
+      x: 0,
+      y: top,
+      toJSON: () => ({}),
+    };
+  }
+
+  function mockGeometry(top: number, bottom: number, menuHeight = 180) {
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(() => rectAt(top, bottom));
+    const heightSpy = vi
+      .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains("pane-tab-overflow-menu") ? menuHeight : 0;
+      });
+    return () => {
+      rectSpy.mockRestore();
+      heightSpy.mockRestore();
+    };
+  }
+
+  it("flips upward near the bottom when the menu does not fit below", async () => {
+    const user = userEvent.setup();
+    const originalHeight = window.innerHeight;
+    Object.defineProperty(window, "innerHeight", { value: 500, configurable: true });
+    const restore = mockGeometry(450, 470);
+    try {
+      render(<KebabMenu items={items} menuPlacement="auto" />);
+      await user.click(screen.getByRole("button"));
+      const menu = document.querySelector(".pane-tab-overflow-menu") as HTMLElement;
+      expect(menu.style.bottom).not.toBe("auto");
+      expect(menu.style.top).toBe("auto");
+      expect(menu.style.maxHeight).toBe("442px");
+    } finally {
+      restore();
+      Object.defineProperty(window, "innerHeight", { value: originalHeight, configurable: true });
+    }
+  });
+
+  it('keeps explicit "bottom" placement and its small available-height cap', async () => {
+    const user = userEvent.setup();
+    installFakeVisualViewport(400, 100);
+    const restore = mockGeometry(458, 478);
+    try {
+      render(<KebabMenu items={items} menuPlacement="bottom" />);
+      await user.click(screen.getByRole("button"));
+      const menu = document.querySelector(".pane-tab-overflow-menu") as HTMLElement;
+      expect(menu.style.top).not.toBe("auto");
+      expect(menu.style.bottom).toBe("auto");
+      expect(menu.style.maxHeight).toBe("14px");
+    } finally {
+      restore();
+      uninstallFakeVisualViewport();
+    }
+  });
+
+  it("opens downward near the top when the menu fits below", async () => {
+    const user = userEvent.setup();
+    const originalHeight = window.innerHeight;
+    Object.defineProperty(window, "innerHeight", { value: 500, configurable: true });
+    const restore = mockGeometry(20, 40);
+    try {
+      render(<KebabMenu items={items} menuPlacement="auto" />);
+      await user.click(screen.getByRole("button"));
+      const menu = document.querySelector(".pane-tab-overflow-menu") as HTMLElement;
+      expect(menu.style.top).toBe("44px");
+      expect(menu.style.bottom).toBe("auto");
+    } finally {
+      restore();
+      Object.defineProperty(window, "innerHeight", { value: originalHeight, configurable: true });
+    }
+  });
+
+  it("chooses the roomier side when neither side can fit the menu", async () => {
+    const user = userEvent.setup();
+    const originalHeight = window.innerHeight;
+    Object.defineProperty(window, "innerHeight", { value: 300, configurable: true });
+    const restore = mockGeometry(170, 190, 220);
+    try {
+      render(<KebabMenu items={items} menuPlacement="auto" />);
+      await user.click(screen.getByRole("button"));
+      const menu = document.querySelector(".pane-tab-overflow-menu") as HTMLElement;
+      // 162px above is roomier than 102px below.
+      expect(menu.style.bottom).not.toBe("auto");
+      expect(menu.style.maxHeight).toBe("162px");
+    } finally {
+      restore();
+      Object.defineProperty(window, "innerHeight", { value: originalHeight, configurable: true });
+    }
+  });
+
+  it("stays below when it fits there even if the space above is roomier", async () => {
+    const user = userEvent.setup();
+    const originalHeight = window.innerHeight;
+    Object.defineProperty(window, "innerHeight", { value: 500, configurable: true });
+    const restore = mockGeometry(300, 320, 100);
+    try {
+      render(<KebabMenu items={items} menuPlacement="auto" />);
+      await user.click(screen.getByRole("button"));
+      const menu = document.querySelector(".pane-tab-overflow-menu") as HTMLElement;
+      expect(menu.style.top).toBe("324px");
+      expect(menu.style.bottom).toBe("auto");
+    } finally {
+      restore();
+      Object.defineProperty(window, "innerHeight", { value: originalHeight, configurable: true });
+    }
+  });
+
+  it("re-evaluates placement on window resize and visual viewport resize", async () => {
+    const user = userEvent.setup();
+    const originalHeight = window.innerHeight;
+    Object.defineProperty(window, "innerHeight", { value: 500, configurable: true });
+    const vv = installFakeVisualViewport(500);
+    let triggerTop = 100;
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(() => rectAt(triggerTop, triggerTop + 20));
+    const heightSpy = vi
+      .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains("pane-tab-overflow-menu") ? 180 : 0;
+      });
+    try {
+      render(<KebabMenu items={items} menuPlacement="auto" />);
+      await user.click(screen.getByRole("button"));
+      const menu = document.querySelector(".pane-tab-overflow-menu") as HTMLElement;
+      expect(menu.style.top).toBe("124px");
+
+      triggerTop = 450;
+      await act(async () => {
+        window.dispatchEvent(new Event("resize"));
+        await flushRaf();
+      });
+      expect(menu.style.bottom).not.toBe("auto");
+
+      triggerTop = 100;
+      await act(async () => {
+        vv.resizeTo(150);
+        await flushRaf();
+      });
+      expect(menu.style.bottom).not.toBe("auto");
+      expect(menu.style.maxHeight).toBe("92px");
+    } finally {
+      rectSpy.mockRestore();
+      heightSpy.mockRestore();
+      uninstallFakeVisualViewport();
+      Object.defineProperty(window, "innerHeight", { value: originalHeight, configurable: true });
+    }
+  });
+});
