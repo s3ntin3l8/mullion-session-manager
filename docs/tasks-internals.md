@@ -822,6 +822,51 @@ claimed/in_progress reconcile loop: it never touches session liveness or the
 time budget, and it must run even on a tick with zero claimed/in_progress
 tasks.
 
+### Hermes as the review agent
+
+`ReviewAgent: hermes` (or the task, project or install-wide default set to
+`hermes`) sends the review to Hermes instead of spawning a CLI session. It is
+opt-in twice: **Settings → Review relay → "Use Hermes as the Task Master
+reviewer"** (`reviewRelay.taskMasterReviewer`) plus a stored Hermes URL and
+key. It does **not** depend on `reviewRelay.provider`, which only switches the
+GitHub-side relay. `hermesTaskReviewerUsable` (`hermes-integration.ts`) is the
+one predicate; the write routes refuse `hermes` with a 400 while it is false,
+and the resolver (`resolveReviewer`, `task-agent-resolve.ts`) answers "no
+reviewer" with a warning rather than falling through to a different CLI.
+`hermes` is deliberately not in `KNOWN_AGENTS`: it is not a CLI to detect or
+place a worker on.
+
+A review there is an HTTP run, stored on the task: `reviewRunId`,
+`reviewRunDispatchedAt`, `reviewRunHeadSha` and the ingest marker
+`reviewRunIngestedId`. They are always cleared together, at every site that
+resets a review (`CLEARED_REVIEW_RUN`, `task-review-handle.ts`), because a run
+has no fresh id per round the way a session does. Two reconcile passes drive it:
+
+- `processHermesDispatch` (after `processPendingReviewSpawns`) starts the run
+  for a `reviewing` task with a PR and no review handle: same CI wait, same
+  auto-rebase hold-back and same claim slot (`reviewSpawnClaimedAt`) as the
+  session spawn. The prompt is `buildReviewPrompt` in `reply` mode with a
+  `clone` workspace, so Hermes checks out the PR head itself and replies with
+  the findings JSON; Mullion posts the review. An unreachable Hermes is retried
+  every tick; 30 minutes after the task entered `reviewing` the round is
+  recorded as inconclusive against a stand-in id (`unsent:<task>:r<round>:x<n>`),
+  and the one automatic inconclusive re-arm retries it. There is no CLI fallback.
+- `processHermesRuns` (before `processReviewingTasks`) polls each in-flight run
+  by id, so a Mullion restart resumes it. A completed run's reply goes through
+  `extractFindingsJson` and `parseReviewFindings`; a reply that is not the
+  findings JSON is **inconclusive**, never a freeform changes-requested. A
+  failed or cancelled run is inconclusive; a run Hermes no longer knows is
+  inconclusive after three consecutive polls; a run still going 60 minutes
+  after dispatch is stopped and recorded inconclusive. The outcome finishes
+  through the same `ingestReviewOutcome` a session review ends in (round
+  comment, posted PR review, auto-return, suggestions round, auto-approve).
+
+A run is stopped (`stopHermesRunQuietly`, fire-and-forget) wherever a review
+session would be killed: re-entering `reviewing`, auto-rebase, the inconclusive
+re-arm, approve / give-up / merge cleanup (`cleanupTaskSessions`) and the
+abandon teardown. Task Master never uses the GitHub relay's
+`stopHermesReview` / `getHermesReviewStatus` for these runs.
+
 ## Seed delivery
 
 **A claim/retry/review spawn delivers its prompt as the agent's own
@@ -1811,10 +1856,12 @@ Some repos configure their own PR-triggered review automation, separate
 from Task Master's own review agent — this repo's is Hermes
 (`.github/workflows/hermes.yml`, invoking the org's reusable
 `hermes-review.yml` on a self-hosted runner). Task Master does not depend
-on it, use it, or wait for it: **Task Master's own review agent**
-(`defaultReviewAgent`, resolved per task by `resolveReviewAgentCommand`)
-**is the terminal review for every task it manages** — see
-[Auto-approve](#auto-approve) above.
+on that workflow, use it, or wait for it: **Task Master's own review agent**
+(`defaultReviewAgent`, resolved per task by `resolveReviewer`) **is the
+terminal review for every task it manages** — see
+[Auto-approve](#auto-approve) above. That agent can itself be Hermes — a
+direct run Mullion dispatches and ingests, not the workflow; see
+[Hermes as the review agent](#hermes-as-the-review-agent).
 
 **Task Master's own PRs are deliberately excluded from such workflows'
 automatic triggers.** `hermes.yml`'s `auto-review` job gates on

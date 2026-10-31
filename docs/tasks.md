@@ -554,9 +554,10 @@ Two independent choices are resolved per task, most-specific tier wins:
 **Review agent** (the optional reviewer — see
 [`tasks-internals.md`](tasks-internals.md#review-agent-mechanics)):
 
-1. The issue body's own `ReviewAgent: <name>` line.
-2. The owning project's `defaultReviewAgent` setting.
-3. The install-wide `settings.taskMaster.defaultReviewAgent` (Task Master
+1. The task's own `reviewAgent` (set when it is created or claimed).
+2. The issue body's own `ReviewAgent: <name>` line.
+3. The owning project's `defaultReviewAgent` setting.
+4. The install-wide `settings.taskMaster.defaultReviewAgent` (Task Master
    Settings' Default review agent). When unset, or explicitly `"none"`/empty,
    no review agent is spawned and a human reviews directly — today's
    unchanged default behavior. **The issue body's own `ReviewAgent: none` or
@@ -565,6 +566,14 @@ Two independent choices are resolved per task, most-specific tier wins:
    review outright, independent of the settings tier.** A review agent remains an additive,
    advisory feature; both tiers just let an operator engage (or disengage)
    one for every task without configuring it per project.
+
+   **`hermes`** is also accepted at every tier: the review then runs on Hermes
+   instead of a CLI session (see
+   [Hermes as the review agent](tasks-internals.md#hermes-as-the-review-agent)).
+   It needs Settings → Review relay → "Use Hermes as the Task Master reviewer"
+   and a stored Hermes URL and key; until then the routes refuse it, and a
+   stored `hermes` resolves to no reviewer (a human reviews) rather than to
+   another agent.
 
    This becomes load-bearing, not just advisory, once a project's
    `autoApprove` setting is on (see
