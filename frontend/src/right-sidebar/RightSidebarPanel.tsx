@@ -3,7 +3,12 @@ import { Dropdown } from "../ui/primitives.js";
 import { CloseIcon, FollowIcon, PinIcon } from "../ui/icons.js";
 import type { FollowedProject } from "../hooks/useFollowedProject.js";
 import { useFollowedCheckoutSession } from "../hooks/useFollowedCheckoutSession.js";
-import { SidebarRepoTitleContext, SidebarToolbarSlotContext } from "./sidebarToolbarSlot.js";
+import { SidebarDetailSlotContext } from "../ui/sidebar/detailSlot.js";
+import {
+  SidebarRepoTitleContext,
+  SidebarStripSlotContext,
+  SidebarToolbarSlotContext,
+} from "./sidebarToolbarSlot.js";
 import type { RightSidebarActions, RightSidebarView } from "./views.js";
 
 export interface RightSidebarPanelProps {
@@ -30,6 +35,8 @@ export function RightSidebarPanel({
   const projectId = followed.effectiveProjectId;
   const checkoutSessionId = useFollowedCheckoutSession(projectId);
   const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
+  const [stripSlot, setStripSlot] = useState<HTMLElement | null>(null);
+  const [detailSlot, setDetailSlot] = useState<HTMLElement | null>(null);
   const [repoTitle, setRepoTitle] = useState<string | null>(null);
   const following = followed.pinnedProjectId == null;
   const projectName = followed.dropdownOptions.find(
@@ -37,9 +44,10 @@ export function RightSidebarPanel({
   )?.label;
   return (
     <>
-      {/* One header row for every view: the project picker is the title (the
-          rail already shows which view is open; view.label stays as the
-          panel's aria-label), then the view's toolbar, pin and close. */}
+      {/* One header row for every view: the project picker is the title, then
+          the view's toolbar, pin and close. The strip below names the view and
+          its context. A pushed detail view fills the detail slot instead, and
+          the picker, toolbar and strip step aside (right-sidebar.css). */}
       <div className="right-sidebar-header">
         {projectId != null && (
           <>
@@ -62,6 +70,7 @@ export function RightSidebarPanel({
           </>
         )}
         <div className="right-sidebar-toolbar-slot" ref={setToolbarSlot} />
+        <div className="right-sidebar-detail-slot" ref={setDetailSlot} />
         <span className="right-sidebar-header-actions">
           {canPin && (
             <button
@@ -86,14 +95,23 @@ export function RightSidebarPanel({
           </button>
         </span>
       </div>
+      <div className="right-sidebar-strip-slot" ref={setStripSlot} />
       {projectId == null ? (
         <div className="github-panel-empty-row">No projects yet.</div>
       ) : (
         <div className="right-sidebar-body cmux-scroll">
           <SidebarToolbarSlotContext.Provider value={toolbarSlot}>
-            <SidebarRepoTitleContext.Provider value={setRepoTitle}>
-              <View projectId={projectId} checkoutSessionId={checkoutSessionId} actions={actions} />
-            </SidebarRepoTitleContext.Provider>
+            <SidebarStripSlotContext.Provider value={stripSlot}>
+              <SidebarDetailSlotContext.Provider value={detailSlot}>
+                <SidebarRepoTitleContext.Provider value={setRepoTitle}>
+                  <View
+                    projectId={projectId}
+                    checkoutSessionId={checkoutSessionId}
+                    actions={actions}
+                  />
+                </SidebarRepoTitleContext.Provider>
+              </SidebarDetailSlotContext.Provider>
+            </SidebarStripSlotContext.Provider>
           </SidebarToolbarSlotContext.Provider>
         </div>
       )}

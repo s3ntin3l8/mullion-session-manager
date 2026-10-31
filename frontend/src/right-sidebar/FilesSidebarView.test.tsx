@@ -121,7 +121,8 @@ describe("FilesSidebarView", () => {
     vi.mocked(api.listProjectFiles).mockClear();
     await user.click(screen.getByRole("button", { name: "Refresh" }));
     await waitFor(() => expect(api.listProjectFiles).toHaveBeenCalledTimes(2));
-    await user.click(screen.getByRole("button", { name: "Open file browser panel" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "Open file browser panel" }));
     expect(actions.onOpenFileEditor).toHaveBeenCalledWith(4);
   });
 
@@ -155,7 +156,10 @@ describe("FilesSidebarView", () => {
     renderView();
     await screen.findByText("README.md");
 
-    await user.click(screen.getByRole("button", { name: "New folder in project root" }));
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "New folder in project root" }));
+    // The menu closing must not pull focus back to its ⋯ trigger.
+    expect(screen.getByPlaceholderText("New folder in /")).toHaveFocus();
     await user.type(screen.getByPlaceholderText("New folder in /"), "a/b{Enter}");
     expect(await screen.findByText("A name can't contain '/'")).toBeTruthy();
     expect(api.mkdirProjectDir).not.toHaveBeenCalled();

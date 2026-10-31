@@ -18,16 +18,12 @@ import type { ProjectDirEntry } from "../api/index.js";
 import {
   ChevronDownIcon,
   ChevronRightIcon,
-  ExternalLinkIcon,
   FilePlusIcon,
   FileTextIcon,
   FolderIcon,
-  FolderPlusIcon,
-  FolderUpIcon,
   RefreshIcon,
-  UploadIcon,
 } from "../ui/icons.js";
-import { SidebarToolbar } from "./SidebarToolbar.js";
+import { SidebarHeader } from "./SidebarHeader.js";
 import { EmptyStateNote } from "../ui/EmptyState.js";
 import type { RightSidebarViewProps } from "./views.js";
 import { TextInput } from "../ui/primitives.js";
@@ -514,7 +510,16 @@ export function FilesSidebarView({
         folderRef={tree.folderInputRef}
         onPick={tree.pickFiles}
       />
-      <SidebarToolbar
+      <SidebarHeader
+        label="Files"
+        contextTitle={rootCwd ?? undefined}
+        context={
+          rootRefused
+            ? "Project root"
+            : rootLabel !== null
+              ? `Worktree: ${rootLabel}`
+              : "Project root"
+        }
         actions={[
           { key: "refresh", label: "Refresh", icon: RefreshIcon, onClick: refresh },
           {
@@ -523,41 +528,40 @@ export function FilesSidebarView({
             icon: FilePlusIcon,
             onClick: () => startCreate("file"),
           },
+        ]}
+        overflow={[
           {
             key: "new-folder",
             label: `New folder in ${selectedDir || "project root"}`,
-            icon: FolderPlusIcon,
+            // The action focuses the new-entry input; the menu must not pull
+            // focus back to its trigger on close.
+            opensOverlay: true,
             onClick: () => startCreate("dir"),
           },
           {
             key: "upload-files",
             label: `Upload files to ${selectedDir || "project root"}`,
-            icon: UploadIcon,
             onClick: () => tree.pickUploadIn(selectedDir, tree.fileInputRef.current),
           },
           {
             key: "upload-folder",
             label: `Upload a folder to ${selectedDir || "project root"}`,
-            icon: FolderUpIcon,
             onClick: () => tree.pickUploadIn(selectedDir, tree.folderInputRef.current),
           },
           {
             key: "open-editor",
             label: "Open file browser panel",
-            icon: ExternalLinkIcon,
             onClick: () => actions.onOpenFileEditor(projectId),
           },
         ]}
       />
       {checkoutSessionId !== null && (
         <div className="files-root-chip">
-          <span className="files-root-chip-label" title={rootCwd ?? undefined}>
-            {rootRefused
-              ? "Project root (this worktree can't be browsed here)"
-              : rootLabel !== null
-                ? `Worktree: ${rootLabel}`
-                : "Project root"}
-          </span>
+          {rootRefused && (
+            <span className="files-root-chip-label" title={rootCwd ?? undefined}>
+              Project root (this worktree can&apos;t be browsed here)
+            </span>
+          )}
           {!rootRefused && (
             <button
               type="button"

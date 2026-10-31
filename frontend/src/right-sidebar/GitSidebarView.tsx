@@ -16,7 +16,8 @@ import { useDashboardStore } from "../store/index.js";
 import { ConfirmButton } from "../ui/ConfirmButton.js";
 import { PullIcon, RefreshIcon, CheckIcon } from "../ui/icons.js";
 import { Toggle } from "../ui/primitives.js";
-import { Button, IconButton, ViewHeader } from "../ui/sidebar/index.js";
+import { Button } from "../ui/sidebar/index.js";
+import { SidebarHeader } from "./SidebarHeader.js";
 import type { RightSidebarViewProps } from "./views.js";
 
 type Page = { kind: "list" } | { kind: "branch"; name: string } | { kind: "prune" };
@@ -188,44 +189,48 @@ export function GitSidebarView({ projectId, actions }: RightSidebarViewProps) {
 
   return (
     <div className="git-sidebar-view">
-      <ViewHeader
-        title="Source Control"
-        subtitle={subtitle}
-        externalUrl={repoUrl}
-        externalLabel="Open repository on GitHub"
-        actions={
-          <>
-            <IconButton
-              label={fetching ? "Fetching…" : "Fetch"}
-              onClick={() => void doFetch()}
-              disabled={busy}
-            >
-              <RefreshIcon size={14} />
-            </IconButton>
-            <IconButton
-              label={
-                status && status.behind === 0
-                  ? "Pull (already up to date)"
-                  : "Pull (fast-forward from tracking branch)"
-              }
-              onClick={() => void doPull()}
-              disabled={busy || !status || status.behind === 0}
-            >
-              <PullIcon size={14} />
-            </IconButton>
-            <IconButton
-              label={
-                health.checking
-                  ? "Checking clone health…"
-                  : "Check clone health (read-only; looks for damage from a background git gc)"
-              }
-              onClick={() => void health.check()}
-              disabled={health.checking || health.repairing}
-              dot={healthDot(health)}
-            >
-              <CheckIcon size={14} />
-            </IconButton>
-          </>
+      <SidebarHeader
+        label="Source Control"
+        context={subtitle}
+        actions={[
+          {
+            key: "fetch",
+            label: fetching ? "Fetching…" : "Fetch",
+            icon: RefreshIcon,
+            onClick: () => void doFetch(),
+            disabled: busy,
+          },
+          {
+            key: "pull",
+            label:
+              status && status.behind === 0
+                ? "Pull (already up to date)"
+                : "Pull (fast-forward from tracking branch)",
+            icon: PullIcon,
+            onClick: () => void doPull(),
+            disabled: busy || !status || status.behind === 0,
+          },
+          {
+            key: "health",
+            label: health.checking
+              ? "Checking clone health…"
+              : "Check clone health (read-only; looks for damage from a background git gc)",
+            icon: CheckIcon,
+            onClick: () => void health.check(),
+            disabled: health.checking || health.repairing,
+            dot: healthDot(health),
+          },
+        ]}
+        overflow={
+          repoUrl
+            ? [
+                {
+                  key: "open-repo",
+                  label: "Open repository on GitHub",
+                  onClick: () => window.open(repoUrl, "_blank", "noopener,noreferrer"),
+                },
+              ]
+            : []
         }
       />
       <div className="sc-scroll">
