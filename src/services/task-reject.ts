@@ -9,8 +9,8 @@
 // prompt that failed after the route's idle check passed) the still-active
 // worker is terminated and re-seeded the way task-reconciler.ts's
 // review-feedback auto-return does (`force: true`): a stuck worker must not
-// leave the feedback undelivered. A worker that is busy or blocked never gets
-// this far — the route refuses with a 409 first, so its context is kept.
+// leave the feedback undelivered. A worker blocked on a dialog never gets this
+// far — the route refuses with a 409 first, so its context is kept.
 // When the session had already exited, a fresh one is spawned in the SAME
 // worktree, seeded with the feedback, so a reject doesn't strand the task
 // with no agent attached. The spawn-or-not mechanics are shared with that
@@ -29,7 +29,11 @@ import {
   buildRejectPrompt,
   taskCommitTitlePath,
 } from "./task-prompt.js";
-import { promptLiveTaskWorker, reseedTaskIfSessionExited } from "./task-reseed.js";
+import {
+  promptLiveTaskWorker,
+  reseedTaskIfSessionExited,
+  type LiveWorkerState,
+} from "./task-reseed.js";
 
 /**
  * Returns whether the task is left with a live agent holding the feedback:
@@ -46,6 +50,8 @@ export async function deliverRejectFeedback(
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
   feedback: string | null,
+  // The caller's own fresh read of the worker, when it has one.
+  worker?: LiveWorkerState,
 ): Promise<boolean> {
   if (!task.sessionId || !task.worktreePath || !task.agentCommand) return true;
   const [session] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
@@ -68,6 +74,7 @@ export async function deliverRejectFeedback(
       task,
       buildRejectFollowUpPrompt({ branchName, feedback, commitTitlePath }),
       "task reject",
+      worker,
     );
     if (delivery === "typed") return true;
     // The worker's host is not answering: the session may be healthy, and

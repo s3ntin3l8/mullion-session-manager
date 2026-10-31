@@ -344,13 +344,19 @@ describe("reseedTaskIfSessionExited", () => {
       expect(await readLiveWorkerState(app, taskRow)).toMatchObject({ kind: "quiet" });
     });
 
-    it.each([
-      ["a permission dialog", { permissionState: "pending" }, "awaiting_permission"],
-      ["a turn in flight", { activity: "working" }, "working"],
-    ])("is occupied while the worker waits on %s", async (_label, info, status) => {
+    it("is blocked while the worker waits on a dialog", async () => {
       const { task: taskRow, sessionId } = insertTaskWithSession("active");
-      mockLiveStatus.mockResolvedValue({ [String(sessionId)]: info });
-      expect(await readLiveWorkerState(app, taskRow)).toEqual({ kind: "occupied", status });
+      mockLiveStatus.mockResolvedValue({ [String(sessionId)]: { permissionState: "pending" } });
+      expect(await readLiveWorkerState(app, taskRow)).toEqual({
+        kind: "blocked",
+        status: "awaiting_permission",
+      });
+    });
+
+    it("can still be typed into while busy: a stale background job never settles", async () => {
+      const { task: taskRow, sessionId } = insertTaskWithSession("active");
+      mockLiveStatus.mockResolvedValue({ [String(sessionId)]: { activity: "working" } });
+      expect(await readLiveWorkerState(app, taskRow)).toMatchObject({ kind: "quiet" });
     });
 
     it("is none for no session, and for one that has exited", async () => {
@@ -378,14 +384,22 @@ describe("reseedTaskIfSessionExited", () => {
       expect(mockTerminate).not.toHaveBeenCalled();
     });
 
-    it.each([
-      ["blocked on a permission dialog", { permissionState: "pending" }],
-      ["busy mid-turn", { activity: "working" }],
-    ])("does not type into a worker that is %s", async (_label, info) => {
+    it("does not type into a worker that is blocked on a permission dialog", async () => {
       const { task: taskRow, sessionId } = insertTaskWithSession("active");
-      mockLiveStatus.mockResolvedValue({ [String(sessionId)]: info });
+      mockLiveStatus.mockResolvedValue({ [String(sessionId)]: { permissionState: "pending" } });
       expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe("declined");
       expect(mockPrompt).not.toHaveBeenCalled();
+    });
+
+    it("types into a busy worker, and reuses a state the caller already read", async () => {
+      const { task: taskRow, sessionId } = insertTaskWithSession("active");
+      mockLiveStatus.mockResolvedValue({ [String(sessionId)]: { activity: "working" } });
+      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe("typed");
+      mockLiveStatus.mockClear();
+      const known = { kind: "quiet", hostId: "local" } as const;
+      expect(await promptLiveTaskWorker(app, taskRow, "y", "test", known)).toBe("typed");
+      // No second read of the session: the caller's own was used.
+      expect(mockLiveStatus).not.toHaveBeenCalled();
     });
 
     it("returns false when the session has already exited", async () => {

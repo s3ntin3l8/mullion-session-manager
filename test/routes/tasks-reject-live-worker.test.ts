@@ -208,13 +208,35 @@ describe("POST /api/tasks/:id/reject on a task with a live worker", () => {
     });
 
     expect(res.statusCode).toBe(409);
-    expect(res.json().message).toMatch(/awaiting permission/);
+    expect(res.json().message).toMatch(/waiting on a dialog \(permission\)/);
     expect(prompt).not.toHaveBeenCalled();
     expect(terminate).not.toHaveBeenCalled();
     // Still in review, with the same worker: the human can reject again later.
     const [row] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
     expect(row.status).toBe("reviewing");
     expect(row.sessionId).toBe(activeSessionId);
+    await cleanup();
+  });
+
+  it("still types into a busy worker, so a stale background job cannot strand the review", async () => {
+    const prompt = vi.fn().mockResolvedValue({ ok: true, outputOffset: 0 });
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    const liveStatus = vi.fn((ids: string[]) =>
+      Promise.resolve({ [ids[0]]: { activity: "working" } }),
+    );
+    const { res, activeSessionId, cleanup } = await rejectActiveWorker({
+      prompt,
+      terminate,
+      liveStatus: liveStatus as never,
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe("in_progress");
+    expect(res.json().sessionId).toBe(activeSessionId);
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(terminate).not.toHaveBeenCalled();
+    // One read of the worker, shared by the route's check and the delivery.
+    expect(liveStatus).toHaveBeenCalledTimes(1);
     await cleanup();
   });
 

@@ -1542,16 +1542,20 @@ export async function tasksRoute(app: FastifyInstance) {
       if (existing.status !== "reviewing") {
         return reply.conflict(`Cannot reject a task in status "${existing.status}"`);
       }
-      // A worker that is blocked on a dialog or busy mid-turn can't take the
-      // feedback now, and the only other way to deliver it is to terminate the
-      // worker and lose its context. Refuse BEFORE the transition instead, so
-      // nothing changes and the human can reject again once it is idle. (An
-      // unreachable host, an exited session, or an agent that takes no typed
-      // prompt is handled after it, by deliverRejectFeedback.)
+      // A worker blocked on a dialog can't take the feedback: Enter would
+      // answer the dialog, and the only other way to deliver it is to
+      // terminate the worker and lose its context. Refuse BEFORE the
+      // transition instead, so nothing changes and the human can answer the
+      // dialog and reject again. Only that: a "busy" worker (a stale background
+      // shell job never settles) still takes a typed prompt, and reject is the
+      // escape hatch out of a stranded review. (An unreachable host, an exited
+      // session, or an agent that takes no typed prompt is handled after the
+      // transition, by deliverRejectFeedback.)
       const worker = await readLiveWorkerState(app, existing);
-      if (worker.kind === "occupied") {
+      if (worker.kind === "blocked") {
+        const waiting = worker.status.replace(/^awaiting_/, "").replace(/_/g, " ");
         return reply.conflict(
-          `The task's agent is ${worker.status.replace(/_/g, " ")} — wait for it to settle (or answer its prompt), then reject again`,
+          `The task's agent is waiting on a dialog (${waiting}) — answer it, then reject again`,
         );
       }
       const [updated] = app.db
@@ -1614,6 +1618,7 @@ export async function tasksRoute(app: FastifyInstance) {
           updated,
           project,
           request.body.feedback ?? null,
+          worker,
         );
         if (!reseeded) {
           // Issue #987 — a re-seed was needed (the previous session had exited,

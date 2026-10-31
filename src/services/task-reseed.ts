@@ -49,9 +49,14 @@ export type LiveWorkerState =
   | { kind: "none" }
   /** The worker's host did not answer, so nothing is known about the session. */
   | { kind: "unreachable" }
-  /** Blocked on a dialog or busy mid-turn: typing would answer it or queue behind it. */
-  | { kind: "occupied"; status: string }
-  /** Idle at its prompt, on the host that owns it. */
+  /** Blocked on a dialog: Enter would answer it. */
+  | { kind: "blocked"; status: string }
+  /**
+   * Can be typed into, on the host that owns it. That includes a worker that is
+   * "busy": a stale background shell job (the state the reconciler hands tasks
+   * to review in, `isShellTailHandoff`) never settles, and a typed prompt just
+   * queues in the TUI — refusing would leave Reject permanently unavailable.
+   */
   | { kind: "quiet"; hostId: string };
 
 /**
@@ -82,9 +87,7 @@ export async function readLiveWorkerState(
       hostRefusedStatus,
     });
     if (sessionStatusSeverity === "gone") return { kind: "none" };
-    if (sessionStatusSeverity === "blocked" || sessionStatusSeverity === "busy") {
-      return { kind: "occupied", status: sessionStatus };
-    }
+    if (sessionStatusSeverity === "blocked") return { kind: "blocked", status: sessionStatus };
     return { kind: "quiet", hostId };
   } catch {
     return { kind: "unreachable" };
@@ -98,8 +101,8 @@ export async function readLiveWorkerState(
  * `force` below it keeps the session, its context and its scrollback.
  *
  * `"declined"` is never an error: the session is blocked on a dialog (Enter
- * would answer it), busy mid-turn, gone, or its agent takes no typed prompt —
- * the caller falls back to re-seeding (`force: true`). `"unreachable"` is the
+ * would answer it), gone, or its agent takes no typed prompt — the caller
+ * falls back to re-seeding (`force: true`). `"unreachable"` is the
  * opposite: a host that does not answer (a sleeping laptop, issue #1727) says
  * nothing about the session, which may be perfectly healthy, so the caller
  * must NOT terminate it — terminating through that host would fail anyway.
@@ -117,8 +120,11 @@ export async function promptLiveTaskWorker(
   task: TaskRow,
   prompt: string,
   logContext: string,
+  // The caller's own read of the worker, when it just made one (the reject
+  // route checks before it changes anything): one proxied round trip, not two.
+  known?: LiveWorkerState,
 ): Promise<LiveWorkerPrompt> {
-  const state = await readLiveWorkerState(app, task);
+  const state = known ?? (await readLiveWorkerState(app, task));
   if (state.kind === "unreachable") {
     app.log.info(
       { taskId: task.id, sessionId: task.sessionId },
@@ -129,7 +135,7 @@ export async function promptLiveTaskWorker(
   if (state.kind !== "quiet") {
     app.log.info(
       { taskId: task.id, sessionId: task.sessionId, state },
-      `${logContext}: worker is not idle, not typing into it`,
+      `${logContext}: worker cannot be typed into, not typing into it`,
     );
     return "declined";
   }
