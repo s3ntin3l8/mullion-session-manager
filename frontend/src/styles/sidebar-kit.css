@@ -1031,3 +1031,68 @@ button.sb-chip--label[aria-pressed="true"] {
 .sb-task-dot--info {
   background: var(--status-info-fg);
 }
+
+/* ───────── Who is working a row: Task Master vs manual ───────── */
+.sb-seg {
+  display: inline-flex;
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.sb-seg button {
+  height: 20px;
+  padding: 0 7px;
+  border: 0;
+  background: var(--surface);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.6875rem;
+  font-weight: 560;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+}
+.sb-seg button.on {
+  background: var(--seg);
+  color: var(--fg);
+}
+.sb-seg button:focus-visible {
+  outline: 1.5px solid var(--accent);
+  outline-offset: -1.5px;
+}
+/* Left-edge marker: blue = a Task Master task, grey = a hand-started session. */
+.sb-row--tm:not(.sb-row--sel)::before,
+.sb-row--manual:not(.sb-row--sel)::before,
+.sb-row--attn:not(.sb-row--sel)::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 2px;
+}
+.sb-row--tm:not(.sb-row--sel)::before {
+  background: var(--status-info-fg);
+}
+.sb-row--manual:not(.sb-row--sel)::before {
+  background: var(--muted);
+}
+/* A PR that wants the user: a red tint and edge, over (not instead of) the origin. */
+.sb-row--attn:not(.sb-row--sel) {
+  background: color-mix(in srgb, var(--r) 7%, transparent);
+}
+.sb-row--attn:not(.sb-row--sel)::before {
+  background: var(--status-danger-fg);
+}
+.sb-row--attn.sb-row--tm:not(.sb-row--sel)::before {
+  background: linear-gradient(var(--status-danger-fg) 50%, var(--status-info-fg) 50%);
+}
+/* Tasks view: the status chips are filters. */
+.tasks-sidebar-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px var(--rs-pad-x, 12px);
+}

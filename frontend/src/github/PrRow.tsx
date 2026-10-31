@@ -19,6 +19,7 @@ import {
   type TriadItem,
 } from "../ui/sidebar/index.js";
 import { ChecksDrill, MergeDrill, ReviewsDrill } from "./PrStatusViews.js";
+import { needsAttention, originClass, prOrigin } from "./rowOrigin.js";
 import { prStatuses, reviewerRows, prTriadItems, relayPillTitle, runIdFromUrl } from "./prPhase.js";
 
 const HOVER_PREFETCH_MS = 120;
@@ -91,6 +92,9 @@ export function PrRow({
       onBlur={cancelWarm}
     >
       <SidebarRow
+        className={[originClass(prOrigin(pr, links)), needsAttention(pr) ? "sb-row--attn" : ""]
+          .filter(Boolean)
+          .join(" ")}
         lead={<span className={`sb-dot sb-dot--${statuses.merge.tone}`} aria-hidden="true" />}
         title={pr.title}
         meta={

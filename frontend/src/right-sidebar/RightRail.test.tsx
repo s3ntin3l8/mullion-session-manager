@@ -68,3 +68,39 @@ describe("RightRail GitHub icon", () => {
     expect(s.githubOpenPrByProject[4]).toBeUndefined();
   });
 });
+
+describe("RightRail Tasks tab", () => {
+  it("shows the Tasks icon, with a needs-you count, only while Task Master is on", () => {
+    useDashboardStore.setState({
+      taskMasterEnabled: true,
+      tasks: [
+        { id: 1, projectId: 4, status: "failed", failureReason: "boom", archivedAt: null },
+        { id: 2, projectId: 4, status: "failed", failureReason: "old", archivedAt: "2026-10-01" },
+        { id: 3, projectId: 9, status: "failed", failureReason: "elsewhere", archivedAt: null },
+      ] as never,
+    });
+    const { unmount } = render(<RightRail projectId={4} />);
+    const btn = screen.getByRole("button", { name: "Tasks" });
+    // Only the one unarchived task of this project counts.
+    expect(btn.textContent).toBe("1");
+    unmount();
+
+    useDashboardStore.setState({ taskMasterEnabled: false });
+    render(<RightRail projectId={4} />);
+    expect(screen.queryByRole("button", { name: "Tasks" })).toBeNull();
+  });
+
+  it("no longer folds tasks into the GitHub badge", () => {
+    useDashboardStore.setState({
+      taskMasterEnabled: true,
+      prsByProject: {},
+      tasks: [
+        { id: 1, projectId: 4, status: "failed", failureReason: "boom", archivedAt: null },
+      ] as never,
+    });
+    render(<RightRail projectId={4} />);
+    expect(
+      screen.getByRole("button", { name: "GitHub" }).querySelector(".right-rail-badge"),
+    ).toBeNull();
+  });
+});

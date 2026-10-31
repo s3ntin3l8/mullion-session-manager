@@ -2,12 +2,20 @@ import type { ComponentType, SVGProps } from "react";
 import { useDashboardStore } from "../store/index.js";
 import { needsYouTasks } from "../github/taskMasterSummary.js";
 import { ATTENTION_ORDER, PHASE_LABEL, attentionSummary } from "../github/prPhase.js";
-import { FolderIcon, GitBranchIcon, GitHubIcon, GearIcon, HistoryIcon } from "../ui/icons.js";
+import {
+  FolderIcon,
+  GitBranchIcon,
+  GitHubIcon,
+  GearIcon,
+  HistoryIcon,
+  ListIcon,
+} from "../ui/icons.js";
 import { FilesSidebarView } from "./FilesSidebarView.js";
 import { GitHubSidebarView } from "./GitHubSidebarView.js";
 import { GitSidebarView } from "./GitSidebarView.js";
 import { HistorySidebarView } from "./HistorySidebarView.js";
 import { ProjectSidebarView } from "./ProjectSidebarView.js";
+import { TasksSidebarView } from "./TasksSidebarView.js";
 
 type ViewIconProps = SVGProps<SVGSVGElement> & { size?: number };
 
@@ -50,10 +58,35 @@ export interface RightSidebarView {
   // of hooks). Required (use `useNoBadge`) so the rail never has to call a
   // hook conditionally. `null` means no badge.
   useBadge: (projectId: number | null) => RailBadge | null;
+  // Whether the rail shows this view at all (same hook-per-button rule as
+  // useBadge). `useAlwaysEnabled` for the views that are always there.
+  useEnabled: () => boolean;
 }
 
 export function useNoBadge(): RailBadge | null {
   return null;
+}
+
+export function useAlwaysEnabled(): boolean {
+  return true;
+}
+
+function useTaskMasterEnabled(): boolean {
+  return useDashboardStore((s) => s.taskMasterEnabled);
+}
+
+// Tasks that want a human (failed, awaiting approval, a merge/release error)
+// for the followed project. Archived tasks never count.
+function useTasksBadge(projectId: number | null): RailBadge | null {
+  const tasks = useDashboardStore((s) => s.tasks);
+  if (projectId == null) return null;
+  const n = needsYouTasks(tasks.filter((t) => t.projectId === projectId)).length;
+  if (n === 0) return null;
+  return {
+    kind: "count",
+    value: n,
+    title: `${n} task${n === 1 ? "" : "s"} ${n === 1 ? "needs" : "need"} you`,
+  };
 }
 
 function useGitBadge(projectId: number | null): RailBadge | null {
@@ -82,24 +115,14 @@ function useGitHubBadge(projectId: number | null): RailBadge | null {
   const defaultBranchFailing = useDashboardStore((s) =>
     projectId != null ? s.defaultBranchCiByProject[projectId] === "failure" : false,
   );
-  const tasks = useDashboardStore((s) => s.tasks);
-  const taskMasterEnabled = useDashboardStore((s) => s.taskMasterEnabled);
   const { total, byPhase } = attentionSummary(prs ?? []);
-  const needsYou =
-    taskMasterEnabled && projectId != null
-      ? needsYouTasks(tasks.filter((t) => t.projectId === projectId)).length
-      : 0;
-  if (total === 0 && !defaultBranchFailing && needsYou === 0) return null;
+  if (total === 0 && !defaultBranchFailing) return null;
   const reasons: string[] = [];
   for (const phase of ATTENTION_ORDER) {
     const n = byPhase[phase];
     if (n) reasons.push(`${n} PR${n === 1 ? "" : "s"}: ${PHASE_LABEL[phase].toLowerCase()}`);
   }
   if (defaultBranchFailing) reasons.push("default branch CI failing");
-  if (needsYou > 0)
-    reasons.push(
-      `${needsYou} task${needsYou === 1 ? "" : "s"} ${needsYou === 1 ? "needs" : "need"} you`,
-    );
   return { kind: "alert", title: reasons.join(", ") };
 }
 
@@ -111,6 +134,7 @@ export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
     icon: GitBranchIcon,
     Component: GitSidebarView,
     useBadge: useGitBadge,
+    useEnabled: useAlwaysEnabled,
   },
   {
     id: "history",
@@ -118,6 +142,7 @@ export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
     icon: HistoryIcon,
     Component: HistorySidebarView,
     useBadge: useNoBadge,
+    useEnabled: useAlwaysEnabled,
   },
   {
     id: "github",
@@ -125,6 +150,15 @@ export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
     icon: GitHubIcon,
     Component: GitHubSidebarView,
     useBadge: useGitHubBadge,
+    useEnabled: useAlwaysEnabled,
+  },
+  {
+    id: "tasks",
+    label: "Tasks",
+    icon: ListIcon,
+    Component: TasksSidebarView,
+    useBadge: useTasksBadge,
+    useEnabled: useTaskMasterEnabled,
   },
   {
     id: "files",
@@ -132,6 +166,7 @@ export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
     icon: FolderIcon,
     Component: FilesSidebarView,
     useBadge: useNoBadge,
+    useEnabled: useAlwaysEnabled,
   },
   {
     id: "project",
@@ -139,5 +174,6 @@ export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
     icon: GearIcon,
     Component: ProjectSidebarView,
     useBadge: useNoBadge,
+    useEnabled: useAlwaysEnabled,
   },
 ];

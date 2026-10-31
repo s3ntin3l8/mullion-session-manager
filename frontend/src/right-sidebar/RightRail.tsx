@@ -10,12 +10,14 @@ interface RailButtonProps {
 
 function RailButton({ view, projectId, active, onClick }: RailButtonProps) {
   const badge = view.useBadge(projectId);
+  const enabled = view.useEnabled();
   const Icon = view.icon;
   const prefetchGithubProject = useDashboardStore((st) => st.prefetchGithubProject);
   // Warm the GitHub data before the click lands (issue #1970).
   const warm = () => {
     if (view.id === "github" && projectId != null) prefetchGithubProject(projectId);
   };
+  if (!enabled) return null;
   return (
     <button
       type="button"

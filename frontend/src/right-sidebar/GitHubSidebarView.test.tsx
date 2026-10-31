@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { GitHubSidebarView } from "./GitHubSidebarView.js";
 import { useDashboardStore } from "../store/index.js";
@@ -202,4 +202,46 @@ describe("GitHubSidebarView", () => {
       expect(screen.queryByRole("button", { name: /back/i })).toBeNull();
     },
   );
+
+  it("filters PRs by who is working them, only while Task Master is on", async () => {
+    vi.mocked(api.getProjectGitHubPRs).mockResolvedValue(
+      prsStatus([pr(1), pr(2, { taskId: 7, taskStatus: "reviewing" } as never)]),
+    );
+    useDashboardStore.setState({ taskMasterEnabled: true });
+    const user = userEvent.setup();
+    const { unmount } = renderView();
+    await screen.findByText("PR title 1");
+    expect(screen.getByText("PR title 2")).toBeTruthy();
+
+    const prFilter = screen.getByRole("group", { name: "Filter pull requests" });
+    await user.click(within(prFilter).getByRole("button", { name: "Task Master" }));
+    expect(screen.queryByText("PR title 1")).toBeNull();
+    expect(screen.getByText("PR title 2")).toBeTruthy();
+
+    await user.click(within(prFilter).getByRole("button", { name: "Manual" }));
+    expect(screen.getByText("No pull requests match this filter")).toBeTruthy();
+    unmount();
+
+    // Turning Task Master off removes the control and must drop the filter with it.
+    useDashboardStore.setState({ taskMasterEnabled: false });
+    renderView();
+    await screen.findByText("PR title 1");
+    expect(screen.queryByRole("group", { name: "Filter pull requests" })).toBeNull();
+    expect(screen.getByText("PR title 2")).toBeTruthy();
+  });
+
+  it("marks a PR that needs attention and a Task Master PR by their row edges", async () => {
+    vi.mocked(api.getProjectGitHubPRs).mockResolvedValue(
+      prsStatus([
+        pr(1, { prPhase: "ci_failing" } as never),
+        pr(2, { taskId: 7, taskStatus: "reviewing" } as never),
+      ]),
+    );
+    renderView();
+    await screen.findByText("PR title 1");
+    const rows = Array.from(document.querySelectorAll(".sb-row"));
+    const row = (title: string) => rows.find((r) => r.textContent?.includes(title));
+    expect(row("PR title 1")?.className).toContain("sb-row--attn");
+    expect(row("PR title 2")?.className).toContain("sb-row--tm");
+  });
 });

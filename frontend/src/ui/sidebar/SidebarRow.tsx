@@ -13,6 +13,8 @@ export interface SidebarRowProps {
   /** Revealed on hover/focus; always visible on touch. */
   actions?: ReactNode;
   selected?: boolean;
+  /** For a row that expands in place: sets aria-expanded on the title button. */
+  expanded?: boolean;
   onClick?: () => void;
   className?: string;
 }
@@ -30,6 +32,7 @@ export function SidebarRow({
   trailing,
   actions,
   selected,
+  expanded,
   onClick,
   className,
 }: SidebarRowProps) {
@@ -52,6 +55,7 @@ export function SidebarRow({
             type="button"
             className="sb-row-title sb-row-title--btn"
             aria-current={selected ? "true" : undefined}
+            aria-expanded={expanded}
             onClick={(e) => {
               // The row div handles the click; don't run onClick twice.
               e.stopPropagation();

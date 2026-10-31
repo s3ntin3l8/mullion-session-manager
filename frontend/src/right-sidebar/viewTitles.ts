@@ -6,6 +6,7 @@ export const VIEW_TITLES = {
   git: "Source Control",
   history: "History",
   github: "GitHub",
+  tasks: "Tasks",
   files: "Files",
   project: "Project",
 } as const;

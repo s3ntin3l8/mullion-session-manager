@@ -786,6 +786,7 @@ export interface UiSlice {
   setGithubOpenPr: (projectId: number, number: number | null) => void;
   /** Shows a PR's drill-in in the right sidebar's GitHub view. */
   openRightSidebarPr: (projectId: number, number: number) => void;
+  openRightSidebarIssue: (projectId: number, number: number) => void;
   /** Opens the History rail view scoped to `scope` (`branch:<name>`, `all`, `head`). */
   openRightSidebarHistory: (projectId: number, scope: string) => void;
   clearRightSidebarHistoryRequest: () => void;

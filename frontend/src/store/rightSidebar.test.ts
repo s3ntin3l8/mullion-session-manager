@@ -191,6 +191,15 @@ describe("git deep-link requests", () => {
     expect(s.githubOpenPrByProject[5]).toBe(42);
   });
 
+  it("openRightSidebarIssue switches to GitHub first, so the drill-in reset doesn't erase the issue", () => {
+    useDashboardStore.getState().openRightSidebarView("git", 5);
+    useDashboardStore.getState().openRightSidebarIssue(5, 17);
+    const s = useDashboardStore.getState();
+    expect(s.rightSidebarOpen).toBe(true);
+    expect(s.rightSidebarView).toBe("github");
+    expect(s.githubOpenIssueByProject[5]).toBe(17);
+  });
+
   describe("GitHub drill-in reset", () => {
     const drill = () => {
       const st = useDashboardStore.getState();

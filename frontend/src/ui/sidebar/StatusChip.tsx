@@ -10,7 +10,10 @@ export interface StatusChipProps {
   mono?: boolean;
   /** Makes the chip a button (used by StatusTriad). */
   onClick?: () => void;
+  /** Expand state (the triad drilldown): renders aria-expanded. */
   pressed?: boolean;
+  /** Toggle state (a filter chip): renders aria-pressed and the open outline. */
+  selected?: boolean;
   title?: string;
   className?: string;
   /** For an accent the tones lack (a GitHub label colour). */
@@ -24,11 +27,18 @@ export function StatusChip({
   mono,
   onClick,
   pressed,
+  selected,
   title,
   className,
   style,
 }: StatusChipProps) {
-  const cls = ["sb-chip", `sb-chip--${tone}`, mono ? "sb-chip--mono" : "", className ?? ""]
+  const cls = [
+    "sb-chip",
+    `sb-chip--${tone}`,
+    mono ? "sb-chip--mono" : "",
+    selected ? "sb-chip--open" : "",
+    className ?? "",
+  ]
     .filter(Boolean)
     .join(" ");
   const body =
@@ -47,6 +57,7 @@ export function StatusChip({
         className={cls}
         onClick={onClick}
         aria-expanded={pressed}
+        aria-pressed={selected}
         title={title}
         style={style}
       >
