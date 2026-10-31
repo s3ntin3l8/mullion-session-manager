@@ -1726,6 +1726,10 @@ function clearMergeState(
   // True when markTaskMerged just won the merge write: its branch cleanup
   // already owns the worktree removal, and a second concurrent
   // removeWorktreeIfClean would make that chain lose and keep the branch.
+  // Deliberately the winning side only: when the CAS was lost to an earlier
+  // writer, that writer may have been the in_progress arm of
+  // finishTaskForMergedPr, which never cleans the worktree, so this call is
+  // then the only thing that removes it (the #758 rebased task).
   worktreeHandled = false,
 ): void {
   app.db
@@ -2176,7 +2180,10 @@ export async function finishTaskForMergedPr(
     });
   } else {
     // A claimed/in_progress task can hold a live worktree (a follow-up
-    // round), so only record the merge here; its own end-of-task path cleans up.
+    // round), so only record the merge here. Its own end-of-task path removes
+    // the worktree, but NOT the branch: mergedAt is already set, so
+    // markTaskMerged's CAS will lose later. That branch lingers until
+    // "Prune merged branches" / Clear done.
     const { changes } = app.db
       .update(tasks)
       .set({ mergedAt: mergedAt ? new Date(mergedAt) : new Date() })
