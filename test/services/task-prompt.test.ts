@@ -685,6 +685,94 @@ describe("buildReviewPrompt", () => {
   });
 });
 
+describe("buildReviewPrompt (clone / reply)", () => {
+  const remote = { owner: "acme", repo: "widgets", headSha: "h1", prNumber: 7 };
+  const cloneReply = { task: TASK, output: "reply", workspace: "clone", remote } as const;
+
+  it("keeps the default byte-identical to the explicit file/worktree mode", () => {
+    const base = { task: TASK, worktreePath: BASE.worktreePath, findingsPath: FINDINGS_PATH };
+    expect(buildReviewPrompt({ ...base, output: "file", workspace: "worktree" })).toBe(
+      buildReviewPrompt(base),
+    );
+    expect(buildReviewPrompt(base)).toContain("End your turn and stay running");
+  });
+
+  it("clones at the exact head and replies with the JSON only", () => {
+    const out = buildReviewPrompt(cloneReply);
+    expect(out).toContain("Clone acme/widgets and check out exactly h1");
+    expect(out).toContain("read-only");
+    expect(out).toContain("Reply with only the JSON object");
+    expect(out).toContain("no prose and no");
+    expect(out).toContain("An unparseable reply is treated as an inconclusive review");
+    expect(out).toContain('"verdict": "approved"');
+  });
+
+  it("drops every worktree and findings-file instruction", () => {
+    const out = buildReviewPrompt(cloneReply);
+    for (const gone of [
+      "worktree",
+      "ATOMICALLY",
+      ".tmp",
+      "missing or unparseable file",
+      "stay running",
+      "`exit`",
+      "in this session too",
+    ]) {
+      expect(out).not.toContain(gone);
+    }
+  });
+
+  it("words the follow-up delta against the pinned head, not HEAD", () => {
+    const out = buildReviewPrompt({
+      ...cloneReply,
+      priorRound: { reviewedSha: "r0", findings: "- a.ts:1 broken" },
+    });
+    expect(out).toContain("git diff r0..h1");
+    expect(out).not.toContain("..HEAD");
+    expect(out).toContain("Still check the final h1 for");
+  });
+
+  it("prefers the dispatched base for the delta and handles a rebased first round", () => {
+    const out = buildReviewPrompt({
+      ...cloneReply,
+      remote: { ...remote, baseSha: "b0" },
+      priorRound: { reviewedSha: "r0", findings: "f" },
+    });
+    expect(out).toContain("git diff b0..h1");
+    const noBase = buildReviewPrompt({
+      ...cloneReply,
+      priorRound: { reviewedSha: null, findings: "f" },
+    });
+    expect(noBase).toContain("Do not re-file the earlier findings as new ones.");
+  });
+
+  it("supports the mixed modes", () => {
+    const fileClone = buildReviewPrompt({
+      task: TASK,
+      workspace: "clone",
+      remote,
+      findingsPath: FINDINGS_PATH,
+    });
+    expect(fileClone).toContain("Clone acme/widgets");
+    expect(fileClone).toContain(FINDINGS_PATH);
+    const replyWorktree = buildReviewPrompt({
+      task: TASK,
+      output: "reply",
+      worktreePath: BASE.worktreePath,
+    });
+    expect(replyWorktree).toContain(BASE.worktreePath);
+    expect(replyWorktree).toContain("Reply with only the JSON object");
+  });
+
+  it("refuses a missing required option", () => {
+    expect(() => buildReviewPrompt({ task: TASK, output: "reply" })).toThrow(/worktreePath/);
+    expect(() => buildReviewPrompt({ task: TASK, workspace: "clone", output: "reply" })).toThrow(
+      /remote/,
+    );
+    expect(() => buildReviewPrompt({ task: TASK, worktreePath: "/w" })).toThrow(/findingsPath/);
+  });
+});
+
 const CLEAN_JSON = JSON.stringify({
   verdict: "clean",
   summary: "Reviewed the diff and ran `go test ./...`; no issues found.",

@@ -1080,8 +1080,19 @@ export function renderRoundsRemaining(roundsRemaining: number): string {
  */
 export function buildReviewPrompt(opts: {
   task: TaskPromptTask;
-  worktreePath: string;
-  findingsPath: string;
+  /** Required for `workspace: "worktree"` (the default). */
+  worktreePath?: string;
+  /** Required for `output: "file"` (the default). */
+  findingsPath?: string;
+  /** Where the findings go: a file the reviewer writes (default), or the
+   * reviewer's reply (an external reviewer, e.g. Hermes, that has no access
+   * to Mullion's filesystem). */
+  output?: "file" | "reply";
+  /** Where the code is: the worker's own worktree (default), or a repository
+   * the reviewer clones itself. `"clone"` requires `remote`. */
+  workspace?: "worktree" | "clone";
+  /** The pull request to review; required for `workspace: "clone"`. */
+  remote?: { owner: string; repo: string; headSha: string; baseSha?: string; prNumber: number };
   /** Omitted for an issue-only task (no PR to check CI on) or when the
    * reconciler couldn't resolve one before its wait deadline — see
    * `ReviewCiInfo`'s own doc comment. */
@@ -1103,22 +1114,60 @@ export function buildReviewPrompt(opts: {
    * Omitted on a first review. */
   priorRound?: { reviewedSha: string | null; findings: string; approved?: boolean };
 }): string {
+  const output = opts.output ?? "file";
+  const workspace = opts.workspace ?? "worktree";
+  const { remote } = opts;
+  if (workspace === "clone" && !remote) {
+    throw new Error('buildReviewPrompt: workspace "clone" requires `remote`');
+  }
+  if (workspace === "worktree" && !opts.worktreePath) {
+    throw new Error('buildReviewPrompt: workspace "worktree" requires `worktreePath`');
+  }
+  if (output === "file" && !opts.findingsPath) {
+    throw new Error('buildReviewPrompt: output "file" requires `findingsPath`');
+  }
+  const reply = output === "reply";
+  // A clone has no HEAD worth naming: the reviewer checks out exactly this commit.
+  // The round's delta base: a clone names the commit it was dispatched against.
+  const deltaBase =
+    (workspace === "clone" ? remote?.baseSha : undefined) ?? opts.priorRound?.reviewedSha ?? null;
+  const headRef = workspace === "clone" && remote ? remote.headSha : "HEAD";
+  const workspaceLines =
+    workspace === "clone" && remote
+      ? [
+          `Clone ${remote.owner}/${remote.repo} and check out exactly ${remote.headSha}. This is`,
+          "read-only: do not push, post or comment anywhere, and do not change any",
+          "file outside your own scratch clone.",
+          "",
+        ]
+      : [
+          `You are running inside the worker's own git worktree at ${opts.worktreePath} —`,
+          "not a copy. Do not create or modify any file here: an untracked or modified",
+          "file blocks the human's approval of this task.",
+          "",
+        ];
+  const outputLines = reply
+    ? [
+        "Reply with only the JSON object below as your final message — no prose and no",
+        "code fences. Mullion reads your reply as the review. Shape:",
+        "",
+      ]
+    : [
+        `Always write your findings to ${opts.findingsPath} — that path is outside`,
+        "the worktree, so writing it does not block approval. Write it ATOMICALLY:",
+        `write the JSON to ${opts.findingsPath}.tmp first, then move/rename that to`,
+        `${opts.findingsPath} as your LAST step — never write the final path`,
+        "directly. Mullion may read this file mid-write otherwise, and a",
+        "half-written JSON body is worse than a missing file: it can be misread",
+        "as a real, if malformed, verdict. Shape:",
+        "",
+      ];
   const preamble = [
     "Review this task's diff. You are not expected to make changes.",
     "",
-    `You are running inside the worker's own git worktree at ${opts.worktreePath} —`,
-    "not a copy. Do not create or modify any file here: an untracked or modified",
-    "file blocks the human's approval of this task.",
-    "",
+    ...workspaceLines,
     ...(opts.ci ? [renderCiSummary(opts.ci), ""] : []),
-    `Always write your findings to ${opts.findingsPath} — that path is outside`,
-    "the worktree, so writing it does not block approval. Write it ATOMICALLY:",
-    `write the JSON to ${opts.findingsPath}.tmp first, then move/rename that to`,
-    `${opts.findingsPath} as your LAST step — never write the final path`,
-    "directly. Mullion may read this file mid-write otherwise, and a",
-    "half-written JSON body is worse than a missing file: it can be misread",
-    "as a real, if malformed, verdict. Shape:",
-    "",
+    ...outputLines,
     "{",
     '  "verdict": "approved" | "approved-with-suggestions" | "changes-requested",',
     '  "summary": "one sentence: your overall verdict, nothing more",',
@@ -1152,10 +1201,19 @@ export function buildReviewPrompt(opts: {
     "is the default whenever nothing must be fixed. Mullion derives the final",
     "verdict from your findings, so keep `verdict` consistent with them.",
     "",
-    "A missing or unparseable file is treated as an inconclusive review, never as",
-    '"approved" — writing the file is what lets a genuinely clean review be told',
-    "apart from one that crashed or was killed before reporting anything.",
-    "",
+    ...(reply
+      ? [
+          "An unparseable reply is treated as an inconclusive review, never as",
+          '"approved" — a well-formed reply is what lets a genuinely clean review be',
+          "told apart from one that crashed or was cut off before reporting anything.",
+          "",
+        ]
+      : [
+          "A missing or unparseable file is treated as an inconclusive review, never as",
+          '"approved" — writing the file is what lets a genuinely clean review be told',
+          "apart from one that crashed or was killed before reporting anything.",
+          "",
+        ]),
     'Every entry in "findings" must be a real file:line in this diff: a finding',
     'is an inline anchored comment, never prose citing "file:42" inside the',
     '"summary" or "notes" fields.',
@@ -1169,10 +1227,10 @@ export function buildReviewPrompt(opts: {
           "",
           opts.priorRound.findings,
           "",
-          ...(opts.priorRound.reviewedSha
+          ...(deltaBase
             ? [
-                `Review \`git diff ${opts.priorRound.reviewedSha}..HEAD\` for NEW findings, and do`,
-                "not re-file the earlier ones as new. Still check the final HEAD for",
+                `Review \`git diff ${deltaBase}..${headRef}\` for NEW findings, and do`,
+                `not re-file the earlier ones as new. Still check the final ${headRef} for`,
                 "regressions — a fix can re-break something earlier in the PR.",
               ]
             : ["Do not re-file the earlier findings as new ones."]),
@@ -1200,12 +1258,16 @@ export function buildReviewPrompt(opts: {
     ...(opts.roundsRemaining !== undefined && Number.isFinite(opts.roundsRemaining)
       ? [renderRoundsRemaining(opts.roundsRemaining), ""]
       : []),
-    "Report your findings in this session too, in plain language — the JSON file",
-    "is what Mullion reads; this is for a human reading your transcript.",
-    "",
-    "End your turn and stay running once you are done. Ending your turn is what",
-    "signals your review is complete; do NOT run `exit` or `/quit` — a review",
-    "session that exits on its own is treated the same as one that crashed.",
+    ...(reply
+      ? []
+      : [
+          "Report your findings in this session too, in plain language — the JSON file",
+          "is what Mullion reads; this is for a human reading your transcript.",
+          "",
+          "End your turn and stay running once you are done. Ending your turn is what",
+          "signals your review is complete; do NOT run `exit` or `/quit` — a review",
+          "session that exits on its own is treated the same as one that crashed.",
+        ]),
   ].join("\n");
   return `${preamble}${SECTION_BREAK}Task: ${taskSpec(opts.task)}`;
 }
