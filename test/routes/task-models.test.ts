@@ -118,6 +118,19 @@ describe("PATCH /api/tasks/:id task-level models (#2491)", () => {
     await app.close();
   });
 
+  it("pins the agent the model was validated against into the agent column", async () => {
+    const { app, id } = await setup("/tmp/task-models-pin", {
+      body: "Do X.\n\nAgent: codex\n",
+    });
+    const res = await patch(app, id, { model: "gpt-5" });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ agent: "codex", modelOverride: "gpt-5" });
+    // Clearing the model leaves the pin; `agent: null` with a model keeps it.
+    const again = await patch(app, id, { agent: null, model: "gpt-5-mini" });
+    expect(again.json()).toMatchObject({ agent: "codex", modelOverride: "gpt-5-mini" });
+    await app.close();
+  });
+
   it("409s once the task is past backlog/ready", async () => {
     const { app, id } = await setup("/tmp/task-models-6", { agent: "opencode" });
     app.db.update(tasks).set({ status: "in_progress" }).where(eq(tasks.id, id)).run();

@@ -156,6 +156,22 @@ describe("retryTask task-level model (#2491)", () => {
     expect((await retryTask(app, bodyDrift)).ok).toBe(true);
     expect(load(bodyDrift)).toMatchObject({ modelOverride: null, smallModelOverride: null });
 
+    // Same family as the last run: a body `Agent:` that still matches
+    // `agentCommand` leaves the override alone.
+    const sameFamily = await failedTask(76, "");
+    app.db
+      .update(tasks)
+      .set({
+        agent: null,
+        agentCommand: "codex",
+        modelOverride: "gpt-5",
+        body: "Do X.\n\nAgent: codex\n",
+      })
+      .where(eq(tasks.id, sameFamily))
+      .run();
+    expect((await retryTask(app, sameFamily)).ok).toBe(true);
+    expect(load(sameFamily)).toMatchObject({ modelOverride: "gpt-5" });
+
     const changed = await failedTask(72, "claude");
     expect((await retryTask(app, changed, { agent: "codex" })).ok).toBe(true);
     expect(load(changed)).toMatchObject({ agent: "codex", modelOverride: null });

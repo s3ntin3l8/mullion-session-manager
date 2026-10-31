@@ -27,9 +27,11 @@ function parseDirectiveLine(body: string | null, re: RegExp): string | null {
  * worker is pinned and neither the issue body, the project nor the install
  * default can move it (issue #2491's family-drift guard keys off it).
  *
- * Only the `agent` COLUMN counts: its sole writer is the PATCH handler in
- * routes/tasks.ts (and the claim route's enqueue path), which always runs
- * `resolveTaskModelPatch`, so a stored override was validated against it. The
+ * Only the `agent` COLUMN counts: it is written by the PATCH handler and the
+ * claim route's enqueue path (both run `resolveTaskModelPatch`, which also
+ * pins the agent into the column whenever it stores a worker model) and by
+ * `POST /api/tasks`, which is safe only because `createTaskSchema` has no
+ * `model`/`smallModel` fields — add them there and this invariant breaks. The
  * issue body's `Agent:` line is re-synced by the watcher and editable by a
  * plain body PATCH without any model revalidation, so it must not count. */
 export function workerAgentPinned(taskAgent: string | null): boolean {

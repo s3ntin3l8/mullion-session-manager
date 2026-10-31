@@ -688,7 +688,8 @@ export async function tasksRoute(app: FastifyInstance) {
       if (body !== undefined) patch.body = body;
       if (status !== undefined) patch.status = status;
       if (boardOrder !== undefined) patch.boardOrder = boardOrder;
-      if (agent !== undefined) patch.agent = agent;
+      // `agent: null` alongside a model keeps the pin resolveTaskModelPatch set.
+      if (agent !== undefined && !(agent === null && patch.agent)) patch.agent = agent;
       if (reviewAgent !== undefined) patch.reviewAgent = reviewAgent;
 
       const [updated] = app.db

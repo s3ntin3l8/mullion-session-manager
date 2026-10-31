@@ -1,7 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { tasks } from "../db/schema.js";
 import { commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
-import { resolveAgentCommand, resolveReviewAgentCommand } from "./task-agent-resolve.js";
+import {
+  resolveAgentCommand,
+  resolveReviewAgentCommand,
+  workerAgentPinned,
+} from "./task-agent-resolve.js";
 import {
   explicitModelError,
   resolveClaudeSmallModel,
@@ -70,7 +74,8 @@ export function resolveTaskModelPatch(
       projectDefaultReviewAgent: project?.defaultReviewAgent ?? null,
     });
   const oldWorker = workerFor(existing.agent);
-  const newWorker = workerFor(body.agent !== undefined ? body.agent : existing.agent);
+  const effectiveAgent = body.agent !== undefined ? body.agent : existing.agent;
+  const newWorker = workerFor(effectiveAgent);
   const oldReviewer = reviewerFor(existing.reviewAgent);
   const newReviewer = reviewerFor(
     body.reviewAgent !== undefined ? body.reviewAgent : existing.reviewAgent,
@@ -100,6 +105,14 @@ export function resolveTaskModelPatch(
       const error = explicitModelError(newCommand, field, given);
       if (error) return error;
       patch[column] = given;
+      // The choice was validated against the agent that will run (body /
+      // project / install tier when the column is unset). Pin that agent into
+      // the column so a later drift of those tiers cannot silently drop the
+      // choice on retry (`workerAgentPinned`). Worker models only: the
+      // reviewer column has its own agent.
+      if (column !== "reviewerModel" && !workerAgentPinned(effectiveAgent)) {
+        patch.agent = newCommand;
+      }
       return null;
     }
     if (stored === null) return null;
