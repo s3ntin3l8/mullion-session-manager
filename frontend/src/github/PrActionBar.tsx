@@ -20,6 +20,7 @@ export function PrActionBar({
   onStep,
   onSession,
   onReReview,
+  hermesLabel = "Re-review",
   onUpdateBranch,
   onToggleComposer,
 }: {
@@ -35,6 +36,8 @@ export function PrActionBar({
   onStep: () => void;
   onSession: () => void;
   onReReview: () => void;
+  /** Label of the Hermes re-review button; spelled out for a task PR, whose own reviewer is Task Master's. */
+  hermesLabel?: string;
   onUpdateBranch: () => void;
   onToggleComposer: () => void;
 }) {
@@ -76,7 +79,7 @@ export function PrActionBar({
       <IconButton label={sessionLabel} disabled={busy} onClick={onSession}>
         <PlayTriangleIcon size={14} />
       </IconButton>
-      <IconButton label="Re-review" disabled={busy} onClick={onReReview}>
+      <IconButton label={hermesLabel} disabled={busy} onClick={onReReview}>
         <BotIcon size={14} />
       </IconButton>
       {comment}

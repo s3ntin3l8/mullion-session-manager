@@ -1057,6 +1057,95 @@ describe("PrDetailView", () => {
       },
     );
 
+    describe("Request re-review on a task PR", () => {
+      const seed = (task: Parameters<typeof makeTask>[0]) =>
+        useDashboardStore.setState({
+          projects: [makeProject({ id: 1 })],
+          tasks: [makeTask({ id: 5, projectId: 1, branchName: "feat-thing", ...task })],
+          prsByProject: {
+            1: {
+              prs: [
+                {
+                  number: 12,
+                  title: "Add thing",
+                  htmlUrl: "u",
+                  author: "me",
+                  headSha: "abc",
+                  headBranch: "feat-thing",
+                  baseBranch: "main",
+                  ciStatus: "success",
+                  actionsRuns: [],
+                },
+              ],
+              prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+            },
+          },
+        });
+      afterEach(() => useDashboardStore.setState({ projects: [], tasks: [], prsByProject: {} }));
+
+      it("re-arms the task's own reviewer when the task is eligible", async () => {
+        const hermes = vi.fn();
+        const fn = vi.fn().mockResolvedValue({});
+        stub({ ...PR, prPhase: "reviewed" }, (url) => {
+          if (url.endsWith("/re-review")) hermes();
+          return null;
+        });
+        seed({
+          status: "reviewing",
+          lastReviewVerdict: "inconclusive",
+          reviewSessionId: 9,
+          reviewFindingsIngestedSessionId: 9,
+        });
+        useDashboardStore.setState({ reReviewTask: fn });
+        render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+        await userEvent.click(await screen.findByRole("button", { name: "Request re-review" }));
+        expect(await screen.findByText("Task #5 re-review requested")).toBeInTheDocument();
+        expect(fn).toHaveBeenCalledWith(5);
+        expect(hermes).not.toHaveBeenCalled();
+      });
+
+      it("disables the step with a reason when the task is not eligible, keeping Hermes explicit", async () => {
+        const hermes = vi.fn();
+        const fn = vi.fn();
+        stub({ ...PR, prPhase: "reviewed" }, (url) => {
+          if (url.endsWith("/re-review")) {
+            hermes();
+            return jsonResponse(200, { status: "dispatched", runId: "r", replayed: false });
+          }
+          return null;
+        });
+        seed({ status: "reviewing", lastReviewVerdict: "clean", reviewSessionId: 9 });
+        useDashboardStore.setState({ reReviewTask: fn });
+        render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+        expect(
+          await screen.findByRole("button", {
+            name: "Task Master's reviewer is handling this PR",
+          }),
+        ).toBeDisabled();
+        await userEvent.click(
+          screen.getByRole("button", { name: "Request Hermes review (on demand)" }),
+        );
+        expect(await screen.findByText("Re-review requested")).toBeInTheDocument();
+        expect(hermes).toHaveBeenCalledTimes(1);
+        expect(fn).not.toHaveBeenCalled();
+      });
+
+      it("keeps the Hermes request for a PR with no linked task", async () => {
+        const hermes = vi.fn();
+        stub({ ...PR, prPhase: "reviewed" }, (url) => {
+          if (url.endsWith("/re-review")) {
+            hermes();
+            return jsonResponse(200, { status: "dispatched", runId: "r", replayed: false });
+          }
+          return null;
+        });
+        render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+        await userEvent.click(await screen.findByRole("button", { name: "Request re-review" }));
+        expect(await screen.findByText("Re-review requested")).toBeInTheDocument();
+        expect(hermes).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it("offers workflow-held tasks the task link instead of task approval, then restores approval", async () => {
       stub(PR);
       const requestOpenTask = vi.fn();
