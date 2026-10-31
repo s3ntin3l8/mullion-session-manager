@@ -750,6 +750,17 @@
   font-size: 0.71875rem;
   color: var(--r);
 }
+.task-detail-failure-diagnostics {
+  font-size: 0.71875rem;
+  color: var(--muted);
+}
+.task-detail-failure-diagnostics pre {
+  margin: 4px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .task-detail-dispatch {
   display: flex;
   align-items: flex-start;
@@ -897,6 +908,14 @@
 }
 .task-detail-review-summary-round {
   font-weight: 600;
+}
+/* The verdict sentence is the reviewer's own and can run long; the full text
+   is the span's title and the Markdown body below. */
+.task-detail-review-summary-verdict {
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 .task-detail-review-summary-counts {
   color: var(--dim);

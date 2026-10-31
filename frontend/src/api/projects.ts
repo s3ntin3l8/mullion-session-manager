@@ -271,6 +271,7 @@ export const projectsApi = {
       diff: string;
       files: string[];
       hasAgentsOverride: boolean;
+      agent?: string;
       sandboxed: boolean;
       possiblyGeneric?: boolean;
       conflicts?: ScaffoldConflict[];

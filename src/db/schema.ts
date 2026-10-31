@@ -1235,7 +1235,7 @@ export const tasks = sqliteTable(
     // Cleared once the PR is merged (or found already merged/closed) — the
     // rate limiter (backoff between attempts) is intentionally in-memory
     // only, not durable, same reasoning as retryStrandedDraftPRs' own
-    // draftPrRetryState.
+    // draftPrRetryBackoff.
     mergeRequestedAt: integer("merge_requested_at", { mode: "timestamp" }),
     // Merge-on-approve — the last merge-sweep failure reason (conflicts with
     // main, checks blocked, no token, ...), surfaced in the task drawer. A
@@ -1356,6 +1356,12 @@ export const tasks = sqliteTable(
     // any other status and capable of clobbering live reject feedback. See
     // githubSyncError below instead.
     failureReason: text("failure_reason"),
+    // Diagnostic snapshot taken when the no-commits gate fails a task
+    // (task-failure-diagnostics.ts): scrollback tail, agent/model, runtime,
+    // git status, salvage outcome, last session events. Kept on the row so it
+    // outlives the worktree and session. Capped and secret-redacted before it
+    // is stored; null for every other failure reason.
+    failureDiagnostics: text("failure_diagnostics"),
     // #485 — the most recent GitHub sync (task-github-sync.ts) or promotion
     // (task-promote.ts) failure, e.g. an under-scoped token's 403. Null
     // means "no known sync problem," not "never synced" — cleared on the

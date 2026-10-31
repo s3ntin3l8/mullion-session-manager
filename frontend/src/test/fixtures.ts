@@ -120,6 +120,14 @@ export function makeProject(overrides: Partial<Project> = {}): Project {
   };
 }
 
+// Server-derived Task fields that default to "absent"; the ceilinged local
+// makeTask helpers spread this rather than growing by a line per field.
+export const TASK_DERIVED_DEFAULTS = {
+  prTitleFallback: false,
+  issueAgent: null,
+  issueReviewAgent: null,
+} as const;
+
 export function makeTask(overrides: Partial<Task> = {}): Task {
   return {
     id: 1,
@@ -161,6 +169,8 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     prNumber: null,
     prTitle: null,
     prTitleFallback: false,
+    issueAgent: null,
+    issueReviewAgent: null,
     mergeRequestedAt: null,
     mergeError: null,
     releaseRequestedAt: null,
@@ -169,6 +179,7 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     lastReviewVerdict: null,
     assignee: null,
     failureReason: null,
+    failureDiagnostics: null,
     dispatchFailingSince: null,
     githubSyncError: null,
     workflowChange: null,

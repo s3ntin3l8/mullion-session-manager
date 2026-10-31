@@ -58,19 +58,19 @@ const DEFAULT_RATE_LIMIT_BACKOFF_MS = 60_000;
  * which deliberately bypasses githubApiFetch — see that file's own doc
  * comment — but calls recordGitHubRateLimit/isGitHubRateLimited directly).
  * Deliberately process-local, not persisted: same posture as
- * task-reconciler.ts's per-task backoff maps (draftPrRetryState and
+ * task-reconciler.ts's per-task backoff ledgers (draftPrRetryBackoff and
  * siblings) — a restart just means one extra live check against GitHub,
  * not a correctness problem.
  *
  * This is the PRIMARY defense against hammering a rate-limited GitHub, not
- * a supplement to per-task backoff maps. It's enforced here, at the
- * transport, rather than threaded into task-reconciler.ts's three
- * independent per-task maps (draftPrRetryState/mergeRetryState/
- * autoApproveRetryState): those maps record an attempt OPTIMISTICALLY,
- * before the network call even happens (see draftPrRetryState's own
- * comment), so there's no single catch site to hook a rate-limit-aware
- * resume time into without a deeper refactor of the discriminated-result
- * types those sweeps already use to swallow errors
+ * a supplement to per-task backoff ledgers. It's enforced here, at the
+ * transport, rather than threaded into task-reconciler.ts's independent
+ * backoff ledgers (draftPrRetryBackoff/mergeRetryBackoff/
+ * releaseRetryBackoff/autoApproveRetryBackoff): those ledgers record an
+ * attempt OPTIMISTICALLY, before the network call even happens (see
+ * draftPrRetryBackoff's own comment), so there's no single catch site to
+ * hook a rate-limit-aware resume time into without a deeper refactor of the
+ * discriminated-result types those sweeps already use to swallow errors
  * (ApproveOutcome/PromoteOutcome-style shapes). A transport-level budget
  * gets the same practical protection — no sweep, and no individual GitHub
  * call anywhere in the process, makes a network request while rate-limited

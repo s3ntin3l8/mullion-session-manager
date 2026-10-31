@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TaskDetail } from "./TaskDetail.js";
-import { makeHost, makeProject } from "./test/fixtures.js";
+import { makeHost, makeProject, TASK_DERIVED_DEFAULTS } from "./test/fixtures.js";
 import type * as ApiModule from "./api/index.js";
 import { ApiError } from "./api/index.js";
 import type {
@@ -142,7 +142,7 @@ function makeTask(overrides: Partial<Task>): Task {
     prUrl: null,
     prNumber: null,
     prTitle: null,
-    prTitleFallback: false,
+    ...TASK_DERIVED_DEFAULTS,
     mergeRequestedAt: null,
     mergeError: null,
     releaseRequestedAt: null,

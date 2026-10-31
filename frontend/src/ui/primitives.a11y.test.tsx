@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ts from "typescript";
@@ -254,6 +254,15 @@ describe("Segmented — radio group semantics", () => {
     expect(group).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: "B" })).toHaveAttribute("aria-checked", "true");
     expect(screen.getByRole("radio", { name: "A" })).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("disables every radio when the group is disabled, so nothing can be selected", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<Segmented options={options} value="a" onChange={onChange} ariaLabel="Mode" disabled />);
+    for (const radio of screen.getAllByRole("radio")) expect(radio).toBeDisabled();
+    await user.click(screen.getByRole("radio", { name: "B" }));
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("keeps a single tab stop for the group and moves selection with the arrow keys", async () => {

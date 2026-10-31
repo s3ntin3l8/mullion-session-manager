@@ -1,4 +1,5 @@
 import type {
+  AddPanelPositionOptions,
   DockviewApi,
   DockviewGroupPanel,
   IDockviewGroupPanel,
@@ -681,34 +682,141 @@ export function shouldAutoOpenChildPanels(input: {
   );
 }
 
+// Where a NEW panel lands: dockview's own placement options. A panel either
+// floats (with an explicit size, so it is big enough to use) or is positioned
+// relative to another panel/group — never both, and neither at all means "a
+// bare add into the active group". The union mirrors dockview's own
+// AddPanelOptions, which takes one or the other.
+type PanelPlacement =
+  | { floating: { width: number; height: number } }
+  | { position: AddPanelPositionOptions }
+  | Record<string, never>;
+
+/**
+ * What a panel open-or-focus needs to know: what the panel IS (its
+ * component, title and params), and the two ways the eleven openers below
+ * used to differ from each other.
+ *
+ * The two differences are the point of the extraction (issue #2410) — they
+ * are spelled out here rather than left to each caller's own copy:
+ *
+ *  - `retargetParams`: three of the openers (openProjectHubPanel,
+ *    openFileEditorPanel, openExternalFilePanel) re-target an ALREADY-OPEN
+ *    panel through `updateParameters` — a fresh `rev`, so the panel switches
+ *    to what was just asked for instead of showing its previous target. The
+ *    other eight leave the open panel exactly as it is.
+ *  - `applyDesktopPositioning`: the project-panel opener applies the tier
+ *    positioning only conditionally — phone always (phonePositioning's own
+ *    float-avoidance, issue #1452), desktop and tablet only when the panel's
+ *    config says so. The Browser pane's config is the one that says no
+ *    (ProjectPanelKindConfig's own doc comment). Every other opener applies
+ *    the tier positioning on every tier, which is what the default here
+ *    means.
+ */
+export interface OpenOrFocusPanelSpec {
+  /** The registered dockview component (panels/registry.tsx). */
+  component: string;
+  /** A separate tab component, for the panels that render their own tab. */
+  tabComponent?: string;
+  /** The panel's title. */
+  title?: string;
+  /** The panel's params — what a newly created panel is opened with. */
+  params: Record<string, unknown>;
+  /**
+   * The params an already-open panel is re-targeted with (through
+   * `updateParameters`). Left out, an open panel is focused exactly as it
+   * is.
+   */
+  retargetParams?: Record<string, unknown>;
+  /**
+   * Whether the desktop and tablet tiers apply the tier positioning.
+   * Defaults to true; phone always applies it (see phonePositioning's own
+   * comment on the float-avoidance fix, issue #1452).
+   */
+  applyDesktopPositioning?: boolean;
+  /**
+   * An explicit placement for the new panel, instead of the tier
+   * positioning — how a drag-and-drop picks its own target.
+   */
+  position?: AddPanelPositionOptions;
+}
+
+/**
+ * Opens the panel `panelId` — or focuses it when it is already open.
+ *
+ * The one place every open-or-focus-by-stable-id opener below routes
+ * through. Each of them used to carry its own copy of the same preamble
+ * (`const existing = api.getPanel(panelId)` … `api.addPanel({...})`), and
+ * the copies had drifted; OpenOrFocusPanelSpec carries the two differences
+ * explicitly so no opener has to re-derive them.
+ *
+ * `layout` is the tier context every opener has. It is optional only for
+ * the drag-and-drop path (dropSessionPanel), which places the panel itself
+ * — there is no tier to position for, and that path has never maximized the
+ * panel it opened.
+ */
+export function openOrFocusPanel(
+  api: DockviewApi,
+  panelId: string,
+  spec: OpenOrFocusPanelSpec,
+  layout?: LayoutContext,
+): void {
+  const existing = api.getPanel(panelId);
+  if (existing) {
+    if (spec.retargetParams) existing.api.updateParameters(spec.retargetParams);
+    // The activate-and-maximize-on-phone rule lives in exactly one place:
+    // focusPanelForTier, the helper the sidebar's own focus paths already go
+    // through (auto-focus on attention, the post-workspace-switch
+    // highlight). Without a tier there is nothing to maximize for — the
+    // drag-and-drop path just activates the panel.
+    if (layout) focusPanelForTier(api, existing, layout.tier);
+    else existing.api.setActive();
+    return;
+  }
+
+  // Where the new panel lands. An explicit placement (a drag-and-drop's own
+  // target) wins; otherwise the tier positioning — on every tier, unless the
+  // panel's spec opts out of the desktop/tablet tiers. See
+  // positioningForTier's own comment for the tier switch: phone keeps its
+  // existing bare add + maximizeGroup — it never has floating groups and
+  // relies on the single-group + session-switcher model, which an explicit
+  // position would break.
+  const placement: PanelPlacement =
+    spec.position !== undefined
+      ? { position: spec.position }
+      : layout && (layout.tier === "phone" || (spec.applyDesktopPositioning ?? true))
+        ? positioningForTier(api, layout)
+        : {};
+
+  const panel = api.addPanel({
+    id: panelId,
+    component: spec.component,
+    ...(spec.tabComponent ? { tabComponent: spec.tabComponent } : {}),
+    title: spec.title,
+    params: spec.params,
+    ...placement,
+  });
+  if (layout?.tier === "phone") maximizeIfTiled(api, panel);
+}
+
 export function openSessionPanel(
   api: DockviewApi,
   session: Session,
   layout: LayoutContext,
   projects: { id: number; name: string | null }[],
 ): void {
-  const panelId = `session-${session.id}`;
-  const existing = api.getPanel(panelId);
-  if (existing) {
-    existing.api.setActive();
-    if (layout.tier === "phone") maximizeIfTiled(api, existing);
-    return;
-  }
-
   const projectName = projects.find((p) => p.id === session.projectId)?.name ?? undefined;
-  // See positioningForTier's own comment for the tier switch. Phone keeps
-  // its existing bare add + maximizeGroup — it never has floating groups
-  // and relies on the single-group + session-switcher model, which an explicit
-  // position would break.
-  const panel = api.addPanel({
-    id: panelId,
-    component: "terminal",
-    tabComponent: "terminal",
-    title: initialPaneTitle(session, projectName),
-    params: { sessionId: session.id },
-    ...positioningForTier(api, layout),
-  });
-  if (layout.tier === "phone") maximizeIfTiled(api, panel);
+  openOrFocusPanel(
+    api,
+    `session-${session.id}`,
+    {
+      component: "terminal",
+      tabComponent: "terminal",
+      title: initialPaneTitle(session, projectName),
+      params: { sessionId: session.id },
+    },
+    layout,
+  );
 }
 
 // Thin wrapper around openSessionPanel for callers that don't otherwise
@@ -730,22 +838,16 @@ export function openOrFocusSessionPanel(
 // `timeline-<id>` panel id/component so it can coexist with that session's
 // own terminal panel (and be opened/closed independently of it).
 export function openTimelinePanel(api: DockviewApi, session: Session, layout: LayoutContext): void {
-  const panelId = `timeline-${session.id}`;
-  const existing = api.getPanel(panelId);
-  if (existing) {
-    existing.api.setActive();
-    if (layout.tier === "phone") maximizeIfTiled(api, existing);
-    return;
-  }
-
-  const panel = api.addPanel({
-    id: panelId,
-    component: "timeline",
-    title: `Timeline: ${session.name || session.command}`,
-    params: { sessionIds: [session.id] },
-    ...positioningForTier(api, layout),
-  });
-  if (layout.tier === "phone") maximizeIfTiled(api, panel);
+  openOrFocusPanel(
+    api,
+    `timeline-${session.id}`,
+    {
+      component: "timeline",
+      title: `Timeline: ${session.name || session.command}`,
+      params: { sessionIds: [session.id] },
+    },
+    layout,
+  );
 }
 
 // Phase 3 (#181) — opens (or focuses) a session's CDP-controlled browser
@@ -761,22 +863,16 @@ export function openBrowserPanePanel(
   session: Session,
   layout: LayoutContext,
 ): void {
-  const panelId = `browserPane-${session.id}`;
-  const existing = api.getPanel(panelId);
-  if (existing) {
-    existing.api.setActive();
-    if (layout.tier === "phone") maximizeIfTiled(api, existing);
-    return;
-  }
-
-  const panel = api.addPanel({
-    id: panelId,
-    component: "browserPane",
-    title: `Agent Browser: ${session.name || session.command}`,
-    params: { sessionId: session.id },
-    ...positioningForTier(api, layout),
-  });
-  if (layout.tier === "phone") maximizeIfTiled(api, panel);
+  openOrFocusPanel(
+    api,
+    `browserPane-${session.id}`,
+    {
+      component: "browserPane",
+      title: `Agent Browser: ${session.name || session.command}`,
+      params: { sessionId: session.id },
+    },
+    layout,
+  );
 }
 
 // Opens (or focuses) a device's video/input panel (DevicePane.tsx, routes/
@@ -785,22 +881,16 @@ export function openBrowserPanePanel(
 // session (a device is host-global, unlike a browser pane's per-project
 // binding — see the `devices` table's own schema.ts comment).
 export function openDevicePanel(api: DockviewApi, device: Device, layout: LayoutContext): void {
-  const panelId = `device-${device.id}`;
-  const existing = api.getPanel(panelId);
-  if (existing) {
-    existing.api.setActive();
-    if (layout.tier === "phone") maximizeIfTiled(api, existing);
-    return;
-  }
-
-  const panel = api.addPanel({
-    id: panelId,
-    component: "device",
-    title: device.name || device.avdName || device.serial || undefined,
-    params: { deviceId: device.id },
-    ...positioningForTier(api, layout),
-  });
-  if (layout.tier === "phone") maximizeIfTiled(api, panel);
+  openOrFocusPanel(
+    api,
+    `device-${device.id}`,
+    {
+      component: "device",
+      title: device.name || device.avdName || device.serial || undefined,
+      params: { deviceId: device.id },
+    },
+    layout,
+  );
 }
 
 // Phase 6 (6.5/#218) — opens (or focuses) a task's detail panel
@@ -814,22 +904,16 @@ export function openDevicePanel(api: DockviewApi, device: Device, layout: Layout
 // TasksPanelRedirect.tsx's own header comment). Kept exported as a ready
 // building block for a future "pop this drawer out to a panel" action.
 export function openTaskDetailPanel(api: DockviewApi, task: Task, layout: LayoutContext): void {
-  const panelId = `task-detail-${task.id}`;
-  const existing = api.getPanel(panelId);
-  if (existing) {
-    existing.api.setActive();
-    if (layout.tier === "phone") maximizeIfTiled(api, existing);
-    return;
-  }
-
-  const panel = api.addPanel({
-    id: panelId,
-    component: "task-detail",
-    title: `Task: ${task.title}`,
-    params: { taskId: task.id },
-    ...positioningForTier(api, layout),
-  });
-  if (layout.tier === "phone") maximizeIfTiled(api, panel);
+  openOrFocusPanel(
+    api,
+    `task-detail-${task.id}`,
+    {
+      component: "task-detail",
+      title: `Task: ${task.title}`,
+      params: { taskId: task.id },
+    },
+    layout,
+  );
 }
 
 // PR 34h of the hook-extraction series — App.tsx used to declare six
@@ -878,24 +962,20 @@ export function openOrFocusProjectPanel(
   config: ProjectPanelKindConfig,
 ): void {
   const project = projects.find((p) => p.id === projectId);
-  const panelId = `${config.kind}-${projectId}`;
-  const existing = api.getPanel(panelId);
-  if (existing) {
-    existing.api.setActive();
-    if (layout.tier === "phone") maximizeIfTiled(api, existing);
-    return;
-  }
-
-  const panel = api.addPanel({
-    id: panelId,
-    component: config.kind,
-    title: project ? `${config.titleLabel}: ${project.name}` : config.titleLabel,
-    params: { projectId },
-    ...(layout.tier === "phone" || config.applyDesktopPositioning
-      ? positioningForTier(api, layout)
-      : {}),
-  });
-  if (layout.tier === "phone") maximizeIfTiled(api, panel);
+  openOrFocusPanel(
+    api,
+    `${config.kind}-${projectId}`,
+    {
+      component: config.kind,
+      title: project ? `${config.titleLabel}: ${project.name}` : config.titleLabel,
+      params: { projectId },
+      // The one conditional positioning of the lot: phone always positions
+      // (see phonePositioning's own comment), desktop and tablet only when
+      // this panel kind's config says so.
+      applyDesktopPositioning: config.applyDesktopPositioning,
+    },
+    layout,
+  );
 }
 
 // Monotonic `rev` for re-targeting an open panel. Date.now() can repeat within
@@ -917,23 +997,19 @@ export function openProjectHubPanel(
   tab?: ProjectHubTab,
   dockView?: "previews",
 ): void {
-  const panelId = `project-hub-${projectId}`;
-  const existing = api.getPanel(panelId);
-  if (existing) {
-    existing.api.updateParameters({ projectId, tab, dockView, rev: nextRev() });
-    existing.api.setActive();
-    if (layout.tier === "phone") maximizeIfTiled(api, existing);
-    return;
-  }
   const project = projects.find((p) => p.id === projectId);
-  const panel = api.addPanel({
-    id: panelId,
-    component: "project-hub",
-    title: project ? `Project: ${project.name}` : "Project",
-    params: { projectId, tab, dockView },
-    ...positioningForTier(api, layout),
-  });
-  if (layout.tier === "phone") maximizeIfTiled(api, panel);
+  openOrFocusPanel(
+    api,
+    `project-hub-${projectId}`,
+    {
+      component: "project-hub",
+      title: project ? `Project: ${project.name}` : "Project",
+      params: { projectId, tab, dockView },
+      // A fresh rev makes an already-open panel switch to that tab.
+      retargetParams: { projectId, tab, dockView, rev: nextRev() },
+    },
+    layout,
+  );
 }
 
 /** Opens the project's file editor on `target.path` — focusing the existing
@@ -948,7 +1024,7 @@ export function openFileEditorPanel(
   layout: LayoutContext,
   target: { path?: string; sessionId?: number; line?: number },
 ): void {
-  const panelId = `file-editor-${projectId}`;
+  const project = projects.find((p) => p.id === projectId);
   const params = {
     projectId,
     path: target.path,
@@ -956,22 +1032,19 @@ export function openFileEditorPanel(
     line: target.line,
     rev: nextRev(),
   };
-  const existing = api.getPanel(panelId);
-  if (existing) {
-    existing.api.updateParameters(params);
-    existing.api.setActive();
-    if (layout.tier === "phone") maximizeIfTiled(api, existing);
-    return;
-  }
-  const project = projects.find((p) => p.id === projectId);
-  const panel = api.addPanel({
-    id: panelId,
-    component: "file-editor",
-    title: project ? `Files: ${project.name}` : "Files",
-    params,
-    ...positioningForTier(api, layout),
-  });
-  if (layout.tier === "phone") maximizeIfTiled(api, panel);
+  openOrFocusPanel(
+    api,
+    `file-editor-${projectId}`,
+    {
+      component: "file-editor",
+      title: project ? `Files: ${project.name}` : "Files",
+      params,
+      // The same params the panel was opened with — a fresh rev makes it
+      // reopen the same path even if it was navigated away from meanwhile.
+      retargetParams: params,
+    },
+    layout,
+  );
 }
 
 /** Stable id of an editor-only file panel. One per file per checkout: the same
@@ -994,23 +1067,18 @@ export function openFileOnlyPanel(
   path: string,
   sessionId?: number,
 ): void {
-  const panelId = filePanelId(projectId, path, sessionId);
-  const existing = api.getPanel(panelId);
-  if (existing) {
-    existing.api.setActive();
-    if (layout.tier === "phone") maximizeIfTiled(api, existing);
-    return;
-  }
   const project = projects.find((p) => p.id === projectId);
   const base = path.split("/").pop() || path;
-  const panel = api.addPanel({
-    id: panelId,
-    component: "file-editor",
-    title: project ? `${base} — ${project.name}` : base,
-    params: { projectId, path, sessionId, mode: "editor", rev: nextRev() },
-    ...positioningForTier(api, layout),
-  });
-  if (layout.tier === "phone") maximizeIfTiled(api, panel);
+  openOrFocusPanel(
+    api,
+    filePanelId(projectId, path, sessionId),
+    {
+      component: "file-editor",
+      title: project ? `${base} — ${project.name}` : base,
+      params: { projectId, path, sessionId, mode: "editor", rev: nextRev() },
+    },
+    layout,
+  );
 }
 
 /** Closes the editor-only file panels for `path` (or anything under it, for a
@@ -1044,26 +1112,22 @@ export function openExternalFilePanel(
   target: { path?: string; line?: number },
 ): void {
   const path = target.path ?? "";
-  const panelId = `external-file-${projectId}-${path ? encodeURIComponent(path) : "blank"}`;
-  const params = { projectId, path, line: target.line, rev: nextRev() };
-  const existing = api.getPanel(panelId);
-  if (existing) {
-    // A fresh rev/line so a second `file:line` link to the same file scrolls.
-    existing.api.updateParameters(params);
-    existing.api.setActive();
-    if (layout.tier === "phone") maximizeIfTiled(api, existing);
-    return;
-  }
   const project = projects.find((p) => p.id === projectId);
   const base = path.split("/").pop() || "Open file";
-  const panel = api.addPanel({
-    id: panelId,
-    component: "external-file",
-    title: project ? `${base} — ${project.name}` : base,
-    params,
-    ...positioningForTier(api, layout),
-  });
-  if (layout.tier === "phone") maximizeIfTiled(api, panel);
+  const params = { projectId, path, line: target.line, rev: nextRev() };
+  openOrFocusPanel(
+    api,
+    `external-file-${projectId}-${path ? encodeURIComponent(path) : "blank"}`,
+    {
+      component: "external-file",
+      title: project ? `${base} — ${project.name}` : base,
+      params,
+      // A fresh rev/line so a second `file:line` link to the same file
+      // scrolls.
+      retargetParams: params,
+    },
+    layout,
+  );
 }
 
 function buildPanelBase(session: Session, projects: { id: number; name: string | null }[]) {
@@ -1077,44 +1141,39 @@ function buildPanelBase(session: Session, projects: { id: number; name: string |
   };
 }
 
+// Where a dragged session panel lands. Drag-and-drop always docks (issue
+// #121) — the previous no-target branch floated, which meant a drag onto
+// empty space (or onto a floating group, which reports no usable grid
+// target) could never build a tiled layout. Only treat the target group as
+// a real drop target when it's actually in the grid; a floating group's own
+// quadrant target isn't one.
+function dropPosition(target: DropTarget | null): AddPanelPositionOptions {
+  if (target && target.group && isTiledGroup(target.group)) {
+    if (target.location === "edge") {
+      return { referenceGroup: target.group, direction: positionToDirection(target.position) };
+    }
+    return { referenceGroup: target.group, direction: "within" };
+  }
+  return { direction: "right" };
+}
+
 export function dropSessionPanel(
   api: DockviewApi,
   session: Session,
   projects: { id: number; name: string | null }[],
   target: DropTarget | null,
 ): void {
-  const panelId = `session-${session.id}`;
-  const existing = api.getPanel(panelId);
-  if (existing) {
-    existing.api.setActive();
-    return;
-  }
-
   const panelBase = buildPanelBase(session, projects);
-
-  // Drag-and-drop always docks (issue #121) — the previous no-target branch
-  // floated, which meant a drag onto empty space (or onto a floating group,
-  // which reports no usable grid target) could never build a tiled layout.
-  // Only treat the target group as a real drop target when it's actually in
-  // the grid; a floating group's own quadrant target isn't one.
-  if (target && target.group && isTiledGroup(target.group)) {
-    if (target.location === "edge") {
-      api.addPanel({
-        ...panelBase,
-        position: {
-          referenceGroup: target.group,
-          direction: positionToDirection(target.position),
-        },
-      });
-    } else {
-      api.addPanel({
-        ...panelBase,
-        position: { referenceGroup: target.group, direction: "within" },
-      });
-    }
-  } else {
-    api.addPanel({ ...panelBase, position: { direction: "right" } });
-  }
+  // No layout: a drop places the panel itself (see dropPosition above), so
+  // there is no tier to position for — and this path has never maximized
+  // the panel it opened.
+  openOrFocusPanel(api, panelBase.id, {
+    component: panelBase.component,
+    tabComponent: panelBase.tabComponent,
+    title: panelBase.title,
+    params: panelBase.params,
+    position: dropPosition(target),
+  });
 }
 
 function collectFloatingPanelIds(

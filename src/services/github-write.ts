@@ -336,12 +336,12 @@ export async function getMergedClosingPullRequest(
   owner: string,
   repo: string,
   issueNumber: number,
-): Promise<number | null> {
+): Promise<{ number: number; mergedAt: string | null } | null> {
   const data = await githubGraphQL<{
     repository: {
       issue: {
         closedByPullRequestsReferences: {
-          nodes: Array<{ number: number; merged: boolean }>;
+          nodes: Array<{ number: number; merged: boolean; mergedAt: string | null }>;
         } | null;
       } | null;
     } | null;
@@ -351,15 +351,15 @@ export async function getMergedClosingPullRequest(
       repository(owner: $owner, name: $repo) {
         issue(number: $number) {
           closedByPullRequestsReferences(first: 10, includeClosedPrs: true) {
-            nodes { number merged }
+            nodes { number merged mergedAt }
           }
         }
       }
     }`,
     { owner, repo, number: issueNumber },
   );
-  const nodes = data.repository?.issue?.closedByPullRequestsReferences?.nodes ?? [];
-  return nodes.find((n) => n.merged)?.number ?? null;
+  const hit = data.repository?.issue?.closedByPullRequestsReferences?.nodes.find((n) => n.merged);
+  return hit ? { number: hit.number, mergedAt: hit.mergedAt } : null;
 }
 
 /** #701 — fetches a single issue's title, used by task-watcher.ts's

@@ -1,4 +1,5 @@
 import { TaskActions } from "./TaskActions.js";
+import { FailureDiagnostics } from "./FailureDiagnostics.js";
 import { useEffect, useState } from "react";
 import { useDashboardStore } from "./store/index.js";
 import { statusLabel } from "./tasksBoard.js";
@@ -261,7 +262,16 @@ export function TaskDetail({
   // the dropdown label so it reads as "no review agent", not as an agent name.
   const projectDefaultReviewAgentLabel =
     projectDefaultReviewAgent === "none" ? "None" : projectDefaultReviewAgent;
-  const reviewAgentForModel = task.reviewAgent || projectDefaultReviewAgent;
+  const reviewAgentForModel =
+    task.reviewAgent || task.issueReviewAgent || projectDefaultReviewAgent;
+  // Same order the backend resolves in (task field, issue directive, project
+  // default): with no task value, an unset entry reads as the directive.
+  const unsetAgentLabel = task.issueAgent
+    ? `${task.issueAgent} (from issue)`
+    : `Project default (${projectDefaultAgent})`;
+  const unsetReviewAgentLabel = task.issueReviewAgent
+    ? `${task.issueReviewAgent === "none" ? "None (disabled)" : task.issueReviewAgent} (from issue)`
+    : `Project default (${projectDefaultReviewAgentLabel})`;
   const isEditableStatus =
     task.status === "backlog" ||
     (task.status === "ready" && task.agentCommand === null) ||
@@ -473,7 +483,7 @@ export function TaskDetail({
                   [
                     {
                       value: UNSET_AGENT,
-                      label: `Project default (${projectDefaultAgent})`,
+                      label: unsetAgentLabel,
                     },
                     ...agentOptions,
                   ],
@@ -494,7 +504,7 @@ export function TaskDetail({
                   [
                     {
                       value: UNSET_AGENT,
-                      label: `Project default (${projectDefaultReviewAgentLabel})`,
+                      label: unsetReviewAgentLabel,
                     },
                     { value: "none", label: "None (disabled)" },
                     ...(hermesAvailable ? [HERMES_REVIEW_OPTION] : []),
@@ -575,6 +585,10 @@ export function TaskDetail({
           <WarningTriangleIcon size={12} />
           {task.failureReason}
         </div>
+      )}
+
+      {task.status === "failed" && task.failureDiagnostics && (
+        <FailureDiagnostics text={task.failureDiagnostics} />
       )}
 
       {/* The task-view session-visibility gap this closes: TaskDetail
@@ -787,7 +801,14 @@ export function TaskDetail({
                 <span className="task-detail-review-summary-round">
                   Latest: round {reviewRounds.latest.round}
                 </span>
-                {reviewRounds.latest.verdict && <span>{reviewRounds.latest.verdict}</span>}
+                {reviewRounds.latest.verdict && (
+                  <span
+                    className="task-detail-review-summary-verdict"
+                    title={reviewRounds.latest.verdict}
+                  >
+                    {reviewRounds.latest.verdict}
+                  </span>
+                )}
                 {reviewRounds.latest.counts && (
                   <span className="task-detail-review-summary-counts">
                     {reviewRounds.latest.counts.critical} critical ·{" "}

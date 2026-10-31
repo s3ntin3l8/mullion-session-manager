@@ -39,6 +39,35 @@ export function workerAgentPinned(taskAgent: string | null): boolean {
 }
 
 /**
+ * The issue body's usable `Agent:` / `ReviewAgent:` directives, for display
+ * (the task detail dropdowns). Applies the same validity checks the resolvers
+ * use, so a value that would fall through there is `null` here: an unknown
+ * agent (falls through). `ReviewAgent: none`/`false` is reported as "none", and
+ * so is `hermes` while Hermes isn't usable, since the resolver yields no
+ * reviewer for it rather than falling through.
+ */
+export function issueDirectiveAgents(
+  app: FastifyInstance,
+  issueBody: string | null,
+): { issueAgent: string | null; issueReviewAgent: string | null } {
+  const agent = parseDirectiveLine(issueBody, AGENT_LINE_RE);
+  const review = parseDirectiveLine(issueBody, REVIEW_AGENT_LINE_RE);
+  const issueAgent =
+    agent !== null && (KNOWN_AGENTS as readonly string[]).includes(agent) ? agent : null;
+  let issueReviewAgent: string | null = null;
+  if (review === "none" || review === "false") issueReviewAgent = "none";
+  else if (review !== null) {
+    if ((KNOWN_AGENTS as readonly string[]).includes(review)) issueReviewAgent = review;
+    else if (review === HERMES_REVIEW_AGENT) {
+      // An unusable hermes does NOT fall through (resolveReviewer): it
+      // resolves to no reviewer, so report that, not the project default.
+      issueReviewAgent = hermesTaskReviewerUsable(app) ? review : "none";
+    }
+  }
+  return { issueAgent, issueReviewAgent };
+}
+
+/**
  * Resolution precedence for the worker agent, most specific wins:
  * 1. The task's own `agent` column (manual per-task override).
  * 2. The issue body's own `Agent: <name>` line.

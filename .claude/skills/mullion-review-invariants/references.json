@@ -47,6 +47,7 @@
     "ref": ".claude/skills/mullion-review-invariants/references/task-merge-and-cleanup.md",
     "paths": [
       "src/services/task-reconciler.ts",
+      "src/services/task-retry-backoff.ts",
       "src/services/task-approve.ts",
       "src/services/task-reseed.ts",
       "src/services/task-workflow-gate.ts",
@@ -54,7 +55,7 @@
       "src/services/github-write.ts",
       "src/services/merge-readiness.ts"
     ],
-    "summary": "merge sweep and 405/409, per-task backoff maps, session cleanup via killSession, the workflow-file push gate"
+    "summary": "merge sweep and 405/409, per-task backoff ledgers, session cleanup via killSession, the workflow-file push gate"
   },
   {
     "ref": ".claude/skills/mullion-review-invariants/references/review-relay.md",

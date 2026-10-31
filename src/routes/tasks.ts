@@ -3,12 +3,8 @@ import { and, eq, inArray, isNull, isNotNull } from "drizzle-orm";
 import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
 import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
-import {
-  buildRejectPrompt,
-  taskCommitTitlePath,
-  parseCommitTitle,
-  resolvePrTitle,
-} from "../services/task-prompt.js";
+import { buildRejectPrompt, taskCommitTitlePath } from "../services/task-prompt.js";
+import { withTaskDerived } from "../services/task-row-derive.js";
 import { resolveTaskIssueContextSafe } from "../services/task-issue-context.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
 import {
@@ -302,6 +298,7 @@ const TASK_ROW_COLUMNS = {
   releaseError: tasks.releaseError,
   assignee: tasks.assignee,
   failureReason: tasks.failureReason,
+  failureDiagnostics: tasks.failureDiagnostics,
   // Issue #1997 — since when a queued task has been failing to dispatch.
   dispatchFailingSince: tasks.dispatchFailingSince,
   githubSyncError: tasks.githubSyncError,
@@ -394,31 +391,6 @@ function withAutoReturnCapped<
   };
 }
 
-// The task drawer's surface for the second silent-fallback layer #761 left:
-// even with conventionalCommitTitles on, a worker that skipped or malformed
-// its title file left task-reconciler.ts's ingest with nothing but one
-// `app.log.warn` — never anything a human looking at the task would see.
-// `prTitle === null` alone is NOT that signal (see prTitle's own doc comment
-// above) — this recomputes exactly what resolvePrTitle/task-promote.ts
-// actually used for the live PR title, and flags it only when THAT title
-// isn't Conventional-Commits-shaped despite the project wanting one. A task
-// with no PR yet never flags (nothing to fall back on yet).
-function withPrTitleFallback<
-  T extends {
-    title: string;
-    prTitle: string | null;
-    prUrl: string | null;
-    projectConventionalCommitTitles: boolean | null;
-  },
->(row: T): Omit<T, "projectConventionalCommitTitles"> & { prTitleFallback: boolean } {
-  const { projectConventionalCommitTitles, ...rest } = row;
-  const prTitleFallback =
-    projectConventionalCommitTitles === true &&
-    row.prUrl !== null &&
-    parseCommitTitle(resolvePrTitle(row)) === null;
-  return { ...rest, prTitleFallback };
-}
-
 interface ListTasksQuery {
   status?: string;
   projectId?: string;
@@ -467,7 +439,7 @@ export async function tasksRoute(app: FastifyInstance) {
         withBlockedState(
           withApprovalState(
             app,
-            withAutoReturnCapped(withPrTitleFallback(row), installCap),
+            withAutoReturnCapped(withTaskDerived(app, row), installCap),
             taskMasterEnabled,
           ),
         ),
@@ -492,7 +464,7 @@ export async function tasksRoute(app: FastifyInstance) {
       ? withBlockedState(
           withApprovalState(
             app,
-            withAutoReturnCapped(withPrTitleFallback(row), taskMaster.maxAutoReturnRounds),
+            withAutoReturnCapped(withTaskDerived(app, row), taskMaster.maxAutoReturnRounds),
             taskMaster.enabled,
           ),
         )

@@ -333,7 +333,9 @@ that a human later closes after doing the work by hand is completed, not
 failed, when a **merged pull request** closed it: `syncUnlabeledIssueToLocal`
 (poll read-back and the `closed` webhook for `backlog`/`ready` tasks alike)
 looks the closing PR up (`getMergedClosingPullRequest`, GraphQL
-`closedByPullRequestsReferences`), writes `done` + `prNumber`, and records
+`closedByPullRequestsReferences`), writes `done` + `prNumber` +
+`mergedAt`/`archivedAt` (the PR's merge webhook fired before the row had a
+`prNumber`, so nothing else would), and records
 `via: "github-sync-closed-manually"` with no GitHub write-back. It bypasses
 `canTransition` on purpose — `TASK_TRANSITIONS` gains no `backlog → done`
 edge. Closed without a merged PR (not planned, PR closed unmerged) or a
@@ -689,7 +691,11 @@ re-broken, evidence}` for each earlier finding; `verified`/`notes`/
   when empty — preceded by `### Earlier findings` on a follow-up round and
   followed by `### Verified`/`### Notes`/`### Looks Good` when
   non-empty. A freeform (non-JSON) review renders verbatim instead, since
-  its `summary` holds the whole file, not one sentence.
+  its `summary` holds the whole file, not one sentence. So does a structured
+  review whose `summary` is over 300 characters _and_ whose `findings`,
+  `verified`, `notes`, `looksGood` and `previous` are all empty (the old
+  whole-review-in-`summary` shape); a long `summary` beside any of those
+  still gets the sections.
 
   A missing file is treated as **inconclusive**, not "no findings" and not
   "approved" — but not on the very first tick that observes it missing.
@@ -887,6 +893,21 @@ re-arm, approve / give-up / merge cleanup (`cleanupTaskSessions`) and the
 abandon teardown. Task Master never uses the GitHub relay's
 `stopHermesReview` / `getHermesReviewStatus` for these runs.
 
+**What Hermes must do.** Nothing is installed on the Hermes host for this: the
+run message (`buildTaskReviewMessage` plus `buildReviewPrompt` in `reply`
+mode) carries the whole contract. Hermes checks out the PR head, reviews, and
+answers with only the findings JSON. Unlike the GitHub relay's message
+(`buildRelayMessage`), it contains no instruction to post, and says not to
+push, post or comment anywhere, so a Hermes skill's posting how-to is never
+triggered. Mullion posts the one review, as `mullion-reviewer[bot]`. A reply
+that is not the findings JSON is **inconclusive** (see above), never a verdict.
+Observed against the review-bot profile with no extra skill: first and
+follow-up (changes-requested) rounds both ran, each 1-8 minutes and within the
+profile's 75-call turn budget (the worst observed was 67 calls, on a four-round
+task), and nothing was posted under a Hermes identity. If a run ever does post, or stops answering in JSON, the fix belongs
+in the Hermes host's own configuration (a contract skill delivered by its
+Ansible role), not in this repo.
+
 ## Seed delivery
 
 **A claim/retry/review spawn delivers its prompt as the agent's own
@@ -1033,9 +1054,10 @@ fails fast and locally with `GitHubRateLimitError`, without spending a
 request (or its 5s timeout) proving what the budget already knows.
 
 **This is enforced at the transport, not threaded into
-task-reconciler.ts's three per-task backoff maps**
-(`draftPrRetryState`/`mergeRetryState`/`autoApproveRetryState`). Those maps
-record an attempt optimistically, before the network call even happens —
+task-reconciler.ts's independent backoff ledgers**
+(`draftPrRetryBackoff`/`mergeRetryBackoff`/`releaseRetryBackoff`/
+`autoApproveRetryBackoff`). Those ledgers record an attempt optimistically,
+before the network call even happens —
 there's no single catch site to hook a server-provided resume time into
 without a deeper refactor of the discriminated-result types the sweeps
 already use to swallow errors (`ApproveOutcome`/`PromoteOutcome`-style

@@ -26,7 +26,7 @@ import { dispatchClaimedTask, failQueuedTask } from "./task-claim.js";
 import { registerTaskTransitionListener } from "./task-state.js";
 
 // Same backoff shape as task-reconciler.ts's retryStrandedDraftPRs /
-// draftPrRetryState — process-local, not a DB column (a restart resetting
+// draftPrRetryBackoff — process-local, not a DB column (a restart resetting
 // a broken task's backoff to "try immediately" is never worse than today's
 // behavior, and this is a strictly best-effort scheduling aid, not
 // correctness state). A task that keeps failing dispatch (a persistently

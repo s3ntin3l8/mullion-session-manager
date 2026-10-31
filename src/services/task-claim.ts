@@ -323,6 +323,7 @@ export function failQueuedTask(
   const patch: Partial<typeof tasks.$inferInsert> = {
     status: "failed",
     failureReason: opts.detail,
+    failureDiagnostics: null,
     dispatchFailingSince: null,
     dispatchHeld: false,
     ...opts.extra,
@@ -787,6 +788,7 @@ export async function dispatchClaimedTask(
         claimedAt: null,
         startedAt: null,
         failureReason: reason,
+        failureDiagnostics: null,
         // Issue #1997 — keeps the START of this run of failures (the give-up
         // clock); `task` is the row read at the top, and nothing else writes
         // the column between that read and here.
@@ -1178,6 +1180,7 @@ export async function retryTask(
         // prUrl (or vice versa), which is exactly the inconsistent pair
         // that made the PR link vanish from the UI (#972).
         failureReason: null,
+        failureDiagnostics: null,
         // Issue #1997 — a retry starts a fresh run; a clock left by an earlier
         // queue spell (a task failed by another route) must not carry over.
         dispatchFailingSince: null,
@@ -1282,7 +1285,7 @@ export async function retryTask(
     }
     const updated = app.db
       .update(tasks)
-      .set({ status: "failed", failureReason: reason })
+      .set({ status: "failed", failureReason: reason, failureDiagnostics: null })
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
       .run();
     // #488 — previously unlogged: retry's own rollback back to "failed" had
@@ -1527,6 +1530,7 @@ export async function retryTask(
         worktreePath: result.row.cwd,
         agentCommand: command,
         failureReason: null,
+        failureDiagnostics: null,
         completedAt: null,
       },
       project,

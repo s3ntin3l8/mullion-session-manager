@@ -43,6 +43,8 @@ import type {
   ReviewSummary,
   ReviewSummaryEntry,
 } from "../../../src/shared/types.js";
+import type { ClearDoneBranchResult } from "./clearDoneTypes.js";
+import type { UpdateStatus } from "./update-types.js";
 import type {
   HostRole,
   PlacementCapability,
@@ -51,6 +53,7 @@ import type {
   TaskStatus,
 } from "../../../src/shared/constants.js";
 
+export type { UpdateCheckResult, UpdatePhase, UpdateStatus } from "./update-types.js";
 export type { GitPullReason, GitPullResult, CloneHealth, RepairOutcome, RepairPlan };
 export type { GitBranchOpReason, GitBranchOpResult };
 export type { GitBranchInfo, GitBranchMergeState, GitBranchPr, GitWorktreeInfo };
@@ -2142,13 +2145,6 @@ export interface TaskBlocker {
 // #746 — POST /api/tasks/clear-done's response shape. No route in this
 // codebase returned a per-row ok/failed shape before this one; modeled on
 // git-worktree.ts's own cleanupOrphanWorktrees (`{ removed, skipped }`).
-export interface ClearDoneBranchResult {
-  id: number;
-  branch: string;
-  deleted: boolean;
-  reason?: string;
-}
-
 export interface ClearDoneResult {
   deleted: number[];
   failed: { id: number; error: string }[];
@@ -2299,6 +2295,12 @@ export interface Task {
   // title itself doesn't parse either. Previously this surfaced nowhere but
   // one server-side `app.log.warn` (task-reconciler.ts).
   prTitleFallback: boolean;
+  // Server-computed from the issue body's `Agent:` / `ReviewAgent:` lines
+  // (routes/tasks.ts's withIssueDirectives): the usable directive value, or
+  // null when absent/unknown. `issueReviewAgent` may be "none" (also for
+  // hermes while unusable, which resolves to no reviewer).
+  issueAgent: string | null;
+  issueReviewAgent: string | null;
   // Merge-on-approve — set at approve time when the project's
   // mergeOnApprove is on, or by a manual "Merge now"/"Retry merge" click.
   // The reconciler's merge sweep clears this once the PR merges (or is
@@ -2332,6 +2334,9 @@ export interface Task {
   // in_progress (only rendered in the UI when status === "failed" — see
   // TaskDetail.tsx). NOT a GitHub sync/scope error — see githubSyncError.
   failureReason: string | null;
+  // Snapshot captured when the no-commits gate failed the task (scrollback
+  // tail, agent/model, runtime, git status); null for other failure reasons.
+  failureDiagnostics?: string | null;
   // #1997 — when the current run of failed/held dispatch attempts began.
   // While status is "claimed", `failureReason` is the LAST dispatch error
   // (the task is still queued and being retried), not a terminal failure.
@@ -2386,44 +2391,6 @@ export interface Task {
   // db/schema.ts's own doc comments.
   mergedAt: string | null;
   archivedAt: string | null;
-}
-
-// Mirrors src/services/update-checker.ts's UpdateCheckResult.
-export interface UpdateCheckResult {
-  currentVersion: string;
-  latestVersion: string | null;
-  updateAvailable: boolean;
-  releaseUrl: string | null;
-  assetUrl: string | null;
-  checksumUrl: string | null;
-  // Whether POST /api/updates/apply would even work — false on a dev
-  // checkout (MULLION_HOME unset), true on a versioned-release install.
-  applyAvailable: boolean;
-  // Epoch ms of when GitHub was actually last queried for this result —
-  // unchanged across a backend cache hit, so it reflects real staleness
-  // rather than "when this response happened to arrive" (issue #123).
-  checkedAt: number;
-}
-
-// Phases self-update.sh writes to $MULLION_HOME/.update-status.json as it
-// runs (see src/routes/updates.ts) — "unavailable" is server-side-only
-// (MULLION_HOME unset), "idle" means MULLION_HOME is set but no update has
-// run yet.
-export type UpdatePhase =
-  | "unavailable"
-  | "idle"
-  | "downloading"
-  | "installing"
-  | "verifying"
-  | "restarting"
-  | "done"
-  | "failed";
-
-export interface UpdateStatus {
-  phase: UpdatePhase;
-  version?: string;
-  updatedAt?: number;
-  error?: string;
 }
 
 // AppSettings itself stays hand-mirrored rather than shared — its

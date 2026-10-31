@@ -887,7 +887,9 @@ const MAX_STRUCTURED_SUMMARY_LENGTH = 300;
  * is suspiciously long (see `MAX_STRUCTURED_SUMMARY_LENGTH` below): valid
  * JSON in the old contract shape (the whole review dumped into `summary`)
  * still parses as `structured: true`, so length is the only signal left to
- * catch it.
+ * catch it — but only when `findings`, `verified`, `notes`, `looksGood` and
+ * `previous` are all empty; a long `summary` beside any of those is just a
+ * wordy verdict line, and the sections still render.
  */
 export function renderReviewFindingsMarkdown(
   parsed: ParsedReviewFindings,
@@ -921,8 +923,19 @@ export function renderReviewFindingsMarkdown(
   // (the OLD contract asked for the whole review in this one field, and
   // that shape still parses cleanly). Past this length, `summary` no longer
   // looks like "one sentence" — render it verbatim rather than wrap a
-  // paragraph in "**Verdict:**" above four empty "- None" sections.
-  if (parsed.summary.length > MAX_STRUCTURED_SUMMARY_LENGTH) return parsed.summary;
+  // paragraph in "**Verdict:**" above four empty "- None" sections. Only
+  // when nothing else is populated, though: a reviewer that filled in
+  // findings/verified/looksGood/etc. used the new contract and just wrote a
+  // long sentence, and dropping those arrays would lose the review.
+  const hasOtherStructure =
+    parsed.findings.length > 0 ||
+    parsed.verified.length > 0 ||
+    parsed.notes.length > 0 ||
+    parsed.looksGood.length > 0 ||
+    parsed.previous.length > 0;
+  if (parsed.summary.length > MAX_STRUCTURED_SUMMARY_LENGTH && !hasOtherStructure) {
+    return parsed.summary;
+  }
 
   const findingsMode = mode === "review-body" ? "count" : "bullets";
   const verdictLabel =

@@ -72,7 +72,8 @@ label"` vs. `"GitHub issue was closed"` — even though both route
   `task-github-sync.ts`), so a closed issue doesn't misreport as a label
   problem. The one exception is an issue closed by a **merged pull
   request** (a human did the work by hand — typically a `Manual: true`
-  issue): the task completes as `done` with `prNumber` set to the closing PR
+  issue): the task completes as `done` with `prNumber` set to the closing PR,
+  recorded as merged and archived (no "needs merge" badge)
   (transition `via: "github-sync-closed-manually"`), with no GitHub comment
   or label write-back. A closing-PR lookup that finds nothing or errors
   falls back to `failed`. A task that's already `claimed`/`in_progress`/`reviewing` —
@@ -585,6 +586,18 @@ Two independent choices are resolved per task, most-specific tier wins:
    off)" after the switch is turned off. Hermes is not a model CLI, so
    Settings → Models never lists it: its model is Review relay → Review
    policy → Model.
+
+   The drawer's Agent and Review agent pickers show the effective choice in
+   resolution order: a task value, else the issue body's `Agent:` /
+   `ReviewAgent:` directive (the unset entry then reads "<agent> (from
+   issue)"; for ReviewAgent, `none`/`false` reads "None (disabled) (from
+   issue)"), else
+   "Project default (<x>)". The server computes this (`issueAgent`,
+   `issueReviewAgent` on the task); an unknown name falls through to the
+   project default. A directive `ReviewAgent: hermes` while Hermes is
+   unusable resolves to no reviewer, so it reads "None (disabled) (from
+   issue)", unlike a stored `hermes`, which shows as "Hermes (Task Master
+   reviews off)".
 
    This becomes load-bearing, not just advisory, once a project's
    `autoApprove` setting is on (see

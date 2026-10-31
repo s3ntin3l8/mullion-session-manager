@@ -702,7 +702,19 @@ export const HOOK_HANDLERS: ReadonlyMap<string, HookHandler> = new Map<string, H
       // Rich statuses — the short, stable label (see errorType's doc
       // comment in hook-protocol.ts), falling back to the free-text detail
       // when the adapter couldn't classify the failure.
-      ctx.errorDetail = sf.errorType ?? sf.errorDetails ?? null;
+      //
+      // Issue #2505 — and to the failing hook's own `error` TEXT when it
+      // sent neither. Claude Code's StopFailure and agy's Stop carry the
+      // provider's message in `error` and classify only the failures they
+      // recognize (Claude Code's own `error_type`, agy's RESOURCE_EXHAUSTED
+      // quota wording), so an unrecognized provider error used to arrive
+      // with NO detail at all — and the "no commits" failure reason
+      // (task-reconciler.ts's checkReviewingGate, which quotes this detail)
+      // had nothing to show, so a provider error read as "the agent gave
+      // up". The `rate_limit` label still wins over the text: it is the
+      // exact string the grace window matches on
+      // (task-rate-limit-grace.ts).
+      ctx.errorDetail = sf.errorType ?? sf.errorDetails ?? (sf.error || null);
       // Issue #1364 self-review finding — for Claude Code, Stop and
       // StopFailure are two SEPARATE hook registrations (forwarder-core.mjs's
       // mapClaudeCodeEvent), so a real StopFailure never has an accompanying

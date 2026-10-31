@@ -30,6 +30,7 @@ function sampleResponse(previewId = "preview-1"): ScaffoldGenerateResponse {
     previewId,
     diff: "diff --git a/AGENTS.md b/AGENTS.md",
     files: ["AGENTS.md", "CLAUDE.md"],
+    agent: "claude",
     sandboxed: true,
     hasAgentsOverride: false,
   };

@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "1d5931d0-fc2a-4386-872f-08c9e0d679a0",
+  "id": "d700f2eb-585b-43cb-83d4-1874d5870617",
   "prevId": "21cd10f1-5290-441d-9d8a-df38656fb51b",
   "tables": {
     "bridges": {
@@ -1983,27 +1983,6 @@
           "notNull": false,
           "autoincrement": false
         },
-        "model_override": {
-          "name": "model_override",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "small_model_override": {
-          "name": "small_model_override",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "reviewer_model": {
-          "name": "reviewer_model",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "placement_requirement": {
           "name": "placement_requirement",
           "type": "text",
@@ -2127,6 +2106,13 @@
         },
         "failure_reason": {
           "name": "failure_reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false,
+          "autoincrement": false
+        },
+        "failure_diagnostics": {
+          "name": "failure_diagnostics",
           "type": "text",
           "primaryKey": false,
           "notNull": false,

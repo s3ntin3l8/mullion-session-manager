@@ -61,7 +61,7 @@ import type { DockviewApi, DockviewGroupPanel, SerializedDockview } from "dockvi
 import { DEFAULT_SETTINGS } from "./api/index.js";
 import type { LayoutContext } from "./lib/layoutTier.js";
 import type { Session, Task, Device } from "./api/index.js";
-import { makeWorkspace } from "./test/fixtures.js";
+import { makeWorkspace, TASK_DERIVED_DEFAULTS } from "./test/fixtures.js";
 
 // `location.type` mirrors the live dockview panel API this module reads to
 // decide float-vs-dock (issue #121): "grid" for anything actually tiled
@@ -780,7 +780,7 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     prUrl: null,
     prNumber: null,
     prTitle: null,
-    prTitleFallback: false,
+    ...TASK_DERIVED_DEFAULTS,
     mergeRequestedAt: null,
     mergeError: null,
     releaseRequestedAt: null,

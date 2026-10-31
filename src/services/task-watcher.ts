@@ -506,7 +506,12 @@ export function upsertIssueTask(app: FastifyInstance, projectId: number, issue: 
       isManualOnly(issue.body) || isEpicIssue(issue) ? "backlog" : "ready";
     const resurrected = app.db
       .update(tasks)
-      .set({ status: resurrectableStatus, failureReason: null, completedAt: null })
+      .set({
+        status: resurrectableStatus,
+        failureReason: null,
+        failureDiagnostics: null,
+        completedAt: null,
+      })
       .where(
         and(
           eq(tasks.id, existingRow.id),

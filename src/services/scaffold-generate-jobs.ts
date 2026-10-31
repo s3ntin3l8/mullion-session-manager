@@ -18,6 +18,8 @@ export interface ScaffoldGenerateResponse {
   previewId: string;
   diff: string;
   files: string[];
+  // The agent whose turn produced this content (the server resolved it).
+  agent: string;
   sandboxed: boolean;
   hasAgentsOverride: boolean;
   possiblyGeneric?: boolean;
