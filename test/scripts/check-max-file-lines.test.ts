@@ -36,8 +36,12 @@ import { gitEnv } from "../../src/services/git-env.js";
 import {
   AUDIT_ROOTS,
   SOURCE_EXTENSIONS,
-  countFileLines,
+  areaOf,
   collectSourceFiles,
+  countFileLines,
+  countSourceFiles,
+  histogram,
+  summariseByArea,
 } from "../../scripts/lib/audit-loc-core.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -145,6 +149,95 @@ describe("audit-loc-core: collectSourceFiles", () => {
       fs.writeFileSync(path.join(root, dir, "big.ts"), "const a = 1;");
     }
     expect(collectSourceFiles(root, ["."])).toEqual([]);
+  });
+});
+
+describe("audit-loc-core: the file map", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "audit-loc-map-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it("collects source files and tolerates a root that is not there", () => {
+    fs.mkdirSync(path.join(root, "src", "deep"), { recursive: true });
+    fs.writeFileSync(path.join(root, "src", "a.ts"), "const a = 1;");
+    fs.writeFileSync(path.join(root, "src", "deep", "b.tsx"), "const b = 1;");
+    fs.writeFileSync(path.join(root, "src", "notes.md"), "# not source");
+    // "test" does not exist in this fixture — the walk skips it rather than
+    // throwing, because a fixture tree need not have every root.
+    expect(collectSourceFiles(root, ["src", "test"])).toEqual(["src/a.ts", "src/deep/b.tsx"]);
+  });
+
+  it("skips a directory it cannot read rather than throwing", () => {
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "src", "a.ts"), "const a = 1;");
+    const locked = path.join(root, "src", "locked");
+    fs.mkdirSync(locked);
+    fs.chmodSync(locked, 0o000);
+    try {
+      // The unreadable directory contributes nothing; the readable one still
+      // does. (As root, the chmod is a no-op and the directory is readable —
+      // the assertion holds either way.)
+      expect(collectSourceFiles(root, ["src"])).toContain("src/a.ts");
+    } finally {
+      fs.chmodSync(locked, 0o755);
+    }
+  });
+
+  it("counts the lines of the files it collects", () => {
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "src", "a.ts"), "const a = 1;\n// a comment\n");
+    const counts = countSourceFiles(root, ["src"]);
+    expect(counts).toHaveLength(1);
+    expect(counts[0]).toMatchObject({ path: "src/a.ts", code: 1, comment: 1, total: 2 });
+  });
+
+  it("classifies each path into the area the audit groups it under", () => {
+    expect(areaOf("src/routes/projects.ts")).toBe("backend production (src/)");
+    expect(areaOf("test/routes/projects.test.ts")).toBe("backend tests (test/)");
+    expect(areaOf("scripts/audit-loc.mjs")).toBe("tooling (scripts/)");
+    expect(areaOf("frontend/src/App.tsx")).toBe("frontend production (frontend/src/)");
+    expect(areaOf("frontend/src/App.test.tsx")).toBe("frontend tests (colocated)");
+    expect(areaOf("frontend/src/App.test.ts")).toBe("frontend tests (colocated)");
+    expect(areaOf("elsewhere/thing.ts")).toBe("other");
+  });
+
+  it("groups the map by area, summing files, code and total lines", () => {
+    const counts = [
+      { path: "src/a.ts", code: 10, total: 12, blank: 1, comment: 1 },
+      { path: "src/b.ts", code: 5, total: 6, blank: 1, comment: 0 },
+      { path: "test/a.test.ts", code: 20, total: 24, blank: 2, comment: 2 },
+    ];
+    const areas = summariseByArea(counts);
+    expect(areas.find((a) => a.area === "backend production (src/)")).toEqual({
+      area: "backend production (src/)",
+      files: 2,
+      code: 15,
+      total: 18,
+    });
+    expect(areas.find((a) => a.area === "backend tests (test/)")).toEqual({
+      area: "backend tests (test/)",
+      files: 1,
+      code: 20,
+      total: 24,
+    });
+  });
+
+  it("buckets the map into a size histogram", () => {
+    const counts = [
+      { path: "a.ts", code: 10, total: 10, blank: 0, comment: 0 },
+      { path: "b.ts", code: 260, total: 260, blank: 0, comment: 0 },
+      { path: "c.ts", code: 300, total: 300, blank: 0, comment: 0 },
+    ];
+    expect(histogram(counts, 250)).toEqual([
+      { label: "0-249", files: 1 },
+      { label: "250-499", files: 2 },
+    ]);
   });
 });
 
