@@ -3,7 +3,11 @@ import type { FastifyInstance } from "fastify";
 import { startHostHeartbeat } from "../services/host-heartbeat.js";
 import { pushTerminalPaletteToHost } from "../services/terminal-palette-sync.js";
 import { autoFillHostCwds } from "../services/host-checkout-detect.js";
+import { runPreProvisionSweep } from "../services/pre-provision.js";
 import { refreshRemoteHostAgents } from "../services/host-agents.js";
+
+/** How often the primary looks for checkouts to pre-provision. */
+const PRE_PROVISION_SWEEP_MS = 10 * 60_000;
 
 // Primary-only, same role gate as githubPRPollerPlugin/gitFetcherPlugin —
 // an agent has no `hosts` table to sweep (see src/app.ts's agent branch).
@@ -52,6 +56,10 @@ export const hostHeartbeatPlugin = fp(async (app: FastifyInstance) => {
     void refreshRemoteHostAgents(app, hostId).catch((err: unknown) => {
       app.log.warn({ err, hostId }, "[host-heartbeat] reading the host's agent list failed");
     });
+    // Pre-provisioned checkouts: start the clone jobs this host is selected for.
+    void runPreProvisionSweep(app, { onlyHostId: hostId }).catch((err: unknown) => {
+      app.log.warn({ err, hostId }, "[host-heartbeat] pre-provisioning checkouts failed");
+    });
     // One run per host at a time: a run that outlasts the sweep interval must
     // not be stacked on by the next "came online".
     if (detecting.has(hostId)) return;
@@ -63,11 +71,31 @@ export const hostHeartbeatPlugin = fp(async (app: FastifyInstance) => {
       .finally(() => detecting.delete(hostId));
   }
 
+  // The periodic half of pre-provisioning: a project edited to pre-provision
+  // (or a host that stayed online) is picked up without waiting for a host to
+  // come back. Primary-only like everything in this plugin; jobs are deduped.
+  let sweepTimer: NodeJS.Timeout | null = null;
+  let sweeping = false;
+  function sweepPreProvision(): void {
+    if (sweeping) return;
+    sweeping = true;
+    void runPreProvisionSweep(app)
+      .catch((err: unknown) => {
+        app.log.warn({ err }, "[host-heartbeat] pre-provisioning checkouts failed");
+      })
+      .finally(() => {
+        sweeping = false;
+      });
+  }
+
   app.addHook("onReady", () => {
     cleanup = startHostHeartbeat(app, undefined, undefined, onHostRecovered, onHostOnline);
+    sweepTimer = setInterval(sweepPreProvision, PRE_PROVISION_SWEEP_MS);
+    sweepTimer.unref();
   });
 
   app.addHook("onClose", () => {
+    if (sweepTimer) clearInterval(sweepTimer);
     if (cleanup) cleanup();
   });
 });

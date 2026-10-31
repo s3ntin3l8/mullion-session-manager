@@ -316,3 +316,65 @@ describe("store.createSession does not wait on the list refresh (issue #2255)", 
     expect(useDashboardStore.getState().sessions).toEqual([created]);
   });
 });
+
+describe("store.createSession while a checkout is being prepared", () => {
+  beforeEach(() => {
+    __resetRefreshSessionsInFlightForTests();
+    useDashboardStore.setState({ sessions: [], toasts: [], backendReachable: true });
+    vi.restoreAllMocks();
+    vi.spyOn(api, "listSessions").mockResolvedValue([]);
+  });
+
+  it("shows a toast, polls the job and re-submits the same create once it is done", async () => {
+    vi.useFakeTimers();
+    try {
+      const created = session(9);
+      const create = vi
+        .spyOn(api, "createSession")
+        .mockResolvedValueOnce({ preparingCheckout: { projectId: 1, hostId: "h1" } })
+        .mockResolvedValueOnce(created);
+      const status = vi
+        .spyOn(api, "materializeStatus")
+        .mockResolvedValueOnce({ state: "cloning" })
+        .mockResolvedValueOnce({ state: "done", cwd: "/srv/p" });
+
+      const pending = useDashboardStore.getState().createSession(1, "claude");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(useDashboardStore.getState().toasts.map((t) => t.message)).toEqual([
+        "Preparing checkout on h1…",
+      ]);
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      await expect(pending).resolves.toBe(created);
+      expect(create).toHaveBeenCalledTimes(2);
+      expect(status).toHaveBeenCalledWith(1, "h1");
+      expect(useDashboardStore.getState().toasts).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("throws the clone's detail when the job failed, and clears the toast", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(api, "createSession").mockResolvedValue({
+        preparingCheckout: { projectId: 1, hostId: "h1" },
+      });
+      vi.spyOn(api, "materializeStatus").mockResolvedValue({
+        state: "failed",
+        reason: "auth",
+        detail: "repository not found",
+      });
+
+      const pending = useDashboardStore.getState().createSession(1, "claude");
+      const assertion = expect(pending).rejects.toThrow(
+        "Could not prepare a checkout on h1: repository not found",
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      await assertion;
+      expect(useDashboardStore.getState().toasts).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

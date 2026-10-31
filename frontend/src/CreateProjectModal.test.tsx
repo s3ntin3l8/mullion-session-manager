@@ -632,6 +632,33 @@ describe("CreateProjectModal — paths on other hosts (hostCwds)", () => {
     });
   });
 
+  it("leaves pre-provision out of the save when unchanged", async () => {
+    const user = userEvent.setup();
+    const onCreate = renderEdit({});
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onCreate.mock.calls[0][0]).not.toHaveProperty("preProvision");
+  });
+
+  it("sends the pre-provision choice once it changed", async () => {
+    const user = userEvent.setup();
+    const onCreate = renderEdit({});
+    await user.selectOptions(screen.getByLabelText("Pre-provision checkouts"), "all");
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onCreate.mock.calls[0][0].preProvision).toBe("all");
+  });
+
+  it("lists the hosts to pick from for a selected-hosts pre-provision", async () => {
+    const user = userEvent.setup();
+    const onCreate = renderEdit({ initialPreProvision: ["mac-1"] });
+    expect(screen.getByRole("checkbox", { name: "macbook" })).toBeChecked();
+    await user.click(screen.getByRole("checkbox", { name: "macbook" }));
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(onCreate).toHaveBeenCalled());
+    expect(onCreate.mock.calls[0][0].preProvision).toEqual([]);
+  });
+
   it("does not show the flags when creating a project", () => {
     render(<CreateProjectModal onClose={vi.fn()} onCreate={vi.fn()} />);
     expect(screen.queryByRole("checkbox", { name: "macOS" })).toBeNull();

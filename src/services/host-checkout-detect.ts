@@ -174,6 +174,15 @@ export async function detectCheckouts(
   const declined = new Set(parseHostCwdsMeta(project.hostCwdsMeta).declined);
   const dirName = path.basename(project.cwd).toLowerCase();
   const out: HostCheckoutSuggestion[] = [];
+  // A path some project already owns on a host (a Mullion-managed clone
+  // included) is never a suggestion for another one.
+  const claimed = new Set<string>();
+  for (const other of app.db.select().from(projects).all()) {
+    claimed.add(`${other.hostId}\0${other.cwd}`);
+    for (const [hostId, cwd] of Object.entries(parseHostCwds(other.hostCwds))) {
+      claimed.add(`${hostId}\0${cwd}`);
+    }
+  }
 
   for (const host of listHosts(app)) {
     if (host.id === project.hostId) continue;
@@ -186,7 +195,13 @@ export async function detectCheckouts(
     // A linked worktree/submodule is not a clone of its own, and a path the
     // sweep would refuse to store is not offered as a suggestion either (the
     // dialog's "Use" button would otherwise seed it).
-    const repos = list.filter((c) => c.isGitRepo && c.isWorktree !== true && isStorablePath(c.cwd));
+    const repos = list.filter(
+      (c) =>
+        c.isGitRepo &&
+        c.isWorktree !== true &&
+        isStorablePath(c.cwd) &&
+        !claimed.has(`${host.id}\0${c.cwd}`),
+    );
 
     const normalized = (c: DiscoveredCandidate): string | null =>
       typeof c.origin === "string" ? normalizeGitRemote(c.origin) : null;

@@ -116,6 +116,7 @@ export const projectsApi = {
         | "hostCwds"
         // Issue #2241 — the placement steering flags are writable too.
         | "placementConstraints"
+        | "preProvision"
         // The per-project git identity override is writable too.
         | "gitIdentity"
       >

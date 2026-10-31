@@ -1,3 +1,13 @@
+import {
+  parsePreProvision,
+  serializePreProvision,
+  type PreProvision,
+} from "../services/pre-provision.js";
+import {
+  getMaterializeJob,
+  startMaterialize,
+  takeFailedMaterialize,
+} from "../services/checkout-materialize.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import {
   GIT_IDENTITY_FIELD_MAX,
@@ -291,6 +301,20 @@ const PLACEMENT_CONSTRAINTS_SCHEMA = {
   },
 } as const;
 
+/** What the API accepts for `preProvision` (see pre-provision.ts). */
+const PRE_PROVISION_SCHEMA = {
+  anyOf: [
+    { type: "null" },
+    { type: "string", enum: ["none", "all"] },
+    {
+      type: "array",
+      items: { type: "string", minLength: 1, maxLength: 128 },
+      maxItems: MAX_HOST_CWDS,
+      uniqueItems: true,
+    },
+  ],
+} as const;
+
 interface CreateProjectBody {
   name: string;
   cwd: string;
@@ -306,6 +330,8 @@ interface CreateProjectBody {
   hostCwds?: Record<string, string> | null;
   // Issue #2241 — placement steering flags; see PLACEMENT_CONSTRAINTS_SCHEMA.
   placementConstraints?: PlacementConstraintsBody | null;
+  // Checkouts to clone ahead of the first placement: "none" (default), "all", or host ids.
+  preProvision?: PreProvision | null;
   gitIdentity?: GitIdentityBody | null;
   // Confirm-first directory creation (leaf-only — see project-dir.ts):
   // the initial POST without this flag 400s with code PROJECT_DIR_MISSING
@@ -347,6 +373,8 @@ interface UpdateProjectBody {
   hostCwds?: Record<string, string> | null;
   // Issue #2241 — placement steering flags; `null` clears them.
   placementConstraints?: PlacementConstraintsBody | null;
+  // Checkouts to clone ahead of the first placement: "none" (default), "all", or host ids.
+  preProvision?: PreProvision | null;
   gitIdentity?: GitIdentityBody | null;
   // Per-project only, no install-wide tier — same posture as
   // defaultReviewAgent above. `null`/`false` = off; default-off matters,
@@ -531,6 +559,7 @@ const createProjectSchema = {
         maxProperties: MAX_HOST_CWDS,
       },
       placementConstraints: PLACEMENT_CONSTRAINTS_SCHEMA,
+      preProvision: PRE_PROVISION_SCHEMA,
       gitIdentity: GIT_IDENTITY_SCHEMA,
       createDir: { type: "boolean" },
       gitInit: { type: "boolean" },
@@ -557,6 +586,7 @@ const updateProjectSchema = {
         maxProperties: MAX_HOST_CWDS,
       },
       placementConstraints: PLACEMENT_CONSTRAINTS_SCHEMA,
+      preProvision: PRE_PROVISION_SCHEMA,
       gitIdentity: GIT_IDENTITY_SCHEMA,
       devServerUrl: { type: ["string", "null"], minLength: 1 },
       autoFetch: { type: ["boolean", "null"] },
@@ -1365,6 +1395,7 @@ export async function projectsRoute(app: FastifyInstance) {
           // operator declined: an OBJECT on the way out, like hostCwds.
           hostCwdsMeta: parseHostCwdsMeta(row.hostCwdsMeta),
           placementConstraints: parsePlacementConstraints(row.placementConstraints),
+          preProvision: parsePreProvision(row.preProvision),
           gitIdentity: parseProjectGitIdentity(row.gitIdentity) ?? null,
           ...crossProjectFieldsOut(row),
           currentBranch,
@@ -4948,6 +4979,7 @@ export async function projectsRoute(app: FastifyInstance) {
         placement,
         hostCwds,
         placementConstraints,
+        preProvision,
         gitIdentity,
         allowDuplicate,
       } = request.body;
@@ -5058,6 +5090,7 @@ export async function projectsRoute(app: FastifyInstance) {
           hostCwds: serializeHostCwds(hostCwds),
           // Issue #2241 — the steering flags; null/default flags store as null.
           placementConstraints: serializePlacementConstraints(placementConstraints),
+          preProvision: serializePreProvision(preProvision),
           gitIdentity: serializeProjectGitIdentity(gitIdentity),
           // Issue #1723 / roadmap 8.9 — absent means "pinned" (the
           // column's default), so an existing project is untouched.
@@ -5085,6 +5118,7 @@ export async function projectsRoute(app: FastifyInstance) {
         placementConstraints: parsePlacementConstraints(
           withReleasePleaseDefault.placementConstraints,
         ),
+        preProvision: parsePreProvision(withReleasePleaseDefault.preProvision),
         gitIdentity: parseProjectGitIdentity(withReleasePleaseDefault.gitIdentity) ?? null,
         ...crossProjectFieldsOut(withReleasePleaseDefault),
       };
@@ -5148,6 +5182,7 @@ export async function projectsRoute(app: FastifyInstance) {
           hostCwds: { ...parseHostCwds(row.hostCwds) },
           hostCwdsMeta: parseHostCwdsMeta(row.hostCwdsMeta),
           placementConstraints: parsePlacementConstraints(row.placementConstraints),
+          preProvision: parsePreProvision(row.preProvision),
           gitIdentity: parseProjectGitIdentity(row.gitIdentity) ?? null,
           ...crossProjectFieldsOut(row),
         },
@@ -5205,9 +5240,56 @@ export async function projectsRoute(app: FastifyInstance) {
         hostCwds: { ...parseHostCwds(row.hostCwds) },
         hostCwdsMeta: parseHostCwdsMeta(row.hostCwdsMeta),
         placementConstraints: parsePlacementConstraints(row.placementConstraints),
+        preProvision: parsePreProvision(row.preProvision),
         gitIdentity: parseProjectGitIdentity(row.gitIdentity) ?? null,
         ...crossProjectFieldsOut(row),
       };
+    },
+  );
+
+  // Lazy checkout materialization: the state of the clone job for a project on
+  // a host (what the launcher polls after a 202 from POST /api/sessions). A host
+  // the project already has a path on reads as `done`; a host nothing was
+  // started for reads as `idle`.
+  app.get<{ Params: { id: string; hostId: string } }>(
+    "/api/projects/:id/host-checkouts/:hostId/materialize",
+    { config: { rateLimit: { max: 120, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const { hostId } = request.params;
+      const [row] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!row) return reply.notFound();
+      const job = getMaterializeJob(projectId, hostId);
+      if (job) {
+        return { state: job.state, cwd: job.cwd, reason: job.reason, detail: job.detail };
+      }
+      const mapped = parseHostCwds(row.hostCwds)[hostId];
+      if (hostId === row.hostId) return { state: "done", cwd: row.cwd };
+      if (mapped !== undefined) return { state: "done", cwd: mapped };
+      return { state: "idle" };
+    },
+  );
+
+  // Starts (or joins) the clone job explicitly — the same job a placement
+  // starts. Answers 202 with the job state; poll the GET above.
+  app.post<{ Params: { id: string; hostId: string } }>(
+    "/api/projects/:id/host-checkouts/:hostId/materialize",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const { hostId } = request.params;
+      if (hostId !== LOCAL_HOST_ID && !getHostRow(app, hostId)) {
+        return reply.badRequest(`Unknown hostId ${hostId}`);
+      }
+      const [row] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+      if (!row) return reply.notFound();
+      // A new request is a retry: a failure already shown is not replayed.
+      takeFailedMaterialize(projectId, hostId);
+      const job = startMaterialize(app, projectId, hostId);
+      reply.code(202);
+      return { state: job.state, cwd: job.cwd, reason: job.reason, detail: job.detail };
     },
   );
 
@@ -5253,6 +5335,7 @@ export async function projectsRoute(app: FastifyInstance) {
         gitInit,
         hostCwds,
         placementConstraints,
+        preProvision,
         gitIdentity,
         allowDuplicate,
       } = request.body;
@@ -5354,6 +5437,7 @@ export async function projectsRoute(app: FastifyInstance) {
         placement === undefined &&
         hostCwds === undefined &&
         placementConstraints === undefined &&
+        preProvision === undefined &&
         gitIdentity === undefined &&
         mergeOnApprove === undefined &&
         autoApprove === undefined &&
@@ -5372,7 +5456,7 @@ export async function projectsRoute(app: FastifyInstance) {
         suppressConventionsInjectionAfterScaffold === undefined
       ) {
         return reply.badRequest(
-          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, placement, hostCwds, placementConstraints, gitIdentity, mergeOnApprove, autoApprove, allowCrossProjectSpawn, crossProjectTargets, acceptsChildrenFrom, acceptsChildrenFromList, acceptsMessagesFrom, acceptsMessagesFromList, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
+          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, placement, hostCwds, placementConstraints, preProvision, gitIdentity, mergeOnApprove, autoApprove, allowCrossProjectSpawn, crossProjectTargets, acceptsChildrenFrom, acceptsChildrenFromList, acceptsMessagesFrom, acceptsMessagesFromList, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
         );
       }
 
@@ -5448,6 +5532,10 @@ export async function projectsRoute(app: FastifyInstance) {
           // Issue #2241 — the steering flags. `null` (or default flags) clears them.
           ...(placementConstraints !== undefined
             ? { placementConstraints: serializePlacementConstraints(placementConstraints) }
+            : {}),
+          // Pre-provisioned checkouts. `null` (or "none") clears them.
+          ...(preProvision !== undefined
+            ? { preProvision: serializePreProvision(preProvision) }
             : {}),
           // The git identity override. `null` clears it.
           ...(gitIdentity !== undefined
@@ -5526,6 +5614,7 @@ export async function projectsRoute(app: FastifyInstance) {
         hostCwds: { ...parseHostCwds(updated[0].hostCwds) },
         hostCwdsMeta: parseHostCwdsMeta(updated[0].hostCwdsMeta),
         placementConstraints: parsePlacementConstraints(updated[0].placementConstraints),
+        preProvision: parsePreProvision(updated[0].preProvision),
         gitIdentity: parseProjectGitIdentity(updated[0].gitIdentity) ?? null,
         ...crossProjectFieldsOut(updated[0]),
       };
