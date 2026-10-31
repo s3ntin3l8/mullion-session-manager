@@ -399,7 +399,11 @@ const {
   DEFAULT_MAX_AUTO_RETURN_ROUNDS,
   resetUnstableRunsUnreadableWarningsForTests,
   autoReturnTask,
+  resetMergeBackoff,
+  MERGE_UNCONFIRMED_PREFIX,
 } = await import("../../src/services/task-reconciler.js");
+const { subscribeToTaskEvents, clearTaskEventSubscribersForTests } =
+  await import("../../src/services/task-events.js");
 const { tasks, sessions, projects } = await import("../../src/db/schema.js");
 const { DEFAULT_SETTINGS } = await import("../../src/services/settings.js");
 const { and, eq, isNull, isNotNull } = await import("drizzle-orm");
@@ -408,7 +412,8 @@ const { taskReviewFindingsPath, taskCommitTitlePath, taskRereviewRequestPath } =
 const { deriveWorktreePath } = await import("../../src/services/git-worktree.js");
 const { recordGitHubRateLimit, resetGitHubRateLimitForTests } =
   await import("../../src/services/github-fetch.js");
-const { setRepoPRsStatus, invalidatePRsCache } = await import("../../src/services/github.js");
+const { setRepoPRsStatus, invalidatePRsCache, GitHubApiError } =
+  await import("../../src/services/github.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-reconciler-test-${process.pid}.db`);
 
@@ -2326,6 +2331,154 @@ describe("reconcileTasks", () => {
       await app.close();
     });
 
+    describe("ambiguous merge transport failure (timeout)", () => {
+      const timeout = () =>
+        new GitHubApiError("Could not reach GitHub: The operation was aborted due to timeout", 0);
+
+      // A minimal stand-in for a task-events WS subscriber: records what the
+      // refresh broadcast delivers.
+      function subscribeFakeSocket() {
+        const sent: string[] = [];
+        const socket = {
+          readyState: 1,
+          OPEN: 1,
+          bufferedAmount: 0,
+          on: () => {},
+          send: (m: string) => sent.push(m),
+        };
+        subscribeToTaskEvents(socket as never);
+        return {
+          sent,
+          socket,
+        };
+      }
+
+      afterEach(() => clearTaskEventSubscribersForTests());
+
+      it("finishes the task when the merge landed server-side and only the response timed out", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithPendingMerge(app);
+        const { sent } = subscribeFakeSocket();
+        mockGetPullRequestByNumber
+          .mockResolvedValueOnce(mockPr({ mergeableState: "clean" }))
+          .mockResolvedValueOnce(mockPr({ state: "closed", merged: true }));
+        mockMergePullRequest.mockRejectedValue(timeout());
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.mergedAt).not.toBeNull();
+        expect(row.archivedAt).not.toBeNull();
+        expect(row.mergeRequestedAt).toBeNull();
+        expect(row.mergeError).toBeNull();
+        expect(sent.some((m) => m.includes('"kind":"ingested"'))).toBe(true);
+
+        await app.close();
+      });
+
+      it("reports an unconfirmed outcome, not a failure, when the confirming read fails too — then recovers", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithPendingMerge(app);
+        mockGetPullRequestByNumber
+          .mockResolvedValueOnce(mockPr({ mergeableState: "clean" }))
+          .mockRejectedValueOnce(timeout());
+        mockMergePullRequest.mockRejectedValue(timeout());
+
+        await reconcileTasks(app);
+
+        let row = await getTask(app, taskId);
+        expect(row.mergedAt).toBeNull();
+        expect(row.mergeRequestedAt).not.toBeNull();
+        expect(row.mergeError).toContain(MERGE_UNCONFIRMED_PREFIX);
+        expect(row.mergeError).not.toContain("Merge attempt failed");
+
+        // Next sweep (backoff elapsed): GitHub now says it merged.
+        resetMergeBackoff(taskId);
+        mockGetPullRequestByNumber.mockReset();
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ state: "closed", merged: true }));
+        await reconcileTasks(app);
+
+        row = await getTask(app, taskId);
+        expect(row.mergedAt).not.toBeNull();
+        expect(row.mergeError).toBeNull();
+        expect(row.mergeRequestedAt).toBeNull();
+
+        await app.close();
+      });
+
+      it("still reports a definite failure when the confirming read shows the PR open", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithPendingMerge(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "clean" }));
+        mockMergePullRequest.mockRejectedValue(timeout());
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.mergeError).toContain("Merge attempt failed");
+        expect(row.mergedAt).toBeNull();
+
+        await app.close();
+      });
+
+      it("treats a PR closed without merging as already-done, not merged", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithPendingMerge(app);
+        mockGetPullRequestByNumber
+          .mockResolvedValueOnce(mockPr({ mergeableState: "clean" }))
+          .mockResolvedValueOnce(mockPr({ state: "closed", merged: false }));
+        mockMergePullRequest.mockRejectedValue(timeout());
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.mergedAt).toBeNull();
+        expect(row.mergeRequestedAt).toBeNull();
+        expect(row.mergeError).toBeNull();
+
+        await app.close();
+      });
+
+      it("keeps a definite GitHub rejection a failure without a confirming read", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithPendingMerge(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "clean" }));
+        mockMergePullRequest.mockRejectedValue(new GitHubApiError("HTTP 405 not mergeable", 405));
+
+        await reconcileTasks(app);
+
+        expect(mockGetPullRequestByNumber).toHaveBeenCalledTimes(1);
+        expect((await getTask(app, taskId)).mergeError).toContain("Merge attempt failed");
+
+        await app.close();
+      });
+
+      it("a late timeout cannot restore a merge error on a task a webhook already merged", async () => {
+        const app = await buildApp();
+        const { taskId } = await createDoneTaskWithPendingMerge(app);
+        mockGetPullRequestByNumber.mockResolvedValue(mockPr({ mergeableState: "clean" }));
+        // The webhook lands while the merge request is still in flight, then
+        // the request times out and the confirming read times out as well.
+        mockMergePullRequest.mockImplementation(async () => {
+          app.db
+            .update(tasks)
+            .set({ mergedAt: new Date(), mergeError: null })
+            .where(eq(tasks.id, taskId))
+            .run();
+          mockGetPullRequestByNumber.mockRejectedValue(timeout());
+          throw timeout();
+        });
+
+        await reconcileTasks(app);
+
+        const row = await getTask(app, taskId);
+        expect(row.mergedAt).not.toBeNull();
+        expect(row.mergeError).toBeNull();
+
+        await app.close();
+      });
+    });
+
     it("updates a behind branch and waits for the next tick instead of merging in the same pass", async () => {
       const app = await buildApp();
       const { taskId } = await createDoneTaskWithPendingMerge(app);
@@ -3408,7 +3561,14 @@ describe("reconcileTasks", () => {
       let row = await getTask(app, taskId);
       expect(row.mergeRequestedAt).toBeNull();
 
-      app.db.update(tasks).set({ mergeRequestedAt: new Date() }).where(eq(tasks.id, taskId)).run();
+      // mergedAt cleared too: a merged task never records a merge error
+      // (recordMergeError's mergedAt guard), so this re-arm models a fresh,
+      // unmerged request rather than a merged one.
+      app.db
+        .update(tasks)
+        .set({ mergeRequestedAt: new Date(), mergedAt: null })
+        .where(eq(tasks.id, taskId))
+        .run();
       mockGetPullRequestByNumber.mockResolvedValueOnce(mockPr({ mergeableState: "dirty" }));
 
       await reconcileTasks(app);

@@ -1453,6 +1453,47 @@ describe("TaskDetail merge-on-approve status", () => {
     expect(screen.queryByText(/Merge pending/)).toBeNull();
   });
 
+  it("shows an unconfirmed merge as neutral status, not an open PR or a failure", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "done",
+        prNumber: 9,
+        prUrl: "https://x/pull/9",
+        mergeRequestedAt: "2026-01-01T00:00:00.000Z",
+        mergeError:
+          "Merge status unconfirmed — GitHub did not respond (Could not reach GitHub: timeout); checking again shortly",
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    expect(screen.getByText(/Merge status could not be confirmed/)).toBeInTheDocument();
+    expect(screen.queryByText(/PR open — needs merge/)).toBeNull();
+    expect(screen.queryByText(/Merge attempt failed/)).toBeNull();
+    expect(screen.queryByText(/Could not reach GitHub/)).toBeNull();
+  });
+
+  it("shows a confirmed merge without a stale error or another merge button", () => {
+    tasks = [
+      makeTask({
+        id: 1,
+        status: "done",
+        prNumber: 9,
+        prUrl: "https://x/pull/9",
+        mergedAt: "2026-01-01T00:00:00.000Z",
+        mergeRequestedAt: "2026-01-01T00:00:00.000Z",
+        mergeError: "Merge attempt failed: Could not reach GitHub: timeout",
+      }),
+    ];
+    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
+
+    expect(screen.getByText(/PR merged/)).toBeInTheDocument();
+    expect(screen.queryByText(/PR open — needs merge/)).toBeNull();
+    expect(screen.queryByText(/Merge attempt failed/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry merge" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Merge now" })).toBeNull();
+  });
+
   it("shows the release-pending hint once a release has been requested (#744)", () => {
     tasks = [
       makeTask({

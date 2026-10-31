@@ -110,6 +110,7 @@ import {
   fetchCheckRunsForHead,
   isRedCheckConclusion,
   getPRsStatus,
+  GitHubApiError,
 } from "./github.js";
 import { isGitHubRateLimited, githubRateLimitRemainingMs } from "./github-fetch.js";
 import { classifyMergeReadiness } from "./merge-readiness.js";
@@ -1931,8 +1932,26 @@ function clearMergeState(
   cleanupTaskSessions(app, task);
 }
 
+// A confirmed-merged task never carries a merge error: `mergedAt` wins over a
+// late failure from an in-flight request or a slow sweep (a webhook or a
+// concurrent reconcile may have recorded the merge while this one was still
+// waiting on a timeout), so the write is a no-op once `mergedAt` is set.
 function recordMergeError(app: FastifyInstance, taskId: number, message: string): void {
-  app.db.update(tasks).set({ mergeError: message }).where(eq(tasks.id, taskId)).run();
+  app.db
+    .update(tasks)
+    .set({ mergeError: message })
+    .where(and(eq(tasks.id, taskId), isNull(tasks.mergedAt)))
+    .run();
+}
+
+// The frontend keys off this prefix (frontend/src/unified-board/awaitingMerge.ts)
+// to render the neutral "could not be confirmed" state instead of a failure.
+export const MERGE_UNCONFIRMED_PREFIX = "Merge status unconfirmed";
+
+// A transport failure (githubRequest's status-0 GitHubApiError — timeout,
+// connection reset) says nothing about whether GitHub applied the write.
+function isAmbiguousTransportFailure(err: unknown): boolean {
+  return err instanceof GitHubApiError && err.statusCode === 0;
 }
 
 // #1015 (archive) — called only where the caller has already confirmed
@@ -2722,8 +2741,52 @@ async function attemptMerge(
     // ordinary expected outcomes here, not alarms; err.message already
     // carries the HTTP status (see githubRequest's own error formatting).
     const detail = err instanceof Error ? err.message : String(err);
+    if (isAmbiguousTransportFailure(err)) {
+      await settleAmbiguousMerge(app, task, project, repoRef, token, detail);
+      return;
+    }
     recordMergeError(app, task.id, `Merge attempt failed: ${detail}`);
   }
+}
+
+/**
+ * A merge/update call died on the transport (timeout) — GitHub may well have
+ * applied it. Ask GitHub for the PR's real state before saying anything: merged
+ * -> finish the task as if the merge call had returned; closed -> same cleanup
+ * as `already-done`; still open -> the write really didn't land, report it as
+ * a failure. If the read fails too, report an unconfirmed outcome (not a
+ * failure) and let the sweep's own backoff reconcile it.
+ */
+async function settleAmbiguousMerge(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+  repoRef: GitHubRepoRef,
+  token: string,
+  detail: string,
+): Promise<void> {
+  if (task.prNumber === null) return;
+  let pr: Awaited<ReturnType<typeof getPullRequestByNumber>>;
+  try {
+    pr = await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber);
+  } catch (readErr) {
+    app.log.warn(
+      { err: readErr, taskId: task.id, prNumber: task.prNumber },
+      "task reconcile: merge request outcome unconfirmed and the PR state read failed too",
+    );
+    recordMergeError(
+      app,
+      task.id,
+      `${MERGE_UNCONFIRMED_PREFIX} — GitHub did not respond (${detail}); checking again shortly`,
+    );
+    return;
+  }
+  if (classifyMergeReadiness(pr) === "already-done") {
+    if (pr.merged) finishMergedDoneTask(app, task, project);
+    else clearMergeState(app, task, project);
+    return;
+  }
+  recordMergeError(app, task.id, `Merge attempt failed: ${detail}`);
 }
 
 async function processMergeRequests(app: FastifyInstance): Promise<void> {

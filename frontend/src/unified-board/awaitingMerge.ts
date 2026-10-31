@@ -19,3 +19,13 @@ export function awaitingMergeReason(
   if (!mergeOnApprove) return "Merge on approve is off for this project";
   return "PR is still open";
 }
+
+// The reconciler records this prefix (MERGE_UNCONFIRMED_PREFIX,
+// src/services/task-reconciler.ts) when a merge request timed out on the wire
+// and GitHub could not be asked what happened. It is neither a failure nor a
+// proof the PR is still open, so the drawer renders it neutrally.
+export const MERGE_UNCONFIRMED_PREFIX = "Merge status unconfirmed";
+
+export function isMergeUnconfirmed(task: Pick<Task, "mergeError">): boolean {
+  return task.mergeError?.startsWith(MERGE_UNCONFIRMED_PREFIX) ?? false;
+}
