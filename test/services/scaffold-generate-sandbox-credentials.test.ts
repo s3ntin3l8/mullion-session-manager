@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  agentSandboxWritablePaths,
   createAgentSandboxHome,
   describeSpawnFailure,
   persistAgentSandboxAuth,
@@ -281,5 +282,25 @@ describe("redactSecrets (issue #2430)", () => {
       "err Bearer leak-me-2",
     );
     expect(msg).not.toContain("leak-me");
+  });
+});
+
+describe("claude's sandbox paths (issue #2430)", () => {
+  it("lists only the OAuth credentials file, never the whole ~/.claude", () => {
+    expect(agentSandboxWritablePaths("claude")).toEqual({
+      dirs: [],
+      files: [path.join(os.homedir(), ".claude", ".credentials.json")],
+    });
+  });
+
+  it("createAgentSandboxHome materializes .agent-home for claude (bwrap --bind needs its source)", () => {
+    const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-home-"));
+    try {
+      const { fakeHome, writablePaths } = createAgentSandboxHome(scratchDir, "claude");
+      expect(writablePaths.files).toEqual([path.join(fakeHome, ".claude", ".credentials.json")]);
+      expect(fs.existsSync(path.join(scratchDir, ".agent-home"))).toBe(true);
+    } finally {
+      fs.rmSync(scratchDir, { recursive: true, force: true });
+    }
   });
 });
