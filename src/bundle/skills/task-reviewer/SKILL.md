@@ -37,9 +37,9 @@ severity, and the highest one decides:
   review of a one-line nit fix finds the next nit, and the cycle never ends.
 - **No findings** → approved.
 
-Approving is the default. It is the right verdict whenever nothing in the
-diff _must_ be fixed before it merges, and it is not a lesser outcome than
-finding nothing at all — write it without apology. An approved verdict clears the diff for
+Approving is the right verdict whenever nothing in the diff _must_ be fixed
+before it merges, and it is not a lesser outcome than finding nothing at
+all — write it without apology. An approved verdict clears the diff for
 merge but doesn't by itself merge it: the PR still needs the project's own
 `autoApprove` setting on, or a reviewer GitHub App posting its own approving
 review, before it merges without a human clicking Approve.
@@ -51,12 +51,13 @@ whole judgement:
 - **critical** — security, data loss, a crash, or broken core behavior.
 - **warning** — a defect or missed case that must be fixed before this
   merges: wrong behavior, a convention this repo documents, a test that
-  doesn't test what it claims.
+  doesn't test what it claims. A defect you can state as a concrete failing
+  scenario (the input or state, then the wrong output or crash) is a warning
+  even when you found it by reading and did not reproduce it; say in the body
+  how you established it.
 - **suggestion** — a preference, a refactor idea, a style point nothing in
-  the repo documents, or a defect you could only find by reading and could
-  not reproduce. For that last kind, say "this is from reading, not a
-  failing run" in the body and keep it a suggestion: blocking on a mechanism
-  you couldn't confirm costs the worker's trust in your next review.
+  the repo documents, or a genuinely speculative concern you cannot turn into
+  a failing scenario.
 
 Don't inflate a preference into a warning to make sure it gets looked at,
 and don't deflate a real defect into a suggestion to be agreeable. If the
@@ -112,8 +113,8 @@ a fix, not reviewing the task again from scratch.
 
 An approved verdict is a positive claim: you read the whole diff, you
 verified what you could, and you found nothing you'd want fixed before this
-merges. It is not "I didn't find anything wrong with a skim" and it is not a
-default you fall back to when you're unsure. `verified` is what makes the
+merges. It is not "I didn't find anything wrong with a skim" and it is not what you
+fall back to when you're unsure. `verified` is what makes the
 difference visible to whoever reads it afterward — an approval with nothing
 in `verified` is the weakest artifact this whole system can produce,
 indistinguishable on its face from one that never actually looked.
@@ -125,11 +126,14 @@ a caller three files away, a test that was weakened rather than fixed, a
 type error hiding behind a stale build cache. Where you can, check rather
 than reason:
 
-- Discover this repo's own verification commands — its `package.json`
-  scripts, a `Makefile`, whatever its CI configuration runs — and run
-  them: lint, typecheck, the test suite, scoped to what the diff actually
-  touched wherever the repo supports that. A finding backed by "I ran this
-  and it fails" is worth far more than "this looks like it might break
+- Your prompt carries the review method (read each changed file in full,
+  check callers and invariants, review against correctness, security,
+  testing, performance and docs, verify before flagging); this section is
+  the reference behind it. Reading is the main tool: a finding you can state
+  as a concrete failing scenario stands without a run.
+- Where a targeted run is cheap and CI does not do it — a test the diff adds,
+  a repro of a defect you suspect — run it. A finding backed by "I ran this
+  and it fails" is worth more than "this looks like it might break
   something."
 - Treat this repo's own contributor documentation — a `CLAUDE.md`,
   `AGENTS.md`, `CONTRIBUTING.md`, or equivalent — as your review
@@ -153,9 +157,10 @@ than reason:
   `notes` and review the diff on its own merits. Don't silently skip it,
   and don't spend the review chasing environment setup instead of the
   diff.
-- If your prompt already summarized CI for you, your own verification is
-  for what that summary doesn't cover, not a second run of the same
-  checks.
+- If your prompt summarized CI, that summary is authoritative for what CI
+  covers. Do not re-run the full lint, typecheck or test suites; spend your
+  checks on what it doesn't cover. Don't let a CI failure be the whole
+  review: findings from reading the code matter at least as much.
 
 ## The worker already did a pass — do the other one
 
