@@ -17,11 +17,16 @@
  * `null` if either marker is absent or the end marker precedes the start —
  * never throws, since "no marked region" is the overwhelmingly common,
  * expected case for both callers. Only markers standing alone on a top-level
- * line count (occurrences inside a longer token, inline prose or code spans,
- * frontmatter, fenced code blocks, or multi-line HTML comments are ignored).
- * Deliberately first-region-only, not a multi-region concat: one region per
- * file keeps the byte budget predictable and the source easy to reason
- * about at a glance.
+ * line count. Occurrences inside a longer token, inline prose or code spans,
+ * or frontmatter are ignored; a fenced code block only hides marker lines
+ * when it directly wraps a quoted marker example (the pair alone, or on the
+ * first and last lines inside the fence), while a fence whose pair has
+ * surrounding lines leaves those markers top-level; and because a stray
+ * `<!--` must not swallow a region marker, a standalone marker line aborts a
+ * multi-line HTML comment search so it is treated as top-level rather than
+ * hidden. Deliberately first-region-only, not a multi-region concat: one
+ * region per file keeps the byte budget predictable and the source easy to
+ * reason about at a glance.
  */
 export function extractMarkedRegion(
   text: string,
@@ -39,9 +44,10 @@ export function extractMarkedRegion(
  * consuming the `endMarker` line's trailing newline) removed. Returns `text`
  * unchanged when no complete pair is present. Uses the same standalone
  * top-level line matching as `extractMarkedRegion` and `upsertMarkedRegion`,
- * so a marker embedded in a longer token, inline code/prose, frontmatter, a
- * fenced code block, or a multi-line HTML comment is never mistaken for a
- * region boundary.
+ * so a marker embedded in a longer token, inline code/prose, frontmatter, or
+ * a fence directly wrapping a quoted marker example is never mistaken for a
+ * region boundary, while markers inside a multi-line comment or a fence with
+ * surrounding lines stay top-level.
  */
 export function stripMarkedRegion(text: string, startMarker: string, endMarker: string): string {
   const { pairs } = findMarkedRegions(text, startMarker, endMarker);
@@ -87,9 +93,14 @@ function buildRegion(startMarker: string, endMarker: string, body: string, eol: 
  *
  * Only markers standing alone on a top-level line count; a marker that is
  * part of a longer token (e.g. `# mullion:worktrees:started-by-hand`),
- * mentioned inline in prose or an inline code span, or inside YAML
- * frontmatter, a fenced code block, or a multi-line HTML comment is left
- * untouched and ignored when locating a region.
+ * mentioned inline in prose or an inline code span, inside YAML frontmatter,
+ * or inside a fenced code block directly wrapping a quoted marker example
+ * (the pair alone, or on the first and last lines inside the fence) is left
+ * untouched and ignored when locating a region (a fence whose pair has
+ * surrounding lines leaves those markers top-level; and because a stray
+ * `<!--` must not swallow a region marker, a standalone marker line aborts a
+ * multi-line HTML comment search so it is treated as top-level rather than
+ * hidden).
  *
  * If a complete, correctly ordered marker pair is already present (a re-run
  * over a previous scaffold, or a repo that already committed a region by
@@ -147,8 +158,8 @@ export function upsertMarkedRegion(
   return `${trimmedText}${eol}${eol}${region}${eol}`;
 }
 
-const DEFAULT_START_MARKER_RE = /^[ \t]*<!--\s*(?:\S+:)?start\s*-->[ \t]*$/;
-const DEFAULT_END_MARKER_RE = /^[ \t]*<!--\s*(?:\S+:)?end\s*-->[ \t]*$/;
+const DEFAULT_START_MARKER_RE = /^[ \t]*<!--\s*mullion:[\w-]+:start\s*-->[ \t]*$/;
+const DEFAULT_END_MARKER_RE = /^[ \t]*<!--\s*mullion:[\w-]+:end\s*-->[ \t]*$/;
 
 /**
  * Per line of a markdown document: true when the line is "top level" prose,
@@ -334,9 +345,13 @@ function escapeRegExp(s: string): string {
 /**
  * Pairs standalone top-level `startMarker` and `endMarker` lines and reports
  * any unmatched ones as `orphans`. A marker embedded in a longer token, in
- * inline code or prose, or inside frontmatter / a fenced code block / a
- * multi-line HTML comment is ignored so it is neither mistaken for a region
- * boundary nor stripped as an orphan.
+ * inline code or prose, in frontmatter, or inside a fenced code block directly
+ * wrapping a quoted marker example (the pair alone, or on the first and last
+ * lines inside the fence) is ignored so it is neither mistaken for a region
+ * boundary nor stripped as an orphan. A fence whose pair has surrounding lines
+ * leaves those markers top-level; and because a stray `<!--` must not swallow a
+ * region marker, a standalone marker line aborts a multi-line HTML comment
+ * search so it is treated as top-level rather than hidden.
  */
 function findMarkedRegions(
   text: string,

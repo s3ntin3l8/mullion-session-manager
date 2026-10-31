@@ -552,4 +552,17 @@ describe("topLevelLines", () => {
     ]);
     expect(topLevelLines(["<!-- unclosed", "after"])).toEqual([true, true]);
   });
+
+  it("does not treat generic <!-- start --> comments as region markers when default regexes are used", () => {
+    const lines = [
+      "# Doc",
+      "",
+      "```html",
+      "Intro",
+      "<!-- start -->",
+      "<<<MULLION_REGION>>>",
+      "```",
+    ];
+    expect(topLevelLines(lines)).toEqual([true, true, false, false, false, false, false]);
+  });
 });
