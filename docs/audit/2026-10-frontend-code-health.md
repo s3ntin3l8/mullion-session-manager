@@ -12,7 +12,7 @@ refactored here. Every finding is filed as a tracked issue (numbers in the
 the report: `scripts/check-max-file-lines.mjs`, a ratchet that stops the
 largest files from growing further.
 
-Measured against `origin/main` at `04db4560`.
+Measured against `origin/main` at `0ceb2f02`.
 
 ---
 
@@ -51,7 +51,7 @@ Checked and left alone. A fix in any of these would be a regression.
 - **`src/shared/types.ts` already absorbed ~90 hand-mirrored API types**, and
   the file's own header says so. The direction is established.
 - **`hooks/useAsyncData.ts` already exists** and is used at
-  `frontend/src/TaskDetail.tsx:204`. The duplication in F15 is of a primitive
+  `frontend/src/TaskDetail.tsx:199`. The duplication in F15 is of a primitive
   the repo already wrote.
 - **`usePanelOpener`, `useAppStreams`, `useGlobalShortcuts`,
   `useDockviewDrop`, `useWorkspacePersistence`, `useMobileLayout`,
@@ -83,8 +83,8 @@ a hazard.
 
 ## The size map
 
-**Frontend production: 63,044 code lines across 405 files.** Frontend tests:
-83,813 code lines across 317 colocated files — **1.33× the production code**.
+**Frontend production: 62,992 code lines across 405 files.** Frontend tests:
+83,798 code lines across 317 colocated files — **1.33× the production code**.
 
 | Size bucket (code lines) | Files in `frontend/src/` (production) |
 | ------------------------ | ------------------------------------: |
@@ -97,15 +97,15 @@ a hazard.
 | 1,500–1,749              |                                     1 |
 | 1,750–1,999              |                                     1 |
 
-Seven frontend files are over 1,000 code lines. Two of them are the most
-churned files in the whole frontend.
+Seven frontend files are over 1,000 code lines. Two of them are among the most
+frequently changed files in the whole repository.
 
 ### The largest frontend files
 
 |  Code | Total | File                                                |
 | ----: | ----: | --------------------------------------------------- |
 | 1,759 | 2,665 | `frontend/src/Sidebar.tsx`                          |
-| 1,626 | 2,872 | `frontend/src/api/types.ts`                         |
+| 1,624 | 2,868 | `frontend/src/api/types.ts`                         |
 | 1,268 | 1,667 | `frontend/src/CommandPalette.tsx`                   |
 | 1,234 | 2,102 | `frontend/src/App.tsx`                              |
 | 1,227 | 2,684 | `frontend/src/TerminalPane.tsx`                     |
@@ -114,14 +114,13 @@ churned files in the whole frontend.
 |   938 | 1,052 | `frontend/src/FileEditorPanel.tsx`                  |
 |   938 | 1,729 | `frontend/src/panelUtils.ts`                        |
 |   874 | 1,272 | `frontend/src/NotificationBell.tsx`                 |
-|   874 | 1,045 | `frontend/src/TaskDetail.tsx`                       |
 
 ### Size × churn × test coverage
 
 |  Code | File                                                | Test                                               | Test ÷ prod | Churn, 12 mo                  |
 | ----: | --------------------------------------------------- | -------------------------------------------------- | ----------: | ----------------------------- |
 | 1,759 | `frontend/src/Sidebar.tsx`                          | `frontend/src/Sidebar.test.tsx` (1,415)            |       0.80× | 4,793 added / 108 commits     |
-| 1,626 | `frontend/src/api/types.ts`                         | —                                                  |           — | **2,949 added / 166 commits** |
+| 1,624 | `frontend/src/api/types.ts`                         | —                                                  |           — | 2,949 added / **167 commits** |
 | 1,268 | `frontend/src/CommandPalette.tsx`                   | `frontend/src/CommandPalette.test.tsx` (2,822)     |       2.23× | 2,588 added / 62 commits      |
 | 1,234 | `frontend/src/App.tsx`                              | `frontend/src/App.test.tsx` (624)                  |   **0.51×** | **4,501 added / 151 commits** |
 | 1,227 | `frontend/src/TerminalPane.tsx`                     | `frontend/src/TerminalPane.test.tsx` (3,769)       |       3.07× | 3,765 added / 65 commits      |
@@ -131,12 +130,17 @@ churned files in the whole frontend.
 |   938 | `frontend/src/FileEditorPanel.tsx`                  | `frontend/src/FileEditorPanel.test.tsx` (1,461)    |       1.56× | —                             |
 |   874 | `frontend/src/TaskDetail.tsx`                       | `frontend/src/TaskDetail.test.tsx` (1,975)         |       2.26× | —                             |
 
-**`App.tsx` is the outlier that matters.** It is the fifth-largest frontend
-file, the second-most-churned file in the entire repository, and it has the
-**worst test-to-source ratio of any file over 1,000 lines** — 624 lines of test
-for 1,234 lines of source, while its nearest neighbours are at 2× and 3×. A
-1,984-line component with 21 `useEffect` hooks and half a test file's worth of
-coverage is the single highest-risk item in the frontend.
+**`App.tsx` is the outlier that matters.** It is the fourth-largest frontend
+file, the second most frequently changed file in the entire repository, and it
+has the **worst test-to-source ratio of any file over 1,000 lines** — 624 lines
+of test for 1,234 lines of source, while its nearest neighbours are at 2× and
+3×. A 1,984-line component with 21 `useEffect` hooks and half a test file's
+worth of coverage is the single highest-risk item in the frontend.
+
+**`api/types.ts` is the most frequently changed file in the frontend** — 167
+commits in twelve months, more than any other file in `frontend/src/`. It is
+almost entirely type declarations. Nothing about that is slow at runtime; what
+it costs is churn spent keeping two copies of a shape in step, which is F12.
 
 ---
 
@@ -147,17 +151,17 @@ coverage is the single highest-risk item in the frontend.
 | F12 | `frontend/src/api/types.ts` is **hand-maintained**: 163 local type names, **78 with a same-named backend twin**, and at least two already diverged. `HostCapacity` folds `sampledAt` in and drops `HostCapacityReport`/`HostCapacityEntry`; `CleanupJob.mode` is typed `DockerPruneMode` where the backend uses `CleanupMode = DockerPruneMode & TempPruneMode` | `frontend/src/api/types.ts:522-530` vs `src/services/host-capacity.ts:23,51,105`; `api/types.ts:185` vs `src/services/disk-cleanup-job.ts:11,43`                  | `frontend/src/api/types.ts`                         | Deferred → #2412                                           |
 | F13 | `panelUtils.ts` repeats the open-or-focus preamble `const existing = api.getPanel(panelId);` **eleven times**, and the copies have diverged — only three re-target via `updateParameters`, and the project-panel copy conditionally applies desktop positioning                                                                                                 | `frontend/src/panelUtils.ts:691,734,765,789,818,882,921,959,998,1049,1087`                                                                                        | `frontend/src/panelUtils.ts`                        | Deferred → #2410                                           |
 | F14 | `CommandPalette.tsx` renders the `cmd-row` block **five times** — the `CommandRow` component and four inline copies that have **already diverged**, dropping `cmd-row-availability` and `showBreadcrumb` and using different icon sizes and background mixes                                                                                                    | `frontend/src/CommandPalette.tsx:134` vs `1371,1471,1509,1546`                                                                                                    | `frontend/src/CommandPalette.tsx`                   | Deferred → #2409                                           |
-| F15 | `DevicesSection.tsx` hand-rolls the `let cancelled` + `.then/.catch` + cleanup effect shape **five times**, while `hooks/useAsyncData.ts` already exists and is used elsewhere                                                                                                                                                                                  | `frontend/src/settings/sections/DevicesSection.tsx:278,300,328,423,451` vs `frontend/src/TaskDetail.tsx:204`                                                      | `frontend/src/settings/sections/DevicesSection.tsx` | Deferred → #2411                                           |
+| F15 | `DevicesSection.tsx` hand-rolls the `let cancelled` + `.then/.catch` + cleanup effect shape **five times**, while `hooks/useAsyncData.ts` already exists and is used elsewhere                                                                                                                                                                                  | `frontend/src/settings/sections/DevicesSection.tsx:278,300,328,423,451` vs `frontend/src/TaskDetail.tsx:199`                                                      | `frontend/src/settings/sections/DevicesSection.tsx` | Deferred → #2411                                           |
 | F18 | `TerminalPane.tsx`'s mount effect is **1,454 lines with ~95 inner function declarations** — xterm construction, fit, link providers, clipboard, upload+inject and the websocket `connect`/`connectOnce` protocol all share one effect's lifecycle                                                                                                               | `frontend/src/TerminalPane.tsx:656-2110`                                                                                                                          | `frontend/src/TerminalPane.tsx`                     | Deferred → #2406                                           |
 | F19 | `App.tsx` is a single **1,984-line component with 21 `useEffect` hooks**, with a ~500-line `const sidebar = (...)` JSX block inline in the body, and the **worst test-to-source ratio among the giants** (624 lines of test)                                                                                                                                    | `frontend/src/App.tsx:119-2102`, `1602-2103`                                                                                                                      | `frontend/src/App.tsx`                              | Deferred → #2407                                           |
 | F10 | **13 import cycles** in production code, five of them the `right-sidebar/views.ts` barrel importing back from the five members it exports — a type-only module that its own members depend on at runtime                                                                                                                                                        | `frontend/src/right-sidebar/views.ts` ↔ `FilesSidebarView.tsx`, `GitHubSidebarView.tsx`, `GitSidebarView.tsx`, `HistorySidebarView.tsx`, `ProjectSidebarView.tsx` | `frontend/src/right-sidebar/`                       | Deferred → #2414                                           |
-| F11 | **105 exported runtime symbols are unreachable** — 85 in `src/`, **20 in `frontend/src/`** — none referenced anywhere, tests included                                                                                                                                                                                                                           | `frontend/src/lib/terminalLinks.ts` (4), `frontend/src/panelUtils.ts` (4), `frontend/src/github/taskMasterSummary.ts` (2)                                         | `frontend/src/`                                     | Deferred → #2415                                           |
+| F11 | **104 exported runtime symbols are unreachable** — 84 in `src/`, **20 in `frontend/src/`** — none referenced anywhere, tests included                                                                                                                                                                                                                           | `frontend/src/lib/terminalLinks.ts` (4), `frontend/src/panelUtils.ts` (4), `frontend/src/github/taskMasterSummary.ts` (2)                                         | `frontend/src/`                                     | Deferred → #2415                                           |
 | F1  | Seven frontend files exceed 1,000 code lines; the frontend's largest is 1,759                                                                                                                                                                                                                                                                                   | see the size map above                                                                                                                                            | `frontend/src/`                                     | Deferred → #2406, #2407, #2408, #2409, #2410, #2411, #2412 |
 
 ### On F12
 
-`api/types.ts` is the highest-churned file in the frontend — 2,949 lines added
-across 166 commits — and it is entirely type declarations except for one
+`api/types.ts` is the most frequently changed file in the frontend — 167
+commits in twelve months — and it is entirely type declarations except for one
 constant. Nothing about it is slow at runtime; what it costs is the **drift**.
 Two shapes have already drifted, and a third kind of drift is invisible: a
 type the backend renames or removes entirely, which the frontend keeps
@@ -186,9 +190,18 @@ each existing offender at its current size:
   much the ceiling could be lowered;
 - a baseline entry whose file is gone is reported, so it can be removed.
 
-Ceilings only ever go **down**. Lowering one is the ratchet turning over: it
-is a deliberate, reviewable act visible in the diff, and it is how the 59
-existing offenders get fixed.
+The policy is that ceilings only go **down** — the giants must shrink. The
+check cannot enforce that on its own, because it only reads the baseline as it
+stands; what it enforces is that growth **cannot happen quietly**, because
+recording a larger size is a visible change to a committed file. That is why
+the baseline is committed rather than generated.
+
+One consequence, and it is not hypothetical: the baseline records sizes as of
+a particular commit, so when `main` grows a baselined file — which it does,
+often, on these very files — the next pull request that touches it fails this
+check until the baseline is refreshed. That is deliberate. The refresh puts
+the growth in a diff where a reviewer sees it, instead of letting a giant grow
+unnoticed.
 
 The baseline holds 59 entries — 15 production files, 43 test files and one
 tooling script — because the ceiling applies to the whole source tree. Test

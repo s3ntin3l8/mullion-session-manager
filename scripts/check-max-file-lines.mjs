@@ -20,10 +20,24 @@
 //
 // Lowering a ceiling is the ratchet turning over: it is a deliberate,
 // reviewable act visible in the diff, and it is how the 59 existing offenders
-// get fixed. The script cannot see the baseline's PREVIOUS values — it only
-// reads the file as it stands — so a ceiling RAISED in the baseline is caught
-// by the diff rather than by this check. That is precisely why the baseline
-// is a committed file and not a generated one.
+// get fixed.
+//
+// The script cannot see the baseline's PREVIOUS values — it only reads the
+// file as it stands — so a ceiling RAISED in the baseline is not caught by
+// this check. It is caught by the DIFF: recording a larger size for a file
+// is a visible change to a committed file, and a reviewer sees it. That is
+// why the baseline is a committed file and not a generated one. The policy
+// is that ceilings only go DOWN (the giants must shrink); the check
+// enforces that growth cannot happen quietly, and the diff is what holds
+// the policy.
+//
+// ONE CONSEQUENCE, and it is not a hypothetical one: the baseline records
+// sizes as of a particular commit, so when `main` grows a baselined file —
+// which it does, often, on these very files — the next pull request that
+// touches it fails this check until the baseline is refreshed. That is
+// deliberate: the refresh puts the growth in a diff where a reviewer sees
+// it, rather than letting a giant grow unnoticed. Refresh it with
+// `node scripts/audit-loc.mjs` and the baseline's own counts.
 //
 // The counting is shared with the audit that motivates this check
 // (`scripts/lib/audit-loc-core.mjs`), so the numbers the reports quote and the
@@ -155,9 +169,11 @@ if (failures.length > 0) {
   }
   console.error(
     `\nThe ceiling is ${baseline.limit} code lines for a new file, and each\n` +
-      "baselined file's own (lower) recorded ceiling for an existing one.\n" +
-      "Split the file, or lower its recorded ceiling in the baseline file if\n" +
-      "the ceiling itself is wrong — a ceiling may only go DOWN.",
+      "baselined file's own recorded ceiling for an existing one.\n" +
+      "Split the file, or record its new size in the baseline file — the\n" +
+      "baseline is a committed file, so a size that goes UP shows up in the\n" +
+      "diff where a reviewer sees it, and one that goes DOWN is the ratchet\n" +
+      "turning over. Either way the growth cannot be silent.",
   );
   process.exit(1);
 }

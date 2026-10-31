@@ -1,7 +1,7 @@
 # Code-health audit — backend
 
 **Scope.** Mullion's backend (`src/`, 378 production files), its test tree
-(`test/`, 482 files) and the cross-cutting structural findings that reach into
+(`test/`, 484 files) and the cross-cutting structural findings that reach into
 the frontend. The React frontend (`frontend/src/`) is audited separately, in
 [2026-10-frontend-code-health.md](2026-10-frontend-code-health.md); the two
 reports share one set of cross-cutting findings, so a finding that spans both
@@ -13,7 +13,7 @@ refactored here. Every finding is filed as a tracked issue (numbers in the
 the report: `scripts/check-max-file-lines.mjs`, a ratchet that stops the
 largest files from growing further.
 
-Measured against `origin/main` at `04db4560`.
+Measured against `origin/main` at `0ceb2f02`.
 
 ---
 
@@ -52,7 +52,7 @@ Checked and left alone. A fix in any of these would be a regression.
   errors are called out as a finding below.
 - **`remote-host-client.ts`'s no-401-retry in `uploadProjectFile` is
   deliberate.** The body stream is single-use, so a retry would have nothing to
-  resend. The comment at line 1438 says so. It looks like an inconsistency and
+  resend. The comment at line 1446 says so. It looks like an inconsistency and
   is not one.
 - **The REST-vs-GraphQL 404 distinction in `github-write.ts` is deliberate.**
   `githubRequest` treats a 404 as a scope error only for non-GET requests
@@ -93,41 +93,41 @@ an annoyance; a large file that changed 152 times in a year is a hazard.
 
 ## The size map
 
-**Backend production: 89,676 code lines across 378 files.** Backend tests:
-195,148 code lines across 482 files — **2.18× the production code**.
+**Backend production: 89,657 code lines across 378 files.** Backend tests:
+195,111 code lines across 484 files — **2.18× the production code**.
 
 | Size bucket (code lines) | Files in `src/` |
 | ------------------------ | --------------: |
 | 0–249                    |             280 |
 | 250–499                  |              54 |
 | 500–749                  |              20 |
-| 750–999                  |              12 |
-| 1,000–1,249              |               3 |
+| 750–999                  |              13 |
+| 1,000–1,249              |               2 |
 | 1,250–1,499              |               2 |
 | 1,500–1,749              |               2 |
 | 2,000–2,249              |               3 |
 | 2,750–2,999              |               1 |
 | 3,750–3,999              |               1 |
 
-Twelve of the 378 backend files are over 1,000 code lines; five are over 2,000.
-Those twelve hold 31% of the backend's production code in 3% of its files.
+Eleven of the 378 backend files are over 1,000 code lines; five are over 2,000.
+Those eleven hold 24% of the backend's production code in 3% of its files.
 
 ### The largest backend files
 
 |  Code | Total | File                                 |
 | ----: | ----: | ------------------------------------ |
 | 3,911 | 5,738 | `src/routes/projects.ts`             |
-| 2,926 | 5,696 | `src/services/task-reconciler.ts`    |
-| 2,208 | 3,536 | `src/routes/internal.ts`             |
+| 2,914 | 5,679 | `src/services/task-reconciler.ts`    |
+| 2,210 | 3,540 | `src/routes/internal.ts`             |
 | 2,180 | 3,236 | `src/plugins/control-socket.ts`      |
 | 2,086 | 4,898 | `src/services/pty-manager.ts`        |
 | 1,609 | 2,110 | `src/cli/core.mjs`                   |
-| 1,517 | 2,592 | `src/services/remote-host-client.ts` |
-| 1,372 | 2,170 | `src/services/github-write.ts`       |
+| 1,523 | 2,600 | `src/services/remote-host-client.ts` |
+| 1,372 | 2,169 | `src/services/github-write.ts`       |
 | 1,333 | 1,456 | `src/mcp/tools.mjs`                  |
-| 1,246 | 1,940 | `src/routes/tasks.ts`                |
+| 1,244 | 1,938 | `src/routes/tasks.ts`                |
 | 1,044 | 2,035 | `src/services/scaffold-generate.ts`  |
-| 1,002 | 1,635 | `src/services/github.ts`             |
+|   981 | 2,039 | `src/services/session-lifecycle.ts`  |
 
 ### Size × churn × test coverage
 
@@ -137,17 +137,16 @@ in the last year, and how much test stands behind it.
 |  Code | File                                 | Test                                               | Test ÷ prod | Churn, 12 mo                  |
 | ----: | ------------------------------------ | -------------------------------------------------- | ----------: | ----------------------------- |
 | 3,911 | `src/routes/projects.ts`             | `test/routes/projects.test.ts` (9,264)             |       2.37× | 6,823 added / 127 commits     |
-| 2,926 | `src/services/task-reconciler.ts`    | `test/services/task-reconciler.test.ts` (8,090)    |       2.76× | 7,437 added / 92 commits      |
-| 2,208 | `src/routes/internal.ts`             | `test/routes/internal.test.ts` (5,721)             |       2.59× | 4,594 added / 110 commits     |
+| 2,914 | `src/services/task-reconciler.ts`    | `test/services/task-reconciler.test.ts` (8,069)    |       2.77× | 7,441 added / 93 commits      |
+| 2,210 | `src/routes/internal.ts`             | `test/routes/internal.test.ts` (5,721)             |       2.59× | 4,599 added / 111 commits     |
 | 2,180 | `src/plugins/control-socket.ts`      | `test/plugins/control-socket.test.ts` (5,881)      |       2.70× | 4,346 added / 61 commits      |
 | 2,086 | `src/services/pty-manager.ts`        | `test/services/pty-manager.test.ts` (7,506)        |       3.60× | **8,881 added / 152 commits** |
 | 1,609 | `src/cli/core.mjs`                   | `test/cli/core.test.ts` (3,354)                    |       2.08× | 2,405 added / 47 commits      |
-| 1,517 | `src/services/remote-host-client.ts` | `test/services/remote-host-client.test.ts` (2,049) |       1.35× | 2,800 added / 95 commits      |
-| 1,372 | `src/services/github-write.ts`       | `test/services/github-write.test.ts` (1,822)       |       1.33× | 2,286 added / 35 commits      |
+| 1,523 | `src/services/remote-host-client.ts` | `test/services/remote-host-client.test.ts` (2,049) |       1.35× | 2,810 added / 96 commits      |
+| 1,372 | `src/services/github-write.ts`       | `test/services/github-write.test.ts` (1,822)       |       1.33× | 2,288 added / 36 commits      |
 | 1,333 | `src/mcp/tools.mjs`                  | `test/mcp/tools.test.ts` (830)                     |       0.62× | 1,576 added / 45 commits      |
-| 1,246 | `src/routes/tasks.ts`                | `test/routes/tasks.test.ts` (3,823)                |       3.07× | 2,575 added / 61 commits      |
+| 1,244 | `src/routes/tasks.ts`                | `test/routes/tasks.test.ts` (3,823)                |       3.07× | 2,575 added / 62 commits      |
 | 1,044 | `src/services/scaffold-generate.ts`  | `test/services/scaffold-generate.test.ts` (1,819)  |       1.74× | 2,390 added / 18 commits      |
-| 1,002 | `src/services/github.ts`             | `test/services/github.test.ts` (706)               |       0.70× | 1,945 added / 34 commits      |
 
 **The test column is the real cost.** Every one of these modules has a test
 file that is _larger than the module it covers_ — up to 3.6× for
@@ -160,7 +159,7 @@ rewriting: the assertions already exist and can be moved unchanged.
 **Churn overlaps size exactly.** The five largest backend files are also five
 of the ten most-churned. And the three largest have never been refactored —
 `projects.ts`, `task-reconciler.ts` and `internal.ts` have taken only feature
-and fix commits while absorbing 6,823, 7,437 and 4,594 added lines respectively.
+and fix commits while absorbing 6,823, 7,441 and 4,599 added lines respectively.
 The repo's extraction pattern is real and working; it has simply not reached
 these three.
 
@@ -170,25 +169,25 @@ these three.
 
 | #   | Finding                                                                                                                                                                                                                                                                                                                                                                                             | Evidence                                                                                                                  | Where                                          | What changed                                               |
 | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------- |
-| F1  | 12 backend files exceed 1,000 code lines; five exceed 2,000. `projects.ts` holds 59 route handlers in one 4,485-line function; `internal.ts` holds 93 in a 2,912-line function                                                                                                                                                                                                                      | `src/routes/projects.ts:1210-5694`; `src/routes/internal.ts:625-3536`                                                     | `src/routes/`, `src/services/`                 | Deferred → #2399, #2400, #2401, #2402, #2403, #2404, #2405 |
+| F1  | 11 backend files exceed 1,000 code lines; five exceed 2,000. `projects.ts` holds 59 route handlers in one 4,485-line function; `internal.ts` holds 95 in a 2,912-line function                                                                                                                                                                                                                      | `src/routes/projects.ts:1210-5694`; `src/routes/internal.ts:625-3536`                                                     | `src/routes/`, `src/services/`                 | Deferred → #2399, #2400, #2401, #2402, #2403, #2404, #2405 |
 | F2  | `projects.ts` mixes four surfaces in one function: CRUD (1387-1771, 4939-5718), Docker (1772-2360), GitHub + release (2361-3439) and Git (3440-4938). The GitHub block alone is ~1,079 code lines                                                                                                                                                                                                   | `src/routes/projects.ts:2361-3439`                                                                                        | `src/routes/projects.ts`                       | Deferred → #2399                                           |
-| F3  | `internal.ts` holds 93 registrations in one function across nine separable regions — git (1253-1716), sessions (2449-2977), project-files (1717-1987) among them                                                                                                                                                                                                                                    | `src/routes/internal.ts:625-3536`                                                                                         | `src/routes/internal.ts`                       | Deferred → #2401                                           |
-| F4  | `task-reconciler.ts` carries **four divergent copies** of one retry-backoff shape — draft PR (1309/1344), merge (1474/1495), release (2410/2412), auto-approve (2654/2656) — keyed differently, with different TTLs, and merge carrying an extra `lastReassertedSha`. The eviction helper `setDraftPrRetryState` (1318) exists, but four call sites re-implement it inline (1430, 2362, 2608, 3731) | `src/services/task-reconciler.ts:1309-1323`                                                                               | `src/services/task-reconciler.ts`              | Deferred → #2400                                           |
+| F3  | `internal.ts` holds 95 registrations in one function across nine separable regions — git (1253-1716), sessions (2449-2977), project-files (1717-1987) among them                                                                                                                                                                                                                                    | `src/routes/internal.ts:625-3536`                                                                                         | `src/routes/internal.ts`                       | Deferred → #2401                                           |
+| F4  | `task-reconciler.ts` carries **four divergent copies** of one retry-backoff shape — draft PR (1308/1343), merge (1473/1494), release (2408/2410), auto-approve (2652/2654) — keyed differently, with different TTLs, and merge carrying an extra `lastReassertedSha`. The eviction helper `setDraftPrRetryState` (1317) exists, but four call sites re-implement it inline (1429, 2360, 2606, 3714) | `src/services/task-reconciler.ts:1308-1322`                                                                               | `src/services/task-reconciler.ts`              | Deferred → #2400                                           |
 | F5  | `github-write.ts` writes the REST pagination loop four times with divergent page bounds and **two different response envelopes** — `listReviewMarkers` breaks on `data.length` while the other three break on `items.length`. Error classification is duplicated between REST and GraphQL with a divergent 404 rule                                                                                 | `src/services/github-write.ts:230,870,1053,1199`; `101-128` vs `1308-1326`                                                | `src/services/github-write.ts`                 | Deferred → #2405                                           |
 | F6  | `pty-manager.ts` duplicates **15 method names verbatim** across `Session` (402) and `PtyManager` (3889); the manager's copies are pure delegations                                                                                                                                                                                                                                                  | `src/services/pty-manager.ts:402-3882`, `3889-4898`                                                                       | `src/services/pty-manager.ts`                  | Deferred → #2403                                           |
-| F7  | `remote-host-client.ts` implements the 401-refresh retry **three times with two behaviours** — `request()` (714-721) and `downloadProjectFile` (1549-1558) retry, `uploadProjectFile` does not, by design (1438)                                                                                                                                                                                    | `src/services/remote-host-client.ts:714,1438,1549`                                                                        | `src/services/remote-host-client.ts`           | Deferred → #2404                                           |
+| F7  | `remote-host-client.ts` implements the 401-refresh retry **three times with two behaviours** — `request()` (714-721) and `downloadProjectFile` (1557) retry, `uploadProjectFile` does not, by design (1446)                                                                                                                                                                                         | `src/services/remote-host-client.ts:714,1446,1557`                                                                        | `src/services/remote-host-client.ts`           | Deferred → #2404                                           |
 | F8  | `control-socket.ts` resolves a session target three times with divergence: `resolveTargetSessionId` (486), `resolveOwnedSessionId` (616, which adds a child-parent check and an active re-check) and `resolveEventsSessionFilter` (670), whose own comment calls it "a variant of `resolveTargetSessionId`'s own shape"                                                                             | `src/plugins/control-socket.ts:486,616,670`                                                                               | `src/plugins/control-socket.ts`                | Deferred → #2402                                           |
 | F9  | **Layering inversion**: nine edges go the wrong way — six `services → routes/plugins` and three `plugins → routes`. Two of them also sit on an import cycle                                                                                                                                                                                                                                         | `src/services/remote-host-client.ts` → `src/plugins/hooks.ts`; `src/plugins/control-socket.ts` → `src/routes/terminal.ts` | `src/services/`, `src/plugins/`, `src/routes/` | Deferred → #2413                                           |
 | F10 | **13 import cycles** in production code, five of them the `right-sidebar/views.ts` barrel importing back from the five members it exports                                                                                                                                                                                                                                                           | `src/services/pty-manager.ts` ↔ `src/services/dev-server-detect.ts`; `frontend/src/right-sidebar/views.ts` ↔ its members  | `src/services/`, `frontend/src/`               | Deferred → #2414                                           |
-| F11 | **105 exported runtime symbols are unreachable** — 85 in `src/`, 20 in `frontend/src/` — none referenced anywhere, tests included                                                                                                                                                                                                                                                                   | `src/services/ssh-agent-filter.ts` (9), `src/services/hook-adapters/mcode.ts` (8), `src/services/hermes-client.ts` (5)    | `src/`, `frontend/src/`                        | Deferred → #2415                                           |
+| F11 | **104 exported runtime symbols are unreachable** — 84 in `src/`, 20 in `frontend/src/` — none referenced anywhere, tests included                                                                                                                                                                                                                                                                   | `src/services/ssh-agent-filter.ts` (9), `src/services/hook-adapters/mcode.ts` (8), `src/services/hermes-client.ts` (5)    | `src/`, `frontend/src/`                        | Deferred → #2415                                           |
 | F16 | 27 edges go from a route module straight to `src/db/schema.ts`, bypassing the service layer                                                                                                                                                                                                                                                                                                         | `src/routes/*.ts` → `src/db/schema.ts`                                                                                    | `src/routes/`                                  | Deferred → #2418                                           |
 | F17 | Four route modules exist but are absent from `docs/architecture.md`'s route list                                                                                                                                                                                                                                                                                                                    | `preview-targets.ts`, `project-github-writes.ts`, `review-relay.ts`, `task-push.ts`                                       | `docs/architecture.md`                         | Deferred → #2417                                           |
-| F20 | Swallowed errors that turn a failure into a success: a failed `git status` reads as "no commits ahead" (1036), a failed check-run lookup reads as "no unstable checks" so **a merge can proceed on unknown CI state** (1991), and a failed body read empties the error text (724, 1616)                                                                                                             | `src/services/task-reconciler.ts:1036,1991`; `src/services/remote-host-client.ts:724,1616`                                | `src/services/`                                | Deferred → #2416                                           |
+| F20 | Swallowed errors that turn a failure into a success: a failed `git status` reads as "no commits ahead" (1066), a failed check-run lookup reads as "no unstable checks" so **a merge can proceed on unknown CI state** (2067), and a failed body read empties the error text (724, 1624)                                                                                                             | `src/services/task-reconciler.ts:1066,2067`; `src/services/remote-host-client.ts:724,1624`                                | `src/services/`                                | Deferred → #2416                                           |
 
 ### On F20
 
 The severity model calls a latent correctness bug P0, and one of these three
-sites is one: `task-reconciler.ts:1991` turns an unknown CI state into "no
+sites is one: `task-reconciler.ts:2067` turns an unknown CI state into "no
 unstable checks", which lets a merge proceed on evidence that was never
 obtained. It is filed as a `fix(...)` issue rather than a `refactor(...)` one
 for that reason, and it is the one finding in this audit that should be picked
@@ -212,9 +211,18 @@ each existing offender at its current size:
   much the ceiling could be lowered;
 - a baseline entry whose file is gone is reported, so it can be removed.
 
-Ceilings only ever go **down**. Lowering one is the ratchet turning over: it
-is a deliberate, reviewable act visible in the diff, and it is how the 59
-existing offenders get fixed.
+The policy is that ceilings only go **down** — the giants must shrink. The
+check cannot enforce that on its own, because it only reads the baseline as it
+stands; what it enforces is that growth **cannot happen quietly**, because
+recording a larger size is a visible change to a committed file. That is why
+the baseline is committed rather than generated.
+
+One consequence, and it is not hypothetical: the baseline records sizes as of
+a particular commit, so when `main` grows a baselined file — which it does,
+often, on these very files — the next pull request that touches it fails this
+check until the baseline is refreshed. That is deliberate. The refresh puts
+the growth in a diff where a reviewer sees it, instead of letting a giant grow
+unnoticed.
 
 The baseline holds 59 entries — 15 production files, 43 test files and one
 tooling script — because the ceiling applies to the whole source tree. Test

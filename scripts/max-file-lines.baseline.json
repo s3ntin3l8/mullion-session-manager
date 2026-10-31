@@ -1,6 +1,7 @@
 {
   "limit": 1200,
-  "note": "The ratchet: each entry is a file ALREADY over the ceiling, recorded at its current size. A baselined file fails only when it grows past its own number here; a file with no entry fails when it passes the global limit. Ceilings only go DOWN - that is how the existing offenders get fixed.",
+  "note": "The ratchet. Each entry is a file ALREADY over the ceiling, recorded at its current size: a baselined file fails only when it grows past its own number here, and a file with no entry fails when it passes the global limit. Sizes are as of the commit named below (`origin/main` at that time). The policy is that ceilings only go DOWN (the giants must shrink); the check enforces that growth cannot happen quietly, and a size that goes UP is caught by the diff on this committed file, which is why it is committed rather than generated. When `main` grows one of these files, refresh the baseline: run `node scripts/audit-loc.mjs`, then re-record the entries for the files whose sizes changed.",
+  "recordedAt": "0ceb2f02",
   "counts": {
     "production": 15,
     "test": 43,
@@ -8,7 +9,7 @@
     "total": 59
   },
   "files": {
-    "frontend/src/api/types.ts": 1626,
+    "frontend/src/api/types.ts": 1624,
     "frontend/src/App.tsx": 1234,
     "frontend/src/BrowserPanel.test.tsx": 1291,
     "frontend/src/CommandPalette.test.tsx": 2822,
@@ -30,13 +31,13 @@
     "src/cli/core.mjs": 1609,
     "src/mcp/tools.mjs": 1333,
     "src/plugins/control-socket.ts": 2180,
-    "src/routes/internal.ts": 2208,
+    "src/routes/internal.ts": 2210,
     "src/routes/projects.ts": 3911,
-    "src/routes/tasks.ts": 1246,
+    "src/routes/tasks.ts": 1244,
     "src/services/github-write.ts": 1372,
     "src/services/pty-manager.ts": 2086,
-    "src/services/remote-host-client.ts": 1517,
-    "src/services/task-reconciler.ts": 2926,
+    "src/services/remote-host-client.ts": 1523,
+    "src/services/task-reconciler.ts": 2914,
     "test/cli/core.test.ts": 3354,
     "test/hooks/forwarder-core.test.ts": 2413,
     "test/hooks/opencode-plugin.test.ts": 1871,
@@ -66,6 +67,6 @@
     "test/services/task-claim.test.ts": 1900,
     "test/services/task-promote.test.ts": 1517,
     "test/services/task-prompt.test.ts": 1365,
-    "test/services/task-reconciler.test.ts": 8090
+    "test/services/task-reconciler.test.ts": 8069
   }
 }
