@@ -80,7 +80,13 @@ describe("git child processes scrub the ambient git environment", () => {
   });
 
   it("scrubGitHookEnv strips a hook's GIT_DIR in a fresh process", () => {
-    const leaked = Object.fromEntries(GIT_ENV_KEYS_TO_STRIP.map((key) => [key, "/leaked"]));
+    const leaked = {
+      ...Object.fromEntries(GIT_ENV_KEYS_TO_STRIP.map((key) => [key, "/leaked"])),
+      // A hosted session's `-c` carrier, which the scrub also clears (test-side only).
+      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_KEY_1: "credential.helper",
+      GIT_CONFIG_VALUE_1: "leaked",
+    };
     const script =
       'const { scrubGitHookEnv } = await import("./test/helpers/git-hook-env.ts");' +
       'const before = Object.keys(process.env).filter((k) => k.startsWith("GIT_"));' +
