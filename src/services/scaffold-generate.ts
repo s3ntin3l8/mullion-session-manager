@@ -1687,7 +1687,7 @@ export function redactSecrets(text: string): string {
 /** A fixed label for the agent in log lines. The agent command arrives from a
  * request or project setting; the log gets only the literal it matched, never
  * the caller's string. */
-function agentLogLabel(agentCommand: string): string {
+export function agentLogLabel(agentCommand: string): string {
   switch (agentCommand) {
     case "claude":
       return "claude";

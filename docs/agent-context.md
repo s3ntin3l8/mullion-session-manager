@@ -292,13 +292,33 @@ three artifacts into a real, reviewable pull request:
 
 **Preview vs. Generate.** The panel offers two ways to compute the file set
 below. **Preview** writes starter placeholders (no agent). **Generate with
-agent** (`POST /api/projects/:id/setup/generate`) first runs one read-only,
-bwrap-sandboxed agent turn on your default agent (up to ~5 minutes, 5 per 10
-minutes) that reads the repo and writes the skill, the reviewer and the
-`AGENTS.md` pointer paragraph; the result goes through the same diff view and
-**Apply**. It warns when the turn ran unsandboxed or looks generic, and when a
-skill and reviewer already exist it asks which to regenerate rather than
-overwriting hand edits.
+agent** (`POST /api/projects/:id/setup/generate/start` is the background-job
+server route that the panel will call once its progress/reattach UI lands in
+issue #2479; the panel still calls the synchronous
+`POST /api/projects/:id/setup/generate`, which also remains for direct API
+callers and tests) first runs one read-only, bwrap-sandboxed agent turn on your
+default agent (up to ~5 minutes, 5 per 10 minutes) that reads the repo and
+writes the skill, the reviewer and the `AGENTS.md` pointer paragraph; the
+result goes through the same diff view and **Apply**. It warns when the turn
+ran unsandboxed or looks generic, and when a skill and reviewer already exist
+it asks which to regenerate rather than overwriting hand edits.
+
+**Background job lifecycle.** `POST /api/projects/:id/setup/generate/start`
+validates the request, checks for the 409 "skill and reviewer already exist"
+conflict and resolves the generating agent synchronously, then starts a
+background job (`202 { jobId }`) with phases
+`preparing` → `agent` → `composing` → `done` | `failed` (one in-flight job per
+project — a second `generate/start` while one is running attaches to the
+existing job rather than spawning a second turn). Progress and completion are
+polled via `GET /api/projects/:id/setup/generate/jobs/:jobId` and
+`GET /api/projects/:id/setup/generate/active` (which have their own 120/min
+rate-limit bucket). Closing the Scaffold panel does not stop the turn: the
+running job and its finished result (or error) survive in the server's
+in-memory registry (`src/services/scaffold-generate-jobs.ts`) until claimed by
+**Apply** or expired after the 15-minute `PREVIEW_TTL_MS` window alongside the
+preview record it points at, so reopening the panel can reattach via
+`generate/active`. A Mullion server restart loses the job (the registry is
+in-memory only, and a restart also terminates the spawned agent child process).
 
 **What happens to instructions the repo already has.** Generate also has an
 "Instructions this repo already has" choice (`existingInstructions` in the
