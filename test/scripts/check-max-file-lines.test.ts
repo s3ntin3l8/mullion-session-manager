@@ -1,15 +1,15 @@
 // scripts/check-max-file-lines.mjs is the guard that stops the codebase's
-// largest files from growing further. The code-health audit found 16
+// largest files from growing further. The code-health audit found 14
 // production files over 1,200 code lines, the largest of them holding 59
-// route handlers in a single 4,466-line function — and every one of those
+// route handlers in a single 4,485-line function — and every one of those
 // files still absorbing feature commits, because a file that size does not
 // fail loudly, it just gets slower to change safely.
 //
 // The guard is a RATCHET: a file that is already over the ceiling is recorded
-// in scripts/max-file-lines.baseline.json at its current size, and fails only
-// when it grows past ITS OWN number. So a new file over the ceiling fails,
-// and a baselined file over its own ceiling fails — while the existing
-// offenders pass, and the ratchet turns over one ceiling at a time.
+// in scripts/max-file-lines.baseline.json at its current size, and fails when
+// it grows past the size it had at the reference commit. So a new file over
+// the ceiling fails, and a file this change made bigger fails — while the
+// existing offenders pass, and the ratchet turns over one ceiling at a time.
 //
 // That makes the boundary logic the whole of the guard's behaviour, and it is
 // exactly the part that is easy to get subtly wrong: a baseline that is
@@ -34,9 +34,10 @@ import { fileURLToPath } from "node:url";
 
 import { gitEnv } from "../../src/services/git-env.js";
 import {
+  AUDIT_ROOTS,
+  SOURCE_EXTENSIONS,
   countFileLines,
   collectSourceFiles,
-  countSourceFiles,
 } from "../../scripts/lib/audit-loc-core.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -297,20 +298,28 @@ describe("check-max-file-lines.mjs: the repository's own baseline", () => {
   // make this test fail for every pull request that did not touch the
   // baseline at all, which is the opposite of what a guard should do.
   //
-  // What must hold is only that the guard PASSES on the tree — which is the
-  // test above — because the ceiling it enforces is the size at the reference
-  // commit, not the size the snapshot happens to record.
-  it("does not require the snapshot to still match the tree exactly", () => {
+  // What must hold is that the baseline is a well-formed RECORD: it names
+  // the giants, its counts block agrees with its entries, and every entry is
+  // a path the guard actually scans. What it must NOT hold is that the
+  // snapshot still matches the tree — the guard's judgement comes from the
+  // reference commit, not from these numbers.
+  it("is a well-formed record of the files it names", () => {
     const baseline = JSON.parse(fs.readFileSync(BASELINE, "utf8")) as {
+      limit: number;
+      counts: { production: number; test: number; tooling: number; total: number };
       files: Record<string, number>;
     };
-    const counts = countSourceFiles(REPO_ROOT);
-    const drifted = Object.entries(baseline.files).filter(
-      ([file, size]) => counts.find((c) => c.path === file)?.code !== size,
+    const names = Object.keys(baseline.files);
+    expect(names.length).toBe(baseline.counts.total);
+    expect(baseline.counts.production + baseline.counts.test + baseline.counts.tooling).toBe(
+      baseline.counts.total,
     );
-    // If nothing drifted, the assertion above is trivially true; the guard
-    // against drift is the "passes on the current tree" test.
-    expect(Array.isArray(drifted)).toBe(true);
+    for (const file of names) {
+      // Every entry names a source file the guard scans, under one of the
+      // audited roots.
+      expect(AUDIT_ROOTS.some((root) => file.startsWith(`${root}/`))).toBe(true);
+      expect(SOURCE_EXTENSIONS.has(path.extname(file))).toBe(true);
+    }
   });
 });
 
@@ -427,6 +436,33 @@ describe("check-max-file-lines.mjs: the ceiling is measured against the default 
     expect(result.code).toBe(0);
   });
 
+  // The discriminating case: the default branch grew the file AND this
+  // branch grew it. The reference is the FORK POINT, so this branch's own
+  // growth is still growth — it fails. Were the reference the default
+  // branch's tip instead, the branch's smaller growth would hide behind
+  // main's larger one and the check would pass. That is the difference the
+  // merge-base reference buys, and it is the one this test exists to pin.
+  it("fails when this branch grew a file, even though the default branch grew it more", async () => {
+    git(["init", "-q", "-b", "main"]);
+    write("src/big.ts", LIMIT + 100);
+    commit("base");
+
+    // The branch forks here and grows the file to LIMIT + 200.
+    git(["checkout", "-q", "-b", "feature"]);
+    write("src/big.ts", LIMIT + 200);
+    commit("the branch grew the file");
+
+    // The default branch grows the SAME file, further, to LIMIT + 300.
+    git(["checkout", "-q", "main"]);
+    write("src/big.ts", LIMIT + 300);
+    commit("main grew it more");
+    git(["checkout", "-q", "feature"]);
+
+    const result = await runCheck();
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("src/big.ts");
+  });
+
   it("fails a new file over the ceiling", async () => {
     git(["init", "-q", "-b", "main"]);
     write("src/small.ts", 10);
@@ -479,6 +515,9 @@ describe("check-max-file-lines.mjs: the ceiling is measured against the default 
 
     const result = await runCheck();
     expect(result.code).toBe(0);
-    expect(result.stdout).toContain("abstains");
+    expect(result.stdout).toContain("abstained");
+    // The degraded mode says so on stderr — a guard that stops guarding
+    // quietly is worse than one that stops guarding loudly.
+    expect(result.stderr).toContain("WARNING");
   });
 });

@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 // The file-size guardrail: no source file may grow past the size ceiling.
 //
-// WHY this exists: Mullion's codebase has 59 source files over 1,200 code
-// lines — 15 of them production, the largest of which hold 59 and 95 route
+// WHY this exists: Mullion's codebase has 57 source files over 1,200 code
+// lines — 14 of them production, the largest of which hold 59 and 95 route
 // registrations respectively. A file that size does not fail loudly — it just gets
 // slower to change safely, one edit at a time, until the next change to it
 // touches something nobody remembers. The ceiling turns that slow decay into
 // a build failure at the moment it happens.
 //
 // THIS IS A RATCHET, NOT A THRESHOLD. A flat "max 1,200 lines" rule would
-// fail on all 59 existing files the day it landed. Instead each file is
+// fail on all 57 existing files the day it landed. Instead each file is
 // measured against a ceiling of its own, and so:
 //
 //   - a NEW file over 1,200 lines fails        (the global ceiling)
@@ -255,14 +255,25 @@ if (reference === null && isGitCheckout(options.root)) {
   // because a guard that silently stops guarding is worse than one that
   // says so.
   const over = counts.filter((c) => c.code > baseline.limit);
-  console.log(
-    `OK — no reference commit could be resolved (no default-branch ref, and ` +
-      `HEAD is not a merge commit), so this check abstains: it cannot tell ` +
+  console.warn(
+    `WARNING — no reference commit could be resolved (no default-branch ref, ` +
+      `and HEAD is not a merge commit), so this check ABSTAINS: it cannot tell ` +
       `what this change did, and a stale snapshot would blame it for the ` +
       `default branch's own growth. ${over.length} file(s) are over the ` +
       `${baseline.limit}-line ceiling; the baseline records ${Object.keys(baseline.files).length}.`,
   );
+  console.log("OK — abstained: see the warning above.");
   process.exit(0);
+}
+
+if (reference === null) {
+  // Not a git checkout at all: there is no default branch whose growth could
+  // be mistaken for this change's, so the recorded baseline is the reference.
+  // Still worth saying out loud — it is a degraded mode.
+  console.warn(
+    `WARNING — this tree is not a git checkout, so there is no default ` +
+      `branch to measure against; the recorded baseline is the only reference.`,
+  );
 }
 
 /** Files that grew past their own ceiling. */

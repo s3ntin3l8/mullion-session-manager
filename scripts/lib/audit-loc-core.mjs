@@ -85,6 +85,47 @@ export const AUDIT_ROOTS = ["src", "frontend/src", "test", "scripts"];
  */
 
 /**
+ * The index of the first block-comment opener on a line that is NOT inside a
+ * string literal, or -1.
+ *
+ * Why this is not a plain `indexOf("/*")`: a `/*` inside a string is a
+ * STRING, not a comment. This codebase has a lot of them — glob patterns
+ * (`refs/heads/*`), git refspecs, URL paths — and a scanner that cannot tell
+ * the difference opens a block comment that never closes and then counts the
+ * rest of the file as comment. So the line is walked for quotes first, and
+ * a `/*` is only a comment opener when it is not inside one.
+ *
+ * The walk tracks single quotes, double quotes and template literals, and
+ * skips escaped characters. It is deliberately simple: the only question it
+ * has to answer is "are we inside a string at this point?", and a regex
+ * literal (`/a\/*b/`) is not a string — the rare line where that costs a
+ * line of precision is noted in the comment below.
+ *
+ * @param {string} line
+ * @returns {number}
+ */
+export function findCommentOpener(line) {
+  let inSingle = false;
+  let inDouble = false;
+  let inTemplate = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (ch === "\\") {
+      i += 1; // the next character is escaped, whatever it is
+      continue;
+    }
+    if (ch === "'" && !inDouble && !inTemplate) inSingle = !inSingle;
+    else if (ch === '"' && !inSingle && !inTemplate) inDouble = !inDouble;
+    else if (ch === "`" && !inSingle && !inDouble) inTemplate = !inTemplate;
+    else if (ch === "/" && !inSingle && !inDouble && !inTemplate) {
+      if (line[i + 1] === "/") return -1; // a line comment — nothing after it is code
+      if (line[i + 1] === "*") return i;
+    }
+  }
+  return -1;
+}
+
+/**
  * Count one file's lines, classifying each as code, blank or comment.
  *
  * The classification is deliberately conservative about what counts as CODE: a
@@ -118,12 +159,12 @@ export function countFileLines(text, relPath) {
 
     if (inBlock) {
       comment += 1;
-      if (line.includes("*/")) {
+      const close = line.indexOf("*/");
+      if (close !== -1) {
         inBlock = false;
-        // Everything up to and including the FIRST closer is comment; what
+        // Everything up to and including the closer is comment; what
         // follows it is code.
-        const rest = line.replace(/^[^*]*\*\//, "");
-        if (rest.trim() !== "") code += 1;
+        if (line.slice(close + 2).trim() !== "") code += 1;
       }
       continue;
     }
@@ -138,18 +179,28 @@ export function countFileLines(text, relPath) {
       continue;
     }
 
-    if (line.startsWith("/*")) {
-      comment += 1;
-      if (!line.includes("*/")) {
-        inBlock = true;
-      } else {
-        const rest = line.replace(/^[^*]*\*\//, "");
-        if (rest.trim() !== "") code += 1;
-      }
+    const open = findCommentOpener(line);
+    if (open === -1) {
+      code += 1;
       continue;
     }
 
-    code += 1;
+    // The line carries a block comment. Whether it is WHOLELY a comment
+    // depends on whether there is code in front of the opener — a comment
+    // that OPENS AFTER CODE ON THE SAME LINE still opens a comment, and its
+    // body must not count as code.
+    const before = line.slice(0, open);
+    if (before.trim() === "") comment += 1;
+    else code += 1;
+
+    const close = line.indexOf("*/", open + 2);
+    if (close === -1) {
+      // The comment opens here and does not close on this line.
+      inBlock = true;
+      continue;
+    }
+    // It opens and closes on this line: what follows the closer is code.
+    if (line.slice(close + 2).trim() !== "") code += 1;
   }
 
   return { path: relPath, total: lines.length, code, blank, comment };

@@ -135,7 +135,12 @@ if (options.tsv) {
 }
 
 if (options.json) {
-  console.log(
+  // NOT `process.exit(0)` here: stdout is asynchronous when it is a pipe, and
+  // exiting discards whatever has not been flushed — the JSON came out
+  // truncated at the first pipe buffer's worth of bytes, with a zero exit
+  // code and invalid JSON. The script's whole premise is that its output is
+  // evidence, so it has to survive a pipe into `jq`.
+  process.stdout.write(
     JSON.stringify(
       {
         root: options.root,
@@ -152,52 +157,51 @@ if (options.json) {
       },
       null,
       2,
-    ),
+    ) + "\n",
   );
-  process.exit(0);
-}
-
-console.log("Mullion — code-size map");
-console.log(`Root: ${options.root}`);
-console.log("");
-
-console.log("== Per-area totals ==");
-console.log("  Area                                 Files      Code     Total");
-for (const area of summariseByArea(counts)) {
-  console.log(
-    `  ${area.area.padEnd(38)} ${String(area.files).padStart(5)} ${String(area.code).padStart(9)} ${String(area.total).padStart(9)}`,
-  );
-}
-console.log(
-  `  ${"TOTAL".padEnd(38)} ${String(counts.length).padStart(5)} ${String(counts.reduce((n, c) => n + c.code, 0)).padStart(9)} ${String(counts.reduce((n, c) => n + c.total, 0)).padStart(9)}`,
-);
-console.log("");
-
-console.log("== Size histogram (code lines) ==");
-for (const bucket of histogram(counts)) {
-  console.log(`  ${bucket.label.padEnd(12)} ${String(bucket.files).padStart(5)} files`);
-}
-console.log("");
-
-console.log(`== Largest ${options.top} files (code lines) ==`);
-console.log("     Code    Total  Path");
-for (const c of [...counts].sort((a, b) => b.code - a.code).slice(0, options.top)) {
-  console.log(`  ${String(c.code).padStart(7)} ${String(c.total).padStart(8)}  ${c.path}`);
-}
-console.log("");
-
-console.log(`== Non-test files over ${SIZE_CEILING} code lines (${over.length}) ==`);
-for (const c of [...over].sort((a, b) => b.code - a.code)) {
-  console.log(`  ${String(c.code).padStart(7)}  ${c.path}`);
-}
-
-if (options.churn) {
+} else {
+  console.log("Mullion — code-size map");
+  console.log(`Root: ${options.root}`);
   console.log("");
-  console.log("== Churn, last 12 months (production files) ==");
-  console.log("     Added  Commits  Path");
-  for (const entry of churnTable(options.root).slice(0, options.top)) {
+
+  console.log("== Per-area totals ==");
+  console.log("  Area                                 Files      Code     Total");
+  for (const area of summariseByArea(counts)) {
     console.log(
-      `  ${String(entry.added).padStart(7)} ${String(entry.commits).padStart(8)}  ${entry.path}`,
+      `  ${area.area.padEnd(38)} ${String(area.files).padStart(5)} ${String(area.code).padStart(9)} ${String(area.total).padStart(9)}`,
     );
+  }
+  console.log(
+    `  ${"TOTAL".padEnd(38)} ${String(counts.length).padStart(5)} ${String(counts.reduce((n, c) => n + c.code, 0)).padStart(9)} ${String(counts.reduce((n, c) => n + c.total, 0)).padStart(9)}`,
+  );
+  console.log("");
+
+  console.log("== Size histogram (code lines) ==");
+  for (const bucket of histogram(counts)) {
+    console.log(`  ${bucket.label.padEnd(12)} ${String(bucket.files).padStart(5)} files`);
+  }
+  console.log("");
+
+  console.log(`== Largest ${options.top} files (code lines) ==`);
+  console.log("     Code    Total  Path");
+  for (const c of [...counts].sort((a, b) => b.code - a.code).slice(0, options.top)) {
+    console.log(`  ${String(c.code).padStart(7)} ${String(c.total).padStart(8)}  ${c.path}`);
+  }
+  console.log("");
+
+  console.log(`== Non-test files over ${SIZE_CEILING} code lines (${over.length}) ==`);
+  for (const c of [...over].sort((a, b) => b.code - a.code)) {
+    console.log(`  ${String(c.code).padStart(7)}  ${c.path}`);
+  }
+
+  if (options.churn) {
+    console.log("");
+    console.log("== Churn, last 12 months (production files) ==");
+    console.log("     Added  Commits  Path");
+    for (const entry of churnTable(options.root).slice(0, options.top)) {
+      console.log(
+        `  ${String(entry.added).padStart(7)} ${String(entry.commits).padStart(8)}  ${entry.path}`,
+      );
+    }
   }
 }
