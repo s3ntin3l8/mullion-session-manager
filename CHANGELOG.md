@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.3.55](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.54...v0.3.55) (2026-10-31)
+
+
+### Features
+
+* **browser:** turn the browser feature on from Settings → Browser ([9fcb328](https://github.com/s3ntin3l8/mullion-session-manager/commit/9fcb328fffea4ecc86d0f6cb3b08f6f6a6439722))
+* **git:** consistent git identity for agent sessions on every host ([3ce874b](https://github.com/s3ntin3l8/mullion-session-manager/commit/3ce874b8b3e8cb3ddac97b5ac50320b70ac1db47))
+* **github:** add a Refresh button to the GitHub sidebar toolbar ([1785af8](https://github.com/s3ntin3l8/mullion-session-manager/commit/1785af8aa916d9f13278311d4e9dfb06a8c6cbce))
+* **github:** distinguish Task Master tasks from sessions on PR and issue rows ([#2352](https://github.com/s3ntin3l8/mullion-session-manager/issues/2352)) ([38a6731](https://github.com/s3ntin3l8/mullion-session-manager/commit/38a67319530ec9f5a7a7ee444a1ef075b8989f4f))
+* **hosts:** Mullion-owned checkout root and a remote clone endpoint ([#2325](https://github.com/s3ntin3l8/mullion-session-manager/issues/2325)) ([c9e99f9](https://github.com/s3ntin3l8/mullion-session-manager/commit/c9e99f9435df99f7356cdf1a30ce5ab8a2acbd3e))
+* **review-relay:** a Hermes run client and a reply-mode review prompt ([a2152d8](https://github.com/s3ntin3l8/mullion-session-manager/commit/a2152d83191a555de6d1fb9cedef71c4faf17013))
+* **scaffold:** skip skill and reviewer generation on an instructions-only pass ([#2333](https://github.com/s3ntin3l8/mullion-session-manager/issues/2333)) ([ca5330e](https://github.com/s3ntin3l8/mullion-session-manager/commit/ca5330ea7718305ce5519f4efb8227e565b6a0d8))
+* **tasks:** offer the fix-it session from the task drawer, like the sidebar PR view ([4016cea](https://github.com/s3ntin3l8/mullion-session-manager/commit/4016cea6b66c689d5c9389cc1f506a1ac76fa624))
+* **tasks:** PR sidebar offers the full set of task actions ([02191d4](https://github.com/s3ntin3l8/mullion-session-manager/commit/02191d4378bc894ce982bf834b750a72badccf5f))
+* **tasks:** show on the board when a done task's PR is still open and needs a merge ([81c4386](https://github.com/s3ntin3l8/mullion-session-manager/commit/81c4386265293fba8dc920355180190182175b3f))
+* **tasks:** surface Task Master status in the right sidebar GitHub view ([0cc584a](https://github.com/s3ntin3l8/mullion-session-manager/commit/0cc584ab4c3ffd293270abcabaddba72340022bd))
+* **uiux:** make the right sidebar's project picker its header ([a40cb0e](https://github.com/s3ntin3l8/mullion-session-manager/commit/a40cb0e8363164b8fc7bd76a17c86e035f9f5ffa))
+
+
+### Bug Fixes
+
+* **github:** reopening the GitHub sidebar lands on the list, not the last-opened PR ([dadfe1e](https://github.com/s3ntin3l8/mullion-session-manager/commit/dadfe1e384e99d6d0eeee0b5ce46ba1fb5b29a51))
+* **scaffold:** make upsertMarkedRegion drop an orphan marker instead of duplicating the region ([#2331](https://github.com/s3ntin3l8/mullion-session-manager/issues/2331)) ([4ed5b70](https://github.com/s3ntin3l8/mullion-session-manager/commit/4ed5b702d17926a2c70bd5329d243b617f6a9236))
+* **sessions:** sessions started from a PR, issue, branch or worktree ignore the skip-permissions setting ([05cef40](https://github.com/s3ntin3l8/mullion-session-manager/commit/05cef40e367d0c083a4b2feb86480d8da61359b3))
+* **tasks:** close the task drawer after deleting its task ([#2358](https://github.com/s3ntin3l8/mullion-session-manager/issues/2358)) ([843f6ef](https://github.com/s3ntin3l8/mullion-session-manager/commit/843f6ef3389fe1dd926ac058a988bb988a5ac4a6))
+* **tasks:** end the auto-rebase review hold-back early when the rebase worker is done ([ec08938](https://github.com/s3ntin3l8/mullion-session-manager/commit/ec08938eb84f5df328e55d82f77d64ffb8d241fe))
+* **tasks:** GitHub sidebar squash-merge marks the linked task done and archives it ([a20f323](https://github.com/s3ntin3l8/mullion-session-manager/commit/a20f323d21680a72f8b33ecb6cb3699724a6b6d9))
+* **tasks:** hold dispatch of a claimed task until its blockers close ([3c9d7ca](https://github.com/s3ntin3l8/mullion-session-manager/commit/3c9d7ca1986f6e80cf6933e2640353d005a34a43))
+* **tasks:** issue sidebar Start session defers to a queued Task Master task ([a2b35f7](https://github.com/s3ntin3l8/mullion-session-manager/commit/a2b35f74125429cb20e36e7df1c4e5b3efb6cb8a))
+* **tasks:** keep the delete confirm where the Delete task button was ([f3db0f4](https://github.com/s3ntin3l8/mullion-session-manager/commit/f3db0f4bfb25b0b8b4c6c546262a537724b4c5d0))
+* **tasks:** PR sidebar Address changes / Fix conflicts goes through Task Master for a task PR ([7e0898e](https://github.com/s3ntin3l8/mullion-session-manager/commit/7e0898e54ae6fb6ff401cd0d0f13c978d1d95f6e))
+* **tasks:** PR sidebar re-review targets the task's own reviewer, not Hermes ([06abc4a](https://github.com/s3ntin3l8/mullion-session-manager/commit/06abc4a6e5a86a80aec22fae63e0edf52804b4b1))
+* **tasks:** removing Manual: true from an issue body leaves its task parked in backlog ([ebf60e5](https://github.com/s3ntin3l8/mullion-session-manager/commit/ebf60e5aaf6797aa217506e6dcd3b4db662a0fa0))
+* **tasks:** reset auto-approve retry backoff on each new verdict and return to the worker ([2366821](https://github.com/s3ntin3l8/mullion-session-manager/commit/23668213065e0e8918c1ca71cfd328d691bdfe34))
+* **tasks:** show the review and auto-rebase state of a reviewing task ([#2376](https://github.com/s3ntin3l8/mullion-session-manager/issues/2376)) ([9ad92be](https://github.com/s3ntin3l8/mullion-session-manager/commit/9ad92be95699739258890ac68379b5318247265b))
+* **tasks:** treat a red optional CI check as work to fix, not as ready to merge ([#2375](https://github.com/s3ntin3l8/mullion-session-manager/issues/2375)) ([c1cdec7](https://github.com/s3ntin3l8/mullion-session-manager/commit/c1cdec72331b4482f8737a514c63d32b8d5673b1))
+* **uiux:** collapse the task board's ad-hoc sessions lane by default ([172c216](https://github.com/s3ntin3l8/mullion-session-manager/commit/172c216b1ec3d87f530e97080ca5a5ffd72f05d3))
+* **uiux:** GitHub sidebar rows shift layout when hover actions appear ([4867181](https://github.com/s3ntin3l8/mullion-session-manager/commit/48671812502f3c3bdfb040df3275be35084d3a41))
+* **uiux:** the session icon is invisible in the PR action bar and icon tooltips are slow ([8376e59](https://github.com/s3ntin3l8/mullion-session-manager/commit/8376e592acef22da7a0e1c50762eddd909ea8566))
+* **uiux:** theme text inputs, search fields and selects with shared primitives ([e38f656](https://github.com/s3ntin3l8/mullion-session-manager/commit/e38f656519822bfb61321527f3fe3d05d8904171))
+
 ## [0.3.54](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.53...v0.3.54) (2026-10-30)
 
 
