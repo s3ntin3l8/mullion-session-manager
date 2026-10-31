@@ -1074,7 +1074,7 @@ describe("webhook routes", () => {
       const githubWrite = await import("../../src/services/github-write.js");
       const closingSpy = vi
         .spyOn(githubWrite, "getMergedClosingPullRequest")
-        .mockResolvedValue(closingPr);
+        .mockResolvedValue(closingPr ? { number: closingPr, mergedAt: null } : null);
       const writeSpy = vi.spyOn(githubWrite, "createComment").mockResolvedValue(undefined as never);
 
       const [project] = app.db

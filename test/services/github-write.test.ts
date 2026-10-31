@@ -162,7 +162,7 @@ describe("github-write service", () => {
               closedByPullRequestsReferences: {
                 nodes: [
                   { number: 7, merged: false },
-                  { number: 9, merged: true },
+                  { number: 9, merged: true, mergedAt: "2026-10-31" },
                 ],
               },
             },
@@ -170,13 +170,14 @@ describe("github-write service", () => {
         },
       }),
     );
-    expect(await getMergedClosingPullRequest("tok", "owner", "repo", 5)).toBe(9);
+    const hit = await getMergedClosingPullRequest("tok", "owner", "repo", 5);
+    expect(hit).toEqual({ number: 9, merged: true, mergedAt: "2026-10-31" });
     const [url, init] = fetchMock.mock.calls[0] as [string, { body: string }];
     expect(url).toBe("https://api.github.com/graphql");
     expect(JSON.parse(init.body).variables).toEqual({ owner: "owner", repo: "repo", number: 5 });
   });
 
-  it("getMergedClosingPullRequest returns null when no closing PR is merged", async () => {
+  it("getMergedClosingPullRequest returns null when no closing PR is merged or the issue is missing", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(200, {
         data: {
@@ -187,9 +188,7 @@ describe("github-write service", () => {
       }),
     );
     expect(await getMergedClosingPullRequest("tok", "owner", "repo", 5)).toBeNull();
-  });
-
-  it("getMergedClosingPullRequest returns null when the issue or references are missing", async () => {
+    // ...or when the issue itself is missing.
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { data: { repository: { issue: null } } }));
     expect(await getMergedClosingPullRequest("tok", "owner", "repo", 5)).toBeNull();
   });

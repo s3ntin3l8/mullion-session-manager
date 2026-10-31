@@ -333,7 +333,8 @@ that a human later closes after doing the work by hand is completed, not
 failed, when a **merged pull request** closed it: `syncUnlabeledIssueToLocal`
 (poll read-back and the `closed` webhook for `backlog`/`ready` tasks alike)
 looks the closing PR up (`getMergedClosingPullRequest`, GraphQL
-`closedByPullRequestsReferences`), writes `done` + `prNumber`, and records
+`closedByPullRequestsReferences`), writes `done` + `prNumber` + `mergedAt`/`archivedAt` (the PR's merge webhook
+fired before the row had a `prNumber`, so nothing else would), and records
 `via: "github-sync-closed-manually"` with no GitHub write-back. It bypasses
 `canTransition` on purpose — `TASK_TRANSITIONS` gains no `backlog → done`
 edge. Closed without a merged PR (not planned, PR closed unmerged) or a

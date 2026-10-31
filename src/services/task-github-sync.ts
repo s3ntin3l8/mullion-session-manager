@@ -483,7 +483,7 @@ async function findMergedClosingPr(
   app: FastifyInstance,
   task: TaskRow,
   project: ProjectRef,
-): Promise<number | null> {
+): Promise<{ number: number; mergedAt: string | null } | null> {
   try {
     const repoRef = await resolveRepoRef(app, project);
     if (!repoRef) return null;
@@ -575,7 +575,16 @@ export async function syncUnlabeledIssueToLocal(
       // either: the human closed the issue with their own PR.
       const doneUpdate = app.db
         .update(tasks)
-        .set({ status: "done", completedAt: now, prNumber: closingPr })
+        // mergedAt + archivedAt: the PR's merge webhook fired before prNumber
+        // existed on this row, so nothing else will ever record the merge —
+        // without it the board shows "PR open — needs merge" indefinitely.
+        .set({
+          status: "done",
+          completedAt: now,
+          prNumber: closingPr.number,
+          mergedAt: closingPr.mergedAt ? new Date(closingPr.mergedAt) : now,
+          archivedAt: now,
+        })
         .where(and(eq(tasks.id, task.id), eq(tasks.status, task.status)))
         .run();
       if (doneUpdate.changes > 0) {
@@ -585,7 +594,7 @@ export async function syncUnlabeledIssueToLocal(
           from: task.status as TaskStatus,
           to: "done",
           via: "github-sync-closed-manually",
-          context: { issueNumber: task.issueNumber, prNumber: closingPr },
+          context: { issueNumber: task.issueNumber, prNumber: closingPr.number },
         });
       }
       return;

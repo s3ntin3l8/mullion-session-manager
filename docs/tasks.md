@@ -72,7 +72,8 @@ label"` vs. `"GitHub issue was closed"` — even though both route
   `task-github-sync.ts`), so a closed issue doesn't misreport as a label
   problem. The one exception is an issue closed by a **merged pull
   request** (a human did the work by hand — typically a `Manual: true`
-  issue): the task completes as `done` with `prNumber` set to the closing PR
+  issue): the task completes as `done` with `prNumber` set to the closing PR,
+  recorded as merged and archived (no "needs merge" badge)
   (transition `via: "github-sync-closed-manually"`), with no GitHub comment
   or label write-back. A closing-PR lookup that finds nothing or errors
   falls back to `failed`. A task that's already `claimed`/`in_progress`/`reviewing` —
