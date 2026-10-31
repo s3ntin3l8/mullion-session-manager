@@ -3,7 +3,9 @@ import { isTaskBranch, type MullionLinkEntry } from "../hooks/useMullionLinks.js
 import { splitTaskSessions } from "../ui/sidebar/linkDecisions.js";
 import { ATTENTION_ORDER } from "./prPhase.js";
 
-/** Who is working a PR or issue: a Task Master task, a hand-started session, or nobody. */
+/** Who is working a PR or issue: a Task Master task, a hand-started session, or nobody.
+ *  The filter treats everything that is not `"tm"` as Manual (see `matchesOrigin`); the
+ *  `"manual"`/`"none"` split only decides whether the row gets a left-edge marker. */
 export type RowOrigin = "tm" | "manual" | "none";
 export type OriginFilterValue = "all" | "tm" | "manual";
 
