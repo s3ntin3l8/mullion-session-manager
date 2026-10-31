@@ -1277,6 +1277,40 @@ describe("createAgentSandboxHome — credential seeding (issue #2430)", () => {
     }
   });
 
+  it("replaces a credentials file the repo committed under .agent-home with the operator's real one", () => {
+    const real = path.join(realHomeDir, ".claude", ".credentials.json");
+    fs.mkdirSync(path.dirname(real), { recursive: true });
+    fs.writeFileSync(real, '{"claudeAiOauth":{"accessToken":"REAL"}}');
+    const planted = path.join(scratchDir, ".agent-home", ".claude", ".credentials.json");
+    fs.mkdirSync(path.dirname(planted), { recursive: true });
+    fs.writeFileSync(planted, '{"claudeAiOauth":{"accessToken":"ATTACKER-SUPPLIED"}}');
+    const { seeded } = createAgentSandboxHome(scratchDir, "claude");
+    expect(fs.readFileSync(planted, "utf8")).toBe('{"claudeAiOauth":{"accessToken":"REAL"}}');
+    expect(seeded).toEqual([planted]);
+  });
+
+  it("with no real credentials, a planted file is removed and nothing counts as seeded", () => {
+    const planted = path.join(scratchDir, ".agent-home", ".claude", ".credentials.json");
+    fs.mkdirSync(path.dirname(planted), { recursive: true });
+    fs.writeFileSync(planted, '{"claudeAiOauth":{"accessToken":"ATTACKER-SUPPLIED"}}');
+    const { seeded } = createAgentSandboxHome(scratchDir, "claude");
+    expect(seeded).toEqual([]);
+    expect(fs.readFileSync(planted, "utf8")).toBe("");
+  });
+
+  it("persist-back with the seeded list never copies a planted file over the real credentials", () => {
+    const real = path.join(realHomeDir, ".claude", ".credentials.json");
+    const planted = path.join(scratchDir, ".agent-home", ".claude", ".credentials.json");
+    fs.mkdirSync(path.dirname(planted), { recursive: true });
+    fs.writeFileSync(planted, '{"claudeAiOauth":{"accessToken":"ATTACKER-SUPPLIED"}}');
+    fs.mkdirSync(path.dirname(real), { recursive: true });
+    fs.writeFileSync(real, '{"claudeAiOauth":{"accessToken":"REAL"}}');
+    const { fakeHome, seeded } = createAgentSandboxHome(scratchDir, "claude");
+    // Only the file this call seeded (the real credentials) is persisted back.
+    persistAgentSandboxAuth(fakeHome, { files: seeded });
+    expect(fs.readFileSync(real, "utf8")).toBe('{"claudeAiOauth":{"accessToken":"REAL"}}');
+  });
+
   it("creates the sandbox's writable TMPDIR inside the fake HOME", () => {
     const { fakeHome } = createAgentSandboxHome(scratchDir, "claude");
     expect(fs.statSync(path.join(fakeHome, "tmp")).isDirectory()).toBe(true);
@@ -2527,6 +2561,25 @@ describe("persistAgentSandboxAuth — claude credentials (issue #2430)", () => {
     const { real, fake, fakeHome } = setup('{"claudeAiOauth":{"accessToken":"rotated"}}');
     persistAgentSandboxAuth(fakeHome, { files: [fake] });
     expect(fs.readFileSync(real, "utf8")).toBe('{"claudeAiOauth":{"accessToken":"rotated"}}');
+  });
+
+  it("does not read through a symlinked directory in the sandbox HOME", () => {
+    const { real, fakeHome } = setup('{"claudeAiOauth":{"accessToken":"x"}}');
+    const elsewhere = fs.mkdtempSync(path.join(os.tmpdir(), "persist-elsewhere-"));
+    try {
+      fs.writeFileSync(
+        path.join(elsewhere, ".credentials.json"),
+        '{"claudeAiOauth":{"accessToken":"ATTACKER"}}',
+      );
+      fs.rmSync(path.join(fakeHome, ".claude"), { recursive: true });
+      fs.symlinkSync(elsewhere, path.join(fakeHome, ".claude"));
+      persistAgentSandboxAuth(fakeHome, {
+        files: [path.join(fakeHome, ".claude", ".credentials.json")],
+      });
+      expect(fs.readFileSync(real, "utf8")).toBe('{"claudeAiOauth":{"accessToken":"old"}}');
+    } finally {
+      fs.rmSync(elsewhere, { recursive: true, force: true });
+    }
   });
 
   it("never replaces the real credentials with an empty placeholder", () => {

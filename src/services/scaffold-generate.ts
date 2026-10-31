@@ -1280,9 +1280,6 @@ export function ensureSandboxWritablePathsExist(
   }
 }
 
-/** The credential files `createAgentSandboxHome` seeds into the disposable
- * HOME and `persistAgentSandboxAuth` copies back (codex/opencode `auth.json`,
- * claude `.credentials.json`). */
 /** True when `dir`, with every symlink resolved, is still inside `root`. */
 function resolvesInside(root: string, dir: string): boolean {
   try {
@@ -1294,6 +1291,9 @@ function resolvesInside(root: string, dir: string): boolean {
   }
 }
 
+/** The credential files `createAgentSandboxHome` seeds into the disposable
+ * HOME and `persistAgentSandboxAuth` copies back (codex/opencode `auth.json`,
+ * claude `.credentials.json`). */
 function isSeededCredentialFile(file: string): boolean {
   const base = path.basename(file);
   return base === "auth.json" || base === ".credentials.json";
@@ -1330,7 +1330,12 @@ function isSeededCredentialFile(file: string): boolean {
 export function createAgentSandboxHome(
   worktreePath: string,
   agentCommand: string,
-): { fakeHome: string; writablePaths: { dirs: string[]; files: string[] } } {
+): {
+  fakeHome: string;
+  writablePaths: { dirs: string[]; files: string[] };
+  /** The credential files this call actually copied in. */
+  seeded: string[];
+} {
   const fakeHome = path.join(worktreePath, ".agent-home");
   // MUST materialize .agent-home unconditionally — bwrap's `--bind`
   // (unlike `--bind-try`) refuses to start when its source is missing.
@@ -1344,35 +1349,36 @@ export function createAgentSandboxHome(
   // creation below is skipped unless .agent-home now exists: its own
   // `recursive: true` mkdirs would otherwise materialize a missing
   // worktree themselves and mask that failure all the same.
+  // The scratch worktree is a CHECKOUT OF THE PROJECT REPO, so whatever the repo
+  // tracks under `.agent-home` (a symlink, or a planted
+  // `.claude/.credentials.json`) is already there. The sandbox HOME must be
+  // ours alone: remove it first. rmSync does not follow a symlink, it removes
+  // the link itself.
+  try {
+    fs.rmSync(fakeHome, { recursive: true, force: true });
+  } catch {
+    // Fall through — the mkdir below / bwrap's --bind surface a real problem.
+  }
   let homeReady = true;
   try {
     fs.mkdirSync(fakeHome);
-  } catch (err) {
+  } catch {
     // Fall through — bwrap's --bind will produce the real error.
-    homeReady = (err as NodeJS.ErrnoException).code === "EEXIST";
-  }
-  // The scratch worktree is a checkout of the project repo, so `.agent-home`
-  // could be a tracked symlink. Seeding follows links, which would write the
-  // operator's credentials into a directory the repo chose: only a real
-  // directory is used as the sandbox HOME.
-  if (homeReady) {
-    try {
-      homeReady = fs.lstatSync(fakeHome).isDirectory();
-    } catch {
-      homeReady = false;
-    }
+    homeReady = false;
   }
   const writablePaths = agentSandboxWritablePaths(agentCommand, fakeHome);
+  // Credential files THIS call copied in. Only these are ever copied back by
+  // persistAgentSandboxAuth: a file the sandbox merely contains is not ours.
+  const seeded: string[] = [];
   // Seed the real credentials BEFORE ensureSandboxWritablePathsExist: that call
   // creates an empty placeholder for every file in `writablePaths.files` (bwrap
-  // needs a bind source), and the COPYFILE_EXCL copy below then fails with
-  // EEXIST on it, leaving a 0-byte credential file and an unauthenticated agent.
-  // The real credentials, if the agent has any, must win.
+  // needs a bind source), which would otherwise make the COPYFILE_EXCL copy
+  // below fail with EEXIST and leave a 0-byte credential file.
   //
-  // Seed the real credentials from the operator's real HOME if they exist — the
-  // CLI needs valid credentials to reach its model API. If the real file doesn't
-  // exist (fresh host, or an API key in the environment instead), the CLI will
-  // re-prompt or fail at auth, which is the correct degradation; it is logged.
+  // Seed from the operator's real HOME if the file exists — the CLI needs valid
+  // credentials to reach its model API. If it doesn't (fresh host, or an API key
+  // in the environment instead), the CLI will fail at auth, which is the correct
+  // degradation; it is logged.
   const realHome = os.homedir();
   if (homeReady) {
     for (const f of writablePaths.files) {
@@ -1382,19 +1388,20 @@ export function createAgentSandboxHome(
         fs.mkdirSync(path.dirname(f), { recursive: true });
         if (!resolvesInside(fakeHome, path.dirname(f))) continue;
         // COPYFILE_EXCL instead of an existsSync pre-check (CodeQL
-        // js/file-system-race, alert #301): a missing real file throws
-        // ENOENT and an already-seeded sandbox copy throws EEXIST — no
-        // check-then-use window.
+        // js/file-system-race, alert #301): no check-then-use window. The home
+        // was just emptied, so nothing can be in the way.
         fs.copyFileSync(realAuth, f, fs.constants.COPYFILE_EXCL);
+        seeded.push(f);
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
-          console.warn(
-            "[scaffold-generate] no credentials seeded for %s from %s: %s",
-            agentCommand,
-            realAuth,
-            (err as Error).message,
-          );
-        }
+        // ENOENT: the operator has no such file (fresh host, or an API key in
+        // the environment). Anything else is unexpected. Either way the agent
+        // starts unauthenticated, so say so.
+        console.warn(
+          "[scaffold-generate] no credentials seeded for %s from %s: %s",
+          forLog(agentCommand),
+          forLog(realAuth),
+          forLog((err as Error).message),
+        );
       }
     }
     ensureSandboxWritablePathsExist(writablePaths, fakeHome);
@@ -1402,13 +1409,12 @@ export function createAgentSandboxHome(
     // read-only inside the sandbox, and tools such as `tac` (used by the nvm
     // CLI wrapper) write temp files there.
     try {
-      const tmpDir = path.join(fakeHome, "tmp");
-      fs.mkdirSync(tmpDir, { recursive: true });
+      fs.mkdirSync(path.join(fakeHome, "tmp"), { recursive: true });
     } catch {
       // Best-effort — bwrap's own spawn surfaces a real failure.
     }
   }
-  return { fakeHome, writablePaths };
+  return { fakeHome, writablePaths, seeded };
 }
 
 /** Copies any rotated auth.json from the disposable fake HOME back to the
@@ -1455,6 +1461,8 @@ export function persistAgentSandboxAuth(
   const realHome = os.homedir();
   for (const f of writablePaths.files) {
     if (!isSeededCredentialFile(f)) continue;
+    // A link in the sandbox HOME must not make this read an arbitrary file.
+    if (!resolvesInside(fakeHome, path.dirname(f))) continue;
     const realAuth = f.replace(fakeHome, () => realHome);
     try {
       // Read both files first — no pre-flight existsSync check, which
@@ -1676,6 +1684,12 @@ export function redactSecrets(text: string): string {
   return out;
 }
 
+/** A value for a log line: no line breaks, so an agent- or repo-controlled
+ * string cannot forge extra log entries (CodeQL js/log-injection). */
+function forLog(value: unknown): string {
+  return String(value).replace(/[\r\n]+/g, " ⏎ ");
+}
+
 function tail(text: string | Buffer | undefined, max: number): string {
   const t = redactSecrets((text ?? "").toString()).trim();
   return t.length > max ? `…${t.slice(-max)}` : t;
@@ -1843,14 +1857,15 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
     );
   }
   let invocation = { bin, args };
-  let sandboxHome: { fakeHome: string; writablePaths: { files: string[] } } | undefined;
+  let sandboxHome:
+    { fakeHome: string; writablePaths: { files: string[] }; seeded: string[] } | undefined;
   if (sandboxUsable) {
     // Create a disposable HOME inside the scratch worktree so the CLI's
     // writes (state dirs, sqlite, tmp files) land here instead of the
     // operator's real HOME. The fake HOME is seeded with auth.json from
     // the real HOME (if it exists) so the CLI can reach its model API.
-    const { fakeHome, writablePaths } = createAgentSandboxHome(spawnCwd, agentCommand);
-    sandboxHome = { fakeHome, writablePaths };
+    const { fakeHome, writablePaths, seeded } = createAgentSandboxHome(spawnCwd, agentCommand);
+    sandboxHome = { fakeHome, writablePaths, seeded };
     // Spread dirs + files into a flat string[] — wrapWithSandbox and
     // bwrap's --bind-try don't distinguish between them.
     invocation = wrapWithSandbox(
@@ -1878,15 +1893,17 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
       // and failure paths: a turn that crashed after rotating auth still
       // has fresh credentials worth propagating.
       if (sandboxHome) {
-        persistAgentSandboxAuth(sandboxHome.fakeHome, sandboxHome.writablePaths);
+        // Only files this turn seeded are copied back; anything else in the
+        // sandbox HOME is not ours.
+        persistAgentSandboxAuth(sandboxHome.fakeHome, { files: sandboxHome.seeded });
       }
       if (err) {
         console.warn(
-          "[scaffold-generate] %s generation turn failed (%s)\nstdout tail: %s\nstderr tail: %s",
-          agentCommand,
-          describeExit(err),
-          tail(stdout, FAILURE_LOG_TAIL_CHARS),
-          tail(stderr, FAILURE_LOG_TAIL_CHARS),
+          "[scaffold-generate] %s generation turn failed (%s) stdout tail: %s | stderr tail: %s",
+          forLog(agentCommand),
+          forLog(describeExit(err)),
+          forLog(tail(stdout, FAILURE_LOG_TAIL_CHARS)),
+          forLog(tail(stderr, FAILURE_LOG_TAIL_CHARS)),
         );
         reject(new GenerationSpawnError(agentCommand, describeSpawnFailure(err, stdout, stderr)));
         return;
