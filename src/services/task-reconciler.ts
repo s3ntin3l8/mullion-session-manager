@@ -27,6 +27,9 @@ import { resolveTaskMasterConfig } from "./task-config.js";
 // "unknown" (the worktree could not be read) is a state of its own here, not
 // a synonym for "no commits"; see the module's header.
 import { resolveCommitsPastBase } from "./commits-past-base.js";
+// #2416 — one throttle policy for the reconciler's "this state is stuck"
+// warnings, instead of a copy per lookup.
+import { createThrottledWarn } from "./throttled-warn.js";
 // #2416 — the PR's check runs, and whether GitHub answered the lookup. The
 // unstable path needs to tell "no checks" from "couldn't ask"; see the
 // module's header.
@@ -3211,31 +3214,11 @@ async function attemptSelfHealPrTitle(
 // lookup did not answer, so a repo whose `/actions/runs` never answers (a
 // permanent 403/404, not a blip) could never open it with nothing in the log
 // saying so. Warn once per task per hour: this runs every sweep tick.
-const UNSTABLE_RUNS_UNREADABLE_WARN_INTERVAL_MS = 60 * 60_000;
-const MAX_UNSTABLE_RUNS_UNREADABLE_WARN_ENTRIES = 500;
-const unstableRunsUnreadableWarnedAt = new Map<number, number>();
-
-function warnUnstableRunsUnreadable(app: FastifyInstance, taskId: number): void {
-  const now = Date.now();
-  const last = unstableRunsUnreadableWarnedAt.get(taskId);
-  if (last !== undefined && now - last < UNSTABLE_RUNS_UNREADABLE_WARN_INTERVAL_MS) return;
-  if (
-    last === undefined &&
-    unstableRunsUnreadableWarnedAt.size >= MAX_UNSTABLE_RUNS_UNREADABLE_WARN_ENTRIES
-  ) {
-    const oldest = unstableRunsUnreadableWarnedAt.keys().next().value;
-    if (oldest !== undefined) unstableRunsUnreadableWarnedAt.delete(oldest);
-  }
-  unstableRunsUnreadableWarnedAt.set(taskId, now);
-  app.log.warn(
-    { taskId },
-    "task reconcile: the PR is `unstable` but the Actions runs lookup did not answer, so the red-CI return stands down (it would risk pushing while Actions is mid-run); a failing non-Actions check will not return the worker until the lookup answers",
-  );
-}
+const warnUnstableRunsUnreadable = createThrottledWarn(60 * 60_000);
 
 /** Exported for tests only — the throttle state is module-scope. */
 export function resetUnstableRunsUnreadableWarningsForTests(): void {
-  unstableRunsUnreadableWarnedAt.clear();
+  warnUnstableRunsUnreadable.reset();
 }
 
 async function attemptReturnRedCiToWorker(
@@ -3258,7 +3241,12 @@ async function attemptReturnRedCiToWorker(
     current.runsAnswered &&
     current.status !== "in_progress";
   if (current.mergeableState === "unstable" && !current.runsAnswered) {
-    warnUnstableRunsUnreadable(app, task.id);
+    warnUnstableRunsUnreadable(
+      app,
+      task.id,
+      { taskId: task.id },
+      "task reconcile: the PR is `unstable` but the Actions runs lookup did not answer, so the red-CI return stands down (it would risk pushing while Actions is mid-run); a failing non-Actions check will not return the worker until the lookup answers",
+    );
   }
   if (current.status !== "failure" && !unstableOnly) return false;
   if (task.worktreePath === null || task.agentCommand === null) return false;

@@ -15,7 +15,7 @@
 // The reconciler's own test file (test/services/task-reconciler.test.ts)
 // covers the OUTCOMES these gates produce and stays their regression net;
 // this file covers the new part: an unreadable worktree and an unanswered
-// check-runs lookup are told apart from "there is nothing there", and SAYED
+// check-runs lookup are told apart from "there is nothing there", and said
 // — in the log, and (for the merge hold) in the operator's message.
 //
 // The harness is deliberately small: a temp DB, a real app, and the handful

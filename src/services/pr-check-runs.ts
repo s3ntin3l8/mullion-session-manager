@@ -24,6 +24,7 @@ import type { FastifyInstance } from "fastify";
 import type { tasks } from "../db/schema.js";
 import { fetchCheckRunsForHead, type CheckRunResult } from "./github.js";
 import type { GitHubRepoRef } from "./git-remote.js";
+import { createThrottledWarn } from "./throttled-warn.js";
 
 /**
  * The check runs of a PR, and whether GitHub answered the lookup.
@@ -36,10 +37,7 @@ import type { GitHubRepoRef } from "./git-remote.js";
 export type PrCheckRuns = { ok: true; runs: CheckRunResult[] } | { ok: false; detail: string };
 
 /** Once per task per hour — see the header. */
-const UNREADABLE_WARN_INTERVAL_MS = 60 * 60_000;
-/** The throttle map is in-memory only; this bounds it. */
-const MAX_UNREADABLE_WARN_ENTRIES = 500;
-const unreadableWarnedAt = new Map<number, number>();
+const warnUnreadableCheckRuns = createThrottledWarn(60 * 60_000);
 
 /**
  * Reads a PR's check runs, saying whether GitHub answered.
@@ -80,15 +78,9 @@ function warnUnreadable(
   repoRef: GitHubRepoRef,
   detail: string,
 ): void {
-  const now = Date.now();
-  const last = unreadableWarnedAt.get(task.id);
-  if (last !== undefined && now - last < UNREADABLE_WARN_INTERVAL_MS) return;
-  if (last === undefined && unreadableWarnedAt.size >= MAX_UNREADABLE_WARN_ENTRIES) {
-    const oldest = unreadableWarnedAt.keys().next().value;
-    if (oldest !== undefined) unreadableWarnedAt.delete(oldest);
-  }
-  unreadableWarnedAt.set(task.id, now);
-  app.log.warn(
+  warnUnreadableCheckRuns(
+    app,
+    task.id,
     {
       taskId: task.id,
       projectId: task.projectId,
@@ -103,5 +95,5 @@ function warnUnreadable(
 /** Test-only reset — the throttle map is module-level and would otherwise
  * leak state between test cases. */
 export function resetPrCheckRunsWarningsForTests(): void {
-  unreadableWarnedAt.clear();
+  warnUnreadableCheckRuns.reset();
 }

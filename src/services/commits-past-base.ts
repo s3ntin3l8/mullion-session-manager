@@ -28,6 +28,7 @@
 import type { FastifyInstance } from "fastify";
 import type { tasks } from "../db/schema.js";
 import { resolveHostGitStatus } from "./host-git.js";
+import { createThrottledWarn } from "./throttled-warn.js";
 
 /**
  * The three states of "has the worker moved HEAD past baseSha".
@@ -42,10 +43,7 @@ export type CommitsPastBase =
   { state: "ahead" } | { state: "none" } | { state: "unknown"; detail: string };
 
 /** Once per task per hour — see `unknownVerdict`. */
-const UNKNOWN_WARN_INTERVAL_MS = 60 * 60_000;
-/** The throttle map is in-memory only; this bounds it. */
-const MAX_UNKNOWN_WARN_ENTRIES = 500;
-const unknownWarnedAt = new Map<number, number>();
+const warnUnknownVerdict = createThrottledWarn(60 * 60_000);
 
 /**
  * Whether the task's worktree has commits past the task's base SHA.
@@ -114,30 +112,23 @@ function unknownVerdict(
   hostId: string,
   detail: string,
 ): CommitsPastBase {
-  const now = Date.now();
-  const last = unknownWarnedAt.get(task.id);
-  if (last === undefined && unknownWarnedAt.size >= MAX_UNKNOWN_WARN_ENTRIES) {
-    const oldest = unknownWarnedAt.keys().next().value;
-    if (oldest !== undefined) unknownWarnedAt.delete(oldest);
-  }
-  if (last === undefined || now - last >= UNKNOWN_WARN_INTERVAL_MS) {
-    unknownWarnedAt.set(task.id, now);
-    app.log.warn(
-      {
-        taskId: task.id,
-        projectId: task.projectId,
-        hostId,
-        worktreePath: task.worktreePath,
-        detail,
-      },
-      "task reconcile: could not read the worktree's git status — the commits are unknown, not 'no commits'",
-    );
-  }
+  warnUnknownVerdict(
+    app,
+    task.id,
+    {
+      taskId: task.id,
+      projectId: task.projectId,
+      hostId,
+      worktreePath: task.worktreePath,
+      detail,
+    },
+    "task reconcile: could not read the worktree's git status — the commits are unknown, not 'no commits'",
+  );
   return { state: "unknown", detail };
 }
 
 /** Test-only reset — the throttle map is module-level and would otherwise
  * leak state between test cases. */
 export function resetUnknownVerdictWarningsForTests(): void {
-  unknownWarnedAt.clear();
+  warnUnknownVerdict.reset();
 }
