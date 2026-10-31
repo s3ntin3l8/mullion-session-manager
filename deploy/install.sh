@@ -955,7 +955,8 @@ elif [ "$PLATFORM_KIND" = "launchd" ]; then
       launchctl bootout "$(launchd_gui_domain)/$OTHER_LABEL" ||
         echo "WARNING: failed to boot out $OTHER_LABEL — it may still be running and could collide on PORT until stopped by hand (launchctl bootout $(launchd_gui_domain)/$OTHER_LABEL)." >&2
     fi
-    rm -f ~/Library/LaunchAgents/"$OTHER_LABEL.plist" 2>/dev/null || true
+    rm -f ~/Library/LaunchAgents/"$OTHER_LABEL.plist" ||
+      echo "WARNING: failed to remove $HOME/Library/LaunchAgents/$OTHER_LABEL.plist — the $OTHER_LABEL job definition is still on disk and may start again at login; delete it by hand (rm $HOME/Library/LaunchAgents/$OTHER_LABEL.plist)." >&2
   fi
 
   # `launchctl bootstrap` refuses a label that is ALREADY loaded
