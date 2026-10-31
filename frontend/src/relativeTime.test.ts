@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { formatRelativeAge } from "./relativeTime.js";
+import { formatRelativeAge, formatRelativeUntil } from "./relativeTime.js";
 
 // Hermes review, PR #130: formatRelativeAge previously had only implicit
 // coverage via NotificationBell's own tests — now that it's a shared
@@ -66,5 +66,22 @@ describe("formatRelativeAge", () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     expect(formatRelativeAge(NOW + 60_000)).toBe("just now");
+  });
+});
+
+describe("formatRelativeUntil", () => {
+  const NOW = 1_700_000_000_000;
+  afterEach(() => vi.useRealTimers());
+
+  it.each([
+    [-5 * 60_000, "any moment"],
+    [30_000, "any moment"],
+    [12 * 60_000, "in 12m"],
+    [3 * 3_600_000, "in 3h"],
+    [2 * 86_400_000, "in 2d"],
+  ])("renders %ims ahead as %s", (ahead, expected) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    expect(formatRelativeUntil(NOW + ahead)).toBe(expected);
   });
 });

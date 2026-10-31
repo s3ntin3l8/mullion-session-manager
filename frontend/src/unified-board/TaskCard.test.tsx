@@ -633,6 +633,36 @@ describe("UnifiedBoard task columns", () => {
     });
   });
 
+  describe("a reviewing task with no live review session", () => {
+    it("explains the auto-rebase hold-back instead of looking idle", () => {
+      tasks = [
+        makeTask({
+          id: 1,
+          status: "reviewing",
+          reviewPhase: "rebasing",
+          reReviewAt: Date.now() + 10 * 60_000,
+          reviewFindings: "## Round 1\n\n**Verdict:** approved — ok",
+        }),
+      ];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.getByRole("status")).toHaveTextContent(
+        /Reviewed, then conflicted with main — auto-rebasing; re-review starts in 10m at the latest/,
+      );
+    });
+
+    it("stays quiet for the no-reviewer config: every reviewing task of such a project would carry the line", () => {
+      tasks = [makeTask({ id: 1, status: "reviewing", reviewPhase: "no-reviewer" })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.queryByRole("status")).toBeNull();
+    });
+
+    it("says a review is waiting to start when nothing holds it back", () => {
+      tasks = [makeTask({ id: 1, status: "reviewing", reviewPhase: "awaiting-review" })];
+      render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+      expect(screen.getByRole("status")).toHaveTextContent("Waiting for the review to start");
+    });
+  });
+
   describe("where the task will run (#2236)", () => {
     const hostChip = () => document.querySelector(".task-card-host");
 

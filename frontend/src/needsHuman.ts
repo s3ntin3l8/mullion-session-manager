@@ -1,3 +1,5 @@
+import { formatRelativeUntil } from "./relativeTime.js";
+
 // Why Task Master's automatic review loop stopped and is waiting on a human —
 // the board card and the task drawer share this wording so they can't drift.
 // `null`/"cap" is the original (and still most common) reason: the round cap.
@@ -47,4 +49,27 @@ export function approvalStateText(state: ApprovalState, rounds: number): string 
       : "approved, auto-approving once CI is green";
   if (rounds > 0) return `Round ${rounds + 1} · ${what}`;
   return what.charAt(0).toUpperCase() + what.slice(1);
+}
+
+// A `reviewing` task with no live review session is waiting, not stuck — the
+// server derives why (`reviewPhase`, services/task-approval-state.ts). Shared
+// by the board card and the drawer. `hadReview` = a previous round's findings
+// exist, i.e. the review was cleared by an auto-rebase rather than never run.
+// Null when the task is not in either waiting phase.
+export function reviewPhaseText(
+  phase: "rebasing" | "awaiting-review" | "no-reviewer" | null | undefined,
+  reReviewAt: number | null | undefined,
+  hadReview: boolean,
+): string | null {
+  if (phase === "rebasing") {
+    // The hold-back ends as soon as the rebase worker's work is finished, so
+    // the window's end is the latest the re-review can start, not the time.
+    const when = reReviewAt ? ` ${formatRelativeUntil(reReviewAt)} at the latest` : "";
+    return `${hadReview ? "Reviewed, then conflicted with main — " : "Conflicted with main — "}auto-rebasing; re-review starts${when}`;
+  }
+  if (phase === "awaiting-review") return "Waiting for the review to start";
+  if (phase === "no-reviewer") {
+    return "No review agent is configured for this task — nothing will start a review, so a human reviews it";
+  }
+  return null;
 }

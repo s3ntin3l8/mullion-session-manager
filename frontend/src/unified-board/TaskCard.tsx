@@ -10,7 +10,12 @@ import { sessionPrDotClass } from "../lib/sidebarStatus.js";
 import { rowClassNameForSeverity } from "../sessionStatus.js";
 import { BlockedIcon, BotIcon, ClockIcon, GitHubIcon, WarningTriangleIcon } from "../ui/icons.js";
 import { formatRelativeAge } from "../relativeTime.js";
-import { approvalStateText, ciGatingUnavailableText, needsHumanText } from "../needsHuman.js";
+import {
+  approvalStateText,
+  ciGatingUnavailableText,
+  needsHumanText,
+  reviewPhaseText,
+} from "../needsHuman.js";
 import { describeTaskHost } from "../lib/hostBadge.js";
 import { parseWorkflowChange, visibleTaskSyncError } from "../workflowChange.js";
 import { awaitingMergeReason, isAwaitingMerge } from "./awaitingMerge.js";
@@ -193,6 +198,12 @@ export function TaskCard({
   // has actually landed on the PR (autoReturnCapAnnouncedAt non-null). Below
   // that point it's still working, same bucket as reviewInFlight below.
   const capAnnounced = task.autoReturnCapAnnouncedAt !== null;
+  // Computed once per render: each call re-reads Date.now() for the relative time.
+  const phaseText = reviewPhaseText(
+    task.reviewPhase,
+    task.reReviewAt,
+    task.reviewFindings !== null,
+  );
 
   // #2108 — the push is held until the operator approves a change to
   // .github/workflows/. The approval control lives in the task drawer, so this
@@ -463,6 +474,14 @@ export function TaskCard({
           {task.dispatchFailingSince &&
             ` (${formatRelativeAge(Date.parse(task.dispatchFailingSince))})`}
           : {task.failureReason}
+        </div>
+      )}
+      {/* A reviewing task with no live review session is waiting, not stuck:
+          after an auto-rebase the fresh reviewer is held back for a while,
+          and nothing else on the card says so. */}
+      {task.status === "reviewing" && task.reviewPhase !== "no-reviewer" && phaseText && (
+        <div className="task-card-review-round" role="status">
+          {phaseText}
         </div>
       )}
       {/* D5 — "sent back to the worker" is the single most useful fact

@@ -27,7 +27,12 @@ import type { MullionLinkEntry } from "./hooks/useMullionLinks.js";
 import { decideSessionAction } from "./ui/sidebar/linkDecisions.js";
 import { Markdown } from "./ui/Markdown.js";
 import { STATUS_PRESENTATION, formatStatusLabel } from "./sessionStatus.js";
-import { approvalStateText, ciGatingUnavailableText, needsHumanText } from "./needsHuman.js";
+import {
+  approvalStateText,
+  ciGatingUnavailableText,
+  needsHumanText,
+  reviewPhaseText,
+} from "./needsHuman.js";
 import { describeTaskHost } from "./lib/hostBadge.js";
 import { parseReviewRounds } from "./lib/reviewRounds.js";
 import { parseWorkflowChange, visibleTaskSyncError } from "./workflowChange.js";
@@ -55,12 +60,17 @@ function SessionAttentionBanner({
   role,
   session,
   onOpenSession,
+  rebasing = false,
 }: {
   role: "Worker" | "Review";
   session: Session | undefined;
   onOpenSession: (session: Session) => void;
+  // The worker is an auto-rebase worker: its "Finished" is the expected end
+  // of its job, and the task's own review-phase line explains what's next.
+  rebasing?: boolean;
 }) {
   if (!session || !session.sessionStatusAttentionRequired) return null;
+  if (rebasing && session.sessionStatus === "finished") return null;
   return (
     <div className="task-detail-session-attention">
       <TerminalPromptIcon size={12} />
@@ -221,6 +231,12 @@ export function TaskDetail({
     hosts ?? [],
   );
   const reviewRounds = parseReviewRounds(task.reviewFindings);
+  // Computed once per render: each call re-reads Date.now() for the relative time.
+  const phaseText = reviewPhaseText(
+    task.reviewPhase,
+    task.reReviewAt,
+    task.reviewFindings !== null,
+  );
 
   const agentOptions = Array.from(
     new Map(agentLaunchers.map((l) => [normalizeAgentId(l.id), l.title])).entries(),
@@ -559,7 +575,12 @@ export function TaskDetail({
           on sessionStatusAttentionRequired so a routine "working"/"idle"
           session stays silent here, matching the failureReason/
           githubSyncError/blockedState banners below. */}
-      <SessionAttentionBanner role="Worker" session={workerSession} onOpenSession={onOpenSession} />
+      <SessionAttentionBanner
+        role="Worker"
+        session={workerSession}
+        onOpenSession={onOpenSession}
+        rebasing={task.reviewPhase === "rebasing"}
+      />
       <SessionAttentionBanner role="Review" session={reviewSession} onOpenSession={onOpenSession} />
 
       {/* #485 — independent of status: a task can be happily in_progress
@@ -669,9 +690,19 @@ export function TaskDetail({
         <SessionTimeline params={{ sessionIds: task.sessionId !== null ? [task.sessionId] : [] }} />
       </div>
 
-      {task.reviewSessionId !== null && (
+      {(task.reviewSessionId !== null || task.reviewFindings !== null || task.reviewPhase) && (
         <div className="task-detail-section task-detail-review-section">
-          <div className="task-detail-section-title">Review</div>
+          <div className="task-detail-section-title">
+            {task.reviewSessionId === null && task.reviewFindings !== null
+              ? "Review (previous round)"
+              : "Review"}
+          </div>
+          {phaseText && (
+            <div className="task-detail-review-round" role="status">
+              {phaseText}
+              {task.rebaseAttempts > 1 && ` (rebase attempt ${task.rebaseAttempts})`}
+            </div>
+          )}
           {/* Issue #1038 — three states, not two: capped-but-not-announced
               (autoReturnCapped true, capAnnounced false) still means a
               worker session or the confirming review may be actively
@@ -766,7 +797,9 @@ export function TaskDetail({
               <Markdown text={task.reviewFindings} className="task-detail-review-findings" />
             )
           )}
-          <SessionTimeline params={{ sessionIds: [task.reviewSessionId] }} />
+          {task.reviewSessionId !== null && (
+            <SessionTimeline params={{ sessionIds: [task.reviewSessionId] }} />
+          )}
         </div>
       )}
 

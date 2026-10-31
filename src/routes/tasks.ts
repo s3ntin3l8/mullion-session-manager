@@ -3,6 +3,8 @@ import { and, eq, inArray, isNull, isNotNull } from "drizzle-orm";
 import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
 import {
   deriveApprovalState,
+  deriveReviewPhase,
+  type ReviewPhaseResult,
   type ApprovalState,
   type ApprovalStateRow,
 } from "../services/task-approval-state.js";
@@ -23,9 +25,11 @@ import {
 } from "../services/task-github-sync.js";
 import { deriveTaskBranchName } from "../services/git-worktree.js";
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
+import { resolveReviewAgentCommand } from "../services/task-agent-resolve.js";
 import { closeDraftPRForTask } from "../services/task-promote.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "../services/task-approve.js";
 import {
+  REBASE_ATTEMPT_STALE_MS,
   resetAutoApproveBackoff,
   resetMergeBackoff,
   resolveMaxAutoReturnRounds,
@@ -195,6 +199,10 @@ const TASK_ROW_COLUMNS = {
   // to any API response.
   reviewFindingsIngestedSessionId: tasks.reviewFindingsIngestedSessionId,
   reviewFindings: tasks.reviewFindings,
+  // How many auto-rebases the task has been through (the drawer says so).
+  // `rebaseStartedAt`, which `reviewPhase`/`reReviewAt` are derived from, is
+  // selected further down with the merge-sweep columns.
+  rebaseAttempts: tasks.rebaseAttempts,
   // #756 — renamed from reviewRounds: this counter is no longer
   // review-verdict-only (a red CI check and an unresolved PR
   // review comment are later auto-return triggers on the same model — see
@@ -224,8 +232,9 @@ const TASK_ROW_COLUMNS = {
   // withBlockedState just below. Raw per-project config has no reason to
   // leak into a task response; the frontend only needs the yes/no answer.
   projectMaxAutoReturnRounds: projects.maxAutoReturnRounds,
-  // Read only to derive `approvalState` (withApprovalState strips it).
+  // Read only to derive `approvalState` / `reviewPhase` (withApprovalState strips them).
   projectAutoApprove: projects.autoApprove,
+  projectDefaultReviewAgent: projects.defaultReviewAgent,
   worktreePath: tasks.worktreePath,
   branchName: tasks.branchName,
   baseSha: tasks.baseSha,
@@ -374,12 +383,46 @@ function withAutoReturnCapped<
 
 // #2234 — the board's `approvalState`; the derivation lives in
 // services/task-approval-state.ts so the #2252 push shares it.
-function withApprovalState<T extends ApprovalStateRow>(
+function withApprovalState<
+  T extends ApprovalStateRow & {
+    rebaseStartedAt: Date | null;
+    worktreePath: string | null;
+    reviewAgent: string | null;
+    body: string | null;
+    projectDefaultReviewAgent: string | null;
+  },
+>(
+  app: FastifyInstance,
   row: T,
   taskMasterEnabled: boolean,
-): Omit<T, "projectAutoApprove"> & { approvalState: ApprovalState | null } {
-  const { projectAutoApprove: _projectAutoApprove, ...rest } = row;
-  return { ...rest, approvalState: deriveApprovalState(row, taskMasterEnabled) };
+): Omit<T, "projectAutoApprove" | "projectDefaultReviewAgent"> & {
+  approvalState: ApprovalState | null;
+} & ReviewPhaseResult {
+  const {
+    projectAutoApprove: _projectAutoApprove,
+    projectDefaultReviewAgent: _projectDefaultReviewAgent,
+    ...rest
+  } = row;
+  // Only a reviewing task with no live review session can carry a phase.
+  // Resolving the reviewer is an uncached settings read per call, and this runs
+  // for every row of the polled task list (done and archived included), so the
+  // cheap checks come first.
+  const canCarryPhase = row.status === "reviewing" && row.reviewSessionId === null;
+  return {
+    ...rest,
+    approvalState: deriveApprovalState(row, taskMasterEnabled),
+    ...deriveReviewPhase(row, REBASE_ATTEMPT_STALE_MS, {
+      taskMasterEnabled,
+      // The same resolution the spawn pass uses (processPendingReviewSpawns).
+      reviewerConfigured:
+        canCarryPhase &&
+        resolveReviewAgentCommand(app, {
+          taskReviewAgent: row.reviewAgent,
+          issueBody: row.body,
+          projectDefaultReviewAgent: row.projectDefaultReviewAgent,
+        }) !== null,
+    }),
+  };
 }
 
 // The task drawer's surface for the second silent-fallback layer #761 left:
@@ -454,6 +497,7 @@ export async function tasksRoute(app: FastifyInstance) {
       return rows.map((row) =>
         withBlockedState(
           withApprovalState(
+            app,
             withAutoReturnCapped(withPrTitleFallback(row), installCap),
             taskMasterEnabled,
           ),
@@ -478,6 +522,7 @@ export async function tasksRoute(app: FastifyInstance) {
     return row
       ? withBlockedState(
           withApprovalState(
+            app,
             withAutoReturnCapped(withPrTitleFallback(row), taskMaster.maxAutoReturnRounds),
             taskMaster.enabled,
           ),
