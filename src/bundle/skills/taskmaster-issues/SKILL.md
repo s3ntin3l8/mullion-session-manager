@@ -167,16 +167,16 @@ directive that merely appears in prose (e.g. "remember to set `Agent:
 claude`") is deliberately not picked up, only a line matching exactly
 (whitespace aside):
 
-| Directive                 | Effect                                                                           |
-| ------------------------- | -------------------------------------------------------------------------------- |
-| `Manual: true`            | Ingests to `backlog`, not `ready` — never auto-claimed. Still claimable by hand. |
-| `Agent: <name>`           | Which worker agent claims this task.                                             |
-| `ReviewAgent: <name>`     | Which agent reviews the diff. `none`/`false` disables review.                    |
-| `Model: <model>`          | Implementer model override — every claimable agent, not just opencode.           |
-| `Reviewer-Model: <model>` | Reviewer model — every agent; falls back to `Model:` if unset.                   |
-| `SmallModel: <model>`     | opencode and claude only — lightweight small/fast model; inert on codex/agy.     |
-| `Platform: <os>`          | The task must run on a host of that platform (`darwin`, `linux`, `win32`).       |
-| `Host: <host id>`         | The task must run on exactly that host. With `Platform:`, both must hold.        |
+| Directive                 | Effect                                                                                                                                                                                                           |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Manual: true`            | Ingests to `backlog`, not `ready` — never auto-claimed. Still claimable by hand. Deleting the line later moves a still-parked task to `ready` on the next sync; otherwise `backlog` → `ready` is a human action. |
+| `Agent: <name>`           | Which worker agent claims this task.                                                                                                                                                                             |
+| `ReviewAgent: <name>`     | Which agent reviews the diff. `none`/`false` disables review.                                                                                                                                                    |
+| `Model: <model>`          | Implementer model override — every claimable agent, not just opencode.                                                                                                                                           |
+| `Reviewer-Model: <model>` | Reviewer model — every agent; falls back to `Model:` if unset.                                                                                                                                                   |
+| `SmallModel: <model>`     | opencode and claude only — lightweight small/fast model; inert on codex/agy.                                                                                                                                     |
+| `Platform: <os>`          | The task must run on a host of that platform (`darwin`, `linux`, `win32`).                                                                                                                                       |
+| `Host: <host id>`         | The task must run on exactly that host. With `Platform:`, both must hold.                                                                                                                                        |
 
 Matching rules, all eight:
 

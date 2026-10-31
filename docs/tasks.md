@@ -242,7 +242,12 @@ waiting for a free concurrency slot. It never holds a session; see the
   tracking epic, not leaf work: dispatching it produces a zero-commit
   turn), in either of which cases it lands in `backlog` instead. This is
   the opt-out: an ingested issue is autonomous by default, matching the
-  "make this production-grade and auto-claimable" goal. An issue that
+  "make this production-grade and auto-claimable" goal. Deleting the
+  `Manual: true` line from the issue body later is the one edit that
+  promotes: the sync that sees the directive disappear moves a task still
+  parked in `backlog` (no session, not an epic with open sub-issues) to
+  `ready`, and the transition is recorded as `github-sync-manual-removed`.
+  Any other `backlog` → `ready` move is a human action. An issue that
   _gains_ open sub-issues after already being ingested `ready` is demoted
   back to `backlog` the same way, but only while it's still untouched
   (`ready`, no session ever attached) — a task already claimed or further

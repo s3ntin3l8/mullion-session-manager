@@ -20,7 +20,7 @@ vi.mock("../../src/services/task-events.js", () => ({
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
-const { tasks } = await import("../../src/db/schema.js");
+const { tasks, sessions } = await import("../../src/db/schema.js");
 const { upsertIssueTask } = await import("../../src/services/task-watcher.js");
 const { FAILURE_REASON_LABEL_LOST, FAILURE_REASON_ISSUE_CLOSED } =
   await import("../../src/services/task-github-sync.js");
@@ -744,6 +744,129 @@ describe("upsertIssueTask (#490a)", () => {
 
       expect(rowFor(955).status).toBe("claimed");
       expect(mockBroadcastTaskEvent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("Manual: true removal promotes a parked task", () => {
+    const base = { htmlUrl: "https://x/970", authorAssociation: "OWNER" };
+    const MANUAL = "Spec.\nManual: true\n";
+    const issue = (number: number, body: string | null, extra: object = {}) => ({
+      ...base,
+      number,
+      title: `Issue ${number}`,
+      body,
+      ...extra,
+    });
+    function rowFor(issueNumber: number) {
+      const [row] = app.db
+        .select()
+        .from(tasks)
+        .where(and(eq(tasks.projectId, projectId), eq(tasks.issueNumber, issueNumber)))
+        .all();
+      return row;
+    }
+    const transitions = () =>
+      mockBroadcastTaskEvent.mock.calls.filter(([e]) => e.kind === "transition").map(([e]) => e);
+
+    it("the edit that removes the directive moves backlog to ready and records the transition", () => {
+      upsertIssueTask(app, projectId, issue(970, MANUAL));
+      expect(rowFor(970).status).toBe("backlog");
+      mockBroadcastTaskEvent.mockClear();
+
+      upsertIssueTask(app, projectId, issue(970, "Spec.\n"));
+
+      const row = rowFor(970);
+      expect(row.status).toBe("ready");
+      expect(transitions()).toEqual([
+        expect.objectContaining({ taskId: row.id, from: "backlog", to: "ready" }),
+      ]);
+    });
+
+    it("a re-sighting that leaves the directive in place does not promote", () => {
+      upsertIssueTask(app, projectId, issue(971, MANUAL));
+      upsertIssueTask(app, projectId, issue(971, `${MANUAL}more`));
+      expect(rowFor(971).status).toBe("backlog");
+    });
+
+    it("a later re-sighting does not promote a task a human moved back to backlog", () => {
+      upsertIssueTask(app, projectId, issue(972, MANUAL));
+      upsertIssueTask(app, projectId, issue(972, "Spec.\n"));
+      expect(rowFor(972).status).toBe("ready");
+      app.db
+        .update(tasks)
+        .set({ status: "backlog" })
+        .where(eq(tasks.id, rowFor(972).id))
+        .run();
+      mockBroadcastTaskEvent.mockClear();
+
+      upsertIssueTask(app, projectId, issue(972, "Spec.\nedited"));
+
+      expect(rowFor(972).status).toBe("backlog");
+      expect(transitions()).toEqual([]);
+    });
+
+    it("leaves a task that is not in backlog untouched", () => {
+      upsertIssueTask(app, projectId, issue(973, MANUAL));
+      app.db
+        .update(tasks)
+        .set({ status: "claimed" })
+        .where(eq(tasks.id, rowFor(973).id))
+        .run();
+      mockBroadcastTaskEvent.mockClear();
+
+      upsertIssueTask(app, projectId, issue(973, "Spec.\n"));
+
+      expect(rowFor(973).status).toBe("claimed");
+      expect(transitions()).toEqual([]);
+    });
+
+    it("leaves a backlog task that already has a session untouched", () => {
+      upsertIssueTask(app, projectId, issue(974, MANUAL));
+      const [session] = app.db
+        .insert(sessions)
+        .values({ projectId, command: "bash", status: "active" })
+        .returning()
+        .all();
+      app.db
+        .update(tasks)
+        .set({ sessionId: session.id })
+        .where(eq(tasks.id, rowFor(974).id))
+        .run();
+      mockBroadcastTaskEvent.mockClear();
+
+      upsertIssueTask(app, projectId, issue(974, "Spec.\n"));
+
+      expect(rowFor(974).status).toBe("backlog");
+      expect(transitions()).toEqual([]);
+    });
+
+    it("keeps an epic with open sub-issues parked", () => {
+      upsertIssueTask(app, projectId, issue(975, MANUAL));
+      mockBroadcastTaskEvent.mockClear();
+
+      upsertIssueTask(
+        app,
+        projectId,
+        issue(975, "Spec.\n", { subIssues: { total: 2, completed: 1 } }),
+      );
+
+      expect(rowFor(975).status).toBe("backlog");
+      expect(transitions()).toEqual([]);
+    });
+
+    it("an unrelated body edit on a task that never had the directive is a no-op", () => {
+      upsertIssueTask(app, projectId, issue(976, "Spec.\n"));
+      app.db
+        .update(tasks)
+        .set({ status: "backlog" })
+        .where(eq(tasks.id, rowFor(976).id))
+        .run();
+      mockBroadcastTaskEvent.mockClear();
+
+      upsertIssueTask(app, projectId, issue(976, "Spec, edited.\n"));
+
+      expect(rowFor(976).status).toBe("backlog");
+      expect(transitions()).toEqual([]);
     });
   });
 });
