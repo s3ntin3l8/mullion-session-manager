@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { fileURLToPath } from "node:url";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
+import { pinnedPath } from "../helpers/pinned-path.js";
 
 // Issue #407's checklist item "CLI end-to-end": `mullion config`,
 // `mullion ps --json`, `mullion session create`, `mullion logs`,
@@ -72,7 +73,7 @@ function runCli(
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = realSpawn(process.execPath, [MULLION_PATH, ...args], {
-      env: { PATH: process.env.PATH ?? "", MULLION_SOCKET_PATH: socketPath },
+      env: { PATH: pinnedPath(), MULLION_SOCKET_PATH: socketPath },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -95,7 +96,7 @@ function runCliUntilInterrupted(
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = realSpawn(process.execPath, [MULLION_PATH, ...args], {
-      env: { PATH: process.env.PATH ?? "", MULLION_SOCKET_PATH: socketPath },
+      env: { PATH: pinnedPath(), MULLION_SOCKET_PATH: socketPath },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
