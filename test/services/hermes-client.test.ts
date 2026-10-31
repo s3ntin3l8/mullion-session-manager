@@ -262,8 +262,16 @@ describe("hermes client", () => {
     const target = { owner: "Acme", repo: "Widgets", prNumber: 7, headSha: "h1", baseSha: "b0" };
 
     it("keys and sessions are distinct from the relay's", () => {
-      const key = taskReviewIdempotencyKey(target, { taskId: 5, round: 2, rearms: 1 });
-      expect(key).toBe("mullion-task-review:acme/widgets#7:t5:r2:x1@b0..h1");
+      const key = taskReviewIdempotencyKey(target, {
+        taskId: 5,
+        round: 2,
+        rearms: 1,
+        enteredAt: 100,
+      });
+      expect(key).toBe("mullion-task-review:acme/widgets#7:t5:r2:x1:e100@b0..h1");
+      expect(
+        taskReviewIdempotencyKey(target, { taskId: 5, round: 2, rearms: 1, enteredAt: 101 }),
+      ).not.toBe(key);
       expect(key).not.toBe(reviewIdempotencyKey("acme", "widgets", 7, "b0", "h1"));
       expect(taskReviewSessionId({ taskId: 5, round: 2 })).toBe("mullion-task-5-r2");
       expect(taskReviewSessionId({ taskId: 5, round: 2 })).not.toBe(
@@ -272,9 +280,9 @@ describe("hermes client", () => {
       expect(
         taskReviewIdempotencyKey(
           { ...target, baseSha: undefined },
-          { taskId: 5, round: 1, rearms: 0 },
+          { taskId: 5, round: 1, rearms: 0, enteredAt: 7 },
         ),
-      ).toBe("mullion-task-review:acme/widgets#7:t5:r1:x0@..h1");
+      ).toBe("mullion-task-review:acme/widgets#7:t5:r1:x0:e7@..h1");
     });
 
     it("builds a read-only message without the post-as-App paragraph", () => {
@@ -302,6 +310,7 @@ describe("hermes client", () => {
         taskId: 5,
         round: 1,
         rearms: 0,
+        enteredAt: 50,
         target,
         prompt: "P",
         model: "m",
@@ -309,7 +318,7 @@ describe("hermes client", () => {
       expect(out).toMatchObject({
         runId: "run_9",
         sessionId: "mullion-task-5-r1",
-        idempotencyKey: "mullion-task-review:acme/widgets#7:t5:r1:x0@b0..h1",
+        idempotencyKey: "mullion-task-review:acme/widgets#7:t5:r1:x0:e50@b0..h1",
       });
       const post = fetchMock.mock.calls.find(([u]) => u === `${API}/v1/runs`)!;
       expect(JSON.parse(post[1].body)).toMatchObject({
@@ -332,7 +341,14 @@ describe("hermes client", () => {
     it("does not dispatch when the health check fails", async () => {
       route = async () => new Response("", { status: 500 });
       await expect(
-        dispatchTaskReview(app, { taskId: 5, round: 1, rearms: 0, target, prompt: "P" }),
+        dispatchTaskReview(app, {
+          taskId: 5,
+          round: 1,
+          rearms: 0,
+          enteredAt: 1,
+          target,
+          prompt: "P",
+        }),
       ).rejects.toBeInstanceOf(HermesUnavailableError);
       expect(fetchMock).toHaveBeenCalledTimes(1);
     });

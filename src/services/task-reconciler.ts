@@ -1011,6 +1011,11 @@ async function processHermesDispatch(app: FastifyInstance): Promise<void> {
           taskId: task.id,
           round: task.autoReturnRounds,
           rearms: task.inconclusiveReviewRearmCount,
+          // Every path into `reviewing` stamps `reviewingAt`; the fallbacks
+          // keep the key defined if one ever does not.
+          enteredAt: Math.floor(
+            (task.reviewingAt ?? task.claimedAt ?? task.createdAt).getTime() / 1000,
+          ),
           target: {
             owner: repoRef.owner,
             repo: repoRef.repo,
