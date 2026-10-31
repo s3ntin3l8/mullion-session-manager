@@ -167,16 +167,16 @@ directive that merely appears in prose (e.g. "remember to set `Agent:
 claude`") is deliberately not picked up, only a line matching exactly
 (whitespace aside):
 
-| Directive                 | Effect                                                                                                                                                                                                           |
-| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Manual: true`            | Ingests to `backlog`, not `ready` — never auto-claimed. Still claimable by hand. Deleting the line later moves a still-parked task to `ready` on the next sync; otherwise `backlog` → `ready` is a human action. |
-| `Agent: <name>`           | Which worker agent claims this task.                                                                                                                                                                             |
-| `ReviewAgent: <name>`     | Which agent reviews the diff. `hermes` runs it on the Hermes server (offered once Settings → Review relay → "Task Master reviews" is on). `none`/`false` disables review.                                        |
-| `Model: <model>`          | Implementer model override — every claimable agent, not just opencode.                                                                                                                                           |
-| `Reviewer-Model: <model>` | Reviewer model — every agent; falls back to `Model:` if unset.                                                                                                                                                   |
-| `SmallModel: <model>`     | opencode and claude only — lightweight small/fast model; inert on codex/agy.                                                                                                                                     |
-| `Platform: <os>`          | The task must run on a host of that platform (`darwin`, `linux`, `win32`).                                                                                                                                       |
-| `Host: <host id>`         | The task must run on exactly that host. With `Platform:`, both must hold.                                                                                                                                        |
+| Directive                 | Effect                                                                                                                                                                                                                                                                             |
+| ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Manual: true`            | Ingests to `backlog`, not `ready` — never auto-claimed. Still claimable by hand. Deleting the line later moves a still-parked task to `ready` on the next sync; otherwise `backlog` → `ready` is a human action. Closed by a merged PR → task `done`; closed otherwise → `failed`. |
+| `Agent: <name>`           | Which worker agent claims this task.                                                                                                                                                                                                                                               |
+| `ReviewAgent: <name>`     | Which agent reviews the diff. `hermes` runs it on the Hermes server (offered once Settings → Review relay → "Task Master reviews" is on). `none`/`false` disables review.                                                                                                          |
+| `Model: <model>`          | Implementer model override — every claimable agent, not just opencode.                                                                                                                                                                                                             |
+| `Reviewer-Model: <model>` | Reviewer model — every agent; falls back to `Model:` if unset.                                                                                                                                                                                                                     |
+| `SmallModel: <model>`     | opencode and claude only — lightweight small/fast model; inert on codex/agy.                                                                                                                                                                                                       |
+| `Platform: <os>`          | The task must run on a host of that platform (`darwin`, `linux`, `win32`).                                                                                                                                                                                                         |
+| `Host: <host id>`         | The task must run on exactly that host. With `Platform:`, both must hold.                                                                                                                                                                                                          |
 
 Matching rules, all eight:
 
@@ -244,8 +244,9 @@ implemented.
 Getting this backwards is expensive and quiet. An issue marked
 `Manual: true` is ingested to `backlog` instead of `ready`, so it is never
 auto-claimed; it sits there until a human claims it by hand. An issue
-marked `Manual: true` that a human then closes after doing the work
-by hand looks, from Task Master's side, like a failure — which is why a
+marked `Manual: true` that a human then closes with a merged PR is recorded
+as done (linked to that PR); one closed without a merged PR is recorded as
+failed. A
 backlog full of `Manual: true` issues reads as "Task Master isn't picking
 anything up" when in fact it was told not to.
 

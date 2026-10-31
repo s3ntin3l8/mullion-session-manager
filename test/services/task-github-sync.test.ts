@@ -13,6 +13,7 @@ const mockCreateComment = vi.fn();
 const mockSetAssignees = vi.fn();
 const mockCloseIssue = vi.fn();
 const mockGetIssueState = vi.fn();
+const mockGetMergedClosingPullRequest = vi.fn();
 const mockGetRemoteHostClient = vi.fn();
 const mockGetPullRequestByNumber = vi.fn();
 const mockCreatePullRequestReview = vi.fn();
@@ -32,6 +33,7 @@ vi.mock("../../src/services/github-write.js", () => ({
   setAssignees: mockSetAssignees,
   closeIssue: mockCloseIssue,
   getIssueState: mockGetIssueState,
+  getMergedClosingPullRequest: mockGetMergedClosingPullRequest,
   getPullRequestByNumber: mockGetPullRequestByNumber,
   createPullRequestReview: mockCreatePullRequestReview,
 }));
@@ -131,6 +133,7 @@ describe("task-github-sync", () => {
     mockGetToken.mockReturnValue("ghp_token");
     mockGetIntegration.mockReturnValue({ login: "mullion-bot" });
     mockResolveRepoRef.mockResolvedValue(repoRef);
+    mockGetMergedClosingPullRequest.mockResolvedValue(null);
   });
 
   describe("syncTaskTransition", () => {
@@ -760,6 +763,85 @@ describe("task-github-sync", () => {
         expect.stringContaining("GitHub issue was closed"),
       );
     });
+  });
+
+  describe("syncUnlabeledIssueToLocal — closed by a merged PR", () => {
+    const CLOSED = "GitHub issue was closed";
+    function insertTask(status: string, issueNumber: number) {
+      const [row] = app.db
+        .insert(tasks)
+        .values({ projectId, issueNumber, title: "t", status })
+        .returning()
+        .all();
+      return row;
+    }
+    it.each(["backlog", "ready"])(
+      "marks a %s task done with the closing PR, no GitHub write-back",
+      async (status) => {
+        const task = insertTask(status, status === "backlog" ? 701 : 702);
+        mockGetMergedClosingPullRequest.mockResolvedValue(77);
+        const logSpy = vi.spyOn(app.log, "info");
+        await syncUnlabeledIssueToLocal(app, task, project, CLOSED);
+
+        const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+        expect(row.status).toBe("done");
+        expect(row.prNumber).toBe(77);
+        expect(row.completedAt).not.toBeNull();
+        expect(row.failureReason).toBeNull();
+        expect(logSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            taskId: task.id,
+            to: "done",
+            via: "github-sync-closed-manually",
+            issueNumber: task.issueNumber,
+            prNumber: 77,
+          }),
+          "task transition",
+        );
+        logSpy.mockRestore();
+        expect(mockCreateComment).not.toHaveBeenCalled();
+        expect(mockAddLabels).not.toHaveBeenCalled();
+        expect(mockRemoveLabel).not.toHaveBeenCalled();
+      },
+    );
+
+    it("fails the task when no merged PR closed the issue", async () => {
+      const task = insertTask("backlog", 703);
+      await syncUnlabeledIssueToLocal(app, task, project, CLOSED);
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toBe(CLOSED);
+    });
+
+    it("fails the task when the closing-PR lookup errors", async () => {
+      const task = insertTask("ready", 704);
+      mockGetMergedClosingPullRequest.mockRejectedValue(new Error("boom"));
+      await syncUnlabeledIssueToLocal(app, task, project, CLOSED);
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(row.status).toBe("failed");
+      expect(row.failureReason).toBe(CLOSED);
+    });
+
+    it("does not look up a closing PR for an unlabeled issue", async () => {
+      const task = insertTask("ready", 705);
+      mockGetMergedClosingPullRequest.mockResolvedValue(78);
+      await syncUnlabeledIssueToLocal(app, task, project);
+      const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+      expect(row.status).toBe("failed");
+      expect(mockGetMergedClosingPullRequest).not.toHaveBeenCalled();
+    });
+
+    it.each(["claimed", "in_progress", "reviewing"])(
+      "leaves a %s task untouched even with a merged closing PR",
+      async (status) => {
+        const task = insertTask(status, 710 + status.length);
+        mockGetMergedClosingPullRequest.mockResolvedValue(79);
+        await syncUnlabeledIssueToLocal(app, task, project, CLOSED);
+        const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+        expect(row.status).toBe(status);
+        expect(row.prNumber).toBeNull();
+      },
+    );
   });
 
   describe("isIssueStillTrackable (#729)", () => {

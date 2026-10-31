@@ -70,10 +70,15 @@ title, spec (issue body), and the final PR link.
 label"` vs. `"GitHub issue was closed"` — even though both route
   through the same shared function (`syncUnlabeledIssueToLocal`,
   `task-github-sync.ts`), so a closed issue doesn't misreport as a label
-  problem. A task that's already `claimed`/`in_progress`/`reviewing` —
+  problem. The one exception is an issue closed by a **merged pull
+  request** (a human did the work by hand — typically a `Manual: true`
+  issue): the task completes as `done` with `prNumber` set to the closing PR
+  (transition `via: "github-sync-closed-manually"`), with no GitHub comment
+  or label write-back. A closing-PR lookup that finds nothing or errors
+  falls back to `failed`. A task that's already `claimed`/`in_progress`/`reviewing` —
   real work behind it, a worktree, maybe a branch — is left strictly
   alone either way; silently failing it out from under a label removal
-  would be destructive. Both the webhook `unlabeled`/`closed` handlers
+  would be destructive. Both the webhook `unlabeled`/`closed` handlers (for `backlog`/`ready` tasks)
   and the poll loop's own read-back apply this identically, via one
   shared function, so the two can't produce different outcomes for the
   same issue.

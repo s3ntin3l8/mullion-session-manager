@@ -1054,6 +1054,80 @@ describe("webhook routes", () => {
       fs.rmSync(cwd, { recursive: true, force: true });
     });
 
+    it.each<[string, number | null, string]>([
+      ["a merged closing PR marks an unclaimed task done", 88, "done"],
+      ["no merged closing PR fails an unclaimed task", null, "failed"],
+    ])("issue closed on a backlog task: %s", async (_label, closingPr, expected) => {
+      const cwd = createMatchingGitRepo("acme", `widgets-manual-${expected}`);
+      const app = await buildApp();
+
+      const originalFetch = global.fetch;
+      global.fetch = (async () =>
+        new Response(JSON.stringify({ login: "octocat" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })) as typeof fetch;
+      const { setPat } = await import("../../src/services/github-integration.js");
+      await setPat(app, "ghp_test_token");
+      global.fetch = originalFetch;
+
+      const githubWrite = await import("../../src/services/github-write.js");
+      const closingSpy = vi
+        .spyOn(githubWrite, "getMergedClosingPullRequest")
+        .mockResolvedValue(closingPr);
+      const writeSpy = vi.spyOn(githubWrite, "createComment").mockResolvedValue(undefined as never);
+
+      const [project] = app.db
+        .insert(projects)
+        .values({ name: `webhook-manual-${expected}`, cwd })
+        .returning()
+        .all();
+      app.db
+        .insert(tasks)
+        .values({ projectId: project.id, issueNumber: 47, title: "Manual", status: "backlog" })
+        .run();
+
+      const payload = JSON.stringify({
+        action: "closed",
+        repository: { full_name: `acme/widgets-manual-${expected}`, open_issues_count: 0 },
+        issue: {
+          number: 47,
+          title: "Manual",
+          body: null,
+          html_url: `https://github.com/acme/widgets-manual-${expected}/issues/47`,
+          author_association: "OWNER",
+          labels: [],
+        },
+      });
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/webhooks/github",
+        headers: {
+          "content-type": "application/json",
+          "x-hub-signature-256": signPayload(payload, TEST_SECRET),
+          "x-github-event": "issues",
+        },
+        payload,
+      });
+
+      expect(res.statusCode).toBe(200);
+      const getRow = () =>
+        app.db
+          .select()
+          .from(tasks)
+          .where(and(eq(tasks.projectId, project.id), eq(tasks.issueNumber, 47)))
+          .all()[0];
+      await waitUntil(() => getRow().status === expected);
+      expect(getRow().prNumber).toBe(closingPr);
+      if (expected === "done") expect(writeSpy).not.toHaveBeenCalled();
+      else expect(getRow().failureReason).toBe("GitHub issue was closed");
+
+      closingSpy.mockRestore();
+      writeSpy.mockRestore();
+      await app.close();
+      fs.rmSync(cwd, { recursive: true, force: true });
+    });
+
     it("ingests an issue that already carries the task label at creation (action: opened)", async () => {
       // Hermes review, PR #503: a label picker at creation time (or the
       // create-with-labels API) fires "opened", not "labeled" — this must

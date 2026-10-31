@@ -323,6 +323,45 @@ export async function getIssueState(
   return { state: result.state, labels, isPullRequest: result.pull_request != null };
 }
 
+/**
+ * The merged pull request that closed an issue, or `null` when none did
+ * (closed as not planned, a duplicate, or by a PR that was closed unmerged).
+ * GraphQL `closedByPullRequestsReferences` is what GitHub itself uses for the
+ * "closed by" link, and it has no REST equivalent. Picks the first MERGED
+ * reference; `includeClosedPrs` is needed because a merged PR is a closed one.
+ * Throws on a GitHub error — the caller decides how to degrade.
+ */
+export async function getMergedClosingPullRequest(
+  token: string,
+  owner: string,
+  repo: string,
+  issueNumber: number,
+): Promise<number | null> {
+  const data = await githubGraphQL<{
+    repository: {
+      issue: {
+        closedByPullRequestsReferences: {
+          nodes: Array<{ number: number; merged: boolean }>;
+        } | null;
+      } | null;
+    } | null;
+  }>(
+    token,
+    `query($owner: String!, $repo: String!, $number: Int!) {
+      repository(owner: $owner, name: $repo) {
+        issue(number: $number) {
+          closedByPullRequestsReferences(first: 10, includeClosedPrs: true) {
+            nodes { number merged }
+          }
+        }
+      }
+    }`,
+    { owner, repo, number: issueNumber },
+  );
+  const nodes = data.repository?.issue?.closedByPullRequestsReferences?.nodes ?? [];
+  return nodes.find((n) => n.merged)?.number ?? null;
+}
+
 /** #701 — fetches a single issue's title, used by task-watcher.ts's
  * fillParentIssueTitles to lazily resolve a child card's `↳ <parent
  * title>` chip (the title isn't on the list response the way
