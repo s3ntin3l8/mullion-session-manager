@@ -18,6 +18,7 @@ import { PullIcon, RefreshIcon, CheckIcon } from "../ui/icons.js";
 import { Toggle } from "../ui/primitives.js";
 import { Button } from "../ui/sidebar/index.js";
 import { SidebarHeader } from "./SidebarHeader.js";
+import { VIEW_TITLES } from "./viewTitles.js";
 import type { RightSidebarViewProps } from "./views.js";
 
 type Page = { kind: "list" } | { kind: "branch"; name: string } | { kind: "prune" };
@@ -190,7 +191,7 @@ export function GitSidebarView({ projectId, actions }: RightSidebarViewProps) {
   return (
     <div className="git-sidebar-view">
       <SidebarHeader
-        label="Source Control"
+        label={VIEW_TITLES.git}
         context={subtitle}
         actions={[
           {

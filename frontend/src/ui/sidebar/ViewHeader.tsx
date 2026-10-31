@@ -32,6 +32,8 @@ export function ViewHeader({
 }: ViewHeaderProps) {
   const linkOwned = useContext(ExternalLinkOwnedContext);
   return (
+    // `bare` wins over `sticky`: in the drawer's header row the header is
+    // already fixed, so there is nothing to stick (IssuesView passes both).
     <div className={bare ? "sb-vh sb-vh--bare" : sticky ? "sb-vh sb-vh--sticky" : "sb-vh"}>
       {leading}
       <div className="sb-vh-title">

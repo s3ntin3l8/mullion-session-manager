@@ -54,6 +54,21 @@ describe("SidebarHeader", () => {
     strip.remove();
   });
 
+  it("keeps the ⋯ menu after the icon buttons in the same bar", () => {
+    render(
+      <SidebarHeader
+        label="Files"
+        actions={actions()}
+        overflow={[{ key: "x", label: "Upload", onClick: vi.fn() }]}
+      />,
+    );
+    const bar = screen.getByRole("toolbar");
+    const names = Array.from(bar.querySelectorAll("button")).map((b) =>
+      b.getAttribute("aria-label"),
+    );
+    expect(names).toEqual(["Refresh", "More actions"]);
+  });
+
   it("omits the ⋯ menu when there is no overflow, and the context when there is none", () => {
     render(<SidebarHeader label="Project" />);
     expect(screen.queryByRole("button", { name: "More actions" })).toBeNull();
@@ -92,6 +107,19 @@ describe("DetailHeader in the drawer", () => {
     expect(slot.querySelector("a[aria-label='Open PR #7 on GitHub']")).toBeTruthy();
     await userEvent.click(slot.querySelector("button[aria-label='Back']") as HTMLElement);
     expect(onBack).toHaveBeenCalled();
+    slot.remove();
+  });
+
+  it("ignores `sticky` in the drawer's header row (the row is already fixed)", () => {
+    const slot = document.createElement("div");
+    document.body.appendChild(slot);
+    render(
+      <SidebarDetailSlotContext.Provider value={slot}>
+        <DetailHeader onBack={() => {}} title="#7" sticky />
+      </SidebarDetailSlotContext.Provider>,
+    );
+    expect(slot.querySelector(".sb-vh--sticky")).toBeNull();
+    expect(slot.querySelector(".sb-vh--bare")).toBeTruthy();
     slot.remove();
   });
 });

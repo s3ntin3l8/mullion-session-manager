@@ -1,7 +1,7 @@
 import { useContext, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { KebabMenu, type KebabMenuItem } from "../ui/KebabMenu.js";
-import { SidebarStripSlotContext, SidebarToolbarSlotContext } from "./sidebarToolbarSlot.js";
+import { SidebarStripSlotContext } from "./sidebarToolbarSlot.js";
 import { SidebarToolbar, type SidebarToolbarAction } from "./SidebarToolbar.js";
 
 export interface SidebarHeaderProps {
@@ -18,8 +18,9 @@ export interface SidebarHeaderProps {
 }
 
 // The one header every right-sidebar view uses: its icon buttons and ⋯ menu go
-// into the drawer's header row (next to the project picker) and a context strip
-// goes under it. Outside the drawer there are no slots, so both render inline.
+// into the drawer's header row (next to the project picker, via SidebarToolbar's
+// own slot portal) and a context strip goes under it. Outside the drawer there
+// are no slots, so both render inline.
 export function SidebarHeader({
   label,
   context,
@@ -27,7 +28,6 @@ export function SidebarHeader({
   actions = [],
   overflow = [],
 }: SidebarHeaderProps) {
-  const toolbarSlot = useContext(SidebarToolbarSlotContext);
   const stripSlot = useContext(SidebarStripSlotContext);
   const strip = (
     <div className="sb-strip">
@@ -35,19 +35,22 @@ export function SidebarHeader({
       {context != null && <span title={contextTitle}>{context}</span>}
     </div>
   );
-  const buttons = (
-    <>
-      {actions.length > 0 && <SidebarToolbar actions={actions} />}
-      {overflow.length > 0 && (
-        <span className="right-sidebar-overflow">
-          <KebabMenu items={overflow} title="More actions" />
-        </span>
-      )}
-    </>
-  );
+  const toolbar =
+    actions.length > 0 || overflow.length > 0 ? (
+      <SidebarToolbar
+        actions={actions}
+        trailing={
+          overflow.length > 0 ? (
+            <span className="right-sidebar-overflow">
+              <KebabMenu items={overflow} title="More actions" />
+            </span>
+          ) : undefined
+        }
+      />
+    ) : null;
   return (
     <>
-      {toolbarSlot ? createPortal(buttons, toolbarSlot) : buttons}
+      {toolbar}
       {stripSlot ? createPortal(strip, stripSlot) : strip}
     </>
   );

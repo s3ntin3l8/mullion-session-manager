@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { GitHubPanel } from "../GitHubPanel.js";
 import { SidebarHeader } from "./SidebarHeader.js";
+import { VIEW_TITLES } from "./viewTitles.js";
 import { TaskMasterSection } from "./TaskMasterSection.js";
 import { usePrList } from "../hooks/useGitHubData.js";
 import { useDashboardStore } from "../store/index.js";
@@ -18,7 +19,7 @@ export function GitHubSidebarView({ projectId, actions }: RightSidebarViewProps)
   return (
     <div className="github-sidebar-view">
       <SidebarHeader
-        label="GitHub"
+        label={VIEW_TITLES.github}
         context={prCount > 0 ? `${prCount} open PR${prCount === 1 ? "" : "s"}` : undefined}
         actions={[
           {

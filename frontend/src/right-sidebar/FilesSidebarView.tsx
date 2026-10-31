@@ -24,6 +24,7 @@ import {
   RefreshIcon,
 } from "../ui/icons.js";
 import { SidebarHeader } from "./SidebarHeader.js";
+import { VIEW_TITLES } from "./viewTitles.js";
 import { EmptyStateNote } from "../ui/EmptyState.js";
 import type { RightSidebarViewProps } from "./views.js";
 import { TextInput } from "../ui/primitives.js";
@@ -511,7 +512,7 @@ export function FilesSidebarView({
         onPick={tree.pickFiles}
       />
       <SidebarHeader
-        label="Files"
+        label={VIEW_TITLES.files}
         contextTitle={rootCwd ?? undefined}
         context={
           rootRefused

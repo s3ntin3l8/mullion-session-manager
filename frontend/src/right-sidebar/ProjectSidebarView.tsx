@@ -1,6 +1,7 @@
 import type { ComponentType, SVGProps } from "react";
 import { DockIcon, FileTextIcon, SkillIcon } from "../ui/icons.js";
 import { SidebarHeader } from "./SidebarHeader.js";
+import { VIEW_TITLES } from "./viewTitles.js";
 import type { RightSidebarActions, RightSidebarViewProps } from "./views.js";
 
 interface ProjectRow {
@@ -48,7 +49,7 @@ const ROWS: ProjectRow[] = [
 export function ProjectSidebarView({ projectId, actions }: RightSidebarViewProps) {
   return (
     <div className="project-sidebar-view">
-      <SidebarHeader label="Project" />
+      <SidebarHeader label={VIEW_TITLES.project} />
       {ROWS.map(({ key, title, subtitle, icon: Icon }) => (
         <button
           key={key}

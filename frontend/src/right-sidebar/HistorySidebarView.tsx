@@ -4,6 +4,7 @@ import type { HistoryScope } from "../api/types.js";
 import { useDashboardStore } from "../store/index.js";
 import { Dropdown } from "../ui/primitives.js";
 import { SidebarHeader } from "./SidebarHeader.js";
+import { VIEW_TITLES } from "./viewTitles.js";
 import type { RightSidebarViewProps } from "./views.js";
 
 const ROOT = "";
@@ -59,7 +60,7 @@ export function HistorySidebarView({ projectId }: RightSidebarViewProps) {
   return (
     <div className="history-sidebar-view">
       <SidebarHeader
-        label="History"
+        label={VIEW_TITLES.history}
         context={branch}
         overflow={
           githubUrl
