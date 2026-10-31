@@ -83,15 +83,30 @@ const inFlight = new Set<string>();
  * reaches `spawn`, not just on the request's string. */
 function canonicalCwd(cwd: string, roots?: string[]): string | null {
   if (typeof cwd !== "string" || cwd.includes("\0") || !path.isAbsolute(cwd)) return null;
+  if (roots === undefined) return existingDir(cwd);
+  // Request-derived cwd: contain it lexically BEFORE any filesystem call, then
+  // again on the symlink-resolved path (a link inside a root must not escape).
+  let realRoots: string[];
   try {
-    const real = realpathSync(cwd);
-    if (roots !== undefined) {
-      const inside = roots.some((r) => {
-        const root = realpathSync(path.resolve(r));
-        return real === root || real.startsWith(root + path.sep);
-      });
-      if (!inside) return null;
-    }
+    realRoots = roots.map((r) => realpathSync(path.resolve(r)));
+  } catch {
+    return null;
+  }
+  const lexical = path.resolve(cwd);
+  const lexicalRoots = roots.map((r) => path.resolve(r));
+  if (!lexicalRoots.some((root) => lexical === root || lexical.startsWith(root + path.sep))) {
+    return null;
+  }
+  const real = existingDir(lexical);
+  if (real === null) return null;
+  if (!realRoots.some((root) => real === root || real.startsWith(root + path.sep))) return null;
+  return real;
+}
+
+/** The symlink-resolved directory `dir` names, or null when it is not one. */
+function existingDir(dir: string): string | null {
+  try {
+    const real = realpathSync(dir);
     return statSync(real).isDirectory() ? real : null;
   } catch {
     return null;
