@@ -336,10 +336,14 @@ button {
 button:hover {
   background: color-mix(in srgb, var(--fg) 10%, transparent);
 }
-button.danger:hover {
+button.danger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--r) 15%, transparent);
   border-color: color-mix(in srgb, var(--r) 40%, transparent);
   color: var(--r);
+}
+button.danger:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 button.danger.armed {
   background: color-mix(in srgb, var(--r) 15%, transparent);

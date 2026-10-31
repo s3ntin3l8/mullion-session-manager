@@ -27,7 +27,7 @@ import {
 import { mergeChip } from "./branchGroups.js";
 import { rebaseNotice, runBranchOp } from "./branchOps.js";
 import { prTriad } from "./prTriad.js";
-import { FORCEABLE_REASONS, reasonMessage } from "./gitReasons.js";
+import { deleteBranchTitle, reasonMessage } from "./gitReasons.js";
 import { openSessionOn } from "./sessionLaunch.js";
 import { refreshGitEverywhere } from "./useSourceControl.js";
 import { useRepoUrl } from "./useRepoUrl.js";
@@ -69,7 +69,7 @@ export function BranchDetail({
   >({ kind: "loading" });
   // So a double click can't make two sessions.
   const [starting, setStarting] = useState(false);
-  const [actionError, setActionError] = useState<{ message: string; reason?: string } | null>(null);
+  const [actionError, setActionError] = useState<{ message: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [moving, setMoving] = useState(false);
   // Bumped after a checkout/rebase, which changes what this view shows.
@@ -102,30 +102,25 @@ export function BranchDetail({
       ? "Cannot delete the default branch"
       : detail?.worktreePath
         ? `Checked out in ${detail.worktreePath.split("/").pop()}`
-        : taskId != null || entry?.taskOwned
-          ? `Owned by task${taskId != null ? ` #${taskId}` : ""} — can't be deleted here`
-          : null;
+        : null;
 
-  const remove = async (force = false) => {
+  const remove = async () => {
     try {
-      const result = await api.deleteProjectGitBranch(projectId, name, force);
+      const result = await api.deleteProjectGitBranch(projectId, name, true);
       if (result.deleted) {
         refreshGitEverywhere(projectId);
         onReload();
         onBack();
         return;
       }
-      setActionError({
-        message: reasonMessage(result.reason, result.detail),
-        reason: result.reason,
-      });
+      setActionError({ message: reasonMessage(result.reason, result.detail) });
     } catch (err) {
       setActionError({ message: describeError(err, "Request failed — try again.") });
     }
   };
 
   // Issue #1672 — guarded checkout / rebase. A refusal shows inline, and
-  // carries no `reason`: neither offers a Force.
+  // is just a message: neither offers a Force.
   const moveHead = async (kind: "checkout" | "rebase") => {
     if (moving) return;
     setMoving(true);
@@ -361,15 +356,6 @@ export function BranchDetail({
         {actionError && (
           <div className="sc-row-error" role="alert">
             {actionError.message}
-            {actionError.reason && FORCEABLE_REASONS.has(actionError.reason) && (
-              <ConfirmButton
-                title="Force delete"
-                onConfirm={() => void remove(true)}
-                armedLabel="Force delete"
-              >
-                Force
-              </ConfirmButton>
-            )}
           </div>
         )}
       </div>
@@ -417,7 +403,7 @@ export function BranchDetail({
           )
         )}
         <ConfirmButton
-          title={blocked ?? "Delete branch"}
+          title={blocked ?? deleteBranchTitle(detail?.mergeState, taskId)}
           disabled={blocked !== null}
           onConfirm={() => void remove()}
           armedLabel="Delete"

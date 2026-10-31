@@ -330,17 +330,15 @@
 }
 /* Actions overlay the title line instead of taking width: toggling display
    made .sb-row-body shrink on hover and re-wrap its title and chips. They stay
-   rendered (so Tab reaches them) and are only faded in on hover/focus. The
-   trail is the containing block and the overlay's right edge sits on the
-   trail's left edge (right: 100%), so the row's trailing content (e.g. the
-   unresolved-threads count) is never covered. */
-.sb-row-trail {
-  position: relative;
-}
+   rendered (so Tab reaches them) and are only faded in on hover/focus.
+   They are pinned to the ROW's right edge so every row's actions sit in the
+   same place. They used to hang off the trail's left edge, which moved them
+   with whatever badges (merged, #PR, current) the row happened to carry. The
+   chips they now sit over are hidden while they show (next rule). */
 .sb-row-actions {
   position: absolute;
-  top: 0;
-  right: 100%;
+  top: 6px;
+  right: 10px;
   display: flex;
   gap: 2px;
   padding-left: 14px;
@@ -348,9 +346,51 @@
   opacity: 0;
   pointer-events: none;
 }
+/* The overlay sits over the row's trailing chips, some of them clickable (a PR
+   chip). While it shows they are hidden — the buttons REPLACE the chips at the
+   right edge rather than sitting on top of live ones, where a click meant for
+   a chip would land on a button (and, over a "merged" chip, on the delete).
+   Scoped to the siblings AFTER `.sb-row-actions`: a row with no actions has no
+   overlay, so its badges (a CI run's status, a deleted file's chip) stay.
+   Hidden on hover, or while focus is in the actions themselves (mouse or
+   keyboard) — NOT on the row's `:focus-within`: tabbing on to a chip moves
+   focus out of the actions. A chip that itself holds focus is never hidden,
+   on either branch (the pointer may be resting on the row while Tab moves
+   on). Hover-capable pointers only: touch keeps the actions in flow. */
+@media (hover: hover) {
+  .sb-row:hover .sb-row-trail > .sb-row-actions ~ *:not(:focus),
+  .sb-row:has(.sb-row-actions :focus) .sb-row-trail > .sb-row-actions ~ *:not(:focus) {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
+/* ConfirmButton `compact` (a trash/rebase in the actions): exactly an
+   `.sb-ibtn`'s box, armed or not, so arming moves nothing. Only the geometry
+   is fixed here; the border stays the global button's 1px, so the armed and
+   hover tints in destructive-confirm.css recolour it without resizing it. The
+   muted resting look is limited to the idle state so it can't outrank them. */
+.sb-row-actions button.confirm-compact {
+  flex: none;
+  box-sizing: border-box;
+  width: 26px;
+  height: 26px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 6px;
+}
+.sb-row-actions button.confirm-compact:not(.armed):not(:hover) {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
 .sb-row:hover .sb-row-actions,
 .sb-row:focus-within .sb-row-actions {
   opacity: 1;
+}
+/* The box itself (gap/padding) never eats a click; only its buttons do. */
+.sb-row:hover .sb-row-actions > *,
+.sb-row:focus-within .sb-row-actions > * {
   pointer-events: auto;
 }
 @media (hover: none) {
@@ -500,6 +540,10 @@ button.sb-chip:focus-visible,
   .sb-row-trail {
     grid-column: 3;
     grid-row: 1;
+  }
+  /* The row's padding is 8px here, so pin to that edge. */
+  .sb-row-actions {
+    right: 8px;
   }
   .sb-row-meta,
   .sb-row-extra {

@@ -28,7 +28,7 @@ import { isTaskBranch, type MullionLinks } from "../hooks/useMullionLinks.js";
 import { useBranchPreview } from "../hooks/useBranchPreview.js";
 import { groupBranches, isPrunable, mergeChip } from "./branchGroups.js";
 import { rebaseNotice, runBranchOp } from "./branchOps.js";
-import { FORCEABLE_REASONS, isDefaultBranchName, reasonMessage } from "./gitReasons.js";
+import { deleteBranchTitle, isDefaultBranchName, reasonMessage } from "./gitReasons.js";
 import { NewBranchForm } from "./NewBranchForm.js";
 import { openSessionOn } from "./sessionLaunch.js";
 import { refreshGitEverywhere } from "./useSourceControl.js";
@@ -36,7 +36,6 @@ import { SearchInput } from "../ui/primitives.js";
 
 interface RowError {
   message: string;
-  reason?: string;
 }
 
 function branchTone(
@@ -116,26 +115,25 @@ export function BranchesSection({
     });
   };
 
-  const deleteBranch = async (name: string, force = false) => {
+  // Always forced: the trash's armed title already says what is at stake, so
+  // the server never has an unmerged/task refusal left to bounce back.
+  const deleteBranch = async (name: string) => {
     try {
-      const result = await api.deleteProjectGitBranch(projectId, name, force);
+      const result = await api.deleteProjectGitBranch(projectId, name, true);
       if (result.deleted) {
         setError(name, null);
         refreshGitEverywhere(projectId);
         onReload();
         return;
       }
-      setError(name, {
-        message: reasonMessage(result.reason, result.detail),
-        reason: result.reason,
-      });
+      setError(name, { message: reasonMessage(result.reason, result.detail) });
     } catch (err) {
       setError(name, { message: describeError(err, "Request failed — try again.") });
     }
   };
 
   // Issue #1672 — guarded checkout / rebase. A refusal lands on the row,
-  // inline, without a `reason`: none of these offer a Force.
+  // inline: none of these offer a Force.
   const moveHead = async (name: string, kind: "checkout" | "rebase") => {
     if (moving) return;
     setMoving(true);
@@ -252,9 +250,7 @@ export function BranchesSection({
                 ? "Cannot delete the default branch"
                 : worktree
                   ? `Checked out in ${worktree.path.split("/").pop()}`
-                  : taskOwned
-                    ? `Owned by task${entry?.task ? ` #${entry.task.id}` : ""} — can't be deleted here`
-                    : null;
+                  : null;
             return (
               <SidebarRow
                 key={b.name}
@@ -320,15 +316,6 @@ export function BranchesSection({
                       {error && (
                         <div className="sc-row-error" role="alert">
                           {error.message}
-                          {error.reason && FORCEABLE_REASONS.has(error.reason) && (
-                            <ConfirmButton
-                              title="Force delete"
-                              onConfirm={() => void deleteBranch(b.name, true)}
-                              armedLabel="Force delete"
-                            >
-                              Force
-                            </ConfirmButton>
-                          )}
                         </div>
                       )}
                     </>
@@ -339,8 +326,8 @@ export function BranchesSection({
                     {b.isCurrent ? (
                       <ConfirmButton
                         variant="neutral"
+                        compact
                         title="Rebase onto its upstream (or the default branch)"
-                        armedLabel="Rebase"
                         disabled={moving}
                         onConfirm={() => void moveHead(b.name, "rebase")}
                       >
@@ -388,8 +375,14 @@ export function BranchesSection({
                     >
                       <HistoryIcon size={13} />
                     </IconButton>
+                    {/* One arm-and-confirm, always forced: the title says what is
+                        at stake, so a refusal-then-Force second round trip adds
+                        nothing. A task-owned branch is deletable too — the
+                        backend only guards a still-resumable one, and the title
+                        names it. */}
                     <ConfirmButton
-                      title={blocked ?? "Delete branch"}
+                      compact
+                      title={blocked ?? deleteBranchTitle(b.mergeState, entry?.task?.id)}
                       disabled={blocked !== null}
                       onConfirm={() => void deleteBranch(b.name)}
                     >

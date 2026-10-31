@@ -28,6 +28,7 @@ export function ConfirmButton({
   allowDoubleClickConfirm = false,
   armedLabel,
   variant = "danger",
+  compact = false,
 }: {
   onConfirm: () => void;
   title: string;
@@ -52,6 +53,11 @@ export function ConfirmButton({
   // "neutral" keeps the arm-then-confirm flow without the destructive red
   // styling, for actions that are deliberate but not dangerous.
   variant?: "danger" | "neutral";
+  // An icon-only button in a row's hover actions: it stays the size of its
+  // `.sb-ibtn` neighbours when armed (the check icon, no "5s" text), so arming
+  // never widens it and shoves them sideways. The countdown is still in the
+  // title, which is where assistive tech reads it from.
+  compact?: boolean;
 }) {
   const [armed, setArmed] = useState(false);
   // Ticks 6 -> 5 -> ... -> 1 rather than sitting static for the whole arm
@@ -112,7 +118,7 @@ export function ConfirmButton({
       type="button"
       className={`${variant === "neutral" ? "confirm-neutral" : "danger"}${armed ? " armed" : ""}${
         armedLabel ? " confirm-btn-stable" : ""
-      }`}
+      }${compact ? " confirm-compact" : ""}`}
       disabled={disabled}
       // Independent review finding (PR #435) — armed used to replace `title`
       // outright with a generic "Click again to confirm", so a
@@ -190,9 +196,11 @@ export function ConfirmButton({
       ) : armed ? (
         <>
           <CheckIcon size={13} />
-          <span className="confirm-btn-countdown" aria-hidden="true">
-            {secondsLeft}s
-          </span>
+          {!compact && (
+            <span className="confirm-btn-countdown" aria-hidden="true">
+              {secondsLeft}s
+            </span>
+          )}
         </>
       ) : (
         children
