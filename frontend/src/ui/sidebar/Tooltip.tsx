@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useDashboardStore } from "../../store/index.js";
 
 const VIEWPORT_MARGIN = 6;
 const GAP = 6;
@@ -11,8 +12,12 @@ interface TooltipProps {
 }
 
 /** Fixed-position bubble under the anchor, clamped inside the viewport (a
- *  portal, so a narrow sidebar's overflow can't clip it). */
+ *  portal, so a narrow sidebar's overflow can't clip it). Portaled to
+ *  document.body, which sits outside `.cmux-root`, so it re-applies the
+ *  theme classes itself (as KebabMenu does) — otherwise `--fg`/`--bg` are
+ *  undefined and the bubble is transparent. */
 export function TooltipBubble({ label, anchor, id }: TooltipProps) {
+  const theme = useDashboardStore((s) => s.theme);
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: 0, top: 0 });
   useLayoutEffect(() => {
@@ -29,7 +34,13 @@ export function TooltipBubble({ label, anchor, id }: TooltipProps) {
     setPos({ left, top: Math.max(VIEWPORT_MARGIN, top) });
   }, [label, anchor]);
   return createPortal(
-    <div ref={ref} id={id} role="tooltip" className="sb-tooltip" style={pos}>
+    <div
+      ref={ref}
+      id={id}
+      role="tooltip"
+      className={`cmux-root${theme === "light" ? " light" : ""} sb-tooltip`}
+      style={pos}
+    >
       {label}
     </div>,
     document.body,
