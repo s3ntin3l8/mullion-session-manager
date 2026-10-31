@@ -4,7 +4,8 @@
 // differently every time) and a broken index has to fail loudly rather than
 // answer "nothing matches".
 //
-// The pure functions are imported; the CLI runs via execFile against fixture
+// The pure functions and the CLI body (runCli) are imported and driven in-process,
+// so their lines are covered; one execFile test checks the real entry point against fixture
 // directories using the script's REVIEW_REFERENCES_ROOT override (precedent:
 // check-review-protocol-sync.test.ts), so none of it depends on this repo's
 // own index.
@@ -21,6 +22,7 @@ import {
   formatReferences,
   loadIndex,
   matchReferences,
+  runCli,
 } from "../../scripts/review-references.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -47,13 +49,18 @@ function fixture(index: unknown = INDEX): string {
   return dir;
 }
 
-async function run(root: string, args: string[], input?: string) {
+// In-process: arguments in, { code, stdout, stderr } out.
+function run(root: string, args: string[], input?: string) {
+  return runCli(args, { root, readStdin: () => input ?? "" });
+}
+
+// The real entry point, as a subprocess: the shebang/entry guard, the stdout
+// and stderr writes and the exit code.
+async function runProcess(root: string, args: string[], input?: string) {
   const child = execFileAsync("node", [SCRIPT, ...args], {
     env: { ...process.env, REVIEW_REFERENCES_ROOT: root },
   });
-  if (input !== undefined) {
-    child.child.stdin?.end(input);
-  }
+  if (input !== undefined) child.child.stdin?.end(input);
   return child.then(
     (r) => ({ code: 0, stdout: r.stdout, stderr: r.stderr }),
     (e: { code: number; stdout: string; stderr: string }) => ({
@@ -154,6 +161,59 @@ describe("review-references.mjs CLI", () => {
     expect((await run(fixture(), ["--nope"])).code).toBe(2);
     expect((await run(fixture(), ["--files", "x"])).code).toBe(2);
     expect((await run(fixture(), ["--base"])).code).toBe(2);
+  });
+
+  it("works as a real process: stdin in, listing out, exit 2 on a bad index", async () => {
+    const ok = await runProcess(fixture(), ["--files", "-"], "src/services/task-reconciler.ts\n");
+    expect(ok.code).toBe(0);
+    expect(ok.stdout).toContain("task-loop.md");
+    const bad = await runProcess(fixture("{"), ["--files", "-"], "a\n");
+    expect(bad.code).toBe(2);
+    expect(bad.stderr).toMatch(/review-references: cannot read/);
+  });
+
+  it("defaults the base to origin/main, then origin/master", () => {
+    const root = fixture();
+    const env = {
+      ...gitEnv(),
+      GIT_AUTHOR_NAME: "t",
+      GIT_AUTHOR_EMAIL: "t@t",
+      GIT_COMMITTER_NAME: "t",
+      GIT_COMMITTER_EMAIL: "t@t",
+    };
+    const git = (...a: string[]) =>
+      execFileSync("git", ["-C", root, ...a], { env: env, stdio: "ignore" });
+    git("init", "-q", "-b", "trunk");
+    fs.mkdirSync(path.join(root, "src/services"), { recursive: true });
+    fs.writeFileSync(path.join(root, "src/services/task-reconciler.ts"), "a\n");
+    git("add", "-A");
+    git("commit", "-q", "-m", "base");
+    git("checkout", "-q", "-b", "feature");
+    fs.writeFileSync(path.join(root, "src/services/task-reconciler.ts"), "b\n");
+    git("commit", "-q", "-am", "change");
+
+    // Only origin/master exists: the first candidate fails, the second answers.
+    git("update-ref", "refs/remotes/origin/master", "trunk");
+    const viaMaster = run(root, []);
+    expect(viaMaster.code).toBe(0);
+    expect(viaMaster.stdout).toContain("task-loop.md");
+
+    // origin/main wins when both exist (and still gives the same answer).
+    git("update-ref", "refs/remotes/origin/main", "trunk");
+    expect(run(root, []).stdout).toContain("task-loop.md");
+  });
+
+  it("reports the original git error when neither diff form resolves", () => {
+    const root = fixture();
+    execFileSync("git", ["-C", root, "init", "-q"], { env: gitEnv(), stdio: "ignore" });
+    const r = run(root, ["--base", "no-such-ref", "--head", "HEAD"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/^review-references: /);
+  });
+
+  it("rejects a flag with no value", () => {
+    expect(run(fixture(), ["--head"]).stderr).toMatch(/--head needs a value/);
+    expect(run(fixture(), ["--files"]).stderr).toMatch(/only accepts "-"/);
   });
 
   it("diffs base...head in a git checkout", async () => {

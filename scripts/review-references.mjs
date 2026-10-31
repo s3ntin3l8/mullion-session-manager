@@ -159,27 +159,44 @@ function parseArgs(argv) {
   return opts;
 }
 
-function main() {
-  const root = process.env.REVIEW_REFERENCES_ROOT ?? defaultRoot;
-  const opts = parseArgs(process.argv.slice(2));
-  const index = loadIndex(root);
-  const files = opts.stdin
-    ? readFileSync(0, "utf8")
-        .split("\n")
-        .map((l) => l.trim())
-        .filter(Boolean)
-    : gitChangedFiles(root, opts.base ?? defaultBase(root), opts.head);
-  const matches = matchReferences(index, files);
-  process.stdout.write(
-    opts.json ? JSON.stringify(matches, null, 2) + "\n" : formatReferences(matches),
-  );
+/**
+ * The whole CLI, as a function: arguments in, `{ code, stdout, stderr }` out.
+ * Split from the entry guard below so the tests can drive it in-process (and so
+ * its lines are covered) instead of only through a subprocess.
+ *
+ * `readStdin` is injected for `--files -`; `root` defaults to this repo.
+ */
+export function runCli(
+  argv,
+  { root = defaultRoot, readStdin = () => readFileSync(0, "utf8") } = {},
+) {
+  try {
+    const opts = parseArgs(argv);
+    const index = loadIndex(root);
+    const files = opts.stdin
+      ? readStdin()
+          .split("\n")
+          .map((l) => l.trim())
+          .filter(Boolean)
+      : gitChangedFiles(root, opts.base ?? defaultBase(root), opts.head);
+    const matches = matchReferences(index, files);
+    const stdout = opts.json ? JSON.stringify(matches, null, 2) + "\n" : formatReferences(matches);
+    return { code: 0, stdout, stderr: "" };
+  } catch (err) {
+    return {
+      code: 2,
+      stdout: "",
+      stderr: `review-references: ${err instanceof Error ? err.message : err}\n`,
+    };
+  }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  try {
-    main();
-  } catch (err) {
-    process.stderr.write(`review-references: ${err instanceof Error ? err.message : err}\n`);
-    process.exit(2);
-  }
+  const result = runCli(process.argv.slice(2), {
+    root: process.env.REVIEW_REFERENCES_ROOT ?? defaultRoot,
+  });
+  process.stdout.write(result.stdout);
+  process.stderr.write(result.stderr);
+  // exitCode, not exit(): lets a piped stdout drain before the process ends.
+  process.exitCode = result.code;
 }
