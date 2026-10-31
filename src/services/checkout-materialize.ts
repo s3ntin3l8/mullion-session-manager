@@ -7,6 +7,7 @@ import { cloneHostCheckout } from "./host-git.js";
 import { getHostRow, LOCAL_HOST_ID } from "./host-registry.js";
 import { parseHostCwds, serializeHostCwds } from "./placement.js";
 import { cloneNameFromRemote, cloneUrlFromRemote, warmProjectOriginUrl } from "./project-origin.js";
+import { startSetupAfterClone } from "./setup-recipe.js";
 
 // Lazy checkout materialization: clone a git project onto a host the first time
 // something is placed there. A clone can take minutes, so it is a background
@@ -14,8 +15,7 @@ import { cloneNameFromRemote, cloneUrlFromRemote, warmProjectOriginUrl } from ".
 // map is in memory (a restart forgets a running clone; the next placement just
 // starts it again, and the clone endpoint reuses a finished checkout).
 //
-// Nothing here runs the per-project setup recipe (#2245): when that lands it
-// adds its call after a successful clone, in `runJob`.
+// After a successful clone, `runJob` starts the per-project setup recipe (#2245).
 
 export type MaterializeState = "cloning" | "done" | "failed";
 
@@ -146,6 +146,8 @@ async function runJob(app: FastifyInstance, job: MaterializeJob): Promise<void> 
       { projectId: job.projectId, hostId: job.hostId, cwd: written.cwd },
       "[checkout-materialize] checkout ready",
     );
+    // Install dependencies in the fresh checkout; fire-and-forget, never fails the job.
+    startSetupAfterClone(app, project, job.hostId, written.cwd);
   } catch (err) {
     fail("failed", err instanceof Error ? err.message : String(err));
   }

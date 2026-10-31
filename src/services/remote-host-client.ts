@@ -69,6 +69,7 @@ import type {
   ProjectSearchListing,
 } from "./project-files.js";
 import type { GenerationTurnResult } from "./scaffold-generate.js";
+import { DEFAULT_SETUP_TIMEOUT_MS, type SetupRunResult } from "./setup-recipe-shared.js";
 
 // One HTTP+WS client per remote "agent" host (issue #26), talking to its
 // token-gated /internal/* API (src/routes/internal.ts). Every request sets
@@ -344,6 +345,9 @@ const WAIT_OUTPUT_REQUEST_SLACK_MS = 10_000;
 // headroom" reasoning as GIT_PUSH_REQUEST_TIMEOUT_MS's own comment.
 const GENERATION_TURN_WORKTREE_LIFECYCLE_MARGIN_MS = 60_000;
 const GENERATION_TURN_NETWORK_MARGIN_MS = 60_000;
+// Issue #2245 — the setup-recipe request outlives the run it carries by a
+// network margin, the same "agent-side budget plus headroom" shape.
+const SETUP_REQUEST_MARGIN_MS = 60_000;
 const GENERATION_TURN_REQUEST_TIMEOUT_MS =
   DEFAULT_GENERATION_TIMEOUT_MS +
   GENERATION_TURN_WORKTREE_LIFECYCLE_MARGIN_MS +
@@ -1744,6 +1748,27 @@ export class RemoteHostClient {
       },
       GENERATION_TURN_REQUEST_TIMEOUT_MS,
     );
+  }
+
+  /** Runs a project's setup recipe on this agent (#2245) — mirrors
+   * /internal/run-setup's `{cwd, recipe, logKey}` -> `SetupRunResult`.
+   * Like run-generation-turn, an application-level failure is a 200 `outcome`,
+   * not an HTTP status. The request timeout is the run's budget plus a margin. */
+  resolveRunSetup(cwd: string, recipe: string, logKey: string): Promise<SetupRunResult> {
+    return this.request(
+      "/internal/run-setup",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd, recipe, logKey }),
+      },
+      DEFAULT_SETUP_TIMEOUT_MS + SETUP_REQUEST_MARGIN_MS,
+    );
+  }
+
+  /** The tail of a setup log on this agent (#2245). */
+  resolveSetupLog(logKey: string): Promise<{ content: string; truncated: boolean }> {
+    return this.request(`/internal/setup-log?logKey=${encodeURIComponent(logKey)}`);
   }
 
   /** Lists this agent's own on-disk task-worktree directories (#484) — for

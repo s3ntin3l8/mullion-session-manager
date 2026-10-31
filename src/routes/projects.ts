@@ -232,6 +232,7 @@ import {
   type ComposeService,
 } from "../services/docker-service-detect.js";
 import { createSessionRecord } from "../services/session-lifecycle.js";
+import { SETUP_RECIPE_MAX_LENGTH } from "../services/setup-recipe-shared.js";
 import { resolveWorkflowConventionsText } from "../services/workflow-conventions.js";
 import { hashWorkflowConventionsSection } from "../services/mullion-scaffold.js";
 import { RESUMABLE_TASK_STATUSES, sessionsUsingWorktree } from "../services/worktree-usage.js";
@@ -362,6 +363,9 @@ interface UpdateProjectBody {
   // tier — see task-agent-resolve.ts).
   defaultAgent?: string | null;
   defaultReviewAgent?: string | null;
+  // Issue #2245 — the setup recipe (a shell command string) run in a fresh
+  // worktree or clone; `null` clears it.
+  setupRecipe?: string | null;
   // Issue #1723 / roadmap 8.9 — the placement mode: "pinned" (the default —
   // every session runs on the project's own host) or "auto" (an eligible
   // host is chosen per session; see services/placement.ts). The opt-in is
@@ -598,6 +602,7 @@ const updateProjectSchema = {
         type: ["string", "null"],
         enum: [...KNOWN_AGENTS, HERMES_REVIEW_AGENT, null],
       },
+      setupRecipe: { type: ["string", "null"], maxLength: SETUP_RECIPE_MAX_LENGTH },
       mergeOnApprove: { type: ["boolean", "null"] },
       autoApprove: { type: ["boolean", "null"] },
       allowCrossProjectSpawn: { type: ["boolean", "null"] },
@@ -5321,6 +5326,7 @@ export async function projectsRoute(app: FastifyInstance) {
         autoFetch,
         defaultAgent,
         defaultReviewAgent,
+        setupRecipe,
         placement,
         mergeOnApprove,
         autoApprove,
@@ -5445,6 +5451,7 @@ export async function projectsRoute(app: FastifyInstance) {
         autoFetch === undefined &&
         defaultAgent === undefined &&
         defaultReviewAgent === undefined &&
+        setupRecipe === undefined &&
         placement === undefined &&
         hostCwds === undefined &&
         placementConstraints === undefined &&
@@ -5467,7 +5474,7 @@ export async function projectsRoute(app: FastifyInstance) {
         suppressConventionsInjectionAfterScaffold === undefined
       ) {
         return reply.badRequest(
-          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, placement, hostCwds, placementConstraints, preProvision, gitIdentity, mergeOnApprove, autoApprove, allowCrossProjectSpawn, crossProjectTargets, acceptsChildrenFrom, acceptsChildrenFromList, acceptsMessagesFrom, acceptsMessagesFromList, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
+          "At least one of name, cwd, devServerUrl, autoFetch, defaultAgent, defaultReviewAgent, setupRecipe, placement, hostCwds, placementConstraints, preProvision, gitIdentity, mergeOnApprove, autoApprove, allowCrossProjectSpawn, crossProjectTargets, acceptsChildrenFrom, acceptsChildrenFromList, acceptsMessagesFrom, acceptsMessagesFromList, maxAutoReturnRounds, conventionalCommitTitles, autoTagRelease, injectAgentGuide, injectProjectBriefing, injectWorkflowConventions, or suppressConventionsInjectionAfterScaffold must be provided.",
         );
       }
 
@@ -5538,6 +5545,8 @@ export async function projectsRoute(app: FastifyInstance) {
           ...(autoFetch !== undefined ? { autoFetch } : {}),
           ...(defaultAgent !== undefined ? { defaultAgent } : {}),
           ...(defaultReviewAgent !== undefined ? { defaultReviewAgent } : {}),
+          // A blank recipe is "none": stored as null so nothing runs.
+          ...(setupRecipe !== undefined ? { setupRecipe: setupRecipe?.trim() || null } : {}),
           // Issue #1723 / roadmap 8.9 — the placement opt-in.
           ...(placement !== undefined ? { placement } : {}),
           // Issue #2241 — the steering flags. `null` (or default flags) clears them.

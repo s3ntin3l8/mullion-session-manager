@@ -346,6 +346,10 @@ export interface Project {
   // Per-project git identity override (beats settings.sessions.gitIdentity);
   // null = use the global one. Optional for older servers and fixtures.
   gitIdentity?: { name: string; email: string } | null;
+  // Issue #2245 — shell command (`sh -c`, max 4096 chars) run in a freshly cut
+  // worktree or cloned checkout to install dependencies; null = none. Optional
+  // for older servers and fixtures.
+  setupRecipe?: string | null;
   // Where this project's dev server listens (issue #28) — a bare port
   // ("5173") or a full URL. The authoritative, manually-set fallback the
   // preview proxy resolves against; null when unconfigured.
@@ -971,6 +975,8 @@ export type WorktreeKeptReason =
   | "conflicts"
   | "remove-failed";
 
+export type SetupStatus = "running" | "ok" | "failed" | "timeout";
+
 export interface Session {
   id: number;
   projectId: number;
@@ -1046,6 +1052,10 @@ export interface Session {
   // (issue #2026) is the only reader.
   worktreeBranch?: string | null;
   worktreeRepoCwd?: string | null;
+  // Issue #2245 — the project's setup recipe ran for this session's fresh
+  // worktree. Null/absent = none ran. The log is read through
+  // `api.getSessionSetupLog`.
+  setupStatus?: SetupStatus | null;
   worktreeKeptReason?: WorktreeKeptReason | null;
   worktreeLastAttemptAt?: string | null;
   worktreeReclaimedAt?: string | null;

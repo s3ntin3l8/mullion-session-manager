@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { SetupBadge } from "./ui/SetupBadge.js";
 import type { IDockviewPanelHeaderProps } from "dockview-react";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 import { useDashboardStore } from "./store/index.js";
@@ -404,6 +405,7 @@ export function PaneTab(props: IDockviewPanelHeaderProps<TerminalPaneParams>) {
         )}
         {!narrow && branchLabel && <span className="pane-tab-branch">{branchLabel}</span>}
         {!narrow && badge}
+        {!narrow && session && <SetupBadge sessionId={session.id} status={session.setupStatus} />}
         {!narrow && hostBadge && (
           <span className="pane-tab-host-badge" title={hostBadge.title}>
             <HostsIcon size={9} />

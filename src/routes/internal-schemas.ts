@@ -849,6 +849,38 @@ export const runGenerationTurnSchema = {
   },
 };
 
+// Issue #2245 — POST /internal/run-setup: run a project's setup recipe in a
+// freshly cut worktree / cloned checkout on THIS agent. `logKey` names the log
+// file (`<sessionsDir>/<logKey>.setup.log`), so it is a filename stem, never a
+// path. The run's timeout is fixed server-side, not a request field.
+export const runSetupSchema = {
+  body: {
+    type: "object",
+    required: ["cwd", "recipe", "logKey"],
+    additionalProperties: false,
+    properties: {
+      cwd: { type: "string", minLength: 1 },
+      recipe: { type: "string", minLength: 1, maxLength: 4096 },
+      logKey: { type: "string", pattern: "^[A-Za-z0-9_-]{1,64}$" },
+    },
+  },
+};
+
+export interface RunSetupBody {
+  cwd: string;
+  recipe: string;
+  logKey: string;
+}
+
+export const setupLogQuerySchema = {
+  querystring: {
+    type: "object",
+    required: ["logKey"],
+    additionalProperties: false,
+    properties: { logKey: { type: "string", pattern: "^[A-Za-z0-9_-]{1,64}$" } },
+  },
+};
+
 export interface BundleSyncRemoveBody {
   disabled: boolean;
 }

@@ -319,6 +319,12 @@ describe("kill session cascade confirmation (issue #196 5.6)", () => {
 });
 
 describe("PaneTab", () => {
+  it("shows the setup-recipe badge on a session whose recipe ran (#2245)", () => {
+    session = { ...session, setupStatus: "failed" };
+    render(<PaneTab {...makeProps()} />);
+    expect(screen.getByRole("button", { name: /setup failed/ })).toBeInTheDocument();
+  });
+
   it("shows the status badge when the tab mounts at or above the narrow threshold", () => {
     render(<PaneTab {...makeProps()} />);
 

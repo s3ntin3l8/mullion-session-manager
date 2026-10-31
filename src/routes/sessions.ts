@@ -26,6 +26,7 @@ import {
   matchesMagicBytes,
 } from "../services/session-upload.js";
 import { listSessionBrowserBindings } from "../services/session-browsers.js";
+import { readSessionSetupLog } from "../services/setup-recipe.js";
 import {
   createSessionRecord,
   killSession,
@@ -433,6 +434,18 @@ export async function sessionsRoute(app: FastifyInstance) {
     // and this operation is about the session.
     const hostId = resolveSessionHostId(app, row);
     return withLiveStatus(app, row, idleThresholdMs, hostId);
+  });
+
+  // Issue #2245 — the tail of the setup-recipe log for this session, read on the
+  // session's own host. 404 when no recipe ran (or the log is gone).
+  app.get<{ Params: { id: string } }>("/api/sessions/:id/setup-log", async (request, reply) => {
+    const sessionId = Number(request.params.id);
+    if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    if (!row) return reply.notFound();
+    const log = await readSessionSetupLog(app, resolveSessionHostId(app, row), sessionId);
+    if (!log) return reply.notFound("No setup log for this session");
+    return log;
   });
 
   // Phase 4 (#187) — scrollback replay over REST, the counterpart to

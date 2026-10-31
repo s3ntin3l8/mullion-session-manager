@@ -549,6 +549,7 @@ export function ProjectBriefingPanel({ params }: { params: ProjectBriefingPanelP
         )}
       </div>
       <ProjectGitIdentity projectId={params.projectId} />
+      <ProjectSetupRecipe projectId={params.projectId} />
       <div className="agent-rules-panel">
         <div className="agent-rules-panel-list cmux-scroll">
           {FIELD_CONFIGS.map((config) => (
@@ -614,6 +615,48 @@ function ProjectGitIdentity({ projectId }: { projectId: number }) {
     <div className="agent-rules-panel-notice project-briefing-git-identity">
       <span>Git identity for this project's sessions (overrides Settings → Sessions):</span>
       <GitIdentityFields value={draft} onChange={setDraft} onCommit={commit} />
+    </div>
+  );
+}
+
+// Per-project setup recipe (issue #2245): a shell command run in a freshly cut
+// worktree or cloned checkout, on the host that owns it. Saved when the field
+// loses focus; clearing it removes the recipe.
+const SETUP_RECIPE_MAX_LENGTH = 4096;
+
+function ProjectSetupRecipe({ projectId }: { projectId: number }) {
+  const saved = useDashboardStore((s) => s.projects.find((p) => p.id === projectId)?.setupRecipe);
+  // Keyed by the saved value so an external change (another tab, a merge)
+  // resets the draft without a set-state-in-effect.
+  return <SetupRecipeField key={saved ?? ""} projectId={projectId} saved={saved ?? ""} />;
+}
+
+function SetupRecipeField({ projectId, saved }: { projectId: number; saved: string }) {
+  const updateProject = useDashboardStore((s) => s.updateProject);
+  const [draft, setDraft] = useState(saved);
+  const commit = () => {
+    const next = draft.trim();
+    if (next === saved) return;
+    void updateProject(projectId, { setupRecipe: next === "" ? null : next });
+  };
+  return (
+    <div className="agent-rules-panel-notice project-briefing-setup-recipe">
+      <span>
+        Setup recipe — run with <code>sh -c</code> in a new worktree or clone, on its host (e.g.{" "}
+        <code>npm ci &amp;&amp; (cd frontend &amp;&amp; npm ci)</code>). A failure never blocks the
+        session; its log stays one click away:
+      </span>
+      <textarea
+        className="project-setup-recipe-input"
+        aria-label="Setup recipe"
+        rows={2}
+        maxLength={SETUP_RECIPE_MAX_LENGTH}
+        spellCheck={false}
+        placeholder="No setup recipe"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+      />
     </div>
   );
 }

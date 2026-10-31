@@ -41,6 +41,7 @@ import {
   type SessionGithubRole,
 } from "./session-github-auth.js";
 import type { SessionGithubAuth } from "./session-github-token.js";
+import { startSetupRecipe } from "./setup-recipe.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { resolveSessionHostId } from "./session-live-info.js";
 import {
@@ -901,6 +902,9 @@ interface CreateRollback {
   parentCwd?: string;
   /** Branch created together with the worktree (baseRef path only). */
   branch?: string;
+  /** Issue #2245 — prepareWorktree cut a fresh tree for this call (not a resume
+   * of an existing one), so the project's setup recipe runs in it. */
+  cutWorktree?: boolean;
   /** Inserted `sessions` row id, once the insert committed. */
   sessionId?: number;
   spawned: boolean;
@@ -1312,6 +1316,15 @@ async function createSessionRecordInner(
 
   trackPreview(app, project, params, cwd, created.id, placementHost);
 
+  // Issue #2245 — a worktree was just cut for this session (prepareWorktree, or
+  // the promote route, which hands over the tree it cut as `ownedWorktree`):
+  // install its dependencies. Fire-and-forget, so the session is never held up
+  // by it and a failure only flags the session. A Task Master retry/resume
+  // reuses an existing tree and passes neither, so it does not re-run.
+  if (cwd !== undefined && (rb.cutWorktree || params.ownedWorktree !== undefined)) {
+    startSetupRecipe(app, project, { id: created.id, hostId: placementHost, cwd });
+  }
+
   return {
     ok: true,
     row: created,
@@ -1438,6 +1451,7 @@ async function prepareWorktree(
     rb.worktreeHostId = placement.hostId;
     rb.worktreePath = result.path;
     rb.parentCwd = cwd ?? projectRootOnHost;
+    rb.cutWorktree = true;
     return { ok: true, cwd: result.path };
   }
   if (worktree?.baseRef) {
@@ -1460,6 +1474,7 @@ async function prepareWorktree(
     rb.worktreePath = resolved.path;
     rb.parentCwd = cwd ?? projectRootOnHost;
     rb.branch = resolved.branch;
+    rb.cutWorktree = true;
     return { ok: true, cwd: resolved.path };
   }
   return { ok: true, cwd };

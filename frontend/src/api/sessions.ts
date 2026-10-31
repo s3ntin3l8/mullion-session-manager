@@ -36,6 +36,10 @@ export const sessionsApi = {
     return request<Session[]>(`/api/sessions${qs ? `?${qs}` : ""}`);
   },
 
+  // Issue #2245 — the tail of the session's setup-recipe log (404 when none).
+  getSessionSetupLog: (id: number) =>
+    request<{ content: string; truncated: boolean }>(`/api/sessions/${id}/setup-log`),
+
   // Issue #213 (roadmap 4.7) — queries persisted session-event history (GET
   // /api/events). Deliberately no `kind` param: the server only supports
   // filtering to exactly one kind, while SessionTimeline.tsx's UI is 16

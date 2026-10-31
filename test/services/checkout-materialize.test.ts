@@ -23,6 +23,7 @@ const { chooseHost, previewPlacement, resolveTargetHost } =
   await import("../../src/services/placement.js");
 const hostGitModule = await import("../../src/services/host-git.js");
 const remoteClientModule = await import("../../src/services/remote-host-client.js");
+const setupRecipeModule = await import("../../src/services/setup-recipe.js");
 const materialize = await import("../../src/services/checkout-materialize.js");
 const preProvision = await import("../../src/services/pre-provision.js");
 const projectOrigin = await import("../../src/services/project-origin.js");
@@ -279,6 +280,20 @@ describe("materializing a checkout", () => {
       // A host that now has the path is done at once, nothing is cloned again.
       expect(materialize.startMaterialize(app, project.id, host).state).toBe("done");
       expect(clone).toHaveBeenCalledTimes(1);
+    });
+
+    it("starts the project's setup recipe in the fresh clone, and not after a failed one", async () => {
+      const host = await addHost();
+      const project = addProject(repoDir(ORIGIN));
+      const setup = vi
+        .spyOn(setupRecipeModule, "startSetupAfterClone")
+        .mockImplementation(() => {});
+      vi.spyOn(hostGitModule, "cloneHostCheckout").mockResolvedValue(cloneOk as never);
+      const job = materialize.startMaterialize(app, project.id, host);
+      await vi.waitFor(() => expect(job.state).toBe("done"));
+      expect(setup).toHaveBeenCalledTimes(1);
+      expect(setup.mock.calls[0][1].id).toBe(project.id);
+      expect(setup.mock.calls[0].slice(2)).toEqual([host, REMOTE_CWD]);
     });
 
     it("keeps the reason and detail of a failed clone, and writes nothing", async () => {

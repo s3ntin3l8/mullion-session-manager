@@ -200,4 +200,8 @@ export type TaskEvent =
   // change (task-workflow-gate.ts's recordWorkflowHold): same doorbell shape,
   // so the board shows the "needs approval" chip without waiting for some
   // unrelated event to trigger a refetch.
-  | { taskId: number; projectId: number; kind: "workflow-hold"; ts: number };
+  | { taskId: number; projectId: number; kind: "workflow-hold"; ts: number }
+  // #2245 — a session's setup recipe started or finished (setup-recipe.ts).
+  // Doorbell shape: the frontend refetches its sessions. `taskId` is 0 — the
+  // frame is about a session, which may not belong to any task.
+  | { taskId: number; projectId: number; kind: "setup"; ts: number };

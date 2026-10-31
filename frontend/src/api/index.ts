@@ -158,6 +158,7 @@ export type {
   SubagentInfo,
   BackgroundTask,
   Session,
+  SetupStatus,
   PromoteSessionResponse,
   StoredEventRow,
   EventHistoryPage,
