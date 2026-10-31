@@ -1397,10 +1397,10 @@ export function createAgentSandboxHome(
         // the environment). Anything else is unexpected. Either way the agent
         // starts unauthenticated, so say so.
         console.warn(
-          "[scaffold-generate] no credentials seeded for %s from %s: %s",
-          String(agentCommand).replace(/[\r\n]+/g, " "),
-          String(realAuth).replace(/[\r\n]+/g, " "),
-          String((err as Error).message).replace(/[\r\n]+/g, " "),
+          "[scaffold-generate] no credentials seeded for %s (%s): %s",
+          agentLogLabel(agentCommand),
+          f.endsWith(".credentials.json") ? ".credentials.json" : "auth.json",
+          String((err as NodeJS.ErrnoException).code ?? "error").replace(/[\r\n]+/g, " "),
         );
       }
     }
@@ -1684,6 +1684,24 @@ export function redactSecrets(text: string): string {
   return out;
 }
 
+/** A fixed label for the agent in log lines. The agent command arrives from a
+ * request or project setting; the log gets only the literal it matched, never
+ * the caller's string. */
+function agentLogLabel(agentCommand: string): string {
+  switch (agentCommand) {
+    case "claude":
+      return "claude";
+    case "codex":
+      return "codex";
+    case "opencode":
+      return "opencode";
+    case "agy":
+      return "agy";
+    default:
+      return "unknown agent";
+  }
+}
+
 function tail(text: string | Buffer | undefined, max: number): string {
   const t = redactSecrets((text ?? "").toString()).trim();
   return t.length > max ? `…${t.slice(-max)}` : t;
@@ -1894,7 +1912,7 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
       if (err) {
         console.warn(
           "[scaffold-generate] %s generation turn failed (%s) stdout tail: %s | stderr tail: %s",
-          String(agentCommand).replace(/[\r\n]+/g, " "),
+          agentLogLabel(agentCommand),
           String(describeExit(err)).replace(/[\r\n]+/g, " "),
           String(tail(stdout, FAILURE_LOG_TAIL_CHARS)).replace(/[\r\n]+/g, " "),
           String(tail(stderr, FAILURE_LOG_TAIL_CHARS)).replace(/[\r\n]+/g, " "),
