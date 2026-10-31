@@ -379,10 +379,11 @@ if (failures.length > 0) {
       "existing file the size it had at the reference commit — so this check\n" +
       "is asking whether THIS change made a file bigger, not whether the\n" +
       "file is bigger than it was once.\n" +
-      "Split the file, or — if the growth is deliberate — record the new size\n" +
-      "in the baseline file: it is a committed file, so a size that goes UP\n" +
-      "shows up in the diff where a reviewer sees it, and one that goes DOWN\n" +
-      "is the ratchet turning over. Either way the growth cannot be silent.",
+      "Split the file. Do not raise its baseline entry to make this pass: raising\n" +
+      "a ceiling is the one edit the ratchet forbids, and a full clone's\n" +
+      "baseline test fails when an entry stops matching the file's size at the\n" +
+      "recorded commit. A size that goes DOWN is the ratchet turning over:\n" +
+      "record that in the baseline file, where a reviewer sees it in the diff.",
   );
   process.exit(1);
 }
