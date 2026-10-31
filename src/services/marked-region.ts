@@ -193,7 +193,6 @@ export function topLevelLines(
       i = close + 1;
     }
   }
-  let inOpenRegion = false;
   for (; i < lines.length; i++) {
     const line = lines[i].replace(/\r$/, "");
     const f = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
@@ -206,7 +205,6 @@ export function topLevelLines(
         f[2].trim() !== "",
         startRe,
         endRe,
-        inOpenRegion,
       );
       if (close !== -1) {
         for (let k = i; k <= close; k++) out[k] = false;
@@ -223,8 +221,6 @@ export function topLevelLines(
         continue;
       }
     }
-    if (startRe.test(line)) inOpenRegion = true;
-    else if (endRe.test(line)) inOpenRegion = false;
   }
   return out;
 }
@@ -237,13 +233,11 @@ function findClosingFenceLine(
   openerHasInfo: boolean,
   startRe: RegExp,
   endRe: RegExp,
-  inOpenRegion: boolean,
 ): number {
   let close = -1;
   let bareCount = 0;
   for (let k = openLine + 1; k < lines.length; k++) {
     const line = lines[k].replace(/\r$/, "");
-    if (close !== -1 && (startRe.test(line) || endRe.test(line))) break;
     const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
     if (!m || m[1][0] !== ch || m[1].length < len) continue;
     if (m[2].trim() === "") {
@@ -263,11 +257,11 @@ function findClosingFenceLine(
   }
   if (close === -1) return -1;
   // An info-string opener (` ```bash `) followed by an even number of bare
-  // fences before the next info-string opener or marker boundary was left
-  // unclosed: the bare fences pair with each other (` ```\nplain\n``` `), and
-  // stealing the first one as a closer here would leave the last one dangling.
+  // fences before the next info-string opener was left unclosed: the bare
+  // fences pair with each other (` ```\nplain\n``` `), and stealing the first
+  // one as a closer here would leave the last one dangling.
   if (openerHasInfo && bareCount % 2 === 0) return -1;
-  if (fenceSwallowsMarker(lines, openLine, close, startRe, endRe, inOpenRegion)) {
+  if (fenceSwallowsMarker(lines, openLine, close, startRe, endRe)) {
     return -1;
   }
   return close;
@@ -279,7 +273,6 @@ function fenceSwallowsMarker(
   closeLine: number,
   startRe: RegExp,
   endRe: RegExp,
-  inOpenRegion: boolean,
 ): boolean {
   const isMarker = (idx: number): boolean => {
     const raw = lines[idx].replace(/\r$/, "");
@@ -293,11 +286,8 @@ function fenceSwallowsMarker(
     }
   }
   if (!hasMarker) return false;
-  // A fence opened inside an already-open region cannot close at or after the
-  // region's end marker.
-  if (inOpenRegion) return true;
-  // Outside an open region, a fence may only contain a marker line when the
-  // fence directly wraps a quoted marker example: either a single marker line
+  // A fence may only contain a marker line when the fence directly wraps a
+  // quoted marker example: either a single marker line
   // (` ```html\n<!-- start -->\n``` `) or a `startMarker ... endMarker` block
   // with the markers on the first and last lines inside the fence.
   if (closeLine === openLine + 2) return false;

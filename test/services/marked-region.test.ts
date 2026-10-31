@@ -395,6 +395,32 @@ describe("upsertMarkedRegionAfterIntro", () => {
     const twice = upsertMarkedRegionAfterIntro(once, START, END, "body2");
     expect(twice).toContain(`Use ${START} or \`${START}\`.`);
     expect(extractMarkedRegion(twice, START, END)).toBe("body2");
+
+    const withBashBeforeBareQuote = `# Project\n\n\`\`\`bash\nnpm test\n\`\`\`\n\n\`\`\`\n${START}\nexample\n${END}\n\`\`\`\n`;
+    expect(extractMarkedRegion(withBashBeforeBareQuote, START, END)).toBeNull();
+    const afterBashQuote = upsertMarkedRegionAfterIntro(
+      withBashBeforeBareQuote,
+      START,
+      END,
+      "new region",
+    );
+    expect(afterBashQuote).toContain(`\`\`\`\n${START}\nexample\n${END}\n\`\`\``);
+    expect(extractMarkedRegion(afterBashQuote, START, END)).toBe("new region");
+
+    const regionQuotingPair = `# Proj\n\n${START}\n## Setup\n\n\`\`\`html\n${START}\nexample\n${END}\n\`\`\`\n\n## More\n${END}\n`;
+    expect(extractMarkedRegion(regionQuotingPair, START, END)).toBe(
+      `## Setup\n\n\`\`\`html\n${START}\nexample\n${END}\n\`\`\`\n\n## More`,
+    );
+    const updatedRegionQuotingPair = upsertMarkedRegionAfterIntro(
+      regionQuotingPair,
+      START,
+      END,
+      "replaced body",
+    );
+    expect(updatedRegionQuotingPair).toBe(`# Proj\n\n${START}\nreplaced body\n${END}\n`);
+    expect(
+      upsertMarkedRegionAfterIntro(updatedRegionQuotingPair, START, END, "replaced body"),
+    ).toBe(updatedRegionQuotingPair);
   });
 
   it("replaces an existing region in place when an unclosed fence or stray comment precedes it", () => {

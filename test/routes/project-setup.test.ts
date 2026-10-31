@@ -1307,18 +1307,15 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
   it("computes hasSkill/hasReviewer/hasScaffoldRegion from the project's real checkout, not the scratch worktree", async () => {
     const app = await buildApp();
     fs.mkdirSync(path.join(repoDir, ".claude", "skills", "demo"), { recursive: true });
+    fs.writeFileSync(path.join(repoDir, ".claude", "skills", "demo", "SKILL.md"), "hand-written\n");
     fs.writeFileSync(
-      path.join(repoDir, ".claude", "skills", "demo", "SKILL.md"),
-      "hand-written already\n",
+      path.join(repoDir, "AGENTS.md"),
+      "# Project\n\n```html\n<!-- mullion:briefing:start -->\nexample\n<!-- mullion:briefing:end -->\n```\n",
     );
-    execFileSync("git", ["add", "-A"], { cwd: repoDir, env: gitEnv() });
-    execFileSync("git", ["commit", "-m", "pre-existing skill", "--no-verify"], {
-      cwd: repoDir,
-      env: gitEnv(),
-    });
+    git(repoDir, ["add", "-A"]);
+    git(repoDir, ["commit", "-m", "pre-existing skill and fenced marker example", "--no-verify"]);
     const projectId = await createProject(app, repoDir);
     mockValidGeneration("demo");
-
     await app.inject({
       method: "POST",
       url: `/api/projects/${projectId}/setup/generate`,
@@ -1329,6 +1326,18 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
     expect(call.hasSkill).toBe(true);
     expect(call.hasReviewer).toBe(false);
     expect(call.hasScaffoldRegion).toBe(false);
+
+    const real = "# P\n\n<!-- mullion:briefing:start -->\nreal\n<!-- mullion:briefing:end -->\n";
+    fs.writeFileSync(path.join(repoDir, "AGENTS.md"), real);
+    git(repoDir, ["add", "-A"]);
+    git(repoDir, ["commit", "-m", "real scaffold region", "--no-verify"]);
+    mockValidGeneration("demo-real");
+    await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/generate`,
+      payload: { slug: "demo-real" },
+    });
+    expect(vi.mocked(generateScaffoldContent).mock.calls[1][0].hasScaffoldRegion).toBe(true);
 
     await app.close();
   });
@@ -1370,11 +1379,8 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
     const agentsDir = path.join(cwd, ".claude", "agents");
     fs.mkdirSync(agentsDir, { recursive: true });
     fs.writeFileSync(path.join(agentsDir, `${slug}-reviewer.md`), handWrittenReviewer(slug));
-    execFileSync("git", ["add", "-A"], { cwd, env: gitEnv() });
-    execFileSync("git", ["commit", "-m", "pre-existing skill+reviewer", "--no-verify"], {
-      cwd,
-      env: gitEnv(),
-    });
+    git(cwd, ["add", "-A"]);
+    git(cwd, ["commit", "-m", "pre-existing skill+reviewer", "--no-verify"]);
   }
 
   // Regression — this is the exact behavior issue #956 built and issue
@@ -1385,11 +1391,8 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
   describe("existingInstructions (issue #2316)", () => {
     function commitAgentsMd(cwd: string, text: string) {
       fs.writeFileSync(path.join(cwd, "AGENTS.md"), text);
-      execFileSync("git", ["add", "-A"], { cwd, env: gitEnv() });
-      execFileSync("git", ["commit", "-m", "add AGENTS.md", "--no-verify"], {
-        cwd,
-        env: gitEnv(),
-      });
+      git(cwd, ["add", "-A"]);
+      git(cwd, ["commit", "-m", "add AGENTS.md", "--no-verify"]);
     }
 
     it("rejects an unknown mode", async () => {
@@ -1481,11 +1484,8 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
     it("restructure splices Mullion's region over the placeholder and writes the moved text to CONTRIBUTING.md", async () => {
       commitAgentsMd(repoDir, "# P\n\n## Workflow rules\n- comment @bot Review\n");
       fs.writeFileSync(path.join(repoDir, "CONTRIBUTING.md"), "# Contributing\n\nExisting.\n");
-      execFileSync("git", ["add", "-A"], { cwd: repoDir, env: gitEnv() });
-      execFileSync("git", ["commit", "-m", "add contributing", "--no-verify"], {
-        cwd: repoDir,
-        env: gitEnv(),
-      });
+      git(repoDir, ["add", "-A"]);
+      git(repoDir, ["commit", "-m", "add contributing", "--no-verify"]);
       const app = await buildApp();
       const projectId = await createProject(app, repoDir);
       vi.mocked(generateScaffoldContent).mockResolvedValue({
