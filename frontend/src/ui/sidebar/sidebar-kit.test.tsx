@@ -380,6 +380,11 @@ describe("SidebarRow hover actions do not shift layout", () => {
     expect(base).toContain("right: 10px");
     expect(base).not.toContain("right: 100%");
     expect(base).not.toContain("display: none");
+    // `position: absolute` resolves against the row, so the row must be the
+    // containing block — drop this and every row's actions stack in one place.
+    expect(rule(".sb-row")).toContain("position: relative");
+    // The overlay hides the chips it covers rather than sitting on live ones.
+    expect(css).toMatch(/\.sb-row:hover \.sb-row-trail > :not\(\.sb-row-actions\)/);
     expect(css).not.toMatch(/\.sb-row:hover \.sb-row-actions[^{]*\{[^}]*display:/);
   });
 });

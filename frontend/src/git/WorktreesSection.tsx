@@ -201,7 +201,7 @@ export function WorktreesSection({
                     <ConfirmButton
                       title="Force remove"
                       onConfirm={() => void remove(w.path, true)}
-                      armedLabel="Confirm"
+                      armedLabel="Force remove"
                     >
                       Force
                     </ConfirmButton>

@@ -381,20 +381,20 @@ describe("Branches", () => {
     await waitFor(() => expect(m.getProjectGitBranches.mock.calls.length).toBeGreaterThan(1));
   });
 
-  it("explains a refusal and offers Force for a forceable one", async () => {
-    m.deleteProjectGitBranch
-      .mockResolvedValueOnce({ deleted: false, reason: "unmerged" })
-      .mockResolvedValueOnce({ deleted: true });
+  it("explains a refusal inline, with no Force: the delete is already forced", async () => {
+    m.deleteProjectGitBranch.mockResolvedValue({
+      deleted: false,
+      reason: "checked-out",
+      detail: "/repo/.wt/misc",
+    });
     renderView();
     await ready();
     await userEvent.click(within(rowOf("misc")).getByRole("button", { name: /^Delete branch/ }));
     await userEvent.click(
       within(rowOf("misc")).getByRole("button", { name: /click again to confirm/ }),
     );
-    expect(await screen.findByText(/commits not merged/)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Force" }));
-    await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
-    await waitFor(() => expect(m.deleteProjectGitBranch).toHaveBeenLastCalledWith(1, "misc", true));
+    expect(await screen.findByText(/Checked out in another worktree/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Force" })).toBeNull();
   });
 
   it("reports a thrown delete failure on the row", async () => {
@@ -722,7 +722,7 @@ describe("Worktrees", () => {
     await userEvent.click(within(section).getByRole("button", { name: /click again to confirm/ }));
     expect(await screen.findByText(/uncommitted changes/)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Force" }));
-    await userEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await userEvent.click(screen.getByRole("button", { name: "Force remove" }));
     await waitFor(() =>
       expect(m.removeProjectGitWorktree).toHaveBeenLastCalledWith(1, "/repo/.wt/old-done", true),
     );
@@ -961,12 +961,13 @@ describe("Branch detail", () => {
 
   it("reports a failed delete and session start", async () => {
     m.getProjectGitBranch.mockResolvedValue(detail({ name: "misc" }));
-    m.deleteProjectGitBranch.mockResolvedValue({ deleted: false, reason: "unmerged" });
+    m.deleteProjectGitBranch.mockResolvedValue({ deleted: false, reason: "delete-failed" });
     m.listProjectActions.mockResolvedValue([]);
     await openDetail("misc");
     await userEvent.click(screen.getByRole("button", { name: /Delete…/ }));
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
-    expect(await screen.findByText(/commits not merged/)).toBeInTheDocument();
+    expect(await screen.findByText(/The operation failed/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Force" })).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: /Open session/ }));
     expect(
       await screen.findByText("No launcher is configured for this project."),

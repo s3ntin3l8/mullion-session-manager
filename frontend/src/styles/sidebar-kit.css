@@ -347,6 +347,18 @@
   opacity: 0;
   pointer-events: none;
 }
+/* The overlay sits over the row's trailing chips, some of them clickable (a PR
+   chip). Hovering the row therefore hides them — the buttons REPLACE the chips
+   at the right edge rather than sitting on top of live ones, where a click
+   meant for a chip would land on a button (and, over a "merged" chip, on the
+   delete). Hover-capable pointers only: touch keeps the actions in flow. */
+@media (hover: hover) {
+  .sb-row:hover .sb-row-trail > :not(.sb-row-actions),
+  .sb-row:has(.sb-row-actions :focus-visible) .sb-row-trail > :not(.sb-row-actions) {
+    opacity: 0;
+    pointer-events: none;
+  }
+}
 /* ConfirmButton `compact` (a trash/rebase in the actions): exactly an
    `.sb-ibtn`'s box, armed or not, so arming moves nothing. Only the geometry
    is fixed here; the border stays the global button's 1px, so the armed and
@@ -370,6 +382,10 @@
 .sb-row:hover .sb-row-actions,
 .sb-row:focus-within .sb-row-actions {
   opacity: 1;
+}
+/* The box itself (gap/padding) never eats a click; only its buttons do. */
+.sb-row:hover .sb-row-actions > *,
+.sb-row:focus-within .sb-row-actions > * {
   pointer-events: auto;
 }
 @media (hover: none) {

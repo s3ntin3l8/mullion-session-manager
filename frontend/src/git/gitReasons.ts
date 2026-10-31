@@ -39,6 +39,8 @@ export function deleteBranchTitle(
   mergeState: GitBranchMergeState | null | undefined,
   taskId: number | null | undefined,
 ): string {
+  // `upstream-gone` counts as merged because mergeChip files it with the merged
+  // states; a force-pushed-then-deleted remote can still hide local-only work.
   const known =
     mergeState === "ancestor" || mergeState === "pr-merged" || mergeState === "upstream-gone";
   const base = known ? "Delete branch" : "Delete branch — it may have unmerged commits";

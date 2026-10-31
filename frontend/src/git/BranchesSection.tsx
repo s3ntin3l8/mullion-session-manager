@@ -28,12 +28,7 @@ import { isTaskBranch, type MullionLinks } from "../hooks/useMullionLinks.js";
 import { useBranchPreview } from "../hooks/useBranchPreview.js";
 import { groupBranches, isPrunable, mergeChip } from "./branchGroups.js";
 import { rebaseNotice, runBranchOp } from "./branchOps.js";
-import {
-  deleteBranchTitle,
-  FORCEABLE_REASONS,
-  isDefaultBranchName,
-  reasonMessage,
-} from "./gitReasons.js";
+import { deleteBranchTitle, isDefaultBranchName, reasonMessage } from "./gitReasons.js";
 import { NewBranchForm } from "./NewBranchForm.js";
 import { openSessionOn } from "./sessionLaunch.js";
 import { refreshGitEverywhere } from "./useSourceControl.js";
@@ -121,9 +116,11 @@ export function BranchesSection({
     });
   };
 
-  const deleteBranch = async (name: string, force = false) => {
+  // Always forced: the trash's armed title already says what is at stake, so
+  // the server never has an unmerged/task refusal left to bounce back.
+  const deleteBranch = async (name: string) => {
     try {
-      const result = await api.deleteProjectGitBranch(projectId, name, force);
+      const result = await api.deleteProjectGitBranch(projectId, name, true);
       if (result.deleted) {
         setError(name, null);
         refreshGitEverywhere(projectId);
@@ -323,15 +320,6 @@ export function BranchesSection({
                       {error && (
                         <div className="sc-row-error" role="alert">
                           {error.message}
-                          {error.reason && FORCEABLE_REASONS.has(error.reason) && (
-                            <ConfirmButton
-                              title="Force delete"
-                              onConfirm={() => void deleteBranch(b.name, true)}
-                              armedLabel="Confirm"
-                            >
-                              Force
-                            </ConfirmButton>
-                          )}
                         </div>
                       )}
                     </>
@@ -400,7 +388,7 @@ export function BranchesSection({
                       compact
                       title={blocked ?? deleteBranchTitle(b.mergeState, entry?.task?.id)}
                       disabled={blocked !== null}
-                      onConfirm={() => void deleteBranch(b.name, true)}
+                      onConfirm={() => void deleteBranch(b.name)}
                     >
                       <TrashIcon size={13} />
                     </ConfirmButton>

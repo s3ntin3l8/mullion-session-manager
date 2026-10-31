@@ -27,7 +27,7 @@ import {
 import { mergeChip } from "./branchGroups.js";
 import { rebaseNotice, runBranchOp } from "./branchOps.js";
 import { prTriad } from "./prTriad.js";
-import { deleteBranchTitle, FORCEABLE_REASONS, reasonMessage } from "./gitReasons.js";
+import { deleteBranchTitle, reasonMessage } from "./gitReasons.js";
 import { openSessionOn } from "./sessionLaunch.js";
 import { refreshGitEverywhere } from "./useSourceControl.js";
 import { useRepoUrl } from "./useRepoUrl.js";
@@ -104,9 +104,9 @@ export function BranchDetail({
         ? `Checked out in ${detail.worktreePath.split("/").pop()}`
         : null;
 
-  const remove = async (force = false) => {
+  const remove = async () => {
     try {
-      const result = await api.deleteProjectGitBranch(projectId, name, force);
+      const result = await api.deleteProjectGitBranch(projectId, name, true);
       if (result.deleted) {
         refreshGitEverywhere(projectId);
         onReload();
@@ -359,15 +359,6 @@ export function BranchDetail({
         {actionError && (
           <div className="sc-row-error" role="alert">
             {actionError.message}
-            {actionError.reason && FORCEABLE_REASONS.has(actionError.reason) && (
-              <ConfirmButton
-                title="Force delete"
-                onConfirm={() => void remove(true)}
-                armedLabel="Confirm"
-              >
-                Force
-              </ConfirmButton>
-            )}
           </div>
         )}
       </div>
@@ -417,7 +408,7 @@ export function BranchDetail({
         <ConfirmButton
           title={blocked ?? deleteBranchTitle(detail?.mergeState, taskId)}
           disabled={blocked !== null}
-          onConfirm={() => void remove(true)}
+          onConfirm={() => void remove()}
           armedLabel="Delete"
         >
           <TrashIcon size={12} /> Delete…
