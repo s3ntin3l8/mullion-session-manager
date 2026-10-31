@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type * as DemoModule from "../../scripts/demo/instance.mjs";
+import { pinnedPath } from "../helpers/pinned-path.js";
 
 // Issue #1642: a server that fails to spawn must not orphan the other one or
 // the scratch dir. These drive the real startDemo() with fake binaries.
@@ -95,7 +96,7 @@ const until = async (cond: () => boolean, timeoutMs = 15_000) => {
 };
 
 let demo: typeof DemoModule;
-const realPath = process.env.PATH;
+const realPath = process.env.PATH; // restored in afterAll; the child PATH is pinned
 beforeAll(async () => {
   // Teardown asks systemd for the demo's session scopes. Tests must not reach
   // the host's user bus (CONTRIBUTING.md), so shadow systemctl with one that
@@ -107,7 +108,7 @@ beforeAll(async () => {
     '#!/bin/sh\necho "Failed to connect to bus: No such file or directory" >&2\nexit 1\n',
     { mode: 0o755 },
   );
-  process.env.PATH = `${fakeBin}:${realPath}`;
+  process.env.PATH = pinnedPath(fakeBin);
   // The ports are read at import time, so pick free ones before importing:
   // a real `make demo` on this host must not make the test fail.
   process.env.DEMO_BACKEND_PORT = await freePort();

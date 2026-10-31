@@ -10,6 +10,7 @@ import {
   lastTranscriptLine,
   seedDemo,
 } from "../../scripts/demo/seed.mjs";
+import { pinnedPath } from "../helpers/pinned-path.js";
 
 // The demo's fake agents must never fall silent after their transcript, or
 // the backend's silence watchdog flags them "Gone quiet" in every screenshot.
@@ -23,7 +24,7 @@ function runFor(script: string, ms: number): Promise<string> {
   writeFileSync(file, script, { mode: 0o755 });
   return new Promise((resolve, reject) => {
     // TERM=dumb so `clear` prints nothing we have to strip.
-    const child = spawn(file, { env: { PATH: process.env.PATH, TERM: "dumb" } });
+    const child = spawn(file, { env: { PATH: pinnedPath(), TERM: "dumb" } });
     let out = "";
     child.stdout.on("data", (d: Buffer) => (out += d.toString("utf8")));
     child.on("error", reject);

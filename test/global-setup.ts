@@ -63,6 +63,11 @@ export function setup(): void {
   // Issue #2003 — no test may start a real systemd scope. Shadow systemd-run
   // for every worker (they inherit this env) and check the run afterwards.
   scopeGuard = installSystemdRunShim(suiteTmpDir);
+  // The shim goes FIRST; the tail is deliberately the inherited PATH (#2439):
+  // this is the one PATH every worker shares, and vitest itself, `git`,
+  // `dtach` and the user's toolchain must stay reachable through it. Spawned
+  // children that care which binary they run pin their own PATH instead
+  // (helpers/pinned-path.ts).
   origPath = process.env.PATH;
   process.env.PATH = `${scopeGuard.binDir}${path.delimiter}${origPath ?? ""}`;
 }

@@ -19,6 +19,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { buildFakeRelease } from "../helpers/fake-release.js";
+import { pinnedPath } from "../helpers/pinned-path.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -62,12 +63,12 @@ cp "$src" "$output"
   for (const name of ["npm", "npx"]) {
     writeShim(binDir, name, "#!/usr/bin/env bash\nexit 0\n");
   }
-  // The REAL rm, under the shim dir's name: the harness already puts its own
-  // bin dir first on the PATH so the commands the script runs resolve there,
-  // and `rm` is one of them (the update script removes the update job's plist
-  // and prunes old releases). Pointing it at /bin/rm keeps the script's own
-  // behaviour — and its assertions — independent of whatever `rm` happens to
-  // be on the host's PATH.
+  // The REAL rm, under the shim dir's name: the harness puts its own bin dir
+  // first on the PATH so the commands the script runs resolve there, and `rm`
+  // is one of them (the update script removes the update job's plist and
+  // prunes old releases). The PATH behind that dir is pinned to the system
+  // directories (pinnedPath), so a host `rm` shim can't be reached either way;
+  // this keeps the explicit /bin/rm as belt and braces.
   writeShim(binDir, "rm", '#!/usr/bin/env bash\nexec /bin/rm "$@"\n');
   writeShim(
     binDir,
@@ -142,7 +143,7 @@ describeOnLinux("scripts/self-update.sh", () => {
       ],
       {
         cwd: mullionHome,
-        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}`, ...opts.env },
+        env: { ...process.env, PATH: pinnedPath(binDir), ...opts.env },
         timeout: 20_000,
       },
     );

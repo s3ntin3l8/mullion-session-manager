@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pinnedPath } from "../helpers/pinned-path.js";
 
 const PORTABLE = path.resolve(__dirname, "../../scripts/portable.sh");
 
@@ -42,7 +43,7 @@ describe("run_with_timeout", () => {
         ],
         {
           encoding: "utf8",
-          env: { ...process.env, PATH: `${shims}${path.delimiter}${process.env.PATH}` },
+          env: { ...process.env, PATH: pinnedPath(shims) },
         },
       );
       expect(out.trim()).toBe("clean");

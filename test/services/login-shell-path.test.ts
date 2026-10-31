@@ -25,6 +25,8 @@ vi.mock("../../src/services/user-shell-env.js", async (importOriginal) => {
 import { runLoginShell } from "../../src/services/login-shell.js";
 
 describe("runLoginShell env", () => {
+  // Deliberately NOT pinned (#2439): this suite is about how the inherited
+  // PATH is combined with the login shell's, so each test sets PATH itself.
   const savedPath = process.env.PATH;
 
   afterEach(() => {

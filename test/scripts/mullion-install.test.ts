@@ -21,6 +21,7 @@ import fs from "node:fs";
 import { execFile, execFileSync } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { pinnedPath } from "../helpers/pinned-path.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -111,7 +112,7 @@ function runBootstrap(args: string[], env: Record<string, string> = {}) {
     timeout: 30_000,
     env: {
       ...process.env,
-      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      PATH: pinnedPath(binDir),
       TMPDIR: scratchDir,
       MULLION_TEST_LATEST_URL: `https://github.com/${REPO}/releases/tag/${TAG}`,
       MULLION_TEST_TARBALL: tarballPath,

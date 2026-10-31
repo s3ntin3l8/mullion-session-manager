@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { fileURLToPath } from "node:url";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
+import { pinnedPath } from "../helpers/pinned-path.js";
 
 // Integration test for the actual mullion.mjs subprocess entry point — the
 // thin spawned shim that core.test.ts/client.test.ts can't reach (those
@@ -82,7 +83,7 @@ function runCli(
   return new Promise((resolve, reject) => {
     const child = realSpawn(process.execPath, [MULLION_PATH, ...args], {
       env: {
-        PATH: process.env.PATH ?? "",
+        PATH: pinnedPath(),
         MULLION_SOCKET_PATH: socketPath,
         // Fail fast: the default 30 s connect retry (#2271) would outlast the test.
         MULLION_CONNECT_RETRY_MS: "0",
@@ -114,7 +115,7 @@ function runCliUntilInterrupted(
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = realSpawn(process.execPath, [MULLION_PATH, ...args], {
-      env: { PATH: process.env.PATH ?? "", MULLION_SOCKET_PATH: socketPath },
+      env: { PATH: pinnedPath(), MULLION_SOCKET_PATH: socketPath },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";

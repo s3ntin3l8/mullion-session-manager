@@ -11,6 +11,7 @@ import {
   installSystemdRunShim,
   readBlockedLaunches,
 } from "./scope-guard.js";
+import { pinnedPath } from "./pinned-path.js";
 
 const dirs: string[] = [];
 function tmp(): string {
@@ -31,7 +32,7 @@ describe("systemd-run shim (issue #2003)", () => {
       "systemd-run",
       ["--user", "--scope", "-u", "crs-session-x-1", "--", "true"],
       {
-        env: { ...process.env, PATH: `${guard.binDir}${path.delimiter}${process.env.PATH}` },
+        env: { ...process.env, PATH: pinnedPath(guard.binDir) },
         encoding: "utf8",
       },
     );
