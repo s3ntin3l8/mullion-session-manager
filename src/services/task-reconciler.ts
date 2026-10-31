@@ -2459,7 +2459,14 @@ async function attemptMerge(
         // silently never healed, and the operator is told why the PR is held.
         // The PR is held either way: an unreadable check list never becomes a
         // merge (the merge gate reads GitHub's own mergeable_state).
-        const checkRuns = await readPrCheckRuns(app, task, token, repoRef, pr.headSha);
+        const checkRuns = await readPrCheckRuns(
+          app,
+          task,
+          token,
+          repoRef,
+          pr.headSha,
+          "unstable-merge",
+        );
         const unstableCheckRuns = checkRuns.ok ? checkRuns.runs : [];
         if (
           unstableCheckRuns.length > 0 &&
@@ -3262,7 +3269,14 @@ async function attemptReturnRedCiToWorker(
   // because "no red checks" and "couldn't ask" are different answers: the
   // old empty-list answer stood the red-CI return down silently, and an
   // unanswered lookup now says so. The stand-down itself is unchanged.
-  const checkRuns = await readPrCheckRuns(app, task, token, current.repoRef, current.headSha);
+  const checkRuns = await readPrCheckRuns(
+    app,
+    task,
+    token,
+    current.repoRef,
+    current.headSha,
+    "red-ci-return",
+  );
   const allCheckRuns = checkRuns.ok ? checkRuns.runs : [];
   // `isRedCheckConclusion` is the one definition of "red" (a bare `failure`,
   // but also `timed_out` and `action_required`, which GitHub's merge gate

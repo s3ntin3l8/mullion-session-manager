@@ -40,7 +40,12 @@ export function createThrottledWarn(intervalMs: number, maxEntries = 500): Throt
     const last = warnedAt.get(key);
     if (last !== undefined && now - last < intervalMs) return;
 
-    if (warnedAt.size >= maxEntries) {
+    // Evict only when a NEW key arrives: re-warning a key that is already
+    // tracked must not cost an innocent key its slot — otherwise a key that
+    // keeps getting re-warned would evict its neighbours on every call, and
+    // the evicted one would then warn immediately (the throttle degrading
+    // toward per-tick logging once the cap is reached).
+    if (last === undefined && warnedAt.size >= maxEntries) {
       let oldestKey: number | undefined;
       let oldestAt = Number.POSITIVE_INFINITY;
       for (const [candidate, at] of warnedAt) {

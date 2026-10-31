@@ -17,8 +17,8 @@
 // exactly as it stood down on the old empty-list answer).
 //
 // The warning is throttled the same way — once per task per hour — because
-// this runs on every sweep tick (60s) and an unstable PR that cannot be read
-// stays unreadable for as long as it is stuck.
+// this runs on every sweep tick (30s by default) and an unstable PR that
+// cannot be read stays unreadable for as long as it is stuck.
 
 import type { FastifyInstance } from "fastify";
 import type { tasks } from "../db/schema.js";
@@ -35,6 +35,12 @@ import { createThrottledWarn } from "./throttled-warn.js";
  *   why. "No checks" and "couldn't ask" are different answers.
  */
 export type PrCheckRuns = { ok: true; runs: CheckRunResult[] } | { ok: false; detail: string };
+
+/**
+ * Which caller asked — the two share the lookup and the warning, and a log
+ * line that cannot say which one it was is a log line nobody can act on.
+ */
+export type PrCheckRunsSource = "unstable-merge" | "red-ci-return";
 
 /** Once per task per hour — see the header. */
 const warnUnreadableCheckRuns = createThrottledWarn(60 * 60_000);
@@ -57,13 +63,14 @@ export async function readPrCheckRuns(
   token: string,
   repoRef: GitHubRepoRef,
   headSha: string,
+  source: PrCheckRunsSource,
 ): Promise<PrCheckRuns> {
   try {
     const runs = await fetchCheckRunsForHead(token, repoRef.owner, repoRef.repo, headSha);
     return { ok: true, runs };
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
-    warnUnreadable(app, task, repoRef, detail);
+    warnUnreadable(app, task, repoRef, detail, err, source);
     return { ok: false, detail };
   }
 }
@@ -77,6 +84,8 @@ function warnUnreadable(
   task: typeof tasks.$inferSelect,
   repoRef: GitHubRepoRef,
   detail: string,
+  err: unknown,
+  source: PrCheckRunsSource,
 ): void {
   warnUnreadableCheckRuns(
     app,
@@ -84,8 +93,11 @@ function warnUnreadable(
     {
       taskId: task.id,
       projectId: task.projectId,
+      prNumber: task.prNumber,
+      source,
       owner: repoRef.owner,
       repo: repoRef.repo,
+      err,
       detail,
     },
     "task reconcile: could not read the PR's check runs — the checks are unknown, not 'no checks'",
