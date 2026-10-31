@@ -329,10 +329,15 @@ specs.
 The failure is quiet in both directions, which is why it is worth stating
 plainly: a backlog full of `Manual: true` issues reads as "Task Master
 isn't picking anything up" when in fact it was told not to, and an issue
-that a human later closes after doing the work by hand is recorded as a
-task failure — through the poll's read-back, since the `closed` webhook
-path is gated on `canTransition(status, "done")` and so never fires for a
-`backlog` task.
+that a human later closes after doing the work by hand is completed, not
+failed, when a **merged pull request** closed it: `syncUnlabeledIssueToLocal`
+(poll read-back and the `closed` webhook for `backlog`/`ready` tasks alike)
+looks the closing PR up (`getMergedClosingPullRequest`, GraphQL
+`closedByPullRequestsReferences`), writes `done` + `prNumber`, and records
+`via: "github-sync-closed-manually"` with no GitHub write-back. It bypasses
+`canTransition` on purpose — `TASK_TRANSITIONS` gains no `backlog → done`
+edge. Closed without a merged PR (not planned, PR closed unmerged) or a
+failing lookup still ends `failed`.
 
 ### The parent-context flow
 

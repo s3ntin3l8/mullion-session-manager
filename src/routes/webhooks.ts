@@ -14,7 +14,11 @@ import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { upsertIssueTask } from "../services/task-watcher.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { pickRepoOwners, repoKey as repoKeyOf, resolveRepoKeys } from "../services/repo-key.js";
-import { syncClosedIssueToLocal, syncUnlabeledIssueToLocal } from "../services/task-github-sync.js";
+import {
+  FAILURE_REASON_ISSUE_CLOSED,
+  syncClosedIssueToLocal,
+  syncUnlabeledIssueToLocal,
+} from "../services/task-github-sync.js";
 import { refreshTaskBlockers } from "../services/task-dependencies.js";
 import { dispatchQueuedTasks } from "../services/task-dispatch.js";
 
@@ -470,7 +474,16 @@ export async function webhookRoutes(app: FastifyInstance) {
                       // not the primary error path.
                       const syncPromise =
                         action === "closed"
-                          ? syncClosedIssueToLocal(app, task, projectRefArg)
+                          ? task.status === "backlog" || task.status === "ready"
+                            ? // Same call as the poll sweep's read-back: an unclaimed
+                              // task settles to done (merged closing PR) or failed.
+                              syncUnlabeledIssueToLocal(
+                                app,
+                                task,
+                                projectRefArg,
+                                FAILURE_REASON_ISSUE_CLOSED,
+                              )
+                            : syncClosedIssueToLocal(app, task, projectRefArg)
                           : syncUnlabeledIssueToLocal(app, task, projectRefArg);
                       syncPromise.catch((err) => {
                         app.log.warn(

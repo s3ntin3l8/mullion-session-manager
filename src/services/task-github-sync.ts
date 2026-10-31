@@ -34,6 +34,7 @@ import {
   setAssignees,
   closeIssue,
   getIssueState,
+  getMergedClosingPullRequest,
   getPullRequestByNumber,
   createPullRequestReview,
 } from "./github-write.js";
@@ -477,6 +478,27 @@ export async function syncClosedIssueToLocal(
   }
 }
 
+/** Merged PR that closed the task's issue, or null (none, or lookup failed). */
+async function findMergedClosingPr(
+  app: FastifyInstance,
+  task: TaskRow,
+  project: ProjectRef,
+): Promise<number | null> {
+  try {
+    const repoRef = await resolveRepoRef(app, project);
+    if (!repoRef) return null;
+    const token = await resolveGitHubToken(app, repoRef);
+    if (!token) return null;
+    return await getMergedClosingPullRequest(token, repoRef.owner, repoRef.repo, task.issueNumber!);
+  } catch (err) {
+    app.log.warn(
+      { taskId: task.id, issueNumber: task.issueNumber, err },
+      "[task-github-sync] closing-PR lookup failed, treating the close as abandoned",
+    );
+    return null;
+  }
+}
+
 /**
  * #490a — the "issue is no longer trackable" counterpart to
  * `syncClosedIssueToLocal` above, for a `backlog`/`ready` task (which
@@ -538,6 +560,38 @@ export async function syncUnlabeledIssueToLocal(
   }
 
   const now = new Date();
+
+  // An issue closed by a merged PR means a human did the work by hand: the
+  // task is done, not failed. Any lookup problem falls through to the
+  // failed write below, so the closed issue is still settled (and never
+  // lingers in the sweep's retry set).
+  if (failureReason === FAILURE_REASON_ISSUE_CLOSED && task.issueNumber !== null) {
+    const closingPr = await findMergedClosingPr(app, task, project);
+    if (closingPr !== null) {
+      // Deliberately bypasses canTransition: backlog/ready -> done is not a
+      // legal TASK_TRANSITIONS edge and must stay unavailable to the PATCH
+      // route, drag-to-column and Retry. Like the failed write below, this is
+      // a sync write reflecting what GitHub already did. No GitHub write-back
+      // either: the human closed the issue with their own PR.
+      const doneUpdate = app.db
+        .update(tasks)
+        .set({ status: "done", completedAt: now, prNumber: closingPr })
+        .where(and(eq(tasks.id, task.id), eq(tasks.status, task.status)))
+        .run();
+      if (doneUpdate.changes > 0) {
+        recordTaskTransition(app, {
+          taskId: task.id,
+          projectId: task.projectId,
+          from: task.status as TaskStatus,
+          to: "done",
+          via: "github-sync-closed-manually",
+          context: { issueNumber: task.issueNumber, prNumber: closingPr },
+        });
+      }
+      return;
+    }
+  }
+
   // Status-guarded, same reasoning as syncClosedIssueToLocal above — the
   // caller's snapshot of `task` may be stale by the time this write lands.
   const updated = app.db
