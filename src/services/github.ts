@@ -1079,8 +1079,15 @@ export function isRedCheckConclusion(conclusion: string | null): boolean {
  * names, and Workflow Runs is one call per commit regardless of how many
  * jobs it fans out into.
  *
- * Never throws — degrades to `[]` on any failure, same posture as
- * `fetchRunsForHead`.
+ * THROWS on a failed lookup (#2416) — "this PR has no checks" and "the
+ * lookup did not answer" are different answers, and both of this function's
+ * callers act on the difference: the unstable-PR path must not read an
+ * unanswered lookup as "nothing to self-heal", and the red-CI path must stand
+ * down on an unanswered lookup rather than on a resolved "nothing is red".
+ * A caller that genuinely cannot tell the two apart can catch and treat the
+ * failure as "no signal" — the posture `fetchRunsForHead` keeps, which has
+ * the `fetchRunsForHeadChecked` sibling for the callers that need the
+ * difference.
  */
 export async function fetchCheckRunsForHead(
   token: string,
@@ -1093,29 +1100,27 @@ export async function fetchCheckRunsForHead(
     Authorization: `Bearer ${token}`,
   };
 
-  try {
-    const res = await githubApiFetch(
-      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(headSha)}/check-runs?per_page=100`,
-      { headers },
-    );
-    if (!res.ok) return [];
-    const data = (await res.json()) as {
-      check_runs?: {
-        name: string;
-        conclusion: string | null;
-        output?: { title?: string | null } | null;
-        details_url?: string | null;
-      }[];
-    };
-    return (data.check_runs ?? []).map((c) => ({
-      name: c.name,
-      conclusion: c.conclusion,
-      ...(c.output?.title ? { detail: c.output.title } : {}),
-      ...(c.details_url ? { url: c.details_url } : {}),
-    }));
-  } catch {
-    return [];
+  const res = await githubApiFetch(
+    `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(headSha)}/check-runs?per_page=100`,
+    { headers },
+  );
+  if (!res.ok) {
+    throw new GitHubApiError(`GitHub API error for check runs (HTTP ${res.status})`, res.status);
   }
+  const data = (await res.json()) as {
+    check_runs?: {
+      name: string;
+      conclusion: string | null;
+      output?: { title?: string | null } | null;
+      details_url?: string | null;
+    }[];
+  };
+  return (data.check_runs ?? []).map((c) => ({
+    name: c.name,
+    conclusion: c.conclusion,
+    ...(c.output?.title ? { detail: c.output.title } : {}),
+    ...(c.details_url ? { url: c.details_url } : {}),
+  }));
 }
 
 // The release-please auto-enable sweep (project-release-please.ts) needs

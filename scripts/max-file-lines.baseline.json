@@ -23,7 +23,7 @@
     "frontend/src/settings/sections/StorageSection.test.tsx": 1296,
     "frontend/src/Sidebar.test.tsx": 1415,
     "frontend/src/Sidebar.tsx": 1693,
-    "frontend/src/TaskDetail.test.tsx": 2063,
+    "frontend/src/TaskDetail.test.tsx": 1975,
     "frontend/src/TerminalPane.test.tsx": 3769,
     "frontend/src/TerminalPane.tsx": 1227,
     "frontend/src/UnifiedBoard.test.tsx": 1226,
@@ -36,7 +36,7 @@
     "src/services/github-write.ts": 1335,
     "src/services/pty-manager.ts": 2033,
     "src/services/remote-host-client.ts": 1470,
-    "src/services/task-reconciler.ts": 3329,
+    "src/services/task-reconciler.ts": 2909,
     "test/cli/core.test.ts": 3353,
     "test/hooks/forwarder-core.test.ts": 2413,
     "test/hooks/opencode-plugin.test.ts": 1866,
@@ -54,7 +54,7 @@
     "test/routes/sessions.test.ts": 4559,
     "test/routes/tasks.test.ts": 3822,
     "test/routes/webhooks.test.ts": 1740,
-    "test/scripts/install.test.ts": 1412,
+    "test/scripts/install.test.ts": 1381,
     "test/services/device-manager.test.ts": 1500,
     "test/services/git-worktree.test.ts": 1367,
     "test/services/github-integration.test.ts": 1207,
@@ -66,6 +66,6 @@
     "test/services/task-claim.test.ts": 1899,
     "test/services/task-promote.test.ts": 1517,
     "test/services/task-prompt.test.ts": 1365,
-    "test/services/task-reconciler.test.ts": 8795
+    "test/services/task-reconciler.test.ts": 8069
   }
 }

@@ -586,18 +586,24 @@ describe("fetchCheckRunsForHead", () => {
     ]);
   });
 
-  it("degrades to [] on a non-ok response, never throws", async () => {
+  // #2416 — the lookup THROWS on a failed lookup, so a caller can tell
+  // "this PR has no checks" from "the lookup did not answer". Both of this
+  // function's callers act on the difference (the unstable-PR path's
+  // title-lint self-heal, and the red-CI path's stand-down), so degrading
+  // to [] here would make an unanswered lookup indistinguishable from a
+  // resolved answer.
+  it("throws on a non-ok response instead of degrading to []", async () => {
     fetchMock.mockResolvedValue(new Response("nope", { status: 404 }));
     await expect(
       fetchCheckRunsForHead("tok", "o", "check-runs-404-repo", "sha-head"),
-    ).resolves.toEqual([]);
+    ).rejects.toThrow(/HTTP 404/);
   });
 
-  it("degrades to [] on a network failure, never throws", async () => {
+  it("throws on a network failure instead of degrading to []", async () => {
     fetchMock.mockRejectedValue(new Error("network down"));
     await expect(
       fetchCheckRunsForHead("tok", "o", "check-runs-down-repo", "sha-head"),
-    ).resolves.toEqual([]);
+    ).rejects.toThrow(/network down/);
   });
 });
 

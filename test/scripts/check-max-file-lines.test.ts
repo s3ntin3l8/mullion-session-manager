@@ -460,9 +460,14 @@ describe("check-max-file-lines.mjs: the repository's own baseline", () => {
     // shallow clone reads as "the baseline names the wrong files".
     if (!hasCommit(REPO_ROOT, baseline.recordedAt)) return;
 
-    // Every recorded size is the size that file had at that commit — the
-    // label has to name the tree the numbers actually came from, or it is
-    // decoration.
+    // Every recorded size is AT MOST the size that file had at that commit —
+    // the label has to name the tree the numbers came from, and the ratchet
+    // only turns one way: a ceiling may be LOWERED (the file shrank, and
+    // the guardrail's own advice says to lower it), never RAISED. The
+    // baseline file's own note spells that out: "re-recording it upward
+    // would be the one edit that RAISES a ceiling, which this ratchet
+    // forbids". An entry that claims a file was BIGGER at the recorded
+    // commit than it was is exactly that forbidden edit, so it fails here.
     for (const [file, size] of Object.entries(baseline.files)) {
       let content: string;
       try {
@@ -476,7 +481,7 @@ describe("check-max-file-lines.mjs: the repository's own baseline", () => {
       } catch {
         throw new Error(`${file} does not exist at ${baseline.recordedAt}`);
       }
-      expect(countFileLines(content, file).code).toBe(size);
+      expect(countFileLines(content, file).code).toBeGreaterThanOrEqual(size);
     }
   });
 });

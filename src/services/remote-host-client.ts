@@ -728,7 +728,7 @@ export class RemoteHostClient {
     }
     if (!res.ok) {
       if (res.status >= 400 && res.status < 500) {
-        const body = await res.text().catch(() => "");
+        const body = await res.text().catch(() => `(no response body — HTTP ${res.status})`);
         throw new HostRequestError(this.hostId, res.status, body);
       }
       throw new HostUnreachableError(this.hostId, new Error(`HTTP ${res.status}`));
@@ -1628,7 +1628,7 @@ export class RemoteHostClient {
   private async readJsonResponse<T>(res: Response): Promise<T> {
     if (!res.ok) {
       if (res.status >= 400 && res.status < 500) {
-        const text = await res.text().catch(() => "");
+        const text = await res.text().catch(() => `(no response body — HTTP ${res.status})`);
         throw new HostRequestError(this.hostId, res.status, text);
       }
       await res.body?.cancel().catch(() => undefined);
