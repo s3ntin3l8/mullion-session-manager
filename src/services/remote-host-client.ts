@@ -1200,8 +1200,16 @@ export class RemoteHostClient {
    * `skipped: true` means the clone was busy — a repair was working on it
    * (issue #1896) — so the fetch did not run. That is not a failure, and the
    * caller must not report it as one. */
-  resolveGitFetch(cwd: string): Promise<{ success: boolean; error?: string; skipped?: boolean }> {
-    return this.request(`/internal/git-fetch?cwd=${encodeURIComponent(cwd)}`);
+  resolveGitFetch(
+    cwd: string,
+    token?: string,
+  ): Promise<{ success: boolean; error?: string; skipped?: boolean }> {
+    const url = `/internal/git-fetch?cwd=${encodeURIComponent(cwd)}`;
+    // The optional read token rides a header on the signed channel, never the
+    // URL. An agent too old to know it ignores the header and fetches plain.
+    return token
+      ? this.request(url, { headers: { "x-mullion-git-token": token } })
+      : this.request(url);
   }
 
   /** Issue #1851 — the READ-ONLY clone health check on this agent's

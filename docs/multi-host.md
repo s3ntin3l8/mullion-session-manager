@@ -506,6 +506,20 @@ ref at all ("upgrade it") — a Task Master claim is not cut from a guessed
 `HEAD`: the task waits in the queue with the reason recorded, and is retried
 until the host can.
 
+**Background fetch of Mullion-managed checkouts.** The auto-fetch sweep
+(`gitAutoFetchIntervalSeconds`, per-project `autoFetch`, honored exactly as for
+the project's own host) also runs `git fetch` on each `hostCwds` entry whose
+host is listed in `hostCwdsMeta.managed` — a clone Mullion created itself — so
+those checkouts do not go stale between worktree cuts. A user-mapped or
+auto-detected entry is never fetched or pulled by the sweep; nothing is ever
+fast-forwarded. A host whose heartbeat is not `online` is skipped quietly
+(debug log) and retried on the next tick; other failures warn as usual. The
+primary resolves the project's repo read token and sends it in an
+`x-mullion-git-token` header on `GET /internal/git-fetch` (never the query
+string); the agent passes it to git as `http.extraHeader` and redacts it from
+any output. An agent too old to know the header ignores it and does a plain
+fetch. The agent's clone-busy guard applies, as for every other git route.
+
 A task's sessions share one host. The worker decides it (the placement
 decides), and the reviewer and the rebase worker join it, because they read
 the worker's worktree.
