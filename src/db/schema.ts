@@ -1187,6 +1187,16 @@ export const tasks = sqliteTable(
     // Issue #958 — same shape as `model` above, for opencode's `small_model`
     // config key. Recorded at claim time alongside `model`.
     smallModel: text("small_model"),
+    // Issue #2491 — the user's own model choices from the task detail panel,
+    // kept apart from `model`/`smallModel` above (the value RESOLVED at claim
+    // time, overwritten on every claim) so a choice stays distinguishable from
+    // the record of what ran. They are the top tier of task-model-resolve.ts's
+    // chain; `null` = no task-level choice, fall through to the issue-body
+    // directive, project and install defaults. `reviewerModel` is the same
+    // choice for the review agent (it has no resolved-record twin).
+    modelOverride: text("model_override"),
+    smallModelOverride: text("small_model_override"),
+    reviewerModel: text("reviewer_model"),
     // Issue #1954 — where the task REQUIRES its worker to run: the `Platform:`
     // / `Host:` directives of the issue body, resolved at dispatch and stored
     // as JSON (`{"platform":"darwin"}`, `{"hostId":"…"}` or both). Recorded

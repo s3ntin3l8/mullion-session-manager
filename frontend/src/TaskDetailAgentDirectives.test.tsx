@@ -93,6 +93,13 @@ describe("TaskDetail agent dropdowns and issue directives", () => {
     expect(updateTask).toHaveBeenCalledWith(1, { reviewAgent: "none" });
   });
 
+  it("builds the worker model controls for the issue directive's agent, not the project default", async () => {
+    // Project default is claude (has a small-model control); the issue says codex (has none).
+    await renderTask({ issueAgent: "codex" });
+    await screen.findByLabelText("Model model");
+    expect(screen.queryByLabelText("Small model model")).toBeNull();
+  });
+
   it("labels a usable directive hermes from the server value", async () => {
     const [, review] = await renderTask({ issueReviewAgent: "hermes" });
     expect(review).toHaveDisplayValue("hermes (from issue)");

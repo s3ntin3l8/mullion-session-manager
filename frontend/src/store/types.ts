@@ -389,6 +389,10 @@ export interface TasksSlice {
       boardOrder?: number;
       agent?: string | null;
       reviewAgent?: string | null;
+      // #2491 — task-level model choices; null clears one.
+      model?: string | null;
+      smallModel?: string | null;
+      reviewerModel?: string | null;
     },
   ) => Promise<Task>;
   deleteTask: (id: number, opts?: { force?: boolean }) => Promise<void>;

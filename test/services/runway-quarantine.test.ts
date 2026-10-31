@@ -612,7 +612,14 @@ describe("the Runway quota quarantine (issue #29)", () => {
       function insertModelTask(projectId: number, issueNumber: number, model: string | null) {
         const [row] = app.db
           .insert(tasks)
-          .values({ projectId, issueNumber, title: "t", body: "d", status: "ready", model })
+          .values({
+            projectId,
+            issueNumber,
+            title: "t",
+            body: "d",
+            status: "ready",
+            modelOverride: model,
+          })
           .returning()
           .all();
         return row;

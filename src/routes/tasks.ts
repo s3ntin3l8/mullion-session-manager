@@ -1,13 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, isNull, isNotNull } from "drizzle-orm";
 import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
-import {
-  deriveApprovalState,
-  deriveReviewPhase,
-  type ReviewPhaseResult,
-  type ApprovalState,
-  type ApprovalStateRow,
-} from "../services/task-approval-state.js";
 import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { buildRejectPrompt, taskCommitTitlePath } from "../services/task-prompt.js";
@@ -21,12 +14,18 @@ import {
 } from "../services/task-github-sync.js";
 import { deriveTaskBranchName } from "../services/git-worktree.js";
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
-import { resolveReviewer } from "../services/task-agent-resolve.js";
-import { isUnsentRunId, stopHermesRunQuietly } from "../services/hermes-task-review.js";
+import { withApprovalState } from "../services/task-approval-row.js";
+import {
+  TASK_MODEL_COLUMNS,
+  TASK_MODEL_SCHEMA_PROPS,
+  hasModelFields,
+  resolveTaskModelPatch,
+  type TaskModelPatchBody,
+} from "../services/task-model-patch.js";
+import { stopHermesRunQuietly } from "../services/hermes-task-review.js";
 import { closeDraftPRForTask } from "../services/task-promote.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "../services/task-approve.js";
 import {
-  REBASE_ATTEMPT_STALE_MS,
   resetAutoApproveBackoff,
   resetMergeBackoff,
   resolveMaxAutoReturnRounds,
@@ -70,7 +69,7 @@ interface CreateTaskBody {
   reviewAgent?: string | null;
 }
 
-interface UpdateTaskBody {
+interface UpdateTaskBody extends TaskModelPatchBody {
   title?: string;
   body?: string | null;
   status?: LocalCreatableStatus;
@@ -147,6 +146,7 @@ const updateTaskSchema = {
       boardOrder: { type: "integer", minimum: 0 },
       agent: { type: ["string", "null"], enum: [...KNOWN_AGENTS, null] },
       reviewAgent: { type: ["string", "null"], enum: REVIEW_AGENT_ENUM },
+      ...TASK_MODEL_SCHEMA_PROPS, // #2491
     },
   },
 };
@@ -261,6 +261,7 @@ const TASK_ROW_COLUMNS = {
   // GET /api/tasks/:id would have returned `undefined` for both.
   model: tasks.model,
   smallModel: tasks.smallModel,
+  ...TASK_MODEL_COLUMNS, // #2491
   prUrl: tasks.prUrl,
   prNumber: tasks.prNumber,
   // #761's Conventional Commits title, and the exact TASK_ROW_COLUMNS
@@ -387,56 +388,6 @@ function withAutoReturnCapped<
     autoReturnCapped:
       row.autoReturnRounds >=
       resolveMaxAutoReturnRounds({ maxAutoReturnRounds: projectMaxAutoReturnRounds }, installCap),
-  };
-}
-
-// #2234 — the board's `approvalState`; the derivation lives in
-// services/task-approval-state.ts so the #2252 push shares it.
-function withApprovalState<
-  T extends ApprovalStateRow & {
-    rebaseStartedAt: Date | null;
-    worktreePath: string | null;
-    reviewAgent: string | null;
-    body: string | null;
-    projectDefaultReviewAgent: string | null;
-  },
->(
-  app: FastifyInstance,
-  row: T,
-  taskMasterEnabled: boolean,
-): Omit<T, "projectAutoApprove" | "projectDefaultReviewAgent"> & {
-  approvalState: ApprovalState | null;
-  /** The review run id is a synthetic `unsent:` marker: dispatch gave up, no run exists. */
-  reviewRunUnsent: boolean;
-} & ReviewPhaseResult {
-  const {
-    projectAutoApprove: _projectAutoApprove,
-    projectDefaultReviewAgent: _projectDefaultReviewAgent,
-    ...rest
-  } = row;
-  // Only a reviewing task with no live review session can carry a phase.
-  // Resolving the reviewer is an uncached settings read per call, and this runs
-  // for every row of the polled task list (done and archived included), so the
-  // cheap checks come first.
-  const canCarryPhase =
-    row.status === "reviewing" &&
-    row.reviewSessionId === null &&
-    typeof row.reviewRunId !== "string";
-  return {
-    ...rest,
-    approvalState: deriveApprovalState(row, taskMasterEnabled),
-    reviewRunUnsent: typeof row.reviewRunId === "string" && isUnsentRunId(row.reviewRunId),
-    ...deriveReviewPhase(row, REBASE_ATTEMPT_STALE_MS, {
-      taskMasterEnabled,
-      // The same resolution the spawn pass uses (processPendingReviewSpawns).
-      reviewerConfigured:
-        canCarryPhase &&
-        resolveReviewer(app, {
-          taskReviewAgent: row.reviewAgent,
-          issueBody: row.body,
-          projectDefaultReviewAgent: row.projectDefaultReviewAgent,
-        }) !== null,
-    }),
   };
 }
 
@@ -664,6 +615,7 @@ export async function tasksRoute(app: FastifyInstance) {
       const { title, body, status, boardOrder, agent, reviewAgent } = request.body;
       const hermesRefusal = hermesReviewAgentRefusal(app, reviewAgent);
       if (hermesRefusal) return reply.badRequest(hermesRefusal);
+      const modelFieldsGiven = hasModelFields(request.body);
       if ((title !== undefined || body !== undefined) && existing.issueNumber !== null) {
         return reply.conflict(
           "Cannot edit title/body of a task linked to a GitHub issue — edit the issue itself; boardOrder, status, and agents remain editable here",
@@ -684,20 +636,35 @@ export async function tasksRoute(app: FastifyInstance) {
       }
 
       if (
-        (agent !== undefined || reviewAgent !== undefined) &&
+        (agent !== undefined || reviewAgent !== undefined || modelFieldsGiven) &&
         !LOCAL_CREATABLE_STATUSES.includes(existing.status as LocalCreatableStatus) &&
         existing.status !== "failed"
       ) {
-        return reply.conflict(`Cannot edit agents for a task in status "${existing.status}"`);
+        return reply.conflict(
+          `Cannot edit ${agent !== undefined || reviewAgent !== undefined ? "agents" : "models"} for a task in status "${existing.status}"`,
+        );
       }
 
       const patch: Partial<typeof tasks.$inferInsert> = {};
+      if (modelFieldsGiven || agent !== undefined || reviewAgent !== undefined) {
+        const modelPatch = resolveTaskModelPatch(
+          app,
+          existing,
+          getProjectOr404(existing.projectId),
+          request.body,
+        );
+        if ("error" in modelPatch) return reply.badRequest(modelPatch.error);
+        Object.assign(patch, modelPatch.patch);
+      }
       if (title !== undefined) patch.title = title;
       if (body !== undefined) patch.body = body;
       if (status !== undefined) patch.status = status;
       if (boardOrder !== undefined) patch.boardOrder = boardOrder;
-      if (agent !== undefined) patch.agent = agent;
-      if (reviewAgent !== undefined) patch.reviewAgent = reviewAgent;
+      // `agent: null` alongside a model keeps the pin resolveTaskModelPatch set.
+      if (agent !== undefined && !(agent === null && patch.agent)) patch.agent = agent;
+      if (reviewAgent !== undefined && !(reviewAgent === null && patch.reviewAgent)) {
+        patch.reviewAgent = reviewAgent;
+      }
 
       const [updated] = app.db
         .update(tasks)
