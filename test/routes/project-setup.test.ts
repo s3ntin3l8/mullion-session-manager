@@ -1437,8 +1437,9 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
       });
       expect(res.statusCode).toBe(200);
       expect(vi.mocked(generateScaffoldContent).mock.calls[0][0].existingInstructions).toBe("keep");
-      expect(res.json().conflicts).toBeUndefined();
-      expect(res.json().possiblyLossy).toBeUndefined();
+      expect([res.json().conflicts, res.json().possiblyLossy]).toEqual([undefined, undefined]);
+      // The response names the agent the server actually ran.
+      expect(typeof res.json().agent).toBe("string");
       await app.close();
     });
 

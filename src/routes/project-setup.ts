@@ -935,6 +935,7 @@ async function executeScaffoldGeneration(
     previewId: result.previewId,
     diff: result.diff,
     files: result.files,
+    agent: agentCommand,
     sandboxed: generated.sandboxed,
     hasAgentsOverride: result.hasAgentsOverride,
   };
