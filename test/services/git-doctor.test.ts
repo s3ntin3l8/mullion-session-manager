@@ -226,7 +226,40 @@ describe("git-doctor — the read-only inspection", () => {
   // fine — and "we could not tell" is a different answer from "we found
   // damage", so it gets its own field.
   it("says the verdict is unknown when the fsck does not finish", async () => {
-    const health = await inspectGitClone(repo, { fsckTimeoutMs: 1 });
+    // A real fsck can finish inside any tiny budget, so the hang is made
+    // deterministic from outside the module: a `git` shim first on PATH that
+    // delegates to the real git (resolved to an absolute path BEFORE the shim
+    // exists) except for `fsck`, which it hangs. `exec` makes SIGTERM reach
+    // `sleep` itself, so the stdio pipes close when the module kills it.
+    const realGit = execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim();
+    const shimDir = fs.mkdtempSync(path.join(os.tmpdir(), "git-shim-"));
+    const originalPath = process.env.PATH;
+    const timeoutMs = 200;
+    fs.writeFileSync(
+      path.join(shimDir, "git"),
+      [
+        "#!/bin/sh",
+        'for arg in "$@"; do',
+        '  if [ "$arg" = "fsck" ]; then exec sleep 30; fi',
+        "done",
+        `exec "${realGit}" "$@"`,
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    let health;
+    let elapsedMs: number;
+    try {
+      process.env.PATH = `${shimDir}${path.delimiter}${originalPath ?? ""}`;
+      const started = Date.now();
+      health = await inspectGitClone(repo, { fsckTimeoutMs: timeoutMs });
+      elapsedMs = Date.now() - started;
+    } finally {
+      process.env.PATH = originalPath;
+      fs.rmSync(shimDir, { recursive: true, force: true });
+    }
+    // The verdict came from the timer, not from a fast fsck.
+    expect(elapsedMs).toBeGreaterThanOrEqual(100);
     expect(health.timedOut).toBe(true);
     expect(health.healthy).toBe(false);
     // The timeout is not a finding about the clone — it is the reason there
