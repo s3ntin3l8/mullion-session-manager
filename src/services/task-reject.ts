@@ -31,9 +31,9 @@ import { promptLiveTaskWorker, reseedTaskIfSessionExited } from "./task-reseed.j
 
 /**
  * Returns whether the task is left with a live agent holding the feedback:
- * `true` covers "typed into the live worker" and "re-seeded a fresh
- * session" (and a task with no session to speak of — nothing to deliver
- * to). `false` means a re-seed was needed AND failed (spawn failure, a
+ * `true` covers "typed into the live worker", "re-seeded a fresh session",
+ * "the worker's host is unreachable, so it was left alone" (and a task with
+ * no session to speak of — nothing to deliver to). `false` means a re-seed was needed AND failed (spawn failure, a
  * failed terminate, or lost a race) — issue #987: that used to leave the
  * task sitting at "in_progress" with a dead session and a stale
  * `sessionId` forever, since nothing ever revisits it. The caller fails the
@@ -61,13 +61,19 @@ export async function deliverRejectFeedback(
       )
     : undefined;
   if (wasActive) {
-    const typed = await promptLiveTaskWorker(
+    const delivery = await promptLiveTaskWorker(
       app,
       task,
       buildRejectFollowUpPrompt({ branchName, feedback, commitTitlePath }),
       "task reject",
     );
-    if (typed) return true;
+    if (delivery === "typed") return true;
+    // The worker's host is not answering: the session may be healthy, and
+    // terminating it through that host would fail and then fail the task
+    // ("re-seed spawn failed") though no spawn was ever attempted. Leave it
+    // as it was before this existed — the feedback is on the issue and in
+    // `failureReason` — and let the session reconciler take over if it dies.
+    if (delivery === "unreachable") return true;
   }
   // Includes the task spec, not just the feedback: this reaches a FRESH
   // agent that has no memory of the task — the previous feedback-only

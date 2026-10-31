@@ -342,7 +342,7 @@ describe("reseedTaskIfSessionExited", () => {
     it("types the prompt into an idle live worker and submits it", async () => {
       const { task: taskRow, sessionId } = insertTaskWithSession("active");
       const ok = await promptLiveTaskWorker(app, taskRow, "please fix X", "test");
-      expect(ok).toBe(true);
+      expect(ok).toBe("typed");
       expect(mockPrompt).toHaveBeenCalledWith(String(sessionId), {
         text: "please fix X",
         submit: true,
@@ -356,20 +356,20 @@ describe("reseedTaskIfSessionExited", () => {
     ])("does not type into a worker that is %s", async (_label, info) => {
       const { task: taskRow, sessionId } = insertTaskWithSession("active");
       mockLiveStatus.mockResolvedValue({ [String(sessionId)]: info });
-      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe(false);
+      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe("declined");
       expect(mockPrompt).not.toHaveBeenCalled();
     });
 
     it("returns false when the session has already exited", async () => {
       const { task: taskRow } = insertTaskWithSession("exited");
-      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe(false);
+      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe("declined");
       expect(mockPrompt).not.toHaveBeenCalled();
     });
 
     it("returns false when the task has no session", async () => {
       const { task: taskRow } = insertTaskWithSession("active");
       expect(await promptLiveTaskWorker(app, { ...taskRow, sessionId: null }, "x", "test")).toBe(
-        false,
+        "declined",
       );
       expect(mockPrompt).not.toHaveBeenCalled();
     });
@@ -377,13 +377,20 @@ describe("reseedTaskIfSessionExited", () => {
     it("returns false when the agent refuses the prompt", async () => {
       const { task: taskRow } = insertTaskWithSession("active");
       mockPrompt.mockResolvedValue({ ok: false, status: 501, error: "not supported" });
-      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe(false);
+      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe("declined");
     });
 
-    it("returns false, rather than throwing, when the host cannot be asked", async () => {
+    it("reports an unreachable host, and types nothing, rather than treating it as a refusal", async () => {
+      const { task: taskRow } = insertTaskWithSession("active");
+      mockLiveStatus.mockRejectedValue(new Error("connect ETIMEDOUT"));
+      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe("unreachable");
+      expect(mockPrompt).not.toHaveBeenCalled();
+    });
+
+    it("declines, rather than throwing, when the prompt itself throws", async () => {
       const { task: taskRow } = insertTaskWithSession("active");
       mockPrompt.mockRejectedValue(new Error("host unreachable"));
-      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe(false);
+      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe("declined");
     });
   });
 });

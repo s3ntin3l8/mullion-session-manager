@@ -86,7 +86,7 @@ describe("POST /api/tasks/:id/reject on a task with a live worker", () => {
   // freshly spawned mock PTY happens to look like; `prompt`/`terminate` are
   // the seams under test.
   async function rejectActiveWorker(
-    overrides: Partial<Pick<SessionBackend, "prompt" | "terminate">>,
+    overrides: Partial<Pick<SessionBackend, "prompt" | "terminate" | "liveStatus">>,
   ) {
     const app = await buildApp();
     const cwd = createGitRepo();
@@ -122,10 +122,13 @@ describe("POST /api/tasks/:id/reject on a task with a live worker", () => {
       .spyOn(sessionBackendModule, "resolveBackend")
       .mockImplementation((appArg, hostId) => {
         const real = realResolveBackend(appArg, hostId);
+        const stubs: Partial<SessionBackend> = {
+          liveStatus: () => Promise.resolve({}),
+          ...overrides,
+        };
         return new Proxy(real, {
           get(target, prop, receiver) {
-            if (prop === "liveStatus") return () => Promise.resolve({});
-            if (prop in overrides) return overrides[prop as keyof typeof overrides];
+            if (prop in stubs) return stubs[prop as keyof SessionBackend];
             const value = Reflect.get(target, prop, receiver);
             return typeof value === "function" ? value.bind(target) : value;
           },
@@ -165,6 +168,26 @@ describe("POST /api/tasks/:id/reject on a task with a live worker", () => {
     expect(opts.text).toContain("mullion/task-reject-live");
     expect(opts.text).not.toContain("as a Mullion Task Master worker");
     expect(opts.text).not.toContain("the widget explodes");
+    expect(terminate).not.toHaveBeenCalled();
+    await cleanup();
+  });
+
+  it("leaves a worker whose host is not answering alone, rather than failing the task", async () => {
+    const prompt = vi.fn();
+    const terminate = vi.fn().mockResolvedValue(undefined);
+    const liveStatus = vi.fn().mockRejectedValue(new Error("connect ETIMEDOUT"));
+    const { res, activeSessionId, cleanup } = await rejectActiveWorker({
+      prompt,
+      terminate,
+      liveStatus,
+    });
+
+    // A sleeping host says nothing about the session: no typing, no terminate,
+    // and the task is not failed for a spawn that was never attempted.
+    expect(res.statusCode).toBe(200);
+    expect(res.json().status).toBe("in_progress");
+    expect(res.json().sessionId).toBe(activeSessionId);
+    expect(prompt).not.toHaveBeenCalled();
     expect(terminate).not.toHaveBeenCalled();
     await cleanup();
   });

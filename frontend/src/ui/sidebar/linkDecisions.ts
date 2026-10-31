@@ -24,8 +24,9 @@ export type SessionAction = { kind: "open-existing"; sessionId: number } | { kin
 /** One decision for "Open session" / "Hand off": reuse a live session, else start. */
 export function decideSessionAction(entry: MullionLinkEntry | undefined): SessionAction {
   // A task's own worker wins over any other session on the branch (its
-  // reviewer, a hand-started one): "Open session" on a task PR means the
-  // agent doing the work, and starting a second one would compete with it.
+  // reviewer, a hand-started one) — even an exited one, whose pane still shows
+  // what it did: "Open session" on a task PR means the agent doing the work,
+  // and starting or opening another would compete with it.
   const workerId = entry?.task?.sessionId ?? null;
   if (workerId !== null && entry?.sessions.some((l) => l.session.id === workerId)) {
     return { kind: "open-existing", sessionId: workerId };
