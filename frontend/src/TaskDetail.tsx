@@ -8,6 +8,7 @@ import type { Launcher, Session, Task, TaskBlocker } from "./api/index.js";
 import { commandToBinary } from "./cliLogos.js";
 import { useAsyncData } from "./hooks/useAsyncData.js";
 import { Dropdown } from "./ui/primitives.js";
+import { TaskModelControls } from "./TaskModelControls.js";
 import {
   BlockedIcon,
   BotIcon,
@@ -260,6 +261,7 @@ export function TaskDetail({
   // the dropdown label so it reads as "no review agent", not as an agent name.
   const projectDefaultReviewAgentLabel =
     projectDefaultReviewAgent === "none" ? "None" : projectDefaultReviewAgent;
+  const reviewAgentForModel = task.reviewAgent || projectDefaultReviewAgent;
   const isEditableStatus =
     task.status === "backlog" ||
     (task.status === "ready" && task.agentCommand === null) ||
@@ -502,6 +504,17 @@ export function TaskDetail({
                 )}
               />
             </div>
+            <TaskModelControls
+              task={task}
+              workerAgent={task.agent || projectDefaultAgent}
+              reviewerAgent={
+                reviewAgentForModel === "none" || reviewAgentForModel === HERMES_REVIEW_OPTION.value
+                  ? null
+                  : reviewAgentForModel
+              }
+              settings={settings}
+              onUpdate={(patch) => updateTask(task.id, patch)}
+            />
           </div>
         ) : (
           <>

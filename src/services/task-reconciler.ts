@@ -776,31 +776,32 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
         const reviewCliModelAgent = commandModelCli(reviewCommand);
         const reviewModel = commandIsOpencode(reviewCommand)
           ? (resolveOpenCodeModel(app, {
-              // Not task.model: that column only records what the *worker*
-              // ran under, and passing it here would outrank (and so
-              // silently discard) the reviewer-role directive and setting.
-              taskModel: null,
+              // Not task.model / modelOverride: those are the *worker's*
+              // record and choice, and passing them here would outrank (and
+              // so silently discard) the reviewer-role directive and setting.
+              // The reviewer's own task-level choice is reviewerModel.
+              taskModel: task.reviewerModel ?? null,
               issueBody: task.body,
               role: "reviewer",
             }) ?? undefined)
           : reviewCliModelAgent !== null
             ? (resolveCliModel(app, reviewCliModelAgent, {
-                taskModel: null,
+                taskModel: task.reviewerModel ?? null,
                 issueBody: task.body,
                 role: "reviewer",
               }) ?? undefined)
             : undefined;
         const reviewSmallModel = commandIsOpencode(reviewCommand)
           ? (resolveOpenCodeSmallModel(app, {
-              taskSmallModel: task.smallModel ?? null,
+              taskSmallModel: task.smallModelOverride ?? null,
               issueBody: task.body,
             }) ?? undefined)
           : reviewCliModelAgent === "claude-code"
             ? (resolveClaudeSmallModel(app, {
                 // Not task.smallModel: it records the worker's resolved
-                // value (same reasoning as taskModel above), and a worker
-                // on a different CLI never has one.
-                taskSmallModel: null,
+                // value (same reasoning as taskModel above). The user's own
+                // choice (smallModelOverride) is the task-level tier.
+                taskSmallModel: task.smallModelOverride ?? null,
                 issueBody: task.body,
               }) ?? undefined)
             : undefined;

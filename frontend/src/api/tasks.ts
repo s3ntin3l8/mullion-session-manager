@@ -51,6 +51,10 @@ export const tasksApi = {
       boardOrder?: number;
       agent?: string | null;
       reviewAgent?: string | null;
+      // #2491 — task-level model choices; null clears one.
+      model?: string | null;
+      smallModel?: string | null;
+      reviewerModel?: string | null;
     },
   ) => request<Task>(`/api/tasks/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
 

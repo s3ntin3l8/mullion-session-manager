@@ -194,7 +194,7 @@ export async function enqueueTask(
       command,
       commandIsOpencode(command)
         ? resolveOpenCodeModel(app, {
-            taskModel: task.model ?? null,
+            taskModel: task.modelOverride ?? null,
             issueBody: task.body,
             role: "implementer",
           })
@@ -907,24 +907,24 @@ export async function dispatchClaimedTask(
     const cliModelAgent = commandModelCli(command);
     const model = commandIsOpencode(command)
       ? (resolveOpenCodeModel(app, {
-          taskModel: task.model ?? null,
+          taskModel: task.modelOverride ?? null,
           issueBody: task.body,
           role: "implementer",
         }) ?? undefined)
       : cliModelAgent !== null
         ? (resolveCliModel(app, cliModelAgent, {
-            taskModel: task.model ?? null,
+            taskModel: task.modelOverride ?? null,
             issueBody: task.body,
           }) ?? undefined)
         : undefined;
     const smallModel = commandIsOpencode(command)
       ? (resolveOpenCodeSmallModel(app, {
-          taskSmallModel: task.smallModel ?? null,
+          taskSmallModel: task.smallModelOverride ?? null,
           issueBody: task.body,
         }) ?? undefined)
       : cliModelAgent === "claude-code"
         ? (resolveClaudeSmallModel(app, {
-            taskSmallModel: task.smallModel ?? null,
+            taskSmallModel: task.smallModelOverride ?? null,
             issueBody: task.body,
           }) ?? undefined)
         : undefined;
