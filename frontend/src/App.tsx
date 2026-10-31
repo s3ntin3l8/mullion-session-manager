@@ -1612,7 +1612,6 @@ export function App() {
       onOpenGlobalLauncher={openGlobalLauncher}
       onOpenSettingsProjects={() => openSettings("projects")}
       onOpenTasks={onOpenTasks}
-      onOpenTask={onOpenTask}
       onOpenGit={onOpenGit}
       onOpenProjectSetup={onOpenProjectSetup}
       onOpenDevice={onOpenDevice}
