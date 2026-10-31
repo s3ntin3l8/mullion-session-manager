@@ -1152,7 +1152,7 @@ describe("TaskDetail approve/reject actions", () => {
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
 
     await user.click(screen.getByRole("button", { name: "Reject" }));
-    await user.type(screen.getByPlaceholderText("Feedback (optional)"), "please fix X");
+    await user.type(screen.getByPlaceholderText(/^Feedback/), "please fix X");
     await user.click(screen.getByRole("button", { name: "Reject" }));
 
     expect(rejectTask).toHaveBeenCalledWith(1, "please fix X");
@@ -1175,7 +1175,7 @@ describe("TaskDetail approve/reject actions", () => {
 
     await user.click(screen.getByRole("button", { name: "Reject" }));
     expect(screen.getByRole("button", { name: "Reject" })).not.toBeDisabled();
-    await user.type(screen.getByPlaceholderText("Feedback (optional)"), "please fix X");
+    await user.type(screen.getByPlaceholderText(/^Feedback/), "please fix X");
     await user.click(screen.getByRole("button", { name: "Reject" }));
 
     expect(rejectTask).toHaveBeenCalledWith(1, "please fix X");
@@ -1188,7 +1188,7 @@ describe("TaskDetail approve/reject actions", () => {
     render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
 
     await user.click(screen.getByRole("button", { name: "Give up" }));
-    await user.type(screen.getByPlaceholderText("Reason (optional)"), "wrong approach");
+    await user.type(screen.getByPlaceholderText(/^Why give up/), "wrong approach");
     await user.click(screen.getByRole("button", { name: "Give up" }));
 
     expect(giveUpTask).toHaveBeenCalledWith(1, "wrong approach");
@@ -1229,7 +1229,7 @@ describe("TaskDetail approve/reject actions", () => {
 
     expect(reReviewTask).toHaveBeenCalledWith(1);
     // Unlike Reject/Give up, no reason field ever appears.
-    expect(screen.queryByPlaceholderText("Reason (optional)")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/^Why give up/)).not.toBeInTheDocument();
   });
 
   it("does not show Re-review for a clean or changes-requested verdict", () => {
@@ -1683,7 +1683,7 @@ describe("TaskDetail action failure paths", () => {
     expect(screen.getByText("Failed to reject task")).toBeInTheDocument();
     // Still in the feedback-entry state, not silently dropped back to the
     // Approve/Reject pair.
-    expect(screen.getByPlaceholderText("Feedback (optional)")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/^Feedback/)).toBeInTheDocument();
   });
 
   // #483
@@ -1711,7 +1711,7 @@ describe("TaskDetail action failure paths", () => {
     await user.click(screen.getByRole("button", { name: "Give up" }));
 
     expect(screen.getByText("Failed to give up on task")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Reason (optional)")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/^Why give up/)).toBeInTheDocument();
   });
 });
 

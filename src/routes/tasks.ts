@@ -1,18 +1,15 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, isNull, isNotNull } from "drizzle-orm";
-import { projects, sessions, tasks, TASK_STATUSES } from "../db/schema.js";
+import { projects, tasks, TASK_STATUSES } from "../db/schema.js";
 import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
-import { buildRejectPrompt, taskCommitTitlePath } from "../services/task-prompt.js";
 import { withTaskDerived } from "../services/task-row-derive.js";
-import { resolveTaskIssueContextSafe } from "../services/task-issue-context.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
 import {
   syncTaskTransition,
   isIssueStillTrackable,
   postTrackingEpicWarning,
 } from "../services/task-github-sync.js";
-import { deriveTaskBranchName } from "../services/git-worktree.js";
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
 import { withApprovalState } from "../services/task-approval-row.js";
 import {
@@ -32,8 +29,8 @@ import {
 } from "../services/task-reconciler.js";
 import { approveWorkflowChange } from "../services/task-workflow-gate.js";
 import { resolveTaskWorkerHost } from "../services/session-live-info.js";
-import { reseedTaskIfSessionExited } from "../services/task-reseed.js";
-import { resolveBackend, resolveSessionsDirWithFallback } from "../services/session-backend.js";
+import { deliverRejectFeedback } from "../services/task-reject.js";
+import { resolveBackend } from "../services/session-backend.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { resolveRepoRef } from "../services/host-git.js";
 import { removeLabel } from "../services/github-write.js";
@@ -487,73 +484,6 @@ export async function tasksRoute(app: FastifyInstance) {
   function getLocalTaskOr404(taskId: number) {
     const [task] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
     return task ?? null;
-  }
-
-  // Reject flow's re-seed (6.7/#220) — a reject keeps the worktree and
-  // session untouched by default so the agent can pick the feedback up on
-  // its own, but that only works if the session is still alive. When it
-  // isn't, a fresh session is spawned in the SAME worktree, seeded with the
-  // feedback, so a reject doesn't strand the task with no agent attached to
-  // it. Builds the prompt here (this route owns the human-feedback framing);
-  // the actual spawn-or-not decision is shared with task-reconciler.ts's
-  // review-feedback auto-return via reseedTaskIfSessionExited
-  // (task-reseed.ts), so the two paths can't drift into different re-seed
-  // behaviors.
-  //
-  // Returns whether the task is left with a live agent attached: `true`
-  // covers both "re-seeded a fresh session" and "the old session is still
-  // active, left alone by design so a human watching that terminal can pick
-  // the feedback up" (task-reseed.ts's own default, non-`force` behavior).
-  // `false` means the previous session had already exited AND the re-seed
-  // attempt itself failed (spawn failure, or lost a race) — issue #987: that
-  // used to leave the task sitting at "in_progress" with a dead session and
-  // a stale `sessionId` forever, since nothing ever revisits it. The caller
-  // below fails the task explicitly instead.
-  async function reseedIfSessionExited(
-    task: typeof tasks.$inferSelect,
-    project: typeof projects.$inferSelect,
-    feedback: string | null,
-  ): Promise<boolean> {
-    if (!task.sessionId || !task.worktreePath || !task.agentCommand) return true;
-    const [session] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
-    if (session?.status === "active") {
-      // Session still alive — task-reseed.ts's own default behavior is to
-      // leave it untouched, not a failure.
-      return true;
-    }
-    // Includes the task spec, not just the feedback: this only actually
-    // reaches a fresh agent once reseedTaskIfSessionExited's own "session
-    // still active" guard passes, and that agent has no memory of the task
-    // — the previous feedback-only prompt told it "this was rejected,
-    // here's why" about work it had never seen and a spec it had never read.
-    // #939/#1016 — resolved once per spawn, fail-open — see
-    // task-issue-context.ts's own doc comment.
-    const issueContext = await resolveTaskIssueContextSafe(app, task, project);
-    const prompt = buildRejectPrompt({
-      task: {
-        ...task,
-        comments: issueContext?.comments,
-        parent: issueContext?.parent,
-        siblings: issueContext?.siblings,
-      },
-      branchName: task.branchName ?? deriveTaskBranchName(task),
-      worktreePath: task.worktreePath,
-      budgetMinutes: resolveTaskMasterConfig(app).budgetMinutes,
-      feedback,
-      agentCommand: task.agentCommand,
-      // #778 — resolved against the OWNING host's own sessionsDir; see
-      // task-reconciler.ts's spawnReviewAgentNow for the full rationale.
-      commitTitlePath: project.conventionalCommitTitles
-        ? taskCommitTitlePath(
-            await resolveSessionsDirWithFallback(app, resolveBackend(app, project.hostId), {
-              taskId: task.id,
-              hostId: project.hostId,
-            }),
-            task.id,
-          )
-        : undefined,
-    });
-    return reseedTaskIfSessionExited(app, task, project, prompt, "task reject");
   }
 
   // Phase 6 (6.9/#233) — local-board creation, works with Task Master off.
@@ -1595,9 +1525,10 @@ export async function tasksRoute(app: FastifyInstance) {
       // it's a human decision to send an in-flight task back for another
       // attempt, not new autonomous work, and it's the one action that
       // keeps a disabled install from permanently stranding a reviewing
-      // task. It can re-seed the worker session if that session already
-      // exited (see reseedIfSessionExited below) — a bounded continuation
-      // of already-approved scope, not a new claim.
+      // task. It types the feedback into the worker session, or re-seeds a
+      // fresh one when that session can't take it (see
+      // deliverRejectFeedback below) — a bounded continuation of
+      // already-approved scope, not a new claim.
       const taskId = Number(request.params.id);
       if (!Number.isInteger(taskId)) return reply.badRequest("Invalid task id");
       const existing = getLocalTaskOr404(taskId);
@@ -1625,16 +1556,12 @@ export async function tasksRoute(app: FastifyInstance) {
           // is told a budget window that assumes a fresh clock. Resetting
           // it keeps both true.
           //
-          // Unconditional, so it also fires below when reseedIfSessionExited
-          // finds the previous session still `active` and skips re-seeding
-          // (Hermes review, PR #569): that surviving agent keeps its
-          // ORIGINAL prompt, whose budget line still cites the original
-          // claim time, while enforcement now measures from this reject.
-          // Safe direction only — the agent may believe its budget is
-          // nearly spent when it isn't — not the reverse. Fixing the
-          // prompt/enforcement match on that path would mean re-prompting a
-          // still-running session, which is a bigger change than this
-          // fix's scope.
+          // Unconditional, and it matters for the live-worker path too: the
+          // feedback is typed into the surviving agent (deliverRejectFeedback
+          // below), whose ORIGINAL prompt still cites the original claim
+          // time in its budget line, while enforcement now measures from this
+          // reject. Safe direction only — the agent may believe its budget
+          // is nearly spent when it isn't — not the reverse.
           claimedAt: new Date(),
           // Issue #1038 — Reject is exactly the escape hatch a capped,
           // announced task relies on (it doesn't spend a round, see
@@ -1669,14 +1596,16 @@ export async function tasksRoute(app: FastifyInstance) {
         // Awaited, unlike the sync above: this can change `sessionId` on
         // the task row, and the response below should reflect that rather
         // than the pre-reseed snapshot.
-        const reseeded = await reseedIfSessionExited(
+        const reseeded = await deliverRejectFeedback(
+          app,
           updated,
           project,
           request.body.feedback ?? null,
         );
         if (!reseeded) {
-          // Issue #987 — the previous session had already exited AND the
-          // re-seed attempt itself failed (spawn failure, or lost a race).
+          // Issue #987 — a re-seed was needed (the previous session had exited,
+          // or could not take the feedback) AND it failed (spawn failure, a
+          // failed terminate, or lost a race).
           // Leaving the task at "in_progress" here strands it with a dead
           // session and a stale `sessionId` permanently: nothing else ever
           // revisits it. Fail it explicitly instead, same CAS-guarded shape

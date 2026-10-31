@@ -1274,10 +1274,14 @@ GitHub issue is linked — a local-only task still gets a PR, it just has no
 issue to close). These steps are ordered so that any failure leaves the
 task in `reviewing`, untouched and safely retryable — never half-promoted.
 
-On reject (`reviewing → in_progress`): the worktree and session are left
-untouched by default so the agent can pick the feedback up on its own. If
-its session has already exited, a fresh one is re-seeded in the **same**
-worktree (never a new one) with the feedback as its prompt. A draft PR, if
+On reject (`reviewing → in_progress`): the feedback is typed into the
+task's still-running worker (`promptLiveTaskWorker`, `task-reseed.ts`), so it
+keeps its context; its next turn end sends the task back to review. If the
+worker is blocked on a dialog, busy mid-turn, or its agent takes no typed
+prompt, it is terminated and re-seeded (`force: true`, as the review-feedback
+auto-return does); if its session had already exited, a fresh one is
+re-seeded the same way. Either re-seed is in the **same** worktree (never a
+new one) with the feedback as its prompt. A draft PR, if
 one is open, is left as-is — the next `→ reviewing` (whether from this
 same round or a later one) pushes the new commits to it, no new PR.
 

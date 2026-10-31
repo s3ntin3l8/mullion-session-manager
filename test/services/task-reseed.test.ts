@@ -5,7 +5,13 @@ import fs from "node:fs";
 
 const mockCreateSessionRecord = vi.fn();
 const mockTerminate = vi.fn();
-const mockResolveBackend = vi.fn(() => ({ terminate: mockTerminate }));
+const mockLiveStatus = vi.fn();
+const mockPrompt = vi.fn();
+const mockResolveBackend = vi.fn(() => ({
+  terminate: mockTerminate,
+  liveStatus: mockLiveStatus,
+  prompt: mockPrompt,
+}));
 const mockCloseSessionBrowserBindings = vi.fn();
 
 vi.mock("../../src/services/session-lifecycle.js", async (importOriginal) => {
@@ -23,7 +29,8 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { tasks, sessions } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
-const { reseedTaskIfSessionExited } = await import("../../src/services/task-reseed.js");
+const { reseedTaskIfSessionExited, promptLiveTaskWorker } =
+  await import("../../src/services/task-reseed.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-reseed-test-${process.pid}.db`);
 
@@ -53,6 +60,8 @@ describe("reseedTaskIfSessionExited", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockTerminate.mockResolvedValue(undefined);
+    mockLiveStatus.mockResolvedValue({});
+    mockPrompt.mockResolvedValue({ ok: true, outputOffset: 0 });
   });
 
   function insertSessionRow(status: "active" | "exited") {
@@ -327,5 +336,54 @@ describe("reseedTaskIfSessionExited", () => {
     const [updated] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
     expect(updated.sessionId).toBe(task.sessionId);
     expect(updated.status).toBe("done");
+  });
+
+  describe("promptLiveTaskWorker", () => {
+    it("types the prompt into an idle live worker and submits it", async () => {
+      const { task: taskRow, sessionId } = insertTaskWithSession("active");
+      const ok = await promptLiveTaskWorker(app, taskRow, "please fix X", "test");
+      expect(ok).toBe(true);
+      expect(mockPrompt).toHaveBeenCalledWith(String(sessionId), {
+        text: "please fix X",
+        submit: true,
+      });
+      expect(mockTerminate).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["blocked on a permission dialog", { permissionState: "pending" }],
+      ["busy mid-turn", { activity: "working" }],
+    ])("does not type into a worker that is %s", async (_label, info) => {
+      const { task: taskRow, sessionId } = insertTaskWithSession("active");
+      mockLiveStatus.mockResolvedValue({ [String(sessionId)]: info });
+      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe(false);
+      expect(mockPrompt).not.toHaveBeenCalled();
+    });
+
+    it("returns false when the session has already exited", async () => {
+      const { task: taskRow } = insertTaskWithSession("exited");
+      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe(false);
+      expect(mockPrompt).not.toHaveBeenCalled();
+    });
+
+    it("returns false when the task has no session", async () => {
+      const { task: taskRow } = insertTaskWithSession("active");
+      expect(await promptLiveTaskWorker(app, { ...taskRow, sessionId: null }, "x", "test")).toBe(
+        false,
+      );
+      expect(mockPrompt).not.toHaveBeenCalled();
+    });
+
+    it("returns false when the agent refuses the prompt", async () => {
+      const { task: taskRow } = insertTaskWithSession("active");
+      mockPrompt.mockResolvedValue({ ok: false, status: 501, error: "not supported" });
+      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe(false);
+    });
+
+    it("returns false, rather than throwing, when the host cannot be asked", async () => {
+      const { task: taskRow } = insertTaskWithSession("active");
+      mockPrompt.mockRejectedValue(new Error("host unreachable"));
+      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe(false);
+    });
   });
 });

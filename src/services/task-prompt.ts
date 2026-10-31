@@ -970,12 +970,13 @@ export function renderReviewFindingsMarkdown(
 /**
  * The reject re-seed's prompt (`routes/tasks.ts`).
  *
- * Note this path only fires when the previous session has already exited —
- * a live agent picks the feedback up itself. That makes the spawned agent a
- * COMPLETELY fresh one with no memory of the task, which is why the task
- * spec is included here: the pre-existing prompt sent only the feedback
- * text, so a re-seeded agent was told "this was rejected, here's why" about
- * work it had never seen and a spec it had never read.
+ * Used when the previous session is gone or had to be replaced (it was
+ * busy/blocked, or took no prompt) — a COMPLETELY fresh agent with no memory
+ * of the task, which is why the task spec is included here: the pre-existing
+ * prompt sent only the feedback text, so a re-seeded agent was told "this was
+ * rejected, here's why" about work it had never seen and a spec it had never
+ * read. A still-live worker already has all of that and gets
+ * `buildRejectFollowUpPrompt` instead.
  */
 export function buildRejectPrompt(
   opts: WorkerPreambleOptions & { feedback: string | null },
@@ -985,6 +986,34 @@ export function buildRejectPrompt(
     ? `A human reviewed this task and requested changes:\n\n${opts.feedback}`
     : "A human reviewed this task and asked for more work on it.";
   return `${preamble}${SECTION_BREAK}${rejection}${SECTION_BREAK}${taskSpec(opts.task)}`;
+}
+
+/**
+ * The reject prompt for a worker that is still running (`routes/tasks.ts`):
+ * it already has the spec, the preamble and its own context, so it gets only
+ * the feedback and the two things a new round must not forget — the branch
+ * the work lives on, and that ending the turn is what sends it back to review.
+ */
+export function buildRejectFollowUpPrompt(opts: {
+  branchName: string;
+  feedback: string | null;
+  commitTitlePath?: string;
+}): string {
+  const rejection = opts.feedback
+    ? `A human reviewed this task and requested changes:\n\n${opts.feedback}`
+    : "A human reviewed this task and asked for more work on it.";
+  const lines = [
+    rejection,
+    "",
+    `Keep working on ${opts.branchName} in the same worktree: address the feedback, re-run the`,
+    "repo's verification gate, and commit. Ending your turn sends the task back to review.",
+  ];
+  if (opts.commitTitlePath) {
+    lines.push(
+      `Rewrite the pull request title in ${opts.commitTitlePath} only if its type should change.`,
+    );
+  }
+  return lines.join("\n");
 }
 
 /**

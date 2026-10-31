@@ -226,6 +226,18 @@ describe("LinkedActions", () => {
     expect(decideSessionAction(dead as never)).toEqual({ kind: "open-existing", sessionId: 3 });
   });
 
+  it("opens a task's own worker over any other session on the branch", () => {
+    const link = (id: number, alive: boolean) =>
+      ({ session: makeSession({ id, alive }), children: [] }) as never;
+    const task = makeTask({ id: 5, sessionId: 4, reviewSessionId: 2 });
+    // 2 (the reviewer) is alive and sorts first; 4 is the worker, idle but its own.
+    const entry = { ...entryFor(), task, sessions: [link(2, true), link(4, false)] };
+    expect(decideSessionAction(entry as never)).toEqual({ kind: "open-existing", sessionId: 4 });
+    // A worker that is not among the branch's sessions falls back to the usual pick.
+    const gone = { ...entryFor(), task, sessions: [link(2, true)] };
+    expect(decideSessionAction(gone as never)).toEqual({ kind: "open-existing", sessionId: 2 });
+  });
+
   it("Open existing session replaces the start action", () => {
     const spy = vi.fn();
     useDashboardStore.setState({ requestOpenSession: spy });
