@@ -1067,6 +1067,13 @@ extensive design comments.
   `mergeable_state` means and what the sweep does about it, and
   [`tasks-internals.md`](tasks-internals.md#auto-rebase-758) if the project
   has `autoApprove` on and the PR is `dirty`.
+- **The drawer says "Merge status could not be confirmed".** The merge request
+  timed out on the wire, and a timeout does not say whether GitHub applied it.
+  The sweep first re-reads the PR: if it merged, the task is finished as usual;
+  if the read fails too, this neutral message stays (not "PR open" and not a
+  failure) until the next backoff tick re-checks. A task with `mergedAt` set
+  never shows a merge error or a merge button, even if a late timeout or
+  webhook races the sweep.
 - **A red CI check never seems to trigger an automatic return to the
   worker.** Any red check on the head counts, required or not, so branch
   protection is not the cause. Check, in order: the project has `autoApprove`

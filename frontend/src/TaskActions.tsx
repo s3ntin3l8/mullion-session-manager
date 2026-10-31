@@ -4,7 +4,11 @@ import { computeTaskReorder, orderTasksForColumn } from "./tasksBoard.js";
 import { ApiError } from "./api/index.js";
 import type { Task } from "./api/index.js";
 import { TextInput } from "./ui/primitives.js";
-import { awaitingMergeReason, isAwaitingMerge } from "./unified-board/awaitingMerge.js";
+import {
+  awaitingMergeReason,
+  isAwaitingMerge,
+  isMergeUnconfirmed,
+} from "./unified-board/awaitingMerge.js";
 import { parseWorkflowChange } from "./workflowChange.js";
 
 // Shared by the task drawer (TaskDetail.tsx) and the GitHub PR sidebar
@@ -445,10 +449,35 @@ function TaskMergeStatus({ task }: { task: Task }) {
     : null;
 
   const awaiting = isAwaitingMerge(task);
+  const unconfirmed = isMergeUnconfirmed(task);
+  // A confirmed merge wins over any stale merge state still on the row: no
+  // "needs merge", no error, no button to merge it again.
+  const merged = task.mergedAt !== null;
 
   return (
     <div className="task-detail-actions">
-      {awaiting && (
+      {merged && (
+        <span className="task-detail-hint">
+          <strong>PR merged.</strong>{" "}
+          {task.prUrl && (
+            <a href={task.prUrl} target="_blank" rel="noreferrer">
+              PR #{task.prNumber}
+            </a>
+          )}
+        </span>
+      )}
+      {awaiting && unconfirmed && (
+        <span className="task-detail-hint task-detail-awaiting-merge">
+          <strong>Merge status could not be confirmed.</strong> GitHub did not answer in time, so
+          the PR may already be merged — checking again shortly.{" "}
+          {task.prUrl && (
+            <a href={task.prUrl} target="_blank" rel="noreferrer">
+              PR #{task.prNumber}
+            </a>
+          )}
+        </span>
+      )}
+      {awaiting && !unconfirmed && (
         <span className="task-detail-hint task-detail-awaiting-merge">
           <strong>PR open — needs merge.</strong> {awaitingMergeReason(task, mergeOnApprove)}.{" "}
           {task.prUrl && (
@@ -458,29 +487,33 @@ function TaskMergeStatus({ task }: { task: Task }) {
           )}
         </span>
       )}
-      <button
-        className="notif-gate-btn notif-gate-approve"
-        disabled={submitting || !taskMasterEnabled}
-        onClick={async () => {
-          setSubmitting(true);
-          setError(null);
-          try {
-            await mergeTask(task.id);
-          } catch (err) {
-            setError(err instanceof ApiError ? err.message : "Failed to request a merge");
-          } finally {
-            setSubmitting(false);
-          }
-        }}
-      >
-        {pending ? "Retry merge" : "Merge now"}
-      </button>
-      {pending && !task.mergeError && (
+      {!merged && (
+        <button
+          className="notif-gate-btn notif-gate-approve"
+          disabled={submitting || !taskMasterEnabled}
+          onClick={async () => {
+            setSubmitting(true);
+            setError(null);
+            try {
+              await mergeTask(task.id);
+            } catch (err) {
+              setError(err instanceof ApiError ? err.message : "Failed to request a merge");
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+        >
+          {pending ? "Retry merge" : "Merge now"}
+        </button>
+      )}
+      {pending && !task.mergeError && !merged && (
         <span className="task-detail-hint">
           Merge pending — landing once the branch is up to date and checks are green.
         </span>
       )}
-      {task.mergeError && <span className="task-detail-error">{task.mergeError}</span>}
+      {task.mergeError && !merged && !unconfirmed && (
+        <span className="task-detail-error">{task.mergeError}</span>
+      )}
       {/* #744 — releaseRequestedAt is only ever set AFTER this task's own PR
           has merged (task-reconciler.ts's attemptMerge, case "clean"), so it
           and mergeRequestedAt/mergeError above are never both "pending" at
