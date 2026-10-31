@@ -92,6 +92,7 @@ const FILLABLE_SETTINGS = [
   "mergeOnApprove",
   "defaultAgent",
   "defaultReviewAgent",
+  "setupRecipe",
   "maxAutoReturnRounds",
   "conventionalCommitTitles",
   "autoTagRelease",

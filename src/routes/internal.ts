@@ -132,6 +132,7 @@ import { checkoutBranch, createBranch, rebaseBranch } from "../services/git-bran
 import type { GitBranchOpResult } from "../services/git-branch-ops.js";
 import { pushBranch } from "../services/git-push.js";
 import { cloneCheckout } from "../services/git-clone.js";
+import { execSetupRecipe, readLocalSetupLog } from "../services/setup-recipe.js";
 import { compileOutputMatcher, waitForOutput } from "../services/output-wait.js";
 import {
   effectiveProjectsRoots,
@@ -234,6 +235,8 @@ import {
   scaffoldScanSchema,
   gitCommitWipSchema,
   runGenerationTurnSchema,
+  runSetupSchema,
+  setupLogQuerySchema,
   bundleSyncRemoveSchema,
   promoteDecisionSchema,
   writeDockConfigBodySchema,
@@ -280,6 +283,7 @@ import type {
   ScaffoldScanBody,
   GitCommitWipBody,
   RunGenerationTurnBody,
+  RunSetupBody,
   BundleSyncRemoveBody,
   PromoteDecisionBody,
 } from "./internal-schemas.js";
@@ -2079,6 +2083,43 @@ export async function internalRoutes(app: FastifyInstance) {
         }
         throw err;
       }
+    },
+  );
+
+  // Issue #2245 — runs a project's setup recipe (`sh -c`) in a freshly cut
+  // worktree or cloned checkout on THIS agent, output to
+  // `<sessionsDir>/<logKey>.setup.log`. Always 200 with a typed `outcome`
+  // (ok | failed | timeout | busy) — like run-generation-turn, so the primary's
+  // viaRemote can tell "the recipe failed" from "the host is unreachable". The
+  // request stays open for the run (bounded by timeoutMs); the PRIMARY is what
+  // never waits on it.
+  app.post<{ Body: RunSetupBody }>(
+    "/internal/run-setup",
+    { ...INTERNAL_RATE_LIMIT, schema: runSetupSchema },
+    async (request, reply) => {
+      const { cwd, recipe, logKey } = request.body;
+      const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
+      if (resolvedCwd === null) return;
+      return await execSetupRecipe({
+        cwd: resolvedCwd,
+        recipe,
+        logKey,
+        sessionsDir: app.config.SESSIONS_DIR,
+        withinRoots: effectiveProjectsRoots(app),
+      });
+    },
+  );
+
+  // Issue #2245 — the tail of a setup log on this agent, for the primary's
+  // `GET /api/sessions/:id/setup-log`. Reads only `<sessionsDir>/<logKey>.setup.log`
+  // (the key is a filename stem by schema), so no PROJECTS_ROOTS check applies.
+  app.get<{ Querystring: { logKey: string } }>(
+    "/internal/setup-log",
+    { ...INTERNAL_RATE_LIMIT, schema: setupLogQuerySchema },
+    async (request, reply) => {
+      const log = readLocalSetupLog(app.config.SESSIONS_DIR, request.query.logKey);
+      if (!log) return reply.notFound("no setup log");
+      return log;
     },
   );
 

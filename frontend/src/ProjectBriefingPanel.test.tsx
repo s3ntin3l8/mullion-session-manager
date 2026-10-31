@@ -846,4 +846,36 @@ describe("ProjectBriefingPanel", () => {
       expect(screen.queryByText(/only supports local-host projects/)).not.toBeInTheDocument();
     });
   });
+
+  describe("setup recipe (#2245)", () => {
+    const originalState = useDashboardStore.getState();
+    afterEach(() => {
+      useDashboardStore.setState(originalState, true);
+    });
+    const get = () => jsonResponse(200, { briefing: null, skill: null, reviewerAgent: null });
+
+    it("saves the recipe on blur, and clears it with null when emptied", async () => {
+      useDashboardStore.setState({ projects: [makeProject({ id: 1, setupRecipe: "npm ci" })] });
+      const updateProject = vi.fn().mockResolvedValue({});
+      useDashboardStore.setState({ updateProject });
+      vi.stubGlobal("fetch", mockFetch({ get }));
+      const user = userEvent.setup();
+      render(<ProjectBriefingPanel params={{ projectId: 1 }} />);
+      const input = await screen.findByLabelText("Setup recipe");
+      expect(input).toHaveValue("npm ci");
+
+      await user.click(input);
+      await user.tab();
+      expect(updateProject).not.toHaveBeenCalled();
+
+      await user.clear(input);
+      await user.type(input, "make deps");
+      await user.tab();
+      expect(updateProject).toHaveBeenLastCalledWith(1, { setupRecipe: "make deps" });
+
+      await user.clear(input);
+      await user.tab();
+      expect(updateProject).toHaveBeenLastCalledWith(1, { setupRecipe: null });
+    });
+  });
 });

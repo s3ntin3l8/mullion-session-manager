@@ -406,8 +406,25 @@ failed`, with `cwd` or `reason`/`detail`) and re-submits the same create, which 
   capability flags and report projects roots.
 - Managed clones never come back as a **suggestion** (below): detection skips any path
   that is already some project's `hostCwds` entry.
-- The per-project setup recipe (#2245) had not merged when this landed; it will add its
-  call after a successful clone in `runJob`.
+- After a successful clone, `runJob` starts the project's setup recipe (#2245) on that host,
+  fire-and-forget, with the log keyed `checkout-<projectId>`.
+
+**Setting up a new tree (`POST /internal/run-setup`).** A project's [setup recipe](configuration.md#setup-recipe-for-new-worktrees-and-clones)
+runs on the host that owns the new worktree or clone, not on the primary. The
+primary posts `{cwd, recipe, logKey}`; `cwd` is checked against the
+agent's `PROJECTS_ROOTS`, `logKey` is a filename stem (never a path), and the agent
+runs `sh -c <recipe>` in `cwd`, writing `<sessionsDir>/<logKey>.setup.log` on that
+agent. It always answers 200 with `{outcome, exitCode, logPath, detail?}`, where
+`outcome` is `ok`, `failed`, `timeout` or `busy` (a run is already in flight in that
+directory, so nothing started); a recipe failure is an outcome, not an HTTP error. The
+primary never waits on it: the session starts at once and its `setup_status` flips
+when the call returns. `GET /internal/setup-log?logKey=` returns the log's tail for
+`GET /api/sessions/:id/setup-log`. An agent too old to have either route answers 404,
+reported on the session as a failed setup.
+
+This only adds the endpoint and the `managed` list on `hostCwdsMeta` (the hosts
+whose `hostCwds` entry is a Mullion-created clone; an operator re-mapping or
+clearing that host removes it). When a clone happens is a separate feature.
 
 **Detecting the checkout (#2090).** You do not have to find and type those paths.
 `GET /api/projects/:id/host-suggestions` asks every other host that is online and not

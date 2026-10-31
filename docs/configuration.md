@@ -90,6 +90,30 @@ host: it is gone when the session ends. Mullion's own salvage commit of an
 agent's uncommitted work uses the same identity. It does not cover GitHub
 credentials or commit signing.
 
+### Setup recipe for new worktrees and clones
+
+A fresh worktree starts without `node_modules`, and a freshly cloned host has no
+installed dependencies at all. A project can carry a **setup recipe** that Mullion
+runs for you:
+
+- **Where:** the project's panel (Agent context & skills → the "Setup recipe" field,
+  `projects.setup_recipe`, PATCH `/api/projects/:id` `setupRecipe`). One shell command
+  string, at most 4096 characters, run with `sh -c` in the new tree — e.g.
+  `npm ci && (cd frontend && npm ci)`. Blank clears it; with no recipe nothing runs
+  and nothing is flagged. Mullion never infers one.
+- **When:** after a worktree is cut for a session — an isolated child, a Task Master
+  worker or reviewer, a dock preview or **Promote to worktree** — and (once the
+  checkout-materialization job lands, #2243) after a clone. Not on a Task Master
+  retry/resume, whose tree is already set up.
+- **Where it runs:** on the host that owns the tree. It never blocks the session
+  starting, has a 15-minute timeout, and only one run per directory at a time (a
+  second session in the same directory starts without its own badge).
+- **Status and log:** the session's tab and its task card show a **setup running /
+  ok / failed / timed out** badge (`sessions.setup_status`); clicking it opens the
+  log, which lives on the session's host at `<sessionsDir>/<sessionId>.setup.log`
+  (`GET /api/sessions/:id/setup-log`). A failed or timed-out recipe never kills or
+  blocks the session — it is only flagged.
+
 ## Database and sessions
 
 | Variable                        | Default              | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |

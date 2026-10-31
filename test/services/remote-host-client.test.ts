@@ -954,6 +954,39 @@ describe("RemoteHostClient", () => {
       }
     });
 
+    it("resolveRunSetup POSTs the recipe to /internal/run-setup with a timeout above the run budget, and resolveSetupLog GETs the log", async () => {
+      const timeout = vi.spyOn(AbortSignal, "timeout");
+      fetchMock.mockImplementation(async () =>
+        jsonResponse(200, { outcome: "ok", exitCode: 0, logPath: "/s/1.setup.log" }),
+      );
+      try {
+        await expect(client().resolveRunSetup("/r/wt", "npm ci", "1")).resolves.toEqual({
+          outcome: "ok",
+          exitCode: 0,
+          logPath: "/s/1.setup.log",
+        });
+        expect(fetchMock).toHaveBeenCalledWith(
+          "http://example.invalid:1234/internal/run-setup",
+          expect.objectContaining({
+            method: "POST",
+            body: JSON.stringify({ cwd: "/r/wt", recipe: "npm ci", logKey: "1" }),
+          }),
+        );
+        expect(timeout).toHaveBeenLastCalledWith(15 * 60 * 1000 + 60_000);
+      } finally {
+        timeout.mockRestore();
+      }
+      fetchMock.mockResolvedValue(jsonResponse(200, { content: "log", truncated: false }));
+      await expect(client().resolveSetupLog("a b")).resolves.toEqual({
+        content: "log",
+        truncated: false,
+      });
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        "http://example.invalid:1234/internal/setup-log?logKey=a%20b",
+        expect.anything(),
+      );
+    });
+
     it("resolveTaskWorktreeDirs unwraps /internal/git-worktree/task-dirs's { dirs } envelope to a bare string[]", async () => {
       fetchMock.mockResolvedValue(
         jsonResponse(200, { dirs: ["/x/y/.mullion-worktrees/mullion-task-1"] }),

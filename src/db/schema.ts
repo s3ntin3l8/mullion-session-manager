@@ -298,6 +298,11 @@ export const projects = sqliteTable("projects", {
   // /api/projects/:id treats `undefined` as "leave unchanged" and `null`
   // as "clear it."
   defaultAgent: text("default_agent"),
+  // Issue #2245 — a shell command string (`sh -c`, capped at
+  // SETUP_RECIPE_MAX_LENGTH) run in a freshly cut worktree or a freshly cloned
+  // checkout, on the host that owns it, to install dependencies. Nullable: null
+  // means no recipe, nothing runs. Per project, never inferred.
+  setupRecipe: text("setup_recipe"),
   // Phase 6 Task Master (6.2/#215) — optional per-project advisory review
   // agent, spawned (in the worker's own worktree) when a task enters
   // "reviewing". Unlike defaultAgent there is no global-settings fallback
@@ -599,6 +604,13 @@ export const sessions = sqliteTable(
     // session's host — `git worktree remove` has to run there, not in the
     // worktree being removed.
     worktreeBranch: text("worktree_branch"),
+    // Issue #2245 — the project's setup recipe ran for this session's fresh
+    // worktree: "running" | "ok" | "failed" | "timeout". NULL = no recipe ran
+    // (none configured, or the tree was not freshly cut). The log is on the
+    // session's host at `setupLogPath` (<sessionsDir>/<id>.setup.log). A failed
+    // recipe never blocks or kills the session; it only flags it.
+    setupStatus: text("setup_status"),
+    setupLogPath: text("setup_log_path"),
     worktreeRepoCwd: text("worktree_repo_cwd"),
     // When the worktree directory was removed (the branch is always kept).
     // NULL while it still exists.

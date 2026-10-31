@@ -123,6 +123,18 @@ describe("store /ws/tasks integration (#488)", () => {
     stop();
   });
 
+  it("refetches the sessions list on a setup-recipe frame (#2245)", async () => {
+    const refreshSessions = vi.fn(async () => {});
+    useDashboardStore.setState({ refreshSessions });
+    const stop = useDashboardStore.getState().startTasksStream();
+    instances[0].__open();
+    instances[0].__message(JSON.stringify({ taskId: 0, projectId: 1, kind: "setup", ts: 1 }));
+    expect(refreshSessions).toHaveBeenCalledTimes(1);
+    instances[0].__message(JSON.stringify({ taskId: 1, projectId: 1, kind: "blockers", ts: 2 }));
+    expect(refreshSessions).toHaveBeenCalledTimes(1);
+    stop();
+  });
+
   it("ignores a malformed frame without throwing", () => {
     const stop = useDashboardStore.getState().startTasksStream();
     instances[0].__open();

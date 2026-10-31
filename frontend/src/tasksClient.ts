@@ -41,6 +41,7 @@ const TASK_EVENT_KINDS: Record<TaskEvent["kind"], true> = {
   hierarchy: true,
   dispatch: true,
   "workflow-hold": true,
+  setup: true,
 };
 
 function isTaskWireMessage(value: unknown): boolean {
@@ -56,7 +57,7 @@ function isTaskWireMessage(value: unknown): boolean {
  * itself is deliberately not passed through — see store.ts's own comment
  * on why a debounced refetch, not payload-driven patching, is the
  * consumer shape here. */
-export function connectTasksStream(onTaskEvent: () => void): TasksClientHandle {
+export function connectTasksStream(onTaskEvent: (kind: string) => void): TasksClientHandle {
   let ws: WebSocket | null = null;
   let destroyed = false;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -81,7 +82,7 @@ export function connectTasksStream(onTaskEvent: () => void): TasksClientHandle {
       } catch {
         return;
       }
-      if (isTaskWireMessage(parsed)) onTaskEvent();
+      if (isTaskWireMessage(parsed)) onTaskEvent((parsed as { kind: string }).kind);
     });
 
     socket.addEventListener("close", () => {

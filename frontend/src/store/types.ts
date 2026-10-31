@@ -136,6 +136,8 @@ export interface ProjectsSlice {
         | "preProvision"
         // The per-project git identity override is writable too.
         | "gitIdentity"
+        // Issue #2245 — the worktree/clone setup recipe is writable too.
+        | "setupRecipe"
       >
     > &
       CreateProjectDirOptions,

@@ -6,6 +6,7 @@ import {
   rowClassNameForSeverity,
 } from "../sessionStatus.js";
 import { resolveAgentLogo } from "../cliLogos.js";
+import { SetupBadge } from "../ui/SetupBadge.js";
 import { BotIcon, TerminalPromptIcon } from "../ui/icons.js";
 
 // Split out of UnifiedBoard.tsx (Wave 5 / PR 28 of
@@ -95,6 +96,7 @@ export function TaskSessionSlot({
       <span className="task-card-session-strip-label">
         {role} · {label}
       </span>
+      <SetupBadge sessionId={session.id} status={session.setupStatus} />
     </span>
   );
 }

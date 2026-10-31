@@ -235,7 +235,9 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
       // mechanism. The 60s poll (SessionsSlice's startLiveRefresh) stays as
       // the fallback for whenever this channel is disconnected or
       // reconnecting.
-      const handle = connectTasksStream(() => {
+      const handle = connectTasksStream((kind) => {
+        // #2245 — a setup-recipe status change lives on the session row.
+        if (kind === "setup") void get().refreshSessions();
         if (tasksEventRefreshTimer) clearTimeout(tasksEventRefreshTimer);
         tasksEventRefreshTimer = setTimeout(() => {
           tasksEventRefreshTimer = null;

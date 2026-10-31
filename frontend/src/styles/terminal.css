@@ -826,3 +826,42 @@
   color: var(--dim);
   font-size: 0.65625rem;
 }
+
+/* Issue #2245 — SetupBadge (ui/SetupBadge.tsx): the project setup recipe's
+   status on a session tab and its task card; the button opens the log. */
+.setup-badge {
+  font-size: 0.65625rem;
+  line-height: 1.3;
+  padding: 1px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.setup-badge-running {
+  color: var(--b);
+}
+.setup-badge-ok {
+  color: var(--g);
+}
+.setup-badge-failed,
+.setup-badge-timeout {
+  color: var(--r);
+  border-color: color-mix(in srgb, var(--r) 45%, transparent);
+}
+.setup-log {
+  margin: 0;
+  max-height: 60vh;
+  overflow: auto;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.project-setup-recipe-input {
+  width: 100%;
+  font-family: var(--mono, monospace);
+  font-size: 0.75rem;
+  resize: vertical;
+}
