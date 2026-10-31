@@ -1915,7 +1915,7 @@ const releaseWorkflowCache = new Map<string, ReleaseWorkflowCacheEntry>();
 // cache, an active repo would spend a live `listWorkflows` call per frame
 // against the process-wide rate-limit budget `github-fetch.ts` shares with
 // the PR poller. Same TTL/"only successes cached" posture as
-// fetchRequiredStatusContexts (github.ts).
+// the other hourly caches in this module.
 const RELEASE_WORKFLOW_CACHE_TTL_MS = 60 * 60_000;
 // A workflow that isn't (known to be) dispatchable is re-read sooner, so a
 // repo that just added `workflow_dispatch:` gets its Run button back without
@@ -1929,8 +1929,7 @@ const RELEASE_WORKFLOW_UNDISPATCHABLE_TTL_MS = 5 * 60_000;
  * `Actions: read` is an explicitly supported configuration, not an error;
  * see docs/github-integration.md). Only a `"found"`/`"not-configured"`
  * result is cached — a scope failure isn't, in case the connected token is
- * fixed later, matching fetchRequiredStatusContexts's "only successes
- * cached" precedent.
+ * fixed later.
  */
 export async function detectReleaseWorkflow(
   token: string,

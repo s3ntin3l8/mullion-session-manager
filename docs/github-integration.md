@@ -247,14 +247,6 @@ individual issue, only a repository):
   writes and its issue-label ingest reads.
 - **read** — Actions, Metadata, Pull requests — used for the repo-status
   widget and PR/CI poller. Deliberately excludes `administration`.
-- **branch-protection** (`#2327`) — Administration (read), Metadata — reads a
-  branch's required status checks (`GET
-/repos/{owner}/{repo}/branches/{branch}/protection`). **No longer needed by
-  Task Master:** its red-CI-return gate (`#755`) now treats every red check as
-  work to fix, required or not, so it no longer reads branch protection and the
-  "CI gating unavailable" flag is no longer set. The scope and the optional
-  App permission remain defined but nothing in the gate depends on them; see
-  [`tasks.md`](tasks.md#auto-approve) for the current mechanics.
 - **issues** — Issues, Pull requests, Metadata (all read) — used only to
   list a repo's open issues for the sidebar's Issues count (`GET
 /repos/{owner}/{repo}/issues`). A token without Issues access gets only

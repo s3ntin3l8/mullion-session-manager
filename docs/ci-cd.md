@@ -264,7 +264,7 @@ required — see the "Test sharding" note above for why dropping one is not
 safe.
 
 Verify the current contexts via (an App installation token reads this endpoint only if the App has the optional
-Administration: Read-only grant; see Issues #1360 / #2327 below):
+Administration: Read-only grant, which Task Master itself does not need):
 
 ```bash
 gh api repos/s3ntin3l8/mullion-session-manager/branches/main/protection --jq '.required_status_checks.contexts'
@@ -281,21 +281,13 @@ first and preserve every other field (`strict`, `enforce_admins`,
 `required_conversation_resolution`, ...) — a PUT replaces the whole object,
 so a PUT that sends only the contexts silently drops the rest.
 
-**Task Master's CI-auto-return no longer reads this (`#755`, formerly `#1360` /
-`#2327`).** `attemptReturnRedCiToWorker` used to read exactly this endpoint
-(`fetchRequiredStatusContexts`, `src/services/github.ts`) to tell a red
-_required_ check from a red _non-required_ one (this repo's own `test-e2e`
-above is a real example), and the optional **Administration: Read-only** App
-permission (`BRANCH_PROTECTION_PERMISSIONS`, the `"branch-protection"` token
-scope) existed to make that read work. The gate now treats every red check as
-work to fix, required or not, because the merge sweep holds on an `unstable`
-PR either way — so it reads neither branch protection nor that token scope,
-and a 403 from the `gh api` command above no longer has anything to do with
-why a worker was, or was not, returned. If a worker is not coming back for a
-red check, look at the guards listed in [`tasks.md`](tasks.md)'s
-troubleshooting entry instead. The lookup helper and the permission are still
-defined (their removal is tracked separately); the `gh api` recipe above stays
-useful for reading the protection object by hand.
+**Task Master does not read this.** `attemptReturnRedCiToWorker` treats every
+red check as work to fix, required or not, because the merge sweep holds on an
+`unstable` PR either way — so it reads neither branch protection nor needs the
+optional **Administration: Read-only** App permission. The `gh api` recipe
+above is only for reading the protection object by hand. If a worker is not
+coming back for a red check, look at the guards listed in
+[`tasks.md`](tasks.md)'s troubleshooting entry instead.
 
 ### PRs are not required to be up to date with `main` (`strict: false`)
 

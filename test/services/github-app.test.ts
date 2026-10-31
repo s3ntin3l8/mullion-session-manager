@@ -270,24 +270,6 @@ describe("github-app (#489)", () => {
       });
     });
 
-    // #2327 — branch protection needs `administration: read`, kept out of
-    // READ_PERMISSIONS so an installation without that optional grant fails
-    // this one mint instead of the whole read token.
-    it("mints the branch-protection scope with administration:read + metadata:read", async () => {
-      const fetchMock = vi
-        .fn()
-        .mockResolvedValue(
-          jsonResponse(200, { token: "ghs_abc", expires_at: "2026-01-01T01:00:00Z" }),
-        );
-      vi.stubGlobal("fetch", fetchMock);
-      await mintInstallationToken("fake.jwt.token", 7, "acme", "widgets", "branch-protection");
-      const [, opts] = fetchMock.mock.calls[0];
-      expect(JSON.parse(opts.body as string).permissions).toEqual({
-        administration: "read",
-        metadata: "read",
-      });
-    });
-
     // #744 — a third permission set for the release-please dispatch trigger.
     // Deliberately its own set, not folded into WRITE_PERMISSIONS: Task
     // Master's ordinary issue/PR/push writes have no business holding

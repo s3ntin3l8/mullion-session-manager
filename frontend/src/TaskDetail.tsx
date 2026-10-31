@@ -27,12 +27,7 @@ import type { MullionLinkEntry } from "./hooks/useMullionLinks.js";
 import { decideSessionAction } from "./ui/sidebar/linkDecisions.js";
 import { Markdown } from "./ui/Markdown.js";
 import { STATUS_PRESENTATION, formatStatusLabel } from "./sessionStatus.js";
-import {
-  approvalStateText,
-  ciGatingUnavailableText,
-  needsHumanText,
-  reviewPhaseText,
-} from "./needsHuman.js";
+import { approvalStateText, needsHumanText, reviewPhaseText } from "./needsHuman.js";
 import { describeTaskHost } from "./lib/hostBadge.js";
 import { parseReviewRounds } from "./lib/reviewRounds.js";
 import { parseWorkflowChange, visibleTaskSyncError } from "./workflowChange.js";
@@ -746,21 +741,6 @@ export function TaskDetail({
                   : `Round ${task.autoReturnRounds} sent back to the worker automatically`}
             </div>
           )}
-          {task.status === "reviewing" &&
-            ciGatingUnavailableText(
-              task.ciGatingUnavailableReason,
-              task.ciGatingUnavailableSource,
-            ) && (
-              <div
-                className="task-detail-review-round task-detail-review-round-capped"
-                role="status"
-              >
-                {ciGatingUnavailableText(
-                  task.ciGatingUnavailableReason,
-                  task.ciGatingUnavailableSource,
-                )}
-              </div>
-            )}
           {task.reviewSeedDelivered === false && (
             <div className="task-detail-review-noseed">
               <WarningTriangleIcon size={12} />

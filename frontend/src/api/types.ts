@@ -2226,10 +2226,6 @@ export interface Task {
   // Why the automatic loop stopped; only meaningful while the announce stamp
   // above is set. See needsHuman.ts.
   needsHumanReason: "cap" | "no-progress" | "finding-persisted" | null;
-  // #2327 — set while the required-checks lookup behind the red-CI
-  // auto-return is unreadable (the gate fails closed); see schema.ts.
-  ciGatingUnavailableReason?: "forbidden" | "not-found" | "other" | null;
-  ciGatingUnavailableSource?: "app" | "account" | null;
   worktreePath: string | null;
   branchName: string | null;
   // #491 — the commit SHA the worktree was actually branched from, pinned
