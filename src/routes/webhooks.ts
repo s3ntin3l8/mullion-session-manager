@@ -6,6 +6,7 @@ import { broadcastToProject } from "../services/github-ws-broadcast.js";
 import { getWebhookSecret } from "../services/github-webhook.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { projects, tasks } from "../db/schema.js";
+import { cleanupMergedTaskBranch } from "../services/task-approve.js";
 import { endReviewingOnPrState } from "../services/task-review-end.js";
 import { invalidateMergedPrs } from "../services/github-merged-prs.js";
 import { invalidatePrDetail } from "../services/github-pr-detail.js";
@@ -275,7 +276,7 @@ export async function webhookRoutes(app: FastifyInstance) {
             ) {
               const now = new Date();
               const matchedTask = app.db
-                .select({ id: tasks.id, status: tasks.status })
+                .select()
                 .from(tasks)
                 .where(
                   and(
@@ -291,14 +292,14 @@ export async function webhookRoutes(app: FastifyInstance) {
                 // before a human merges the PR). A PR merged early, while
                 // the task still sits in reviewing, only gets mergedAt here;
                 // the reviewing-task ending just below moves it to done.
-                app.db
+                const { changes } = app.db
                   .update(tasks)
                   .set(
                     matchedTask.status === "done"
                       ? { mergedAt: now, archivedAt: now }
                       : { mergedAt: now },
                   )
-                  .where(eq(tasks.id, matchedTask.id))
+                  .where(and(eq(tasks.id, matchedTask.id), isNull(tasks.mergedAt)))
                   .run();
                 // Clears the board's "PR open — needs merge" badge live.
                 broadcastTaskEvent({
@@ -307,6 +308,16 @@ export async function webhookRoutes(app: FastifyInstance) {
                   kind: "ingested",
                   ts: Date.now(),
                 });
+                // A reviewing task's merge is cleaned up by endReviewingTask
+                // just below; only an already-done task needs it here.
+                if (changes > 0 && matchedTask.status === "done") {
+                  const mergedProject = app.db
+                    .select()
+                    .from(projects)
+                    .where(eq(projects.id, projectId))
+                    .get();
+                  if (mergedProject) cleanupMergedTaskBranch(app, matchedTask, mergedProject);
+                }
               }
             }
             // #2103 — a PR closed under a REVIEWING task (merged by hand, or

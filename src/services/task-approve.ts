@@ -43,10 +43,34 @@ export function cleanupTaskWorktree(
   project: { id?: number; cwd: string; hostId: string; hostCwds?: string | null },
 ): void {
   if (!task.worktreePath) return;
-  // Issue #1724 — the worktree lives on the host its worker session was
-  // PLACED on, which is not necessarily the project's own host. The
-  // project's host is the fallback for a task whose worker session is gone
-  // — and for every task from before placement existed.
+  const target = resolveCleanupTarget(app, task, project);
+  if (!target) return;
+  void resolveBackend(app, target.hostId)
+    .removeWorktreeIfClean(task.worktreePath, target.cwdOnHost)
+    .catch((err) => {
+      app.log.warn(
+        { err, worktreePath: task.worktreePath, projectId: project.id },
+        "task cleanup: removeWorktreeIfClean threw",
+      );
+    });
+}
+
+type CleanupProject = { id?: number; cwd: string; hostId: string; hostCwds?: string | null };
+
+// Issue #1724 — the worktree lives on the host its worker session was
+// PLACED on, which is not necessarily the project's own host. The
+// project's host is the fallback for a task whose worker session is gone
+// — and for every task from before placement existed. `cwdOnHost` is the
+// project's path ON THAT HOST; null (-> this returns null) when the project
+// is not mapped there, in which case that host cannot be holding the
+// worktree or branch, so there is nothing to remove. The project's own root
+// is NOT a stand-in: it is a path that host does not have, and removing
+// against it fails silently and leaks the worktree.
+function resolveCleanupTarget(
+  app: FastifyInstance,
+  task: { sessionId?: number | null; projectId?: number },
+  project: CleanupProject,
+): { hostId: string; cwdOnHost: string } | null {
   const hostId =
     task.sessionId !== undefined && task.sessionId !== null && task.projectId !== undefined
       ? resolveTaskWorkerHost(
@@ -55,27 +79,69 @@ export function cleanupTaskWorktree(
           project,
         )
       : project.hostId;
-  // The parent directory the worktree sits under, ON THAT HOST. Null when
-  // the project is not mapped there — in which case that host cannot be
-  // holding the worktree, so there is nothing to remove. The project's own
-  // root is NOT a stand-in here: it is a path that host does not have, and
-  // removing against it fails silently and leaks the worktree.
   const cwdOnHost = projectCwdOnHost(project, hostId, parseHostCwds(project.hostCwds));
   if (cwdOnHost === null) {
     app.log.warn(
       { projectId: project.id, hostId },
       "task cleanup: no path for this project on that host — the worktree there cannot be removed",
     );
+    return null;
+  }
+  return { hostId, cwdOnHost };
+}
+
+// Once GitHub has CONFIRMED a task's PR merged, its local branch has no
+// further use (the remote one is deleted on merge): remove the worktree,
+// then the branch. Sequenced, not parallel — git refuses to delete a branch
+// that is still checked out in a worktree, and concurrent git operations on
+// one clone have corrupted shared objects before. A worktree that is dirty or
+// conflicted is left in place and its branch with it. `force` is needed
+// because a squash-merged branch is not an ancestor of the base; it is safe
+// only because every caller has already confirmed the merge. Best-effort and
+// fire-and-forget like cleanupTaskWorktree. Callers must run it only from
+// the CAS that won the merge write, so one merge cleans up once.
+export function cleanupMergedTaskBranch(
+  app: FastifyInstance,
+  task: {
+    branchName: string | null;
+    worktreePath: string | null;
+    sessionId?: number | null;
+    projectId?: number;
+  },
+  project: CleanupProject,
+): void {
+  if (!task.branchName) {
+    cleanupTaskWorktree(app, task, project);
     return;
   }
-  void resolveBackend(app, hostId)
-    .removeWorktreeIfClean(task.worktreePath, cwdOnHost)
-    .catch((err) => {
-      app.log.warn(
-        { err, worktreePath: task.worktreePath, projectId: project.id },
-        "task cleanup: removeWorktreeIfClean threw",
+  const target = resolveCleanupTarget(app, task, project);
+  if (!target) return;
+  const branchName = task.branchName;
+  const backend = resolveBackend(app, target.hostId);
+  void (async () => {
+    if (task.worktreePath) {
+      const res = await backend.removeWorktreeIfClean(task.worktreePath, target.cwdOnHost);
+      if (!res.removed && res.reason !== "not-a-repo") {
+        app.log.info(
+          { projectId: project.id, branchName, reason: res.reason },
+          "task cleanup: worktree left in place, keeping the merged task's branch",
+        );
+        return;
+      }
+    }
+    const result = await backend.deleteBranch(target.cwdOnHost, branchName, { force: true });
+    if (!result.deleted) {
+      app.log.debug(
+        { projectId: project.id, branchName, result },
+        "task cleanup: merged task's branch was not deleted",
       );
-    });
+    }
+  })().catch((err) => {
+    app.log.warn(
+      { err, branchName, projectId: project.id },
+      "task cleanup: deleting the merged task's branch threw",
+    );
+  });
 }
 
 // Best-effort session cleanup once a task leaves "reviewing" for a terminal

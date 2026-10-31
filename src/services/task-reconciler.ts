@@ -1,4 +1,3 @@
-import { broadcastTaskEvent } from "./task-events.js";
 import { and, eq, inArray, isNotNull, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { projects, sessions, tasks } from "../db/schema.js";
@@ -94,6 +93,7 @@ import {
 import { openDraftPRForTask } from "./task-promote.js";
 import { maybeAutoEnableConventionalTitles } from "./project-release-please.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "./task-approve.js";
+import { markTaskMerged, notifyTaskMerged } from "./task-merged.js";
 import { reseedTaskIfSessionExited } from "./task-reseed.js";
 import { resolveHostGitStatus, resolveRepoRef } from "./host-git.js";
 import { deriveTaskBranchName, deriveWorktreePath } from "./git-worktree.js";
@@ -1712,6 +1712,14 @@ function clearMergeState(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
+  // True when markTaskMerged just won the merge write: its branch cleanup
+  // already owns the worktree removal, and a second concurrent
+  // removeWorktreeIfClean would make that chain lose and keep the branch.
+  // Deliberately the winning side only: when the CAS was lost to an earlier
+  // writer, that writer may have been the in_progress arm of
+  // finishTaskForMergedPr, which never cleans the worktree, so this call is
+  // then the only thing that removes it (the #758 rebased task).
+  worktreeHandled = false,
 ): void {
   app.db
     .update(tasks)
@@ -1740,7 +1748,7 @@ function clearMergeState(
   // removeWorktreeIfClean returns "not-a-repo" on an already-gone
   // directory, and killSession is a safe no-op on an already-"killed"
   // session.
-  cleanupTaskWorktree(app, task, project);
+  if (!worktreeHandled) cleanupTaskWorktree(app, task, project);
   cleanupTaskSessions(app, task);
 }
 
@@ -1764,36 +1772,6 @@ export const MERGE_UNCONFIRMED_PREFIX = "Merge status unconfirmed";
 // connection reset) says nothing about whether GitHub applied the write.
 function isAmbiguousTransportFailure(err: unknown): boolean {
   return err instanceof GitHubApiError && err.statusCode === 0;
-}
-
-// #1015 (archive) — called only where the caller has already confirmed
-// `pr.merged` is true (never on a PR closed WITHOUT merging — see this
-// function's two call sites' own comments on why that distinction matters).
-// Every task reaching attemptMerge came from processMergeRequests' own
-// `status = "done"` sweep candidate query, so archivedAt is set
-// unconditionally here — unlike the `pull_request` webhook handler
-// (routes/webhooks.ts), which can observe a merge before the task has left
-// "reviewing" and must check status itself. `isNull(tasks.mergedAt)` makes
-// this idempotent against attemptMerge's own retry/backoff behavior.
-function markTaskMerged(app: FastifyInstance, taskId: number, mergedAt: Date = new Date()): void {
-  const { changes } = app.db
-    .update(tasks)
-    .set({ mergedAt, archivedAt: new Date() })
-    .where(and(eq(tasks.id, taskId), isNull(tasks.mergedAt)))
-    .run();
-  // The board's "PR open — needs merge" badge clears off this write, so tell
-  // it to refetch ("ingested" is the generic refetch kind).
-  if (changes > 0) notifyTaskMerged(app, taskId);
-}
-
-function notifyTaskMerged(app: FastifyInstance, taskId: number): void {
-  const row = app.db
-    .select({ projectId: tasks.projectId })
-    .from(tasks)
-    .where(eq(tasks.id, taskId))
-    .get();
-  if (row)
-    broadcastTaskEvent({ taskId, projectId: row.projectId, kind: "ingested", ts: Date.now() });
 }
 
 // #758 — bounds how many times attemptAutoRebase spawns a worker for the
@@ -2154,11 +2132,11 @@ function finishMergedDoneTask(
   project: typeof projects.$inferSelect,
   mergedAt?: Date,
 ): void {
-  markTaskMerged(app, task.id, mergedAt);
+  const won = markTaskMerged(app, task, project, mergedAt);
   if (project.autoTagRelease) {
     app.db.update(tasks).set({ releaseRequestedAt: new Date() }).where(eq(tasks.id, task.id)).run();
   }
-  clearMergeState(app, task, project);
+  clearMergeState(app, task, project, won);
 }
 
 /**
@@ -2190,12 +2168,17 @@ export async function finishTaskForMergedPr(
       mergedAt: mergedAt ?? null,
     });
   } else {
-    app.db
+    // A claimed/in_progress task can hold a live worktree (a follow-up
+    // round), so only record the merge here. Its own end-of-task path removes
+    // the worktree, but NOT the branch: mergedAt is already set, so
+    // markTaskMerged's CAS will lose later. That branch lingers until
+    // "Prune merged branches" / Clear done.
+    const { changes } = app.db
       .update(tasks)
       .set({ mergedAt: mergedAt ? new Date(mergedAt) : new Date() })
-      .where(eq(tasks.id, task.id))
+      .where(and(eq(tasks.id, task.id), isNull(tasks.mergedAt)))
       .run();
-    notifyTaskMerged(app, task.id);
+    if (changes > 0) notifyTaskMerged(app, task.id);
   }
 }
 
@@ -2231,8 +2214,8 @@ async function attemptMerge(
         // comment below already relies on: "already-done" collapses merged
         // and closed-without-merging into one verdict, and only the former
         // should archive.
-        if (pr.merged) markTaskMerged(app, task.id);
-        clearMergeState(app, task, project);
+        const won = pr.merged && markTaskMerged(app, task, project);
+        clearMergeState(app, task, project, won);
         return;
       }
       case "clean": {
