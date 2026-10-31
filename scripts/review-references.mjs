@@ -111,8 +111,10 @@ function gitChangedFiles(root, base, head) {
   } catch (err) {
     // Three dots need a merge base, and a shallow clone (--depth 1 of the base
     // and of the head, the usual way an external reviewer prepares a PR) has
-    // none. Two dots compare the trees and need none; with the base an ancestor
-    // of the head, as in that case, it is the same set of files.
+    // none. Two dots compare the trees and need none. That is the same set of
+    // files when the base is an ancestor of the head, but a superset when the
+    // base has moved on past the merge base (the clone cannot tell), so an
+    // unexpected extra reference in a shallow clone is not a spurious match.
     try {
       out = diff(`${base}..${head}`);
     } catch {

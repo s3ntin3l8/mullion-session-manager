@@ -46,7 +46,7 @@ branch. A `try/catch` around the post-write GitHub calls must not re-enter inges
 `reviewRunDispatchedAt`, `reviewRunHeadSha`, `reviewRunIngestedId`). A run has no
 fresh id per round, so a reset that clears `reviewSessionId` but leaves the run
 columns makes the next round read as already reviewed. Resets spread
-`CLEARED_REVIEW_RUN` (`task-review-handle.ts`); callers use `hasReviewHandle` and
+`CLEARED_REVIEW_RUN` (`src/services/task-review-handle.ts`); callers use `hasReviewHandle` and
 `hasIngestedCurrentReview`, not their own column comparisons. The one legitimate
 exception is the carried-approval path, which keeps the pair on purpose. A new
 run-scoped column belongs in `CLEARED_REVIEW_RUN`.

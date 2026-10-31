@@ -198,9 +198,10 @@ describe("review-references.mjs CLI", () => {
     expect(viaMaster.code).toBe(0);
     expect(viaMaster.stdout).toContain("task-loop.md");
 
-    // origin/main wins when both exist (and still gives the same answer).
-    git("update-ref", "refs/remotes/origin/main", "trunk");
-    expect(run(root, []).stdout).toContain("task-loop.md");
+    // origin/main wins when both exist: pointed at the feature head itself, a
+    // diff against it is empty, which origin/master (the trunk) would not give.
+    git("update-ref", "refs/remotes/origin/main", "HEAD");
+    expect(run(root, []).stdout).toBe("No area-specific references match this diff.\n");
   });
 
   it("reports the original git error when neither diff form resolves", () => {
