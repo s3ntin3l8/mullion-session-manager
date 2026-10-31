@@ -13,22 +13,40 @@ import {
   resolveMarkerTokens,
 } from "./github-integration.js";
 import type { MarkerUnavailableReason } from "./github-integration.js";
-import { getPinnedDispatcher, assertAllowedUrl } from "./pinned-connect.js";
 import { getStoredSettings } from "./settings.js";
-import type { UrlGuardPolicy } from "./url-guard.js";
+import {
+  HERMES_URL_POLICY,
+  HermesAuthError,
+  HermesNotConfiguredError,
+  HermesUnavailableError,
+  ReviewConflictError,
+  ReviewSessionRefusedError,
+  baseUrl,
+  checkHealth,
+  getRun,
+  hermesFetch,
+  isGone,
+  isTerminal,
+  postRun,
+  readBounded,
+  resolveHermesConfig,
+  stopRun,
+  unavailableFromResponse,
+} from "./hermes-client.js";
+import type { HermesRun } from "./hermes-client.js";
 
-// Hermes sits on the operator's LAN, so private and loopback targets are
-// legitimate here (same policy as a registered agent host). Link-local /
-// cloud-metadata ranges stay blocked by url-guard regardless.
-export const HERMES_URL_POLICY: UrlGuardPolicy = { allowLoopback: true, allowPrivate: true };
+// The error classes and the URL policy live in the client; re-exported so the
+// relay's importers keep their import site.
+export {
+  HERMES_URL_POLICY,
+  HermesAuthError,
+  HermesNotConfiguredError,
+  HermesUnavailableError,
+  ReviewConflictError,
+  ReviewSessionRefusedError,
+};
 
-const HEALTH_TIMEOUT_MS = 5_000;
 const PROMPT_TIMEOUT_MS = 5_000;
-// POST /v1/runs answers 202 with a run id as soon as the run is admitted, so
-// (unlike the old chat/completions call, which was held open until the agent
-// finished) a timeout here is a real failure, not "accepted and running".
-const DISPATCH_TIMEOUT_MS = 15_000;
-const STATUS_TIMEOUT_MS = 10_000;
 // Hermes builds the model inventory with catalog and pricing enrichment, so it
 // can be slow: give it the dispatch budget, not the health check's.
 const MODEL_OPTIONS_TIMEOUT_MS = 15_000;
@@ -56,37 +74,6 @@ const MAX_LISTED_RUNS = 20;
 const PROMPT_CACHE_TTL_MS = 10 * 60_000;
 const MAX_AGENT_TURNS = 30;
 
-export class HermesNotConfiguredError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "HermesNotConfiguredError";
-  }
-}
-
-export class HermesUnavailableError extends Error {
-  // `message` is safe to return to a session (it travels back through the
-  // control socket); `detail` may carry the configured URL / resolved
-  // addresses / raw network errors, so it is only ever logged server-side —
-  // except for the operator-only "Test connection" route.
-  constructor(
-    message: string,
-    readonly detail?: string,
-    readonly retryAfterSeconds?: number,
-  ) {
-    super(message);
-    this.name = "HermesUnavailableError";
-  }
-}
-
-export class HermesAuthError extends Error {
-  constructor(status: number) {
-    super(
-      `Hermes API rejected the key (HTTP ${status}) — check the key in Settings → Integrations`,
-    );
-    this.name = "HermesAuthError";
-  }
-}
-
 export class ReviewCooldownError extends Error {
   constructor(
     readonly retryAfterSeconds: number,
@@ -103,16 +90,6 @@ export class ReviewCooldownError extends Error {
           : `A review of this PR was requested recently — wait ${retryAfterSeconds}s before requesting another`,
     );
     this.name = "ReviewCooldownError";
-  }
-}
-
-/** Hermes already holds a run for this commit's idempotency key (409). */
-export class ReviewConflictError extends Error {
-  constructor() {
-    super(
-      "A review of this commit was already requested (possibly by the repository's own workflow) — wait for it instead of requesting again",
-    );
-    this.name = "ReviewConflictError";
   }
 }
 
@@ -194,29 +171,6 @@ export class ReviewInFlightError extends Error {
 }
 
 /**
- * The statuses that mean the run is FINISHED. Everything else is treated as
- * live — the list is inverted on purpose: Hermes parks a run in statuses this
- * code has never heard of (`waiting_for_approval` while the agent waits for
- * a tool approval, for one), and a status missing from a "live" list reads as
- * finished, which dispatches a second review of a pull request that is still
- * being reviewed.
- *
- * "completed" is finished, but it is NOT evidence that a review landed
- * (Hermes reports "completed" for a run that posted nothing), so a completed
- * run is retried under a deeper key rather than treated as "already
- * reviewed".
- */
-const TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled", "interrupted"]);
-
-/**
- * The statuses that mean the run is GONE — Hermes does not know it any more
- * (its window elapsed, or the gateway lost it). Not live: there is nothing
- * running to wait for. "unknown" is here for the same reason: it is what the
- * API answers when the run's body was unreadable.
- */
-const GONE_RUN_STATUSES = new Set(["not_found", "expired", "unknown"]);
-
-/**
  * How many times one request may start a fresh attempt for a range whose
  * previous run failed. Each attempt is a full review, so this is a
  * backstop, not a budget.
@@ -232,27 +186,6 @@ const MAX_REVIEW_ATTEMPTS = 3;
  * stuck sessions would leave no attempt for the dispatch.
  */
 const MAX_SESSION_ATTEMPTS = 3;
-
-/**
- * Hermes' session authority refused the turn (HTTP 409 `admission_conflict`).
- *
- * The session a pull request's reviews run in is stuck: the gateway paused it
- * on an earlier conflict and never recovers
- * (NousResearch/hermes-agent#142731), so every later round for that pull
- * request is refused at the door. The way out is a fresh session — the caller
- * retries the attempt there.
- */
-export class ReviewSessionRefusedError extends Error {
-  constructor(
-    /** The session that refused the turn. */
-    readonly sessionId: string,
-  ) {
-    super(
-      `Hermes refused the turn for the review session of this pull request (${sessionId}) — that session is stuck and refuses every later round. The relay retries in a fresh session; asking again is not the way out of it.`,
-    );
-    this.name = "ReviewSessionRefusedError";
-  }
-}
 
 /** A session tried to stop a run another session dispatched. */
 export class ReviewRunForbiddenError extends Error {
@@ -378,16 +311,15 @@ export function reviewIdempotencyKey(
 // is WHO posts the review — a GitHub App bot identity that can give an
 // official verdict — so that is stated as a requirement.
 /**
- * The dispatch message for a relay run (issue #1629). The target line names
- * the kind, so a triage run is never mistaken for a review of a pull request
- * that happens to share the number.
+ * The Target line and, for a pull request with a head commit, the exact
+ * commit to review and — on a follow-up round — the range since the previous
+ * one. Shared by the relay's message and the Task Master reviewer's.
  */
-export function buildRelayMessage(
+export function buildRelayTargetLines(
   kind: RelayTargetKind,
   owner: string,
   repo: string,
   number: number,
-  prompt: string,
   range: {
     /** The head commit to review. */
     headSha?: string;
@@ -398,9 +330,6 @@ export function buildRelayMessage(
   } = {},
 ): string {
   const target = kind === "issue" ? `issue #${number}` : `pr #${number}`;
-  // A triage posts a comment, not a review — telling it to "post the review"
-  // would ask for a verdict it has none to give.
-  const post = kind === "issue" ? "comment" : "review";
   // Same wording as the shared workflow's build_msg(), so both entry points
   // instruct the reviewer identically. An issue triage has no commit or range.
   let commit = "";
@@ -426,9 +355,34 @@ export function buildRelayMessage(
         `If ${baseSha} is not an ancestor of ${headSha} (the PR was rebased), review the whole PR instead.\n`;
     }
   }
+  return `Target: ${target} in repo ${owner}/${repo}\n${commit}`;
+}
+
+/**
+ * The dispatch message for a relay run (issue #1629). The target line names
+ * the kind, so a triage run is never mistaken for a review of a pull request
+ * that happens to share the number.
+ */
+export function buildRelayMessage(
+  kind: RelayTargetKind,
+  owner: string,
+  repo: string,
+  number: number,
+  prompt: string,
+  range: {
+    /** The head commit to review. */
+    headSha?: string;
+    /** The commit the previous round reviewed up to; set on a follow-up round. */
+    baseSha?: string;
+    /** This dispatch moved to a new session, so earlier rounds are not in its history. */
+    freshSession?: boolean;
+  } = {},
+): string {
+  // A triage posts a comment, not a review — telling it to "post the review"
+  // would ask for a verdict it has none to give.
+  const post = kind === "issue" ? "comment" : "review";
   const header =
-    `Target: ${target} in repo ${owner}/${repo}\n` +
-    commit +
+    buildRelayTargetLines(kind, owner, repo, number, range) +
     `Post the ${post} as your GitHub App bot identity (an installation token from your profile's ` +
     "App credentials) — never with a personal user token. If you have no App credentials, do not " +
     "post; reply with the reason instead. Do NOT ask the human for secrets.\n" +
@@ -648,26 +602,6 @@ export function resetHermesReviewState(): void {
   latestRunByPr.clear();
 }
 
-// Reads at most `maxBytes` of a response body, so the cap bounds the memory
-// spent reading it (not just what's forwarded). Returns null when exceeded.
-async function readBounded(res: Response, maxBytes: number): Promise<string | null> {
-  if (!res.body) return "";
-  const reader = res.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      void reader.cancel().catch(() => undefined);
-      return null;
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
 async function loadReviewPrompt(promptRepo: string, promptPath: string): Promise<string> {
   const key = `${promptRepo}:${promptPath}`;
   const cached = promptCache.get(key);
@@ -692,34 +626,6 @@ async function loadReviewPrompt(promptRepo: string, promptPath: string): Promise
   if (text === null) throw new HermesUnavailableError("The review prompt is too large", url);
   promptCache.set(key, { text, fetchedAt: Date.now() });
   return text;
-}
-
-function baseUrl(apiUrl: string): string {
-  try {
-    assertAllowedUrl(apiUrl, HERMES_URL_POLICY);
-  } catch {
-    throw new HermesNotConfiguredError("The Hermes API URL in Settings is not a valid http(s) URL");
-  }
-  return apiUrl.replace(/\/+$/, "");
-}
-
-// `verbose` is for the operator-only Test connection route; everything a
-// session can see gets the generic message, with the detail logged instead.
-async function checkHealth(root: string, verbose = false): Promise<void> {
-  try {
-    const res = await fetch(`${root}/health`, {
-      signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
-      redirect: "manual",
-      dispatcher: getPinnedDispatcher(HERMES_URL_POLICY),
-    } as RequestInit);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  } catch (err) {
-    const detail = `Hermes API unreachable at ${root}/health (${(err as Error).message})`;
-    throw new HermesUnavailableError(
-      verbose ? detail : "The Hermes API is unreachable — review not dispatched",
-      detail,
-    );
-  }
 }
 
 /** Settings → Integrations "Test connection": health check only, no key needed. */
@@ -827,19 +733,7 @@ export interface HermesReviewRequest {
  * key for the dispatch.
  */
 export function assertReviewerConfigured(app: FastifyInstance): string {
-  const { provider, apiUrl } = getStoredSettings(app.db).reviewRelay;
-  if (provider !== "hermes") {
-    throw new HermesNotConfiguredError(
-      "No reviewer is configured for this Mullion — use the repository's own review process",
-    );
-  }
-  const key = getHermesKey(app);
-  if (!apiUrl || !key) {
-    throw new HermesNotConfiguredError(
-      "The Hermes review relay is not configured — choose Hermes and set the API URL and key in Settings → Integrations",
-    );
-  }
-  return key;
+  return resolveHermesConfig(app).key;
 }
 
 /**
@@ -901,8 +795,8 @@ async function findLiveRun(
     // An unreadable status is not proof of a live run (it is also not proof of
     // a finished one): treat it as not live, so a request is never dropped.
     if (!status.status) return null;
-    if (TERMINAL_RUN_STATUSES.has(status.status)) return null;
-    if (GONE_RUN_STATUSES.has(status.status)) return null;
+    if (isTerminal(status.status)) return null;
+    if (isGone(status.status)) return null;
     return record;
   } catch {
     return null;
@@ -1114,7 +1008,7 @@ export async function requestRelay(
       // code has never heard of must not read as "finished" — that would
       // dispatch a second review of a pull request that is still being
       // reviewed. Only a status that is known to be OVER is treated as over.
-      if (!TERMINAL_RUN_STATUSES.has(dispatched.status)) {
+      if (!isTerminal(dispatched.status)) {
         throw new ReviewInFlightError(dispatched.runId, target.headSha, target.kind);
       }
       // The run is over — it failed, or it completed. A completed run is NOT
@@ -1268,57 +1162,6 @@ async function readRememberedSession(
   }
 }
 
-// One authenticated call against the Hermes API. Never follows a redirect with
-// the bearer attached (see remote-host-client.ts's rawFetch for the same
-// reasoning); a 401/403 is always HermesAuthError.
-async function hermesFetch(
-  root: string,
-  key: string,
-  path: string,
-  init: { method: string; body?: string; headers?: Record<string, string>; timeoutMs: number },
-): Promise<Response> {
-  let res: Response;
-  try {
-    res = await fetch(`${root}${path}`, {
-      method: init.method,
-      headers: {
-        Authorization: `Bearer ${key}`,
-        ...(init.body !== undefined ? { "Content-Type": "application/json" } : {}),
-        ...init.headers,
-      },
-      body: init.body,
-      signal: AbortSignal.timeout(init.timeoutMs),
-      redirect: "manual",
-      dispatcher: getPinnedDispatcher(HERMES_URL_POLICY),
-    } as RequestInit);
-  } catch (err) {
-    throw new HermesUnavailableError(
-      "Could not reach the Hermes API",
-      `${init.method} ${path}: ${(err as Error).message}`,
-    );
-  }
-  if (res.status === 401 || res.status === 403) {
-    void res.body?.cancel().catch(() => undefined);
-    throw new HermesAuthError(res.status);
-  }
-  return res;
-}
-
-// The API's own error text usually names the problem (e.g. a wrong `model`);
-// keep a bounded snippet as server-side detail only.
-async function unavailableFromResponse(
-  res: Response,
-  what: string,
-): Promise<HermesUnavailableError> {
-  const snippet = (await readBounded(res, 2_000).catch(() => null)) ?? "(body too large)";
-  const retryAfter = Number(res.headers.get("retry-after"));
-  return new HermesUnavailableError(
-    `Hermes API returned HTTP ${res.status} — ${what}`,
-    `HTTP ${res.status}: ${snippet.slice(0, 500)}`,
-    Number.isFinite(retryAfter) && retryAfter > 0 ? Math.ceil(retryAfter) : undefined,
-  );
-}
-
 async function dispatchReview(
   root: string,
   key: string,
@@ -1348,73 +1191,20 @@ async function dispatchReview(
       : BUILTIN_REVIEW_PROMPT;
   await checkHealth(root);
 
-  const body = JSON.stringify({
-    ...(r.model ? { model: r.model } : {}),
-    ...(r.model && r.provider ? { provider: r.provider } : {}),
-    input: buildRelayMessage(r.kind, r.owner, r.repo, r.number, prompt, {
-      headSha: r.headSha,
-      baseSha: r.baseSha,
-      freshSession: r.freshSession,
-    }),
-    // The session id is what makes the review rounds of one pull request
-    // continue the same conversation. Without it Hermes derives the session
-    // from the request text, which made every request for a PR land in the
-    // same session — and queue behind each other.
-    ...(r.sessionId ? { session_id: r.sessionId } : {}),
-  });
-  const res = await hermesFetch(root, key, "/v1/runs", {
-    method: "POST",
-    body,
-    // Hermes reserves this durably for 24h: a retry of this request replays it.
-    headers: { "Idempotency-Key": r.idempotencyKey },
-    timeoutMs: DISPATCH_TIMEOUT_MS,
-  });
-  if (res.status === 409) {
-    // 409 also covers ownership / generation / identity refusals, which are not
-    // "a review is already coming": only the idempotency conflict means that.
-    const refusal = await readJson<{ error?: { code?: unknown }; code?: unknown }>(res);
-    const code = refusal?.error?.code ?? refusal?.code;
-    if (code === "idempotency_key_conflict") throw new ReviewConflictError();
-    if (code === "admission_conflict" && r.sessionId) {
-      // Hermes' session authority refused the turn. The session this pull
-      // request's reviews run in is stuck — the gateway paused it on an
-      // earlier conflict and never recovers
-      // (NousResearch/hermes-agent#142731) — so every later round of this
-      // pull request is refused at the door. The caller retries in a fresh
-      // session.
-      throw new ReviewSessionRefusedError(r.sessionId);
-    }
-    throw new HermesUnavailableError(
-      "Hermes refused the review request (HTTP 409) — review not dispatched",
-      `HTTP 409: ${JSON.stringify(refusal)?.slice(0, 300)}`,
-    );
-  }
-  if (!res.ok) throw await unavailableFromResponse(res, "review not dispatched");
-  const parsed = await readJson<{ run_id?: unknown; status?: unknown; replayed?: unknown }>(res);
-  if (typeof parsed?.run_id !== "string" || parsed.run_id === "") {
-    throw new HermesUnavailableError(
-      "Hermes accepted the request but returned no run id",
-      `unexpected /v1/runs body: ${JSON.stringify(parsed)?.slice(0, 200)}`,
-    );
-  }
-  return {
-    runId: parsed.run_id,
-    status: typeof parsed.status === "string" ? parsed.status : "queued",
-    // Hermes answers a repeat of an earlier request with the ORIGINAL run
-    // (possibly already finished) instead of starting one: the header says
-    // so, and so does the body.
-    replayed: res.headers.get("idempotency-replayed") === "true" || parsed.replayed === true,
-  };
-}
-
-async function readJson<T>(res: Response): Promise<T | null> {
-  const text = await readBounded(res, 256_000).catch(() => null);
-  if (text === null) return null;
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    return null;
-  }
+  return postRun(
+    { root, key },
+    {
+      idempotencyKey: r.idempotencyKey,
+      model: r.model,
+      provider: r.provider,
+      input: buildRelayMessage(r.kind, r.owner, r.repo, r.number, prompt, {
+        headSha: r.headSha,
+        baseSha: r.baseSha,
+        freshSession: r.freshSession,
+      }),
+      sessionId: r.sessionId,
+    },
+  );
 }
 
 export interface ReviewRunStatus {
@@ -1441,17 +1231,17 @@ export interface ReviewRunStatus {
   marker?: ReviewMarkerResult;
 }
 
-function toStatus(record: ReviewRunRecord, run: Record<string, unknown> | null): ReviewRunStatus {
-  const text = (v: unknown): string | undefined =>
-    typeof v === "string" && v !== "" ? v.slice(0, MAX_RUN_OUTPUT_CHARS) : undefined;
+function toStatus(record: ReviewRunRecord, run: HermesRun): ReviewRunStatus {
+  // The relay's status API stays capped; the client returns the whole text.
+  const text = (v: string | undefined): string | undefined => v?.slice(0, MAX_RUN_OUTPUT_CHARS);
   return {
     provider: "hermes",
     runId: record.runId,
     kind: record.kind,
-    status: run ? (typeof run.status === "string" ? run.status : "unknown") : "not_found",
-    output: text(run?.output),
-    error: text(run?.error),
-    shuttingDown: run?.shutdown_requested_at != null,
+    status: run.status,
+    output: text(run.output),
+    error: text(run.error),
+    shuttingDown: run.shuttingDown,
     repo: `${record.owner}/${record.repo}`,
     number: record.prNumber,
     prNumber: record.prNumber,
@@ -1466,19 +1256,7 @@ async function fetchRun(
   key: string,
   record: ReviewRunRecord,
 ): Promise<ReviewRunStatus> {
-  const res = await hermesFetch(root, key, `/v1/runs/${encodeURIComponent(record.runId)}`, {
-    method: "GET",
-    timeoutMs: STATUS_TIMEOUT_MS,
-  });
-  if (res.status === 404) {
-    void res.body?.cancel().catch(() => undefined);
-    return toStatus(record, null);
-  }
-  if (!res.ok) throw await unavailableFromResponse(res, "could not read the run status");
-  const run = await readJson<Record<string, unknown>>(res);
-  // An empty / non-JSON / oversized 200 (e.g. a proxy page) is not "the run
-  // does not exist"; keep that to a real 404.
-  return run ? toStatus(record, run) : { ...toStatus(record, null), status: "unknown" };
+  return toStatus(record, await getRun({ root, key }, record.runId));
 }
 
 /**
@@ -1664,8 +1442,7 @@ export async function listHermesReviews(app: FastifyInstance): Promise<ReviewRun
   return Promise.all(
     recent.map((record) =>
       fetchRun(root, key, record).catch((): ReviewRunStatus => ({
-        ...toStatus(record, null),
-        status: "unknown",
+        ...toStatus(record, { status: "unknown", shuttingDown: false }),
       })),
     ),
   );
@@ -1687,15 +1464,7 @@ export async function stopHermesReview(
   if (callerSessionId !== undefined && record.sessionId !== callerSessionId) {
     throw new ReviewRunForbiddenError();
   }
-  const res = await hermesFetch(root, key, `/v1/runs/${encodeURIComponent(runId)}/stop`, {
-    method: "POST",
-    timeoutMs: STATUS_TIMEOUT_MS,
-  });
-  if (res.status === 404) {
-    void res.body?.cancel().catch(() => undefined);
-    throw new ReviewRunNotFoundError();
-  }
-  if (!res.ok) throw await unavailableFromResponse(res, "could not stop the run");
-  const parsed = await readJson<{ status?: unknown }>(res);
-  return { runId, status: typeof parsed?.status === "string" ? parsed.status : "stopping" };
+  const stopped = await stopRun({ root, key }, runId);
+  if (!stopped.found) throw new ReviewRunNotFoundError();
+  return { runId, status: stopped.status };
 }
