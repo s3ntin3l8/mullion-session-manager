@@ -55,10 +55,7 @@ import {
   commandSupportsSeed,
   resolveSeedDelivered,
 } from "./task-agent-resolve.js";
-import {
-  resolveCliModel,
-  resolveOpenCodeModel,
-} from "./task-model-resolve.js";
+import { resolveCliModel, resolveOpenCodeModel } from "./task-model-resolve.js";
 import { resolveReviewerSmallModel } from "./task-model-patch.js";
 import { commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
 import { parseBlockedBy } from "./task-dependencies.js";

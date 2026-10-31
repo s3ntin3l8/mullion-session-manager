@@ -39,7 +39,7 @@ export function hasModelFields(body: TaskModelPatchBody): boolean {
 // Issue #2491 — the model "family" a task-level model choice is bound to: the
 // CLI adapter (claude-code / codex / agy / mcode) or opencode; null for a
 // command with no model concept (a shell, gemini, pi).
-function modelFamily(command: string): string | null {
+export function modelFamily(command: string): string | null {
   return commandModelCli(command) ?? (commandIsOpencode(command) ? "opencode" : null);
 }
 const smallModelFamilies = new Set(["opencode", "claude-code"]);

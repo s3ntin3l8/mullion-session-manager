@@ -42,7 +42,8 @@ vi.mock("../../src/services/task-github-sync.js", () => ({
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { retryTask } = await import("../../src/services/task-claim.js");
-const { tasks } = await import("../../src/db/schema.js");
+const { tasks, projects } = await import("../../src/db/schema.js");
+const { resolveReviewerSmallModel } = await import("../../src/services/task-model-patch.js");
 const { createWorktree, removeWorktreeIfClean } =
   await import("../../src/services/git-worktree.js");
 
@@ -113,11 +114,43 @@ describe("retryTask task-level model (#2491)", () => {
       modelOverride: "claude-opus-4-5",
     });
 
+    // A bare retry after the project default agent moved to another family
+    // must not hand the old family's model to the new worker.
+    const drifted = await failedTask(73, "");
+    app.db
+      .update(tasks)
+      .set({ agent: null, agentCommand: "opencode", modelOverride: "openrouter/foo" })
+      .where(eq(tasks.id, drifted))
+      .run();
+    app.db.update(projects).set({ defaultAgent: "claude" }).where(eq(projects.id, projectId)).run();
+    expect((await retryTask(app, drifted)).ok).toBe(true);
+    expect(load(drifted).modelOverride).toBeNull();
+    app.db.update(projects).set({ defaultAgent: null }).where(eq(projects.id, projectId)).run();
+
     const changed = await failedTask(72, "claude");
     expect((await retryTask(app, changed, { agent: "codex" })).ok).toBe(true);
     expect(load(changed)).toMatchObject({ agent: "codex", modelOverride: null });
 
     fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("resolveReviewerSmallModel only passes a small model to a same-family reviewer", async () => {
+    const app = await buildApp();
+    const task = (agentCommand: string | null, smallModelOverride: string | null) => ({
+      agentCommand,
+      smallModelOverride,
+      body: null,
+    });
+    const oc = task("opencode", "anthropic/claude-haiku-4-5");
+    expect(resolveReviewerSmallModel(app, oc, "claude")).toBeUndefined();
+    expect(resolveReviewerSmallModel(app, oc, "opencode")).toBe("anthropic/claude-haiku-4-5");
+    expect(resolveReviewerSmallModel(app, task("claude", "claude-haiku-5-5"), "claude")).toBe(
+      "claude-haiku-5-5",
+    );
+    expect(
+      resolveReviewerSmallModel(app, task(null, "claude-haiku-5-5"), "claude"),
+    ).toBeUndefined();
     await app.close();
   });
 });

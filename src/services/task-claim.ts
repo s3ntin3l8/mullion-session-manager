@@ -12,7 +12,7 @@ import {
   takeFailedMaterialize,
 } from "./checkout-materialize.js";
 import { createSessionRecord, killSession } from "./session-lifecycle.js";
-import { resolveTaskModelPatch } from "./task-model-patch.js";
+import { modelFamily, resolveTaskModelPatch } from "./task-model-patch.js";
 import {
   resolveSessionHostId,
   resolveTaskWorkerHost,
@@ -1561,17 +1561,36 @@ export async function retryTask(
 
 // Issue #2491 — the task-level model columns a claim/retry-time agent change
 // must clear (an opencode `provider/model` does not fit a codex worker).
-// Reuses the PATCH route's family rule; an unknown project fails open.
+// Two triggers: an explicit agent/reviewAgent in `opts` (the PATCH route's
+// family rule), and a worker family that no longer matches the one the task
+// last ran under (`task.agentCommand`) — e.g. the project default agent
+// changed between a failure and a bare retry. An unknown project fails open.
+// Only agent fields are passed to the resolver, so its `{ error }` arm is
+// unreachable here and is treated as "nothing to clear".
 function agentChangeModelClears(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
   opts: { agent?: string | null; reviewAgent?: string | null },
 ): Partial<typeof tasks.$inferInsert> {
-  if (opts.agent === undefined && opts.reviewAgent === undefined) return {};
-  const resolved = resolveTaskModelPatch(app, task, project, {
-    agent: opts.agent,
-    reviewAgent: opts.reviewAgent,
-  });
-  return "patch" in resolved ? resolved.patch : {};
+  const patch: Partial<typeof tasks.$inferInsert> = {};
+  if (opts.agent !== undefined || opts.reviewAgent !== undefined) {
+    const resolved = resolveTaskModelPatch(app, task, project, {
+      agent: opts.agent,
+      reviewAgent: opts.reviewAgent,
+    });
+    if ("patch" in resolved) Object.assign(patch, resolved.patch);
+  }
+  if (task.agentCommand !== null && (task.modelOverride || task.smallModelOverride)) {
+    const next = resolveAgentCommand(app, {
+      taskAgent: opts.agent !== undefined ? opts.agent : task.agent,
+      issueBody: task.body,
+      projectDefaultAgent: project.defaultAgent,
+    });
+    if (modelFamily(next) !== modelFamily(task.agentCommand)) {
+      if (task.modelOverride) patch.modelOverride = null;
+      if (task.smallModelOverride) patch.smallModelOverride = null;
+    }
+  }
+  return patch;
 }
