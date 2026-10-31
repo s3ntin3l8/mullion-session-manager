@@ -1,6 +1,6 @@
 ---
 name: mullion-review-invariants
-description: "Repo-specific correctness invariants for this codebase (Mullion) — read this before reviewing or writing a diff here. Covers the sessions.command/workspaces.layout opaque-blob rule, the three NODE_ENV=test guards that must not be simplified, ESM .js import specifiers, config-via-app.config, DB migration generation, and the two distinct worktree concepts. Companion to the generic autonomous-pr-review skill, which deliberately carries no repo-specific invariants of its own."
+description: "Repo-specific correctness invariants for this codebase (Mullion) — read this before reviewing or writing a diff here. Covers the sessions.command/workspaces.layout opaque-blob rule, the three NODE_ENV=test guards that must not be simplified, ESM .js import specifiers, config-via-app.config, DB migration generation, and the two distinct worktree concepts, plus per-area references (the task review loop and verdict contract, and more) that `node scripts/review-references.mjs` picks by the diff's changed files. Companion to the generic autonomous-pr-review skill, which deliberately carries no repo-specific invariants of its own."
 ---
 
 # Mullion review invariants
@@ -10,6 +10,29 @@ skill exists so a review pass (or `/code-review`, or a `mullion-reviewer`
 sub-agent) checks them mechanically instead of relying on having read and
 remembered that file. If a diff violates one of these, it's very likely
 wrong even if it's internally consistent and well-tested.
+
+## Per-area references
+
+Beyond the checklist below, `references/` holds one note per area where a
+plausible-looking change breaks something the diff does not show. Which ones
+apply to a diff is decided by path, not by judgement: run
+
+    node scripts/review-references.mjs
+
+from the checkout under review (it diffs `origin/main...HEAD`; `--base <ref>
+--head <ref>` overrides, `--files -` reads changed paths from stdin) and read
+every reference it lists before judging the diff. `references.json` is the
+index; the same areas are:
+
+| Reference                                                                         | Read it when a diff touches                                         |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| [`task-verdict-contract.md`](references/task-verdict-contract.md)                 | review verdict parsing, storing, posting, the reviewer App identity |
+| [`task-review-ingest-and-handle.md`](references/task-review-ingest-and-handle.md) | review ingestion, the review handle columns, `TASK_ROW_COLUMNS`     |
+| [`task-reconcile-loop.md`](references/task-reconcile-loop.md)                     | `reconcileTasks` sweeps, auto-return and rounds, approval carry     |
+
+Each reference states the invariant, what breaks, and how to check it, and was
+verified against the code when it was written; if one contradicts the code you
+are reading, the code wins: say so in the review.
 
 ## The opaque-blob invariant
 

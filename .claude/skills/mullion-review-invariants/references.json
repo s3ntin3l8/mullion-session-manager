@@ -1,0 +1,35 @@
+[
+  {
+    "ref": ".claude/skills/mullion-review-invariants/references/task-verdict-contract.md",
+    "paths": [
+      "src/services/task-prompt.ts",
+      "src/services/task-github-sync.ts",
+      "src/services/task-approval-state.ts",
+      "src/services/github-write.ts",
+      "src/services/github-integration.ts"
+    ],
+    "summary": "how a review verdict is parsed, stored, posted and acted on; the reviewer App identity; own-comment filtering"
+  },
+  {
+    "ref": ".claude/skills/mullion-review-invariants/references/task-review-ingest-and-handle.md",
+    "paths": [
+      "src/services/task-review-handle.ts",
+      "src/services/task-reconciler.ts",
+      "src/services/hermes-task-review.ts",
+      "src/routes/tasks.ts",
+      "src/db/schema.ts",
+      "frontend/src/api/types.ts"
+    ],
+    "summary": "the ingest latch and its compare-and-swap, the review handle that every reset must clear, the TASK_ROW_COLUMNS wire contract"
+  },
+  {
+    "ref": ".claude/skills/mullion-review-invariants/references/task-reconcile-loop.md",
+    "paths": [
+      "src/services/task-reconciler.ts",
+      "src/services/task-reseed.ts",
+      "src/services/task-claim.ts",
+      "src/routes/tasks.ts"
+    ],
+    "summary": "reconcileTasks sweep order, auto-return rounds and rollback, approval carry, per-host loop control flow"
+  }
+]
