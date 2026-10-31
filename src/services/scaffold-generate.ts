@@ -1943,9 +1943,19 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
  * "everything else": carrying these three distinguishable local error
  * classes as HTTP status instead would collapse them into one
  * indistinguishable `"unreachable"` bucket by the time they reached
- * `generateScaffoldContent`'s remote branch below. */
+ * `generateScaffoldContent`'s remote branch below.
+ *
+ * `sandboxed` on `"ok"` is optional on the wire type because this route
+ * shipped in #1101 before #1144/#1159 added the field, and
+ * `RemoteHostClient.resolveRunGenerationTurn` does a raw fetch-and-cast
+ * with no runtime validation (same version-skew posture as `SpawnResult`,
+ * `AgentConfig`, and `resolveGitBranches` in `remote-host-client.ts`): a
+ * remote agent on a build between #1101 and #1144 omits `sandboxed`, and
+ * `generateScaffoldContent` defaults it to `false` so the unsandboxed
+ * warning still surfaces rather than assuming the turn was sandboxed. A
+ * current agent build (`routes/internal.ts`) always populates it. */
 export type GenerationTurnResult =
-  | { outcome: "ok"; stdout: string; sandboxed: boolean }
+  | { outcome: "ok"; stdout: string; sandboxed?: boolean }
   | { outcome: "unsupported-agent"; detail: string }
   | { outcome: "worktree-error"; detail: string }
   | { outcome: "spawn-error"; detail: string };
