@@ -14,10 +14,13 @@
 // never cross-match each other.
 
 /**
- * Returns the text strictly between the first `startMarker` and the first
- * `endMarker` that follows it, trimmed. `null` if either marker is absent or
- * the end marker precedes the start — never throws, since "no marked
- * region" is the overwhelmingly common, expected case for both callers.
+ * Returns the text strictly between the first top-level standalone
+ * `startMarker` line and the first `endMarker` line that closes it, trimmed.
+ * `null` if either marker is absent or the end marker precedes the start —
+ * never throws, since "no marked region" is the overwhelmingly common,
+ * expected case for both callers. Only markers standing alone on a top-level
+ * line count (occurrences inside a longer token, inline prose or code spans,
+ * frontmatter, fenced code blocks, or multi-line HTML comments are ignored).
  * Deliberately first-region-only, not a multi-region concat: one region per
  * file keeps the byte budget predictable and the source easy to reason
  * about at a glance.
@@ -27,12 +30,9 @@ export function extractMarkedRegion(
   startMarker: string,
   endMarker: string,
 ): string | null {
-  const startIdx = text.indexOf(startMarker);
-  if (startIdx === -1) return null;
-  const contentStart = startIdx + startMarker.length;
-  const endIdx = text.indexOf(endMarker, contentStart);
-  if (endIdx === -1) return null;
-  return text.slice(contentStart, endIdx).trim();
+  const { pairs } = findMarkedRegions(text, startMarker, endMarker);
+  if (pairs.length === 0) return null;
+  return text.slice(pairs[0].start.lineEndWithoutEol, pairs[0].end.lineStart).trim();
 }
 
 /**
@@ -70,24 +70,32 @@ function buildRegion(startMarker: string, endMarker: string, body: string, eol: 
  * "current contents in, target contents out" contract) — no filesystem
  * access here, same posture as extractMarkedRegion/clampToBytes.
  *
- * If both markers are already present (a re-run over a previous scaffold,
- * or a repo that already committed a region by hand), replaces everything
- * from `startMarker` through `endMarker` in place — the surrounding
- * document is left untouched, and a pre-existing region's content is fully
- * superseded, not merged with. If there is no complete, correctly ordered
- * pair, any orphan marker (a lone one, or an end before the start) is first
- * removed, keeping the text around it, so a half-edited file never ends up with
- * two start markers; then a new region is appended to the end of `text`
- * instead (separated by a blank line from
- * whatever's already there), rather than refusing or guessing where to
- * insert into unfamiliar prose — this mirrors `check-scaffold-region-sync.mjs`'s
- * own byte-identical-region assumption: a fresh region always starts
- * unambiguous only when appended, never spliced mid-paragraph. `body` is
- * trimmed before being placed between the markers, so callers don't need
- * to worry about leading/trailing whitespace producing a visually
- * inconsistent region across repeated calls. A CRLF file (one containing
- * `\r\n`) gets a CRLF region on every path, with `body`'s own line endings
- * normalized first, so a re-run writes back the same bytes.
+ * Only markers standing alone on a top-level line count; a marker that is
+ * part of a longer token (e.g. `# mullion:worktrees:started-by-hand`),
+ * mentioned inline in prose or an inline code span, or inside YAML
+ * frontmatter, a fenced code block, or a multi-line HTML comment is left
+ * untouched and ignored when locating a region.
+ *
+ * If a complete, correctly ordered marker pair is already present (a re-run
+ * over a previous scaffold, or a repo that already committed a region by
+ * hand), replaces everything from `startMarker` through `endMarker` in
+ * place — a pre-existing region's content is fully superseded, not merged
+ * with — and strips any unmatched (orphan) standalone marker lines outside
+ * complete pairs (e.g. a stray start before or after the region), while
+ * leaving any subsequent complete pair intact. If there is no complete pair,
+ * any orphan standalone marker line (a lone one, or an end before the start)
+ * is first removed, keeping the text around it, so a half-edited file never
+ * ends up with two start markers; then a new region is appended to the end
+ * of `text` instead (separated by a blank line from whatever's already
+ * there), rather than refusing or guessing where to insert into unfamiliar
+ * prose — this mirrors `check-scaffold-region-sync.mjs`'s own
+ * byte-identical-region assumption: a fresh region always starts unambiguous
+ * only when appended, never spliced mid-paragraph. `body` is trimmed before
+ * being placed between the markers, so callers don't need to worry about
+ * leading/trailing whitespace producing a visually inconsistent region
+ * across repeated calls. A CRLF file (one containing `\r\n`) gets a CRLF
+ * region on every path, with `body`'s own line endings normalized first, so
+ * a re-run writes back the same bytes.
  */
 export function upsertMarkedRegion(
   text: string,
@@ -99,17 +107,27 @@ export function upsertMarkedRegion(
   // place writes back the same bytes instead of flipping the endings.
   const eol = text.includes("\r\n") ? "\r\n" : "\n";
   const region = buildRegion(startMarker, endMarker, body, eol);
-  const startIdx = text.indexOf(startMarker);
-  const endIdx = startIdx === -1 ? -1 : text.indexOf(endMarker, startIdx + startMarker.length);
-  if (startIdx !== -1 && endIdx !== -1) {
-    const before = text.slice(0, startIdx);
-    const after = text.slice(endIdx + endMarker.length);
+  const { pairs, orphans } = findMarkedRegions(text, startMarker, endMarker);
+  if (pairs.length > 0) {
+    const first = pairs[0];
+    const before = dropMarkerLines(
+      text,
+      orphans.filter((m) => m.lineEnd <= first.start.lineStart),
+      0,
+      first.start.lineStart,
+    );
+    const after = dropMarkerLines(
+      text,
+      orphans.filter((m) => m.lineStart >= first.end.lineEndWithoutEol),
+      first.end.lineEndWithoutEol,
+      text.length,
+    );
     return `${before}${region}${after}`;
   }
   // No complete, correctly ordered pair: a lone marker (or an end before the
   // start) is a half-edited region. Drop it, keeping the text around it, or
   // the appended region would sit next to it and leave two start markers.
-  const trimmedText = withoutOrphanMarkers(text, [startMarker, endMarker]).trim();
+  const trimmedText = dropMarkerLines(text, orphans).trim();
   if (trimmedText.length === 0) return `${region}${eol}`;
   return `${trimmedText}${eol}${eol}${region}${eol}`;
 }
@@ -170,15 +188,77 @@ export function topLevelLines(lines: string[]): boolean[] {
   return out;
 }
 
-/** Removes each marker from `text`: a line holding nothing but the marker is
- * dropped whole, an inline occurrence is just cut out. Everything else stays. */
-function withoutOrphanMarkers(text: string, markers: string[]): string {
-  let out = text;
-  for (const marker of markers) {
-    const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    out = out.replace(new RegExp(`^[ \\t]*${escaped}[ \\t]*\\r?\\n?`, "gm"), "");
-    out = out.split(marker).join("");
+interface MarkerLine {
+  lineStart: number;
+  lineEndWithoutEol: number;
+  lineEnd: number;
+}
+
+interface MarkedRegionPair {
+  start: MarkerLine;
+  end: MarkerLine;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Pairs standalone top-level `startMarker` and `endMarker` lines and reports
+ * any unmatched ones as `orphans`. A marker embedded in a longer token, in
+ * inline code or prose, or inside frontmatter / a fenced code block / a
+ * multi-line HTML comment is ignored so it is neither mistaken for a region
+ * boundary nor stripped as an orphan.
+ */
+function findMarkedRegions(
+  text: string,
+  startMarker: string,
+  endMarker: string,
+): { pairs: MarkedRegionPair[]; orphans: MarkerLine[] } {
+  const startRe = new RegExp(`^[ \\t]*${escapeRegExp(startMarker)}[ \\t]*$`);
+  const endRe = new RegExp(`^[ \\t]*${escapeRegExp(endMarker)}[ \\t]*$`);
+  const lines = text.split("\n");
+  const top = topLevelLines(lines);
+  const pairs: MarkedRegionPair[] = [];
+  const orphans: MarkerLine[] = [];
+  let openStart: MarkerLine | null = null;
+  let offset = 0;
+
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i].replace(/\r$/, "");
+    const lineStart = offset;
+    const lineEndWithoutEol = offset + raw.length;
+    const lineEnd = i < lines.length - 1 ? offset + lines[i].length + 1 : text.length;
+    offset = lineEnd;
+
+    if (!top[i]) continue;
+    if (startRe.test(raw)) {
+      const m: MarkerLine = { lineStart, lineEndWithoutEol, lineEnd };
+      if (openStart) orphans.push(openStart);
+      openStart = m;
+    } else if (endRe.test(raw)) {
+      const m: MarkerLine = { lineStart, lineEndWithoutEol, lineEnd };
+      if (openStart) {
+        pairs.push({ start: openStart, end: m });
+        openStart = null;
+      } else {
+        orphans.push(m);
+      }
+    }
   }
+  if (openStart) orphans.push(openStart);
+  return { pairs, orphans };
+}
+
+/** Returns `text.slice(from, to)` with each line in `toDrop` removed whole. */
+function dropMarkerLines(text: string, toDrop: MarkerLine[], from = 0, to = text.length): string {
+  let out = "";
+  let cursor = from;
+  for (const m of toDrop) {
+    out += text.slice(cursor, m.lineStart);
+    cursor = m.lineEnd;
+  }
+  out += text.slice(cursor, to);
   return out;
 }
 
@@ -207,14 +287,14 @@ export function upsertMarkedRegionAfterIntro(
   endMarker: string,
   body: string,
 ): string {
-  const startIdx = text.indexOf(startMarker);
-  if (startIdx !== -1 && text.indexOf(endMarker, startIdx + startMarker.length) !== -1) {
+  const { pairs, orphans } = findMarkedRegions(text, startMarker, endMarker);
+  if (pairs.length > 0) {
     return upsertMarkedRegion(text, startMarker, endMarker, body);
   }
+  const eol = text.includes("\r\n") ? "\r\n" : "\n";
   // upsertMarkedRegion drops orphan markers too, but the heading search below
   // must run on the cleaned text, so the strip happens here first.
-  text = withoutOrphanMarkers(text, [startMarker, endMarker]);
-  const eol = text.includes("\r\n") ? "\r\n" : "\n";
+  text = dropMarkerLines(text, orphans);
   const region = buildRegion(startMarker, endMarker, body, eol);
   const lines = text.split("\n");
   const top = topLevelLines(lines);

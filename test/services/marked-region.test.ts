@@ -43,6 +43,14 @@ describe("extractMarkedRegion", () => {
     const text = `${START}\r\nhello\r\n${END}`;
     expect(extractMarkedRegion(text, START, END)).toBe("hello");
   });
+
+  it("ignores markers inside inline code, fenced blocks, prose, or longer tokens", () => {
+    expect(extractMarkedRegion(`Use \`${START}\` and \`${END}\`.`, START, END)).toBeNull();
+    expect(extractMarkedRegion(`Use ${START} and ${END} in prose.`, START, END)).toBeNull();
+    expect(extractMarkedRegion(`\`\`\`\n${START}\nfenced\n${END}\n\`\`\``, START, END)).toBeNull();
+    const withRealAfterFence = `\`\`\`\n${START}\nfenced\n${END}\n\`\`\`\n${START}\nreal\n${END}`;
+    expect(extractMarkedRegion(withRealAfterFence, START, END)).toBe("real");
+  });
 });
 
 describe("clampToBytes", () => {
@@ -120,9 +128,70 @@ describe("upsertMarkedRegion", () => {
     expect(result).toBe(`intro\nhand written\n\n${START}\nhello\n${END}\n`);
   });
 
-  it("cuts only the marker when it sits inline in prose", () => {
-    const result = upsertMarkedRegion(`keep ${START} this`, START, END, "hello");
-    expect(result).toBe(`keep  this\n\n${START}\nhello\n${END}\n`);
+  it("leaves a marker mentioned inline in prose untouched and ignores it on re-run", () => {
+    const once = upsertMarkedRegion(`Use ${START} to start.`, START, END, "hello");
+    expect(once).toBe(`Use ${START} to start.\n\n${START}\nhello\n${END}\n`);
+    const twice = upsertMarkedRegion(once, START, END, "updated");
+    expect(twice).toBe(`Use ${START} to start.\n\n${START}\nupdated\n${END}\n`);
+  });
+
+  it("ignores inline start and end markers on the same prose line instead of replacing between them", () => {
+    const once = upsertMarkedRegion(`${START} a ${START} b ${END}`, START, END, "hello");
+    expect(once).toBe(`${START} a ${START} b ${END}\n\n${START}\nhello\n${END}\n`);
+    expect(upsertMarkedRegion(once, START, END, "updated")).toBe(
+      `${START} a ${START} b ${END}\n\n${START}\nupdated\n${END}\n`,
+    );
+  });
+
+  it("does not cut marker text out of a longer token in .gitignore, and ignores it on re-run", () => {
+    const m1 = "# mullion:worktrees:start";
+    const m2 = "# mullion:worktrees:end";
+    const once = upsertMarkedRegion(
+      `node_modules\n# mullion:worktrees:started-by-hand\n`,
+      m1,
+      m2,
+      ".wt/",
+    );
+    expect(once).toBe(`node_modules\n# mullion:worktrees:started-by-hand\n\n${m1}\n.wt/\n${m2}\n`);
+    expect(once).not.toContain("\ned-by-hand");
+    expect(upsertMarkedRegion(once, m1, m2, ".wt/")).toBe(once);
+  });
+
+  it("leaves a quoted marker inside an inline code span untouched and ignores it on re-run", () => {
+    const inlineSpan = upsertMarkedRegion(`Quoted \`${START}\` marker.`, START, END, "hello");
+    expect(inlineSpan).toBe(`Quoted \`${START}\` marker.\n\n${START}\nhello\n${END}\n`);
+    expect(upsertMarkedRegion(inlineSpan, START, END, "updated")).toBe(
+      `Quoted \`${START}\` marker.\n\n${START}\nupdated\n${END}\n`,
+    );
+
+    const loneSpanLine = upsertMarkedRegion(`\`${START}\``, START, END, "hello");
+    expect(loneSpanLine).toBe(`\`${START}\`\n\n${START}\nhello\n${END}\n`);
+    expect(upsertMarkedRegion(loneSpanLine, START, END, "updated")).toBe(
+      `\`${START}\`\n\n${START}\nupdated\n${END}\n`,
+    );
+  });
+
+  it("leaves a marker inside a fenced code block untouched and ignores it on re-run", () => {
+    const fenced = `# Doc\n\n\`\`\`html\n${START}\n\`\`\`\n`;
+    const once = upsertMarkedRegion(fenced, START, END, "hello");
+    expect(once).toBe(`# Doc\n\n\`\`\`html\n${START}\n\`\`\`\n\n${START}\nhello\n${END}\n`);
+    expect(upsertMarkedRegion(once, START, END, "updated")).toBe(
+      `# Doc\n\n\`\`\`html\n${START}\n\`\`\`\n\n${START}\nupdated\n${END}\n`,
+    );
+  });
+
+  it("strips a second orphan start after a complete pair when replacing the pair", () => {
+    const text = `${START}\nold\n${END}\nmid\n${START}\ntail`;
+    const once = upsertMarkedRegion(text, START, END, "new");
+    expect(once).toBe(`${START}\nnew\n${END}\nmid\ntail`);
+    expect(upsertMarkedRegion(once, START, END, "new")).toBe(once);
+  });
+
+  it("strips an orphan start before a complete pair without eating the text between the two starts", () => {
+    const text = `${START}\nkeep me\n${START}\nold\n${END}`;
+    const once = upsertMarkedRegion(text, START, END, "new");
+    expect(once).toBe(`keep me\n${START}\nnew\n${END}`);
+    expect(upsertMarkedRegion(once, START, END, "new")).toBe(once);
   });
 
   it("is stable on a second run over a half-edited file", () => {
@@ -289,6 +358,17 @@ describe("upsertMarkedRegionAfterIntro", () => {
       `# T\r\n\r\nintro\r\n\r\n${START}\r\na\r\nb\r\n${END}\r\n\r\n## A\r\nx\r\n`,
     );
     expect(result).not.toMatch(/[^\r]\n/);
+  });
+
+  it("leaves inline and fenced markers alone and ignores them on re-run", () => {
+    const text = `# T\n\nUse ${START} or \`${START}\`.\n\n\`\`\`\n${START}\n${END}\n\`\`\`\n\n## A\nx\n`;
+    const once = upsertMarkedRegionAfterIntro(text, START, END, "body");
+    expect(once).toContain(`Use ${START} or \`${START}\`.`);
+    expect(once).toContain(`\`\`\`\n${START}\n${END}\n\`\`\``);
+    expect(extractMarkedRegion(once, START, END)).toBe("body");
+    const twice = upsertMarkedRegionAfterIntro(once, START, END, "body2");
+    expect(twice).toContain(`Use ${START} or \`${START}\`.`);
+    expect(extractMarkedRegion(twice, START, END)).toBe("body2");
   });
 });
 
