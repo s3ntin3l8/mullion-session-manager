@@ -224,7 +224,6 @@ export type {
   Task,
   TaskBlocker,
   ClearDoneResult,
-  ClearDoneBranchResult,
   UpdateCheckResult,
   UpdatePhase,
   UpdateStatus,
@@ -258,6 +257,7 @@ export type {
   Measured,
   ProbeMeta,
 } from "./types.js";
+export type { ClearDoneBranchResult } from "./clearDoneTypes.js";
 
 export { ApiError, AuthExpiredError, RateLimitedError } from "./client.js";
 

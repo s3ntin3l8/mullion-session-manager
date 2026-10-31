@@ -43,6 +43,7 @@ import type {
   ReviewSummary,
   ReviewSummaryEntry,
 } from "../../../src/shared/types.js";
+import type { ClearDoneBranchResult } from "./clearDoneTypes.js";
 import type {
   HostRole,
   PlacementCapability,
@@ -2142,13 +2143,6 @@ export interface TaskBlocker {
 // #746 — POST /api/tasks/clear-done's response shape. No route in this
 // codebase returned a per-row ok/failed shape before this one; modeled on
 // git-worktree.ts's own cleanupOrphanWorktrees (`{ removed, skipped }`).
-export interface ClearDoneBranchResult {
-  id: number;
-  branch: string;
-  deleted: boolean;
-  reason?: string;
-}
-
 export interface ClearDoneResult {
   deleted: number[];
   failed: { id: number; error: string }[];
@@ -2332,6 +2326,9 @@ export interface Task {
   // in_progress (only rendered in the UI when status === "failed" — see
   // TaskDetail.tsx). NOT a GitHub sync/scope error — see githubSyncError.
   failureReason: string | null;
+  // Snapshot captured when the no-commits gate failed the task (scrollback
+  // tail, agent/model, runtime, git status); null for other failure reasons.
+  failureDiagnostics?: string | null;
   // #1997 — when the current run of failed/held dispatch attempts began.
   // While status is "claimed", `failureReason` is the LAST dispatch error
   // (the task is still queued and being retried), not a terminal failure.

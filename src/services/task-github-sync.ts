@@ -22,6 +22,7 @@
 // syncClosedIssueToLocal's own comment on why a successful read proves
 // nothing about write scope, Hermes review PR #495). Visibility, not
 // automatic recovery.
+import { trimDiagnosticsForComment } from "./task-failure-diagnostics.js";
 import type { FastifyInstance } from "fastify";
 import { and, eq } from "drizzle-orm";
 import { tasks } from "../db/schema.js";
@@ -219,7 +220,9 @@ async function runSync(
         owner,
         repo,
         issueNumber,
-        `Task failed: ${task.failureReason ?? "unknown reason"}`,
+        `Task failed: ${task.failureReason ?? "unknown reason"}${
+          task.failureDiagnostics ? trimDiagnosticsForComment(task.failureDiagnostics) : ""
+        }`,
       );
       lastProgressCommentAt.delete(task.id);
       break;
