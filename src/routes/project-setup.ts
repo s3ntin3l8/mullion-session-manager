@@ -51,6 +51,7 @@ import {
   GenerationOutputError,
   type GeneratedScaffoldContent,
   type ExistingInstructionsMode,
+  type ScaffoldConflict,
 } from "../services/scaffold-generate.js";
 import {
   PREVIEW_TTL_MS,
@@ -460,6 +461,28 @@ interface PreviewRecord {
   // later request with different options must NOT read back as "the repo's
   // current files" — see ensureSetupWorktree's `fresh`.
   rewroteInstructions?: boolean;
+  // What /setup/preview or /setup/generate answered with, kept so
+  // GET /setup/preview/active can hand the same payload back to a client that
+  // lost it (page reload). Issue #2478.
+  snapshot: PreviewSnapshot;
+}
+
+/** The preview payload a client renders — the shared shape of the
+ * preview/generate responses (minus the generate-only fields on a template
+ * preview), plus what the panel needs to label it. */
+interface PreviewSnapshot {
+  previewId: string;
+  diff: string;
+  files: string[];
+  hasAgentsOverride: boolean;
+  generated?: boolean;
+  agent?: string;
+  sandboxed?: boolean;
+  possiblyGeneric?: boolean;
+  instructionsMode?: ExistingInstructionsMode;
+  conflicts?: ScaffoldConflict[];
+  droppedConflictLines?: number;
+  possiblyLossy?: boolean;
 }
 
 // In-memory only, primary-only, short-lived — a preview is a "here's what
@@ -496,6 +519,16 @@ function getLivePreview(previewId: string): PreviewRecord | null {
  * this map is small (one entry per in-flight interactive preview) and
  * short-lived, so the O(n) cost here is never worth a second data
  * structure to keep in sync. */
+function findNewestLivePreview(projectId: number): PreviewRecord | null {
+  sweepExpiredPreviews();
+  let newest: PreviewRecord | null = null;
+  for (const record of previews.values()) {
+    if (record.projectId !== projectId) continue;
+    if (!newest || record.createdAt >= newest.createdAt) newest = record;
+  }
+  return newest;
+}
+
 function findLiveSlugPreview(projectId: number, slug: string): PreviewRecord | null {
   sweepExpiredPreviews();
   for (const record of previews.values()) {
@@ -666,6 +699,12 @@ async function finishPreview(
     // never actually reached with undefined in practice.
     workflowConventionsText: options.workflowConventionsText ?? "",
     ...(rewroteInstructions ? { rewroteInstructions: true } : {}),
+    snapshot: {
+      previewId,
+      diff,
+      files: entries.map((entry) => entry.path),
+      hasAgentsOverride: existingFiles["AGENTS.override.md"] !== undefined,
+    },
   });
 
   return {
@@ -948,6 +987,14 @@ async function executeScaffoldGeneration(
     response.droppedConflictLines = generated.droppedConflictLines;
   }
   if (generated.possiblyLossy) response.possiblyLossy = true;
+  const record = previews.get(result.previewId);
+  if (record) {
+    record.snapshot = {
+      ...response,
+      generated: true,
+      instructionsMode: existingInstructions,
+    };
+  }
   return { ok: true, response };
 }
 
@@ -1173,6 +1220,24 @@ export async function projectSetupRoute(app: FastifyInstance) {
       const job = getActiveGenerateJob(projectId);
       if (!job) return reply.code(204).send();
       return serializeGenerateJob(job);
+    },
+  );
+
+  // Issue #2478 — the project's newest live preview, so a client that lost
+  // its previewId (page reload) can recover it. `createdAt` lets it apply the
+  // same expiry the server does.
+  app.get<{ Params: { id: string } }>(
+    "/api/projects/:id/setup/preview/active",
+    GENERATE_POLL_RATE_LIMIT,
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const project = getProjectOr404(projectId);
+      if (!project) return reply.notFound();
+
+      const record = findNewestLivePreview(projectId);
+      if (!record) return reply.code(204).send();
+      return { ...record.snapshot, slug: record.slug, createdAt: record.createdAt };
     },
   );
 

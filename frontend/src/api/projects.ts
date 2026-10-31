@@ -282,6 +282,29 @@ export const projectsApi = {
       body: JSON.stringify(options),
     }),
 
+  // The project's newest live preview, so a page reload can recover a preview
+  // the server still holds. undefined (204) when there is none.
+  getActiveProjectSetupPreview: (projectId: number) =>
+    request<
+      | {
+          previewId: string;
+          diff: string;
+          files: string[];
+          hasAgentsOverride: boolean;
+          slug: string;
+          createdAt: number;
+          generated?: boolean;
+          agent?: string;
+          sandboxed?: boolean;
+          possiblyGeneric?: boolean;
+          instructionsMode?: ExistingInstructionsMode;
+          conflicts?: ScaffoldConflict[];
+          droppedConflictLines?: number;
+          possiblyLossy?: boolean;
+        }
+      | undefined
+    >(`/api/projects/${projectId}/setup/preview/active`),
+
   applyProjectSetup: (projectId: number, previewId: string) =>
     request<{
       ok: boolean;

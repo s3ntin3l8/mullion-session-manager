@@ -65,6 +65,7 @@ export const createProjectsSlice: StateCreator<DashboardState, [], [], ProjectsS
 
   deleteProject: async (id) => {
     await api.deleteProject(id);
+    get().clearScaffoldDraft(id);
     await Promise.all([get().refreshProjects(), get().refreshSessions()]);
   },
 

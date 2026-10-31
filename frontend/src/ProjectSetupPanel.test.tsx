@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProjectSetupPanel } from "./ProjectSetupPanel.js";
@@ -17,10 +17,15 @@ function mockFetch(opts: {
   // defaults to a fixed literal here so every EXISTING test (which never
   // asserted on this text) keeps working unchanged.
   scaffoldDefaultsText?: string;
+  // GET /setup/preview/active (#2478); absent = the server holds nothing (204).
+  active?: () => Response | Promise<Response>;
 }) {
   return vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const body = init?.body ? JSON.parse(init.body as string) : undefined;
+    if (url.endsWith("/setup/preview/active")) {
+      return Promise.resolve(opts.active ? opts.active() : new Response(null, { status: 204 }));
+    }
     if (url.endsWith("/setup/preview") && init?.method === "POST") {
       return Promise.resolve(
         opts.preview ? opts.preview(body) : new Response(null, { status: 500 }),
@@ -50,6 +55,9 @@ async function toTemplatePath(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("ProjectSetupPanel", () => {
+  beforeEach(() => {
+    useDashboardStore.setState({ scaffoldDrafts: {} });
+  });
   afterEach(() => {
     vi.unstubAllGlobals();
     // A 429 trips the per-endpoint breaker (api/client.ts), which would
@@ -850,6 +858,109 @@ describe("ProjectSetupPanel", () => {
         screen.getByRole("button", { name: "Add a CONTRIBUTING.md pointer" }),
       ).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Symlink .agents/skills" })).toBeInTheDocument();
+    });
+  });
+
+  describe("state kept across unmount (#2478)", () => {
+    it("restores the form and the preview when the panel is remounted", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          generate: () =>
+            jsonResponse(200, {
+              previewId: "gen1",
+              diff: "diff --git a/AGENTS.md b/AGENTS.md\n+kept line\n",
+              files: ["AGENTS.md"],
+              hasAgentsOverride: false,
+              sandboxed: true,
+              agent: "claude",
+            }),
+        }),
+      );
+      const user = userEvent.setup();
+      const first = render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      await user.type(screen.getByPlaceholderText("my-project"), "demo");
+      await user.click(screen.getByRole("radio", { name: "Restructure it" }));
+      await user.click(screen.getByRole("button", { name: /^Generate with / }));
+      expect(await screen.findByText("Preview — 1 file")).toBeInTheDocument();
+      first.unmount();
+
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      expect(screen.getByText("Preview — 1 file")).toBeInTheDocument();
+      expect(screen.getByText(/\+kept line/)).toBeInTheDocument();
+      expect(screen.getByTestId("preview-source")).toHaveTextContent("Restructure it");
+      expect(screen.getByRole("button", { name: "Apply" })).toBeEnabled();
+      await user.click(screen.getByRole("button", { name: "Back" }));
+      expect(screen.getByPlaceholderText("my-project")).toHaveValue("demo");
+      expect(screen.getByRole("radio", { name: "Restructure it" })).toBeChecked();
+    });
+
+    it("keeps one project's draft apart from another's", () => {
+      useDashboardStore.getState().patchScaffoldDraft(1, { slug: "one" });
+      vi.stubGlobal("fetch", mockFetch({}));
+      render(<ProjectSetupPanel params={{ projectId: 2 }} />);
+      expect(screen.getByPlaceholderText("my-project")).toHaveValue("");
+    });
+
+    it("discards a preview older than the server keeps it, with a message", async () => {
+      vi.stubGlobal("fetch", mockFetch({}));
+      useDashboardStore.getState().patchScaffoldDraft(1, {
+        slug: "demo",
+        preview: { previewId: "old", diff: "", files: ["AGENTS.md"], hasAgentsOverride: false },
+        previewCreatedAt: Date.now() - 16 * 60 * 1000,
+      });
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      expect(await screen.findByText(/This preview expired/)).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Apply" })).not.toBeInTheDocument();
+      expect(screen.getByPlaceholderText("my-project")).toHaveValue("demo");
+    });
+
+    it("recovers the server's live preview when the store has nothing", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          active: () =>
+            jsonResponse(200, {
+              previewId: "srv1",
+              diff: "diff --git a/AGENTS.md b/AGENTS.md\n+from server\n",
+              files: ["AGENTS.md"],
+              hasAgentsOverride: false,
+              slug: "demo",
+              createdAt: Date.now() - 1000,
+              generated: true,
+              agent: "claude",
+              sandboxed: true,
+              instructionsMode: "restructure",
+              possiblyLossy: true,
+            }),
+        }),
+      );
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      expect(await screen.findByText(/\+from server/)).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Apply" })).toBeEnabled();
+      expect(screen.getByText(/much shorter than the original/)).toBeInTheDocument();
+      expect(useDashboardStore.getState().scaffoldDrafts[1]?.slug).toBe("demo");
+    });
+
+    it("clears the draft once Apply succeeds into a result that Scaffold another resets", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          apply: () =>
+            jsonResponse(200, { ok: true, mode: "local-branch", branch: "b", detail: "done" }),
+        }),
+      );
+      useDashboardStore.getState().patchScaffoldDraft(1, {
+        preview: { previewId: "p", diff: "", files: ["AGENTS.md"], hasAgentsOverride: false },
+        previewCreatedAt: Date.now(),
+      });
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      await user.click(screen.getByRole("button", { name: "Apply" }));
+      expect(await screen.findByText(/Committed to branch/)).toBeInTheDocument();
+      expect(useDashboardStore.getState().scaffoldDrafts[1]?.preview).toBeNull();
+      await user.click(screen.getByRole("button", { name: "Scaffold another" }));
+      expect(useDashboardStore.getState().scaffoldDrafts[1]?.applyResult).toBeNull();
     });
   });
 });
