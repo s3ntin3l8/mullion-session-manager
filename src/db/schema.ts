@@ -1516,6 +1516,19 @@ export const tasks = sqliteTable(
     // services needs no auditing. Unarchive clears only this column, never
     // mergedAt.
     archivedAt: integer("archived_at", { mode: "timestamp" }),
+    // #2292 — this copy was superseded by a project merge
+    // (project-merge.ts's `mergeProjects`): another task now owns the issue,
+    // so this row must never start a worker of its own. A durable marker
+    // rather than a reading of `failureReason`'s wording (the `dispatchHeld`
+    // column above sets that precedent — a real flag, because several
+    // behaviours hang off it), and deliberately NOT the same thing as
+    // `archivedAt`: a merge archives the copy, but a human can Unarchive it
+    // (which clears only `archivedAt`), and the fact that a merge superseded
+    // it does not change when the row is unhidden. `retryTask` refuses a
+    // marked task outright (it would otherwise resume the copy's branch and
+    // spawn a duplicate worker for work another task already owns). Null =
+    // "not superseded" — the safe default for every pre-existing row.
+    supersededAt: integer("superseded_at", { mode: "timestamp" }),
   },
   // De-dup mechanism for the watcher's poll sweep: insert-or-ignore/update
   // per (project, issue) rather than a "last-seen cursor" — see #214's

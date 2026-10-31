@@ -12,6 +12,7 @@ import {
 } from "../services/task-github-sync.js";
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
 import { withApprovalState } from "../services/task-approval-row.js";
+import { SUPERSEDED_RETRY_DETAIL } from "../services/task-supersede.js";
 import {
   TASK_MODEL_COLUMNS,
   TASK_MODEL_SCHEMA_PROPS,
@@ -1290,6 +1291,8 @@ export async function tasksRoute(app: FastifyInstance) {
             return reply.notFound();
           case "not-failed":
             return reply.conflict(outcome.detail ?? "Task is not failed");
+          case "superseded":
+            return reply.conflict(outcome.detail ?? SUPERSEDED_RETRY_DETAIL);
           case "cap":
             return reply
               .code(429)

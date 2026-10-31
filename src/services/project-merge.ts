@@ -19,6 +19,7 @@ import { parseHostCwdsMeta, serializeHostCwdsMeta } from "./host-cwds-meta.js";
 import { buildOriginIndex } from "./repo-identity.js";
 import { notifyOperator } from "./push-delivery.js";
 import { broadcastTaskEvent } from "./task-events.js";
+import { replacedByMergeReason, supersededMergeReason } from "./task-supersede.js";
 
 // Issue #2232 — merge a duplicate project into its same-repo survivor. The
 // duplicate's rows are re-pointed at the survivor in ONE synchronous
@@ -569,7 +570,14 @@ export function mergeProjects(
             projectId: to,
             issueNumber: null,
             archivedAt: t.archivedAt ?? now,
-            failureReason: t.failureReason ?? `Merged from project #${from}: superseded.`,
+            // #2292 — record that a merge superseded this copy, so a Retry
+            // refuses it (retryTask would otherwise resume the copy's branch
+            // and spawn a duplicate worker for work the survivor's copy owns).
+            // A durable marker, not a reading of the failure reason below: the
+            // reason is only a default (`??`) and says nothing about a copy
+            // that had already failed before the merge.
+            supersededAt: now,
+            failureReason: t.failureReason ?? supersededMergeReason(from),
             ...(QUEUED_TASK_STATUSES.includes(t.status) ? { status: "failed" as const } : {}),
           })
           .where(eq(tasks.id, t.id))
@@ -584,8 +592,11 @@ export function mergeProjects(
           .set({
             issueNumber: null,
             archivedAt: clash.archivedAt ?? now,
-            failureReason:
-              clash.failureReason ?? `Replaced by task #${t.id} when project #${from} was merged.`,
+            // #2292 — same marker as above: this copy lost the issue to the
+            // duplicate's live task, so it must never start a worker of its
+            // own either.
+            supersededAt: now,
+            failureReason: clash.failureReason ?? replacedByMergeReason(t.id, from),
             ...(QUEUED_TASK_STATUSES.includes(clash.status) ? { status: "failed" as const } : {}),
           })
           .where(eq(tasks.id, clash.id))

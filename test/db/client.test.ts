@@ -129,3 +129,102 @@ describe("approval_notified_verdict_at backfill migration (#2252)", () => {
     db.close();
   });
 });
+
+// #2292 — the superseded-copy migration: it adds `tasks.superseded_at`, marks
+// the copies an EARLIER project merge already superseded, and normalizes the
+// archived-but-still-queued copies that #2291 left behind.
+//
+// The rows below are the eight shapes that matter, each one a real state the
+// merge or a human archive can leave behind:
+//
+//   1-4  a merge-superseded copy (archived + issue number cleared + GitHub-linked)
+//   5    a normal queued task (not archived) — must not move
+//   6    a MANUALLY archived LOCAL task — must not be marked superseded
+//   7    a MANUALLY archived GitHub task — must not be marked superseded
+//   8    a pre-`html_url` superseded copy, recognized by the merge's own wording
+describe("superseded_at backfill + archived-queued normalization migration (#2292)", () => {
+  const tmpDb = path.join(os.tmpdir(), `db-client-2292-test-${process.pid}.db`);
+  const drizzleDir = path.resolve(__dirname, "../../drizzle");
+
+  afterEach(() => {
+    for (const suffix of ["", "-wal", "-shm"]) fs.rmSync(`${tmpDb}${suffix}`, { force: true });
+  });
+
+  it("marks the superseded copies, normalizes the queued ones, and leaves the rest alone", () => {
+    const files = fs
+      .readdirSync(drizzleDir)
+      .filter((f) => /^\d{4}_.*\.sql$/.test(f))
+      .sort();
+    const target = files.find((f) =>
+      fs.readFileSync(path.join(drizzleDir, f), "utf8").includes("superseded_at"),
+    )!;
+    const apply = (db: Database.Database, file: string) => {
+      const sqlText = fs.readFileSync(path.join(drizzleDir, file), "utf8");
+      for (const stmt of sqlText.split("--> statement-breakpoint")) db.exec(stmt);
+    };
+    const db = new Database(tmpDb);
+    for (const f of files.slice(0, files.indexOf(target))) apply(db, f);
+
+    const ARCHIVED = 1700000000;
+    // archived_at, issue_number, html_url, failure_reason
+    db.exec(
+      "INSERT INTO projects (id, name, cwd, created_at) VALUES (1, 'p', '/tmp', 1);" +
+        "INSERT INTO tasks (id, project_id, title, status, issue_number, html_url, archived_at, failure_reason, created_at, updated_at) VALUES " +
+        // 1 — superseded copy, still queued, with a failure reason of its own
+        `(1, 1, 'copy ready', 'ready', NULL, 'https://github.com/o/r/issues/1', ${ARCHIVED}, 'session died', 1, 1),` +
+        // 2 — superseded copy, queued, with no failure reason at all
+        `(2, 1, 'copy backlog', 'backlog', NULL, 'https://github.com/o/r/issues/2', ${ARCHIVED}, NULL, 1, 1),` +
+        // 3 — superseded copy that was claimed once and then failed
+        `(3, 1, 'copy failed', 'failed', NULL, 'https://github.com/o/r/issues/3', ${ARCHIVED}, 'boom', 1, 1),` +
+        // 4 — superseded copy that was already done
+        `(4, 1, 'copy done', 'done', NULL, 'https://github.com/o/r/issues/4', ${ARCHIVED}, NULL, 1, 1),` +
+        // 5 — an ordinary queued task, never archived
+        `(5, 1, 'ordinary', 'ready', 5, 'https://github.com/o/r/issues/5', NULL, NULL, 1, 1),` +
+        // 6 — a MANUALLY archived LOCAL task (no issue, no URL)
+        `(6, 1, 'local archived', 'failed', NULL, NULL, ${ARCHIVED}, 'boom', 1, 1),` +
+        // 7 — a MANUALLY archived GitHub task (its issue number is still set)
+        `(7, 1, 'github archived', 'failed', 7, 'https://github.com/o/r/issues/7', ${ARCHIVED}, 'boom', 1, 1),` +
+        // 8 — a superseded copy old enough to predate html_url
+        `(8, 1, 'old copy', 'ready', NULL, NULL, ${ARCHIVED}, 'Merged from project #7: superseded.', 1, 1);`,
+    );
+    apply(db, target);
+
+    const rows = db
+      .prepare(
+        "SELECT id, status, failure_reason AS reason, superseded_at AS s FROM tasks ORDER BY id",
+      )
+      .all() as Array<{ id: number; status: string; reason: string | null; s: number | null }>;
+
+    const byId = new Map(rows.map((r) => [r.id, r]));
+    const marked = (id: number) => expect(byId.get(id)?.s).not.toBeNull();
+
+    // 1 — the queued copy leaves the queue, keeping its own failure reason.
+    expect(byId.get(1)).toMatchObject({ status: "failed", reason: "session died" });
+    marked(1);
+    // 2 — no reason of its own, so it gets the generic one.
+    expect(byId.get(2)?.status).toBe("failed");
+    expect(byId.get(2)?.reason).toContain("Superseded by a project merge");
+    marked(2);
+    // 3 — a failed copy keeps its status and its reason; it is still marked.
+    expect(byId.get(3)).toMatchObject({ status: "failed", reason: "boom" });
+    marked(3);
+    // 4 — a done copy stays done (and is marked, though it is not retryable).
+    expect(byId.get(4)?.status).toBe("done");
+    marked(4);
+    // 5 — an ordinary queued task is untouched.
+    expect(byId.get(5)).toMatchObject({ status: "ready", reason: null, s: null });
+    // 6 — a manually archived LOCAL task is NOT superseded: nothing may take
+    // its Retry away (that is #1015's deliberate escape hatch).
+    expect(byId.get(6)).toMatchObject({ status: "failed", reason: "boom", s: null });
+    // 7 — a manually archived GitHub task is not superseded either.
+    expect(byId.get(7)).toMatchObject({ status: "failed", reason: "boom", s: null });
+    // 8 — recognized by the merge's own wording.
+    expect(byId.get(8)).toMatchObject({
+      status: "failed",
+      reason: "Merged from project #7: superseded.",
+    });
+    marked(8);
+
+    db.close();
+  });
+});

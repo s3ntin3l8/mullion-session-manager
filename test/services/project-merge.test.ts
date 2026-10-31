@@ -408,6 +408,43 @@ describe("project-merge", () => {
           });
         }
       });
+
+      // #2292 — a superseded copy is marked as such, so `retryTask` refuses
+      // it (it would otherwise resume the copy's branch and spawn a duplicate
+      // worker for an issue another task owns).
+      it("marks the superseded copy, so Retry can refuse it", () => {
+        const keep = task(survivorId, { issueNumber: 40, status: "in_progress" });
+        const dup = task(dupId, { issueNumber: 40, status: "failed" });
+        expect(merge().ok).toBe(true);
+        const row = app.db.select().from(tasks).where(eq(tasks.id, dup.id)).get()!;
+        expect(row.supersededAt).not.toBeNull();
+        expect(row.issueNumber).toBeNull();
+        expect(row.archivedAt).not.toBeNull();
+        // The survivor's copy is untouched — it owns the issue.
+        expect(app.db.select().from(tasks).where(eq(tasks.id, keep.id)).get()).toMatchObject({
+          issueNumber: 40,
+          supersededAt: null,
+        });
+      });
+
+      it("marks the replaced survivor copy too", () => {
+        const stale = task(survivorId, { issueNumber: 41, status: "failed" });
+        task(dupId, { issueNumber: 41, status: "in_progress" });
+        expect(merge().ok).toBe(true);
+        const row = app.db.select().from(tasks).where(eq(tasks.id, stale.id)).get()!;
+        expect(row.supersededAt).not.toBeNull();
+        expect(row.archivedAt).not.toBeNull();
+      });
+
+      it("does not mark a task that just moves", () => {
+        const moved = task(dupId, { issueNumber: 42, status: "ready" });
+        expect(merge().ok).toBe(true);
+        expect(app.db.select().from(tasks).where(eq(tasks.id, moved.id)).get()).toMatchObject({
+          projectId: survivorId,
+          supersededAt: null,
+          archivedAt: null,
+        });
+      });
     });
 
     describe("refusals", () => {
