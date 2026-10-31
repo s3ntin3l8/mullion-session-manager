@@ -33,6 +33,7 @@ import {
 } from "../ui/sidebar/index.js";
 import type { Tone } from "../lib/statusTone.js";
 import { ConversationComposer, ThreadActions } from "./Composer.js";
+import { CommentCard } from "./CommentCard.js";
 import { MergeConfirmModal, PrActionBar } from "./PrActionBar.js";
 import {
   nextStep,
@@ -100,6 +101,13 @@ const REVIEW_STATE_LABEL: Record<string, string> = {
   CHANGES_REQUESTED: "Changes requested",
   COMMENTED: "Commented",
 };
+
+function reviewState(state: string): { label: string; tone: Tone } {
+  return {
+    label: REVIEW_STATE_LABEL[state] ?? state.toLowerCase().replace(/_/g, " "),
+    tone: REVIEW_STATE_TONE[state] ?? "neutral",
+  };
+}
 
 function hasLiveSession(links: readonly SessionLink[] | undefined, id: number): boolean {
   return (links ?? []).some(
@@ -565,7 +573,21 @@ export function PrDetailView({
       item: c,
       pinned: false,
     })),
-  ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  ]
+    // Newest first: the conversation is read from the latest word backwards.
+    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
+    // Keyed by what the item is, not where it sits: a new comment shifts every
+    // index, and each card keeps its own open/closed state. Two items by one
+    // author in the same second get a suffix so keys stay unique.
+    .map((e, i, all) => {
+      const base = `${e.kind}-${e.at}-${e.item.author ?? ""}`;
+      const dupes = all
+        .slice(0, i)
+        .filter((o) => `${o.kind}-${o.at}-${o.item.author ?? ""}` === base);
+      return { ...e, key: dupes.length ? `${base}-${dupes.length}` : base };
+    });
+  // Only the newest card that is not pinned above starts open.
+  const newestKey = timeline.find((e) => !e.pinned)?.key;
 
   // Recent PR events (CI failed/passed, conflicts, comments, review) from the
   // linked sessions' own event streams.
@@ -925,22 +947,25 @@ export function PrDetailView({
                 )}
               </div>
             )}
-            {timeline.map((e, i) =>
+            {timeline.map((e) =>
               e.pinned ? (
-                <div key={i} className="gh-comment pr-pinned-mark">
+                <div key={e.key} className="gh-comment pr-pinned-mark">
                   {e.item.author ?? "unknown"} reviewed · {formatRelativeAge(Date.parse(e.at))}{" "}
                   <StatusChip tone="neutral">pinned above</StatusChip>
                 </div>
               ) : (
-                <div key={i} className="gh-comment">
-                  <div className="gh-detail-meta">
-                    {e.item.author ?? "unknown"}
-                    {e.kind === "review" &&
-                      ` · ${(e.item as { state: string }).state.toLowerCase().replace(/_/g, " ")}`}{" "}
-                    · {formatRelativeAge(Date.parse(e.at))}
-                  </div>
-                  <SafeHtml className="gh-html" html={e.item.bodyHtml} />
-                </div>
+                <CommentCard
+                  key={e.key}
+                  author={e.item.author}
+                  at={e.at}
+                  bodyHtml={e.item.bodyHtml}
+                  state={
+                    e.kind === "review"
+                      ? reviewState((e.item as { state: string }).state)
+                      : undefined
+                  }
+                  defaultOpen={e.key === newestKey}
+                />
               ),
             )}
             {openThreads.length === 0 && resolvedThreads.length === 0 && timeline.length === 0 && (

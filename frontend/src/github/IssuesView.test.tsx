@@ -115,6 +115,35 @@ describe("IssuesSection", () => {
     useDashboardStore.setState({ taskMasterEnabled: wasEnabled });
   });
 
+  it("shows comments newest first and folds all but the newest", async () => {
+    const user = userEvent.setup();
+    const comment = (id: number, body: string) => ({
+      ...DETAIL.comments[0],
+      id,
+      bodyHtml: `<p>${body}</p>`,
+      createdAt: `2026-01-0${id}T00:00:00Z`,
+    });
+    // The server returns them oldest first.
+    const detail = {
+      ...DETAIL,
+      commentCount: 3,
+      comments: [comment(1, "first words"), comment(2, "middle words"), comment(3, "last words")],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() => Promise.resolve(jsonResponse(200, detail))),
+    );
+    render(<IssueDetailView projectId={1} number={7} onBack={vi.fn()} />);
+    expect(await screen.findByText("last words")).toBeInTheDocument();
+    expect(screen.queryByText("middle words")).toBeNull();
+    expect(screen.queryByText("first words")).toBeNull();
+
+    const headers = screen.getAllByRole("button", { name: /bob/ });
+    expect(headers.map((h) => h.getAttribute("aria-expanded"))).toEqual(["true", "false", "false"]);
+    await user.click(headers[1]);
+    expect(screen.getByText("middle words")).toBeInTheDocument();
+  });
+
   it("sorts through the sort popover and refetches with the new sort", async () => {
     const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(200, LIST)));
     vi.stubGlobal("fetch", fetchMock);
@@ -388,7 +417,7 @@ describe("IssueDetailView", () => {
     );
     render(<IssueDetailView projectId={1} number={7} onBack={vi.fn()} />);
     expect(await screen.findByText("Comments (1 of 230)")).toBeInTheDocument();
-    expect(screen.getByText(/Showing the first 1/)).toBeInTheDocument();
+    expect(screen.getByText(/Showing the latest 1/)).toBeInTheDocument();
   });
 
   it("offers Open session instead of Start when the issue's worktree session exists, and shows Queued", async () => {

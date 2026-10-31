@@ -66,3 +66,22 @@ export function parseReviewRounds(text: string | null | undefined): ReviewRounds
     },
   };
 }
+
+const ENTITIES: Record<string, string> = {
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&#39;": "'",
+};
+
+/**
+ * The `## Round N …` heading a review opens with (task-reconciler.ts writes it
+ * into the body it posts), read back out of GitHub's rendered HTML so a
+ * collapsed review card can say which round it is. Null for any other comment.
+ */
+export function roundLabelFromHtml(html: string): string | null {
+  const match = /<h[1-3][^>]*>\s*(Round\s+\d+[^<]*?)\s*<\/h[1-3]>/i.exec(html);
+  if (!match) return null;
+  return match[1].replace(/&(?:amp|lt|gt|quot|#39);/g, (e) => ENTITIES[e]);
+}

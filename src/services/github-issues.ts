@@ -236,6 +236,9 @@ export async function listIssues(
   };
 }
 
+/** GitHub's page size for an issue's comments (its maximum). */
+const COMMENTS_PAGE_SIZE = 100;
+
 export async function getIssueDetail(
   token: string,
   owner: string,
@@ -243,10 +246,29 @@ export async function getIssueDetail(
   number: number,
 ): Promise<IssueDetail> {
   const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${number}`;
-  const [issue, comments] = await Promise.all([
+  const commentsUrl = (page: number) =>
+    `${base}/comments?per_page=${COMMENTS_PAGE_SIZE}&page=${page}`;
+  const [issue, firstPage] = await Promise.all([
     getJson<RawIssue>(base, token, HTML_ACCEPT),
-    getJson<RawComment[]>(`${base}/comments?per_page=100`, token, HTML_ACCEPT),
+    getJson<RawComment[]>(commentsUrl(1), token, HTML_ACCEPT),
   ]);
+  let comments = firstPage;
+  // GitHub lists comments oldest first, so page 1 of a long thread is its
+  // OLDEST hundred. The conversation is read newest first, so fetch the tail:
+  // the last page, topped up from the one before when it is short.
+  const total = issue.comments ?? firstPage.length;
+  if (total > COMMENTS_PAGE_SIZE) {
+    const lastPage = Math.ceil(total / COMMENTS_PAGE_SIZE);
+    const last = await getJson<RawComment[]>(commentsUrl(lastPage), token, HTML_ACCEPT);
+    comments = last;
+    if (last.length < COMMENTS_PAGE_SIZE) {
+      const previous =
+        lastPage - 1 === 1
+          ? firstPage
+          : await getJson<RawComment[]>(commentsUrl(lastPage - 1), token, HTML_ACCEPT);
+      comments = [...previous, ...last].slice(-COMMENTS_PAGE_SIZE);
+    }
+  }
   if (issue.pull_request) {
     throw new GitHubApiError(`#${number} is a pull request, not an issue`, 404);
   }
