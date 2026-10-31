@@ -7,7 +7,7 @@ vi.mock("../../src/services/task-github-sync.js", () => ({
 }));
 
 const { buildApp } = await import("../../src/app.js");
-const { retryTask } = await import("../../src/services/task-claim.js");
+const { retryTask, failQueuedTask } = await import("../../src/services/task-claim.js");
 const { tasks, projects } = await import("../../src/db/schema.js");
 const sessionBackendModule = await import("../../src/services/session-backend.js");
 const { HostRequestError } = await import("../../src/services/remote-host-client.js");
@@ -51,6 +51,43 @@ describe("retryTask clears the failure diagnostics snapshot", () => {
     expect(outcome.ok).toBe(false);
     const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
     expect(row.status).toBe("failed");
+    expect(row.failureDiagnostics).toBeNull();
+    await app.close();
+  });
+});
+
+// failQueuedTask rewrites failureReason on a claimed row; a snapshot left on
+// the row by an earlier failed run must not survive that rewrite.
+describe("failQueuedTask clears the failure diagnostics snapshot", () => {
+  it("when it fails a claimed task with a new reason", async () => {
+    const app = await buildApp();
+    const [project] = app.db
+      .insert(projects)
+      .values({ name: "diag-queued-p", cwd: "/tmp/diag-queued" })
+      .returning()
+      .all();
+    const [task] = app.db
+      .insert(tasks)
+      .values({
+        projectId: project.id,
+        title: "t",
+        status: "claimed",
+        failureReason: "old",
+        failureDiagnostics: "Terminal tail (last 40 lines):\nOLD RUN OUTPUT",
+      })
+      .returning()
+      .all();
+
+    const failed = failQueuedTask(app, task.id, {
+      detail: "placement refused",
+      via: "placement-refusal",
+      hostId: null,
+    });
+
+    expect(failed).toBe(true);
+    const [row] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+    expect(row.status).toBe("failed");
+    expect(row.failureReason).toBe("placement refused");
     expect(row.failureDiagnostics).toBeNull();
     await app.close();
   });
