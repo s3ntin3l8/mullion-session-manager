@@ -31,8 +31,13 @@ if [ -z "$real_gh" ]; then
   exit 127
 fi
 
-helper="$(dirname -- "$MULLION_FORWARDER_PATH")/git-credential-mullion.mjs"
-line=$("$MULLION_FORWARDER_NODE" "$helper" gh-token 2>/dev/null)
+if [ -n "$MULLION_FORWARDER_PATH" ]; then
+  helper="$(dirname -- "$MULLION_FORWARDER_PATH")/git-credential-mullion.mjs"
+else
+  # This wrapper lives in <hooks>/bin; the helper sits one level up.
+  helper="$(dirname -- "$self_dir")/git-credential-mullion.mjs"
+fi
+line=$("${MULLION_FORWARDER_NODE:-node}" "$helper" gh-token 2>/dev/null)
 IFS=' ' read -r kind host_first rest <<EOF2
 $line
 EOF2

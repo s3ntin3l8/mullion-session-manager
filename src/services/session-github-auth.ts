@@ -3,7 +3,7 @@ import { eq, or } from "drizzle-orm";
 import { projects, sessions, tasks } from "../db/schema.js";
 import { resolveRepoRef } from "./host-git.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
-import { peekInstallationTokenExpiry } from "./github-app.js";
+import { SESSION_TOKEN_RENEW_BEFORE_MS, peekInstallationTokenExpiry } from "./github-app.js";
 import {
   GITHUB_REVIEWER_PROVIDER,
   getConfiguredAppId,
@@ -30,7 +30,7 @@ import {
 export type SessionGithubRole = "manual" | "worker" | "reviewer";
 
 /** What the primary re-sends tokens ahead of (App tokens live ~1h). */
-export const SESSION_TOKEN_RENEW_BEFORE_MS = 10 * 60 * 1000;
+export { SESSION_TOKEN_RENEW_BEFORE_MS };
 
 export interface ResolveSessionGithubAuthInput {
   role: SessionGithubRole;
@@ -72,7 +72,7 @@ export async function resolveSessionGithubAuth(
   return { mode: "task", token, username: "x-access-token", expiresAt };
 }
 
-/** Sessions whose App token the refresher keeps renewed on a remote host. */
+/** Sessions whose App token the refresher keeps renewed (local or remote). */
 interface Tracked {
   hostId: string;
   input: ResolveSessionGithubAuthInput;
@@ -88,7 +88,7 @@ export function trackSessionGithubAuth(
   auth: SessionGithubAuth,
 ): void {
   // A user token (no expiry) and an unavailable one need no renewal.
-  if (hostId === LOCAL_HOST_ID || auth.expiresAt === undefined) {
+  if (auth.expiresAt === undefined) {
     tracked.delete(sessionId);
     return;
   }
@@ -123,7 +123,8 @@ export async function refreshSessionGithubAuth(
     }
     try {
       const auth = await resolveSessionGithubAuth(app, entry.input);
-      await getRemoteHostClient(app, entry.hostId).sendSessionGithubAuth(sessionId, auth);
+      if (entry.hostId === LOCAL_HOST_ID) deliverLocalSessionGithubAuth(sessionId, auth);
+      else await getRemoteHostClient(app, entry.hostId).sendSessionGithubAuth(sessionId, auth);
       entry.expiresAt = auth.expiresAt;
     } catch (err) {
       // The host may be offline; the next tick tries again while the old

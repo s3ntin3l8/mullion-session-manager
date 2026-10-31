@@ -253,7 +253,11 @@ async function replyWithSessionGithubToken(
   sessionId: string,
 ): Promise<void> {
   const held = await Promise.resolve(getSessionGithubAuth(sessionId))
-    .then((found) => found ?? recoverLocalSessionGithubAuth(app, sessionId))
+    .then(async (found) => {
+      // An expired entry is as good as none for a local session: re-derive it.
+      if (found && (found.expiresAt === undefined || found.expiresAt > Date.now())) return found;
+      return (await recoverLocalSessionGithubAuth(app, sessionId)) ?? found;
+    })
     .catch((err: unknown) => {
       app.log.warn({ err, sessionId }, "could not recover a session's GitHub token");
       return undefined;

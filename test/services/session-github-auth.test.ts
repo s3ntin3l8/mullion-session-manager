@@ -21,6 +21,7 @@ vi.mock("../../src/services/github-integration.js", () => ({
     mocks.resolveReviewerSessionReadToken(...args),
 }));
 vi.mock("../../src/services/github-app.js", () => ({
+  SESSION_TOKEN_RENEW_BEFORE_MS: 10 * 60 * 1000,
   peekInstallationTokenExpiry: (...args: unknown[]) => mocks.peek(...args),
 }));
 vi.mock("../../src/services/remote-host-client.js", () => ({
@@ -36,7 +37,8 @@ const {
   untrackSessionGithubAuth,
   SESSION_TOKEN_RENEW_BEFORE_MS,
 } = await import("../../src/services/session-github-auth.js");
-const { GITHUB_TOKEN_MISSING_HINT } = await import("../../src/services/session-github-token.js");
+const { GITHUB_TOKEN_MISSING_HINT, getSessionGithubAuth } =
+  await import("../../src/services/session-github-token.js");
 
 const repo = { owner: "o", repo: "r" };
 const app = {
@@ -134,8 +136,15 @@ describe("refreshSessionGithubAuth (issue #2246)", () => {
     expect(mocks.send).toHaveBeenCalledWith("7", expect.objectContaining({ token: "ghs_new" }));
   });
 
-  it("does not track local sessions or tokens without an expiry", async () => {
+  it("renews a local session's token into the in-process store, without a remote send", async () => {
     trackSessionGithubAuth("1", "local", input, { mode: "task", token: "t", expiresAt: 1 });
+    mocks.resolveGitHubToken.mockResolvedValue("ghs_local_new");
+    await refreshSessionGithubAuth(app, 100);
+    expect(mocks.send).not.toHaveBeenCalled();
+    expect(getSessionGithubAuth("1")).toMatchObject({ token: "ghs_local_new" });
+  });
+
+  it("does not track tokens without an expiry", async () => {
     trackSessionGithubAuth("2", "dev-01", input, { mode: "manual", token: "t" });
     mocks.resolveGitHubToken.mockResolvedValue("x");
     await refreshSessionGithubAuth(app, 10 ** 12);

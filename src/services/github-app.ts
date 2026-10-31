@@ -499,6 +499,11 @@ interface CachedTokenFailure {
 }
 const tokenCache = new Map<string, CachedToken | CachedTokenFailure>();
 const CACHE_SAFETY_MARGIN_MS = 60_000;
+/** The session-credential refresher renews an App token this far ahead of expiry. */
+export const SESSION_TOKEN_RENEW_BEFORE_MS = 10 * 60 * 1000;
+// A session-scope token is served from cache only while the refresher would not
+// yet renew it; otherwise a renewal inside its window would get the same token back.
+const SESSION_CACHE_SAFETY_MARGIN_MS = SESSION_TOKEN_RENEW_BEFORE_MS + CACHE_SAFETY_MARGIN_MS;
 // Same TTL as the installation-id negative cache below — GitHub gives no
 // cheaper signal for "did this App's granted permissions change" than
 // re-attempting the mint, so this is a deliberate cap on how often a
@@ -627,7 +632,10 @@ export async function getInstallationToken(
   const key = cacheKey(appId, scope, owner, repo);
   const cached = tokenCache.get(key);
   if (cached) {
-    if (cached.ok && cached.expiresAt.getTime() - CACHE_SAFETY_MARGIN_MS > Date.now()) {
+    const margin = scope.startsWith("session-")
+      ? SESSION_CACHE_SAFETY_MARGIN_MS
+      : CACHE_SAFETY_MARGIN_MS;
+    if (cached.ok && cached.expiresAt.getTime() - margin > Date.now()) {
       return { token: cached.token, installationsChecked: null };
     }
     if (!cached.ok && cached.expiresAt > Date.now()) {

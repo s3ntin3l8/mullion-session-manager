@@ -15,7 +15,8 @@ export const TOKEN_REQUEST_TIMEOUT_MS = 5_000;
 /** git's credential protocol: `key=value` lines, a blank line ends the input. */
 export function parseCredentialInput(text) {
   const fields = {};
-  for (const line of text.split("\n")) {
+  for (const raw of text.split("\n")) {
+    const line = raw.replace(/\r$/, "");
     if (line === "") break;
     const eq = line.indexOf("=");
     if (eq > 0) fields[line.slice(0, eq)] = line.slice(eq + 1);
