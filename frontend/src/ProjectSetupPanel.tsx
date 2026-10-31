@@ -565,8 +565,8 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
           </div>
         </div>
       )}
-      <div className="settings-row">
-        <div className="settings-row-text">
+      <div className="settings-row" style={{ flexWrap: "wrap", rowGap: 8 }}>
+        <div className="settings-row-text" style={{ minWidth: "min(100%, 230px)" }}>
           <div className="settings-row-label" id="setup-existing-instructions-label">
             Instructions this repo already has
           </div>
@@ -595,9 +595,13 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
               {m.label}
             </label>
           ))}
-          <div className="settings-row-desc" id="setup-existing-instructions-desc">
-            {INSTRUCTION_MODES.find((m) => m.id === existingInstructions)?.desc}
-          </div>
+        </div>
+        <div
+          className="settings-row-desc"
+          id="setup-existing-instructions-desc"
+          style={{ flexBasis: "100%", marginTop: 0 }}
+        >
+          {INSTRUCTION_MODES.find((m) => m.id === existingInstructions)?.desc}
         </div>
       </div>
       <div className="settings-row-desc">
