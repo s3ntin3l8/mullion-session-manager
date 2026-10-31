@@ -2,7 +2,6 @@ import { useState } from "react";
 import { GitHubPanel } from "../GitHubPanel.js";
 import { SidebarHeader } from "./SidebarHeader.js";
 import { VIEW_TITLES } from "./viewTitles.js";
-import { TaskMasterSection } from "./TaskMasterSection.js";
 import { usePrList } from "../hooks/useGitHubData.js";
 import { useDashboardStore } from "../store/index.js";
 import { RefreshIcon } from "../ui/icons.js";
@@ -45,7 +44,6 @@ export function GitHubSidebarView({ projectId, actions }: RightSidebarViewProps)
           },
         ]}
       />
-      <TaskMasterSection projectId={projectId} onOpenTasks={actions.onOpenTasks} />
       <ExternalLinkOwnedContext.Provider value={true}>
         {/* Keyed on the project: the panel's own state (the release row, the open
             PR) belongs to one repo and must not carry over to the next. */}

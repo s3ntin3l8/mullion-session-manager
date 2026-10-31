@@ -1,5 +1,7 @@
 import { runStatusText, statusTone } from "./lib/statusTone.js";
 import { sortPrsByAttention } from "./github/prPhase.js";
+import { matchesOrigin, prOrigin, type OriginFilterValue } from "./github/rowOrigin.js";
+import { OriginFilter } from "./ui/sidebar/OriginFilter.js";
 import { PrDetailView } from "./github/PrDetailView.js";
 import { PrRow } from "./github/PrRow.js";
 import { IssueDetailView, IssuesSection } from "./github/IssuesView.js";
@@ -307,6 +309,11 @@ export function GitHubPanel({
   const effectivePrs = usePrList(params.projectId);
   // Sessions / task / review run per PR (B7); the list's own PRs feed the join.
   const links = useMullionLinks(params.projectId, { prs: effectivePrs?.prs });
+  // Who is working these PRs: only meaningful when Task Master is on.
+  const taskMasterEnabled = useDashboardStore((s) => s.taskMasterEnabled);
+  const [prOriginPick, setPrOriginFilter] = useState<OriginFilterValue>("all");
+  // The control is gone while Task Master is off, so the pick must not keep filtering.
+  const prOriginFilter = taskMasterEnabled ? prOriginPick : "all";
 
   useAsyncData(
     () => api.getProjectRelease(params.projectId),
@@ -393,6 +400,9 @@ export function GitHubPanel({
   // The open release PR belongs to the Release section, not this list.
   const releasePrNumber = releaseStatus?.pr?.number ?? null;
   const prs = (effectivePrs?.prs ?? []).filter((pr) => pr.number !== releasePrNumber);
+  const visiblePrs = sortPrsByAttention(prs).filter((pr) =>
+    matchesOrigin(prOriginFilter, prOrigin(pr, links.byPr.get(pr.number))),
+  );
   const statusPulls = (status?.pulls ?? []).filter((pr) => pr.number !== releasePrNumber);
   const showEmptyPrs =
     ((effectivePrs && prs.length === 0) || (!effectivePrs && status)) && statusPulls.length === 0;
@@ -435,8 +445,24 @@ export function GitHubPanel({
         )}
 
       {prs.length > 0 && (
-        <SidebarSection title="Pull requests" count={prs.length} persistKey="github-prs">
-          {sortPrsByAttention(prs).map((pr) => (
+        <SidebarSection
+          title="Pull requests"
+          count={prs.length}
+          persistKey="github-prs"
+          actions={
+            taskMasterEnabled ? (
+              <OriginFilter
+                label="Filter pull requests"
+                value={prOriginFilter}
+                onChange={setPrOriginFilter}
+              />
+            ) : undefined
+          }
+        >
+          {visiblePrs.length === 0 && (
+            <div className="github-panel-empty-row">No pull requests match this filter</div>
+          )}
+          {visiblePrs.map((pr) => (
             <PrRow
               key={pr.number}
               pr={pr}

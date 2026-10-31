@@ -36,6 +36,9 @@ import {
 import { SearchInput } from "../ui/primitives.js";
 import { SessionPills } from "../ui/sidebar/SessionPills.js";
 import { TaskChip } from "../ui/sidebar/TaskChip.js";
+import { OriginFilter } from "../ui/sidebar/OriginFilter.js";
+import { TaskActions } from "../TaskActions.js";
+import { issueOrigin, matchesOrigin, originClass, type OriginFilterValue } from "./rowOrigin.js";
 
 // The Issues half of the GitHub sidebar: a filterable list (label chips,
 // assignee, sort, title search, paging) and a drill-in detail with the
@@ -152,6 +155,14 @@ export function IssuesSection({
     });
 
   const links = useMullionLinks(projectId, { issues: data?.issues });
+  const [originPick, setOriginFilter] = useState<OriginFilterValue>("all");
+  // The same flag the PR section uses. The control is gone while Task Master is
+  // off, so the pick must not keep filtering.
+  const tmOn = useDashboardStore((s) => s.taskMasterEnabled);
+  const originFilter = tmOn ? originPick : "all";
+  const visibleIssues = (data?.issues ?? []).filter((issue) =>
+    matchesOrigin(originFilter, issueOrigin(issue, links.byIssue.get(issue.number))),
+  );
   const [starting, setStarting] = useState<ReadonlySet<number>>(new Set());
   const startSessionFrom = useStartSessionFrom(projectId);
   const [queued, setQueued] = useState<ReadonlySet<number>>(new Set());
@@ -199,7 +210,16 @@ export function IssuesSection({
   const filtered = selected.length > 0 || unassigned || debouncedQuery !== "";
 
   return (
-    <SidebarSection title="Issues" count={openIssues} persistKey="github-issues">
+    <SidebarSection
+      title="Issues"
+      count={openIssues}
+      persistKey="github-issues"
+      actions={
+        tmOn ? (
+          <OriginFilter label="Filter issues" value={originFilter} onChange={setOriginFilter} />
+        ) : undefined
+      }
+    >
       {issuesHidden ? (
         <div className="github-panel-empty-row">
           The GitHub token can't list issues — grant it Issues access
@@ -282,12 +302,19 @@ export function IssuesSection({
                     : "No open issues"}
             </div>
           )}
-          {data?.issues.map((issue) => (
+          {data && data.issues.length > 0 && visibleIssues.length === 0 && !loading && (
+            <div className="github-panel-empty-row">
+              {data.hasMore
+                ? "No matches on this page — load more"
+                : "No issues match this Task Master / Manual filter"}
+            </div>
+          )}
+          {visibleIssues.map((issue) => (
             <IssueRow
               key={issue.number}
               issue={issue}
               link={links.byIssue.get(issue.number)}
-              canQueue={ui.taskMaster?.enabled ?? data.taskMasterEnabled}
+              canQueue={ui.taskMaster?.enabled ?? data?.taskMasterEnabled ?? false}
               queued={queued.has(issue.number)}
               onOpen={() => onOpenIssue(issue.number)}
               onStart={() => startIssueSession(issue)}
@@ -347,6 +374,7 @@ function IssueRow({
     issue.labels.length > 0 || issue.taskStatus || task || issue.triage || pills.length || queued;
   return (
     <SidebarRow
+      className={originClass(issueOrigin(issue, link))}
       lead={<span className={`gh-issue-glyph${done ? " gh-issue-glyph--done" : ""}`} aria-hidden />}
       title={issue.title}
       meta={
@@ -596,6 +624,14 @@ export function IssueDetailView({
               <SessionPills links={detailPills} />
             </div>
           )}
+          {link?.task &&
+            (link.task.status === "reviewing" ||
+              link.task.status === "failed" ||
+              (link.task.status === "done" && link.task.prNumber !== null)) && (
+              <div className="gh-issue-card">
+                <TaskActions task={link.task} />
+              </div>
+            )}
           {notice && (
             <div className="gh-detail-notice">
               {notice}

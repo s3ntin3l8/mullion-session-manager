@@ -1,5 +1,6 @@
 export { Button, type ButtonProps, type ButtonVariant } from "./Button.js";
 export { DetailHeader, type DetailHeaderProps } from "./DetailHeader.js";
+export { OriginFilter } from "./OriginFilter.js";
 export { IconPopover } from "./IconPopover.js";
 export { IconButton, type IconButtonProps } from "./IconButton.js";
 export { LinkedActions, type LinkedActionsProps } from "./LinkedActions.js";
