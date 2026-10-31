@@ -243,6 +243,24 @@ function resolvePendingGate(
   return true;
 }
 
+/** #2246 — answer a session's `github_token` ask with its OWN entry (the
+ * session id is the handshake's, never the message's). Lookup, local recovery
+ * and reply live here so the connection handler holds no branch on the
+ * credential itself; a miss still gets an actionable `{error}` reply. */
+async function replyWithSessionGithubToken(
+  app: FastifyInstance,
+  socket: net.Socket,
+  sessionId: string,
+): Promise<void> {
+  const held = await Promise.resolve(getSessionGithubAuth(sessionId))
+    .then((found) => found ?? recoverLocalSessionGithubAuth(app, sessionId))
+    .catch((err: unknown) => {
+      app.log.warn({ err, sessionId }, "could not recover a session's GitHub token");
+      return undefined;
+    });
+  if (socket.writable) socket.write(`${JSON.stringify(buildGithubTokenReply(held))}\n`);
+}
+
 function handleConnection(
   app: FastifyInstance,
   socket: net.Socket,
@@ -704,17 +722,7 @@ function handleConnection(
         // handshake token, so another session's entry is unreachable. Always
         // replies at once (a miss is an actionable `{error}`, never a hang).
         if (result.message.kind === "github_token") {
-          let auth = getSessionGithubAuth(sessionId);
-          if (!auth) {
-            try {
-              auth = await recoverLocalSessionGithubAuth(app, sessionId);
-            } catch (err) {
-              app.log.warn({ err, sessionId }, "could not recover a session's GitHub token");
-            }
-          }
-          if (socket.writable) {
-            socket.write(`${JSON.stringify(buildGithubTokenReply(auth))}\n`);
-          }
+          await replyWithSessionGithubToken(app, socket, sessionId);
           continue;
         }
 
