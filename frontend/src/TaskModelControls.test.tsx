@@ -91,7 +91,7 @@ describe("TaskModelControls", () => {
       t: { modelOverride: "openrouter/bar" },
     });
     const provider = await screen.findByLabelText("Model provider");
-    expect(screen.getByText("Default (openrouter/foo)")).toBeTruthy();
+    expect(screen.getAllByText("Default (openrouter/foo)")).toHaveLength(2);
     expect((provider as HTMLSelectElement).value).toBe("openrouter");
     fireEvent.change(provider, { target: { value: "" } });
     expect(onUpdate).toHaveBeenCalledWith({ model: null });

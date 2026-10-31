@@ -2,7 +2,11 @@ import type { FastifyInstance } from "fastify";
 import { tasks } from "../db/schema.js";
 import { commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
 import { resolveAgentCommand, resolveReviewAgentCommand } from "./task-agent-resolve.js";
-import { explicitModelError } from "./task-model-resolve.js";
+import {
+  explicitModelError,
+  resolveClaudeSmallModel,
+  resolveOpenCodeSmallModel,
+} from "./task-model-resolve.js";
 
 export interface TaskModelPatchBody {
   agent?: string | null;
@@ -138,4 +142,26 @@ export function resolveTaskModelPatch(
       "reviewerModel",
     );
   return error ? { error } : { patch };
+}
+
+// Issue #2491 — the reviewer's small model. The user's small-model choice was
+// validated against the WORKER's CLI only, so it reaches the reviewer only
+// when both run the same family (an opencode `anthropic/claude-haiku-4-5`
+// handed to a claude reviewer would become ANTHROPIC_DEFAULT_HAIKU_MODEL —
+// #2032). `task.smallModel` is the worker's resolved record, never used here.
+export function resolveReviewerSmallModel(
+  app: FastifyInstance,
+  task: { agentCommand: string | null; smallModelOverride: string | null; body: string | null },
+  reviewCommand: string,
+): string | undefined {
+  const family = modelFamily(reviewCommand);
+  const sameFamily =
+    task.agentCommand !== null && modelFamily(task.agentCommand) === family && family !== null;
+  const input = {
+    taskSmallModel: sameFamily ? task.smallModelOverride : null,
+    issueBody: task.body,
+  };
+  if (family === "opencode") return resolveOpenCodeSmallModel(app, input) ?? undefined;
+  if (family === "claude-code") return resolveClaudeSmallModel(app, input) ?? undefined;
+  return undefined;
 }

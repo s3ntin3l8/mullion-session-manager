@@ -57,10 +57,9 @@ import {
 } from "./task-agent-resolve.js";
 import {
   resolveCliModel,
-  resolveClaudeSmallModel,
   resolveOpenCodeModel,
-  resolveOpenCodeSmallModel,
 } from "./task-model-resolve.js";
+import { resolveReviewerSmallModel } from "./task-model-patch.js";
 import { commandIsOpencode, commandModelCli } from "./hook-adapters/index.js";
 import { parseBlockedBy } from "./task-dependencies.js";
 import {
@@ -791,20 +790,7 @@ async function processPendingReviewSpawns(app: FastifyInstance): Promise<void> {
                 role: "reviewer",
               }) ?? undefined)
             : undefined;
-        const reviewSmallModel = commandIsOpencode(reviewCommand)
-          ? (resolveOpenCodeSmallModel(app, {
-              taskSmallModel: task.smallModelOverride ?? null,
-              issueBody: task.body,
-            }) ?? undefined)
-          : reviewCliModelAgent === "claude-code"
-            ? (resolveClaudeSmallModel(app, {
-                // Not task.smallModel: it records the worker's resolved
-                // value (same reasoning as taskModel above). The user's own
-                // choice (smallModelOverride) is the task-level tier.
-                taskSmallModel: task.smallModelOverride ?? null,
-                issueBody: task.body,
-              }) ?? undefined)
-            : undefined;
+        const reviewSmallModel = resolveReviewerSmallModel(app, task, reviewCommand);
 
         const ci = await resolveReviewCi(
           app,

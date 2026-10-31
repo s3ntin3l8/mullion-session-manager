@@ -668,7 +668,9 @@ export async function tasksRoute(app: FastifyInstance) {
         !LOCAL_CREATABLE_STATUSES.includes(existing.status as LocalCreatableStatus) &&
         existing.status !== "failed"
       ) {
-        return reply.conflict(`Cannot edit agents for a task in status "${existing.status}"`);
+        return reply.conflict(
+          `Cannot edit ${agent !== undefined || reviewAgent !== undefined ? "agents" : "models"} for a task in status "${existing.status}"`,
+        );
       }
 
       const patch: Partial<typeof tasks.$inferInsert> = {};

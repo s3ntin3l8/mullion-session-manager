@@ -635,7 +635,10 @@ reviewing` transition itself — `task-reconciler.ts`'s
   worker's own (see [`tasks.md`](tasks.md#agent-selection)) — `commandIsOpencode`/
   `commandModelCli` pick opencode's `Reviewer-Model:`/`Model:` fallback chain
   or a claude-code/codex/agy reviewer's own `--model` flag, resolved
-  independently of whatever the worker command used.
+  independently of whatever the worker command used. The top tier is the
+  task's own `reviewer_model` (set in the detail panel), above the
+  `Reviewer-Model:` directive; the user's `small_model_override` is passed to
+  the reviewer only when worker and reviewer share a CLI family.
 
   A CAS on `tasks.reviewSpawnClaimedAt`, claimed immediately before the
   spawn's own I/O, keeps a concurrent Reject/Give-up/Approve from racing a

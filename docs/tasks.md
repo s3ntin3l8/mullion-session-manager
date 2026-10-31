@@ -641,6 +641,16 @@ each spawn site checks to pick the right resolver.
    Falls back to the install-wide small model, then the CLI's own default, if
    unset.
 
+**Task-level choice (top tier).** The task detail panel's model controls
+(implementer, reviewer, and — for opencode and claude workers — small model)
+are stored on the task (`model_override`, `reviewer_model`,
+`small_model_override`) and outrank every directive above, then the project
+default, then the install-wide default. Picking "Default" clears the choice.
+A choice is bound to an agent family: changing the agent (in the panel, or at
+claim/retry time) to another family clears it. A retry runs with the chosen
+model. A small-model choice only reaches the reviewer when worker and
+reviewer run the same CLI family.
+
 opencode's `<provider>/<model>` format accepts **more than one slash**, e.g.
 `openrouter/anthropic/claude-sonnet-4-5` — the format check requires
 non-whitespace content on either side of the first and last `/`, not exactly

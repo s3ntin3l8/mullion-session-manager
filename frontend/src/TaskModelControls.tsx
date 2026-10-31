@@ -81,7 +81,7 @@ function ModelField({
           ariaLabel={`${label} model`}
           value={value}
           options={options}
-          defaultLabel={withProvider ? "Choose a model…" : defaultLabel(resolved)}
+          defaultLabel={withProvider && value === null ? "Choose a model…" : defaultLabel(resolved)}
           allowCustom={allowCustom}
           onChange={onChange}
           small

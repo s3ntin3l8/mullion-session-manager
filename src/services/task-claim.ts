@@ -12,6 +12,7 @@ import {
   takeFailedMaterialize,
 } from "./checkout-materialize.js";
 import { createSessionRecord, killSession } from "./session-lifecycle.js";
+import { resolveTaskModelPatch } from "./task-model-patch.js";
 import {
   resolveSessionHostId,
   resolveTaskWorkerHost,
@@ -155,6 +156,9 @@ export async function enqueueTask(
   }
 
   const effectiveAgent = opts.agent !== undefined ? opts.agent : task.agent;
+  // Issue #2491 — an agent change made through this path bypasses the PATCH
+  // route, so drop a task-level model the new agent family cannot take here.
+  const agentChangeModelPatch = agentChangeModelClears(app, task, project, opts);
 
   const command = resolveAgentCommand(app, {
     taskAgent: effectiveAgent,
@@ -244,6 +248,7 @@ export async function enqueueTask(
     };
     if (opts.agent !== undefined) patch.agent = opts.agent;
     if (opts.reviewAgent !== undefined) patch.reviewAgent = opts.reviewAgent;
+    Object.assign(patch, agentChangeModelPatch);
     tx.update(tasks)
       .set(patch)
       .where(and(eq(tasks.id, taskId), eq(tasks.status, "ready"), isNull(tasks.archivedAt)))
@@ -1119,6 +1124,13 @@ export async function retryTask(
   if (!project) return { ok: false, reason: "not-found" };
 
   const effectiveAgent = opts.agent !== undefined ? opts.agent : task.agent;
+  // Issue #2491 — same agent-change revalidation as enqueueTask; the retry
+  // then runs with the surviving task-level choice.
+  const agentChangeModelPatch = agentChangeModelClears(app, task, project, opts);
+  const modelOverride =
+    "modelOverride" in agentChangeModelPatch ? null : (task.modelOverride ?? null);
+  const smallModelOverride =
+    "smallModelOverride" in agentChangeModelPatch ? null : (task.smallModelOverride ?? null);
 
   const command = resolveAgentCommand(app, {
     taskAgent: effectiveAgent,
@@ -1395,10 +1407,39 @@ export async function retryTask(
           )
         : undefined,
     });
+    // Issue #2491 — the same resolution as the claim spawn, so a model picked
+    // after the failure reaches the retried worker (and `tasks.model` records
+    // what this attempt ran with).
+    const cliModelAgent = commandModelCli(command);
+    const model = commandIsOpencode(command)
+      ? (resolveOpenCodeModel(app, {
+          taskModel: modelOverride,
+          issueBody: task.body,
+          role: "implementer",
+        }) ?? undefined)
+      : cliModelAgent !== null
+        ? (resolveCliModel(app, cliModelAgent, {
+            taskModel: modelOverride,
+            issueBody: task.body,
+          }) ?? undefined)
+        : undefined;
+    const smallModel = commandIsOpencode(command)
+      ? (resolveOpenCodeSmallModel(app, {
+          taskSmallModel: smallModelOverride,
+          issueBody: task.body,
+        }) ?? undefined)
+      : cliModelAgent === "claude-code"
+        ? (resolveClaudeSmallModel(app, {
+            taskSmallModel: smallModelOverride,
+            issueBody: task.body,
+          }) ?? undefined)
+        : undefined;
     const result = await createSessionRecord(app, {
       projectId: project.id,
       command,
       cwd: worktree.path,
+      model,
+      smallModel,
       initialPrompt: seedCapable ? prompt : undefined,
       skipPermissions: taskMasterConfig.skipPermissions,
       // #9 — see the claim spawn's own comment (above, in this same file).
@@ -1448,6 +1489,8 @@ export async function retryTask(
       sessionId: result.row.id,
       worktreePath: result.row.cwd,
       agentCommand: command,
+      model: model ?? null,
+      smallModel: smallModel ?? null,
       seedDelivered,
       // Issue #1038 — a give-up on a capped, announced "reviewing" task
       // lands on "failed" without clearing this (give-up's own write only
@@ -1460,6 +1503,7 @@ export async function retryTask(
     };
     if (opts.agent !== undefined) patch.agent = opts.agent;
     if (opts.reviewAgent !== undefined) patch.reviewAgent = opts.reviewAgent;
+    Object.assign(patch, agentChangeModelPatch);
 
     app.db.update(tasks).set(patch).where(eq(tasks.id, taskId)).run();
     committed = true;
@@ -1513,4 +1557,21 @@ export async function retryTask(
       detail: err instanceof Error ? err.message : String(err),
     };
   }
+}
+
+// Issue #2491 — the task-level model columns a claim/retry-time agent change
+// must clear (an opencode `provider/model` does not fit a codex worker).
+// Reuses the PATCH route's family rule; an unknown project fails open.
+function agentChangeModelClears(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+  opts: { agent?: string | null; reviewAgent?: string | null },
+): Partial<typeof tasks.$inferInsert> {
+  if (opts.agent === undefined && opts.reviewAgent === undefined) return {};
+  const resolved = resolveTaskModelPatch(app, task, project, {
+    agent: opts.agent,
+    reviewAgent: opts.reviewAgent,
+  });
+  return "patch" in resolved ? resolved.patch : {};
 }
