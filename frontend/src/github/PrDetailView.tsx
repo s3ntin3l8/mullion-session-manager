@@ -34,7 +34,12 @@ import {
 import type { Tone } from "../lib/statusTone.js";
 import { ConversationComposer, ThreadActions } from "./Composer.js";
 import { MergeConfirmModal, PrActionBar } from "./PrActionBar.js";
-import { nextStep } from "./prNextStep.js";
+import {
+  nextStep,
+  nextStepForTask,
+  TASK_REVIEWER_BUSY,
+  taskReReviewEligible,
+} from "./prNextStep.js";
 import { ChecksDrill, ReviewsDrill } from "./PrStatusViews.js";
 import { prStatuses, reviewerRows, runIdFromUrl, type DimStatus } from "./prPhase.js";
 import { ReviewGateActions } from "./ReviewGateActions.js";
@@ -121,6 +126,7 @@ function PinnedReview({
   unresolved,
   busy,
   onReReview,
+  reReviewDisabled = false,
   onHandoff,
   onStop,
 }: {
@@ -131,6 +137,7 @@ function PinnedReview({
   unresolved: number;
   busy: boolean;
   onReReview: () => void;
+  reReviewDisabled?: boolean;
   onHandoff: () => void;
   onStop: (() => void) | null;
 }) {
@@ -189,7 +196,12 @@ function PinnedReview({
               <ThreadIcon size={11} /> {unresolved} unresolved
             </StatusChip>
           )}
-          <Button size="sm" disabled={busy} onClick={onReReview}>
+          <Button
+            size="sm"
+            disabled={busy || reReviewDisabled}
+            title={reReviewDisabled ? TASK_REVIEWER_BUSY : undefined}
+            onClick={onReReview}
+          >
             Re-review
           </Button>
           <Button size="sm" disabled={busy} onClick={onHandoff}>
@@ -372,6 +384,16 @@ export function PrDetailView({
         : "Re-review requested";
     });
 
+  // A PR with a linked task is reviewed by Task Master's own reviewer, not
+  // Hermes: re-arm that one when the task allows it. Hermes stays reachable
+  // through the action bar's explicit secondary button (`reReview`).
+  const reReviewViaTask = () =>
+    run("review", async () => {
+      if (entry?.task == null) return;
+      await useDashboardStore.getState().reReviewTask(entry.task.id);
+      return `Task #${entry.task.id} re-review requested`;
+    });
+
   const handoff = () =>
     run("handoff", async () => {
       if (!pr) return;
@@ -528,7 +550,7 @@ export function PrDetailView({
     });
 
   const toggleStatus = (k: StatusKey) => setOpenStatus((cur) => (cur === k ? null : k));
-  const step = nextStep(pr.prPhase, unresolved);
+  const step = nextStepForTask(nextStep(pr.prPhase, unresolved), entry?.task);
   const runStep = () => {
     switch (step.kind) {
       case "merge":
@@ -545,7 +567,7 @@ export function PrDetailView({
         setOpenStatus("ci");
         break;
       case "reReview":
-        void reReview();
+        void (entry?.task ? reReviewViaTask() : reReview());
         break;
       case "update":
         void updateBranch();
@@ -593,6 +615,7 @@ export function PrDetailView({
               : void handoff()
           }
           onReReview={() => void reReview()}
+          hermesLabel={entry?.task ? "Request Hermes review (on demand)" : undefined}
           onUpdateBranch={() => void updateBranch()}
           onToggleComposer={() => setComposerOpen((o) => !o)}
         />
@@ -685,7 +708,8 @@ export function PrDetailView({
             commits={pr.commits}
             unresolved={unresolved}
             busy={busy !== null}
-            onReReview={reReview}
+            onReReview={entry?.task ? reReviewViaTask : reReview}
+            reReviewDisabled={entry?.task != null && !taskReReviewEligible(entry.task)}
             onHandoff={handoff}
             onStop={relayActive ? stopReview : null}
           />
