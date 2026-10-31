@@ -1,6 +1,6 @@
 import type { StateCreator } from "zustand";
 import { api, AuthExpiredError, RateLimitedError } from "../../api/index.js";
-import type { Session } from "../../api/index.js";
+import type { PreparingCheckoutResponse, Session } from "../../api/index.js";
 import { BACKEND_UNREACHABLE_THRESHOLD, LIVE_REFRESH_INTERVAL_MS } from "../constants.js";
 import { pruneDismissedEventKeys, pruneSessionKeyedRecord } from "../helpers.js";
 import { writeDismissedEventKeys } from "../../lib/persistedState.js";
@@ -95,6 +95,50 @@ export function __resetRefreshSessionsInFlightForTests(): void {
   refreshSessionsActiveRun = null;
   refreshSessionsQueuedRun = null;
   pendingCreatedSessions.clear();
+}
+
+/** How often the clone job is polled, and the longest a launch waits for it. */
+const MATERIALIZE_POLL_MS = 2_000;
+const MATERIALIZE_MAX_WAIT_MS = 15 * 60_000;
+
+/**
+ * POST /api/sessions answers 202 `{preparingCheckout}` when placement picked a
+ * host the project is not cloned on yet: no session exists, a clone job is
+ * running. Show "Preparing checkout on <host>…", poll the job, then re-submit
+ * the same create, which now finds the path. A failed clone throws with its
+ * detail, so the launcher's usual error path shows it.
+ */
+async function createWhenCheckoutReady(
+  get: () => DashboardState,
+  projectId: number,
+  submit: () => Promise<Session | PreparingCheckoutResponse>,
+): Promise<Session> {
+  let toastId: number | null = null;
+  const deadline = Date.now() + MATERIALIZE_MAX_WAIT_MS;
+  try {
+    for (;;) {
+      const result = await submit();
+      if (!("preparingCheckout" in result)) return result;
+      const { hostId } = result.preparingCheckout;
+      const hostName = get().hosts.find((h) => h.id === hostId)?.name ?? hostId;
+      toastId ??= get().pushToast({ message: `Preparing checkout on ${hostName}…` });
+      for (;;) {
+        if (Date.now() > deadline)
+          throw new Error(`Preparing the checkout on ${hostName} timed out.`);
+        await new Promise((resolve) => setTimeout(resolve, MATERIALIZE_POLL_MS));
+        const status = await api.materializeStatus(projectId, hostId);
+        if (status.state === "failed") {
+          throw new Error(
+            `Could not prepare a checkout on ${hostName}: ${status.detail ?? "the clone failed"}`,
+          );
+        }
+        // "idle" = the job was forgotten (a restart): submitting again restarts it.
+        if (status.state === "done" || status.state === "idle") break;
+      }
+    }
+  } finally {
+    if (toastId !== null) get().dismissToast(toastId);
+  }
 }
 
 export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsSlice> = (
@@ -223,7 +267,9 @@ export const createSessionsSlice: StateCreator<DashboardState, [], [], SessionsS
   },
 
   createSession: async (projectId, command, opts) => {
-    const session = await api.createSession(projectId, command, opts);
+    const session = await createWhenCheckoutReady(get, projectId, () =>
+      api.createSession(projectId, command, opts),
+    );
     // Issue #2255 — the caller opens the session's pane as soon as this
     // resolves, and the list refresh can take seconds (it waits on every
     // remote host, and queues behind an in-flight poll). A program that asks

@@ -214,6 +214,11 @@ export const projects = sqliteTable("projects", {
   // against `platform`. Nullable: null = no flags, which is every project as of
   // this migration. Read it through `parsePlacementConstraints`.
   placementConstraints: text("placement_constraints"),
+  // Pre-provisioning of Mullion-managed checkouts: JSON `"all"` or an array of
+  // host ids whose checkout is materialized ahead of the first placement
+  // (checkout-materialize.ts). Nullable: null = none, which is every project as
+  // of this migration. Read it through `parsePreProvision`.
+  preProvision: text("pre_provision"),
   // A per-project git identity override, a JSON object `{ "name": "...",
   // "email": "..." }`, beating settings.sessions.gitIdentity for this
   // project's sessions and Mullion's own commits in it. Nullable: null = use

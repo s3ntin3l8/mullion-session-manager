@@ -1,3 +1,4 @@
+import { describePreparing, startMaterialize } from "./checkout-materialize.js";
 import type { FastifyInstance } from "fastify";
 import { resolveGitIdentity } from "./git-identity.js";
 import { crossProjectAllowed } from "./cross-project.js";
@@ -471,6 +472,11 @@ export type CreateSessionResult =
   // for, never the rest of the fleet. Issue #2241 — also an Auto launch that
   // the project's platform flag leaves no host for (`detail` names the flag).
   | { ok: false; reason: "no-target-host"; detail: string }
+  // Lazy checkout materialization — placement chose a host the project has no
+  // checkout on yet; the clone job is running (or was just started). No session
+  // row exists. POST /api/sessions answers 202 and the launcher re-submits once
+  // the job is done; every other caller treats it as a refusal.
+  | { ok: false; reason: "preparing-checkout"; projectId: number; hostId: string; detail: string }
   | { ok: false; reason: "child-cap-exceeded" }
   // Hermes review, this PR — validated here (not just dock-config.ts's write
   // path), so a direct full-scope `POST /api/sessions` caller carrying `env`
@@ -966,6 +972,20 @@ interface SessionPlacement {
   reason: string;
 }
 
+/** Starts (or joins) the clone job for a host the project is not on yet and refuses the create. */
+function preparingCheckout(app: FastifyInstance, project: ProjectRow, hostId: string) {
+  const job = startMaterialize(app, project.id, hostId);
+  // A job that was already finished by the time we looked (the path landed
+  // between the placement read and here) is a refusal the caller just retries.
+  return {
+    ok: false as const,
+    reason: "preparing-checkout" as const,
+    projectId: project.id,
+    hostId,
+    detail: `${describePreparing(hostId)}${job.state === "failed" ? ` (${job.detail ?? "failed"})` : ""}`,
+  };
+}
+
 /**
  * The placement decision for a session being created.
  *
@@ -997,7 +1017,8 @@ function resolveSessionPlacement(
   params: CreateSessionParams,
 ):
   | { ok: true; placement: SessionPlacement }
-  | { ok: false; reason: "host-unknown-project" | "no-target-host"; detail: string } {
+  | { ok: false; reason: "host-unknown-project" | "no-target-host"; detail: string }
+  | { ok: false; reason: "preparing-checkout"; projectId: number; hostId: string; detail: string } {
   const hostCwds = parseHostCwds(project.hostCwds);
 
   if (params.target !== undefined && params.hostId === undefined) {
@@ -1018,6 +1039,9 @@ function resolveSessionPlacement(
     });
     if (!targeted.ok) {
       return { ok: false, reason: "no-target-host", detail: targeted.detail };
+    }
+    if (targeted.decision.needsCheckout) {
+      return preparingCheckout(app, project, targeted.decision.hostId);
     }
     return {
       ok: true,
@@ -1080,6 +1104,8 @@ function resolveSessionPlacement(
   if (decision.refusal !== undefined) {
     return { ok: false, reason: "no-target-host", detail: decision.refusal.detail };
   }
+
+  if (decision.needsCheckout) return preparingCheckout(app, project, decision.hostId);
 
   return {
     ok: true,
@@ -1168,6 +1194,7 @@ async function createSessionRecordInner(
   // is cut from the project root ON THAT HOST.
   const placementResult = resolveSessionPlacement(app, project, params);
   if (!placementResult.ok) {
+    if (placementResult.reason === "preparing-checkout") return placementResult;
     return { ok: false, reason: placementResult.reason, detail: placementResult.detail };
   }
   const placement = placementResult.placement;

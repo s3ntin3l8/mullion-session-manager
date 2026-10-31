@@ -2,7 +2,14 @@
 // frontend/src/api.ts (PR 22 of the refactoring roadmap).
 import { UPLOAD_IMAGE_EXTENSIONS } from "../../../src/shared/constants.js";
 import { request } from "./client.js";
-import type { Session, EventHistoryPage, Preview, PromoteSessionResponse } from "./types.js";
+import type {
+  Session,
+  EventHistoryPage,
+  MaterializeStatus,
+  Preview,
+  PreparingCheckoutResponse,
+  PromoteSessionResponse,
+} from "./types.js";
 
 // The image types the backend magic-byte-verifies (shared, so the two sides
 // can't drift). Any other file goes up as a generic upload.
@@ -96,10 +103,16 @@ export const sessionsApi = {
       isolate?: boolean;
     },
   ) =>
-    request<Session>("/api/sessions", {
+    request<Session | PreparingCheckoutResponse>("/api/sessions", {
       method: "POST",
       body: JSON.stringify({ projectId, command, ...opts }),
     }),
+
+  // Lazy checkout materialization — the clone job for a project on a host.
+  materializeStatus: (projectId: number, hostId: string) =>
+    request<MaterializeStatus>(
+      `/api/projects/${projectId}/host-checkouts/${encodeURIComponent(hostId)}/materialize`,
+    ),
 
   renameSession: (id: number, name: string) =>
     request<Session>(`/api/sessions/${id}`, {

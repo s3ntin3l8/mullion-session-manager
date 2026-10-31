@@ -340,6 +340,9 @@ export interface Project {
   // Optional only so a response from an older server (and hand-built test
   // fixtures) still type-checks; the current API always sends it.
   placementConstraints?: PlacementConstraints;
+  // Which hosts get a Mullion-managed clone ahead of the first placement.
+  // Optional for older servers and fixtures; absent reads as "none".
+  preProvision?: PreProvision;
   // Per-project git identity override (beats settings.sessions.gitIdentity);
   // null = use the global one. Optional for older servers and fixtures.
   gitIdentity?: { name: string; email: string } | null;
@@ -1308,6 +1311,21 @@ export interface PlacementConstraints {
   allowBurst: boolean;
   capabilities?: PlacementCapability[];
 }
+
+// Lazy checkout materialization: what a clone job reports (GET
+// /api/projects/:id/host-checkouts/:hostId/materialize), and the 202 body of
+// POST /api/sessions when placement picked a host the project is not cloned on.
+export interface MaterializeStatus {
+  state: "idle" | "cloning" | "done" | "failed";
+  cwd?: string;
+  reason?: string;
+  detail?: string;
+}
+export interface PreparingCheckoutResponse {
+  preparingCheckout: { projectId: number; hostId: string };
+}
+// Hosts a project's checkout is cloned onto ahead of the first placement.
+export type PreProvision = "none" | "all" | string[];
 
 export interface HostCwdsMeta {
   auto: string[];

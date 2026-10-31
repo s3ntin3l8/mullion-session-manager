@@ -26,6 +26,8 @@ export interface HostAgentEntry {
   capabilities: string[] | null;
   /** The host's Mullion version; null when it could not be read. */
   mullionVersion: string | null;
+  /** The host's `PROJECTS_ROOTS` (where a managed clone goes); absent/null when unknown. */
+  projectsRoots?: string[] | null;
   checkedAt: number;
 }
 
@@ -120,15 +122,18 @@ async function readRemoteHostAgents(
     if (err instanceof HostRequestError && err.statusCode === 404) capabilities = null;
   }
   let mullionVersion: string | null = null;
+  let projectsRoots: string[] | null = tracker.get(hostId)?.projectsRoots ?? null;
   try {
-    mullionVersion = (await client.resolveConfig()).version ?? null;
+    const config = await client.resolveConfig();
+    mullionVersion = config.version ?? null;
+    if (Array.isArray(config.projectsRoots)) projectsRoots = config.projectsRoots;
   } catch {
     // The version is advisory; the agent list above is what gates placement.
   }
   // The host's address or token changed while we were reading: this list
   // describes the OLD agent, so it must not be recorded as fresh.
   if (tracker.epoch(hostId) !== epoch) return;
-  tracker.record(hostId, { agents, capabilities, mullionVersion });
+  tracker.record(hostId, { agents, capabilities, mullionVersion, projectsRoots });
 }
 
 // Per app: tests (and nothing else) build many Fastify instances in one process.

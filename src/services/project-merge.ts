@@ -102,6 +102,8 @@ const FILLABLE_SETTINGS = [
   "autoFetch",
   // Issue #2241 — the placement steering flags; null = unset on the survivor.
   "placementConstraints",
+  // Pre-provisioned checkouts; null = none on the survivor.
+  "preProvision",
   // The per-project git identity override; null = unset on the survivor.
   "gitIdentity",
 ] as const satisfies readonly (keyof ProjectRow)[];

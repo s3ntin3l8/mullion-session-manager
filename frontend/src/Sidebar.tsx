@@ -1413,6 +1413,7 @@ function ProjectHeader({
               initialHostCwds={project.hostCwds}
               initialHostCwdsMeta={project.hostCwdsMeta}
               initialPlacementConstraints={project.placementConstraints}
+              initialPreProvision={project.preProvision}
               onClose={() => setEditOpen(false)}
               onCreate={({
                 name,
@@ -1436,6 +1437,7 @@ function ProjectHeader({
                 placement,
                 hostCwds,
                 placementConstraints,
+                preProvision,
                 allowDuplicate,
               }) =>
                 useDashboardStore.getState().updateProject(project.id, {
@@ -1463,6 +1465,7 @@ function ProjectHeader({
                   placement,
                   hostCwds,
                   placementConstraints,
+                  preProvision,
                   allowDuplicate,
                 })
               }

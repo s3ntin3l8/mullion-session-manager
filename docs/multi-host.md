@@ -361,9 +361,53 @@ goes into the host's **first `PROJECTS_ROOTS` entry** as `<root>/<repo-name>`.
 - An agent too old to have the route answers 404, which the primary reports as
   "unsupported" (update the agent).
 
-This only adds the endpoint and the `managed` list on `hostCwdsMeta` (the hosts
-whose `hostCwds` entry is a Mullion-created clone; an operator re-mapping or
-clearing that host removes it). When a clone happens is a separate feature.
+The `managed` list on `hostCwdsMeta` records the hosts whose `hostCwds` entry is a
+Mullion-created clone (an operator re-mapping or clearing that host removes it).
+
+**Lazy materialization (#2243).** A git project (it has a normalised `origin`) does not
+need a `hostCwds` entry on every host any more. In automatic placement and for a
+targeted launch, an online host with no path for the project is a candidate marked
+`needsCheckout` instead of being excluded with "the project has no path on this host":
+
+- It is still excluded when the host **reports no projects roots** (nothing to clone
+  into), when its role, platform, capability or agent-CLI steering excludes it, and
+  for a **non-git project** (no origin) — those are never cloned. A host whose roots
+  are not known yet (an agent too old to report them) fails open; the clone then
+  reports `no-roots` itself.
+- A host that already has a checkout **wins a tie** on load; a lightly loaded host
+  that needs a clone still beats a busy one that has the repo.
+- A targeted launch or task requirement that matches a `needsCheckout` host waits
+  (transient) rather than failing.
+- The clone is an **in-memory background job** keyed `(project, host)`
+  (`services/checkout-materialize.ts`), never held inside an HTTP request or a Task
+  Master tick. A second request for the same pair joins the running job. States:
+  `cloning`, `done`, `failed{reason, detail}`. On success the path is written to
+  `hostCwds` and the host added to `hostCwdsMeta.managed`; a path the operator mapped
+  while the clone ran wins. The job map is not persisted: after a restart the next
+  placement simply starts the clone again (the clone endpoint reuses a finished repo).
+  The clone URL is the project's `origin` rewritten to https.
+- **Sessions.** `POST /api/sessions` answers **202** `{preparingCheckout: {projectId,
+hostId}}` when placement picked such a host: no session row is created. The web
+  launcher shows "Preparing checkout on <host>…", polls
+  `GET /api/projects/:id/host-checkouts/:hostId/materialize` (`idle | cloning | done |
+failed`, with `cwd` or `reason`/`detail`) and re-submits the same create, which now
+  finds the path; a failure is shown with its detail. `POST` on the same URL starts
+  (or joins) a job explicitly. Every other caller of `createSessionRecord` (control
+  socket child spawns, branch previews, Task Master's reconciler and reseed) gets a
+  `preparing-checkout` refusal ("preparing checkout on <host>") instead of a 202.
+- **Task Master.** A claim whose placement needs a checkout starts or joins the job and is
+  **held** with the reason "preparing checkout on <host>"; the next sweep tick
+  continues once the path exists. A failed job is reported once as a failed attempt
+  (the usual dispatch backoff), and the next attempt starts a fresh job.
+- **Pre-provision.** A project's `preProvision` (`none` by default, `all`, or a list of
+  host ids; Edit project → Placement) clones the checkout ahead of time. The primary
+  sweeps every 10 minutes and when a host comes online, starting jobs for the online,
+  un-parked, non-burst hosts it selects that match the project's platform and
+  capability flags and report projects roots.
+- Managed clones never come back as a **suggestion** (below): detection skips any path
+  that is already some project's `hostCwds` entry.
+- The per-project setup recipe (#2245) had not merged when this landed; it will add its
+  call after a successful clone in `runJob`.
 
 **Detecting the checkout (#2090).** You do not have to find and type those paths.
 `GET /api/projects/:id/host-suggestions` asks every other host that is online and not

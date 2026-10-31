@@ -2000,6 +2000,93 @@ describe("claimTask", () => {
 
     await app.close();
   });
+
+  describe("lazy checkout materialization", () => {
+    const checkoutModule = () => import("../../src/services/checkout-materialize.js");
+
+    function forceNeedsCheckout(hostId: string) {
+      vi.spyOn(placementModule, "resolvePlacement").mockReturnValue({
+        hostId,
+        reason: "forced for the test",
+        considered: [],
+        excluded: [],
+        fellBack: false,
+        needsCheckout: true,
+      });
+    }
+
+    it("holds the claim while the checkout is being prepared, instead of spawning", async () => {
+      const { clearMaterializeJobsForTests, getMaterializeJob } = await checkoutModule();
+      clearMaterializeJobsForTests();
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const projectId = await createProject(app, cwd);
+      const task = insertReadyTask(app, projectId, 81);
+      app.db.update(tasks).set({ status: "claimed" }).where(eq(tasks.id, task.id)).run();
+      git(cwd, ["remote", "add", "origin", "https://github.com/acme/widget.git"]);
+      const host = await app.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "clone-target", baseUrl: "http://127.0.0.1:1", token: "t" },
+      });
+      const hostId = host.json().id as string;
+      forceNeedsCheckout(hostId);
+      // The clone never finishes within the test: the job stays `cloning`.
+      const cloneSpy = vi
+        .spyOn(hostGitModule, "cloneHostCheckout")
+        .mockReturnValue(new Promise(() => {}));
+      const createSpy = vi.spyOn(sessionsModule, "createSessionRecord");
+
+      const outcome = await dispatchClaimedTask(app, task.id);
+
+      expect(outcome).toMatchObject({ ok: false, reason: "placement-held" });
+      expect(outcome.ok === false && outcome.detail).toBe(`preparing checkout on ${hostId}`);
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("claimed");
+      expect(row.dispatchHeld).toBe(true);
+      expect(row.failureReason).toBe(`preparing checkout on ${hostId}`);
+      expect(createSpy).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(cloneSpy).toHaveBeenCalledTimes(1));
+      expect(getMaterializeJob(projectId, hostId)?.state).toBe("cloning");
+      // A second tick joins the running job: no second clone.
+      await dispatchClaimedTask(app, task.id);
+      expect(cloneSpy).toHaveBeenCalledTimes(1);
+
+      clearMaterializeJobsForTests();
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+
+    it("takes the failed-attempt path (not a hold) when the clone job failed", async () => {
+      const { clearMaterializeJobsForTests } = await checkoutModule();
+      clearMaterializeJobsForTests();
+      const app = await buildApp();
+      const cwd = createGitRepo();
+      const projectId = await createProject(app, cwd);
+      const task = insertReadyTask(app, projectId, 82);
+      app.db.update(tasks).set({ status: "claimed" }).where(eq(tasks.id, task.id)).run();
+      forceNeedsCheckout("ghost-host");
+      const { startMaterialize, getMaterializeJob } = await checkoutModule();
+      // An unregistered host fails the job straight away, with a reason.
+      startMaterialize(app, projectId, "ghost-host");
+      expect(getMaterializeJob(projectId, "ghost-host")?.state).toBe("failed");
+
+      const outcome = await dispatchClaimedTask(app, task.id);
+
+      expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+      const row = getTask(app, task.id);
+      expect(row.status).toBe("claimed");
+      expect(row.dispatchHeld).toBe(false);
+      expect(row.failureReason).toContain("could not prepare a checkout on ghost-host");
+      expect(row.failureReason).toContain("unknown host");
+      // Reported once: the failed job is consumed, so the next tick retries.
+      expect(getMaterializeJob(projectId, "ghost-host")).toBeUndefined();
+
+      clearMaterializeJobsForTests();
+      fs.rmSync(cwd, { recursive: true, force: true });
+      await app.close();
+    });
+  });
 });
 
 describe("retryTask (#483)", () => {

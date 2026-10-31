@@ -799,6 +799,16 @@ export async function sessionsRoute(app: FastifyInstance) {
           );
         }
         if (result.reason === "invalid-options") return reply.badRequest(result.detail);
+        if (result.reason === "preparing-checkout") {
+          // Lazy checkout materialization: no session row exists yet. The
+          // launcher shows "Preparing checkout on <host>…", waits for the job
+          // (GET /api/projects/:id/host-checkouts/:hostId/materialize) and
+          // re-submits this same create, which then finds the path.
+          reply.code(202);
+          return {
+            preparingCheckout: { projectId: result.projectId, hostId: result.hostId },
+          };
+        }
         if (result.reason === "no-target-host") {
           // Issue #1951 — the caller named a host/platform nothing eligible
           // matches. A conflict with the fleet's current state, not a

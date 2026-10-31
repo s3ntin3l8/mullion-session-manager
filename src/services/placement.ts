@@ -10,6 +10,7 @@ import { listHosts } from "./host-registry.js";
 import { measureHostCapacity, type HostCapacity } from "./host-capacity.js";
 import { isOlderVersion, refreshLocalAgents } from "./host-agents.js";
 import { appVersion } from "../routes/server-info.js";
+import { cachedProjectOrigin, hostProjectsRoots } from "./project-origin.js";
 
 /**
  * The PLACEMENT policy — which host should a new session run on (issue
@@ -72,6 +73,19 @@ export interface PlacementCandidate {
    * like a missing capacity reading.
    */
   projectCwd: string | null;
+  /**
+   * The project has no path on this host, but Mullion can clone one there on
+   * first use (checkout-materialize.ts): a git project (it has a normalized
+   * origin), on a host that did not report empty projects roots. Such a host is
+   * eligible; the caller starts the clone job instead of spawning.
+   */
+  needsCheckout?: boolean;
+  /**
+   * A git project with no path on this host, which KNOWS it has no
+   * `PROJECTS_ROOTS` to clone into: excluded with that reason. (An unknown
+   * list fails open — the clone itself reports `no-roots`.)
+   */
+  noProjectsRoots?: boolean;
   /**
    * The host's platform ("darwin" | "linux" | "win32" | …) — null when it
    * never reported one. Issue #1951: only a TARGETED placement reads it
@@ -187,6 +201,12 @@ export interface PlacementDecision {
   excluded: ExcludedHost[];
   /** True when the fallback was used (no eligible host at all). */
   fellBack: boolean;
+  /**
+   * True when the chosen host has no checkout of the project yet: the caller
+   * must start the materialize job (checkout-materialize.ts) and wait for it
+   * instead of spawning on `hostId`.
+   */
+  needsCheckout?: boolean;
   /**
    * Issue #2241 — set INSTEAD of the fallback when the project's `platform`
    * flag is active and no host satisfies it: the caller must not run the work
@@ -344,7 +364,7 @@ export function describeCapabilityFlag(capabilities: readonly string[]): string 
  * turn out to match, so a refusal for it is transient), "forbidden" (reports
  * another platform).
  */
-function platformFlagState(
+export function platformFlagState(
   platform: string | null | undefined,
   allowed: readonly string[] | undefined,
 ): "ok" | "unknown" | "forbidden" {
@@ -391,6 +411,25 @@ export function projectCwdOnHost(
 ): string | null {
   if (hostId === project.hostId) return project.cwd ?? PROJECT_PATH_UNKNOWN;
   return hostCwds[hostId] ?? null;
+}
+
+/**
+ * `projectCwd` plus the materialization fields for one host. A host without a
+ * path is `needsCheckout` unless it reports no projects roots (then it is
+ * excluded with that reason).
+ */
+function checkoutFields(
+  app: FastifyInstance,
+  project: PlacementProject,
+  hostId: string,
+  hostCwds: Record<string, string>,
+  isGit: boolean,
+): Pick<PlacementCandidate, "projectCwd" | "needsCheckout" | "noProjectsRoots"> {
+  const projectCwd = projectCwdOnHost(project, hostId, hostCwds);
+  if (projectCwd !== null || !isGit) return { projectCwd };
+  const roots = hostProjectsRoots(app, hostId);
+  if (roots !== null && roots.length === 0) return { projectCwd, noProjectsRoots: true };
+  return { projectCwd, needsCheckout: true };
 }
 
 /**
@@ -503,6 +542,7 @@ function decideHost(
   if (!context.unattended && local !== undefined && projectIsLocal) {
     markChosen(considered, local.hostId);
     return {
+      ...(local.needsCheckout === true ? { needsCheckout: true } : {}),
       hostId: local.hostId,
       reason: `local host preferred for an interactive session (terminal latency): ${local.hostId}`,
       considered,
@@ -526,6 +566,7 @@ function decideHost(
   const bestCapacity = capacityOf(best, context);
   markChosen(considered, best.hostId);
   return {
+    ...(best.needsCheckout === true ? { needsCheckout: true } : {}),
     hostId: best.hostId,
     reason:
       `least loaded: ${best.hostId} at ${bestCapacity.loadAverage1m} load on ` +
@@ -560,7 +601,13 @@ function exclusionReason(candidate: PlacementCandidate, context: PlacementContex
   if (capacity === null) return "no capacity reported";
   // Issue #1724 — the host must have the project: a session runs in a
   // directory, and this host's directory does not have it.
-  if (candidate.projectCwd === null) return "the project has no path on this host";
+  if (candidate.projectCwd === null) {
+    if (candidate.needsCheckout !== true) {
+      return candidate.noProjectsRoots === true
+        ? "the project has no path on this host and the host reports no projects roots to clone into"
+        : "the project has no path on this host";
+    }
+  }
   // Issue #2240 — a host KNOWN to lack the CLI cannot run the session. An
   // unknown list does not exclude (fail open); `chooseHost` notes it instead.
   const missing = missingAgent(candidate, context);
@@ -610,6 +657,9 @@ function isBetter(
 ): boolean {
   if (load < bestLoad) return true;
   if (load > bestLoad) return false;
+  // A host that already has a checkout wins a tie over one that must clone.
+  const candidateClones = candidate.needsCheckout === true;
+  if (candidateClones !== (best.needsCheckout === true)) return !candidateClones;
   return candidate.hostId < best.hostId;
 }
 
@@ -684,6 +734,11 @@ function collectCandidates(
   // operator-supplied and become property names, so it is parsed into a
   // null-prototype object; see parseHostCwds).
   const hostCwds = parseHostCwds(project.hostCwds);
+  // Lazy materialization: only a git project (a known origin) can be cloned
+  // onto a host that has no path for it.
+  const isGit =
+    project.cwd !== undefined &&
+    cachedProjectOrigin(app, { hostId: project.hostId, cwd: project.cwd }) !== null;
   const candidates = listHosts(app).map((host) => {
     const isLocal = host.id === LOCAL_HOST_ID;
     const health = app.hostHeartbeatTracker?.getHealth(host.id);
@@ -704,7 +759,7 @@ function collectCandidates(
       capacity: isLocal ? null : (app.hostCapacityTracker?.get(host.id)?.capacity ?? null),
       // Issue #1724 — where the project lives on THIS host. Null for a
       // host the project is not on, which makes it not a candidate.
-      projectCwd: projectCwdOnHost(project, host.id, hostCwds),
+      ...checkoutFields(app, project, host.id, hostCwds, isGit),
       // Issue #2239 — what the host is for (burst hosts stay out of Auto).
       role: host.role,
       // Issue #2240 — the CLIs this host has (null while unknown) and its version.
@@ -886,7 +941,9 @@ function refuseForFlags(
     if (!candidate.online) why.add("a matching host is offline");
     else if (candidate.drained) why.add("a matching host is parked/drained");
     else if (capacity === null) why.add("a matching host has no capacity reading yet");
-    if (candidate.projectCwd === null) why.add("the project has no checkout on a matching host");
+    if (candidate.projectCwd === null && candidate.needsCheckout !== true) {
+      why.add("the project has no checkout on a matching host");
+    }
     const bin = missingAgent(candidate, context);
     if (bin !== null) why.add(`a matching host has no ${bin} CLI`);
     const lacking = missingCapability(candidate, context);
@@ -900,7 +957,7 @@ function refuseForFlags(
   // temporarily unavailable (or has not reported its platform yet).
   const transient = passing.some(
     (candidate) =>
-      candidate.projectCwd !== null &&
+      (candidate.projectCwd !== null || candidate.needsCheckout === true) &&
       missingAgent(candidate, context) === null &&
       // A host known to lack a capability never gains it by waiting.
       missingCapability(candidate, context) === null,
@@ -1015,7 +1072,9 @@ function refusalReasons(
     else if ((candidate.isLocal ? localCapacity : candidate.capacity) === null) {
       why.add("a matching host has no capacity reading yet");
     }
-    if (candidate.projectCwd === null) why.add("the project has no checkout on a matching host");
+    if (candidate.projectCwd === null && candidate.needsCheckout !== true) {
+      why.add("the project has no checkout on a matching host");
+    }
   }
   if (matching.length === 0) {
     const named = wantedHost === null ? undefined : all.find((c) => c.hostId === wantedHost);
@@ -1132,7 +1191,7 @@ export function resolveTargetHost(
     // target it counts too — it may turn out to be one.
     const mightMatch = collected.candidates.some(
       (candidate) =>
-        candidate.projectCwd !== null &&
+        (candidate.projectCwd !== null || candidate.needsCheckout === true) &&
         platformFlagState(candidate.platform, flagPlatforms) !== "forbidden" &&
         // A host known to lack the CLI never gains it by waiting.
         missingAgent(candidate, agentContext) === null &&

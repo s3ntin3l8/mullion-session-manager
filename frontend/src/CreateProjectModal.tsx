@@ -8,6 +8,7 @@ import type {
   HostCwdsMeta,
   Launcher,
   PlacementConstraints,
+  PreProvision,
   PlacementMode,
   PlacementPreview,
 } from "./api/index.js";
@@ -120,6 +121,9 @@ interface CreateProjectModalProps {
     // Issue #2241 — the placement steering flags. Edit mode only, and only
     // present when they changed (a PATCH replaces them wholesale).
     placementConstraints?: PlacementConstraints;
+    // Checkouts to clone ahead of the first placement. Edit mode only, and
+    // only present when changed.
+    preProvision?: PreProvision;
   }) => Promise<{ dirCreated?: boolean; gitInitialized?: boolean } | undefined>;
   // Phase 4d: this same modal doubles as "Edit project" (kebab menu on a
   // project row), pre-filled with the project's current name/cwd — a
@@ -166,6 +170,8 @@ interface CreateProjectModalProps {
   // Issue #2241 — the project's steering flags. Absent = none (any platform,
   // no burst hosts).
   initialPlacementConstraints?: PlacementConstraints;
+  // Which hosts get a Mullion-managed clone ahead of the first placement.
+  initialPreProvision?: PreProvision;
   // Issue #1951 follow-up — edit mode only. The project's own host (its path
   // is `initialPath`, so it never gets a row of its own) and the per-host
   // paths it already has on others.
@@ -232,6 +238,7 @@ export function CreateProjectModal({
   initialAutoTagRelease = null,
   initialPlacement = "pinned",
   initialPlacementConstraints,
+  initialPreProvision = "none",
   projectHostId = LOCAL_HOST_ID,
   initialHostCwds = {},
   initialHostCwdsMeta,
@@ -255,6 +262,7 @@ export function CreateProjectModal({
   const [flagCapabilities, setFlagCapabilities] = useState<PlacementCapability[]>(
     initialPlacementConstraints?.capabilities ?? [],
   );
+  const [preProvision, setPreProvision] = useState<PreProvision>(initialPreProvision);
   const [preview, setPreview] = useState<PlacementPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   // Issue #1951 follow-up — the per-host paths being edited, keyed by host id.
@@ -551,6 +559,8 @@ export function CreateProjectModal({
       flagAllowBurst !== (initialPlacementConstraints?.allowBurst ?? false) ||
       flagPlatforms.join(",") !== (initialPlacementConstraints?.platform ?? []).join(",") ||
       flagCapabilities.join(",") !== (initialPlacementConstraints?.capabilities ?? []).join(",");
+    const preProvisionChanged =
+      JSON.stringify(preProvision) !== JSON.stringify(initialPreProvision);
     setSubmitting(true);
     setError(null);
     try {
@@ -644,6 +654,7 @@ export function CreateProjectModal({
               },
             }
           : {}),
+        ...(isEdit && preProvisionChanged ? { preProvision } : {}),
         ...(opts?.createDir ? { createDir: true, gitInit } : {}),
         ...(opts?.allowDuplicate ? { allowDuplicate: true } : {}),
       });
@@ -899,6 +910,45 @@ export function CreateProjectModal({
             Platform:/Host: line
             {placement === "auto" ? ", nor by automatic placement" : ""}. A host that has not
             reported its capabilities is still tried.
+          </span>
+          <label className="create-modal-field-hint" htmlFor="pre-provision-mode">
+            Pre-provision checkouts
+          </label>
+          <select
+            id="pre-provision-mode"
+            value={Array.isArray(preProvision) ? "some" : preProvision}
+            onChange={(e) => {
+              const v = e.target.value;
+              setPreProvision(v === "some" ? [] : (v as "none" | "all"));
+            }}
+          >
+            <option value="none">None — clone on first use</option>
+            <option value="all">All eligible hosts</option>
+            <option value="some">Selected hosts</option>
+          </select>
+          {Array.isArray(preProvision) &&
+            hosts
+              .filter((h) => h.id !== projectHostId)
+              .map((h) => (
+                <label key={h.id} className="create-modal-dir-confirm-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={preProvision.includes(h.id)}
+                    onChange={(e) =>
+                      setPreProvision(
+                        e.target.checked
+                          ? [...preProvision, h.id]
+                          : preProvision.filter((id) => id !== h.id),
+                      )
+                    }
+                  />
+                  {h.name}
+                </label>
+              ))}
+          <span className="create-modal-field-hint">
+            A git project is cloned onto a host the first time something is placed there.
+            Pre-provision clones it ahead of time, when the host is online. Needs the host's
+            projects roots.
           </span>
         </fieldset>
       )}

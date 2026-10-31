@@ -694,6 +694,13 @@
       "when": 1793430205706,
       "tag": "0098_light_warlock",
       "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "6",
+      "when": 1793433486947,
+      "tag": "0099_shocking_junta",
+      "breakpoints": true
     }
   ]
 }

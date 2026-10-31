@@ -6,6 +6,11 @@ import { projects, tasks } from "../db/schema.js";
 // service can reuse them directly rather than reaching into routes/ — see
 // those files' own doc comments for the createSessionRecord/killSession and
 // buildLiveInfo/withLiveInfo/withLiveStatus split.
+import {
+  describePreparing,
+  startMaterialize,
+  takeFailedMaterialize,
+} from "./checkout-materialize.js";
 import { createSessionRecord, killSession } from "./session-lifecycle.js";
 import {
   resolveSessionHostId,
@@ -653,6 +658,29 @@ export async function dispatchClaimedTask(
       );
     }
     placement = auto;
+  }
+  // Lazy checkout materialization: the chosen host has no checkout of the
+  // project yet. The clone is a background job (never held inside this tick):
+  // hold the claim while it runs; the next sweep tick re-places and continues
+  // once the path exists. A failed job is reported once, as a failed attempt.
+  if (placement.needsCheckout) {
+    const failedJob = takeFailedMaterialize(project.id, placement.hostId);
+    if (failedJob !== null) {
+      const detail = `could not prepare a checkout on ${placement.hostId}: ${failedJob.detail ?? "the clone failed"}`;
+      app.db
+        .update(tasks)
+        .set({
+          failureReason: detail,
+          dispatchFailingSince: failingSince ?? new Date(),
+          dispatchHeld: false,
+        })
+        .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
+        .run();
+      app.log.warn({ taskId, hostId: placement.hostId }, `task dispatch: ${detail}`);
+      return { ok: false, reason: "worktree-failed", detail };
+    }
+    startMaterialize(app, project.id, placement.hostId);
+    return holdClaim(describePreparing(placement.hostId));
   }
   // Placement succeeded, so a hold recorded earlier (the host was not eligible)
   // no longer describes the task — it may now wait for a worker slot instead,
