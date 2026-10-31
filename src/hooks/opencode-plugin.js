@@ -150,6 +150,22 @@ const RATE_LIMIT_PATTERNS = [
   /\brate[ _-]?limit\b/i, // "rate limit" / "rate_limit" / "rate-limit"
   /\btoo many requests\b/i, // the HTTP status text
   /\binsufficient_quota\b/i, // the provider's own quota-exhausted error code
+  // Issue #2505 — a provider PLAN that ran out mid-task, which is a rate
+  // limit in everything but name: the plan's quota is exhausted and the
+  // turn can only succeed once it resets. The wording is unambiguous
+  // ("usage limit reached" / "usage limit exceeded"), and it is what
+  // MiniMax reports when a Token Plan runs out ("Token Plan usage limit
+  // reached: Upgrade your Token Plan or purchase Credits for more usage.
+  // (2056)") — observed on issue #2495, where the worker was failed
+  // outright as "agent ended its turn with no commits" instead of being
+  // deferred by the grace window.
+  /\busage limit (?:reached|exceeded)\b/i,
+  // MiniMax's own numeric plan-exhausted code. The phrase above already
+  // classifies on its own; this pattern pins the code's own rule — it counts
+  // ONLY together with that phrase (hence the lookahead), so a bare "(2056)"
+  // in some other provider's message (a build number, an error id) can never
+  // classify a failure as a rate limit.
+  /(?=[\s\S]*\busage limit (?:reached|exceeded)\b)[\s\S]*\(2056\)/i,
 ];
 
 /** Issue #1700 — classifies an opencode v2 turn failure into the

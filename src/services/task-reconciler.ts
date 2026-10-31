@@ -1352,8 +1352,13 @@ function isShellTailHandoff(
  * it probes `commitHostWipChanges` BEFORE its status CAS lands, so an
  * unsupported/unreachable remote host still can't get stranded with a
  * dirty worktree and a task stuck in "failed".
+ *
+ * Exported for its own test (test/services/task-failure-reason.test.ts) —
+ * the reconciler's own test file is at the file-size ratchet's ceiling, and
+ * this function's failure REASON (not the transition around it) is what
+ * issue #2505 is about.
  */
-async function checkReviewingGate(
+export async function checkReviewingGate(
   app: FastifyInstance,
   task: typeof tasks.$inferSelect,
   project: typeof projects.$inferSelect,
