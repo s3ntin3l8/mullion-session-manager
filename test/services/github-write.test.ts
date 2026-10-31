@@ -171,7 +171,7 @@ describe("github-write service", () => {
       }),
     );
     const hit = await getMergedClosingPullRequest("tok", "owner", "repo", 5);
-    expect(hit).toEqual({ number: 9, merged: true, mergedAt: "2026-10-31" });
+    expect(hit).toEqual({ number: 9, mergedAt: "2026-10-31" });
     const [url, init] = fetchMock.mock.calls[0] as [string, { body: string }];
     expect(url).toBe("https://api.github.com/graphql");
     expect(JSON.parse(init.body).variables).toEqual({ owner: "owner", repo: "repo", number: 5 });

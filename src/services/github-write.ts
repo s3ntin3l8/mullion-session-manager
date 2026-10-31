@@ -358,8 +358,8 @@ export async function getMergedClosingPullRequest(
     }`,
     { owner, repo, number: issueNumber },
   );
-  const nodes = data.repository?.issue?.closedByPullRequestsReferences?.nodes ?? [];
-  return nodes.find((n) => n.merged) ?? null;
+  const hit = data.repository?.issue?.closedByPullRequestsReferences?.nodes.find((n) => n.merged);
+  return hit ? { number: hit.number, mergedAt: hit.mergedAt } : null;
 }
 
 /** #701 — fetches a single issue's title, used by task-watcher.ts's
