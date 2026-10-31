@@ -69,7 +69,7 @@ export function BranchDetail({
   >({ kind: "loading" });
   // So a double click can't make two sessions.
   const [starting, setStarting] = useState(false);
-  const [actionError, setActionError] = useState<{ message: string; reason?: string } | null>(null);
+  const [actionError, setActionError] = useState<{ message: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [moving, setMoving] = useState(false);
   // Bumped after a checkout/rebase, which changes what this view shows.
@@ -113,17 +113,14 @@ export function BranchDetail({
         onBack();
         return;
       }
-      setActionError({
-        message: reasonMessage(result.reason, result.detail),
-        reason: result.reason,
-      });
+      setActionError({ message: reasonMessage(result.reason, result.detail) });
     } catch (err) {
       setActionError({ message: describeError(err, "Request failed — try again.") });
     }
   };
 
   // Issue #1672 — guarded checkout / rebase. A refusal shows inline, and
-  // carries no `reason`: neither offers a Force.
+  // is just a message: neither offers a Force.
   const moveHead = async (kind: "checkout" | "rebase") => {
     if (moving) return;
     setMoving(true);

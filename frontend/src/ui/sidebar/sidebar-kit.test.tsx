@@ -383,8 +383,12 @@ describe("SidebarRow hover actions do not shift layout", () => {
     // `position: absolute` resolves against the row, so the row must be the
     // containing block — drop this and every row's actions stack in one place.
     expect(rule(".sb-row")).toContain("position: relative");
-    // The overlay hides the chips it covers rather than sitting on live ones.
-    expect(css).toMatch(/\.sb-row:hover \.sb-row-trail > :not\(\.sb-row-actions\)/);
+    // The overlay hides the chips it covers rather than sitting on live ones,
+    // keyed like the reveal (hover AND focus-within) and scoped to the siblings
+    // after the actions: a trailing-only row has no overlay, so its badge stays.
+    expect(css).toContain(".sb-row:hover .sb-row-trail > .sb-row-actions ~ *");
+    expect(css).toContain(".sb-row:focus-within .sb-row-trail > .sb-row-actions ~ *");
+    expect(css).not.toMatch(/\.sb-row:hover \.sb-row-trail > :not\(/);
     expect(css).not.toMatch(/\.sb-row:hover \.sb-row-actions[^{]*\{[^}]*display:/);
   });
 });

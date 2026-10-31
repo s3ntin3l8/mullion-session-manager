@@ -331,11 +331,10 @@
 /* Actions overlay the title line instead of taking width: toggling display
    made .sb-row-body shrink on hover and re-wrap its title and chips. They stay
    rendered (so Tab reaches them) and are only faded in on hover/focus.
-   They are pinned to the ROW's right edge, over the trailing chips, so every
-   row's actions sit in the same place. They used to hang off the trail's left
-   edge, which moved them with whatever badges (merged, #PR, current) the row
-   happened to carry — and covering those chips on hover is the lesser evil.
-   The gradient fades the chips out behind the buttons. */
+   They are pinned to the ROW's right edge so every row's actions sit in the
+   same place. They used to hang off the trail's left edge, which moved them
+   with whatever badges (merged, #PR, current) the row happened to carry. The
+   chips they now sit over are hidden while they show (next rule). */
 .sb-row-actions {
   position: absolute;
   top: 6px;
@@ -348,13 +347,16 @@
   pointer-events: none;
 }
 /* The overlay sits over the row's trailing chips, some of them clickable (a PR
-   chip). Hovering the row therefore hides them — the buttons REPLACE the chips
-   at the right edge rather than sitting on top of live ones, where a click
-   meant for a chip would land on a button (and, over a "merged" chip, on the
-   delete). Hover-capable pointers only: touch keeps the actions in flow. */
+   chip). While it shows they are hidden — the buttons REPLACE the chips at the
+   right edge rather than sitting on top of live ones, where a click meant for
+   a chip would land on a button (and, over a "merged" chip, on the delete).
+   Scoped to the siblings AFTER `.sb-row-actions`: a row with no actions has no
+   overlay, so its badges (a CI run's status, a deleted file's chip) stay.
+   Keyed on the same hover/focus-within as the reveal above, so the two never
+   disagree. Hover-capable pointers only: touch keeps the actions in flow. */
 @media (hover: hover) {
-  .sb-row:hover .sb-row-trail > :not(.sb-row-actions),
-  .sb-row:has(.sb-row-actions :focus-visible) .sb-row-trail > :not(.sb-row-actions) {
+  .sb-row:hover .sb-row-trail > .sb-row-actions ~ *,
+  .sb-row:focus-within .sb-row-trail > .sb-row-actions ~ * {
     opacity: 0;
     pointer-events: none;
   }

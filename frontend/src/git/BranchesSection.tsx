@@ -36,7 +36,6 @@ import { SearchInput } from "../ui/primitives.js";
 
 interface RowError {
   message: string;
-  reason?: string;
 }
 
 function branchTone(
@@ -127,17 +126,14 @@ export function BranchesSection({
         onReload();
         return;
       }
-      setError(name, {
-        message: reasonMessage(result.reason, result.detail),
-        reason: result.reason,
-      });
+      setError(name, { message: reasonMessage(result.reason, result.detail) });
     } catch (err) {
       setError(name, { message: describeError(err, "Request failed — try again.") });
     }
   };
 
   // Issue #1672 — guarded checkout / rebase. A refusal lands on the row,
-  // inline, without a `reason`: none of these offer a Force.
+  // inline: none of these offer a Force.
   const moveHead = async (name: string, kind: "checkout" | "rebase") => {
     if (moving) return;
     setMoving(true);
