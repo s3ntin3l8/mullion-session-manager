@@ -586,6 +586,7 @@ function GroupSection({
             <CloseIcon size={13} />
           </ConfirmButton>
           <KebabMenu
+            menuPlacement="auto"
             title="More…"
             items={[
               {
@@ -918,6 +919,7 @@ function WorkspaceItem({
           <CloseIcon size={13} />
         </ConfirmButton>
         <KebabMenu
+          menuPlacement="auto"
           title="More…"
           items={[
             {
