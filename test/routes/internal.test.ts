@@ -1,4 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import {
+  dropSessionGithubAuth,
+  getSessionGithubAuth,
+} from "../../src/services/session-github-token.js";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -397,6 +401,43 @@ describe("internal routes (agent role, issue #26)", () => {
     }
     return { app, port: address.port };
   }
+
+  it("PUT /internal/sessions/:id/github-auth stores a refreshed token for the session (#2246)", async () => {
+    const app = await buildApp();
+    const headers = { authorization: `Bearer ${TOKEN}` };
+    const ok = await app.inject({
+      method: "PUT",
+      url: "/internal/sessions/2246/github-auth",
+      headers,
+      payload: { mode: "task", token: "ghs_refreshed", username: "x-access-token" },
+    });
+    expect(ok.statusCode).toBe(204);
+    expect(getSessionGithubAuth("2246")).toMatchObject({ mode: "task", token: "ghs_refreshed" });
+
+    const noAuth = await app.inject({
+      method: "PUT",
+      url: "/internal/sessions/2246/github-auth",
+      payload: { mode: "task", token: "x" },
+    });
+    expect(noAuth.statusCode).toBe(401);
+
+    const badId = await app.inject({
+      method: "PUT",
+      url: `/internal/sessions/${encodeURIComponent("weird;id")}/github-auth`,
+      headers,
+      payload: { mode: "task", token: "x" },
+    });
+    expect(badId.statusCode).toBe(400);
+    const badBody = await app.inject({
+      method: "PUT",
+      url: "/internal/sessions/2246/github-auth",
+      headers,
+      payload: { mode: "root", token: "x" },
+    });
+    expect(badBody.statusCode).toBe(400);
+    dropSessionGithubAuth("2246");
+    await app.close();
+  });
 
   it("rejects a request with no Authorization header", async () => {
     const app = await buildApp();

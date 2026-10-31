@@ -1271,7 +1271,13 @@ async function createSessionRecordInner(
   );
   // #2246 — resolved here, not in resolveSpawnInputs: it needs the network
   // (App token mint) and, for a remote host, tracking for refresh.
-  spawnOpts.githubAuth = await resolveSpawnGithubAuth(app, project, params, created.id, placementHost);
+  spawnOpts.githubAuth = await resolveSpawnGithubAuth(
+    app,
+    project,
+    params,
+    created.id,
+    placementHost,
+  );
   const spawned = await spawnOrRollback(app, project, created.id, spawnOpts, rb, placementHost);
   if (!spawned.ok) return spawned.result;
 

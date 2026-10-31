@@ -1499,6 +1499,53 @@ describe("hooksPlugin (issue #172)", () => {
     });
   });
 
+  describe("github_token (issue #2246)", () => {
+    async function ask(hookToken: string): Promise<Record<string, unknown>> {
+      const socket = await connect(app!.pty.hookSocketPath);
+      socket.write(`${JSON.stringify({ token: hookToken })}\n`);
+      const replyPromise = waitForLine(socket);
+      socket.write(`${JSON.stringify({ kind: "github_token" })}\n`);
+      const reply = JSON.parse(await replyPromise);
+      socket.destroy();
+      return reply;
+    }
+
+    it("answers with the session's own token, and a second session cannot read it", async () => {
+      app = await buildApp();
+      await app.ready();
+      const spawn = (id: string, githubAuth?: { mode: "manual" | "task"; token?: string }) =>
+        app!.pty.getOrCreate({ id, cwd: "/tmp", command: "bash", cols: 80, rows: 24, githubAuth });
+      const a = spawn("2246", { mode: "task", token: "ghs_session_a" });
+      const b = spawn("2247", { mode: "manual" });
+
+      expect(await ask(a.hookToken)).toEqual({
+        token: "ghs_session_a",
+        username: "x-access-token",
+        hostFirst: false,
+      });
+      // b has an entry with no token: its own actionable message, not a's token.
+      const reply = await ask(b.hookToken);
+      expect(reply.token).toBeUndefined();
+      expect(String(reply.error)).toMatch(/Settings/);
+      expect(reply.hostFirst).toBe(true);
+      expect(JSON.stringify(reply)).not.toContain("ghs_session_a");
+    });
+
+    it("replies at once with an actionable error when there is no entry", async () => {
+      app = await buildApp();
+      await app.ready();
+      const session = app.pty.getOrCreate({
+        id: "2248",
+        cwd: "/tmp",
+        command: "bash",
+        cols: 80,
+        rows: 24,
+      });
+      const reply = await ask(session.hookToken);
+      expect(String(reply.error)).toMatch(/connect GitHub/);
+    });
+  });
+
   describe("browser_action (Feature 3.7)", () => {
     it("handles browser_action hook message and executes browser actions locally", async () => {
       process.env.BROWSER_ENABLED = "true";
