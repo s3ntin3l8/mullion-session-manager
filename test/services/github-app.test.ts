@@ -9,6 +9,9 @@ import {
   WRITE_PERMISSIONS,
   resolveInstallationId,
   getInstallationToken,
+  peekInstallationTokenExpiry,
+  SESSION_READ_PERMISSIONS,
+  SESSION_WORK_PERMISSIONS,
   getAuthenticatedApp,
   computeKeyFingerprint,
   clearInstallationTokenCacheForApp,
@@ -406,6 +409,43 @@ describe("github-app (#489)", () => {
       expect(second.token).toBe("ghs_fresh");
       // Cached — no new fetch calls for the repeat.
       expect(fetchMock.mock.calls.length).toBe(callsAfterFirst);
+    });
+
+    it("mints the session scopes with their own permission sets and exposes the expiry (#2246)", async () => {
+      const bodies: Array<{ permissions: Record<string, string> }> = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockImplementation((url: string, init?: { body?: string }) => {
+          if (url.includes("/app/installations") && !url.includes("access_tokens")) {
+            return Promise.resolve(jsonResponse(200, [{ id: 9, account: { login: "acme" } }]));
+          }
+          bodies.push(JSON.parse(init?.body ?? "{}"));
+          return Promise.resolve(
+            jsonResponse(200, { token: "ghs_s", expires_at: "2099-01-01T01:00:00Z" }),
+          );
+        }),
+      );
+      await getInstallationToken("123", privateKey, "acme", "widgets", "session-work");
+      await getInstallationToken("123", privateKey, "acme", "widgets", "session-read");
+      expect(bodies.map((b) => b.permissions)).toEqual([
+        SESSION_WORK_PERMISSIONS,
+        SESSION_READ_PERMISSIONS,
+      ]);
+      // The worker can write issues but never contents; the reviewer writes nothing.
+      expect(SESSION_WORK_PERMISSIONS).toMatchObject({ issues: "write", contents: "read" });
+      expect(Object.values(SESSION_READ_PERMISSIONS)).not.toContain("write");
+
+      const expiry = Date.parse("2099-01-01T01:00:00Z");
+      expect(peekInstallationTokenExpiry("123", "session-work", "acme", "widgets", "ghs_s")).toBe(
+        expiry,
+      );
+      // Not the cached token (a PAT fallback, say), or not cached at all: unknown.
+      expect(
+        peekInstallationTokenExpiry("123", "session-work", "acme", "widgets", "ghp_other"),
+      ).toBeUndefined();
+      expect(
+        peekInstallationTokenExpiry("123", "session-work", "acme", "other", "ghs_s"),
+      ).toBeUndefined();
     });
 
     it("returns a null token and the checked count when the App has no installation covering the owner (Hermes review, PR #504, round 6)", async () => {
