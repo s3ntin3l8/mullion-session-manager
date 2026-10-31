@@ -1545,6 +1545,10 @@ export async function internalRoutes(app: FastifyInstance) {
       if (!cwd) return reply.badRequest("cwd query param is required");
       const resolvedCwd = requireWithinRoots(app, reply, cwd, "cwd");
       if (resolvedCwd === null) return;
+      // Optional read token for a private repo: a header on the signed
+      // channel, never the query string (which lands in access logs).
+      const rawToken = request.headers["x-mullion-git-token"];
+      const token = typeof rawToken === "string" && rawToken !== "" ? rawToken : undefined;
       // A repair is running on this clone (issue #1896): it fetches and
       // rewrites the indexes itself, and a second fetch in that window would
       // fail its ref update and make a healthy clone look broken. Skip it —
@@ -1561,7 +1565,7 @@ export async function internalRoutes(app: FastifyInstance) {
       }
       markCloneBusy(LOCAL_HOST_ID, resolvedCwd);
       try {
-        return await runGitFetch(resolvedCwd);
+        return await runGitFetch(resolvedCwd, token);
       } finally {
         releaseClone(LOCAL_HOST_ID, resolvedCwd);
       }

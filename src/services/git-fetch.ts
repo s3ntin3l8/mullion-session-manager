@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.js";
+import { runGitCommand } from "./git-run.js";
 
 const FETCH_TIMEOUT_MS = 30_000;
 
@@ -14,9 +15,27 @@ function isSafeAbsolutePath(cwd: string): boolean {
   return path.isAbsolute(cwd) && !path.normalize(cwd).split(path.sep).includes("..");
 }
 
-export async function runGitFetch(cwd: string): Promise<{ success: boolean; error?: string }> {
+export async function runGitFetch(
+  cwd: string,
+  token?: string,
+): Promise<{ success: boolean; error?: string }> {
   if (!isSafeAbsolutePath(cwd)) {
     return { success: false, error: "cwd must be an absolute path with no '..' segments" };
+  }
+  if (token) {
+    // Same http.extraHeader + redact() plumbing as push/clone: the token rides
+    // argv for this one invocation, never `.git/config`, and is stripped from
+    // the returned error.
+    const encodedCredential = Buffer.from(`x-access-token:${token}`).toString("base64");
+    const result = await runGitCommand(
+      cwd,
+      ["fetch", "--quiet", "--prune"],
+      `AUTHORIZATION: basic ${encodedCredential}`,
+      token,
+      encodedCredential,
+      FETCH_TIMEOUT_MS,
+    );
+    return result.ok ? { success: true } : { success: false, error: result.detail };
   }
   try {
     await new Promise<void>((resolve, reject) => {
