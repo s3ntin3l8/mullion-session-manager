@@ -208,6 +208,16 @@ describe("Settings -> Review relay", () => {
     );
   });
 
+  it("toggles Task Master reviews from the Connection group", async () => {
+    const user = userEvent.setup();
+    await renderCard();
+    await user.click(relay().getByRole("button", { name: "Task Master reviews" }));
+    await waitFor(() =>
+      expect(settingsPatches).toContainEqual({ reviewRelay: { taskMasterReviewer: true } }),
+    );
+    expect(relay().getByRole("button", { name: "Test connection" })).toBeInTheDocument();
+  });
+
   it("commits the prompt repository on Enter", async () => {
     const user = userEvent.setup();
     await renderCard();

@@ -97,14 +97,19 @@ export const TASK_REVIEWER_BUSY = "Task Master's reviewer is handling this PR";
 export function taskReReviewEligible(
   task: Pick<
     Task,
-    "status" | "lastReviewVerdict" | "reviewSessionId" | "reviewFindingsIngestedSessionId"
+    | "status"
+    | "lastReviewVerdict"
+    | "reviewSessionId"
+    | "reviewFindingsIngestedSessionId"
+    | "reviewRunId"
+    | "reviewRunIngestedId"
   >,
 ): boolean {
   return (
     task.status === "reviewing" &&
     task.lastReviewVerdict === "inconclusive" &&
-    task.reviewSessionId !== null &&
-    task.reviewFindingsIngestedSessionId !== null
+    ((task.reviewSessionId !== null && task.reviewFindingsIngestedSessionId !== null) ||
+      (task.reviewRunId !== null && task.reviewRunIngestedId !== null))
   );
 }
 

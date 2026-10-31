@@ -243,7 +243,13 @@ export function ModelsSection() {
   // and each side's model then comes from that CLI's own settings.
   const installedRoles = resolveInstalledRoleModels({
     workerCli: settings.taskMaster?.defaultAgent,
-    reviewCli: settings.taskMaster?.defaultReviewAgent,
+    // "hermes" is an HTTP reviewer, not a model CLI: it has no per-CLI model
+    // here (its model is Review relay → Review policy → Model), so it must not
+    // be matched against any CLI card.
+    reviewCli:
+      settings.taskMaster?.defaultReviewAgent === "hermes"
+        ? null
+        : settings.taskMaster?.defaultReviewAgent,
     pairs: cliPairs,
   });
 
@@ -391,7 +397,8 @@ export function ModelsSection() {
         Install-wide defaults for new sessions and Task Master workers. A task's <code>Model:</code>{" "}
         or <code>Reviewer-Model:</code> line overrides them, and <code>Model:</code> applies to both
         roles. A launcher that already passes <code>--model</code> (or <code>-m</code> for MiniMax
-        Code) is left alone.
+        Code) is left alone. These are model settings for local CLIs; when the review agent is
+        Hermes, its model is set under Review relay → Review policy → Model instead.
       </p>
       <div className="settings-models-grid">
         <div className="settings-models-head">

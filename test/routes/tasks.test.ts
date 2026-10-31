@@ -2976,6 +2976,7 @@ describe("tasks route", () => {
         // a resolvable review agent; reviewPhase promises nothing otherwise.
         worktreePath?: string | null;
         reviewAgent?: string | null;
+        reviewRunId?: string | null;
       }) {
         // resolveTaskMasterConfig reads the env at request time; the describe
         // block's default is on (top-level beforeAll), so restore it after.
@@ -3018,11 +3019,29 @@ describe("tasks route", () => {
             rebaseAttempts: opts.rebaseStartedAt ? 1 : 0,
             worktreePath: opts.worktreePath === undefined ? "/tmp/wt-x" : opts.worktreePath,
             reviewAgent: opts.reviewAgent === undefined ? "claude" : opts.reviewAgent,
+            reviewRunId: opts.reviewRunId ?? null,
           })
           .returning()
           .all();
         return { app, taskId: row.id };
       }
+
+      it.each([
+        ["unsent:1:r0:x0", true],
+        ["run_abc", false],
+        [null, false],
+      ])("derives reviewRunUnsent from run id %s (UI never reads the marker)", async (id, want) => {
+        const { app, taskId } = await seed({
+          autoApprove: false,
+          verdict: null,
+          ingested: false,
+          withReviewSession: false,
+          reviewRunId: id,
+        });
+        const res = await app.inject({ method: "GET", url: `/api/tasks/${taskId}` });
+        expect(res.json().reviewRunUnsent).toBe(want);
+        await app.close();
+      });
 
       it("reports reviewPhase=rebasing with a re-review time after an auto-rebase cleared the review", async () => {
         // the timestamp column stores whole seconds

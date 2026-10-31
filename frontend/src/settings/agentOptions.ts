@@ -23,3 +23,38 @@ export const AGENT_OPTIONS = [
 // agent, human reviews directly" value settings.taskMaster.defaultReviewAgent
 // defaults to.
 export const REVIEW_AGENT_OPTIONS = [{ value: "none", label: "None" }, ...AGENT_OPTIONS];
+
+// The Hermes reviewer is not a local CLI: it is an HTTP run on the review
+// relay's Hermes connection, so it is only offered when Task Master reviews
+// are switched on there and the connection has a URL (independent of the
+// GitHub-side relay provider switch). A stored "hermes" value
+// stays readable when this goes false (see withCurrentReviewAgent).
+export const HERMES_REVIEW_OPTION = { value: "hermes", label: "Hermes" };
+
+export function hermesReviewerAvailable(
+  relay: { apiUrl: string; taskMasterReviewer: boolean } | undefined,
+): boolean {
+  return !!relay && relay.taskMasterReviewer && relay.apiUrl.trim() !== "";
+}
+
+export function reviewAgentOptions(hermesAvailable: boolean) {
+  return hermesAvailable ? [...REVIEW_AGENT_OPTIONS, HERMES_REVIEW_OPTION] : REVIEW_AGENT_OPTIONS;
+}
+
+// Keep a stored review-agent value in the list so the control renders it
+// instead of falling back to the first option. "hermes" gets its own label
+// since it is never "not detected".
+export function withCurrentReviewAgent(
+  options: { value: string; label: string }[],
+  current: string | null | undefined,
+): { value: string; label: string }[] {
+  if (!current || options.some((o) => o.value === current)) return options;
+  return [
+    ...options,
+    {
+      value: current,
+      label:
+        current === "hermes" ? "Hermes (Task Master reviews off)" : `${current} (not detected)`,
+    },
+  ];
+}

@@ -13,6 +13,7 @@ import {
   Segmented,
   StyledList,
   TextInput,
+  Toggle,
 } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { ConfirmButton } from "../../ui/ConfirmButton.js";
@@ -361,6 +362,16 @@ export function ReviewRelaySection() {
                   {saving ? "Saving…" : "Save key"}
                 </SecondaryButton>
               </div>
+            </Row>
+            <Row
+              label="Task Master reviews"
+              desc="Let Task Master use Hermes as a review agent: it then appears as “Hermes” in the review-agent pickers (Settings → Task Master, project settings, task drawer). The Hermes model is the Model setting under Review policy below."
+            >
+              <Toggle
+                ariaLabel="Task Master reviews"
+                on={relay.taskMasterReviewer}
+                onChange={(v) => updateSettings({ reviewRelay: { taskMasterReviewer: v } })}
+              />
             </Row>
             <div style={{ marginTop: 10 }}>
               <SecondaryButton onClick={test} disabled={testing || relay.apiUrl === ""}>
