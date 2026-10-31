@@ -164,13 +164,20 @@ describe("retryTask task-level model (#2491)", () => {
       .set({
         agent: null,
         agentCommand: "codex",
-        modelOverride: "gpt-5",
+        modelOverride: null,
         body: "Do X.\n\nAgent: codex\n",
       })
       .where(eq(tasks.id, sameFamily))
       .run();
+    // Pick the model through the real route (it pins the validated agent).
+    const picked = await app.inject({
+      method: "PATCH",
+      url: `/api/tasks/${sameFamily}`,
+      payload: { model: "gpt-5" },
+    });
+    expect(picked.statusCode).toBe(200);
     expect((await retryTask(app, sameFamily)).ok).toBe(true);
-    expect(load(sameFamily)).toMatchObject({ modelOverride: "gpt-5" });
+    expect(load(sameFamily)).toMatchObject({ agent: "codex", modelOverride: "gpt-5" });
 
     const changed = await failedTask(72, "claude");
     expect((await retryTask(app, changed, { agent: "codex" })).ok).toBe(true);
