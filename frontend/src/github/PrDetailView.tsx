@@ -101,13 +101,13 @@ const REVIEW_STATE_LABEL: Record<string, string> = {
   COMMENTED: "Commented",
 };
 
-/** How far the head has moved past the reviewed commit, when the commits show it. */
 function hasLiveSession(links: readonly SessionLink[] | undefined, id: number): boolean {
   return (links ?? []).some(
     (l) => (l.session.id === id && l.session.alive) || hasLiveSession(l.children, id),
   );
 }
 
+/** How far the head has moved past the reviewed commit, when the commits show it. */
 function staleLabel(entry: ReviewSummaryEntry, commits: GitHubPrDetail["commits"]) {
   const sha = entry.reviewedSha.slice(0, 7);
   const at = entry.reviewedSha
