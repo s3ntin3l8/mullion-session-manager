@@ -60,7 +60,7 @@ spread `CLEARED_REVIEW_RUN` or be the carry path.
 ## 4. A column the route does not select is silently `undefined`
 
 **Invariant.** `GET /api/tasks` and `GET /api/tasks/:id` use
-`.select(TASK_ROW_COLUMNS)` (`routes/tasks.ts`). A field added to the frontend
+`.select(TASK_ROW_COLUMNS)` (`src/routes/tasks.ts`). A field added to the frontend
 `Task` type, or a column added by migration "for display", that is not added to
 `TASK_ROW_COLUMNS` typechecks but is `undefined` at runtime. Paired columns
 (`prUrl`/`prNumber`) are cleared together and neither is asserted non-null alone.

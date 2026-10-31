@@ -182,6 +182,16 @@ describe("review-references.mjs CLI", () => {
     expect(r.code).toBe(0);
     expect(r.stdout).toContain("task-loop.md");
 
+    // A history with no merge base (what a shallow clone of base and head
+    // looks like): the three-dot diff fails and the two-dot fallback answers.
+    git("checkout", "-q", "--orphan", "unrelated");
+    fs.writeFileSync(path.join(root, "src/services/task-reconciler.ts"), "c\n");
+    git("add", "-A");
+    git("commit", "-q", "-m", "orphan");
+    const shallow = await run(root, ["--base", "main", "--head", "unrelated"]);
+    expect(shallow.code).toBe(0);
+    expect(shallow.stdout).toContain("task-loop.md");
+
     // No origin/* in the fixture: the default base cannot resolve, and the
     // script says to pass --base instead of guessing.
     const noBase = await run(root, []);

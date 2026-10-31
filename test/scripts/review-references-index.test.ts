@@ -38,7 +38,11 @@ describe("mullion-review-invariants reference index", () => {
 
   it("points every entry at a file that exists under references/", () => {
     for (const { ref } of index) {
-      expect(path.dirname(ref), ref).toBe(path.relative(root, referencesDir));
+      // The index stores POSIX paths; compare against a POSIX form of the
+      // directory so the check holds on Windows too.
+      expect(path.posix.dirname(ref), ref).toBe(
+        path.relative(root, referencesDir).split(path.sep).join("/"),
+      );
       expect(fs.existsSync(path.join(root, ref)), ref).toBe(true);
     }
   });
@@ -73,6 +77,48 @@ describe("mullion-review-invariants reference index", () => {
       expect(text.startsWith("# "), ref).toBe(true);
       expect(text, ref).not.toMatch(/\.(ts|tsx|mjs):\d+/);
     }
+  });
+
+  it("names only code symbols that still exist (a rename must update the note)", () => {
+    // Line numbers are not cited, so the other way a note rots is a renamed or
+    // removed symbol that it keeps describing. Every identifier-shaped
+    // backticked token (camelCase, UPPER_CASE or snake_case, an optional `()`
+    // dropped) has to appear in the code, with the same loudness as a dead glob.
+    const symbols = new Set<string>();
+    for (const { ref } of index) {
+      const text = fs.readFileSync(path.join(root, ref), "utf8");
+      for (const m of text.matchAll(/`([^`\n]+)`/g)) {
+        const token = m[1].trim().replace(/\(\)$/, "");
+        if (/^[A-Za-z_]\w*$/.test(token) && (/[A-Z]/.test(token.slice(1)) || token.includes("_"))) {
+          symbols.add(token);
+        }
+      }
+    }
+    let found = "";
+    try {
+      found = execFileSync(
+        "git",
+        [
+          "grep",
+          "-h",
+          "-o",
+          "-w",
+          "-F",
+          ...[...symbols].flatMap((s) => ["-e", s]),
+          "--",
+          "src",
+          "scripts",
+          "test",
+          "frontend/src",
+          "drizzle",
+        ],
+        { cwd: root, encoding: "utf8", env: gitEnv(), maxBuffer: 64 * 1024 * 1024 },
+      );
+    } catch {
+      // git grep exits 1 when nothing matched; every symbol is then missing.
+    }
+    const present = new Set(found.split("\n"));
+    expect([...symbols].filter((s) => !present.has(s)).sort()).toEqual([]);
   });
 
   it("answers a task-reconciler diff with the task-loop references and an unrelated diff with none", () => {

@@ -12,9 +12,11 @@
 // It lives in the repo (not in the review prompt) on purpose: the Task Master
 // review prompt is sent to every target repo and cannot name this repo's
 // areas. The prompt points at AGENTS.md and the repo's own skill; the skill
-// says to run this. It works the same for a CLI review inside the worker's
-// worktree and for an external reviewer (Hermes) in its own clone of the PR
-// head, since both have the repo's files.
+// says to run this. It works for a CLI review inside the worker's worktree and
+// for an external reviewer (Hermes) in its own clone of the PR head, since both
+// have the repo's files. A shallow clone has no merge base, so the diff falls
+// back to two dots (see gitChangedFiles); a clone with no base ref at all can
+// pipe `git diff --name-only` into `--files -`.
 //
 // Usage:
 //   node scripts/review-references.mjs                      origin/main...HEAD
@@ -96,11 +98,27 @@ export function formatReferences(matches) {
 }
 
 function gitChangedFiles(root, base, head) {
-  const out = execFileSync(
-    "git",
-    [...GIT_NO_AUTO_GC, "diff", "--name-only", "-z", `${base}...${head}`],
-    { cwd: root, encoding: "utf8", env: gitEnv(), stdio: ["ignore", "pipe", "pipe"] },
-  );
+  const diff = (range) =>
+    execFileSync("git", [...GIT_NO_AUTO_GC, "diff", "--name-only", "-z", range], {
+      cwd: root,
+      encoding: "utf8",
+      env: gitEnv(),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  let out;
+  try {
+    out = diff(`${base}...${head}`);
+  } catch (err) {
+    // Three dots need a merge base, and a shallow clone (--depth 1 of the base
+    // and of the head, the usual way an external reviewer prepares a PR) has
+    // none. Two dots compare the trees and need none; with the base an ancestor
+    // of the head, as in that case, it is the same set of files.
+    try {
+      out = diff(`${base}..${head}`);
+    } catch {
+      throw err;
+    }
+  }
   return out.split("\0").filter(Boolean);
 }
 
