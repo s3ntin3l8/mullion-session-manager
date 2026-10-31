@@ -516,7 +516,7 @@ export function TaskDetail({
             </div>
             <TaskModelControls
               task={task}
-              workerAgent={task.agent || projectDefaultAgent}
+              workerAgent={task.agent || task.issueAgent || projectDefaultAgent}
               reviewerAgent={
                 reviewAgentForModel === "none" || reviewAgentForModel === HERMES_REVIEW_OPTION.value
                   ? null
