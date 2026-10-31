@@ -12,7 +12,7 @@ import {
   replyToReviewThread,
   resolveReviewThread,
 } from "../services/github-write.js";
-import { loadProjectRepoContext } from "./projects.js";
+import { loadProjectRepoContext } from "./project-github.js";
 
 // The GitHub sidebar's own writes (#1672 a, b): reply to and resolve a review
 // thread, comment on an issue or PR, and submit a PR review. Each goes out

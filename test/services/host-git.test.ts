@@ -390,8 +390,8 @@ describe("host-git.ts", () => {
     });
   });
 
-  // Moved here from github-webhook.ts as part of routes/projects.ts's
-  // GitHub-route dedup — routes/projects.ts's `loadProjectRepoContext`
+  // Moved here from github-webhook.ts as part of the GitHub-route dedup in
+  // routes/project-github.ts — its `loadProjectRepoContext`
   // needs the 3-way `ok:true/value:null` vs. `ok:false` split
   // `resolveRepoRefResult` gives it (unlike the null-collapsing
   // `resolveRepoRef` below, which every other caller — webhook
