@@ -105,18 +105,6 @@ export function attentionSummary(prs: readonly { prPhase?: GitHubPrPhase }[]): {
   return { total, byPhase };
 }
 
-/** The PR the rail badge routes to: the most urgent attention phase wins
- * (ATTENTION_ORDER), the list order breaks ties. Null when nothing needs the user. */
-export function firstAttentionPr<T extends { number: number; prPhase?: GitHubPrPhase }>(
-  prs: readonly T[],
-): T | null {
-  for (const phase of ATTENTION_ORDER) {
-    const hit = prs.find((pr) => pr.prPhase === phase);
-    if (hit) return hit;
-  }
-  return null;
-}
-
 // ───────── Status-first derivations (epic #1965, B4) ─────────
 // ONE reading of "how is this PR doing" for the three dimensions, shared by the
 // list row and the detail view so the two can never disagree.
