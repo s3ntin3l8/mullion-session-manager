@@ -389,7 +389,7 @@ describe("SidebarRow hover actions do not shift layout", () => {
     // after the actions: a trailing-only row has no overlay, so its badge stays.
     expect(css).toContain(".sb-row:hover .sb-row-trail > .sb-row-actions ~ *:not(:focus)");
     expect(css).toContain(
-      ".sb-row:has(.sb-row-actions :focus) .sb-row-trail > .sb-row-actions ~ *",
+      ".sb-row:has(.sb-row-actions :focus) .sb-row-trail > .sb-row-actions ~ *:not(:focus)",
     );
     expect(css).not.toMatch(/\.sb-row:hover \.sb-row-trail > :not\(/);
     expect(css).not.toMatch(/\.sb-row:hover \.sb-row-actions[^{]*\{[^}]*display:/);
@@ -405,7 +405,8 @@ describe("SidebarRow chips under the hover actions", () => {
     const block = css
       .split("@media (hover: hover) {")
       .find((chunk) => chunk.includes(".sb-row-actions ~ *"));
-    return block ? block.slice(0, block.indexOf("\n}\n")) : "";
+    const end = block?.indexOf("\n}\n") ?? -1;
+    return block && end > 0 ? block.slice(0, end) : "";
   })();
   let style: HTMLStyleElement | undefined;
   afterEach(() => {
