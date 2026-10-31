@@ -184,12 +184,17 @@ export function Segmented<T extends string>({
   value,
   onChange,
   ariaLabel,
+  disabled,
 }: {
   options: Array<{ value: T; label: ReactNode }>;
   value: T;
   onChange: (v: T) => void;
   // Overrides the name the enclosing Row would otherwise supply.
   ariaLabel?: string;
+  // Locks the whole group (e.g. while an operation that depends on the
+  // selection is in flight): every radio is disabled, so nothing looks
+  // operable and arrow keys cannot move focus.
+  disabled?: boolean;
 }) {
   const label = useControlLabel(ariaLabel);
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -253,6 +258,7 @@ export function Segmented<T extends string>({
           type="button"
           role="radio"
           aria-checked={opt.value === value}
+          disabled={disabled}
           tabIndex={i === tabbableIndex ? 0 : -1}
           className={`settings-segmented-btn${opt.value === value ? " active" : ""}`}
           onFocus={() => {

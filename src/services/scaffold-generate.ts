@@ -273,7 +273,7 @@ export interface GeneratedScaffoldContent {
    * was not run.
    *
    * Only surfaced via `/setup/generate`'s response — ProjectSetupPanel's
-   * "Generate with agent" button shows it as a warning. `/setup/preview`
+   * agent-path Generate button shows it as a warning. `/setup/preview`
    * never carries it: the preview step runs no generation, so it can't know
    * the output yet. */
   possiblyGeneric?: boolean;

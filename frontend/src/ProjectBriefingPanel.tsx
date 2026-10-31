@@ -90,9 +90,9 @@ to be.
 // at all (a live note, not a repo-committable artifact).
 const SCAFFOLD_RECOMMENDATION_NOTICE =
   "Recommended: use Scaffold Mullion (Command Palette → “Scaffold Mullion: <project>”) and " +
-  "choose “Generate with agent” to write this from your actual codebase — a sandboxed agent " +
-  "turn analyzing this project produces higher-quality, project-specific content than a " +
-  "blank text box (“Preview” alone only writes starter placeholders). Edit the field " +
+  "choose “Write it with an agent” to write this from your actual codebase — a sandboxed " +
+  "agent turn analyzing this project produces higher-quality, project-specific content than a " +
+  "blank text box (the “Starter template” path only writes placeholders). Edit the field " +
   "below directly only if you need a manual override.";
 
 // Issue #1083 — codex and agy have no ephemeral per-session channel at all

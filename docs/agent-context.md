@@ -82,9 +82,9 @@ note, a skill, and a reviewer subagent per project, stored as one row in the
 write**:
 
 **For skill/reviewer specifically, prefer Scaffold Mullion instead**
-(issue #1082(b)) — its **Generate with agent** button runs agent-assisted
+(issue #1082(b)) — its **Write it with an agent** path runs agent-assisted
 scaffold-content generation (#956: a real, sandboxed agent turn analyzing the
-actual codebase; plain **Preview** only writes starter placeholders), so free-text
+actual codebase; the **Starter template** path only writes placeholders), so free-text
 authoring here produces lower-quality, generic content by comparison, and
 the ProjectBriefingPanel UI itself now leads with a "use Scaffold Mullion"
 recommendation on those two fields. These two fields remain fully
@@ -290,9 +290,12 @@ author it per-project in Mullion's own UI, the **Scaffold Mullion**
 panel (Command Palette → "Scaffold Mullion: \<project\>") turns the same
 three artifacts into a real, reviewable pull request:
 
-**Preview vs. Generate.** The panel offers two ways to compute the file set
-below. **Preview** writes starter placeholders (no agent). **Generate with
-agent** (`POST /api/projects/:id/setup/generate/start` is the background-job
+**Agent vs. template.** A switch at the top of the panel picks one of two ways
+to compute the file set below, and the instructions choice and the agent only
+exist on the agent path. **Starter template** (button: Preview starter
+template) writes placeholders (no agent). **Write it with an agent** (button:
+Generate with `<agent>`, which names the project's default agent;
+`POST /api/projects/:id/setup/generate/start` is the background-job
 server route that the panel will call once its progress/reattach UI lands in
 issue #2479; the panel still calls the synchronous
 `POST /api/projects/:id/setup/generate`, which also remains for direct API
