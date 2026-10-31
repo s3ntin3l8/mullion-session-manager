@@ -246,8 +246,9 @@ export async function getIssueDetail(
   number: number,
 ): Promise<IssueDetail> {
   const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${number}`;
+  // Page 1 is GitHub's default, so its URL stays the plain one.
   const commentsUrl = (page: number) =>
-    `${base}/comments?per_page=${COMMENTS_PAGE_SIZE}&page=${page}`;
+    `${base}/comments?per_page=${COMMENTS_PAGE_SIZE}${page > 1 ? `&page=${page}` : ""}`;
   const [issue, firstPage] = await Promise.all([
     getJson<RawIssue>(base, token, HTML_ACCEPT),
     getJson<RawComment[]>(commentsUrl(1), token, HTML_ACCEPT),

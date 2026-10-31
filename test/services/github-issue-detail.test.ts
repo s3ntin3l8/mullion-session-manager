@@ -32,10 +32,9 @@ const page = (from: number, to: number) =>
 
 function serve(commentCount: number) {
   mockFetch.mockImplementation(async (path: string) => {
-    const m = /comments\?per_page=100&page=(\d+)/.exec(path);
-    const body = m
-      ? page((Number(m[1]) - 1) * 100 + 1, Math.min(Number(m[1]) * 100, commentCount))
-      : issue(commentCount);
+    const m = /comments\?per_page=100(?:&page=(\d+))?$/.exec(path);
+    const n = m ? Number(m[1] ?? 1) : 0;
+    const body = m ? page((n - 1) * 100 + 1, Math.min(n * 100, commentCount)) : issue(commentCount);
     return { ok: true, status: 200, json: async () => body };
   });
 }
