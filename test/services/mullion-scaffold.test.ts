@@ -869,6 +869,10 @@ describe("computeScaffold", () => {
       // The region's own line does not count as "elsewhere".
       const once = gitignore(computeScaffold({}, withWt)) as string;
       expect(gitignore(computeScaffold({ ".gitignore": once }, withWt))).toBe(once);
+      // A longer token starting with the start marker text does not strip a
+      // pre-region `.wt/` line during the `ignoresWtElsewhere` check.
+      const withLongerToken = `# mullion:worktrees:started-by-hand\n.wt/\n${WORKTREES_IGNORE_MARKER_START}\n${WORKTREES_IGNORE_MARKER_END}\n`;
+      expect(gitignore(computeScaffold({ ".gitignore": withLongerToken }, withWt))).toBeUndefined();
     });
 
     it("leaves .gitignore alone when the conventions do not use .wt/", () => {
@@ -1301,6 +1305,32 @@ describe("computeScaffold — restructured instructions (issue #2316)", () => {
     expect(later.match(/mullion:moved:start/g)).toHaveLength(1);
     expect(later).toContain("v1 (hand-edited)");
     expect(later).toContain("## Other");
+  });
+
+  it("preserves prior moved text in CONTRIBUTING.md even when it contains an unclosed fence", () => {
+    const first = get(
+      computeScaffold(
+        {},
+        {
+          slug: "demo",
+          generated: { agentsMdBody: body, contributingAppend: "## Moved\n```sh\nnpm test\n" },
+        },
+      ),
+      "CONTRIBUTING.md",
+    )!;
+    const second = get(
+      computeScaffold(
+        { "CONTRIBUTING.md": first },
+        {
+          slug: "demo",
+          generated: { agentsMdBody: body, contributingAppend: "## Second\nmore\n" },
+        },
+      ),
+      "CONTRIBUTING.md",
+    )!;
+    expect(second.match(/mullion:moved:start/g)).toHaveLength(1);
+    expect(second).toContain("```sh\nnpm test");
+    expect(second).toContain("## Second\nmore");
   });
 
   it("combines the pointer and the moved region in one CONTRIBUTING.md entry", () => {

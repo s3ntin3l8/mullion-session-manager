@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   clampToBytes,
   extractMarkedRegion,
+  stripMarkedRegion,
   upsertMarkedRegion,
   topLevelLines,
   upsertMarkedRegionAfterIntro,
@@ -50,6 +51,29 @@ describe("extractMarkedRegion", () => {
     expect(extractMarkedRegion(`\`\`\`\n${START}\nfenced\n${END}\n\`\`\``, START, END)).toBeNull();
     const withRealAfterFence = `\`\`\`\n${START}\nfenced\n${END}\n\`\`\`\n${START}\nreal\n${END}`;
     expect(extractMarkedRegion(withRealAfterFence, START, END)).toBe("real");
+  });
+
+  it("extracts a region whose body contains an unclosed fence", () => {
+    const text = `${START}\n## Setup\n\`\`\`sh\nnpm install\n${END}\n\n\`\`\`sh\nnpm test\n\`\`\``;
+    expect(extractMarkedRegion(text, START, END)).toBe("## Setup\n```sh\nnpm install");
+  });
+});
+
+describe("stripMarkedRegion", () => {
+  it("strips the first complete top-level region and leaves surrounding text intact", () => {
+    const text = `before\n${START}\nbody\n${END}\nafter`;
+    expect(stripMarkedRegion(text, START, END)).toBe("before\n\nafter");
+  });
+
+  it("returns the input unchanged when no complete pair is present", () => {
+    expect(stripMarkedRegion(`only\n${START}\nhere`, START, END)).toBe(`only\n${START}\nhere`);
+  });
+
+  it("ignores a marker prefix inside a longer token instead of stripping from it", () => {
+    const m1 = "# mullion:worktrees:start";
+    const m2 = "# mullion:worktrees:end";
+    const text = `# mullion:worktrees:started-by-hand\n.wt/\n${m1}\n.wt/\n${m2}\n`;
+    expect(stripMarkedRegion(text, m1, m2)).toBe("# mullion:worktrees:started-by-hand\n.wt/\n\n");
   });
 });
 
@@ -370,6 +394,30 @@ describe("upsertMarkedRegionAfterIntro", () => {
     expect(twice).toContain(`Use ${START} or \`${START}\`.`);
     expect(extractMarkedRegion(twice, START, END)).toBe("body2");
   });
+
+  it("replaces an existing region in place when an unclosed fence or stray comment precedes it", () => {
+    const text = `# Proj\n\n\`\`\`bash\nnpm run dev\n\n## Rules\n${START}\nold region\n${END}\n`;
+    const once = upsertMarkedRegionAfterIntro(text, START, END, "new region");
+    expect(once).toBe(
+      `# Proj\n\n\`\`\`bash\nnpm run dev\n\n## Rules\n${START}\nnew region\n${END}\n`,
+    );
+    expect(once.match(new RegExp(START, "g"))).toHaveLength(1);
+    expect(upsertMarkedRegionAfterIntro(once, START, END, "new region")).toBe(once);
+
+    const withStrayComment = `# Proj\n\n<!-- unclosed\n\n${START}\nold region\n${END}\n`;
+    const commentOnce = upsertMarkedRegionAfterIntro(withStrayComment, START, END, "new region");
+    expect(commentOnce).toBe(`# Proj\n\n<!-- unclosed\n\n${START}\nnew region\n${END}\n`);
+    expect(commentOnce.match(new RegExp(START, "g"))).toHaveLength(1);
+  });
+
+  it("replaces a region whose own body contains an unclosed fence without duplicating it", () => {
+    const text = `# Proj\n\n${START}\nbody\n\`\`\`bash\nnpm run dev\n${END}\n\n## Later\n\`\`\`bash\nnpm test\n\`\`\`\n`;
+    const once = upsertMarkedRegionAfterIntro(text, START, END, "clean body");
+    expect(once).toBe(
+      `# Proj\n\n${START}\nclean body\n${END}\n\n## Later\n\`\`\`bash\nnpm test\n\`\`\`\n`,
+    );
+    expect(once.match(new RegExp(START, "g"))).toHaveLength(1);
+  });
 });
 
 describe("topLevelLines", () => {
@@ -400,5 +448,23 @@ describe("topLevelLines", () => {
 
   it("ignores a single-line comment", () => {
     expect(topLevelLines(["<!-- c -->", "p"])).toEqual([true, true]);
+  });
+
+  it("does not hide the rest of the document after an unclosed fence or unclosed comment", () => {
+    expect(topLevelLines(["```bash", "npm run dev", "## Heading"])).toEqual([true, true, true]);
+    expect(topLevelLines(["```bash", "unclosed", "```sh", "closed", "```", "after"])).toEqual([
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+    ]);
+    expect(topLevelLines(["<!-- unclosed", "<!-- single -->", "after"])).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect(topLevelLines(["<!-- unclosed", "after"])).toEqual([true, true]);
   });
 });

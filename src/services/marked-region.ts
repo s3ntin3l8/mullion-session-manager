@@ -3,14 +3,12 @@
 // delimited region into a scaffolded file), so "carry/author a delimited
 // slice of a doc" features use exactly one truncation behavior — not two
 // independently-drifting implementations of the same idea. `extractMarkedRegion`
-// itself has no production caller of its own as of issue #949 (which
-// removed agent-guide.ts's `readAgentGuideExcerpt`, the last one) — kept
-// here as `upsertMarkedRegion`'s natural read-side counterpart and exercised
-// directly by this file's own test suite plus mullion-scaffold.test.ts's
-// round-trip assertions against `upsertMarkedRegion`'s output. Any future
-// caller reading a marked region should use its own marker-string constant,
-// same posture the removed caller and project-briefing.ts's
-// `mullion:briefing:*` constants both had — so two features' regions can
+// is `upsertMarkedRegion`'s read-side counterpart (used by mullion-scaffold.ts
+// to read back an existing `mullion:moved` region in CONTRIBUTING.md, and by
+// the test suites for round-trip assertions against `upsertMarkedRegion`'s
+// output). Every caller reading or writing a marked region uses its own
+// marker-string constant (`mullion:briefing:*`, `mullion:pointer:*`,
+// `mullion:moved:*`, `mullion:worktrees:*`) so two features' regions can
 // never cross-match each other.
 
 /**
@@ -33,6 +31,23 @@ export function extractMarkedRegion(
   const { pairs } = findMarkedRegions(text, startMarker, endMarker);
   if (pairs.length === 0) return null;
   return text.slice(pairs[0].start.lineEndWithoutEol, pairs[0].end.lineStart).trim();
+}
+
+/**
+ * Returns `text` with the first complete top-level marked region (from its
+ * `startMarker` line through the end of its `endMarker` line, without
+ * consuming the `endMarker` line's trailing newline) removed. Returns `text`
+ * unchanged when no complete pair is present. Uses the same standalone
+ * top-level line matching as `extractMarkedRegion` and `upsertMarkedRegion`,
+ * so a marker embedded in a longer token, inline code/prose, frontmatter, a
+ * fenced code block, or a multi-line HTML comment is never mistaken for a
+ * region boundary.
+ */
+export function stripMarkedRegion(text: string, startMarker: string, endMarker: string): string {
+  const { pairs } = findMarkedRegions(text, startMarker, endMarker);
+  if (pairs.length === 0) return text;
+  const first = pairs[0];
+  return text.slice(0, first.start.lineStart) + text.slice(first.end.lineEndWithoutEol);
 }
 
 /**
@@ -134,13 +149,16 @@ export function upsertMarkedRegion(
 
 /**
  * Per line of a markdown document: true when the line is "top level" prose,
- * false when it sits inside a leading YAML frontmatter block, a fenced code
- * block (matched on fence character and length, at most 3 spaces of indent,
- * as CommonMark does) or a multi-line HTML comment. Used to find structure
- * (a `## ` heading, a bare import line) without being fooled by examples
- * quoted inside code or comments. Deliberately small, not a markdown parser:
- * callers fall back to the safe behavior (append, leave alone) when nothing
- * qualifies.
+ * false when it sits inside a closed leading YAML frontmatter block, a closed
+ * fenced code block (matched on fence character and length, at most 3 spaces
+ * of indent, as CommonMark does), or a closed multi-line HTML comment. Only
+ * balanced constructs hide the lines inside them — an unclosed fence opener or
+ * stray `<!--` leaves the rest of the document top-level so a broken snippet
+ * cannot swallow a marked region or heading further down. Used to find
+ * structure (a `## ` heading, a bare import line, a standalone region marker)
+ * without being fooled by examples quoted inside code or comments.
+ * Deliberately small, not a markdown parser: callers fall back to the safe
+ * behavior (append, leave alone) when nothing qualifies.
  */
 export function topLevelLines(lines: string[]): boolean[] {
   const out: boolean[] = new Array<boolean>(lines.length).fill(true);
@@ -158,34 +176,55 @@ export function topLevelLines(lines: string[]): boolean[] {
       i = close + 1;
     }
   }
-  let fence: { ch: string; len: number } | null = null;
-  let inComment = false;
   for (; i < lines.length; i++) {
     const line = lines[i].replace(/\r$/, "");
-    if (fence) {
-      out[i] = false;
-      const m = /^ {0,3}(`{3,}|~{3,})\s*$/.exec(line);
-      if (m && m[1][0] === fence.ch && m[1].length >= fence.len) fence = null;
-      continue;
-    }
-    if (inComment) {
-      out[i] = false;
-      if (line.includes("-->")) inComment = false;
-      continue;
-    }
     const f = /^ {0,3}(`{3,}|~{3,})/.exec(line);
     if (f) {
-      fence = { ch: f[1][0], len: f[1].length };
-      out[i] = false;
-      continue;
+      const close = findClosingFenceLine(lines, i + 1, f[1][0], f[1].length);
+      if (close !== -1) {
+        for (let k = i; k <= close; k++) out[k] = false;
+        i = close;
+        continue;
+      }
     }
     const open = line.lastIndexOf("<!--");
     if (open !== -1 && !line.includes("-->", open)) {
-      out[i] = false;
-      inComment = true;
+      const close = findClosingCommentLine(lines, i + 1);
+      if (close !== -1) {
+        for (let k = i; k <= close; k++) out[k] = false;
+        i = close;
+      }
     }
   }
   return out;
+}
+
+function findClosingFenceLine(lines: string[], from: number, ch: string, len: number): number {
+  for (let k = from; k < lines.length; k++) {
+    const line = lines[k].replace(/\r$/, "");
+    const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (!m || m[1][0] !== ch || m[1].length < len) continue;
+    if (m[2].trim() === "") return k;
+    // A fence of the same char and length with an info string cannot be nested
+    // inside an outer fence of the same char and length (its closing fence
+    // would close the outer one first), so seeing one before any closer means
+    // the earlier opener was left unclosed.
+    if (m[1].length === len) return -1;
+  }
+  return -1;
+}
+
+function findClosingCommentLine(lines: string[], from: number): number {
+  for (let k = from; k < lines.length; k++) {
+    const closeIdx = lines[k].indexOf("-->");
+    const openIdx = lines[k].indexOf("<!--");
+    // HTML comments do not nest: a new `<!--` before any `-->` (including a
+    // standalone `<!-- mullion:...:start -->` marker line) means the earlier
+    // `<!--` was left unclosed rather than wrapping this line.
+    if (openIdx !== -1 && (closeIdx === -1 || openIdx < closeIdx)) return -1;
+    if (closeIdx !== -1) return k;
+  }
+  return -1;
 }
 
 interface MarkerLine {
