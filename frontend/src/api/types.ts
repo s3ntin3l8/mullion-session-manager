@@ -2265,6 +2265,8 @@ export interface Task {
   // an outstanding merge request AND a recorded error at the same time
   // (the sweep keeps retrying). Null means no known problem.
   mergeError: string | null;
+  // When the current auto-rebase attempt started (attemptAutoRebase); null when none is running.
+  rebaseStartedAt: string | null;
   // #744 — set once this task's own PR merges, on a project with
   // autoTagRelease on. The autorelease sweep clears this once the release PR
   // merges (or the toggle turns out to be pointing at a repo with no

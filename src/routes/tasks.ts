@@ -273,6 +273,9 @@ const TASK_ROW_COLUMNS = {
   // cause, not the frontend guards themselves.
   mergeRequestedAt: tasks.mergeRequestedAt,
   mergeError: tasks.mergeError,
+  // Auto-rebase attempt marker (task-reconciler.ts's attemptAutoRebase): the
+  // PR sidebar reads it to say a done task's conflicts are already owned.
+  rebaseStartedAt: tasks.rebaseStartedAt,
   releaseRequestedAt: tasks.releaseRequestedAt,
   releaseError: tasks.releaseError,
   assignee: tasks.assignee,

@@ -6,7 +6,15 @@ import { PHASE_LABEL } from "./prPhase.js";
 // disabled hides why; this says it.
 
 export type NextStepKind =
-  "merge" | "threads" | "handoff" | "checks" | "reReview" | "update" | "none";
+  | "merge"
+  | "threads"
+  | "handoff"
+  | "sendBack"
+  | "openWorker"
+  | "checks"
+  | "reReview"
+  | "update"
+  | "none";
 
 export interface NextStep {
   kind: NextStepKind;
@@ -15,7 +23,38 @@ export interface NextStep {
   disabled: boolean;
 }
 
-export function nextStep(phase: GitHubPrPhase | undefined, unresolved: number): NextStep {
+/** What the step needs to know about the PR's Task Master task, when it has one. */
+export interface StepTask {
+  task: Pick<Task, "status" | "rebaseStartedAt" | "mergeError">;
+  /** The task's own worker session is alive. */
+  workerLive: boolean;
+}
+
+// A task PR's "handoff" must not start a second session on the task's branch —
+// that competes with the task's worker. Route it through Task Master instead.
+function taskHandoff(phase: GitHubPrPhase | undefined, { task, workerLive }: StepTask): NextStep {
+  if (task.status === "reviewing") {
+    return { kind: "sendBack", label: "Send back to worker", disabled: false };
+  }
+  if (workerLive) return { kind: "openWorker", label: "Open worker session", disabled: false };
+  if (task.status === "done" && phase === "conflicts") {
+    const label = task.rebaseStartedAt
+      ? "Auto-rebase in progress"
+      : task.mergeError
+        ? "Auto-rebase will retry"
+        : "Auto-rebase will fix conflicts";
+    return { kind: "none", label, disabled: true };
+  }
+  return { kind: "none", label: "Task Master owns this PR", disabled: true };
+}
+
+export function nextStep(
+  phase: GitHubPrPhase | undefined,
+  unresolved: number,
+  taskCtx?: StepTask | null,
+): NextStep {
+  const handoff = (label: string): NextStep =>
+    taskCtx ? taskHandoff(phase, taskCtx) : { kind: "handoff", label, disabled: false };
   switch (phase) {
     case "ready_to_merge":
       return { kind: "merge", label: "Squash & merge", disabled: false };
@@ -29,9 +68,9 @@ export function nextStep(phase: GitHubPrPhase | undefined, unresolved: number): 
         disabled: false,
       };
     case "changes_requested":
-      return { kind: "handoff", label: "Address changes", disabled: false };
+      return handoff("Address changes");
     case "conflicts":
-      return { kind: "handoff", label: "Fix conflicts", disabled: false };
+      return handoff("Fix conflicts");
     case "behind":
       return { kind: "update", label: "Update branch", disabled: false };
     case "ci_failing":

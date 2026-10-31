@@ -1642,4 +1642,93 @@ describe("PrDetailView", () => {
       expect(await screen.findByText(/unavailable right now/)).toBeInTheDocument();
     });
   });
+
+  describe("a task PR's handoff step goes through Task Master", () => {
+    const seed = (status: string, sessions: ReturnType<typeof makeSession>[] = [], over = {}) =>
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 1 })],
+        sessions,
+        tasks: [
+          makeTask({
+            id: 5,
+            projectId: 1,
+            branchName: "feat-thing",
+            status,
+            ...over,
+          } as never),
+        ],
+        prsByProject: {
+          1: {
+            prs: [
+              {
+                number: 12,
+                title: "Add thing",
+                htmlUrl: "u",
+                author: "me",
+                headSha: "abc",
+                headBranch: "feat-thing",
+                baseBranch: "main",
+                ciStatus: "success",
+                actionsRuns: [],
+              },
+            ],
+            prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
+          },
+        },
+      });
+    const handoffStub = (fetchFn: (url: string) => Response | null) => (url: string) =>
+      url.endsWith("/handoff")
+        ? jsonResponse(200, { prompt: "Fix the threads", branch: "feat-thing" })
+        : fetchFn(url);
+    afterEach(() =>
+      useDashboardStore.setState({ projects: [], tasks: [], sessions: [], prsByProject: {} }),
+    );
+
+    it("sends a reviewing task back with the handoff prompt as feedback", async () => {
+      stub(
+        { ...PR, prPhase: "changes_requested" },
+        handoffStub(() => null),
+      );
+      const rejectTask = vi.fn().mockResolvedValue({});
+      const createSession = vi.fn();
+      seed("reviewing");
+      useDashboardStore.setState({ rejectTask, createSession });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      await userEvent.click(await screen.findByRole("button", { name: "Send back to worker" }));
+      expect(await screen.findByText("Task #5 sent back to its worker")).toBeInTheDocument();
+      expect(rejectTask).toHaveBeenCalledWith(5, "Fix the threads");
+      expect(createSession).not.toHaveBeenCalled();
+    });
+
+    it("opens the live worker session instead of starting one", async () => {
+      stub(
+        { ...PR, prPhase: "changes_requested" },
+        handoffStub(() => null),
+      );
+      const requestOpenSession = vi.fn();
+      const createSession = vi.fn();
+      seed("in_progress", [makeSession({ id: 31, projectId: 1, liveBranch: "feat-thing" })], {
+        sessionId: 31,
+      });
+      useDashboardStore.setState({ requestOpenSession, createSession });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      await userEvent.click(await screen.findByRole("button", { name: "Open worker session" }));
+      expect(requestOpenSession).toHaveBeenCalledWith(31);
+      expect(createSession).not.toHaveBeenCalled();
+    });
+
+    it("shows a done task's conflicts as owned by auto-rebase, with no session start", async () => {
+      stub(
+        { ...PR, prPhase: "conflicts" },
+        handoffStub(() => null),
+      );
+      seed("done", [], { rebaseStartedAt: "2026-01-01T00:00:00.000Z" });
+      const createSession = vi.fn();
+      useDashboardStore.setState({ createSession });
+      render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
+      const btn = await screen.findByRole("button", { name: "Auto-rebase in progress" });
+      expect(btn).toBeDisabled();
+      expect(createSession).not.toHaveBeenCalled();
+    });
+  });
 });
