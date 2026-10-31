@@ -58,6 +58,7 @@ describe("IconButton", () => {
       expect(screen.getByRole("tooltip")).not.toHaveClass("light");
       unmount();
 
+      const prior = useDashboardStore.getState().theme;
       useDashboardStore.setState({ theme: "light" });
       try {
         render(
@@ -68,7 +69,7 @@ describe("IconButton", () => {
         fireEvent.focus(screen.getByRole("button", { name: "Fetch" }));
         expect(screen.getByRole("tooltip")).toHaveClass("cmux-root", "light");
       } finally {
-        useDashboardStore.setState({ theme: "dark" });
+        useDashboardStore.setState({ theme: prior });
       }
     });
 
