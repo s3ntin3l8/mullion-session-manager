@@ -833,7 +833,8 @@ tasks.
 `hermes`) sends the review to Hermes instead of spawning a CLI session. It is
 opt-in twice: **Settings → Review relay → "Task Master
 reviews"** (`reviewRelay.taskMasterReviewer`) plus a stored Hermes URL and
-key. It does **not** depend on `reviewRelay.provider`, which only switches the
+key. `reviewRelay.taskMasterReviewer` is off by default (its default is `false`
+in `frontend/src/api/settings.ts` and the backend settings defaults). It does **not** depend on `reviewRelay.provider`, which only switches the
 GitHub-side relay. `hermesTaskReviewerUsable` (`hermes-integration.ts`) is the
 one predicate; the write routes refuse `hermes` with a 400 while it is false,
 and the resolver (`resolveReviewer`, `task-agent-resolve.ts`) answers "no
