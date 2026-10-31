@@ -615,12 +615,13 @@ describe("generateScaffoldContent — remote-hosted project (issue #1101)", () =
       .mockResolvedValue({ baseRef: "origin/main", sha: "deadbeef" });
     const turnSpy = vi
       .spyOn(remoteHostClientModule.RemoteHostClient.prototype, "resolveRunGenerationTurn")
-      // The remote agent's "ok" result carries `sandboxed` — the field the
-      // remote branch reads to report whether the turn ran sandboxed. The
-      // double omitted it (the production code tolerates a missing field
-      // with `?? false`), so it is stated explicitly here: the remote
-      // host's sandbox capability is not what this test is about.
-      .mockResolvedValue({ outcome: "ok", stdout: validOutput("demo"), sandboxed: false });
+      // Issue #1910 — a remote agent on 0.3.9/0.3.10 (shipped in PR #1134 before
+      // PR #1167 added `sandboxed` in 0.3.11) omits `sandboxed` from the "ok"
+      // result; GenerationTurnResult marks it optional so this wire shape is
+      // valid without a cast, and `turn.sandboxed ?? false` defaults it
+      // conservatively to `false`.
+      .mockResolvedValue({ outcome: "ok", stdout: validOutput("demo"), sandboxed: true })
+      .mockResolvedValueOnce({ outcome: "ok", stdout: validOutput("demo") });
 
     // A path that genuinely doesn't exist on THIS machine — if
     // generateScaffoldContent's remote branch ever fell through to the
@@ -628,8 +629,7 @@ describe("generateScaffoldContent — remote-hosted project (issue #1101)", () =
     // this test guards against), it would throw trying to operate against
     // a nonexistent directory, not resolve cleanly with parsed content.
     const fakeRemoteCwd = "/this/path/does/not/exist/on/this/machine";
-
-    const result = await generateScaffoldContent({
+    const callOpts = {
       app,
       hostId,
       cwd: fakeRemoteCwd,
@@ -639,10 +639,14 @@ describe("generateScaffoldContent — remote-hosted project (issue #1101)", () =
       hasSkill: false,
       hasReviewer: false,
       hasScaffoldRegion: false,
-    });
+    };
+
+    const result = await generateScaffoldContent(callOpts);
 
     expect(result.skill).toContain("Real invariant.");
     expect(result.reviewer).toContain("Read .claude/skills/demo/SKILL.md first.");
+    expect(result.sandboxed).toBe(false);
+    expect((await generateScaffoldContent(callOpts)).sandboxed).toBe(true);
     expect(turnSpy).toHaveBeenCalledWith(
       fakeRemoteCwd,
       "demo",
