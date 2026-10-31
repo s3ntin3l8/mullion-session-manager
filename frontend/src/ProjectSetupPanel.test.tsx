@@ -245,6 +245,41 @@ describe("ProjectSetupPanel", () => {
         expect(screen.queryByText(/outside Mullion/)).not.toBeInTheDocument();
         expect(screen.queryByText(/restructured below/)).not.toBeInTheDocument();
       });
+
+      it("renders the mode description outside .settings-row-control while keeping radiogroup labelling and disabling while generating", async () => {
+        let release!: (r: Response) => void;
+        vi.stubGlobal(
+          "fetch",
+          mockFetch({
+            generate: () => new Promise<Response>((resolve) => (release = resolve)) as never,
+          }),
+        );
+        const user = userEvent.setup();
+        render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+
+        const radiogroup = screen.getByRole("radiogroup", {
+          name: "Instructions this repo already has",
+        });
+        expect(radiogroup).toHaveClass("settings-row-control");
+        expect(radiogroup).toHaveAttribute("aria-labelledby", "setup-existing-instructions-label");
+        expect(radiogroup).toHaveAttribute("aria-describedby", "setup-existing-instructions-desc");
+
+        const desc = document.getElementById("setup-existing-instructions-desc");
+        expect(desc).not.toBeNull();
+        expect(desc).toHaveTextContent(/everything else stays as written/);
+        expect(radiogroup.contains(desc)).toBe(false);
+
+        await user.click(screen.getByLabelText("Tell me about conflicts"));
+        expect(desc).toHaveTextContent(/Nothing is rewritten/);
+
+        await user.type(screen.getByPlaceholderText("my-project"), "demo");
+        await user.click(screen.getByText("Generate with agent"));
+        for (const radio of screen.getAllByRole("radio")) {
+          expect(radio).toBeDisabled();
+        }
+        release(generated());
+        await screen.findByText("Preview — 2 files");
+      });
     });
 
     it("shows an error and stays on the form when generation fails", async () => {
