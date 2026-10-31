@@ -202,27 +202,31 @@ text rather than misstate a fact.
 code lines**.
 
 It is a **ratchet**, not a threshold. A flat rule would fail on 59 existing
-files the day it landed, so `scripts/max-file-lines.baseline.json` records
-each existing offender at its current size:
+files the day it landed, so each file is measured against a ceiling of its
+own:
 
 - a **new** file over 1,200 lines **fails**;
-- a **baselined** file over **its own** recorded ceiling **fails**;
-- a baselined file **under** its ceiling passes, and the script says by how
-  much the ceiling could be lowered;
-- a baseline entry whose file is gone is reported, so it can be removed.
+- an existing file that **grew** **fails**;
+- an existing file that did not grow **passes**.
 
-The policy is that ceilings only go **down** — the giants must shrink. The
-check cannot enforce that on its own, because it only reads the baseline as it
-stands; what it enforces is that growth **cannot happen quietly**, because
-recording a larger size is a visible change to a committed file. That is why
-the baseline is committed rather than generated.
+**The ceiling is the higher of two references**: the file's size at the
+**reference commit** (the merge base with the default branch), and the size
+recorded for it in `scripts/max-file-lines.baseline.json`.
 
-One consequence, and it is not hypothetical: the baseline records sizes as of
-a particular commit, so when `main` grows a baselined file — which it does,
-often, on these very files — the next pull request that touches it fails this
-check until the baseline is refreshed. That is deliberate. The refresh puts
-the growth in a diff where a reviewer sees it, instead of letting a giant grow
-unnoticed.
+The reference commit is what makes the guard survivable. A baseline is a
+snapshot, and it goes stale the moment `main` grows one of these files —
+which it does, often, on these very files. With only the snapshot, the guard
+would then fail the build of **every** later pull request, because it reads
+the whole tree rather than only the files a pull request touched. With the
+reference commit, a pull request is judged against what it actually changed,
+and `main`'s own growth is never mistaken for someone else's.
+
+So the policy is unchanged — the giants must not grow — but it is enforced
+against the change in front of you, not against a number that goes out of
+date on its own. The baseline remains the record of the giants, the fallback
+when there is no git reference to measure against, and the place a ceiling is
+**lowered** — the ratchet turning over, a deliberate reviewable act visible
+in the diff, and how the 59 existing offenders get fixed.
 
 The baseline holds 59 entries — 15 production files, 43 test files and one
 tooling script — because the ceiling applies to the whole source tree. Test

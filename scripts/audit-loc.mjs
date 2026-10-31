@@ -29,6 +29,7 @@ import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.mjs";
 import {
   AUDIT_ROOTS,
   areaOf,
@@ -89,8 +90,17 @@ function churnTable(root) {
   try {
     output = execFileSync(
       "git",
-      ["log", "--since=12 months ago", "--numstat", "--format=", "--", "src/**", "frontend/src/**"],
-      { cwd: root, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+      [
+        ...GIT_NO_AUTO_GC,
+        "log",
+        "--since=12 months ago",
+        "--numstat",
+        "--format=",
+        "--",
+        "src/**",
+        "frontend/src/**",
+      ],
+      { cwd: root, encoding: "utf8", env: gitEnv(), maxBuffer: 64 * 1024 * 1024 },
     );
   } catch {
     return [];

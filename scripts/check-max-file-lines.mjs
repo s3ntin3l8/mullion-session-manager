@@ -9,35 +9,40 @@
 // a build failure at the moment it happens.
 //
 // THIS IS A RATCHET, NOT A THRESHOLD. A flat "max 1,200 lines" rule would
-// fail on all 59 existing files the day it landed. Instead
-// `max-file-lines.baseline.json` records each existing offender's CURRENT
-// count, and a file fails only when it exceeds ITS OWN recorded ceiling. So:
+// fail on all 59 existing files the day it landed. Instead each file is
+// measured against a ceiling of its own, and so:
 //
 //   - a NEW file over 1,200 lines fails        (the global ceiling)
-//   - a baselined file over ITS ceiling fails  (its ceiling, not the global one)
-//   - a baselined file UNDER its ceiling passes, and the script says by how
-//     much its ceiling could be lowered
+//   - an existing file that GREW fails        (its size at the reference)
+//   - an existing file that did not grow passes
 //
-// Lowering a ceiling is the ratchet turning over: it is a deliberate,
-// reviewable act visible in the diff, and it is how the 59 existing offenders
-// get fixed.
+// WHAT THE CEILING IS, and why it is not one frozen number:
 //
-// The script cannot see the baseline's PREVIOUS values — it only reads the
-// file as it stands — so a ceiling RAISED in the baseline is not caught by
-// this check. It is caught by the DIFF: recording a larger size for a file
-// is a visible change to a committed file, and a reviewer sees it. That is
-// why the baseline is a committed file and not a generated one. The policy
-// is that ceilings only go DOWN (the giants must shrink); the check
-// enforces that growth cannot happen quietly, and the diff is what holds
-// the policy.
+//   ceiling(file) = max(baseline entry, size at the reference commit)
 //
-// ONE CONSEQUENCE, and it is not a hypothetical one: the baseline records
-// sizes as of a particular commit, so when `main` grows a baselined file —
-// which it does, often, on these very files — the next pull request that
-// touches it fails this check until the baseline is refreshed. That is
-// deliberate: the refresh puts the growth in a diff where a reviewer sees
-// it, rather than letting a giant grow unnoticed. Refresh it with
-// `node scripts/audit-loc.mjs` and the baseline's own counts.
+// The baseline entry (`max-file-lines.baseline.json`) is where the file stood
+// when the baseline was written — the floor, so the giants must not grow.
+// The size at the reference commit is where the file stood where this branch
+// forked from the default branch.
+//
+// The second term is what makes the guard survivable. Without it the baseline
+// is a snapshot that goes stale the moment `main` grows one of these files —
+// which it does, often, on these very files — and then EVERY later pull
+// request fails, because the guard reads the whole tree and not just the
+// files the pull request touched. With it, a pull request is only ever
+// judged against what it actually changed, and `main`'s own growth is never
+// mistaken for someone else's.
+//
+// So the policy is unchanged: the giants must not grow. What changed is that
+// the guard enforces it against the change in front of it, rather than
+// against a number that goes out of date on its own.
+//
+// A ceiling can still be LOWERED — that is the ratchet turning over, a
+// deliberate reviewable act visible in the diff, and it is how the 59
+// existing offenders get fixed. The script cannot see the baseline's PREVIOUS
+// values, so a ceiling RAISED in the baseline is caught by that diff rather
+// than by this check; that is why the baseline is a committed file and not a
+// generated one.
 //
 // The counting is shared with the audit that motivates this check
 // (`scripts/lib/audit-loc-core.mjs`), so the numbers the reports quote and the
@@ -49,11 +54,13 @@
 //   root       the tree to check (default: the repo this script lives in)
 //   --baseline the baseline file to read (default: the one beside this script)
 
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { AUDIT_ROOTS, countSourceFiles } from "./lib/audit-loc-core.mjs";
+import { GIT_NO_AUTO_GC, gitEnv } from "./git-env.mjs";
+import { AUDIT_ROOTS, countFileLines, countSourceFiles } from "./lib/audit-loc-core.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -125,6 +132,61 @@ const options = parseArgs(process.argv.slice(2));
 const baseline = readBaseline(options.baseline);
 const counts = countSourceFiles(options.root, AUDIT_ROOTS);
 
+/**
+ * The commit this tree is compared against: the MERGE BASE with the default
+ * branch. Everything is measured against where the branch forked, not against
+ * the tip of `main`, so a change that `main` itself made afterwards is not
+ * mistaken for this branch's growth.
+ *
+ * @param {string} root
+ * @returns {string | null}
+ */
+function resolveReferenceCommit(root) {
+  for (const ref of ["origin/main", "origin/master", "main", "master"]) {
+    try {
+      const base = execFileSync("git", [...GIT_NO_AUTO_GC, "merge-base", "HEAD", ref], {
+        cwd: root,
+        encoding: "utf8",
+        env: gitEnv(),
+      }).trim();
+      if (base) return base;
+    } catch {
+      // No such ref, or not a git checkout — try the next one.
+    }
+  }
+  return null;
+}
+
+/**
+ * A file's code-line count at the reference commit, or null when it did not
+ * exist there (a new file) or the reference is unavailable.
+ *
+ * @param {string} root
+ * @param {string | null} reference
+ * @param {string} relPath
+ * @returns {number | null}
+ */
+function codeLinesAtReference(root, reference, relPath) {
+  if (!reference) return null;
+  try {
+    const content = execFileSync("git", [...GIT_NO_AUTO_GC, "show", `${reference}:${relPath}`], {
+      cwd: root,
+      encoding: "utf8",
+      env: gitEnv(),
+      maxBuffer: 64 * 1024 * 1024,
+      // A file that did not exist at the reference is a normal answer, not an
+      // error — git's "fatal: path ... exists on disk, but not in ..." would
+      // otherwise print for every new file in the tree.
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return countFileLines(content, relPath).code;
+  } catch {
+    return null;
+  }
+}
+
+const reference = resolveReferenceCommit(options.root);
+
 /** Files that grew past their own ceiling. */
 const failures = [];
 /** Baselined files that shrank — the ratchet can turn over for these. */
@@ -134,25 +196,44 @@ const stale = [];
 
 for (const c of counts) {
   const recorded = baseline.files[c.path];
-  if (recorded === undefined) {
-    if (c.code > baseline.limit) {
-      failures.push({
-        path: c.path,
-        code: c.code,
-        ceiling: baseline.limit,
-        reason: "new file over the global ceiling",
-      });
+  // A file under the limit can never fail: its floor is the limit itself, so
+  // the ceiling is at least the limit and the file is below it. That is the
+  // overwhelming majority of the tree, and asking git about each one would
+  // spawn a process per file for nothing.
+  if (c.code <= baseline.limit) {
+    if (recorded !== undefined && c.code < recorded) {
+      shrinkable.push({ path: c.path, code: c.code, ceiling: recorded });
     }
     continue;
   }
-  if (c.code > recorded) {
+  // The ceiling is the HIGHER of the two references:
+  //
+  //   - the baseline's recorded size, which is where the file stood when the
+  //     baseline was written (the floor — the giants must not grow);
+  //   - the file's size at the reference commit, which absorbs any growth
+  //     `main` itself made after the baseline was written.
+  //
+  // Without the second term the guard would break the build of every later
+  // pull request the moment `main` grew one of these files — a change the
+  // pull request did not make. With it, a pull request is only ever judged
+  // against what it actually changed.
+  const atReference = codeLinesAtReference(options.root, reference, c.path);
+  const floor = recorded === undefined ? baseline.limit : recorded;
+  const ceiling = Math.max(floor, atReference ?? 0);
+
+  if (c.code > ceiling) {
     failures.push({
       path: c.path,
       code: c.code,
-      ceiling: recorded,
-      reason: "grew past its recorded ceiling",
+      ceiling,
+      reason:
+        recorded === undefined
+          ? "new file over the global ceiling"
+          : "grew past the size it had at the reference commit",
     });
-  } else if (c.code < recorded) {
+    continue;
+  }
+  if (recorded !== undefined && c.code < recorded) {
     shrinkable.push({ path: c.path, code: c.code, ceiling: recorded });
   }
 }
@@ -168,12 +249,14 @@ if (failures.length > 0) {
     console.error(`  ${f.path} — ${f.code} code lines, ceiling ${f.ceiling} (${f.reason})`);
   }
   console.error(
-    `\nThe ceiling is ${baseline.limit} code lines for a new file, and each\n` +
-      "baselined file's own recorded ceiling for an existing one.\n" +
-      "Split the file, or record its new size in the baseline file — the\n" +
-      "baseline is a committed file, so a size that goes UP shows up in the\n" +
-      "diff where a reviewer sees it, and one that goes DOWN is the ratchet\n" +
-      "turning over. Either way the growth cannot be silent.",
+    `\nThe ceiling is ${baseline.limit} code lines for a new file, and for an\n` +
+      "existing file the size it had at the reference commit — so this check\n" +
+      "is asking whether THIS change made a file bigger, not whether the\n" +
+      "file is bigger than it was once.\n" +
+      "Split the file, or — if the growth is deliberate — record the new size\n" +
+      "in the baseline file: it is a committed file, so a size that goes UP\n" +
+      "shows up in the diff where a reviewer sees it, and one that goes DOWN\n" +
+      "is the ratchet turning over. Either way the growth cannot be silent.",
   );
   process.exit(1);
 }
