@@ -24,11 +24,18 @@ from the checkout under review (it diffs `origin/main...HEAD`; `--base <ref>
 every reference it lists before judging the diff. `references.json` is the
 index; the same areas are:
 
-| Reference                                                                         | Read it when a diff touches                                         |
-| --------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| [`task-verdict-contract.md`](references/task-verdict-contract.md)                 | review verdict parsing, storing, posting, the reviewer App identity |
-| [`task-review-ingest-and-handle.md`](references/task-review-ingest-and-handle.md) | review ingestion, the review handle columns, `TASK_ROW_COLUMNS`     |
-| [`task-reconcile-loop.md`](references/task-reconcile-loop.md)                     | `reconcileTasks` sweeps, auto-return and rounds, approval carry     |
+| Reference                                                                             | Read it when a diff touches                                                |
+| ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| [`task-verdict-contract.md`](references/task-verdict-contract.md)                     | review verdict parsing, storing, posting, the reviewer App identity        |
+| [`task-review-ingest-and-handle.md`](references/task-review-ingest-and-handle.md)     | review ingestion, the review handle columns, `TASK_ROW_COLUMNS`            |
+| [`task-reconcile-loop.md`](references/task-reconcile-loop.md)                         | `reconcileTasks` sweeps, auto-return and rounds, approval carry            |
+| [`task-rebase-and-worktrees.md`](references/task-rebase-and-worktrees.md)             | auto-rebase, the review-spawn pass, `mergeable`, worktree reclaim          |
+| [`task-merge-and-cleanup.md`](references/task-merge-and-cleanup.md)                   | the merge sweep, retry-state maps, task session cleanup, the workflow gate |
+| [`review-relay.md`](references/review-relay.md)                                       | the Hermes review relay and external-reviewer runs                         |
+| [`boot-auth-and-limits.md`](references/boot-auth-and-limits.md)                       | boot-time auth checks, the credential reader, the origin gate, rate limits |
+| [`session-lifecycle.md`](references/session-lifecycle.md)                             | session liveness, kill, spawn rollback, per-session files, session env     |
+| [`pty-host-scope-and-remote-hosts.md`](references/pty-host-scope-and-remote-hosts.md) | the PTY-host protocol, scope ownership, remote hosts, git over a host      |
+| [`events-hooks-and-control.md`](references/events-hooks-and-control.md)               | event history, the hook protocol, adapter launch flags, the control socket |
 
 Each reference states the invariant, what breaks, and how to check it, and was
 verified against the code when it was written; if one contradicts the code you

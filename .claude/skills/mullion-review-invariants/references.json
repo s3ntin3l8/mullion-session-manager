@@ -31,5 +31,92 @@
       "src/routes/tasks.ts"
     ],
     "summary": "reconcileTasks sweep order, auto-return rounds and rollback, approval carry, per-host loop control flow"
+  },
+  {
+    "ref": ".claude/skills/mullion-review-invariants/references/task-rebase-and-worktrees.md",
+    "paths": [
+      "src/services/task-reconciler.ts",
+      "src/services/task-reseed.ts",
+      "src/services/task-claim.ts",
+      "src/services/git-worktree.ts",
+      "src/services/merge-readiness.ts"
+    ],
+    "summary": "auto-rebase and the review-spawn pass, never two agents in one worktree, mergeable is tri-state, worktree reclaim"
+  },
+  {
+    "ref": ".claude/skills/mullion-review-invariants/references/task-merge-and-cleanup.md",
+    "paths": [
+      "src/services/task-reconciler.ts",
+      "src/services/task-approve.ts",
+      "src/services/task-reseed.ts",
+      "src/services/task-workflow-gate.ts",
+      "src/services/task-promote.ts",
+      "src/services/github-write.ts",
+      "src/services/merge-readiness.ts"
+    ],
+    "summary": "merge sweep and 405/409, per-task backoff maps, session cleanup via killSession, the workflow-file push gate"
+  },
+  {
+    "ref": ".claude/skills/mullion-review-invariants/references/review-relay.md",
+    "paths": [
+      "src/services/hermes-review.ts",
+      "src/services/hermes-task-review.ts",
+      "src/services/hermes-client.ts",
+      "src/routes/review-relay.ts",
+      "src/plugins/review-marker-sweep.ts"
+    ],
+    "summary": "the Hermes review relay: session ids and idempotency keys, per-kind keys and cooldowns, marker check runs, external-reviewer runs"
+  },
+  {
+    "ref": ".claude/skills/mullion-review-invariants/references/boot-auth-and-limits.md",
+    "paths": [
+      "src/plugins/env.ts",
+      "src/plugins/auth.ts",
+      "src/plugins/security.ts",
+      "src/app.ts",
+      "src/services/sessions-dir-history.ts"
+    ],
+    "summary": "half-configured auth refuses to boot, one credential reader, the origin gate, default bind, the sessions dir, per-route rate limits"
+  },
+  {
+    "ref": ".claude/skills/mullion-review-invariants/references/session-lifecycle.md",
+    "paths": [
+      "src/services/session-reconciler.ts",
+      "src/services/session-lifecycle.ts",
+      "src/services/pty-manager.ts",
+      "src/services/session-files-cleanup.ts",
+      "src/services/launch-plan.ts",
+      "src/services/session-env-keys.ts",
+      "src/routes/sessions.ts"
+    ],
+    "summary": "a dead verdict only on affirmative dead, kill ordering, spawn-failure rollback, per-session file cleanup, env ordering"
+  },
+  {
+    "ref": ".claude/skills/mullion-review-invariants/references/pty-host-scope-and-remote-hosts.md",
+    "paths": [
+      "src/services/pty-manager.ts",
+      "src/services/pty-host-client.ts",
+      "src/services/pty-host-token.ts",
+      "src/services/scope/**",
+      "src/services/session-process.ts",
+      "src/services/remote-host-client.ts",
+      "src/services/host-git.ts",
+      "src/services/git-env.ts",
+      "src/routes/internal.ts"
+    ],
+    "summary": "the PTY-host master protocol, scope ownership, remote spawn fields, request signing, git over a remote host, gitEnv"
+  },
+  {
+    "ref": ".claude/skills/mullion-review-invariants/references/events-hooks-and-control.md",
+    "paths": [
+      "src/services/event-history.ts",
+      "src/services/event-store.ts",
+      "src/services/remote-event-bus.ts",
+      "src/services/remote-event-subscriber.ts",
+      "src/services/hook-protocol.ts",
+      "src/services/hook-adapters/**",
+      "src/plugins/control-socket.ts"
+    ],
+    "summary": "persisted event identity, the hook protocol and agent payload facts, per-CLI launch flags, control-socket scope enforcement and relay"
   }
 ]
