@@ -805,5 +805,50 @@ describe("ProjectSetupPanel", () => {
       await user.click(screen.getByText("Preview starter template"));
       expect(await screen.findByTestId("preview-source")).toHaveTextContent("Starter template");
     });
+    it("ignores a path switch while a turn is running", async () => {
+      let release: (r: Response) => void = () => {};
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          generate: () => new Promise<Response>((resolve) => (release = resolve)) as never,
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      await user.type(screen.getByPlaceholderText("my-project"), "demo");
+      await user.click(screen.getByRole("button", { name: /^Generate with / }));
+      await toTemplatePath(user);
+      expect(screen.getByRole("radio", { name: "Write it with an agent" })).toBeChecked();
+      release(generated());
+      await screen.findByText("Preview — 1 file");
+    });
+
+    it("keeps the regenerate choice offered after a 409 when switching path and back", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          generate: () => jsonResponse(409, { error: "skill and reviewer already exist" }),
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      await user.type(screen.getByPlaceholderText("my-project"), "demo");
+      await user.click(screen.getByRole("button", { name: /^Generate with / }));
+      await user.click(await screen.findByLabelText("Regenerate the skill"));
+      await toTemplatePath(user);
+      expect(screen.queryByLabelText("Regenerate the skill")).not.toBeInTheDocument();
+      await user.click(screen.getByRole("radio", { name: "Write it with an agent" }));
+      expect(screen.getByLabelText("Regenerate the skill")).toBeChecked();
+    });
+
+    it("names the path switch and the option toggles for assistive tech", () => {
+      vi.stubGlobal("fetch", mockFetch({}));
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      expect(screen.getByRole("radiogroup", { name: "Scaffold path" })).toBeInTheDocument();
+      expect(
+        screen.getByRole("button", { name: "Add a CONTRIBUTING.md pointer" }),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Symlink .agents/skills" })).toBeInTheDocument();
+    });
   });
 });

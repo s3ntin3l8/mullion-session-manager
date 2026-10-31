@@ -466,7 +466,15 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
         skill/reviewer settings (see the Mullion Briefing panel).
       </div>
       {error && <div className="agent-rules-panel-notice error">{error}</div>}
-      <Segmented options={PATH_OPTIONS} value={path} onChange={setPath} ariaLabel="Scaffold path" />
+      <Segmented
+        options={PATH_OPTIONS}
+        value={path}
+        onChange={(next) => {
+          // A running turn belongs to the path it was started on.
+          if (!generating && !previewing) setPath(next);
+        }}
+        ariaLabel="Scaffold path"
+      />
       <Row
         label="Slug"
         desc={
