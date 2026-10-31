@@ -35,6 +35,13 @@ export interface TaskReviewRound {
   round: number;
   /** How many times this round was re-armed; keeps a re-armed round's key fresh. */
   rearms: number;
+  /**
+   * Epoch seconds the task entered `reviewing` (`tasks.reviewingAt`). A human
+   * reject and re-review at the same head keeps round, rearms and head, but
+   * resets this, so Hermes' 24h idempotency replay cannot return the old run.
+   * A retry within one entry keeps it, so it still replays.
+   */
+  enteredAt: number;
 }
 
 /**
@@ -66,7 +73,7 @@ export function buildTaskReviewMessage(target: TaskReviewTarget, prompt: string)
 export function taskReviewIdempotencyKey(target: TaskReviewTarget, r: TaskReviewRound): string {
   return (
     `mullion-task-review:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.prNumber}` +
-    `:t${r.taskId}:r${r.round}:x${r.rearms}@${target.baseSha ?? ""}..${target.headSha}`
+    `:t${r.taskId}:r${r.round}:x${r.rearms}:e${r.enteredAt}@${target.baseSha ?? ""}..${target.headSha}`
   );
 }
 
@@ -178,7 +185,7 @@ const UNSENT_RUN_PREFIX = "unsent:";
  * round can be ingested as inconclusive and re-armed once; there is no run
  * behind it, so nothing may poll or stop it.
  */
-export function unsentRunId(r: TaskReviewRound): string {
+export function unsentRunId(r: Pick<TaskReviewRound, "taskId" | "round" | "rearms">): string {
   return `${UNSENT_RUN_PREFIX}${r.taskId}:r${r.round}:x${r.rearms}`;
 }
 

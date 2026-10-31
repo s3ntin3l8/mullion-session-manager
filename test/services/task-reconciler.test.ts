@@ -11175,6 +11175,42 @@ describe("reconcileTasks", () => {
         await app.close();
       });
 
+      it("keys a re-entry into reviewing at the same head differently, but a retry within one entry the same", async () => {
+        const app = await buildApp();
+        const t0 = new Date(Date.now() - 60_000);
+        const taskId = await createHermesTask(app, { reviewingAt: t0 });
+        mockDispatchTaskReview.mockRejectedValueOnce(new Error("connection refused"));
+
+        await reconcileTasks(app); // fails, retried on the next tick
+        await reconcileTasks(app);
+        expect(mockDispatchTaskReview).toHaveBeenCalledTimes(2);
+        const first = mockDispatchTaskReview.mock.calls[0][1];
+        const retry = mockDispatchTaskReview.mock.calls[1][1];
+        expect(retry.enteredAt).toBe(first.enteredAt);
+        expect(first.enteredAt).toBe(Math.floor(t0.getTime() / 1000));
+
+        // A human rejects and sends it straight back: same head, round and
+        // rearms, but a fresh entry into `reviewing`.
+        app.db
+          .update(tasks)
+          .set({
+            reviewRunId: null,
+            reviewRunDispatchedAt: null,
+            reviewRunHeadSha: null,
+            reviewingAt: new Date(t0.getTime() + HOUR),
+          })
+          .where(eq(tasks.id, taskId))
+          .run();
+        await reconcileTasks(app);
+        expect(mockDispatchTaskReview).toHaveBeenCalledTimes(3);
+        const again = mockDispatchTaskReview.mock.calls[2][1];
+        expect(again.target.headSha).toBe(first.target.headSha);
+        expect(again.round).toBe(first.round);
+        expect(again.rearms).toBe(first.rearms);
+        expect(again.enteredAt).not.toBe(first.enteredAt);
+        await app.close();
+      });
+
       it("does nothing when Hermes is not usable", async () => {
         mockHermesUsable.mockReturnValue(false);
         const app = await buildApp();
