@@ -1030,9 +1030,10 @@ fails fast and locally with `GitHubRateLimitError`, without spending a
 request (or its 5s timeout) proving what the budget already knows.
 
 **This is enforced at the transport, not threaded into
-task-reconciler.ts's three per-task backoff maps**
-(`draftPrRetryState`/`mergeRetryState`/`autoApproveRetryState`). Those maps
-record an attempt optimistically, before the network call even happens —
+task-reconciler.ts's independent backoff ledgers**
+(`draftPrRetryBackoff`/`mergeRetryBackoff`/`releaseRetryBackoff`/
+`autoApproveRetryBackoff`). Those ledgers record an attempt optimistically,
+before the network call even happens —
 there's no single catch site to hook a server-provided resume time into
 without a deeper refactor of the discriminated-result types the sweeps
 already use to swallow errors (`ApproveOutcome`/`PromoteOutcome`-style

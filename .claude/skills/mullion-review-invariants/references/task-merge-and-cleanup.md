@@ -1,7 +1,7 @@
 # Task merge sweep, retry state and session cleanup
 
 Read this when a diff touches `processMergeRequests`, `attemptMerge`, the
-module-level retry Maps in the task reconciler, how a task's sessions are ended,
+module-level retry ledgers in the task reconciler, how a task's sessions are ended,
 or the workflow-file push gate. Verified against `origin/main` baf16a1e; code is
 cited by symbol, not line.
 
@@ -23,12 +23,13 @@ cap strands tasks forever; a 409 is recorded as a permanent error.
 in `mergePullRequest`. A new terminal "gave up" state for a retryable
 mergeability is the red flag.
 
-## 2. Backoff Map entries are spread, not overwritten
+## 2. Backoff ledger entries keep the site's own fields
 
-**Invariant.** `mergeRetryState` and the sibling Maps (`autoApproveRetryState`,
-`draftPrRetryState`) hold long-lived fields such as `lastReassertedSha` next to
-the backoff timers. The sweep's per-iteration update must spread the previous
-entry before setting `lastAttemptedAt` and `attempts`. Re-asserting the reviewer
+**Invariant.** The reconciler's retry ledgers (`draftPrRetryBackoff`,
+`mergeRetryBackoff`, `releaseRetryBackoff`, `autoApproveRetryBackoff`, all built
+by `createRetryBackoff`) hold long-lived fields such as `lastReassertedSha` next
+to the backoff timers. A `record` must preserve the previous entry's fields
+before setting `lastAttemptedAt` and `attempts`. Re-asserting the reviewer
 App's approval is allowed only when the decision is `REVIEW_REQUIRED`, the task
 is `done`, and `lastReassertedSha` differs from the current head SHA; never after
 `CHANGES_REQUESTED`.
@@ -37,8 +38,8 @@ is `done`, and `lastReassertedSha` differs from the current head SHA; never afte
 identical APPROVE is reposted on every backoff; re-asserting over
 `CHANGES_REQUESTED` overrides an explicit rejection.
 
-**Check.** `git grep -n "mergeRetryState.set\|autoApproveRetryState.set\|draftPrRetryState.set" -- src`
-and confirm each write that can follow a callee-set field spreads. A new field in
+**Check.** `git grep -n "RetryBackoff.record" -- src`
+and confirm each write that can follow a callee-set field preserves it. A new field in
 such an entry needs a two-tick test.
 
 ## 3. Task sessions end through `killSession`

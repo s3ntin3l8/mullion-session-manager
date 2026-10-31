@@ -35,6 +35,10 @@ import { createThrottledWarn } from "./throttled-warn.js";
 // module's header.
 import { readPrCheckRuns } from "./pr-check-runs.js";
 import { canSpawnReviewer, deriveApprovalState } from "./task-approval-state.js";
+// One bounded, exponential-backoff retry ledger behind every retry site in
+// this file (draft PR, merge, release, auto-approve) — see the module's
+// own header for what it does and does not decide.
+import { createRetryBackoff } from "./task-retry-backoff.js";
 import {
   CLEARED_REVIEW_RUN,
   hasIngestedCurrentReview,
@@ -1660,13 +1664,26 @@ const DRAFT_PR_RETRY_MAX_TTL_MS = 60 * 60 * 1000;
 // pathological install with many simultaneously-stranded "reviewing" tasks
 // all hitting the same host's git/GitHub calls in one tick.
 const MAX_DRAFT_PR_RETRIES_PER_SWEEP = 20;
-// Bounds the attempt-state Map itself; nothing else would. Simple
+// Bounds the attempt-state ledger itself; nothing else would. Simple
 // oldest-inserted eviction (Map iteration order === insertion order) — this
-// map's entries self-expire via the TTL above far faster than 500 distinct
+// ledger's entries self-expire via the TTL above far faster than 500 distinct
 // tasks could realistically accumulate, so eviction policy sophistication
 // (see the parentTitleFetchAttempts precedent) isn't worth it here.
 const MAX_DRAFT_PR_RETRY_ENTRIES = 500;
-const draftPrRetryState = new Map<number, { lastAttemptedAt: number; attempts: number }>();
+// Keyed by task id. The ledger owns the eviction, the backoff curve and the
+// attempt counter; the policy (TTL, ceiling, cap) stays here.
+//
+// `attempts` is stored post-increment (1 after the very first attempt), so
+// the exponent is `attempts - 1`: the first wait is exactly
+// DRAFT_PR_RETRY_TTL_MS (2**0), then it doubles from there. Independent
+// review, PR #726 — using `attempts` directly made the very first backoff
+// 10 minutes, not the 5 the constant name implies. The ledger applies that
+// curve to every retry site in this file.
+const draftPrRetryBackoff = createRetryBackoff<number>({
+  ttlMs: DRAFT_PR_RETRY_TTL_MS,
+  maxTtlMs: DRAFT_PR_RETRY_MAX_TTL_MS,
+  maxEntries: MAX_DRAFT_PR_RETRY_ENTRIES,
+});
 // An attempt count high enough that either backoff curve is already at its
 // ceiling: how a permanent failure (a 403 push) skips the doubling ramp.
 const PERMANENT_FAILURE_ATTEMPTS = 64;
@@ -1674,13 +1691,9 @@ const PERMANENT_FAILURE_ATTEMPTS = 64;
 // instead of leaving them idle for up to the full ceiling.
 const permanentFailureTaskIds = new Set<number>();
 
-/** Bounded insert into the draft-PR retry map (oldest-first eviction). */
+/** Bounded insert into the draft-PR retry ledger (oldest-first eviction). */
 function setDraftPrRetryState(taskId: number, attempts: number, now: number): void {
-  if (!draftPrRetryState.has(taskId) && draftPrRetryState.size >= MAX_DRAFT_PR_RETRY_ENTRIES) {
-    const oldest = draftPrRetryState.keys().next().value;
-    if (oldest !== undefined) draftPrRetryState.delete(oldest);
-  }
-  draftPrRetryState.set(taskId, { lastAttemptedAt: now, attempts });
+  draftPrRetryBackoff.record(taskId, now, { attempts });
 }
 
 /**
@@ -1690,19 +1703,10 @@ function setDraftPrRetryState(taskId: number, attempts: number, now: number): vo
  */
 export function retryPermanentPushFailuresNow(): void {
   for (const id of permanentFailureTaskIds) {
-    draftPrRetryState.delete(id);
-    autoApproveRetryState.delete(id);
+    draftPrRetryBackoff.clear(id);
+    autoApproveRetryBackoff.clear(id);
   }
   permanentFailureTaskIds.clear();
-}
-
-// `attempts` is stored post-increment (1 after the very first attempt —
-// see the `.set()` call below), so the exponent is `attempts - 1`: the
-// first wait is exactly DRAFT_PR_RETRY_TTL_MS (2**0), then it doubles from
-// there. Independent review, PR #726 — using `attempts` directly here made
-// the very first backoff 10 minutes, not the 5 the constant name implies.
-function draftPrRetryBackoffMs(attempts: number): number {
-  return Math.min(DRAFT_PR_RETRY_TTL_MS * 2 ** (attempts - 1), DRAFT_PR_RETRY_MAX_TTL_MS);
 }
 
 // #759 — one entry-point check per sweep, not per task: skip opening the
@@ -1775,25 +1779,10 @@ async function retryStrandedDraftPRs(app: FastifyInstance): Promise<void> {
         // catches a limit already in effect when the tick started.
         if (isGitHubRateLimited()) return;
 
-        const state = draftPrRetryState.get(task.id);
-        if (
-          state !== undefined &&
-          now - state.lastAttemptedAt < draftPrRetryBackoffMs(state.attempts)
-        )
-          continue;
+        if (!draftPrRetryBackoff.shouldAttempt(task.id, now)) continue;
 
         attempted++;
-        if (
-          !draftPrRetryState.has(task.id) &&
-          draftPrRetryState.size >= MAX_DRAFT_PR_RETRY_ENTRIES
-        ) {
-          const oldest = draftPrRetryState.keys().next().value;
-          if (oldest !== undefined) draftPrRetryState.delete(oldest);
-        }
-        draftPrRetryState.set(task.id, {
-          lastAttemptedAt: now,
-          attempts: (state?.attempts ?? 0) + 1,
-        });
+        draftPrRetryBackoff.record(task.id, now);
 
         // maybeOpenDraftPR already re-reads the task's current git status
         // and is idempotent/best-effort (it's the exact same call the
@@ -1821,7 +1810,7 @@ async function retryStrandedDraftPRs(app: FastifyInstance): Promise<void> {
 // backoff) and act on it.
 //
 // Per-task attempt state is process-local (module state, not a DB column),
-// same posture and same reasoning as draftPrRetryState above — the merge
+// same posture and same reasoning as draftPrRetryBackoff above — the merge
 // *intent* is durable (tasks.mergeRequestedAt), the retry *rate limiter*
 // doesn't need to be.
 const MERGE_RETRY_TTL_MS = 60 * 1000;
@@ -1831,30 +1820,23 @@ const MERGE_RETRY_TTL_MS = 60 * 1000;
 const MERGE_RETRY_MAX_TTL_MS = 30 * 60 * 1000;
 const MAX_MERGE_RETRIES_PER_SWEEP = 20;
 const MAX_MERGE_RETRY_ENTRIES = 500;
-const mergeRetryState = new Map<
-  number,
-  {
-    lastAttemptedAt: number;
-    attempts: number;
-    // #737 (Hermes review, PR #827) — the head SHA a re-assert APPROVE was
-    // last posted for. Without this, a re-assert whose APPROVE succeeds at
-    // the GitHub API level but doesn't actually satisfy the branch
-    // protection rule (the reviewer App isn't an eligible approver — the
-    // CODEOWNERS limitation this feature already documents) never flips
-    // `reviewDecision` to `APPROVED`, so the "can't spin" argument's
-    // premise fails: every backoff tick would re-post an identical APPROVE
-    // on the same commit forever, spam bounded by ticks, not pushes. Only
-    // cleared by `clearMergeState`/`resetMergeBackoff`, same lifecycle as
-    // the rest of this entry — a human's explicit "Merge now"/"Retry
-    // merge" click (which calls `resetMergeBackoff`) deliberately gets a
-    // fresh re-assert attempt even on an unchanged head.
-    lastReassertedSha?: string;
-  }
->();
-
-function mergeRetryBackoffMs(attempts: number): number {
-  return Math.min(MERGE_RETRY_TTL_MS * 2 ** (attempts - 1), MERGE_RETRY_MAX_TTL_MS);
-}
+// Keyed by task id, and the one site that carries a field of its own:
+// `lastReassertedSha` — the head SHA a re-assert APPROVE was last posted
+// for. Without it, a re-assert whose APPROVE succeeds at the GitHub API
+// level but doesn't actually satisfy the branch protection rule (the
+// reviewer App isn't an eligible approver — the CODEOWNERS limitation this
+// feature already documents) never flips `reviewDecision` to `APPROVED`, so
+// the "can't spin" argument's premise fails: every backoff tick would
+// re-post an identical APPROVE on the same commit forever, spam bounded by
+// ticks, not pushes. Only cleared by `clearMergeState`/`resetMergeBackoff`,
+// same lifecycle as the rest of this entry — a human's explicit "Merge
+// now"/"Retry merge" click (which calls `resetMergeBackoff`) deliberately
+// gets a fresh re-assert attempt even on an unchanged head.
+const mergeRetryBackoff = createRetryBackoff<number, { lastReassertedSha?: string }>({
+  ttlMs: MERGE_RETRY_TTL_MS,
+  maxTtlMs: MERGE_RETRY_MAX_TTL_MS,
+  maxEntries: MAX_MERGE_RETRY_ENTRIES,
+});
 
 /**
  * Re-arms a task's merge backoff so the next reconcile tick attempts it
@@ -1864,7 +1846,7 @@ function mergeRetryBackoffMs(attempts: number): number {
  * to do nothing until the window elapsed on its own.
  */
 export function resetMergeBackoff(taskId: number): void {
-  mergeRetryState.delete(taskId);
+  mergeRetryBackoff.reset(taskId);
 }
 
 function clearMergeState(
@@ -1878,13 +1860,13 @@ function clearMergeState(
     .where(eq(tasks.id, task.id))
     .run();
   // Hermes review, PR #763 — without this, a resolved task's backoff entry
-  // lingers in mergeRetryState until MAX_MERGE_RETRY_ENTRIES forces an
+  // lingers in the merge ledger until MAX_MERGE_RETRY_ENTRIES forces an
   // oldest-insertion eviction, which can evict an ACTIVELY retrying task's
   // entry instead of a resolved one, silently resetting its backoff/attempt
-  // count. Deleting here (unlike draftPrRetryState's own "never gets read
+  // count. Deleting here (unlike draftPrRetryBackoff's own "never gets read
   // again" reasoning, which relies on the row dropping out of that sweep's
   // WHERE clause) closes that gap directly.
-  mergeRetryState.delete(task.id);
+  mergeRetryBackoff.clear(task.id);
   // #758, fresh-review fix — a task that went through attemptAutoRebase has
   // a REAL worktree/session again (worktreePath/sessionId overwritten from
   // their post-approve null), which nothing else ever cleans up once the
@@ -2569,7 +2551,7 @@ async function attemptMerge(
         // backoff tick would re-post an identical `APPROVE` on the same
         // commit forever, spam bounded by ticks, not pushes. Guarded here
         // by memoizing the head SHA a re-assert was last attempted for
-        // (`mergeRetryState`, shared with the rest of this task's merge
+        // (`mergeRetryBackoff`, shared with the rest of this task's merge
         // backoff — same lifecycle, cleared by `clearMergeState`/
         // `resetMergeBackoff`) and only trying again once `pr.headSha`
         // actually changes — restoring "bounded by pushes" as a guarantee
@@ -2579,7 +2561,7 @@ async function attemptMerge(
         // `processMergeRequests`' own per-task backoff cadence, same as
         // every other `attemptMerge` call, not on every tick — that part
         // of the throttling was never the issue.)
-        const retryState = mergeRetryState.get(task.id);
+        const retryState = mergeRetryBackoff.get(task.id);
         if (
           reviewDecision === "REVIEW_REQUIRED" &&
           task.status === "done" &&
@@ -2602,10 +2584,12 @@ async function attemptMerge(
               // Record the SHA regardless of whether this ends up
               // satisfying branch protection — that's precisely the case
               // this memoization exists to stop from retrying forever.
-              mergeRetryState.set(task.id, {
-                lastAttemptedAt: retryState?.lastAttemptedAt ?? Date.now(),
+              // The attempt count and the timestamp are carried over
+              // unchanged: this memoizes a re-assert, it does not start a
+              // new attempt.
+              mergeRetryBackoff.record(task.id, retryState?.lastAttemptedAt ?? Date.now(), {
                 attempts: retryState?.attempts ?? 1,
-                lastReassertedSha: pr.headSha,
+                extra: { lastReassertedSha: pr.headSha },
               });
               // Don't record an error — the next sweep tick re-reads
               // GitHub's fresh mergeable_state instead of retrying a merge
@@ -2802,27 +2786,19 @@ async function processMergeRequests(app: FastifyInstance): Promise<void> {
     if (attempted >= MAX_MERGE_RETRIES_PER_SWEEP) return;
     if (isGitHubRateLimited()) return; // #759 — see the draft-PR sweep's own comment
 
-    const state = mergeRetryState.get(task.id);
-    if (state !== undefined && now - state.lastAttemptedAt < mergeRetryBackoffMs(state.attempts))
-      continue;
+    if (!mergeRetryBackoff.shouldAttempt(task.id, now)) continue;
 
     attempted++;
-    if (!mergeRetryState.has(task.id) && mergeRetryState.size >= MAX_MERGE_RETRY_ENTRIES) {
-      const oldest = mergeRetryState.keys().next().value;
-      if (oldest !== undefined) mergeRetryState.delete(oldest);
-    }
-    // Hermes review, PR #827 (round 3): MUST spread `state` here — this
-    // write ran unconditionally, without preserving `lastReassertedSha`,
-    // immediately before every `attemptMerge` call. That silently wiped the
-    // re-assert memoization on the very next tick regardless of what
-    // `attemptMerge` itself had just recorded, making the round-2 fix a
-    // complete no-op: the exact "re-post an identical APPROVE every tick
-    // forever" spin it was written to prevent.
-    mergeRetryState.set(task.id, {
-      ...state,
-      lastAttemptedAt: now,
-      attempts: (state?.attempts ?? 0) + 1,
-    });
+    // Hermes review, PR #827 (round 3): the ledger MUST preserve
+    // `lastReassertedSha` here — this write ran unconditionally, without
+    // preserving it, immediately before every `attemptMerge` call. That
+    // silently wiped the re-assert memoization on the very next tick
+    // regardless of what `attemptMerge` itself had just recorded, making the
+    // round-2 fix a complete no-op: the exact "re-post an identical APPROVE
+    // every tick forever" spin it was written to prevent. The ledger keeps
+    // the site's own fields across a record unless the caller overrides
+    // them, so this write carries the memoized SHA over untouched.
+    mergeRetryBackoff.record(task.id, now);
 
     await attemptMerge(app, task, project);
   }
@@ -2856,11 +2832,14 @@ const RELEASE_RETRY_TTL_MS = 60 * 1000;
 const RELEASE_RETRY_MAX_TTL_MS = 30 * 60 * 1000;
 const MAX_RELEASE_ATTEMPTS_PER_SWEEP = 20;
 const MAX_RELEASE_RETRY_ENTRIES = 500;
-const releaseRetryState = new Map<number, { lastAttemptedAt: number; attempts: number }>();
-
-function releaseRetryBackoffMs(attempts: number): number {
-  return Math.min(RELEASE_RETRY_TTL_MS * 2 ** (attempts - 1), RELEASE_RETRY_MAX_TTL_MS);
-}
+// Keyed by PROJECT id, not task id: this sweep groups by project and acts
+// once per project per tick (a burst of N task merges coalesces into ONE
+// release PR merge attempt), so the rate limiter is per project too.
+const releaseRetryBackoff = createRetryBackoff<number>({
+  ttlMs: RELEASE_RETRY_TTL_MS,
+  maxTtlMs: RELEASE_RETRY_MAX_TTL_MS,
+  maxEntries: MAX_RELEASE_RETRY_ENTRIES,
+});
 
 function recordReleaseError(app: FastifyInstance, taskIds: number[], message: string): void {
   app.db.update(tasks).set({ releaseError: message }).where(inArray(tasks.id, taskIds)).run();
@@ -2939,7 +2918,7 @@ async function attemptRelease(
       })
       .where(inArray(tasks.id, taskIds))
       .run();
-    releaseRetryState.delete(project.id);
+    releaseRetryBackoff.clear(project.id);
     return;
   }
   if (detection.kind === "no-actions-scope") {
@@ -2955,7 +2934,7 @@ async function attemptRelease(
   // own to clear.
   const result = await resolveReleaseMerge(app, repoRef, token, project.id);
   if (result.merged) {
-    releaseRetryState.delete(project.id);
+    releaseRetryBackoff.clear(project.id);
     return;
   }
   recordReleaseError(app, taskIds, releaseMergeErrorMessage(result));
@@ -3048,19 +3027,10 @@ async function processReleaseRequests(app: FastifyInstance): Promise<void> {
     // window, so a steady trickle of merges never fires until it stops.
     if (now - maxRequestedAt < RELEASE_QUIET_MS) continue;
 
-    const state = releaseRetryState.get(project.id);
-    if (state !== undefined && now - state.lastAttemptedAt < releaseRetryBackoffMs(state.attempts))
-      continue;
+    if (!releaseRetryBackoff.shouldAttempt(project.id, now)) continue;
 
     attempted++;
-    if (!releaseRetryState.has(project.id) && releaseRetryState.size >= MAX_RELEASE_RETRY_ENTRIES) {
-      const oldest = releaseRetryState.keys().next().value;
-      if (oldest !== undefined) releaseRetryState.delete(oldest);
-    }
-    releaseRetryState.set(project.id, {
-      lastAttemptedAt: now,
-      attempts: (state?.attempts ?? 0) + 1,
-    });
+    releaseRetryBackoff.record(project.id, now);
 
     await attemptRelease(app, project, taskIds);
   }
@@ -3100,14 +3070,16 @@ const AUTO_APPROVE_RETRY_TTL_MS = 60 * 1000;
 const AUTO_APPROVE_RETRY_MAX_TTL_MS = 30 * 60 * 1000;
 const MAX_AUTO_APPROVALS_PER_SWEEP = 20;
 const MAX_AUTO_APPROVE_RETRY_ENTRIES = 500;
-const autoApproveRetryState = new Map<number, { lastAttemptedAt: number; attempts: number }>();
-
-function autoApproveRetryBackoffMs(attempts: number): number {
-  return Math.min(AUTO_APPROVE_RETRY_TTL_MS * 2 ** (attempts - 1), AUTO_APPROVE_RETRY_MAX_TTL_MS);
-}
+// Keyed by task id. The ledger owns the eviction, the backoff curve and the
+// attempt counter; the policy (TTL, ceiling, cap) stays here.
+const autoApproveRetryBackoff = createRetryBackoff<number>({
+  ttlMs: AUTO_APPROVE_RETRY_TTL_MS,
+  maxTtlMs: AUTO_APPROVE_RETRY_MAX_TTL_MS,
+  maxEntries: MAX_AUTO_APPROVE_RETRY_ENTRIES,
+});
 
 export function resetAutoApproveBackoff(taskId: number): void {
-  autoApproveRetryState.delete(taskId);
+  autoApproveRetryBackoff.reset(taskId);
 }
 
 /**
@@ -3444,8 +3416,8 @@ async function endReviewingFromPr(
     mergedAt: current.mergedAt,
   });
   if (ended) {
-    autoApproveRetryState.delete(task.id);
-    mergeRetryState.delete(task.id);
+    autoApproveRetryBackoff.clear(task.id);
+    mergeRetryBackoff.clear(task.id);
   }
   return ended;
 }
@@ -3853,8 +3825,8 @@ async function attemptAutoApprove(
     current &&
     (await endIfRebaseEmptied(app, task, project, Date.now(), REBASE_ATTEMPT_STALE_MS))
   ) {
-    autoApproveRetryState.delete(task.id);
-    mergeRetryState.delete(task.id);
+    autoApproveRetryBackoff.clear(task.id);
+    mergeRetryBackoff.clear(task.id);
     return;
   }
 
@@ -3942,8 +3914,8 @@ async function attemptAutoApprove(
     // strictly load-bearing the way it was there (this task's status just
     // flipped to "done", dropping it out of this sweep's own `status =
     // "reviewing"` WHERE clause on the next tick regardless), but keeping
-    // the map to live-in-flight candidates only is worth the one line.
-    autoApproveRetryState.delete(task.id);
+    // the ledger to live-in-flight candidates only is worth the one line.
+    autoApproveRetryBackoff.clear(task.id);
     return;
   }
 
@@ -3959,7 +3931,7 @@ async function attemptAutoApprove(
       // sweep's own WHERE clause, so — same reasoning as the success case
       // above — this entry would never be read again regardless, but drop
       // it now rather than waiting on the eviction cap.
-      autoApproveRetryState.delete(task.id);
+      autoApproveRetryBackoff.clear(task.id);
       return;
     case "dirty-tree":
       // A review agent leaving a scratch file behind looks permanent but
@@ -3998,10 +3970,9 @@ async function attemptAutoApprove(
         "task reconcile: auto-approve push refused (403) — the GitHub App cannot write to this repository",
       );
       permanentFailureTaskIds.add(task.id);
-      autoApproveRetryState.set(task.id, {
-        lastAttemptedAt: Date.now(),
-        attempts: PERMANENT_FAILURE_ATTEMPTS,
-      });
+      // Parked at the ceiling, so the next attempt waits the full slowest
+      // cadence instead of climbing the doubling ramp.
+      autoApproveRetryBackoff.record(task.id, Date.now(), { attempts: PERMANENT_FAILURE_ATTEMPTS });
       return;
     case "no-worktree":
     case "no-repo":
@@ -4142,25 +4113,10 @@ async function processAutoApprovals(app: FastifyInstance): Promise<void> {
       resetAutoApproveBackoff(task.id);
     }
 
-    const state = autoApproveRetryState.get(task.id);
-    if (
-      state !== undefined &&
-      now - state.lastAttemptedAt < autoApproveRetryBackoffMs(state.attempts)
-    )
-      continue;
+    if (!autoApproveRetryBackoff.shouldAttempt(task.id, now)) continue;
 
     attempted++;
-    if (
-      !autoApproveRetryState.has(task.id) &&
-      autoApproveRetryState.size >= MAX_AUTO_APPROVE_RETRY_ENTRIES
-    ) {
-      const oldest = autoApproveRetryState.keys().next().value;
-      if (oldest !== undefined) autoApproveRetryState.delete(oldest);
-    }
-    autoApproveRetryState.set(task.id, {
-      lastAttemptedAt: now,
-      attempts: (state?.attempts ?? 0) + 1,
-    });
+    autoApproveRetryBackoff.record(task.id, now);
 
     await attemptAutoApprove(app, task, project);
   }
