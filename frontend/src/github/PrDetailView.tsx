@@ -574,7 +574,7 @@ export function PrDetailView({
         void handoff();
         break;
       case "sendBack":
-        if (taskId != null) void sendBackToWorker(taskId);
+        if (entry?.task) void sendBackToWorker(entry.task.id);
         break;
       case "openWorker":
         if (workerSessionId != null) requestOpenSession(workerSessionId);
