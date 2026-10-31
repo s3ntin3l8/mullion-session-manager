@@ -6,7 +6,7 @@
 // this module never imports that service itself, keeping the two
 // independently testable).
 
-import { githubApiFetch, GitHubApiError, classifyRateLimit } from "./github-fetch.js";
+import { githubApiFetch, GitHubApiError } from "./github-fetch.js";
 import type { RelayReviewState, ReviewSummary } from "../shared/types.js";
 import {
   derivePrPhase,
@@ -1071,44 +1071,16 @@ export function isRedCheckConclusion(conclusion: string | null): boolean {
 }
 
 /**
- * #755 fresh-review finding: `required_status_checks.contexts` (branch
- * protection) names match CHECK RUN names, not Workflow Run names — two
- * different GitHub API namespaces that happen to look superficially
- * similar. Verified live against this repo's own protected branch: a
- * single workflow run (`fetchRunsForHead`'s `"CI/CD"`, `"CodeQL"`, ...)
- * fans out into many individual check runs (`"test-node / lint-and-test"`,
- * `"analyze / Analyze (javascript-typescript)"`, ...), and it's the
- * check-run name GitHub itself compares against `required_status_checks
- * .contexts` when deciding merge eligibility — `fetchRunsForHead`'s names
- * never appear in that set at all. The original #755 implementation
- * compared `fetchRunsForHead`'s workflow-run names against
- * `fetchRequiredStatusContexts`'s check-run-shaped required set, which can
- * never match for a repo using GitHub's standard "require these specific
- * job checks" branch protection — the common case, not an edge case. This
- * is the fix: read `GET /commits/{sha}/check-runs` directly, in the same
- * namespace as the required set.
- *
- * `fetchRunsForHead` stays on the Workflow Runs API deliberately — its
+ * The individual check runs (`GET /commits/{sha}/check-runs`) for a head
+ * commit — the per-check names and conclusions the red-CI return to the worker
+ * needs. `fetchRunsForHead` stays on the Workflow Runs API deliberately: its
  * other callers (the review-agent's CI summary, auto-approve's coarse
  * red/green pre-filter) only need "is anything red at all," not per-check
  * names, and Workflow Runs is one call per commit regardless of how many
  * jobs it fans out into.
  *
  * Never throws — degrades to `[]` on any failure, same posture as
- * `fetchRunsForHead`. A job configured with `continue-on-error: true` can
- * report a check-run `conclusion` other than the plain pass/fail GitHub
- * shows in its own merge-gate UI; not accounted for here, same scope
- * boundary `computeCiStatus` already draws for skipped/cancelled runs.
- *
- * Scope boundary, not covered here: `required_status_checks.contexts` can
- * name either a Check Run (what this function reads) OR a legacy Statuses
- * API context (`GET /commits/{sha}/status`) — this repo's own `main` uses
- * only Check Run names today, but a Task Master project pointed at a repo
- * whose branch protection requires a Statuses-API context would see that
- * context invisible to this lookup, and `attemptReturnRedCiToWorker` would
- * never fire for it (fails safe — the task just stays in `reviewing`, same
- * as any other run list with no red conclusion). Not fixed here; would need a
- * second, differently-shaped call (`GET /commits/{sha}/status`) merged in.
+ * `fetchRunsForHead`.
  */
 export async function fetchCheckRunsForHead(
   token: string,
@@ -1146,160 +1118,6 @@ export async function fetchCheckRunsForHead(
   }
 }
 
-interface RequiredStatusContextsCacheEntry {
-  contexts: string[];
-  expiresAt: number;
-}
-const requiredStatusContextsCache = new Map<string, RequiredStatusContextsCacheEntry>();
-// Branch protection changes about never — this is read on every
-// processAutoApprovals tick for every candidate task otherwise (#755).
-const REQUIRED_STATUS_CONTEXTS_CACHE_TTL_MS = 60 * 60_000;
-
-// #1360 — this file has no logger dependency anywhere else (grepped: zero
-// `app.log`/FastifyInstance usage in this module), so `fetchRequiredStatusContexts`
-// itself stays log-free rather than becoming the first function here to take
-// one. Instead it records WHY the last lookup for a given key failed in this
-// small side-map (same "parallel Map, same key shape as the main cache"
-// pattern task-reconciler.ts's own ciCapCommentedRounds/prCommentCapCommentedRounds
-// use) so the one caller that already has app.log
-// (attemptReturnRedCiToWorker, task-reconciler.ts) can decide whether it's
-// worth surfacing. Not cached with a TTL like the success cache above — this
-// is cheap process-local state, not a rate-limit-avoidance mechanism, so it's
-// simply overwritten (or cleared, on a later success) every call.
-export type RequiredStatusContextsFailureReason = "forbidden" | "not-found" | "other";
-// Self-review finding — bounded the same way every other cache in this file
-// is (MAX_CACHE_ENTRIES/cacheSet above, prsCache's own copy of the same
-// pattern): this map's key space (owner/repo/branch) is realistically small
-// on any one install, but nothing stops an unbounded number of DISTINCT
-// keys from accumulating over a long-lived process — a repo/branch that
-// never has branch protection (an ordinary, common "not-found" case per
-// this function's own doc comment) never succeeds, so its entry here would
-// otherwise never get cleared by the success path either.
-const MAX_REQUIRED_STATUS_CONTEXTS_FAILURE_ENTRIES = 200;
-const requiredStatusContextsLastFailure = new Map<string, RequiredStatusContextsFailureReason>();
-
-// Both of fetchRequiredStatusContexts's own failure paths (the `!res.ok`
-// branch and the outer `catch`) need the identical eviction-then-set
-// sequence — factored out so a fix to one can't accidentally miss the
-// other, same "second self-review pass" reasoning as the catch branch's
-// own comment.
-function setRequiredStatusContextsFailure(
-  key: string,
-  reason: RequiredStatusContextsFailureReason,
-): void {
-  if (
-    !requiredStatusContextsLastFailure.has(key) &&
-    requiredStatusContextsLastFailure.size >= MAX_REQUIRED_STATUS_CONTEXTS_FAILURE_ENTRIES
-  ) {
-    const oldestKey = requiredStatusContextsLastFailure.keys().next().value;
-    if (oldestKey !== undefined) requiredStatusContextsLastFailure.delete(oldestKey);
-  }
-  requiredStatusContextsLastFailure.set(key, reason);
-}
-
-/** See `requiredStatusContextsLastFailure`'s own comment above. `null` means
- * either the last lookup for this key succeeded, or no lookup has been made
- * yet — callers should only consult this right after `fetchRequiredStatusContexts`
- * itself returned `null` for the same `owner/repo/branch`. */
-export function getRequiredStatusContextsFailureReason(
-  owner: string,
-  repo: string,
-  branch: string,
-): RequiredStatusContextsFailureReason | null {
-  return requiredStatusContextsLastFailure.get(`${owner}/${repo}/${branch}`) ?? null;
-}
-
-/**
- * Reads `required_status_checks.contexts` from branch protection for a
- * branch — the subset of check names that actually gate a merge, as
- * opposed to every Actions run for a head commit (`computeCiStatus` makes
- * no required/non-required distinction at all). #755's red-CI-return gate
- * uses this to avoid returning a task to the worker over a red but
- * non-required check (this repo's own `test-e2e`, deliberately not
- * required — see docs/ci-cd.md).
- *
- * Returns `null`, never throws, on ANY lookup failure. The GitHub App's
- * "read" token scope (`READ_PERMISSIONS`, github-app.ts) does not include
- * `administration`, which this endpoint requires — deliberately not
- * expanded for this one lookup (see #755's own plan notes: that would be
- * unrequested scope creep for a single feature). A 403 from that missing
- * scope and a 404 (no protection configured, or the branch doesn't exist)
- * both collapse to `null`. Callers must fail CLOSED on `null` — treating it
- * as "nothing is required" would let a task stalled on a red
- * non-required-only check look identical to one this gate has an actual
- * opinion on. #1360 — WHICH of those two collapsed into this `null` is now
- * separately recoverable via `getRequiredStatusContextsFailureReason` for a
- * caller that wants to warn about the (permanent, install-wide) 403 case
- * without confusing it for the (ordinary, per-repo) 404 case.
- *
- * Cached per `owner/repo/branch` for `REQUIRED_STATUS_CONTEXTS_CACHE_TTL_MS`.
- * Only successes are cached — a failure is retried on the next call rather
- * than latched, since it may be transient.
- */
-export async function fetchRequiredStatusContexts(
-  token: string,
-  owner: string,
-  repo: string,
-  branch: string,
-): Promise<string[] | null> {
-  validateGitHubRepoRef(owner, repo);
-  const key = `${owner}/${repo}/${branch}`;
-  const cached = requiredStatusContextsCache.get(key);
-  if (cached && Date.now() < cached.expiresAt) return cached.contexts;
-
-  try {
-    const res = await githubApiFetch(
-      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches/${encodeURIComponent(branch)}/protection`,
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
-    if (!res.ok) {
-      // Self-review finding — `githubApiFetch` always returns a rate-limited
-      // response as-is rather than throwing on its FIRST occurrence (its own
-      // doc comment: "a caller with its own bespoke 403 handling still gets
-      // the response returned as-is"), so a transient GitHub rate limit can
-      // itself present as a bare 403 here, indistinguishable from the
-      // permission problem this function otherwise reports on 403 — without
-      // this check, that would misclassify as the permanent "forbidden"
-      // case and mislead attemptReturnRedCiToWorker's operator-facing
-      // warning. Reuses the same detection githubApiFetch itself already
-      // ran (classifyRateLimit reads only status/headers, safe to call
-      // again on the same Response before its body is read).
-      const reason: RequiredStatusContextsFailureReason = classifyRateLimit(res)
-        ? "other"
-        : res.status === 403
-          ? "forbidden"
-          : res.status === 404
-            ? "not-found"
-            : "other";
-      setRequiredStatusContextsFailure(key, reason);
-      return null;
-    }
-    const data = (await res.json()) as {
-      required_status_checks?: { contexts?: string[] } | null;
-    };
-    const contexts = data.required_status_checks?.contexts ?? [];
-    requiredStatusContextsCache.set(key, {
-      contexts,
-      expiresAt: Date.now() + REQUIRED_STATUS_CONTEXTS_CACHE_TTL_MS,
-    });
-    // A prior failure (e.g. a 403 while the App's permissions were still
-    // being granted) is stale now that this key has a real success — don't
-    // let a caller who only checks the failure map on a LATER, unrelated
-    // `null` (from some other transient blip) see a resolved condition.
-    requiredStatusContextsLastFailure.delete(key);
-    return contexts;
-  } catch {
-    // Second self-review pass — this path was missing the same eviction
-    // guard the sibling `!res.ok` branch above uses: a network error or a
-    // thrown GitHubRateLimitError (githubApiFetch's own isGitHubRateLimited
-    // fast-path) reaches here just as easily as an ordinary `!res.ok`, and
-    // these are exactly the keys that "never succeed" (this function's own
-    // doc comment) and so would never get cleared either.
-    setRequiredStatusContextsFailure(key, "other");
-    return null;
-  }
-}
-
 // The release-please auto-enable sweep (project-release-please.ts) needs
 // "does this repo run release-please" — deliberately NOT
 // `detectReleaseWorkflow`/`RELEASE_WORKFLOW_FILENAMES`
@@ -1329,8 +1147,8 @@ interface ReleasePleaseConfigCacheEntry {
   expiresAt: number;
 }
 const releasePleaseConfigCache = new Map<string, ReleasePleaseConfigCacheEntry>();
-// Same TTL/"only definite results cached" posture as
-// fetchRequiredStatusContexts above — a repo's release-please adoption
+// Same TTL/"only definite results cached" posture as the
+// other hourly caches in this module — a repo's release-please adoption
 // changes about never, and this is checked at every project create plus
 // once per project per reconciler tick until stamped (see
 // project-release-please.ts).
@@ -1348,8 +1166,7 @@ const RELEASE_PLEASE_CONFIG_CACHE_TTL_MS = 60 * 60_000;
  * Callers MUST treat `null` as "don't act" rather than "not detected" —
  * this gates writing `projects.conventionalCommitTitles`, and a transient
  * failure must never be indistinguishable from a real negative. Only a
- * definite result is cached, matching `fetchRequiredStatusContexts`'s own
- * "only successes cached" precedent.
+ * definite result is cached.
  *
  * Deliberately not the octokit-style content-decoding return shape — this
  * only ever needs a filename match, never a file's contents.

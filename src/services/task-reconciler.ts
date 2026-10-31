@@ -463,9 +463,8 @@ async function fetchCurrentCiStatus(
   headSha: string;
   status: ReturnType<typeof computeCiStatus>;
   runs: ReviewCiInfo["runs"];
-  // #755 — the PR's own repo/base branch, for the red-CI-return gate's
-  // branch-protection lookup. Returned here (rather than re-resolved by
-  // that gate) since this function already has both in scope from the
+  // #755 — the PR's own repo/base branch, for the red-CI-return gate.
+  // Returned here (rather than re-resolved by that gate) since this function already has both in scope from the
   // `getPullRequestByNumber` call below — one fewer redundant GitHub call.
   repoRef: GitHubRepoRef;
   baseRef: string;
@@ -2233,8 +2232,7 @@ async function attemptMerge(
         // Reading branch protection's own `required_conversation_resolution`
         // flag directly isn't an option here — that endpoint needs the
         // `administration` scope, which neither WRITE_PERMISSIONS nor
-        // READ_PERMISSIONS grants (github.ts's own fetchRequiredStatusContexts
-        // documents the identical gap for required_status_checks) — so this
+        // READ_PERMISSIONS grants — so this
         // derives the cause from OBSERVED unresolved threads instead, which
         // is more precise anyway: it answers "is THIS PR actually blocked on
         // a conversation," not "does the branch require one."
@@ -2768,15 +2766,6 @@ async function attemptSelfHealPrTitle(
   }
 }
 
-function clearCiGatingUnavailable(app: FastifyInstance, task: typeof tasks.$inferSelect): void {
-  if (task.ciGatingUnavailableReason === null && task.ciGatingUnavailableSource === null) return;
-  app.db
-    .update(tasks)
-    .set({ ciGatingUnavailableReason: null, ciGatingUnavailableSource: null })
-    .where(eq(tasks.id, task.id))
-    .run();
-}
-
 // The `unstable` arm of the red-CI gate stands down when the Actions-runs
 // lookup did not answer, so a repo whose `/actions/runs` never answers (a
 // permanent 403/404, not a blip) could never open it with nothing in the log
@@ -2830,10 +2819,7 @@ async function attemptReturnRedCiToWorker(
   if (current.mergeableState === "unstable" && !current.runsAnswered) {
     warnUnstableRunsUnreadable(app, task.id);
   }
-  if (current.status !== "failure" && !unstableOnly) {
-    clearCiGatingUnavailable(app, task);
-    return false;
-  }
+  if (current.status !== "failure" && !unstableOnly) return false;
   if (task.worktreePath === null || task.agentCommand === null) return false;
   if (!commandSupportsSeed(task.agentCommand)) return false;
 
@@ -2842,9 +2828,6 @@ async function attemptReturnRedCiToWorker(
   // Which checks branch protection requires no longer matters here: a red
   // check is work to fix whether or not it gates the merge, because the merge
   // sweep holds on an `unstable` PR anyway (attemptMerge's `case "unstable"`).
-  // So the "required checks unreadable" condition (#2327) can no longer stall
-  // this gate — clear any flag an earlier version left on the task.
-  clearCiGatingUnavailable(app, task);
 
   const checkRuns = await fetchCheckRunsForHead(
     token,

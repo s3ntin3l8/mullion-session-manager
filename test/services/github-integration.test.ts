@@ -318,22 +318,22 @@ describe("github-integration service", () => {
       await app.close();
     });
 
-    // #2327 — an installation without the optional Administration grant 422s
-    // the branch-protection mint alone; the account token answers that call.
-    it("falls back to the PAT for the branch-protection scope when its mint is refused", async () => {
+    // An installation without the optional grant for one scope 422s that mint
+    // alone; the account token answers that call.
+    it("falls back to the PAT for one scope when its mint is refused", async () => {
       fetchMock.mockResolvedValue(jsonResponse(200, { login: "octocat" }));
       const app = await buildApp();
       await setPat(app, "ghp_shared");
       setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
       mockGetInstallationToken.mockImplementation(
         async (_id: string, _key: string, _o: string, _r: string, scope: string) =>
-          scope === "branch-protection"
+          scope === "dispatch"
             ? { token: null, installationsChecked: null, failureStatus: 422 }
             : { token: "ghs_read_token", installationsChecked: null },
       );
 
       const repo = { owner: "acme", repo: "widgets" };
-      expect(await resolveGitHubToken(app, repo, "branch-protection")).toBe("ghp_shared");
+      expect(await resolveGitHubToken(app, repo, "dispatch")).toBe("ghp_shared");
       // The main read token is untouched.
       expect(await resolveGitHubToken(app, repo, "read")).toBe("ghs_read_token");
       await app.close();
