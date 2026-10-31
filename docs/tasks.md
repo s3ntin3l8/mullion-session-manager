@@ -589,7 +589,8 @@ Two independent choices are resolved per task, most-specific tier wins:
    The drawer's Agent and Review agent pickers show the effective choice in
    resolution order: a task value, else the issue body's `Agent:` /
    `ReviewAgent:` directive (the unset entry then reads "<agent> (from
-   issue)"; `none`/`false` reads "None (disabled) (from issue)"), else
+   issue)"; for ReviewAgent, `none`/`false` reads "None (disabled) (from
+   issue)"), else
    "Project default (<x>)". The server computes this (`issueAgent`,
    `issueReviewAgent` on the task); an unknown name falls through to the
    project default. A directive `ReviewAgent: hermes` while Hermes is

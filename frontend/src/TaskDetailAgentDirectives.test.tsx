@@ -93,7 +93,7 @@ describe("TaskDetail agent dropdowns and issue directives", () => {
     expect(updateTask).toHaveBeenCalledWith(1, { reviewAgent: "none" });
   });
 
-  it("labels a directive hermes (usable or already reported as none) from the server value", async () => {
+  it("labels a usable directive hermes from the server value", async () => {
     const [, review] = await renderTask({ issueReviewAgent: "hermes" });
     expect(review).toHaveDisplayValue("hermes (from issue)");
   });
