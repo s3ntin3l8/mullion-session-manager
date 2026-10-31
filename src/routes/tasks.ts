@@ -11,8 +11,7 @@ import {
 import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { buildRejectPrompt, taskCommitTitlePath } from "../services/task-prompt.js";
-import { withPrTitleFallback } from "../services/task-pr-title-fallback.js";
-import { withIssueDirectives } from "../services/task-row-derive.js";
+import { withTaskDerived } from "../services/task-row-derive.js";
 import { resolveTaskIssueContextSafe } from "../services/task-issue-context.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
 import {
@@ -489,7 +488,7 @@ export async function tasksRoute(app: FastifyInstance) {
         withBlockedState(
           withApprovalState(
             app,
-            withAutoReturnCapped(withIssueDirectives(app, withPrTitleFallback(row)), installCap),
+            withAutoReturnCapped(withTaskDerived(app, row), installCap),
             taskMasterEnabled,
           ),
         ),
@@ -514,10 +513,7 @@ export async function tasksRoute(app: FastifyInstance) {
       ? withBlockedState(
           withApprovalState(
             app,
-            withAutoReturnCapped(
-              withIssueDirectives(app, withPrTitleFallback(row)),
-              taskMaster.maxAutoReturnRounds,
-            ),
+            withAutoReturnCapped(withTaskDerived(app, row), taskMaster.maxAutoReturnRounds),
             taskMaster.enabled,
           ),
         )
