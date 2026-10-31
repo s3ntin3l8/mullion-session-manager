@@ -1,4 +1,5 @@
 import { TaskActions } from "./TaskActions.js";
+import { FailureDiagnostics } from "./FailureDiagnostics.js";
 import { useEffect, useState } from "react";
 import { useDashboardStore } from "./store/index.js";
 import { statusLabel } from "./tasksBoard.js";
@@ -562,6 +563,10 @@ export function TaskDetail({
           <WarningTriangleIcon size={12} />
           {task.failureReason}
         </div>
+      )}
+
+      {task.status === "failed" && task.failureDiagnostics && (
+        <FailureDiagnostics text={task.failureDiagnostics} />
       )}
 
       {/* The task-view session-visibility gap this closes: TaskDetail

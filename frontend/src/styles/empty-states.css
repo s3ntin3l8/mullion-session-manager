@@ -750,6 +750,17 @@
   font-size: 0.71875rem;
   color: var(--r);
 }
+.task-detail-failure-diagnostics {
+  font-size: 0.71875rem;
+  color: var(--muted);
+}
+.task-detail-failure-diagnostics pre {
+  margin: 4px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .task-detail-dispatch {
   display: flex;
   align-items: flex-start;
