@@ -439,4 +439,46 @@ describe("check-max-file-lines.mjs: the ceiling is measured against the default 
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain("src/new.ts");
   });
+
+  // A pull request's CI checks out the MERGE ref, with a fetch scoped to it —
+  // so `origin/main` and every other default-branch name do not exist there.
+  // The merge commit's second parent (the base branch's tip) is, and it is
+  // the right reference: the size this change should be measured against.
+  it("uses the merge commit's base side when no default-branch ref resolves", async () => {
+    git(["init", "-q", "-b", "main"]);
+    write("src/big.ts", LIMIT + 100);
+    commit("base");
+
+    // The branch grows the file, then merges the base branch in — the shape
+    // CI's merge ref has: first parent is the branch, second is the base.
+    git(["checkout", "-q", "-b", "feature"]);
+    write("src/big.ts", LIMIT + 200);
+    commit("the branch grew the file");
+    git(["checkout", "-q", "main"]);
+    write("src/other.ts", 10);
+    commit("the base branch moved on");
+    git(["checkout", "-q", "feature"]);
+    git(["merge", "--no-ff", "-q", "-m", "merge main into the branch", "main"]);
+
+    // No default-branch ref resolves any more — exactly CI's situation.
+    git(["branch", "-D", "main"]);
+
+    const result = await runCheck();
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain("src/big.ts");
+  });
+
+  it("abstains, rather than guessing, when there is no reference at all", async () => {
+    // A branch called "trunk" is not one of the names the guard looks for, and
+    // HEAD is not a merge commit — so there is nothing to measure the change
+    // against, and the guard must not blame this tree for a baseline that has
+    // since gone stale.
+    git(["init", "-q", "-b", "trunk"]);
+    write("src/big.ts", LIMIT + 200);
+    commit("base");
+
+    const result = await runCheck();
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("abstains");
+  });
 });

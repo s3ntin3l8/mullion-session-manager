@@ -37,6 +37,20 @@
 // the guard enforces it against the change in front of it, rather than
 // against a number that goes out of date on its own.
 //
+// WHERE THE REFERENCE COMES FROM, in order:
+//
+//   1. the merge base with the default branch, when a default-branch ref
+//      resolves — the fork point, which is the ideal reference;
+//   2. a merge commit's second parent, which is the base side. This is what
+//      a pull request's CI has: it checks out the merge ref with a fetch
+//      scoped to it, so `origin/main` and friends do not exist there;
+//   3. nothing. Then this is a git checkout with no reference at all, and
+//      the guard ABSTAINS rather than measuring against a stale snapshot and
+//      blaming the pull request for the default branch's own growth.
+//
+// A tree that is not a git checkout has no default branch to have grown
+// anything, so there the recorded baseline is the reference.
+//
 // A ceiling can still be LOWERED — that is the ratchet turning over, a
 // deliberate reviewable act visible in the diff, and it is how the 59
 // existing offenders get fixed. The script cannot see the baseline's PREVIOUS
@@ -138,6 +152,13 @@ const counts = countSourceFiles(options.root, AUDIT_ROOTS);
  * the tip of `main`, so a change that `main` itself made afterwards is not
  * mistaken for this branch's growth.
  *
+ * The default branch is not always reachable by name. A pull request's CI
+ * checks out the MERGE ref with a fetch scoped to it, so `origin/main` and
+ * friends do not exist there — but the merge commit's second parent IS the
+ * base branch's tip, and it is in the object database. So when no default
+ * branch ref resolves, the merge commit's other parent is the next best
+ * reference.
+ *
  * @param {string} root
  * @returns {string | null}
  */
@@ -148,11 +169,28 @@ function resolveReferenceCommit(root) {
         cwd: root,
         encoding: "utf8",
         env: gitEnv(),
+        stdio: ["ignore", "pipe", "ignore"],
       }).trim();
       if (base) return base;
     } catch {
       // No such ref, or not a git checkout — try the next one.
     }
+  }
+  // A merge commit's second parent is the branch it was merged WITH — the
+  // base side. That is the reference a pull request's CI needs: the merge
+  // ref it checks out has the pull request's branch as the first parent and
+  // the base branch's tip as the second, and the base branch's tip is the
+  // size this change should be measured against.
+  try {
+    const other = execFileSync("git", [...GIT_NO_AUTO_GC, "rev-parse", "--verify", "HEAD^2"], {
+      cwd: root,
+      encoding: "utf8",
+      env: gitEnv(),
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (other) return other;
+  } catch {
+    // Not a merge commit.
   }
   return null;
 }
@@ -185,7 +223,47 @@ function codeLinesAtReference(root, reference, relPath) {
   }
 }
 
+/**
+ * Is this tree a git checkout at all? A tree that is not a git checkout has
+ * no default branch whose growth could be mistaken for this change's, so the
+ * recorded baseline is the only — and a perfectly good — reference there.
+ *
+ * @param {string} root
+ * @returns {boolean}
+ */
+function isGitCheckout(root) {
+  try {
+    execFileSync("git", [...GIT_NO_AUTO_GC, "rev-parse", "--git-dir"], {
+      cwd: root,
+      encoding: "utf8",
+      env: gitEnv(),
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const reference = resolveReferenceCommit(options.root);
+
+if (reference === null && isGitCheckout(options.root)) {
+  // A git checkout, but no reference could be resolved: no default-branch
+  // ref, and HEAD is not a merge commit. The guard cannot tell what this
+  // change did, and a stale snapshot would blame it for the default
+  // branch's own growth. So it abstains rather than guessing — loudly,
+  // because a guard that silently stops guarding is worse than one that
+  // says so.
+  const over = counts.filter((c) => c.code > baseline.limit);
+  console.log(
+    `OK — no reference commit could be resolved (no default-branch ref, and ` +
+      `HEAD is not a merge commit), so this check abstains: it cannot tell ` +
+      `what this change did, and a stale snapshot would blame it for the ` +
+      `default branch's own growth. ${over.length} file(s) are over the ` +
+      `${baseline.limit}-line ceiling; the baseline records ${Object.keys(baseline.files).length}.`,
+  );
+  process.exit(0);
+}
 
 /** Files that grew past their own ceiling. */
 const failures = [];
