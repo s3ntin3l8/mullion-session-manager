@@ -254,10 +254,13 @@ export interface GeneratedScaffoldContent {
   scaffoldRegion: string;
   /** Issue #1144, #1159 — whether the generation turn actually ran inside a
    * bwrap sandbox. `false` when sandboxing was opted out via
-   * MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED or when bwrap is unusable and
+   * MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED, when bwrap is unusable and
    * the agent is claude/codex (agy/opencode fail-closed instead, never
-   * reaching this point unsandboxed). Surfaced in the /setup/generate
-   * response so the primary/UI can warn the user. */
+   * reaching this point unsandboxed), or when a remote host is running an
+   * agent build older than 0.3.11 that omits `sandboxed` from
+   * `GenerationTurnResult` (defaulted conservatively to `false`; see that
+   * type's doc comment). Surfaced in the /setup/generate response so the
+   * primary/UI can warn the user. */
   sandboxed: boolean;
   /** Issue #1145 — post-generation heuristic: when the generated content
    * references concrete file paths but none of them appear to be real
@@ -1946,11 +1949,12 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
  * `generateScaffoldContent`'s remote branch below.
  *
  * `sandboxed` on `"ok"` is optional on the wire type because this route
- * shipped in #1101 before #1144/#1159 added the field, and
+ * shipped in 0.3.9 (PR #1134, issue #1101) before 0.3.11 (PR #1167, issues
+ * #1144/#1159) added the field, and
  * `RemoteHostClient.resolveRunGenerationTurn` does a raw fetch-and-cast
  * with no runtime validation (same version-skew posture as `SpawnResult`,
  * `AgentConfig`, and `resolveGitBranches` in `remote-host-client.ts`): a
- * remote agent on a build between #1101 and #1144 omits `sandboxed`, and
+ * remote agent on a 0.3.9 or 0.3.10 build omits `sandboxed`, and
  * `generateScaffoldContent` defaults it to `false` so the unsandboxed
  * warning still surfaces rather than assuming the turn was sandboxed. A
  * current agent build (`routes/internal.ts`) always populates it. */

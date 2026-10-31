@@ -615,12 +615,13 @@ describe("generateScaffoldContent — remote-hosted project (issue #1101)", () =
       .mockResolvedValue({ baseRef: "origin/main", sha: "deadbeef" });
     const turnSpy = vi
       .spyOn(remoteHostClientModule.RemoteHostClient.prototype, "resolveRunGenerationTurn")
-      // Issue #1910 — an older remote agent build (between #1101 and #1144)
-      // omits `sandboxed` from the "ok" result; GenerationTurnResult marks it
-      // optional so this wire shape is valid without a cast, and
-      // `turn.sandboxed ?? false` defaults it conservatively to `false`.
-      .mockResolvedValueOnce({ outcome: "ok", stdout: validOutput("demo") })
-      .mockResolvedValueOnce({ outcome: "ok", stdout: validOutput("demo"), sandboxed: true });
+      // Issue #1910 — a remote agent on 0.3.9/0.3.10 (shipped in PR #1134 before
+      // PR #1167 added `sandboxed` in 0.3.11) omits `sandboxed` from the "ok"
+      // result; GenerationTurnResult marks it optional so this wire shape is
+      // valid without a cast, and `turn.sandboxed ?? false` defaults it
+      // conservatively to `false`.
+      .mockResolvedValue({ outcome: "ok", stdout: validOutput("demo"), sandboxed: true })
+      .mockResolvedValueOnce({ outcome: "ok", stdout: validOutput("demo") });
 
     // A path that genuinely doesn't exist on THIS machine — if
     // generateScaffoldContent's remote branch ever fell through to the
