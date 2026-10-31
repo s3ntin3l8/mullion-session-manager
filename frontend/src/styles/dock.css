@@ -125,6 +125,30 @@
   z-index: 100;
   padding: 4px;
 }
+/* The filter row at the top of a searchable menu (issue #2495). Sticky, so it
+   stays put while a long option list scrolls underneath it — and opaque, so
+   the options scrolling under it do not show through. */
+.custom-select-filter {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--sidebar);
+  padding-bottom: 4px;
+}
+.custom-select-filter-input {
+  display: block;
+  width: 100%;
+}
+/* What the menu shows when the filter matches nothing (issue #2495). */
+.custom-select-empty {
+  padding: 6px 10px;
+  color: var(--muted);
+  font-size: 0.75rem;
+  font-family: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .custom-select-item {
   display: block;
   width: 100%;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { truncateHead } from "./truncatePath.js";
+import { truncateHead, truncateMiddle } from "./truncatePath.js";
 
 describe("truncateHead", () => {
   it("returns the text unchanged when it already fits", () => {
@@ -41,5 +41,42 @@ describe("truncateHead", () => {
 
   it("handles empty input", () => {
     expect(truncateHead("", 10)).toBe("");
+  });
+});
+
+describe("truncateMiddle", () => {
+  it("returns the text unchanged when it already fits", () => {
+    expect(truncateMiddle("short", 20)).toBe("short");
+  });
+
+  it("returns the text unchanged when it exactly matches max", () => {
+    expect(truncateMiddle("exactly10!", 10)).toBe("exactly10!");
+  });
+
+  it("cuts in the middle, keeping both the start and the distinctive tail", () => {
+    const branch = "fix(dock): the dock branch picker runs off-screen and can't be searched";
+    const result = truncateMiddle(branch, 30);
+    expect(result.length).toBe(30);
+    expect(result.startsWith("fix(dock): the ")).toBe(true);
+    expect(result.endsWith("be searched")).toBe(true);
+    expect(result).toContain("…");
+  });
+
+  it("never returns a result longer than max", () => {
+    expect(truncateMiddle("a".repeat(100), 5).length).toBe(5);
+  });
+
+  it("keeps two branches that share a prefix but differ at the tail distinguishable", () => {
+    const a = truncateMiddle("fix(dock): the dock branch picker runs off-screen", 30);
+    const b = truncateMiddle("fix(dock): the dock branch picker is searchable now", 30);
+    expect(a).not.toBe(b);
+  });
+
+  it("handles max of 0 without throwing", () => {
+    expect(truncateMiddle("abc", 0)).toBe("…");
+  });
+
+  it("handles empty input", () => {
+    expect(truncateMiddle("", 10)).toBe("");
   });
 });

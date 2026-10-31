@@ -310,6 +310,14 @@ export function DockMonitor({
                 label={`${control.title} worktree`}
                 menuPlacement="top"
                 menuAlign="right"
+                // Issue #2495 — a project can have dozens of branches, and
+                // the branch names are long enough that the menu used to run
+                // off the left edge of the screen with no way to find one
+                // branch among them. The filter is opt-in on CustomSelect
+                // (other pickers keep the plain list), and the empty state
+                // names what it is filtering.
+                searchable
+                emptyMessage="No matching branches"
                 onChange={onWorktreeChange}
               />
             </span>

@@ -25,3 +25,24 @@ export function truncateHead(text: string, max: number): string {
   const keep = Math.max(0, max - 1);
   return `…${text.slice(text.length - keep)}`;
 }
+
+// A branch name is the OTHER shape of long text: it starts with a shared
+// prefix ("fix(dock): …") and ends with the part that tells two of them
+// apart. Cutting only the tail (truncateHead) hides the distinguishing end;
+// cutting only the head (CSS text-overflow: ellipsis) hides the fact that
+// these are all the same kind of thing. So a label that must show BOTH ends
+// gets cut in the middle instead — the start stays readable as a prefix, and
+// the distinctive tail survives next to the ellipsis.
+//
+// Same contract as truncateHead: the RESULT never exceeds `max` (the
+// ellipsis is reserved out of the budget), and a text that already fits is
+// returned unchanged.
+export function truncateMiddle(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const keep = Math.max(0, max - 1);
+  // The head gets the extra character when the split is uneven, so the
+  // result is exactly `max` characters long.
+  const head = Math.ceil(keep / 2);
+  const tail = keep - head;
+  return `${text.slice(0, head)}…${text.slice(text.length - tail)}`;
+}
