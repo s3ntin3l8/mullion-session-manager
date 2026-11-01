@@ -39,6 +39,7 @@ function pullsFor(repo) {
     return [
       {
         number: 12,
+        touched: 20,
         title: "Add login rate limiting",
         author: "mira",
         branch: "feat/login-rate-limit",
@@ -53,6 +54,7 @@ function pullsFor(repo) {
       },
       {
         number: 14,
+        touched: 30,
         title: "Fix focus loss in the login form",
         author: "jonas",
         branch: "fix/login-focus",
@@ -65,6 +67,7 @@ function pullsFor(repo) {
       },
       {
         number: 15,
+        touched: 8,
         title: "WIP: dark mode palette",
         author: "mira",
         branch: "feat/dark-palette",
@@ -77,6 +80,7 @@ function pullsFor(repo) {
       },
       {
         number: 17,
+        touched: 2,
         title: "Cache the session lookup",
         author: "jonas",
         branch: "perf/session-cache",
@@ -90,6 +94,7 @@ function pullsFor(repo) {
       },
       {
         number: 18,
+        touched: 45,
         title: "Rework the settings page layout",
         author: "mira",
         branch: "feat/settings-layout",
@@ -107,6 +112,7 @@ function pullsFor(repo) {
   return [
     {
       number: 5,
+      touched: 15,
       title: "Speed up the orders query",
       author: "jonas",
       branch: "perf/orders-query",
@@ -118,6 +124,7 @@ function pullsFor(repo) {
     },
     {
       number: 6,
+      touched: 60,
       title: "Paginate the customers endpoint",
       author: "mira",
       branch: "feat/customers-pagination",
@@ -198,7 +205,7 @@ function buildState(now) {
       ...p,
       sha: sha(p.number * 4099 + repo.length),
       created: iso(p.age, now),
-      updated: iso(Math.min(p.age, 30), now),
+      updated: iso(p.touched ?? Math.min(p.age, 30), now),
       reviews: p.reviews ?? [],
       threads: p.threads ?? [],
     }));
@@ -418,9 +425,9 @@ export async function startFakeGithub({ tickMs = 0, latestRelease = "v99.0.0" } 
     // Thread counts: aliases like `p12: pullRequest(number: 12) {...}`.
     const aliases = [...query.matchAll(/(p\d+): pullRequest\(number: (\d+)\)/g)];
     if (aliases.length > 0) {
-      for (const [, alias, num] of aliases) {
+      for (const [, , num] of aliases) {
         const pr = repo.pulls.find((p) => p.number === Number(num));
-        data.repository[alias] = pr
+        data.repository[`p${num}`] = pr
           ? { reviewThreads: { nodes: pr.threads.map(() => ({ isResolved: false })) } }
           : null;
       }

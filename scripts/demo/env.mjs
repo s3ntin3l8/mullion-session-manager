@@ -47,7 +47,10 @@ const PASSTHROUGH = [
 const ALLOWED_MULLION = new Set(["MULLION_TRUST_GATEWAY", "MULLION_GITHUB_API_URL"]);
 
 /** The fake GitHub API is the only GitHub the demo may reach: loopback only. */
-const LOOPBACK_URL = /^http:\/\/127\.0\.0\.1:\d+$/;
+const isLoopbackUrl = (value) => {
+  const m = /^http:\/\/127\.0\.0\.1:(\d{1,5})$/.exec(value);
+  return m !== null && Number(m[1]) >= 1 && Number(m[1]) <= 65535;
+};
 
 /** Never set in the demo: they point at real agent configs or credentials. */
 const FORBIDDEN = new Set([
@@ -177,7 +180,7 @@ export function assertDemoEnv(env, demoDir, { cwd, collect = false } = {}) {
     // forbidden key before it is an out-of-scratch path.
     if (key.startsWith("MULLION_") && !ALLOWED_MULLION.has(key))
       problems.push(`${key} must not reach the demo`);
-    else if (key === "MULLION_GITHUB_API_URL" && !LOOPBACK_URL.test(value))
+    else if (key === "MULLION_GITHUB_API_URL" && !isLoopbackUrl(value))
       problems.push(`${key} must be a loopback http://127.0.0.1:<port> URL`);
     else if (FORBIDDEN.has(key)) problems.push(`${key} must not be set in the demo`);
     else if (SECRET_KEY.test(key))

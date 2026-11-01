@@ -32,7 +32,9 @@ import { seedDemo } from "./seed.mjs";
 function nextMinorTag() {
   const { version } = JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
   const [major, minor] = version.split(".").map(Number);
-  return `v${major}.${minor + 1}.0`;
+  return Number.isInteger(major) && Number.isInteger(minor)
+    ? `v${major}.${minor + 1}.0`
+    : "v999.0.0";
 }
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -136,11 +138,9 @@ export async function startDemo({
   // socket path would exceed the platform's sun_path limit
   // (src/plugins/pty.ts).
   const demoDir = await mkdtemp("/tmp/mullion-demo-");
-  // Before the backend: its env needs the fake's URL. Teardown stops it.
-  const fakeGithub = await startFakeGithub({
-    tickMs: githubTickMs,
-    latestRelease: nextMinorTag(),
-  });
+  // Started in startup() (the backend's env needs its URL), so a failure
+  // there still reaches teardown; undefined until then.
+  let fakeGithub;
   const runDir = path.join(demoDir, "run"); // backend cwd: no .env, migrations via symlink
   const sessionsDir = path.join(demoDir, "s");
   const instanceId = instanceIdFor(sessionsDir);
@@ -149,24 +149,26 @@ export async function startDemo({
   const frontendUrl = `http://127.0.0.1:${DEMO_FRONTEND_PORT}`;
 
   const PATH = `${path.join(demoDir, "bin")}:${process.env.PATH}`;
-  const backendEnv = demoEnv(demoDir, {
-    PATH,
-    NODE_ENV: "development",
-    PORT: DEMO_BACKEND_PORT,
-    HOST: "127.0.0.1",
-    LOG_LEVEL: "warn",
-    DATABASE_URL: `file:${path.join(demoDir, "app.db")}`,
-    SESSIONS_DIR: sessionsDir,
-    CRS_CONFIG_DIR: path.join(demoDir, "crs"),
-    BROWSER_DATA_DIR: path.join(demoDir, "browsers"),
-    PROJECTS_ROOTS: path.join(demoDir, "projects"),
-    FRONTEND_DIST: path.join(demoDir, "no-frontend-dist"),
-    // No auth on a loopback-only throwaway instance; the backend requires this
-    // explicit opt-in when no token/OIDC is configured (src/app.ts).
-    MULLION_TRUST_GATEWAY: "true",
-    // GitHub traffic goes to the loopback fake, never to api.github.com.
-    MULLION_GITHUB_API_URL: fakeGithub.url,
-  });
+  // Built in startup(), once the fake GitHub's URL is known.
+  const backendEnvFor = (githubUrl) =>
+    demoEnv(demoDir, {
+      PATH,
+      NODE_ENV: "development",
+      PORT: DEMO_BACKEND_PORT,
+      HOST: "127.0.0.1",
+      LOG_LEVEL: "warn",
+      DATABASE_URL: `file:${path.join(demoDir, "app.db")}`,
+      SESSIONS_DIR: sessionsDir,
+      CRS_CONFIG_DIR: path.join(demoDir, "crs"),
+      BROWSER_DATA_DIR: path.join(demoDir, "browsers"),
+      PROJECTS_ROOTS: path.join(demoDir, "projects"),
+      FRONTEND_DIST: path.join(demoDir, "no-frontend-dist"),
+      // No auth on a loopback-only throwaway instance; the backend requires this
+      // explicit opt-in when no token/OIDC is configured (src/app.ts).
+      MULLION_TRUST_GATEWAY: "true",
+      // GitHub traffic goes to the loopback fake, never to api.github.com.
+      MULLION_GITHUB_API_URL: githubUrl,
+    });
   const frontendEnv = demoEnv(demoDir, { PATH, BACKEND_URL: backendUrl });
 
   let backend;
@@ -180,7 +182,12 @@ export async function startDemo({
     // Stop the sessions first: they live in systemd scopes, not in the
     // backend's process group, and would otherwise outlive it.
     const leaked = await stopDemoScopes(instanceId, sessionsDir);
-    await Promise.all([killGroup(backend), killGroup(frontend), fakeGithub.stop()]);
+    await Promise.all([
+      killGroup(backend),
+      killGroup(frontend),
+      // A rejection here must not skip the rm below or mask the startup error.
+      fakeGithub?.stop().catch((err) => console.warn(`[demo] fake GitHub did not stop: ${err}`)),
+    ]);
     if (keep) return console.log(`[demo] kept ${demoDir}`);
     if (leaked.length > 0)
       return console.warn(
@@ -240,6 +247,8 @@ export async function startDemo({
       { mode: 0o755 },
     );
     await symlink(path.join(REPO_ROOT, "drizzle"), path.join(runDir, "drizzle"));
+    fakeGithub = await startFakeGithub({ tickMs: githubTickMs, latestRelease: nextMinorTag() });
+    const backendEnv = backendEnvFor(fakeGithub.url);
     assertDemoEnv(backendEnv, demoDir, { cwd: runDir });
     assertDemoEnv(frontendEnv, demoDir, { cwd: path.join(REPO_ROOT, "frontend") });
     console.log(`[demo] scratch dir ${demoDir} (instance ${instanceId})`);

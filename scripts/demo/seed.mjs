@@ -235,7 +235,7 @@ export async function seedDemo({ api, root, holdTranscripts = false }) {
     commitMessages: ["Initial commit", "Bump version"],
   });
   for (const name of ["aurora-web", "orbit-api"])
-    await connectOrigin(path.join(scratchRoot, name), name, path.join(scratchRoot, ".remotes"));
+    await connectOrigin(path.join(scratchRoot, name), name, `${scratchRoot}-remotes`);
   // A third repo, deliberately never registered as a project below — the
   // sidebar's project-discovery panel (Sidebar.tsx's "Configure search
   // roots" empty state) needs at least one genuinely undiscovered
