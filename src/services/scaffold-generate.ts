@@ -10,6 +10,7 @@ import { resolveHostBaseRef, viaRemote } from "./host-git.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { gitEnv } from "./git-env.js";
 import { CANARY_MISSING_MESSAGE, placeCanary } from "./scaffold-canary.js";
+import { homeMaskArgs } from "./scaffold-sandbox-home.js";
 import {
   FAILURE_LOG_TAIL_CHARS,
   agentLogLabel,
@@ -1137,11 +1138,16 @@ function buildBwrapBaseArgs(
   worktreePath: string,
   extraWritablePaths: string[],
   fakeHome?: string,
+  homeMask: string[] = [],
 ): string[] {
   return [
     "--ro-bind",
     "/",
     "/",
+    // Issue #2489 — hides the operator's real HOME (see scaffold-sandbox-home.ts).
+    // Must stay right after the root bind and before every bind below, which
+    // are re-established on top of the tmpfs.
+    ...homeMask,
     "--dev",
     "/dev",
     "--proc",
@@ -1665,10 +1671,16 @@ export function wrapWithSandbox(
   worktreePath: string,
   extraWritablePaths: string[] = [],
   fakeHome?: string,
+  homeMask: string[] = [],
 ): SandboxedInvocation {
   return {
     bin: "bwrap",
-    args: [...buildBwrapBaseArgs(worktreePath, extraWritablePaths, fakeHome), "--", bin, ...args],
+    args: [
+      ...buildBwrapBaseArgs(worktreePath, extraWritablePaths, fakeHome, homeMask),
+      "--",
+      bin,
+      ...args,
+    ],
   };
 }
 
@@ -1695,7 +1707,11 @@ export function buildBwrapSmokeTestInvocation(): SandboxedInvocation {
   const probeBindPath = os.tmpdir();
   return {
     bin: "bwrap",
-    args: [...buildBwrapBaseArgs(probeBindPath, []), "--", "/bin/true"],
+    args: [
+      ...buildBwrapBaseArgs(probeBindPath, [], undefined, homeMaskArgs({ home: os.homedir() })),
+      "--",
+      "/bin/true",
+    ],
   };
 }
 
@@ -1926,6 +1942,7 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
       spawnCwd,
       [...writablePaths.dirs, ...writablePaths.files],
       fakeHome,
+      homeMaskArgs({ home: os.homedir(), agentCommand, worktreePath: spawnCwd }),
     );
   }
   // Built out here, not inline in the Promise executor below: CodeQL's
