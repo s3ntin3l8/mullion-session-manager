@@ -33,6 +33,17 @@ describe("placeCanary", () => {
     expect(c.verify(`MULLION_CANARY: ${c.value}`)).toBe("");
   });
 
+  it("strips every echoed copy and handles CRLF", () => {
+    const c = placeCanary(dir);
+    const echo = `MULLION_CANARY: ${c.value}`;
+    expect(c.verify(`${echo}\r\nbody\r\n${echo}\r\n`)).toBe("body\r\n");
+  });
+
+  it("rejects an inline echo that the line pattern could not strip", () => {
+    const c = placeCanary(dir);
+    expect(c.verify(`body \`MULLION_CANARY: ${c.value}\` more\n`)).toBeNull();
+  });
+
   it("rejects a missing or wrong canary", () => {
     const c = placeCanary(dir);
     expect(c.verify("body\n")).toBeNull();

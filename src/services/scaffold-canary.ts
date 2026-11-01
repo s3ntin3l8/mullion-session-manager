@@ -32,7 +32,9 @@ export interface Canary {
 export function placeCanary(worktreePath: string): Canary {
   const value = randomBytes(8).toString("hex");
   fs.writeFileSync(path.join(worktreePath, CANARY_FILE), `${value}\n`);
-  const line = `${CANARY_LABEL} ${value}`;
+  // One pattern for both the accept check and the strip, so a turn is never
+  // accepted on a line that then stays in the output.
+  const lineRe = new RegExp(`^[ \\t]*${CANARY_LABEL} ${value}[ \\t]*\\r?(?:\\n|$)`, "gm");
   return {
     value,
     withInstruction: (prompt) =>
@@ -41,8 +43,8 @@ export function placeCanary(worktreePath: string): Canary {
       `"${CANARY_LABEL} <the file's content>" (the content is a short token; copy it exactly). ` +
       `That line is a check that you could read the repository.`,
     verify: (stdout) => {
-      if (!stdout.includes(line)) return null;
-      return stdout.replace(new RegExp(`^[ \\t]*${CANARY_LABEL} ${value}[ \\t]*\\r?\\n?`, "m"), "");
+      if (!new RegExp(lineRe.source, "m").test(stdout)) return null;
+      return stdout.replace(lineRe, "");
     },
   };
 }
