@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, isNull, isNotNull } from "drizzle-orm";
 import { projects, tasks, TASK_STATUSES } from "../db/schema.js";
-import { enqueueTask, retryTask, SUPERSEDED_RETRY_DETAIL } from "../services/task-claim.js";
+import { enqueueTask, retryTask } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { withTaskDerived } from "../services/task-row-derive.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
@@ -12,6 +12,7 @@ import {
 } from "../services/task-github-sync.js";
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
 import { withApprovalState } from "../services/task-approval-row.js";
+import { retryRefusal } from "./task-retry-refusal.js";
 import {
   TASK_MODEL_COLUMNS,
   TASK_MODEL_SCHEMA_PROPS,
@@ -1285,26 +1286,7 @@ export async function tasksRoute(app: FastifyInstance) {
       if (hermesRefusal) return reply.badRequest(hermesRefusal);
       const outcome = await retryTask(app, taskId, request.body || undefined);
       if (!outcome.ok) {
-        switch (outcome.reason) {
-          case "not-found":
-            return reply.notFound();
-          case "not-failed":
-            return reply.conflict(outcome.detail ?? "Task is not failed");
-          case "superseded":
-            return reply.conflict(outcome.detail ?? SUPERSEDED_RETRY_DETAIL);
-          case "cap":
-            return reply
-              .code(429)
-              .send({ error: "concurrency-cap", limit: outcome.limit, message: outcome.detail });
-          case "no-worktree":
-            return reply.badRequest(outcome.detail ?? "Task has no recorded branch to resume");
-          case "remote-not-supported":
-            return reply.code(501).send({ error: "remote-not-supported", message: outcome.detail });
-          case "worktree-failed":
-            return reply.badGateway(outcome.detail ?? "Failed to resume this task's worktree");
-          case "spawn-failed":
-            return reply.badGateway(outcome.detail ?? "Failed to spawn a session for this task");
-        }
+        return retryRefusal(reply, outcome);
       }
 
       reply.code(201);

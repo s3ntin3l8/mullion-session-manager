@@ -32,7 +32,7 @@
     "src/plugins/control-socket.ts": 2131,
     "src/routes/internal.ts": 2210,
     "src/routes/projects.ts": 2737,
-    "src/routes/tasks.ts": 1201,
+    "src/routes/tasks.ts": 1194,
     "src/services/github-write.ts": 1335,
     "src/services/pty-manager.ts": 2033,
     "src/services/remote-host-client.ts": 1470,
