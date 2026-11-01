@@ -2070,7 +2070,9 @@ export async function internalRoutes(app: FastifyInstance) {
         // isSandboxCapable() in defaultSpawnGenerationTurn.
         const sandboxRequested = app.config.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED !== false;
         const sandboxed = sandboxRequested && (await isSandboxCapable());
-        return { outcome: "ok", stdout, sandboxed };
+        // Issue #2554 — runGenerationTurnInScratchWorktree wraps every turn in
+        // the read canary (a failed canary throws), so reaching here means it ran.
+        return { outcome: "ok", stdout, sandboxed, canary: true };
       } catch (err) {
         if (err instanceof UnsupportedGenerationAgentError) {
           return { outcome: "unsupported-agent", detail: err.message };

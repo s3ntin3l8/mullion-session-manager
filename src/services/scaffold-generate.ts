@@ -1,4 +1,4 @@
-import { execFile, type ExecException } from "node:child_process";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -9,6 +9,16 @@ import { deleteBranch } from "./git-branch-delete.js";
 import { resolveHostBaseRef, viaRemote } from "./host-git.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { gitEnv } from "./git-env.js";
+import { CANARY_MISSING_MESSAGE, placeCanary } from "./scaffold-canary.js";
+import {
+  FAILURE_LOG_TAIL_CHARS,
+  agentLogLabel,
+  describeExit,
+  describeSpawnFailure,
+  tail,
+} from "./scaffold-failure.js";
+
+export { agentLogLabel, describeSpawnFailure, redactSecrets } from "./scaffold-failure.js";
 import {
   scaffoldSkillPath,
   scaffoldReviewerPath,
@@ -267,6 +277,11 @@ export interface GeneratedScaffoldContent {
    * type's doc comment). Surfaced in the /setup/generate response so the
    * primary/UI can warn the user. */
   sandboxed: boolean;
+  /** Issue #2554 — whether the read canary verified that the agent read the
+   * repo. `true` for a local turn (the canary wraps every one); for a remote
+   * turn it is `false` when the agent build predates the canary and omitted
+   * `canary` from `GenerationTurnResult`. Only `false` is a signal. */
+  canary?: boolean;
   /** Issue #1145 — post-generation heuristic: when the generated content
    * references concrete file paths but none of them appear to be real
    * repo-specific paths, this is `true`. A signal, not a hard failure —
@@ -646,6 +661,7 @@ export function parseGeneratedOutput(
     reviewer,
     scaffoldRegion,
     sandboxed: false,
+    canary: true,
     possiblyGeneric: false,
   };
   const mode = instructions?.mode ?? "keep";
@@ -1754,85 +1770,6 @@ export function scaffoldGenerateBaseDir(): string {
   return path.join(os.tmpdir(), "mullion-scaffold-generate");
 }
 
-const FAILURE_LOG_TAIL_CHARS = 2000;
-const FAILURE_MESSAGE_TAIL_CHARS = 300;
-
-/** Noise an agent CLI prints that says nothing about why the turn failed. */
-const HARMLESS_STDERR_LINE = /^Warning: no stdin data received in \d+s/i;
-
-/** Credentials an agent turn could echo (it can read its own credentials file).
- * Applied to every tail that is logged or put in the 502 message. */
-const SECRET_PATTERNS: RegExp[] = [
-  /sk-ant-[\w-]+/g,
-  /\beyJ[\w-]+\.[\w-]+\.[\w-]+/g,
-  /("?(?:access|refresh|id)_?[Tt]oken"?\s*[:=]\s*)"?[^"\s,}]+"?/g,
-  /\bBearer\s+[\w.~+/=-]+/gi,
-];
-
-export function redactSecrets(text: string): string {
-  let out = text;
-  for (const re of SECRET_PATTERNS) {
-    out = out.replace(re, (m, prefix) =>
-      typeof prefix === "string" ? `${prefix}"[redacted]"` : "[redacted]",
-    );
-  }
-  return out;
-}
-
-/** A fixed label for the agent in log lines. The agent command arrives from a
- * request or project setting; the log gets only the literal it matched, never
- * the caller's string. */
-export function agentLogLabel(agentCommand: string): string {
-  switch (agentCommand) {
-    case "claude":
-      return "claude";
-    case "codex":
-      return "codex";
-    case "opencode":
-      return "opencode";
-    case "agy":
-      return "agy";
-    default:
-      return "unknown agent";
-  }
-}
-
-function tail(text: string | Buffer | undefined, max: number): string {
-  const t = redactSecrets((text ?? "").toString()).trim();
-  return t.length > max ? `…${t.slice(-max)}` : t;
-}
-
-type ExecFailure = Pick<ExecException, "code" | "killed" | "signal" | "message">;
-
-function describeExit(err: ExecFailure): string {
-  if (err.killed || err.signal) return `killed by ${err.signal ?? "a signal"}`;
-  if (typeof err.code === "number") return `exit code ${err.code}`;
-  // A spawn error (ENOENT, EACCES, …): the code alone says nothing, the message does.
-  return (err.message ?? "unknown error").split("\n")[0].slice(0, 200);
-}
-
-/** The message of a failed generation turn: how it ended, then the tail of what
- * the CLI printed. stdout is included because `claude -p` reports its errors
- * there ("Not logged in"), and known-harmless stderr lines are dropped so they
- * cannot mask the real cause. Bounded: the message ends up in a 502 body. */
-export function describeSpawnFailure(
-  err: ExecFailure,
-  stdout: string | Buffer | undefined,
-  stderr: string | Buffer | undefined,
-): string {
-  const cleanedStderr = (stderr ?? "")
-    .toString()
-    .split("\n")
-    .filter((line) => !HARMLESS_STDERR_LINE.test(line.trim()))
-    .join("\n");
-  const parts = [describeExit(err)];
-  const out = tail(stdout, FAILURE_MESSAGE_TAIL_CHARS);
-  const errText = tail(cleanedStderr, FAILURE_MESSAGE_TAIL_CHARS);
-  if (out) parts.push(`stdout: ${out}`);
-  if (errText) parts.push(`stderr: ${errText}`);
-  return parts.join(" — ");
-}
-
 /** Codex's own tool-failure text when its sandbox cannot start inside ours
  * (#2472). The line has no stable prefix (codex quotes it mid-sentence), so
  * it cannot be anchored; a repo whose files contain these phrases can trip it.
@@ -2075,12 +2012,33 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
  * remote agent on a 0.3.9 or 0.3.10 build omits `sandboxed`, and
  * `generateScaffoldContent` defaults it to `false` so the unsandboxed
  * warning still surfaces rather than assuming the turn was sandboxed. A
- * current agent build (`routes/internal.ts`) always populates it. */
+ * current agent build (`routes/internal.ts`) always populates it.
+ *
+ * `canary` (#2554) is the same kind of optional field: `true` when the agent
+ * ran the read canary (`withReadCanary`) around the turn. An agent build that
+ * predates the canary omits it and returns plain stdout, which the primary
+ * cannot otherwise tell from a verified turn; `generateScaffoldContent`
+ * reports its absence as `canary: false` rather than failing the turn. */
 export type GenerationTurnResult =
-  | { outcome: "ok"; stdout: string; sandboxed?: boolean }
+  | { outcome: "ok"; stdout: string; sandboxed?: boolean; canary?: boolean }
   | { outcome: "unsupported-agent"; detail: string }
   | { outcome: "worktree-error"; detail: string }
   | { outcome: "spawn-error"; detail: string };
+
+/** Issue #2535 — wraps a spawn so the turn must prove it could read the
+ * repository: a canary file is placed in its cwd (see scaffold-canary.ts) and
+ * the output is rejected unless it echoes the content. Applied to the real
+ * spawn only; a test double never reads the file. */
+export function withReadCanary(inner: SpawnGenerationTurn): SpawnGenerationTurn {
+  return async (turn) => {
+    const canary = placeCanary(turn.cwd, scaffoldGenerateBaseDir());
+    const stdout = await inner({ ...turn, prompt: canary.withInstruction(turn.prompt) });
+    const verified = canary.verify(stdout);
+    if (verified === null)
+      throw new GenerationSpawnError(turn.agentCommand, CANARY_MISSING_MESSAGE);
+    return verified;
+  };
+}
 
 export interface RunGenerationTurnInScratchWorktreeOptions {
   /** The REAL project checkout — the generation worktree is branched off
@@ -2132,7 +2090,7 @@ export interface RunGenerationTurnInScratchWorktreeOptions {
 export async function runGenerationTurnInScratchWorktree(
   opts: RunGenerationTurnInScratchWorktreeOptions,
 ): Promise<string> {
-  const spawn = opts.spawn ?? defaultSpawnGenerationTurn;
+  const spawn = opts.spawn ?? withReadCanary(defaultSpawnGenerationTurn);
 
   // Unique per call, not `gen-<slug>` — unlike preview/apply's own
   // `setup-<slug>` worktree (deliberately STABLE so a re-preview reuses
@@ -2284,6 +2242,7 @@ export async function generateScaffoldContent(
 
   let raw: string;
   let sandboxed: boolean;
+  let canary = true;
   if (!opts.hostId || opts.hostId === LOCAL_HOST_ID) {
     raw = await runGenerationTurnInScratchWorktree({
       cwd: opts.cwd,
@@ -2336,6 +2295,7 @@ export async function generateScaffoldContent(
       throw new GenerationSpawnError(opts.agentCommand, turn.detail);
     raw = turn.stdout;
     sandboxed = turn.sandboxed ?? false;
+    canary = turn.canary === true;
   }
 
   const parsed = parseGeneratedOutput(raw, opts.slug, {
@@ -2351,6 +2311,7 @@ export async function generateScaffoldContent(
   return {
     ...parsed,
     sandboxed,
+    canary,
     possiblyGeneric,
     ...(missingCitedPaths ? { missingCitedPaths } : {}),
   };

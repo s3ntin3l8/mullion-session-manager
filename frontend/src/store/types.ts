@@ -960,6 +960,8 @@ export interface ScaffoldPreview {
   // The agent that wrote a generated preview, for the result header.
   agent?: string;
   sandboxed?: boolean;
+  // false: a remote agent build that predates the read canary ran the turn.
+  canary?: boolean;
   possiblyGeneric?: boolean;
   missingCitedPaths?: { missing: number; cited: number };
   // What the generation turn was asked to do with existing instructions, and
