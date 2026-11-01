@@ -108,6 +108,13 @@ describe("taskReReviewEligible", () => {
     reviewRunId: null,
     reviewRunIngestedId: null,
   } as const;
+  it("accepts a finished review of any verdict, but not a task never reviewed", () => {
+    const ingested = { ...base, reviewSessionId: 1, reviewFindingsIngestedSessionId: 1 };
+    for (const lastReviewVerdict of ["changes-requested", "approved", "clean"]) {
+      expect(taskReReviewEligible({ ...ingested, lastReviewVerdict })).toBe(true);
+    }
+    expect(taskReReviewEligible({ ...ingested, lastReviewVerdict: null })).toBe(false);
+  });
   it("accepts an ingested session review or an ingested Hermes run", () => {
     expect(
       taskReReviewEligible({ ...base, reviewSessionId: 1, reviewFindingsIngestedSessionId: 1 }),
@@ -119,13 +126,5 @@ describe("taskReReviewEligible", () => {
   it("refuses while neither review has been ingested", () => {
     expect(taskReReviewEligible({ ...base, reviewSessionId: 1 })).toBe(false);
     expect(taskReReviewEligible({ ...base, reviewRunId: "r1" })).toBe(false);
-    expect(
-      taskReReviewEligible({
-        ...base,
-        reviewRunId: "r1",
-        reviewRunIngestedId: "r1",
-        lastReviewVerdict: "approved",
-      }),
-    ).toBe(false);
   });
 });

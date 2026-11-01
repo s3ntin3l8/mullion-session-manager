@@ -475,18 +475,23 @@ non-Abandon-path task) are not gated either way.
   has a preserved branch (a task that failed before ever committing
   anything has nothing to resume — see "Known limitations" below).
 - **Re-review** (`reviewing`, no status change) — `POST
-/api/tasks/:id/re-review`, for a task whose `lastReviewVerdict` is stuck at
+/api/tasks/:id/re-review`, to run the review again on the current branch
+  **without sending anything to the worker** — for a task stuck on
   `"inconclusive"` (a review agent that went idle with no reported error at
-  all). Kills the stale review session and clears the same four columns an
+  all), a changes-requested verdict you disagree with, or a review made
+  against a head that has since moved ("stale"). Any finished review (a
+  non-null `lastReviewVerdict` whose findings were ingested) can be re-run.
+  Kills the stale review session and clears the same four columns an
   automatic hourly re-arm sweep (`reannounceInconclusiveReviewsAfterGrace`,
   issue `#1345`/`#1346`) already uses, so a fresh review agent spawns on the
-  next tick — but with no time grace and no rearm-count cap, since a human
-  explicitly clicking this is a stronger signal than the sweep's own
-  conservative heuristics. **Deliberately not gated** on Task Master being
+  next tick — as a follow-up round that reads the previous verdict, which
+  stays until the new one overwrites it. No time grace and no rearm-count
+  cap, since a human explicitly clicking this is a stronger signal than the
+  sweep's own conservative heuristics; the rearm count only moves for an
+  `inconclusive` verdict. **Deliberately not gated** on Task Master being
   enabled, the same reasoning as Reject/Give-up: a disabled install must
   not permanently strand a task stuck on `inconclusive`. Surfaced as a
-  "Re-review" button in `TaskDetail.tsx` only when `lastReviewVerdict ===
-"inconclusive"`.
+  "Re-review" button in `TaskDetail.tsx` whenever such a review exists.
 - **Give up** (`reviewing → failed`) — the other resolver of a `reviewing`
   task besides Approve/Reject, for "stop trying entirely." Closes a
   still-open draft PR. Not automatic on session exit, and ungated, the same

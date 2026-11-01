@@ -54,3 +54,30 @@ describe("TaskActions on a reviewing task", () => {
     expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
   });
 });
+
+describe("TaskActions' Re-review on a reviewing task", () => {
+  const reviewed = (lastReviewVerdict: string | null) =>
+    makeTask({
+      id: 1,
+      status: "reviewing",
+      lastReviewVerdict,
+      reviewSessionId: 5,
+      reviewFindingsIngestedSessionId: 5,
+    });
+
+  it.each(["inconclusive", "changes-requested", "approved-with-suggestions", "clean"])(
+    "is offered for a finished %s review, with a tooltip that says it sends nothing to the agent",
+    (verdict) => {
+      render(<TaskActions task={reviewed(verdict)} />);
+      expect(screen.getByRole("button", { name: "Re-review" })).toHaveAttribute(
+        "title",
+        expect.stringContaining("without sending anything to the agent"),
+      );
+    },
+  );
+
+  it("is not offered for a task that has not been reviewed", () => {
+    render(<TaskActions task={reviewed(null)} />);
+    expect(screen.queryByRole("button", { name: "Re-review" })).not.toBeInTheDocument();
+  });
+});
