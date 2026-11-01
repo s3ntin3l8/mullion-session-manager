@@ -66,8 +66,8 @@ a command's shape: the `commandIs*` predicates (`commandIsOpencode`,
 `getAdapterDelegationHint`, plus `validateModel`/`validateCliModel`
 (`services/task-model-resolve.ts`) and `commandSupportsSeed`
 (`services/task-agent-resolve.ts`). This list is examples, not a closed
-whitelist: a helper exported from `hook-adapters/` is sanctioned by living
-there. Callers elsewhere (`task-claim.ts`, `task-reconciler.ts`,
+whitelist: any helper in it, or any command-shape lookup exported from
+`hook-adapters/`, is sanctioned. Callers elsewhere (`task-claim.ts`, `task-reconciler.ts`,
 `routes/sessions.ts`, `session-transcript.ts`, `pty-manager.ts`) use them to
 branch on a command's agent family, inject a model flag, or decide whether a
 real first-turn prompt can be delivered.
