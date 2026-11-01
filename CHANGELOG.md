@@ -1,5 +1,42 @@
 # Changelog
 
+## [0.3.57](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.56...v0.3.57) (2026-11-01)
+
+
+### Features
+
+* **github:** conversation items as collapsible cards, newest first ([#2523](https://github.com/s3ntin3l8/mullion-session-manager/issues/2523)) ([6828ce5](https://github.com/s3ntin3l8/mullion-session-manager/commit/6828ce53327446d6172dbfa4952362c6ec25c8df))
+* **scaffold:** run Generate as a background job (job registry, start and status routes) ([adf404e](https://github.com/s3ntin3l8/mullion-session-manager/commit/adf404eb0278b9db375626d49a23f61b6ac4a0a0))
+* **scaffold:** show Generate progress in the Scaffold panel and reattach to a running job ([5e922c4](https://github.com/s3ntin3l8/mullion-session-manager/commit/5e922c461a73ebfa64c19d1a9c3a072231c88e94))
+* **tasks:** choose the provider and model for a task in the detail panel ([be6ba99](https://github.com/s3ntin3l8/mullion-session-manager/commit/be6ba993ece95c29cd72484d1e09e95deafb2582))
+* **tasks:** delete a task's local branch once its PR is confirmed merged ([#2510](https://github.com/s3ntin3l8/mullion-session-manager/issues/2510)) ([84e0dd6](https://github.com/s3ntin3l8/mullion-session-manager/commit/84e0dd60e3290ca01333eb4fb728c7a3cc947eae))
+* **tasks:** keep a diagnostic snapshot when a worker fails with no commits ([2cd284d](https://github.com/s3ntin3l8/mullion-session-manager/commit/2cd284df7670c793e9d34b723fa7a23b2660ac14))
+* **tasks:** re-run a review without sending the task back ([#2527](https://github.com/s3ntin3l8/mullion-session-manager/issues/2527)) ([4e3e092](https://github.com/s3ntin3l8/mullion-session-manager/commit/4e3e09288bb1f2be7c252309bceb0b9024c5f02d))
+
+
+### Bug Fixes
+
+* **dock:** npm run dev:backend strips the hosting session's injected MULLION_* variables ([#2502](https://github.com/s3ntin3l8/mullion-session-manager/issues/2502)) ([18cb14e](https://github.com/s3ntin3l8/mullion-session-manager/commit/18cb14eadbb8aaccfe2a0d41272c7b9ddcfdb306))
+* **dock:** the dock branch picker runs off-screen and can't be searched ([509706c](https://github.com/s3ntin3l8/mullion-session-manager/commit/509706c67fca07c80f3d4eeb8c05cf29031eb7fd))
+* **github:** the Manual filter shows PRs and issues not run by Task Master ([#2514](https://github.com/s3ntin3l8/mullion-session-manager/issues/2514)) ([df2dc5d](https://github.com/s3ntin3l8/mullion-session-manager/commit/df2dc5d27ec8011e0caae228a11fde8e075d1397))
+* **opencode:** treat a provider usage-limit stop as a rate limit, not a no-commits failure ([b216973](https://github.com/s3ntin3l8/mullion-session-manager/commit/b2169730c0d330c93a80929c519ec2ea06ce61a4))
+* **scaffold:** don't cut marker text out of longer tokens or code when removing an orphan marker ([72a0f09](https://github.com/s3ntin3l8/mullion-session-manager/commit/72a0f09ad9cdd7ce492fd0b60e3e15e0942fb39c))
+* **scaffold:** force-add gitignored scaffold targets and let the skill and reviewer be left out ([d9443e6](https://github.com/s3ntin3l8/mullion-session-manager/commit/d9443e6ffd9de62f8e2cd9b7609fbab9cba24697))
+* **scaffold:** keep existing-instructions row label and radio group from squeezing each other ([814638f](https://github.com/s3ntin3l8/mullion-session-manager/commit/814638f9d033152e2334d7316411dbb5892f52de))
+* **scaffold:** keep the Scaffold panel's form and preview across unmounts and recover a live preview ([bcbed4b](https://github.com/s3ntin3l8/mullion-session-manager/commit/bcbed4b76d6a4c8265ccc8f64a9a210a1cbb9b78))
+* **scaffold:** let codex generation turns read the repo inside Mullion's sandbox ([#2484](https://github.com/s3ntin3l8/mullion-session-manager/issues/2484)) ([29a33af](https://github.com/s3ntin3l8/mullion-session-manager/commit/29a33afad209a82c4d07f563d69b39dc85a5a4aa))
+* **scaffold:** make GenerationTurnResult.sandboxed optional for version-skewed agents ([#1910](https://github.com/s3ntin3l8/mullion-session-manager/issues/1910)) ([1d2a05b](https://github.com/s3ntin3l8/mullion-session-manager/commit/1d2a05b2c212a539d9982658fb6bdddb097821b2))
+* **scaffold:** make the Scaffold panel's agent and template paths unmistakable ([#2493](https://github.com/s3ntin3l8/mullion-session-manager/issues/2493)) ([34ae4c5](https://github.com/s3ntin3l8/mullion-session-manager/commit/34ae4c5d1137848339c910a7fd596a872c38a282))
+* **tasks:** keep a structured review's sections when its summary runs long ([#2500](https://github.com/s3ntin3l8/mullion-session-manager/issues/2500)) ([3422e22](https://github.com/s3ntin3l8/mullion-session-manager/commit/3422e221ec4c237f0fa97fb5925950dc461288ca))
+* **tasks:** record a manually merged closing PR as merged, clearing the needs-merge badge ([#2503](https://github.com/s3ntin3l8/mullion-session-manager/issues/2503)) ([fae760a](https://github.com/s3ntin3l8/mullion-session-manager/commit/fae760a602bfdd20a3a292a1426a7fd16f2857c9))
+* **tasks:** refuse Retry on a task copy superseded by a project merge ([#2524](https://github.com/s3ntin3l8/mullion-session-manager/issues/2524)) ([c02bc2c](https://github.com/s3ntin3l8/mullion-session-manager/commit/c02bc2ceaa901ef5dba8775fcd60a25573acf2f7)), closes [#2292](https://github.com/s3ntin3l8/mullion-session-manager/issues/2292)
+* **tasks:** Reject sends the feedback to the task's live worker ([#2516](https://github.com/s3ntin3l8/mullion-session-manager/issues/2516)) ([5e0959d](https://github.com/s3ntin3l8/mullion-session-manager/commit/5e0959d6d0b876a1567f404fbf5f8a324b8b35d5))
+* **tasks:** task detail agent dropdowns show the issue-body directive, not just the project default ([15a015b](https://github.com/s3ntin3l8/mullion-session-manager/commit/15a015b6f723de4cc01c0fc71568ce277d5ba70f))
+* **terminal:** answer a program's startup color query from the backend even when a pane is attached ([#2526](https://github.com/s3ntin3l8/mullion-session-manager/issues/2526)) ([569bfb1](https://github.com/s3ntin3l8/mullion-session-manager/commit/569bfb10e5ea04aa27c949b45bd85d5d6bd4a779))
+* **uiux:** auto-place sidebar kebab menus within the visible viewport ([9e80232](https://github.com/s3ntin3l8/mullion-session-manager/commit/9e802329a27f21162d43219b4d520e33ababec8b))
+* **uiux:** row action buttons no longer shift, and branches delete in two clicks ([#2511](https://github.com/s3ntin3l8/mullion-session-manager/issues/2511)) ([8293152](https://github.com/s3ntin3l8/mullion-session-manager/commit/8293152d6eab8452ad88fc98044909c97351563b))
+* **uiux:** tooltips render on top of the page in both themes ([#2513](https://github.com/s3ntin3l8/mullion-session-manager/issues/2513)) ([dc5d751](https://github.com/s3ntin3l8/mullion-session-manager/commit/dc5d75169ba422dec17334a32ce223bd36dd2bab))
+
 ## [0.3.56](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.55...v0.3.56) (2026-10-31)
 
 
