@@ -645,7 +645,19 @@ describe("generateScaffoldContent — remote-hosted project (issue #1101)", () =
     expect(result.skill).toContain("Real invariant.");
     expect(result.reviewer).toContain("Read .claude/skills/demo/SKILL.md first.");
     expect(result.sandboxed).toBe(false);
-    expect((await generateScaffoldContent(callOpts)).sandboxed).toBe(true);
+    // Issue #2554 — an agent build without the canary omits `canary`: reported
+    // as unverified, not failed.
+    expect(result.canary).toBe(false);
+    const second = await generateScaffoldContent(callOpts);
+    expect(second.sandboxed).toBe(true);
+    expect(second.canary).toBe(false);
+    turnSpy.mockResolvedValueOnce({
+      outcome: "ok",
+      stdout: validOutput("demo"),
+      sandboxed: true,
+      canary: true,
+    });
+    expect((await generateScaffoldContent(callOpts)).canary).toBe(true);
     expect(turnSpy).toHaveBeenCalledWith(
       fakeRemoteCwd,
       "demo",

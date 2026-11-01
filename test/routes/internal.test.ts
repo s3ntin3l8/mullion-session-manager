@@ -3215,7 +3215,7 @@ describe("internal routes (agent role, issue #26)", () => {
     });
 
     it("runs a generation turn and returns { outcome: 'ok', stdout }", async () => {
-      vi.mocked(runGenerationTurnInScratchWorktree).mockResolvedValue("some generated stdout");
+      vi.mocked(runGenerationTurnInScratchWorktree).mockResolvedValue("out");
       const previousRoots = process.env.PROJECTS_ROOTS;
       const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "internal-gen-turn-"));
       process.env.PROJECTS_ROOTS = cwd;
@@ -3235,11 +3235,7 @@ describe("internal routes (agent role, issue #26)", () => {
         },
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({
-        outcome: "ok",
-        sandboxed: true,
-        stdout: "some generated stdout",
-      });
+      expect(res.json()).toEqual({ outcome: "ok", sandboxed: true, canary: true, stdout: "out" });
       expect(runGenerationTurnInScratchWorktree).toHaveBeenCalledWith({
         cwd,
         slug: "demo",
@@ -3250,7 +3246,6 @@ describe("internal routes (agent role, issue #26)", () => {
         // Issue #1133 — this agent's own config default (sandboxing on).
         sandbox: true,
       });
-
       process.env.PROJECTS_ROOTS = previousRoots;
       fs.rmSync(cwd, { recursive: true, force: true });
       await app.close();

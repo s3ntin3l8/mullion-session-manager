@@ -277,6 +277,11 @@ export interface GeneratedScaffoldContent {
    * type's doc comment). Surfaced in the /setup/generate response so the
    * primary/UI can warn the user. */
   sandboxed: boolean;
+  /** Issue #2554 — whether the read canary verified that the agent read the
+   * repo. `true` for a local turn (the canary wraps every one); for a remote
+   * turn it is `false` when the agent build predates the canary and omitted
+   * `canary` from `GenerationTurnResult`. Only `false` is a signal. */
+  canary?: boolean;
   /** Issue #1145 — post-generation heuristic: when the generated content
    * references concrete file paths but none of them appear to be real
    * repo-specific paths, this is `true`. A signal, not a hard failure —
@@ -656,6 +661,7 @@ export function parseGeneratedOutput(
     reviewer,
     scaffoldRegion,
     sandboxed: false,
+    canary: true,
     possiblyGeneric: false,
   };
   const mode = instructions?.mode ?? "keep";
@@ -2006,9 +2012,15 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
  * remote agent on a 0.3.9 or 0.3.10 build omits `sandboxed`, and
  * `generateScaffoldContent` defaults it to `false` so the unsandboxed
  * warning still surfaces rather than assuming the turn was sandboxed. A
- * current agent build (`routes/internal.ts`) always populates it. */
+ * current agent build (`routes/internal.ts`) always populates it.
+ *
+ * `canary` (#2554) is the same kind of optional field: `true` when the agent
+ * ran the read canary (`withReadCanary`) around the turn. An agent build that
+ * predates the canary omits it and returns plain stdout, which the primary
+ * cannot otherwise tell from a verified turn; `generateScaffoldContent`
+ * reports its absence as `canary: false` rather than failing the turn. */
 export type GenerationTurnResult =
-  | { outcome: "ok"; stdout: string; sandboxed?: boolean }
+  | { outcome: "ok"; stdout: string; sandboxed?: boolean; canary?: boolean }
   | { outcome: "unsupported-agent"; detail: string }
   | { outcome: "worktree-error"; detail: string }
   | { outcome: "spawn-error"; detail: string };
@@ -2230,6 +2242,7 @@ export async function generateScaffoldContent(
 
   let raw: string;
   let sandboxed: boolean;
+  let canary = true;
   if (!opts.hostId || opts.hostId === LOCAL_HOST_ID) {
     raw = await runGenerationTurnInScratchWorktree({
       cwd: opts.cwd,
@@ -2282,6 +2295,7 @@ export async function generateScaffoldContent(
       throw new GenerationSpawnError(opts.agentCommand, turn.detail);
     raw = turn.stdout;
     sandboxed = turn.sandboxed ?? false;
+    canary = turn.canary === true;
   }
 
   const parsed = parseGeneratedOutput(raw, opts.slug, {
@@ -2297,6 +2311,7 @@ export async function generateScaffoldContent(
   return {
     ...parsed,
     sandboxed,
+    canary,
     possiblyGeneric,
     ...(missingCitedPaths ? { missingCitedPaths } : {}),
   };

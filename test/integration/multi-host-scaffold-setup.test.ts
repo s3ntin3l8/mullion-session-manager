@@ -307,6 +307,8 @@ describe("multi-host scaffold setup (issue #895)", () => {
     expect(res.statusCode).toBe(200);
     const body = res.json();
     expect(body.previewId).toBeTypeOf("string");
+    // Issue #2554 — the current agent ran the read canary and says so.
+    expect(body.canary).toBe(true);
     expect(body.files).toEqual(
       expect.arrayContaining([
         "AGENTS.md",

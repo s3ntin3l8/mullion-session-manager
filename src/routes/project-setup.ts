@@ -494,6 +494,7 @@ interface PreviewSnapshot {
   generated?: boolean;
   agent?: string;
   sandboxed?: boolean;
+  canary?: boolean;
   possiblyGeneric?: boolean;
   missingCitedPaths?: { missing: number; cited: number };
   instructionsMode?: ExistingInstructionsMode;
@@ -1038,6 +1039,7 @@ async function executeScaffoldGeneration(
     files: result.files,
     agent: agentCommand,
     sandboxed: generated.sandboxed,
+    canary: generated.canary,
     hasAgentsOverride: result.hasAgentsOverride,
     ...(result.ignoredPaths ? { ignoredPaths: result.ignoredPaths } : {}),
   };

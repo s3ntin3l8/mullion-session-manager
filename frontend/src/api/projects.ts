@@ -43,6 +43,7 @@ export interface ScaffoldGenerateResult {
   hasAgentsOverride: boolean;
   agent?: string;
   sandboxed: boolean;
+  canary?: boolean;
   possiblyGeneric?: boolean;
   missingCitedPaths?: { missing: number; cited: number };
   conflicts?: ScaffoldConflict[];
@@ -327,6 +328,7 @@ export const projectsApi = {
       hasAgentsOverride: boolean;
       agent?: string;
       sandboxed: boolean;
+      canary?: boolean;
       possiblyGeneric?: boolean;
       missingCitedPaths?: { missing: number; cited: number };
       conflicts?: ScaffoldConflict[];
@@ -390,6 +392,7 @@ export const projectsApi = {
           generated?: boolean;
           agent?: string;
           sandboxed?: boolean;
+          canary?: boolean;
           possiblyGeneric?: boolean;
           missingCitedPaths?: { missing: number; cited: number };
           instructionsMode?: ExistingInstructionsMode;
