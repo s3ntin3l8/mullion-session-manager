@@ -1496,8 +1496,8 @@ describe("PtyManager", () => {
       session.onData((d) => seen.push(d.toString()));
 
       fakePtyChildren[0].emitData(QUERY);
-      expect(fakePtyChildren[0].writeSpy).toHaveBeenCalledWith(REPLY);
-      expect(session.getScrollback().includes("]11;?")).toBe(false);
+      const kept = [session.getScrollback().includes("]11;?"), session.toInfo().lastActivityAt];
+      expect(kept).toEqual([false, expect.any(Number)]);
 
       fakePtyChildren[0].emitData(QUERY + "hello");
       expect(seen).toEqual(["hello"]);

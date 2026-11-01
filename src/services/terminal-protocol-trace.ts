@@ -22,9 +22,9 @@ export type ProtocolDirection = "to-pty" | "from-pty";
 export const PROTOCOL_TRACE_MAX_LINES = 300;
 // Hard ceiling per session, color traffic included: a program polling the
 // background color on every frame floods the journal just the same.
+export const PROTOCOL_TRACE_MAX_COLOR_LINES = 1000;
 // Event-loop stall is only sampled this long: startup queries are the case it explains.
 const PROTOCOL_TRACE_LOOP_WINDOW_MS = 30_000;
-export const PROTOCOL_TRACE_MAX_COLOR_LINES = 1000;
 
 let enabled = true;
 
@@ -145,6 +145,8 @@ export class ProtocolTrace {
         this.loopDelayDone = true;
       }, left).unref();
       this.loopDelay = histogram;
+      // Nothing measured yet: say so rather than report a misleading 0 ms.
+      return "";
     }
     const max = Math.round(this.loopDelay.max / 1e6);
     this.loopDelay.reset();

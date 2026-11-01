@@ -1911,11 +1911,13 @@ export class Session {
         this.attention.cancelDeferred("apiError");
       }
 
-      for (const listener of data === "" ? [] : this.dataListeners) {
-        try {
-          listener(chunk);
-        } catch (err) {
-          console.error(`[pty-manager] data listener threw for session ${this.id}:`, err);
+      if (data !== "") {
+        for (const listener of this.dataListeners) {
+          try {
+            listener(chunk);
+          } catch (err) {
+            console.error(`[pty-manager] data listener threw for session ${this.id}:`, err);
+          }
         }
       }
     });
