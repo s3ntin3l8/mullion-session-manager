@@ -116,8 +116,8 @@ export const WORKFLOW_CONVENTION_QUESTIONS: readonly WorkflowConventionQuestion[
         id: "worktree",
         label: "Dedicated worktree per branch (recommended)",
         fragment:
-          "Work in a dedicated worktree per branch, under `.wt/<branch>`, off the latest remote default branch: " +
-          "`git fetch origin && git worktree add .wt/<branch> -b <branch> origin/<default>`. " +
+          "Work in a dedicated worktree per branch, under `.wt/<name>` (the branch name with `/` replaced by `-`, so the directory stays flat), off the latest remote default branch: " +
+          "`git fetch origin && git worktree add .wt/<name> -b <branch> origin/<default>`. " +
           "A fresh worktree does not inherit installed dependencies — reinstall them there " +
           "before testing or building.",
       },

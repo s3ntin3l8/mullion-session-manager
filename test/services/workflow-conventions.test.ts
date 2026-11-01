@@ -194,7 +194,7 @@ describe("buildWorkflowConventionsText", () => {
       reviewFeedback: "reply-and-resolve",
       deferredWork: "tracked-issue",
     });
-    expect(text).toContain("git worktree add .wt/<branch> -b <branch> origin/<default>");
+    expect(text).toContain("git worktree add .wt/<name> -b <branch> origin/<default>");
     expect(text).toContain("/pulls/<pr>/comments/<comment_id>/replies");
     expect(text).toContain("resolveReviewThread");
     expect(text).toContain("`reviewThreads` query");
