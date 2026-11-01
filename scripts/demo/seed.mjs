@@ -336,10 +336,17 @@ export async function seedDemo({ api, root, holdTranscripts = false }) {
 
   // Task Master on, with auto-claim paused: the watcher must never spawn a
   // real worker for the demo's ready tasks.
+  // A settings "on" overrides the demo env's refusal of
+  // MULLION_TASK_MASTER_ENABLED, so the pause is what keeps real automation
+  // out. Read it back and refuse to go on without it: a PATCH that dropped or
+  // lost the pause would turn the demo into an auto-claiming instance.
   await api("/api/settings", {
     method: "PATCH",
     body: JSON.stringify({ taskMaster: { enabled: "on", autoClaimPaused: true } }),
   });
+  const { taskMaster } = await api("/api/settings");
+  if (taskMaster?.enabled !== "on" || taskMaster?.autoClaimPaused !== true)
+    throw new Error("demo seed: Task Master must be on with auto-claim paused");
 
   const ago = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
   const issueUrl = (repo, n) => `https://github.com/${DEMO_GITHUB_OWNER}/${repo}/issues/${n}`;

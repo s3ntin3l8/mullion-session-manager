@@ -75,6 +75,43 @@ describe("demo fixture routes", () => {
     await app.close();
   });
 
+  it("rejects a malformed timestamp and a bad needsHumanReason", async () => {
+    process.env.MULLION_DEMO = "true";
+    const app = await buildApp();
+    const projectId = await project(app);
+    const post = (task: Record<string, unknown>) =>
+      app.inject({
+        method: "POST",
+        url: "/api/demo/fixtures/tasks",
+        payload: { projectId, tasks: [{ title: "x", status: "ready", ...task }] },
+      });
+    expect((await post({ startedAt: "not-a-date" })).statusCode).toBe(400);
+    expect((await post({ needsHumanReason: "typo" })).statusCode).toBe(400);
+    expect((await post({ startedAt: "2026-01-02T03:04:05Z" })).statusCode).toBe(201);
+    await app.close();
+  });
+
+  it("is all or nothing: a duplicate issue number rolls the whole batch back", async () => {
+    process.env.MULLION_DEMO = "true";
+    const app = await buildApp();
+    const projectId = await project(app);
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/demo/fixtures/tasks",
+      payload: {
+        projectId,
+        tasks: [
+          { title: "first", status: "ready", issueNumber: 5 },
+          { title: "dup", status: "ready", issueNumber: 5 },
+        ],
+      },
+    });
+    expect(res.statusCode).toBe(500);
+    const after = (await app.inject({ method: "GET", url: "/api/tasks" })).json();
+    expect(after.map((t: { title: string }) => t.title)).not.toContain("first");
+    await app.close();
+  });
+
   it("rejects an unknown project and status, and drops a column outside the allow-list", async () => {
     process.env.MULLION_DEMO = "true";
     const app = await buildApp();

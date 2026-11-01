@@ -53,9 +53,13 @@ const taskFixtureProps = {
   title: { type: "string", minLength: 1 },
   status: { type: "string", enum: [...TASK_STATUSES] },
   ...Object.fromEntries(TEXT_COLUMNS.map((c) => [c, { type: ["string", "null"] }])),
+  // An enum column (db/schema.ts), so a typo is a 400, not a silently bad row.
+  needsHumanReason: { enum: ["cap", "no-progress", "finding-persisted", null] },
   ...Object.fromEntries(INTEGER_COLUMNS.map((c) => [c, { type: ["integer", "null"] }])),
   // ISO-8601 strings; the route turns them into Dates.
-  ...Object.fromEntries(TIMESTAMP_COLUMNS.map((c) => [c, { type: ["string", "null"] }])),
+  ...Object.fromEntries(
+    TIMESTAMP_COLUMNS.map((c) => [c, { type: ["string", "null"], format: "date-time" }]),
+  ),
 } as const;
 
 const createTasksSchema = {
@@ -93,18 +97,30 @@ export async function demoFixturesRoute(app: FastifyInstance): Promise<void> {
       const project = app.db.select().from(projects).where(eq(projects.id, projectId)).get();
       if (!project) return reply.notFound(`project ${projectId} not found`);
 
-      const created = fixtures.map((fixture) => {
-        const values: Record<string, unknown> = { ...fixture, projectId };
-        for (const column of TIMESTAMP_COLUMNS) {
-          const raw = fixture[column];
-          if (typeof raw === "string") values[column] = new Date(raw);
-        }
-        return app.db
-          .insert(tasks)
-          .values(values as typeof tasks.$inferInsert)
-          .returning()
-          .get();
-      });
+      // All or nothing: a throw on fixture N (e.g. the unique
+      // (project_id, issue_number) index) must not leave 1..N-1 behind.
+      const created = app.db.transaction((tx) =>
+        fixtures.map((fixture) => {
+          const values: Record<string, unknown> = {
+            projectId,
+            title: fixture.title,
+            status: fixture.status,
+          };
+          // Only the listed columns are ever copied, whatever else got through.
+          for (const column of [...TEXT_COLUMNS, ...INTEGER_COLUMNS]) {
+            if (fixture[column] !== undefined) values[column] = fixture[column];
+          }
+          for (const column of TIMESTAMP_COLUMNS) {
+            const raw = fixture[column];
+            if (raw !== undefined) values[column] = raw === null ? null : new Date(raw as string);
+          }
+          return tx
+            .insert(tasks)
+            .values(values as typeof tasks.$inferInsert)
+            .returning()
+            .get();
+        }),
+      );
       return reply.code(201).send({ tasks: created });
     },
   );
