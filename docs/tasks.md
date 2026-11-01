@@ -566,8 +566,15 @@ this copy must never start a worker of its own. Three things follow:
   resumes the copy's preserved branch and would spawn a second worker for work the surviving
   copy already owns. The refusal survives Unarchive (which clears only `archivedAt`): unhiding
   a row does not undo the fact that a merge superseded it;
-- a copy that was still `ready`/`backlog` when the merge happened leaves the queue as
-  `failed`. Installs that merged _before_ issue #2291 are normalized by a one-off migration
+- it is never **promoted** — `preparePromotion` (`task-promote.ts`, shared by `openDraftPRForTask` and the approve-time `promoteTaskToPR`) refuses a task with
+  `supersededAt` set, so a superseded copy can never open a PR for an issue another task owns
+  (its cleared issue number would leave the PR without a `Closes #N` line);
+- a survivor's copy that was **live** when it was replaced (issue #2522) is stopped: it moves to
+  `failed`, its worker and review sessions are killed (`killSession`), and its worktree is
+  removed the way a failed task's is — `removeWorktreeIfClean`, clean-check-gated, leaving the
+  **branch** alone so the committed work is not lost. The board gets the same `ingested` event;
+- any non-`done` superseded copy (live, `ready` or `backlog`) ends as `failed`; one that was
+  still `ready`/`backlog` simply leaves the queue. Installs that merged _before_ issue #2291 are normalized by a one-off migration
   (drizzle `0104`), which moves their superseded-but-still-queued copies to `failed` too — they
   were never claimable, but they did show up as claim-less "ready" rows in the archived view.
   The migration finds those copies by their **merge signature** rather than by their archived

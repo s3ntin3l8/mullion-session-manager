@@ -213,6 +213,20 @@ async function preparePromotion(
     }
   | { ok: false; outcome: PromoteFailure }
 > {
+  // #2522 — a copy a project merge superseded is never promoted (both openDraftPRForTask and promoteTaskToPR go through here): another task
+  // owns its issue, and its cleared issue number would leave the PR without a
+  // `Closes #N` line. Reuses "no-repo" (no repo link left to promote against)
+  // rather than widening the outcome union every caller switches over.
+  if (task.supersededAt) {
+    return {
+      ok: false,
+      outcome: {
+        ok: false,
+        reason: "no-repo",
+        detail: "task was superseded by a project merge",
+      },
+    };
+  }
   if (!task.worktreePath || !task.branchName) {
     return {
       ok: false,
