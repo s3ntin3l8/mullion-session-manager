@@ -365,7 +365,7 @@ describe("computeScaffold", () => {
     // slug "demo" with no workflowConventionsText set, so a genuine
     // regression in either half still fails here even if it fails to move
     // the three variants apart from each other.
-    it("matches the exact pre-#1201 AGENTS.md region byte-for-byte, as a literal", () => {
+    it("matches the exact AGENTS.md region byte-for-byte, as a literal (conventions as a bullet list)", () => {
       const entries = computeScaffold({}, { slug: "demo" });
       const agentsMd = entries.find((e) => e.path === "AGENTS.md") as { contents: string };
       const region = extractMarkedRegion(
@@ -381,16 +381,16 @@ describe("computeScaffold", () => {
           "changes, and use the reviewer subagent (or `/code-review`) before\n" +
           "declaring a change done.\n\n" +
           "## Workflow Conventions\n\n" +
-          "Never commit directly to the default branch. Always branch and open a PR.\n\n" +
-          "Branch off the latest remote default branch, never off your local one: " +
+          "- Never commit directly to the default branch. Always branch and open a PR.\n" +
+          "- Branch off the latest remote default branch, never off your local one: " +
           "`git fetch origin && git checkout -b <branch> origin/<default>`. A local " +
           "default branch is routinely stale, which is what makes a PR show up as " +
-          '"out-of-date with the base branch" the moment it\'s opened.\n\n' +
-          "Commit and PR titles need a Conventional Commits prefix " +
-          "(`feat:`, `fix:`, `chore:`, ...).\n\n" +
-          "Squash-merge PRs — the PR title becomes the commit message on the default branch.\n\n" +
-          "Require green CI before merging.\n\n" +
-          "Before pushing, run the full lint/typecheck/test/format gate.",
+          '"out-of-date with the base branch" the moment it\'s opened.\n' +
+          "- Commit and PR titles need a Conventional Commits prefix " +
+          "(`feat:`, `fix:`, `chore:`, ...).\n" +
+          "- Squash-merge PRs — the PR title becomes the commit message on the default branch.\n" +
+          "- Require green CI before merging.\n" +
+          "- Before pushing, run the full lint/typecheck/test/format gate.",
       );
     });
   });

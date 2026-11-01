@@ -26,7 +26,9 @@ describe("buildWorkflowConventionsText", () => {
 
   it("assembles a single selected fragment", () => {
     const text = buildWorkflowConventionsText({ branching: "branch-pr" });
-    expect(text).toBe("Never commit directly to the default branch. Always branch and open a PR.");
+    expect(text).toBe(
+      "- Never commit directly to the default branch. Always branch and open a PR.",
+    );
   });
 
   it("assembles multiple selected fragments in WORKFLOW_CONVENTION_QUESTIONS's own fixed order, not answer-object key order", () => {
@@ -39,7 +41,16 @@ describe("buildWorkflowConventionsText", () => {
       "Never commit directly to the default branch. Always branch and open a PR.";
     const mergeFragment =
       "Squash-merge PRs — the PR title becomes the commit message on the default branch.";
-    expect(text).toBe(`${branchingFragment}\n\n${mergeFragment}`);
+    expect(text).toBe(`- ${branchingFragment}\n- ${mergeFragment}`);
+  });
+
+  it("indents a multi-line fragment's continuation lines under its bullet", () => {
+    const text = buildWorkflowConventionsText({ codeReview: "self-review-and-bot-review-once" });
+    const lines = text.split("\n");
+    expect(lines[0].startsWith("- ")).toBe(true);
+    for (const line of lines.slice(1)) {
+      expect(line === "" || line.startsWith("  ")).toBe(true);
+    }
   });
 
   it("is deterministic — the same answers always produce the same text", () => {
@@ -77,7 +88,8 @@ describe("buildWorkflowConventionsText", () => {
     const text = buildWorkflowConventionsText({ branching: "branch-pr" });
     // Only one fragment — every other question's own default option prose
     // never appears just because it went unanswered.
-    expect(text.split("\n\n")).toHaveLength(1);
+    expect(text.split("\n")).toHaveLength(1);
+    expect(text.startsWith("- ")).toBe(true);
   });
 
   it("silently skips an unrecognized option id for a real question", () => {
@@ -92,7 +104,11 @@ describe("buildWorkflowConventionsText", () => {
     for (const question of WORKFLOW_CONVENTION_QUESTIONS) {
       for (const option of question.options) {
         const text = buildWorkflowConventionsText({ [question.id]: option.id });
-        expect(text).toBe(option.fragment);
+        const indented = option.fragment
+          .split("\n")
+          .map((line) => (line === "" ? line : `  ${line}`))
+          .join("\n");
+        expect(text).toBe(`- ${indented.slice(2)}`);
         expect(text.length).toBeGreaterThan(0);
       }
     }
@@ -147,7 +163,7 @@ describe("buildWorkflowConventionsText", () => {
     // An approval's suggestions are applied without another round.
     expect(fragment).toContain("Once the review bot has approved");
     expect(fragment).toContain("for humans, not agents");
-    expect(buildWorkflowConventionsText({ codeReview: "bot-review-once" })).toBe(fragment);
+    expect(buildWorkflowConventionsText({ codeReview: "bot-review-once" })).toBe(`- ${fragment}`);
   });
 
   it("leaves the plain 'bot-review' and 'both' options byte-for-byte as they were", () => {
@@ -191,7 +207,10 @@ describe("buildWorkflowConventionsText", () => {
       answers[question.id] = question.options[0].id;
     }
     const text = buildWorkflowConventionsText(answers);
-    expect(text.split("\n\n")).toHaveLength(WORKFLOW_CONVENTION_QUESTIONS.length);
+    const bullets = text.split("\n").filter((line) => line.startsWith("- "));
+    expect(bullets).toHaveLength(WORKFLOW_CONVENTION_QUESTIONS.length);
+    // No blank line separates two bullets.
+    expect(text).not.toMatch(/\n\n- /);
   });
 
   // Issue #1203 (Phase 2) — the worktree question specifically: named
@@ -214,7 +233,7 @@ describe("buildWorkflowConventionsText", () => {
 
     it("selects the main-checkout fragment when chosen", () => {
       const text = buildWorkflowConventionsText({ worktrees: "main-checkout" });
-      expect(text).toBe("Work directly in the main checkout — no separate worktree per branch.");
+      expect(text).toBe("- Work directly in the main checkout — no separate worktree per branch.");
     });
 
     it("is silently skipped, like every other unanswered question, when omitted", () => {
