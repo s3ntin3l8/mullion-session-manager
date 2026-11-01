@@ -198,6 +198,21 @@ describe("assertDemoEnv refuses a poisoned environment", () => {
     refuses({}, { cwd });
   });
 
+  it("allows the loopback fake GitHub URL, and nothing else for that key", () => {
+    expect(problems({ MULLION_GITHUB_API_URL: "http://127.0.0.1:41233" })).toEqual([]);
+    for (const url of [
+      "https://api.github.com",
+      "http://localhost:41233",
+      "http://10.0.0.5:80",
+      "http://127.0.0.1:0",
+      "http://127.0.0.1:99999",
+      "http://127.0.0.1:41233/",
+    ])
+      expect(problems({ MULLION_GITHUB_API_URL: url })).toEqual([
+        "MULLION_GITHUB_API_URL must be a loopback http://127.0.0.1:<port> URL",
+      ]);
+  });
+
   it("reports one problem per offending key", () => {
     expect(problems({ MULLION_SOCKET_PATH: "/opt/mullion/data/sessions/mullion.sock" })).toEqual([
       "MULLION_SOCKET_PATH must not reach the demo",

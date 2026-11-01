@@ -82,6 +82,15 @@ one of its sessions. `scripts/demo/env.mjs` enforces that, and
 - The backend runs from a scratch directory without a `.env`.
 - The demo uses dedicated loopback ports that must be free.
 - `docker` is shadowed, so the Dock never probes real compose stacks.
+- GitHub is a loopback fake (`scripts/demo/fake-github.mjs`). The backend is
+  pointed at it with `MULLION_GITHUB_API_URL` (the only other `MULLION_*` key
+  the demo sets, and it must be a `127.0.0.1` URL), the seeded checkouts get an
+  `acme/<repo>` origin that a repo-local `insteadOf` redirects to a bare clone,
+  and a placeholder token is saved through the API. So the PR list, PR detail,
+  issues, CI and the update banner show data without an account, and nothing
+  reaches `api.github.com`. `make demo` also flips one PR's CI after a minute so
+  the live `/ws/github` update can be seen; the screenshot pipeline leaves the
+  data frozen.
 - Demo sessions run as `crs-session-<instanceId>-*` scopes, namespaced by the
   scratch `SESSIONS_DIR`; teardown stops exactly those.
 

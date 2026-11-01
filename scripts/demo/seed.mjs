@@ -3,6 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { GIT_NO_AUTO_GC, gitEnv } from "../git-env.mjs";
+import { DEMO_GITHUB_OWNER } from "./fake-github.mjs";
 import { ptySizeFile } from "./geometry.mjs";
 
 /**
@@ -49,6 +50,24 @@ async function seedGitRepo(dir, { readme, files, commitMessages }) {
   const [firstFile] = Object.keys(files);
   await writeFile(path.join(dir, firstFile), files[firstFile] + "\nconsole.log('debug');\n");
   await writeFile(path.join(dir, "src", "scratch.ts"), "// TODO: wire up the API client\n");
+}
+
+/**
+ * Gives a seeded checkout a github.com origin (what parseGitRemote reads to
+ * pick the repo the backend asks GitHub about) while keeping every git
+ * operation offline: a bare clone next to the checkout stands in for the
+ * remote, and a repo-local `insteadOf` rewrites the github.com URL to it, so
+ * the background `git fetch` never leaves the scratch dir.
+ */
+async function connectOrigin(dir, name, bareRoot) {
+  const bare = path.join(bareRoot, `${name}.git`);
+  await mkdir(bareRoot, { recursive: true });
+  await git(bareRoot, "clone", "-q", "--bare", dir, bare);
+  const url = `https://github.com/${DEMO_GITHUB_OWNER}/${name}.git`;
+  await git(dir, "remote", "add", "origin", url);
+  await git(dir, "config", `url.${bare}.insteadOf`, url);
+  await git(dir, "fetch", "-q", "origin");
+  await git(dir, "branch", "-q", "--set-upstream-to=origin/main", "main");
 }
 
 // A plausible-looking agent transcript, entirely synthetic — printed with
@@ -215,6 +234,8 @@ export async function seedDemo({ api, root, holdTranscripts = false }) {
     files: { "src/index.ts": 'export const version = "1.0.0";\n' },
     commitMessages: ["Initial commit", "Bump version"],
   });
+  for (const name of ["aurora-web", "orbit-api"])
+    await connectOrigin(path.join(scratchRoot, name), name, `${scratchRoot}-remotes`);
   // A third repo, deliberately never registered as a project below — the
   // sidebar's project-discovery panel (Sidebar.tsx's "Configure search
   // roots" empty state) needs at least one genuinely undiscovered
@@ -235,6 +256,14 @@ export async function seedDemo({ api, root, holdTranscripts = false }) {
   await api("/api/settings", {
     method: "PATCH",
     body: JSON.stringify({ projectRoots: [scratchRoot] }),
+  });
+
+  // Connect "GitHub": the backend validates this against the fake's /user and
+  // then reads PRs/issues for the origins above from it. The value is a
+  // placeholder the fake accepts, not a credential.
+  await api("/api/integrations/github/token", {
+    method: "PUT",
+    body: JSON.stringify({ token: "demo-placeholder" }), // pragma: allowlist secret
   });
 
   const auroraProject = await api("/api/projects", {
