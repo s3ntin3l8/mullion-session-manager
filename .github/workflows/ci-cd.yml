@@ -186,7 +186,7 @@ jobs:
         run: npm ci --ignore-scripts
       # Names come from the `artifact-prefix` inputs above; the shared
       # ci-node.yml uploads `coverage-shard<prefix>-<n>`.
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: coverage-shard-*
           path: .shard-artifacts
@@ -199,8 +199,8 @@ jobs:
           while IFS= read -r f; do args+=(--coverage "$f"); done \
             < <(find .shard-artifacts -name coverage-final.json | sort)
           if [ "${#args[@]}" -eq 0 ]; then
-            echo "::warning::no shard coverage reports were downloaded"
-            exit 0
+            echo "::error::no shard coverage reports were downloaded"
+            exit 1
           fi
           status=0
           node scripts/check-patch-coverage.mjs --no-run --annotations \
