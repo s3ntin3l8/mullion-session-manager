@@ -1712,9 +1712,7 @@ export async function tasksRoute(app: FastifyInstance) {
     // short of sending the worker back. (A task that was never reviewed has
     // nothing to re-run.)
     if (existing.lastReviewVerdict === null) {
-      return reply.conflict(
-        'Cannot re-review a task with no finished review (last review verdict is "none")',
-      );
+      return reply.conflict('Cannot re-review a task with no finished review (verdict "none")');
     }
     if (!hasReviewHandle(existing)) {
       return reply.conflict("Task has no review session to re-arm");
@@ -1744,6 +1742,9 @@ export async function tasksRoute(app: FastifyInstance) {
         "Task's review session hasn't produced a result yet — nothing stale to re-arm",
       );
     }
+    // The counter is the inconclusive sweep's own bound (it re-arms once on its
+    // own); a re-run of a review that DID conclude doesn't spend it.
+    const spendsRearm = existing.lastReviewVerdict === "inconclusive" ? 1 : 0;
     // One of these is null: the stale review is a session or a run, not both.
     const staleReviewSessionId = existing.reviewSessionId;
     const staleReviewRunId = existing.reviewRunId;
@@ -1755,12 +1756,7 @@ export async function tasksRoute(app: FastifyInstance) {
         reviewSeedDelivered: null,
         reviewSpawnClaimedAt: null,
         ...CLEARED_REVIEW_RUN,
-        // The counter is the inconclusive sweep's own bound (it re-arms once
-        // on its own); a re-run of a review that DID conclude doesn't spend it.
-        inconclusiveReviewRearmCount:
-          existing.lastReviewVerdict === "inconclusive"
-            ? existing.inconclusiveReviewRearmCount + 1
-            : existing.inconclusiveReviewRearmCount,
+        inconclusiveReviewRearmCount: existing.inconclusiveReviewRearmCount + spendsRearm,
       })
       .where(
         and(

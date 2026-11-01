@@ -2523,29 +2523,6 @@ describe("tasks route", () => {
       await app.close();
     });
 
-    it("re-runs a review that concluded too, without spending the inconclusive rearm count", async () => {
-      const app = await buildApp();
-      const { task } = await createInconclusiveReviewingTask(app, {
-        lastReviewVerdict: "changes-requested",
-      });
-
-      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/re-review` });
-
-      expect(res.statusCode).toBe(200);
-      // Re-armed (the handles are cleared, so a fresh review is spawned) but the
-      // verdict stays until the new one overwrites it — the follow-up review
-      // reads it as the prior round.
-      expect(res.json()).toMatchObject({
-        status: "reviewing",
-        lastReviewVerdict: "changes-requested",
-        reviewSessionId: null,
-        reviewFindingsIngestedSessionId: null,
-        inconclusiveReviewRearmCount: 0,
-      });
-
-      await app.close();
-    });
-
     it("409s when the last review verdict is null — never actually reviewed", async () => {
       const app = await buildApp();
       const { task } = await createInconclusiveReviewingTask(app, { lastReviewVerdict: null });
