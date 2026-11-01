@@ -14,6 +14,12 @@ describe("roundLabelFromHtml", () => {
     );
     expect(roundLabelFromHtml('<h2 id="r1">Round 1</h2>')).toBe("Round 1");
     expect(roundLabelFromHtml("<h3>Round 2 &amp; a half</h3>")).toBe("Round 2 & a half");
+    // Entities and inline markup in the heading come out as text.
+    expect(roundLabelFromHtml("<h2>Round 3 &mdash; <code>x</code> again</h2>")).toBe(
+      "Round 3 — x again",
+    );
+    // The round heading need not be the first heading in the body.
+    expect(roundLabelFromHtml("<h2>Verdict</h2><h2>Round 5</h2>")).toBe("Round 5");
   });
 
   it("is null for a comment that is not a review round", () => {
@@ -37,6 +43,8 @@ describe("CommentCard", () => {
     );
     const header = screen.getByRole("button", { name: /mullion-reviewer/ });
     expect(header).toHaveAttribute("aria-expanded", "false");
+    // Nothing to control while the body is unmounted.
+    expect(header).not.toHaveAttribute("aria-controls");
     expect(header).toHaveTextContent("Changes requested");
     // The round shows on the folded card, so it can be told apart from the others.
     expect(header).toHaveTextContent("Round 2");

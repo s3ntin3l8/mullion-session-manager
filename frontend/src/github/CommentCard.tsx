@@ -36,7 +36,7 @@ export function CommentCard({
         type="button"
         className="gh-card-h"
         aria-expanded={open}
-        aria-controls={bodyId}
+        aria-controls={open ? bodyId : undefined}
         onClick={() => setOpen((o) => !o)}
       >
         <ChevronDownIcon size={12} className={open ? "sb-chev" : "sb-chev sb-chev--closed"} />
