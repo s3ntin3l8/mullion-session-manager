@@ -1,4 +1,8 @@
-import type { tasks } from "../db/schema.js";
+import type { FastifyInstance } from "fastify";
+import type { projects, tasks } from "../db/schema.js";
+import { resolveRepoRef } from "./host-git.js";
+import { resolveGitHubToken } from "./github-integration.js";
+import { getPullRequestByNumber } from "./github-write.js";
 
 /**
  * What the previous review round found, for a FOLLOW-UP review's delta
@@ -42,4 +46,31 @@ export function priorRoundFor(
         approved: task.lastReviewVerdict === "approved-with-suggestions",
       }
     : undefined;
+}
+
+/**
+ * The head a review being spawned now will cover: the one the caller's CI read
+ * already found, else the task's PR head from GitHub. Best-effort — `null` when
+ * there is no PR, no token, or GitHub does not answer, in which case
+ * `priorRoundFor` keeps the follow-up behaviour (an unknown head never drops the
+ * previous round's dispositions).
+ */
+export async function resolveReviewHeadSha(
+  app: FastifyInstance,
+  task: Pick<typeof tasks.$inferSelect, "prNumber">,
+  project: typeof projects.$inferSelect,
+  known?: string | null,
+): Promise<string | null> {
+  if (known) return known;
+  if (task.prNumber === null) return null;
+  try {
+    const repoRef = await resolveRepoRef(app, project);
+    const token = repoRef ? await resolveGitHubToken(app, repoRef, "read") : null;
+    if (!repoRef || !token) return null;
+    return (await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber))
+      .headSha;
+  } catch (err) {
+    app.log.warn({ err }, "task review: could not read the PR head — spawning without it");
+    return null;
+  }
 }

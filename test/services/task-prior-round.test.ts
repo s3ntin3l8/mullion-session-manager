@@ -1,5 +1,17 @@
-import { describe, expect, it } from "vitest";
-import { priorRoundFor } from "../../src/services/task-prior-round.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { FastifyInstance } from "fastify";
+
+const mockResolveRepoRef = vi.fn();
+const mockResolveToken = vi.fn();
+const mockGetPr = vi.fn();
+vi.mock("../../src/services/host-git.js", () => ({ resolveRepoRef: mockResolveRepoRef }));
+vi.mock("../../src/services/github-integration.js", () => ({
+  resolveGitHubToken: mockResolveToken,
+}));
+vi.mock("../../src/services/github-write.js", () => ({ getPullRequestByNumber: mockGetPr }));
+
+const { priorRoundFor, resolveReviewHeadSha } =
+  await import("../../src/services/task-prior-round.js");
 import type { tasks } from "../../src/db/schema.js";
 
 const FINDINGS = "## Round 1\n\n**Verdict:** changes requested\n\n\n## Round 2\n\nstill broken";
@@ -48,5 +60,36 @@ describe("priorRoundFor", () => {
   it("stays a follow-up when the caller does not know the head", () => {
     expect(priorRoundFor(task())).toMatchObject({ reviewedSha: "aaa" });
     expect(priorRoundFor(task(), null)).toMatchObject({ reviewedSha: "aaa" });
+  });
+});
+
+describe("resolveReviewHeadSha", () => {
+  const app = { log: { warn: vi.fn() } } as unknown as FastifyInstance;
+  const project = { id: 1 } as never;
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockResolveRepoRef.mockResolvedValue({ owner: "o", repo: "r" });
+    mockResolveToken.mockResolvedValue("tok");
+    mockGetPr.mockResolvedValue({ headSha: "fromgithub" });
+  });
+
+  it("uses the head the caller already read, without asking GitHub", async () => {
+    expect(await resolveReviewHeadSha(app, { prNumber: 7 }, project, "known")).toBe("known");
+    expect(mockGetPr).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the PR's head from GitHub when the CI read found none", async () => {
+    expect(await resolveReviewHeadSha(app, { prNumber: 7 }, project, undefined)).toBe("fromgithub");
+    expect(mockGetPr).toHaveBeenCalledWith("tok", "o", "r", 7);
+  });
+
+  it("is null with no PR, no repo, no token, or a GitHub that does not answer", async () => {
+    expect(await resolveReviewHeadSha(app, { prNumber: null }, project)).toBeNull();
+    mockResolveRepoRef.mockResolvedValueOnce(null);
+    expect(await resolveReviewHeadSha(app, { prNumber: 7 }, project)).toBeNull();
+    mockResolveToken.mockResolvedValueOnce(null);
+    expect(await resolveReviewHeadSha(app, { prNumber: 7 }, project)).toBeNull();
+    mockGetPr.mockRejectedValueOnce(new Error("rate limited"));
+    expect(await resolveReviewHeadSha(app, { prNumber: 7 }, project)).toBeNull();
   });
 });

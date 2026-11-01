@@ -491,7 +491,7 @@ non-Abandon-path task) are not gated either way.
   `inconclusive` verdict. **Deliberately not gated** on Task Master being
   enabled, the same reasoning as Reject/Give-up: a disabled install must
   not permanently strand a task stuck on `inconclusive`. Surfaced as a
-  "Re-review" button in `TaskActions.tsx` (the task drawer and the PR card) whenever such a review exists.
+  "Re-review" button in `TaskActions.tsx` (the task drawer) whenever such a review exists; the PR card's Re-review enables on the same condition (`taskReReviewEligible`).
 - **Give up** (`reviewing → failed`) — the other resolver of a `reviewing`
   task besides Approve/Reject, for "stop trying entirely." Closes a
   still-open draft PR. Not automatic on session exit, and ungated, the same

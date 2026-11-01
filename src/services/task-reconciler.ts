@@ -90,7 +90,7 @@ import {
   type ReviewCiInfo,
   type PrReviewCommentInfo,
 } from "./task-prompt.js";
-import { priorRoundFor } from "./task-prior-round.js";
+import { priorRoundFor, resolveReviewHeadSha } from "./task-prior-round.js";
 import { openDraftPRForTask } from "./task-promote.js";
 import { maybeAutoEnableConventionalTitles } from "./project-release-please.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "./task-approve.js";
@@ -325,7 +325,7 @@ async function spawnReviewAgentNow(
       findingsPath,
       ci,
       roundsRemaining,
-      priorRound: priorRoundFor(task, ci?.headSha),
+      priorRound: priorRoundFor(task, await resolveReviewHeadSha(app, task, project, ci?.headSha)),
     });
     const result = await createSessionRecord(app, {
       projectId: project.id,
