@@ -2013,6 +2013,21 @@ export type GenerationTurnResult =
   | { outcome: "worktree-error"; detail: string }
   | { outcome: "spawn-error"; detail: string };
 
+/** Issue #2535 — wraps a spawn so the turn must prove it could read the
+ * repository: a canary file is placed in its cwd (see scaffold-canary.ts) and
+ * the output is rejected unless it echoes the content. Applied to the real
+ * spawn only; a test double never reads the file. */
+export function withReadCanary(inner: SpawnGenerationTurn): SpawnGenerationTurn {
+  return async (turn) => {
+    const canary = placeCanary(turn.cwd, scaffoldGenerateBaseDir());
+    const stdout = await inner({ ...turn, prompt: canary.withInstruction(turn.prompt) });
+    const verified = canary.verify(stdout);
+    if (verified === null)
+      throw new GenerationSpawnError(turn.agentCommand, CANARY_MISSING_MESSAGE);
+    return verified;
+  };
+}
+
 export interface RunGenerationTurnInScratchWorktreeOptions {
   /** The REAL project checkout — the generation worktree is branched off
    * `baseRef`, exactly like preview/apply's own scratch worktree, but is a
@@ -2038,10 +2053,6 @@ export interface RunGenerationTurnInScratchWorktreeOptions {
    * executes here would defeat the sandboxing this function's own spawn
    * step applies. */
   spawn?: SpawnGenerationTurn;
-  /** Issue #2535 — require the agent to echo the canary file (see
-   * scaffold-canary.ts). Defaults to on, and off when a test injects `spawn`:
-   * a fake agent never reads the file. */
-  canary?: boolean;
 }
 
 /**
@@ -2067,7 +2078,7 @@ export interface RunGenerationTurnInScratchWorktreeOptions {
 export async function runGenerationTurnInScratchWorktree(
   opts: RunGenerationTurnInScratchWorktreeOptions,
 ): Promise<string> {
-  const spawn = opts.spawn ?? defaultSpawnGenerationTurn;
+  const spawn = opts.spawn ?? withReadCanary(defaultSpawnGenerationTurn);
 
   // Unique per call, not `gen-<slug>` — unlike preview/apply's own
   // `setup-<slug>` worktree (deliberately STABLE so a re-preview reuses
@@ -2108,19 +2119,13 @@ export async function runGenerationTurnInScratchWorktree(
   const { path: worktreePath, branch } = worktreeResult;
 
   try {
-    const canary = (opts.canary ?? !opts.spawn) ? placeCanary(worktreePath, baseDir) : undefined;
-    const stdout = await spawn({
+    return await spawn({
       agentCommand: opts.agentCommand,
       cwd: worktreePath,
-      prompt: canary ? canary.withInstruction(opts.prompt) : opts.prompt,
+      prompt: opts.prompt,
       timeoutMs: opts.timeoutMs,
       sandbox: opts.sandbox,
     });
-    if (!canary) return stdout;
-    const verified = canary.verify(stdout);
-    if (verified === null)
-      throw new GenerationSpawnError(opts.agentCommand, CANARY_MISSING_MESSAGE);
-    return verified;
   } finally {
     await removeWorktree(worktreePath, opts.cwd);
     await deleteBranch(opts.cwd, branch, { force: true }).catch(() => {

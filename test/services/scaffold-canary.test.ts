@@ -8,6 +8,7 @@ import { CANARY_FILE, placeCanary } from "../../src/services/scaffold-canary.js"
 import {
   GenerationSpawnError,
   runGenerationTurnInScratchWorktree,
+  withReadCanary,
   type SpawnGenerationTurn,
 } from "../../src/services/scaffold-generate.js";
 
@@ -74,7 +75,7 @@ describe("runGenerationTurnInScratchWorktree canary", () => {
   });
   afterEach(() => fs.rmSync(repo, { recursive: true, force: true }));
 
-  const run = (spawn: SpawnGenerationTurn) =>
+  const run = (inner: SpawnGenerationTurn) =>
     runGenerationTurnInScratchWorktree({
       cwd: repo,
       slug: "demo",
@@ -82,8 +83,7 @@ describe("runGenerationTurnInScratchWorktree canary", () => {
       agentCommand: "claude",
       prompt: "PROMPT",
       timeoutMs: 5000,
-      spawn,
-      canary: true,
+      spawn: withReadCanary(inner),
     });
 
   it("returns the output without the canary line when the agent read the file", async () => {
