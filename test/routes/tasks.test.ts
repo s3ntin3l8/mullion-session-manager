@@ -1823,50 +1823,6 @@ describe("tasks route", () => {
       await app.close();
     });
 
-    it("POST /api/tasks/:id/reject does NOT re-seed when the previous session is still active", async () => {
-      const app = await buildApp();
-      const cwd = createGitRepo();
-      const project = await app.inject({
-        method: "POST",
-        url: "/api/projects",
-        payload: { allowDuplicate: true, createDir: true, name: "reject-no-reseed-p", cwd },
-      });
-      const projectId = project.json().id;
-
-      const sessionRes = await app.inject({
-        method: "POST",
-        url: "/api/sessions",
-        payload: { projectId, command: "bash" },
-      });
-      const activeSessionId = sessionRes.json().id;
-
-      const [task] = app.db
-        .insert(tasks)
-        .values({
-          projectId,
-          title: "under review",
-          status: "reviewing",
-          sessionId: activeSessionId,
-          worktreePath: cwd,
-          branchName: "main",
-          agentCommand: "bash",
-        })
-        .returning()
-        .all();
-
-      const res = await app.inject({
-        method: "POST",
-        url: `/api/tasks/${task.id}/reject`,
-        payload: {},
-      });
-
-      expect(res.statusCode).toBe(200);
-      expect(res.json().sessionId).toBe(activeSessionId);
-
-      fs.rmSync(cwd, { recursive: true, force: true });
-      await app.close();
-    });
-
     it("POST /api/tasks/:id/reject fails the task explicitly when the re-seed spawn fails (issue #987)", async () => {
       // The re-seed's prompt is now delivered as spawn-time initialPrompt
       // argv, not a separate post-spawn stashSeed call (see task-claim.ts's

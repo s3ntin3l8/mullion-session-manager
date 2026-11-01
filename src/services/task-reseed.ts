@@ -23,10 +23,143 @@ import { createSessionRecord } from "./session-lifecycle.js";
 // cleanupPreviewWorktree is a no-op here regardless — a task worker session
 // is never registered in the preview-worktree map — so only this one matters.
 import { closeSessionBrowserBindings } from "./session-browsers.js";
-import { resolveSessionHostId, resolveTaskWorkerHost } from "./session-live-info.js";
+import {
+  readSessionLiveInfo,
+  resolveSessionHostId,
+  resolveTaskWorkerHost,
+  withLiveInfo,
+} from "./session-live-info.js";
+import { getStoredSettings } from "./settings.js";
 
 type TaskRow = typeof tasks.$inferSelect;
 type ProjectRow = typeof projects.$inferSelect;
+
+/** What `promptLiveTaskWorker` did, so the caller can tell "try something else" from "leave it". */
+export type LiveWorkerPrompt =
+  /** The prompt was typed and submitted. */
+  | "typed"
+  /** The worker could not take it right now (blocked, busy, gone, or an agent with no typed prompt). */
+  | "declined"
+  /** The worker's host did not answer, so nothing is known about the session. */
+  | "unreachable";
+
+/** Where a task's worker stands, as far as typing into it is concerned. */
+export type LiveWorkerState =
+  /** No session that is still running (none recorded, exited, or gone). */
+  | { kind: "none" }
+  /** The worker's host did not answer, so nothing is known about the session. */
+  | { kind: "unreachable" }
+  /** Blocked on a dialog: Enter would answer it. */
+  | { kind: "blocked"; status: string }
+  /**
+   * Can be typed into, on the host that owns it. That includes a worker that is
+   * "busy": a stale background shell job (the state the reconciler hands tasks
+   * to review in, `isShellTailHandoff`) never settles, and a typed prompt just
+   * queues in the TUI — refusing would leave Reject permanently unavailable.
+   */
+  | { kind: "quiet"; hostId: string };
+
+/**
+ * Reads the task's worker session fresh, from the host that owns it, and says
+ * whether it can be typed into. Never throws: a read that fails is
+ * `"unreachable"`.
+ */
+export async function readLiveWorkerState(
+  app: FastifyInstance,
+  task: Pick<TaskRow, "sessionId">,
+): Promise<LiveWorkerState> {
+  if (!task.sessionId) return { kind: "none" };
+  const [row] = app.db.select().from(sessions).where(eq(sessions.id, task.sessionId)).all();
+  if (!row || row.status !== "active") return { kind: "none" };
+  const hostId = resolveSessionHostId(app, row);
+  const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
+  try {
+    const { info, hostReachable, hostRefusedStatus } = await readSessionLiveInfo(
+      app,
+      row,
+      idleThresholdMs,
+      hostId,
+      { fresh: true },
+    );
+    if (!hostReachable) return { kind: "unreachable" };
+    const { sessionStatus, sessionStatusSeverity } = withLiveInfo(app, row, info, hostId, {
+      hostReachable,
+      hostRefusedStatus,
+    });
+    if (sessionStatusSeverity === "gone") return { kind: "none" };
+    if (sessionStatusSeverity === "blocked") return { kind: "blocked", status: sessionStatus };
+    return { kind: "quiet", hostId };
+  } catch {
+    return { kind: "unreachable" };
+  }
+}
+
+/**
+ * Types `prompt` into the task's still-running worker and submits it — the
+ * reject path's way of getting a human's feedback to an agent that is idle at
+ * its prompt (the normal state of a worker whose task is in review). Unlike
+ * `force` below it keeps the session, its context and its scrollback.
+ *
+ * `"declined"` is never an error: the session is blocked on a dialog (Enter
+ * would answer it), gone, or its agent takes no typed prompt — the caller
+ * falls back to re-seeding (`force: true`). `"unreachable"` is the
+ * opposite: a host that does not answer (a sleeping laptop, issue #1727) says
+ * nothing about the session, which may be perfectly healthy, so the caller
+ * must NOT terminate it — terminating through that host would fail anyway.
+ *
+ * The state is read fresh right before typing, and the prompt goes through
+ * the backend of the host that owns the PTY (local or remote). Unlike the
+ * control socket's prompt it does not re-check between typing and Enter (the
+ * backend's `prompt` has no such seam for a remote host). That leaves a
+ * `submitDelayMs` window in which a dialog could appear and the Enter would
+ * answer it; for a worker that was idle a moment ago the likelier cost is one
+ * extra review round.
+ */
+export async function promptLiveTaskWorker(
+  app: FastifyInstance,
+  task: TaskRow,
+  prompt: string,
+  logContext: string,
+  // The caller's own read of the worker, when it just made one (the reject
+  // route checks before it changes anything): one proxied round trip, not two.
+  known?: LiveWorkerState,
+): Promise<LiveWorkerPrompt> {
+  const state = known ?? (await readLiveWorkerState(app, task));
+  if (state.kind === "unreachable") {
+    app.log.info(
+      { taskId: task.id, sessionId: task.sessionId },
+      `${logContext}: the worker's host did not answer, leaving the session alone`,
+    );
+    return "unreachable";
+  }
+  if (state.kind !== "quiet") {
+    app.log.info(
+      { taskId: task.id, sessionId: task.sessionId, state },
+      `${logContext}: worker cannot be typed into, not typing into it`,
+    );
+    return "declined";
+  }
+  try {
+    const outcome = await resolveBackend(app, state.hostId).prompt(String(task.sessionId), {
+      text: prompt,
+      submit: true,
+    });
+    if (!outcome.ok) {
+      app.log.warn(
+        { taskId: task.id, sessionId: task.sessionId, status: outcome.status },
+        `${logContext}: the live worker did not take the prompt (${outcome.error})`,
+      );
+      return "declined";
+    }
+    return "typed";
+  } catch (err) {
+    app.log.warn(
+      { err, taskId: task.id, sessionId: task.sessionId },
+      `${logContext}: failed to prompt the live worker`,
+    );
+    return "declined";
+  }
+}
 
 /**
  * `prompt` is built by the caller (buildRejectPrompt/buildReviewFeedbackPrompt
@@ -36,20 +169,21 @@ type ProjectRow = typeof projects.$inferSelect;
  * log lines stay distinguishable without this function needing to know
  * which caller it is.
  *
- * `opts.force` (default `false`) — reject's own default behavior: when the
- * previous session is still "active," do nothing at all, leaving the
- * worktree and session untouched so a HUMAN can pick the feedback up by
- * typing into that still-open terminal themselves. That assumption is
- * exactly backwards for an unattended caller: task-reconciler.ts's
- * review-feedback auto-return has no human watching, and the worker's own
- * prompt (task-prompt.ts's buildTaskMasterPreamble) explicitly tells it to
- * "End your turn and stay running" — so the common case is a still-"active"
- * but genuinely idle session that would otherwise wait forever for input
- * nobody will ever send. `force: true` terminates that survivor first, then
- * always spawns fresh via the same reliable argv-prompt mechanism every
- * other Task Master spawn uses (claim/retry/review) — never injects
- * keystrokes into the live TUI, which would depend on guessing that CLI's
- * current, possibly-mid-tool-call UI state.
+ * `opts.force` (default `false`) — when the previous session is still
+ * "active," do nothing at all, leaving the worktree and session untouched
+ * (the caller owns it). Both callers pass `force: true` for a live session:
+ * reject once `promptLiveTaskWorker` above could not type the feedback into
+ * it, and task-reconciler.ts's review-feedback auto-return straight away —
+ * it has no human watching, and the worker's own prompt
+ * (task-prompt.ts's buildTaskMasterPreamble) explicitly tells it to "End your
+ * turn and stay running", so the common case is a still-"active" but
+ * genuinely idle session that would otherwise wait forever for input nobody
+ * will ever send. `force: true` terminates that survivor first, then always
+ * spawns fresh via the same reliable argv-prompt mechanism every other Task
+ * Master spawn uses (claim/retry/review) — this function itself never
+ * injects keystrokes into a live TUI, which would depend on guessing that
+ * CLI's current, possibly-mid-tool-call UI state (`promptLiveTaskWorker`
+ * only does so after reading its derived status).
  *
  * Returns whether it actually re-seeded (assigned a new `sessionId`) —
  * `false` covers every early-return below (no-op, terminate failure, spawn

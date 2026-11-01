@@ -23,6 +23,14 @@ export function severityTone(severity: SessionSeverity): Tone {
 export type SessionAction = { kind: "open-existing"; sessionId: number } | { kind: "start" };
 /** One decision for "Open session" / "Hand off": reuse a live session, else start. */
 export function decideSessionAction(entry: MullionLinkEntry | undefined): SessionAction {
+  // A task's own worker wins over any other session on the branch (its
+  // reviewer, a hand-started one) — even an exited one, whose pane still shows
+  // what it did: "Open session" on a task PR means the agent doing the work,
+  // and starting or opening another would compete with it.
+  const workerId = entry?.task?.sessionId ?? null;
+  if (workerId !== null && entry?.sessions.some((l) => l.session.id === workerId)) {
+    return { kind: "open-existing", sessionId: workerId };
+  }
   // An entry can hold several sessions (an issue-branch one plus its task's);
   // a live process beats an exited pane that merely sorts first.
   const first = entry?.sessions.find((l) => l.session.alive) ?? entry?.sessions[0];

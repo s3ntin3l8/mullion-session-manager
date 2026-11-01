@@ -11,6 +11,14 @@ import {
 } from "./unified-board/awaitingMerge.js";
 import { parseWorkflowChange } from "./workflowChange.js";
 
+// What each review action does, said once for the buttons' tooltips and the
+// confirm step's hint — the three of them are easy to confuse.
+const APPROVE_HINT = "Accept the work: open the pull request and close the issue.";
+const REJECT_HINT =
+  "Send your feedback to the task's agent. It keeps working on the same branch, then the change is reviewed again.";
+const GIVE_UP_HINT =
+  "Stop the task. It is marked Failed, its sessions stop and any draft pull request closes. You can Retry it later from the branch.";
+
 // Shared by the task drawer (TaskDetail.tsx) and the GitHub PR sidebar
 // (github/PrDetailView.tsx) so both offer the same per-status task actions.
 // GateActions' own pattern (NotificationBell.tsx) — no optimistic state; the
@@ -207,10 +215,15 @@ export function TaskActions({ task }: { task: Task }) {
     const isGiveUp = pendingAction === "give-up";
     return (
       <div className="task-detail-actions">
+        <span className="task-detail-hint">{isGiveUp ? GIVE_UP_HINT : REJECT_HINT}</span>
         <TextInput
           small
           className="notif-gate-deny-reason"
-          placeholder={isGiveUp ? "Reason (optional)" : "Feedback (optional)"}
+          placeholder={
+            isGiveUp
+              ? "Why give up? (optional, posted to the issue)"
+              : "Feedback for the agent (optional)"
+          }
           value={reason}
           onChange={(e) => setReason(e.target.value)}
           autoFocus
@@ -295,6 +308,7 @@ export function TaskActions({ task }: { task: Task }) {
         <button
           className="notif-gate-btn notif-gate-approve"
           disabled={submitting || !taskMasterEnabled}
+          title={APPROVE_HINT}
           onClick={async () => {
             setSubmitting(true);
             setError(null);
@@ -359,6 +373,7 @@ export function TaskActions({ task }: { task: Task }) {
       <button
         className="notif-gate-btn notif-gate-deny"
         disabled={submitting}
+        title={REJECT_HINT}
         onClick={() => setPendingAction("reject")}
       >
         Reject
@@ -366,6 +381,7 @@ export function TaskActions({ task }: { task: Task }) {
       <button
         className="notif-gate-btn notif-gate-deny"
         disabled={submitting}
+        title={GIVE_UP_HINT}
         onClick={() => setPendingAction("give-up")}
       >
         Give up

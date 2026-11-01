@@ -134,7 +134,7 @@ function PinnedReview({
   busy,
   onReReview,
   reReviewDisabled = false,
-  onHandoff,
+  handoff,
   onStop,
 }: {
   entry: ReviewSummaryEntry;
@@ -145,7 +145,9 @@ function PinnedReview({
   busy: boolean;
   onReReview: () => void;
   reReviewDisabled?: boolean;
-  onHandoff: () => void;
+  /** The comments button; `null` hides it (a task PR that isn't in review has no
+   *  worker to hand them to, and a new session would compete with its task). */
+  handoff: { label: string; title: string; onClick: () => void } | null;
   onStop: (() => void) | null;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -211,9 +213,11 @@ function PinnedReview({
           >
             Re-review
           </Button>
-          <Button size="sm" disabled={busy} onClick={onHandoff}>
-            Hand off comments
-          </Button>
+          {handoff && (
+            <Button size="sm" disabled={busy} title={handoff.title} onClick={handoff.onClick}>
+              {handoff.label}
+            </Button>
+          )}
           {onStop && (
             <Button size="sm" variant="danger" onClick={onStop}>
               Stop review
@@ -442,6 +446,35 @@ export function PrDetailView({
   const statuses = prStatuses(pr, relayReview, jobsByRun);
   const entry = links.byPr.get(pr.number) ?? links.byBranch.get(pr.headBranch);
   const sessionAction = decideSessionAction(entry);
+  const sessionLabel =
+    sessionAction.kind !== "open-existing"
+      ? "Open session"
+      : entry?.task?.sessionId === sessionAction.sessionId
+        ? "Open worker session"
+        : "Open existing session";
+
+  // The pinned review's "comments" button. On a task PR the comments go to the
+  // task's own worker (reject, with the handoff prompt as the feedback) — only
+  // while the task is in review, the one status reject accepts; otherwise
+  // there is no button, since a new session would compete with the worker.
+  const pinnedHandoff: {
+    label: string;
+    title: string;
+    onClick: () => void;
+  } | null = !entry?.task
+    ? {
+        label: "Hand off comments",
+        title: "Start a session on this branch with the open comments and failing checks",
+        onClick: () => void handoff(),
+      }
+    : entry.task.status === "reviewing"
+      ? {
+          label: "Send to worker",
+          title:
+            "Send the open comments and failing checks to the task's agent. It keeps working on this branch, then the change is reviewed again.",
+          onClick: () => void sendBackToWorker(entry.task!.id),
+        }
+      : null;
   const reviewRun = entry?.reviewRun ?? null;
   const relayActive = reviewRun?.state === "requested" && !reviewRun.unverified;
   const stopReview = () =>
@@ -615,9 +648,7 @@ export function PrDetailView({
           open={pr.state === "OPEN"}
           step={step}
           busy={busy !== null}
-          sessionLabel={
-            sessionAction.kind === "open-existing" ? "Open existing session" : "Open session"
-          }
+          sessionLabel={sessionLabel}
           behind={
             pr.behindBy != null
               ? pr.behindBy > 0 && step.kind !== "update"
@@ -726,7 +757,7 @@ export function PrDetailView({
             busy={busy !== null}
             onReReview={entry?.task ? reReviewViaTask : reReview}
             reReviewDisabled={entry?.task != null && !taskReReviewEligible(entry.task)}
-            onHandoff={handoff}
+            handoff={pinnedHandoff}
             onStop={relayActive ? stopReview : null}
           />
         ))}

@@ -7,96 +7,8 @@ import { PrDetailView } from "./PrDetailView.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { useDashboardStore } from "../store/index.js";
 import type { GitHubPrDetail, ReviewSummary } from "../api/types.js";
+import { PR, stub, summaryOf } from "./prDetailTestKit.js";
 import { makeProject, makeSession, makeTask } from "../test/fixtures.js";
-
-const PR: GitHubPrDetail = {
-  number: 12,
-  title: "Add thing",
-  htmlUrl: "https://github.com/a/b/pull/12",
-  state: "OPEN",
-  isDraft: false,
-  author: "me",
-  bodyHtml: "<p>desc</p>",
-  baseBranch: "main",
-  headBranch: "feat-thing",
-  headSha: "abc",
-  createdAt: "2026-01-01T00:00:00Z",
-  updatedAt: "2026-01-02T00:00:00Z",
-  additions: 10,
-  deletions: 2,
-  changedFiles: 1,
-  commitCount: 1,
-  commits: [{ oid: "commit-1", headline: "feat: thing", author: "Me", committedDate: "t" }],
-  files: [{ filename: "src/a.ts", status: "modified", additions: 10, deletions: 2 }],
-  mergeable: "MERGEABLE",
-  mergeStateStatus: "CLEAN",
-  reviewDecision: "APPROVED",
-  requestedReviewers: [],
-  reviewers: [{ login: "bob", state: "APPROVED" }],
-  reviews: [
-    {
-      author: "bob",
-      state: "APPROVED",
-      bodyHtml: "<p>lgtm</p>",
-      createdAt: "2026-01-02T00:00:00Z",
-    },
-  ],
-  threads: [
-    {
-      id: "T1",
-      isResolved: false,
-      isOutdated: false,
-      path: "src/a.ts",
-      line: 4,
-      comments: [
-        { author: "bob", bodyHtml: "<p>guard null</p>", createdAt: "2026-01-02T00:00:00Z" },
-      ],
-    },
-    {
-      id: "T2",
-      isResolved: true,
-      isOutdated: false,
-      path: "src/b.ts",
-      line: 1,
-      comments: [{ author: "bob", bodyHtml: "<p>old nit</p>", createdAt: "2026-01-02T00:00:00Z" }],
-    },
-  ],
-  comments: [{ author: "carol", bodyHtml: "<p>nice</p>", createdAt: "2026-01-03T00:00:00Z" }],
-  ciStatus: "success",
-  ciKnown: true,
-  actionsRuns: [
-    {
-      name: "CI",
-      status: "completed",
-      conclusion: "success",
-      htmlUrl: "https://github.com/a/b/actions/runs/1",
-      headSha: "abc",
-    },
-  ],
-  prPhase: "ready_to_merge",
-};
-
-const summaryOf = (over: Partial<ReviewSummary>): ReviewSummary => ({
-  decision: null,
-  approved: [],
-  changesRequested: [],
-  commented: [],
-  requested: [],
-  relay: null,
-  unresolvedThreads: 0,
-  latest: [],
-  ...over,
-});
-
-function stub(pr: GitHubPrDetail, extra?: (url: string, init?: RequestInit) => Response | null) {
-  const fn = vi.fn((url: string, init?: RequestInit) => {
-    const custom = extra?.(url, init);
-    if (custom) return Promise.resolve(custom);
-    return Promise.resolve(jsonResponse(200, pr));
-  });
-  vi.stubGlobal("fetch", fn);
-  return fn;
-}
 
 // The review relay's state for the PR (issue #1630) — its own endpoint, so
 // it needs its own stub. `states` may hold one state for every PR, or one
@@ -1712,7 +1624,9 @@ describe("PrDetailView", () => {
       });
       useDashboardStore.setState({ requestOpenSession, createSession });
       render(<PrDetailView projectId={1} number={12} onBack={vi.fn()} />);
-      await userEvent.click(await screen.findByRole("button", { name: "Open worker session" }));
+      // The next-step button and the action bar's ▶ both open the worker.
+      const [open] = await screen.findAllByRole("button", { name: "Open worker session" });
+      await userEvent.click(open);
       expect(requestOpenSession).toHaveBeenCalledWith(31);
       expect(createSession).not.toHaveBeenCalled();
     });

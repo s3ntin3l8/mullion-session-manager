@@ -5,7 +5,13 @@ import fs from "node:fs";
 
 const mockCreateSessionRecord = vi.fn();
 const mockTerminate = vi.fn();
-const mockResolveBackend = vi.fn(() => ({ terminate: mockTerminate }));
+const mockLiveStatus = vi.fn();
+const mockPrompt = vi.fn();
+const mockResolveBackend = vi.fn(() => ({
+  terminate: mockTerminate,
+  liveStatus: mockLiveStatus,
+  prompt: mockPrompt,
+}));
 const mockCloseSessionBrowserBindings = vi.fn();
 
 vi.mock("../../src/services/session-lifecycle.js", async (importOriginal) => {
@@ -23,7 +29,8 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { tasks, sessions } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
-const { reseedTaskIfSessionExited } = await import("../../src/services/task-reseed.js");
+const { reseedTaskIfSessionExited, promptLiveTaskWorker, readLiveWorkerState } =
+  await import("../../src/services/task-reseed.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-reseed-test-${process.pid}.db`);
 
@@ -53,6 +60,8 @@ describe("reseedTaskIfSessionExited", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockTerminate.mockResolvedValue(undefined);
+    mockLiveStatus.mockResolvedValue({});
+    mockPrompt.mockResolvedValue({ ok: true, outputOffset: 0 });
   });
 
   function insertSessionRow(status: "active" | "exited") {
@@ -327,5 +336,103 @@ describe("reseedTaskIfSessionExited", () => {
     const [updated] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
     expect(updated.sessionId).toBe(task.sessionId);
     expect(updated.status).toBe("done");
+  });
+
+  describe("readLiveWorkerState", () => {
+    it("is quiet for an idle live worker, and names the host that owns it", async () => {
+      const { task: taskRow } = insertTaskWithSession("active");
+      expect(await readLiveWorkerState(app, taskRow)).toMatchObject({ kind: "quiet" });
+    });
+
+    it("is blocked while the worker waits on a dialog", async () => {
+      const { task: taskRow, sessionId } = insertTaskWithSession("active");
+      mockLiveStatus.mockResolvedValue({ [String(sessionId)]: { permissionState: "pending" } });
+      expect(await readLiveWorkerState(app, taskRow)).toEqual({
+        kind: "blocked",
+        status: "awaiting_permission",
+      });
+    });
+
+    it("can still be typed into while busy: a stale background job never settles", async () => {
+      const { task: taskRow, sessionId } = insertTaskWithSession("active");
+      mockLiveStatus.mockResolvedValue({ [String(sessionId)]: { activity: "working" } });
+      expect(await readLiveWorkerState(app, taskRow)).toMatchObject({ kind: "quiet" });
+    });
+
+    it("is none for no session, and for one that has exited", async () => {
+      expect(await readLiveWorkerState(app, { sessionId: null })).toEqual({ kind: "none" });
+      const { task: exited } = insertTaskWithSession("exited");
+      expect(await readLiveWorkerState(app, exited)).toEqual({ kind: "none" });
+    });
+
+    it("is unreachable when the host cannot be read", async () => {
+      const { task: taskRow } = insertTaskWithSession("active");
+      mockLiveStatus.mockRejectedValue(new Error("connect ETIMEDOUT"));
+      expect(await readLiveWorkerState(app, taskRow)).toEqual({ kind: "unreachable" });
+    });
+  });
+
+  describe("promptLiveTaskWorker", () => {
+    it("types the prompt into an idle live worker and submits it", async () => {
+      const { task: taskRow, sessionId } = insertTaskWithSession("active");
+      const ok = await promptLiveTaskWorker(app, taskRow, "please fix X", "test");
+      expect(ok).toBe("typed");
+      expect(mockPrompt).toHaveBeenCalledWith(String(sessionId), {
+        text: "please fix X",
+        submit: true,
+      });
+      expect(mockTerminate).not.toHaveBeenCalled();
+    });
+
+    it("does not type into a worker that is blocked on a permission dialog", async () => {
+      const { task: taskRow, sessionId } = insertTaskWithSession("active");
+      mockLiveStatus.mockResolvedValue({ [String(sessionId)]: { permissionState: "pending" } });
+      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe("declined");
+      expect(mockPrompt).not.toHaveBeenCalled();
+    });
+
+    it("types into a busy worker, and reuses a state the caller already read", async () => {
+      const { task: taskRow, sessionId } = insertTaskWithSession("active");
+      mockLiveStatus.mockResolvedValue({ [String(sessionId)]: { activity: "working" } });
+      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe("typed");
+      mockLiveStatus.mockClear();
+      const known = { kind: "quiet", hostId: "local" } as const;
+      expect(await promptLiveTaskWorker(app, taskRow, "y", "test", known)).toBe("typed");
+      // No second read of the session: the caller's own was used.
+      expect(mockLiveStatus).not.toHaveBeenCalled();
+    });
+
+    it("returns false when the session has already exited", async () => {
+      const { task: taskRow } = insertTaskWithSession("exited");
+      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe("declined");
+      expect(mockPrompt).not.toHaveBeenCalled();
+    });
+
+    it("returns false when the task has no session", async () => {
+      const { task: taskRow } = insertTaskWithSession("active");
+      expect(await promptLiveTaskWorker(app, { ...taskRow, sessionId: null }, "x", "test")).toBe(
+        "declined",
+      );
+      expect(mockPrompt).not.toHaveBeenCalled();
+    });
+
+    it("returns false when the agent refuses the prompt", async () => {
+      const { task: taskRow } = insertTaskWithSession("active");
+      mockPrompt.mockResolvedValue({ ok: false, status: 501, error: "not supported" });
+      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe("declined");
+    });
+
+    it("reports an unreachable host, and types nothing, rather than treating it as a refusal", async () => {
+      const { task: taskRow } = insertTaskWithSession("active");
+      mockLiveStatus.mockRejectedValue(new Error("connect ETIMEDOUT"));
+      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe("unreachable");
+      expect(mockPrompt).not.toHaveBeenCalled();
+    });
+
+    it("declines, rather than throwing, when the prompt itself throws", async () => {
+      const { task: taskRow } = insertTaskWithSession("active");
+      mockPrompt.mockRejectedValue(new Error("host unreachable"));
+      expect(await promptLiveTaskWorker(app, taskRow, "x", "test")).toBe("declined");
+    });
   });
 });
