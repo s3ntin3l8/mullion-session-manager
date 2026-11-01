@@ -42,14 +42,14 @@ export function placeCanary(worktreePath: string, rootDir: string): Canary {
   // with owner-only permissions so nothing is followed or overwritten.
   fs.rmSync(file, { force: true });
   fs.writeFileSync(file, `${value}\n`, { flag: "wx", mode: 0o600 });
-  // One pattern for both the accept check and the strip, so a turn is never
-  // accepted on a line that then stays in the output. It matches any line that
-  // carries the label and the value, whatever surrounds them (backticks, a
-  // bullet, a trailing period): a turn that echoed the token DID read the file,
-  // and discarding it over formatting would send the operator after the wrong
-  // cause. The value is random per turn, so a match is proof of a read; it may
-  // appear anywhere in the output, not only on the last line the prompt asks for.
-  const lineRe = new RegExp(`^.*${CANARY_LABEL} ${value}.*(?:\\r?\\n|$)`, "gm");
+  // A turn that echoed the token DID read the file, whatever surrounds the
+  // token (backticks, a bullet, a period), so the accept check is just "the
+  // token is present" (the value is random per turn; it may appear anywhere,
+  // not only on the last line the prompt asks for). Stripping removes only the
+  // token, so an echo sharing a line with real output (or a section marker)
+  // leaves that output intact; a line left holding nothing but decoration goes.
+  const token = `${CANARY_LABEL} ${value}`;
+  const decorationOnly = /^[\s`*_>.\-\u2022]*$/;
   return {
     value,
     withInstruction: (prompt) =>
@@ -58,8 +58,19 @@ export function placeCanary(worktreePath: string, rootDir: string): Canary {
       `"${CANARY_LABEL} <the file's content>" (the content is a short token; copy it exactly). ` +
       `That line is a check that you could read the repository.`,
     verify: (stdout) => {
-      if (!new RegExp(lineRe.source, "m").test(stdout)) return null;
-      return stdout.replace(lineRe, "");
+      if (!stdout.includes(token)) return null;
+      return stdout
+        .split(/(?<=\n)/)
+        .flatMap((line) => {
+          if (!line.includes(token)) return [line];
+          const eol = /\r?\n$/.exec(line)?.[0] ?? "";
+          const rest = line
+            .slice(0, line.length - eol.length)
+            .split(token)
+            .join("");
+          return decorationOnly.test(rest) ? [] : [rest.trimEnd() + eol];
+        })
+        .join("");
     },
   };
 }

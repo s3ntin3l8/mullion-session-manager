@@ -2019,7 +2019,13 @@ export type GenerationTurnResult =
  * spawn only; a test double never reads the file. */
 export function withReadCanary(inner: SpawnGenerationTurn): SpawnGenerationTurn {
   return async (turn) => {
-    const canary = placeCanary(turn.cwd, scaffoldGenerateBaseDir());
+    let canary: ReturnType<typeof placeCanary>;
+    try {
+      canary = placeCanary(turn.cwd, scaffoldGenerateBaseDir());
+    } catch (err) {
+      // Typed, so /internal/run-generation-turn answers 200 + outcome, not a 500.
+      throw new GenerationWorktreeError(`could not place the read canary: ${String(err)}`);
+    }
     const stdout = await inner({ ...turn, prompt: canary.withInstruction(turn.prompt) });
     const verified = canary.verify(stdout);
     if (verified === null)
