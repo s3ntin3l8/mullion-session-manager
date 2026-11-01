@@ -1219,8 +1219,8 @@ async function validateToken(token: string): Promise<GitHubUserValidation> {
   let res: Response;
   try {
     // Unlike RemoteHostClient's SSRF-sensitive `redirect: "manual"` (a
-    // user-supplied baseUrl there), this always targets the fixed,
-    // trusted api.github.com host — no reason to reject a redirect (e.g.
+    // user-supplied baseUrl there), this always targets the operator-set,
+    // trusted API base (api.github.com by default — never request-derived) — no reason to reject a redirect (e.g.
     // an API mirror/CDN) rather than follow it. Left as "manual" here,
     // a 3xx would leave `res.ok === false` and surface as a misleading
     // "GitHub rejected this token" for a perfectly valid one (Hermes

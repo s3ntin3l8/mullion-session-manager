@@ -21,7 +21,7 @@ import {
   normalizeRollupState,
   type PROrWithChecks,
 } from "./github.js";
-import { isGitHubRateLimited } from "./github-fetch.js";
+import { githubApiBase, isGitHubRateLimited } from "./github-fetch.js";
 import { cachedBehindBy, peekBehindBy } from "./github-compare.js";
 import type { PrMergeable, PrReviewDecision } from "./github-pr-phase.js";
 import {
@@ -32,7 +32,6 @@ import {
   type GqlLatestReviewNode,
 } from "./review-summary.js";
 
-const GRAPHQL_URL = "https://api.github.com/graphql";
 const REQUEST_TIMEOUT_MS = 8_000;
 // Newest-updated PRs enriched per repo. A PR beyond this page keeps its
 // last-known review state, or stays phase "unknown" if it never had one —
@@ -179,7 +178,7 @@ export async function graphql<T>(
 
   let res: Response;
   try {
-    res = await fetch(GRAPHQL_URL, {
+    res = await fetch(`${githubApiBase()}/graphql`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,

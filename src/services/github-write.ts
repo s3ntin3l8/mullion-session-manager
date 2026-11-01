@@ -24,6 +24,7 @@
 import { GitHubApiError, validateGitHubRepoRef, getDefaultBranch, getPRsStatus } from "./github.js";
 import {
   githubApiFetch,
+  githubApiBase,
   classifyRateLimit,
   recordGitHubRateLimit,
   isGitHubRateLimited,
@@ -32,7 +33,6 @@ import {
 } from "./github-fetch.js";
 import type { ReleaseDetectionResult, ReleasePullRequestStatus } from "../shared/types.js";
 
-const GITHUB_API_BASE = "https://api.github.com";
 const REQUEST_TIMEOUT_MS = 5_000;
 const USER_AGENT = "mullion-session-manager";
 
@@ -85,7 +85,7 @@ async function githubRequest<T>(
 
   let res: Response;
   try {
-    res = await fetch(`${GITHUB_API_BASE}${path}`, {
+    res = await fetch(`${githubApiBase()}${path}`, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
