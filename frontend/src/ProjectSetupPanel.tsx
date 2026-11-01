@@ -128,14 +128,24 @@ function ConflictList({ conflicts, dropped }: { conflicts: ScaffoldConflict[]; d
 }
 
 // Phase 3 (drift detection, issue #1205, follow-up to #1201) — shown at the top of the
-// initial form, before Preview is even clicked, so the signal is visible
-// the moment the user opens this panel on a drifted project. Kept as its
-// own small component rather than inlined so the copy has one definition.
-function ConventionsDriftBanner() {
+// panel, before anything is previewed, so the signal is visible the moment
+// the user opens it on a drifted project. Kept as its own small component
+// rather than inlined so the copy has one definition. It names the button of
+// the path currently selected (the panel opens on a path switch, issue #2428)
+// and says what that path does to an existing skill and reviewer.
+function ConventionsDriftBanner({
+  path,
+  defaultAgent,
+}: {
+  path: "agent" | "template";
+  defaultAgent: string;
+}) {
   return (
     <div className="agent-rules-panel-notice warning">
-      This install's own workflow conventions have changed since this project was last scaffolded —
-      re-run Preview and Apply below to update the committed text.
+      This install's own workflow conventions have changed since this project was last scaffolded —{" "}
+      {path === "agent"
+        ? `click "Generate with ${defaultAgent}" and then Apply below to update the committed text. An existing skill and reviewer are only regenerated if you tick them.`
+        : 'click "Preview starter template" and then Apply below to update the committed text. An existing skill and reviewer are left untouched.'}
     </div>
   );
 }
@@ -805,7 +815,9 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
         <FileTextIcon size={14} />
         Scaffold Mullion integration
       </div>
-      {project?.conventionsDrifted && <ConventionsDriftBanner />}
+      {project?.conventionsDrifted && (
+        <ConventionsDriftBanner path={path} defaultAgent={defaultAgent} />
+      )}
       <div className="agent-rules-panel-notice">
         Commits an AGENTS.md briefing region, a CLAUDE.md @AGENTS.md import (Claude Code doesn't
         read AGENTS.md on its own — the import is what puts it in context), a starter project skill,
