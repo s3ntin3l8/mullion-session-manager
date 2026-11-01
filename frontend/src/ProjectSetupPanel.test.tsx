@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProjectSetupPanel } from "./ProjectSetupPanel.js";
 import { __resetRateLimitBreakerForTests } from "./api/client.js";
-import type { ExistingInstructionsMode, ScaffoldGenerateJob } from "./api/projects.js";
+import type { ExistingInstructionsMode } from "./api/projects.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { useDashboardStore } from "./store/index.js";
 import { makeProject } from "./test/fixtures.js";
