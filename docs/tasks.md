@@ -336,7 +336,9 @@ waiting for a free concurrency slot. It never holds a session; see the
   supersedes the two-step "flip to ready, then claim" flow they would
   otherwise have required for a task Retry can actually resume. Gated on
   Task Master being enabled, same as Claim, since it also spawns a session.
-  Still cap-checked — a retry can still 429 at capacity.
+  Still cap-checked — a retry can still 429 at capacity. A task copy that a
+  project merge superseded is refused with a 409 instead of retried
+  (`#2292` — see "Merging two projects" below).
 - **`reviewing → failed`** (`#483`) — **Give up**, the other resolver of a
   `reviewing` task alongside Approve/Reject, for when the answer is "give
   up entirely" rather than "try again." Not automatic on session exit, same
@@ -473,7 +475,12 @@ non-Abandon-path task) are not gated either way.
   branch into a fresh worktree and spawns a new worker; see "Lifecycle"
   above for its own reservation mechanics. Only available when the task
   has a preserved branch (a task that failed before ever committing
-  anything has nothing to resume — see "Known limitations" below).
+  anything has nothing to resume — see "Known limitations" below). A task
+  copy that a project merge superseded is refused with a **409** instead
+  (issue #2292 — see "Merging two projects" below): another task owns the
+  issue now, so retrying it would start a duplicate worker. A task the
+  user merely archived is still retryable, and the retry un-hides it
+  (issue #1015).
 - **Re-review** (`reviewing`, no status change) — `POST
 /api/tasks/:id/re-review`, to run the review again on the current branch
   **without sending anything to the worker** — for a task stuck on
@@ -548,6 +555,25 @@ unique index decides what happens on a clash:
 - tasks with no clash (including local, issue-less ones) just move.
 
 The task board is told with an `ingested` event per moved task, so it refetches.
+
+**A superseded copy is off the board for good** (issue #2292). The losing copy is marked
+`tasks.supersededAt` — a durable fact, not a view state: another task owns the issue now, so
+this copy must never start a worker of its own. Three things follow:
+
+- it is never **claimed** — an archived task is not claimable at all (issue #2291), and the
+  auto-claim sweep skips archived rows;
+- it is never **retried** — `POST /api/tasks/:id/retry` answers **409** for it, because a retry
+  resumes the copy's preserved branch and would spawn a second worker for work the surviving
+  copy already owns. The refusal survives Unarchive (which clears only `archivedAt`): unhiding
+  a row does not undo the fact that a merge superseded it;
+- a copy that was still `ready`/`backlog` when the merge happened leaves the queue as
+  `failed`. Installs that merged _before_ issue #2291 are normalized by a one-off migration
+  (drizzle `0104`), which moves their superseded-but-still-queued copies to `failed` too — they
+  were never claimable, but they did show up as claim-less "ready" rows in the archived view.
+  The migration finds those copies by their **merge signature** rather than by their archived
+  state: a row a merge superseded has no issue number left, and still carries the `html_url`
+  only a GitHub-linked task has. That matters because Unarchive clears only `archivedAt` — an
+  unarchived superseded copy is claimable, and must not be left sitting in `ready`.
 
 ## Agent selection
 

@@ -1067,6 +1067,22 @@ export async function dispatchClaimedTask(
   }
 }
 
+/**
+ * #2292 — the refusal a Retry returns for a task copy that a project merge
+ * superseded. It is a 409 from `POST /api/tasks/:id/retry` (routes/tasks.ts
+ * maps the outcome reason).
+ *
+ * It has to explain WHY, because the row on the board looks like any other
+ * `failed` task: without this, "Retry did nothing" reads like a bug.
+ *
+ * It lives HERE, next to the refusal that produces it, rather than beside the
+ * merge's own wording (task-supersede.ts): `retryTask` already fans out to a
+ * long list of modules, and an import added only for one string would widen
+ * that coupling for no reason.
+ */
+export const SUPERSEDED_RETRY_DETAIL =
+  "This task's copy was superseded by a project merge — another task now owns the issue, so retrying it would start a duplicate worker.";
+
 export type RetryTaskOutcome =
   | { ok: true; session: Awaited<ReturnType<typeof withLiveStatus>>; seedDelivered: boolean }
   | {
@@ -1074,6 +1090,7 @@ export type RetryTaskOutcome =
       reason:
         | "not-found"
         | "not-failed"
+        | "superseded"
         | "cap"
         | "no-worktree"
         | "remote-not-supported"
@@ -1114,6 +1131,14 @@ export type RetryTaskOutcome =
  * worktree-lifecycle op on that interface already does; `remote-not-
  * supported` in `RetryTaskOutcome`'s union survives only as the
  * version-skew case (an agent build predating this proxy route).
+ *
+ * #2292 — a task copy that a project merge SUPERSEDED is refused outright
+ * ("superseded"). Another task owns the issue now, so resuming this copy's
+ * preserved branch would start a second worker for work already in flight.
+ * The marker is `tasks.supersededAt` (see task-supersede.ts and db/schema.ts's
+ * own doc comment); unlike `archivedAt`, it survives Unarchive, so unhiding
+ * the row does not re-arm the duplicate. This is the retry-side twin of
+ * #2291's claim-side refusal (an archived task is never claimed).
  */
 export async function retryTask(
   app: FastifyInstance,
@@ -1155,6 +1180,15 @@ export async function retryTask(
     const [current] = tx.select().from(tasks).where(eq(tasks.id, taskId)).all();
     if (!current || current.status !== "failed") {
       return { reserved: false as const, currentStatus: current?.status };
+    }
+    // #2292 — a copy a project merge superseded must never be retried: it
+    // would resume the branch and spawn a second worker for an issue another
+    // task already owns. Checked BEFORE the branchName gate below, because
+    // "superseded" is the true diagnosis and "no-worktree" is only a symptom
+    // of it — and inside the transaction, like that gate, so the refusal
+    // cannot race the reservation.
+    if (current.supersededAt !== null) {
+      return { reserved: false as const, superseded: true as const };
     }
     if (!current.branchName) {
       return { reserved: false as const, noBranch: true as const };
@@ -1210,6 +1244,17 @@ export async function retryTask(
       // short-circuited before any status changed.
       app.log.info({ taskId, limit: maxConcurrent }, "task retry: at capacity");
       return { ok: false, reason: "cap", limit: maxConcurrent, detail: capDetail(maxConcurrent) };
+    }
+    // #2292 — the reservation transaction short-circuited before any status
+    // changed, so there is nothing to roll back: the row is still `failed`,
+    // still archived, still holding its branch. Refusing here is what keeps
+    // the copy from spawning a duplicate worker.
+    if ("superseded" in reservation && reservation.superseded) {
+      app.log.info(
+        { taskId },
+        "task retry: refused — the task copy was superseded by a project merge",
+      );
+      return { ok: false, reason: "superseded", detail: SUPERSEDED_RETRY_DETAIL };
     }
     if ("noBranch" in reservation && reservation.noBranch) {
       return {
