@@ -122,6 +122,42 @@ describe("POST /api/tasks/:id/re-review on a concluded review", () => {
     },
   );
 
+  it("resets the entry time, so a second re-review at the same head is a new Hermes dispatch", async () => {
+    const app = await buildApp();
+    const task = await reviewingTask(app, "changes-requested");
+    const longAgo = new Date("2026-01-01T00:00:00Z");
+    app.db.update(tasks).set({ reviewingAt: longAgo }).where(eq(tasks.id, task.id)).run();
+    const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/re-review` });
+    expect(res.statusCode).toBe(200);
+    // reviewingAt is part of the dispatch's idempotency key (hermes-task-review.ts).
+    expect(new Date(res.json().reviewingAt).getTime()).toBeGreaterThan(longAgo.getTime());
+    await app.close();
+  });
+
+  it("re-arms a finished external-reviewer run the same way", async () => {
+    const app = await buildApp();
+    const task = await reviewingTask(app, "changes-requested");
+    app.db
+      .update(tasks)
+      .set({
+        reviewSessionId: null,
+        reviewFindingsIngestedSessionId: null,
+        reviewRunId: "run_1",
+        reviewRunIngestedId: "run_1",
+      })
+      .where(eq(tasks.id, task.id))
+      .run();
+    const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/re-review` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      reviewRunId: null,
+      reviewRunIngestedId: null,
+      lastReviewVerdict: "changes-requested",
+      inconclusiveReviewRearmCount: 0,
+    });
+    await app.close();
+  });
+
   it("still counts a re-run of an inconclusive review against the rearm count", async () => {
     const app = await buildApp();
     const task = await reviewingTask(app, "inconclusive", 1);

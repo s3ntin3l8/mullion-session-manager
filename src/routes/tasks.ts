@@ -1757,6 +1757,10 @@ export async function tasksRoute(app: FastifyInstance) {
         reviewSpawnClaimedAt: null,
         ...CLEARED_REVIEW_RUN,
         inconclusiveReviewRearmCount: existing.inconclusiveReviewRearmCount + spendsRearm,
+        // Part of a Hermes dispatch's idempotency key: a human re-review at the same head
+        // keeps round, rearms and head, so without a fresh entry time the second click
+        // would replay the first run.
+        reviewingAt: new Date(),
       })
       .where(
         and(
