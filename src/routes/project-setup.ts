@@ -495,6 +495,7 @@ interface PreviewSnapshot {
   agent?: string;
   sandboxed?: boolean;
   possiblyGeneric?: boolean;
+  missingCitedPaths?: { missing: number; cited: number };
   instructionsMode?: ExistingInstructionsMode;
   conflicts?: ScaffoldConflict[];
   droppedConflictLines?: number;
@@ -1042,6 +1043,7 @@ async function executeScaffoldGeneration(
   };
   if (generated.possiblyGeneric) {
     response.possiblyGeneric = true;
+    if (generated.missingCitedPaths) response.missingCitedPaths = generated.missingCitedPaths;
   }
   // Issue #2316 — present only for the mode that produced them.
   if (generated.conflicts) response.conflicts = generated.conflicts;

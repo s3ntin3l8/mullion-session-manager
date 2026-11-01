@@ -961,6 +961,7 @@ export interface ScaffoldPreview {
   agent?: string;
   sandboxed?: boolean;
   possiblyGeneric?: boolean;
+  missingCitedPaths?: { missing: number; cited: number };
   // What the generation turn was asked to do with existing instructions, and
   // what came back: a conflicts list (report) or a lossy-rewrite signal
   // (restructure).
