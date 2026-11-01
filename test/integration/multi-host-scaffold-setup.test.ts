@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { CODEX_REVIEWER_DELEGATION_CLAUSE } from "../../src/services/mullion-scaffold.js";
+import { CANARY_FILE } from "../../src/services/scaffold-canary.js";
 
 // Issue #895 — end-to-end proof that `/setup/preview` and `/setup/apply`
 // actually work for a remote-hosted project, against two real buildApp()
@@ -43,6 +44,10 @@ const GENERATE_STDOUT =
   `<<<MULLION_REVIEWER_START>>>\n---\nname: gendemo-reviewer\ndescription: "Review changes. ${CODEX_REVIEWER_DELEGATION_CLAUSE}"\n---\nRead .claude/skills/gendemo/SKILL.md first.\n<<<MULLION_REVIEWER_END>>>\n` +
   `<<<MULLION_SCAFFOLD_REGION_START>>>\nThe skill lives at .claude/skills/gendemo/SKILL.md.\n<<<MULLION_SCAFFOLD_REGION_END>>>\n`;
 
+// Extra stdout sections for one test (report/restructure output), appended
+// to GENERATE_STDOUT by the `execFile` fake below.
+let generateExtra = "";
+
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
   return {
@@ -76,14 +81,22 @@ vi.mock("node:child_process", async (importOriginal) => {
       (
         file: string,
         _args: string[],
-        _options: unknown,
+        options: unknown,
         callback: (err: Error | null, stdout: string, stderr: string) => void,
       ) => {
         if (file === "bwrap") {
           setImmediate(() => callback(new Error("bwrap not available (test double)"), "", ""));
           return;
         }
-        setImmediate(() => callback(null, GENERATE_STDOUT, ""));
+        // Issue #2535 — a real agent reads the canary file in its cwd and
+        // echoes it on a last line; this fake does the same, so the canary
+        // check runs for real on the agent side.
+        const cwd = (options as { cwd: string }).cwd;
+        const canary = fs.readFileSync(path.join(cwd, CANARY_FILE), "utf8").trim();
+        const extra = generateExtra ? `${generateExtra}\n` : "";
+        setImmediate(() =>
+          callback(null, `${GENERATE_STDOUT}${extra}MULLION_CANARY: ${canary}\n`, ""),
+        );
       },
     ),
   };
@@ -321,4 +334,39 @@ describe("multi-host scaffold setup (issue #895)", () => {
 
     turnSpy.mockRestore();
   });
+
+  // Issue #2535 — report and restructure through /internal/run-generation-turn:
+  // the conflicts section has to survive the wire, and the agent-side canary
+  // check (the fake echoes the canary file it finds in its cwd) has to pass.
+  const CONFLICT_LINE = JSON.stringify({
+    file: "CONTRIBUTING.md",
+    excerpt: "ping the review bot",
+    kind: "contradicts",
+    note: "Asks for a path the conventions forbid.",
+  });
+  const CONFLICTS_SECTION = `<<<MULLION_CONFLICTS_START>>>\n${CONFLICT_LINE}\n<<<MULLION_CONFLICTS_END>>>\n`;
+
+  it.each([
+    ["report", CONFLICTS_SECTION],
+    [
+      "restructure",
+      `<<<MULLION_AGENTS_MD_START>>>\n# Remote repo\n\n<<<MULLION_REGION>>>\n\nOnly what an agent cannot derive.\n<<<MULLION_AGENTS_MD_END>>>\n${CONFLICTS_SECTION}`,
+    ],
+  ])(
+    "/setup/generate in %s mode returns the conflicts from the remote turn",
+    async (mode, extra) => {
+      generateExtra = extra;
+      try {
+        const res = await primary.app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/setup/generate`,
+          payload: { slug: "gendemo", existingInstructions: mode },
+        });
+        expect(res.statusCode).toBe(200);
+        expect(res.json().conflicts).toEqual([JSON.parse(CONFLICT_LINE)]);
+      } finally {
+        generateExtra = "";
+      }
+    },
+  );
 });
