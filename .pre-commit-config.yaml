@@ -165,7 +165,7 @@ repos:
         pass_filenames: false
         stages: [pre-commit]
 
-      # The >=75% patch-coverage rule (AGENTS.md's "Core invariants"). This
+      # The >=75% patch-coverage rule (AGENTS.md's "Repo specifics" gate bullet). This
       # hook MUST stay last in this file: pre-commit runs hooks in file
       # order, and this one consumes the coverage/coverage-final.json that
       # the two test hooks above just wrote.

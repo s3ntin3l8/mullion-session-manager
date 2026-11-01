@@ -5,7 +5,7 @@ description: "Repo-specific correctness invariants for this codebase (Mullion) �
 
 # Mullion review invariants
 
-`AGENTS.md`'s "Core invariants" section states each of these rules; this
+`AGENTS.md` states the rules below in brief; this
 skill exists so a review pass (or `/code-review`, or a `mullion-reviewer`
 sub-agent) checks them mechanically instead of relying on having read and
 remembered that file. If a diff violates one of these, it's very likely
@@ -54,17 +54,23 @@ See `AGENTS.md`. The deliberate exception is `src/services/hook-adapters/`:
 each adapter's own `commandTransform` (Claude Code's appends `--settings`/
 `--mcp-config`/`--plugin-dir`; Codex's and agy's append their own MCP/model
 flags the same way) inspects and rewrites the launch command at spawn time.
-Alongside that, a narrow set of helpers inspects `session.command` from
-outside the adapters: `commandIsOpencode`/`commandModelCli`/`commandAgentBin`
-(`hook-adapters/index.ts`) and `buildModelFlag` (`hook-adapters/shared.ts`),
-plus `validateModel`/`validateCliModel` (`services/task-model-resolve.ts`)
-`commandSupportsSeed` (`services/task-agent-resolve.ts`), and
-`getAdapterPromptFraming` (`hook-adapters/index.ts` — the pure adapter lookup
-`sessions.prompt` in `plugins/control-socket.ts` uses to frame input for the
-child's agent family) — what callers elsewhere (`task-claim.ts`,
-`task-reconciler.ts`, `routes/sessions.ts`) use to branch on a command's agent
-family, inject a model flag, or decide whether a real first-turn prompt can be
-delivered.
+Alongside that, the pure lookups exported by `hook-adapters/index.ts` and
+`hook-adapters/shared.ts` are the sanctioned way for code elsewhere to ask about
+a command's shape: the `commandIs*` predicates (`commandIsOpencode`,
+`commandIsMcode`), `commandModelCli`, `commandAgentBin`, `buildModelFlag`,
+`getAdapterPromptFraming` (what `sessions.prompt` in
+`plugins/control-socket.ts` uses to frame input for the child's agent family),
+`getAdapterEmits`, `getAdapterTranscriptFormat`,
+`getAdapterInitialPromptArgs`/`adapterHasInitialPromptArgs`,
+`getAdapterResumeSessionArgs`/`adapterHasResumeSessionArgs` and
+`getAdapterDelegationHint`, plus `validateModel`/`validateCliModel`
+(`services/task-model-resolve.ts`) and `commandSupportsSeed`
+(`services/task-agent-resolve.ts`). This list is examples, not a closed
+whitelist: any helper in it, or any command-shape lookup exported from
+`hook-adapters/`, is sanctioned. Callers elsewhere (`task-claim.ts`, `task-reconciler.ts`,
+`routes/sessions.ts`, `session-transcript.ts`, `pty-manager.ts`) use them to
+branch on a command's agent family, inject a model flag, or decide whether a
+real first-turn prompt can be delivered.
 
 **Red flag:** any new code that calls `.split()`, a regex, or a shell
 parser on `session.command` or `workspace.layout` **outside** a hook
@@ -126,8 +132,8 @@ it must return `changes-requested` so the worker rebases before approval.
 ## Patch test coverage ($\ge 75\%$)
 
 New or modified executable lines in `src/` and `frontend/src/` must meet
-at least $75\%$ patch coverage (`make test-patch-coverage`). A PR that drops
-patch coverage fails CI on Codecov.
+at least $75\%$ patch coverage (`make test-patch-coverage`). Dropped patch
+coverage is reported on the PR as the advisory `codecov/patch` status.
 
 ## Security anti-patterns & CORS credentials
 
