@@ -307,6 +307,28 @@ describe("ProjectSetupPanel", () => {
         expect(screen.getByText(/No existing instructions conflict/)).toBeInTheDocument();
       });
 
+      it("restructure lists the passages it left unchanged", async () => {
+        await generateWith("Restructure it", {
+          conflicts: [
+            { file: "CONTRIBUTING.md", excerpt: "ask the bot", kind: "stale-reference", note: "n" },
+          ],
+          droppedConflictLines: 1,
+        });
+        expect(
+          screen.getByText(/outside AGENTS.md was noticed and left as it is/),
+        ).toBeInTheDocument();
+        expect(screen.getByText(/ask the bot/)).toBeInTheDocument();
+        expect(
+          screen.getByText(/1 more line from the agent could not be read/),
+        ).toBeInTheDocument();
+      });
+
+      it("restructure with no unchanged passages shows no list", async () => {
+        await generateWith("Restructure it", { conflicts: [] });
+        expect(screen.queryByText(/left as it is/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/No existing instructions conflict/)).not.toBeInTheDocument();
+      });
+
       it("restructure warns about a lossy rewrite and otherwise asks for a check", async () => {
         await generateWith("Restructure it", { possiblyLossy: true });
         expect(screen.getByText(/much shorter than the original/)).toBeInTheDocument();
