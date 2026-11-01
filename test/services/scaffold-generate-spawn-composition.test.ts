@@ -100,6 +100,8 @@ describe("defaultSpawnGenerationTurn — sandbox composition (issue #1081 covera
     const [mainBin, mainArgs] = execFileMock.mock.calls[1];
     expect(mainBin).toBe("bwrap");
     expect(mainArgs).toContain("--die-with-parent");
+    // Issue #2489 — the real HOME is masked in every sandboxed turn.
+    expect(mainArgs).toContain("--tmpfs");
     expect(mainArgs).toContain(scratchDir);
     // The real agent binary/prompt must still be present, appended after
     // bwrap's own flags and the `--` separator.
