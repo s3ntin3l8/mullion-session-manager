@@ -25,6 +25,8 @@ import { parseHostCwds, serializeHostCwds } from "../../src/services/placement.j
 import { parseHostCwdsMeta } from "../../src/services/host-cwds-meta.js";
 import { MAX_HOST_CWDS } from "../../src/shared/constants.js";
 import * as taskEvents from "../../src/services/task-events.js";
+import * as sessionLifecycle from "../../src/services/session-lifecycle.js";
+import * as taskApprove from "../../src/services/task-approve.js";
 import * as githubWebhook from "../../src/services/github-webhook.js";
 import { localProject, mergeDiscovery, remoteProject } from "../helpers/merge-fixtures.js";
 
@@ -57,6 +59,12 @@ describe("project-merge", () => {
       .returning()
       .get();
   }
+  const mkSession = (projectId: number) =>
+    app.db
+      .insert(sessions)
+      .values({ projectId, command: "bash", status: "active" })
+      .returning()
+      .get().id;
   const merge = () => mergeProjects(app, { survivorId, duplicateId: dupId });
 
   beforeEach(async () => {
@@ -424,6 +432,82 @@ describe("project-merge", () => {
         expect(app.db.select().from(tasks).where(eq(tasks.id, keep.id)).get()).toMatchObject({
           issueNumber: 40,
           supersededAt: null,
+        });
+      });
+
+      // #2522 — the survivor's copy lost the issue to a live duplicate; its
+      // worker must not keep running on an issue another task owns.
+      describe("a superseded copy with a live worker", () => {
+        it("stops its sessions, cleans its worktree and fails the row", async () => {
+          const kill = vi
+            .spyOn(sessionLifecycle, "killSession")
+            .mockResolvedValue(undefined as never);
+          const clean = vi.spyOn(taskApprove, "cleanupTaskWorktree").mockImplementation(() => {});
+          const [w, r] = [mkSession(survivorId), mkSession(survivorId)];
+          const stale = task(survivorId, {
+            issueNumber: 50,
+            status: "failed",
+            sessionId: w,
+            reviewSessionId: r,
+            worktreePath: "/wt/x",
+          });
+          task(dupId, { issueNumber: 50, status: "in_progress" });
+          expect(merge().ok).toBe(true);
+          await vi.waitFor(() => expect(clean).toHaveBeenCalledTimes(1));
+          expect(kill.mock.calls.map((c) => c[1]).sort()).toEqual([w, r].sort());
+          expect(clean.mock.calls[0]![1]).toMatchObject({ id: stale.id, worktreePath: "/wt/x" });
+          const row = app.db.select().from(tasks).where(eq(tasks.id, stale.id)).get()!;
+          expect(row).toMatchObject({ status: "failed", issueNumber: null });
+          expect(row.supersededAt).not.toBeNull();
+        });
+
+        it("leaves a copy with no live status alone", async () => {
+          const kill = vi
+            .spyOn(sessionLifecycle, "killSession")
+            .mockResolvedValue(undefined as never);
+          const clean = vi.spyOn(taskApprove, "cleanupTaskWorktree").mockImplementation(() => {});
+          const old = task(survivorId, {
+            issueNumber: 51,
+            status: "done",
+            sessionId: mkSession(survivorId),
+          });
+          task(dupId, { issueNumber: 51, status: "in_progress" });
+          expect(merge().ok).toBe(true);
+          expect(kill).not.toHaveBeenCalled();
+          expect(clean).not.toHaveBeenCalled();
+          expect(app.db.select().from(tasks).where(eq(tasks.id, old.id)).get()!.status).toBe(
+            "done",
+          );
+        });
+
+        it("stops the duplicate's own superseded copy too", async () => {
+          const kill = vi
+            .spyOn(sessionLifecycle, "killSession")
+            .mockResolvedValue(undefined as never);
+          vi.spyOn(taskApprove, "cleanupTaskWorktree").mockImplementation(() => {});
+          const sid = mkSession(dupId);
+          task(survivorId, { issueNumber: 53, status: "in_progress" });
+          task(dupId, { issueNumber: 53, status: "failed", sessionId: sid });
+          expect(merge().ok).toBe(true);
+          await vi.waitFor(() =>
+            expect(kill).toHaveBeenCalledWith(expect.anything(), sid, "detach"),
+          );
+        });
+
+        it("a non-clashing live duplicate is unaffected", () => {
+          const kill = vi
+            .spyOn(sessionLifecycle, "killSession")
+            .mockResolvedValue(undefined as never);
+          const t = task(dupId, {
+            issueNumber: 52,
+            status: "in_progress",
+            sessionId: mkSession(dupId),
+          });
+          expect(merge().ok).toBe(true);
+          expect(kill).not.toHaveBeenCalled();
+          expect(app.db.select().from(tasks).where(eq(tasks.id, t.id)).get()!.status).toBe(
+            "in_progress",
+          );
         });
       });
 

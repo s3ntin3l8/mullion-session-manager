@@ -597,6 +597,13 @@ export async function openDraftPRForTask(
   // Issue #1724 — the worktree's host; see preparePromotion's own comment.
   worktreeHostId?: string,
 ): Promise<PromoteOutcome> {
+  // #2522 — a copy a project merge superseded is never promoted: another task
+  // owns its issue, and its cleared issue number would leave the PR without a
+  // `Closes #N` line. Reuses "no-repo" (no repo link left to promote against)
+  // rather than widening the outcome union every caller switches over.
+  if (task.supersededAt) {
+    return { ok: false, reason: "no-repo", detail: "task was superseded by a project merge" };
+  }
   const prepared = await preparePromotion(app, task, project, worktreeHostId);
   if (!prepared.ok) return prepared.outcome;
   const { repoRef, token, pushToken } = prepared;

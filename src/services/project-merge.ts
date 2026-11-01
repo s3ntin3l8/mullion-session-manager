@@ -19,6 +19,8 @@ import { parseHostCwdsMeta, serializeHostCwdsMeta } from "./host-cwds-meta.js";
 import { buildOriginIndex } from "./repo-identity.js";
 import { notifyOperator } from "./push-delivery.js";
 import { broadcastTaskEvent } from "./task-events.js";
+import { killSession } from "./session-lifecycle.js";
+import { cleanupTaskWorktree } from "./task-approve.js";
 import { replacedByMergeReason, supersededMergeReason } from "./task-supersede.js";
 
 // Issue #2232 — merge a duplicate project into its same-repo survivor. The
@@ -412,6 +414,13 @@ export function mergeProjects(
   app: FastifyInstance,
   opts: { survivorId: number; duplicateId: number },
 ): MergeResult {
+  // #2522 — superseded copies that still have a session; stopped once the
+  // transaction has committed. A `done` copy's sessions are not touched.
+  const supersededLive: (typeof tasks.$inferSelect)[] = [];
+  const noteSuperseded = (copy: typeof tasks.$inferSelect) => {
+    const hasSession = copy.sessionId !== null || copy.reviewSessionId !== null;
+    if (hasSession && copy.status !== "done") supersededLive.push(copy);
+  };
   const result = app.db.transaction((tx): MergeResult => {
     const survivor = tx.select().from(projects).where(eq(projects.id, opts.survivorId)).get();
     const duplicate = tx.select().from(projects).where(eq(projects.id, opts.duplicateId)).get();
@@ -582,6 +591,7 @@ export function mergeProjects(
           })
           .where(eq(tasks.id, t.id))
           .run();
+        noteSuperseded(t);
         movedTaskIds.push(t.id);
         continue;
       }
@@ -601,6 +611,7 @@ export function mergeProjects(
           })
           .where(eq(tasks.id, clash.id))
           .run();
+        noteSuperseded(clash);
         movedTaskIds.push(clash.id);
       }
       tx.update(tasks).set({ projectId: to }).where(eq(tasks.id, t.id)).run();
@@ -621,6 +632,19 @@ export function mergeProjects(
     app.browser.closeForProject(opts.duplicateId).catch((err) => {
       app.log.warn({ err, projectId: opts.duplicateId }, "merge: failed to close project browser");
     });
+    // #2522 — stop the superseded copies' workers, then clear their
+    // worktrees the way a failed task's is (clean-check-gated, branch kept).
+    // Fire-and-forget like the other terminal transitions' cleanup; the
+    // sessions are killed first so a still-running worker cannot dirty the
+    // tree the removal is checking.
+    const survivorProject = app.db
+      .select()
+      .from(projects)
+      .where(eq(projects.id, opts.survivorId))
+      .get();
+    for (const copy of supersededLive) {
+      void stopSupersededWorker(app, copy, survivorProject);
+    }
     // The board refetches on "ingested"; DELETE broadcasts nothing, so the
     // frontend also refreshes the project list itself.
     for (const taskId of result.movedTaskIds) {
@@ -628,4 +652,18 @@ export function mergeProjects(
     }
   }
   return result;
+}
+
+async function stopSupersededWorker(
+  app: FastifyInstance,
+  copy: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect | undefined,
+): Promise<void> {
+  for (const sessionId of new Set([copy.sessionId, copy.reviewSessionId])) {
+    if (sessionId === null) continue;
+    await killSession(app, sessionId, "detach").catch((err) => {
+      app.log.warn({ err, sessionId, taskId: copy.id }, "merge: killing a superseded worker threw");
+    });
+  }
+  if (project) cleanupTaskWorktree(app, copy, project);
 }
