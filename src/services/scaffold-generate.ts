@@ -10,7 +10,7 @@ import { resolveHostBaseRef, viaRemote } from "./host-git.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { gitEnv } from "./git-env.js";
 import { CANARY_MISSING_MESSAGE, placeCanary } from "./scaffold-canary.js";
-import { homeMaskArgs } from "./scaffold-sandbox-home.js";
+import { homeMaskArgs, turnEnv } from "./scaffold-sandbox-home.js";
 import {
   FAILURE_LOG_TAIL_CHARS,
   agentLogLabel,
@@ -1936,13 +1936,17 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
     sandboxHome = { fakeHome, writablePaths, seeded };
     // Spread dirs + files into a flat string[] — wrapWithSandbox and
     // bwrap's --bind-try don't distinguish between them.
+    const homeMask = homeMaskArgs({ home: os.homedir(), agentCommand, worktreePath: spawnCwd });
+    if (homeMask.length === 0) {
+      console.warn("[scaffold-generate] HOME could not be masked; this turn can read it");
+    }
     invocation = wrapWithSandbox(
       bin,
       args,
       spawnCwd,
       [...writablePaths.dirs, ...writablePaths.files],
       fakeHome,
-      homeMaskArgs({ home: os.homedir(), agentCommand, worktreePath: spawnCwd }),
+      homeMask,
     );
   }
   // Built out here, not inline in the Promise executor below: CodeQL's
@@ -1950,7 +1954,7 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
   // applies within the function it dominates, not inside a nested closure.
   const execOptions = {
     cwd: spawnCwd,
-    env: gitEnv(),
+    env: sandboxUsable ? turnEnv(gitEnv()) : gitEnv(),
     timeout: timeoutMs,
     maxBuffer: 16 * 1024 * 1024,
   };

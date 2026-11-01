@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { gitEnv } from "../../src/services/git-env.js";
-import { homeMaskArgs } from "../../src/services/scaffold-sandbox-home.js";
+import { homeMaskArgs, turnEnv } from "../../src/services/scaffold-sandbox-home.js";
 import { wrapWithSandbox } from "../../src/services/scaffold-generate.js";
 
 function bwrapUsable(): boolean {
@@ -28,6 +28,19 @@ function exe(file: string) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, "#!/bin/sh\n", { mode: 0o755 });
 }
+
+describe("turnEnv", () => {
+  it("drops the ssh-agent sockets and keeps the rest", () => {
+    expect(
+      turnEnv({
+        SSH_AUTH_SOCK: "/s",
+        MULLION_SSH_AUTH_SOCK: "/m",
+        PATH: "/bin",
+        ANTHROPIC_API_KEY: "k",
+      }),
+    ).toEqual({ PATH: "/bin", ANTHROPIC_API_KEY: "k" });
+  });
+});
 
 describe("homeMaskArgs", () => {
   let home: string;
@@ -107,6 +120,20 @@ describe("homeMaskArgs", () => {
     ]);
   });
 
+  it("binds the target when the exec path is outside HOME but the symlink points into it", () => {
+    const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "mask-out-")));
+    try {
+      exe(path.join(home, ".claude", "local", "claude"));
+      link(path.join(home, ".claude", "local", "claude"), path.join(outside, "bin", "claude"));
+      const target = path.join(home, ".claude", "local", "claude");
+      expect(
+        binds(homeMaskArgs({ home, agentCommand: "claude", pathEnv: path.join(outside, "bin") })),
+      ).toEqual([`${target} ${target}`]);
+    } finally {
+      fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
   it("binds nothing for an agent and node that live outside HOME", () => {
     const outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "mask-out-")));
     try {
@@ -184,6 +211,30 @@ describeIfBwrap("a sandboxed turn with HOME masked (real bwrap)", () => {
     );
     return spawnSync(bin, args, { encoding: "utf8" });
   };
+
+  it("starts an agent installed under HOME by bare name", () => {
+    const bin = path.join(home, "tools", "fakeagent");
+    fs.mkdirSync(path.dirname(bin));
+    fs.writeFileSync(bin, "#!/bin/sh\necho agent-ok\n", { mode: 0o755 });
+    const { bin: b, args } = wrapWithSandbox(
+      "fakeagent",
+      [],
+      wt,
+      [],
+      undefined,
+      homeMaskArgs({
+        home,
+        agentCommand: "fakeagent",
+        worktreePath: wt,
+        pathEnv: path.dirname(bin),
+      }),
+    );
+    const r = spawnSync(b, args, {
+      encoding: "utf8",
+      env: { ...process.env, PATH: path.dirname(bin) + ":" + process.env.PATH },
+    });
+    expect(r.stdout).toContain("agent-ok");
+  });
 
   it("cannot read a file under the real HOME", () => {
     const r = run(`cat ${home}/.ssh/id_secret`);

@@ -19,11 +19,15 @@ import path from "node:path";
 //
 // Not covered: `--ro-bind / /` still exposes everything outside HOME (an app
 // at /opt, other users' homes, /etc), and the turn inherits the server's
-// environment variables. This hides the operator's HOME, no more.
+// environment variables (`turnEnv` drops only the ssh-agent sockets: provider
+// API keys may be what the agent authenticates with). A remote agent host on a
+// build that predates this runs unmasked, and nothing on the wire says so.
+// This hides the operator's HOME, no more.
 //
 // The scratch worktree and the fake HOME are bound writable AFTER these (the
 // caller's argument order), so they work even when they live under HOME.
-// Credentials stay reachable only through the copy seeded into the fake HOME.
+// Credential FILES stay reachable only through the copy seeded into the fake
+// HOME.
 
 function realpathOrNull(p: string): string | null {
   try {
@@ -142,16 +146,30 @@ export function homeMaskArgs(opts: HomeMaskOptions): string[] {
       .map((d) => realpathOrNull(d))
       .filter((d): d is string => d !== null && d.startsWith(home + path.sep)),
   );
-  const fileBinds = files.filter(
-    (f) =>
-      f.dest.startsWith(home + path.sep) &&
-      // already present through a bound directory
-      !inside.some((d) => f.dest === d || f.dest.startsWith(d + path.sep)),
-  );
+  // A file is re-bound where it is needed: at its real path when that lies
+  // under HOME (a symlink elsewhere, e.g. /usr/local/bin/claude, points into
+  // it), and at the path the turn execs it by when that does too. Anything a
+  // bound directory already provides is skipped.
+  const covered = (p: string) => inside.some((d) => p === d || p.startsWith(d + path.sep));
+  const underHome = (p: string) => p.startsWith(home + path.sep);
+  const fileBinds = files.flatMap((f) => {
+    const out: Array<[string, string]> = [];
+    if (underHome(f.src) && !covered(f.src)) out.push([f.src, f.src]);
+    if (f.dest !== f.src && underHome(f.dest) && !covered(f.dest)) out.push([f.src, f.dest]);
+    return out;
+  });
   return [
     "--tmpfs",
     home,
     ...inside.flatMap((d) => ["--ro-bind-try", d, d]),
-    ...fileBinds.flatMap((f) => ["--ro-bind-try", f.src, f.dest]),
+    ...fileBinds.flatMap(([src, dest]) => ["--ro-bind-try", src, dest]),
   ];
+}
+
+/** The environment for a sandboxed turn: the server's, without the ssh-agent
+ * sockets, which would let the turn authenticate with the operator's keys
+ * without reading `~/.ssh`. */
+export function turnEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const { SSH_AUTH_SOCK: _a, MULLION_SSH_AUTH_SOCK: _b, ...rest } = env;
+  return rest;
 }
