@@ -446,7 +446,9 @@ describe("project-merge", () => {
           const [w, r] = [mkSession(survivorId), mkSession(survivorId)];
           const stale = task(survivorId, {
             issueNumber: 50,
-            status: "failed",
+            // Not yet "failed", so the merge's own transition is what is asserted
+            // (a live-status survivor copy would make the merge refuse outright).
+            status: "ready",
             sessionId: w,
             reviewSessionId: r,
             worktreePath: "/wt/x",

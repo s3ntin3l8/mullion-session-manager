@@ -83,9 +83,6 @@ export interface DuplicateGroup {
 /** Task statuses that mean a worker is (or was just) on the task. */
 const LIVE_TASK_STATUSES = ["claimed", "in_progress", "reviewing"];
 
-/** Not-yet-started statuses: an archived copy in one of these must leave the queue (a ready one would auto-claim). */
-const QUEUED_TASK_STATUSES = ["ready", "backlog"];
-
 /** Settings copied from the duplicate only where the survivor's value is null.
  * `allowCrossProjectSpawn` is deliberately not here: it widens what a session may do,
  * so it is never inherited silently.
@@ -587,7 +584,7 @@ export function mergeProjects(
             // that had already failed before the merge.
             supersededAt: now,
             failureReason: t.failureReason ?? supersededMergeReason(from),
-            ...(QUEUED_TASK_STATUSES.includes(t.status) ? { status: "failed" as const } : {}),
+            ...(t.status !== "done" ? { status: "failed" as const } : {}),
           })
           .where(eq(tasks.id, t.id))
           .run();
@@ -607,7 +604,7 @@ export function mergeProjects(
             // own either.
             supersededAt: now,
             failureReason: clash.failureReason ?? replacedByMergeReason(t.id, from),
-            ...(QUEUED_TASK_STATUSES.includes(clash.status) ? { status: "failed" as const } : {}),
+            ...(clash.status !== "done" ? { status: "failed" as const } : {}),
           })
           .where(eq(tasks.id, clash.id))
           .run();
