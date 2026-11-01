@@ -87,6 +87,7 @@ import { skillsRoute } from "./routes/skills.js";
 import { browserCookiesRoute } from "./routes/browser-cookies.js";
 import { browserUrlsRoute } from "./routes/browser-urls.js";
 import { tasksRoute } from "./routes/tasks.js";
+import { demoFixturesRoute } from "./routes/demo-fixtures.js";
 import { closePinnedConnectors } from "./services/pinned-connect.js";
 import { registerDispatchCleanup } from "./services/task-dispatch.js";
 
@@ -609,6 +610,7 @@ export async function buildApp() {
   await app.register(browserCookiesRoute);
   await app.register(browserUrlsRoute);
   await app.register(tasksRoute);
+  await app.register(demoFixturesRoute);
   await app.register(terminalRoute);
   await app.register(githubWSRoute);
   await app.register(tasksWSRoute);

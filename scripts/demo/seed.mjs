@@ -306,15 +306,11 @@ export async function seedDemo({ api, root, holdTranscripts = false }) {
     }),
   });
 
-  // Task Master board — deliberately backlog/ready only. Every other
-  // status (claimed/in_progress/reviewing/done) is a real lifecycle
-  // transition that spins up an actual worker session/worktree; faking
-  // that state without the automation behind it would mean this script
-  // either runs a real agent CLI (slow, needs credentials, not
-  // reproducible in CI) or writes the database directly (silently false
-  // to what "regenerate with this script" promises). Staying inside the
-  // plain creatable set keeps the whole board honestly reproducible from
-  // this file alone, at the cost of a less visually varied column spread.
+  // Task Master board. Backlog/ready tasks are plain REST creates. Every
+  // other status is a real lifecycle transition that spins up a worker
+  // session and worktree, so those come from the demo-only fixture route
+  // (src/routes/demo-fixtures.ts, registered because instance.mjs sets
+  // MULLION_DEMO): it inserts rows describing the state, nothing runs.
   const backlogTasks = [
     "Add dark mode toggle to Settings",
     "Fix flaky session-reconciler test",
@@ -329,16 +325,122 @@ export async function seedDemo({ api, root, holdTranscripts = false }) {
       body: JSON.stringify({ projectId: auroraProject.id, title, status: "backlog" }),
     });
   }
-  const readyTasks = [
-    "Speed up orders query with an index",
-    "Add rate limiting to the login route",
-  ];
-  for (const title of readyTasks) {
-    await api("/api/tasks", {
-      method: "POST",
-      body: JSON.stringify({ projectId: orbitProject.id, title, status: "ready" }),
-    });
-  }
+  await api("/api/tasks", {
+    method: "POST",
+    body: JSON.stringify({
+      projectId: orbitProject.id,
+      title: "Speed up orders query with an index",
+      status: "ready",
+    }),
+  });
+
+  // Task Master on, with auto-claim paused: the watcher must never spawn a
+  // real worker for the demo's ready tasks.
+  await api("/api/settings", {
+    method: "PATCH",
+    body: JSON.stringify({ taskMaster: { enabled: "on", autoClaimPaused: true } }),
+  });
+
+  const ago = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const issueUrl = (repo, n) => `https://github.com/${DEMO_GITHUB_OWNER}/${repo}/issues/${n}`;
+  const prUrl = (repo, n) => `https://github.com/${DEMO_GITHUB_OWNER}/${repo}/pull/${n}`;
+  // The issue/PR numbers match scripts/demo/fake-github.mjs, so the rows in
+  // the GitHub tab carry Task Master markers and the Tasks tab links through.
+  await api("/api/demo/fixtures/tasks", {
+    method: "POST",
+    body: JSON.stringify({
+      projectId: auroraProject.id,
+      tasks: [
+        {
+          title: "Document the session cookie lifetime",
+          status: "ready",
+          issueNumber: 11,
+          htmlUrl: issueUrl("aurora-web", 11),
+        },
+        {
+          title: "Add rate limiting to the login route",
+          status: "in_progress",
+          issueNumber: 10,
+          htmlUrl: issueUrl("aurora-web", 10),
+          prNumber: 12,
+          prUrl: prUrl("aurora-web", 12),
+          branchName: "feat/login-rate-limit",
+          agent: "claude",
+          claimedAt: ago(110),
+          startedAt: ago(105),
+        },
+        {
+          title: "Cache the session lookup",
+          status: "reviewing",
+          prNumber: 17,
+          prUrl: prUrl("aurora-web", 17),
+          branchName: "perf/session-cache",
+          agent: "claude",
+          claimedAt: ago(70),
+          startedAt: ago(65),
+          reviewingAt: ago(10),
+        },
+        {
+          title: "Fix focus loss in the login form",
+          status: "reviewing",
+          issueNumber: 7,
+          htmlUrl: issueUrl("aurora-web", 7),
+          prNumber: 14,
+          prUrl: prUrl("aurora-web", 14),
+          branchName: "fix/login-focus",
+          agent: "claude",
+          claimedAt: ago(300),
+          startedAt: ago(295),
+          reviewingAt: ago(40),
+          lastReviewVerdict: "approved",
+          lastReviewVerdictAt: ago(20),
+          reviewRunId: "demo-run-1",
+          reviewRunIngestedId: "demo-run-1",
+          reviewFindings:
+            "## Round 1\n\nApproved. The focus handling matches the other form fields.",
+        },
+        {
+          title: "Rework the settings page layout",
+          status: "failed",
+          prNumber: 18,
+          prUrl: prUrl("aurora-web", 18),
+          branchName: "feat/settings-layout",
+          agent: "claude",
+          claimedAt: ago(1600),
+          startedAt: ago(1590),
+          failureReason: "The worker used up its 45 minute budget",
+        },
+        {
+          title: "Dark mode: low contrast on disabled buttons",
+          status: "done",
+          issueNumber: 9,
+          htmlUrl: issueUrl("aurora-web", 9),
+          mergeError: "required check failing on main",
+          completedAt: ago(200),
+        },
+      ],
+    }),
+  });
+  await api("/api/demo/fixtures/tasks", {
+    method: "POST",
+    body: JSON.stringify({
+      projectId: orbitProject.id,
+      tasks: [
+        {
+          title: "Orders list is slow with more than 10k rows",
+          status: "in_progress",
+          issueNumber: 3,
+          htmlUrl: issueUrl("orbit-api", 3),
+          prNumber: 5,
+          prUrl: prUrl("orbit-api", 5),
+          branchName: "perf/orders-query",
+          agent: "claude",
+          claimedAt: ago(80),
+          startedAt: ago(75),
+        },
+      ],
+    }),
+  });
 
   return { scratchRoot, scriptsDir, auroraProject, orbitProject, authReleaseFile };
 }
