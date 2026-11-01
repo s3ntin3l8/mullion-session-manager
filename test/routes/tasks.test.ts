@@ -2523,18 +2523,6 @@ describe("tasks route", () => {
       await app.close();
     });
 
-    it("409s when the last review verdict isn't 'inconclusive' (e.g. clean)", async () => {
-      const app = await buildApp();
-      const { task } = await createInconclusiveReviewingTask(app, { lastReviewVerdict: "clean" });
-
-      const res = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/re-review` });
-
-      expect(res.statusCode).toBe(409);
-      expect(res.json().message).toContain('"clean"');
-
-      await app.close();
-    });
-
     it("409s when the last review verdict is null — never actually reviewed", async () => {
       const app = await buildApp();
       const { task } = await createInconclusiveReviewingTask(app, { lastReviewVerdict: null });

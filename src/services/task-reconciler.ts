@@ -90,6 +90,7 @@ import {
   type ReviewCiInfo,
   type PrReviewCommentInfo,
 } from "./task-prompt.js";
+import { priorRoundFor, resolveReviewHeadSha } from "./task-prior-round.js";
 import { openDraftPRForTask } from "./task-promote.js";
 import { maybeAutoEnableConventionalTitles } from "./project-release-please.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "./task-approve.js";
@@ -217,33 +218,6 @@ function hasCurrentApproval(task: typeof tasks.$inferSelect): boolean {
 }
 
 /**
- * What the previous review round found, for a FOLLOW-UP review's delta
- * prompt — the last `## Round N` block of `tasks.reviewFindings`, plus the
- * head SHA that review covered. `undefined` for a first review, and after an
- * inconclusive one (there was nothing to follow up on).
- */
-function priorRoundFor(
-  task: typeof tasks.$inferSelect,
-): { reviewedSha: string | null; findings: string; approved?: boolean } | undefined {
-  if (!task.reviewFindings) return undefined;
-  if (
-    task.lastReviewVerdict !== "changes-requested" &&
-    task.lastReviewVerdict !== "approved-with-suggestions"
-  ) {
-    return undefined;
-  }
-  const blocks = task.reviewFindings.split(/\n\n(?=## Round )/);
-  const last = blocks[blocks.length - 1];
-  return last
-    ? {
-        reviewedSha: task.lastReviewedHeadSha,
-        findings: last,
-        approved: task.lastReviewVerdict === "approved-with-suggestions",
-      }
-    : undefined;
-}
-
-/**
  * Review agent decision (this phase's binding design) — when a project or
  * the task's own issue configures one, entering "reviewing" spawns it IN
  * THE WORKER'S OWN WORKTREE (no new worktree — the worker's turn is
@@ -351,7 +325,7 @@ async function spawnReviewAgentNow(
       findingsPath,
       ci,
       roundsRemaining,
-      priorRound: priorRoundFor(task),
+      priorRound: priorRoundFor(task, await resolveReviewHeadSha(app, task, project, ci?.headSha)),
     });
     const result = await createSessionRecord(app, {
       projectId: project.id,
@@ -985,7 +959,7 @@ async function processHermesDispatch(app: FastifyInstance): Promise<void> {
               await getPullRequestByNumber(token, repoRef.owner, repoRef.repo, task.prNumber!)
             ).headSha;
           })());
-        const priorRound = priorRoundFor(task);
+        const priorRound = priorRoundFor(task, headSha);
         const roundsRemaining = Math.max(
           0,
           resolveMaxAutoReturnRounds(project, resolvedTaskMaster.maxAutoReturnRounds) -

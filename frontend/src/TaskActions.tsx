@@ -9,6 +9,7 @@ import {
   isAwaitingMerge,
   isMergeUnconfirmed,
 } from "./unified-board/awaitingMerge.js";
+import { taskReReviewEligible } from "./github/prNextStep.js";
 import { parseWorkflowChange } from "./workflowChange.js";
 
 // What each review action does, said once for the buttons' tooltips and the
@@ -16,6 +17,8 @@ import { parseWorkflowChange } from "./workflowChange.js";
 const APPROVE_HINT = "Accept the work: open the pull request and close the issue.";
 const REJECT_HINT =
   "Send your feedback to the task's agent. It keeps working on the same branch, then the change is reviewed again.";
+const REVIEW_HINT =
+  "Run the review again on the current branch, without sending anything to the agent.";
 const GIVE_UP_HINT =
   "Stop the task. It is marked Failed, its sessions stop and any draft pull request closes. You can Retry it later from the branch.";
 
@@ -337,39 +340,36 @@ export function TaskActions({ task }: { task: Task }) {
         </button>
       )}
       {/* Issue #1345 — visible only for exactly the state the backend
-          route will actually accept, mirroring its own three checks
-          (routes/tasks.ts): lastReviewVerdict === "inconclusive",
-          reviewSessionId set, AND reviewFindingsIngestedSessionId set —
-          the last of which rules out the window right after a re-review
-          (or the automatic sweep) already fired, where reviewSessionId
-          points at a FRESH session with no result yet but
-          lastReviewVerdict is still the stale "inconclusive" from before.
-          Self-review finding: without the third check, the button stayed
-          enabled during that window and clicking it deterministically
-          409ed. No free-text reason needed (unlike reject/give-up below),
-          so this fires directly on click rather than opening the
-          pendingAction confirm flow. */}
-      {task.lastReviewVerdict === "inconclusive" &&
-        ((task.reviewSessionId !== null && task.reviewFindingsIngestedSessionId !== null) ||
-          (task.reviewRunId !== null && task.reviewRunIngestedId !== null)) && (
-          <button
-            className="notif-gate-btn"
-            disabled={submitting}
-            onClick={async () => {
-              setSubmitting(true);
-              setError(null);
-              try {
-                await reReviewTask(task.id);
-              } catch (err) {
-                setError(err instanceof ApiError ? err.message : "Failed to re-review task");
-              } finally {
-                setSubmitting(false);
-              }
-            }}
-          >
-            Re-review
-          </button>
-        )}
+          route will actually accept (taskReReviewEligible mirrors its
+          checks): a finished review of any verdict, with its findings
+          ingested — which rules out the window right after a re-review (or
+          the automatic sweep) already fired, where reviewSessionId points at
+          a FRESH session with no result yet but lastReviewVerdict is still
+          the old one. Without that check the button stayed enabled during
+          that window and clicking it deterministically 409ed. No free-text
+          reason needed (unlike reject/give-up below), so this fires
+          directly on click rather than opening the pendingAction confirm
+          flow. */}
+      {taskReReviewEligible(task) && (
+        <button
+          className="notif-gate-btn"
+          disabled={submitting}
+          title={REVIEW_HINT}
+          onClick={async () => {
+            setSubmitting(true);
+            setError(null);
+            try {
+              await reReviewTask(task.id);
+            } catch (err) {
+              setError(err instanceof ApiError ? err.message : "Failed to re-review task");
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+        >
+          Re-review
+        </button>
+      )}
       <button
         className="notif-gate-btn notif-gate-deny"
         disabled={submitting}

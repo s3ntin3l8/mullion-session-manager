@@ -1232,21 +1232,6 @@ describe("TaskDetail approve/reject actions", () => {
     expect(screen.queryByPlaceholderText(/^Why give up/)).not.toBeInTheDocument();
   });
 
-  it("does not show Re-review for a clean or changes-requested verdict", () => {
-    tasks = [
-      makeTask({
-        id: 1,
-        status: "reviewing",
-        lastReviewVerdict: "clean",
-        reviewSessionId: 5,
-        reviewFindingsIngestedSessionId: 5,
-      }),
-    ];
-    render(<TaskDetail params={{ taskId: 1 }} onOpenSession={vi.fn()} />);
-
-    expect(screen.queryByRole("button", { name: "Re-review" })).not.toBeInTheDocument();
-  });
-
   // Self-review finding — the backend route 409s on this exact shape (a
   // fresh reviewSessionId with no findings ingested yet: a prior
   // re-review, or the automatic sweep, already fired and the reconciler

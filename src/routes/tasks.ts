@@ -1701,17 +1701,18 @@ export async function tasksRoute(app: FastifyInstance) {
     // (reviewing -> reviewing, mirroring reannounceInconclusiveReviewsAfterGrace's
     // own write, which likewise never calls recordTaskTransition since
     // there's no status edge to record), so canTransition's table has
-    // nothing to say about this action at all. This route only makes sense
-    // for exactly the state #1346's sweep targets — a task merely
-    // "reviewing" with a clean/changes-requested verdict, or one not
-    // reviewing at all, gets a 409.
+    // nothing to say about this action at all. A task that isn't
+    // "reviewing", or has no finished review to re-run, gets a 409.
     if (existing.status !== "reviewing") {
       return reply.conflict(`Cannot re-review a task in status "${existing.status}"`);
     }
-    if (existing.lastReviewVerdict !== "inconclusive") {
-      return reply.conflict(
-        `Cannot re-review a task whose last review verdict is "${existing.lastReviewVerdict ?? "none"}", not "inconclusive"`,
-      );
+    // Any FINISHED review can be re-run, not just an inconclusive one: a
+    // changes-requested verdict the human disagrees with, or one made against a
+    // head that has since moved ("stale"), has no other way to be asked again
+    // short of sending the worker back. (A task that was never reviewed has
+    // nothing to re-run.)
+    if (existing.lastReviewVerdict === null) {
+      return reply.conflict('Cannot re-review a task with no finished review (verdict "none")');
     }
     if (!hasReviewHandle(existing)) {
       return reply.conflict("Task has no review session to re-arm");
@@ -1741,6 +1742,9 @@ export async function tasksRoute(app: FastifyInstance) {
         "Task's review session hasn't produced a result yet — nothing stale to re-arm",
       );
     }
+    // The counter is the inconclusive sweep's own bound (it re-arms once on its
+    // own); a re-run of a review that DID conclude doesn't spend it.
+    const spendsRearm = existing.lastReviewVerdict === "inconclusive" ? 1 : 0;
     // One of these is null: the stale review is a session or a run, not both.
     const staleReviewSessionId = existing.reviewSessionId;
     const staleReviewRunId = existing.reviewRunId;
@@ -1752,13 +1756,17 @@ export async function tasksRoute(app: FastifyInstance) {
         reviewSeedDelivered: null,
         reviewSpawnClaimedAt: null,
         ...CLEARED_REVIEW_RUN,
-        inconclusiveReviewRearmCount: existing.inconclusiveReviewRearmCount + 1,
+        inconclusiveReviewRearmCount: existing.inconclusiveReviewRearmCount + spendsRearm,
+        // Part of a Hermes dispatch's idempotency key: a human re-review at the same head
+        // keeps round, rearms and head, so without a fresh entry time the second click
+        // would replay the first run.
+        reviewingAt: new Date(),
       })
       .where(
         and(
           eq(tasks.id, taskId),
           eq(tasks.status, "reviewing"),
-          eq(tasks.lastReviewVerdict, "inconclusive"),
+          eq(tasks.lastReviewVerdict, existing.lastReviewVerdict),
           staleReviewSessionId === null
             ? isNull(tasks.reviewSessionId)
             : eq(tasks.reviewSessionId, staleReviewSessionId),

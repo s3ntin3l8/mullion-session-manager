@@ -90,8 +90,8 @@ export const TASK_REVIEWER_BUSY = "Task Master's reviewer is handling this PR";
  * Task Master's own reviewer is the terminal review for a `mullion/task-*` PR
  * (hermes.yml's auto-review skips those branches), so "Request re-review" on a
  * PR with a linked task re-arms that reviewer — only possible where
- * `POST /api/tasks/:id/re-review` accepts it (reviewing, inconclusive verdict,
- * a review session whose findings were ingested). Anything else is disabled
+ * `POST /api/tasks/:id/re-review` accepts it (reviewing, a finished review —
+ * any verdict — whose findings were ingested). Anything else is disabled
  * with a reason; Hermes stays reachable as an explicit secondary action.
  */
 export function taskReReviewEligible(
@@ -107,7 +107,7 @@ export function taskReReviewEligible(
 ): boolean {
   return (
     task.status === "reviewing" &&
-    task.lastReviewVerdict === "inconclusive" &&
+    task.lastReviewVerdict !== null &&
     ((task.reviewSessionId !== null && task.reviewFindingsIngestedSessionId !== null) ||
       (task.reviewRunId !== null && task.reviewRunIngestedId !== null))
   );
