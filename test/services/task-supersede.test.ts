@@ -1,13 +1,20 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
+// Must come before any import below that could itself trigger loading
+// "node-pty"/"node:child_process" — see test/helpers/mock-pty.ts's header
+// comment for the empirically confirmed hoisting/ordering failure mode.
+import { plainNodePtyMock } from "../helpers/mock-pty.js";
+import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
+import { buildTestApp } from "../helpers/app.js";
+import {
+  createTaskGitRepo,
+  createTaskProject,
+  insertFailedTaskWithPreservedBranch,
+} from "../helpers/task-retry-fixture.js";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { EventEmitter } from "node:events";
-import { execFileSync } from "node:child_process";
 import type * as ChildProcess from "node:child_process";
 import { eq } from "drizzle-orm";
-import { gitEnv } from "../../src/services/git-env.js";
-import { deriveTaskBranchName } from "../../src/services/git-worktree.js";
 
 // #2292 — a task copy that a project merge superseded must never be retried:
 // another task owns the issue now, so resuming this copy's branch would start
@@ -19,60 +26,19 @@ import { deriveTaskBranchName } from "../../src/services/git-worktree.js";
 // lines.mjs is a ratchet: a file may not grow past its size at the reference
 // commit), so the retryTask cases it holds cannot be added to.
 
-vi.mock("node-pty", () => ({
-  spawn: vi.fn(() => ({
-    onData: () => ({ dispose: () => {} }),
-    onExit: () => ({ dispose: () => {} }),
-    write: vi.fn(),
-    resize: vi.fn(),
-    kill: vi.fn(),
-  })),
-}));
+vi.mock("node-pty", () => plainNodePtyMock());
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof ChildProcess>();
-  return {
-    ...actual,
-    spawn: vi.fn((command: string, args?: readonly string[], options?: object) => {
-      if (command === "git") return actual.spawn(command, args, options);
-      const ee = new EventEmitter() as EventEmitter & { stdout?: EventEmitter };
-      setImmediate(() => {
-        ee.emit("exit", 0);
-        ee.stdout = new EventEmitter();
-        setImmediate(() => ee.emit("close", 0));
-      });
-      return ee;
-    }),
-  };
+  return mockChildProcessSpawn(actual, { passthrough: ["git"] });
 });
 
-const mockSyncTaskTransition = vi.fn().mockResolvedValue(undefined);
-vi.mock("../../src/services/task-github-sync.js", () => ({
-  syncTaskTransition: mockSyncTaskTransition,
-}));
-
-const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { retryTask } = await import("../../src/services/task-claim.js");
 const { tasks } = await import("../../src/db/schema.js");
 const sessionsModule = await import("../../src/services/session-lifecycle.js");
-const { createWorktree, removeWorktreeIfClean } =
-  await import("../../src/services/git-worktree.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-supersede-test-${process.pid}.db`);
-
-function git(cwd: string, args: string[]) {
-  execFileSync("git", args, { cwd, stdio: "pipe", env: gitEnv() });
-}
-
-function createGitRepo(): string {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "task-supersede-test-repo-"));
-  git(cwd, ["init", "-b", "main"]);
-  fs.writeFileSync(path.join(cwd, "a.txt"), "a");
-  git(cwd, ["add", "-A"]);
-  git(cwd, ["commit", "-m", "initial", "--no-verify"]);
-  return cwd;
-}
 
 describe("retryTask refuses a superseded copy (#2292)", () => {
   beforeAll(() => {
@@ -90,79 +56,17 @@ describe("retryTask refuses a superseded copy (#2292)", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    mockSyncTaskTransition.mockClear();
   });
 
-  async function createProject(app: Awaited<ReturnType<typeof buildApp>>, cwd: string) {
-    const res = await app.inject({
-      method: "POST",
-      url: "/api/projects",
-      payload: { allowDuplicate: true, createDir: true, name: "supersede-p", cwd },
-    });
-    return res.json().id as number;
-  }
-
-  function getTask(app: Awaited<ReturnType<typeof buildApp>>, taskId: number) {
+  function getTask(app: Awaited<ReturnType<typeof buildTestApp>>, taskId: number) {
     const [row] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
     return row;
   }
 
-  /**
-   * The real →failed lifecycle shape: a worker claimed the task, committed
-   * work on `mullion/task-<id>`, then failed — the failure cleanup removed the
-   * worktree DIRECTORY while deliberately leaving the branch (and its commit)
-   * intact, which is what makes a retry able to resume it.
-   *
-   * `archivedAt` and `supersededAt` are what separate the cases below: a
-   * MANUAL archive (the user hid the row) must stay retryable, a merge
-   * supersession (another task owns the issue) must not.
-   */
-  async function insertFailedTaskWithPreservedBranch(
-    app: Awaited<ReturnType<typeof buildApp>>,
-    projectId: number,
-    cwd: string,
-    issueNumber: number,
-    over: { archivedAt?: Date; supersededAt?: Date } = {},
-  ) {
-    // Inserted first as a throwaway "ready" row purely to get a real task id:
-    // branchName must match `mullion/task-<id>` exactly.
-    const [placeholder] = app.db
-      .insert(tasks)
-      .values({ projectId, issueNumber, title: "t", status: "ready" })
-      .returning()
-      .all();
-    const branchName = deriveTaskBranchName(placeholder);
-
-    const created = await createWorktree({ cwd, baseRef: "main", seed: branchName, branchName });
-    if (!created?.path) throw new Error("test setup: failed to create worktree");
-    fs.writeFileSync(path.join(created.path, "work.txt"), "real committed work");
-    git(created.path, ["add", "-A"]);
-    git(created.path, ["commit", "-m", "agent did real work", "--no-verify"]);
-    const removed = await removeWorktreeIfClean(created.path, cwd);
-    if (!removed.removed) throw new Error("test setup: failed to remove worktree");
-
-    const [row] = app.db
-      .update(tasks)
-      .set({
-        status: "failed",
-        failureReason: "budget exceeded after 120 minutes",
-        completedAt: new Date(),
-        worktreePath: created.path,
-        branchName,
-        sessionId: null,
-        ...(over.archivedAt ? { archivedAt: over.archivedAt } : {}),
-        ...(over.supersededAt ? { supersededAt: over.supersededAt } : {}),
-      })
-      .where(eq(tasks.id, placeholder.id))
-      .returning()
-      .all();
-    return row;
-  }
-
   it("refuses a copy a project merge superseded, and starts nothing", async () => {
-    const app = await buildApp();
-    const cwd = createGitRepo();
-    const projectId = await createProject(app, cwd);
+    const app = await buildTestApp();
+    const cwd = createTaskGitRepo("task-supersede-test-repo-");
+    const projectId = await createTaskProject(app, cwd);
     const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 80, {
       archivedAt: new Date(),
       supersededAt: new Date(),
@@ -185,13 +89,38 @@ describe("retryTask refuses a superseded copy (#2292)", () => {
     expect(row.failureReason).toBe("budget exceeded after 120 minutes");
 
     fs.rmSync(cwd, { recursive: true, force: true });
-    await app.close();
+  });
+
+  // The reason this is a COLUMN rather than a reading of `archivedAt`: the
+  // marker is a fact about the row ("a merge superseded this copy"), and
+  // Unarchive clears only `archivedAt` — unhiding a row does not undo the
+  // fact, and must not re-arm the duplicate worker.
+  it("still refuses a superseded copy that has been unarchived", async () => {
+    const app = await buildTestApp();
+    const cwd = createTaskGitRepo("task-supersede-test-repo-");
+    const projectId = await createTaskProject(app, cwd);
+    const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 82, {
+      archivedAt: null,
+      supersededAt: new Date(),
+    });
+    const spawnSpy = vi.spyOn(sessionsModule, "createSessionRecord");
+
+    const outcome = await retryTask(app, task.id);
+
+    expect(outcome).toMatchObject({ ok: false, reason: "superseded" });
+    expect(spawnSpy).not.toHaveBeenCalled();
+    const row = getTask(app, task.id);
+    expect(row.status).toBe("failed");
+    expect(row.sessionId).toBeNull();
+    expect(row.archivedAt).toBeNull();
+
+    fs.rmSync(cwd, { recursive: true, force: true });
   });
 
   it("reports the supersession rather than the missing branch", async () => {
-    const app = await buildApp();
-    const cwd = createGitRepo();
-    const projectId = await createProject(app, cwd);
+    const app = await buildTestApp();
+    const cwd = createTaskGitRepo("task-supersede-test-repo-");
+    const projectId = await createTaskProject(app, cwd);
     const [task] = app.db
       .insert(tasks)
       .values({
@@ -212,13 +141,12 @@ describe("retryTask refuses a superseded copy (#2292)", () => {
     expect(outcome).toMatchObject({ ok: false, reason: "superseded" });
 
     fs.rmSync(cwd, { recursive: true, force: true });
-    await app.close();
   });
 
   it("still retries a task the user merely archived (#1015)", async () => {
-    const app = await buildApp();
-    const cwd = createGitRepo();
-    const projectId = await createProject(app, cwd);
+    const app = await buildTestApp();
+    const cwd = createTaskGitRepo("task-supersede-test-repo-");
+    const projectId = await createTaskProject(app, cwd);
     const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 81, {
       archivedAt: new Date(),
     });
@@ -233,6 +161,5 @@ describe("retryTask refuses a superseded copy (#2292)", () => {
     expect(row.archivedAt).toBeNull();
 
     fs.rmSync(cwd, { recursive: true, force: true });
-    await app.close();
   });
 });

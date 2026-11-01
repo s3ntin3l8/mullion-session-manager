@@ -132,16 +132,20 @@ describe("approval_notified_verdict_at backfill migration (#2252)", () => {
 
 // #2292 — the superseded-copy migration: it adds `tasks.superseded_at`, marks
 // the copies an EARLIER project merge already superseded, and normalizes the
-// archived-but-still-queued copies that #2291 left behind.
+// superseded-but-still-queued copies that #2291 left behind.
 //
-// The rows below are the eight shapes that matter, each one a real state the
-// merge or a human archive can leave behind:
+// The rows below are the shapes that matter, each one a real state the merge
+// or a human archive can leave behind:
 //
 //   1-4  a merge-superseded copy (archived + issue number cleared + GitHub-linked)
 //   5    a normal queued task (not archived) — must not move
 //   6    a MANUALLY archived LOCAL task — must not be marked superseded
 //   7    a MANUALLY archived GitHub task — must not be marked superseded
 //   8    a pre-`html_url` superseded copy, recognized by the merge's own wording
+//   9    a superseded copy a human UNARCHIVED — claimable, so it must move
+//   10   an archived queued copy that predates `html_url` and kept an
+//        unrelated failure reason — only a merge archives a queued task
+//   11   an ordinary LOCAL queued task — must stay claimable
 describe("superseded_at backfill + archived-queued normalization migration (#2292)", () => {
   const tmpDb = path.join(os.tmpdir(), `db-client-2292-test-${process.pid}.db`);
   const drizzleDir = path.resolve(__dirname, "../../drizzle");
@@ -185,7 +189,21 @@ describe("superseded_at backfill + archived-queued normalization migration (#229
         // 7 — a MANUALLY archived GitHub task (its issue number is still set)
         `(7, 1, 'github archived', 'failed', 7, 'https://github.com/o/r/issues/7', ${ARCHIVED}, 'boom', 1, 1),` +
         // 8 — a superseded copy old enough to predate html_url
-        `(8, 1, 'old copy', 'ready', NULL, NULL, ${ARCHIVED}, 'Merged from project #7: superseded.', 1, 1);`,
+        `(8, 1, 'old copy', 'ready', NULL, NULL, ${ARCHIVED}, 'Merged from project #7: superseded.', 1, 1),` +
+        // 9 — a superseded copy that a human UNARCHIVED: still queued, so it
+        //     is claimable (the claim guards are archived-only) — the row the
+        //     merge signature has to catch even without `archived_at`
+        `(9, 1, 'unarchived copy', 'ready', NULL, 'https://github.com/o/r/issues/9', NULL, NULL, 1, 1),` +
+        // 10 — an archived queued copy old enough to predate html_url, whose
+        //      failure reason the merge did not overwrite: only a merge
+        //      archives a queued task, so it is superseded all the same
+        `(10, 1, 'old archived copy', 'backlog', NULL, NULL, ${ARCHIVED}, 'session died', 1, 1),` +
+        // 11 — an ordinary LOCAL queued task (no issue, no URL, not archived):
+        //      it must stay claimable
+        `(11, 1, 'local ready', 'ready', NULL, NULL, NULL, NULL, 1, 1),` +
+        // 12 — a superseded copy that was claimed, failed, and was then
+        //      UNARCHIVED: nothing but the marker keeps its Retry refused
+        `(12, 1, 'unarchived failed copy', 'failed', NULL, 'https://github.com/o/r/issues/12', NULL, 'boom', 1, 1);`,
     );
     apply(db, target);
 
@@ -224,6 +242,24 @@ describe("superseded_at backfill + archived-queued normalization migration (#229
       reason: "Merged from project #7: superseded.",
     });
     marked(8);
+    // 9 — the UNARCHIVED superseded copy: it leaves the queue too, and it is
+    // marked. This is the row that would otherwise stay `ready` and be
+    // claimed by the sweep — a duplicate worker for an issue another task
+    // already owns.
+    expect(byId.get(9)).toMatchObject({ status: "failed" });
+    expect(byId.get(9)?.reason).toContain("Superseded by a project merge");
+    marked(9);
+    // 10 — an archived queued copy that predates html_url and kept an
+    //      unrelated failure reason: only a merge archives a queued task, so
+    //      it is superseded all the same.
+    expect(byId.get(10)).toMatchObject({ status: "failed", reason: "session died" });
+    marked(10);
+    // 11 — an ordinary LOCAL queued task keeps its place in the queue.
+    expect(byId.get(11)).toMatchObject({ status: "ready", reason: null, s: null });
+    // 12 — an unarchived failed copy: the marker is what keeps its Retry
+    //      refused, and it does not depend on the row being archived.
+    expect(byId.get(12)).toMatchObject({ status: "failed", reason: "boom" });
+    marked(12);
 
     db.close();
   });

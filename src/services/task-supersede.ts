@@ -10,18 +10,18 @@
 //
 // Why the marker matters: that copy's worker, if it ever ran again, would be
 // a SECOND worker for an issue another task already owns. #2291 closed the
-// claim side (an archived task is never auto-claimed nor claimable), and this
-// module closes the retry side — `retryTask` (task-claim.ts) resumes a
-// `failed` task's preserved branch and CLEARS `archivedAt` (#1015), so
-// without the marker a superseded copy that was claimed once and later failed
-// is one deliberate Retry away from spawning that duplicate worker.
+// claim side (an archived task is never auto-claimed nor claimable), and
+// task-claim.ts's `retryTask` closes the retry side — it resumes a `failed`
+// task's preserved branch and CLEARS `archivedAt` (#1015), so without the
+// marker a superseded copy that was claimed once and later failed is one
+// deliberate Retry away from spawning that duplicate worker.
 //
-// This module owns the two pieces of shared vocabulary that used to live
-// inline in project-merge.ts and are now also mirrored by the backfill
-// migration (drizzle/0104_past_famine.sql):
-//
-//   - the failure-reason wording a merge writes onto a superseded copy, and
-//   - the refusal message a Retry returns when it meets one.
+// This module owns the wording a merge writes onto a superseded copy, which
+// the backfill migration (drizzle/0104_past_famine.sql) also matches as a
+// signal for rows old enough to predate `html_url`. The refusal a Retry
+// returns for such a copy is task-claim.ts's own (SUPERSEDED_RETRY_DETAIL
+// there) — it belongs to the refusal that produces it, and keeping it here
+// would add a module edge to an already heavily-coupled `retryTask`.
 
 /**
  * The `failureReason` a merge writes on the DUPLICATE's copy when the
@@ -44,13 +44,3 @@ export function supersededMergeReason(fromProjectId: number): string {
 export function replacedByMergeReason(taskId: number, fromProjectId: number): string {
   return `Replaced by task #${taskId} when project #${fromProjectId} was merged.`;
 }
-
-/**
- * The refusal a Retry returns for a superseded copy — a 409 from
- * `POST /api/tasks/:id/retry` (routes/tasks.ts maps the outcome reason).
- *
- * It has to explain WHY, because the row on the board looks like any other
- * `failed` task: without this, "Retry did nothing" reads like a bug.
- */
-export const SUPERSEDED_RETRY_DETAIL =
-  "This task's copy was superseded by a project merge — another task now owns the issue, so retrying it would start a duplicate worker.";

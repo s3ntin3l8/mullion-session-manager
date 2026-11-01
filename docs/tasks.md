@@ -568,8 +568,12 @@ this copy must never start a worker of its own. Three things follow:
   a row does not undo the fact that a merge superseded it;
 - a copy that was still `ready`/`backlog` when the merge happened leaves the queue as
   `failed`. Installs that merged _before_ issue #2291 are normalized by a one-off migration
-  (drizzle `0104`), which moves their archived-but-still-queued copies to `failed` too — they
+  (drizzle `0104`), which moves their superseded-but-still-queued copies to `failed` too — they
   were never claimable, but they did show up as claim-less "ready" rows in the archived view.
+  The migration finds those copies by their **merge signature** rather than by their archived
+  state: a row a merge superseded has no issue number left, and still carries the `html_url`
+  only a GitHub-linked task has. That matters because Unarchive clears only `archivedAt` — an
+  unarchived superseded copy is claimable, and must not be left sitting in `ready`.
 
 ## Agent selection
 

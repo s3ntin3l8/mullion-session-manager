@@ -44,7 +44,6 @@ import { getStoredSettings } from "./settings.js";
 import { resolveTaskMasterConfig } from "./task-config.js";
 import { deriveTaskBranchName, deriveWorktreePath } from "./git-worktree.js";
 import { CONCURRENCY_CAPPED_STATUSES, recordTaskTransition } from "./task-state.js";
-import { SUPERSEDED_RETRY_DETAIL } from "./task-supersede.js";
 import {
   resolveAgentCommand,
   resolveReviewAgentCommand,
@@ -1067,6 +1066,22 @@ export async function dispatchClaimedTask(
     };
   }
 }
+
+/**
+ * #2292 — the refusal a Retry returns for a task copy that a project merge
+ * superseded. It is a 409 from `POST /api/tasks/:id/retry` (routes/tasks.ts
+ * maps the outcome reason).
+ *
+ * It has to explain WHY, because the row on the board looks like any other
+ * `failed` task: without this, "Retry did nothing" reads like a bug.
+ *
+ * It lives HERE, next to the refusal that produces it, rather than beside the
+ * merge's own wording (task-supersede.ts): `retryTask` already fans out to a
+ * long list of modules, and an import added only for one string would widen
+ * that coupling for no reason.
+ */
+export const SUPERSEDED_RETRY_DETAIL =
+  "This task's copy was superseded by a project merge — another task now owns the issue, so retrying it would start a duplicate worker.";
 
 export type RetryTaskOutcome =
   | { ok: true; session: Awaited<ReturnType<typeof withLiveStatus>>; seedDelivered: boolean }

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, isNull, isNotNull } from "drizzle-orm";
 import { projects, tasks, TASK_STATUSES } from "../db/schema.js";
-import { enqueueTask, retryTask } from "../services/task-claim.js";
+import { enqueueTask, retryTask, SUPERSEDED_RETRY_DETAIL } from "../services/task-claim.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { withTaskDerived } from "../services/task-row-derive.js";
 import { canTransition, recordTaskTransition, type TaskStatus } from "../services/task-state.js";
@@ -12,7 +12,6 @@ import {
 } from "../services/task-github-sync.js";
 import { dependencyGate, parseBlockedBy } from "../services/task-dependencies.js";
 import { withApprovalState } from "../services/task-approval-row.js";
-import { SUPERSEDED_RETRY_DETAIL } from "../services/task-supersede.js";
 import {
   TASK_MODEL_COLUMNS,
   TASK_MODEL_SCHEMA_PROPS,
