@@ -245,7 +245,9 @@ export type ConflictKind = (typeof CONFLICT_KINDS)[number];
 export interface ScaffoldConflict {
   file: string;
   excerpt: string;
-  kind: ConflictKind;
+  /** Report mode only ever carries a `ConflictKind`; a restructure report keeps
+   * whatever kind the agent used ("stale-reference", "other", ...). */
+  kind: string;
   note: string;
 }
 
@@ -285,9 +287,10 @@ export interface GeneratedScaffoldContent {
    * appended to CONTRIBUTING.md inside its own marked region. Never replaces
    * anything already in CONTRIBUTING.md. */
   contributingAppend?: string;
-  /** `report` only — findings for a human; nothing is written for them. */
+  /** `report` and `restructure` — findings for a human; nothing is written for
+   * them. In restructure these are passages outside AGENTS.md left unchanged. */
   conflicts?: ScaffoldConflict[];
-  /** `report` only — lines the agent returned that were not shown: not valid
+  /** `report` and `restructure` — lines the agent returned that were not shown: not valid
    * JSON objects of the expected shape, or valid but past the 50-entry cap. */
   droppedConflictLines?: number;
   /** `restructure` only — heuristic: the rewrite looks like it lost more than
@@ -527,7 +530,14 @@ function instructionsItem(
     `needed rarely may move to a file that is not auto-loaded (return it verbatim as a ` +
     `CONTRIBUTING append) only with a one-line pointer left in AGENTS.md saying when to read ` +
     `it. Before moving text into another file, check that file does not already say it, and ` +
-    `never append a duplicate. Keep wording of kept passages unchanged.${conventions}`
+    `never append a duplicate. Keep wording of kept passages unchanged.${conventions}` +
+    `\nAlso report the passages OUTSIDE AGENTS.md that you saw in any file you looked at and ` +
+    `did not change (they stay as they are): ones that contradict the conventions ` +
+    `(kind "contradicts"), restate them ("duplicates"), are workflow rules that belong in the ` +
+    `conventions ("misplaced"), point at something the rewrite renamed or removed ` +
+    `("stale-reference"), or are otherwise inconsistent ("other"). One JSON object per line, ` +
+    `with exactly the keys "file", "excerpt" (at most 200 characters), "kind", "note" (one ` +
+    `sentence). Between the conflicts markers below; write the single word none if there are none.`
   );
 }
 
@@ -538,7 +548,8 @@ function instructionsOutputShape(mode: ExistingInstructionsMode): string {
   if (mode === "restructure") {
     return (
       `${AGENTS_MD_START}\n(the complete proposed AGENTS.md)\n${AGENTS_MD_END}\n` +
-      `${CONTRIBUTING_APPEND_START}\n(text moved to CONTRIBUTING.md, or omit this section)\n${CONTRIBUTING_APPEND_END}\n`
+      `${CONTRIBUTING_APPEND_START}\n(text moved to CONTRIBUTING.md, or omit this section)\n${CONTRIBUTING_APPEND_END}\n` +
+      `${CONFLICTS_START}\n(one JSON object per line for passages outside AGENTS.md you left unchanged, or the word none, or omit this section)\n${CONFLICTS_END}\n`
     );
   }
   return "";
@@ -681,10 +692,17 @@ export function parseGeneratedOutput(
         "the CONTRIBUTING append carries a Mullion marker — regenerate rather than commit it",
       );
     }
+    // Optional here: absent means nothing to report.
+    const { conflicts, dropped } = parseConflicts(
+      optionalSection(haystackFor(CONFLICTS_START), CONFLICTS_START, CONFLICTS_END),
+      { openKinds: true },
+    );
     return {
       ...base,
       agentsMdBody,
       contributingAppend,
+      conflicts,
+      droppedConflictLines: dropped,
       possiblyLossy: assessRewrite(
         instructions?.originalAgentsMd ?? "",
         agentsMdBody,
@@ -722,7 +740,10 @@ const MAX_CONFLICT_NOTE = 400;
 /** One JSON object per line; a line that is not a valid, correctly-shaped
  * object is counted and dropped rather than failing a turn that already spent
  * minutes of agent time. */
-export function parseConflicts(section: string | null): {
+export function parseConflicts(
+  section: string | null,
+  opts: { openKinds?: boolean } = {},
+): {
   conflicts: ScaffoldConflict[];
   dropped: number;
 } {
@@ -739,13 +760,15 @@ export function parseConflicts(section: string | null): {
         typeof v.excerpt === "string" &&
         typeof v.note === "string" &&
         typeof v.kind === "string" &&
-        (CONFLICT_KINDS as readonly string[]).includes(v.kind)
+        (opts.openKinds
+          ? v.kind.trim().length > 0
+          : (CONFLICT_KINDS as readonly string[]).includes(v.kind))
       ) {
         if (conflicts.length < MAX_CONFLICTS) {
           conflicts.push({
             file: v.file.slice(0, 200),
             excerpt: v.excerpt.slice(0, MAX_CONFLICT_EXCERPT),
-            kind: v.kind as ConflictKind,
+            kind: v.kind.slice(0, 40),
             note: v.note.slice(0, MAX_CONFLICT_NOTE),
           });
         } else {

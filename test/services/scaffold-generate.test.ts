@@ -2048,7 +2048,7 @@ describe("existingInstructions (issue #2316)", () => {
       expect(p).toContain("<<<MULLION_CONTRIBUTING_APPEND_START>>>");
       expect(p).toContain(MULLION_REGION_PLACEHOLDER);
       expect(p).toContain("## Repo specifics");
-      expect(p).not.toContain("<<<MULLION_CONFLICTS_START>>>");
+      expect(p).toContain("<<<MULLION_CONFLICTS_START>>>");
       // The READ-ONLY promise still holds in every mode.
       expect(p).toContain("READ-ONLY");
     });

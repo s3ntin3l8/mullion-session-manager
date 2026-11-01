@@ -25,7 +25,7 @@ export type { ExistingInstructionsMode };
 export interface ScaffoldConflict {
   file: string;
   excerpt: string;
-  kind: "contradicts" | "duplicates" | "misplaced";
+  kind: string;
   note: string;
 }
 
