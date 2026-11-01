@@ -1,7 +1,7 @@
 # AGENTS.md — Mullion
 
 This file is the single source of truth for this repo's agent instructions.
-`CLAUDE.md` is a one-line `@AGENTS.md` import, so every CLI Mullion hosts
+`CLAUDE.md` is a short `@AGENTS.md` import, so every CLI Mullion hosts
 (Claude Code, Codex, opencode, agy) reads this file, natively or via that
 import. It has two halves with different owners:
 
@@ -84,7 +84,7 @@ How this repo applies the conventions above — facts and commands, not rules.
   (`scripts/with-gate-lock.sh`; `MULLION_NO_GATE_LOCK=1` bypasses it,
   `MULLION_GATE_LOCK_TIMEOUT` bounds the wait): let a waiting push wait. In CI
   the patch-coverage floor is advisory (`codecov/patch` is not a required
-  check. The region above asks for the full gate; this is how **this** repo
+  check). The region above asks for the full gate; this is how **this** repo
   satisfies it. Details: the pre-push section of [`docs/ci-cd.md`](docs/ci-cd.md).
 - **Reviews:** this repo reviews every pull request automatically when it
   opens (`.github/workflows/hermes.yml`'s `auto-review` job), except Task

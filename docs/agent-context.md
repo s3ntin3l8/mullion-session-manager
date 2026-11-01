@@ -34,7 +34,7 @@ Mullion never parses it, extracts a region, or re-injects a copy of its
 content for those three. **Claude Code does not**: its own memory docs are
 explicit — "Claude Code reads `CLAUDE.md`, not `AGENTS.md`" — confirmed
 empirically (a session with both files present at a repo root loads only
-`CLAUDE.md`). That's why `CLAUDE.md` is scaffolded as a one-line
+`CLAUDE.md`). That's why `CLAUDE.md` is scaffolded as a short
 `@AGENTS.md` **import**, not a prose pointer: a prose "read AGENTS.md" line
 relies on the agent choosing to open the file (the exact failure this repo's
 own `hooks.ts` documents for a different injection path), while `@AGENTS.md`
