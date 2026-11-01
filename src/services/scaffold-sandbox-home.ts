@@ -146,10 +146,11 @@ export function homeMaskArgs(opts: HomeMaskOptions): string[] {
       .map((d) => realpathOrNull(d))
       .filter((d): d is string => d !== null && d.startsWith(home + path.sep)),
   );
-  // A file is re-bound where it is needed: at its real path when that lies
-  // under HOME (a symlink elsewhere, e.g. /usr/local/bin/claude, points into
-  // it), and at the path the turn execs it by when that does too. Anything a
-  // bound directory already provides is skipped.
+  // A file is re-bound in up to two places, each independent of the other:
+  // at its real path when that lies under HOME (a symlink elsewhere, e.g.
+  // /usr/local/bin/claude, points into it), and at the path the turn execs it
+  // by whenever THAT lies under HOME (even if the real file is elsewhere).
+  // Anything a bound directory already provides is skipped.
   const covered = (p: string) => inside.some((d) => p === d || p.startsWith(d + path.sep));
   const underHome = (p: string) => p.startsWith(home + path.sep);
   const fileBinds = files.flatMap((f) => {
