@@ -66,6 +66,7 @@ import {
   type GenerateJob,
   type GenerateJobOutcome,
   type RunningGenerateJobPhase,
+  type AgentsMdSize,
   type ScaffoldGenerateResponse,
 } from "../services/scaffold-generate-jobs.js";
 
@@ -498,6 +499,7 @@ interface PreviewSnapshot {
   conflicts?: ScaffoldConflict[];
   droppedConflictLines?: number;
   possiblyLossy?: boolean;
+  agentsMdSize?: AgentsMdSize;
   /** Issue #2473 — scaffold targets the project's `.gitignore` matches, which
    * were force-added anyway. Absent when nothing is ignored. */
   ignoredPaths?: IgnoredPath[];
@@ -587,6 +589,8 @@ type PreviewComputation =
       // diff itself is unaffected.
       hasAgentsOverride: boolean;
       ignoredPaths?: IgnoredPath[];
+      /** The AGENTS.md this preview writes, in bytes (restructure only). */
+      agentsMdAfterBytes?: number;
     }
   | { ok: false; status: 400 | 500; message: string };
 
@@ -736,6 +740,7 @@ async function finishPreview(
     },
   });
 
+  const agentsMdEntry = entries.find((e) => e.path === "AGENTS.md" && e.kind === "file");
   return {
     ok: true,
     previewId,
@@ -743,6 +748,9 @@ async function finishPreview(
     files: entries.map((entry) => entry.path),
     hasAgentsOverride: existingFiles["AGENTS.override.md"] !== undefined,
     ...(ignoredPaths.length > 0 ? { ignoredPaths } : {}),
+    ...(rewroteInstructions && agentsMdEntry && agentsMdEntry.kind === "file"
+      ? { agentsMdAfterBytes: Buffer.byteLength(agentsMdEntry.contents) }
+      : {}),
   };
 }
 
@@ -1041,6 +1049,13 @@ async function executeScaffoldGeneration(
     response.droppedConflictLines = generated.droppedConflictLines;
   }
   if (generated.possiblyLossy) response.possiblyLossy = true;
+  // Context-budget signal: only a restructure rewrites AGENTS.md.
+  if (existingInstructions === "restructure" && result.agentsMdAfterBytes !== undefined) {
+    response.agentsMdSize = {
+      before: Buffer.byteLength(existingFiles["AGENTS.md"] ?? ""),
+      after: result.agentsMdAfterBytes,
+    };
+  }
   const record = previews.get(result.previewId);
   if (record) {
     record.snapshot = {

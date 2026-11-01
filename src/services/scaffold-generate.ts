@@ -491,11 +491,16 @@ function instructionsItem(
         `region) are:\n---\n${conventionsText.trim()}\n---`
       : "";
   const scope =
-    `Look at AGENTS.md, CLAUDE.md and CONTRIBUTING.md (whichever exist), ignoring anything ` +
+    `Look at every file that tells agents or contributors how to work in this repo (AGENTS.md, ` +
+    `CLAUDE.md, CONTRIBUTING.md, and any docs they point to for workflow), ignoring anything ` +
     `between \`<!-- mullion:...:start -->\` and \`<!-- mullion:...:end -->\` markers — ` +
     `Mullion owns those. Workflow rules (branching, commit/PR titles, merging, reviews, ` +
     `review-bot handling, issue filing, cleanup, pre-push checks) belong to the conventions ` +
-    `above, not to the repo's own instructions.`;
+    `above, not to the repo's own instructions. A repo that already has instructions is not a ` +
+    `fresh repo, so expect leftovers: instructions that contradict or duplicate the conventions, ` +
+    `in any wording or by any mechanism; references to sections or concepts the rewrite renamed ` +
+    `or removed (the intro, pointers in other files); and anything else the rewrite makes ` +
+    `inconsistent.`;
   if (mode === "report") {
     return (
       `\n${itemNumber}. A conflicts report. ${scope} List every passage outside those regions that ` +
@@ -514,10 +519,15 @@ function instructionsItem(
     `workflow conventions yourself); then \`## Repo specifics\` (how THIS repo applies those ` +
     `conventions: its real commands, gates, CI quirks and footguns, stated as facts, not ` +
     `rules); then the repo's existing invariants and command sections. Drop passages that ` +
-    `contradict or restate the conventions. Do not delete anything else that is repo-specific: ` +
-    `procedural detail that is not a rule (long how-tos, tool-pinning procedures) goes to ` +
-    `CONTRIBUTING.md instead — return it verbatim as a CONTRIBUTING append, with a short ` +
-    `pointer left in AGENTS.md. Keep wording of kept passages unchanged.${conventions}`
+    `contradict or restate the conventions. Mind the context budget: AGENTS.md is read in every ` +
+    `session, so every line costs every session. Keep what an agent needs and cannot get from ` +
+    `the repo itself (Makefile, config, CI, tool output); drop what is standard or discoverable ` +
+    `(command lists a help target prints, CI check names, timing remarks, framework ` +
+    `boilerplate). Anything needed on every change stays in AGENTS.md. Procedure that is only ` +
+    `needed rarely may move to a file that is not auto-loaded (return it verbatim as a ` +
+    `CONTRIBUTING append) only with a one-line pointer left in AGENTS.md saying when to read ` +
+    `it. Before moving text into another file, check that file does not already say it, and ` +
+    `never append a duplicate. Keep wording of kept passages unchanged.${conventions}`
   );
 }
 

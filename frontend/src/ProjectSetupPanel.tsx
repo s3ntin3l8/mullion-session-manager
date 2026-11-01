@@ -150,6 +150,10 @@ function ConventionsDriftBanner() {
 // writes real files into a real worktree and, when a GitHub remote and
 // token are available, opens a real PR — so the UI never lets Apply fire
 // without the user having seen the exact diff Preview produced first.
+function formatKb(bytes: number): string {
+  return `${(bytes / 1000).toFixed(1)} KB`;
+}
+
 export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams }) {
   // Issue #1201 — same install-wide text every session already gets
   // injected from (settings.sessions.workflowConventionsText, Settings ->
@@ -720,6 +724,12 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
             {preview.possiblyLossy
               ? "The rewritten AGENTS.md is much shorter than the original, or most of its sections are gone. Read the diff for lost repo-specific detail before applying."
               : "AGENTS.md is restructured below. Check that nothing repo-specific was dropped before applying."}
+            {preview.agentsMdSize && (
+              <div data-testid="agents-md-size">
+                AGENTS.md: {formatKb(preview.agentsMdSize.before)} →{" "}
+                {formatKb(preview.agentsMdSize.after)}
+              </div>
+            )}
           </div>
         )}
         {preview.ignoredPaths && preview.ignoredPaths.length > 0 && (

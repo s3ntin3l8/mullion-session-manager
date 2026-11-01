@@ -1505,7 +1505,7 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
         payload: { slug: "demo", existingInstructions: "restructure" },
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json().possiblyLossy).toBe(true);
+      expect(res.json()).toMatchObject({ possiblyLossy: true, agentsMdSize: { before: 45 } });
       expect(res.json().files).toContain("CONTRIBUTING.md");
 
       const wt = path.join(repoDir, ".mullion-worktrees", "setup-demo");

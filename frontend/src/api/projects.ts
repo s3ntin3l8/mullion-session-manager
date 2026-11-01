@@ -47,6 +47,7 @@ export interface ScaffoldGenerateResult {
   conflicts?: ScaffoldConflict[];
   droppedConflictLines?: number;
   possiblyLossy?: boolean;
+  agentsMdSize?: { before: number; after: number };
 }
 
 /** A background generation job (issue #2429): the panel polls it for
@@ -329,6 +330,7 @@ export const projectsApi = {
       conflicts?: ScaffoldConflict[];
       droppedConflictLines?: number;
       possiblyLossy?: boolean;
+      agentsMdSize?: { before: number; after: number };
     }>(`/api/projects/${projectId}/setup/generate`, {
       method: "POST",
       body: JSON.stringify(options),
@@ -391,6 +393,7 @@ export const projectsApi = {
           conflicts?: ScaffoldConflict[];
           droppedConflictLines?: number;
           possiblyLossy?: boolean;
+          agentsMdSize?: { before: number; after: number };
         }
       | undefined
     >(`/api/projects/${projectId}/setup/preview/active`),

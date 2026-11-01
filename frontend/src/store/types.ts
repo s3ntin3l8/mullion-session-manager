@@ -968,6 +968,7 @@ export interface ScaffoldPreview {
   conflicts?: ScaffoldConflict[];
   droppedConflictLines?: number;
   possiblyLossy?: boolean;
+  agentsMdSize?: { before: number; after: number };
 }
 
 export interface ScaffoldApplyResult {

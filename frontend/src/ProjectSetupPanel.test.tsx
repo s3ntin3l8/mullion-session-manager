@@ -312,6 +312,18 @@ describe("ProjectSetupPanel", () => {
         expect(screen.getByText(/much shorter than the original/)).toBeInTheDocument();
       });
 
+      it("restructure reports AGENTS.md size before and after", async () => {
+        await generateWith("Restructure it", { agentsMdSize: { before: 12011, after: 10200 } });
+        expect(screen.getByTestId("agents-md-size")).toHaveTextContent(
+          "AGENTS.md: 12.0 KB → 10.2 KB",
+        );
+      });
+
+      it("shows no size line without agentsMdSize", async () => {
+        await generateWith("Restructure it");
+        expect(screen.queryByTestId("agents-md-size")).not.toBeInTheDocument();
+      });
+
       it("restructure without the lossy signal still prompts a review", async () => {
         await generateWith("Restructure it");
         expect(screen.getByText(/AGENTS.md is restructured below/)).toBeInTheDocument();
