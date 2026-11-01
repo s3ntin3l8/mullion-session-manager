@@ -67,6 +67,19 @@ describe("getIssueDetail's comments", () => {
     expect(got[99]).toBe(105);
   });
 
+  it("walks back past a last page that comes back empty, rather than falling to page 1", async () => {
+    // The issue says 250, but the listing has already lost the last 50 (deleted).
+    serve(250);
+    const real = mockFetch.getMockImplementation()!;
+    mockFetch.mockImplementation(async (path: string) =>
+      /page=3$/.test(path) ? { ok: true, status: 200, json: async () => [] } : real(path),
+    );
+    const got = await ids();
+    expect(got).toHaveLength(100);
+    expect(got[0]).toBe(101);
+    expect(got[99]).toBe(200);
+  });
+
   it("does not need a second request when the last page is full", async () => {
     serve(200);
     const got = await ids();

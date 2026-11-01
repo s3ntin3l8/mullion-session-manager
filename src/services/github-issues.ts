@@ -256,19 +256,25 @@ export async function getIssueDetail(
   let comments = firstPage;
   // GitHub lists comments oldest first, so page 1 of a long thread is its
   // OLDEST hundred. The conversation is read newest first, so fetch the tail:
-  // the last page, topped up from the one before when it is short.
+  // walk back from the last page until a hundred are collected. Walking (rather
+  // than assuming the last page is full) also covers a last page that comes back
+  // short or empty — a comment deleted between the issue GET and this fetch —
+  // without ever mistaking page 1 for "the latest".
   const total = issue.comments ?? firstPage.length;
   if (total > COMMENTS_PAGE_SIZE) {
-    const lastPage = Math.ceil(total / COMMENTS_PAGE_SIZE);
-    const last = await getJson<RawComment[]>(commentsUrl(lastPage), token, HTML_ACCEPT);
-    comments = last;
-    if (last.length < COMMENTS_PAGE_SIZE) {
-      const previous =
-        lastPage - 1 === 1
-          ? firstPage
-          : await getJson<RawComment[]>(commentsUrl(lastPage - 1), token, HTML_ACCEPT);
-      comments = [...previous, ...last].slice(-COMMENTS_PAGE_SIZE);
+    const pages: RawComment[][] = [];
+    let collected = 0;
+    for (
+      let page = Math.ceil(total / COMMENTS_PAGE_SIZE);
+      page >= 1 && collected < COMMENTS_PAGE_SIZE;
+      page--
+    ) {
+      const got =
+        page === 1 ? firstPage : await getJson<RawComment[]>(commentsUrl(page), token, HTML_ACCEPT);
+      pages.unshift(got);
+      collected += got.length;
     }
+    comments = pages.flat().slice(-COMMENTS_PAGE_SIZE);
   }
   if (issue.pull_request) {
     throw new GitHubApiError(`#${number} is a pull request, not an issue`, 404);
