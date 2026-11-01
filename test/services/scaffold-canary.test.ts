@@ -51,11 +51,27 @@ describe("placeCanary", () => {
     expect(c.verify(`${echo}\r\nbody\r\n${echo}\r\n`)).toBe("body\r\n");
   });
 
-  it("accepts a differently formatted echo and still strips its whole line", () => {
+  it("accepts a differently formatted echo and strips the decoration with it", () => {
     const c = placeCanary(dir, os.tmpdir());
     const echo = `MULLION_CANARY: ${c.value}`;
     expect(c.verify(`body\n- \`${echo}\`.\n`)).toBe("body\n");
     expect(c.verify(`body\n**${echo}**`)).toBe("body\n");
+  });
+
+  it("keeps real output that shares a line with the echo, markers included", () => {
+    const c = placeCanary(dir, os.tmpdir());
+    const echo = `MULLION_CANARY: ${c.value}`;
+    expect(c.verify(`See src/marker.ts for the rule. ${echo}\n`)).toBe(
+      "See src/marker.ts for the rule.\n",
+    );
+    expect(c.verify(`<<<MULLION_SKILL_END>>> ${echo}\nnext\n`)).toBe(
+      "<<<MULLION_SKILL_END>>>\nnext\n",
+    );
+  });
+
+  it("keeps a frontmatter fence or rule that carried the echo", () => {
+    const c = placeCanary(dir, os.tmpdir());
+    expect(c.verify(`--- MULLION_CANARY: ${c.value}\nname: x\n`)).toBe("---\nname: x\n");
   });
 
   it("rejects a missing or wrong canary", () => {
