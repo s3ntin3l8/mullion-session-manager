@@ -78,7 +78,6 @@ export async function insertFailedTaskWithPreservedBranch(
   over: {
     archivedAt?: Date | null;
     supersededAt?: Date | null;
-    issueNumber?: number | null;
     failureReason?: string | null;
   } = {},
 ): Promise<typeof tasks.$inferSelect> {
@@ -105,12 +104,14 @@ export async function insertFailedTaskWithPreservedBranch(
     .update(tasks)
     .set({
       status: "failed",
-      failureReason: over.failureReason ?? "budget exceeded after 120 minutes",
+      // `!== undefined`, not `??`: an explicit `null` means "no failure
+      // reason" here, and `??` would silently turn it back into the default.
+      failureReason:
+        over.failureReason !== undefined ? over.failureReason : "budget exceeded after 120 minutes",
       completedAt: new Date(),
       worktreePath: created.path,
       branchName,
       sessionId: null,
-      ...(over.issueNumber !== undefined ? { issueNumber: over.issueNumber } : {}),
       ...(over.archivedAt !== undefined ? { archivedAt: over.archivedAt } : {}),
       ...(over.supersededAt !== undefined ? { supersededAt: over.supersededAt } : {}),
     })

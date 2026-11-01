@@ -146,6 +146,8 @@ describe("approval_notified_verdict_at backfill migration (#2252)", () => {
 //   10   an archived queued copy that predates `html_url` and kept an
 //        unrelated failure reason — only a merge archives a queued task
 //   11   an ordinary LOCAL queued task — must stay claimable
+//   12   a superseded copy that was claimed, failed, and was then UNARCHIVED:
+//        nothing but the marker keeps its Retry refused
 describe("superseded_at backfill + archived-queued normalization migration (#2292)", () => {
   const tmpDb = path.join(os.tmpdir(), `db-client-2292-test-${process.pid}.db`);
   const drizzleDir = path.resolve(__dirname, "../../drizzle");

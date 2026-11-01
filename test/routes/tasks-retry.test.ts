@@ -58,9 +58,9 @@ describe("POST /api/tasks/:id/retry — a superseded copy is refused (#2292)", (
     const cwd = createTaskGitRepo("tasks-retry-route-repo-");
     const projectId = await createTaskProject(app, cwd, "retry-superseded-p");
     // The shape a merge leaves behind: archived, its issue number cleared
-    // (NULLs do not collide), and marked as superseded.
-    const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, 90, {
-      issueNumber: null,
+    // (NULLs do not collide), and marked as superseded — hence the null
+    // issue number, and the marker that says the copy lost the issue.
+    const task = await insertFailedTaskWithPreservedBranch(app, projectId, cwd, null, {
       archivedAt: new Date(),
       supersededAt: new Date(),
       failureReason: "Merged from project #7: superseded.",
