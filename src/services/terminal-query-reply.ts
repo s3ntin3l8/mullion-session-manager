@@ -13,6 +13,13 @@
 // palette (PUT /api/terminal/palette) and this module caches the latest one.
 // Until a palette is known nothing is answered (the old behaviour).
 //
+// The backend answers whether or not a browser is attached: Codex 0.166 probes
+// once at startup (OSC 10/11 + DA1 + CPR in one write) and waits only 250 ms
+// for all of it, so a reply routed through a pane's WebSocket and xterm can
+// miss the window under load and leave Codex on its ANSI-grey fallback for the
+// session. The answered queries are stripped from what is forwarded, so a
+// pane never answers them a second time (live or on replay).
+//
 // A chunk split across two PTY reads is not reassembled; a split query is
 // simply left for the browser, as before.
 
@@ -77,4 +84,17 @@ export function buildStartupQueryReplies(
     }
   }
   return out;
+}
+
+/**
+ * The replies to the startup queries in `data` and `data` without them (so the
+ * browser neither answers them again live nor on replay). Nothing is answered
+ * or stripped until a palette is known.
+ */
+export function splitStartupQueries(
+  data: string,
+  current: TerminalPalette | null = palette,
+): { reply: string; rest: string } {
+  const reply = buildStartupQueryReplies(data, current);
+  return { reply, rest: reply ? data.replace(STARTUP_QUERY_RE, "") : data };
 }

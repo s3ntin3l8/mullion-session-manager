@@ -26,7 +26,7 @@ import {
   type AttentionSignal,
 } from "./attention-detect.js";
 import { ProtocolTrace } from "./terminal-protocol-trace.js";
-import { buildStartupQueryReplies } from "./terminal-query-reply.js";
+import { splitStartupQueries } from "./terminal-query-reply.js";
 import { AttentionTracker } from "./attention-tracker.js";
 import { GateRegistry } from "./gate-registry.js";
 import {
@@ -1725,17 +1725,19 @@ export class Session {
   /** Routes an attach client's output and exit into this session. */
   private wireAttachClient(ptyProcess: AttachClient): void {
     this.incompatibleMaster = null;
-    ptyProcess.onData((data) => {
-      this.protocolTrace.record("from-pty", data);
-      // No pane is there to answer the program's startup color/DA1 query, and a
-      // late reply from the replay is ignored by Codex (see
-      // terminal-query-reply.ts); answer it from the cached palette instead.
-      if (
-        this.browserAttachCount === 0 &&
-        Date.now() - this.createdAt < STARTUP_QUERY_REPLY_WINDOW_MS
-      ) {
-        const reply = buildStartupQueryReplies(data);
+    ptyProcess.onData((rawData) => {
+      this.protocolTrace.record("from-pty", rawData);
+      // Answer the program's startup color/DA1 query here, whether or not a pane
+      // is attached: Codex waits only 250 ms for its startup probe, and a reply
+      // that detours through the browser can miss it (see
+      // terminal-query-reply.ts). The answered queries are stripped so a pane
+      // does not answer them again, live or on replay.
+      let data = rawData;
+      if (Date.now() - this.createdAt < STARTUP_QUERY_REPLY_WINDOW_MS) {
+        const { reply, rest } = splitStartupQueries(rawData);
         if (reply) this.writeToPty(reply, Date.now());
+        if (rest === "") return;
+        data = rest;
       }
       const chunk = Buffer.from(data, "utf8");
       // Skipped during a redraw-nudge repaint window — see

@@ -13,6 +13,8 @@
 // diagnostic, and a split query shows up as its two halves missing, which is
 // itself the signal worth noticing.
 
+import { monitorEventLoopDelay } from "node:perf_hooks";
+
 export type ProtocolDirection = "to-pty" | "from-pty";
 
 // Lines logged per session of any kind. Past it only color traffic is kept —
@@ -93,6 +95,23 @@ export function describeTerminalProtocol(data: string): ProtocolDescription {
   return { tags, color };
 }
 
+// Event-loop stall since the previous traced line, so a late reply to a startup
+// query (Codex gives up after 250 ms) can be told apart from a slow program.
+// Sampled lazily: the histogram only starts on the first traced line.
+const loopDelay = monitorEventLoopDelay({ resolution: 10 });
+let loopDelayStarted = false;
+
+function takeLoopMaxMs(): number {
+  if (!loopDelayStarted) {
+    loopDelay.enable();
+    loopDelayStarted = true;
+    return 0;
+  }
+  const max = Math.round(loopDelay.max / 1e6);
+  loopDelay.reset();
+  return max;
+}
+
 export class ProtocolTrace {
   private lines = 0;
 
@@ -113,7 +132,7 @@ export class ProtocolTrace {
     this.lines += 1;
     this.sink(
       `[pty-manager] session ${this.sessionId} protocol ${direction} ` +
-        `+${this.now() - this.startedAt}ms ${tags.join(" ")}`,
+        `+${this.now() - this.startedAt}ms ${tags.join(" ")} loop-max=${takeLoopMaxMs()}ms`,
     );
   }
 }

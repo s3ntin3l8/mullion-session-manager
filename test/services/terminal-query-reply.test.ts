@@ -4,6 +4,7 @@ import {
   getTerminalPalette,
   resetTerminalPalette,
   setTerminalPalette,
+  splitStartupQueries,
 } from "../../src/services/terminal-query-reply.js";
 
 const LIGHT = { foreground: "#1d1d1d", background: "#f2f2f2", cursor: "#1d1d1d" };
@@ -39,5 +40,21 @@ describe("buildStartupQueryReplies", () => {
     setTerminalPalette(LIGHT);
     expect(getTerminalPalette()).toEqual(LIGHT);
     expect(buildStartupQueryReplies("\x1b]11;?\x07")).toBe("\x1b]11;rgb:f2f2/f2f2/f2f2\x07");
+  });
+});
+
+describe("splitStartupQueries", () => {
+  afterEach(() => resetTerminalPalette());
+
+  it("answers the startup queries and returns the data without them", () => {
+    const data = "a\x1b]10;?\x07b\x1b]11;?\x1b\\c\x1b[c\x1b[6n\x1b[>c";
+    expect(splitStartupQueries(data, LIGHT)).toEqual({
+      reply: buildStartupQueryReplies(data, LIGHT),
+      rest: "abc\x1b[6n\x1b[>c",
+    });
+  });
+
+  it("leaves the data untouched when no palette is known", () => {
+    expect(splitStartupQueries("\x1b]11;?\x07")).toEqual({ reply: "", rest: "\x1b]11;?\x07" });
   });
 });

@@ -91,7 +91,11 @@ describe("ProtocolTrace", () => {
   it("logs direction, session, elapsed time and tags", () => {
     const { trace, lines } = make();
     trace.record("from-pty", "\x1b]11;?\x07\x1b[6n");
-    expect(lines).toEqual(["[pty-manager] session 42 protocol from-pty +500ms osc11? csi6n"]);
+    expect(lines).toEqual([
+      expect.stringMatching(
+        /^\[pty-manager\] session 42 protocol from-pty \+500ms osc11\? csi6n loop-max=\d+ms$/,
+      ),
+    ]);
   });
 
   it("skips chunks with no ESC byte and chunks with nothing worth tracing", () => {
