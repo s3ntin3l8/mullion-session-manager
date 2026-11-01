@@ -1,5 +1,5 @@
 // Answers a program's startup terminal queries (OSC 10/11/12 color queries and
-// DA1) from the backend while NO browser is attached to its session.
+// DA1) from the backend, whether or not a browser is attached to its session.
 //
 // Why: Claude Code and Codex ask for the terminal's colors ~0.3-0.8 s after
 // launch and pick their palette from the reply. A session often starts before
@@ -19,6 +19,13 @@
 // miss the window under load and leave Codex on its ANSI-grey fallback for the
 // session. The answered queries are stripped from what is forwarded, so a
 // pane never answers them a second time (live or on replay).
+//
+// One palette is held for the whole process (last reporter wins), so two
+// dashboards on different schemes (`theme: "system"` resolves per browser)
+// can have a session answered with the other one's colors, and the stripped
+// query leaves the program no way to correct it. Accepted: a single-user
+// install is the norm, and the late-browser alternative loses Codex's palette
+// outright. Per-pane palettes would need to ride the WS attach handshake.
 //
 // A chunk split across two PTY reads is not reassembled; a split query is
 // simply left for the browser, as before.

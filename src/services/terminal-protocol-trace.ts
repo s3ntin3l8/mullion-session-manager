@@ -22,6 +22,8 @@ export type ProtocolDirection = "to-pty" | "from-pty";
 export const PROTOCOL_TRACE_MAX_LINES = 300;
 // Hard ceiling per session, color traffic included: a program polling the
 // background color on every frame floods the journal just the same.
+// Event-loop stall is only sampled this long: startup queries are the case it explains.
+const PROTOCOL_TRACE_LOOP_WINDOW_MS = 30_000;
 export const PROTOCOL_TRACE_MAX_COLOR_LINES = 1000;
 
 let enabled = true;
@@ -95,25 +97,14 @@ export function describeTerminalProtocol(data: string): ProtocolDescription {
   return { tags, color };
 }
 
-// Event-loop stall since the previous traced line, so a late reply to a startup
-// query (Codex gives up after 250 ms) can be told apart from a slow program.
-// Sampled lazily: the histogram only starts on the first traced line.
-const loopDelay = monitorEventLoopDelay({ resolution: 10 });
-let loopDelayStarted = false;
-
-function takeLoopMaxMs(): number {
-  if (!loopDelayStarted) {
-    loopDelay.enable();
-    loopDelayStarted = true;
-    return 0;
-  }
-  const max = Math.round(loopDelay.max / 1e6);
-  loopDelay.reset();
-  return max;
-}
-
 export class ProtocolTrace {
   private lines = 0;
+  // Event-loop stall since this session's previous traced chunk, so a late reply
+  // to a startup query (Codex gives up after 250 ms) can be told apart from a
+  // slow program. One histogram per session: a shared one would be reset by
+  // another session's chatter and hide the stall. Started on first use.
+  private loopDelay: ReturnType<typeof monitorEventLoopDelay> | null = null;
+  private loopDelayDone = false;
 
   constructor(
     private readonly sessionId: string,
@@ -127,12 +118,36 @@ export class ProtocolTrace {
     if (!enabled || !data.includes("\x1b")) return;
     const { tags, color } = describeTerminalProtocol(data);
     if (tags.length === 0) return;
+    const loopMax = this.takeLoopMaxMs();
     if (this.lines >= PROTOCOL_TRACE_MAX_COLOR_LINES) return;
     if (this.lines >= PROTOCOL_TRACE_MAX_LINES && !color) return;
     this.lines += 1;
     this.sink(
       `[pty-manager] session ${this.sessionId} protocol ${direction} ` +
-        `+${this.now() - this.startedAt}ms ${tags.join(" ")} loop-max=${takeLoopMaxMs()}ms`,
+        `+${this.now() - this.startedAt}ms ${tags.join(" ")}${loopMax}`,
     );
+  }
+
+  /** " loop-max=Nms" for a session's first 30 s (the startup probes), "" after. */
+  private takeLoopMaxMs(): string {
+    if (this.loopDelayDone) return "";
+    if (!this.loopDelay) {
+      const left = PROTOCOL_TRACE_LOOP_WINDOW_MS - (this.now() - this.startedAt);
+      if (left <= 0) {
+        this.loopDelayDone = true;
+        return "";
+      }
+      const histogram = monitorEventLoopDelay({ resolution: 10 });
+      histogram.enable();
+      // Disabled on a timer, not on the next line: a session may never log again.
+      setTimeout(() => {
+        histogram.disable();
+        this.loopDelayDone = true;
+      }, left).unref();
+      this.loopDelay = histogram;
+    }
+    const max = Math.round(this.loopDelay.max / 1e6);
+    this.loopDelay.reset();
+    return ` loop-max=${max}ms`;
   }
 }

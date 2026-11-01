@@ -98,6 +98,13 @@ describe("ProtocolTrace", () => {
     ]);
   });
 
+  it("stops reporting event-loop stall once the session is past its startup window", () => {
+    const { trace, lines, advance } = make();
+    advance(31_000);
+    trace.record("from-pty", "\x1b[6n");
+    expect(lines).toEqual(["[pty-manager] session 42 protocol from-pty +31500ms csi6n"]);
+  });
+
   it("skips chunks with no ESC byte and chunks with nothing worth tracing", () => {
     const { trace, lines } = make();
     trace.record("to-pty", "plain typing");

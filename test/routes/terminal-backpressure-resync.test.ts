@@ -24,9 +24,7 @@ class FakeSocket extends EventEmitter {
 
 function setup() {
   let dataCb: (chunk: string) => void = () => {};
-  const releaseBrowserAttach = vi.fn();
   const session = {
-    noteBrowserAttached: vi.fn(() => releaseBrowserAttach),
     isAlive: true,
     size: { cols: 80, rows: 24 },
     getScrollback: vi.fn(() => "SCROLLBACK"),
@@ -54,7 +52,7 @@ function setup() {
   socket.sent.length = 0;
   session.requestRedraw.mockClear();
   session.getScrollback.mockClear();
-  return { session, socket, releaseBrowserAttach, emit: (c: string) => dataCb(c) };
+  return { session, socket, emit: (c: string) => dataCb(c) };
 }
 
 describe("attachSocketToSession backpressure resync (issue #1520)", () => {
@@ -128,15 +126,5 @@ describe("attachSocketToSession backpressure resync (issue #1520)", () => {
     emit("dropped");
     socket.emit("message", Buffer.from(JSON.stringify({ type: "resync-request" })), false);
     expect(socket.sent).toEqual([]);
-  });
-
-  it("counts the WS as an attached browser and releases it when the socket closes", () => {
-    const { session, socket, releaseBrowserAttach } = setup();
-    expect(session.noteBrowserAttached).toHaveBeenCalledTimes(1);
-    expect(releaseBrowserAttach).not.toHaveBeenCalled();
-
-    socket.close();
-
-    expect(releaseBrowserAttach).toHaveBeenCalledTimes(1);
   });
 });

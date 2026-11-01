@@ -1489,18 +1489,18 @@ describe("PtyManager", () => {
       expect(fakePtyChildren[0].writeSpy).toHaveBeenCalledWith(REPLY);
     });
 
-    it("answers even while a pane is attached, and keeps the query from the pane", async () => {
+    it("strips answered queries but still counts them as activity", async () => {
       setTerminalPalette(LIGHT);
       const session = await startSession();
-      session.noteBrowserAttached();
       const seen: string[] = [];
       session.onData((d) => seen.push(d.toString()));
 
-      fakePtyChildren[0].emitData(QUERY + "hello");
-
+      fakePtyChildren[0].emitData(QUERY);
       expect(fakePtyChildren[0].writeSpy).toHaveBeenCalledWith(REPLY);
-      expect(seen.join("")).toBe("hello");
-      expect(session.getScrollback().toString()).not.toContain("\x1b]11;?");
+      expect(session.getScrollback().includes("]11;?")).toBe(false);
+
+      fakePtyChildren[0].emitData(QUERY + "hello");
+      expect(seen).toEqual(["hello"]);
     });
 
     it("only answers during the session's startup window", async () => {

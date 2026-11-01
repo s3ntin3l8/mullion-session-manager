@@ -386,9 +386,9 @@ const NO_ATTENTION_SIGNALS: AttentionSignal = Object.freeze({
   titleChange: null,
 });
 
-// Only a program's STARTUP queries are answered on its behalf while no browser
-// is attached (see terminal-query-reply.ts): a stray `ESC [ c` in output hours
-// later (a `cat`ted capture, say) must not inject bytes into stdin.
+// Only a program's STARTUP queries are answered on its behalf (see
+// terminal-query-reply.ts): a stray `ESC [ c` in output hours later (a
+// `cat`ted capture, say) must not inject bytes into stdin.
 const STARTUP_QUERY_REPLY_WINDOW_MS = 30_000;
 
 const SESSION_ID_RE = /^\d+$/;
@@ -1165,22 +1165,6 @@ export class Session {
     return this.dataListeners.size;
   }
 
-  // Browser panes currently attached over the terminal WebSocket. Distinct
-  // from subscriberCount, which also counts transient internal listeners
-  // (wait_for_output, control-socket attach streams).
-  private browserAttachCount = 0;
-
-  /** Called by routes/terminal.ts per WS attach; the returned fn releases it (idempotent). */
-  noteBrowserAttached(): () => void {
-    this.browserAttachCount += 1;
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      this.browserAttachCount -= 1;
-    };
-  }
-
   // --- State file persistence (issue #323) ---
 
   /** Read and apply persisted state from disk. Called once at construction.
@@ -1736,13 +1720,14 @@ export class Session {
       if (Date.now() - this.createdAt < STARTUP_QUERY_REPLY_WINDOW_MS) {
         const { reply, rest } = splitStartupQueries(rawData);
         if (reply) this.writeToPty(reply, Date.now());
-        if (rest === "") return;
         data = rest;
       }
       const chunk = Buffer.from(data, "utf8");
       // Skipped during a redraw-nudge repaint window — see
-      // redrawNudge's docstring above. Listeners below still get it live.
-      const pushedToScrollback = !this.redrawNudge.suppressingOutput;
+      // redrawNudge's docstring above. Listeners below still get it live. A
+      // chunk that was nothing but answered startup queries is still output
+      // (activity, attention) but has nothing left to store or fan out.
+      const pushedToScrollback = data !== "" && !this.redrawNudge.suppressingOutput;
       if (pushedToScrollback) this.scrollbackBuffer.push(chunk);
 
       // Prepend any carry from the previous chunk so a `?1049h`/mouse-mode
@@ -1926,7 +1911,7 @@ export class Session {
         this.attention.cancelDeferred("apiError");
       }
 
-      for (const listener of this.dataListeners) {
+      for (const listener of data === "" ? [] : this.dataListeners) {
         try {
           listener(chunk);
         } catch (err) {
