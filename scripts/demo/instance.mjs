@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { startFakeGithub } from "./fake-github.mjs";
 import { assertDemoEnv, assertPortsFree, demoEnv, instanceIdFor } from "./env.mjs";
 import { stopDemoScopes } from "./scopes.mjs";
 import { seedDemo } from "./seed.mjs";
@@ -23,6 +24,16 @@ import { seedDemo } from "./seed.mjs";
  * SESSIONS_DIR. Teardown does not trust that prefix: it stops a scope only when
  * its dtach socket sits in the demo's SESSIONS_DIR (see stopDemoScopes).
  */
+
+/**
+ * The release tag the fake GitHub reports: one minor above this checkout's
+ * version, so the update banner always shows, whatever the checkout is on.
+ */
+function nextMinorTag() {
+  const { version } = JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
+  const [major, minor] = version.split(".").map(Number);
+  return `v${major}.${minor + 1}.0`;
+}
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -112,6 +123,9 @@ export async function startDemo({
   keep = false,
   seed = true,
   holdTranscripts = false,
+  // How long until the fake GitHub's live-tick PR flips its CI (0 = frozen,
+  // which the screenshot pipeline needs). `make demo` turns it on.
+  githubTickMs = 0,
   bins,
 } = {}) {
   bins ??= demoBins();
@@ -122,6 +136,11 @@ export async function startDemo({
   // socket path would exceed the platform's sun_path limit
   // (src/plugins/pty.ts).
   const demoDir = await mkdtemp("/tmp/mullion-demo-");
+  // Before the backend: its env needs the fake's URL. Teardown stops it.
+  const fakeGithub = await startFakeGithub({
+    tickMs: githubTickMs,
+    latestRelease: nextMinorTag(),
+  });
   const runDir = path.join(demoDir, "run"); // backend cwd: no .env, migrations via symlink
   const sessionsDir = path.join(demoDir, "s");
   const instanceId = instanceIdFor(sessionsDir);
@@ -145,6 +164,8 @@ export async function startDemo({
     // No auth on a loopback-only throwaway instance; the backend requires this
     // explicit opt-in when no token/OIDC is configured (src/app.ts).
     MULLION_TRUST_GATEWAY: "true",
+    // GitHub traffic goes to the loopback fake, never to api.github.com.
+    MULLION_GITHUB_API_URL: fakeGithub.url,
   });
   const frontendEnv = demoEnv(demoDir, { PATH, BACKEND_URL: backendUrl });
 
@@ -159,7 +180,7 @@ export async function startDemo({
     // Stop the sessions first: they live in systemd scopes, not in the
     // backend's process group, and would otherwise outlive it.
     const leaked = await stopDemoScopes(instanceId, sessionsDir);
-    await Promise.all([killGroup(backend), killGroup(frontend)]);
+    await Promise.all([killGroup(backend), killGroup(frontend), fakeGithub.stop()]);
     if (keep) return console.log(`[demo] kept ${demoDir}`);
     if (leaked.length > 0)
       return console.warn(
@@ -270,7 +291,10 @@ export async function startDemo({
 
 const invokedDirectly = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
 if (invokedDirectly) {
-  const demo = await startDemo({ keep: process.argv.includes("--keep") }).catch((err) => {
+  const demo = await startDemo({
+    keep: process.argv.includes("--keep"),
+    githubTickMs: 60_000,
+  }).catch((err) => {
     console.error(`[demo] failed to start: ${err.message}`);
     process.exit(1);
   });
