@@ -14,6 +14,12 @@ export const GENERATE_JOB_PHASES = ["preparing", "agent", "composing", "done", "
 export type GenerateJobPhase = (typeof GENERATE_JOB_PHASES)[number];
 export type RunningGenerateJobPhase = "preparing" | "agent" | "composing";
 
+/** AGENTS.md before/after a restructure, in bytes. */
+export interface AgentsMdSize {
+  before: number;
+  after: number;
+}
+
 export interface ScaffoldGenerateResponse {
   previewId: string;
   diff: string;
@@ -26,6 +32,8 @@ export interface ScaffoldGenerateResponse {
   conflicts?: ScaffoldConflict[];
   droppedConflictLines?: number;
   possiblyLossy?: boolean;
+  /** `restructure` only. */
+  agentsMdSize?: AgentsMdSize;
 }
 
 export interface GenerateJobError {
