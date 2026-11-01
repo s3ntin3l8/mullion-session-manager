@@ -1,5 +1,9 @@
 import type { ProjectPreviewConfig } from "../api/types.js";
-import type { ExistingInstructionsMode, ScaffoldConflict } from "../api/projects.js";
+import type {
+  ExistingInstructionsMode,
+  ScaffoldConflict,
+  ScaffoldGenerateJob,
+} from "../api/projects.js";
 import type { HostEditableRole } from "../../../src/shared/constants.js";
 import type {
   AppSettings,
@@ -986,6 +990,10 @@ export interface ScaffoldDraft {
   // PREVIEW_TTL_MS, so a restore older than that discards it.
   previewCreatedAt: number | null;
   applyResult: ScaffoldApplyResult | null;
+  // The background generation job for this project, while one is running
+  // (issue #2429). Kept here so the panel can pick the same run back up
+  // after it was unmounted, and null once the job is done or failed.
+  generateJob: ScaffoldGenerateJob | null;
   offerRefresh: boolean;
   refreshSkill: boolean;
   refreshReviewer: boolean;

@@ -19,6 +19,7 @@ export const EMPTY_SCAFFOLD_DRAFT: ScaffoldDraft = {
   preview: null,
   previewCreatedAt: null,
   applyResult: null,
+  generateJob: null,
   offerRefresh: false,
   refreshSkill: false,
   refreshReviewer: false,

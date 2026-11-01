@@ -4,14 +4,46 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProjectSetupPanel } from "./ProjectSetupPanel.js";
 import { __resetRateLimitBreakerForTests } from "./api/client.js";
+import type { ExistingInstructionsMode } from "./api/projects.js";
 import { jsonResponse } from "./test/jsonResponse.js";
 import { useDashboardStore } from "./store/index.js";
 import { makeProject } from "./test/fixtures.js";
 
+// What a generation turn produced — the same body the synchronous
+// /setup/generate used to return.
+const generatedResult = (extra: Record<string, unknown> = {}) => ({
+  previewId: "gen1",
+  diff: "diff --git a/AGENTS.md b/AGENTS.md\n+generated line\n",
+  files: ["AGENTS.md", ".claude/skills/demo/SKILL.md"],
+  hasAgentsOverride: false,
+  sandboxed: true,
+  ...extra,
+});
+
+// A generation JOB (issue #2429): the panel starts one, polls it, and picks
+// it back up when the panel opens again.
+const finishedJob = (extra: Record<string, unknown> = {}) => ({
+  jobId: "job1",
+  slug: "demo",
+  phase: "done",
+  agent: "claude",
+  mode: "keep",
+  startedAt: Date.now(),
+  finishedAt: Date.now(),
+  result: generatedResult(),
+  ...extra,
+});
+
 function mockFetch(opts: {
   preview?: (body: unknown) => Response | Promise<Response>;
   apply?: (body: unknown) => Response | Promise<Response>;
-  generate?: (body: unknown) => Response | Promise<Response>;
+  // POST /setup/generate/start — 202 { jobId }; the agent turn then runs in
+  // the background and the panel polls GET /setup/generate/jobs/:jobId.
+  startGenerate?: (body: unknown) => Response | Promise<Response>;
+  // GET /setup/generate/jobs/:jobId — the job's current state.
+  job?: (jobId: string) => Response | Promise<Response>;
+  // GET /setup/generate/active — the project's current job (204 = none).
+  activeGenerate?: () => Response | Promise<Response>;
   // Hermes review, PR #1200 round 3 (suggestion) — the panel now fetches
   // this on mount to drive its "(see the exact defaults)" disclosure;
   // defaults to a fixed literal here so every EXISTING test (which never
@@ -26,14 +58,23 @@ function mockFetch(opts: {
     if (url.endsWith("/setup/preview/active")) {
       return Promise.resolve(opts.active ? opts.active() : new Response(null, { status: 204 }));
     }
+    if (url.endsWith("/setup/generate/start") && init?.method === "POST") {
+      return Promise.resolve(
+        opts.startGenerate ? opts.startGenerate(body) : jsonResponse(202, { jobId: "job1" }),
+      );
+    }
+    if (/\/setup\/generate\/jobs\/[^/]+$/.test(url)) {
+      const jobId = url.slice(url.lastIndexOf("/") + 1);
+      return Promise.resolve(opts.job ? opts.job(jobId) : jsonResponse(200, finishedJob()));
+    }
+    if (url.endsWith("/setup/generate/active")) {
+      return Promise.resolve(
+        opts.activeGenerate ? opts.activeGenerate() : new Response(null, { status: 204 }),
+      );
+    }
     if (url.endsWith("/setup/preview") && init?.method === "POST") {
       return Promise.resolve(
         opts.preview ? opts.preview(body) : new Response(null, { status: 500 }),
-      );
-    }
-    if (url.endsWith("/setup/generate") && init?.method === "POST") {
-      return Promise.resolve(
-        opts.generate ? opts.generate(body) : new Response(null, { status: 500 }),
       );
     }
     if (url.endsWith("/setup/apply") && init?.method === "POST") {
@@ -66,24 +107,14 @@ describe("ProjectSetupPanel", () => {
   });
 
   describe("Generate with agent", () => {
-    const generated = (extra: Record<string, unknown> = {}) =>
-      jsonResponse(200, {
-        previewId: "gen1",
-        diff: "diff --git a/AGENTS.md b/AGENTS.md\n+generated line\n",
-        files: ["AGENTS.md", ".claude/skills/demo/SKILL.md"],
-        hasAgentsOverride: false,
-        sandboxed: true,
-        ...extra,
-      });
-
     it("is disabled until a slug is entered", () => {
       vi.stubGlobal("fetch", mockFetch({}));
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
       expect(screen.getByRole("button", { name: /^Generate with / })).toBeDisabled();
     });
 
-    it("posts the entered options to /setup/generate and shows the same diff view", async () => {
-      const fetchMock = mockFetch({ generate: () => generated() });
+    it("starts a job on /setup/generate/start and shows the same diff view", async () => {
+      const fetchMock = mockFetch({});
       vi.stubGlobal("fetch", fetchMock);
       const user = userEvent.setup();
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
@@ -92,7 +123,9 @@ describe("ProjectSetupPanel", () => {
 
       expect(await screen.findByText("Preview — 2 files")).toBeInTheDocument();
       expect(screen.getByText(/\+generated line/)).toBeInTheDocument();
-      const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/setup/generate"));
+      const call = fetchMock.mock.calls.find(([url]) =>
+        String(url).endsWith("/setup/generate/start"),
+      );
       expect(JSON.parse((call![1] as RequestInit).body as string)).toEqual({
         slug: "demo",
         includeContributingPointer: false,
@@ -105,7 +138,13 @@ describe("ProjectSetupPanel", () => {
     it("warns when the turn ran unsandboxed and when it looks generic", async () => {
       vi.stubGlobal(
         "fetch",
-        mockFetch({ generate: () => generated({ sandboxed: false, possiblyGeneric: true }) }),
+        mockFetch({
+          job: () =>
+            jsonResponse(
+              200,
+              finishedJob({ result: generatedResult({ sandboxed: false, possiblyGeneric: true }) }),
+            ),
+        }),
       );
       const user = userEvent.setup();
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
@@ -118,9 +157,11 @@ describe("ProjectSetupPanel", () => {
     it("on a 409 offers regenerate checkboxes and retries with refresh", async () => {
       let calls = 0;
       const fetchMock = mockFetch({
-        generate: () => {
+        startGenerate: () => {
           calls += 1;
-          return calls === 1 ? jsonResponse(409, { message: "already exist" }) : generated();
+          return calls === 1
+            ? jsonResponse(409, { message: "already exist" })
+            : jsonResponse(202, { jobId: "job1" });
         },
       });
       vi.stubGlobal("fetch", fetchMock);
@@ -138,7 +179,7 @@ describe("ProjectSetupPanel", () => {
 
       expect(await screen.findByText("Preview — 2 files")).toBeInTheDocument();
       const generateCalls = fetchMock.mock.calls.filter(([url]) =>
-        String(url).endsWith("/setup/generate"),
+        String(url).endsWith("/setup/generate/start"),
       );
       expect(JSON.parse((generateCalls[1][1] as RequestInit).body as string).refresh).toEqual([
         "skill",
@@ -149,7 +190,9 @@ describe("ProjectSetupPanel", () => {
     it("drops the regenerate choice when the slug changes", async () => {
       vi.stubGlobal(
         "fetch",
-        mockFetch({ generate: () => jsonResponse(409, { message: "already exist" }) }),
+        mockFetch({
+          startGenerate: () => jsonResponse(409, { message: "already exist" }),
+        }),
       );
       const user = userEvent.setup();
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
@@ -162,10 +205,10 @@ describe("ProjectSetupPanel", () => {
       expect(screen.getByRole("button", { name: /^Generate with / })).toBeEnabled();
     });
 
-    it("starts only one agent turn for a double click", async () => {
+    it("starts only one job for a double click", async () => {
       let release!: (r: Response) => void;
       const fetchMock = mockFetch({
-        generate: () => new Promise<Response>((resolve) => (release = resolve)) as never,
+        startGenerate: () => new Promise<Response>((resolve) => (release = resolve)) as never,
       });
       vi.stubGlobal("fetch", fetchMock);
       const user = userEvent.setup();
@@ -173,16 +216,32 @@ describe("ProjectSetupPanel", () => {
       await user.type(screen.getByPlaceholderText("my-project"), "demo");
       const button = screen.getByRole("button", { name: /^Generate with / });
       await user.dblClick(button);
-      release(generated());
+      release(jsonResponse(202, { jobId: "job1" }));
       await screen.findByText("Preview — 2 files");
       expect(
-        fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/setup/generate")),
+        fetchMock.mock.calls.filter(([url]) => String(url).endsWith("/setup/generate/start")),
       ).toHaveLength(1);
     });
 
     describe("existing instructions choice", () => {
+      // The mode the panel sends is the mode the server reports back on the
+      // job, and the preview's notices follow the job's mode.
+      const MODE_IDS: Record<string, ExistingInstructionsMode> = {
+        "Tell me about conflicts": "report",
+        "Restructure it": "restructure",
+      };
+
       async function generateWith(mode: string | null, extra: Record<string, unknown> = {}) {
-        const fetchMock = mockFetch({ generate: () => generated(extra) });
+        const fetchMock = mockFetch({
+          job: () =>
+            jsonResponse(
+              200,
+              finishedJob({
+                mode: mode ? (MODE_IDS[mode] ?? "keep") : "keep",
+                result: generatedResult(extra),
+              }),
+            ),
+        });
         vi.stubGlobal("fetch", fetchMock);
         const user = userEvent.setup();
         render(<ProjectSetupPanel params={{ projectId: 1 }} />);
@@ -190,12 +249,14 @@ describe("ProjectSetupPanel", () => {
         if (mode) await user.click(screen.getByLabelText(mode));
         await user.click(screen.getByRole("button", { name: /^Generate with / }));
         await screen.findByText("Preview — 2 files");
-        const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/setup/generate"));
+        const call = fetchMock.mock.calls.find(([url]) =>
+          String(url).endsWith("/setup/generate/start"),
+        );
         return JSON.parse((call![1] as RequestInit).body as string) as Record<string, unknown>;
       }
 
       it("defaults to leaving existing content alone and sends no mode", async () => {
-        const fetchMock = mockFetch({ generate: () => generated() });
+        const fetchMock = mockFetch({});
         vi.stubGlobal("fetch", fetchMock);
         const user = userEvent.setup();
         render(<ProjectSetupPanel params={{ projectId: 1 }} />);
@@ -203,7 +264,9 @@ describe("ProjectSetupPanel", () => {
         await user.type(screen.getByPlaceholderText("my-project"), "demo");
         await user.click(screen.getByRole("button", { name: /^Generate with / }));
         await screen.findByText("Preview — 2 files");
-        const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/setup/generate"));
+        const call = fetchMock.mock.calls.find(([url]) =>
+          String(url).endsWith("/setup/generate/start"),
+        );
         expect(JSON.parse((call![1] as RequestInit).body as string).existingInstructions).toBe(
           undefined,
         );
@@ -265,7 +328,7 @@ describe("ProjectSetupPanel", () => {
         vi.stubGlobal(
           "fetch",
           mockFetch({
-            generate: () => new Promise<Response>((resolve) => (release = resolve)) as never,
+            startGenerate: () => new Promise<Response>((resolve) => (release = resolve)) as never,
           }),
         );
         const user = userEvent.setup();
@@ -296,15 +359,15 @@ describe("ProjectSetupPanel", () => {
         for (const radio of within(radiogroup).getAllByRole("radio")) {
           expect(radio).toBeDisabled();
         }
-        release(generated());
+        release(jsonResponse(202, { jobId: "job1" }));
         await screen.findByText("Preview — 2 files");
       });
     });
 
-    it("shows an error and stays on the form when generation fails", async () => {
+    it("shows an error and stays on the form when the job cannot be started", async () => {
       vi.stubGlobal(
         "fetch",
-        mockFetch({ generate: () => jsonResponse(500, { message: "agent exploded" }) }),
+        mockFetch({ startGenerate: () => jsonResponse(500, { message: "agent exploded" }) }),
       );
       const user = userEvent.setup();
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
@@ -318,7 +381,7 @@ describe("ProjectSetupPanel", () => {
       vi.stubGlobal(
         "fetch",
         mockFetch({
-          generate: () =>
+          startGenerate: () =>
             new Response(JSON.stringify({ message: "Rate limit exceeded" }), {
               status: 429,
               headers: { "Retry-After": "600", "Content-Type": "application/json" },
@@ -727,15 +790,6 @@ describe("ProjectSetupPanel", () => {
   });
   // Issue #2428 — the instructions choice and the agent belong to one path.
   describe("agent and template paths", () => {
-    const generated = () =>
-      jsonResponse(200, {
-        previewId: "gen1",
-        diff: "diff --git a/AGENTS.md b/AGENTS.md\n+x\n",
-        files: ["AGENTS.md"],
-        hasAgentsOverride: false,
-        sandboxed: true,
-      });
-
     it("opens on the agent path: the radio, the agent line and a Generate button naming the agent", () => {
       vi.stubGlobal("fetch", mockFetch({}));
       useDashboardStore.setState({
@@ -779,7 +833,28 @@ describe("ProjectSetupPanel", () => {
     });
 
     it("names the source of a generated preview, with the agent and the mode", async () => {
-      vi.stubGlobal("fetch", mockFetch({ generate: () => generated() }));
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          job: () =>
+            jsonResponse(200, {
+              jobId: "job1",
+              slug: "demo",
+              phase: "done",
+              agent: "codex",
+              mode: "restructure",
+              startedAt: Date.now(),
+              result: {
+                previewId: "gen1",
+                diff: "diff --git a/AGENTS.md b/AGENTS.md\n+x\n",
+                files: ["AGENTS.md"],
+                hasAgentsOverride: false,
+                sandboxed: true,
+                agent: "codex",
+              },
+            }),
+        }),
+      );
       useDashboardStore.setState({
         projects: [makeProject({ id: 1, defaultAgent: "codex" })],
       });
@@ -818,7 +893,23 @@ describe("ProjectSetupPanel", () => {
       vi.stubGlobal(
         "fetch",
         mockFetch({
-          generate: () => new Promise<Response>((resolve) => (release = resolve)) as never,
+          startGenerate: () => new Promise<Response>((resolve) => (release = resolve)) as never,
+          job: () =>
+            jsonResponse(200, {
+              jobId: "job1",
+              slug: "demo",
+              phase: "done",
+              agent: "claude",
+              mode: "keep",
+              startedAt: Date.now(),
+              result: {
+                previewId: "gen1",
+                diff: "diff --git a/AGENTS.md b/AGENTS.md\n+x\n",
+                files: ["AGENTS.md"],
+                hasAgentsOverride: false,
+                sandboxed: true,
+              },
+            }),
         }),
       );
       const user = userEvent.setup();
@@ -828,7 +919,7 @@ describe("ProjectSetupPanel", () => {
       expect(screen.getByRole("radio", { name: "Starter template" })).toBeDisabled();
       await toTemplatePath(user);
       expect(screen.getByRole("radio", { name: "Write it with an agent" })).toBeChecked();
-      release(generated());
+      release(jsonResponse(202, { jobId: "job1" }));
       await screen.findByText("Preview — 1 file");
     });
 
@@ -836,7 +927,7 @@ describe("ProjectSetupPanel", () => {
       vi.stubGlobal(
         "fetch",
         mockFetch({
-          generate: () => jsonResponse(409, { error: "skill and reviewer already exist" }),
+          startGenerate: () => jsonResponse(409, { error: "skill and reviewer already exist" }),
         }),
       );
       const user = userEvent.setup();
@@ -866,14 +957,22 @@ describe("ProjectSetupPanel", () => {
       vi.stubGlobal(
         "fetch",
         mockFetch({
-          generate: () =>
+          job: () =>
             jsonResponse(200, {
-              previewId: "gen1",
-              diff: "diff --git a/AGENTS.md b/AGENTS.md\n+kept line\n",
-              files: ["AGENTS.md"],
-              hasAgentsOverride: false,
-              sandboxed: true,
+              jobId: "job1",
+              slug: "demo",
+              phase: "done",
               agent: "claude",
+              mode: "restructure",
+              startedAt: Date.now(),
+              result: {
+                previewId: "gen1",
+                diff: "diff --git a/AGENTS.md b/AGENTS.md\n+kept line\n",
+                files: ["AGENTS.md"],
+                hasAgentsOverride: false,
+                sandboxed: true,
+                agent: "claude",
+              },
             }),
         }),
       );
