@@ -344,7 +344,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
         const message = job.error?.message ?? "Failed to generate";
         // A 409 is the "the skill/reviewer already exist" case — the same
         // refresh-checkbox flow the synchronous call produced.
-        if (status === 409) {
+        if (status === 409 && includeSkillAndReviewer) {
           patch({
             generateJob: job,
             preview: null,
@@ -368,7 +368,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
       }
       patch({ generateJob: job });
     },
-    [patch, defaultAgent],
+    [patch, defaultAgent, includeSkillAndReviewer],
   );
 
   // Poll the running job until it finishes. The poll stops on done/failed
@@ -508,7 +508,10 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
   // to the form with the option off and the user generates again.
   const handleLeaveOut = useCallback(() => {
     patch({ includeSkillAndReviewer: false });
-    if (preview?.generated) {
+    // With the existing instructions kept, a scaffold without the skill and
+    // reviewer has no agent-written content (Generate would refuse it), so
+    // the starter-template preview is the right thing to show.
+    if (preview?.generated && existingInstructions !== "keep") {
       patch({
         preview: null,
         previewCreatedAt: null,
@@ -518,7 +521,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
       return;
     }
     void handlePreview(false);
-  }, [patch, preview, handlePreview]);
+  }, [patch, preview, existingInstructions, handlePreview]);
 
   const generateInFlight = useRef(false);
 
@@ -564,7 +567,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
         refreshReviewer: false,
       });
     } catch (err) {
-      if (err instanceof ApiError && err.statusCode === 409) {
+      if (err instanceof ApiError && err.statusCode === 409 && includeSkillAndReviewer) {
         patch({ offerRefresh: true, preview: null, previewCreatedAt: null });
       } else if (err instanceof RateLimitedError) {
         patch({
