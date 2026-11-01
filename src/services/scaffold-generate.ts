@@ -9,6 +9,7 @@ import { deleteBranch } from "./git-branch-delete.js";
 import { resolveHostBaseRef, viaRemote } from "./host-git.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { gitEnv } from "./git-env.js";
+import { CANARY_MISSING_MESSAGE, placeCanary } from "./scaffold-canary.js";
 import {
   scaffoldSkillPath,
   scaffoldReviewerPath,
@@ -2107,6 +2108,10 @@ export interface RunGenerationTurnInScratchWorktreeOptions {
    * executes here would defeat the sandboxing this function's own spawn
    * step applies. */
   spawn?: SpawnGenerationTurn;
+  /** Issue #2535 — require the agent to echo the canary file (see
+   * scaffold-canary.ts). Defaults to on, and off when a test injects `spawn`:
+   * a fake agent never reads the file. */
+  canary?: boolean;
 }
 
 /**
@@ -2173,13 +2178,19 @@ export async function runGenerationTurnInScratchWorktree(
   const { path: worktreePath, branch } = worktreeResult;
 
   try {
-    return await spawn({
+    const canary = (opts.canary ?? !opts.spawn) ? placeCanary(worktreePath) : undefined;
+    const stdout = await spawn({
       agentCommand: opts.agentCommand,
       cwd: worktreePath,
-      prompt: opts.prompt,
+      prompt: canary ? canary.withInstruction(opts.prompt) : opts.prompt,
       timeoutMs: opts.timeoutMs,
       sandbox: opts.sandbox,
     });
+    if (!canary) return stdout;
+    const verified = canary.verify(stdout);
+    if (verified === null)
+      throw new GenerationSpawnError(opts.agentCommand, CANARY_MISSING_MESSAGE);
+    return verified;
   } finally {
     await removeWorktree(worktreePath, opts.cwd);
     await deleteBranch(opts.cwd, branch, { force: true }).catch(() => {
