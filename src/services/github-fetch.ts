@@ -25,7 +25,7 @@ export function githubApiBase(): string {
 }
 
 export function setGitHubApiBase(url: string): void {
-  githubApiBaseUrl = url.replace(/\/+$/, "") || DEFAULT_GITHUB_API_BASE;
+  githubApiBaseUrl = url.trim().replace(/\/+$/, "") || DEFAULT_GITHUB_API_BASE;
 }
 
 export class GitHubApiError extends Error {
