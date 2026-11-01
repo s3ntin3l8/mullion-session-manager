@@ -741,6 +741,8 @@ describe("computeScaffold", () => {
         POINTER_MARKER_END,
       );
       expect(region).toContain("@AGENTS.md");
+      // CLAUDE.md is loaded every session: the import and one comment, no prose (#2536).
+      expect(region?.trim().split("\n").filter(Boolean)).toHaveLength(2);
     });
 
     // The regression guard for the highest-risk line in this change: every

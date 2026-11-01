@@ -643,17 +643,14 @@ export function hashWorkflowConventionsSection(text: string | undefined): string
 // pointer markers (upsertMarkedRegion) or an existing CLAUDE.md's own
 // prose can sit above it, and that's fine, Claude Code scans the whole
 // file. What matters is that the import's OWN line has nothing else on
-// it. The prose below it is a graceful degradation for a human, or an
-// agent whose import syntax differs.
+// it. The comment below it is for a human maintainer wondering why the file
+// is one line; it is deliberately a one-line HTML comment, not prose, because
+// CLAUDE.md is loaded into every Claude Code session (#2536).
 function claudeMdImportBody(): string {
   return (
     "@AGENTS.md\n" +
     "\n" +
-    "The line above is a Claude Code import, not a link: it expands AGENTS.md\n" +
-    "into this session's context automatically at launch. AGENTS.md is this\n" +
-    "repository's single source of truth for agent instructions — read it\n" +
-    "before making changes. Claude Code does not read AGENTS.md on its own;\n" +
-    "this import is what delivers it."
+    "<!-- Claude Code does not read AGENTS.md on its own; this import delivers it. -->"
   );
 }
 

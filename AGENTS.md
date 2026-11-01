@@ -63,98 +63,60 @@ How this repo applies the conventions above — facts and commands, not rules.
 - **Worktrees:** `make wt name=<slug>` creates `.wt/<slug>` off the latest
   `origin/main` and runs `npm ci` in the repo root **and** in `frontend/`. A
   worktree made by hand needs both `npm ci`s before it can build or test.
-- **This clone is shared, so its automatic gc is off.** A background `git gc`
-  in a clone that several agents push to concurrently can delete a loose
-  object that a concurrent write is creating — the failure surfaces far from
-  the cause, as a commit that cannot complete, naming a _missing_ object
-  rather than a corrupt one ([#1836](https://github.com/s3ntin3l8/mullion-session-manager/issues/1836)).
-  `gc.auto 0` is set on the clone (`make git-safe`, which `make wt` runs for
-  you); `git fetch` is what would otherwise trigger the background gc, and
-  this repo fetches a lot. Run `git gc` deliberately, when no agent is
-  pushing. `make git-doctor` reports the damage if it ever happens;
-  `make git-doctor APPLY=1` repairs it.
-- **The pre-push gate** is what `.pre-commit-config.yaml` actually wires to
-  the `pre-push` stage: `typecheck` (both workspaces, path-scoped), a
-  repo-wide `prettier --check` (covers `frontend/` too), the two vitest
-  suites (path-scoped, run as `test:coverage` so the coverage JSON is on
-  disk), and the **≥75% patch-coverage check**
-  (`npm run check:patch-coverage`). It is **not** `make lint` — lint is a
-  **pre-commit** hook only, path-scoped to the workspace you touched.
-  `.pre-commit-config.yaml` sets `fail_fast: true` (a failed test hook no
-  longer triggers a second full suite run via patch-coverage), and the two
-  test hooks run through `scripts/with-gate-lock.sh`, a repo-wide `flock`
-  that makes concurrent pushes from different worktrees queue rather than
-  overload the host (`MULLION_NO_GATE_LOCK=1` bypasses it,
-  `MULLION_GATE_LOCK_TIMEOUT` bounds the wait). If your push is waiting on
-  that lock, let it wait — don't poll load and retry.
-- **Running the gate: once, not twice.** `make test` and the pre-push
-  hook's `test:coverage` are the **same suite** — the hook's version adds
-  istanbul instrumentation, and runs it precisely so the coverage JSON
-  lands on disk for the patch-coverage check. Running `make test` first
-  and then pushing runs the suite twice, and on a loaded host that is
-  10-30 minutes of duplicated work per push. So run the parts the hooks
-  do **not** do for you, and let the hook run the suites:
-  ```bash
-  make lint
-  ```
-  then push. (`make typecheck` and `make format-check` are worth running
-  too, but the hook runs its own — path-scoped — typecheck and format
-  check, so running the repo-wide ones is a second pass over the same
-  ground; `make lint` is the one the hook genuinely does not cover, since
-  lint is a pre-commit hook only, scoped to the workspace you touched.)
-  The hook's two suite steps are **path-scoped per workspace**
-  (`^(?!frontend/)…` for the backend, `^frontend/…` for the frontend), so
-  the workspace you did **not** touch is not run locally — say so, or run
-  that one suite yourself, if you want local parity with CI (which runs
-  both). The region above asks for the full gate; this is how **this** repo
-  satisfies it — `make lint` covers the repo-wide lint the hooks do not
-  run, and the pre-push hook supplies the test run and the coverage JSON
-  the patch-coverage check needs.
-- **Patch test coverage (≥75%)** on changed lines in `src/` and
-  `frontend/src/` is enforced locally by the pre-push hook
-  (`scripts/check-patch-coverage-hook.mjs`, a thin wrapper over
-  `scripts/check-patch-coverage.mjs`). In CI the same floor is **advisory**:
-  Codecov posts a `codecov/patch` status on the PR, but it is not one of
-  `main`'s required status checks, so a red patch status does not block a
-  merge on its own. A `patch-coverage` job in `ci-cd.yml` runs the same
-  script over the CI shard reports alongside it (also advisory, #1920).
+- **This clone is shared, so its automatic gc is off** (`gc.auto 0`, set by
+  `make git-safe`, which `make wt` runs). A background `git gc` can delete a
+  loose object that a concurrent push is creating, and the failure surfaces far
+  from the cause, as a commit naming a _missing_ object
+  ([#1836](https://github.com/s3ntin3l8/mullion-session-manager/issues/1836)).
+  Run `git gc` deliberately, when no agent is pushing; `make git-doctor` reports
+  the damage and `make git-doctor APPLY=1` repairs it.
+- **The gate: run `make lint`, then push.** Lint is a pre-commit hook only
+  (path-scoped to the workspace you touched), so the pre-push hook does not
+  cover it; the hook runs the rest: a path-scoped typecheck, a repo-wide
+  `prettier --check`, the two vitest suites (as `test:coverage`, so the
+  patch-coverage check can reuse the JSON) and the **≥75% patch-coverage
+  check** on changed lines in `src/` and `frontend/src/`
+  (`npm run check:patch-coverage`, or `make test-patch-coverage`). Do not run
+  `make test` first: it is the same suite, so you would run it twice (10-30
+  minutes on a loaded host). The suites are path-scoped per workspace, so the
+  one you did not touch is not run locally; say so, or run it, for parity with
+  CI. Pushes from different worktrees queue on a repo-wide lock
+  (`scripts/with-gate-lock.sh`; `MULLION_NO_GATE_LOCK=1` bypasses it,
+  `MULLION_GATE_LOCK_TIMEOUT` bounds the wait): let a waiting push wait. In CI
+  the patch-coverage floor is advisory (`codecov/patch` is not a required
+  check. The region above asks for the full gate; this is how **this** repo
+  satisfies it. Details: the pre-push section of [`docs/ci-cd.md`](docs/ci-cd.md).
 - **Reviews:** this repo reviews every pull request automatically when it
   opens (`.github/workflows/hermes.yml`'s `auto-review` job), except Task
   Master's own `mullion/task-*` branches — see `docs/tasks-internals.md`'s
-  "External review workflows". Asking through the relay after opening is
-  still safe: it refuses a review that is already running or already landed.
+  "External review workflows". Asking through the relay after opening is still
+  safe: it refuses a review that is already running or already landed.
 - **PRs need not be up to date with `main`** (`strict: false`): a behind PR
   merges without a rebase, and the required checks re-run on the push to
   `main`. If CI is red on something your diff doesn't touch, check `main`'s
-  latest push run first. See `docs/ci-cd.md` ("PRs are not required to be up
-  to date with `main`").
+  latest push run first ([`docs/ci-cd.md`](docs/ci-cd.md)).
 - **Issues:** use the [Issue Blueprint](.github/ISSUE_TEMPLATE/issue-blueprint.md)
-  format.
-- **Issue titles & epics.** Title issues `type(scope): summary` with a
-  Conventional Commits type only (a decision is `docs(scope): decide …`, a bug
-  investigation `fix(scope): investigate …`; never `design:`/`decide:`/`idea:`/
-  `investigate:`). Scopes are a fixed vocabulary, not free text: `sessions`,
-  `tasks`, `uiux`, `github`, `dock`, `previews`, `projects`, `worktrees`,
-  `storage`, `files`, `git`, `settings`, `hooks`, `opencode`, `windows`, `macos`, `hosts`,
-  `devices`, `browser`, `terminal`, `mobile`, `voice`, `review-relay`, `skills`,
-  `deps`, `deploy`, `scaffold`. Older commit history also uses `ui`, `review` and
-  `agents`: write those as `uiux`, `review-relay` and `hooks`. CI-only work is a bare `ci:`. Open epics carry
-  the `epic` label (`gh issue list --label epic --state open`); attach every new
-  issue to the one that fits as a sub-issue, and set `blocked_by` where one
-  issue gates another. The `taskmaster-issues` skill has the commands.
+  format and title them `type(scope): summary` with a Conventional Commits type
+  only (a decision is `docs(scope): decide …`, a bug investigation
+  `fix(scope): investigate …`; never `design:`/`decide:`/`idea:`/`investigate:`).
+  Scopes are a fixed vocabulary: `sessions`, `tasks`, `uiux`, `github`, `dock`,
+  `previews`, `projects`, `worktrees`, `storage`, `files`, `git`, `settings`,
+  `hooks`, `opencode`, `windows`, `macos`, `hosts`, `devices`, `browser`,
+  `terminal`, `mobile`, `voice`, `review-relay`, `skills`, `deps`, `deploy`,
+  `scaffold`. Older history also uses `ui`, `review` and `agents`: write those
+  as `uiux`, `review-relay` and `hooks`. CI-only work is a bare `ci:`. Attach
+  every new issue as a sub-issue to the open epic that fits
+  (`gh issue list --label epic --state open`) and set `blocked_by` where one
+  issue gates another; the `taskmaster-issues` skill has the commands.
 - **Spikes must be fully isolated from the host's real agent state.** A probe
-  that points an agent CLI at a copy/symlink farm of the user's real data
-  directory can fence the live runtime and abort the user's other sessions —
-  observed with mcode: a second mcode runtime started against a _shared_
-  `runtime-state.sqlite` made the incumbent runtime's
-  `Turn controller shutdown {reason:"runtime-shutdown"}` fire, aborting
-  sibling sessions seconds later. So a spike must use a **fully isolated data
-  dir with NO symlink to `~/.minimax`** (a plain `cp -a` copy is fine, but
-  the copy needs its own physical `v2/sqlite` — mcode refuses a symlinked
-  migration lock dir and a symlinked plugin root), and it **must not start a
-  runtime against shared sqlite/lease state**. When in doubt, probe the
-  agent's _documented_ surfaces (its own `--help`, its own source) rather than
-  by launching it.
+  that points an agent CLI at a copy or symlink farm of its real data directory
+  can fence the live runtime and abort the user's other sessions (observed with
+  mcode: a second runtime on a _shared_ `runtime-state.sqlite` made the
+  incumbent's `Turn controller shutdown {reason:"runtime-shutdown"}` fire,
+  aborting sibling sessions seconds later). Use a fully isolated data dir with no symlink to the
+  real one (a plain `cp -a` copy is fine, with its own physical `v2/sqlite`),
+  never start a runtime against shared sqlite/lease state, and prefer an
+  agent's documented surfaces (`--help`, its own source) over launching it.
 - **Codex:** an `AGENTS.override.md` would be read _instead of_ this file;
   `npm run check:scaffold-region-sync` (also a pre-commit hook) fails if one
   carries its own copy of the region.
@@ -163,67 +125,37 @@ How this repo applies the conventions above — facts and commands, not rules.
 
 - **The non-obvious session model.** A session is a host PTY attached via
   `dtach`, running inside a transient `systemd --user` scope so it survives
-  service redeploys/restarts. The `sessions` DB row records _intent_ (has
-  this been explicitly killed?); live process state lives only in
-  `PtyManager`'s in-memory map, and routes merge the two rather than trusting
-  the DB column alone. Read this before touching `src/services/pty-manager.ts`
-  or the terminal WS protocol. The scope's unit name
-  (`crs-session-<instanceId>-<id>`, `session-process.ts`'s `scopeUnitName`)
-  lives in a **Unix-user-global** systemd namespace, so it's namespaced by a
-  per-Mullion-instance id (`deriveInstanceId`, a hash of `sessionsDir`) to
-  keep two backends (or a test run) on one host from colliding on a low
-  `sessions.id` (issue #1140). The unit name is **not** what identifies a
-  session as this instance's own, though — ownership is always resolved by
-  the scope's dtach socket path (`listOwnedScopes`/`resolveOwningUnit`),
-  which is what lets a session created before an instance's own unit-naming
-  scheme changed keep working unchanged. A test must never let a real
-  `systemd-run` fire for this (mock `node:child_process`'s `spawn`, not just
-  `node-pty` — issue #1137), and a teardown must never call
-  `terminate()`/`stopScope()` on an id it didn't itself create. `test/global-setup.ts`
-  enforces the first half suite-wide (issue #2003): a `systemd-run` shim leads
-  `PATH`, and the run fails if the shim was hit or a `crs-session-*` scope is
-  left under the run's temp root.
+  service redeploys. The `sessions` DB row records _intent_ (explicitly
+  killed?); live process state lives only in `PtyManager`'s in-memory map, and
+  routes merge the two rather than trusting the DB column alone. Read this
+  before touching `src/services/pty-manager.ts` or the terminal WS protocol. The
+  scope unit (`crs-session-<instanceId>-<id>`) lives in a Unix-user-global
+  systemd namespace, so it is namespaced by a per-instance id (`deriveInstanceId`,
+  #1140); ownership is resolved by the scope's dtach socket path
+  (`listOwnedScopes`/`resolveOwningUnit`), not by the unit name. A test must
+  never let a real `systemd-run` fire (mock `node:child_process`'s `spawn`, not
+  just `node-pty`, #1137), and a teardown must never `terminate()`/`stopScope()`
+  an id it didn't create; `test/global-setup.ts` enforces the first half
+  suite-wide (#2003: a `systemd-run` shim leads `PATH`, and the run fails if it
+  was hit or a `crs-session-*` scope is left behind).
 - **Scope operations go through the `ScopeBackend` seam
-  (`src/services/scope/`), not through systemd directly.** The systemd scope
-  above is one _implementation_ of a platform-neutral seam ("run a detached
-  long-lived process and track it"), added in issue #1715 so a non-Linux
-  agent host becomes possible. `pty-manager.ts` launches, probes liveness,
-  stops and inventories every scope through `getScopeBackend()`; it must not
-  call `systemd-run`/`systemctl` itself. The backend is chosen **on the host
-  that owns the scope**, from that host's own `process.platform` — never
-  negotiated between hosts. `src/services/session-process.ts` remains the
-  systemd implementation's home. `src/services/device-process.ts` (the Android
-  emulator scopes) is a second consumer of the same shape, migrated in #1854:
-  `pty-manager.ts` and `device-manager.ts` each go through their own factory
-  (`getScopeBackend` / `getDeviceScopeBackend`), and the two are deliberately
-  separate classes — a session's identity is its dtach socket, an emulator's is
-  its marker file (systemd `Description` on Linux, pid + start time on macOS).
-- **`sessions.command` and `workspaces.layout` are opaque blobs.** The
-  backend never parses a shell command line or a dockview layout — it just
-  stores and replays what it's given. **The exception** is
-  `src/services/hook-adapters/`: each adapter's own `commandTransform`
-  (Claude Code's appends `--settings`/`--mcp-config`/`--plugin-dir`; Codex's
-  and agy's append their own MCP/model flags the same way) inspects and
-  rewrites the launch command at spawn time. The same is true of a narrow
-  set of helpers that inspect `session.command` from outside the adapters
-  themselves: `commandIsOpencode`/`commandModelCli`/`commandAgentBin` (`hook-adapters/index.ts`)
-  and `buildModelFlag` (`hook-adapters/shared.ts`), plus `validateModel`/
-  `validateCliModel` (`services/task-model-resolve.ts`) and
-  `commandSupportsSeed` (`services/task-agent-resolve.ts`), and the pure
-  adapter lookups in `hook-adapters/index.ts` — `getAdapterPromptFraming`
-  (the one `sessions.prompt` uses to frame input for the child's agent
-  family), `getAdapterEmits`, `getAdapterInitialPromptArgs`/
-  `adapterHasInitialPromptArgs`, `getAdapterResumeSessionArgs`/
-  `adapterHasResumeSessionArgs`, and `getAdapterDelegationHint` — used by
-  callers like `task-claim.ts`, `task-reconciler.ts` and
-  `routes/sessions.ts` to branch on a command's agent family, inject a model
-  flag, or decide whether a real first-turn prompt can be delivered,
-  rather than re-deriving that shape with their own ad-hoc parsing — and
-  the seam they all go through, `applyHookAdapters` (the entry point that
-  matches a command to its adapter and applies that adapter's transform;
-  `launch-plan.ts` is its caller). Any `session.command` inspection
-  outside these sanctioned adapter/helper call sites is the red flag, not a
-  call into one of them.
+  (`src/services/scope/`), not through systemd directly** (#1715, so a non-Linux
+  agent host becomes possible). `pty-manager.ts` launches, probes, stops and
+  inventories scopes through `getScopeBackend()` and must not call
+  `systemd-run`/`systemctl` itself; the backend is chosen on the host that owns
+  the scope, from its own `process.platform`. `src/services/session-process.ts`
+  is the systemd implementation's home; `device-manager.ts` is a second consumer
+  through `getDeviceScopeBackend` (#1854), and the two are deliberately separate
+  classes — a session's identity is its dtach socket, an emulator's its marker
+  file.
+- **`sessions.command` and `workspaces.layout` are opaque blobs.** The backend
+  never parses a shell command line or a dockview layout; it stores and replays
+  what it is given. The exception is `src/services/hook-adapters/` (each
+  adapter's `commandTransform` rewrites the launch command at spawn time, via
+  `applyHookAdapters`, which `launch-plan.ts` calls) and a narrow set of
+  sanctioned helpers — listed in the `mullion-review-invariants` skill, "The
+  opaque-blob invariant". Any other inspection of `session.command` is the red
+  flag, not a call into one of them.
 - **ESM throughout.** Import specifiers end in `.js` even when importing
   `.ts` source files (Node16 resolution). Use `import type` for type-only
   imports.
@@ -242,13 +174,13 @@ How this repo applies the conventions above — facts and commands, not rules.
   is a product feature (`src/services/git-worktree.ts`, end-user session
   isolation, managed by the backend); `.wt/` is _your own_ developer
   workspace, described in "Repo specifics" above.
-- **Patch test coverage ($\ge 75\%$) and clean mergeability.** PR branches
-  must cleanly rebase onto `origin/main` without merge conflicts. Any new or
-  modified executable lines in `src/` or `frontend/src/` must meet $\ge 75\%$
-  patch test coverage (`make test-patch-coverage`).
+- **PR branches must cleanly rebase onto `origin/main`** without merge
+  conflicts.
 - **Security anti-patterns & CORS credentials.** Never enable
   `Access-Control-Allow-Credentials: true` with wildcard or reflected origins
-  (`scripts/check-security-antipatterns.mjs`, enforced in `make lint`).
+  (`scripts/check-security-antipatterns.mjs`, enforced in `make lint`); in the
+  rare intentional case add `// pragma: allowlist cors-credentials` on the same
+  line.
 
 ## Everyday commands
 
@@ -264,25 +196,16 @@ How this repo applies the conventions above — facts and commands, not rules.
   diff's changed files; read what it prints before reviewing or changing those
   areas.
 
-## Secrets and security linters
+## Secrets
 
 Real credentials must never be committed. `detect-secrets` scans code in
 pre-commit/CI against `.secrets.baseline`; regenerate it with
-`detect-secrets scan > .secrets.baseline`. A `pragma: allowlist secret`
-comment must stay on the **same line** as the flagged string — Prettier can
-silently move it to its own line, which breaks the allowlist match.
-
-In CI the scan covers the files the push touched plus the files the
-previous baseline listed, not the whole tree (see `docs/ci-cd.md`). A known
-secret is matched by filename, hash and type — not by line number — but the
-baseline carries the line number as metadata and the hook refreshes it when
-it rescans. So the baseline has to be refreshed in the same change when the
-change **moves, adds or removes** a baselined secret: a moved or removed one
-fails the build with "the baseline file was updated", an added one is
-reported as a new secret. A change that leaves every baselined secret where
-it was (appending a line below one, say) needs no refresh.
-
-`scripts/check-security-antipatterns.mjs` enforces CORS security (e.g. no
-`Access-Control-Allow-Credentials: true` with wildcard or reflected origins).
-In the rare event intentional credentials reflection is needed, add
-`// pragma: allowlist cors-credentials` on the same line to bypass the check.
+`detect-secrets scan > .secrets.baseline`. A `pragma: allowlist secret` comment
+must stay on the **same line** as the flagged string — Prettier can silently
+move it to its own line, which breaks the allowlist match. A known secret is
+matched by filename, hash and type, not by line number, but the baseline carries
+the line number and the hook refreshes it: refresh the baseline in the same
+change when it **moves, adds or removes** a baselined secret (a moved or removed
+one fails with "the baseline file was updated", an added one is reported as new);
+appending below one needs nothing. CI scans the files the push touched plus the
+ones the previous baseline listed, not the whole tree (`docs/ci-cd.md`).

@@ -5,7 +5,7 @@ description: "Repo-specific correctness invariants for this codebase (Mullion) �
 
 # Mullion review invariants
 
-`AGENTS.md`'s "Core invariants" section states each of these rules; this
+`AGENTS.md`'s "Core invariants" section states the rules below in brief; this
 skill exists so a review pass (or `/code-review`, or a `mullion-reviewer`
 sub-agent) checks them mechanically instead of relying on having read and
 remembered that file. If a diff violates one of these, it's very likely
@@ -57,11 +57,14 @@ flags the same way) inspects and rewrites the launch command at spawn time.
 Alongside that, a narrow set of helpers inspects `session.command` from
 outside the adapters: `commandIsOpencode`/`commandModelCli`/`commandAgentBin`
 (`hook-adapters/index.ts`) and `buildModelFlag` (`hook-adapters/shared.ts`),
-plus `validateModel`/`validateCliModel` (`services/task-model-resolve.ts`)
-`commandSupportsSeed` (`services/task-agent-resolve.ts`), and
-`getAdapterPromptFraming` (`hook-adapters/index.ts` — the pure adapter lookup
+plus `validateModel`/`validateCliModel` (`services/task-model-resolve.ts`),
+`commandSupportsSeed` (`services/task-agent-resolve.ts`), and the pure adapter
+lookups in `hook-adapters/index.ts`: `getAdapterPromptFraming` (what
 `sessions.prompt` in `plugins/control-socket.ts` uses to frame input for the
-child's agent family) — what callers elsewhere (`task-claim.ts`,
+child's agent family), `getAdapterEmits`,
+`getAdapterInitialPromptArgs`/`adapterHasInitialPromptArgs`,
+`getAdapterResumeSessionArgs`/`adapterHasResumeSessionArgs` and
+`getAdapterDelegationHint` — what callers elsewhere (`task-claim.ts`,
 `task-reconciler.ts`, `routes/sessions.ts`) use to branch on a command's agent
 family, inject a model flag, or decide whether a real first-turn prompt can be
 delivered.
@@ -127,7 +130,7 @@ it must return `changes-requested` so the worker rebases before approval.
 
 New or modified executable lines in `src/` and `frontend/src/` must meet
 at least $75\%$ patch coverage (`make test-patch-coverage`). A PR that drops
-patch coverage fails CI on Codecov.
+patch coverage is reported on the PR as the advisory `codecov/patch` status.
 
 ## Security anti-patterns & CORS credentials
 
