@@ -279,6 +279,9 @@ export interface GeneratedScaffoldContent {
    * never carries it: the preview step runs no generation, so it can't know
    * the output yet. */
   possiblyGeneric?: boolean;
+  /** Issue #2532 — how many of the cited repo paths do not exist in the
+   * scratch worktree; the Generate banner quotes it. */
+  missingCitedPaths?: MissingCitedPaths;
   /** `existingInstructions: "restructure"` only — the agent's proposed
    * AGENTS.md, containing exactly one `MULLION_REGION_PLACEHOLDER` line.
    * computeScaffold splices Mullion's region over that line. */
@@ -881,10 +884,20 @@ export function assessRewrite(
  * A signal, not a hard failure. The caller surfaces it as a warning;
  * tightening to a failure is a follow-up once confidence is high.
  */
+export interface MissingCitedPaths {
+  missing: number;
+  cited: number;
+}
+
 export function validateGenerationOutput(
   content: GeneratedScaffoldContent,
-  _cwd: string,
-): { possiblyGeneric: boolean; referencedPaths: string[] } {
+  cwd: string,
+): {
+  possiblyGeneric: boolean;
+  referencedPaths: string[];
+  /** Set when some cited paths do not exist in `cwd` (issue #2532). */
+  missingCitedPaths?: MissingCitedPaths;
+} {
   // Match file path references: src/foo.ts, lib/bar.js, test/baz.test.ts, etc.
   const pathPattern =
     /(?:^|\s|`|\()([A-Za-z0-9_/.-]+\.(?:ts|js|mjs|tsx|jsx|json|md|yaml|yml|toml|sh))\b/g;
@@ -924,11 +937,26 @@ export function validateGenerationOutput(
     return false;
   });
 
+  if (plausiblePaths.length === 0) {
+    return { possiblyGeneric: true, referencedPaths: plausiblePaths };
+  }
+
+  // Issue #2532 — a skill that cites one real path and invents the rest used
+  // to pass. Count how many of the cited paths exist in the scratch worktree;
+  // fewer than half is flagged. Paths the scaffold itself writes are skipped
+  // (they do not exist before the first apply).
+  const checkable = plausiblePaths.filter((p) => !SCAFFOLD_OUTPUT_PATH.test(p));
+  const missing = checkable.filter((p) => !fs.existsSync(path.join(cwd, p))).length;
+  const existing = checkable.length - missing;
   return {
-    possiblyGeneric: plausiblePaths.length === 0,
+    possiblyGeneric: checkable.length > 0 && existing * 2 < checkable.length,
     referencedPaths: plausiblePaths,
+    ...(missing > 0 ? { missingCitedPaths: { missing, cited: checkable.length } } : {}),
   };
 }
+
+/** Paths Mullion's scaffold writes: absent from the worktree until applied. */
+const SCAFFOLD_OUTPUT_PATH = /^\.claude\/(?:skills|agents)\//;
 
 export interface SpawnGenerationTurnOptions {
   agentCommand: string;
@@ -2319,6 +2347,11 @@ export async function generateScaffoldContent(
   // On an instructions-only pass only the region paragraph is agent-produced
   // (the skill and reviewer fields are absent), and it is still worth checking
   // for fabricated paths.
-  const possiblyGeneric = validateGenerationOutput(parsed, opts.cwd).possiblyGeneric;
-  return { ...parsed, sandboxed, possiblyGeneric };
+  const { possiblyGeneric, missingCitedPaths } = validateGenerationOutput(parsed, opts.cwd);
+  return {
+    ...parsed,
+    sandboxed,
+    possiblyGeneric,
+    ...(missingCitedPaths ? { missingCitedPaths } : {}),
+  };
 }

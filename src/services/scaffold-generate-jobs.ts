@@ -29,6 +29,7 @@ export interface ScaffoldGenerateResponse {
   sandboxed: boolean;
   hasAgentsOverride: boolean;
   possiblyGeneric?: boolean;
+  missingCitedPaths?: { missing: number; cited: number };
   conflicts?: ScaffoldConflict[];
   droppedConflictLines?: number;
   possiblyLossy?: boolean;

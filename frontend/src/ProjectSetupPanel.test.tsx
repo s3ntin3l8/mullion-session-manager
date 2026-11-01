@@ -143,7 +143,13 @@ describe("ProjectSetupPanel", () => {
           job: () =>
             jsonResponse(
               200,
-              finishedJob({ result: generatedResult({ sandboxed: false, possiblyGeneric: true }) }),
+              finishedJob({
+                result: generatedResult({
+                  sandboxed: false,
+                  possiblyGeneric: true,
+                  missingCitedPaths: { missing: 3, cited: 8 },
+                }),
+              }),
             ),
         }),
       );
@@ -153,6 +159,7 @@ describe("ProjectSetupPanel", () => {
       await user.click(screen.getByRole("button", { name: /^Generate with / }));
       expect(await screen.findByText(/without a sandbox/)).toBeInTheDocument();
       expect(screen.getByText(/may not have read this repo/)).toBeInTheDocument();
+      expect(screen.getByText(/3 of 8 cited paths do not exist here/)).toBeInTheDocument();
     });
 
     it("on a 409 offers regenerate checkboxes and retries with refresh", async () => {

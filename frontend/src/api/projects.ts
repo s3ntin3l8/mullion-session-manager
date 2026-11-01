@@ -44,6 +44,7 @@ export interface ScaffoldGenerateResult {
   agent?: string;
   sandboxed: boolean;
   possiblyGeneric?: boolean;
+  missingCitedPaths?: { missing: number; cited: number };
   conflicts?: ScaffoldConflict[];
   droppedConflictLines?: number;
   possiblyLossy?: boolean;
@@ -327,6 +328,7 @@ export const projectsApi = {
       agent?: string;
       sandboxed: boolean;
       possiblyGeneric?: boolean;
+      missingCitedPaths?: { missing: number; cited: number };
       conflicts?: ScaffoldConflict[];
       droppedConflictLines?: number;
       possiblyLossy?: boolean;
@@ -389,6 +391,7 @@ export const projectsApi = {
           agent?: string;
           sandboxed?: boolean;
           possiblyGeneric?: boolean;
+          missingCitedPaths?: { missing: number; cited: number };
           instructionsMode?: ExistingInstructionsMode;
           conflicts?: ScaffoldConflict[];
           droppedConflictLines?: number;
