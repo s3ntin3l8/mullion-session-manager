@@ -28,10 +28,20 @@ export interface Canary {
   verify(stdout: string): string | null;
 }
 
-/** Writes the canary file into `worktreePath` and returns the handle. */
-export function placeCanary(worktreePath: string): Canary {
+/** Writes the canary file into `worktreePath`, which must lie strictly inside
+ * `rootDir` (the server-controlled scratch root), and returns the handle. */
+export function placeCanary(worktreePath: string, rootDir: string): Canary {
   const value = randomBytes(8).toString("hex");
-  fs.writeFileSync(path.join(worktreePath, CANARY_FILE), `${value}\n`);
+  const dir = path.resolve(worktreePath);
+  if (!dir.startsWith(path.resolve(rootDir) + path.sep)) {
+    throw new Error(`refusing to place a canary outside the scratch root (${dir})`);
+  }
+  const file = path.join(dir, CANARY_FILE);
+  // The worktree is a checkout of the project repo, so the repo may already
+  // track this name (even as a symlink): remove it, then create exclusively
+  // with owner-only permissions so nothing is followed or overwritten.
+  fs.rmSync(file, { force: true });
+  fs.writeFileSync(file, `${value}\n`, { flag: "wx", mode: 0o600 });
   // One pattern for both the accept check and the strip, so a turn is never
   // accepted on a line that then stays in the output.
   const lineRe = new RegExp(`^[ \\t]*${CANARY_LABEL} ${value}[ \\t]*\\r?(?:\\n|$)`, "gm");

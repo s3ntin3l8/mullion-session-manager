@@ -19,33 +19,44 @@ describe("placeCanary", () => {
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   it("writes a fresh value to the canary file and keeps it out of the prompt", () => {
-    const a = placeCanary(dir);
+    const a = placeCanary(dir, os.tmpdir());
     expect(fs.readFileSync(path.join(dir, CANARY_FILE), "utf8").trim()).toBe(a.value);
     const prompt = a.withInstruction("Do the job.");
     expect(prompt).toContain(CANARY_FILE);
     expect(prompt).not.toContain(a.value);
-    expect(placeCanary(dir).value).not.toBe(a.value);
+    expect(placeCanary(dir, os.tmpdir()).value).not.toBe(a.value);
+  });
+
+  it("replaces a tracked symlink of that name and refuses a dir outside the root", () => {
+    const victim = path.join(dir, "victim");
+    fs.writeFileSync(victim, "keep");
+    fs.symlinkSync(victim, path.join(dir, CANARY_FILE));
+    const c = placeCanary(dir, os.tmpdir());
+    expect(fs.readFileSync(victim, "utf8")).toBe("keep");
+    expect(fs.lstatSync(path.join(dir, CANARY_FILE)).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(path.join(dir, CANARY_FILE), "utf8").trim()).toBe(c.value);
+    expect(() => placeCanary(dir, path.join(dir, "elsewhere"))).toThrow(/outside the scratch root/);
   });
 
   it("accepts an echoed canary and strips its line", () => {
-    const c = placeCanary(dir);
+    const c = placeCanary(dir, os.tmpdir());
     expect(c.verify(`body\nMULLION_CANARY: ${c.value}\n`)).toBe("body\n");
     expect(c.verify(`MULLION_CANARY: ${c.value}`)).toBe("");
   });
 
   it("strips every echoed copy and handles CRLF", () => {
-    const c = placeCanary(dir);
+    const c = placeCanary(dir, os.tmpdir());
     const echo = `MULLION_CANARY: ${c.value}`;
     expect(c.verify(`${echo}\r\nbody\r\n${echo}\r\n`)).toBe("body\r\n");
   });
 
   it("rejects an inline echo that the line pattern could not strip", () => {
-    const c = placeCanary(dir);
+    const c = placeCanary(dir, os.tmpdir());
     expect(c.verify(`body \`MULLION_CANARY: ${c.value}\` more\n`)).toBeNull();
   });
 
   it("rejects a missing or wrong canary", () => {
-    const c = placeCanary(dir);
+    const c = placeCanary(dir, os.tmpdir());
     expect(c.verify("body\n")).toBeNull();
     expect(c.verify("body\nMULLION_CANARY: 0000000000000000\n")).toBeNull();
   });
