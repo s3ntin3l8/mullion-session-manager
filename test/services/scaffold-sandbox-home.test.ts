@@ -15,6 +15,15 @@ function bwrapUsable(): boolean {
 }
 const describeIfBwrap = bwrapUsable() ? describe : describe.skip;
 
+/** The `src dest` pairs of the re-binds, in order. */
+function binds(args: string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--ro-bind-try") out.push(`${args[i + 1]} ${args[i + 2]}`);
+  }
+  return out;
+}
+
 function exe(file: string) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, "#!/bin/sh\n", { mode: 0o755 });
@@ -36,24 +45,65 @@ describe("homeMaskArgs", () => {
     expect(homeMaskArgs({ home: "/" })).toEqual([]);
   });
 
-  it("re-binds an nvm-style prefix once, and the agent's symlink target", () => {
-    exe(path.join(home, "nvm", "bin", "node"));
-    exe(path.join(home, "nvm", "lib", "node_modules", "pkg", "bin", "tool.js"));
-    fs.symlinkSync(
-      path.join(home, "nvm", "lib", "node_modules", "pkg", "bin", "tool.js"),
-      path.join(home, "nvm", "bin", "tool"),
+  const link = (target: string, at: string) => {
+    fs.mkdirSync(path.dirname(at), { recursive: true });
+    fs.symlinkSync(target, at);
+  };
+
+  it("re-binds a nested nvm-style prefix once (agent and node inside it)", () => {
+    const prefix = path.join(home, ".nvm", "versions", "node", "v1");
+    exe(path.join(prefix, "bin", "node"));
+    exe(path.join(prefix, "lib", "node_modules", "pkg", "bin", "tool.js"));
+    link(
+      path.join(prefix, "lib", "node_modules", "pkg", "bin", "tool.js"),
+      path.join(prefix, "bin", "tool"),
     );
+    const args = homeMaskArgs({ home, agentCommand: "tool", pathEnv: path.join(prefix, "bin") });
+    // node_modules (the agent's package tree) and the bin entries; the prefix
+    // itself is taken for node, which swallows the rest.
+    expect(args.slice(0, 2)).toEqual(["--tmpfs", home]);
+    expect(binds(args)).toEqual([`${prefix} ${prefix}`]);
+  });
+
+  it("does not re-bind a shared root such as ~/.local for a prefix directly under HOME", () => {
+    const prefix = path.join(home, ".local");
+    exe(path.join(prefix, "bin", "node"));
+    exe(path.join(prefix, "share", "opencode", "auth.json"));
+    const args = homeMaskArgs({ home, pathEnv: path.join(prefix, "bin"), agentCommand: "node" });
+    const b = binds(args).join("\n");
+    expect(b).not.toContain(`${prefix} ${prefix}`);
+    expect(b).not.toContain(path.join(prefix, "share"));
+    expect(b).toContain(path.join(prefix, "bin", "node"));
+  });
+
+  it("binds a global node_modules tree whole, so a sibling vendor package comes along", () => {
+    const root = path.join(home, ".npm-global");
+    exe(path.join(root, "lib", "node_modules", "@o", "codex", "bin", "codex.js"));
+    exe(path.join(root, "lib", "node_modules", "@o", "codex-linux", "vendor", "codex"));
+    link(
+      path.join(root, "lib", "node_modules", "@o", "codex", "bin", "codex.js"),
+      path.join(root, "bin", "codex"),
+    );
+    const args = homeMaskArgs({ home, agentCommand: "codex", pathEnv: path.join(root, "bin") });
+    const nm = path.join(root, "lib", "node_modules");
+    expect(binds(args)).toContain(`${nm} ${nm}`);
+    // the target at the symlink's own path, never the (shared) directory
+    expect(binds(args)).toContain(
+      `${path.join(nm, "@o", "codex", "bin", "codex.js")} ${path.join(root, "bin", "codex")}`,
+    );
+    expect(binds(args).join("\n")).not.toContain(`${path.join(root, "bin")} `);
+  });
+
+  it("skips a directory or relative PATH entry that merely shares the agent's name", () => {
+    fs.mkdirSync(path.join(home, "d", "tool"), { recursive: true });
+    exe(path.join(home, "e", "tool"));
     const args = homeMaskArgs({
       home,
       agentCommand: "tool",
-      pathEnv: path.join(home, "nvm", "bin"),
+      pathEnv: ["rel/bin", path.join(home, "d"), path.join(home, "e")].join(path.delimiter),
     });
-    expect(args).toEqual([
-      "--tmpfs",
-      home,
-      "--ro-bind-try",
-      path.join(home, "nvm"),
-      path.join(home, "nvm"),
+    expect(binds(args)).toEqual([
+      `${path.join(home, "e", "tool")} ${path.join(home, "e", "tool")}`,
     ]);
   });
 
@@ -76,6 +126,7 @@ describe("homeMaskArgs", () => {
     fs.mkdirSync(wt);
     fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${home}/repo/.git/worktrees/w\n`);
     fs.mkdirSync(path.join(home, "repo", ".git", "worktrees", "w"), { recursive: true });
+    fs.writeFileSync(path.join(home, "repo", ".git", "worktrees", "w", "commondir"), "../..\n");
     expect(homeMaskArgs({ home, worktreePath: wt })).toEqual([
       "--tmpfs",
       home,
@@ -84,6 +135,21 @@ describe("homeMaskArgs", () => {
       path.join(home, "repo", ".git"),
     ]);
   });
+});
+
+it("falls back to the gitdir itself when there is no commondir (submodule layout)", () => {
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "mask-sub-")));
+  try {
+    const wt = path.join(home, "wt");
+    fs.mkdirSync(wt);
+    fs.mkdirSync(path.join(home, "outer", ".git", "modules", "x"), { recursive: true });
+    fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${home}/outer/.git/modules/x\n`);
+    expect(homeMaskArgs({ home, worktreePath: wt })).toContain(
+      path.join(home, "outer", ".git", "modules", "x"),
+    );
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 describeIfBwrap("a sandboxed turn with HOME masked (real bwrap)", () => {
