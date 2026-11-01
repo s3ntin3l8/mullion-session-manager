@@ -11,9 +11,10 @@ import { GridIcon, LayersIcon } from "./ui/icons.js";
 // ReactPanelContentPart, whose ReactPart.createPortal throws synchronously
 // (its own isReactComponent guard rejects `undefined` before React.
 // createElement is ever reached) — which fromJSON's own catch handles by
-// reverting the ENTIRE restored layout, not just this one panel (verified
-// against dockview-core's fromJSON/catch and dockview-react's ReactPart
-// source).
+// removing every restored panel, not just this one panel. As of dockview
+// 8.8.0, recovery preserves the structural edge groups but empties their
+// panels too (verified against dockview-core's _doFromJSON/catch and
+// dockview-react's ReactPart source).
 //
 // App.tsx's restore effect also calls panelUtils.ts's closeLegacyPanels
 // right after fromJSON, closing any restored "tasks" panel and scheduling a
