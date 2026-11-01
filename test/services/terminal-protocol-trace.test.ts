@@ -88,10 +88,23 @@ describe("ProtocolTrace", () => {
     return { trace, lines, advance: (ms: number) => (t += ms) };
   }
 
-  it("logs direction, session, elapsed time and tags", () => {
+  it("logs direction, session, elapsed time and tags, with the stall from the second line on", () => {
     const { trace, lines } = make();
     trace.record("from-pty", "\x1b]11;?\x07\x1b[6n");
-    expect(lines).toEqual(["[pty-manager] session 42 protocol from-pty +500ms osc11? csi6n"]);
+    trace.record("from-pty", "\x1b[6n");
+    expect(lines).toEqual([
+      "[pty-manager] session 42 protocol from-pty +500ms osc11? csi6n",
+      expect.stringMatching(
+        /^\[pty-manager\] session 42 protocol from-pty \+500ms csi6n loop-max=\d+ms$/,
+      ),
+    ]);
+  });
+
+  it("stops reporting event-loop stall once the session is past its startup window", () => {
+    const { trace, lines, advance } = make();
+    advance(31_000);
+    trace.record("from-pty", "\x1b[6n");
+    expect(lines).toEqual(["[pty-manager] session 42 protocol from-pty +31500ms csi6n"]);
   });
 
   it("skips chunks with no ESC byte and chunks with nothing worth tracing", () => {

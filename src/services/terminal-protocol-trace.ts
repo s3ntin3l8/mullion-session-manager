@@ -13,6 +13,8 @@
 // diagnostic, and a split query shows up as its two halves missing, which is
 // itself the signal worth noticing.
 
+import { monitorEventLoopDelay } from "node:perf_hooks";
+
 export type ProtocolDirection = "to-pty" | "from-pty";
 
 // Lines logged per session of any kind. Past it only color traffic is kept —
@@ -21,6 +23,8 @@ export const PROTOCOL_TRACE_MAX_LINES = 300;
 // Hard ceiling per session, color traffic included: a program polling the
 // background color on every frame floods the journal just the same.
 export const PROTOCOL_TRACE_MAX_COLOR_LINES = 1000;
+// Event-loop stall is only sampled this long: startup queries are the case it explains.
+const PROTOCOL_TRACE_LOOP_WINDOW_MS = 30_000;
 
 let enabled = true;
 
@@ -95,6 +99,12 @@ export function describeTerminalProtocol(data: string): ProtocolDescription {
 
 export class ProtocolTrace {
   private lines = 0;
+  // Event-loop stall since this session's previous traced chunk, so a late reply
+  // to a startup query (Codex gives up after 250 ms) can be told apart from a
+  // slow program. One histogram per session: a shared one would be reset by
+  // another session's chatter and hide the stall. Started on first use.
+  private loopDelay: ReturnType<typeof monitorEventLoopDelay> | null = null;
+  private loopDelayDone = false;
 
   constructor(
     private readonly sessionId: string,
@@ -108,12 +118,38 @@ export class ProtocolTrace {
     if (!enabled || !data.includes("\x1b")) return;
     const { tags, color } = describeTerminalProtocol(data);
     if (tags.length === 0) return;
+    const loopMax = this.takeLoopMaxMs();
     if (this.lines >= PROTOCOL_TRACE_MAX_COLOR_LINES) return;
     if (this.lines >= PROTOCOL_TRACE_MAX_LINES && !color) return;
     this.lines += 1;
     this.sink(
       `[pty-manager] session ${this.sessionId} protocol ${direction} ` +
-        `+${this.now() - this.startedAt}ms ${tags.join(" ")}`,
+        `+${this.now() - this.startedAt}ms ${tags.join(" ")}${loopMax}`,
     );
+  }
+
+  /** " loop-max=Nms" for a session's first 30 s (the startup probes), "" after. */
+  private takeLoopMaxMs(): string {
+    if (this.loopDelayDone) return "";
+    if (!this.loopDelay) {
+      const left = PROTOCOL_TRACE_LOOP_WINDOW_MS - (this.now() - this.startedAt);
+      if (left <= 0) {
+        this.loopDelayDone = true;
+        return "";
+      }
+      const histogram = monitorEventLoopDelay({ resolution: 10 });
+      histogram.enable();
+      // Disabled on a timer, not on the next line: a session may never log again.
+      setTimeout(() => {
+        histogram.disable();
+        this.loopDelayDone = true;
+      }, left).unref();
+      this.loopDelay = histogram;
+      // Nothing measured yet: say so rather than report a misleading 0 ms.
+      return "";
+    }
+    const max = Math.round(this.loopDelay.max / 1e6);
+    this.loopDelay.reset();
+    return ` loop-max=${max}ms`;
   }
 }

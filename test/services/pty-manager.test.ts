@@ -1461,7 +1461,7 @@ describe("PtyManager", () => {
     expect(session.toInfo().attention).toBe(true);
   });
 
-  describe("startup terminal queries while no browser is attached", () => {
+  describe("startup terminal queries", () => {
     const LIGHT = { foreground: "#1d1d1d", background: "#f2f2f2", cursor: "#1d1d1d" };
     const QUERY = "\x1b]11;?\x07\x1b[c";
     const REPLY = "\x1b]11;rgb:f2f2/f2f2/f2f2\x07\x1b[?1;2c";
@@ -1489,19 +1489,18 @@ describe("PtyManager", () => {
       expect(fakePtyChildren[0].writeSpy).toHaveBeenCalledWith(REPLY);
     });
 
-    it("leaves the query to the browser while a pane is attached", async () => {
+    it("strips answered queries but still counts them as activity", async () => {
       setTerminalPalette(LIGHT);
       const session = await startSession();
-      const release = session.noteBrowserAttached();
+      const seen: string[] = [];
+      session.onData((d) => seen.push(d.toString()));
 
       fakePtyChildren[0].emitData(QUERY);
-      expect(fakePtyChildren[0].writeSpy).not.toHaveBeenCalledWith(REPLY);
+      const kept = [session.getScrollback().includes("]11;?"), session.toInfo().lastActivityAt];
+      expect(kept).toEqual([false, expect.any(Number)]);
 
-      // Idempotent release; once the pane is gone the backend answers again.
-      release();
-      release();
-      fakePtyChildren[0].emitData(QUERY);
-      expect(fakePtyChildren[0].writeSpy).toHaveBeenCalledWith(REPLY);
+      fakePtyChildren[0].emitData(QUERY + "hello");
+      expect(seen).toEqual(["hello"]);
     });
 
     it("only answers during the session's startup window", async () => {

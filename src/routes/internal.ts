@@ -1024,8 +1024,8 @@ export async function internalRoutes(app: FastifyInstance) {
   );
 
   // The primary forwards the dashboard's resolved terminal palette here so this
-  // agent's sessions get their startup color queries answered while no pane is
-  // attached (see services/terminal-query-reply.ts).
+  // agent's sessions get their startup color queries answered by the backend
+  // (see services/terminal-query-reply.ts).
   app.put<{ Body: TerminalPalette }>(
     "/internal/terminal/palette",
     { ...INTERNAL_RATE_LIMIT, schema: paletteBodySchema },
