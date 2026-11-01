@@ -860,6 +860,12 @@ export function assessRewrite(
   return vanished / titles.length > 0.6;
 }
 
+/** Cited-path existence counts (issue #2532). */
+export interface MissingCitedPaths {
+  missing: number;
+  cited: number;
+}
+
 /**
  * Post-generation heuristic (issue #1145): checks whether the generated
  * content references concrete file paths from the repo. A turn that read
@@ -875,20 +881,16 @@ export function assessRewrite(
  * flagged — that's a different problem (missing specificity) this
  * heuristic does not cover.
  *
- * On first-time generates the scaffold files don't exist yet, so this
- * checks whether paths look plausible (have real extensions, follow
- * reasonable conventions) rather than checking physical existence —
- * otherwise valid content that references `.claude/skills/<slug>/SKILL.md`
- * would false-positive as generic before it's committed.
+ * Paths that look plausible (real extension, not a placeholder or shallow
+ * generic path) are then checked against `cwd` (issue #2532): the content is
+ * also flagged when fewer than half of its plausible cited paths exist
+ * there, and `missingCitedPaths` reports how many could not be found. Paths
+ * Mullion's scaffold itself writes (`.claude/skills|agents/`) are excluded,
+ * since they do not exist until first applied.
  *
  * A signal, not a hard failure. The caller surfaces it as a warning;
  * tightening to a failure is a follow-up once confidence is high.
  */
-export interface MissingCitedPaths {
-  missing: number;
-  cited: number;
-}
-
 export function validateGenerationOutput(
   content: GeneratedScaffoldContent,
   cwd: string,
@@ -914,9 +916,7 @@ export function validateGenerationOutput(
     return { possiblyGeneric: false, referencedPaths: [] };
   }
 
-  // Instead of checking filesystem existence (which false-positives on
-  // first-time generates when the scaffold files don't exist yet), check
-  // whether the referenced paths look like real repo-specific files.
+  // First filter to paths that look like real repo-specific files.
   const plausiblePaths = [...referencedPaths].filter((p) => {
     if (p.includes("..") || path.isAbsolute(p)) return false;
     // Reject obviously generic / placeholder patterns
