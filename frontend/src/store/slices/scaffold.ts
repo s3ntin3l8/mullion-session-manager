@@ -15,6 +15,7 @@ export const EMPTY_SCAFFOLD_DRAFT: ScaffoldDraft = {
   includeContributingPointer: false,
   symlinkAgentsSkills: false,
   includeDockConfig: false,
+  includeSkillAndReviewer: true,
   existingInstructions: "keep",
   preview: null,
   previewCreatedAt: null,

@@ -201,6 +201,35 @@ describe("host-files.ts", () => {
       expect(gitStatusPorcelain(cwd)).toBe("A  AGENTS.md");
     });
 
+    it("force-adds a gitignored target and reports it with the rule (issue #2473)", () => {
+      initRepo(cwd);
+      writeFileSync(path.join(cwd, ".gitignore"), ".claude/\n");
+
+      const result = writeEntriesLocally(
+        cwd,
+        [
+          { path: "AGENTS.md", kind: "file", contents: "hi\n" },
+          { path: ".claude/skills/demo/SKILL.md", kind: "file", contents: "s\n" },
+        ],
+        { stage: true },
+      );
+
+      expect(result.ignored).toEqual([
+        { path: ".claude/skills/demo/SKILL.md", rule: ".gitignore:1:.claude/" },
+      ]);
+      expect(gitStatusPorcelain(cwd)).toContain("A  .claude/skills/demo/SKILL.md");
+    });
+
+    it("reports nothing ignored when no rule matches", () => {
+      initRepo(cwd);
+      const result = writeEntriesLocally(
+        cwd,
+        [{ path: "AGENTS.md", kind: "file", contents: "hi\n" }],
+        { stage: true },
+      );
+      expect(result.ignored).toEqual([]);
+    });
+
     it("does NOT stage when opts.stage is omitted", () => {
       initRepo(cwd);
 
@@ -247,12 +276,13 @@ describe("host-files.ts", () => {
         { path: "AGENTS.md", kind: "file", contents: "hi\n" },
       ]);
 
-      expect(result).toEqual({ ok: true, value: undefined });
+      expect(result).toEqual({ ok: true, value: { ignored: [] } });
       expect(readFileSync(path.join(cwd, "AGENTS.md"), "utf8")).toBe("hi\n");
     });
 
     it("remote: proxies entries and stage to the remote client's writeFiles", async () => {
-      const mockWriteFiles = vi.fn().mockResolvedValue(undefined);
+      const ignored = [{ path: ".claude/x.md", rule: ".gitignore:1:.claude/" }];
+      const mockWriteFiles = vi.fn().mockResolvedValue({ ok: true, ignored });
       mockGetRemoteHostClient.mockReturnValue({ writeFiles: mockWriteFiles });
       const entries = [{ path: "AGENTS.md", kind: "file" as const, contents: "hi\n" }];
 
@@ -261,7 +291,7 @@ describe("host-files.ts", () => {
       });
 
       expect(mockWriteFiles).toHaveBeenCalledWith("/remote/cwd", entries, true);
-      expect(result).toEqual({ ok: true, value: undefined });
+      expect(result).toEqual({ ok: true, value: { ignored } });
     });
 
     it("remote: an old agent build (404) maps to reason 'unsupported'", async () => {

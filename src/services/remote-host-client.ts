@@ -1373,8 +1373,8 @@ export class RemoteHostClient {
    * why `stage` is a named, explicit opt-in rather than baked in
    * unconditionally, and for why BOTH ScaffoldEntry variants (file and
    * symlink) are supported remotely, not rejected. */
-  async writeFiles(cwd: string, entries: ScaffoldEntry[], stage?: boolean): Promise<void> {
-    await this.request("/internal/write-files", {
+  async writeFiles(cwd: string, entries: ScaffoldEntry[], stage?: boolean) {
+    return this.request<{ ignored?: unknown }>("/internal/write-files", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ cwd, entries, stage }),

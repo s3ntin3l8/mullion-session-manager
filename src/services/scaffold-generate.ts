@@ -351,10 +351,16 @@ export function buildGenerationPrompt(opts: {
    * refreshed, so only the region paragraph and the instructions output are
    * asked for. Requires a non-"keep" `existingInstructions`. */
   instructionsOnly?: boolean;
+  /** Issue #2473 — the scaffold writes no skill, reviewer or AGENTS.md pointer
+   * paragraph, so the turn is asked for the instructions item alone. Requires
+   * a non-"keep" `existingInstructions`. */
+  noPointer?: boolean;
 }): string {
   const { slug, seed, hasSkill, hasReviewer, hasScaffoldRegion } = opts;
   const mode = opts.existingInstructions ?? "keep";
-  if (opts.instructionsOnly && mode !== "keep") return buildInstructionsOnlyPrompt(opts);
+  if ((opts.instructionsOnly || opts.noPointer) && mode !== "keep") {
+    return buildInstructionsOnlyPrompt(opts);
+  }
   const skillPath = scaffoldSkillPath(slug);
   const reviewerPath = scaffoldReviewerPath(slug);
 
@@ -425,8 +431,23 @@ function buildInstructionsOnlyPrompt(opts: {
   hasScaffoldRegion: boolean;
   existingInstructions?: ExistingInstructionsMode;
   conventionsText?: string;
+  noPointer?: boolean;
 }): string {
   const mode = opts.existingInstructions ?? "keep";
+  if (opts.noPointer) {
+    return (
+      `You have READ-ONLY access to this repository. Do not create, edit, or delete any file — ` +
+      `your entire job is to READ the codebase (source, tests, docs, config) and report back ` +
+      `text; nothing you do in this session is committed or kept.\n\n` +
+      `Read this codebase and write content for one thing Mullion (the tool hosting this ` +
+      `session) will commit on your behalf. No project skill or reviewer is being written ` +
+      `and AGENTS.md gets no pointer to one, so do not mention either.\n\n` +
+      `${instructionsItem(mode, opts.conventionsText, 1).trimStart()}\n\n` +
+      `Report back EXACTLY this shape and nothing else outside these markers — no preamble, no ` +
+      `commentary, no markdown fences around the markers themselves:\n\n` +
+      instructionsOutputShape(mode)
+    );
+  }
   const skillPath = scaffoldSkillPath(opts.slug);
   const reviewerPath = scaffoldReviewerPath(opts.slug);
   const briefing =
@@ -549,19 +570,19 @@ export function parseGeneratedOutput(
     originalAgentsMd?: string;
     /** Issue #2320 — the turn was not asked for a skill or reviewer. */
     instructionsOnly?: boolean;
+    /** Issue #2473 — no pointer paragraph was asked for either. */
+    noPointer?: boolean;
   },
 ): GeneratedScaffoldContent {
-  const instructionsOnly = instructions?.instructionsOnly === true;
+  const noPointer = instructions?.noPointer === true;
+  const instructionsOnly = instructions?.instructionsOnly === true || noPointer;
   const skill = instructionsOnly ? undefined : extractSection(raw, SKILL_START, SKILL_END, "skill");
   const reviewer = instructionsOnly
     ? undefined
     : extractSection(raw, REVIEWER_START, REVIEWER_END, "reviewer");
-  const scaffoldRegion = extractSection(
-    raw,
-    GENERATED_REGION_START,
-    GENERATED_REGION_END,
-    "scaffold region",
-  );
+  const scaffoldRegion = noPointer
+    ? ""
+    : extractSection(raw, GENERATED_REGION_START, GENERATED_REGION_END, "scaffold region");
 
   const skillPath = scaffoldSkillPath(slug);
   if (reviewer !== undefined && !reviewer.includes(skillPath)) {
@@ -2133,6 +2154,10 @@ export interface GenerateScaffoldContentOptions {
    * refreshed: ask only for the region paragraph and the instructions output.
    * Ignored (treated as false) for `keep`. */
   instructionsOnly?: boolean;
+  /** Issue #2473 — the scaffold excludes the skill and reviewer, so the turn
+   * is asked for the instructions item alone (no skill, reviewer or pointer
+   * paragraph). Requires a non-"keep" `existingInstructions`. */
+  excludeSkillAndReviewer?: boolean;
   timeoutMs?: number;
   /** Issue #1133 — LOCAL_HOST_ID only. The route resolves this from ITS
    * OWN `app.config.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED` and passes
@@ -2180,11 +2205,10 @@ export async function generateScaffoldContent(
   const baseRef =
     baseRefResult.ok && baseRefResult.value.baseRef ? baseRefResult.value.baseRef : "HEAD";
 
+  const nonKeep = (opts.existingInstructions ?? "keep") !== "keep";
+  const noPointer = opts.excludeSkillAndReviewer === true && nonKeep;
   const instructionsOnly =
-    opts.instructionsOnly === true &&
-    opts.hasSkill &&
-    opts.hasReviewer &&
-    (opts.existingInstructions ?? "keep") !== "keep";
+    noPointer || (opts.instructionsOnly === true && opts.hasSkill && opts.hasReviewer && nonKeep);
   const prompt = buildGenerationPrompt({
     slug: opts.slug,
     seed: opts.seed,
@@ -2194,6 +2218,7 @@ export async function generateScaffoldContent(
     existingInstructions: opts.existingInstructions,
     conventionsText: opts.conventionsText,
     instructionsOnly,
+    noPointer,
   });
 
   let raw: string;
@@ -2256,6 +2281,7 @@ export async function generateScaffoldContent(
     mode: opts.existingInstructions,
     originalAgentsMd: opts.originalAgentsMd,
     instructionsOnly,
+    noPointer,
   });
   // On an instructions-only pass only the region paragraph is agent-produced
   // (the skill and reviewer fields are absent), and it is still worth checking

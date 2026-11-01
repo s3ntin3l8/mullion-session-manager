@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ProjectSetupPanel } from "./ProjectSetupPanel.js";
 import { __resetRateLimitBreakerForTests } from "./api/client.js";
@@ -131,6 +131,7 @@ describe("ProjectSetupPanel", () => {
         includeContributingPointer: false,
         symlinkAgentsSkills: false,
         includeDockConfig: false,
+        includeSkillAndReviewer: true,
       });
       expect(screen.queryByText(/without a sandbox/)).not.toBeInTheDocument();
     });
@@ -443,6 +444,7 @@ describe("ProjectSetupPanel", () => {
       includeContributingPointer: false,
       symlinkAgentsSkills: false,
       includeDockConfig: false,
+      includeSkillAndReviewer: true,
     });
     expect(screen.getByText(/\+new line/)).toBeInTheDocument();
   });
@@ -729,6 +731,104 @@ describe("ProjectSetupPanel", () => {
     expect((await screen.findAllByText(/AGENTS\.override\.md/)).length).toBeGreaterThan(0);
     expect(screen.getByText(/codex reads that file/)).toBeInTheDocument();
     expect(screen.getByText("Apply")).not.toBeDisabled();
+  });
+
+  describe("gitignored targets (issue #2473)", () => {
+    const ignoredPaths = [
+      { path: ".claude/skills/demo/SKILL.md", rule: ".gitignore:83:.claude/" },
+      { path: ".claude/agents/demo-reviewer.md", rule: ".gitignore:83:.claude/" },
+    ];
+    const previewBody = (extra: Record<string, unknown> = {}) => ({
+      previewId: "abc123",
+      diff: "diff --git a/AGENTS.md b/AGENTS.md\n+new line\n",
+      files: ["AGENTS.md"],
+      hasAgentsOverride: false,
+      ...extra,
+    });
+
+    it("warns with each path and rule, defaults to force-add, and Apply stays enabled", async () => {
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({ preview: () => jsonResponse(200, previewBody({ ignoredPaths })) }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      await user.type(screen.getByPlaceholderText("my-project"), "demo");
+      await toTemplatePath(user);
+      await user.click(screen.getByText("Preview starter template"));
+
+      const warning = await screen.findByTestId("ignored-paths-warning");
+      expect(warning).toHaveTextContent(".claude/skills/demo/SKILL.md");
+      expect(warning).toHaveTextContent(".claude/agents/demo-reviewer.md");
+      expect(warning).toHaveTextContent(".gitignore:83:.claude/");
+      expect(screen.getByLabelText("Commit them anyway (force-add)")).toBeChecked();
+      expect(screen.getByLabelText("Leave the skill and reviewer out")).not.toBeChecked();
+      expect(screen.getByText("Apply")).not.toBeDisabled();
+    });
+
+    it("shows no warning when nothing is ignored", async () => {
+      vi.stubGlobal("fetch", mockFetch({ preview: () => jsonResponse(200, previewBody()) }));
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      await user.type(screen.getByPlaceholderText("my-project"), "demo");
+      await toTemplatePath(user);
+      await user.click(screen.getByText("Preview starter template"));
+      await screen.findByText("Preview — 1 file");
+
+      expect(screen.queryByTestId("ignored-paths-warning")).not.toBeInTheDocument();
+    });
+
+    it("'Leave out' re-previews without the skill and reviewer", async () => {
+      const bodies: Array<Record<string, unknown>> = [];
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          preview: (body) => {
+            bodies.push(body as Record<string, unknown>);
+            return jsonResponse(
+              200,
+              (body as { includeSkillAndReviewer?: boolean }).includeSkillAndReviewer === false
+                ? previewBody()
+                : previewBody({ ignoredPaths }),
+            );
+          },
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      await user.type(screen.getByPlaceholderText("my-project"), "demo");
+      await toTemplatePath(user);
+      await user.click(screen.getByText("Preview starter template"));
+      await user.click(await screen.findByLabelText("Leave the skill and reviewer out"));
+
+      await waitFor(() => expect(screen.queryByTestId("ignored-paths-warning")).toBeNull());
+      expect(bodies).toHaveLength(2);
+      expect(bodies[1]).toMatchObject({ includeSkillAndReviewer: false });
+    });
+
+    it("the Skill and reviewer agent toggle defaults on and is sent off when switched", async () => {
+      const bodies: Array<Record<string, unknown>> = [];
+      vi.stubGlobal(
+        "fetch",
+        mockFetch({
+          preview: (body) => {
+            bodies.push(body as Record<string, unknown>);
+            return jsonResponse(200, previewBody());
+          },
+        }),
+      );
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+      await user.type(screen.getByPlaceholderText("my-project"), "demo");
+      await toTemplatePath(user);
+      const toggle = screen.getByRole("button", { name: /Skill and reviewer agent/ });
+      expect(toggle).toHaveAttribute("aria-pressed", "true");
+      await user.click(toggle);
+      await user.click(screen.getByText("Preview starter template"));
+      await screen.findByText("Preview — 1 file");
+
+      expect(bodies[0]).toMatchObject({ includeSkillAndReviewer: false });
+    });
   });
 
   it("shows no override warning when the preview reports none", async () => {

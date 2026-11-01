@@ -950,6 +950,9 @@ export interface ScaffoldPreview {
   // reads it INSTEAD OF AGENTS.md), so the committed Workflow Conventions
   // would never reach codex sessions for this project.
   hasAgentsOverride: boolean;
+  // Issue #2473 — scaffold targets the project's .gitignore matches (with the
+  // matching rule). The server force-added them; absent when none are ignored.
+  ignoredPaths?: Array<{ path: string; rule: string }>;
   // Only set by the agent-assisted path (/setup/generate). `sandboxed`
   // false means the host ran the turn without bwrap; `possiblyGeneric`
   // means the turn finished without evidence it actually read the repo.
@@ -984,6 +987,9 @@ export interface ScaffoldDraft {
   includeContributingPointer: boolean;
   symlinkAgentsSkills: boolean;
   includeDockConfig: boolean;
+  // Issue #2473 — write the project's skill and reviewer agent (and the
+  // AGENTS.md pointer to them). Off = conventions only.
+  includeSkillAndReviewer: boolean;
   existingInstructions: ExistingInstructionsMode;
   preview: ScaffoldPreview | null;
   // When the server created `preview` (epoch ms); the server drops it after

@@ -290,6 +290,31 @@ author it per-project in Mullion's own UI, the **Scaffold Mullion**
 panel (Command Palette → "Scaffold Mullion: \<project\>") turns the same
 three artifacts into a real, reviewable pull request:
 
+**Skill and reviewer agent (issue #2473).** The panel's _Skill and reviewer
+agent_ toggle (request field `includeSkillAndReviewer`, default on) is
+independent of the repo's `.gitignore`. Off, the scaffold writes neither
+`.claude/skills/<slug>/SKILL.md`, `.claude/agents/<slug>-reviewer.md`, the
+`.agents/skills/<slug>` copy/symlink nor the `.agents/skills/<slug>-reviewer`
+mirror, and the `AGENTS.md` region is the Workflow Conventions section alone —
+no paragraph pointing at files that don't exist. A Generate turn is then asked
+only for the instructions item, so it needs _report_ or _restructure_; with
+_keep_ there is nothing for an agent to write and the server answers 409.
+
+**Gitignored targets (issue #2473).** `git add` silently skips a path the
+project's `.gitignore` matches (a project may ignore `.claude/` on purpose, as
+a home for local agent state), which would commit an `AGENTS.md` pointer to a
+skill that never reaches the repo. The preview therefore runs
+`git check-ignore -v` over every path the scaffold writes (on the host that
+owns the checkout, so remote hosts work too) and returns
+`ignoredPaths: [{ path, rule }]`, present only when something is ignored. The
+write step force-adds those paths (`git add -f`), so by default they are in the
+diff and in the commit, and the panel shows a warning naming each path and
+rule with two choices: _Commit them anyway (force-add)_ (the default) and
+_Leave the skill and reviewer out_, which re-previews with the toggle above
+off. The scaffold never edits the project's `.gitignore`. Only the skill and
+reviewer can be left out this way; any other ignored target (say `AGENTS.md`
+itself) is still force-added and listed in the warning.
+
 **Agent vs. template.** A switch at the top of the panel picks one of two ways
 to compute the file set below, and the instructions choice and the agent only
 exist on the agent path. **Starter template** (button: Preview starter
