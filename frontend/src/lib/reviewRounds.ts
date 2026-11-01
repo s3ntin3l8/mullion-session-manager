@@ -66,3 +66,20 @@ export function parseReviewRounds(text: string | null | undefined): ReviewRounds
     },
   };
 }
+
+/**
+ * The `## Round N …` heading a review opens with (task-reconciler.ts writes it
+ * into the body it posts), read back out of GitHub's rendered HTML so a
+ * collapsed review card can say which round it is. Null for any other comment.
+ * Reads the heading's text content from an inert parsed document, so entities
+ * (`&mdash;`) and inline markup (`Round 2 — <code>x</code>`) come out as text.
+ */
+export function roundLabelFromHtml(html: string): string | null {
+  if (!html) return null;
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  for (const heading of doc.querySelectorAll("h1, h2, h3")) {
+    const text = (heading.textContent ?? "").replace(/\s+/g, " ").trim();
+    if (/^Round\s+\d+/i.test(text)) return text;
+  }
+  return null;
+}

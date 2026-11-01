@@ -236,6 +236,9 @@ export async function listIssues(
   };
 }
 
+/** GitHub's page size for an issue's comments (its maximum). */
+const COMMENTS_PAGE_SIZE = 100;
+
 export async function getIssueDetail(
   token: string,
   owner: string,
@@ -243,10 +246,36 @@ export async function getIssueDetail(
   number: number,
 ): Promise<IssueDetail> {
   const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/issues/${number}`;
-  const [issue, comments] = await Promise.all([
+  // Page 1 is GitHub's default, so its URL stays the plain one.
+  const commentsUrl = (page: number) =>
+    `${base}/comments?per_page=${COMMENTS_PAGE_SIZE}${page > 1 ? `&page=${page}` : ""}`;
+  const [issue, firstPage] = await Promise.all([
     getJson<RawIssue>(base, token, HTML_ACCEPT),
-    getJson<RawComment[]>(`${base}/comments?per_page=100`, token, HTML_ACCEPT),
+    getJson<RawComment[]>(commentsUrl(1), token, HTML_ACCEPT),
   ]);
+  let comments = firstPage;
+  // GitHub lists comments oldest first, so page 1 of a long thread is its
+  // OLDEST hundred. The conversation is read newest first, so fetch the tail:
+  // walk back from the last page until a hundred are collected. Walking (rather
+  // than assuming the last page is full) also covers a last page that comes back
+  // short or empty — a comment deleted between the issue GET and this fetch —
+  // without ever mistaking page 1 for "the latest".
+  const total = issue.comments ?? firstPage.length;
+  if (total > COMMENTS_PAGE_SIZE) {
+    const pages: RawComment[][] = [];
+    let collected = 0;
+    for (
+      let page = Math.ceil(total / COMMENTS_PAGE_SIZE);
+      page >= 1 && collected < COMMENTS_PAGE_SIZE;
+      page--
+    ) {
+      const got =
+        page === 1 ? firstPage : await getJson<RawComment[]>(commentsUrl(page), token, HTML_ACCEPT);
+      pages.unshift(got);
+      collected += got.length;
+    }
+    comments = pages.flat().slice(-COMMENTS_PAGE_SIZE);
+  }
   if (issue.pull_request) {
     throw new GitHubApiError(`#${number} is a pull request, not an issue`, 404);
   }

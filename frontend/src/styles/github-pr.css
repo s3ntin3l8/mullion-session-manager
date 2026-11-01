@@ -291,7 +291,51 @@ a.pr-dr-row:hover {
   overflow-wrap: anywhere;
 }
 
-/* Conversation: threads are boxed, the timeline is not, resolved ones fold. */
+/* Conversation: threads and timeline items are each boxed (.gh-card is shared by
+   a PR's timeline and an issue's comments, so it is not scoped under .pr-detail),
+   resolved threads fold. */
+.gh-card {
+  margin: 6px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--sidebar-2);
+  overflow: hidden;
+}
+.gh-card-h {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+  width: 100%;
+  padding: 6px 10px;
+  background: none;
+  border: 0;
+  color: var(--dim);
+  font: inherit;
+  font-size: 0.6875rem;
+  text-align: left;
+  cursor: pointer;
+}
+.gh-card-h:hover {
+  background: var(--surface-hover);
+}
+.gh-card-author {
+  color: var(--fg);
+  font-weight: 650;
+}
+.gh-card-round {
+  color: var(--fg);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.gh-card-age {
+  margin-left: auto;
+  white-space: nowrap;
+}
+.gh-card-b {
+  padding: 8px 10px;
+  border-top: 1px solid var(--border-soft);
+}
 .pr-threads-h {
   font-weight: 650;
   scroll-margin-top: 120px;

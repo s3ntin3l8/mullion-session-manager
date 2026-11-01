@@ -36,6 +36,7 @@ import {
 import { SearchInput } from "../ui/primitives.js";
 import { SessionPills } from "../ui/sidebar/SessionPills.js";
 import { TaskChip } from "../ui/sidebar/TaskChip.js";
+import { CommentCard } from "./CommentCard.js";
 import { OriginFilter } from "../ui/sidebar/OriginFilter.js";
 import { TaskActions } from "../TaskActions.js";
 import { issueOrigin, matchesOrigin, originClass, type OriginFilterValue } from "./rowOrigin.js";
@@ -662,16 +663,18 @@ export function IssueDetailView({
               </div>
               {issue.commentCount > issue.comments.length && (
                 <div className="github-panel-empty-row">
-                  Showing the first {issue.comments.length} — open on GitHub for the rest
+                  Showing the latest {issue.comments.length} — open on GitHub for the rest
                 </div>
               )}
-              {issue.comments.map((c) => (
-                <div key={c.id} className="gh-comment">
-                  <div className="gh-detail-meta">
-                    {c.author ?? "unknown"} · {formatRelativeAge(Date.parse(c.createdAt))}
-                  </div>
-                  <SafeHtml className="gh-html" html={c.bodyHtml} />
-                </div>
+              {/* Newest first; the server returns the latest page, oldest first. */}
+              {[...issue.comments].reverse().map((c, i) => (
+                <CommentCard
+                  key={c.id}
+                  author={c.author}
+                  at={c.createdAt}
+                  bodyHtml={c.bodyHtml}
+                  defaultOpen={i === 0}
+                />
               ))}
             </div>
           )}
