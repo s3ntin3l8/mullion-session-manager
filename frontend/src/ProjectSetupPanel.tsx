@@ -215,6 +215,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
     includeContributingPointer,
     symlinkAgentsSkills,
     includeDockConfig,
+    includeSkillAndReviewer,
     existingInstructions,
     preview,
     previewCreatedAt,
@@ -464,34 +465,60 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
     return () => clearInterval(timer);
   }, [jobRunning]);
 
-  const handlePreview = useCallback(async () => {
-    setPreviewing(true);
-    patch({ error: null, applyResult: null });
-    try {
-      const result = await api.previewProjectSetup(params.projectId, {
-        slug,
-        includeContributingPointer,
-        symlinkAgentsSkills,
-        includeDockConfig,
-      });
-      patch({ preview: result, previewCreatedAt: Date.now() });
-    } catch (err) {
+  // `skillAndReviewer` overrides the stored toggle for the one call that
+  // flips it (the ignored-paths "leave out" choice), which would otherwise
+  // read the value from before its own patch.
+  const handlePreview = useCallback(
+    async (skillAndReviewer: boolean = includeSkillAndReviewer) => {
+      setPreviewing(true);
+      patch({ error: null, applyResult: null });
+      try {
+        const result = await api.previewProjectSetup(params.projectId, {
+          slug,
+          includeContributingPointer,
+          symlinkAgentsSkills,
+          includeDockConfig,
+          includeSkillAndReviewer: skillAndReviewer,
+        });
+        patch({ preview: result, previewCreatedAt: Date.now() });
+      } catch (err) {
+        patch({
+          error: err instanceof ApiError ? err.message : "Failed to preview",
+          preview: null,
+          previewCreatedAt: null,
+        });
+      } finally {
+        setPreviewing(false);
+      }
+    },
+    [
+      params.projectId,
+      patch,
+      slug,
+      includeContributingPointer,
+      symlinkAgentsSkills,
+      includeDockConfig,
+      includeSkillAndReviewer,
+    ],
+  );
+
+  // Issue #2473 — the "Leave the skill and reviewer out" choice on the
+  // ignored-paths warning. A template preview is cheap, so it is recomputed
+  // without them; a generated one cost an agent turn, so the panel goes back
+  // to the form with the option off and the user generates again.
+  const handleLeaveOut = useCallback(() => {
+    patch({ includeSkillAndReviewer: false });
+    if (preview?.generated) {
       patch({
-        error: err instanceof ApiError ? err.message : "Failed to preview",
         preview: null,
         previewCreatedAt: null,
+        error:
+          "The skill and reviewer are now left out. Generate again to get a scaffold without them.",
       });
-    } finally {
-      setPreviewing(false);
+      return;
     }
-  }, [
-    params.projectId,
-    patch,
-    slug,
-    includeContributingPointer,
-    symlinkAgentsSkills,
-    includeDockConfig,
-  ]);
+    void handlePreview(false);
+  }, [patch, preview, handlePreview]);
 
   const generateInFlight = useRef(false);
 
@@ -517,6 +544,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
         includeContributingPointer,
         symlinkAgentsSkills,
         includeDockConfig,
+        includeSkillAndReviewer,
         ...(refresh.length > 0 ? { refresh } : {}),
         ...(existingInstructions !== "keep" ? { existingInstructions } : {}),
       });
@@ -561,6 +589,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
     includeContributingPointer,
     symlinkAgentsSkills,
     includeDockConfig,
+    includeSkillAndReviewer,
     refreshSkill,
     refreshReviewer,
     patch,
@@ -690,6 +719,44 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
               : "AGENTS.md is restructured below. Check that nothing repo-specific was dropped before applying."}
           </div>
         )}
+        {preview.ignoredPaths && preview.ignoredPaths.length > 0 && (
+          <div className="agent-rules-panel-notice warning" data-testid="ignored-paths-warning">
+            This project&apos;s <code>.gitignore</code> ignores{" "}
+            {preview.ignoredPaths.length === 1 ? "a path" : "paths"} this scaffold writes. Git would
+            leave {preview.ignoredPaths.length === 1 ? "it" : "them"} out of the commit unless you
+            choose otherwise:
+            <ul>
+              {preview.ignoredPaths.map((i) => (
+                <li key={i.path}>
+                  <code>{i.path}</code> — ignored by <code>{i.rule}</code>
+                </li>
+              ))}
+            </ul>
+            <label style={{ display: "block" }}>
+              <input
+                type="radio"
+                name="ignored-paths-choice"
+                checked={includeSkillAndReviewer}
+                onChange={() => {
+                  patch({ includeSkillAndReviewer: true });
+                  void handlePreview(true);
+                }}
+                disabled={applying || previewing}
+              />{" "}
+              Commit them anyway (force-add)
+            </label>
+            <label style={{ display: "block" }}>
+              <input
+                type="radio"
+                name="ignored-paths-choice"
+                checked={!includeSkillAndReviewer}
+                onChange={handleLeaveOut}
+                disabled={applying || previewing}
+              />{" "}
+              Leave the skill and reviewer out
+            </label>
+          </div>
+        )}
         {preview.hasAgentsOverride && (
           <div className="agent-rules-panel-notice warning">
             This repo already has its own <code>AGENTS.override.md</code> — codex reads that file
@@ -780,6 +847,15 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
         <Toggle
           on={includeContributingPointer}
           onChange={(on) => patch({ includeContributingPointer: on })}
+        />
+      </Row>
+      <Row
+        label="Skill and reviewer agent"
+        desc="The project's own skill and reviewer subagent, their .agents/skills mirrors, and the AGENTS.md paragraph pointing at them. Off scaffolds only the Workflow Conventions."
+      >
+        <Toggle
+          on={includeSkillAndReviewer}
+          onChange={(on) => patch({ includeSkillAndReviewer: on })}
         />
       </Row>
       <Row
@@ -933,7 +1009,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
       ) : (
         <button
           className="git-panel-fetch-btn"
-          onClick={handlePreview}
+          onClick={() => void handlePreview()}
           disabled={previewing || generating || slug.trim().length === 0}
         >
           {previewing ? "Previewing…" : "Preview starter template"}

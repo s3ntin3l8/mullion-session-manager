@@ -133,6 +133,18 @@ export function sameSymlinkTarget(
   return actual.replace(/\//g, "\\") === wanted.replace(/\//g, "\\");
 }
 
+/** A scaffold target the project's gitignore rules match (issue #2473). */
+export interface IgnoredPath {
+  path: string;
+  /** `source:line:pattern`, as `git check-ignore -v` prints it. */
+  rule: string;
+}
+
+export interface WriteEntriesResult {
+  /** Paths force-added despite a gitignore match; empty unless `stage`. */
+  ignored: IgnoredPath[];
+}
+
 /** Writes `entries` (files and/or symlinks) directly onto `cwd`'s own local
  * filesystem, then stages every change in `cwd` via `git add -A` when
  * `stage` is set — moved verbatim from routes/project-setup.ts's
@@ -171,7 +183,7 @@ export function writeEntriesLocally(
   cwd: string,
   entries: ScaffoldEntry[],
   opts?: { stage?: boolean },
-): void {
+): WriteEntriesResult {
   for (const entry of entries) {
     const targetPath = resolveWithin(cwd, entry.path);
     if (entry.kind === "symlink") {
@@ -204,6 +216,7 @@ export function writeEntriesLocally(
       writeFileSync(targetPath, entry.contents);
     }
   }
+  const ignored: IgnoredPath[] = [];
   if (opts?.stage) {
     // `git diff HEAD` never shows an untracked file, staged or not — every
     // scaffold entry is brand new (or a mirror the target repo never had
@@ -216,7 +229,71 @@ export function writeEntriesLocally(
       stdio: "pipe",
       env: gitEnv(),
     });
+    // Issue #2473 — `git add -A` silently skips a path the project's
+    // `.gitignore` matches, so a scaffold target under an ignored directory
+    // (`.claude/`) would be written but never reach the commit, leaving the
+    // AGENTS.md pointer dangling. Report each such path with the rule that
+    // ignores it and force-add it: the index is what apply commits
+    // (`commitWipChanges` keeps staged paths), so the default is "commit
+    // them", and the caller's "leave them out" choice is to not write them.
+    ignored.push(...findIgnoredPaths(cwd, entries));
+    if (ignored.length > 0) {
+      execFileSync(
+        "git",
+        [
+          ...GIT_NO_AUTO_GC,
+          "-C",
+          cwd,
+          "add",
+          "-f",
+          "--",
+          ...ignored.map((i) => `:(literal)${i.path}`),
+        ],
+        { stdio: "pipe", env: gitEnv() },
+      );
+    }
   }
+  return { ignored };
+}
+
+/** Scaffold target paths `cwd`'s gitignore rules match, with the matching
+ * rule as `source:line:pattern` (`git check-ignore -v`). A path git already
+ * tracks is never reported — it is committed regardless of the rule. */
+function findIgnoredPaths(cwd: string, entries: ScaffoldEntry[]): IgnoredPath[] {
+  if (entries.length === 0) return [];
+  let out: string;
+  try {
+    // --stdin so -z (NUL-separated, unquoted) applies to the input paths too.
+    out = execFileSync(
+      "git",
+      [...GIT_NO_AUTO_GC, "-C", cwd, "check-ignore", "-v", "-z", "--stdin"],
+      {
+        stdio: ["pipe", "pipe", "pipe"],
+        env: gitEnv(),
+        encoding: "utf8",
+        input: entries.map((e) => `${e.path}\0`).join(""),
+      },
+    );
+  } catch (err) {
+    // Exit 1 = "no path is ignored" — the common case, not a failure.
+    if ((err as { status?: number }).status === 1) return [];
+    throw err;
+  }
+  const fields = out.split("\0");
+  const result: IgnoredPath[] = [];
+  // -z -v output: <source> NUL <linenum> NUL <pattern> NUL <pathname> NUL
+  for (let i = 0; i + 3 < fields.length; i += 4) {
+    const [source, line, pattern, pathname] = [
+      fields[i],
+      fields[i + 1],
+      fields[i + 2],
+      fields[i + 3],
+    ];
+    // A negated pattern ("!keep") reports a match that does NOT ignore.
+    if (pattern.startsWith("!")) continue;
+    result.push({ path: pathname, rule: `${source}:${line}:${pattern}` });
+  }
+  return result;
 }
 
 /**
@@ -254,12 +331,13 @@ export async function writeHostFiles(
   cwd: string,
   entries: ScaffoldEntry[],
   opts?: { stage?: boolean },
-): Promise<HostGitResult<void>> {
+): Promise<HostGitResult<WriteEntriesResult>> {
   if (hostId === LOCAL_HOST_ID) {
-    writeEntriesLocally(cwd, entries, opts);
-    return { ok: true, value: undefined };
+    return { ok: true, value: writeEntriesLocally(cwd, entries, opts) };
   }
   return viaRemote(app, hostId, async (client) => {
-    await client.writeFiles(cwd, entries, opts?.stage);
+    const res = await client.writeFiles(cwd, entries, opts?.stage);
+    // An older agent build replies `{ok: true}` with no list.
+    return { ignored: (res?.ignored as IgnoredPath[] | undefined) ?? [] };
   });
 }

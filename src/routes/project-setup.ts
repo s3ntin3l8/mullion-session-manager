@@ -31,7 +31,7 @@ import {
   resolveRepoRef,
   pushHostBranch,
 } from "../services/host-git.js";
-import { readHostFiles, writeHostFiles } from "../services/host-files.js";
+import { readHostFiles, writeHostFiles, type IgnoredPath } from "../services/host-files.js";
 import { HostRequestError } from "../services/remote-host-client.js";
 import { PathEscapeError, resolveWithin } from "../services/safe-path.js";
 import { getToken } from "../services/github-integration.js";
@@ -150,6 +150,8 @@ const generateSchema = {
       includeContributingPointer: { type: "boolean" },
       symlinkAgentsSkills: { type: "boolean" },
       includeDockConfig: { type: "boolean" },
+      // Issue #2473 — see ScaffoldOptions.includeSkillAndReviewer.
+      includeSkillAndReviewer: { type: "boolean" },
       // Issue #1082(c) — diff-aware refresh. Absent/empty means today's
       // conservative default (never overwrite an already-committed file);
       // naming a target here is the caller's explicit opt-in to discarding
@@ -184,6 +186,8 @@ const previewSchema = {
       includeContributingPointer: { type: "boolean" },
       symlinkAgentsSkills: { type: "boolean" },
       includeDockConfig: { type: "boolean" },
+      // Issue #2473 — see ScaffoldOptions.includeSkillAndReviewer.
+      includeSkillAndReviewer: { type: "boolean" },
     },
   },
 };
@@ -242,6 +246,7 @@ function resolveScaffoldWorkflowConventionsText(
 // dock-config once something's already there, so their existence has to
 // actually be probed here, not just the region-upsert targets.
 function scaffoldableRelPaths(slug: string, options: ScaffoldOptions): string[] {
+  const withSkillAndReviewer = options.includeSkillAndReviewer !== false;
   const paths = [
     "AGENTS.md",
     // Issue #942 (this restructure) — CLAUDE.md is unconditional, same
@@ -251,18 +256,22 @@ function scaffoldableRelPaths(slug: string, options: ScaffoldOptions): string[] 
     // would silently OVERWRITE a real, possibly 200-line CLAUDE.md with a
     // scaffold-only `@AGENTS.md` import file instead of upserting into it.
     "CLAUDE.md",
-    path.join(".claude", "skills", slug, "SKILL.md"),
-    path.join(".claude", "agents", `${slug}-reviewer.md`),
-    options.symlinkAgentsSkills
-      ? path.join(".agents", "skills", slug)
-      : path.join(".agents", "skills", slug, "SKILL.md"),
-    // Issue #943 — the codex reviewer mirror is ALWAYS a plain file, even
-    // under symlinkAgentsSkills (unlike the skill mirror above): a symlink
-    // needs a same-shape source to point at, and
-    // `.claude/agents/<slug>-reviewer.md` (Claude Code subagent
-    // frontmatter) isn't the same shape as codex's SKILL.md target, so
-    // there's no symlink-mode variant to branch on here.
-    path.join(".agents", "skills", `${slug}-reviewer`, "SKILL.md"),
+    ...(withSkillAndReviewer
+      ? [
+          path.join(".claude", "skills", slug, "SKILL.md"),
+          path.join(".claude", "agents", `${slug}-reviewer.md`),
+          options.symlinkAgentsSkills
+            ? path.join(".agents", "skills", slug)
+            : path.join(".agents", "skills", slug, "SKILL.md"),
+          // Issue #943 — the codex reviewer mirror is ALWAYS a plain file, even
+          // under symlinkAgentsSkills (unlike the skill mirror above): a symlink
+          // needs a same-shape source to point at, and
+          // `.claude/agents/<slug>-reviewer.md` (Claude Code subagent
+          // frontmatter) isn't the same shape as codex's SKILL.md target, so
+          // there's no symlink-mode variant to branch on here.
+          path.join(".agents", "skills", `${slug}-reviewer`, "SKILL.md"),
+        ]
+      : []),
   ];
   if (options.includeDockConfig) paths.push(path.join(".crs", "dock.json"));
   // Issue #942 — without this, readScaffoldableFiles below never sees a real
@@ -463,6 +472,10 @@ interface PreviewRecord {
   // later request with different options must NOT read back as "the repo's
   // current files" — see ensureSetupWorktree's `fresh`.
   rewroteInstructions?: boolean;
+  // Issue #2473 — whether this preview's scaffold included the skill and
+  // reviewer. A reused worktree still holds (and has staged) the files of the
+  // other setting, so a request that flips it starts from a clean checkout.
+  includeSkillAndReviewer: boolean;
   // What /setup/preview or /setup/generate answered with, kept so
   // GET /setup/preview/active can hand the same payload back to a client that
   // lost it (page reload). Issue #2478.
@@ -485,6 +498,9 @@ interface PreviewSnapshot {
   conflicts?: ScaffoldConflict[];
   droppedConflictLines?: number;
   possiblyLossy?: boolean;
+  /** Issue #2473 — scaffold targets the project's `.gitignore` matches, which
+   * were force-added anyway. Absent when nothing is ignored. */
+  ignoredPaths?: IgnoredPath[];
 }
 
 // In-memory only, primary-only, short-lived — a preview is a "here's what
@@ -570,6 +586,7 @@ type PreviewComputation =
       // informational — the caller surfaces it as a warning, the preview
       // diff itself is unaffected.
       hasAgentsOverride: boolean;
+      ignoredPaths?: IgnoredPath[];
     }
   | { ok: false; status: 400 | 500; message: string };
 
@@ -587,7 +604,7 @@ async function ensureSetupWorktree(
   project: { cwd: string; hostId: string },
   projectId: number,
   slug: string,
-  opts: { fresh?: boolean } = {},
+  opts: { fresh?: boolean; includeSkillAndReviewer?: boolean } = {},
 ): Promise<{ ok: true; worktree: ReadyWorktree } | { ok: false; message: string }> {
   const seed = `setup-${slug}`;
   let liveSlugPreview = findLiveSlugPreview(projectId, slug);
@@ -602,7 +619,13 @@ async function ensureSetupWorktree(
   // request that follows a generate which rewrote instructions. Older preview
   // records for the slug are dropped with the worktree they pointed at, so an
   // old previewId can never apply content it was not computed for.
-  if (opts.fresh || liveSlugPreview?.rewroteInstructions) {
+  if (
+    opts.fresh ||
+    liveSlugPreview?.rewroteInstructions ||
+    (liveSlugPreview !== null &&
+      liveSlugPreview !== undefined &&
+      liveSlugPreview.includeSkillAndReviewer !== (opts.includeSkillAndReviewer !== false))
+  ) {
     for (const [id, record] of previews) {
       if (record.projectId === projectId && record.slug === slug) deletePreview(id);
     }
@@ -674,6 +697,8 @@ async function finishPreview(
     };
   }
 
+  const ignoredPaths = writeResult.value?.ignored ?? [];
+
   const diffs = await Promise.all(
     entries.map(async (entry) => {
       if (entry.kind === "symlink") return null;
@@ -701,11 +726,13 @@ async function finishPreview(
     // never actually reached with undefined in practice.
     workflowConventionsText: options.workflowConventionsText ?? "",
     ...(rewroteInstructions ? { rewroteInstructions: true } : {}),
+    includeSkillAndReviewer: options.includeSkillAndReviewer !== false,
     snapshot: {
       previewId,
       diff,
       files: entries.map((entry) => entry.path),
       hasAgentsOverride: existingFiles["AGENTS.override.md"] !== undefined,
+      ...(ignoredPaths.length > 0 ? { ignoredPaths } : {}),
     },
   });
 
@@ -715,6 +742,7 @@ async function finishPreview(
     diff,
     files: entries.map((entry) => entry.path),
     hasAgentsOverride: existingFiles["AGENTS.override.md"] !== undefined,
+    ...(ignoredPaths.length > 0 ? { ignoredPaths } : {}),
   };
 }
 
@@ -724,7 +752,9 @@ async function computeAndStorePreview(
   projectId: number,
   options: ScaffoldOptions,
 ): Promise<PreviewComputation> {
-  const ensured = await ensureSetupWorktree(app, project, projectId, options.slug);
+  const ensured = await ensureSetupWorktree(app, project, projectId, options.slug, {
+    includeSkillAndReviewer: options.includeSkillAndReviewer,
+  });
   if (!ensured.ok) return { ok: false, status: 500, message: ensured.message };
   const relPaths = scaffoldableRelPaths(options.slug, options);
   const read = await readScaffoldableFiles(app, project.hostId, ensured.worktree.path, relPaths);
@@ -778,6 +808,7 @@ async function prepareScaffoldGeneration(
   const existingInstructions = body.existingInstructions ?? "keep";
   const ensured = await ensureSetupWorktree(app, project, projectId, options.slug, {
     fresh: existingInstructions !== "keep",
+    includeSkillAndReviewer: options.includeSkillAndReviewer,
   });
   if (!ensured.ok) return { ok: false, status: 500, message: ensured.message };
   const relPaths = scaffoldableRelPaths(options.slug, options);
@@ -822,7 +853,20 @@ async function prepareScaffoldGeneration(
   // path doesn't need to touch at all.
   // Issue #2316 — an instructions-only pass (report/restructure) is worth
   // the turn even when nothing else would be regenerated.
-  const nothingToRegenerate = hasSkill && hasReviewer && !refreshSkill && !refreshReviewer;
+  const excludeSkillAndReviewer = options.includeSkillAndReviewer === false;
+  if (excludeSkillAndReviewer && existingInstructions === "keep") {
+    // Issue #2473 — with no skill, reviewer or pointer paragraph there is
+    // nothing for an agent to write; Preview already gives the full result.
+    return {
+      ok: false,
+      status: 409,
+      message:
+        "Nothing to generate: the skill and reviewer are excluded, so the scaffold has no " +
+        "agent-written content. Use Preview, or choose how to handle existing instructions.",
+    };
+  }
+  const nothingToRegenerate =
+    excludeSkillAndReviewer || (hasSkill && hasReviewer && !refreshSkill && !refreshReviewer);
   if (nothingToRegenerate && existingInstructions === "keep") {
     return {
       ok: false,
@@ -923,6 +967,8 @@ async function executeScaffoldGeneration(
       // Issue #2320 — nothing of the skill or reviewer would be written,
       // so the turn is not asked for them.
       instructionsOnly: nothingToRegenerate && existingInstructions !== "keep",
+      // Issue #2473 — also no pointer paragraph to write.
+      excludeSkillAndReviewer: options.includeSkillAndReviewer === false,
       // Issue #1133 — this primary's own opt-out; only takes effect for
       // a LOCAL_HOST_ID project (generateScaffoldContent's own doc
       // comment). A remote-hosted project's own
@@ -984,6 +1030,7 @@ async function executeScaffoldGeneration(
     agent: agentCommand,
     sandboxed: generated.sandboxed,
     hasAgentsOverride: result.hasAgentsOverride,
+    ...(result.ignoredPaths ? { ignoredPaths: result.ignoredPaths } : {}),
   };
   if (generated.possiblyGeneric) {
     response.possiblyGeneric = true;
@@ -1060,6 +1107,7 @@ function sendPreviewComputation(reply: FastifyReply, result: PreviewComputation)
     diff: result.diff,
     files: result.files,
     hasAgentsOverride: result.hasAgentsOverride,
+    ...(result.ignoredPaths ? { ignoredPaths: result.ignoredPaths } : {}),
   };
 }
 
@@ -1090,6 +1138,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
         includeContributingPointer: request.body.includeContributingPointer,
         symlinkAgentsSkills: request.body.symlinkAgentsSkills,
         includeDockConfig: request.body.includeDockConfig,
+        includeSkillAndReviewer: request.body.includeSkillAndReviewer,
         // Issue #1201 — this install's own Settings → Sessions conventions
         // text, so the committed AGENTS.md Workflow Conventions section
         // matches what's already injected into every session on this
@@ -1130,6 +1179,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
         includeContributingPointer: request.body.includeContributingPointer,
         symlinkAgentsSkills: request.body.symlinkAgentsSkills,
         includeDockConfig: request.body.includeDockConfig,
+        includeSkillAndReviewer: request.body.includeSkillAndReviewer,
         // Issue #1201 — same resolution as /setup/preview above; must
         // match it exactly, since finishPreview's "preview and apply are
         // provably the same bytes" guarantee (mullion-scaffold.ts's own
@@ -1162,6 +1212,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
         includeContributingPointer: request.body.includeContributingPointer,
         symlinkAgentsSkills: request.body.symlinkAgentsSkills,
         includeDockConfig: request.body.includeDockConfig,
+        includeSkillAndReviewer: request.body.includeSkillAndReviewer,
         workflowConventionsText: resolveScaffoldWorkflowConventionsText(app, project),
       };
       if (!isValidScaffoldSlug(options.slug)) {
@@ -1363,7 +1414,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
           title: `chore: scaffold Mullion integration (${record.slug})`,
           head: record.branch,
           base,
-          body: "Adds a Mullion briefing region to AGENTS.md, a CLAUDE.md @AGENTS.md import (Claude Code does not read AGENTS.md natively — the import is what loads it), a project skill, a reviewer subagent, and (if opted in) a CONTRIBUTING.md pointer — scaffolded by Mullion's setup flow, not hand-written. Review and edit the placeholder sections before merging.",
+          body: `Adds a Mullion briefing region to AGENTS.md, a CLAUDE.md @AGENTS.md import (Claude Code does not read AGENTS.md natively — the import is what loads it), ${record.includeSkillAndReviewer ? "a project skill, a reviewer subagent, " : ""}and (if opted in) a CONTRIBUTING.md pointer — scaffolded by Mullion's setup flow, not hand-written. Review and edit the placeholder sections before merging.`,
         });
         deletePreview(request.body.previewId);
         return { ok: true, mode: "pull-request", prUrl: pr.htmlUrl, prNumber: pr.number };

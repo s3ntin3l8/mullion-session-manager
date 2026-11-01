@@ -1769,7 +1769,7 @@ export async function internalRoutes(app: FastifyInstance) {
         }
       }
       try {
-        writeEntriesLocally(
+        const written = writeEntriesLocally(
           resolvedCwd,
           entries as Array<
             | { path: string; kind: "file"; contents: string }
@@ -1777,7 +1777,7 @@ export async function internalRoutes(app: FastifyInstance) {
           >,
           { stage },
         );
-        return { ok: true };
+        return { ok: true, ignored: written.ignored };
       } catch (err) {
         if (err instanceof PathEscapeError) return reply.badRequest(err.message);
         throw err;

@@ -305,6 +305,27 @@ export interface ScaffoldOptions {
      * touched. */
     contributingAppend?: string;
   };
+  /** Issue #2473 — whether this scaffold writes the project's own skill
+   * (`.claude/skills/<slug>/SKILL.md`), its reviewer subagent
+   * (`.claude/agents/<slug>-reviewer.md`) and their codex/agy mirrors
+   * (`.agents/skills/<slug>`, `.agents/skills/<slug>-reviewer/SKILL.md`) at
+   * all. Default true — the historical behavior, unchanged.
+   *
+   * False means "scaffold the conventions, not the agent tooling": no skill,
+   * no reviewer, no mirrors, and (crucially) the AGENTS.md scaffold region
+   * carries ONLY its `## Workflow Conventions` section — no pointer
+   * paragraph naming a skill and reviewer that were never written. A
+   * committed pointer to a file that is not in the repository is worse than
+   * no pointer at all: every agent that reads AGENTS.md is then told to
+   * consult a file it cannot find.
+   *
+   * Deliberately independent of the target repo's `.gitignore` (issue
+   * #2473's "exclude the skill and reviewer" option): a repo may want the
+   * conventions committed while keeping its agent tooling local, and it may
+   * want both committed even when a `.gitignore` happens to match
+   * `.claude/`. The gitignore case is handled separately, by the preview's
+   * `ignoredPaths` report and the panel's force-add choice. */
+  includeSkillAndReviewer?: boolean;
   /** This Mullion install's own `settings.sessions.workflowConventionsText`
    * (issue #937's Settings → Sessions field, resolved by the caller —
    * `routes/project-setup.ts` — before this pure function ever sees it,
@@ -779,12 +800,24 @@ export function computeScaffold(
   // template below has none; normalizing here means both sources compose
   // with the SAME single-blank-line separator before the heading, rather
   // than the generated path silently getting an extra blank line.
-  const pointerBody = (
-    options.generated?.scaffoldRegion
-      ? stripStrayWorkflowConventionsHeading(options.generated.scaffoldRegion)
-      : scaffoldRegionPointerBody(slug)
-  ).trimEnd();
-  const region = `${pointerBody}\n\n${workflowConventionsSection(options.workflowConventionsText)}`;
+  // Issue #2473 — the pointer prose names where the skill and the reviewer
+  // live. When the scaffold excludes them (`includeSkillAndReviewer: false`),
+  // that prose would point at files this scaffold never writes — a dangling
+  // pointer committed into the repo's AGENTS.md, which is the very failure
+  // this issue is about (a region pointing at a file the repo does not have).
+  // So the pointer prose is dropped entirely in that mode, and the region is
+  // the Workflow Conventions section alone. The generated region prose (an
+  // agent's own paragraph about the repo) is dropped with it: it is written
+  // to describe the same skill/reviewer pair the prompt asked for.
+  const includeSkillAndReviewer = options.includeSkillAndReviewer !== false;
+  const pointerBody = !includeSkillAndReviewer
+    ? ""
+    : (options.generated?.scaffoldRegion
+        ? stripStrayWorkflowConventionsHeading(options.generated.scaffoldRegion)
+        : scaffoldRegionPointerBody(slug)
+      ).trimEnd();
+  const conventionsSection = workflowConventionsSection(options.workflowConventionsText);
+  const region = pointerBody ? `${pointerBody}\n\n${conventionsSection}` : conventionsSection;
   const existingAgentsMd = existingFiles["AGENTS.md"] ?? "";
   entries.push({
     path: "AGENTS.md",
@@ -894,92 +927,96 @@ export function computeScaffold(
   // there — real content for a text file, or an empty-string existence
   // sentinel for a directory/symlink it can't read as text (see that
   // function's own doc comment).
-  const skillPath = scaffoldSkillPath(slug);
-  const skillAlreadyExists = existingFiles[skillPath] !== undefined;
-  // Whatever the skill's FINAL content is (freshly generated, or the
-  // existing repo's own content preserved) is what the `.agents/skills`
-  // mirror below copies — never its own independently-regenerated starter
-  // text, which would silently diverge from a preserved `.claude/skills`
-  // copy the moment a re-scaffold ran. The stamp is only ever added to
-  // FRESH content (generated or template) — an already-existing file is
-  // preserved byte-for-byte, unstamped or not, same as every other field
-  // this function refuses to silently rewrite.
-  const skillContent =
-    existingFiles[skillPath] ??
-    stampScaffoldBody(options.generated?.skill ?? skillFileContents(slug), slug);
-  if (!skillAlreadyExists) {
-    entries.push({ path: skillPath, kind: "file", contents: skillContent });
-  }
+  // Issue #2473 — `includeSkillAndReviewer: false` writes none of the skill,
+  // the reviewer or their `.agents/skills` mirrors.
+  if (includeSkillAndReviewer) {
+    const skillPath = scaffoldSkillPath(slug);
+    const skillAlreadyExists = existingFiles[skillPath] !== undefined;
+    // Whatever the skill's FINAL content is (freshly generated, or the
+    // existing repo's own content preserved) is what the `.agents/skills`
+    // mirror below copies — never its own independently-regenerated starter
+    // text, which would silently diverge from a preserved `.claude/skills`
+    // copy the moment a re-scaffold ran. The stamp is only ever added to
+    // FRESH content (generated or template) — an already-existing file is
+    // preserved byte-for-byte, unstamped or not, same as every other field
+    // this function refuses to silently rewrite.
+    const skillContent =
+      existingFiles[skillPath] ??
+      stampScaffoldBody(options.generated?.skill ?? skillFileContents(slug), slug);
+    if (!skillAlreadyExists) {
+      entries.push({ path: skillPath, kind: "file", contents: skillContent });
+    }
 
-  // Issue #943 — same "resolve final content once, mirror always carries
-  // it" shape as skillContent/skillPath above: reviewerContent must be
-  // hoisted OUT of the create-once `if` (unlike before this issue, when
-  // nothing needed the resolved value outside that branch) so a PRESERVED
-  // existing reviewer — not just freshly generated/template content — is
-  // what the codex mirror below reflects. Getting this wrong would silently
-  // diverge the codex reviewer from the Claude Code one on every re-scaffold
-  // of a repo whose reviewer was hand-edited after the first scaffold.
-  const reviewerPath = scaffoldReviewerPath(slug);
-  const reviewerAlreadyExists = existingFiles[reviewerPath] !== undefined;
-  const reviewerContent =
-    existingFiles[reviewerPath] ??
-    stampScaffoldBody(options.generated?.reviewer ?? reviewerAgentFileContents(slug), slug);
-  if (!reviewerAlreadyExists) {
-    entries.push({ path: reviewerPath, kind: "file", contents: reviewerContent });
-  }
+    // Issue #943 — same "resolve final content once, mirror always carries
+    // it" shape as skillContent/skillPath above: reviewerContent must be
+    // hoisted OUT of the create-once `if` (unlike before this issue, when
+    // nothing needed the resolved value outside that branch) so a PRESERVED
+    // existing reviewer — not just freshly generated/template content — is
+    // what the codex mirror below reflects. Getting this wrong would silently
+    // diverge the codex reviewer from the Claude Code one on every re-scaffold
+    // of a repo whose reviewer was hand-edited after the first scaffold.
+    const reviewerPath = scaffoldReviewerPath(slug);
+    const reviewerAlreadyExists = existingFiles[reviewerPath] !== undefined;
+    const reviewerContent =
+      existingFiles[reviewerPath] ??
+      stampScaffoldBody(options.generated?.reviewer ?? reviewerAgentFileContents(slug), slug);
+    if (!reviewerAlreadyExists) {
+      entries.push({ path: reviewerPath, kind: "file", contents: reviewerContent });
+    }
 
-  // Issue #943 — codex-readable mirror of the reviewer, translated to
-  // SKILL.md's two-field frontmatter shape (see deriveCodexReviewerSkillContent
-  // above). Always (re-)written, same "no independent identity of its own to
-  // preserve" rationale as the skill mirror below — it only ever carries
-  // whatever reviewerContent resolved to. UNLIKE the skill mirror, this is
-  // NEVER a symlink, even under symlinkAgentsSkills: the skill mirror can
-  // symlink because both ends are the same SKILL.md format, but
-  // `.claude/agents/<slug>-reviewer.md` is Claude Code subagent frontmatter
-  // and the codex target needs a genuinely different shape — there is no
-  // valid symlink target to point at. A `null` translation (unparseable/
-  // unsafe preserved reviewer frontmatter) silently emits no entry here;
-  // `finishPreview`'s diff loop iterates `entries`, not the scaffoldable
-  // path list, so a read-but-not-emitted path is simply not diffed.
-  const codexReviewerContent = deriveCodexReviewerSkillContent(reviewerContent, slug);
-  if (codexReviewerContent !== null) {
-    entries.push({
-      path: path.join(".agents", "skills", `${slug}-reviewer`, "SKILL.md"),
-      kind: "file",
-      contents: codexReviewerContent,
-    });
-  }
+    // Issue #943 — codex-readable mirror of the reviewer, translated to
+    // SKILL.md's two-field frontmatter shape (see deriveCodexReviewerSkillContent
+    // above). Always (re-)written, same "no independent identity of its own to
+    // preserve" rationale as the skill mirror below — it only ever carries
+    // whatever reviewerContent resolved to. UNLIKE the skill mirror, this is
+    // NEVER a symlink, even under symlinkAgentsSkills: the skill mirror can
+    // symlink because both ends are the same SKILL.md format, but
+    // `.claude/agents/<slug>-reviewer.md` is Claude Code subagent frontmatter
+    // and the codex target needs a genuinely different shape — there is no
+    // valid symlink target to point at. A `null` translation (unparseable/
+    // unsafe preserved reviewer frontmatter) silently emits no entry here;
+    // `finishPreview`'s diff loop iterates `entries`, not the scaffoldable
+    // path list, so a read-but-not-emitted path is simply not diffed.
+    const codexReviewerContent = deriveCodexReviewerSkillContent(reviewerContent, slug);
+    if (codexReviewerContent !== null) {
+      entries.push({
+        path: path.join(".agents", "skills", `${slug}-reviewer`, "SKILL.md"),
+        kind: "file",
+        contents: codexReviewerContent,
+      });
+    }
 
-  if (options.symlinkAgentsSkills) {
-    entries.push({
-      path: path.join(".agents", "skills", slug),
-      kind: "symlink",
-      // Issue #895 (fixed pre-existing bug) — a relative symlink target is
-      // resolved by the OS relative to the LINK'S OWN DIRECTORY
-      // (`.agents/skills`, two segments deep), not the link's own full path
-      // including its own name. The previous three-".." target instead
-      // landed one level ABOVE the repo root (verified: a real symlink
-      // created with the old target failed to resolve at all in a repro —
-      // `symlinkAgentsSkills` mode was silently producing a dangling link
-      // for every project that used it, never caught by any existing test,
-      // none of which checked whether the link actually resolved to real
-      // content). This repo's own hand-made
-      // `.agents/skills/mullion-review-invariants` symlink is the ground
-      // truth this now matches: `../../.claude/skills/<slug>`, two levels
-      // up from `.agents/skills`, then down into `.claude/skills/<slug>`.
-      target: path.join("..", "..", ".claude", "skills", slug),
-    });
-  } else {
-    // Always (re-)written, regardless of skillAlreadyExists — this mirror
-    // has no independent identity of its own to preserve; it exists only
-    // to carry whatever `.claude/skills/<slug>/SKILL.md`'s content
-    // resolved to above, in file form for codex/agy's own project-scope
-    // discovery.
-    entries.push({
-      path: path.join(".agents", "skills", slug, "SKILL.md"),
-      kind: "file",
-      contents: skillContent,
-    });
+    if (options.symlinkAgentsSkills) {
+      entries.push({
+        path: path.join(".agents", "skills", slug),
+        kind: "symlink",
+        // Issue #895 (fixed pre-existing bug) — a relative symlink target is
+        // resolved by the OS relative to the LINK'S OWN DIRECTORY
+        // (`.agents/skills`, two segments deep), not the link's own full path
+        // including its own name. The previous three-".." target instead
+        // landed one level ABOVE the repo root (verified: a real symlink
+        // created with the old target failed to resolve at all in a repro —
+        // `symlinkAgentsSkills` mode was silently producing a dangling link
+        // for every project that used it, never caught by any existing test,
+        // none of which checked whether the link actually resolved to real
+        // content). This repo's own hand-made
+        // `.agents/skills/mullion-review-invariants` symlink is the ground
+        // truth this now matches: `../../.claude/skills/<slug>`, two levels
+        // up from `.agents/skills`, then down into `.claude/skills/<slug>`.
+        target: path.join("..", "..", ".claude", "skills", slug),
+      });
+    } else {
+      // Always (re-)written, regardless of skillAlreadyExists — this mirror
+      // has no independent identity of its own to preserve; it exists only
+      // to carry whatever `.claude/skills/<slug>/SKILL.md`'s content
+      // resolved to above, in file form for codex/agy's own project-scope
+      // discovery.
+      entries.push({
+        path: path.join(".agents", "skills", slug, "SKILL.md"),
+        kind: "file",
+        contents: skillContent,
+      });
+    }
   }
 
   const dockConfigPath = path.join(".crs", "dock.json");

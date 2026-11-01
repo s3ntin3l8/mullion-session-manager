@@ -2931,7 +2931,7 @@ describe("internal routes (agent role, issue #26)", () => {
         },
       });
       expect(res.statusCode).toBe(200);
-      expect(res.json()).toEqual({ ok: true });
+      expect(res.json()).toEqual({ ok: true, ignored: [] });
       expect(fs.readFileSync(path.join(cwd, "AGENTS.md"), "utf8")).toBe("hi\n");
 
       const { execFileSync } = await import("node:child_process");

@@ -284,12 +284,19 @@ export const projectsApi = {
       includeContributingPointer?: boolean;
       symlinkAgentsSkills?: boolean;
       includeDockConfig?: boolean;
+      includeSkillAndReviewer?: boolean;
     },
   ) =>
-    request<{ previewId: string; diff: string; files: string[]; hasAgentsOverride: boolean }>(
-      `/api/projects/${projectId}/setup/preview`,
-      { method: "POST", body: JSON.stringify(options) },
-    ),
+    request<{
+      previewId: string;
+      diff: string;
+      files: string[];
+      hasAgentsOverride: boolean;
+      ignoredPaths?: Array<{ path: string; rule: string }>;
+    }>(`/api/projects/${projectId}/setup/preview`, {
+      method: "POST",
+      body: JSON.stringify(options),
+    }),
 
   // The agent-assisted twin of previewProjectSetup (routes/project-setup.ts's
   // /setup/generate): runs a sandboxed, read-only agent turn over the repo
@@ -304,6 +311,7 @@ export const projectsApi = {
       includeContributingPointer?: boolean;
       symlinkAgentsSkills?: boolean;
       includeDockConfig?: boolean;
+      includeSkillAndReviewer?: boolean;
       refresh?: Array<"skill" | "reviewer">;
       // What the turn does with instruction content already in the repo
       // outside Mullion's regions (absent = "keep").
@@ -342,6 +350,7 @@ export const projectsApi = {
       includeContributingPointer?: boolean;
       symlinkAgentsSkills?: boolean;
       includeDockConfig?: boolean;
+      includeSkillAndReviewer?: boolean;
       refresh?: Array<"skill" | "reviewer">;
       existingInstructions?: ExistingInstructionsMode;
     },

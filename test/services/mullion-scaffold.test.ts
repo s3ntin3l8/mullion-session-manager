@@ -1358,3 +1358,37 @@ describe("computeScaffold — restructured instructions (issue #2316)", () => {
     ).toBeUndefined();
   });
 });
+
+describe("computeScaffold — includeSkillAndReviewer: false (issue #2473)", () => {
+  it("writes no skill, reviewer, symlink or mirror, and the region has no pointer paragraph", () => {
+    for (const symlinkAgentsSkills of [false, true]) {
+      const entries = computeScaffold(
+        {},
+        { slug: "demo", includeSkillAndReviewer: false, symlinkAgentsSkills },
+      );
+      expect(entries.map((e) => e.path).sort()).toEqual(["AGENTS.md", "CLAUDE.md"]);
+      const agents = entries.find((e) => e.path === "AGENTS.md");
+      const contents = agents?.kind === "file" ? agents.contents : "";
+      expect(contents).toContain("## Workflow Conventions");
+      expect(contents).not.toMatch(/SKILL\.md|reviewer/i);
+    }
+  });
+
+  it("drops a generated region paragraph too, and the default is unchanged", () => {
+    const entries = computeScaffold(
+      {},
+      {
+        slug: "demo",
+        includeSkillAndReviewer: false,
+        generated: {
+          scaffoldRegion: "Read .claude/skills/demo/SKILL.md",
+          sandboxed: false,
+        } as never,
+      },
+    );
+    const agents = entries.find((e) => e.path === "AGENTS.md");
+    expect(agents?.kind === "file" && agents.contents).not.toContain("SKILL.md");
+    const dflt = computeScaffold({}, { slug: "demo" });
+    expect(dflt.map((e) => e.path)).toContain(".claude/skills/demo/SKILL.md");
+  });
+});
