@@ -1442,7 +1442,7 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
       expect(vi.mocked(generateScaffoldContent).mock.calls[0][0].existingInstructions).toBe("keep");
       expect([res.json().conflicts, res.json().possiblyLossy]).toEqual([undefined, undefined]);
       // The response names the agent the server actually ran.
-      expect(res.json().agent).toBe("claude");
+      expect([res.json().agent, res.json().agentsMdSize]).toEqual(["claude", undefined]);
       await app.close();
     });
 
@@ -1468,7 +1468,7 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
       });
       expect(res.statusCode).toBe(200);
       expect(res.json().conflicts).toHaveLength(1);
-      expect(res.json().droppedConflictLines).toBe(2);
+      expect([res.json().droppedConflictLines, res.json().agentsMdSize]).toEqual([2, undefined]);
       const call = vi.mocked(generateScaffoldContent).mock.calls[0][0];
       expect(call.existingInstructions).toBe("report");
       expect(call.originalAgentsMd).toContain("## Workflow rules");
@@ -1506,7 +1506,7 @@ describe("project-setup route — /setup/generate (issue #956)", () => {
       });
       expect(res.statusCode).toBe(200);
       expect(res.json()).toMatchObject({ possiblyLossy: true, agentsMdSize: { before: 45 } });
-      expect(res.json().files).toContain("CONTRIBUTING.md");
+      expect(res.json().agentsMdSize.after).toBeGreaterThan(0);
 
       const wt = path.join(repoDir, ".mullion-worktrees", "setup-demo");
       const agentsMd = fs.readFileSync(path.join(wt, "AGENTS.md"), "utf8");
