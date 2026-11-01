@@ -608,9 +608,9 @@ pinned note]` `additionalContext` ordering `hooks.ts` composes for
   that as a post-apply checkbox, and Hermes review caught it as a data-loss
   bug before merge: that flag also gates text _resolution_ (the bullet
   above), so flipping it after a real scaffold made the drift check
-  permanently false-positive and made its own "re-run Preview and Apply"
-  banner silently overwrite the just-committed real text with the generic
-  defaults on the next apply. The two questions are genuinely different and
+  permanently false-positive and made its own drift
+  banner (which tells the user to re-run the scaffold) silently overwrite
+  the just-committed real text with the generic defaults on the next apply. The two questions are genuinely different and
   need genuinely different columns:
   - `injectWorkflowConventions === false` — **"my `AGENTS.md` is
     authoritative instead."** Feeds `resolveWorkflowConventionsText` /

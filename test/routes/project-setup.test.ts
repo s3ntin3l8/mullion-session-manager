@@ -493,7 +493,7 @@ describe("project-setup route", () => {
       // this opted-out project to "" from this point on, so its stamped
       // hash (of the real text) would stop matching hash("") and
       // conventionsDrifted would flip to a false positive — and the
-      // drift banner's own "re-run Preview and Apply" suggestion would
+      // drift banner's own "re-run the scaffold" suggestion would
       // then silently replace the real text with the generic defaults on
       // the next apply.
       await app.inject({

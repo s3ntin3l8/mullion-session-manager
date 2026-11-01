@@ -871,9 +871,24 @@ describe("ProjectSetupPanel", () => {
       });
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
 
+      expect(screen.getByText(/click "Generate with .+" and then Apply below/)).toBeInTheDocument();
+      expect(screen.getByText(/only regenerated if you tick them/)).toBeInTheDocument();
+    });
+
+    it("names the starter-template button once the template path is selected", async () => {
+      vi.stubGlobal("fetch", mockFetch({}));
+      useDashboardStore.setState({
+        projects: [makeProject({ id: 1, conventionsDrifted: true })],
+      });
+      const user = userEvent.setup();
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+
+      await user.click(screen.getByRole("radio", { name: "Starter template" }));
+
       expect(
-        screen.getByText(/re-run Preview and Apply below to update the committed text/),
+        screen.getByText(/click "Preview starter template" and then Apply/),
       ).toBeInTheDocument();
+      expect(screen.getByText(/left untouched/)).toBeInTheDocument();
     });
 
     it("shows no drift banner when the project has not drifted", () => {
@@ -884,7 +899,7 @@ describe("ProjectSetupPanel", () => {
       render(<ProjectSetupPanel params={{ projectId: 1 }} />);
 
       expect(
-        screen.queryByText(/re-run Preview and Apply below to update the committed text/),
+        screen.queryByText(/Apply below to update the committed text/),
       ).not.toBeInTheDocument();
     });
   });
