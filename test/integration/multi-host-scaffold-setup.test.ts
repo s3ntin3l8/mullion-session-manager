@@ -6,6 +6,7 @@ import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { CODEX_REVIEWER_DELEGATION_CLAUSE } from "../../src/services/mullion-scaffold.js";
+import { CANARY_FILE } from "../../src/services/scaffold-canary.js";
 
 // Issue #895 — end-to-end proof that `/setup/preview` and `/setup/apply`
 // actually work for a remote-hosted project, against two real buildApp()
@@ -91,7 +92,7 @@ vi.mock("node:child_process", async (importOriginal) => {
         // echoes it on a last line; this fake does the same, so the canary
         // check runs for real on the agent side.
         const cwd = (options as { cwd: string }).cwd;
-        const canary = fs.readFileSync(path.join(cwd, ".mullion-canary"), "utf8").trim();
+        const canary = fs.readFileSync(path.join(cwd, CANARY_FILE), "utf8").trim();
         const extra = generateExtra ? `${generateExtra}\n` : "";
         setImmediate(() =>
           callback(null, `${GENERATE_STDOUT}${extra}MULLION_CANARY: ${canary}\n`, ""),

@@ -43,8 +43,13 @@ export function placeCanary(worktreePath: string, rootDir: string): Canary {
   fs.rmSync(file, { force: true });
   fs.writeFileSync(file, `${value}\n`, { flag: "wx", mode: 0o600 });
   // One pattern for both the accept check and the strip, so a turn is never
-  // accepted on a line that then stays in the output.
-  const lineRe = new RegExp(`^[ \\t]*${CANARY_LABEL} ${value}[ \\t]*\\r?(?:\\n|$)`, "gm");
+  // accepted on a line that then stays in the output. It matches any line that
+  // carries the label and the value, whatever surrounds them (backticks, a
+  // bullet, a trailing period): a turn that echoed the token DID read the file,
+  // and discarding it over formatting would send the operator after the wrong
+  // cause. The value is random per turn, so a match is proof of a read; it may
+  // appear anywhere in the output, not only on the last line the prompt asks for.
+  const lineRe = new RegExp(`^.*${CANARY_LABEL} ${value}.*(?:\\r?\\n|$)`, "gm");
   return {
     value,
     withInstruction: (prompt) =>

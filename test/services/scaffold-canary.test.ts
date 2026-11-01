@@ -51,9 +51,11 @@ describe("placeCanary", () => {
     expect(c.verify(`${echo}\r\nbody\r\n${echo}\r\n`)).toBe("body\r\n");
   });
 
-  it("rejects an inline echo that the line pattern could not strip", () => {
+  it("accepts a differently formatted echo and still strips its whole line", () => {
     const c = placeCanary(dir, os.tmpdir());
-    expect(c.verify(`body \`MULLION_CANARY: ${c.value}\` more\n`)).toBeNull();
+    const echo = `MULLION_CANARY: ${c.value}`;
+    expect(c.verify(`body\n- \`${echo}\`.\n`)).toBe("body\n");
+    expect(c.verify(`body\n**${echo}**`)).toBe("body\n");
   });
 
   it("rejects a missing or wrong canary", () => {
