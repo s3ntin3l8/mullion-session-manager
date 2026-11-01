@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError, RateLimitedError } from "./api/index.js";
-import type { ExistingInstructionsMode, ScaffoldConflict } from "./api/projects.js";
+import type {
+  ExistingInstructionsMode,
+  ScaffoldConflict,
+  ScaffoldGenerateJob,
+  ScaffoldGenerateJobPhase,
+} from "./api/projects.js";
+import { isGenerateJobRunning } from "./api/projects.js";
 import { parseUnifiedDiff } from "./diffUtils.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { FileTextIcon } from "./ui/icons.js";
@@ -40,6 +46,38 @@ const PATH_OPTIONS: Array<{ value: ScaffoldPath; label: string }> = [
   { value: "agent", label: "Write it with an agent" },
   { value: "template", label: "Starter template" },
 ];
+
+// Issue #2429 — how often the panel asks the server how the background
+// generation job is doing. Fast enough that the phase feels live, slow
+// enough not to hammer the poll route: the server's poll bucket is 120
+// requests a minute for the whole route (routes/project-setup.ts's
+// GENERATE_POLL_RATE_LIMIT), and every open panel spends from it.
+const GENERATE_POLL_INTERVAL_MS = 2_000;
+
+/** The phase a running job is in, as a human label. */
+const GENERATE_PHASE_LABELS: Record<ScaffoldGenerateJobPhase, string> = {
+  preparing: "Preparing…",
+  agent: "Running the agent…",
+  composing: "Composing the scaffold…",
+  done: "Finished",
+  failed: "Failed",
+};
+
+/** What the job's turn does with instruction content already in the repo. */
+const GENERATE_MODE_LABELS: Record<ExistingInstructionsMode, string> = {
+  keep: "keeping existing instructions",
+  report: "reporting conflicts",
+  restructure: "restructuring existing instructions",
+};
+
+/** "m:ss" — the time a job has been running, measured from the server's
+ * own `startedAt` (so a reopened panel shows the true elapsed time). */
+function formatElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
 
 /** What produced a preview, for its header. */
 function previewSource(preview: ScaffoldPreview): string {
@@ -181,6 +219,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
     preview,
     previewCreatedAt,
     applyResult,
+    generateJob,
     offerRefresh,
     refreshSkill,
     refreshReviewer,
@@ -191,8 +230,23 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
     [patchScaffoldDraft, projectId],
   );
   const [previewing, setPreviewing] = useState(false);
-  const [generating, setGenerating] = useState(false);
+  // True while the START call is in flight — the job itself lives in the
+  // store (see `generateJob` above), because it outlives this panel.
+  const [starting, setStarting] = useState(false);
   const [applying, setApplying] = useState(false);
+  // The clock the elapsed timer reads, ticked once a second while a job
+  // runs (see the effect further down).
+  const [now, setNow] = useState(() => Date.now());
+  const jobRunning = generateJob !== null && isGenerateJobRunning(generateJob.phase);
+  // A generation is under way while the start call is in flight OR while the
+  // job it started is still running — so everything that must stay locked
+  // during a generation (the path switch, the radio, the button) is locked
+  // for a running job too.
+  const generating = starting || jobRunning;
+  // The job's id and slug, on their own: the poll effect keys on them, so a
+  // poll that merely updates the phase does not restart the interval.
+  const generateJobId = generateJob?.jobId ?? null;
+  const generateJobSlug = generateJob?.slug ?? null;
 
   // A restored preview older than the server keeps it is gone there; showing
   // it would only fail on Apply.
@@ -240,6 +294,176 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
     };
   }, [projectId, patchScaffoldDraft]);
 
+  // Issue #2429 — a job update: a running job refreshes the progress view, a
+  // finished one becomes the preview (or the error) exactly as the
+  // synchronous /setup/generate call used to produce it.
+  //
+  // The job record STAYS in the store after the job finishes: it is how the
+  // panel knows this job has already been handled — and its result possibly
+  // dismissed with Back — so a reopened panel does not resurrect it.
+  const applyJobUpdate = useCallback(
+    (job: ScaffoldGenerateJob) => {
+      if (job.phase === "done") {
+        if (!job.result) {
+          // A finished job without a result cannot become a preview.
+          patch({
+            generateJob: job,
+            preview: null,
+            previewCreatedAt: null,
+            error: "The generation finished without a result — generate again.",
+          });
+          return;
+        }
+        patch({
+          generateJob: job,
+          preview: {
+            ...job.result,
+            generated: true,
+            // The server reports the agent it ran; the panel's own resolution
+            // is only the fallback for an older backend.
+            agent: job.result.agent ?? job.agent ?? defaultAgent,
+            instructionsMode: job.mode,
+          },
+          // The SERVER's clock: the preview expires PREVIEW_TTL_MS after the
+          // job finished, not after the panel noticed it.
+          previewCreatedAt: job.finishedAt ?? Date.now(),
+          // The result is an agent-generated preview for this slug — the form
+          // has to describe what it is showing.
+          path: "agent",
+          slug: job.slug,
+          offerRefresh: false,
+          refreshSkill: false,
+          refreshReviewer: false,
+          error: null,
+        });
+        return;
+      }
+      if (job.phase === "failed") {
+        const status = job.error?.status ?? 500;
+        const message = job.error?.message ?? "Failed to generate";
+        // A 409 is the "the skill/reviewer already exist" case — the same
+        // refresh-checkbox flow the synchronous call produced.
+        if (status === 409) {
+          patch({
+            generateJob: job,
+            preview: null,
+            previewCreatedAt: null,
+            offerRefresh: true,
+            refreshSkill: false,
+            refreshReviewer: false,
+          });
+          return;
+        }
+        patch({
+          generateJob: job,
+          preview: null,
+          previewCreatedAt: null,
+          error:
+            status === 429
+              ? "Generation is rate limited — try again in about 1 minute(s)."
+              : message,
+        });
+        return;
+      }
+      patch({ generateJob: job });
+    },
+    [patch, defaultAgent],
+  );
+
+  // Poll the running job until it finishes. The poll stops on done/failed
+  // (the job is no longer running), on unmount, on a project change, and
+  // when the slug changes — the form no longer describes the running job,
+  // so the panel stops following it (the turn itself keeps running
+  // server-side).
+  useEffect(() => {
+    if (!generateJobId || !jobRunning) return;
+    if (generateJobSlug !== slug) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const job = await api.getGenerateJob(projectId, generateJobId);
+        if (cancelled) return;
+        applyJobUpdate(job);
+      } catch (err) {
+        if (cancelled) return;
+        if (err instanceof ApiError && err.statusCode === 404) {
+          // The server does not know this job (it restarted, which also lost
+          // the agent turn): stop tracking a job that will never finish
+          // instead of polling a ghost forever. Only when it is still the
+          // job being tracked — a newer one must not be dropped by the old
+          // job's 404.
+          const tracked = useDashboardStore.getState().scaffoldDrafts[projectId]?.generateJob;
+          if (tracked?.jobId !== generateJobId) return;
+          patch({
+            generateJob: null,
+            error: "That generation job is gone — the server may have restarted. Generate again.",
+          });
+        }
+        // Any other failure (a network blip, a rate limit) is transient: the
+        // job keeps running server-side, so keep polling it.
+      }
+    };
+    void poll();
+    const timer = setInterval(() => {
+      void poll();
+    }, GENERATE_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [projectId, generateJobId, generateJobSlug, jobRunning, slug, applyJobUpdate, patch]);
+
+  // Issue #2429 — pick a generation job back up when the panel opens: one
+  // that is still running (the panel went away mid-turn) or one that
+  // finished while it was away (the result is still there to preview).
+  useEffect(() => {
+    let cancelled = false;
+    void api
+      .getActiveGenerateJob(projectId)
+      .then((job) => {
+        if (cancelled || !job) return;
+        if (isGenerateJobRunning(job.phase)) {
+          // A running job is the live work: it wins over whatever the store
+          // remembers, and the poll above takes it from here.
+          patch({
+            generateJob: job,
+            // The progress view lives on the agent path — the panel has to
+            // show the run it is tracking.
+            path: "agent",
+            // The job supersedes any preview the panel still held — the
+            // progress view has to be the one on screen.
+            preview: null,
+            previewCreatedAt: null,
+            error: null,
+          });
+          return;
+        }
+        // A finished job is adopted unless the panel has already handled
+        // THIS job: its result became the preview (which the user may have
+        // dismissed with Back), so the panel's own state wins.
+        const stored = useDashboardStore.getState().scaffoldDrafts[projectId];
+        if (stored?.generateJob?.jobId === job.jobId) return;
+        applyJobUpdate(job);
+      })
+      .catch(() => {
+        // Recovery is best-effort: the panel simply shows the form.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, patch, applyJobUpdate]);
+
+  // The elapsed timer runs off the SERVER's startedAt, so a panel that
+  // reattaches to a running job shows the time the job has really been
+  // running instead of counting from zero. The clock is only read while a
+  // job runs; `now` starts at mount time, which is what a panel that opens
+  // onto a running job needs.
+  useEffect(() => {
+    if (!jobRunning) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [jobRunning]);
+
   const handlePreview = useCallback(async () => {
     setPreviewing(true);
     patch({ error: null, applyResult: null });
@@ -276,13 +500,19 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
     // costly agent turn.
     if (generateInFlight.current) return;
     generateInFlight.current = true;
-    setGenerating(true);
-    patch({ error: null, applyResult: null });
+    setStarting(true);
+    // The old preview is dropped up front: a running generation supersedes
+    // it, and the progress view has to be the one on screen.
+    patch({ error: null, applyResult: null, preview: null, previewCreatedAt: null });
     try {
       const refresh: Array<"skill" | "reviewer"> = [];
       if (refreshSkill) refresh.push("skill");
       if (refreshReviewer) refresh.push("reviewer");
-      const result = await api.generateProjectSetup(params.projectId, {
+      // Issue #2429 — the turn runs as a background job on the server, so
+      // the panel can show progress and pick the run back up after the
+      // panel goes away. The start call still answers the 409 (the skill and
+      // reviewer already exist) and the 429 (rate limited) synchronously.
+      const { jobId } = await api.startGenerateProjectSetup(params.projectId, {
         slug,
         includeContributingPointer,
         symlinkAgentsSkills,
@@ -290,16 +520,17 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
         ...(refresh.length > 0 ? { refresh } : {}),
         ...(existingInstructions !== "keep" ? { existingInstructions } : {}),
       });
+      // The job's own phase and start time come from the first poll; this is
+      // the provisional state, so the progress view appears right away.
       patch({
-        preview: {
-          ...result,
-          generated: true,
-          // The server reports the agent it ran; the panel's own resolution is
-          // only the fallback for an older backend.
-          agent: result.agent ?? defaultAgent,
-          instructionsMode: existingInstructions,
+        generateJob: {
+          jobId,
+          slug,
+          phase: "preparing",
+          agent: defaultAgent,
+          mode: existingInstructions,
+          startedAt: Date.now(),
         },
-        previewCreatedAt: Date.now(),
         offerRefresh: false,
         refreshSkill: false,
         refreshReviewer: false,
@@ -322,7 +553,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
       }
     } finally {
       generateInFlight.current = false;
-      setGenerating(false);
+      setStarting(false);
     }
   }, [
     params.projectId,
@@ -591,6 +822,21 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
       </div>
       {path === "agent" && (
         <>
+          {jobRunning && generateJob && (
+            <div className="agent-rules-panel-notice" data-testid="generate-progress">
+              <div>
+                Generating with <strong>{generateJob.agent}</strong> for “{generateJob.slug}” —{" "}
+                {GENERATE_MODE_LABELS[generateJob.mode]}
+              </div>
+              <div data-testid="generate-progress-phase">
+                {GENERATE_PHASE_LABELS[generateJob.phase]}
+              </div>
+              <div data-testid="generate-progress-elapsed">
+                Elapsed {formatElapsed(now - generateJob.startedAt)}
+              </div>
+              <div>Safe to close this panel; it keeps running.</div>
+            </div>
+          )}
           {offerRefresh && (
             <div className="agent-rules-panel-notice warning">
               The skill and reviewer for this slug already exist, and generation never overwrites a

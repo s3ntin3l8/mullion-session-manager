@@ -92,3 +92,87 @@ describe("projectsApi.generateProjectSetup — existingInstructions", () => {
     expect(result.droppedConflictLines).toBe(1);
   });
 });
+
+// Issue #2429 — the background generation job the Scaffold panel polls.
+describe("projectsApi.startGenerateProjectSetup", () => {
+  it("POSTs the options to /setup/generate/start and returns the job id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(202, { jobId: "job-1" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await projectsApi.startGenerateProjectSetup(7, {
+      slug: "demo",
+      includeDockConfig: true,
+      refresh: ["skill"],
+      existingInstructions: "restructure",
+    });
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/projects/7/setup/generate/start");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({
+      slug: "demo",
+      includeDockConfig: true,
+      refresh: ["skill"],
+      existingInstructions: "restructure",
+    });
+    expect(result.jobId).toBe("job-1");
+  });
+});
+
+describe("projectsApi.getGenerateJob", () => {
+  it("GETs the job's state and returns its phase, agent and mode", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        jobId: "job-1",
+        slug: "demo",
+        phase: "agent",
+        agent: "codex",
+        mode: "restructure",
+        startedAt: 1000,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const job = await projectsApi.getGenerateJob(7, "job-1");
+
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/projects/7/setup/generate/jobs/job-1");
+    expect(init.method).toBeUndefined();
+    expect(job.phase).toBe("agent");
+    expect(job.agent).toBe("codex");
+    expect(job.mode).toBe("restructure");
+    expect(job.startedAt).toBe(1000);
+  });
+});
+
+describe("projectsApi.getActiveGenerateJob", () => {
+  it("returns the project's current job", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        jobId: "job-1",
+        slug: "demo",
+        phase: "done",
+        agent: "codex",
+        mode: "keep",
+        startedAt: 1000,
+        finishedAt: 2000,
+        result: { previewId: "p", diff: "", files: [], hasAgentsOverride: false, sandboxed: true },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const job = await projectsApi.getActiveGenerateJob(7);
+
+    const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/projects/7/setup/generate/active");
+    expect(job?.phase).toBe("done");
+    expect(job?.result?.previewId).toBe("p");
+  });
+
+  it("returns undefined when the server holds no job (204)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(204));
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(await projectsApi.getActiveGenerateJob(7)).toBeUndefined();
+  });
+});

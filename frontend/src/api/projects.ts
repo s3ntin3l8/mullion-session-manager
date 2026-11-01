@@ -29,6 +29,50 @@ export interface ScaffoldConflict {
   note: string;
 }
 
+/** The phases a background generation job moves through — mirrors
+ * src/services/scaffold-generate-jobs.ts's GENERATE_JOB_PHASES 1:1. */
+export type ScaffoldGenerateJobPhase = "preparing" | "agent" | "composing" | "done" | "failed";
+
+/** What a finished generation job produced: the same body the synchronous
+ * /setup/generate returns, so a job's result can become the panel's preview
+ * without a second call. */
+export interface ScaffoldGenerateResult {
+  previewId: string;
+  diff: string;
+  files: string[];
+  hasAgentsOverride: boolean;
+  agent?: string;
+  sandboxed: boolean;
+  possiblyGeneric?: boolean;
+  conflicts?: ScaffoldConflict[];
+  droppedConflictLines?: number;
+  possiblyLossy?: boolean;
+}
+
+/** A background generation job (issue #2429): the panel polls it for
+ * progress and reattaches to it after the panel went away. */
+export interface ScaffoldGenerateJob {
+  jobId: string;
+  slug: string;
+  phase: ScaffoldGenerateJobPhase;
+  // The agent whose turn is running (the server resolved it).
+  agent: string;
+  // What the turn does with instruction content already in the repo.
+  mode: ExistingInstructionsMode;
+  // Epoch ms — the panel measures its elapsed timer from THIS, so a
+  // reopened panel shows the real time the job has been running.
+  startedAt: number;
+  finishedAt?: number;
+  result?: ScaffoldGenerateResult;
+  error?: { status: number; message: string };
+}
+
+/** True while the job is still running (not done, not failed) — mirrors
+ * src/services/scaffold-generate-jobs.ts's isGenerateJobRunning. */
+export function isGenerateJobRunning(phase: ScaffoldGenerateJobPhase): boolean {
+  return phase === "preparing" || phase === "agent" || phase === "composing";
+}
+
 export const projectsApi = {
   listProjects: () => request<Project[]>("/api/projects"),
 
@@ -281,6 +325,43 @@ export const projectsApi = {
       method: "POST",
       body: JSON.stringify(options),
     }),
+
+  // Issue #2429 — the BACKGROUND twin of generateProjectSetup: the agent
+  // turn runs in the server's own job registry and the panel polls it, so
+  // the work survives the panel being closed and the user sees progress
+  // instead of a button that says "Generating…" for five minutes.
+  //
+  // POST /setup/generate/start validates synchronously — a bad slug is a
+  // 400 and an already-committed skill/reviewer is a 409, exactly as the
+  // synchronous route reports them — and then answers 202 with the job id
+  // (the id of the job already running for this project, when there is one).
+  startGenerateProjectSetup: (
+    projectId: number,
+    options: {
+      slug: string;
+      includeContributingPointer?: boolean;
+      symlinkAgentsSkills?: boolean;
+      includeDockConfig?: boolean;
+      refresh?: Array<"skill" | "reviewer">;
+      existingInstructions?: ExistingInstructionsMode;
+    },
+  ) =>
+    request<{ jobId: string }>(`/api/projects/${projectId}/setup/generate/start`, {
+      method: "POST",
+      body: JSON.stringify(options),
+    }),
+
+  // The job's current state: phase, the agent and mode it runs, when it
+  // started, and — once it is done — the preview it produced.
+  getGenerateJob: (projectId: number, jobId: string) =>
+    request<ScaffoldGenerateJob>(
+      `/api/projects/${projectId}/setup/generate/jobs/${encodeURIComponent(jobId)}`,
+    ),
+
+  // The project's current job, running or finished (undefined/204 when the
+  // server holds none) — how a reopened panel picks its work back up.
+  getActiveGenerateJob: (projectId: number) =>
+    request<ScaffoldGenerateJob | undefined>(`/api/projects/${projectId}/setup/generate/active`),
 
   // The project's newest live preview, so a page reload can recover a preview
   // the server still holds. undefined (204) when there is none.
