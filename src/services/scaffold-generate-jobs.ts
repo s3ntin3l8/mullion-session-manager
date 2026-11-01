@@ -27,6 +27,8 @@ export interface ScaffoldGenerateResponse {
   // The agent whose turn produced this content (the server resolved it).
   agent: string;
   sandboxed: boolean;
+  // Issue #2554 — false when a remote agent ran the turn without the read canary.
+  canary?: boolean;
   hasAgentsOverride: boolean;
   possiblyGeneric?: boolean;
   missingCitedPaths?: { missing: number; cited: number };

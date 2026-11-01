@@ -6,7 +6,7 @@
 // this module never imports that service itself, keeping the two
 // independently testable).
 
-import { githubApiFetch, GitHubApiError } from "./github-fetch.js";
+import { githubApiBase, githubApiFetch, GitHubApiError } from "./github-fetch.js";
 import type { RelayReviewState, ReviewSummary } from "../shared/types.js";
 import {
   derivePrPhase,
@@ -20,7 +20,8 @@ export { GitHubApiError };
 // (max 39 chars), plus underscores/periods for repos (max 100 chars).
 // We validate these before using parsed git-remote data in URLs, to satisfy
 // CodeQL's "file-data in outbound request" rule even though
-// encodeURIComponent and the fixed api.github.com base prevent injection.
+// encodeURIComponent and the operator-set API base (api.github.com by default,
+// see githubApiBase in github-fetch.ts) prevent injection.
 const OWNER_RE = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,38}[a-zA-Z0-9])?$/;
 const REPO_RE = /^[a-zA-Z0-9_.-]{1,100}$/;
 
@@ -28,12 +29,13 @@ const REPO_RE = /^[a-zA-Z0-9_.-]{1,100}$/;
 // remote-supplied string feeding a later outbound request — same
 // "file/API data reaching a request" shape OWNER_RE/REPO_RE above guard
 // against, for CodeQL's js/request-forgery). The owner/repo character
-// classes below must stay in sync with OWNER_RE/REPO_RE; only the fixed
-// api.github.com host and the /repos/{owner}/{repo}/issues/{n} path shape
-// are new here. Anything that doesn't match this exactly is treated as "no
+// classes below must stay in sync with OWNER_RE/REPO_RE; only the configured
+// API base (githubApiBase(), api.github.com by default — a fake or mirror
+// serves parent_issue_url on its own origin) and the
+// /repos/{owner}/{repo}/issues/{n} path shape are new here. Anything that doesn't match this exactly is treated as "no
 // parent" rather than partially parsed — see parseParentIssueUrl below.
-const PARENT_ISSUE_URL_RE =
-  /^https:\/\/api\.github\.com\/repos\/([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,38}[a-zA-Z0-9])?)\/([a-zA-Z0-9_.-]{1,100})\/issues\/(\d{1,10})$/;
+const PARENT_ISSUE_PATH_RE =
+  /^\/repos\/([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,38}[a-zA-Z0-9])?)\/([a-zA-Z0-9_.-]{1,100})\/issues\/(\d{1,10})$/;
 
 // Fetch-on-open + short TTL, not background polling — see the plan's
 // "protect the 5000/hr budget" note. A project's Dock widget/panel re-fetches
@@ -666,7 +668,7 @@ export interface TaskIssue {
 
 /**
  * Strict, anchored parse of GitHub's `parent_issue_url` — see
- * PARENT_ISSUE_URL_RE's own comment. Anything that doesn't match exactly
+ * PARENT_ISSUE_PATH_RE's own comment. Anything that doesn't match exactly
  * (wrong host, malformed path, a future URL shape) is treated as "no
  * parent" rather than partially parsed. `repo` here is "owner/repo" (the
  * schema's `parentIssueRepo` column is that combined slug, since the parent
@@ -677,7 +679,9 @@ function parseParentIssueUrl(
   url: string | null | undefined,
 ): { repo: string; number: number } | null {
   if (!url) return null;
-  const match = PARENT_ISSUE_URL_RE.exec(url);
+  const base = githubApiBase();
+  if (!url.startsWith(base)) return null;
+  const match = PARENT_ISSUE_PATH_RE.exec(url.slice(base.length));
   if (!match) return null;
   const [, owner, repo, numberStr] = match;
   return { repo: `${owner}/${repo}`, number: Number(numberStr) };

@@ -69,6 +69,11 @@ describe("placeCanary", () => {
     );
   });
 
+  it("keeps a frontmatter fence or rule that carried the echo", () => {
+    const c = placeCanary(dir, os.tmpdir());
+    expect(c.verify(`--- MULLION_CANARY: ${c.value}\nname: x\n`)).toBe("---\nname: x\n");
+  });
+
   it("rejects a missing or wrong canary", () => {
     const c = placeCanary(dir, os.tmpdir());
     expect(c.verify("body\n")).toBeNull();

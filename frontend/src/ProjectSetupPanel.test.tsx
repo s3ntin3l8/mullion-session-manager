@@ -162,6 +162,28 @@ describe("ProjectSetupPanel", () => {
       expect(screen.getByText(/3 of 8 cited paths do not exist here/)).toBeInTheDocument();
     });
 
+    describe.each([
+      [false, true],
+      [true, false],
+      [undefined, false],
+    ])("when a turn reports canary %s", (canary, shown) => {
+      it(`${shown ? "shows" : "hides"} the read-check notice`, async () => {
+        vi.stubGlobal(
+          "fetch",
+          mockFetch({
+            job: () => jsonResponse(200, finishedJob({ result: generatedResult({ canary }) })),
+          }),
+        );
+        const user = userEvent.setup();
+        render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+        await user.type(screen.getByPlaceholderText("my-project"), "demo");
+        await user.click(screen.getByRole("button", { name: /^Generate with / }));
+        await screen.findByTestId("preview-source");
+        expect(screen.queryByTestId("canary-notice") !== null).toBe(shown);
+        if (shown) expect(screen.getByText(/predates the read check/)).toBeInTheDocument();
+      });
+    });
+
     it("on a 409 offers regenerate checkboxes and retries with refresh", async () => {
       let calls = 0;
       const fetchMock = mockFetch({

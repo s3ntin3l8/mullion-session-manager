@@ -473,6 +473,13 @@ export const schema = {
       type: "string",
       default: "s3ntin3l8/mullion-session-manager",
     },
+    // Base URL of the GitHub REST/GraphQL API (src/services/github-fetch.ts).
+    // Operator config only: the demo instance (scripts/demo/) points it at a
+    // loopback fake. Leave unset for api.github.com.
+    MULLION_GITHUB_API_URL: {
+      type: "string",
+      default: "https://api.github.com",
+    },
     // Explicit override for the systemd --user unit self-update.sh restarts
     // (src/routes/updates.ts, src/services/service-unit.ts). Empty (the
     // default) means "autodetect": resolve it from this process's own
@@ -1108,6 +1115,7 @@ declare module "fastify" {
       PREVIEW_RATE_LIMIT_MAX: number;
       MULLION_HOME: string;
       MULLION_UPDATE_REPO: string;
+      MULLION_GITHUB_API_URL: string;
       MULLION_SERVICE_UNIT: string;
       MULLION_KEEP_AWAKE: boolean;
       MULLION_TASK_MASTER_ENABLED: boolean;

@@ -20,6 +20,7 @@ import { githubPRPollerPlugin } from "./plugins/github-pr-poller.js";
 import { taskWatcherPlugin } from "./plugins/task-watcher.js";
 import { webhookReconcilerPlugin } from "./plugins/webhook-reconciler.js";
 import { gitFetcherPlugin } from "./plugins/git-fetcher.js";
+import { githubApiBasePlugin } from "./plugins/github-api-base.js";
 import { sessionGithubRefresherPlugin } from "./plugins/session-github-refresher.js";
 import { sessionWorktreeSweepPlugin } from "./plugins/session-worktree-sweep.js";
 import { hostHeartbeatPlugin } from "./plugins/host-heartbeat.js";
@@ -99,6 +100,7 @@ export async function buildApp() {
   // envPlugin first: everything below (including this role branch) reads
   // app.config.
   await app.register(envPlugin);
+  await app.register(githubApiBasePlugin);
 
   // Multi-host support (issue #26). "primary" (default) is today's full
   // single-process app, unchanged below. "agent" is a lightweight, DB-less

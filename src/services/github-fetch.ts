@@ -9,9 +9,24 @@
 // which error class to throw) at its own call sites — only the mechanics
 // below are shared.
 
-const GITHUB_API_BASE = "https://api.github.com";
+const DEFAULT_GITHUB_API_BASE = "https://api.github.com";
 const REQUEST_TIMEOUT_MS = 5_000;
 const USER_AGENT = "mullion-session-manager";
+
+// The one place the GitHub API host lives (github-write.ts and
+// github-pr-reviews.ts read it too). Operator config only — set once at boot
+// from MULLION_GITHUB_API_URL (plugins/github-api-base.ts) so the demo
+// instance can point at a local fake; never derived from a request, a project
+// or a stored setting, which would reopen js/request-forgery.
+let githubApiBaseUrl = DEFAULT_GITHUB_API_BASE;
+
+export function githubApiBase(): string {
+  return githubApiBaseUrl;
+}
+
+export function setGitHubApiBase(url: string): void {
+  githubApiBaseUrl = url.trim().replace(/\/+$/, "") || DEFAULT_GITHUB_API_BASE;
+}
 
 export class GitHubApiError extends Error {
   constructor(
@@ -99,6 +114,10 @@ export function resetGitHubRateLimitForTests(): void {
   rateLimitedUntil = 0;
 }
 
+export function resetGitHubApiBaseForTests(): void {
+  githubApiBaseUrl = DEFAULT_GITHUB_API_BASE;
+}
+
 /**
  * Reads `Retry-After` (seconds, or an HTTP-date) off a Response, falling
  * back to `DEFAULT_RATE_LIMIT_BACKOFF_MS` when the header is present but
@@ -176,7 +195,7 @@ export function classifyRateLimit(res: Response): GitHubRateLimitError | null {
 }
 
 /**
- * Issues a request against `${GITHUB_API_BASE}${path}`, merging the
+ * Issues a request against `${githubApiBaseUrl}${path}`, merging the
  * caller's own headers (Authorization, Content-Type, If-None-Match, ...)
  * over the Accept/User-Agent defaults every caller needs, and applying the
  * shared REQUEST_TIMEOUT_MS via AbortSignal.timeout. A raw network failure
@@ -200,7 +219,7 @@ export async function githubApiFetch(path: string, init: RequestInit = {}): Prom
 
   let res: Response;
   try {
-    res = await fetch(`${GITHUB_API_BASE}${path}`, {
+    res = await fetch(`${githubApiBaseUrl}${path}`, {
       ...init,
       headers: {
         Accept: "application/vnd.github+json",

@@ -50,6 +50,8 @@ export function placeCanary(worktreePath: string, rootDir: string): Canary {
   // leaves that output intact; a line left holding nothing but decoration goes.
   const token = `${CANARY_LABEL} ${value}`;
   const decorationOnly = /^[\s`*_>.\-\u2022]*$/;
+  // ...except a horizontal rule or frontmatter fence, which is content.
+  const rule = /^\s*(?:-{3}|\*{3}|_{3})\s*$/;
   return {
     value,
     withInstruction: (prompt) =>
@@ -68,7 +70,7 @@ export function placeCanary(worktreePath: string, rootDir: string): Canary {
             .slice(0, line.length - eol.length)
             .split(token)
             .join("");
-          return decorationOnly.test(rest) ? [] : [rest.trimEnd() + eol];
+          return decorationOnly.test(rest) && !rule.test(rest) ? [] : [rest.trimEnd() + eol];
         })
         .join("");
     },

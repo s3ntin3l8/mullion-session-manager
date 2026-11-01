@@ -737,6 +737,13 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
             have touched the host&apos;s files.
           </div>
         )}
+        {preview.generated && preview.canary === false && (
+          <div className="agent-rules-panel-notice warning" data-testid="canary-notice">
+            This host&apos;s agent build predates the read check, so nothing verified that the agent
+            actually read this repo. Review the generated content carefully, or update the agent
+            build and generate again.
+          </div>
+        )}
         {preview.generated && preview.possiblyGeneric && (
           <div className="agent-rules-panel-notice warning">
             The agent may not have read this repo — the generated skill and reviewer look generic.
