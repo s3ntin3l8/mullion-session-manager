@@ -591,6 +591,17 @@ pinned note]` `additionalContext` ordering `hooks.ts` composes for
   states only: never scaffolded (`null` hash), up to date, or drifted — an
   opted-out project is never considered drifted, since by definition its
   committed text is no longer tracking the install-wide one.
+- **Rendered as a bullet list (issue #2534).** `buildWorkflowConventionsText`
+  emits one `- ` bullet per fragment (continuation lines of a multi-line
+  fragment indented two spaces), not blank-line-separated paragraphs, so the
+  region reads like the rest of an `AGENTS.md`. Only text _generated from the
+  answers_ changes: the stored setting is rewritten on read
+  (`refreshGeneratedConventions`) only while it still equals the wizard's last
+  output (`workflowConventionsAppliedText`); operator hand-edited text is left
+  exactly as typed. **Side effect:** the conventions hash changes, so every
+  project scaffolded earlier shows the drift banner once, until it re-applies
+  the scaffold. `MAX_WORKFLOW_CONVENTIONS_BYTES` is unchanged — the prefix adds
+  about two bytes per fragment, far below the cap's headroom.
 - **Two independent opt-outs, not one (issue #1208).** It's tempting to
   read `injectWorkflowConventions` as covering "the committed `AGENTS.md`
   already has this text, stop injecting it too" — PR #1206 shipped exactly

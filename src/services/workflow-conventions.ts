@@ -323,7 +323,7 @@ export const WORKFLOW_CONVENTION_QUESTIONS: readonly WorkflowConventionQuestion[
 
 /**
  * Deterministic, pure assembly of the selected options' fragments into
- * readable prose — no I/O, no agent, no network. `answers` maps a question
+ * a markdown bullet list (one `- ` item per fragment) — no I/O, no agent, no network. `answers` maps a question
  * id to the id of the option selected for it; a question with no entry (or
  * an unrecognized option id) is silently skipped, not defaulted — an
  * incomplete wizard run still produces valid, if shorter, prose rather than
@@ -341,7 +341,17 @@ export function buildWorkflowConventionsText(answers: Record<string, string>): s
     if (!option) continue;
     fragments.push(option.fragment);
   }
-  return fragments.join("\n\n");
+  return fragments.map(toBullet).join("\n");
+}
+
+// One fragment is one markdown bullet, however many sentences or lines it
+// has: continuation lines are indented two spaces so they stay inside the
+// item (a blank line inside a fragment stays blank, not trailing spaces).
+function toBullet(fragment: string): string {
+  return `- ${fragment
+    .split("\n")
+    .map((line, i) => (i === 0 || line === "" ? line : `  ${line}`))
+    .join("\n")}`;
 }
 
 // Phase 3 (drift detection, issue #1205, follow-up to #1201) — the SAME per-project
