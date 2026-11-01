@@ -199,8 +199,8 @@ jobs:
           while IFS= read -r f; do args+=(--coverage "$f"); done \
             < <(find .shard-artifacts -name coverage-final.json | sort)
           if [ "${#args[@]}" -eq 0 ]; then
-            echo "::warning::no shard coverage reports were downloaded"
-            exit 0
+            echo "::error::no shard coverage reports were downloaded"
+            exit 1
           fi
           status=0
           node scripts/check-patch-coverage.mjs --no-run --annotations \
