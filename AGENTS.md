@@ -34,7 +34,7 @@ Never commit directly to the default branch. Always branch and open a PR.
 
 Branch off the latest remote default branch, never off your local one: `git fetch origin && git checkout -b <branch> origin/<default>`. A local default branch is routinely stale, which is what makes a PR show up as "out-of-date with the base branch" the moment it's opened.
 
-Work in a dedicated worktree per branch, under `.wt/<branch>`, off the latest remote default branch: `git fetch origin && git worktree add .wt/<branch> -b <branch> origin/<default>`. A fresh worktree does not inherit installed dependencies — reinstall them there before testing or building.
+Work in a dedicated worktree per branch, under `.wt/<name>` (the branch name with `/` replaced by `-`, so the directory stays flat), off the latest remote default branch: `git fetch origin && git worktree add .wt/<name> -b <branch> origin/<default>`. A fresh worktree does not inherit installed dependencies — reinstall them there before testing or building.
 
 Commit and PR titles need a Conventional Commits prefix (`feat:`, `fix:`, `chore:`, ...).
 

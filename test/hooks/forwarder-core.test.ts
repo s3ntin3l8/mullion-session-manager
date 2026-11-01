@@ -575,7 +575,7 @@ describe("worktreeNudge (issue #1979)", () => {
       true,
     );
     expect(nudge).toContain("`/repo-wt-x`");
-    expect(nudge).toContain(".wt/<branch>");
+    expect(nudge).toContain(".wt/<name>");
     expect(nudge).toContain("promote_to_worktree");
   });
 

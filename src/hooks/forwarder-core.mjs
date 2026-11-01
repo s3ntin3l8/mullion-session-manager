@@ -418,9 +418,9 @@ export function worktreeNudge(agent, kind, payload, worktreesInDotWt) {
   const detected = detectWorktreeAdd(payload, payload?.cwd);
   if (!detected || isUnderDotWt(detected.worktree)) return null;
   return (
-    `Mullion: this project keeps worktrees under \`.wt/<branch>\` in the repository root, ` +
+    `Mullion: this project keeps worktrees under \`.wt/<name>\` in the repository root, ` +
     `but \`git worktree add\` just created \`${detected.worktree}\`. That was not blocked. ` +
-    `For new worktrees, run \`git worktree add .wt/<branch> -b <branch> origin/<default>\` ` +
+    `For new worktrees, run \`git worktree add .wt/<name> -b <branch> origin/<default>\` ` +
     `from the repository root. (The \`promote_to_worktree\` tool is the other option, ` +
     `but it makes a Mullion-managed worktree under \`.mullion-worktrees/\`, not \`.wt/\`.)`
   );
