@@ -276,11 +276,11 @@ export async function seedDemo({ api, root, holdTranscripts = false }) {
   for (const name of ["aurora-web", "orbit-api"])
     await connectOrigin(path.join(scratchRoot, name), name, `${scratchRoot}-remotes`);
   // Git depth on aurora-web: ahead/behind/gone/merged branches, a merge on
-  // main, a few topic branches for the History graph and one worktree.
+  // main, topic branches (one with a long name) for the History graph and one worktree.
   const auroraDir = path.join(scratchRoot, "aurora-web");
   await addBranchDepth(auroraDir);
-  await widenHistory(auroraDir, 3);
-  await addWorktree(auroraDir, "feat/dark-mode");
+  await widenHistory(auroraDir, 4);
+  await addWorktree(auroraDir, "feat/dark-palette");
   await writeDockControl(auroraDir, { port: DEV_SERVER_PORT, scriptDir: scriptsDir });
   // A third repo, deliberately never registered as a project below — the
   // sidebar's project-discovery panel (Sidebar.tsx's "Configure search

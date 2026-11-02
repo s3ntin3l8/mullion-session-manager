@@ -214,7 +214,7 @@ describe("seedDemo git depth and dock", () => {
     expect(tracks).toContain("feat/ahead [ahead 1]");
     expect(tracks).toContain("feat/behind [behind 1]");
     expect(tracks).toContain("feat/gone [gone]");
-    expect(existsSync(path.join(aurora, ".mullion-worktrees", "feat-dark-mode"))).toBe(true);
+    expect(existsSync(path.join(aurora, ".mullion-worktrees", "feat-dark-palette"))).toBe(true);
     expect(existsSync(path.join(aurora, ".crs", "dock.json"))).toBe(true);
     const patch = calls.find((c) => c.method === "PATCH" && c.url.startsWith("/api/projects/"));
     expect(patch?.body).toEqual({ devServerUrl: "3958" });

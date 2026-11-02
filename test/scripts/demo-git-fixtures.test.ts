@@ -55,9 +55,10 @@ describe("demo git fixtures", () => {
     expect(status("feat/ahead")).toBe("[ahead 1]");
     expect(status("feat/behind")).toBe("[behind 1]");
     expect(status("feat/gone")).toBe("[gone]");
-    expect(git(repo, "branch", "--merged", "main", "--list", "feat/merged")).toContain(
-      "feat/merged",
-    );
+    // Only feat/merged may be an ancestor of main: any other branch would
+    // read as "merged" in the app and hide its ahead/behind/gone state.
+    const merged = git(repo, "branch", "--merged", "main", "--format=%(refname:short)").split("\n");
+    expect(merged.filter((b) => b.startsWith("feat/")).sort()).toEqual(["feat/merged"]);
     expect(git(repo, "rev-list", "--merges", "--count", "main")).toBe("1");
     expect(status("main")).toBe("");
   });
@@ -73,9 +74,9 @@ describe("demo git fixtures", () => {
 
   it("adds a worktree under .mullion-worktrees", async () => {
     const { repo } = repoWithOrigin();
-    const dir = await addWorktree(repo, "feat/dark-mode");
-    expect(dir).toBe(path.join(repo, ".mullion-worktrees", "feat-dark-mode"));
-    expect(git(dir, "branch", "--show-current")).toBe("feat/dark-mode");
+    const dir = await addWorktree(repo, "feat/dark-palette");
+    expect(dir).toBe(path.join(repo, ".mullion-worktrees", "feat-dark-palette"));
+    expect(git(dir, "branch", "--show-current")).toBe("feat/dark-palette");
   });
 
   it("writes a dock control that runs the dev-server script", async () => {

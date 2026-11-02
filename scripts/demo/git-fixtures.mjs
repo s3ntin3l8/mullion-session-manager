@@ -62,6 +62,11 @@ export async function widenHistory(repo, count = 11) {
  *   feat/merged  already merged into main (Prune: merged)
  *
  * Plus a merge commit on `main`, so the History graph has a join.
+ *
+ * Every branch except `feat/merged` carries a commit of its own: listBranches
+ * reads a tip that is an ancestor of `main` as "merged" before it looks at
+ * the upstream state (git-refs.ts), so a branch forked at main's tip would
+ * never show ahead/behind/gone.
  */
 export async function addBranchDepth(repo) {
   const head = await gitOut(repo, "rev-parse", "main");
@@ -73,27 +78,33 @@ export async function addBranchDepth(repo) {
   const merge = await commit(repo, tree, [head, mergedTip], "Merge feat/merged");
   await gitOut(repo, "update-ref", "refs/heads/main", merge, head);
 
-  // Each of these starts from the new main, is pushed, then diverges.
-  for (const name of ["feat/ahead", "feat/behind", "feat/gone"]) {
-    await gitOut(repo, "branch", name, merge);
+  const track = async (name, sha) => {
+    await gitOut(repo, "branch", name, sha);
     await gitOut(repo, "push", "-q", "origin", `${name}:${name}`);
     await gitOut(repo, "branch", "-q", `--set-upstream-to=origin/${name}`, name);
-  }
+  };
 
-  const ahead = await commit(repo, tree, [merge], "Cache the session lookup");
-  await gitOut(repo, "update-ref", "refs/heads/feat/ahead", ahead, merge);
+  // Ahead: pushed at its own commit, then one more local commit.
+  const aheadBase = await commit(repo, tree, [merge], "Add the session cache");
+  await track("feat/ahead", aheadBase);
+  const ahead = await commit(repo, tree, [aheadBase], "Cache the session lookup");
+  await gitOut(repo, "update-ref", "refs/heads/feat/ahead", ahead, aheadBase);
 
-  // Behind: advance origin's copy without touching the local branch.
-  const remoteTip = await commit(repo, tree, [merge], "Tighten the timeout");
+  // Behind: origin's copy moves on without the local branch.
+  const behindBase = await commit(repo, tree, [merge], "Add the request timeout");
+  await track("feat/behind", behindBase);
+  const remoteTip = await commit(repo, tree, [behindBase], "Tighten the timeout");
   await gitOut(repo, "push", "-q", "origin", `${remoteTip}:refs/heads/feat/behind`);
-  await gitOut(repo, "fetch", "-q", "origin");
 
-  // Gone: delete it remotely, then fetch --prune so the tracking ref vanishes
-  // but the local branch keeps its (now dangling) upstream.
+  // Gone: the remote branch is deleted but its tip stays reachable from
+  // another remote ref, so Prune sees no unpushed work (branchesWithUnpushedTips).
+  const goneTip = await commit(repo, tree, [merge], "Draft the audit log");
+  await track("feat/gone", goneTip);
+  await gitOut(repo, "push", "-q", "origin", `${goneTip}:refs/heads/archive/audit-log`);
   await gitOut(repo, "push", "-q", "origin", "--delete", "feat/gone");
-  await gitOut(repo, "fetch", "-q", "--prune", "origin");
+
   await gitOut(repo, "push", "-q", "origin", "main");
-  await gitOut(repo, "fetch", "-q", "origin");
+  await gitOut(repo, "fetch", "-q", "--prune", "origin");
   await gitOut(repo, "branch", "-q", "--set-upstream-to=origin/main", "main");
 }
 
@@ -129,6 +140,8 @@ http
             id: "dev-server",
             title: "Dev server",
             command: `node ${JSON.stringify(script)}`,
+            port,
+            preview: true,
           },
         ],
       },
