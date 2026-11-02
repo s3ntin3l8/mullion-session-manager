@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { gitEnv } from "../../scripts/git-env.mjs";
 import { parseSttySize, ptySizeFile } from "../../scripts/demo/geometry.mjs";
 import {
   IDLE_KEEPALIVE_INTERVAL_S,
@@ -208,7 +209,7 @@ describe("seedDemo git depth and dock", () => {
     const tracks = execFileSync(
       "git",
       ["for-each-ref", "--format=%(refname:short) %(upstream:track)", "refs/heads"],
-      { cwd: aurora },
+      { cwd: aurora, env: gitEnv() },
     ).toString();
     expect(tracks).toContain("feat/ahead [ahead 1]");
     expect(tracks).toContain("feat/behind [behind 1]");
