@@ -39,6 +39,28 @@ const BUCKET_LABEL: Record<TaskBucket, string> = Object.fromEntries(
   FILTERS.map((f) => [f.key, f.label]),
 ) as Record<TaskBucket, string>;
 
+// #2559 — what a row's leading number means.
+//
+// It used to be `#${task.issueNumber ?? task.id}`: a task linked to an issue
+// wore the issue number, a task without one wore its own task id, and both
+// wore the same bare "#N" form. So two different rows could read the same —
+// a task for issue #10 and a different task whose id is 10 were both "#10" —
+// and the chips under the row ("Issue #10", "PR #12") then said the same
+// thing again.
+//
+// The board already answers this: a task card names the task by its GitHub
+// issue number (unified-board/TaskCard.tsx's issue badge, "#42" with the
+// GitHub icon) and shows no number at all for a task with no issue. The
+// sidebar does the same, so the two surfaces agree on what a task is called.
+// A task with no issue has no issue number to show, so it leads with its own
+// id — spelled "Task #N", the repo's own wording for a task id (the task
+// chip's "Task #5 — open task", the source-control row's "owned by task #7")
+// — never in the bare "#N" form that means an issue number here. The linked
+// issue and PR keep their own "Issue #N" / "PR #N" chips under the row.
+function taskRowLabel(task: Task): string {
+  return task.issueNumber != null ? `#${task.issueNumber}` : `Task #${task.id}`;
+}
+
 // Task Master's active work for the followed project, in the sidebar: what is
 // running, what needs you, with the same per-status actions as the task panel.
 // Done, backlog and archived tasks belong to the board and are not listed.
@@ -129,7 +151,7 @@ export function TasksSidebarView({ projectId, actions }: RightSidebarViewProps) 
                 key={task.id}
                 className="sb-row--tm"
                 lead={<span className={`sb-dot sb-dot--${DOT_TONE[bucket]}`} aria-hidden="true" />}
-                title={`#${task.issueNumber ?? task.id} ${task.title}`}
+                title={`${taskRowLabel(task)} ${task.title}`}
                 meta={reason ?? BUCKET_LABEL[bucket]}
                 expanded={open}
                 onClick={() => setOpenId(open ? null : task.id)}
