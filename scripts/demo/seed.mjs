@@ -91,6 +91,7 @@ function shellSingleQuote(s) {
 // badge, which then sits in the sidebar and the kanban's ad-hoc list of
 // every later shot and through the landing loop. The interval stays under
 // the backend's IDLE_THRESHOLD_MS (2 s) so the row keeps reading "Working".
+export const IDLE_KEEPALIVE_INTERVAL_S = 20;
 export const KEEPALIVE_INTERVAL_S = 1;
 
 // `releaseFile`, when given, holds the transcript until that file exists. dtach
@@ -104,7 +105,22 @@ export const KEEPALIVE_INTERVAL_S = 1;
 // observed state rather than a pause means a loaded host can't outrun it.
 // Once released, the script records its PTY's size (ptySizeFile) before
 // printing, so the shot can check the geometry the transcript printed at.
-export function agentTranscriptScript({ lines, releaseFile }) {
+/**
+ * @param {{
+ *   lines: string[];
+ *   releaseFile?: string;
+ *   hookEvent?: { kind: string; payload?: object };
+ *   exitAfter?: boolean;
+ *   idle?: boolean;
+ * }} options
+ */
+export function agentTranscriptScript({
+  lines,
+  releaseFile,
+  hookEvent,
+  exitAfter = false,
+  idle = false,
+}) {
   const hold = releaseFile
     ? `while [ ! -e ${shellSingleQuote(releaseFile)} ]; do sleep 0.1; done\n` +
       `stty size > ${shellSingleQuote(ptySizeFile(releaseFile))} 2>/dev/null || true\n`
@@ -112,8 +128,23 @@ export function agentTranscriptScript({ lines, releaseFile }) {
   const body = lines
     .map((l) => (l === "" ? "echo" : `echo ${shellSingleQuote(l)}`))
     .join("\nsleep 0.25\n");
-  const keepalive = `while :; do printf '\\033[0m'; sleep ${KEEPALIVE_INTERVAL_S}; done`;
-  return `#!/usr/bin/env bash\nset -u\nclear\n${hold}${body}\n${keepalive}\n`;
+  // `hookEvent` ({ kind: "Notification" | "Stop", payload }) sends the same
+  // hook message a real Claude Code session's hook would, through the shipped
+  // forwarder and the session's own MULLION_HOOK_* env — so the session reaches
+  // Needs Attention / Idle for real instead of by a seeded flag.
+  const hook = hookEvent
+    ? `\n"\${MULLION_FORWARDER_NODE:-node}" "\${MULLION_FORWARDER_PATH:-}" claude-code ${hookEvent.kind} ` +
+      `<<< ${shellSingleQuote(JSON.stringify(hookEvent.payload ?? {}))} >/dev/null 2>&1 || true`
+    : "";
+  // `exitAfter` ends the script (and so the session) once it has printed.
+  // `idle` keeps the session alive with a SLOW keepalive: every 20 s is far
+  // past the backend's 2 s idle threshold (so it reads Idle, unlike the default
+  // 1 s keepalive that pins a session to Working) and still well under the 60 s
+  // silence bound that would raise "Gone quiet".
+  const keepalive = exitAfter
+    ? "exit 0"
+    : `while :; do printf '\\033[0m'; sleep ${idle ? IDLE_KEEPALIVE_INTERVAL_S : KEEPALIVE_INTERVAL_S}; done`;
+  return `#!/usr/bin/env bash\nset -u\nclear\n${hold}${body}${hook}\n${keepalive}\n`;
 }
 
 /** The last non-blank line of a transcript: once it's in the scrollback, the whole transcript is. */
@@ -305,6 +336,113 @@ export async function seedDemo({ api, root, holdTranscripts = false }) {
       name: "Speed up orders query",
     }),
   });
+
+  // More sessions, so the kanban lanes, the notifications bell and the
+  // right-sidebar origin markers have something to show. Each ends differently:
+  // one asks for attention, one goes idle, one exits, and one is a hand-started
+  // session on a worktree whose branch is a fake PR's head, which is what makes
+  // that PR's row read "manual".
+  const session = (projectId, name, lines, extra = {}, scriptOptions = {}) =>
+    writeFile(
+      path.join(scriptsDir, `${name.toLowerCase().replace(/\W+/g, "-")}.sh`),
+      agentTranscriptScript({ lines, ...scriptOptions }),
+      { mode: 0o755 },
+    ).then(() =>
+      api("/api/sessions", {
+        method: "POST",
+        body: JSON.stringify({
+          projectId,
+          name,
+          command: path.join(scriptsDir, `${name.toLowerCase().replace(/\W+/g, "-")}.sh`),
+          ...extra,
+        }),
+      }),
+    );
+  await session(
+    auroraProject.id,
+    "Document the cookie lifetime",
+    [
+      "Claude Code v2.1.0",
+      "",
+      "> Document how long the session cookie lives",
+      "",
+      "  Read src/auth/session.ts",
+      "",
+    ],
+    {},
+    {
+      hookEvent: {
+        kind: "Notification",
+        payload: {
+          message: "Claude needs your permission to run: git push origin docs/cookie-lifetime",
+        },
+      },
+    },
+  );
+  await session(
+    orbitProject.id,
+    "Add a health endpoint",
+    [
+      "Codex CLI",
+      "",
+      "> Expose GET /healthz",
+      "",
+      "  Edit src/routes/health.ts",
+      "",
+      "Done. /healthz returns 200 with the build version.",
+      "",
+    ],
+    {},
+    {
+      idle: true,
+      hookEvent: { kind: "Stop", payload: { last_assistant_message: "Added GET /healthz." } },
+    },
+  );
+  await session(
+    auroraProject.id,
+    "Fix flaky login test",
+    [
+      "Claude Code v2.1.0",
+      "",
+      "> fix the flaky login test",
+      "",
+      "  Edit auth.test.ts",
+      "  ✓ 12 passed",
+      "",
+      "Fixed.",
+      "",
+    ],
+    {},
+    { exitAfter: true },
+  );
+  // The link to the PR comes from the session's liveBranch, which only an agent
+  // hook sets (here: the PostToolUse a real agent sends after `git worktree
+  // add`), not from the worktree existing.
+  const paletteWorktree = path.join(
+    scratchRoot,
+    "aurora-web",
+    ".mullion-worktrees",
+    "feat-dark-palette",
+  );
+  await session(
+    auroraProject.id,
+    "Dark mode palette",
+    ["Claude Code v2.1.0", "", "> Draft the dark palette", "", "  Edit src/ui/theme.ts", ""],
+    // The PR "WIP: dark mode palette" (#15 in fake-github.mjs) has this head
+    // branch; a worktree on it links the session to that PR.
+    { worktree: { baseRef: "main", branchName: "feat/dark-palette" } },
+    {
+      hookEvent: {
+        kind: "PostToolUse",
+        payload: {
+          tool_name: "Bash",
+          tool_input: {
+            command: `git worktree add ${paletteWorktree} -b feat/dark-palette main`,
+          },
+        },
+      },
+    },
+  );
 
   // Task Master board. Backlog/ready tasks are plain REST creates. Every
   // other status is a real lifecycle transition that spins up a worker
