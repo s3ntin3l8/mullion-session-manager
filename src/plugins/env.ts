@@ -516,6 +516,14 @@ export const schema = {
       type: "boolean",
       default: true,
     },
+    // Registers the demo-only fixture routes (src/routes/demo-fixtures.ts) that
+    // insert tasks in states the REST API refuses to create. Set only by
+    // scripts/demo/instance.mjs for the throwaway demo instance; never in a
+    // real deployment.
+    MULLION_DEMO: {
+      type: "boolean",
+      default: false,
+    },
     // Gates autonomous Task Master behavior — the background watcher's
     // GitHub ingest + auto-claim, and the claim/approve endpoints. Default
     // OFF, same "real feature, off by default" posture the roadmap
@@ -1118,6 +1126,7 @@ declare module "fastify" {
       MULLION_GITHUB_API_URL: string;
       MULLION_SERVICE_UNIT: string;
       MULLION_KEEP_AWAKE: boolean;
+      MULLION_DEMO: boolean;
       MULLION_TASK_MASTER_ENABLED: boolean;
       MULLION_TASK_LABEL: string;
       MULLION_TASK_POLL_INTERVAL: number;

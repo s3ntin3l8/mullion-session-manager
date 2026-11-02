@@ -168,6 +168,8 @@ export async function startDemo({
       MULLION_TRUST_GATEWAY: "true",
       // GitHub traffic goes to the loopback fake, never to api.github.com.
       MULLION_GITHUB_API_URL: githubUrl,
+      // Registers the demo-only fixture routes the seed uses (src/routes/demo-fixtures.ts).
+      MULLION_DEMO: "true",
     });
   const frontendEnv = demoEnv(demoDir, { PATH, BACKEND_URL: backendUrl });
 

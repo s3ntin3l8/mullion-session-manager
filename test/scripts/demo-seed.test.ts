@@ -91,12 +91,18 @@ describe("lastTranscriptLine", () => {
   });
 });
 
+// Every call answers with an id; GET /api/settings also reports the Task Master
+// state the seed reads back (`paused: false` simulates a lost pause).
+const stubApi =
+  (paused = true) =>
+  async () => ({ id: 1, taskMaster: { enabled: "on", autoClaimPaused: paused } });
+
 describe("seedDemo holdTranscripts", () => {
   // Seeds against a stub API (every call answers with an id) so only the
   // generated scripts and the returned release path are under test.
   const seed = (holdTranscripts?: boolean) => {
     const root = mkdtempSync(path.join(dir, "seed-"));
-    return seedDemo({ api: async () => ({ id: 1 }), root, holdTranscripts });
+    return seedDemo({ api: stubApi(), root, holdTranscripts });
   };
 
   it("gates fake-agent.sh on the returned release file when holding", async () => {
@@ -110,5 +116,14 @@ describe("seedDemo holdTranscripts", () => {
     const seeded = await seed();
     const script = readFileSync(path.join(seeded.scriptsDir, "fake-agent.sh"), "utf8");
     expect(script).not.toContain("fake-agent.release");
+  });
+});
+
+describe("seedDemo Task Master pin", () => {
+  it("refuses to go on when auto-claim is not paused", async () => {
+    const root = mkdtempSync(path.join(dir, "seed-"));
+    await expect(seedDemo({ api: stubApi(false), root })).rejects.toThrow(
+      /Task Master must be on with auto-claim paused/,
+    );
   });
 });

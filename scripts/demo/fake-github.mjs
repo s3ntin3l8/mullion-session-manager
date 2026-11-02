@@ -169,7 +169,7 @@ function issuesFor(repo) {
         title: "Document the session cookie lifetime",
         author: "jonas",
         age: 900,
-        labels: ["docs"],
+        labels: ["docs", "mullion-task"],
       },
     ];
   return [
@@ -358,6 +358,8 @@ function issueJson(i, repoName, withHtml) {
     html_url: url,
     state: "open",
     user: { login: i.author },
+    // Task Master ignores a labelled issue unless its author is trusted.
+    author_association: "MEMBER",
     labels: i.labels.map((name) => ({ name, color: LABEL_COLORS[name] ?? "ededed" })),
     assignees: [],
     comments: 0,
@@ -499,6 +501,9 @@ export async function startFakeGithub({ tickMs = 0, latestRelease = "v99.0.0" } 
       ];
       return json(res, page === 1 ? items.slice(0, perPage) : []);
     }
+
+    // Task Master asks for each tracked issue's blockers; none here.
+    if (/^\/issues\/\d+\/dependencies\/blocked_by$/.test(sub)) return json(res, []);
 
     const issueMatch = sub.match(/^\/issues\/(\d+)(\/comments)?$/);
     if (issueMatch) {

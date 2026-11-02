@@ -54,8 +54,12 @@ describe("fake GitHub API", () => {
 
   it("filters issues by label and hides PRs from a labelled list", async () => {
     const r = await get("/repos/acme/aurora-web/issues?state=open&labels=mullion-task");
-    expect(r.body.map((i: Row) => i.number)).toEqual([9, 10]);
+    expect(r.body.map((i: Row) => i.number)).toEqual([9, 10, 11]);
     expect(r.body.every((i: Row) => !i.pull_request)).toBe(true);
+    expect(r.body[0]!.author_association).toBe("MEMBER");
+    expect((await get("/repos/acme/aurora-web/issues/10/dependencies/blocked_by")).body).toEqual(
+      [],
+    );
   });
 
   it("returns issue detail with body_html and an empty comment list", async () => {
