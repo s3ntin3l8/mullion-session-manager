@@ -218,6 +218,10 @@ export interface CreateWorktreeOptions {
 export interface WorktreeResult {
   path: string;
   branch: string;
+  /** Set by `resumeTaskWorktree` when it adopted a worktree that was already
+   * on disk (a failed task's leftover, possibly with uncommitted changes)
+   * instead of cutting a new one. */
+  reused?: boolean;
 }
 
 // Issue #677 — createWorktree's failure surface collapsed every distinct
@@ -1060,6 +1064,18 @@ export async function resumeTaskWorktree(
 
   const baseDir = path.join(projectRoot, ".mullion-worktrees");
   ensureExcluded(projectRoot, baseDir);
+
+  // A failed task whose worktree was dirty keeps it (removeWorktreeIfClean
+  // never discards work), and `git worktree add` refuses a path that exists
+  // with the branch checked out in it. Adopt that exact checkout rather than
+  // dead-ending the retry; any OTHER collision still falls through to the
+  // add below and fails as before.
+  const existing = (await listWorktrees(projectRoot))?.find(
+    (w) => path.resolve(w.path) === worktreePath && w.branch === branchName,
+  );
+  if (existing && existsSync(worktreePath)) {
+    return { path: worktreePath, branch: branchName, reused: true };
+  }
 
   const result = await runGit(projectRoot, ["worktree", "add", worktreePath, branchName]);
   if (result.code !== 0) return null;

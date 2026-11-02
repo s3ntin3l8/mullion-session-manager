@@ -1719,20 +1719,14 @@ describe("resumeTaskWorktree (#483)", () => {
     expect(result).toBeNull();
   });
 
-  it("returns null when the branch is already checked out elsewhere (git worktree add refuses without --force)", async () => {
+  it("returns null when the branch is checked out at a different path (git worktree add refuses without --force)", async () => {
     const branch = "mullion/task-8-test";
-    const created = await createWorktree({
-      cwd: tmpDir,
-      baseRef: "main",
-      seed: branch,
-      branchName: branch,
-    });
-    expect(created).not.toBeNull();
-    // Deliberately NOT removed — the branch is still checked out at
-    // created!.path, so a second checkout must be refused.
+    const elsewhere = path.join(tmpDir, "..", `elsewhere-${path.basename(tmpDir)}`);
+    git(tmpDir, ["worktree", "add", "-b", branch, elsewhere, "main"]);
 
     const result = await resumeTaskWorktree(tmpDir, branch);
     expect(result).toBeNull();
+    fs.rmSync(elsewhere, { recursive: true, force: true });
   });
 
   it("refuses a branch name outside the mullion/task-<id>-<slug> namespace, even if it exists", async () => {
