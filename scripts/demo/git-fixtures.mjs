@@ -63,6 +63,10 @@ export async function widenHistory(repo, count = 11) {
  *
  * Plus a merge commit on `main`, so the History graph has a join.
  *
+ * `archive/audit-log` on origin is load-bearing: it keeps `feat/gone`'s tip
+ * reachable from a remote ref, which is what stops Prune treating `feat/gone`
+ * as holding unpushed work (branchesWithUnpushedTips). Don't clean it up.
+ *
  * Every branch except `feat/merged` carries a commit of its own: listBranches
  * reads a tip that is an ancestor of `main` as "merged" before it looks at
  * the upstream state (git-refs.ts), so a branch forked at main's tip would
@@ -108,11 +112,19 @@ export async function addBranchDepth(repo) {
   await gitOut(repo, "branch", "-q", "--set-upstream-to=origin/main", "main");
 }
 
-/** A worktree for a new branch under the project's `.mullion-worktrees`. */
-export async function addWorktree(repo, branch) {
+/**
+ * A worktree under the project's `.mullion-worktrees` on `branch`, which gets
+ * a commit of its own so it is not an ancestor of main (the app would chip it
+ * "merged" even with an open PR). Pick a branch no seeded session creates:
+ * the server's own `git worktree add -b` refuses an existing branch or path.
+ */
+export async function addWorktree(repo, branch, message = "Start the work") {
+  const head = await gitOut(repo, "rev-parse", "main");
+  const tree = await gitOut(repo, "rev-parse", `${head}^{tree}`);
+  await gitOut(repo, "branch", branch, await commit(repo, tree, [head], message));
   const dir = path.join(repo, ".mullion-worktrees", branch.replaceAll("/", "-"));
   await mkdir(path.dirname(dir), { recursive: true });
-  await gitOut(repo, "worktree", "add", "-q", dir, "-b", branch, "main");
+  await gitOut(repo, "worktree", "add", "-q", dir, branch);
   return dir;
 }
 

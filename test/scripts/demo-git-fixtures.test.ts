@@ -74,9 +74,11 @@ describe("demo git fixtures", () => {
 
   it("adds a worktree under .mullion-worktrees", async () => {
     const { repo } = repoWithOrigin();
-    const dir = await addWorktree(repo, "feat/dark-palette");
-    expect(dir).toBe(path.join(repo, ".mullion-worktrees", "feat-dark-palette"));
-    expect(git(dir, "branch", "--show-current")).toBe("feat/dark-palette");
+    const dir = await addWorktree(repo, "feat/search-filters");
+    expect(dir).toBe(path.join(repo, ".mullion-worktrees", "feat-search-filters"));
+    expect(git(dir, "branch", "--show-current")).toBe("feat/search-filters");
+    // Its own commit: not an ancestor of main, so no "merged" chip.
+    expect(git(repo, "branch", "--merged", "main", "--list", "feat/search-filters")).toBe("");
   });
 
   it("writes a dock control that runs the dev-server script", async () => {

@@ -214,9 +214,13 @@ describe("seedDemo git depth and dock", () => {
     expect(tracks).toContain("feat/ahead [ahead 1]");
     expect(tracks).toContain("feat/behind [behind 1]");
     expect(tracks).toContain("feat/gone [gone]");
-    expect(existsSync(path.join(aurora, ".mullion-worktrees", "feat-dark-palette"))).toBe(true);
+    expect(existsSync(path.join(aurora, ".mullion-worktrees", "feat-search-filters"))).toBe(true);
     expect(existsSync(path.join(aurora, ".crs", "dock.json"))).toBe(true);
     const patch = calls.find((c) => c.method === "PATCH" && c.url.startsWith("/api/projects/"));
+    // The palette session asks the server to create its own worktree; a
+    // pre-made branch or path of that name would make the server refuse it.
+    expect(existsSync(path.join(aurora, ".mullion-worktrees", "feat-dark-palette"))).toBe(false);
+    expect(tracks).not.toContain("feat/dark-palette");
     expect(patch?.body).toEqual({ devServerUrl: "3958" });
   });
 });
