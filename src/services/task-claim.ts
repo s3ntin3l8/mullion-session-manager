@@ -1112,7 +1112,9 @@ export type RetryTaskOutcome =
  * reliably present here. `removeWorktreeIfClean` (the `→ failed` cleanup
  * itself) removes only the worktree directory, never the branch — see that
  * function's own doc comment — which is exactly what makes resuming
- * possible.
+ * possible. A dirty worktree is the exception: `removeWorktreeIfClean` leaves
+ * it on disk with the branch checked out, so `resumeTaskWorktree` adopts that
+ * checkout as it stands (`reused`) instead of colliding with it.
  *
  * Goes straight from "failed" to "claimed", not through "ready" —
  * task-state.ts's table only allows `failed → ready`/`backlog`, but this
@@ -1440,6 +1442,7 @@ export async function retryTask(
       worktreePath: worktree.path,
       budgetMinutes: taskMasterConfig.budgetMinutes,
       mode: "retry",
+      reusedWorktree: worktree.reused === true,
       agentCommand: command,
       // #778 — resolved against the OWNING host's own sessionsDir; see
       // task-reconciler.ts's spawnReviewAgentNow for the full rationale.

@@ -401,6 +401,9 @@ export interface WorkerPromptOptions extends WorkerPreambleOptions {
    * earlier work — otherwise a retry looks like a fresh start on a
    * mysteriously non-empty tree. */
   mode: "claim" | "retry";
+  /** Retry only: the worktree was a failed attempt's leftover, adopted as it
+   * stood, so it may hold uncommitted changes the branch's commits lack. */
+  reusedWorktree?: boolean;
 }
 
 /** The full initial prompt for a claim or retry spawn: preamble, break,
@@ -414,7 +417,11 @@ export function buildWorkerPrompt(opts: WorkerPromptOptions): string {
         ' commit\'s message starts with "wip:", it is a machine-made salvage commit' +
         " Mullion made when the previous turn ended with uncommitted changes, not real" +
         " progress — fold it into a proper commit (amend it, or `git reset --soft" +
-        " HEAD~1` and recommit) before you finish."
+        " HEAD~1` and recommit) before you finish." +
+        (opts.reusedWorktree
+          ? " This worktree is the earlier attempt's own checkout and may hold uncommitted" +
+            " changes — check `git status` and `git diff`, and build on any you find."
+          : "")
       : "";
   return `${preamble}${retryNote}${SECTION_BREAK}${taskSpec(opts.task)}`;
 }
