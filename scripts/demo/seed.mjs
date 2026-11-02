@@ -450,6 +450,8 @@ export async function seedDemo({ api, root, holdTranscripts = false }) {
     ["Claude Code v2.1.0", "", "> Draft the dark palette", "", "  Edit src/ui/theme.ts", ""],
     // The PR "WIP: dark mode palette" (#15 in fake-github.mjs) has this head
     // branch; a worktree on it links the session to that PR.
+    // The server cuts this branch at main's tip, so the Git panel may chip it
+    // "merged" beside its open PR. Cosmetic: worktree branches are never pruned.
     { worktree: { baseRef: "main", branchName: "feat/dark-palette" } },
     {
       hookEvent: {
