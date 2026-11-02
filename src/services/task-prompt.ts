@@ -419,8 +419,8 @@ export function buildWorkerPrompt(opts: WorkerPromptOptions): string {
         " progress — fold it into a proper commit (amend it, or `git reset --soft" +
         " HEAD~1` and recommit) before you finish." +
         (opts.reusedWorktree
-          ? " The earlier attempt also left uncommitted changes in this worktree —" +
-            " check `git status` and `git diff`, and build on them."
+          ? " This worktree is the earlier attempt's own checkout and may hold uncommitted" +
+            " changes — check `git status` and `git diff`, and build on any you find."
           : "")
       : "";
   return `${preamble}${retryNote}${SECTION_BREAK}${taskSpec(opts.task)}`;

@@ -59,7 +59,35 @@ describe("buildWorkerPrompt reusedWorktree", () => {
   it("mentions uncommitted changes only when the retry adopted a leftover worktree", () => {
     const reused = buildWorkerPrompt({ ...base, mode: "retry", reusedWorktree: true });
     const fresh = buildWorkerPrompt({ ...base, mode: "retry" });
-    expect(reused).toContain("left uncommitted changes in this worktree");
-    expect(fresh).not.toContain("uncommitted changes in this worktree");
+    expect(reused).toContain("may hold uncommitted changes");
+    expect(fresh).not.toContain("may hold uncommitted changes");
+  });
+});
+
+describe("resumeTaskWorktree with a prunable registration", () => {
+  it("prunes a registration whose directory was deleted, then checks the branch out", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "git-worktree-prunable-"));
+    try {
+      git(root, ["init", "-b", "main"]);
+      fs.writeFileSync(path.join(root, "a.txt"), "a");
+      git(root, ["add", "-A"]);
+      git(root, ["commit", "-m", "initial", "--no-verify"]);
+      const branch = "mullion/task-5-test";
+      const created = await createWorktree({
+        cwd: root,
+        baseRef: "main",
+        seed: branch,
+        branchName: branch,
+      });
+      const worktreePath = created.path as string;
+      fs.rmSync(worktreePath, { recursive: true, force: true });
+
+      const result = await resumeTaskWorktree(root, branch);
+
+      expect(result).toEqual({ path: worktreePath, branch });
+      expect(fs.existsSync(worktreePath)).toBe(true);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

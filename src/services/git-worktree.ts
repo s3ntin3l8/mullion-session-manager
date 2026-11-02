@@ -1068,14 +1068,15 @@ export async function resumeTaskWorktree(
   // A failed task whose worktree was dirty keeps it (removeWorktreeIfClean
   // never discards work), and `git worktree add` refuses a path that exists
   // with the branch checked out in it. Adopt that exact checkout rather than
-  // dead-ending the retry; any OTHER collision still falls through to the
-  // add below and fails as before.
+  // dead-ending the retry; any OTHER collision still falls through to the add
+  // below and fails as before. Pruning first drops a registration whose
+  // directory was deleted out of band, so a surviving entry is a live checkout
+  // and the add below no longer trips over "missing but already registered".
+  await runGit(projectRoot, ["worktree", "prune"]);
   const existing = (await listWorktrees(projectRoot))?.find(
     (w) => path.resolve(w.path) === worktreePath && w.branch === branchName,
   );
-  if (existing && existsSync(worktreePath)) {
-    return { path: worktreePath, branch: branchName, reused: true };
-  }
+  if (existing) return { path: worktreePath, branch: branchName, reused: true };
 
   const result = await runGit(projectRoot, ["worktree", "add", worktreePath, branchName]);
   if (result.code !== 0) return null;
