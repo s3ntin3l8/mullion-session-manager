@@ -4,6 +4,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { GIT_NO_AUTO_GC, gitEnv } from "../git-env.mjs";
 import { DEMO_GITHUB_OWNER } from "./fake-github.mjs";
+import { addBranchDepth, addWorktree, widenHistory, writeDockControl } from "./git-fixtures.mjs";
 import { ptySizeFile } from "./geometry.mjs";
 
 /**
@@ -14,6 +15,9 @@ import { ptySizeFile } from "./geometry.mjs";
  */
 
 const execFileAsync = promisify(execFile);
+
+// aurora-web's dev server: the port its dock control listens on.
+const DEV_SERVER_PORT = 3958;
 
 // Identity comes from the env, not `git config`: nothing is written to any
 // config file, so a leaked GIT_DIR/GIT_CONFIG can't make this pollute a real
@@ -271,6 +275,13 @@ export async function seedDemo({ api, root, holdTranscripts = false }) {
   });
   for (const name of ["aurora-web", "orbit-api"])
     await connectOrigin(path.join(scratchRoot, name), name, `${scratchRoot}-remotes`);
+  // Git depth on aurora-web: ahead/behind/gone/merged branches, a merge on
+  // main, a few topic branches for the History graph and one worktree.
+  const auroraDir = path.join(scratchRoot, "aurora-web");
+  await addBranchDepth(auroraDir);
+  await widenHistory(auroraDir, 3);
+  await addWorktree(auroraDir, "feat/dark-mode");
+  await writeDockControl(auroraDir, { port: DEV_SERVER_PORT, scriptDir: scriptsDir });
   // A third repo, deliberately never registered as a project below — the
   // sidebar's project-discovery panel (Sidebar.tsx's "Configure search
   // roots" empty state) needs at least one genuinely undiscovered
@@ -304,6 +315,11 @@ export async function seedDemo({ api, root, holdTranscripts = false }) {
   const auroraProject = await api("/api/projects", {
     method: "POST",
     body: JSON.stringify({ name: "aurora-web", cwd: path.join(scratchRoot, "aurora-web") }),
+  });
+  // POST ignores devServerUrl; only PATCH sets it.
+  await api(`/api/projects/${auroraProject.id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ devServerUrl: String(DEV_SERVER_PORT) }),
   });
   const orbitProject = await api("/api/projects", {
     method: "POST",
