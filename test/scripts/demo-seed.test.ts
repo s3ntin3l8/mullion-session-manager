@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { parseSttySize, ptySizeFile } from "../../scripts/demo/geometry.mjs";
 import {
+  IDLE_KEEPALIVE_INTERVAL_S,
   KEEPALIVE_INTERVAL_S,
   agentTranscriptScript,
   lastTranscriptLine,
@@ -34,6 +35,37 @@ function runFor(script: string, ms: number): Promise<string> {
     }, ms);
   });
 }
+
+describe("agentTranscriptScript options", () => {
+  const lines = ["hello"];
+
+  it("sends a hook event through the shipped forwarder, tolerating its absence", () => {
+    const script = agentTranscriptScript({
+      lines,
+      hookEvent: { kind: "Notification", payload: { message: "needs you" } },
+    });
+    expect(script).toContain('claude-code Notification <<< \'{"message":"needs you"}\'');
+    // `set -u` would abort on an unset variable, so both must have defaults.
+    expect(script).toContain("${MULLION_FORWARDER_PATH:-}");
+    expect(script).toContain("${MULLION_FORWARDER_NODE:-node}");
+    expect(script).toContain("|| true");
+    expect(agentTranscriptScript({ lines })).not.toContain("claude-code");
+  });
+
+  it("exits after the transcript when asked, and never loops", () => {
+    const script = agentTranscriptScript({ lines, exitAfter: true });
+    expect(script.trimEnd().endsWith("exit 0")).toBe(true);
+    expect(script).not.toContain("while :");
+  });
+
+  it("idles on a slow keepalive: past the idle threshold, under the silence bound", () => {
+    const script = agentTranscriptScript({ lines, idle: true });
+    expect(script).toContain(`sleep ${IDLE_KEEPALIVE_INTERVAL_S}; done`);
+    expect(IDLE_KEEPALIVE_INTERVAL_S).toBeGreaterThan(2); // backend idle threshold
+    expect(IDLE_KEEPALIVE_INTERVAL_S).toBeLessThan(60); // "Gone quiet" bound
+    expect(agentTranscriptScript({ lines })).toContain(`sleep ${KEEPALIVE_INTERVAL_S}; done`);
+  });
+});
 
 describe("agentTranscriptScript", () => {
   it("prints the transcript verbatim, including shell metacharacters", async () => {
@@ -125,5 +157,32 @@ describe("seedDemo Task Master pin", () => {
     await expect(seedDemo({ api: stubApi(false), root })).rejects.toThrow(
       /Task Master must be on with auto-claim paused/,
     );
+  });
+});
+
+describe("seedDemo sessions", () => {
+  it("seeds sessions in four end states and one manual worktree session on a PR's branch", async () => {
+    const root = mkdtempSync(path.join(dir, "seed-"));
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    const api = async (url: string, init?: { body?: string }) => {
+      calls.push({ url, body: init?.body ? JSON.parse(init.body) : {} });
+      return { id: 1, taskMaster: { enabled: "on", autoClaimPaused: true } };
+    };
+    await seedDemo({ api, root });
+    const sessions = calls.filter((c) => c.url === "/api/sessions").map((c) => c.body);
+    expect(sessions.map((b) => b.name)).toEqual([
+      "Add login rate limiting",
+      "Speed up orders query",
+      "Document the cookie lifetime",
+      "Add a health endpoint",
+      "Fix flaky login test",
+      "Dark mode palette",
+    ]);
+    const palette = sessions.at(-1)!;
+    expect(palette.worktree).toEqual({ baseRef: "main", branchName: "feat/dark-palette" });
+    const script = readFileSync(String(palette.command), "utf8");
+    expect(script).toContain("PostToolUse");
+    expect(script).toContain("git worktree add");
+    expect(script).toContain("-b feat/dark-palette");
   });
 });
