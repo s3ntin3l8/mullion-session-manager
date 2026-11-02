@@ -1,8 +1,9 @@
-import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { gitEnv } from "../../scripts/git-env.mjs";
 import { parseSttySize, ptySizeFile } from "../../scripts/demo/geometry.mjs";
 import {
   IDLE_KEEPALIVE_INTERVAL_S,
@@ -192,5 +193,34 @@ describe("seedDemo sessions", () => {
     expect(paletteScript).toContain("PostToolUse");
     expect(paletteScript).toContain("git worktree add");
     expect(paletteScript).toContain("-b feat/dark-palette");
+  });
+});
+
+describe("seedDemo git depth and dock", () => {
+  it("gives aurora-web branches, a worktree, a dev-server port and a dock control", async () => {
+    const root = mkdtempSync(path.join(dir, "seed-"));
+    const calls: { url: string; method?: string; body: Record<string, unknown> }[] = [];
+    const api = async (url: string, init?: { method?: string; body?: string }) => {
+      calls.push({ url, method: init?.method, body: init?.body ? JSON.parse(init.body) : {} });
+      return { id: 1, taskMaster: { enabled: "on", autoClaimPaused: true } };
+    };
+    await seedDemo({ api, root });
+    const aurora = path.join(root, "aurora-web");
+    const tracks = execFileSync(
+      "git",
+      ["for-each-ref", "--format=%(refname:short) %(upstream:track)", "refs/heads"],
+      { cwd: aurora, env: gitEnv() },
+    ).toString();
+    expect(tracks).toContain("feat/ahead [ahead 1]");
+    expect(tracks).toContain("feat/behind [behind 1]");
+    expect(tracks).toContain("feat/gone [gone]");
+    expect(existsSync(path.join(aurora, ".mullion-worktrees", "feat-search-filters"))).toBe(true);
+    expect(existsSync(path.join(aurora, ".crs", "dock.json"))).toBe(true);
+    const patch = calls.find((c) => c.method === "PATCH" && c.url.startsWith("/api/projects/"));
+    // The palette session asks the server to create its own worktree; a
+    // pre-made branch or path of that name would make the server refuse it.
+    expect(existsSync(path.join(aurora, ".mullion-worktrees", "feat-dark-palette"))).toBe(false);
+    expect(tracks).not.toContain("feat/dark-palette");
+    expect(patch?.body).toEqual({ devServerUrl: "3958" });
   });
 });
