@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.58](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.57...v0.3.58) (2026-11-02)
+
+
+### Features
+
+* **github:** configurable GitHub API base for a local fake server ([#2552](https://github.com/s3ntin3l8/mullion-session-manager/issues/2552)) ([8fcb58e](https://github.com/s3ntin3l8/mullion-session-manager/commit/8fcb58e19e6e48397ac7e12e7f1e3a74e9617a67))
+* **scaffold:** render the workflow conventions as a markdown list ([5c7c3b1](https://github.com/s3ntin3l8/mullion-session-manager/commit/5c7c3b15db8ca0dd75aab036e9bba0b82a6cbed6))
+* **scaffold:** restructure also reports the passages it did not change ([a0d6d38](https://github.com/s3ntin3l8/mullion-session-manager/commit/a0d6d38f6dfbc59969428a402d1b04af46d3f748))
+* **scaffold:** say when a remote generation turn ran without the read canary ([45968a9](https://github.com/s3ntin3l8/mullion-session-manager/commit/45968a926fbd24c7fc84549fc94d4aabcc65f17e))
+* **tasks:** demo-only fixture route seeds tasks in every lifecycle state ([#2560](https://github.com/s3ntin3l8/mullion-session-manager/issues/2560)) ([9c19da6](https://github.com/s3ntin3l8/mullion-session-manager/commit/9c19da66797b6444843a2a93d6c77adfcb9e4929))
+
+
+### Bug Fixes
+
+* **scaffold:** flag generated content whose cited paths mostly do not exist ([766d8de](https://github.com/s3ntin3l8/mullion-session-manager/commit/766d8de871706b93bda0097fc4a324b6d31186b0))
+* **scaffold:** hide the operator's real HOME from sandboxed generation turns ([#2558](https://github.com/s3ntin3l8/mullion-session-manager/issues/2558)) ([663481d](https://github.com/s3ntin3l8/mullion-session-manager/commit/663481d7aa6002de02b0b267232c7f791f11a460))
+* **scaffold:** the conventions drift banner still names the old Preview button ([76deb03](https://github.com/s3ntin3l8/mullion-session-manager/commit/76deb03c5dd25779a7a749aaafad55bc56718741))
+* **scaffold:** the conventions say .wt/&lt;branch&gt;, which nests for a branch with a slash ([a81444a](https://github.com/s3ntin3l8/mullion-session-manager/commit/a81444a7d5ae3a1d616d3af616c5c3e6bdbf1ded))
+* **scaffold:** widen the restructure brief to every instruction file and add a context budget ([f4857da](https://github.com/s3ntin3l8/mullion-session-manager/commit/f4857da571b5108210b64a1be0a4a257cac24a1b))
+* **tasks:** a merge that supersedes a live task copy leaves its worker running ([55f607c](https://github.com/s3ntin3l8/mullion-session-manager/commit/55f607cbf770e481cff60f0e604a03a6894fd0fd))
+
 ## [0.3.57](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.56...v0.3.57) (2026-11-01)
 
 
