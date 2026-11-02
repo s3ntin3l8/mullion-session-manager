@@ -61,6 +61,26 @@ describe("TasksSidebarView", () => {
     expect(screen.queryByText(/Other project/)).toBeNull();
   });
 
+  // #2559 — the leading number means one thing only. A task linked to an
+  // issue wears its issue number (the number the board's task card badges,
+  // TaskCard.tsx), a task without one wears its own id spelled "Task #N" —
+  // never the bare "#N" form that would read as an issue number. So a task
+  // for issue #10 and a different task whose id is 10 no longer both read
+  // "#10".
+  it("labels a task with an issue number by the issue, and one without by its task id", () => {
+    useDashboardStore.setState({
+      tasks: [
+        task({ id: 3, title: "Linked to issue ten", status: "ready", issueNumber: 10 }),
+        task({ id: 10, title: "No issue at all", status: "ready" }),
+      ],
+    });
+    renderView();
+    expect(screen.getByText("#10 Linked to issue ten")).toBeTruthy();
+    expect(screen.getByText("Task #10 No issue at all")).toBeTruthy();
+    // The two rows read differently — no two rows can collide any more.
+    expect(screen.queryByText("#10 No issue at all")).toBeNull();
+  });
+
   it("puts tasks that need you first, with the reason", () => {
     renderView();
     const titles = screen.getAllByText(/Fresh work|Broken job/).map((e) => e.textContent);
