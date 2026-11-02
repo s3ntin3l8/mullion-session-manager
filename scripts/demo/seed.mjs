@@ -91,8 +91,14 @@ function shellSingleQuote(s) {
 // badge, which then sits in the sidebar and the kanban's ad-hoc list of
 // every later shot and through the landing loop. The interval stays under
 // the backend's IDLE_THRESHOLD_MS (2 s) so the row keeps reading "Working".
-export const IDLE_KEEPALIVE_INTERVAL_S = 20;
 export const KEEPALIVE_INTERVAL_S = 1;
+
+// The idle session's keepalive: slow, but under the backend's 10 s
+// SUSTAINED_SILENCE_MS (pty-manager.ts). A hookless `.sh` demo script is held
+// to that bound, so a longer gap would depend on how the output streaks happen
+// to fall. The row still reads Idle: that comes from the Stop hook's finished
+// latch, not from the output going quiet.
+export const IDLE_KEEPALIVE_INTERVAL_S = 8;
 
 // `releaseFile`, when given, holds the transcript until that file exists. dtach
 // starts this script the instant the session is created, before any client
@@ -137,10 +143,8 @@ export function agentTranscriptScript({
       `<<< ${shellSingleQuote(JSON.stringify(hookEvent.payload ?? {}))} >/dev/null 2>&1 || true`
     : "";
   // `exitAfter` ends the script (and so the session) once it has printed.
-  // `idle` keeps the session alive with a SLOW keepalive: every 20 s is far
-  // past the backend's 2 s idle threshold (so it reads Idle, unlike the default
-  // 1 s keepalive that pins a session to Working) and still well under the 60 s
-  // silence bound that would raise "Gone quiet".
+  // `idle` keeps the session alive with a SLOW keepalive (see
+  // IDLE_KEEPALIVE_INTERVAL_S), unlike the default 1 s one that pins it to Working.
   const keepalive = exitAfter
     ? "exit 0"
     : `while :; do printf '\\033[0m'; sleep ${idle ? IDLE_KEEPALIVE_INTERVAL_S : KEEPALIVE_INTERVAL_S}; done`;

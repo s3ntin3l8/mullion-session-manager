@@ -61,8 +61,10 @@ describe("agentTranscriptScript options", () => {
   it("idles on a slow keepalive: past the idle threshold, under the silence bound", () => {
     const script = agentTranscriptScript({ lines, idle: true });
     expect(script).toContain(`sleep ${IDLE_KEEPALIVE_INTERVAL_S}; done`);
-    expect(IDLE_KEEPALIVE_INTERVAL_S).toBeGreaterThan(2); // backend idle threshold
-    expect(IDLE_KEEPALIVE_INTERVAL_S).toBeLessThan(60); // "Gone quiet" bound
+    // pty-manager.ts's SUSTAINED_SILENCE_MS: what governs a hookless `.sh` demo
+    // script. Past it, "Gone quiet" would depend on how the output streaks fall.
+    expect(IDLE_KEEPALIVE_INTERVAL_S).toBeLessThan(10);
+    expect(IDLE_KEEPALIVE_INTERVAL_S).toBeGreaterThan(KEEPALIVE_INTERVAL_S);
     expect(agentTranscriptScript({ lines })).toContain(`sleep ${KEEPALIVE_INTERVAL_S}; done`);
   });
 });
@@ -178,11 +180,17 @@ describe("seedDemo sessions", () => {
       "Fix flaky login test",
       "Dark mode palette",
     ]);
+    const script = (name: string) =>
+      readFileSync(String(sessions.find((b) => b.name === name)!.command), "utf8");
+    expect(script("Document the cookie lifetime")).toContain("claude-code Notification");
+    expect(script("Add a health endpoint")).toContain("claude-code Stop");
+    expect(script("Add a health endpoint")).toContain(`sleep ${IDLE_KEEPALIVE_INTERVAL_S}; done`);
+    expect(script("Fix flaky login test").trimEnd().endsWith("exit 0")).toBe(true);
     const palette = sessions.at(-1)!;
     expect(palette.worktree).toEqual({ baseRef: "main", branchName: "feat/dark-palette" });
-    const script = readFileSync(String(palette.command), "utf8");
-    expect(script).toContain("PostToolUse");
-    expect(script).toContain("git worktree add");
-    expect(script).toContain("-b feat/dark-palette");
+    const paletteScript = script("Dark mode palette");
+    expect(paletteScript).toContain("PostToolUse");
+    expect(paletteScript).toContain("git worktree add");
+    expect(paletteScript).toContain("-b feat/dark-palette");
   });
 });
