@@ -64,14 +64,14 @@ describe("agentEnrollmentPlugin machine identity", () => {
   });
 
   it("asks for a credential on first registration and persists it 0600", async () => {
-    fetchMock.mockResolvedValue(registered({ machine_credential: "cred-1" }));
+    fetchMock.mockResolvedValue(registered({ machine_credential: "a1".repeat(32) }));
     const app = await buildApp();
     try {
       await app.ready();
       await waitUntil(() => loadAgentIdentity(statePath) !== null);
       expect(loadAgentIdentity(statePath)).toEqual({
         hostId: "host-1",
-        machineCredential: "cred-1",
+        machineCredential: "a1".repeat(32),
       });
       const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
       expect(body.token).toBe("bootstrap-secret");
@@ -85,14 +85,17 @@ describe("agentEnrollmentPlugin machine identity", () => {
   });
 
   it("re-registers with the stored identity, not the bootstrap token, and keeps the rotated credential", async () => {
-    fs.writeFileSync(statePath, JSON.stringify({ hostId: "host-1", machineCredential: "cred-1" }));
-    fetchMock.mockResolvedValue(registered({ machine_credential: "cred-2" }));
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify({ hostId: "host-1", machineCredential: "a1".repeat(32) }),
+    );
+    fetchMock.mockResolvedValue(registered({ machine_credential: "b2".repeat(32) }));
     const app = await buildApp();
     try {
       await app.ready();
-      await waitUntil(() => loadAgentIdentity(statePath)?.machineCredential === "cred-2");
+      await waitUntil(() => loadAgentIdentity(statePath)?.machineCredential === "b2".repeat(32));
       const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
-      expect(body).toMatchObject({ hostId: "host-1", machineCredential: "cred-1" });
+      expect(body).toMatchObject({ hostId: "host-1", machineCredential: "a1".repeat(32) });
       expect(body.token).toBeUndefined();
       expect(JSON.stringify(fetchMock.mock.calls[0])).not.toContain("bootstrap-secret");
     } finally {
@@ -101,7 +104,10 @@ describe("agentEnrollmentPlugin machine identity", () => {
   });
 
   it("does not fall back to the bootstrap token when the identity is rejected", async () => {
-    fs.writeFileSync(statePath, JSON.stringify({ hostId: "host-1", machineCredential: "cred-1" }));
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify({ hostId: "host-1", machineCredential: "a1".repeat(32) }),
+    );
     fetchMock.mockResolvedValue(jsonResponse(401, { message: "machine credential rejected" }));
     const app = await buildApp();
     try {

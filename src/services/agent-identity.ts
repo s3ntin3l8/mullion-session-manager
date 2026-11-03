@@ -20,6 +20,12 @@ export interface AgentIdentity {
   machineCredential: string;
 }
 
+// The primary issues a 32-byte hex credential and a UUID-ish host id. Both come
+// off the network, so they are shape-checked before they reach the filesystem:
+// anything else is refused rather than persisted.
+const HOST_ID_RE = /^[A-Za-z0-9_-]{1,128}$/;
+const CREDENTIAL_RE = /^[A-Za-z0-9_-]{16,512}$/;
+
 const STATE_FILE_NAME = "agent-identity.json";
 const execFileAsync = promisify(execFile);
 
@@ -66,11 +72,18 @@ async function restrictToCurrentUserWindows(file: string): Promise<void> {
  * agent just cannot keep its identity across a restart).
  */
 export async function saveAgentIdentity(statePath: string, identity: AgentIdentity): Promise<void> {
+  if (!HOST_ID_RE.test(identity.hostId) || !CREDENTIAL_RE.test(identity.machineCredential)) {
+    throw new Error("refusing to persist a malformed machine identity");
+  }
   const dir = path.dirname(statePath);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tmp = `${statePath}.${process.pid}.tmp`;
   try {
-    fs.writeFileSync(tmp, JSON.stringify(identity), { mode: 0o600 });
+    fs.writeFileSync(
+      tmp,
+      JSON.stringify({ hostId: identity.hostId, machineCredential: identity.machineCredential }),
+      { mode: 0o600 },
+    );
     // writeFileSync's mode is subject to the umask and ignored if the temp
     // file pre-existed; chmod makes the restriction unconditional.
     if (process.platform !== "win32") fs.chmodSync(tmp, 0o600);
