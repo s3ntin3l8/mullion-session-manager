@@ -63,6 +63,17 @@ describe("demo git fixtures", () => {
     expect(status("main")).toBe("");
   });
 
+  it("dates fixture commits apart, so branch order never depends on the clock", async () => {
+    const { repo } = repoWithOrigin();
+    await addBranchDepth(repo);
+    await widenHistory(repo, 3);
+    await addWorktree(repo, "feat/x");
+    const stamps = git(repo, "log", "--all", "--format=%ct").split("\n");
+    // Every commit, the repo's own first one included, has its own second.
+    expect(new Set(stamps).size).toBe(stamps.length);
+    expect(Math.max(...stamps.map(Number))).toBeLessThanOrEqual(Math.floor(Date.now() / 1000));
+  });
+
   it("widens history without duplicating existing branches", async () => {
     const { repo } = repoWithOrigin();
     await widenHistory(repo, 3);

@@ -29,10 +29,26 @@ export async function gitOut(cwd, ...args) {
   return stdout.trim();
 }
 
+// Fixture commits get their own dates, one minute apart and all in the past, in
+// creation order. Left to the clock, commits made within the same second tie and
+// the branch list (sorted by recency) shows them in an arbitrary order, so two
+// renders of the same demo differ.
+let commitClock = Date.now() - 2 * 60 * 60_000;
+
 /** A commit on `parents` that reuses `tree`, so no work tree is touched. */
 async function commit(repo, tree, parents, message) {
   const parentArgs = parents.flatMap((p) => ["-p", p]);
-  return gitOut(repo, "commit-tree", tree, ...parentArgs, "-m", message);
+  commitClock += 60_000;
+  const date = new Date(commitClock).toISOString();
+  const { stdout } = await execFileAsync(
+    "git",
+    [...GIT_NO_AUTO_GC, "commit-tree", tree, ...parentArgs, "-m", message],
+    {
+      cwd: repo,
+      env: { ...gitEnv(), ...IDENTITY, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date },
+    },
+  );
+  return stdout.trim();
 }
 
 /**
