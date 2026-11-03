@@ -12,10 +12,13 @@ import path from "node:path";
 //   - the agent binary and what it needs next to it (see `installRoots`),
 //   - the same for `node` (codex and opencode are node scripts),
 //   - the project repo's git directory, because the scratch worktree is a
-//     `git worktree add` whose `.git` file points into it. Known limit: that
-//     directory is readable whole, `config` included, so a remote URL with an
-//     embedded token in it is visible to the turn. It is the project's own
-//     secret, not the operator's HOME, and git needs the directory to work.
+//     `git worktree add` whose `.git` file points into it. Both `<common>/config`
+//     and `<gitdir>/config.worktree` (the file git reads when
+//     `extensions.worktreeConfig` is set) are shadowed with a sanitised copy
+//     (remote URLs stripped of userinfo; see `sanitizeGitConfig`) so
+//     credentialed remotes are not visible to the turn while git keeps
+//     working. Known limit: `hooks/` and every git object
+//     remain readable read-only as git needs the directory to work.
 //
 // Not covered: `--ro-bind / /` still exposes everything outside HOME (an app
 // at /opt, other users' homes, /etc), and the turn inherits the server's
@@ -58,7 +61,7 @@ function findOnPath(name: string, pathEnv: string): { found: string; real: strin
 
 /** The common git directory a scratch worktree points at, from its `.git` file
  * (`gitdir: <common>/worktrees/<name>`), or null if it is not a linked worktree. */
-function gitCommonDirOf(worktreePath: string): string | null {
+function gitCommonDirOf(worktreePath: string): { common: string; gitdir: string } | null {
   try {
     const text = fs.readFileSync(path.join(worktreePath, ".git"), "utf8");
     const m = /^gitdir:\s*(.+)$/m.exec(text);
@@ -69,9 +72,9 @@ function gitCommonDirOf(worktreePath: string): string | null {
     // gitdir itself is then what git needs.
     try {
       const rel = fs.readFileSync(path.join(gitdir, "commondir"), "utf8").trim();
-      return path.resolve(gitdir, rel);
+      return { common: path.resolve(gitdir, rel), gitdir };
     } catch {
-      return gitdir;
+      return { common: gitdir, gitdir };
     }
   } catch {
     return null;
@@ -101,6 +104,95 @@ function installRoots(real: string, home: string): string[] {
 function outermost(dirs: string[]): string[] {
   const unique = [...new Set(dirs)];
   return unique.filter((d) => !unique.some((o) => o !== d && d.startsWith(o + path.sep)));
+}
+
+/** Strips userinfo (username and password/token) from a URL string, preserving
+ * surrounding quotes if present. Non-standard URLs without userinfo are left
+ * unchanged. */
+export function stripUserInfoFromUrl(raw: string): string {
+  const trimmed = raw.trim();
+  const quoted = trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2;
+  const unquoted = quoted ? trimmed.slice(1, -1) : trimmed;
+
+  try {
+    const parsed = new URL(unquoted);
+    if (parsed.username || parsed.password) {
+      parsed.username = "";
+      parsed.password = "";
+      let stripped = parsed.toString();
+      if (!unquoted.endsWith("/") && stripped.endsWith("/")) {
+        stripped = stripped.slice(0, -1);
+      }
+      return quoted ? `"${stripped}"` : stripped;
+    }
+    return raw;
+  } catch {
+    return raw;
+  }
+}
+
+function splitValueAndComment(raw: string): { value: string; comment: string } {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('"')) {
+    const m = raw.match(/^(\s*"[^"]*")(\s+[#;].*)$/);
+    if (m) return { value: m[1], comment: m[2] };
+    return { value: raw, comment: "" };
+  }
+  const m = raw.match(/^(\s*\S+)(\s+[#;].*)$/);
+  if (m) return { value: m[1], comment: m[2] };
+  return { value: raw, comment: "" };
+}
+
+/** Sanitises git configuration content by stripping userinfo from every URL
+ * a config can carry credentials in: `url`/`pushurl` (keys are
+ * case-insensitive) under `[remote ...]` and `[submodule ...]` sections, and
+ * the base of a `[url "<base>"]` rewrite section. Everything else is kept
+ * (including `http.*.extraHeader` and `credential.*`: this hides credentialed
+ * remote URLs, it is not a full credential seal), and
+ * CRLF line endings are preserved (git accepts them, so they must be matched).
+ * The caller shadows both `<common>/config` and `<gitdir>/config.worktree`. */
+export function sanitizeGitConfig(content: string): string {
+  const lines = content.split("\n");
+  let inUrlSection = false;
+  const result: string[] = [];
+
+  for (const rawLine of lines) {
+    const eol = rawLine.endsWith("\r") ? "\r" : "";
+    const line = rawLine.slice(0, rawLine.length - eol.length);
+    const trimmed = line.trim();
+    const sectionMatch = trimmed.match(
+      /^\[\s*([a-zA-Z0-9.-]+)(?:\s+"([^"]*)")?\s*\](?:\s*[#;].*)?$/,
+    );
+    if (sectionMatch) {
+      const name = sectionMatch[1].toLowerCase();
+      // Git still accepts the legacy `[remote.origin]` header form.
+      const kind = name.split(".")[0];
+      inUrlSection = kind === "remote" || kind === "submodule";
+      const base = sectionMatch[2];
+      if (name === "url" && base !== undefined) {
+        const stripped = stripUserInfoFromUrl(base);
+        result.push(
+          (stripped === base ? line : line.replace(`"${base}"`, () => `"${stripped}"`)) + eol,
+        );
+      } else {
+        result.push(rawLine);
+      }
+      continue;
+    }
+
+    if (inUrlSection) {
+      const urlMatch = line.match(/^(\s*(?:push)?url\s*=\s*)(.*)$/i);
+      if (urlMatch) {
+        const { value, comment } = splitValueAndComment(urlMatch[2]);
+        result.push(`${urlMatch[1]}${stripUserInfoFromUrl(value)}${comment}${eol}`);
+        continue;
+      }
+    }
+
+    result.push(rawLine);
+  }
+
+  return result.join("\n");
 }
 
 export interface HomeMaskOptions {
@@ -137,9 +229,42 @@ export function homeMaskArgs(opts: HomeMaskOptions): string[] {
       needed.push(...installRoots(node.real, home));
     }
   }
+  const shadowConfigBinds: Array<{ src: string; dest: string }> = [];
   if (opts.worktreePath) {
-    const common = gitCommonDirOf(opts.worktreePath);
-    if (common) needed.push(common);
+    const dirs = gitCommonDirOf(opts.worktreePath);
+    if (dirs) {
+      const { common, gitdir } = dirs;
+      needed.push(common);
+      const shadowDir = fs.existsSync(path.join(opts.worktreePath, ".agent-home"))
+        ? path.join(opts.worktreePath, ".agent-home")
+        : opts.worktreePath;
+      // `config.worktree` (extensions.worktreeConfig) is read as a real config
+      // file too, from inside the bound tree, so it is shadowed the same way.
+      const configs: Array<[string, string, string]> = [
+        [common, "config", ".git-config-sanitized"],
+        [gitdir, "config.worktree", ".git-config-worktree-sanitized"],
+      ];
+      for (const [dir, name, shadowName] of configs) {
+        const realConfig = path.join(dir, name);
+        if (!fs.existsSync(realConfig)) continue;
+        try {
+          const sanitized = sanitizeGitConfig(fs.readFileSync(realConfig, "utf8"));
+          const shadowConfig = path.join(shadowDir, shadowName);
+          fs.writeFileSync(shadowConfig, sanitized, { mode: 0o600 });
+          const targets = new Set<string>([realConfig]);
+          const resolvedDir = realpathOrNull(dir);
+          if (resolvedDir) targets.add(path.join(resolvedDir, name));
+          for (const dest of targets) shadowConfigBinds.push({ src: shadowConfig, dest });
+        } catch (err) {
+          // Fails open (the turn reads the original config): say so.
+          console.warn(
+            `git config ${realConfig} could not be shadowed; this turn can read its remote URLs: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
+      }
+    }
   }
   const inside = outermost(
     needed
@@ -164,6 +289,7 @@ export function homeMaskArgs(opts: HomeMaskOptions): string[] {
     home,
     ...inside.flatMap((d) => ["--ro-bind-try", d, d]),
     ...fileBinds.flatMap(([src, dest]) => ["--ro-bind-try", src, dest]),
+    ...shadowConfigBinds.flatMap((b) => ["--ro-bind-try", b.src, b.dest]),
   ];
 }
 

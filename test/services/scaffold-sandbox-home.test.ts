@@ -4,7 +4,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { gitEnv } from "../../src/services/git-env.js";
-import { homeMaskArgs, turnEnv } from "../../src/services/scaffold-sandbox-home.js";
+import {
+  homeMaskArgs,
+  sanitizeGitConfig,
+  stripUserInfoFromUrl,
+  turnEnv,
+} from "../../src/services/scaffold-sandbox-home.js";
 import { wrapWithSandbox } from "../../src/services/scaffold-generate.js";
 
 function bwrapUsable(): boolean {
@@ -39,6 +44,138 @@ describe("turnEnv", () => {
         ANTHROPIC_API_KEY: "k",
       }),
     ).toEqual({ PATH: "/bin", ANTHROPIC_API_KEY: "k" });
+  });
+});
+
+describe("stripUserInfoFromUrl", () => {
+  it("strips user:token@ from https URLs", () => {
+    const url = "https://user:token@github.com/o/r.git"; // pragma: allowlist secret
+    expect(stripUserInfoFromUrl(url)).toBe("https://github.com/o/r.git");
+  });
+
+  it("strips token@ without password from https URLs", () => {
+    expect(stripUserInfoFromUrl("https://secret-token@github.com/owner/repo.git")).toBe(
+      // pragma: allowlist secret
+      "https://github.com/owner/repo.git",
+    );
+  });
+
+  it("strips userinfo from http URLs with port", () => {
+    const url = "http://alice:secret@127.0.0.1:8080/r.git"; // pragma: allowlist secret
+    expect(stripUserInfoFromUrl(url)).toBe("http://127.0.0.1:8080/r.git");
+  });
+
+  it("preserves quotes around the URL", () => {
+    const url = '"https://user:token@github.com/o/r.git"'; // pragma: allowlist secret
+    expect(stripUserInfoFromUrl(url)).toBe('"https://github.com/o/r.git"');
+  });
+
+  it("strips userinfo from ssh URLs", () => {
+    const url = "ssh://user:token@github.com/o/r.git"; // pragma: allowlist secret
+    expect(stripUserInfoFromUrl(url)).toBe("ssh://github.com/o/r.git");
+  });
+
+  it("leaves URLs without userinfo unchanged", () => {
+    expect(stripUserInfoFromUrl("https://github.com/owner/repo.git")).toBe(
+      "https://github.com/owner/repo.git",
+    );
+  });
+
+  it("leaves scp-style URLs untouched", () => {
+    expect(stripUserInfoFromUrl("git@github.com:owner/repo.git")).toBe(
+      "git@github.com:owner/repo.git",
+    );
+  });
+});
+
+describe("sanitizeGitConfig", () => {
+  it("strips userinfo from remote url and pushurl while preserving other sections and formatting", () => {
+    const raw = [
+      "[core]",
+      "\trepositoryformatversion = 0",
+      "\tfilemode = true",
+      "\tbare = false",
+      "\tlogallrefupdates = true",
+      "[extensions]",
+      "\tworktreeConfig = true",
+      '[remote "origin"]',
+      "\turl = https://user:token@github.com/owner/repo.git", // pragma: allowlist secret
+      "\tfetch = +refs/heads/*:refs/remotes/origin/*",
+      "\tpushurl = https://user:token@github.com/owner/repo-push.git", // pragma: allowlist secret
+      '[remote "upstream"]',
+      '\turl = "https://x-access-token:secret@github.com/u/r.git" # upstream', // pragma: allowlist secret
+      "\tfetch = +refs/heads/*:refs/remotes/upstream/*",
+      '[branch "main"]',
+      "\tremote = origin",
+      "\tmerge = refs/heads/main",
+    ].join("\n");
+
+    const sanitized = sanitizeGitConfig(raw);
+    expect(sanitized).not.toContain("user:token@");
+    expect(sanitized).not.toContain("x-access-token:secret@");
+    expect(sanitized).toContain("\turl = https://github.com/owner/repo.git");
+    expect(sanitized).toContain("\tpushurl = https://github.com/owner/repo-push.git");
+    expect(sanitized).toContain('\turl = "https://github.com/u/r.git" # upstream');
+    expect(sanitized).toContain("[extensions]\n\tworktreeConfig = true");
+    expect(sanitized).toContain('[branch "main"]\n\tremote = origin');
+  });
+
+  it("sanitises CRLF configs and keeps the line endings", () => {
+    const cred = "https://user:tok@example.com/o/r.git"; // pragma: allowlist secret
+    const raw = ['[remote "origin"]', `\turl = ${cred}`, ""].join("\r\n");
+    const out = sanitizeGitConfig(raw);
+    expect(out).not.toContain("tok@");
+    expect(out).toBe(['[remote "origin"]', "\turl = https://example.com/o/r.git", ""].join("\r\n"));
+  });
+
+  it("does not expand $-patterns in a [url] base and still strips the token", () => {
+    const raw =
+      '[url "https://user:tok@example.com/a$&b/"]\n\tinsteadOf = https://example.com/a$&b/\n'; // pragma: allowlist secret
+    const out = sanitizeGitConfig(raw);
+    expect(out).not.toContain("tok@");
+    expect(out).toBe(
+      '[url "https://example.com/a$&b/"]\n\tinsteadOf = https://example.com/a$&b/\n',
+    );
+  });
+
+  it("recognises the legacy dotted [remote.origin] header", () => {
+    const raw = "[remote.origin]\n\turl = https://user:tok@example.com/o/r.git\n"; // pragma: allowlist secret
+    expect(sanitizeGitConfig(raw)).toBe("[remote.origin]\n\turl = https://example.com/o/r.git\n");
+  });
+
+  it("matches keys case-insensitively", () => {
+    const raw = ['[remote "origin"]', "\tURL = https://user:tok@example.com/o/r.git"].join("\n"); // pragma: allowlist secret
+    expect(sanitizeGitConfig(raw)).toBe(
+      ['[remote "origin"]', "\tURL = https://example.com/o/r.git"].join("\n"),
+    );
+  });
+
+  it('strips userinfo from a [url "<base>"] rewrite section and from submodule urls', () => {
+    const raw = [
+      '[url "https://x-access-token:TOK@github.com/"]', // pragma: allowlist secret
+      "\tinsteadOf = https://github.com/",
+      '[submodule "sub"]',
+      "\turl = https://user:token@example.com/sub.git", // pragma: allowlist secret
+    ].join("\n");
+    const out = sanitizeGitConfig(raw);
+    expect(out).not.toMatch(/TOK@|token@/);
+    expect(out).toContain('[url "https://github.com/"]');
+    expect(out).toContain("\tinsteadOf = https://github.com/");
+    expect(out).toContain("\turl = https://example.com/sub.git");
+  });
+
+  it("sanitises a section whose header carries a comment with no space before it", () => {
+    for (const mark of [";note", "#note"]) {
+      const raw = `[remote "origin"]${mark}\n\turl = https://user:tok@example.com/o/r.git\n`; // pragma: allowlist secret
+      expect(sanitizeGitConfig(raw)).toBe(
+        `[remote "origin"]${mark}\n\turl = https://example.com/o/r.git\n`,
+      );
+    }
+  });
+
+  it("does not touch url settings in unrelated sections", () => {
+    const raw = ["[other]", "\turl = https://user:token@example.com/x.git"].join("\n"); // pragma: allowlist secret
+    expect(sanitizeGitConfig(raw)).toBe(raw);
   });
 });
 
@@ -162,6 +299,67 @@ describe("homeMaskArgs", () => {
       path.join(home, "repo", ".git"),
     ]);
   });
+
+  it("shadows <common>/config with a sanitized copy when config exists", () => {
+    const wt = path.join(home, "wt");
+    fs.mkdirSync(wt);
+    const gitDir = path.join(home, "repo", ".git", "worktrees", "w");
+    fs.mkdirSync(gitDir, { recursive: true });
+    fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${gitDir}\n`);
+    fs.writeFileSync(path.join(gitDir, "commondir"), "../..\n");
+    const common = path.join(home, "repo", ".git");
+    fs.writeFileSync(
+      path.join(common, "config"),
+      '[remote "origin"]\n\turl = https://user:token@github.com/owner/repo.git\n', // pragma: allowlist secret
+    );
+
+    const args = homeMaskArgs({ home, worktreePath: wt });
+    const b = binds(args);
+    expect(b).toContain(`${common} ${common}`);
+    const shadowBind = b.find((entry) => entry.endsWith(` ${path.join(common, "config")}`));
+    expect(shadowBind).toBeDefined();
+    const shadowFile = shadowBind!.split(" ")[0];
+    expect(fs.existsSync(shadowFile)).toBe(true);
+    const content = fs.readFileSync(shadowFile, "utf8");
+    expect(content).not.toContain("user:token@");
+    expect(content).toContain("https://github.com/owner/repo.git");
+  });
+
+  it("shadows <gitdir>/config.worktree with a sanitized copy, keeping its other keys", () => {
+    const wt = path.join(home, "wt");
+    fs.mkdirSync(wt);
+    const gitDir = path.join(home, "repo", ".git", "worktrees", "w");
+    fs.mkdirSync(gitDir, { recursive: true });
+    fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${gitDir}\n`);
+    fs.writeFileSync(path.join(gitDir, "commondir"), "../..\n");
+    fs.writeFileSync(
+      path.join(gitDir, "config.worktree"),
+      '[core]\n\tsparseCheckout = true\n[remote "origin"]\n\turl = https://user:tok@example.com/o/r.git\n', // pragma: allowlist secret
+    );
+    const shadowBind = binds(homeMaskArgs({ home, worktreePath: wt })).find((e) =>
+      e.endsWith(` ${path.join(gitDir, "config.worktree")}`),
+    );
+    expect(shadowBind).toBeDefined();
+    const content = fs.readFileSync(shadowBind!.split(" ")[0], "utf8");
+    expect(content).not.toContain("tok@");
+    expect(content).toContain("sparseCheckout = true");
+    expect(content).toContain("https://example.com/o/r.git");
+  });
+
+  it("writes the shadow under .agent-home when the worktree has one", () => {
+    const wt = path.join(home, "wt");
+    fs.mkdirSync(path.join(wt, ".agent-home"), { recursive: true });
+    const gitDir = path.join(home, "repo", ".git", "worktrees", "w");
+    fs.mkdirSync(gitDir, { recursive: true });
+    fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${gitDir}\n`);
+    fs.writeFileSync(path.join(gitDir, "commondir"), "../..\n");
+    const common = path.join(home, "repo", ".git");
+    fs.writeFileSync(path.join(common, "config"), "[core]\n\tbare = false\n");
+    const shadowBind = binds(homeMaskArgs({ home, worktreePath: wt })).find((e) =>
+      e.endsWith(` ${path.join(common, "config")}`),
+    );
+    expect(shadowBind!.split(" ")[0]).toBe(path.join(wt, ".agent-home", ".git-config-sanitized"));
+  });
 });
 
 it("falls back to the gitdir itself when there is no commondir (submodule layout)", () => {
@@ -246,6 +444,33 @@ describeIfBwrap("a sandboxed turn with HOME masked (real bwrap)", () => {
     const r = run(`cat ${wt}/a.txt && echo x > ${wt}/new.txt && git -C ${wt} log -1 --format=%s`);
     expect(r.status).toBe(0);
     expect(r.stdout).toContain("hello");
+    expect(r.stdout).toContain("init");
+  });
+
+  it("shadows config so a sandboxed turn sees no user:token@ and git log / git status still work", () => {
+    const repo = path.join(home, "repo");
+    git(repo, ["remote", "add", "origin", "https://user:token@github.com/owner/repo.git"]); // pragma: allowlist secret
+    const r = run(
+      `cat ${path.join(repo, ".git", "config")} && git -C ${wt} config remote.origin.url && git -C ${wt} status && git -C ${wt} log -1 --format=%s`,
+    );
+    expect(r.status).toBe(0);
+    expect(r.stdout).not.toContain("user:token@");
+    expect(r.stdout).toContain("https://github.com/owner/repo.git");
+    expect(r.stdout).toContain("init");
+  });
+
+  it("works with extensions.worktreeConfig in a sandboxed turn", () => {
+    const repo = path.join(home, "repo");
+    git(repo, ["config", "extensions.worktreeConfig", "true"]);
+    git(repo, ["remote", "add", "upstream", "https://user:token@github.com/upstream/repo.git"]); // pragma: allowlist secret
+    git(wt, ["config", "--worktree", "dummy.key", "Sandboxed Turn"]);
+    const r = run(
+      `git -C ${wt} config remote.upstream.url && git -C ${wt} config dummy.key && git -C ${wt} status && git -C ${wt} log -1 --format=%s`,
+    );
+    expect(r.status).toBe(0);
+    expect(r.stdout).not.toContain("user:token@");
+    expect(r.stdout).toContain("https://github.com/upstream/repo.git");
+    expect(r.stdout).toContain("Sandboxed Turn");
     expect(r.stdout).toContain("init");
   });
 });
