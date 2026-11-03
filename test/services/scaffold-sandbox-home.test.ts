@@ -164,6 +164,15 @@ describe("sanitizeGitConfig", () => {
     expect(out).toContain("\turl = https://example.com/sub.git");
   });
 
+  it("sanitises a section whose header carries a comment with no space before it", () => {
+    for (const mark of [";note", "#note"]) {
+      const raw = `[remote "origin"]${mark}\n\turl = https://user:tok@example.com/o/r.git\n`; // pragma: allowlist secret
+      expect(sanitizeGitConfig(raw)).toBe(
+        `[remote "origin"]${mark}\n\turl = https://example.com/o/r.git\n`,
+      );
+    }
+  });
+
   it("does not touch url settings in unrelated sections", () => {
     const raw = ["[other]", "\turl = https://user:token@example.com/x.git"].join("\n"); // pragma: allowlist secret
     expect(sanitizeGitConfig(raw)).toBe(raw);
@@ -314,6 +323,27 @@ describe("homeMaskArgs", () => {
     const content = fs.readFileSync(shadowFile, "utf8");
     expect(content).not.toContain("user:token@");
     expect(content).toContain("https://github.com/owner/repo.git");
+  });
+
+  it("shadows <gitdir>/config.worktree with a sanitized copy, keeping its other keys", () => {
+    const wt = path.join(home, "wt");
+    fs.mkdirSync(wt);
+    const gitDir = path.join(home, "repo", ".git", "worktrees", "w");
+    fs.mkdirSync(gitDir, { recursive: true });
+    fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${gitDir}\n`);
+    fs.writeFileSync(path.join(gitDir, "commondir"), "../..\n");
+    fs.writeFileSync(
+      path.join(gitDir, "config.worktree"),
+      '[core]\n\tsparseCheckout = true\n[remote "origin"]\n\turl = https://user:tok@example.com/o/r.git\n', // pragma: allowlist secret
+    );
+    const shadowBind = binds(homeMaskArgs({ home, worktreePath: wt })).find((e) =>
+      e.endsWith(` ${path.join(gitDir, "config.worktree")}`),
+    );
+    expect(shadowBind).toBeDefined();
+    const content = fs.readFileSync(shadowBind!.split(" ")[0], "utf8");
+    expect(content).not.toContain("tok@");
+    expect(content).toContain("sparseCheckout = true");
+    expect(content).toContain("https://example.com/o/r.git");
   });
 
   it("writes the shadow under .agent-home when the worktree has one", () => {

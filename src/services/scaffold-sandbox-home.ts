@@ -12,10 +12,12 @@ import path from "node:path";
 //   - the agent binary and what it needs next to it (see `installRoots`),
 //   - the same for `node` (codex and opencode are node scripts),
 //   - the project repo's git directory, because the scratch worktree is a
-//     `git worktree add` whose `.git` file points into it. Its `config` is
-//     shadowed with a sanitised copy (remote URLs stripped of userinfo; see
-//     `sanitizeGitConfig`) so credentialed remotes are not visible to the turn
-//     while git keeps working. Known limit: `hooks/` and every git object
+//     `git worktree add` whose `.git` file points into it. Both `<common>/config`
+//     and `<gitdir>/config.worktree` (the file git reads when
+//     `extensions.worktreeConfig` is set) are shadowed with a sanitised copy
+//     (remote URLs stripped of userinfo; see `sanitizeGitConfig`) so
+//     credentialed remotes are not visible to the turn while git keeps
+//     working. Known limit: `hooks/` and every git object
 //     remain readable read-only as git needs the directory to work.
 //
 // Not covered: `--ro-bind / /` still exposes everything outside HOME (an app
@@ -159,7 +161,7 @@ export function sanitizeGitConfig(content: string): string {
     const line = rawLine.slice(0, rawLine.length - eol.length);
     const trimmed = line.trim();
     const sectionMatch = trimmed.match(
-      /^\[\s*([a-zA-Z0-9.-]+)(?:\s+"([^"]*)")?\s*\](?:\s+[#;].*)?$/,
+      /^\[\s*([a-zA-Z0-9.-]+)(?:\s+"([^"]*)")?\s*\](?:\s*[#;].*)?$/,
     );
     if (sectionMatch) {
       const name = sectionMatch[1].toLowerCase();
