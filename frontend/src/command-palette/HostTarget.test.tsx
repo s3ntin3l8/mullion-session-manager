@@ -186,6 +186,41 @@ describe("CommandPalette -> launcher host target (#2237)", () => {
     renderPalette(MULTI.id);
     expect(((await screen.findByLabelText("Target host")) as HTMLSelectElement).value).toBe("mac");
   });
+
+  it("ignores an Auto left in storage by an older build for a pinned project", async () => {
+    localStorage.setItem(STORAGE_KEYS.lastLaunchHostByProject, JSON.stringify({ "5": "auto" }));
+    const user = userEvent.setup();
+    renderPalette(MULTI.id);
+    expect(((await screen.findByLabelText("Target host")) as HTMLSelectElement).value).toBe(
+      "__own__",
+    );
+    await user.click((await screen.findAllByText("bash"))[0]);
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).not.toHaveProperty("placement");
+  });
+
+  it("one project's remembered host never leaks into another project's launcher", async () => {
+    const OTHER = makeProject({
+      id: 8,
+      name: "other",
+      hostId: "local",
+      hostCwds: { mac: "/q" },
+    });
+    useDashboardStore.setState({ projects: [MULTI, OTHER], hosts: [MAC] });
+    localStorage.setItem(STORAGE_KEYS.lastLaunchHostByProject, JSON.stringify({ "5": "mac" }));
+    const user = userEvent.setup();
+    renderPalette(OTHER.id);
+    expect(((await screen.findByLabelText("Target host")) as HTMLSelectElement).value).toBe(
+      "__own__",
+    );
+    await user.click((await screen.findAllByText("bash"))[0]);
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).not.toHaveProperty("targetHostId");
+    expect(posted[0]).not.toHaveProperty("placement");
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.lastLaunchHostByProject) ?? "{}")).toEqual({
+      "5": "mac",
+    });
+  });
 });
 
 describe("hostTarget helpers", () => {
@@ -208,14 +243,6 @@ describe("hostTarget helpers", () => {
     expect(resolveHostChoice("auto", auto)).toBe("auto");
     expect(resolveHostChoice("local", project)).toBeNull();
     expect(resolveHostChoice(undefined, project)).toBeNull();
-  });
-
-  it("one project's remembered choice never affects another", () => {
-    const a = { hostId: "local", hostCwds: { mac: "/p" } };
-    const b = { hostId: "local", hostCwds: { mac: "/q" } };
-    const remembered: Record<string, string> = { "1": "mac" };
-    expect(resolveHostChoice(remembered["1"], a)).toBe("mac");
-    expect(resolveHostChoice(remembered["2"], b)).toBeNull();
   });
 
   it("names a remote own host instead of 'this server'", () => {
