@@ -80,6 +80,7 @@ import { commandAgentBin } from "../services/hook-adapters/index.js";
 import { portFromUrl } from "../plugins/preview-proxy.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { resolveSessionHostId } from "../services/session-live-info.js";
+import { resolveTrustedSessionContext } from "../services/execution-context.js";
 import { forwardHostRequestError } from "../services/host-error-reply.js";
 import {
   claimReclaimSlot,
@@ -731,19 +732,11 @@ async function resolveSessionCwdTargets(
       id: sessions.id,
       cwd: sessions.cwd,
       projectId: sessions.projectId,
-      // Issue #1722 / roadmap 8.8 — the session's own host, so the target
-      // can be resolved from the row (resolveSessionHostId) rather than
-      // from the project.
-      hostId: sessions.hostId,
     })
     .from(sessions)
     .where(inArray(sessions.id, sessionIds))
     .all();
   if (sessionRows.length === 0) return [];
-
-  const projectIds = [...new Set(sessionRows.map((s) => s.projectId))];
-  const projectRows = app.db.select().from(projects).where(inArray(projects.id, projectIds)).all();
-  const projectById = new Map(projectRows.map((p) => [p.id, p]));
 
   const targets: SessionCwdTarget[] = [];
   // Cached per project, not per session: sessions sharing a project also
@@ -751,21 +744,22 @@ async function resolveSessionCwdTargets(
   // process — no reason to pay for that once per session in the same batch.
   // Stores the full GitWorktreeInfo (with branch names) so the liveBranch
   // fallback below can match worktree by branch name.
-  const worktreesByProject = new Map<number, GitWorktreeInfo[]>();
-  const ensureWorktreeInfos = async (projectId: number, projectCwd: string) => {
-    let infos = worktreesByProject.get(projectId);
+  const worktreesByProject = new Map<string, GitWorktreeInfo[]>();
+  const ensureWorktreeInfos = async (checkoutRoot: string) => {
+    let infos = worktreesByProject.get(checkoutRoot);
     if (infos === undefined) {
-      const worktrees = await listWorktrees(projectCwd);
-      infos = worktrees ?? [];
-      worktreesByProject.set(projectId, infos);
+      infos = (await listWorktrees(checkoutRoot)) ?? [];
+      worktreesByProject.set(checkoutRoot, infos);
     }
     return infos;
   };
   for (const row of sessionRows) {
-    const project = projectById.get(row.projectId);
-    if (!project) continue;
-    let cwd = row.cwd ?? project.cwd;
-    if (project.hostId === LOCAL_HOST_ID) {
+    // A deleted project resolves to null. The session's own (host, cwd), or nothing: never the project's host in
+    // its place (services/execution-context.ts).
+    const ctx = await resolveTrustedSessionContext(app, row.projectId, row.id);
+    if (!ctx) continue;
+    let cwd = ctx.cwd;
+    if (ctx.hostId === LOCAL_HOST_ID) {
       const ptySession = app.pty.get(String(row.id));
       const liveCwd = ptySession?.liveCwd;
       const liveBranch = ptySession?.liveBranch;
@@ -775,7 +769,7 @@ async function resolveSessionCwdTargets(
       // project's own worktree paths (see the function's doc comment).
       let resolved = false;
       if (liveCwd && isGitRepo(liveCwd)) {
-        const worktreeInfos = await ensureWorktreeInfos(project.id, project.cwd);
+        const worktreeInfos = await ensureWorktreeInfos(ctx.checkoutRoot);
         if (
           isWithinAnyWorktree(
             liveCwd,
@@ -795,18 +789,12 @@ async function resolveSessionCwdTargets(
       // use that worktree's path as the effective cwd so the per-session
       // git status resolves against the worktree's actual filesystem.
       if (!resolved && liveBranch) {
-        const worktreeInfos = await ensureWorktreeInfos(project.id, project.cwd);
+        const worktreeInfos = await ensureWorktreeInfos(ctx.checkoutRoot);
         const matched = worktreeInfos.find((w) => w.branch === liveBranch && !w.isMain);
         if (matched) cwd = matched.path;
       }
     }
-    // Issue #1722 / roadmap 8.8 — the SESSION's host: each target is one
-    // session, and a session placed on a host of its own is acted on there.
-    // The project's host is already in scope here, so this is
-    // resolveSessionHostId's own rule (`row.hostId ?? project.hostId`)
-    // without its query — this function batches its selects and caches
-    // `listWorktrees` per project, and a per-row SELECT would undo both.
-    targets.push({ sessionId: row.id, hostId: row.hostId ?? project.hostId, cwd });
+    targets.push({ sessionId: row.id, hostId: ctx.hostId, cwd });
   }
   return targets;
 }

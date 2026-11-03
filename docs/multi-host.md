@@ -1245,6 +1245,37 @@ policy ([#1723](https://github.com/s3ntin3l8/mullion-session-manager/issues/1723
 is: treat `platform: "win32"` as _this host reports no load_, never as _this
 host is idle_.
 
+## Which host and directory a session's tools use
+
+Everything opened for a session (the Files editor, per-session git status)
+resolves its `(host, cwd)` through one function,
+`resolveExecutionContext` in `src/services/execution-context.ts`, instead of
+each caller deriving its own. The rules:
+
+- **Host.** A session's own `sessions.hostId`; NULL (every pre-placement row)
+  means "inherit the project's host". The project's host is never substituted
+  when a session can't be resolved: the request fails instead.
+- **Project.** A session of another project is refused (`invalid_context`).
+- **Root.** The project's checkout on that host: `projects.cwd` on the
+  project's own host, `projects.hostCwds[<host>]` on any other. A project with
+  no checkout there is refused, so an Auto-placed session at its `hostCwds`
+  path is served by its own host even when the paths on two hosts are equal.
+- **Path flavour.** Windows (`path.win32`) or POSIX rules come from the owning
+  host's reported `platform`; the local host uses the primary's own platform.
+- **Valid session cwd.** Inside that root, or a registered git worktree of the
+  checkout. Local hosts also get the realpath/symlink check. For a remote host
+  the primary accepts a cwd lexically inside the root as is (the agent
+  re-checks it against `PROJECTS_ROOTS`) and asks the agent to list worktrees
+  for a cwd outside it.
+- **Without a `sessionId`** a request uses the explicit project default: the
+  project's host and `projects.cwd`.
+
+Errors map to HTTP as `invalid_context` → 400, `host_unavailable` (host not
+registered, no address, unreachable, or the directory can't be verified) →
+503, `unsupported` (agent too old to list worktrees) → 501. The per-session git
+status targets read the recorded cwd as is (`trustSessionCwd`) because they
+validate it themselves; the host is still the session's own.
+
 ## Where a session lives
 
 A session records the host it was spawned on — `sessions.hostId`, written
