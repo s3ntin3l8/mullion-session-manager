@@ -140,4 +140,50 @@ describe("fake GitHub API", () => {
       await ticking.stop();
     }
   });
+
+  it("moves the live-tick PR's updated_at relative to `now`, not the wall clock", async () => {
+    const now = Date.parse("2026-10-01T09:00:00Z");
+    const ticking = await startFakeGithub({ tickMs: 20, now });
+    try {
+      const updatedAt = async () => {
+        const pulls = (await (
+          await fetch(ticking.url + "/repos/acme/aurora-web/pulls")
+        ).json()) as { number: number; updated_at: string }[];
+        return pulls.find((p) => p.number === 17)!.updated_at;
+      };
+      // Poll for the tick instead of sleeping a fixed time: a loaded host
+      // delays the timer, which must not read as a wrong value.
+      const deadline = Date.now() + 5_000;
+      const before = await updatedAt();
+      let after = before;
+      while (after === before && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10));
+        after = await updatedAt();
+      }
+      expect(after).toBe(new Date(now + 20).toISOString());
+    } finally {
+      await ticking.stop();
+    }
+  });
+
+  it("counts every timestamp back from `now`, so two runs agree", async () => {
+    const now = Date.parse("2026-10-01T09:00:00Z");
+    const updatedOf = async (instant: number) => {
+      const frozen = await startFakeGithub({ now: instant });
+      try {
+        const pulls = (await (await fetch(frozen.url + "/repos/acme/aurora-web/pulls")).json()) as {
+          number: number;
+          updated_at: string;
+        }[];
+        return pulls.map((p) => [p.number, p.updated_at]);
+      } finally {
+        await frozen.stop();
+      }
+    };
+    const first = await updatedOf(now);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(await updatedOf(now)).toEqual(first);
+    // PR 12 was touched 20 minutes before `now`.
+    expect(first).toContainEqual([12, "2026-10-01T08:40:00.000Z"]);
+  });
 });

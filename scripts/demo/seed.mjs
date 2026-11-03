@@ -19,6 +19,9 @@ const execFileAsync = promisify(execFile);
 // aurora-web's dev server: the port its dock control listens on.
 const DEV_SERVER_PORT = 3958;
 
+// The loop session's pause after its release (see agentTranscriptScript's leadMs).
+const LOOP_LEAD_MS = 3000;
+
 // Identity comes from the env, not `git config`: nothing is written to any
 // config file, so a leaked GIT_DIR/GIT_CONFIG can't make this pollute a real
 // checkout (issue #1649).
@@ -122,6 +125,7 @@ export const IDLE_KEEPALIVE_INTERVAL_S = 8;
  *   hookEvent?: { kind: string; payload?: object };
  *   exitAfter?: boolean;
  *   idle?: boolean;
+ *   leadMs?: number;
  * }} options
  */
 export function agentTranscriptScript({
@@ -130,11 +134,16 @@ export function agentTranscriptScript({
   hookEvent,
   exitAfter = false,
   idle = false,
+  leadMs = 0,
 }) {
   const hold = releaseFile
     ? `while [ ! -e ${shellSingleQuote(releaseFile)} ]; do sleep 0.1; done\n` +
       `stty size > ${shellSingleQuote(ptySizeFile(releaseFile))} 2>/dev/null || true\n`
     : "";
+  // `leadMs` pauses after the release, before the first line. A recorded loop
+  // is released while the page is still settling, so without it the opening
+  // lines can print before the recording starts.
+  const lead = leadMs > 0 ? `sleep ${(leadMs / 1000).toFixed(2)}\n` : "";
   const body = lines
     .map((l) => (l === "" ? "echo" : `echo ${shellSingleQuote(l)}`))
     .join("\nsleep 0.25\n");
@@ -152,7 +161,7 @@ export function agentTranscriptScript({
   const keepalive = exitAfter
     ? "exit 0"
     : `while :; do printf '\\033[0m'; sleep ${idle ? IDLE_KEEPALIVE_INTERVAL_S : KEEPALIVE_INTERVAL_S}; done`;
-  return `#!/usr/bin/env bash\nset -u\nclear\n${hold}${body}${hook}\n${keepalive}\n`;
+  return `#!/usr/bin/env bash\nset -u\nclear\n${hold}${lead}${body}${hook}\n${keepalive}\n`;
 }
 
 /** The last non-blank line of a transcript: once it's in the scrollback, the whole transcript is. */
@@ -255,9 +264,20 @@ export const ORDERS_TRANSCRIPT = [
 /**
  * `holdTranscripts`: the aurora-web agent (fake-agent.sh) waits for
  * `authReleaseFile` (returned) before printing; see agentTranscriptScript.
- * Off for `make demo`, where nothing would ever release it.
+ * Off for `make demo`, where nothing would ever release it. `heldSessions`
+ * (an opt-in of its own, since scripts/capture-screenshots.mjs still creates the
+ * same two sessions itself) seeds `mobile-demo.sh` and `loop-demo.sh`, held
+ * behind release files the same way. Pair it with `holdTranscripts`: nothing
+ * else releases them.
+ * `now` (ms) is the instant the fixture tasks' timestamps count back from.
  */
-export async function seedDemo({ api, root, holdTranscripts = false }) {
+export async function seedDemo({
+  api,
+  root,
+  holdTranscripts = false,
+  heldSessions = false,
+  now = Date.now(),
+}) {
   const scratchRoot = root;
   const scriptsDir = path.join(scratchRoot, "scripts");
   await mkdir(scriptsDir, { recursive: true });
@@ -356,6 +376,32 @@ export async function seedDemo({ api, root, holdTranscripts = false }) {
       name: "Speed up orders query",
     }),
   });
+
+  // The mobile terminal still and the landing loop each need a session whose
+  // transcript waits for its own release file, so the capture releases it once
+  // the right client is attached and settled. Opt-in: `make demo` would show two
+  // sessions nothing can release.
+  if (heldSessions) {
+    for (const [name, title, lines, extra] of [
+      ["mobile-demo", "mobile demo", MOBILE_TRANSCRIPT, {}],
+      ["loop-demo", "Add login rate limiting", AUTH_TRANSCRIPT, { leadMs: LOOP_LEAD_MS }],
+    ]) {
+      const script = path.join(scriptsDir, `${name}.sh`);
+      await writeFile(
+        script,
+        agentTranscriptScript({
+          lines,
+          releaseFile: path.join(scriptsDir, `${name}.release`),
+          ...extra,
+        }),
+        { mode: 0o755 },
+      );
+      await api("/api/sessions", {
+        method: "POST",
+        body: JSON.stringify({ projectId: auroraProject.id, command: script, name: title }),
+      });
+    }
+  }
 
   // More sessions, so the kanban lanes, the notifications bell and the
   // right-sidebar origin markers have something to show. Each ends differently:
@@ -508,7 +554,7 @@ export async function seedDemo({ api, root, holdTranscripts = false }) {
   if (taskMaster?.enabled !== "on" || taskMaster?.autoClaimPaused !== true)
     throw new Error("demo seed: Task Master must be on with auto-claim paused");
 
-  const ago = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
+  const ago = (minutes) => new Date(now - minutes * 60_000).toISOString();
   const issueUrl = (repo, n) => `https://github.com/${DEMO_GITHUB_OWNER}/${repo}/issues/${n}`;
   const prUrl = (repo, n) => `https://github.com/${DEMO_GITHUB_OWNER}/${repo}/pull/${n}`;
   // The issue/PR numbers match scripts/demo/fake-github.mjs, so the rows in

@@ -224,3 +224,72 @@ describe("seedDemo git depth and dock", () => {
     expect(patch?.body).toEqual({ devServerUrl: "3958" });
   });
 });
+
+describe("agentTranscriptScript leadMs", () => {
+  it("pauses after the release, before the first line", () => {
+    const script = agentTranscriptScript({
+      lines: ["first"],
+      releaseFile: "/tmp/x.release",
+      leadMs: 2500,
+    });
+    const release = script.indexOf("while [ ! -e");
+    const lead = script.indexOf("sleep 2.50");
+    expect(release).toBeGreaterThan(-1);
+    expect(lead).toBeGreaterThan(release);
+    expect(lead).toBeLessThan(script.indexOf("echo 'first'"));
+  });
+
+  it("adds no pause by default", () => {
+    expect(agentTranscriptScript({ lines: ["a"] })).not.toMatch(/sleep 0\.00|sleep 2/);
+  });
+});
+
+describe("seedDemo held sessions", () => {
+  const sessionsFor = async (opts: {
+    holdTranscripts?: boolean;
+    heldSessions?: boolean;
+    now?: number;
+  }) => {
+    const root = mkdtempSync(path.join(dir, "seed-"));
+    const calls: { url: string; body: Record<string, unknown> }[] = [];
+    const api = async (url: string, init?: { body?: string }) => {
+      calls.push({ url, body: init?.body ? JSON.parse(init.body) : {} });
+      return { id: 1, taskMaster: { enabled: "on", autoClaimPaused: true } };
+    };
+    const seeded = await seedDemo({ api, root, ...opts });
+    return { calls, seeded };
+  };
+
+  it("seeds the mobile and loop sessions only when asked", async () => {
+    const held = await sessionsFor({ holdTranscripts: true, heldSessions: true });
+    const names = held.calls.filter((c) => c.url === "/api/sessions").map((c) => c.body.name);
+    expect(names).toContain("mobile demo");
+    expect(names.filter((n) => n === "Add login rate limiting")).toHaveLength(2);
+    const loop = readFileSync(path.join(held.seeded.scriptsDir, "loop-demo.sh"), "utf8");
+    expect(loop).toContain("loop-demo.release");
+    expect(loop).toMatch(/sleep 3\.00/);
+    expect(readFileSync(path.join(held.seeded.scriptsDir, "mobile-demo.sh"), "utf8")).toContain(
+      "mobile-demo.release",
+    );
+
+    // Holding alone (what capture-screenshots.mjs passes) must not add them.
+    const plain = await sessionsFor({ holdTranscripts: true });
+    const plainNames = plain.calls.filter((c) => c.url === "/api/sessions").map((c) => c.body.name);
+    expect(plainNames).not.toContain("mobile demo");
+    expect(plainNames.filter((n) => n === "Add login rate limiting")).toHaveLength(1);
+  });
+
+  it("counts the fixture tasks' timestamps back from `now`", async () => {
+    const now = Date.parse("2026-10-01T09:00:00Z");
+    const { calls } = await sessionsFor({ now });
+    const stamps = calls
+      .filter((c) => c.url === "/api/demo/fixtures/tasks")
+      .flatMap((c) => c.body.tasks as Record<string, unknown>[])
+      .flatMap((t) => [t.claimedAt, t.startedAt])
+      .filter((v): v is string => typeof v === "string");
+    expect(stamps.length).toBeGreaterThan(0);
+    for (const stamp of stamps) expect(Date.parse(stamp)).toBeLessThan(now);
+    // 80 minutes before `now`: the orbit task's claim.
+    expect(stamps).toContain("2026-10-01T07:40:00.000Z");
+  });
+});

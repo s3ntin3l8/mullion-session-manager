@@ -91,6 +91,15 @@ one of its sessions. `scripts/demo/env.mjs` enforces that, and
   reaches `api.github.com`. `make demo` also flips one PR's CI after a minute so
   the live `/ws/github` update can be seen; the screenshot pipeline leaves the
   data frozen.
+- A renderer outside this process (visual-kit) drives `make demo` through
+  environment variables read by `scripts/demo/instance.mjs` itself, never passed
+  on to the backend: `MULLION_DEMO_HOLD=1` holds the screenshot transcripts
+  behind release files (and seeds the mobile and loop sessions) and stops the CI
+  tick; `MULLION_DEMO_THEME=system` lets the browser's colour scheme decide;
+  `DEMO_NOW=<ISO instant>` fixes the instant the fake GitHub's and the seed's
+  "N minutes ago" count back from; `MULLION_DEMO_STATE=<file>` records the seeded
+  scripts directory (where the release files go) while the demo is up. Once
+  seeded it prints `DEMO_READY <url>`, and it tears down on SIGINT or SIGTERM.
 - Demo sessions run as `crs-session-<instanceId>-*` scopes, namespaced by the
   scratch `SESSIONS_DIR`; teardown stops exactly those.
 

@@ -388,11 +388,17 @@ function pullListItem(pr, repoName) {
  * `tickMs`: when > 0, the live-tick PR's CI flips pending -> success after
  * that long and its updated_at moves, so the backend's poller sees a change
  * and pushes /ws/github. 0 keeps the data frozen (screenshots).
+ * `now` (ms): the instant every "N minutes ago" counts back from; a fixed value
+ * makes the data identical between runs.
  * `latestRelease`: the tag the releases endpoint reports, so the update
  * banner does not depend on the network.
  */
-export async function startFakeGithub({ tickMs = 0, latestRelease = "v99.0.0" } = {}) {
-  const state = buildState(Date.now());
+export async function startFakeGithub({
+  tickMs = 0,
+  latestRelease = "v99.0.0",
+  now = Date.now(),
+} = {}) {
+  const state = buildState(now);
   const repoOf = (name) => state[name];
 
   let tickTimer;
@@ -402,7 +408,7 @@ export async function startFakeGithub({ tickMs = 0, latestRelease = "v99.0.0" } 
         for (const pr of pulls)
           if (pr.ticks) {
             pr.ci = "success";
-            pr.updated = new Date().toISOString();
+            pr.updated = new Date(now + tickMs).toISOString();
           }
     }, tickMs);
     tickTimer.unref();

@@ -70,6 +70,9 @@ const demoDirs = () =>
 type DemoBins = ReturnType<typeof DemoModule.demoBins>;
 type DemoOptions = NonNullable<Parameters<typeof DemoModule.startDemo>[0]> & {
   bins?: DemoBins;
+  // Defaulted to `undefined` in the .mjs, which the inferred type keeps as `undefined`.
+  now?: string;
+  stateFile?: string;
 };
 
 /**
@@ -129,6 +132,13 @@ describe("preflight", () => {
     );
   });
 
+  it("refuses a `now` that is not an instant, before creating a scratch dir", async () => {
+    const before = demoDirs();
+    const opts: DemoOptions = { quiet: true, now: "yesterday-ish" };
+    await expect(demo.startDemo(opts)).rejects.toThrow(/now is not an ISO instant/);
+    expect([...demoDirs()].filter((d) => !before.has(d))).toEqual([]);
+  });
+
   it("refuses before creating a scratch dir", async () => {
     const before = demoDirs();
     // Passed through a variable (not an inline literal) so the `bins`
@@ -163,6 +173,21 @@ describe("a server that fails to spawn", () => {
     expect(dir).toMatch(/^\/tmp\/mullion-demo-/);
     expect(existsSync(dir!)).toBe(false);
     expect(processesIn(dir!)).toEqual([]);
+  });
+
+  it("removes the state file a renderer waits on when startup fails", async () => {
+    const stateFile = path.join(fixtures, "state", "demo-state");
+    mkdirSync(path.dirname(stateFile), { recursive: true });
+    writeFileSync(stateFile, "/stale\n");
+    const notExecutable = writeScript("not-executable-state", "exit 0", 0o644);
+    const run = startCapturingDir({
+      quiet: true,
+      seed: false,
+      stateFile,
+      bins: { tsx: notExecutable, vite: notExecutable },
+    });
+    await expect(run.started).rejects.toThrow(/backend: could not run .*EACCES/);
+    expect(existsSync(stateFile)).toBe(false);
   });
 
   it("removes the scratch dir even when no server ever started", async () => {
