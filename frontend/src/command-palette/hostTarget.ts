@@ -115,6 +115,9 @@ export function buildHostTargetOptions(
  * must say so rather than claim "this server". Picking the own host of an auto
  * project is remembered as that host id and sent as an explicit target.
  *
+ * A remembered "auto" is ignored for a pinned project (the configured host
+ * stays the default; Auto is opt-in per launch).
+ *
  * A remembered choice that no longer means anything falls back to that default:
  * a host the project has left, or one that is now offline/parked.
  */
@@ -127,10 +130,15 @@ export function resolveHostChoice(
     placementConstraints?: PlacementConstraints;
   },
   hosts: readonly Host[] = [],
+  inSession = false,
 ): HostChoice {
   const fallback: HostChoice = project.placement === "auto" ? AUTO_VALUE : null;
   if (remembered === undefined) return fallback;
-  if (remembered === AUTO_VALUE) return AUTO_VALUE;
+  // Auto is honoured only for a project that is itself `auto` (where it is the
+  // fallback). On a pinned project it is a per-launch opt-in: it lives in the
+  // launcher's memory for this open session, so it is passed as `inSession`.
+  if (remembered === AUTO_VALUE)
+    return project.placement === "auto" || inSession ? AUTO_VALUE : fallback;
   if (remembered === project.hostId) return project.placement === "auto" ? remembered : null;
   if (!Object.hasOwn(project.hostCwds ?? {}, remembered)) return fallback;
   const host = hosts.find((h) => h.id === remembered);
@@ -140,6 +148,24 @@ export function resolveHostChoice(
     platformFlagViolation(host, project.placementConstraints) === null &&
     capabilityFlagViolation(host, project.placementConstraints) === null;
   return usable ? remembered : fallback;
+}
+
+/** The remembered map after picking `value` for `project`: the pinned project's own host is the default, so it is forgotten. */
+export function rememberHostChoice(
+  map: Record<string, string>,
+  project: { id: number; hostId: string; placement?: string },
+  value: string,
+): Record<string, string> {
+  const next = { ...map };
+  const own = value === OWN_HOST_VALUE;
+  if (own && project.placement !== "auto") delete next[String(project.id)];
+  else next[String(project.id)] = own ? project.hostId : value;
+  return next;
+}
+
+/** Drop Auto from a persisted map: Auto is never replayed across launcher sessions. */
+export function withoutAutoChoices(map: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(map).filter(([, v]) => v !== AUTO_VALUE));
 }
 
 /** The "chosen host, reason, excluded" lines under the chip for Auto. */

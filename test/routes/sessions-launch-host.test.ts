@@ -179,4 +179,16 @@ describe("launcher host target: placement:auto and targetHostId (issue #2237)", 
     expect(res.statusCode).toBe(201);
     expect(res.json().hostId).toBe("local");
   });
+
+  it("an absent placement uses project.placement; a pinned project never auto-places (issue #2250)", async () => {
+    const { projectId } = await setup();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().hostId).toBe("local");
+    expect(res.json().placementReason).toMatch(/^pinned to/);
+  });
 });

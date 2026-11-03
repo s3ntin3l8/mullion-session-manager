@@ -217,7 +217,10 @@ Auto sends `placement: "auto"` on `POST /api/sessions`, which applies Auto to
 that one launch without changing the project's stored mode (it is exclusive
 with `targetHostId`/`targetPlatform`, `400` otherwise). For Auto the chip shows
 the placement preview: the chosen host, why, and the hosts not considered. The
-choice is remembered per project. With the worktree toggle on, a launch aimed
+choice is remembered per project. Auto stays opt-in: a remembered Auto is only
+replayed while the project itself is `auto`; on a pinned project, picking Auto
+applies to that open launcher only and is never persisted, so the next launch is
+back on the configured host (#2250). With the worktree toggle on, a launch aimed
 at another host or at Auto sends `isolate: true` instead of a base ref — a
 branch picked from this server's list is not valid on another host — and the
 server cuts the worktree from the placed host's default branch. Auto only moves an interactive launch off a local-owned project when the local host is not eligible (it is
