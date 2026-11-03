@@ -12,10 +12,11 @@ import path from "node:path";
 //   - the agent binary and what it needs next to it (see `installRoots`),
 //   - the same for `node` (codex and opencode are node scripts),
 //   - the project repo's git directory, because the scratch worktree is a
-//     `git worktree add` whose `.git` file points into it. Known limit: that
-//     directory is readable whole, `config` included, so a remote URL with an
-//     embedded token in it is visible to the turn. It is the project's own
-//     secret, not the operator's HOME, and git needs the directory to work.
+//     `git worktree add` whose `.git` file points into it. Its `config` is
+//     shadowed with a sanitised copy (remote URLs stripped of userinfo; see
+//     `sanitizeGitConfig`) so credentialed remotes are not visible to the turn
+//     while git keeps working. Known limit: `hooks/` and every git object
+//     remain readable read-only as git needs the directory to work.
 //
 // Not covered: `--ro-bind / /` still exposes everything outside HOME (an app
 // at /opt, other users' homes, /etc), and the turn inherits the server's
@@ -103,6 +104,80 @@ function outermost(dirs: string[]): string[] {
   return unique.filter((d) => !unique.some((o) => o !== d && d.startsWith(o + path.sep)));
 }
 
+/** Strips userinfo (username and password/token) from a URL string, preserving
+ * surrounding quotes if present. Non-standard URLs without userinfo are left
+ * unchanged. */
+export function stripUserInfoFromUrl(raw: string): string {
+  const trimmed = raw.trim();
+  const quoted = trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2;
+  const unquoted = quoted ? trimmed.slice(1, -1) : trimmed;
+
+  try {
+    const parsed = new URL(unquoted);
+    if (parsed.username || parsed.password) {
+      parsed.username = "";
+      parsed.password = "";
+      let stripped = parsed.toString();
+      if (!unquoted.endsWith("/") && stripped.endsWith("/")) {
+        stripped = stripped.slice(0, -1);
+      }
+      return quoted ? `"${stripped}"` : stripped;
+    }
+    return raw;
+  } catch {
+    return raw;
+  }
+}
+
+function splitValueAndComment(raw: string): { value: string; comment: string } {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('"')) {
+    const m = raw.match(/^(\s*"[^"]*")(\s+[#;].*)$/);
+    if (m) return { value: m[1], comment: m[2] };
+    return { value: raw, comment: "" };
+  }
+  const m = raw.match(/^(\s*\S+)(\s+[#;].*)$/);
+  if (m) return { value: m[1], comment: m[2] };
+  return { value: raw, comment: "" };
+}
+
+/** Sanitises git configuration content by stripping userinfo from remote URLs
+ * (any `url` or `pushurl` under `[remote ...]` sections), keeping all other
+ * sections and configuration intact. */
+export function sanitizeGitConfig(content: string): string {
+  const lines = content.split("\n");
+  let inRemoteSection = false;
+  const result: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    const sectionMatch = trimmed.match(
+      /^\[\s*([a-zA-Z0-9.-]+)(?:\s+"([^"]*)")?\s*\](?:\s+[#;].*)?$/,
+    );
+    if (sectionMatch) {
+      inRemoteSection = sectionMatch[1].toLowerCase() === "remote";
+      result.push(line);
+      continue;
+    }
+
+    if (inRemoteSection) {
+      const urlMatch = line.match(/^(\s*(?:push)?url\s*=\s*)(.*)$/);
+      if (urlMatch) {
+        const prefix = urlMatch[1];
+        const rawValue = urlMatch[2];
+        const { value, comment } = splitValueAndComment(rawValue);
+        const stripped = stripUserInfoFromUrl(value);
+        result.push(`${prefix}${stripped}${comment}`);
+        continue;
+      }
+    }
+
+    result.push(line);
+  }
+
+  return result.join("\n");
+}
+
 export interface HomeMaskOptions {
   /** The operator's real HOME (`os.homedir()`); injectable for tests. */
   home: string;
@@ -137,9 +212,34 @@ export function homeMaskArgs(opts: HomeMaskOptions): string[] {
       needed.push(...installRoots(node.real, home));
     }
   }
+  const shadowConfigBinds: Array<{ src: string; dest: string }> = [];
   if (opts.worktreePath) {
     const common = gitCommonDirOf(opts.worktreePath);
-    if (common) needed.push(common);
+    if (common) {
+      needed.push(common);
+      const realConfig = path.join(common, "config");
+      if (fs.existsSync(realConfig)) {
+        try {
+          const content = fs.readFileSync(realConfig, "utf8");
+          const sanitized = sanitizeGitConfig(content);
+          const shadowDir = fs.existsSync(path.join(opts.worktreePath, ".agent-home"))
+            ? path.join(opts.worktreePath, ".agent-home")
+            : opts.worktreePath;
+          const shadowConfig = path.join(shadowDir, ".git-config-sanitized");
+          fs.writeFileSync(shadowConfig, sanitized, { mode: 0o600 });
+          const targets = new Set<string>([realConfig]);
+          const resolvedCommon = realpathOrNull(common);
+          if (resolvedCommon) {
+            targets.add(path.join(resolvedCommon, "config"));
+          }
+          for (const dest of targets) {
+            shadowConfigBinds.push({ src: shadowConfig, dest });
+          }
+        } catch {
+          // Best-effort if worktree is unreadable/unwritable
+        }
+      }
+    }
   }
   const inside = outermost(
     needed
@@ -164,6 +264,7 @@ export function homeMaskArgs(opts: HomeMaskOptions): string[] {
     home,
     ...inside.flatMap((d) => ["--ro-bind-try", d, d]),
     ...fileBinds.flatMap(([src, dest]) => ["--ro-bind-try", src, dest]),
+    ...shadowConfigBinds.flatMap((b) => ["--ro-bind-try", b.src, b.dest]),
   ];
 }
 
