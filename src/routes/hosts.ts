@@ -11,6 +11,7 @@ import {
   getHostRow,
   listHosts,
   mintHostToken,
+  revokeMachineIdentity,
   updateHost,
 } from "../services/host-registry.js";
 import { resolveBackend } from "../services/session-backend.js";
@@ -304,6 +305,17 @@ export async function hostsRoute(app: FastifyInstance) {
     if (!updated) return reply.notFound();
     onHostCredentialsChanged(app, id);
     return { token };
+  });
+
+  // Issue #2568 — final revocation of a host's machine identity. The agent
+  // is rejected on its next renewal and does not fall back to its bootstrap
+  // token; the operator clears the agent's state file to re-enroll it.
+  app.post<{ Params: { id: string } }>("/api/hosts/:id/revoke", async (request, reply) => {
+    const { id } = request.params;
+    if (id === LOCAL_HOST_ID) return reply.badRequest("the local host has no machine identity");
+    if (!revokeMachineIdentity(app, id)) return reply.notFound();
+    onHostCredentialsChanged(app, id);
+    reply.code(204);
   });
 
   // Connection-test ping for the Settings hosts panel — `local` is always

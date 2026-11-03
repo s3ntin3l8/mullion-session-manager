@@ -482,6 +482,10 @@ export interface Host {
   // "enrolled" = created by an agent registering with the fleet secret;
   // "manual" = added in Settings (including every pre-#245 row).
   origin?: "manual" | "enrolled";
+  // Issue #2568 — the agent has a persistent machine identity / an operator
+  // revoked it. Never the credential. Absent from an older primary.
+  hasMachineIdentity?: boolean;
+  machineIdentityRevoked?: boolean;
   health: HostHealthStatus;
   // Not currently rendered anywhere — kept for a future "last seen Nm ago"
   // affordance (would make a "degraded" host more actionable than a bare

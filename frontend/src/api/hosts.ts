@@ -30,6 +30,10 @@ export const hostsApi = {
       method: "POST",
     }),
 
+  // Issue #2568 — final revocation of the host's machine identity.
+  revokeHost: (id: string) =>
+    request<void>(`/api/hosts/${encodeURIComponent(id)}/revoke`, { method: "POST" }),
+
   // Issue #1725 / roadmap 8.11 — `drained` parks the host (it takes no new
   // work) or un-parks it. A flag, not an action: nothing is terminated.
   updateHost: (

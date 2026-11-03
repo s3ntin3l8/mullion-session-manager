@@ -100,7 +100,51 @@ a Settings → Hosts & SSH bridges UI badge surfacing this (so an unexpected
 enrolled host is easy to spot at a glance, not just via the API) hasn't
 shipped yet; the data is there for a follow-up to render it.
 
-Advertised URLs must be unique per agent, the same requirement manual
+#### Machine identity and machine credentials
+
+An agent that has registered once keeps a **persistent machine identity**
+that does not depend on its URL. On the first successful registration (a
+claim or an enrollment) the primary issues a **machine credential** bound to
+the host's id: a long-lived, renewable secret, stored encrypted and kept
+apart from the 24 h request-signing session. It is returned **exactly once**
+in `machine_credential`.
+
+- **State file.** The agent writes `{hostId, machineCredential}` to
+  `agent-identity.json` in its data dir (`SESSIONS_DIR`). The file is mode
+  `0600` (on Windows, an ACL granting only the current user), written
+  atomically (temp file + rename), and never logged or passed as a process
+  argument.
+- **Re-registration by identity.** On every later boot the agent presents
+  `{hostId, machineCredential}` instead of the bootstrap token, and the
+  primary matches the host by id, never by `baseUrl`. Repeated registration
+  therefore keeps one row, and two agents that advertise the same URL get
+  distinct identities (each enrollment by a credential-aware agent creates
+  its own row). The advertised URL, hostname and platform follow the agent
+  if it moves.
+- **Renewal and the grace credential.** The agent renews at ~50% of the
+  session TTL, and each identity-authenticated renewal **rotates** the
+  credential. The previous credential stays valid for a 24 h grace period, so
+  a renewal response that is lost in transit does not lock the agent out: it
+  retries with the credential it still holds and is handed the
+  already-issued current one. A credential also expires after 90 days
+  without use (the expiry slides on every use).
+- **Revocation is final.** `POST /api/hosts/:id/revoke` (Settings → Hosts →
+  the row's menu → _Revoke identity_) drops the credential, its grace copy
+  and the live session. The agent's next registration gets `401`, and it
+  does **not** fall back to its bootstrap token to regain the identity: it
+  logs the rejection and stops. A revoked row can no longer be claimed with
+  its per-host token (rotating that token re-arms it). To re-enroll, an
+  operator stops the agent, deletes `agent-identity.json`, and restarts it;
+  it then registers as a new host.
+- **Legacy agents.** An agent without the state file (an older release, or
+  one that predates this feature) registers exactly as before — claim or
+  enroll with the bootstrap token, with the `baseUrl` dedupe — and is issued
+  no credential. The primary logs a line recommending the upgrade.
+- **Known limit.** A _first_ enrollment whose response is lost leaves an
+  unused extra row, because the agent has no identity yet to dedupe on; delete
+  it from the Hosts list.
+
+Advertised URLs must be unique per legacy agent, the same requirement manual
 registration already has implicitly. `MULLION_AGENT_ADVERTISE_URL`'s
 `http://<hostname>:<PORT>` fallback only produces a unique URL if hostnames
 are actually unique across your fleet (true for most cloud/container

@@ -86,8 +86,16 @@ function HostCapabilitiesLine({ host }: { host: Host }) {
 }
 
 export function HostsSection() {
-  const { hosts, refreshHosts, createHost, updateHost, deleteHost, pingHost, rotateHostToken } =
-    useDashboardStore();
+  const {
+    hosts,
+    refreshHosts,
+    createHost,
+    updateHost,
+    deleteHost,
+    pingHost,
+    rotateHostToken,
+    revokeHost,
+  } = useDashboardStore();
 
   // Issue #1725 / roadmap 8.11 — park a host, or un-park it.
   //
@@ -298,6 +306,13 @@ export function HostsSection() {
         setDeleteError(message);
       }
     });
+  };
+
+  const handleRevoke = (host: Host) => {
+    setRotateError(null);
+    revokeHost(host.id).catch((err: unknown) =>
+      setRotateError(err instanceof Error ? err.message : "Could not revoke the identity."),
+    );
   };
 
   const handleRotate = (host: Host) => {
@@ -513,6 +528,23 @@ export function HostsSection() {
                                 onClick: () => handleRotate(host),
                               },
                             ]),
+                        // Issue #2568 — only a host that holds a machine identity
+                        // has one to revoke.
+                        ...(host.hasMachineIdentity
+                          ? [
+                              {
+                                // Final: the agent is rejected and does not fall
+                                // back to its bootstrap token; clearing its
+                                // state file is the only way back.
+                                key: "revoke",
+                                label: "Revoke identity",
+                                armLabel: "Click again to revoke",
+                                icon: <CloseIcon size={14} style={{ color: "var(--muted)" }} />,
+                                confirm: true,
+                                onClick: () => handleRevoke(host),
+                              },
+                            ]
+                          : []),
                         {
                           key: "delete",
                           label: "Delete host",

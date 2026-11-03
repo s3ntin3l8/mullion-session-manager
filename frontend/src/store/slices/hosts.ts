@@ -21,6 +21,11 @@ export const createHostsSlice: StateCreator<DashboardState, [], [], HostsSlice> 
     return token;
   },
 
+  revokeHost: async (id) => {
+    await api.revokeHost(id);
+    await get().refreshHosts();
+  },
+
   updateHost: async (id, patch) => {
     await api.updateHost(id, patch);
     await get().refreshHosts();
