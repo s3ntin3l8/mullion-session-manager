@@ -55,8 +55,9 @@ const idParams = {
 // gitignored .env lives in its worktree, which a custom worktree baseDir can
 // put outside the project root. A session row's cwd is NOT trusted on its own
 // (a top-level session may carry an arbitrary cwd): it must be inside the
-// project, or — local hosts only — a registered git worktree of the project's
-// repo (the same rule createSessionRecord applies to child spawns). A session
+// project, or a registered git worktree of the project's repo on that session's
+// host (the same rule createSessionRecord applies to child spawns; see
+// services/execution-context.ts). A session
 // of ANOTHER project is refused.
 const pathQuery = {
   type: "object",

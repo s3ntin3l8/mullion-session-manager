@@ -7,7 +7,7 @@ import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts, projects, sessions } from "../../src/db/schema.js";
 import { resolveExecutionContext } from "../../src/services/execution-context.js";
-import { RemoteHostClient } from "../../src/services/remote-host-client.js";
+import { HostRequestError, RemoteHostClient } from "../../src/services/remote-host-client.js";
 
 const tmpDb = path.join(os.tmpdir(), `execution-context-test-${process.pid}.db`);
 
@@ -188,6 +188,19 @@ describe("resolveExecutionContext", () => {
     });
   });
 
+  it("is unsupported (not unreachable) when the agent answers 4xx", async () => {
+    const b = await addHost();
+    const projectId = addProject({ cwd: "/srv/repo", hostId: b });
+    vi.spyOn(RemoteHostClient.prototype, "resolveGitBranches").mockRejectedValue(
+      new HostRequestError(b, 400, "cwd must be within this agent's PROJECTS_ROOTS"),
+    );
+    const sessionId = addSession(projectId, "/srv/repo-wt", null);
+    expect(await resolveExecutionContext(app, { projectId, sessionId })).toMatchObject({
+      ok: false,
+      error: { code: "unsupported", message: expect.stringContaining("PROJECTS_ROOTS") },
+    });
+  });
+
   it("is host_unavailable for a session on a host that isn't registered or has no address", async () => {
     const pending = await addHost({ baseUrl: null });
     const projectId = addProject({ cwd: root, hostCwds: { [pending]: "/x" } });
@@ -199,7 +212,6 @@ describe("resolveExecutionContext", () => {
   });
 
   it("is unsupported when the agent predates worktree listing", async () => {
-    const { HostRequestError } = await import("../../src/services/remote-host-client.js");
     const b = await addHost();
     const projectId = addProject({ cwd: "/srv/repo", hostId: b });
     vi.spyOn(RemoteHostClient.prototype, "resolveGitBranches").mockRejectedValue(

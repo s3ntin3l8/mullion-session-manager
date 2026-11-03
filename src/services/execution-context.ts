@@ -75,6 +75,11 @@ export interface ExecutionContextOptions {
    * run `isGitRepo` and an absolute-path guard); host, platform and
    * cross-project checks still apply. Never use it to serve file contents. */
   trustSessionCwd?: boolean;
+  /** Rows the caller already loaded (a batch), so no per-row re-select. */
+  preloaded?: {
+    project: typeof projects.$inferSelect;
+    session?: typeof sessions.$inferSelect;
+  };
 }
 
 export async function resolveExecutionContext(
@@ -82,13 +87,17 @@ export async function resolveExecutionContext(
   ref: ExecutionContextRef,
   opts: ExecutionContextOptions = {},
 ): Promise<ExecutionContextResult> {
-  const [project] = app.db.select().from(projects).where(eq(projects.id, ref.projectId)).all();
+  const project =
+    opts.preloaded?.project ??
+    app.db.select().from(projects).where(eq(projects.id, ref.projectId)).all()[0];
   if (!project) return fail("invalid_context", "Project not found");
 
   let session: typeof sessions.$inferSelect | undefined;
   let hostId = project.hostId;
   if ("sessionId" in ref) {
-    [session] = app.db.select().from(sessions).where(eq(sessions.id, ref.sessionId)).all();
+    session =
+      opts.preloaded?.session ??
+      app.db.select().from(sessions).where(eq(sessions.id, ref.sessionId)).all()[0];
     if (!session || session.projectId !== project.id) {
       return fail("invalid_context", "Session not found in this project");
     }
@@ -167,10 +176,18 @@ export async function resolveExecutionContext(
       ? { ok: true, context: { ...base, cwd: sessionCwd, checkoutRoot: sessionCwd } }
       : fail("invalid_context", outsideMsg);
   } catch (err) {
-    if (err instanceof HostRequestError && err.statusCode === 404) {
-      return fail("unsupported", `Host ${hostId}'s Mullion is too old to list worktrees`);
+    // The agent answered and said no (404 = too old; 400 = cwd outside its
+    // PROJECTS_ROOTS; 401/403 = credentials): a config problem, not a
+    // connectivity one, so never "unreachable" (see host-error-reply.ts).
+    if (err instanceof HostRequestError) {
+      return fail(
+        "unsupported",
+        err.statusCode === 404
+          ? `Host ${hostId}'s Mullion is too old to list worktrees`
+          : `Host ${hostId} rejected the worktree lookup: ${err.body || `HTTP ${err.statusCode}`}`,
+      );
     }
-    app.log.warn({ err, hostId }, "couldn't list the remote host's worktrees");
+    app.log.warn({ err, hostId }, "couldn't reach the remote host to list its worktrees");
     return fail("host_unavailable", `Host ${hostId} is unreachable`);
   }
 }
@@ -180,16 +197,15 @@ export function executionContextErrorStatus(code: ExecutionContextErrorCode): 40
 }
 
 /** A session's recorded (host, cwd) for a read-only, self-validating caller
- * (`trustSessionCwd`), or `null` when it can't be resolved. */
-export async function resolveTrustedSessionContext(
+ * (`trustSessionCwd`). Pass the already-loaded rows when resolving a batch. */
+export function resolveTrustedSessionContext(
   app: FastifyInstance,
-  projectId: number,
-  sessionId: number,
-): Promise<ExecutionContext | null> {
-  const got = await resolveExecutionContext(
+  project: typeof projects.$inferSelect,
+  session: typeof sessions.$inferSelect,
+): Promise<ExecutionContextResult> {
+  return resolveExecutionContext(
     app,
-    { projectId, sessionId },
-    { trustSessionCwd: true },
+    { projectId: project.id, sessionId: session.id },
+    { trustSessionCwd: true, preloaded: { project, session } },
   );
-  return got.ok ? got.context : null;
 }
