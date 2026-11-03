@@ -272,7 +272,7 @@ describe("seedDemo held sessions", () => {
       "mobile-demo.release",
     );
 
-    // Holding alone (what capture-screenshots.mjs passes) must not add them.
+    // Holding alone must not add them: they are their own opt-in.
     const plain = await sessionsFor({ holdTranscripts: true });
     const plainNames = plain.calls.filter((c) => c.url === "/api/sessions").map((c) => c.body.name);
     expect(plainNames).not.toContain("mobile demo");

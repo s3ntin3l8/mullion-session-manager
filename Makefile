@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help install install-hooks dev demo screenshots screenshots-landing test test-backend test-coverage test-patch-coverage test-e2e verify-ui verify-dockview-restore verify-history-view verify-github-view lint typecheck typecheck-test format format-check build clean wt check-scope-leaks git-safe git-doctor
+.PHONY: help install install-hooks dev demo screenshots screenshots-landing screenshots-audit visual-check visual-baseline test test-backend test-coverage test-patch-coverage test-e2e verify-ui verify-dockview-restore verify-history-view verify-github-view lint typecheck typecheck-test format format-check build clean wt check-scope-leaks git-safe git-doctor
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2}'
@@ -18,11 +18,30 @@ dev: ## Start dev server
 demo: ## Throwaway isolated demo (scratch DB/sessions/HOME, clean env, loopback ports); Ctrl-C deletes it
 	node scripts/demo/instance.mjs
 
-screenshots: ## Regenerate README + PWA manifest screenshots from an isolated demo instance
-	node scripts/capture-screenshots.mjs
+# Screenshots and visual checks run on visual-kit (https://github.com/s3ntin3l8/visual-kit,
+# CONTRACT.md): its container drives `make demo` through visual/scenes.json. Needs Docker.
+VISUAL_IMAGE := visual-kit-local/$(notdir $(CURDIR))
+VISUAL_RUN   := VISUAL_KIT_IMAGE=$(VISUAL_IMAGE) visual/.kit/run.sh
 
-screenshots-landing: ## Landing-page stills + terminal loop into OUT (default ./landing-shots); loop needs ffmpeg
-	node scripts/capture-screenshots.mjs --profile landing --out "$(or $(OUT),landing-shots)"
+visual/.kit/run.sh: visual/Dockerfile
+	docker build -q -t $(VISUAL_IMAGE) - < visual/Dockerfile
+	mkdir -p visual/.kit && docker run --rm $(VISUAL_IMAGE) host-files | tar -x -C visual/.kit
+
+screenshots: visual/.kit/run.sh ## README screenshots into docs/screenshots, plus the PWA manifest's copies (committed)
+	$(VISUAL_RUN) readme $(if $(FORCE),--force)
+	node scripts/sync-pwa-screenshots.mjs
+
+screenshots-landing: visual/.kit/run.sh ## Landing-page stills + terminal loop into OUT (default ./landing-shots)
+	$(VISUAL_RUN) landing --out "$(or $(OUT),landing-shots)" $(if $(FORCE),--force)
+
+screenshots-audit: visual/.kit/run.sh ## Audit evidence into docs/audit/assets/$(AUDIT) (AUDIT=YYYY-MM-<scope>-<topic>, local only)
+	$(VISUAL_RUN) audit --slug "$(AUDIT)" $(if $(FORCE),--force)
+
+visual-check: visual/.kit/run.sh ## Before/after of a UI change: ROUTES=a,b BASE=ref (default origin/main) -> visual/.out/check
+	$(VISUAL_RUN) check $(if $(ROUTES),--routes "$(ROUTES)") $(if $(BASE),--base "$(BASE)") $(if $(FORCE),--force)
+
+visual-baseline: visual/.kit/run.sh ## Regenerate the committed baselines (visual/baselines)
+	$(VISUAL_RUN) baseline $(if $(FORCE),--force)
 
 test: ## Run tests (backend + frontend)
 	npm run test:all

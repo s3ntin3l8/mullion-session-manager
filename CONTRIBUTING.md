@@ -64,11 +64,24 @@ inherit `node_modules`: run `npm ci` at the repo root **and**
 
 `make demo` starts a throwaway Mullion (backend and Vite frontend) seeded with
 demo projects, sessions and tasks, and prints its URL. Ctrl-C stops its
-sessions and deletes everything it created. `make screenshots` uses the same
-instance to regenerate `frontend/public/screenshots/` (referenced by the README
-and `frontend/public/site.webmanifest`), and `make screenshots-landing OUT=<dir>`
-writes 2x landing-page stills plus a short terminal loop (the loop needs
-`ffmpeg`).
+sessions and deletes everything it created.
+
+Screenshots and visual checks run on [visual-kit](https://github.com/s3ntin3l8/visual-kit)
+(its `CONTRACT.md` is the spec), which needs Docker: it starts `make demo`, drives
+the scenes in `visual/scenes.json` in a pinned browser image, and stops the demo.
+
+| Target                                                 | What it does                                                                                                                                                         |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `make screenshots`                                     | README images into `docs/screenshots/` (light and dark), plus the dark copies the PWA manifest lists in `frontend/public/screenshots/`                               |
+| `make screenshots-landing OUT=<dir>`                   | landing-page stills and the terminal loop, for personal-landing's `npm run assets:sync` (the loop needs `ffmpeg`)                                                    |
+| `make visual-check [ROUTES=a,b] [BASE=ref]`            | renders the scenes tagged `check` before (merge base) and after your change into `visual/.out/check/`; run it twice on an unchanged tree and it must say `0 changed` |
+| `make visual-baseline`                                 | regenerates the committed `visual/baselines/` (the scenes flagged `"baseline": true`); commit them with the change that moved the page                               |
+| `make screenshots-audit AUDIT=YYYY-MM-<scope>-<topic>` | every form factor into `docs/audit/assets/<slug>/` (local only)                                                                                                      |
+
+`visual/hooks.mjs` holds what a declarative scene cannot: the terminal scenes wait for
+the terminal to settle, then release the demo's held transcript through
+`visual/host-hooks.sh` (the container can reach the demo only over HTTP, and the
+release file lives in the demo's scratch directory).
 
 It is safe to run on a host that also runs a real Mullion, including from inside
 one of its sessions. `scripts/demo/env.mjs` enforces that, and
@@ -94,12 +107,15 @@ one of its sessions. `scripts/demo/env.mjs` enforces that, and
 - A renderer outside this process (visual-kit) drives `make demo` through
   environment variables read by `scripts/demo/instance.mjs` itself, never passed
   on to the backend: `MULLION_DEMO_HOLD=1` holds the screenshot transcripts
-  behind release files (and seeds the mobile and loop sessions) and stops the CI
-  tick; `MULLION_DEMO_THEME=system` lets the browser's colour scheme decide;
+  behind release files (and seeds the mobile and loop sessions), stops the CI
+  tick and the update banner; `MULLION_DEMO_THEME=system` lets the browser's colour scheme decide;
   `DEMO_NOW=<ISO instant>` fixes the instant the fake GitHub's and the seed's
   "N minutes ago" count back from; `MULLION_DEMO_STATE=<file>` records the seeded
   scripts directory (where the release files go) while the demo is up. Once
   seeded it prints `DEMO_READY <url>`, and it tears down on SIGINT or SIGTERM.
+- The backend's per-address rate limit (`RATE_LIMIT_MAX`, 300 a minute by default) is
+  lifted for the demo: a renderer that loads the app dozens of times from one address
+  otherwise gets 429 on every read and sees an empty sidebar.
 - Demo sessions run as `crs-session-<instanceId>-*` scopes, namespaced by the
   scratch `SESSIONS_DIR`; teardown stops exactly those.
 
