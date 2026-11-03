@@ -133,9 +133,18 @@ in `machine_credential`.
   and the live session. The agent's next registration gets `401`, and it
   does **not** fall back to its bootstrap token to regain the identity: it
   logs the rejection and stops. A revoked row can no longer be claimed with
-  its per-host token (rotating that token re-arms it). To re-enroll, an
-  operator stops the agent, deletes `agent-identity.json`, and restarts it;
-  it then registers as a new host.
+  its per-host token. To re-enroll an agent that uses the fleet secret, stop
+  it, delete `agent-identity.json`, and restart it; it registers as a new
+  host. For an agent that claimed a manual host with its per-host token, that
+  does not work (the token still matches only the revoked row): rotate the
+  host's token (`POST /api/hosts/:id/rotate-token`, which re-arms the row),
+  put the new token in the agent's `.env`, delete `agent-identity.json`, then
+  restart. A credential unused for 90 days is rejected the same way as a
+  revoked one, so the agent log's "revoked or unknown" can also mean expiry.
+- **Shared per-host token.** If a second agent claims a row with the same
+  per-host token, the incumbent's credential moves to the grace slot and
+  the primary logs a warning; the displaced agent converges onto the new
+  credential at its next renewal. Give each agent its own host.
 - **Legacy agents.** An agent without the state file (an older release, or
   one that predates this feature) registers exactly as before — claim or
   enroll with the bootstrap token, with the `baseUrl` dedupe — and is issued

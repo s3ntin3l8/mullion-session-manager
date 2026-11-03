@@ -177,13 +177,13 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
       await saveAgentIdentity(statePath, next);
       identity = next;
     } catch (err) {
-      // Not fatal: the session works; only the identity is lost on restart.
-      // The error is logged without the credential.
+      // Not fatal: the session works. Keep presenting the last PERSISTED
+      // identity (the primary still accepts it via the grace slot), so memory
+      // never drifts ahead of disk. The error is logged without the credential.
       app.log.warn(
         { err: err instanceof Error ? err.message : String(err) },
-        "[agent-enrollment] could not persist the machine identity; it will re-enroll on restart",
+        "[agent-enrollment] could not persist the machine identity; keeping the last persisted one and retrying on the next renewal",
       );
-      identity = next;
     }
   }
 
@@ -191,7 +191,7 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
     identityRejected = true;
     app.log.error(
       { hostId: identity?.hostId },
-      `[agent-enrollment] the primary rejected this agent's machine identity (revoked or unknown). ` +
+      `[agent-enrollment] the primary rejected this agent's machine identity (revoked, expired after 90 days unused, or unknown). ` +
         `Not falling back to the bootstrap token. To re-enroll, stop the agent, delete ${statePath}, and restart.`,
     );
   }
@@ -375,10 +375,7 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
     app.log.info("[agent-enrollment] resumed from a suspend, revalidating the credential");
     if (app.agentSession) {
       void renew();
-    } else if (
-      app.config.MULLION_PRIMARY_URL &&
-      (app.config.MULLION_ENROLLMENT_TOKEN || identity)
-    ) {
+    } else if (app.config.MULLION_PRIMARY_URL && app.config.MULLION_ENROLLMENT_TOKEN) {
       // Only an ENROLLING agent re-registers from scratch. A manual-token-only
       // agent has no session to establish and no bootstrap credential to
       // present — its whole credential is the static token the refresh above
@@ -387,8 +384,7 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
     }
   });
 
-  // A stored identity is enough to register without the bootstrap token.
-  if (!app.config.MULLION_PRIMARY_URL || (!app.config.MULLION_ENROLLMENT_TOKEN && !identity)) {
+  if (!app.config.MULLION_PRIMARY_URL || !app.config.MULLION_ENROLLMENT_TOKEN) {
     // Manual-token-only agent (today's flow, unchanged): it never calls out
     // to the primary, so there is no session to renew — but the resume
     // handler above still refreshes its static token.

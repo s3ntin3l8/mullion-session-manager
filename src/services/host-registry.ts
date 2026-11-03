@@ -511,17 +511,36 @@ function insertEnrolledHost(app: FastifyInstance, input: RegisterAgentInput): Ho
  * Issue #2568 — a fresh machine credential for a host: the first one (claim /
  * enroll by an agent that asked for it) or a replacement after the operator
  * cleared the agent's state file. Returned in plaintext exactly once; stored
- * encrypted. Replaces any previous credential outright, with no grace — this
- * is a new identity handover, not a lost-response retry.
+ * encrypted. A live previous credential moves to the grace slot (see below).
  */
 function issueMachineCredential(app: FastifyInstance, hostId: string): string {
   const credential = crypto.randomBytes(32).toString("hex");
+  // A claim cannot tell a deliberate re-enroll from a second agent sharing the
+  // same per-host token. Keep a still-live credential in the grace slot so a
+  // displaced agent converges onto the new one at its next renewal instead of
+  // being 401-ed permanently.
+  const existing = app.db
+    .select({
+      enc: hosts.machineCredentialEnc,
+      revokedAt: hosts.machineCredentialRevokedAt,
+    })
+    .from(hosts)
+    .where(eq(hosts.id, hostId))
+    .get();
+  const replacesLive = !!existing?.enc && !existing.revokedAt;
+  if (replacesLive) {
+    app.log.warn(
+      { hostId },
+      "[host-registry] a registration replaced a live machine identity; the displaced agent " +
+        "(if any) converges via the grace credential. Two agents sharing one per-host token collide here.",
+    );
+  }
   app.db
     .update(hosts)
     .set({
       machineCredentialEnc: app.encryption.encryptString(credential),
-      machineCredentialPrevEnc: null,
-      machineCredentialRotatedAt: null,
+      machineCredentialPrevEnc: replacesLive ? existing.enc : null,
+      machineCredentialRotatedAt: replacesLive ? new Date() : null,
       machineCredentialExpiresAt: new Date(Date.now() + MACHINE_CREDENTIAL_TTL_MS),
       machineCredentialRevokedAt: null,
     })

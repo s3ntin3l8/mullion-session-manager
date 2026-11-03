@@ -18,6 +18,7 @@ import {
   getHostRow,
   HostHasProjectsError,
   listHosts,
+  renewMachineCredential,
   rotateSession,
   UnknownHostError,
   updateHost,
@@ -157,6 +158,31 @@ describe("host-registry", () => {
 
   // Issue #245 / roadmap 7.1 — agent-initiated registration & rotation.
   describe("claimHost / enrollHost / rotateSession", () => {
+    it("a second claim with the same per-host token keeps the incumbent's credential in the grace slot", async () => {
+      const app = await buildApp();
+      const created = createHost(app, {
+        name: "shared-token",
+        baseUrl: "http://placeholder:0",
+        token: "shared-per-host",
+      });
+      const input = {
+        baseUrl: "http://a:4000",
+        hostname: "a",
+        wantsMachineCredential: true,
+      };
+      const a = claimHost(app, "shared-per-host", input)!;
+      const b = claimHost(app, "shared-per-host", { ...input, baseUrl: "http://b:4000" })!;
+      expect(a.machineCredential).toBeTruthy();
+      expect(b.machineCredential).toBeTruthy();
+      expect(b.machineCredential).not.toBe(a.machineCredential);
+
+      // The displaced agent's renewal is still accepted and converges.
+      const renewed = renewMachineCredential(app, created.id, a.machineCredential!, input);
+      expect(renewed).not.toBeNull();
+      expect(renewed!.machineCredential).toBeTruthy();
+      await app.close();
+    });
+
     it("claimHost matches an existing host's own token, fills baseUrl/metadata, and issues a session", async () => {
       const app = await buildApp();
       const created = createHost(app, {
