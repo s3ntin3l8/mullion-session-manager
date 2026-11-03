@@ -52,6 +52,7 @@ import type {
   PlacementPlatform,
   TaskStatus,
 } from "../../../src/shared/constants.js";
+import type { HostProtocolStatus } from "../../../src/shared/agent-protocol.js";
 
 export type { UpdateCheckResult, UpdatePhase, UpdateStatus } from "./update-types.js";
 export type { GitPullReason, GitPullResult, CloneHealth, RepairOutcome, RepairPlan };
@@ -506,6 +507,8 @@ export interface Host {
   // Issue #2306 — "xcode" / "android-emulator"; null while unknown (an old agent).
   capabilities?: PlacementCapability[] | null;
   mullionVersion?: string | null;
+  // Issue #2248 — the negotiated agent protocol; null while not read yet.
+  protocol?: HostProtocolStatus | null;
   // The host's CAPACITY — how busy it is, in numbers comparable across
   // hosts. Null when the host does not report capacity (an agent build
   // without the route) or has not been polled yet. `sampledAt` is when the

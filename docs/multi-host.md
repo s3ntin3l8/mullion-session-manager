@@ -1165,6 +1165,41 @@ and the primary keeps it beside the agent list (same TTL, same invalidation).
 Enrollment's `capabilities` / `hosts.agentMetadata` is a static snapshot that
 goes stale, so it is intentionally **not** read.
 
+### Protocol and operation support
+
+Issue [#2248](https://github.com/s3ntin3l8/mullion-session-manager/issues/2248)
+— the release version says nothing reliable about what an agent can do, and an
+old agent's `additionalProperties: false` schemas silently strip spawn fields
+they do not know. So the agent also answers a handshake,
+`GET /internal/protocol` (same auth as the rest of `/internal/*`):
+`{ "protocolVersion": 1, "operations": [...], "launchOptions": [...] }`.
+
+- **One registry.** `src/shared/agent-protocol.ts` names the operations (route
+  families) and launch options (optional spawn-body fields). The agent's route
+  and the primary's checks both read it; a test pins `launchOptions` to the
+  spawn schema's optional fields so they cannot drift.
+- **Compatible differing releases.** Compatibility is `protocolVersion` inside
+  the primary's supported range (`SUPPORTED_PROTOCOL_RANGE`), never identical
+  versions. Whatever the agent lists is supported; anything not listed is not.
+- **Legacy hosts.** A `404` means an agent that predates the handshake and is
+  recorded as `LEGACY_BASELINE` (`legacy: true`, no version): the operations
+  and launch options known to exist before it. Everything else is unsupported.
+  The baseline is frozen; new registry entries never join it.
+- **Caching.** Stored as `HostAgentEntry.protocol`, next to the agent list
+  (same TTL, same heartbeat refresh). It is also re-read when an agent
+  registers or renews, and after a per-host update is applied (the entry is
+  made stale at once). A URL/credential change discards it through the
+  existing epoch guard. A failed read keeps the previous reading; `null` means
+  not read yet.
+- **Helpers.** `hostSupports(app, hostId, op)` and `hostLaunchOptions(app,
+hostId)` (`src/services/host-agents.ts`). An unnegotiated host supports
+  nothing; the local host is this build. **Nothing is gated on them yet** —
+  launches and operations are a follow-up — only the Hosts API uses them.
+- **Hosts API / UI.** `GET /api/hosts` adds `protocol: { protocolVersion,
+incompatible, missingOperations, legacy } | null`; Settings → Hosts shows the
+  version, "incompatible" and the missing operations. The remedy is the row's
+  existing **Update** action.
+
 ## Capacity reporting
 
 Issue [#1721](https://github.com/s3ntin3l8/mullion-session-manager/issues/1721)

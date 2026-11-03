@@ -3,6 +3,13 @@ import { LOCAL_HOST_ID } from "../shared/constants.js";
 import { appVersion } from "../routes/server-info.js";
 import { getCachedAgents, type DetectedAgent } from "./agent-detect.js";
 import { getCachedCapabilities } from "./host-capabilities.js";
+import {
+  LEGACY_BASELINE,
+  isProtocolCompatible,
+  localProtocolInfo,
+  type AgentProtocolInfo,
+  type HostProtocolStatus,
+} from "../shared/agent-protocol.js";
 import { getRemoteHostClient, HostRequestError } from "./remote-host-client.js";
 
 /**
@@ -28,8 +35,20 @@ export interface HostAgentEntry {
   mullionVersion: string | null;
   /** The host's `PROJECTS_ROOTS` (where a managed clone goes); absent/null when unknown. */
   projectsRoots?: string[] | null;
+  /** The negotiated protocol (issue #2248); absent/null when not read yet. */
+  protocol?: HostProtocol | null;
   checkedAt: number;
 }
+
+/**
+ * What a host's agent advertised on `GET /internal/protocol`, or — when the
+ * agent predates the route (404) — `LEGACY_BASELINE` with `legacy: true`.
+ */
+export interface HostProtocol extends AgentProtocolInfo {
+  legacy: boolean;
+}
+
+const LEGACY_PROTOCOL: HostProtocol = { ...LEGACY_BASELINE, legacy: true };
 
 /** The agent binaries (`claude`, `codex`, …) a probe found, shells excluded. */
 export function availableAgentBins(detected: readonly DetectedAgent[]): string[] {
@@ -65,6 +84,16 @@ export class HostAgentTracker {
     for (const id of this.entries.keys()) {
       if (id !== LOCAL_HOST_ID && !currentIds.has(id)) this.entries.delete(id);
     }
+  }
+
+  /**
+   * The host re-registered or was updated, so its negotiated protocol may
+   * describe a previous build: forget it and make the entry stale, so the next
+   * heartbeat re-reads. The agent list and capabilities are kept (stale, real).
+   */
+  markProtocolStale(hostId: string): void {
+    const entry = this.entries.get(hostId);
+    if (entry) this.entries.set(hostId, { ...entry, protocol: null, checkedAt: 0 });
   }
 
   /** Call when the host's baseUrl/token changes: the list described another agent. */
@@ -130,10 +159,18 @@ async function readRemoteHostAgents(
   } catch {
     // The version is advisory; the agent list above is what gates placement.
   }
+  // The handshake: a 404 is an agent that predates it, which is the explicit
+  // legacy baseline; any other failure keeps the previous reading.
+  let protocol: HostProtocol | null = tracker.get(hostId)?.protocol ?? null;
+  try {
+    protocol = { ...(await client.detectProtocol()), legacy: false };
+  } catch (err) {
+    if (err instanceof HostRequestError && err.statusCode === 404) protocol = LEGACY_PROTOCOL;
+  }
   // The host's address or token changed while we were reading: this list
   // describes the OLD agent, so it must not be recorded as fresh.
   if (tracker.epoch(hostId) !== epoch) return;
-  tracker.record(hostId, { agents, capabilities, mullionVersion, projectsRoots });
+  tracker.record(hostId, { agents, capabilities, mullionVersion, projectsRoots, protocol });
 }
 
 // Per app: tests (and nothing else) build many Fastify instances in one process.
@@ -160,6 +197,7 @@ export function refreshLocalAgents(app: FastifyInstance): void {
         agents: availableAgentBins(detected),
         capabilities,
         mullionVersion: appVersion,
+        protocol: { ...localProtocolInfo(), legacy: false },
       });
     })
     .catch((err: unknown) => {
@@ -168,6 +206,53 @@ export function refreshLocalAgents(app: FastifyInstance): void {
     .finally(() => {
       localRefreshing.delete(app);
     });
+}
+
+/**
+ * Re-reads a host's protocol soon after it re-registered or was updated: drops
+ * the old reading, then refreshes best-effort (the agent may still be coming
+ * back, in which case the stale entry makes the next heartbeat retry).
+ */
+export function refreshHostProtocolSoon(app: FastifyInstance, hostId: string): void {
+  app.hostAgentTracker?.markProtocolStale(hostId);
+  void refreshRemoteHostAgents(app, hostId).catch((err: unknown) => {
+    app.log.debug({ err, hostId }, "[host-agents] protocol refresh failed");
+  });
+}
+
+/**
+ * Whether the host's agent supports `op`. Unknown (not negotiated yet) reads
+ * as unsupported: callers that must fail open on unknown ask `hostProtocol`.
+ * The local host is this build, so it supports everything it registers.
+ */
+export function hostSupports(app: FastifyInstance, hostId: string, op: string): boolean {
+  if (hostId === LOCAL_HOST_ID) return localProtocolInfo().operations.includes(op);
+  return hostProtocol(app, hostId)?.operations.includes(op) ?? false;
+}
+
+/** The launch options (spawn-body fields) the host's agent accepts; `[]` when unknown. */
+export function hostLaunchOptions(app: FastifyInstance, hostId: string): string[] {
+  if (hostId === LOCAL_HOST_ID) return localProtocolInfo().launchOptions;
+  return hostProtocol(app, hostId)?.launchOptions ?? [];
+}
+
+/** The negotiated protocol for a remote host; null until first read. */
+export function hostProtocol(app: FastifyInstance, hostId: string): HostProtocol | null {
+  return app.hostAgentTracker?.get(hostId)?.protocol ?? null;
+}
+
+/** The Hosts API's view of a protocol; null while it is not known. */
+export function protocolStatus(
+  protocol: HostProtocol | null | undefined,
+  registryOperations: readonly string[] = localProtocolInfo().operations,
+): HostProtocolStatus | null {
+  if (!protocol) return null;
+  return {
+    protocolVersion: protocol.legacy ? null : protocol.protocolVersion,
+    incompatible: !protocol.legacy && !isProtocolCompatible(protocol.protocolVersion),
+    missingOperations: registryOperations.filter((op) => !protocol.operations.includes(op)),
+    legacy: protocol.legacy,
+  };
 }
 
 /** `a` is an older version than `b` (dotted numeric compare; unparseable → false). */

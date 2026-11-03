@@ -144,7 +144,7 @@ import {
 import { deliverPrompt, REMOTE_WAIT_CHUNK_MS } from "../services/session-prompt.js";
 import { FILE_STREAM_CONTENT_TYPE } from "../shared/constants.js";
 import { getCachedAgents } from "../services/agent-detect.js";
-import { getCachedCapabilities } from "../services/host-capabilities.js";
+import { registerProbeRoutes } from "./internal-probes.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { attachSocketToSession } from "./terminal.js";
 import { attachLocalEventsSocket, attachCursorsAndSeenBroadcast } from "./events.js";
@@ -1244,11 +1244,9 @@ export async function internalRoutes(app: FastifyInstance) {
     return getCachedAgents();
   });
 
-  // Issue #2306 — what this host can do beyond agent CLIs (Xcode, an Android
-  // emulator). Its own route: /internal/agents answers a bare array.
-  app.get("/internal/capabilities", INTERNAL_RATE_LIMIT, async () => {
-    return { capabilities: await getCachedCapabilities(app) };
-  });
+  // #2306 capabilities and the #2248 protocol handshake (inside this plugin's
+  // auth hook, hence registered from here).
+  registerProbeRoutes(app, INTERNAL_RATE_LIMIT);
 
   // Owner/repo derivation for a remote-host project's GitHub widget (issue
   // #27) — a remote project's cwd is a path on *this* agent's filesystem,

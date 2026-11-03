@@ -22,7 +22,11 @@ import { forwardHostRequestError } from "../services/host-error-reply.js";
 import { MAX_PROJECTS_ROOTS } from "../services/agent-projects-roots.js";
 import { buildAgentConfig } from "./internal.js";
 import { appVersion } from "./server-info.js";
-import { refreshLocalAgents } from "../services/host-agents.js";
+import {
+  protocolStatus,
+  refreshHostProtocolSoon,
+  refreshLocalAgents,
+} from "../services/host-agents.js";
 import { resolveReleaseByTag, UpdateCheckError } from "../services/update-checker.js";
 import type { ReleaseByTagResult } from "../services/update-checker.js";
 import type { UpdateStatus } from "../services/update-apply.js";
@@ -193,6 +197,7 @@ export async function hostsRoute(app: FastifyInstance) {
         ...host,
         agents: agentEntry?.agents ?? null,
         capabilities: agentEntry?.capabilities ?? null,
+        protocol: protocolStatus(agentEntry?.protocol),
         mullionVersion:
           host.id === LOCAL_HOST_ID ? appVersion : (agentEntry?.mullionVersion ?? null),
         // The LOCAL host's platform is this process's own — the row simply
@@ -585,6 +590,8 @@ export async function hostsRoute(app: FastifyInstance) {
         assetUrl: release.assetUrl,
         checksumUrl: release.checksumUrl,
       });
+      // The agent restarts onto a new build: what it advertised is now stale.
+      refreshHostProtocolSoon(app, id);
       reply.code(202);
       return status;
     } catch (err) {
