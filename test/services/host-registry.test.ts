@@ -176,17 +176,30 @@ describe("host-registry", () => {
       expect(b.machineCredential).toBeTruthy();
       expect(b.machineCredential).not.toBe(a.machineCredential);
 
-      // The displaced agent's renewal is still accepted and converges.
-      const before = getHostRow(app, created.id)!.machineCredentialRotatedAt;
-      await new Promise((r) => setTimeout(r, 1100));
-      const renewed = renewMachineCredential(app, created.id, a.machineCredential!, input);
-      expect(renewed).not.toBeNull();
-      // Converges onto the already-issued current credential; does not rotate.
-      expect(renewed!.machineCredential).toBe(b.machineCredential);
-      // The grace window slides on use (a stale holder that keeps renewing survives).
-      expect(getHostRow(app, created.id)!.machineCredentialRotatedAt!.getTime()).toBeGreaterThan(
-        before!.getTime(),
-      );
+      // The displaced agent's renewal is still accepted and converges; the
+      // grace window slides on use, so a stale holder that keeps presenting
+      // survives past 24 h from the replacement.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const t0 = Date.now();
+        vi.setSystemTime(new Date(t0 + 12 * 3600_000));
+        const renewed = renewMachineCredential(app, created.id, a.machineCredential!, input);
+        expect(renewed).not.toBeNull();
+        // Converges onto the already-issued current credential; does not rotate.
+        expect(renewed!.machineCredential).toBe(b.machineCredential);
+
+        // +24 h from the replacement, but only 12 h since last presented.
+        vi.setSystemTime(new Date(t0 + 24 * 3600_000));
+        expect(
+          renewMachineCredential(app, created.id, a.machineCredential!, input)?.machineCredential,
+        ).toBe(b.machineCredential);
+
+        // 25 h with no presentation: the grace has lapsed.
+        vi.setSystemTime(new Date(t0 + 49 * 3600_000));
+        expect(renewMachineCredential(app, created.id, a.machineCredential!, input)).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
       await app.close();
     });
 

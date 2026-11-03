@@ -123,10 +123,10 @@ in `machine_credential`.
   if it moves.
 - **Renewal and the grace credential.** The agent renews at ~50% of the
   session TTL, and each identity-authenticated renewal **rotates** the
-  credential. The previous credential stays valid for 24 h after it was replaced or last presented, so
-  a renewal response that is lost in transit does not lock the agent out: it
-  retries with the credential it still holds and is handed the
-  already-issued current one. A credential also expires after 90 days
+  credential. The previous credential stays valid for 24 h after it was
+  replaced or last presented, so a renewal response that is lost in
+  transit does not lock the agent out: it retries with the credential
+  it still holds and is handed the already-issued current one. A credential also expires after 90 days
   without use (the expiry slides on every use).
 - **Revocation is final.** `POST /api/hosts/:id/revoke` (Settings → Hosts →
   the row's menu → _Revoke identity_) drops the credential, its grace copy
@@ -141,10 +141,16 @@ in `machine_credential`.
   put the new token in the agent's `.env`, delete `agent-identity.json`, then
   restart. A credential unused for 90 days is rejected the same way as a
   revoked one, so the agent log's "revoked or unknown" can also mean expiry.
+  Because the grace credential slides on use, a replaced credential (a
+  displaced agent, or a leaked copy of the state file) stays valid while
+  its holder keeps presenting it, and each acceptance hands it the live
+  current credential; revocation is the only way to end its life.
 - **Shared per-host token.** If a second agent claims a row with the same
   per-host token, the incumbent's credential moves to the grace slot and
   the primary logs a warning; the displaced agent converges onto the new
-  credential at its next renewal. Give each agent its own host.
+  credential at its next renewal, provided that renewal lands within
+  the 24 h grace window; after that it gets `401` and must be
+  re-enrolled. Give each agent its own host.
 - **Legacy agents.** An agent without the state file (an older release, or
   one that predates this feature) registers exactly as before — claim or
   enroll with the bootstrap token, with the `baseUrl` dedupe — and is issued

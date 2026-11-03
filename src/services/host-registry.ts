@@ -648,6 +648,8 @@ export function renewMachineCredential(
       })
       .where(eq(hosts.id, hostId))
       .run();
+    // Info, not warn: a lost renewal response produces the same line legitimately.
+    app.log.info({ hostId }, "[host-registry] renewal accepted via the grace credential");
   }
   return { ...issueSession(app, hostId), machineCredential: credential };
 }
