@@ -139,6 +139,9 @@ export async function startDemo({
   // The backend's theme. visual-kit renders both colour schemes, so it asks
   // for "system" and lets the browser decide; every other caller keeps dark.
   theme = "dark",
+  // A steady terminal cursor. The default blinks, so two renders of the same
+  // frame catch it in different states.
+  staticCursor = false,
   // Freezes the clock the fake GitHub and the seed count "N minutes ago" back
   // from (an ISO instant); unset uses the real one.
   now,
@@ -306,7 +309,13 @@ export async function startDemo({
     );
     await waitForHttp(`${backendUrl}/api/sessions`, aborted.signal);
     await waitForHttp(frontendUrl, aborted.signal);
-    await api("/api/settings", { method: "PATCH", body: JSON.stringify({ theme }) });
+    await api("/api/settings", {
+      method: "PATCH",
+      body: JSON.stringify({
+        theme,
+        ...(staticCursor ? { terminal: { cursorBlink: false } } : {}),
+      }),
+    });
     const seeded = seed
       ? await seedDemo({
           api,
@@ -355,6 +364,7 @@ if (invokedDirectly) {
     holdTranscripts: hold,
     heldSessions: hold,
     updateBanner: !hold,
+    staticCursor: hold,
     theme: process.env.MULLION_DEMO_THEME === "system" ? "system" : "dark",
     now: process.env.DEMO_NOW || undefined,
     stateFile: process.env.MULLION_DEMO_STATE

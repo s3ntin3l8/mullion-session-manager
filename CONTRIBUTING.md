@@ -108,7 +108,7 @@ one of its sessions. `scripts/demo/env.mjs` enforces that, and
   environment variables read by `scripts/demo/instance.mjs` itself, never passed
   on to the backend: `MULLION_DEMO_HOLD=1` holds the screenshot transcripts
   behind release files (and seeds the mobile and loop sessions), stops the CI
-  tick and the update banner; `MULLION_DEMO_THEME=system` lets the browser's colour scheme decide;
+  tick, the update banner and the blinking terminal cursor; `MULLION_DEMO_THEME=system` lets the browser's colour scheme decide;
   `DEMO_NOW=<ISO instant>` fixes the instant the fake GitHub's and the seed's
   "N minutes ago" count back from; `MULLION_DEMO_STATE=<file>` records the seeded
   scripts directory (where the release files go) while the demo is up. Once
