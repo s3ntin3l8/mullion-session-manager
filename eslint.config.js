@@ -27,6 +27,8 @@ export default tseslint.config(
       "src/cli/**/*.mjs",
       "src/pty-host/**/*.mjs",
       "scripts/**/*.mjs",
+      // visual-kit hooks: Node code that runs inside the visual-kit image.
+      "visual/**/*.mjs",
     ],
     languageOptions: {
       globals: {
@@ -39,7 +41,7 @@ export default tseslint.config(
         setImmediate: "readonly",
         Buffer: "readonly",
         // Node 18+ globals, for files that talk HTTP directly (for example,
-        // scripts/capture-screenshots.mjs's own seed calls).
+        // scripts/demo/seed.mjs's own API calls).
         fetch: "readonly",
         AbortController: "readonly",
         AbortSignal: "readonly",

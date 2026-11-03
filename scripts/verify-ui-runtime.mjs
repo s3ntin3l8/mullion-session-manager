@@ -1515,7 +1515,7 @@ function formatLine(result) {
 async function writeReport(results, reportPath) {
   const target = path.resolve(reportPath);
   await mkdir(path.dirname(target), { recursive: true });
-  // Write-then-rename, like capture-screenshots.mjs: an interrupted run never
+  // Write-then-rename: an interrupted run never
   // leaves a half-written report behind.
   const tmp = path.join(path.dirname(target), `.${path.basename(target)}`);
   await writeFile(tmp, JSON.stringify({ results }, null, 2));

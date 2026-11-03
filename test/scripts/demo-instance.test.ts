@@ -124,6 +124,17 @@ afterAll(() => {
   delete process.env.DEMO_FRONTEND_PORT;
 });
 
+describe("releaseTag", () => {
+  it("is one minor above the version, or the version itself when nothing should be offered", () => {
+    expect(demo.releaseTag("0.3.58")).toBe("v0.4.0");
+    expect(demo.releaseTag("0.3.58", { newer: false })).toBe("v0.3.58");
+  });
+
+  it("falls back to a far-future tag for a version it cannot parse", () => {
+    expect(demo.releaseTag("next")).toBe("v999.0.0");
+  });
+});
+
 describe("preflight", () => {
   it("names the missing frontend deps and how to install them", () => {
     const bins = demo.demoBins(path.join(fixtures, "no-such-repo"));

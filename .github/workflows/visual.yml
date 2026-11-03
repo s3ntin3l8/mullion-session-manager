@@ -1,0 +1,35 @@
+name: Visual check
+
+# Before/after screenshots of the scenes in visual/scenes.json, posted as a sticky
+# comment. Advisory: it never blocks a merge. The runner and report format live in
+# visual-kit (https://github.com/s3ntin3l8/visual-kit); the reusable workflow in
+# s3ntin3l8/.github runs `make visual-check BASE=origin/<base>` and posts the report.
+on:
+  pull_request:
+    # ready_for_review: a PR opened as a draft is skipped below, and marking it
+    # ready is the event that should start the check.
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "frontend/**"
+      - "src/**"
+      - "visual/**"
+      - "scripts/demo/**"
+      - ".github/workflows/visual.yml"
+      - ".github/visual-setup.sh"
+      - "Makefile"
+
+concurrency:
+  group: visual-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  visual:
+    if: ${{ !github.event.pull_request.draft }}
+    uses: s3ntin3l8/.github/.github/workflows/visual-check.yml@main
+    with:
+      node-version: "26"
+      timeout-minutes: 45

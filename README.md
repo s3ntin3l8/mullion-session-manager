@@ -13,8 +13,24 @@ CI/CD. Frontend: React + [dockview](https://dockview.dev/) (tiled splits/tabs) a
 [xterm.js](https://xtermjs.org/).
 
 <p align="center">
-  <img src="frontend/public/screenshots/desktop-dashboard.png" width="49%" alt="A live terminal session, with the project sidebar showing sessions across multiple projects" />
-  <img src="frontend/public/screenshots/desktop-kanban.png" width="49%" alt="Task Master's Kanban board, tracking tasks from backlog through review to done" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dashboard-dark-desktop.png" />
+    <img src="docs/screenshots/dashboard-light-desktop.png" width="49%" alt="A live terminal session, with the project sidebar showing each session's state" />
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/kanban-dark-desktop.png" />
+    <img src="docs/screenshots/kanban-light-desktop.png" width="49%" alt="Task Master's board, tracking tasks from backlog through review to done" />
+  </picture>
+</p>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/github-pr-dark-desktop.png" />
+    <img src="docs/screenshots/github-pr-light-desktop.png" width="49%" alt="A pull request in the GitHub sidebar: failing checks, review state and its Task Master task" />
+  </picture>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/git-panel-dark-desktop.png" />
+    <img src="docs/screenshots/git-panel-light-desktop.png" width="49%" alt="The Git panel: changes, branches, prunable and merged branches, next to a terminal" />
+  </picture>
 </p>
 
 ## ✨ Features

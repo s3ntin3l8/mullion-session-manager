@@ -14,7 +14,7 @@ import { seedDemo } from "./seed.mjs";
  * isolated from any real instance on the same host:
  *
  *   make demo          # interactive: seeds, prints the URL, Ctrl-C deletes it
- *   make screenshots   # scripts/capture-screenshots.mjs drives startDemo()
+ *   make screenshots   # visual-kit drives `make demo` through visual/scenes.json
  *
  * Isolation is enforced in code (./env.mjs): a clean env with nothing inherited
  * but PATH/locale/shell and the systemd user-bus variables, every path under
@@ -26,15 +26,18 @@ import { seedDemo } from "./seed.mjs";
  */
 
 /**
- * The release tag the fake GitHub reports: one minor above this checkout's
- * version, so the update banner always shows, whatever the checkout is on.
+ * The release tag the fake GitHub reports: one minor above `version` (this
+ * checkout's), so the update banner always shows whatever it is on, or `version`
+ * itself when `newer` is false, so nothing is offered.
  */
-function nextMinorTag() {
-  const { version } = JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
+export function releaseTag(version, { newer = true } = {}) {
   const [major, minor] = version.split(".").map(Number);
-  return Number.isInteger(major) && Number.isInteger(minor)
-    ? `v${major}.${minor + 1}.0`
-    : "v999.0.0";
+  if (!Number.isInteger(major) || !Number.isInteger(minor)) return "v999.0.0";
+  return newer ? `v${major}.${minor + 1}.0` : `v${version}`;
+}
+
+function checkoutVersion() {
+  return JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8")).version;
 }
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -125,6 +128,9 @@ export async function startDemo({
   keep = false,
   seed = true,
   holdTranscripts = false,
+  // Whether the fake GitHub offers a newer release, so the update banner shows.
+  // `make demo` keeps it as a visible feature; the screenshots turn it off.
+  updateBanner = true,
   // Also seed the held mobile-demo and loop-demo sessions (see seedDemo).
   heldSessions = false,
   // How long until the fake GitHub's live-tick PR flips its CI (0 = frozen,
@@ -133,6 +139,9 @@ export async function startDemo({
   // The backend's theme. visual-kit renders both colour schemes, so it asks
   // for "system" and lets the browser decide; every other caller keeps dark.
   theme = "dark",
+  // A steady terminal cursor. The default blinks, so two renders of the same
+  // frame catch it in different states.
+  staticCursor = false,
   // Freezes the clock the fake GitHub and the seed count "N minutes ago" back
   // from (an ISO instant); unset uses the real one.
   now,
@@ -184,6 +193,11 @@ export async function startDemo({
       MULLION_GITHUB_API_URL: githubUrl,
       // Registers the demo-only fixture routes the seed uses (src/routes/demo-fixtures.ts).
       MULLION_DEMO: "true",
+      // The default 300 requests a minute per address is a real deployment's abuse
+      // guard. A renderer that loads the app dozens of times and polls for
+      // readiness (visual-kit) hits it and gets 429 on every read, which leaves the
+      // sidebar empty. Nothing but this loopback demo is behind it.
+      RATE_LIMIT_MAX: "100000",
     });
   const frontendEnv = demoEnv(demoDir, { PATH, BACKEND_URL: backendUrl });
 
@@ -266,7 +280,7 @@ export async function startDemo({
     await symlink(path.join(REPO_ROOT, "drizzle"), path.join(runDir, "drizzle"));
     fakeGithub = await startFakeGithub({
       tickMs: githubTickMs,
-      latestRelease: nextMinorTag(),
+      latestRelease: releaseTag(checkoutVersion(), { newer: updateBanner }),
       now: nowMs,
     });
     const backendEnv = backendEnvFor(fakeGithub.url);
@@ -295,7 +309,13 @@ export async function startDemo({
     );
     await waitForHttp(`${backendUrl}/api/sessions`, aborted.signal);
     await waitForHttp(frontendUrl, aborted.signal);
-    await api("/api/settings", { method: "PATCH", body: JSON.stringify({ theme }) });
+    await api("/api/settings", {
+      method: "PATCH",
+      body: JSON.stringify({
+        theme,
+        ...(staticCursor ? { terminal: { cursorBlink: false } } : {}),
+      }),
+    });
     const seeded = seed
       ? await seedDemo({
           api,
@@ -343,6 +363,8 @@ if (invokedDirectly) {
     githubTickMs: hold ? 0 : 60_000,
     holdTranscripts: hold,
     heldSessions: hold,
+    updateBanner: !hold,
+    staticCursor: hold,
     theme: process.env.MULLION_DEMO_THEME === "system" ? "system" : "dark",
     now: process.env.DEMO_NOW || undefined,
     stateFile: process.env.MULLION_DEMO_STATE

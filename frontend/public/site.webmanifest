@@ -6,8 +6,18 @@
   "start_url": "/",
   "scope": "/",
   "icons": [
-    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
-    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
     {
       "src": "/icon-512-maskable.png",
       "sizes": "512x512",
@@ -22,36 +32,57 @@
   "categories": ["developer", "productivity"],
   "screenshots": [
     {
-      "src": "/screenshots/desktop-dashboard.png",
-      "sizes": "1920x1080",
+      "src": "/screenshots/dashboard-dark-desktop.png",
+      "sizes": "2880x1800",
       "type": "image/png",
       "form_factor": "wide",
-      "label": "A live terminal session, with the project sidebar showing sessions across multiple projects"
+      "label": "A live terminal session, with the project sidebar showing each session's state"
     },
     {
-      "src": "/screenshots/desktop-git-panel.png",
-      "sizes": "1920x1080",
+      "src": "/screenshots/git-panel-dark-desktop.png",
+      "sizes": "2880x1800",
       "type": "image/png",
       "form_factor": "wide",
-      "label": "The Git panel — branch, changed files, and worktrees — open alongside a terminal"
+      "label": "The Git panel — changes, branches, prunable and merged branches — open alongside a terminal"
     },
     {
-      "src": "/screenshots/desktop-kanban.png",
-      "sizes": "1920x1080",
+      "src": "/screenshots/kanban-dark-desktop.png",
+      "sizes": "2880x1800",
       "type": "image/png",
       "form_factor": "wide",
-      "label": "Task Master's Kanban board, tracking tasks from backlog through review to done"
+      "label": "Task Master's board, tracking tasks from backlog through review to done"
     },
     {
-      "src": "/screenshots/mobile-session-list.png",
-      "sizes": "750x1624",
+      "src": "/screenshots/github-pr-dark-desktop.png",
+      "sizes": "2880x1800",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "A pull request in the GitHub sidebar: failing checks, review state and its Task Master task"
+    },
+    {
+      "src": "/screenshots/tasks-tab-dark-desktop.png",
+      "sizes": "2880x1800",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "The Tasks sidebar tab, listing each project's tasks and which need you"
+    },
+    {
+      "src": "/screenshots/attention-dark-desktop.png",
+      "sizes": "2880x1800",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "The notifications popover, with sessions waiting on input and one that finished"
+    },
+    {
+      "src": "/screenshots/session-list-dark-mobile.png",
+      "sizes": "780x1688",
       "type": "image/png",
       "form_factor": "narrow",
       "label": "The mobile session list, showing sessions grouped by project"
     },
     {
-      "src": "/screenshots/mobile-terminal.png",
-      "sizes": "750x1624",
+      "src": "/screenshots/terminal-dark-mobile.png",
+      "sizes": "780x1688",
       "type": "image/png",
       "form_factor": "narrow",
       "label": "A terminal session on mobile, with the on-screen key bar for Esc/Tab/Ctrl+C"

@@ -20,7 +20,7 @@ const execFileAsync = promisify(execFile);
 const DEV_SERVER_PORT = 3958;
 
 // The loop session's pause after its release (see agentTranscriptScript's leadMs).
-const LOOP_LEAD_MS = 3000;
+const LOOP_LEAD_MS = 1500;
 
 // Identity comes from the env, not `git config`: nothing is written to any
 // config file, so a leaked GIT_DIR/GIT_CONFIG can't make this pollute a real
@@ -264,10 +264,10 @@ export const ORDERS_TRANSCRIPT = [
 /**
  * `holdTranscripts`: the aurora-web agent (fake-agent.sh) waits for
  * `authReleaseFile` (returned) before printing; see agentTranscriptScript.
- * Off for `make demo`, where nothing would ever release it. `heldSessions`
- * (an opt-in of its own, since scripts/capture-screenshots.mjs still creates the
- * same two sessions itself) seeds `mobile-demo.sh` and `loop-demo.sh`, held
- * behind release files the same way. Pair it with `holdTranscripts`: nothing
+ * Off for `make demo`, where nothing would ever release it (visual-kit does,
+ * through visual/host-hooks.sh). `heldSessions` seeds `mobile-demo.sh` and
+ * `loop-demo.sh`, held behind release files the same way, for the mobile
+ * terminal still and the landing loop. Pair it with `holdTranscripts`: nothing
  * else releases them.
  * `now` (ms) is the instant the fixture tasks' timestamps count back from.
  */

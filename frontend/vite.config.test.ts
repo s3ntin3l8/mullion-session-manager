@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import type { UserConfigFn } from "vite";
 import configExport from "./vite.config.js";
@@ -113,5 +116,37 @@ describe("vite.config dev NODE_ENV guard (#105)", () => {
 
     expect(process.env.NODE_ENV).toBe("development");
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("vite.config dev server file access", () => {
+  // A merge-base worktree that symlinks node_modules (visual-kit's check) must
+  // still be served its fonts: Vite refuses files whose real path is outside
+  // its root unless that path is allowed.
+  const allowedPaths = async () => {
+    const resolved = await config({ command: "serve", mode: "development" });
+    return (resolved as { server: { fs: { allow: string[] } } }).server.fs.allow;
+  };
+
+  it("allows the real path of node_modules next to the workspace root", async () => {
+    expect(await allowedPaths()).toContain(realpathSync("node_modules"));
+  });
+
+  it("follows a node_modules symlink to where it really lives", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "vite-fs-allow-"));
+    try {
+      const elsewhere = path.join(root, "elsewhere", "node_modules");
+      const checkout = path.join(root, "checkout");
+      mkdirSync(elsewhere, { recursive: true });
+      mkdirSync(checkout);
+      symlinkSync(elsewhere, path.join(checkout, "node_modules"));
+      vi.spyOn(process, "cwd").mockReturnValue(checkout);
+
+      // The symlink's target, not the symlink, is what Vite compares against its root.
+      expect(await allowedPaths()).toContain(realpathSync(elsewhere));
+    } finally {
+      vi.restoreAllMocks();
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

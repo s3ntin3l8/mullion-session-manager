@@ -1,0 +1,280 @@
+{
+  "$schema": "https://raw.githubusercontent.com/s3ntin3l8/visual-kit/main/schema/scenes.schema.json",
+  "demo": {
+    "start": "make demo",
+    "url": "http://127.0.0.1:3957",
+    "startTimeoutSec": 300,
+    "env": {
+      "MULLION_DEMO_HOLD": "1",
+      "MULLION_DEMO_THEME": "system",
+      "MULLION_DEMO_STATE": "visual/.out/demo-state",
+      "DEMO_NOW": "2026-10-01T09:00:00Z"
+    }
+  },
+  "baseDeps": ["node_modules", "frontend/node_modules"],
+  "cacheKeyFiles": ["package-lock.json", "frontend/package-lock.json"],
+  "clock": "2026-10-01T09:00:00Z",
+  "scenes": [
+    {
+      "name": "dashboard",
+      "path": "/",
+      "tags": ["presentation", "check", "audit"],
+      "viewports": ["desktop"],
+      "baseline": true,
+      "steps": [
+        {
+          "click": "role=button[name=\"Add project\"] >> nth=-1"
+        },
+        {
+          "click": "text=\"aurora-web\" >> nth=-1"
+        },
+        {
+          "click": "role=button[name=\"Collapse dock\"]"
+        },
+        {
+          "click": ".session-item:has-text(\"fake-agent.sh\")"
+        }
+      ],
+      "settle": ".xterm-screen",
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "git-panel",
+      "path": "/",
+      "tags": ["presentation", "check", "audit"],
+      "viewports": ["desktop"],
+      "steps": [
+        {
+          "click": "role=button[name=\"Add project\"] >> nth=-1"
+        },
+        {
+          "click": "text=\"aurora-web\" >> nth=-1"
+        },
+        {
+          "click": "role=button[name=\"Collapse dock\"]"
+        },
+        {
+          "click": ".session-item:has-text(\"fake-agent.sh\")"
+        },
+        {
+          "click": ".right-rail-btn[aria-label=\"Git\"]"
+        },
+        {
+          "waitFor": "text=feat/ahead"
+        }
+      ],
+      "settle": ".xterm-screen",
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "kanban",
+      "path": "/",
+      "tags": ["presentation", "check", "audit"],
+      "viewports": ["desktop"],
+      "baseline": true,
+      "steps": [
+        {
+          "click": "role=button[name=/^Tasks/] >> nth=0"
+        },
+        {
+          "wait": 3000
+        }
+      ],
+      "settle": 500,
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "github-pr",
+      "path": "/",
+      "tags": ["presentation", "check", "audit"],
+      "viewports": ["desktop"],
+      "baseline": true,
+      "steps": [
+        {
+          "click": "role=button[name=\"Add project\"] >> nth=-1"
+        },
+        {
+          "click": "text=\"aurora-web\" >> nth=-1"
+        },
+        {
+          "click": "role=button[name=\"Collapse dock\"]"
+        },
+        {
+          "click": ".right-rail-btn[aria-label=\"GitHub\"]"
+        },
+        {
+          "waitFor": "text=#12"
+        },
+        {
+          "click": "text=#12"
+        },
+        {
+          "wait": 800
+        }
+      ],
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "tasks-tab",
+      "path": "/",
+      "tags": ["presentation", "check", "audit"],
+      "viewports": ["desktop"],
+      "steps": [
+        {
+          "click": "role=button[name=\"Add project\"] >> nth=-1"
+        },
+        {
+          "click": "text=\"aurora-web\" >> nth=-1"
+        },
+        {
+          "click": "role=button[name=\"Collapse dock\"]"
+        },
+        {
+          "click": ".right-rail-btn[aria-label=\"Tasks\"]"
+        },
+        {
+          "waitFor": "text=need you"
+        }
+      ],
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "attention",
+      "path": "/",
+      "tags": ["presentation", "check", "audit"],
+      "viewports": ["desktop"],
+      "steps": [
+        {
+          "click": "role=button[name=\"Add project\"] >> nth=-1"
+        },
+        {
+          "click": "text=\"aurora-web\" >> nth=-1"
+        },
+        {
+          "click": "role=button[name=\"Collapse dock\"]"
+        },
+        {
+          "click": "role=button[name=/Notifications/]"
+        },
+        {
+          "wait": 500
+        }
+      ],
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "session-list",
+      "path": "/",
+      "tags": ["presentation", "check", "audit"],
+      "viewports": ["mobile", "phone"],
+      "steps": [
+        {
+          "click": "[class*=\"toolbar\"] button >> nth=0"
+        },
+        {
+          "wait": 800
+        }
+      ]
+    },
+    {
+      "name": "terminal",
+      "path": "/",
+      "tags": ["presentation", "check", "audit"],
+      "viewports": ["mobile", "phone"],
+      "steps": [
+        {
+          "click": "[class*=\"toolbar\"] button >> nth=0"
+        },
+        {
+          "wait": 800
+        },
+        {
+          "click": ".session-item:has-text(\"mobile-demo.sh\")"
+        }
+      ],
+      "settle": ".xterm-screen"
+    },
+    {
+      "name": "terminal-stream",
+      "path": "/",
+      "tags": ["presentation"],
+      "viewports": ["desktop"],
+      "stills": false,
+      "loop": {
+        "tailSec": 1.5
+      },
+      "steps": [
+        {
+          "wait": 5000
+        },
+        {
+          "wait": 3000
+        }
+      ]
+    },
+    {
+      "name": "history",
+      "path": "/",
+      "tags": ["check", "audit"],
+      "viewports": ["desktop"],
+      "steps": [
+        {
+          "click": "role=button[name=\"Add project\"] >> nth=-1"
+        },
+        {
+          "click": "text=\"aurora-web\" >> nth=-1"
+        },
+        {
+          "click": "role=button[name=\"Collapse dock\"]"
+        },
+        {
+          "click": ".right-rail-btn[aria-label=\"History\"]"
+        },
+        {
+          "wait": 800
+        }
+      ],
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    },
+    {
+      "name": "files",
+      "path": "/",
+      "tags": ["check", "audit"],
+      "viewports": ["desktop"],
+      "steps": [
+        {
+          "click": "role=button[name=\"Add project\"] >> nth=-1"
+        },
+        {
+          "click": "text=\"aurora-web\" >> nth=-1"
+        },
+        {
+          "click": "role=button[name=\"Collapse dock\"]"
+        },
+        {
+          "click": ".right-rail-btn[aria-label=\"Files\"]"
+        },
+        {
+          "wait": 800
+        }
+      ],
+      "emphasis": {
+        "css": ".discover-block { display: none !important; }"
+      }
+    }
+  ]
+}

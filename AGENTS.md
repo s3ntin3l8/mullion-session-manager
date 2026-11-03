@@ -108,6 +108,14 @@ How this repo applies the conventions above — facts and commands, not rules.
   every new issue as a sub-issue to the open epic that fits
   (`gh issue list --label epic --state open`) and set `blocked_by` where one
   issue gates another; the `taskmaster-issues` skill has the commands.
+- **UI changes get a visual check.** CI runs `make visual-check` on every
+  non-draft pull request that touches `frontend/`, `src/`, `visual/` or
+  `scripts/demo/` and posts a before/after report (advisory, not a required
+  check). Run it yourself (`make visual-check ROUTES=<scene>`, needs Docker)
+  when you are iterating on a screen, and put a "Visual check" section in a UI
+  PR's description: which scenes changed and whether that was intended. Move
+  the committed baselines (`make visual-baseline`) in the PR that moves the
+  page. Details: `CONTRIBUTING.md`, "Demo instance and screenshots".
 - **Spikes must be fully isolated from the host's real agent state.** A probe
   that points an agent CLI at a copy or symlink farm of its real data directory
   can fence the live runtime and abort the user's other sessions (observed with

@@ -267,12 +267,12 @@ describe("seedDemo held sessions", () => {
     expect(names.filter((n) => n === "Add login rate limiting")).toHaveLength(2);
     const loop = readFileSync(path.join(held.seeded.scriptsDir, "loop-demo.sh"), "utf8");
     expect(loop).toContain("loop-demo.release");
-    expect(loop).toMatch(/sleep 3\.00/);
+    expect(loop).toMatch(/sleep 1\.50/);
     expect(readFileSync(path.join(held.seeded.scriptsDir, "mobile-demo.sh"), "utf8")).toContain(
       "mobile-demo.release",
     );
 
-    // Holding alone (what capture-screenshots.mjs passes) must not add them.
+    // Holding alone must not add them: they are their own opt-in.
     const plain = await sessionsFor({ holdTranscripts: true });
     const plainNames = plain.calls.filter((c) => c.url === "/api/sessions").map((c) => c.body.name);
     expect(plainNames).not.toContain("mobile demo");

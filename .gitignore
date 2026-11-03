@@ -35,3 +35,8 @@ docs/audit/assets/
 # Windows PowerShell writes its module-analysis cache here when LOCALAPPDATA
 # does not resolve (a test run with a blanked environment).
 /Microsoft/
+
+# visual-kit (make screenshots / visual-check)
+visual/.kit/
+visual/.out/
+*.staging
