@@ -21,7 +21,8 @@ const manifest = JSON.parse(
 const wanted = new Set(manifest.screenshots.map((s) => path.basename(s.src)));
 
 await mkdir(to, { recursive: true });
-for (const file of await readdir(to)) if (!wanted.has(file)) await rm(path.join(to, file));
+for (const file of await readdir(to))
+  if (!wanted.has(file)) await rm(path.join(to, file), { recursive: true, force: true });
 for (const file of wanted) {
   await copyFile(path.join(from, file), path.join(to, file)).catch((err) => {
     throw new Error(

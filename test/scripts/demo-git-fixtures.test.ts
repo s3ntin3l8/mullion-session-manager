@@ -74,6 +74,17 @@ describe("demo git fixtures", () => {
     expect(Math.max(...stamps.map(Number))).toBeLessThanOrEqual(Math.floor(Date.now() / 1000));
   });
 
+  it("keeps every repo's fixture dates in the past however many repos a process seeds", async () => {
+    // One shared clock would run 60 s ahead per commit across repos and pass "now".
+    for (let i = 0; i < 12; i++) {
+      const { repo } = repoWithOrigin();
+      await addBranchDepth(repo);
+      await widenHistory(repo, 4);
+      const newest = Math.max(...git(repo, "log", "--all", "--format=%ct").split("\n").map(Number));
+      expect(newest).toBeLessThanOrEqual(Math.floor(Date.now() / 1000));
+    }
+  });
+
   it("widens history without duplicating existing branches", async () => {
     const { repo } = repoWithOrigin();
     await widenHistory(repo, 3);

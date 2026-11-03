@@ -33,13 +33,16 @@ export async function gitOut(cwd, ...args) {
 // creation order. Left to the clock, commits made within the same second tie and
 // the branch list (sorted by recency) shows them in an arbitrary order, so two
 // renders of the same demo differ.
-let commitClock = Date.now() - 2 * 60 * 60_000;
+// The clock is per repository (each starts two hours back), so seeding many
+// repos in one process cannot run a later one's dates into the future.
+const commitClocks = new Map();
 
 /** A commit on `parents` that reuses `tree`, so no work tree is touched. */
 async function commit(repo, tree, parents, message) {
   const parentArgs = parents.flatMap((p) => ["-p", p]);
-  commitClock += 60_000;
-  const date = new Date(commitClock).toISOString();
+  const clock = (commitClocks.get(repo) ?? Date.now() - 2 * 60 * 60_000) + 60_000;
+  commitClocks.set(repo, clock);
+  const date = new Date(clock).toISOString();
   const { stdout } = await execFileAsync(
     "git",
     [...GIT_NO_AUTO_GC, "commit-tree", tree, ...parentArgs, "-m", message],

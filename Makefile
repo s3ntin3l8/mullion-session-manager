@@ -29,6 +29,8 @@ visual/.kit/run.sh: visual/Dockerfile
 
 screenshots: visual/.kit/run.sh ## README screenshots into docs/screenshots, plus the PWA manifest's copies (committed)
 	$(VISUAL_RUN) readme $(if $(FORCE),--force)
+	@# The README shows stills only; the terminal loop is for the landing page (screenshots-landing).
+	rm -f docs/screenshots/*.webm docs/screenshots/*.mp4 docs/screenshots/*.jpg
 	node scripts/sync-pwa-screenshots.mjs
 
 screenshots-landing: visual/.kit/run.sh ## Landing-page stills + terminal loop into OUT (default ./landing-shots)

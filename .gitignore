@@ -39,5 +39,4 @@ docs/audit/assets/
 # visual-kit (make screenshots / visual-check)
 visual/.kit/
 visual/.out/
-docs/audit/assets/
 *.staging

@@ -6,6 +6,9 @@ name: Visual check
 # s3ntin3l8/.github runs `make visual-check BASE=origin/<base>` and posts the report.
 on:
   pull_request:
+    # ready_for_review: a PR opened as a draft is skipped below, and marking it
+    # ready is the event that should start the check.
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "frontend/**"
       - "src/**"

@@ -1,4 +1,5 @@
 import { existsSync, realpathSync } from "node:fs";
+import path from "node:path";
 import { defineConfig, searchForWorkspaceRoot } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
@@ -11,6 +12,7 @@ import { VitePWA } from "vite-plugin-pwa";
 const backendUrl = process.env.BACKEND_URL || "http://localhost:3450";
 
 export default defineConfig(({ command, mode }) => {
+  const nodeModules = path.join(process.cwd(), "node_modules");
   // A dev shell exporting NODE_ENV=production (see #82/#114) otherwise leaks
   // into the dev server: Vite derives isProduction from NODE_ENV, so `vite
   // dev` would set skipFastRefresh and drop @vitejs/plugin-react's
@@ -161,7 +163,7 @@ export default defineConfig(({ command, mode }) => {
         // already inside the root, so this adds nothing.
         allow: [
           searchForWorkspaceRoot(process.cwd()),
-          ...(existsSync("node_modules") ? [realpathSync("node_modules")] : []),
+          ...(existsSync(nodeModules) ? [realpathSync(nodeModules)] : []),
         ],
       },
       proxy: {
