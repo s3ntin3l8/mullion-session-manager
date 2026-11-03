@@ -179,4 +179,32 @@ describe("launcher host target: placement:auto and targetHostId (issue #2237)", 
     expect(res.statusCode).toBe(201);
     expect(res.json().hostId).toBe("local");
   });
+
+  it("an absent placement uses project.placement; a pinned project never auto-places (issue #2250)", async () => {
+    const { projectId } = await setup();
+    const res = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId, command: "bash" },
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json().hostId).toBe("local");
+    expect(res.json().placementReason).toMatch(/^pinned to/);
+
+    // The other direction: the same absent placement on an auto project falls
+    // through to project.placement, so it is not pinned.
+    const other = await setup();
+    app.db
+      .update(projects)
+      .set({ placement: "auto" })
+      .where(eq(projects.id, other.projectId))
+      .run();
+    const auto = await app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      payload: { projectId: other.projectId, command: "bash" },
+    });
+    expect(auto.statusCode).toBe(201);
+    expect(auto.json().placementReason).not.toMatch(/^pinned to/);
+  });
 });

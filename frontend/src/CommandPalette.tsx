@@ -37,7 +37,9 @@ import {
   OWN_HOST_VALUE,
   buildHostTargetOptions,
   describeAutoPreview,
+  rememberHostChoice,
   resolveHostChoice,
+  withoutAutoChoices,
 } from "./command-palette/hostTarget.js";
 import type { PlacementPreview } from "./api/types.js";
 import { Dropdown, TextInput } from "./ui/primitives.js";
@@ -539,7 +541,7 @@ export function CommandPalette({
   // falls back to the default (null = the project's own host).
   const hosts = useDashboardStore((s) => s.hosts);
   const [rememberedHosts, setRememberedHosts] = useState<Record<string, string>>(() =>
-    readJSON<Record<string, string>>(STORAGE_KEYS.lastLaunchHostByProject, {}),
+    withoutAutoChoices(readJSON<Record<string, string>>(STORAGE_KEYS.lastLaunchHostByProject, {})),
   );
   const [autoPreview, setAutoPreview] = useState<{
     projectId: number;
@@ -937,7 +939,7 @@ export function CommandPalette({
   );
   const showHostChip = target !== null && projectHostCount(target, sessions) > 1;
   const hostChoice = target
-    ? resolveHostChoice(rememberedHosts[String(target.id)], target, hosts)
+    ? resolveHostChoice(rememberedHosts[String(target.id)], target, hosts, true)
     : null;
   // "Elsewhere" = a base ref from this host's branches is not safe: another
   // host, or Auto. The project's own host (explicit, on an auto project) is not.
@@ -960,11 +962,9 @@ export function CommandPalette({
   }, [showHostChip, hostChoice, effectiveProjectId]);
   const onHostChange = (value: string) => {
     if (!target) return;
-    const next = { ...rememberedHosts };
-    if (value === OWN_HOST_VALUE && target.placement !== "auto") delete next[String(target.id)];
-    else next[String(target.id)] = value === OWN_HOST_VALUE ? target.hostId : value;
+    const next = rememberHostChoice(rememberedHosts, target, value);
     setRememberedHosts(next);
-    writeJSON(STORAGE_KEYS.lastLaunchHostByProject, next);
+    writeJSON(STORAGE_KEYS.lastLaunchHostByProject, withoutAutoChoices(next));
   };
 
   // P9 — this used to be `void createSession(...).then(...)` with no

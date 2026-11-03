@@ -11,7 +11,12 @@ import type { Launcher } from "../api/index.js";
 import { jsonResponse } from "../test/jsonResponse.js";
 import { makeHost, makeProject } from "../test/fixtures.js";
 import { STORAGE_KEYS } from "../lib/persistedState.js";
-import { buildHostTargetOptions, resolveHostChoice, describeAutoPreview } from "./hostTarget.js";
+import {
+  buildHostTargetOptions,
+  resolveHostChoice,
+  describeAutoPreview,
+  withoutAutoChoices,
+} from "./hostTarget.js";
 
 const LAUNCHER: Launcher = { id: "agent:bash", kind: "shell", title: "bash", command: "bash" };
 const MAC = makeHost({ id: "mac", name: "Mac mini", health: "online" });
@@ -164,6 +169,10 @@ describe("CommandPalette -> launcher host target (#2237)", () => {
     await vi.waitFor(() => expect(posted).toHaveLength(1));
     expect(posted[0]).toMatchObject({ placement: "auto" });
     expect(posted[0]).not.toHaveProperty("targetHostId");
+    // Auto on a pinned project is per launch: never persisted (issue #2250).
+    expect(localStorage.getItem(STORAGE_KEYS.lastLaunchHostByProject) ?? "{}").not.toContain(
+      "auto",
+    );
   });
 
   it("remembers the choice per project across a remount", async () => {
@@ -177,13 +186,52 @@ describe("CommandPalette -> launcher host target (#2237)", () => {
     renderPalette(MULTI.id);
     expect(((await screen.findByLabelText("Target host")) as HTMLSelectElement).value).toBe("mac");
   });
+
+  it("ignores an Auto left in storage by an older build for a pinned project", async () => {
+    localStorage.setItem(STORAGE_KEYS.lastLaunchHostByProject, JSON.stringify({ "5": "auto" }));
+    const user = userEvent.setup();
+    renderPalette(MULTI.id);
+    expect(((await screen.findByLabelText("Target host")) as HTMLSelectElement).value).toBe(
+      "__own__",
+    );
+    await user.click((await screen.findAllByText("bash"))[0]);
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).not.toHaveProperty("placement");
+  });
+
+  it("one project's remembered host never leaks into another project's launcher", async () => {
+    const OTHER = makeProject({
+      id: 8,
+      name: "other",
+      hostId: "local",
+      hostCwds: { mac: "/q" },
+    });
+    useDashboardStore.setState({ projects: [MULTI, OTHER], hosts: [MAC] });
+    localStorage.setItem(STORAGE_KEYS.lastLaunchHostByProject, JSON.stringify({ "5": "mac" }));
+    const user = userEvent.setup();
+    renderPalette(OTHER.id);
+    expect(((await screen.findByLabelText("Target host")) as HTMLSelectElement).value).toBe(
+      "__own__",
+    );
+    await user.click((await screen.findAllByText("bash"))[0]);
+    await vi.waitFor(() => expect(posted).toHaveLength(1));
+    expect(posted[0]).not.toHaveProperty("targetHostId");
+    expect(posted[0]).not.toHaveProperty("placement");
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEYS.lastLaunchHostByProject) ?? "{}")).toEqual({
+      "5": "mac",
+    });
+  });
 });
 
 describe("hostTarget helpers", () => {
   it("resolveHostChoice falls back to the default for a host no longer on the project", () => {
     const project = { hostId: "local", hostCwds: { mac: "/p" } };
     expect(resolveHostChoice("mac", project)).toBe("mac");
-    expect(resolveHostChoice("auto", project)).toBe("auto");
+    // A remembered Auto is stale on a pinned project: the configured host wins.
+    expect(resolveHostChoice("auto", project)).toBeNull();
+    // ...unless picked in this launcher session, which is never persisted.
+    expect(resolveHostChoice("auto", project, [], true)).toBe("auto");
+    expect(withoutAutoChoices({ "1": "auto", "2": "mac" })).toEqual({ "2": "mac" });
     expect(resolveHostChoice("removed", project)).toBeNull();
     expect(resolveHostChoice("mac", project, [OFFLINE_MAC])).toBeNull();
     expect(resolveHostChoice("mac", project, [{ ...OFFLINE_MAC, health: "pending" }])).toBeNull();
@@ -192,6 +240,7 @@ describe("hostTarget helpers", () => {
     expect(resolveHostChoice(undefined, auto)).toBe("auto");
     expect(resolveHostChoice("local", auto)).toBe("local");
     expect(resolveHostChoice("removed", auto)).toBe("auto");
+    expect(resolveHostChoice("auto", auto)).toBe("auto");
     expect(resolveHostChoice("local", project)).toBeNull();
     expect(resolveHostChoice(undefined, project)).toBeNull();
   });
