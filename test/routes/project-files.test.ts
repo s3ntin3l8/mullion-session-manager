@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -7,8 +7,10 @@ import http from "node:http";
 import { Readable } from "node:stream";
 import { execFileSync } from "node:child_process";
 import { closeDb } from "../../src/db/client.js";
-import { sessions } from "../../src/db/schema.js";
+import { projects, sessions } from "../../src/db/schema.js";
+import { eq } from "drizzle-orm";
 import { gitEnv } from "../../src/services/git-env.js";
+import { RemoteHostClient } from "../../src/services/remote-host-client.js";
 
 const tmpDb = path.join(os.tmpdir(), `project-files-test-${process.pid}.db`);
 process.env.DATABASE_URL = `file:${tmpDb}`;
@@ -880,6 +882,76 @@ describe("project-files routes", () => {
       });
       expect(refused.statusCode).toBe(400);
       fs.rmSync(elsewhere, { recursive: true, force: true });
+      await primary.close();
+      await agentApp.close();
+    });
+
+    it("serves an Auto-placed session from its own host's checkout, not the project host's", async () => {
+      const localDir = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-project-files-local-"));
+      fs.writeFileSync(path.join(localDir, ".env"), "FROM=local\n");
+      fs.writeFileSync(path.join(projectCwd, ".env"), "FROM=agent\n");
+      const { agentApp, port } = await startAgent("pf-token-auto");
+      const primary = await buildApp();
+      const host = await primary.inject({
+        method: "POST",
+        url: "/api/hosts",
+        payload: { name: "pf-auto", baseUrl: `http://127.0.0.1:${port}`, token: "pf-token-auto" },
+      });
+      const hostId = host.json().id as string;
+      const projectId = (
+        await primary.inject({
+          method: "POST",
+          url: "/api/projects",
+          payload: { allowDuplicate: true, name: "pf-auto", cwd: localDir },
+        })
+      ).json().id as number;
+      primary.db
+        .update(projects)
+        .set({ hostCwds: JSON.stringify({ [hostId]: projectCwd }) })
+        .where(eq(projects.id, projectId))
+        .run();
+      const placed = primary.db
+        .insert(sessions)
+        .values({ projectId, name: "placed", command: "bash", cwd: projectCwd, hostId })
+        .returning({ id: sessions.id })
+        .get().id;
+      const res = await primary.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env&sessionId=${placed}`,
+      });
+      expect(res.json().content).toBe("FROM=agent\n");
+      // no sessionId: the explicit project default, i.e. the local checkout
+      const dflt = await primary.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/file?path=.env`,
+      });
+      expect(dflt.json().content).toBe("FROM=local\n");
+      fs.rmSync(localDir, { recursive: true, force: true });
+      await primary.close();
+      await agentApp.close();
+    });
+
+    it("serves a remote sibling worktree the agent lists, and 503s when the host can't answer", async () => {
+      const sibling = fs.mkdtempSync(path.join(os.tmpdir(), "mullion-project-files-wt-"));
+      fs.writeFileSync(path.join(sibling, ".env"), "WT=1\n");
+      const { agentApp, port } = await startAgent("pf-token-wt");
+      const { primary, projectId } = await remoteProject(port, "pf-token-wt", projectCwd);
+      const sessionId = primary.db
+        .insert(sessions)
+        .values({ projectId, name: "wt", command: "bash", cwd: sibling })
+        .returning({ id: sessions.id })
+        .get().id;
+      const spy = vi.spyOn(RemoteHostClient.prototype, "resolveGitBranches").mockResolvedValue({
+        branches: [],
+        worktrees: [{ path: sibling, branch: "feat", isMain: false }] as never,
+        remoteBranches: [],
+      });
+      const url = `/api/projects/${projectId}/file?path=.env&sessionId=${sessionId}`;
+      expect((await primary.inject({ method: "GET", url })).json().content).toBe("WT=1\n");
+      spy.mockRejectedValue(new Error("down"));
+      expect((await primary.inject({ method: "GET", url })).statusCode).toBe(503);
+      spy.mockRestore();
+      fs.rmSync(sibling, { recursive: true, force: true });
       await primary.close();
       await agentApp.close();
     });

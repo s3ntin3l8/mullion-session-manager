@@ -327,8 +327,8 @@ PR).
   and `GET .../files/download?path` (always an opaque attachment) — over `services/project-files.ts`,
   which holds every path to the project root by lexical + realpath containment
   and `O_NOFOLLOW` opens; an optional `sessionId` re-roots it at that session's
-  cwd (a worktree's own checkout) — accepted only when that cwd is inside the project or, on
-  local hosts, a registered git worktree of its repo; remote-hosted projects proxy through
+  cwd (a worktree's own checkout) — accepted only when that cwd is inside the project or a
+  registered git worktree of its repo on the session's host (`services/execution-context.ts`); remote-hosted projects proxy through
   `/internal/project-files/*`, and an agent too old to have them yields a 501;
   `GET /api/projects/:id/external-file?path=` is the one read-only exception to the
   project-root rule — an absolute or `~/` path under a Settings `externalReadRoots`

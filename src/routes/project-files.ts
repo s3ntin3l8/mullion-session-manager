@@ -4,8 +4,6 @@
 // (services/project-files.ts), a remote-hosted one proxies through
 // /internal/project-files/* on that host. Contents are secrets-adjacent
 // (.env) — nothing here logs a request body or a file's content.
-import path from "node:path";
-import { realpathSync } from "node:fs";
 import type { Readable } from "node:stream";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { eq } from "drizzle-orm";
@@ -14,8 +12,11 @@ import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { forwardHostRequestError } from "../services/host-error-reply.js";
 import { getStoredSettings } from "../services/settings.js";
-import { isSiblingWorktreeCwd } from "../services/session-lifecycle.js";
-import { resolveSessionHostId } from "../services/session-live-info.js";
+import {
+  executionContextErrorStatus,
+  resolveExecutionContext,
+  type ExecutionContextResult,
+} from "../services/execution-context.js";
 import {
   PROJECT_FILE_BODY_LIMIT,
   ProjectFileError,
@@ -54,8 +55,9 @@ const idParams = {
 // gitignored .env lives in its worktree, which a custom worktree baseDir can
 // put outside the project root. A session row's cwd is NOT trusted on its own
 // (a top-level session may carry an arbitrary cwd): it must be inside the
-// project, or — local hosts only — a registered git worktree of the project's
-// repo (the same rule createSessionRecord applies to child spawns). A session
+// project, or a registered git worktree of the project's repo on that session's
+// host (the same rule createSessionRecord applies to child spawns; see
+// services/execution-context.ts). A session
 // of ANOTHER project is refused.
 const pathQuery = {
   type: "object",
@@ -159,7 +161,10 @@ export async function projectFilesRoute(app: FastifyInstance) {
       return null;
     }
     if (sessionIdRaw === undefined || sessionIdRaw === null || sessionIdRaw === "") {
-      return { hostId: project.hostId, cwd: project.cwd };
+      return sendResolved(
+        reply,
+        await resolveExecutionContext(app, { projectId, projectDefault: true }),
+      );
     }
     const sessionId = Number(sessionIdRaw);
     if (!Number.isInteger(sessionId) || sessionId <= 0) {
@@ -171,53 +176,15 @@ export async function projectFilesRoute(app: FastifyInstance) {
       reply.notFound("Session not found in this project");
       return null;
     }
-    const sessionCwd = session.cwd ? path.resolve(session.cwd) : null;
-    if (!sessionCwd || sessionCwd === path.resolve(project.cwd)) {
-      return { hostId: project.hostId, cwd: project.cwd };
-    }
-    let allowed: boolean;
-    try {
-      allowed = await sessionRootAllowed(project, sessionCwd);
-    } catch (err) {
-      // Couldn't tell (EACCES on a sandboxed FS, ...) — not the same as "no".
-      app.log.warn({ err, projectId: project.id }, "couldn't verify the session's directory");
-      reply.serviceUnavailable("Couldn't verify the session's directory");
-      return null;
-    }
-    if (!allowed) {
-      reply.badRequest("The session's directory is outside the project or no longer exists");
-      return null;
-    }
-    // Issue #1722 / roadmap 8.8 — the SESSION's host: this is the session's
-    // OWN worktree (the branch above returned the project's cwd, which is
-    // the PROJECT's host), and the session's worktree is on the host the
-    // session runs on.
-    return { hostId: resolveSessionHostId(app, session), cwd: sessionCwd };
+    return sendResolved(reply, await resolveExecutionContext(app, { projectId, sessionId }));
   }
 
-  async function sessionRootAllowed(
-    project: { cwd: string; hostId: string },
-    sessionCwd: string,
-  ): Promise<boolean> {
-    const root = path.resolve(project.cwd);
-    if (!sessionCwd.startsWith(root + path.sep)) {
-      // Outside the project: only a registered worktree of its repo, and only
-      // where `git worktree list` can run (the primary's own filesystem).
-      return project.hostId === LOCAL_HOST_ID && (await isSiblingWorktreeCwd(project, sessionCwd));
-    }
-    if (project.hostId !== LOCAL_HOST_ID) return true; // the agent re-checks against PROJECTS_ROOTS
-    try {
-      // Lexically inside, but a symlinked directory could lead out of it.
-      const real = realpathSync(sessionCwd);
-      const realRoot = realpathSync(root);
-      return real === realRoot || real.startsWith(realRoot + path.sep);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      // The directory is gone or unresolvable — treat as not allowed. Anything
-      // else (EACCES, ...) is "couldn't check", surfaced by the caller as 503.
-      if (code === "ENOENT" || code === "ENOTDIR" || code === "ELOOP") return false;
-      throw err;
-    }
+  function sendResolved(reply: FastifyReply, result: ExecutionContextResult): Ctx | null {
+    if (result.ok) return { hostId: result.context.hostId, cwd: result.context.cwd };
+    reply
+      .code(executionContextErrorStatus(result.error.code))
+      .send({ message: result.error.message });
+    return null;
   }
 
   // The hostId-branching every route shares: run `local` against the
