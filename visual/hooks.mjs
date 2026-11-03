@@ -90,7 +90,12 @@ function normalizeRunDependentText() {
           const next = rewrite(record.target.nodeValue ?? "");
           if (next !== record.target.nodeValue) record.target.nodeValue = next;
         } else {
-          for (const added of record.addedNodes) walk(added);
+          for (const added of record.addedNodes) {
+            if (added.nodeType === 3) {
+              const next = rewrite(added.nodeValue ?? "");
+              if (next !== added.nodeValue) added.nodeValue = next;
+            } else walk(added);
+          }
         }
       }
     }).observe(globalThis.document.body, { childList: true, characterData: true, subtree: true });
