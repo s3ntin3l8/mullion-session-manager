@@ -443,6 +443,17 @@ html[data-theme-hint="dark"] {
    declaration regardless of position, so the guard holds no matter which
    file a future animation is added to.
 
+   Transitions are zeroed (`0s`), not shortened to the 0.01ms this reset
+   usually carries. A transition that starts and ends within a few
+   milliseconds leaves @xterm/addon-webgl's main glyph canvas at 1x on a
+   high-DPI display (the link layer beside it is right), so the terminal's
+   text is drawn at half resolution for anyone with the OS setting on.
+   Measured on a 2x display: 0s gives a 2x text canvas, 1ms and 10ms give 1x,
+   and the authored durations (0.16s and up) give 2x. `0s` starts no
+   transition at all, so nothing fires `transitionend`; nothing in the app
+   listens for it (frontend/src/styles/tokens.reducedMotion.test.ts pins that
+   too). Animations keep 0.01ms: removing that part changed nothing.
+
    The end states are safe: cmuxPulse settles at opacity 1 (full legibility),
    cmuxAttn settles at a fully transparent ring, and the attention state
    also carries a static tint, a left-edge accent bar and the word
@@ -453,7 +464,7 @@ html[data-theme-hint="dark"] {
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
+    transition-duration: 0s !important;
     scroll-behavior: auto !important;
   }
 }

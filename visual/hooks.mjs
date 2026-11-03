@@ -46,14 +46,7 @@ function warmUp(page) {
   return warmed;
 }
 
-export async function beforeScene({ context, page, scene }) {
-  // visual-kit renders with reduced motion on, and under it the terminal's text
-  // canvas stays at 1x on a 2x display (blurry text, and the geometry check
-  // refuses it). Animations stay off through visual-kit's own stylesheet, so
-  // the scenes that show a terminal opt back out of the media query.
-  if (HELD_SCRIPT[scene.name] || LOOP_SCRIPT[scene.name]) {
-    await page.emulateMedia({ reducedMotion: "no-preference" });
-  }
+export async function beforeScene({ context }) {
   // The low-disk banner would sit over every shot. The browser clock is frozen
   // by scenes.json `clock`, so Date.now() here is the same instant the app sees.
   await context.addInitScript(() => {
