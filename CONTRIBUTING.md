@@ -70,6 +70,12 @@ Screenshots and visual checks run on [visual-kit](https://github.com/s3ntin3l8/v
 (its `CONTRACT.md` is the spec), which needs Docker: it starts `make demo`, drives
 the scenes in `visual/scenes.json` in a pinned browser image, and stops the demo.
 
+Besides Docker, the demo itself needs what every Mullion session needs: `dtach` and
+a running `systemd --user` manager, because each demo session is a dtach PTY in a
+transient systemd scope. On a host without them (a container, macOS) the demo fails
+at startup with `master bootstrap exited with code 1`. `.github/visual-setup.sh` shows
+how the CI runner provides both.
+
 | Target                                                 | What it does                                                                                                                                                         |
 | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `make screenshots`                                     | README images into `docs/screenshots/` (light and dark), plus the dark copies the PWA manifest lists in `frontend/public/screenshots/`                               |
