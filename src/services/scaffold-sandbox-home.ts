@@ -59,7 +59,7 @@ function findOnPath(name: string, pathEnv: string): { found: string; real: strin
 
 /** The common git directory a scratch worktree points at, from its `.git` file
  * (`gitdir: <common>/worktrees/<name>`), or null if it is not a linked worktree. */
-function gitCommonDirOf(worktreePath: string): string | null {
+function gitCommonDirOf(worktreePath: string): { common: string; gitdir: string } | null {
   try {
     const text = fs.readFileSync(path.join(worktreePath, ".git"), "utf8");
     const m = /^gitdir:\s*(.+)$/m.exec(text);
@@ -70,9 +70,9 @@ function gitCommonDirOf(worktreePath: string): string | null {
     // gitdir itself is then what git needs.
     try {
       const rel = fs.readFileSync(path.join(gitdir, "commondir"), "utf8").trim();
-      return path.resolve(gitdir, rel);
+      return { common: path.resolve(gitdir, rel), gitdir };
     } catch {
-      return gitdir;
+      return { common: gitdir, gitdir };
     }
   } catch {
     return null;
@@ -145,7 +145,8 @@ function splitValueAndComment(raw: string): { value: string; comment: string } {
  * a config can carry credentials in: `url`/`pushurl` (keys are
  * case-insensitive) under `[remote ...]` and `[submodule ...]` sections, and
  * the base of a `[url "<base>"]` rewrite section. Everything else is kept, and
- * CRLF line endings are preserved (git accepts them, so they must be matched). */
+ * CRLF line endings are preserved (git accepts them, so they must be matched).
+ * The caller shadows both `<common>/config` and `<gitdir>/config.worktree`. */
 export function sanitizeGitConfig(content: string): string {
   const lines = content.split("\n");
   let inUrlSection = false;
@@ -160,11 +161,15 @@ export function sanitizeGitConfig(content: string): string {
     );
     if (sectionMatch) {
       const name = sectionMatch[1].toLowerCase();
-      inUrlSection = name === "remote" || name === "submodule";
+      // Git still accepts the legacy `[remote.origin]` header form.
+      const kind = name.split(".")[0];
+      inUrlSection = kind === "remote" || kind === "submodule";
       const base = sectionMatch[2];
       if (name === "url" && base !== undefined) {
         const stripped = stripUserInfoFromUrl(base);
-        result.push((stripped === base ? line : line.replace(`"${base}"`, `"${stripped}"`)) + eol);
+        result.push(
+          (stripped === base ? line : line.replace(`"${base}"`, () => `"${stripped}"`)) + eol,
+        );
       } else {
         result.push(rawLine);
       }
@@ -222,27 +227,30 @@ export function homeMaskArgs(opts: HomeMaskOptions): string[] {
   }
   const shadowConfigBinds: Array<{ src: string; dest: string }> = [];
   if (opts.worktreePath) {
-    const common = gitCommonDirOf(opts.worktreePath);
-    if (common) {
+    const dirs = gitCommonDirOf(opts.worktreePath);
+    if (dirs) {
+      const { common, gitdir } = dirs;
       needed.push(common);
-      const realConfig = path.join(common, "config");
-      if (fs.existsSync(realConfig)) {
+      const shadowDir = fs.existsSync(path.join(opts.worktreePath, ".agent-home"))
+        ? path.join(opts.worktreePath, ".agent-home")
+        : opts.worktreePath;
+      // `config.worktree` (extensions.worktreeConfig) is read as a real config
+      // file too, from inside the bound tree, so it is shadowed the same way.
+      const configs: Array<[string, string, string]> = [
+        [common, "config", ".git-config-sanitized"],
+        [gitdir, "config.worktree", ".git-config-worktree-sanitized"],
+      ];
+      for (const [dir, name, shadowName] of configs) {
+        const realConfig = path.join(dir, name);
+        if (!fs.existsSync(realConfig)) continue;
         try {
-          const content = fs.readFileSync(realConfig, "utf8");
-          const sanitized = sanitizeGitConfig(content);
-          const shadowDir = fs.existsSync(path.join(opts.worktreePath, ".agent-home"))
-            ? path.join(opts.worktreePath, ".agent-home")
-            : opts.worktreePath;
-          const shadowConfig = path.join(shadowDir, ".git-config-sanitized");
+          const sanitized = sanitizeGitConfig(fs.readFileSync(realConfig, "utf8"));
+          const shadowConfig = path.join(shadowDir, shadowName);
           fs.writeFileSync(shadowConfig, sanitized, { mode: 0o600 });
           const targets = new Set<string>([realConfig]);
-          const resolvedCommon = realpathOrNull(common);
-          if (resolvedCommon) {
-            targets.add(path.join(resolvedCommon, "config"));
-          }
-          for (const dest of targets) {
-            shadowConfigBinds.push({ src: shadowConfig, dest });
-          }
+          const resolvedDir = realpathOrNull(dir);
+          if (resolvedDir) targets.add(path.join(resolvedDir, name));
+          for (const dest of targets) shadowConfigBinds.push({ src: shadowConfig, dest });
         } catch (err) {
           // Fails open (the turn reads the original config): say so.
           console.warn(

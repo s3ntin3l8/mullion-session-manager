@@ -128,6 +128,21 @@ describe("sanitizeGitConfig", () => {
     expect(out).toBe(['[remote "origin"]', "\turl = https://example.com/o/r.git", ""].join("\r\n"));
   });
 
+  it("does not expand $-patterns in a [url] base and still strips the token", () => {
+    const raw =
+      '[url "https://user:tok@example.com/a$&b/"]\n\tinsteadOf = https://example.com/a$&b/\n'; // pragma: allowlist secret
+    const out = sanitizeGitConfig(raw);
+    expect(out).not.toContain("tok@");
+    expect(out).toBe(
+      '[url "https://example.com/a$&b/"]\n\tinsteadOf = https://example.com/a$&b/\n',
+    );
+  });
+
+  it("recognises the legacy dotted [remote.origin] header", () => {
+    const raw = "[remote.origin]\n\turl = https://user:tok@example.com/o/r.git\n"; // pragma: allowlist secret
+    expect(sanitizeGitConfig(raw)).toBe("[remote.origin]\n\turl = https://example.com/o/r.git\n");
+  });
+
   it("matches keys case-insensitively", () => {
     const raw = ['[remote "origin"]', "\tURL = https://user:tok@example.com/o/r.git"].join("\n"); // pragma: allowlist secret
     expect(sanitizeGitConfig(raw)).toBe(
