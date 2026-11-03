@@ -267,7 +267,7 @@ describe("seedDemo held sessions", () => {
     expect(names.filter((n) => n === "Add login rate limiting")).toHaveLength(2);
     const loop = readFileSync(path.join(held.seeded.scriptsDir, "loop-demo.sh"), "utf8");
     expect(loop).toContain("loop-demo.release");
-    expect(loop).toMatch(/sleep 3\.00/);
+    expect(loop).toMatch(/sleep 1\.50/);
     expect(readFileSync(path.join(held.seeded.scriptsDir, "mobile-demo.sh"), "utf8")).toContain(
       "mobile-demo.release",
     );

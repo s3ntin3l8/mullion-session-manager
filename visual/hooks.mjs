@@ -17,9 +17,9 @@ const HELD_SCRIPT = {
   terminal: { script: "mobile-demo", lines: MOBILE_TRANSCRIPT },
 };
 
-// The landing loop is released on page load instead: the loop recorder never
-// runs settle() after its steps, and the loop-demo script pauses (leadMs) after
-// its release so its first lines print after the recording started.
+// The landing loop is set up and released in settle() instead: the loop recorder
+// never runs settle() after its steps, and the loop-demo script pauses (leadMs)
+// after its release so its first lines print after the recording started.
 const LOOP_SCRIPT = { "terminal-stream": "loop-demo" };
 
 // How long a terminal's geometry must hold still, and how long a stray second
@@ -107,8 +107,22 @@ function normalizeRunDependentText() {
 export async function settle({ page, scene, host }) {
   await warmUp(page);
   await projectsLoaded(page);
+  const api = (path) => page.request.get(new URL(path, page.url()).href).then((r) => r.json());
+  const sessionRunning = (script) => async () =>
+    (await api("/api/sessions")).find((s) => s.command?.endsWith(`/${script}.sh`));
+
   const loop = LOOP_SCRIPT[scene.name];
   if (loop) {
+    // The loop recorder runs no settle() after its steps and trims everything
+    // before they start, so the setup lives here: open the session, let its
+    // terminal settle, release the transcript. It prints leadMs later, inside
+    // the recording, and the scene's wait steps keep recording until it is done.
+    await page.addStyleTag({ content: ".discover-block { display: none !important; }" });
+    await page.click('role=button[name="Add project"] >> nth=-1');
+    await page.click('text="aurora-web" >> nth=-1');
+    await page.click('role=button[name="Collapse dock"]');
+    await page.click(`.session-item:has-text("${loop}.sh")`);
+    await waitForSettledTerminal(page, sessionRunning(loop), loop);
     await host("release", loop);
     return;
   }
@@ -118,9 +132,7 @@ export async function settle({ page, scene, host }) {
   // open the session: only act once there is a terminal to settle.
   if ((await page.locator(".xterm-screen").count()) === 0) return;
 
-  const api = (path) => page.request.get(new URL(path, page.url()).href).then((r) => r.json());
-  const find = async () =>
-    (await api("/api/sessions")).find((s) => s.command?.endsWith(`/${held.script}.sh`));
+  const find = sessionRunning(held.script);
 
   await waitForSettledTerminal(page, find, held.script);
   await host("release", held.script);

@@ -20,7 +20,7 @@ const execFileAsync = promisify(execFile);
 const DEV_SERVER_PORT = 3958;
 
 // The loop session's pause after its release (see agentTranscriptScript's leadMs).
-const LOOP_LEAD_MS = 3000;
+const LOOP_LEAD_MS = 1500;
 
 // Identity comes from the env, not `git config`: nothing is written to any
 // config file, so a leaked GIT_DIR/GIT_CONFIG can't make this pollute a real
