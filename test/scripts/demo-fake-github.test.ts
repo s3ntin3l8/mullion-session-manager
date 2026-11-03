@@ -145,12 +145,22 @@ describe("fake GitHub API", () => {
     const now = Date.parse("2026-10-01T09:00:00Z");
     const ticking = await startFakeGithub({ tickMs: 20, now });
     try {
-      await new Promise((r) => setTimeout(r, 80));
-      const pulls = (await (await fetch(ticking.url + "/repos/acme/aurora-web/pulls")).json()) as {
-        number: number;
-        updated_at: string;
-      }[];
-      expect(pulls.find((p) => p.number === 17)!.updated_at).toBe(new Date(now + 20).toISOString());
+      const updatedAt = async () => {
+        const pulls = (await (
+          await fetch(ticking.url + "/repos/acme/aurora-web/pulls")
+        ).json()) as { number: number; updated_at: string }[];
+        return pulls.find((p) => p.number === 17)!.updated_at;
+      };
+      // Poll for the tick instead of sleeping a fixed time: a loaded host
+      // delays the timer, which must not read as a wrong value.
+      const deadline = Date.now() + 5_000;
+      const before = await updatedAt();
+      let after = before;
+      while (after === before && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10));
+        after = await updatedAt();
+      }
+      expect(after).toBe(new Date(now + 20).toISOString());
     } finally {
       await ticking.stop();
     }

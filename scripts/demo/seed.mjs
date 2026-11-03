@@ -267,7 +267,8 @@ export const ORDERS_TRANSCRIPT = [
  * Off for `make demo`, where nothing would ever release it. `heldSessions`
  * (an opt-in of its own, since scripts/capture-screenshots.mjs still creates the
  * same two sessions itself) seeds `mobile-demo.sh` and `loop-demo.sh`, held
- * behind release files the same way.
+ * behind release files the same way. Pair it with `holdTranscripts`: nothing
+ * else releases them.
  * `now` (ms) is the instant the fixture tasks' timestamps count back from.
  */
 export async function seedDemo({
