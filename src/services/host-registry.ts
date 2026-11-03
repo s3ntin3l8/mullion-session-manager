@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
-import { eq, and, isNotNull, ne } from "drizzle-orm";
+import { eq, and, isNotNull, isNull, ne } from "drizzle-orm";
 import { hosts, projects } from "../db/schema.js";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
 // LOCAL_HOST_ID now physically lives in src/shared/constants.ts
@@ -46,6 +46,11 @@ export interface HostSummary {
   // Issue #2239 — what the host is for: "main" (`local` only), "worker" or
   // "burst". Burst hosts stay out of automatic placement.
   role: HostRole;
+  // Issue #2568 — whether the host has a live machine credential (a
+  // persistent identity), and whether an operator revoked it. Never the
+  // credential itself.
+  hasMachineIdentity: boolean;
+  machineIdentityRevoked: boolean;
   // baseUrl is null for "local" and for a "manual" host added without one
   // (Settings -> Add host, token minted by the primary) that is still
   // waiting for its agent: claimHost fills it in from the agent's own
@@ -107,6 +112,8 @@ function toSummary(row: HostRow): HostSummary {
     platform: row.platform,
     drained: row.drained,
     role: row.role,
+    hasMachineIdentity: row.machineCredentialEnc !== null,
+    machineIdentityRevoked: row.machineCredentialRevokedAt !== null,
   };
 }
 
@@ -182,6 +189,10 @@ export function updateHost(
             sessionIdEnc: null,
             sessionSecretEnc: null,
             sessionExpiresAt: null,
+            // Issue #2568 — minting a new bootstrap token is how an operator
+            // re-arms a host whose machine identity was revoked, so the
+            // revoked marker (which blocks claiming the row) is lifted.
+            machineCredentialRevokedAt: null,
           }
         : {}),
     })
@@ -233,6 +244,11 @@ export interface HostRegistration {
   sessionId: string;
   sessionSecret: string;
   expiresAt: Date;
+  // Issue #2568 — the machine credential, present only on the responses that
+  // hand one out: a first registration by an agent that asked for one, and
+  // every credential-authenticated renewal (which rotates it). The agent
+  // persists it; the primary keeps it only encrypted.
+  machineCredential?: string;
 }
 
 export interface RegisterAgentInput {
@@ -246,7 +262,25 @@ export interface RegisterAgentInput {
   // column stays null. Never a gate — nothing branches on it (see
   // bridges.platform's own posture).
   platform?: string;
+  // Issue #2568 — set by an agent that persists a machine identity. An agent
+  // that predates it (or any manual caller) leaves it unset and is served the
+  // legacy way: no credential is issued, and enrollHost dedupes on baseUrl.
+  wantsMachineCredential?: boolean;
 }
+
+// Issue #2568 — a machine credential slides: each use pushes expiry out by
+// this much, so an agent that is merely offline for a while keeps its
+// identity, while one abandoned for a quarter stops being accepted.
+const MACHINE_CREDENTIAL_TTL_MS = 90 * 24 * 60 * 60 * 1000;
+// How long the PREVIOUS credential stays acceptable after a rotation, for an
+// agent whose response was lost. Matches the session TTL: the agent renews at
+// ~12 h, so a lost response is retried well inside it.
+const MACHINE_CREDENTIAL_GRACE_MS = SESSION_TTL_MS;
+
+const LEGACY_AGENT_NOTICE =
+  "[host-registry] a legacy agent registered without a machine identity " +
+  "(no state file / old release); it keeps working, but upgrade the agent to get a " +
+  "persistent identity and renewable credential";
 
 // Both halves of a session credential are generated with real entropy and
 // stored encrypted, same rigor as authTokenEnc — see schema.ts's own
@@ -312,7 +346,15 @@ export function claimHost(
   const candidates = app.db
     .select()
     .from(hosts)
-    .where(and(ne(hosts.id, LOCAL_HOST_ID), isNotNull(hosts.authTokenEnc)))
+    .where(
+      and(
+        ne(hosts.id, LOCAL_HOST_ID),
+        isNotNull(hosts.authTokenEnc),
+        // Issue #2568 — revocation is final: a revoked identity cannot be
+        // won back with the bootstrap token. Rotating the token re-arms it.
+        isNull(hosts.machineCredentialRevokedAt),
+      ),
+    )
     .all();
   let matchedRow: HostRow | undefined;
   for (const row of candidates) {
@@ -354,7 +396,7 @@ export function claimHost(
     })
     .where(eq(hosts.id, matchedRow.id))
     .run();
-  return issueSession(app, matchedRow.id);
+  return withMachineCredential(app, issueSession(app, matchedRow.id), input);
 }
 
 /**
@@ -379,6 +421,11 @@ export function claimHost(
  * this can't be used to hijack a pre-provisioned host's identity.
  */
 export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): HostRegistration {
+  // Issue #2568 — an agent that persists an identity is matched by host id on
+  // every later registration, so baseUrl is not an identity for it: two
+  // agents sharing an advertised URL each get their own row (and credential)
+  // instead of re-stealing one. Only the legacy path below still dedupes.
+  if (input.wantsMachineCredential) return insertEnrolledHost(app, input);
   const metadata = JSON.stringify({
     hostname: input.hostname,
     capabilities: input.capabilities ?? null,
@@ -386,7 +433,16 @@ export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): Hos
   const [existing] = app.db
     .select()
     .from(hosts)
-    .where(and(eq(hosts.origin, "enrolled"), eq(hosts.baseUrl, input.baseUrl)))
+    .where(
+      and(
+        eq(hosts.origin, "enrolled"),
+        eq(hosts.baseUrl, input.baseUrl),
+        isNull(hosts.machineCredentialRevokedAt),
+        // A row with a machine identity belongs to an agent that presents it;
+        // a legacy agent must not be able to take it over by URL.
+        isNull(hosts.machineCredentialEnc),
+      ),
+    )
     .all();
   if (existing) {
     // Independent review, PR #528: this dedup key is baseUrl, which only
@@ -423,8 +479,18 @@ export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): Hos
       })
       .where(eq(hosts.id, existing.id))
       .run();
+    app.log.warn({ hostId: existing.id }, LEGACY_AGENT_NOTICE);
     return issueSession(app, existing.id);
   }
+  app.log.warn(LEGACY_AGENT_NOTICE);
+  return insertEnrolledHost(app, input);
+}
+
+function insertEnrolledHost(app: FastifyInstance, input: RegisterAgentInput): HostRegistration {
+  const metadata = JSON.stringify({
+    hostname: input.hostname,
+    capabilities: input.capabilities ?? null,
+  });
   const id = crypto.randomUUID();
   app.db
     .insert(hosts)
@@ -438,7 +504,180 @@ export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): Hos
       platform: input.platform ?? null,
     })
     .run();
-  return issueSession(app, id);
+  return withMachineCredential(app, issueSession(app, id), input);
+}
+
+/**
+ * Issue #2568 — a fresh machine credential for a host: the first one (claim /
+ * enroll by an agent that asked for it) or a replacement after the operator
+ * cleared the agent's state file. Returned in plaintext exactly once; stored
+ * encrypted. A live previous credential moves to the grace slot (see below).
+ */
+function issueMachineCredential(app: FastifyInstance, hostId: string): string {
+  const credential = crypto.randomBytes(32).toString("hex");
+  // A claim cannot tell a deliberate re-enroll from a second agent sharing the
+  // same per-host token. Keep a still-live credential in the grace slot so a
+  // displaced agent converges onto the new one at its next renewal instead of
+  // being 401-ed permanently.
+  const existing = app.db
+    .select({
+      enc: hosts.machineCredentialEnc,
+      revokedAt: hosts.machineCredentialRevokedAt,
+      expiresAt: hosts.machineCredentialExpiresAt,
+    })
+    .from(hosts)
+    .where(eq(hosts.id, hostId))
+    .get();
+  // An expired credential is already dead (renewMachineCredential rejects the
+  // row), so it must not be revived into the grace slot.
+  const replacesLive =
+    !!existing?.enc &&
+    !existing.revokedAt &&
+    !!existing.expiresAt &&
+    existing.expiresAt.getTime() > Date.now();
+  if (replacesLive) {
+    app.log.warn(
+      { hostId },
+      "[host-registry] a registration replaced a live machine identity; the displaced agent " +
+        "(if any) converges via the grace credential. Expected after an operator re-enroll; a collision if two agents share one per-host token.",
+    );
+  }
+  app.db
+    .update(hosts)
+    .set({
+      machineCredentialEnc: app.encryption.encryptString(credential),
+      machineCredentialPrevEnc: replacesLive ? existing.enc : null,
+      machineCredentialRotatedAt: replacesLive ? new Date() : null,
+      machineCredentialExpiresAt: new Date(Date.now() + MACHINE_CREDENTIAL_TTL_MS),
+      machineCredentialRevokedAt: null,
+    })
+    .where(eq(hosts.id, hostId))
+    .run();
+  return credential;
+}
+
+function withMachineCredential(
+  app: FastifyInstance,
+  registration: HostRegistration,
+  input: RegisterAgentInput,
+): HostRegistration {
+  if (!input.wantsMachineCredential) {
+    app.log.warn({ hostId: registration.hostId }, LEGACY_AGENT_NOTICE);
+    return registration;
+  }
+  return { ...registration, machineCredential: issueMachineCredential(app, registration.hostId) };
+}
+
+function safeMatch(app: FastifyInstance, presented: string, enc: string | null): boolean {
+  if (!enc) return false;
+  try {
+    // Both sides are server-minted 64-char hex (see crypto-utils.ts).
+    return timingSafeTokenMatch(presented, app.encryption.decryptString(enc));
+  } catch (err) {
+    app.log.warn({ err }, "[host-registry] machine credential failed to decrypt; non-match");
+    return false;
+  }
+}
+
+/**
+ * Issue #2568 — re-registration with a stored identity. Matched by host id
+ * (never baseUrl); on success issues a fresh session and rotates the
+ * credential, returning the new one.
+ *
+ * Presenting the CURRENT credential rotates it: the old one becomes the
+ * previous credential, accepted for a grace period. Presenting the PREVIOUS
+ * credential means the agent never saw the rotation's response: the already
+ * -issued current credential is returned again (not rotated further), so the
+ * retry converges instead of chasing its own tail. Null on any mismatch — an
+ * unknown host, a revoked or expired credential — and the caller 401s.
+ */
+export function renewMachineCredential(
+  app: FastifyInstance,
+  hostId: string,
+  presented: string,
+  input: Pick<RegisterAgentInput, "baseUrl" | "hostname" | "name" | "platform" | "capabilities">,
+): HostRegistration | null {
+  const row = getHostRow(app, hostId);
+  if (!row || row.id === LOCAL_HOST_ID || !row.machineCredentialEnc) return null;
+  if (row.machineCredentialRevokedAt) return null;
+  if (!row.machineCredentialExpiresAt || row.machineCredentialExpiresAt.getTime() <= Date.now()) {
+    return null;
+  }
+  // Evaluate both so timing does not reveal which slot matched.
+  const isCurrent = safeMatch(app, presented, row.machineCredentialEnc);
+  const prevLive =
+    row.machineCredentialRotatedAt !== null &&
+    Date.now() - row.machineCredentialRotatedAt.getTime() < MACHINE_CREDENTIAL_GRACE_MS;
+  const isPrev = safeMatch(app, presented, prevLive ? row.machineCredentialPrevEnc : null);
+  if (!isCurrent && !isPrev) return null;
+
+  const selfReport = {
+    // The identity is the host id, so the advertised URL follows the agent
+    // (it may have moved); this is what replaces the baseUrl dedupe.
+    baseUrl: input.baseUrl,
+    agentMetadata: JSON.stringify({
+      hostname: input.hostname,
+      capabilities: input.capabilities ?? null,
+    }),
+    ...(input.platform ? { platform: input.platform } : {}),
+  };
+  const expiresAt = new Date(Date.now() + MACHINE_CREDENTIAL_TTL_MS);
+  let credential: string;
+  if (isCurrent) {
+    credential = crypto.randomBytes(32).toString("hex");
+    app.db
+      .update(hosts)
+      .set({
+        ...selfReport,
+        machineCredentialEnc: app.encryption.encryptString(credential),
+        machineCredentialPrevEnc: row.machineCredentialEnc,
+        machineCredentialRotatedAt: new Date(),
+        machineCredentialExpiresAt: expiresAt,
+      })
+      .where(eq(hosts.id, hostId))
+      .run();
+  } else {
+    credential = app.encryption.decryptString(row.machineCredentialEnc);
+    app.db
+      .update(hosts)
+      // Slide the grace window: a stale holder that keeps presenting stays valid.
+      .set({
+        ...selfReport,
+        machineCredentialRotatedAt: new Date(),
+        machineCredentialExpiresAt: expiresAt,
+      })
+      .where(eq(hosts.id, hostId))
+      .run();
+    // Info, not warn: a lost renewal response produces the same line legitimately.
+    app.log.info({ hostId }, "[host-registry] renewal accepted via the grace credential");
+  }
+  return { ...issueSession(app, hostId), machineCredential: credential };
+}
+
+/**
+ * Issue #2568 — final revocation of a host's machine identity. Drops the
+ * credential, its grace copy and the live session, and marks the row so the
+ * bootstrap token cannot claim it back. The agent gets 401 on its next
+ * renewal and, by design, does not fall back to the bootstrap token.
+ * Returns false for an unknown host.
+ */
+export function revokeMachineIdentity(app: FastifyInstance, hostId: string): boolean {
+  const updated = app.db
+    .update(hosts)
+    .set({
+      machineCredentialEnc: null,
+      machineCredentialPrevEnc: null,
+      machineCredentialRotatedAt: null,
+      machineCredentialExpiresAt: null,
+      machineCredentialRevokedAt: new Date(),
+      sessionIdEnc: null,
+      sessionSecretEnc: null,
+      sessionExpiresAt: null,
+    })
+    .where(and(eq(hosts.id, hostId), ne(hosts.id, LOCAL_HOST_ID)))
+    .returning()
+    .all();
+  return updated.length > 0;
 }
 
 // Shared by rotateSession (below) and verifyHostSession — the read-only

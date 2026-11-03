@@ -92,6 +92,23 @@ export const hosts = sqliteTable("hosts", {
   // automatic placement, still reachable by an explicit target). The
   // migration sets `local` to "main".
   role: text("role", { enum: HOST_ROLES }).notNull().default("worker"),
+  // Issue #2568 / epic #2230 — the MACHINE CREDENTIAL: a long-lived,
+  // renewable secret bound to this row's id, kept apart from the 24 h
+  // request-signing session above. The agent persists {hostId, credential}
+  // and re-registers with them instead of the bootstrap token, so identity
+  // is matched by host id, never by baseUrl. Mirrors bridges' session shape
+  // (bridge-registry.ts): encrypted at rest, a previous credential kept for a
+  // grace period so a lost renewal response cannot lock the agent out, and a
+  // sliding expiry.
+  machineCredentialEnc: text("machine_credential_enc"),
+  machineCredentialPrevEnc: text("machine_credential_prev_enc"),
+  // When the current credential replaced the previous one; bounds the grace.
+  machineCredentialRotatedAt: integer("machine_credential_rotated_at", { mode: "timestamp" }),
+  machineCredentialExpiresAt: integer("machine_credential_expires_at", { mode: "timestamp" }),
+  // Set by POST /api/hosts/:id/revoke. Final: a revoked row can no longer be
+  // claimed or deduped onto, so only a fresh enrollment (the operator
+  // clearing the agent's state file) yields a new identity.
+  machineCredentialRevokedAt: integer("machine_credential_revoked_at", { mode: "timestamp" }),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),

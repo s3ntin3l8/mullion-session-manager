@@ -4,6 +4,7 @@ import {
   clearHostSession,
   enrollHost,
   recordHostSelfReport,
+  renewMachineCredential,
   rotateSession,
   verifyHostSession,
   type HostRegistration,
@@ -36,8 +37,15 @@ import { getRawRemoteAddress } from "../services/raw-remote-address.js";
 // does today.
 
 interface RegisterBody {
-  token: string;
+  // Absent only when `machineCredential` is presented instead (issue #2568).
+  token?: string;
   hostId?: string;
+  // Issue #2568 — the agent's persisted machine credential; with `hostId` it
+  // re-registers the agent by identity, not by bootstrap token.
+  machineCredential?: string;
+  // Issue #2568 — the agent persists an identity and wants a credential
+  // issued on this (first) registration.
+  wantsMachineCredential?: boolean;
   baseUrl: string;
   hostname: string;
   name?: string;
@@ -51,11 +59,13 @@ interface RegisterBody {
 const registerSchema = {
   body: {
     type: "object",
-    required: ["token", "baseUrl", "hostname"],
+    required: ["baseUrl", "hostname"],
     additionalProperties: false,
     properties: {
       token: { type: "string", minLength: 1 },
       hostId: { type: "string", minLength: 1 },
+      machineCredential: { type: "string", minLength: 1 },
+      wantsMachineCredential: { type: "boolean" },
       baseUrl: { type: "string", minLength: 1 },
       hostname: { type: "string", minLength: 1 },
       name: { type: "string" },
@@ -105,6 +115,9 @@ function respond(result: HostRegistration) {
     session_id: result.sessionId,
     session_secret: result.sessionSecret,
     expires_at: result.expiresAt.toISOString(),
+    // Issue #2568 — omitted (not null) when none was issued, so a legacy
+    // agent's response is byte-for-byte what it was.
+    ...(result.machineCredential ? { machine_credential: result.machineCredential } : {}),
   };
 }
 
@@ -147,12 +160,44 @@ export async function enrollmentRoute(app: FastifyInstance) {
     "/api/internal/register",
     { schema: registerSchema, config: { rateLimit: REGISTER_RATE_LIMIT } },
     async (request, reply) => {
-      const { token, hostId, baseUrl, hostname, name, capabilities, platform } = request.body;
+      const {
+        token,
+        hostId,
+        machineCredential,
+        wantsMachineCredential,
+        baseUrl,
+        hostname,
+        name,
+        capabilities,
+        platform,
+      } = request.body;
 
       if (!isAllowedHttpUrl(baseUrl, { allowLoopback: true, allowPrivate: true })) {
         return reply.badRequest("baseUrl must be a valid http(s) URL");
       }
-      const input: RegisterAgentInput = { baseUrl, hostname, name, capabilities, platform };
+      const input: RegisterAgentInput = {
+        baseUrl,
+        hostname,
+        name,
+        capabilities,
+        platform,
+        wantsMachineCredential,
+      };
+
+      // Issue #2568 — re-registration by persistent identity. Matched by host
+      // id, never by baseUrl; a revoked, expired or unknown credential is a
+      // plain 401 and the agent is expected NOT to retry with its bootstrap
+      // token (the operator clears its state file to re-enroll).
+      if (machineCredential) {
+        if (!hostId) return reply.badRequest("machineCredential requires hostId");
+        const renewed = renewMachineCredential(app, hostId, machineCredential, input);
+        if (!renewed) return reply.unauthorized("machine credential rejected");
+        app.reconfigureRemoteEventSubscriptions({ forceReconnect: [renewed.hostId] });
+        app.reconfigureSshAgentFanout();
+        app.reconfigureControlRelayFanout();
+        return respond(renewed);
+      }
+      if (!token) return reply.badRequest("token or machineCredential is required");
 
       // Issue #213 cross-host capture: every path below issues a fresh
       // session credential (host-registry.ts's issueSession), which

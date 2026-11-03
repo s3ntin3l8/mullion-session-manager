@@ -2,6 +2,12 @@ import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import os from "node:os";
 import { reloadDotenvOverrides } from "./env.js";
+import {
+  identityStatePath,
+  loadAgentIdentity,
+  saveAgentIdentity,
+  type AgentIdentity,
+} from "../services/agent-identity.js";
 
 // Issue #245 / roadmap 7.1 — the agent-side half of agent-initiated
 // registration. Agent-role-only, and inert unless both MULLION_PRIMARY_URL
@@ -15,6 +21,9 @@ export interface AgentSession {
   sessionId: string;
   sessionSecret: string;
   expiresAt: Date;
+  // Issue #2568 — the machine credential the primary returned with this
+  // session, when it returned one (kept only long enough to persist it).
+  machineCredential?: string;
 }
 
 interface RegisterResponse {
@@ -22,6 +31,17 @@ interface RegisterResponse {
   session_id: string;
   session_secret: string;
   expires_at: string;
+  // Issue #2568 — present on a first registration that asked for one and on
+  // every identity-authenticated renewal; absent from an older primary.
+  machine_credential?: string;
+}
+
+// Thrown for a 401 from the primary so callers can tell "credential rejected"
+// from a transient failure without matching message text.
+class RegisterRejectedError extends Error {
+  constructor(public readonly status: number) {
+    super(`registration request failed: HTTP ${status}`);
+  }
 }
 
 // Capped exponential-ish backoff for the initial registration loop — an
@@ -53,11 +73,15 @@ function resolveAdvertiseUrl(app: FastifyInstance): string {
 
 async function callRegister(
   app: FastifyInstance,
-  opts: { token: string; hostId?: string },
+  opts: { token?: string; hostId?: string; machineCredential?: string },
 ): Promise<AgentSession> {
   const body = {
     token: opts.token,
     hostId: opts.hostId,
+    machineCredential: opts.machineCredential,
+    // Issue #2568 — a registration authenticated by the bootstrap token asks
+    // for a persistent identity; an identity-authenticated one already has it.
+    wantsMachineCredential: opts.machineCredential ? undefined : true,
     baseUrl: resolveAdvertiseUrl(app),
     hostname: os.hostname(),
     name: app.config.MULLION_AGENT_NAME || undefined,
@@ -81,7 +105,7 @@ async function callRegister(
     },
   );
   if (!res.ok) {
-    throw new Error(`registration request failed: HTTP ${res.status}`);
+    throw new RegisterRejectedError(res.status);
   }
   const json = (await res.json()) as RegisterResponse;
   return {
@@ -89,6 +113,7 @@ async function callRegister(
     sessionId: json.session_id,
     sessionSecret: json.session_secret,
     expiresAt: new Date(json.expires_at),
+    machineCredential: json.machine_credential,
   };
 }
 
@@ -136,6 +161,43 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
   // deregistered.
   let registerInFlight = false;
 
+  // Issue #2568 — the persisted identity. Loaded once at boot and kept current
+  // as the primary rotates the credential.
+  const statePath = identityStatePath(app.config.SESSIONS_DIR);
+  let identity: AgentIdentity | null = loadAgentIdentity(statePath);
+  // Set when the primary rejected the stored identity. Terminal until the
+  // operator clears the state file: the agent must not silently regain a
+  // revoked identity with its bootstrap token.
+  let identityRejected = false;
+
+  async function persistIdentity(session: AgentSession): Promise<void> {
+    if (!session.machineCredential) return;
+    const next = { hostId: session.hostId, machineCredential: session.machineCredential };
+    try {
+      await saveAgentIdentity(statePath, next);
+      identity = next;
+    } catch (err) {
+      // Not fatal: the session works. Keep presenting the last PERSISTED
+      // identity (the primary still accepts it via the grace slot), so memory
+      // never drifts ahead of disk. The error is logged without the credential.
+      app.log.warn(
+        { err: err instanceof Error ? err.message : String(err) },
+        identity
+          ? "[agent-enrollment] could not persist the machine identity; keeping the last persisted one (a renewal that returns a credential retries the write)"
+          : "[agent-enrollment] could not persist the machine identity and none is stored yet; this agent keeps running on its session and re-claims a credential on the next restart",
+      );
+    }
+  }
+
+  function onIdentityRejected(): void {
+    identityRejected = true;
+    app.log.error(
+      { hostId: identity?.hostId },
+      `[agent-enrollment] the primary rejected this agent's machine identity (revoked, expired after 90 days unused, or unknown). ` +
+        `Not falling back to the bootstrap token. To re-enroll, stop the agent, delete ${statePath}, and restart.`,
+    );
+  }
+
   // Issue #1719 (roadmap 8.5) — the credential this agent holds is read from
   // the env file ONCE, at boot (env.ts's loadDotenvOverrides). An admin who
   // rotates it on the primary while this laptop is ASLEEP leaves the agent
@@ -182,7 +244,7 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
   // A rejected credential may simply be a stale copy of a rotated one. The
   // error message is the only signal available: callRegister's own throw.
   function isUnauthorized(err: unknown): boolean {
-    return err instanceof Error && /\bHTTP 401\b/.test(err.message);
+    return err instanceof RegisterRejectedError && err.status === 401;
   }
 
   function scheduleRenewal(session: AgentSession) {
@@ -205,7 +267,13 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
     if (!current) return;
     renewInFlight = true;
     try {
-      const renewed = await callRegister(app, { token: current.sessionId, hostId: current.hostId });
+      const renewed = identity
+        ? await callRegister(app, {
+            hostId: identity.hostId,
+            machineCredential: identity.machineCredential,
+          })
+        : await callRegister(app, { token: current.sessionId, hostId: current.hostId });
+      await persistIdentity(renewed);
       // Recheck after the await — onClose (a real app.close() mid-renewal,
       // e.g. a session-teardown test or an actual shutdown racing this
       // call) may have flipped `stopped` and cleared app.agentSession
@@ -217,6 +285,10 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
       app.log.info({ hostId: renewed.hostId }, "[agent-enrollment] session renewed");
       scheduleRenewal(renewed);
     } catch (err) {
+      if (identity && err instanceof RegisterRejectedError && err.status === 401) {
+        onIdentityRejected();
+        return;
+      }
       // #157's own "primary DB loss -> 401 -> re-register" path: a renewal
       // failure (expired/unknown session on the primary's side, or a
       // transient network blip) falls all the way back to the bootstrap
@@ -234,12 +306,19 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
 
   async function registerWithRetry(): Promise<void> {
     if (registerInFlight) return;
+    if (identityRejected) return;
     registerInFlight = true;
     try {
       let attempt = 0;
       while (!stopped) {
         try {
-          const session = await callRegister(app, { token: app.config.MULLION_ENROLLMENT_TOKEN });
+          const session = await callRegister(
+            app,
+            identity
+              ? { hostId: identity.hostId, machineCredential: identity.machineCredential }
+              : { token: app.config.MULLION_ENROLLMENT_TOKEN },
+          );
+          await persistIdentity(session);
           // See the identical recheck in renew() — onClose may have fired
           // while this call was in flight.
           if (stopped) return;
@@ -247,6 +326,10 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
           scheduleRenewal(session);
           return;
         } catch (err) {
+          if (identity && err instanceof RegisterRejectedError && err.status === 401) {
+            onIdentityRejected();
+            return;
+          }
           // Issue #1719 — a 401 means the credential was REJECTED, which for a
           // sleeping host is most often a stale copy of a rotated one. Re-read
           // the env file once and, if the value actually changed, retry
