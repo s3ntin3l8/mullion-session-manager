@@ -141,6 +141,21 @@ describe("fake GitHub API", () => {
     }
   });
 
+  it("moves the live-tick PR's updated_at relative to `now`, not the wall clock", async () => {
+    const now = Date.parse("2026-10-01T09:00:00Z");
+    const ticking = await startFakeGithub({ tickMs: 20, now });
+    try {
+      await new Promise((r) => setTimeout(r, 80));
+      const pulls = (await (await fetch(ticking.url + "/repos/acme/aurora-web/pulls")).json()) as {
+        number: number;
+        updated_at: string;
+      }[];
+      expect(pulls.find((p) => p.number === 17)!.updated_at).toBe(new Date(now + 20).toISOString());
+    } finally {
+      await ticking.stop();
+    }
+  });
+
   it("counts every timestamp back from `now`, so two runs agree", async () => {
     const now = Date.parse("2026-10-01T09:00:00Z");
     const updatedOf = async (instant: number) => {

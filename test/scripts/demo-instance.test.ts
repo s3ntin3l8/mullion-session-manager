@@ -175,6 +175,21 @@ describe("a server that fails to spawn", () => {
     expect(processesIn(dir!)).toEqual([]);
   });
 
+  it("removes the state file a renderer waits on when startup fails", async () => {
+    const stateFile = path.join(fixtures, "state", "demo-state");
+    mkdirSync(path.dirname(stateFile), { recursive: true });
+    writeFileSync(stateFile, "/stale\n");
+    const notExecutable = writeScript("not-executable-state", "exit 0", 0o644);
+    const run = startCapturingDir({
+      quiet: true,
+      seed: false,
+      stateFile,
+      bins: { tsx: notExecutable, vite: notExecutable },
+    });
+    await expect(run.started).rejects.toThrow(/backend: could not run .*EACCES/);
+    expect(existsSync(stateFile)).toBe(false);
+  });
+
   it("removes the scratch dir even when no server ever started", async () => {
     const notExecutable = writeScript("not-executable", "exit 0", 0o644);
     const run = startCapturingDir({

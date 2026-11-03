@@ -245,7 +245,11 @@ describe("agentTranscriptScript leadMs", () => {
 });
 
 describe("seedDemo held sessions", () => {
-  const sessionsFor = async (opts: { holdTranscripts?: boolean; now?: number }) => {
+  const sessionsFor = async (opts: {
+    holdTranscripts?: boolean;
+    heldSessions?: boolean;
+    now?: number;
+  }) => {
     const root = mkdtempSync(path.join(dir, "seed-"));
     const calls: { url: string; body: Record<string, unknown> }[] = [];
     const api = async (url: string, init?: { body?: string }) => {
@@ -256,8 +260,8 @@ describe("seedDemo held sessions", () => {
     return { calls, seeded };
   };
 
-  it("seeds the mobile and loop sessions only when holding", async () => {
-    const held = await sessionsFor({ holdTranscripts: true });
+  it("seeds the mobile and loop sessions only when asked", async () => {
+    const held = await sessionsFor({ holdTranscripts: true, heldSessions: true });
     const names = held.calls.filter((c) => c.url === "/api/sessions").map((c) => c.body.name);
     expect(names).toContain("mobile demo");
     expect(names.filter((n) => n === "Add login rate limiting")).toHaveLength(2);
@@ -268,7 +272,8 @@ describe("seedDemo held sessions", () => {
       "mobile-demo.release",
     );
 
-    const plain = await sessionsFor({});
+    // Holding alone (what capture-screenshots.mjs passes) must not add them.
+    const plain = await sessionsFor({ holdTranscripts: true });
     const plainNames = plain.calls.filter((c) => c.url === "/api/sessions").map((c) => c.body.name);
     expect(plainNames).not.toContain("mobile demo");
     expect(plainNames.filter((n) => n === "Add login rate limiting")).toHaveLength(1);

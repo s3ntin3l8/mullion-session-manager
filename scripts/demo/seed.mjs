@@ -264,11 +264,19 @@ export const ORDERS_TRANSCRIPT = [
 /**
  * `holdTranscripts`: the aurora-web agent (fake-agent.sh) waits for
  * `authReleaseFile` (returned) before printing; see agentTranscriptScript.
- * Off for `make demo`, where nothing would ever release it. When on, two more
- * held sessions are seeded (`mobile-demo.sh`, `loop-demo.sh`), released the same way.
+ * Off for `make demo`, where nothing would ever release it. `heldSessions`
+ * (an opt-in of its own, since scripts/capture-screenshots.mjs still creates the
+ * same two sessions itself) seeds `mobile-demo.sh` and `loop-demo.sh`, held
+ * behind release files the same way.
  * `now` (ms) is the instant the fixture tasks' timestamps count back from.
  */
-export async function seedDemo({ api, root, holdTranscripts = false, now = Date.now() }) {
+export async function seedDemo({
+  api,
+  root,
+  holdTranscripts = false,
+  heldSessions = false,
+  now = Date.now(),
+}) {
   const scratchRoot = root;
   const scriptsDir = path.join(scratchRoot, "scripts");
   await mkdir(scriptsDir, { recursive: true });
@@ -370,9 +378,9 @@ export async function seedDemo({ api, root, holdTranscripts = false, now = Date.
 
   // The mobile terminal still and the landing loop each need a session whose
   // transcript waits for its own release file, so the capture releases it once
-  // the right client is attached and settled. Only seeded when holding, since
-  // `make demo` would show two sessions nothing can release.
-  if (holdTranscripts) {
+  // the right client is attached and settled. Opt-in: `make demo` would show two
+  // sessions nothing can release.
+  if (heldSessions) {
     for (const [name, title, lines, extra] of [
       ["mobile-demo", "mobile demo", MOBILE_TRANSCRIPT, {}],
       ["loop-demo", "Add login rate limiting", AUTH_TRANSCRIPT, { leadMs: LOOP_LEAD_MS }],

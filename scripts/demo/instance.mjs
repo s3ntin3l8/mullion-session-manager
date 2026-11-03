@@ -125,6 +125,8 @@ export async function startDemo({
   keep = false,
   seed = true,
   holdTranscripts = false,
+  // Also seed the held mobile-demo and loop-demo sessions (see seedDemo).
+  heldSessions = false,
   // How long until the fake GitHub's live-tick PR flips its CI (0 = frozen,
   // which the screenshot pipeline needs). `make demo` turns it on.
   githubTickMs = 0,
@@ -299,6 +301,7 @@ export async function startDemo({
           api,
           root: path.join(demoDir, "projects"),
           holdTranscripts,
+          heldSessions,
           now: nowMs,
         })
       : null;
@@ -339,6 +342,7 @@ if (invokedDirectly) {
     // a PR between two renders.
     githubTickMs: hold ? 0 : 60_000,
     holdTranscripts: hold,
+    heldSessions: hold,
     theme: process.env.MULLION_DEMO_THEME === "system" ? "system" : "dark",
     now: process.env.DEMO_NOW || undefined,
     stateFile: process.env.MULLION_DEMO_STATE

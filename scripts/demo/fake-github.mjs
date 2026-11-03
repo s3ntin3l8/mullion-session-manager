@@ -408,7 +408,7 @@ export async function startFakeGithub({
         for (const pr of pulls)
           if (pr.ticks) {
             pr.ci = "success";
-            pr.updated = new Date().toISOString();
+            pr.updated = new Date(now + tickMs).toISOString();
           }
     }, tickMs);
     tickTimer.unref();
