@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import type { UserConfigFn } from "vite";
 import configExport from "./vite.config.js";
@@ -113,5 +114,17 @@ describe("vite.config dev NODE_ENV guard (#105)", () => {
 
     expect(process.env.NODE_ENV).toBe("development");
     expect(warn).not.toHaveBeenCalled();
+  });
+});
+
+describe("vite.config dev server file access", () => {
+  // A merge-base worktree that symlinks node_modules (visual-kit's check) must
+  // still be served its fonts: Vite refuses files whose real path is outside
+  // its root unless that path is allowed.
+  it("allows the real path of node_modules next to the workspace root", async () => {
+    const resolved = await config({ command: "serve", mode: "development" });
+    const allow = (resolved as { server: { fs: { allow: string[] } } }).server.fs.allow;
+    expect(allow).toContain(realpathSync("node_modules"));
+    expect(allow.length).toBeGreaterThanOrEqual(2);
   });
 });

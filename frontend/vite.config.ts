@@ -1,4 +1,5 @@
-import { defineConfig } from "vite";
+import { existsSync, realpathSync } from "node:fs";
+import { defineConfig, searchForWorkspaceRoot } from "vite";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 
@@ -151,6 +152,18 @@ export default defineConfig(({ command, mode }) => {
     ],
     server: {
       host: true,
+      fs: {
+        // Dev serves the self-hosted fonts (@fontsource) and other assets out of
+        // node_modules, and Vite refuses a file whose real path is outside its
+        // root. A checkout that symlinks node_modules from another one (visual-kit
+        // renders a merge-base worktree that way, see visual/scenes.json baseDeps)
+        // would otherwise lose its fonts. In a normal checkout the real path is
+        // already inside the root, so this adds nothing.
+        allow: [
+          searchForWorkspaceRoot(process.cwd()),
+          ...(existsSync("node_modules") ? [realpathSync("node_modules")] : []),
+        ],
+      },
       proxy: {
         "/api": backendUrl,
         "/ws": { target: backendUrl, ws: true },
