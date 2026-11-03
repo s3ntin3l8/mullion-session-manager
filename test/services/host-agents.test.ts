@@ -12,7 +12,12 @@ vi.mock("../../src/services/host-capabilities.js", () => ({
 vi.mock("../../src/services/agent-detect.js", () => ({
   getCachedAgents: (...args: unknown[]) => getCachedAgents(...args),
 }));
-const client = { detectAgents: vi.fn(), detectCapabilities: vi.fn(), resolveConfig: vi.fn() };
+const client = {
+  detectAgents: vi.fn(),
+  detectCapabilities: vi.fn(),
+  resolveConfig: vi.fn(),
+  detectProtocol: vi.fn(),
+};
 vi.mock("../../src/services/remote-host-client.js", async () => {
   class HostRequestError extends Error {
     constructor(
@@ -29,10 +34,16 @@ const {
   HostAgentTracker,
   availableAgentBins,
   isOlderVersion,
+  hostLaunchOptions,
+  hostSupports,
+  protocolStatus,
+  refreshHostProtocolSoon,
   refreshLocalAgents,
   refreshRemoteHostAgents,
 } = await import("../../src/services/host-agents.js");
 const { HostRequestError } = await import("../../src/services/remote-host-client.js");
+const { AGENT_OPERATIONS, LEGACY_BASELINE, PROTOCOL_VERSION } =
+  await import("../../src/shared/agent-protocol.js");
 
 function agent(bin: string, available: boolean, kind: "agent" | "shell" = "agent"): DetectedAgent {
   return {
@@ -241,5 +252,130 @@ describe("host agent tracker (issue #2240)", () => {
     await vi.waitFor(() =>
       expect(failing.get("local")).toMatchObject({ agents: ["claude"], capabilities: null }),
     );
+  });
+});
+
+describe("protocol negotiation (issue #2248)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client.detectAgents.mockResolvedValue([]);
+    client.detectCapabilities.mockResolvedValue({ capabilities: [] });
+    client.resolveConfig.mockResolvedValue({ version: "0.3.1" });
+  });
+
+  it("negotiates independently of the release version", async () => {
+    const tracker = new HostAgentTracker();
+    const app = fakeApp(tracker);
+    // A different release than the primary, same protocol, a subset of operations.
+    client.resolveConfig.mockResolvedValue({ version: "0.1.0" });
+    client.detectProtocol.mockResolvedValue({
+      protocolVersion: PROTOCOL_VERSION,
+      operations: ["sessions", "git"],
+      launchOptions: ["env"],
+    });
+    await refreshRemoteHostAgents(app, "mac");
+    expect(hostSupports(app, "mac", "git")).toBe(true);
+    expect(hostSupports(app, "mac", "browser")).toBe(false);
+    expect(hostLaunchOptions(app, "mac")).toEqual(["env"]);
+    const status = protocolStatus(tracker.get("mac")?.protocol);
+    expect(status).toMatchObject({ incompatible: false, legacy: false });
+    expect(status?.missingOperations).toContain("browser");
+    expect(status?.missingOperations).not.toContain("git");
+  });
+
+  it("flags a protocol outside the supported range as incompatible", async () => {
+    const tracker = new HostAgentTracker();
+    client.detectProtocol.mockResolvedValue({
+      protocolVersion: PROTOCOL_VERSION + 1,
+      operations: [...AGENT_OPERATIONS],
+      launchOptions: [],
+    });
+    await refreshRemoteHostAgents(fakeApp(tracker), "mac");
+    expect(protocolStatus(tracker.get("mac")?.protocol)).toMatchObject({
+      incompatible: true,
+      protocolVersion: PROTOCOL_VERSION + 1,
+    });
+  });
+
+  it("maps a 404 to the legacy baseline", async () => {
+    const tracker = new HostAgentTracker();
+    const app = fakeApp(tracker);
+    client.detectProtocol.mockRejectedValue(new HostRequestError("old", 404, ""));
+    await refreshRemoteHostAgents(app, "old");
+    expect(tracker.get("old")?.protocol).toMatchObject({ legacy: true });
+    expect(hostSupports(app, "old", "sessions")).toBe(true);
+    expect(hostSupports(app, "old", "updates")).toBe(false);
+    expect(hostLaunchOptions(app, "old")).toEqual(LEGACY_BASELINE.launchOptions);
+    expect(protocolStatus(tracker.get("old")?.protocol)).toMatchObject({
+      legacy: true,
+      protocolVersion: null,
+      incompatible: false,
+    });
+  });
+
+  it("treats an unnegotiated host as supporting nothing, and keeps a reading on a transient failure", async () => {
+    const tracker = new HostAgentTracker();
+    const app = fakeApp(tracker);
+    expect(hostSupports(app, "mac", "sessions")).toBe(false);
+    expect(hostLaunchOptions(app, "mac")).toEqual([]);
+    expect(protocolStatus(null)).toBeNull();
+    client.detectProtocol.mockResolvedValue({
+      protocolVersion: 1,
+      operations: ["git"],
+      launchOptions: [],
+    });
+    await refreshRemoteHostAgents(app, "mac");
+    client.detectProtocol.mockRejectedValue(new HostRequestError("mac", 502, ""));
+    await refreshRemoteHostAgents(app, "mac");
+    expect(hostSupports(app, "mac", "git")).toBe(true);
+  });
+
+  it("reads the local host from this build's registry", () => {
+    const app = fakeApp(new HostAgentTracker());
+    expect(hostSupports(app, "local", "updates")).toBe(true);
+    expect(hostLaunchOptions(app, "local")).toContain("skipPermissions");
+  });
+
+  it("drops the reading on URL/credential change and re-reads after an update", async () => {
+    const tracker = new HostAgentTracker();
+    const app = fakeApp(tracker);
+    client.detectProtocol.mockResolvedValue({
+      protocolVersion: 1,
+      operations: ["git"],
+      launchOptions: [],
+    });
+    await refreshRemoteHostAgents(app, "mac");
+    tracker.invalidateHost("mac");
+    expect(tracker.get("mac")).toBeUndefined();
+
+    // A read that began before the credential change must not record.
+    let release!: () => void;
+    client.detectProtocol.mockReturnValue(
+      new Promise(
+        (r) => (release = () => r({ protocolVersion: 1, operations: [], launchOptions: [] })),
+      ),
+    );
+    const inFlight = refreshRemoteHostAgents(app, "mac");
+    tracker.invalidateHost("mac");
+    release();
+    await inFlight;
+    expect(tracker.get("mac")).toBeUndefined();
+
+    // After an update: stale immediately, then refreshed to the new build.
+    client.detectProtocol.mockResolvedValue({
+      protocolVersion: 1,
+      operations: ["git"],
+      launchOptions: [],
+    });
+    await refreshRemoteHostAgents(app, "mac");
+    client.detectProtocol.mockResolvedValue({
+      protocolVersion: 1,
+      operations: ["git", "browser"],
+      launchOptions: [],
+    });
+    refreshHostProtocolSoon(app, "mac");
+    expect(tracker.get("mac")?.protocol).toBeNull();
+    expect(tracker.isStale("mac", 60_000)).toBe(true);
+    await vi.waitFor(() => expect(hostSupports(app, "mac", "browser")).toBe(true));
   });
 });

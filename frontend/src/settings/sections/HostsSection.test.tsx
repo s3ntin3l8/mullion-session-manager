@@ -76,6 +76,54 @@ describe("HostsSection token rotation", () => {
     expect(screen.getByText("no extra capabilities")).toBeInTheDocument();
   });
 
+  it("shows the protocol version, legacy hosts, incompatibility and missing operations", () => {
+    stubFetch({});
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({
+          id: "ok",
+          name: "ok",
+          protocol: {
+            protocolVersion: 1,
+            incompatible: false,
+            missingOperations: [],
+            legacy: false,
+          },
+        }),
+        makeHost({
+          id: "old",
+          name: "old",
+          protocol: {
+            protocolVersion: null,
+            incompatible: false,
+            missingOperations: ["updates"],
+            legacy: true,
+          },
+        }),
+        makeHost({
+          id: "bad",
+          name: "bad",
+          protocol: {
+            protocolVersion: 9,
+            incompatible: true,
+            missingOperations: [],
+            legacy: false,
+          },
+        }),
+        makeHost({ id: "unk", name: "unk", protocol: null }),
+      ],
+    });
+    render(<HostsSection />);
+    expect(screen.getByTestId("host-protocol-ok")).toHaveTextContent("protocol v1");
+    expect(screen.getByTestId("host-protocol-old")).toHaveTextContent(
+      "protocol: legacy · missing: updates — update this host",
+    );
+    expect(screen.getByTestId("host-protocol-bad")).toHaveTextContent(
+      "protocol v9 · incompatible — update this host",
+    );
+    expect(screen.queryByTestId("host-protocol-unk")).not.toBeInTheDocument();
+  });
+
   it("rotates after a second click and shows the new token once", async () => {
     const user = userEvent.setup();
     const calls = stubFetch({ rotate: () => jsonResponse(200, { token: "new-token-abc" }) });

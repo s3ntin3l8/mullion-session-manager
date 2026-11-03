@@ -1,3 +1,4 @@
+import type { AgentProtocolInfo } from "../shared/agent-protocol.js";
 import { renderScrollback } from "./scrollback-render.js";
 import type { GitIdentity } from "./git-env.js";
 import type { SessionGithubAuth } from "./session-github-token.js";
@@ -20,7 +21,7 @@ import {
   sign,
 } from "./request-signature.js";
 import type { HostCapacityReport } from "./host-capacity.js";
-import { DEFAULT_GENERATION_TIMEOUT_MS } from "./scaffold-generate.js";
+import { DEFAULT_GENERATION_TIMEOUT_MS, type GenerationTurnResult } from "./scaffold-generate.js";
 import { GIT_CLONE_TIMEOUT_MS } from "./git-run.js";
 import type { CloneResult } from "./git-clone.js";
 import type { DiscoveredCandidate, Launcher, DockControl } from "./project-config.js";
@@ -68,7 +69,6 @@ import type {
   ProjectFileStat,
   ProjectSearchListing,
 } from "./project-files.js";
-import type { GenerationTurnResult } from "./scaffold-generate.js";
 import { DEFAULT_SETUP_TIMEOUT_MS, type SetupRunResult } from "./setup-recipe-shared.js";
 
 // One HTTP+WS client per remote "agent" host (issue #26), talking to its
@@ -869,9 +869,11 @@ export class RemoteHostClient {
   }
 
   // Issue #2306 — an agent build without the route answers 404 (unknown).
-  detectCapabilities(): Promise<{ capabilities: string[] }> {
-    return this.request("/internal/capabilities");
-  }
+  detectCapabilities = (): Promise<{ capabilities: string[] }> =>
+    this.request("/internal/capabilities");
+
+  // Issue #2248 — the protocol handshake; an agent build without it answers 404.
+  detectProtocol = (): Promise<AgentProtocolInfo> => this.request("/internal/protocol");
 
   // Issue #432 — the client half of the skills-discovery triple; see
   // routes/internal.ts's /internal/skills for the agent-side resolveWithinRoots

@@ -9,6 +9,7 @@ import {
   type HostRegistration,
   type RegisterAgentInput,
 } from "../services/host-registry.js";
+import { refreshHostProtocolSoon } from "../services/host-agents.js";
 import { isAllowedHttpUrl } from "../services/url-guard.js";
 import { timingSafeTokenMatch } from "../services/crypto-utils.js";
 import { getRawRemoteAddress } from "../services/raw-remote-address.js";
@@ -172,6 +173,7 @@ export async function enrollmentRoute(app: FastifyInstance) {
         // the credential, and neither depends on the other.
         recordHostSelfReport(app, renewed.hostId, { platform });
         app.reconfigureRemoteEventSubscriptions({ forceReconnect: [renewed.hostId] });
+        refreshHostProtocolSoon(app, renewed.hostId);
         // Issue #820 — no forceReconnect equivalent yet (see hosts.ts's
         // PATCH handler for the same documented gap): an already-open
         // ssh-agent-fanout connection for this host keeps its old
@@ -189,6 +191,7 @@ export async function enrollmentRoute(app: FastifyInstance) {
       const claimed = claimHost(app, token, input);
       if (claimed) {
         app.reconfigureRemoteEventSubscriptions({ forceReconnect: [claimed.hostId] });
+        refreshHostProtocolSoon(app, claimed.hostId);
         app.reconfigureSshAgentFanout();
         app.reconfigureControlRelayFanout();
         return respond(claimed);
@@ -209,6 +212,7 @@ export async function enrollmentRoute(app: FastifyInstance) {
         }
         const enrolled = enrollHost(app, input);
         app.reconfigureRemoteEventSubscriptions({ forceReconnect: [enrolled.hostId] });
+        refreshHostProtocolSoon(app, enrolled.hostId);
         app.reconfigureSshAgentFanout();
         app.reconfigureControlRelayFanout();
         return respond(enrolled);

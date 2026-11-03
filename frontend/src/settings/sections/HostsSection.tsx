@@ -85,6 +85,29 @@ function HostCapabilitiesLine({ host }: { host: Host }) {
   return <span>{host.capabilities.map((c) => labels[c] ?? c).join(" · ")}</span>;
 }
 
+/**
+ * Issue #2248 — protocol version, incompatibility and missing operations. The
+ * remedy for both is the row's existing Update action. Null renders nothing
+ * (not negotiated yet).
+ */
+function HostProtocolLine({ host }: { host: Host }) {
+  const protocol = host.protocol;
+  if (!protocol) return null;
+  const parts: string[] = [
+    protocol.legacy ? "protocol: legacy" : `protocol v${protocol.protocolVersion}`,
+  ];
+  if (protocol.incompatible) parts.push("incompatible — update this host");
+  else if (protocol.missingOperations.length > 0) {
+    parts.push(`missing: ${protocol.missingOperations.join(", ")} — update this host`);
+  }
+  return (
+    <span data-testid={`host-protocol-${host.id}`}>
+      {" · "}
+      {parts.join(" · ")}
+    </span>
+  );
+}
+
 export function HostsSection() {
   const { hosts, refreshHosts, createHost, updateHost, deleteHost, pingHost, rotateHostToken } =
     useDashboardStore();
@@ -393,6 +416,7 @@ export function HostsSection() {
                     <HostCapacityLine host={host} />
                     {" · "}
                     <HostCapabilitiesLine host={host} />
+                    <HostProtocolLine host={host} />
                   </>
                 }
                 trailing={
