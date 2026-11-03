@@ -523,16 +523,23 @@ function issueMachineCredential(app: FastifyInstance, hostId: string): string {
     .select({
       enc: hosts.machineCredentialEnc,
       revokedAt: hosts.machineCredentialRevokedAt,
+      expiresAt: hosts.machineCredentialExpiresAt,
     })
     .from(hosts)
     .where(eq(hosts.id, hostId))
     .get();
-  const replacesLive = !!existing?.enc && !existing.revokedAt;
+  // An expired credential is already dead (renewMachineCredential rejects the
+  // row), so it must not be revived into the grace slot.
+  const replacesLive =
+    !!existing?.enc &&
+    !existing.revokedAt &&
+    !!existing.expiresAt &&
+    existing.expiresAt.getTime() > Date.now();
   if (replacesLive) {
     app.log.warn(
       { hostId },
       "[host-registry] a registration replaced a live machine identity; the displaced agent " +
-        "(if any) converges via the grace credential. Two agents sharing one per-host token collide here.",
+        "(if any) converges via the grace credential. Expected after an operator re-enroll; a collision if two agents share one per-host token.",
     );
   }
   app.db
@@ -633,7 +640,12 @@ export function renewMachineCredential(
     credential = app.encryption.decryptString(row.machineCredentialEnc);
     app.db
       .update(hosts)
-      .set({ ...selfReport, machineCredentialExpiresAt: expiresAt })
+      // Slide the grace window: a stale holder that keeps presenting stays valid.
+      .set({
+        ...selfReport,
+        machineCredentialRotatedAt: new Date(),
+        machineCredentialExpiresAt: expiresAt,
+      })
       .where(eq(hosts.id, hostId))
       .run();
   }

@@ -123,7 +123,7 @@ in `machine_credential`.
   if it moves.
 - **Renewal and the grace credential.** The agent renews at ~50% of the
   session TTL, and each identity-authenticated renewal **rotates** the
-  credential. The previous credential stays valid for a 24 h grace period, so
+  credential. The previous credential stays valid for 24 h after it was replaced or last presented, so
   a renewal response that is lost in transit does not lock the agent out: it
   retries with the credential it still holds and is handed the
   already-issued current one. A credential also expires after 90 days

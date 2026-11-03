@@ -182,7 +182,7 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
       // never drifts ahead of disk. The error is logged without the credential.
       app.log.warn(
         { err: err instanceof Error ? err.message : String(err) },
-        "[agent-enrollment] could not persist the machine identity; keeping the last persisted one and retrying on the next renewal",
+        "[agent-enrollment] could not persist the machine identity; keeping the last persisted one (a renewal that returns a credential retries the write)",
       );
     }
   }

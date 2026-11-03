@@ -177,9 +177,35 @@ describe("host-registry", () => {
       expect(b.machineCredential).not.toBe(a.machineCredential);
 
       // The displaced agent's renewal is still accepted and converges.
+      const before = getHostRow(app, created.id)!.machineCredentialRotatedAt;
+      await new Promise((r) => setTimeout(r, 1100));
       const renewed = renewMachineCredential(app, created.id, a.machineCredential!, input);
       expect(renewed).not.toBeNull();
-      expect(renewed!.machineCredential).toBeTruthy();
+      // Converges onto the already-issued current credential; does not rotate.
+      expect(renewed!.machineCredential).toBe(b.machineCredential);
+      // The grace window slides on use (a stale holder that keeps renewing survives).
+      expect(getHostRow(app, created.id)!.machineCredentialRotatedAt!.getTime()).toBeGreaterThan(
+        before!.getTime(),
+      );
+      await app.close();
+    });
+
+    it("claimHost does not revive an expired credential into the grace slot", async () => {
+      const app = await buildApp();
+      const created = createHost(app, {
+        name: "expired-incumbent",
+        baseUrl: "http://placeholder:0",
+        token: "shared-expired",
+      });
+      const input = { baseUrl: "http://a:4000", hostname: "a", wantsMachineCredential: true };
+      const a = claimHost(app, "shared-expired", input)!;
+      app.db
+        .update(hosts)
+        .set({ machineCredentialExpiresAt: new Date(Date.now() - 1000) })
+        .where(eq(hosts.id, created.id))
+        .run();
+      claimHost(app, "shared-expired", input);
+      expect(renewMachineCredential(app, created.id, a.machineCredential!, input)).toBeNull();
       await app.close();
     });
 
