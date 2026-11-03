@@ -176,20 +176,40 @@ export async function resolveExecutionContext(
       ? { ok: true, context: { ...base, cwd: sessionCwd, checkoutRoot: sessionCwd } }
       : fail("invalid_context", outsideMsg);
   } catch (err) {
-    // The agent answered and said no (404 = too old; 400 = cwd outside its
-    // PROJECTS_ROOTS; 401/403 = credentials): a config problem, not a
-    // connectivity one, so never "unreachable" (see host-error-reply.ts).
+    // The agent answered and said no: a config problem, not a connectivity one,
+    // so never "unreachable" (see host-error-reply.ts). 404 = too old; 401/403 =
+    // credentials (check the agent token); other 4xx (e.g. a cwd outside its
+    // PROJECTS_ROOTS) are about this session's directory.
     if (err instanceof HostRequestError) {
+      if (err.statusCode === 404) {
+        return fail("unsupported", `Host ${hostId}'s Mullion is too old to list worktrees`);
+      }
+      if (err.statusCode === 401 || err.statusCode === 403) {
+        return fail(
+          "host_unavailable",
+          `Host ${hostId} rejected the request — check its agent token`,
+        );
+      }
       return fail(
-        "unsupported",
-        err.statusCode === 404
-          ? `Host ${hostId}'s Mullion is too old to list worktrees`
-          : `Host ${hostId} rejected the worktree lookup: ${err.body || `HTTP ${err.statusCode}`}`,
+        "invalid_context",
+        `Host ${hostId} rejected the worktree lookup: ${agentReason(err)}`,
       );
     }
     app.log.warn({ err, hostId }, "couldn't reach the remote host to list its worktrees");
     return fail("host_unavailable", `Host ${hostId} is unreachable`);
   }
+}
+
+/** The agent's `{message}` when its body is JSON, else the error's own message. */
+function agentReason(err: HostRequestError): string {
+  try {
+    const parsed: unknown = JSON.parse(err.body);
+    const message = (parsed as { message?: unknown } | null)?.message;
+    if (typeof message === "string") return message;
+  } catch {
+    // Not a JSON body.
+  }
+  return err.message;
 }
 
 export function executionContextErrorStatus(code: ExecutionContextErrorCode): 400 | 501 | 503 {

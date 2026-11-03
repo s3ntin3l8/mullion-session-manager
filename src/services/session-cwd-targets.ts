@@ -18,8 +18,8 @@ export interface SessionCwdTarget {
 /**
  * Effective cwd per session (`liveCwd ?? row.cwd ?? project.cwd`) joined to
  * its project's `hostId` — the shared "which host, which path" resolution
- * used by both the batch git-status and git-diff-stats session endpoints
- * below (issue #202). This is the plan's deliberate deviation from a
+ * used by the batch git-status and git-diff-stats session endpoints in
+ * src/routes/projects.ts (issue #202). This is the plan's deliberate deviation from a
  * `session.worktreePath` column: `sessions.cwd` is already passed verbatim
  * as the spawn cwd with no confinement to the project root (see
  * sessions.ts's getOrCreate), so a worktree session's cwd can already point
@@ -29,8 +29,8 @@ export interface SessionCwdTarget {
  * PtyManager state — the shell's OSC-7-announced cwd, which reflects a
  * manual `cd` after launch that `sessions.cwd` (written once, at creation)
  * never does. Only merged for a LOCAL session: `app.pty` here only tracks
- * sessions this process itself spawned/attached (same caveat as this file's
- * detectedDevServerPort above) — a remote session's live cwd lives in that
+ * sessions this process itself spawned/attached (same caveat as projects.ts's
+ * detectedDevServerPort) — a remote session's live cwd lives in that
  * agent's own PtyManager instead, out of reach from here. (The plain session
  * list's `Session.liveCwd` field, unlike this function, IS remote-aware —
  * see services/session-live-info.ts's withLiveInfo, which goes through resolveBackend(hostId)
@@ -64,7 +64,10 @@ export interface SessionCwdTarget {
  * A session id with no matching row (already deleted, or a stale/racing
  * client) or whose project has since been deleted is simply omitted from
  * the result — same "nothing to show" posture as every other best-effort
- * lookup in this file, not an error.
+ * lookup in this file, not an error. A session whose context is durably
+ * invalid (e.g. its project has no checkout on its host) is emitted with
+ * `invalid: true` instead, so callers report `null` rather than keep a
+ * stale value; a transient failure (host unavailable) is omitted.
  */
 export async function resolveSessionCwdTargets(
   app: FastifyInstance,

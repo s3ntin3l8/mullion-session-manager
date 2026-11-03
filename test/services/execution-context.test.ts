@@ -188,16 +188,35 @@ describe("resolveExecutionContext", () => {
     });
   });
 
-  it("is unsupported (not unreachable) when the agent answers 4xx", async () => {
+  it("is invalid_context (not unreachable) when the agent answers 400, with its parsed reason", async () => {
     const b = await addHost();
     const projectId = addProject({ cwd: "/srv/repo", hostId: b });
     vi.spyOn(RemoteHostClient.prototype, "resolveGitBranches").mockRejectedValue(
-      new HostRequestError(b, 400, "cwd must be within this agent's PROJECTS_ROOTS"),
+      new HostRequestError(
+        b,
+        400,
+        JSON.stringify({ message: "cwd must be within this agent's PROJECTS_ROOTS" }),
+      ),
+    );
+    const sessionId = addSession(projectId, "/srv/repo-wt", null);
+    const r = await resolveExecutionContext(app, { projectId, sessionId });
+    expect(r).toMatchObject({
+      ok: false,
+      error: { code: "invalid_context", message: expect.stringContaining("PROJECTS_ROOTS") },
+    });
+    expect(JSON.stringify(r)).not.toContain('{\\"message');
+  });
+
+  it("is host_unavailable (check the token) when the agent answers 401", async () => {
+    const b = await addHost();
+    const projectId = addProject({ cwd: "/srv/repo", hostId: b });
+    vi.spyOn(RemoteHostClient.prototype, "resolveGitBranches").mockRejectedValue(
+      new HostRequestError(b, 401, "unauthorized"),
     );
     const sessionId = addSession(projectId, "/srv/repo-wt", null);
     expect(await resolveExecutionContext(app, { projectId, sessionId })).toMatchObject({
       ok: false,
-      error: { code: "unsupported", message: expect.stringContaining("PROJECTS_ROOTS") },
+      error: { code: "host_unavailable", message: expect.stringContaining("agent token") },
     });
   });
 

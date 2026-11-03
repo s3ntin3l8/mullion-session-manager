@@ -1270,9 +1270,11 @@ each caller deriving its own. The rules:
 - **Without a `sessionId`** a request uses the explicit project default: the
   project's host and `projects.cwd`.
 
-Errors map to HTTP as `invalid_context` → 400, `host_unavailable` (host not
-registered, no address, unreachable, or the directory can't be verified) →
-503, `unsupported` (agent too old to list worktrees) → 501. The per-session git
+Errors map to HTTP as `invalid_context` (including an agent 4xx about the
+session's directory, e.g. outside its `PROJECTS_ROOTS`) → 400,
+`host_unavailable` (host not registered, no address, unreachable, rejecting our
+agent token with 401/403, or the directory can't be verified) → 503,
+`unsupported` (agent too old to list worktrees, a 404) → 501. The per-session git
 status targets read the recorded cwd as is (`trustSessionCwd`) because they
 validate it themselves; the host is still the session's own.
 
