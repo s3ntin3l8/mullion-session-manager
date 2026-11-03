@@ -140,4 +140,25 @@ describe("fake GitHub API", () => {
       await ticking.stop();
     }
   });
+
+  it("counts every timestamp back from `now`, so two runs agree", async () => {
+    const now = Date.parse("2026-10-01T09:00:00Z");
+    const updatedOf = async (instant: number) => {
+      const frozen = await startFakeGithub({ now: instant });
+      try {
+        const pulls = (await (await fetch(frozen.url + "/repos/acme/aurora-web/pulls")).json()) as {
+          number: number;
+          updated_at: string;
+        }[];
+        return pulls.map((p) => [p.number, p.updated_at]);
+      } finally {
+        await frozen.stop();
+      }
+    };
+    const first = await updatedOf(now);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(await updatedOf(now)).toEqual(first);
+    // PR 12 was touched 20 minutes before `now`.
+    expect(first).toContainEqual([12, "2026-10-01T08:40:00.000Z"]);
+  });
 });

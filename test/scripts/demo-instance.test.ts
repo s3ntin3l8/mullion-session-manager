@@ -70,6 +70,9 @@ const demoDirs = () =>
 type DemoBins = ReturnType<typeof DemoModule.demoBins>;
 type DemoOptions = NonNullable<Parameters<typeof DemoModule.startDemo>[0]> & {
   bins?: DemoBins;
+  // Defaulted to `undefined` in the .mjs, which the inferred type keeps as `undefined`.
+  now?: string;
+  stateFile?: string;
 };
 
 /**
@@ -127,6 +130,13 @@ describe("preflight", () => {
     expect(() => demo.preflight({ ...bins, tsx: process.execPath })).toThrow(
       /frontend\/node_modules\/\.bin\/vite.*npm --prefix frontend ci/,
     );
+  });
+
+  it("refuses a `now` that is not an instant, before creating a scratch dir", async () => {
+    const before = demoDirs();
+    const opts: DemoOptions = { quiet: true, now: "yesterday-ish" };
+    await expect(demo.startDemo(opts)).rejects.toThrow(/now is not an ISO instant/);
+    expect([...demoDirs()].filter((d) => !before.has(d))).toEqual([]);
   });
 
   it("refuses before creating a scratch dir", async () => {

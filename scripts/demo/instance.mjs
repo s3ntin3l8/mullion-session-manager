@@ -128,9 +128,21 @@ export async function startDemo({
   // How long until the fake GitHub's live-tick PR flips its CI (0 = frozen,
   // which the screenshot pipeline needs). `make demo` turns it on.
   githubTickMs = 0,
+  // The backend's theme. visual-kit renders both colour schemes, so it asks
+  // for "system" and lets the browser decide; every other caller keeps dark.
+  theme = "dark",
+  // Freezes the clock the fake GitHub and the seed count "N minutes ago" back
+  // from (an ISO instant); unset uses the real one.
+  now,
+  // A file to record the seeded scripts dir in while the demo is up. A caller
+  // outside this process (visual-kit's host hook) learns where the held
+  // transcripts' release files go from it.
+  stateFile,
   bins,
 } = {}) {
   bins ??= demoBins();
+  const nowMs = now === undefined ? Date.now() : Date.parse(now);
+  if (!Number.isFinite(nowMs)) throw new Error(`demo: now is not an ISO instant: ${now}`);
   preflight(bins);
   await assertPortsFree([DEMO_BACKEND_PORT, DEMO_FRONTEND_PORT]);
 
@@ -190,6 +202,7 @@ export async function startDemo({
       // A rejection here must not skip the rm below or mask the startup error.
       fakeGithub?.stop().catch((err) => console.warn(`[demo] fake GitHub did not stop: ${err}`)),
     ]);
+    if (stateFile) await rm(stateFile, { force: true });
     if (keep) return console.log(`[demo] kept ${demoDir}`);
     if (leaked.length > 0)
       return console.warn(
@@ -249,7 +262,11 @@ export async function startDemo({
       { mode: 0o755 },
     );
     await symlink(path.join(REPO_ROOT, "drizzle"), path.join(runDir, "drizzle"));
-    fakeGithub = await startFakeGithub({ tickMs: githubTickMs, latestRelease: nextMinorTag() });
+    fakeGithub = await startFakeGithub({
+      tickMs: githubTickMs,
+      latestRelease: nextMinorTag(),
+      now: nowMs,
+    });
     const backendEnv = backendEnvFor(fakeGithub.url);
     assertDemoEnv(backendEnv, demoDir, { cwd: runDir });
     assertDemoEnv(frontendEnv, demoDir, { cwd: path.join(REPO_ROOT, "frontend") });
@@ -276,10 +293,20 @@ export async function startDemo({
     );
     await waitForHttp(`${backendUrl}/api/sessions`, aborted.signal);
     await waitForHttp(frontendUrl, aborted.signal);
-    await api("/api/settings", { method: "PATCH", body: JSON.stringify({ theme: "dark" }) });
-    return seed
-      ? await seedDemo({ api, root: path.join(demoDir, "projects"), holdTranscripts })
+    await api("/api/settings", { method: "PATCH", body: JSON.stringify({ theme }) });
+    const seeded = seed
+      ? await seedDemo({
+          api,
+          root: path.join(demoDir, "projects"),
+          holdTranscripts,
+          now: nowMs,
+        })
       : null;
+    if (seeded && stateFile) {
+      await mkdir(path.dirname(stateFile), { recursive: true });
+      await writeFile(stateFile, `${seeded.scriptsDir}\n`);
+    }
+    return seeded;
   };
 
   // Everything after mkdtemp runs inside the try, so any failure (a refused
@@ -302,9 +329,21 @@ export async function startDemo({
 
 const invokedDirectly = process.argv[1] && import.meta.url === `file://${process.argv[1]}`;
 if (invokedDirectly) {
+  // The knobs visual-kit sets through scenes.json `demo.env`; unset, this is
+  // plain `make demo`. They stay out of startDemo's callers (and out of the
+  // backend's env, which assertDemoEnv builds from an explicit allow-list).
+  const hold = process.env.MULLION_DEMO_HOLD === "1";
   const demo = await startDemo({
     keep: process.argv.includes("--keep"),
-    githubTickMs: 60_000,
+    // Held transcripts and a moving CI tick don't mix: the tick would change
+    // a PR between two renders.
+    githubTickMs: hold ? 0 : 60_000,
+    holdTranscripts: hold,
+    theme: process.env.MULLION_DEMO_THEME === "system" ? "system" : "dark",
+    now: process.env.DEMO_NOW || undefined,
+    stateFile: process.env.MULLION_DEMO_STATE
+      ? path.resolve(process.env.MULLION_DEMO_STATE)
+      : undefined,
   }).catch((err) => {
     console.error(`[demo] failed to start: ${err.message}`);
     process.exit(1);
@@ -312,6 +351,8 @@ if (invokedDirectly) {
   console.log(`
 [demo] Mullion demo is up: ${demo.frontendUrl}
 [demo] Loopback only, no login. Ctrl-C stops its sessions and deletes all demo data.`);
+  // The line visual-kit waits for before it starts rendering.
+  console.log(`DEMO_READY ${demo.frontendUrl}`);
   const shutdown = async () => {
     await demo.stop();
     process.exit(0);
