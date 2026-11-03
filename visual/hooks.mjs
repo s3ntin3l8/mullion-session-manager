@@ -59,6 +59,44 @@ export async function beforeScene({ context, page, scene }) {
   await context.addInitScript(() => {
     globalThis.localStorage.setItem("mullion:storage-warning-dismissed-at", String(Date.now()));
   });
+  await context.addInitScript(normalizeRunDependentText);
+}
+
+/**
+ * Runs in the page. Two things the demo prints depend on the run, not on the
+ * code, and would make every shot differ from the last: the scratch directory's
+ * random name inside a session's script path, and the ages git computes on the
+ * server ("82 seconds ago"; the frontend's own relative times follow the frozen
+ * browser clock and are already stable). Both are rewritten to fixed text as the
+ * page renders, which also reads better in a README than a mktemp name.
+ */
+function normalizeRunDependentText() {
+  const rewrite = (text) =>
+    text
+      .replace(/\/tmp\/mullion-demo-[A-Za-z0-9]+\//g, "/tmp/mullion-demo/")
+      .replace(/\b\d+ (?:second|minute|hour)s? ago\b/g, "2 minutes ago");
+  const walk = (root) => {
+    const walker = globalThis.document.createTreeWalker(root, 4 /* NodeFilter.SHOW_TEXT */);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const next = rewrite(node.nodeValue ?? "");
+      if (next !== node.nodeValue) node.nodeValue = next;
+    }
+  };
+  const start = () => {
+    walk(globalThis.document.body);
+    new globalThis.MutationObserver((records) => {
+      for (const record of records) {
+        if (record.type === "characterData") {
+          const next = rewrite(record.target.nodeValue ?? "");
+          if (next !== record.target.nodeValue) record.target.nodeValue = next;
+        } else {
+          for (const added of record.addedNodes) walk(added);
+        }
+      }
+    }).observe(globalThis.document.body, { childList: true, characterData: true, subtree: true });
+  };
+  if (globalThis.document.body) start();
+  else globalThis.addEventListener("DOMContentLoaded", start);
 }
 
 export async function settle({ page, scene, host }) {
