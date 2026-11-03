@@ -144,7 +144,9 @@ function splitValueAndComment(raw: string): { value: string; comment: string } {
 /** Sanitises git configuration content by stripping userinfo from every URL
  * a config can carry credentials in: `url`/`pushurl` (keys are
  * case-insensitive) under `[remote ...]` and `[submodule ...]` sections, and
- * the base of a `[url "<base>"]` rewrite section. Everything else is kept, and
+ * the base of a `[url "<base>"]` rewrite section. Everything else is kept
+ * (including `http.*.extraHeader` and `credential.*`: this hides credentialed
+ * remote URLs, it is not a full credential seal), and
  * CRLF line endings are preserved (git accepts them, so they must be matched).
  * The caller shadows both `<common>/config` and `<gitdir>/config.worktree`. */
 export function sanitizeGitConfig(content: string): string {
