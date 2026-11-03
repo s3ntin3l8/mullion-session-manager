@@ -120,8 +120,37 @@ describe("sanitizeGitConfig", () => {
     expect(sanitized).toContain('[branch "main"]\n\tremote = origin');
   });
 
-  it("does not strip url settings outside remote sections", () => {
-    const raw = ['[submodule "sub"]', "\turl = https://user:token@example.com/sub.git"].join("\n"); // pragma: allowlist secret
+  it("sanitises CRLF configs and keeps the line endings", () => {
+    const cred = "https://user:tok@example.com/o/r.git"; // pragma: allowlist secret
+    const raw = ['[remote "origin"]', `\turl = ${cred}`, ""].join("\r\n");
+    const out = sanitizeGitConfig(raw);
+    expect(out).not.toContain("tok@");
+    expect(out).toBe(['[remote "origin"]', "\turl = https://example.com/o/r.git", ""].join("\r\n"));
+  });
+
+  it("matches keys case-insensitively", () => {
+    const raw = ['[remote "origin"]', "\tURL = https://user:tok@example.com/o/r.git"].join("\n"); // pragma: allowlist secret
+    expect(sanitizeGitConfig(raw)).toBe(
+      ['[remote "origin"]', "\tURL = https://example.com/o/r.git"].join("\n"),
+    );
+  });
+
+  it('strips userinfo from a [url "<base>"] rewrite section and from submodule urls', () => {
+    const raw = [
+      '[url "https://x-access-token:TOK@github.com/"]', // pragma: allowlist secret
+      "\tinsteadOf = https://github.com/",
+      '[submodule "sub"]',
+      "\turl = https://user:token@example.com/sub.git", // pragma: allowlist secret
+    ].join("\n");
+    const out = sanitizeGitConfig(raw);
+    expect(out).not.toMatch(/TOK@|token@/);
+    expect(out).toContain('[url "https://github.com/"]');
+    expect(out).toContain("\tinsteadOf = https://github.com/");
+    expect(out).toContain("\turl = https://example.com/sub.git");
+  });
+
+  it("does not touch url settings in unrelated sections", () => {
+    const raw = ["[other]", "\turl = https://user:token@example.com/x.git"].join("\n"); // pragma: allowlist secret
     expect(sanitizeGitConfig(raw)).toBe(raw);
   });
 });
@@ -270,6 +299,21 @@ describe("homeMaskArgs", () => {
     const content = fs.readFileSync(shadowFile, "utf8");
     expect(content).not.toContain("user:token@");
     expect(content).toContain("https://github.com/owner/repo.git");
+  });
+
+  it("writes the shadow under .agent-home when the worktree has one", () => {
+    const wt = path.join(home, "wt");
+    fs.mkdirSync(path.join(wt, ".agent-home"), { recursive: true });
+    const gitDir = path.join(home, "repo", ".git", "worktrees", "w");
+    fs.mkdirSync(gitDir, { recursive: true });
+    fs.writeFileSync(path.join(wt, ".git"), `gitdir: ${gitDir}\n`);
+    fs.writeFileSync(path.join(gitDir, "commondir"), "../..\n");
+    const common = path.join(home, "repo", ".git");
+    fs.writeFileSync(path.join(common, "config"), "[core]\n\tbare = false\n");
+    const shadowBind = binds(homeMaskArgs({ home, worktreePath: wt })).find((e) =>
+      e.endsWith(` ${path.join(common, "config")}`),
+    );
+    expect(shadowBind!.split(" ")[0]).toBe(path.join(wt, ".agent-home", ".git-config-sanitized"));
   });
 });
 

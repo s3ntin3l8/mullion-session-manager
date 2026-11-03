@@ -141,38 +141,46 @@ function splitValueAndComment(raw: string): { value: string; comment: string } {
   return { value: raw, comment: "" };
 }
 
-/** Sanitises git configuration content by stripping userinfo from remote URLs
- * (any `url` or `pushurl` under `[remote ...]` sections), keeping all other
- * sections and configuration intact. */
+/** Sanitises git configuration content by stripping userinfo from every URL
+ * a config can carry credentials in: `url`/`pushurl` (keys are
+ * case-insensitive) under `[remote ...]` and `[submodule ...]` sections, and
+ * the base of a `[url "<base>"]` rewrite section. Everything else is kept, and
+ * CRLF line endings are preserved (git accepts them, so they must be matched). */
 export function sanitizeGitConfig(content: string): string {
   const lines = content.split("\n");
-  let inRemoteSection = false;
+  let inUrlSection = false;
   const result: string[] = [];
 
-  for (const line of lines) {
+  for (const rawLine of lines) {
+    const eol = rawLine.endsWith("\r") ? "\r" : "";
+    const line = rawLine.slice(0, rawLine.length - eol.length);
     const trimmed = line.trim();
     const sectionMatch = trimmed.match(
       /^\[\s*([a-zA-Z0-9.-]+)(?:\s+"([^"]*)")?\s*\](?:\s+[#;].*)?$/,
     );
     if (sectionMatch) {
-      inRemoteSection = sectionMatch[1].toLowerCase() === "remote";
-      result.push(line);
+      const name = sectionMatch[1].toLowerCase();
+      inUrlSection = name === "remote" || name === "submodule";
+      const base = sectionMatch[2];
+      if (name === "url" && base !== undefined) {
+        const stripped = stripUserInfoFromUrl(base);
+        result.push((stripped === base ? line : line.replace(`"${base}"`, `"${stripped}"`)) + eol);
+      } else {
+        result.push(rawLine);
+      }
       continue;
     }
 
-    if (inRemoteSection) {
-      const urlMatch = line.match(/^(\s*(?:push)?url\s*=\s*)(.*)$/);
+    if (inUrlSection) {
+      const urlMatch = line.match(/^(\s*(?:push)?url\s*=\s*)(.*)$/i);
       if (urlMatch) {
-        const prefix = urlMatch[1];
-        const rawValue = urlMatch[2];
-        const { value, comment } = splitValueAndComment(rawValue);
-        const stripped = stripUserInfoFromUrl(value);
-        result.push(`${prefix}${stripped}${comment}`);
+        const { value, comment } = splitValueAndComment(urlMatch[2]);
+        result.push(`${urlMatch[1]}${stripUserInfoFromUrl(value)}${comment}${eol}`);
         continue;
       }
     }
 
-    result.push(line);
+    result.push(rawLine);
   }
 
   return result.join("\n");
@@ -235,8 +243,13 @@ export function homeMaskArgs(opts: HomeMaskOptions): string[] {
           for (const dest of targets) {
             shadowConfigBinds.push({ src: shadowConfig, dest });
           }
-        } catch {
-          // Best-effort if worktree is unreadable/unwritable
+        } catch (err) {
+          // Fails open (the turn reads the original config): say so.
+          console.warn(
+            `git config ${realConfig} could not be shadowed; this turn can read its remote URLs: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
         }
       }
     }
