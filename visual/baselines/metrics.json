@@ -204,5 +204,119 @@
       }
     ],
     "console": []
+  },
+  "session-list.phone.dark.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 5
+      },
+      {
+        "id": "heading-order",
+        "impact": "moderate",
+        "nodes": 1
+      },
+      {
+        "id": "label-content-name-mismatch",
+        "impact": "serious",
+        "nodes": 8
+      },
+      {
+        "id": "nested-interactive",
+        "impact": "serious",
+        "nodes": 10
+      },
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 8
+      }
+    ],
+    "console": []
+  },
+  "session-list.phone.light.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 7
+      },
+      {
+        "id": "heading-order",
+        "impact": "moderate",
+        "nodes": 1
+      },
+      {
+        "id": "label-content-name-mismatch",
+        "impact": "serious",
+        "nodes": 8
+      },
+      {
+        "id": "nested-interactive",
+        "impact": "serious",
+        "nodes": 10
+      },
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 8
+      }
+    ],
+    "console": []
+  },
+  "terminal.phone.dark.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "label-content-name-mismatch",
+        "impact": "serious",
+        "nodes": 1
+      },
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 2
+      }
+    ],
+    "console": []
+  },
+  "terminal.phone.light.png": {
+    "status": 200,
+    "overflow": false,
+    "unnamed": 0,
+    "unnamedSample": [],
+    "offscreen": 0,
+    "offscreenSample": [],
+    "axe": [
+      {
+        "id": "label-content-name-mismatch",
+        "impact": "serious",
+        "nodes": 1
+      },
+      {
+        "id": "region",
+        "impact": "moderate",
+        "nodes": 2
+      }
+    ],
+    "console": []
   }
 }
