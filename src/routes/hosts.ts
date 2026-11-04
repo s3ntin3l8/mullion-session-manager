@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
+import { closeAgentChannel } from "./agent-channel.js";
+import { AgentChannelCloseCode, type HostChannelStatus } from "../shared/agent-channel.js";
 import { HOST_EDITABLE_ROLES, type HostEditableRole } from "../shared/constants.js";
 import {
   LOCAL_HOST_ID,
@@ -108,6 +110,15 @@ function isValidHttpUrl(value: string): boolean {
 // A changed baseUrl/token means the old health verdict no longer means
 // anything (it was measured against a different URL/agent). Shared by PATCH
 // and rotate-token so the two cannot drift.
+function channelStatus(app: FastifyInstance, hostId: string): HostChannelStatus {
+  const channel = app.agentChannels?.get(hostId);
+  return {
+    ready: channel !== undefined,
+    connectedAt: channel ? new Date(channel.connectedAt).toISOString() : null,
+    carriedOperations: channel ? [...channel.carriedOperations] : [],
+  };
+}
+
 function onHostCredentialsChanged(app: FastifyInstance, id: string): void {
   app.hostHeartbeatTracker?.invalidateHost(id);
   // Issue #1721 — same staleness reasoning for the CAPACITY cache:
@@ -204,6 +215,9 @@ export async function hostsRoute(app: FastifyInstance) {
         agents: agentEntry?.agents ?? null,
         capabilities: agentEntry?.capabilities ?? null,
         protocol: protocolStatus(agentEntry?.protocol),
+        // Issue #2450 — channel readiness, separate from pairing/credential
+        // state (hasMachineIdentity / machineIdentityRevoked above).
+        channel: channelStatus(app, host.id),
         mullionVersion:
           host.id === LOCAL_HOST_ID ? appVersion : (agentEntry?.mullionVersion ?? null),
         // The LOCAL host's platform is this process's own — the row simply
@@ -327,6 +341,8 @@ export async function hostsRoute(app: FastifyInstance) {
     if (id === LOCAL_HOST_ID) return reply.badRequest("the local host has no machine identity");
     if (!revokeMachineIdentity(app, id)) return reply.notFound();
     onHostCredentialsChanged(app, id);
+    // A revoked identity must stop being served now, not at the next redial.
+    closeAgentChannel(app, id, AgentChannelCloseCode.Revoked);
     reply.code(204);
   });
 
@@ -664,6 +680,7 @@ export async function hostsRoute(app: FastifyInstance) {
 
       try {
         deleteHost(app, id, { cascade });
+        closeAgentChannel(app, id, AgentChannelCloseCode.Revoked);
       } catch (err) {
         if (err instanceof UnknownHostError) return reply.notFound();
         if (err instanceof HostHasProjectsError) {

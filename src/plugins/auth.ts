@@ -92,6 +92,10 @@ function isProtectedPath(pathname: string): boolean {
   // deliberately NOT exempted here — that's a Settings-side admin action
   // and stays behind the normal gate, matching POST /api/hosts.
   if (pathname === "/ws/agent-bridge") return false;
+  // Issue #2450 — an execution agent's outbound channel
+  // (routes/agent-channel.ts). Authenticated by the agent's machine
+  // credential in the connection's first frame, never MULLION_AUTH_TOKEN.
+  if (pathname === "/ws/agent-channel") return false;
   // Round 3 (session renewal) — same exemption, same reasoning, for the
   // helper's periodic credential-renewal call: it presents its own current
   // session id as proof of identity (routes/agent-bridge.ts's

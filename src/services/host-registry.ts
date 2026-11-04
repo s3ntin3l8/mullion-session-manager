@@ -718,6 +718,36 @@ export function renewMachineCredential(
   return { ...issueSession(app, hostId), machineCredential: credential };
 }
 
+export type MachineCredentialCheck = "ok" | "revoked" | "invalid";
+
+/**
+ * Issue #2450 — read-only check of a presented machine credential, for the
+ * outbound agent channel's handshake. Unlike renewMachineCredential it never
+ * rotates or slides anything: a connection that drops and redials must not
+ * churn the credential. Accepts the current credential and a still-graced
+ * previous one; "revoked" is reported separately so the agent can stop
+ * retrying a dead identity at full rate.
+ */
+export function checkMachineCredential(
+  app: FastifyInstance,
+  hostId: string,
+  presented: string,
+): MachineCredentialCheck {
+  const row = getHostRow(app, hostId);
+  if (!row || row.id === LOCAL_HOST_ID) return "invalid";
+  if (row.machineCredentialRevokedAt) return "revoked";
+  if (!row.machineCredentialEnc) return "invalid";
+  if (!row.machineCredentialExpiresAt || row.machineCredentialExpiresAt.getTime() <= Date.now()) {
+    return "invalid";
+  }
+  const isCurrent = safeMatch(app, presented, row.machineCredentialEnc);
+  const prevLive =
+    row.machineCredentialRotatedAt !== null &&
+    Date.now() - row.machineCredentialRotatedAt.getTime() < MACHINE_CREDENTIAL_GRACE_MS;
+  const isPrev = safeMatch(app, presented, prevLive ? row.machineCredentialPrevEnc : null);
+  return isCurrent || isPrev ? "ok" : "invalid";
+}
+
 /**
  * Issue #2568 — final revocation of a host's machine identity. Drops the
  * credential, its grace copy and the live session, and marks the row so the

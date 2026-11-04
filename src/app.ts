@@ -66,6 +66,9 @@ import { internalRoutes } from "./routes/internal.js";
 import { hostsRoute } from "./routes/hosts.js";
 import { enrollmentRoute } from "./routes/enrollment.js";
 import { agentBridgeRoute } from "./routes/agent-bridge.js";
+import { agentChannelRoute } from "./routes/agent-channel.js";
+import { agentChannelPlugin } from "./plugins/agent-channel.js";
+import { agentChannelClientPlugin } from "./plugins/agent-channel-client.js";
 import { agentBridgePlugin } from "./plugins/agent-bridge.js";
 import { sshAgentFanoutPlugin } from "./plugins/ssh-agent-fanout.js";
 import { integrationsRoute } from "./routes/integrations.js";
@@ -434,6 +437,7 @@ export async function buildApp() {
     // and MULLION_ENROLLMENT_TOKEN are set — a manual-token-only agent is
     // completely unaffected.
     await app.register(agentEnrollmentPlugin);
+    await app.register(agentChannelClientPlugin);
     // Before internalRoutes: decorates app.requestNonceStore, which
     // internalRoutes' own onRequest/preValidation hooks use to reject a
     // replayed signed request (issue #249 / roadmap 7.5). Inert (no store,
@@ -593,6 +597,8 @@ export async function buildApp() {
   await app.register(sshAgentFanoutPlugin);
   await app.register(controlRelayFanoutPlugin);
   await app.register(agentBridgeRoute);
+  await app.register(agentChannelPlugin);
+  await app.register(agentChannelRoute);
   await app.register(integrationsRoute);
   await app.register(webhookRoutes);
   await app.register(previewTargetsRoute);
