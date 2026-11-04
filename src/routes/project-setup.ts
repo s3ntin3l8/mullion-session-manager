@@ -61,6 +61,7 @@ import {
   getGenerateJob,
   getActiveGenerateJob,
   getInFlightGenerateJob,
+  cancelGenerateJob,
   sweepExpiredGenerateJobs,
   deleteGenerateJobByPreviewId,
   type GenerateJob,
@@ -939,6 +940,7 @@ async function executeScaffoldGeneration(
   projectId: number,
   prepared: PreparedScaffoldGeneration,
   onPhase?: (phase: RunningGenerateJobPhase) => void,
+  signal?: AbortSignal,
 ): Promise<GenerateJobOutcome> {
   const {
     options,
@@ -963,6 +965,7 @@ async function executeScaffoldGeneration(
       cwd: project.cwd,
       slug: options.slug,
       agentCommand,
+      signal,
       seed: {
         skill: readProjectSkill(app.db, project.id),
         reviewerAgent: readProjectReviewerAgent(app.db, project.id),
@@ -1261,8 +1264,8 @@ export async function projectSetupRoute(app: FastifyInstance) {
         agent: prepared.prepared.agentCommand,
         mode: prepared.prepared.existingInstructions,
         log: app.log,
-        run: ({ setPhase }) =>
-          executeScaffoldGeneration(app, project, projectId, prepared.prepared, setPhase),
+        run: ({ setPhase, signal }) =>
+          executeScaffoldGeneration(app, project, projectId, prepared.prepared, setPhase, signal),
       });
       return reply.code(202).send({ jobId: job.id });
     },
@@ -1281,6 +1284,21 @@ export async function projectSetupRoute(app: FastifyInstance) {
       const job = getGenerateJob(request.params.jobId);
       if (!job || job.projectId !== projectId) return reply.notFound();
       return serializeGenerateJob(job);
+    },
+  );
+
+  app.post<{ Params: { id: string; jobId: string } }>(
+    "/api/projects/:id/setup/generate/jobs/:jobId/cancel",
+    GENERATE_POLL_RATE_LIMIT,
+    async (request, reply) => {
+      const projectId = Number(request.params.id);
+      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+      const project = getProjectOr404(projectId);
+      if (!project) return reply.notFound();
+
+      const job = cancelGenerateJob(request.params.jobId, projectId);
+      if (!job) return reply.notFound();
+      return reply.code(202).send(serializeGenerateJob(job));
     },
   );
 

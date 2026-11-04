@@ -10,7 +10,14 @@ import { agentLogLabel, type ScaffoldConflict } from "./scaffold-generate.js";
 
 export const PREVIEW_TTL_MS = 15 * 60 * 1000;
 
-export const GENERATE_JOB_PHASES = ["preparing", "agent", "composing", "done", "failed"] as const;
+export const GENERATE_JOB_PHASES = [
+  "preparing",
+  "agent",
+  "composing",
+  "done",
+  "failed",
+  "cancelled",
+] as const;
 export type GenerateJobPhase = (typeof GENERATE_JOB_PHASES)[number];
 export type RunningGenerateJobPhase = "preparing" | "agent" | "composing";
 
@@ -62,12 +69,15 @@ export type GenerateJobOutcome =
 
 export interface GenerateJobRunnerControls {
   setPhase: (phase: RunningGenerateJobPhase) => void;
+  /** Aborted by `cancelGenerateJob`; the runner passes it to the agent turn. */
+  signal: AbortSignal;
 }
 
 export type GenerateJobLogger = Pick<FastifyBaseLogger, "info"> &
   Partial<Pick<FastifyBaseLogger, "error">>;
 
 const jobsById = new Map<string, GenerateJob>();
+const abortControllers = new Map<string, AbortController>();
 const jobIdByProject = new Map<number, string>();
 
 export function isGenerateJobRunning(job: GenerateJob): boolean {
@@ -99,7 +109,7 @@ function logJobFinished(
   const agent = agentLogLabel(job.agent);
   const sandboxed = outcome.ok ? Boolean(outcome.response.sandboxed) : false;
   const durationMs = Math.max(0, finishedAt - job.startedAt);
-  const outcomeLabel = outcome.ok ? "done" : "failed";
+  const outcomeLabel = job.phase === "cancelled" ? "cancelled" : outcome.ok ? "done" : "failed";
   log.info(
     {
       mode,
@@ -114,6 +124,7 @@ function logJobFinished(
 
 function removeJob(job: GenerateJob): void {
   jobsById.delete(job.id);
+  abortControllers.delete(job.id);
   if (jobIdByProject.get(job.projectId) === job.id) {
     jobIdByProject.delete(job.projectId);
   }
@@ -165,6 +176,7 @@ export function getInFlightGenerateJob(projectId: number, now = Date.now()): Gen
 
 export function clearGenerateJobsForTests(): void {
   jobsById.clear();
+  abortControllers.clear();
   jobIdByProject.clear();
 }
 
@@ -180,6 +192,7 @@ async function runGenerateJob(
         job.phase = phase;
       }
     },
+    signal: (abortControllers.get(job.id) ?? new AbortController()).signal,
   };
   // Yield a microtask so callers inspecting the job immediately after start
   // observe the initial `preparing` phase before `run` transitions to `agent`.
@@ -194,6 +207,13 @@ async function runGenerateJob(
       message: err instanceof Error ? err.message : String(err),
     };
   }
+  abortControllers.delete(job.id);
+  // `cancelGenerateJob` already recorded the job as cancelled; the aborted
+  // turn's rejection (or a result that raced in) must not overwrite it.
+  if (job.phase === "cancelled") {
+    logJobFinished(log, job, job.finishedAt ?? now(), outcome);
+    return;
+  }
   const finishedAt = now();
   job.finishedAt = finishedAt;
   if (outcome.ok) {
@@ -204,6 +224,22 @@ async function runGenerateJob(
     job.error = { status: outcome.status, message: outcome.message };
   }
   logJobFinished(log, job, finishedAt, outcome);
+}
+
+/** Cancels a running job: aborts its agent turn and records it as
+ * `cancelled` (not `failed`). Returns false when the job is unknown, belongs to
+ * another project, or has already finished. */
+export function cancelGenerateJob(
+  jobId: string,
+  projectId: number,
+  now = Date.now(),
+): GenerateJob | null {
+  const job = jobsById.get(jobId);
+  if (!job || job.projectId !== projectId || !isGenerateJobRunning(job)) return null;
+  job.phase = "cancelled";
+  job.finishedAt = now;
+  abortControllers.get(jobId)?.abort();
+  return job;
 }
 
 /** Starts a background generate job for `projectId`, or attaches to the
@@ -240,6 +276,7 @@ export function startGenerateJob(opts: {
     startedAt: now(),
   };
   jobsById.set(job.id, job);
+  abortControllers.set(job.id, new AbortController());
   jobIdByProject.set(opts.projectId, job.id);
 
   void runGenerateJob(job, opts.run, opts.log, now).catch((err) => {

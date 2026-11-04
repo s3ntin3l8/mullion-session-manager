@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   PREVIEW_TTL_MS,
   startGenerateJob,
+  cancelGenerateJob,
   getGenerateJob,
   getActiveGenerateJob,
   getInFlightGenerateJob,
@@ -309,5 +310,31 @@ describe("scaffold-generate-jobs registry", () => {
     await Promise.resolve();
     expect(error).toHaveBeenCalledTimes(1);
     expect(error.mock.calls[0]?.[1]).toBe("[scaffold-generate] generation job runner crashed");
+  });
+
+  it("cancelGenerateJob aborts the runner's signal and keeps the job cancelled, not failed", async () => {
+    let controls: GenerateJobRunnerControls | undefined;
+    const { job } = startGenerateJob({
+      projectId: 7,
+      slug: "demo",
+      agent: "claude",
+      mode: "keep",
+      run: (c) => {
+        controls = c;
+        return new Promise((_res, rej) =>
+          c.signal.addEventListener("abort", () => rej(new Error("aborted"))),
+        );
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(cancelGenerateJob(job.id, 8)).toBeNull();
+    expect(cancelGenerateJob(job.id, 7)?.phase).toBe("cancelled");
+    expect(controls?.signal.aborted).toBe(true);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(getGenerateJob(job.id)).toMatchObject({ phase: "cancelled" });
+    expect(getGenerateJob(job.id)?.error).toBeUndefined();
+    expect(getInFlightGenerateJob(7)).toBeNull();
+    expect(cancelGenerateJob(job.id, 7)).toBeNull();
   });
 });

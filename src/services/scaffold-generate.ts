@@ -980,6 +980,9 @@ export interface SpawnGenerationTurnOptions {
   cwd: string;
   prompt: string;
   timeoutMs: number;
+  /** Issue #2584 — aborting terminates the agent child (execFile kills it and
+   * the callback rejects), so a cancelled job does not leave its turn running. */
+  signal?: AbortSignal;
   /** Issue #1133 — whether bwrap sandboxing may be applied at all, from
    * `MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED` on whichever host actually
    * spawns this turn. Optional and defaults to `true` (sandboxing stays
@@ -1817,6 +1820,7 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
   cwd,
   prompt,
   timeoutMs,
+  signal,
   sandbox,
 }) => {
   const spawnCwd = path.resolve(cwd);
@@ -1957,6 +1961,7 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
     env: sandboxUsable ? turnEnv(gitEnv()) : gitEnv(),
     timeout: timeoutMs,
     maxBuffer: 16 * 1024 * 1024,
+    ...(signal ? { signal } : {}),
   };
   return new Promise<string>((resolve, reject) => {
     const child = execFile(invocation.bin, invocation.args, execOptions, (err, stdout, stderr) => {
@@ -2082,6 +2087,8 @@ export interface RunGenerationTurnInScratchWorktreeOptions {
   agentCommand: string;
   prompt: string;
   timeoutMs: number;
+  /** Issue #2584 — forwarded to the spawn; abort kills the agent child. */
+  signal?: AbortSignal;
   /** Issue #1133 — forwarded verbatim to `spawn`'s own `sandbox` option;
    * see `SpawnGenerationTurnOptions.sandbox`'s doc comment. Each caller
    * (the primary for a LOCAL_HOST_ID project, `/internal/run-generation-turn`'s
@@ -2167,6 +2174,7 @@ export async function runGenerationTurnInScratchWorktree(
       cwd: worktreePath,
       prompt: opts.prompt,
       timeoutMs: opts.timeoutMs,
+      signal: opts.signal,
       sandbox: opts.sandbox,
     });
   } finally {
@@ -2209,6 +2217,10 @@ export interface GenerateScaffoldContentOptions {
    * paragraph). Requires a non-"keep" `existingInstructions`. */
   excludeSkillAndReviewer?: boolean;
   timeoutMs?: number;
+  /** Issue #2584 — aborts the turn (LOCAL_HOST_ID only: a remote agent's
+   * `/internal/run-generation-turn` request is not cancellable yet, so a
+   * cancelled remote job is abandoned rather than killed). */
+  signal?: AbortSignal;
   /** Issue #1133 — LOCAL_HOST_ID only. The route resolves this from ITS
    * OWN `app.config.MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED` and passes
    * it in (`opts.app` here is only ever used for `resolveHostBaseRef`/
@@ -2282,6 +2294,7 @@ export async function generateScaffoldContent(
       agentCommand: opts.agentCommand,
       prompt,
       timeoutMs,
+      signal: opts.signal,
       sandbox: opts.sandbox,
       spawn: opts.spawn,
     });

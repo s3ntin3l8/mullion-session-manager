@@ -31,7 +31,8 @@ export interface ScaffoldConflict {
 
 /** The phases a background generation job moves through — mirrors
  * src/services/scaffold-generate-jobs.ts's GENERATE_JOB_PHASES 1:1. */
-export type ScaffoldGenerateJobPhase = "preparing" | "agent" | "composing" | "done" | "failed";
+export type ScaffoldGenerateJobPhase =
+  "preparing" | "agent" | "composing" | "done" | "failed" | "cancelled";
 
 /** What a finished generation job produced: the same body the synchronous
  * /setup/generate returns, so a job's result can become the panel's preview
@@ -371,6 +372,14 @@ export const projectsApi = {
   getGenerateJob: (projectId: number, jobId: string) =>
     request<ScaffoldGenerateJob>(
       `/api/projects/${projectId}/setup/generate/jobs/${encodeURIComponent(jobId)}`,
+    ),
+
+  // Stops a running job's agent turn; the server records it as cancelled.
+  // 404 when the job is unknown or has already finished.
+  cancelGenerateJob: (projectId: number, jobId: string) =>
+    request<ScaffoldGenerateJob>(
+      `/api/projects/${projectId}/setup/generate/jobs/${encodeURIComponent(jobId)}/cancel`,
+      { method: "POST" },
     ),
 
   // The project's current job, running or finished (undefined/204 when the
