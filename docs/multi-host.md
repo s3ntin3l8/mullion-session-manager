@@ -1771,6 +1771,15 @@ WebSocket. It carries no operations yet; see [agent-channel.md](agent-channel.md
 for the contract. `GET /api/hosts` reports it as `channel`, separate from the
 credential state.
 
+A newer connection for the same host replaces the older one (close code 4001).
+The superseded agent does not fight back: it keeps its backoff curve, reports
+state `superseded` ("superseded by a newer connection") and waits about five
+minutes before redialing. A normal drop after `ready` still restarts the 1 s
+curve, and a revoked identity (4002) still retries every five minutes. When one
+host is superseded twice within 60 s the primary logs a warning naming only the
+host id: two daemons appear to share one machine credential (a cloned VM, a
+restored backup, a duplicated state dir). Give each machine its own enrollment.
+
 ## Current limitations
 
 - Self-registration has no admin-approval queue — any holder of

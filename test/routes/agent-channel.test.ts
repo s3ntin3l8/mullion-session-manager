@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -184,6 +184,20 @@ describe("GET /ws/agent-channel (#2450)", () => {
     expect(current).toBeDefined();
     expect(current).not.toBe(firstEntry);
     expect(second.ws.readyState).toBe(NodeWebSocket.OPEN);
+  });
+
+  it("warns, naming only the host id, when a host is superseded twice within 60s", async () => {
+    const id = enroll();
+    const warn = vi.spyOn(app.log, "warn");
+    await handshake(authFrame(id));
+    await handshake(authFrame(id));
+    const sharedWarnings = () =>
+      warn.mock.calls.filter((c) => String(c[1]).includes("share one machine credential"));
+    expect(sharedWarnings()).toHaveLength(0);
+    await handshake(authFrame(id));
+    expect(sharedWarnings()).toHaveLength(1);
+    expect(JSON.stringify(sharedWarnings()[0])).not.toContain(id.credential);
+    expect(sharedWarnings()[0][0]).toEqual({ hostId: id.hostId });
   });
 
   it("drops the entry when the agent disconnects", async () => {

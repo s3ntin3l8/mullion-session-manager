@@ -46,7 +46,12 @@ redialing does not churn the credential (renewal stays on the HTTP path).
   the older one deterministically: the old socket is closed with code 4001
   (`superseded`) and all its mux channels are closed (in-flight work is
   cancelled) before the new one is registered. The agent does not fight a
-  supersede; it backs off and redials like any drop.
+  supersede: it does not reset its backoff curve and waits about 5 minutes
+  (`AGENT_CHANNEL_SUPERSEDED_RETRY_MS`, +-20% jitter) before redialing, reporting
+  state `superseded` with `lastError` "superseded by a newer connection". Two
+  daemons sharing one credential (a cloned VM, a restored backup) therefore swap
+  the channel at most once per interval instead of looping. The primary logs a
+  warning naming only the host id when one host is superseded twice within 60 s.
 - Per connection: 64 channels, a 16 KiB handshake frame, and an 8 MiB
   `ws.bufferedAmount` ceiling **on both sides**. The mux closes (terminates)
   the connection rather than queue past it (`maxBufferedBytes`).
@@ -56,7 +61,8 @@ redialing does not churn the credential (renewal stays on the HTTP path).
 ## Reconnect
 
 The agent redials with exponential backoff, 1 s to 60 s, +-20% jitter; the
-curve resets after a connection that reached `ready`. A refused identity or
+curve resets after a connection that reached `ready` (but not after a
+supersede, see above). A refused identity or
 protocol (`rejected`) retries every 5 minutes instead. The persisted identity is
 re-read on every attempt, so credential renewal is picked up. No identity
 (legacy agent) means the dialer stays idle and dials nothing; there is no silent
@@ -73,4 +79,4 @@ not stop the daemon, its channel, or running sessions.
 Channel readiness is reported separately from pairing and credential state:
 `GET /api/hosts` returns `channel: {ready, connectedAt, carriedOperations}`
 next to `hasMachineIdentity` / `machineIdentityRevoked`. On the agent,
-`app.agentChannelStatus.state` is `idle | connecting | ready | backoff | rejected`.
+`app.agentChannelStatus.state` is `idle | connecting | ready | backoff | rejected | superseded`.
