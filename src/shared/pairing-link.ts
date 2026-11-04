@@ -17,9 +17,32 @@ export function buildPairingLink({ url, code }: PairingLink): string {
 }
 
 /**
+ * Normalizes an http(s) base URL to its bare origin (`scheme://host[:port]`).
+ * Null for anything else: another scheme, embedded userinfo (a link must never
+ * smuggle credentials to the Helper), or a malformed URL. Any path, query or
+ * fragment is dropped.
+ */
+export function normalizePairingOrigin(value: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(value);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+  if (u.username !== "" || u.password !== "") return null;
+  return u.origin;
+}
+
+/**
  * Parses a pairing link. Returns null for anything malformed: wrong scheme or
- * action, a missing or non-http(s) url, a code that is not 64 lowercase hex
- * characters, or unexpected extra parameters (a link must carry nothing else).
+ * action, a missing or non-http(s) url, a url carrying userinfo, a code that
+ * is not 64 lowercase hex characters, or unexpected extra parameters (a link
+ * must carry nothing else). `url` in the result is the NORMALIZED origin.
+ *
+ * This is the REFERENCE for the Helper's own link parser (the Helper is a
+ * separate program and must implement the same rules). The server never parses
+ * a link in production: the dashboard only builds, displays and copies it.
  */
 export function parsePairingLink(link: string): PairingLink | null {
   let parsed: URL;
@@ -34,11 +57,7 @@ export function parsePairingLink(link: string): PairingLink | null {
   const url = parsed.searchParams.get("url");
   const code = parsed.searchParams.get("code");
   if (!url || !code || !PAIRING_CODE_PATTERN.test(code)) return null;
-  try {
-    const u = new URL(url);
-    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
-  } catch {
-    return null;
-  }
-  return { url, code };
+  const origin = normalizePairingOrigin(url);
+  if (origin === null) return null;
+  return { url: origin, code };
 }

@@ -3,6 +3,8 @@ import crypto from "node:crypto";
 import { eq, and, isNotNull, isNull, ne } from "drizzle-orm";
 import { hostPairings, hosts, projects, sessions } from "../db/schema.js";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
+// Used only inside listHosts (call time), so the import cycle with host-pairing is inert.
+import { HOST_PAIRING_RETRY_WINDOW_MS } from "./host-pairing.js";
 // LOCAL_HOST_ID now physically lives in src/shared/constants.ts
 // (re-exported by the frontend too, from the same file — see
 // frontend/src/api.ts's own re-export). Re-exported below so every existing
@@ -55,6 +57,11 @@ export interface HostSummary {
   // enrollment or a manual add). Set by listHosts; pairing success is separate
   // from transport reachability, which the heartbeat reports.
   paired: boolean;
+  // Issue #2597 — paired, but the Helper never took delivery: the retry window
+  // has passed, the credential was never renewed and no channel ever
+  // connected. Distinct from a healthy outbound-only host (which connects a
+  // channel). Set by listHosts.
+  unclaimed: boolean;
   // baseUrl is null for "local" and for a "manual" host added without one
   // (Settings -> Add host, token minted by the primary) that is still
   // waiting for its agent: claimHost fills it in from the agent's own
@@ -119,23 +126,46 @@ function toSummary(row: HostRow): HostSummary {
     hasMachineIdentity: row.machineCredentialEnc !== null,
     machineIdentityRevoked: row.machineCredentialRevokedAt !== null,
     paired: false,
+    unclaimed: false,
   };
 }
 
 export function listHosts(app: FastifyInstance): HostSummary[] {
-  const paired = new Set(
+  const redeemedAtByHost = new Map<string, Date | null>(
     app.db
-      .select({ id: hostPairings.redeemedHostId })
+      .select({ id: hostPairings.redeemedHostId, redeemedAt: hostPairings.redeemedAt })
       .from(hostPairings)
       .where(isNotNull(hostPairings.redeemedHostId))
       .all()
-      .map((r) => r.id),
+      .map((r) => [r.id!, r.redeemedAt] as const),
   );
+  const retryCutoff = Date.now() - HOST_PAIRING_RETRY_WINDOW_MS;
   return app.db
     .select()
     .from(hosts)
     .all()
-    .map((row) => ({ ...toSummary(row), paired: paired.has(row.id) }));
+    .map((row) => {
+      const paired = redeemedAtByHost.has(row.id);
+      const redeemedAt = redeemedAtByHost.get(row.id) ?? null;
+      const unclaimed =
+        paired &&
+        redeemedAt !== null &&
+        redeemedAt.getTime() <= retryCutoff &&
+        row.machineCredentialEnc !== null &&
+        row.machineCredentialRevokedAt === null &&
+        row.machineCredentialRotatedAt === null &&
+        row.channelFirstConnectedAt === null;
+      return { ...toSummary(row), paired, unclaimed };
+    });
+}
+
+/** Records that a host's outbound channel completed its handshake (first time only). */
+export function markChannelConnected(app: FastifyInstance, hostId: string): void {
+  app.db
+    .update(hosts)
+    .set({ channelFirstConnectedAt: new Date() })
+    .where(and(eq(hosts.id, hostId), isNull(hosts.channelFirstConnectedAt)))
+    .run();
 }
 
 function reportedHostname(row: HostRow): string | null {

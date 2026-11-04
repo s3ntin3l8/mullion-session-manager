@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { buildPairingLink, parsePairingLink } from "../../src/shared/pairing-link.js";
+import {
+  buildPairingLink,
+  normalizePairingOrigin,
+  parsePairingLink,
+} from "../../src/shared/pairing-link.js";
 
 const code = "ab".repeat(32);
 
@@ -19,8 +23,30 @@ describe("pairing link (issue #2449)", () => {
     ["missing code", "mullion://pair?url=https%3A%2F%2Fx.test"],
     ["short code", "mullion://pair?url=https%3A%2F%2Fx.test&code=abc"],
     ["non-http url", `mullion://pair?url=ftp%3A%2F%2Fx.test&code=${"ab".repeat(32)}`],
+    [
+      "userinfo",
+      `mullion://pair?url=${encodeURIComponent("https://u:p@x.test")}&code=${"ab".repeat(32)}`,
+    ],
+    [
+      "username only",
+      `mullion://pair?url=${encodeURIComponent("https://u@x.test")}&code=${"ab".repeat(32)}`,
+    ],
     ["extra param", `mullion://pair?url=https%3A%2F%2Fx.test&code=${"ab".repeat(32)}&token=x`],
   ])("rejects %s", (_name, link) => {
     expect(parsePairingLink(link)).toBeNull();
+  });
+
+  it("returns the normalized origin, dropping path, query and fragment", () => {
+    const link = buildPairingLink({ url: "HTTPS://M.Example.com:443/base/?x=1#f", code });
+    expect(parsePairingLink(link)).toEqual({ url: "https://m.example.com", code });
+  });
+});
+
+describe("normalizePairingOrigin (issue #2597)", () => {
+  it("keeps http(s) origins and refuses everything else", () => {
+    expect(normalizePairingOrigin("http://10.0.0.5:4000/x")).toBe("http://10.0.0.5:4000");
+    expect(normalizePairingOrigin("ftp://x.test")).toBeNull();
+    expect(normalizePairingOrigin("https://u:p@x.test")).toBeNull();
+    expect(normalizePairingOrigin("nope")).toBeNull();
   });
 });

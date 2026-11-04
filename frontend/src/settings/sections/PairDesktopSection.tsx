@@ -23,6 +23,7 @@ const PAIRINGS_POLL_MS = 3000;
 const STAGE_COLOR: Record<PairingStage, string> = {
   pending: "var(--y)",
   paired: "var(--y)",
+  unclaimed: "var(--y)",
   connected: "var(--g)",
   expired: "var(--dim)",
   revoked: "var(--dim)",
@@ -169,7 +170,9 @@ export function PairDesktopSection() {
                     ? `code expires ${formatRelativeUntil(Date.parse(p.expires_at))}`
                     : stage === "paired"
                       ? "Identity issued. The primary cannot reach this host yet."
-                      : "Helper connected"
+                      : stage === "unclaimed"
+                        ? "The Helper never picked up its identity. Revoke or remove the host."
+                        : "Helper connected"
                 }
                 trailing={
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

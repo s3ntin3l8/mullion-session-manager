@@ -368,6 +368,23 @@ enabled for the main dashboard — **unless** `PREVIEW_AUTH_REQUIRED=true`
 (issue #383) is also set, which closes this gap in-process instead of at
 the gateway (see point 4's own tradeoffs before relying on that instead).
 
+## Optional: public URL for pairing links (issue #2597)
+
+The one-time pairing link (Settings → Hosts → _Pair a desktop_) embeds the
+primary's address. By default the primary derives it from the request: the
+`Host` header plus the scheme. Behind a reverse proxy that rewrites `Host`, or
+terminates TLS without a correct `X-Forwarded-Proto`, that yields a link the
+desktop Helper cannot use. Set `MULLION_PUBLIC_URL` in `.env` to the address
+the Helper should dial:
+
+```sh
+MULLION_PUBLIC_URL=https://mullion.example.com
+```
+
+It must be a bare http(s) origin (`scheme://host[:port]`): no path, query,
+fragment or credentials, or the primary refuses to boot. Unset keeps the
+request-derived behavior.
+
 ## Optional: SSH-agent bridge behind a forwardAuth gateway (issues #820, #1072)
 
 See [`docs/ssh-agent.md`](../docs/ssh-agent.md) for the feature itself; this

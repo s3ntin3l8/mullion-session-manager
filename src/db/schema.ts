@@ -109,6 +109,10 @@ export const hosts = sqliteTable("hosts", {
   // claimed or deduped onto, so only a fresh enrollment (the operator
   // clearing the agent's state file) yields a new identity.
   machineCredentialRevokedAt: integer("machine_credential_revoked_at", { mode: "timestamp" }),
+  // Issue #2597 — when this host's outbound agent channel first completed its
+  // handshake. With machineCredentialRotatedAt it tells a paired host that
+  // never took delivery of its credential from a healthy outbound-only one.
+  channelFirstConnectedAt: integer("channel_first_connected_at", { mode: "timestamp" }),
   createdAt: integer("created_at", { mode: "timestamp" })
     .notNull()
     .$defaultFn(() => new Date()),
@@ -124,9 +128,10 @@ export const hosts = sqliteTable("hosts", {
 // audit trail of how it was paired.
 export const hostPairings = sqliteTable("host_pairings", {
   id: text("id").primaryKey(),
-  // Encrypted at rest; nulled once redeemed-and-past-retry-window, expired or
-  // revoked so a dead code leaves no secret behind.
-  codeEnc: text("code_enc"),
+  // SHA-256 (hex) of the code; the code itself is never stored, so redeem is
+  // an indexed lookup instead of decrypting every candidate. Nulled once
+  // redeemed-and-past-retry-window, expired or revoked.
+  codeHash: text("code_hash"),
   expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
   // Free-form operator label ("Mac mini"), informational.
   label: text("label"),
