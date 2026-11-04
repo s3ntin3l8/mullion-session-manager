@@ -103,7 +103,7 @@ export async function viaRemote<T>(
   fn: (client: ReturnType<typeof getRemoteHostClient>) => Promise<T>,
   // The negotiated operation `fn` calls (issue #2569): checked before the
   // request, and what a 404 is reported as lacking.
-  op = "this operation",
+  op: string,
 ): Promise<HostGitResult<T>> {
   const gate = await gateOperation(app, hostId, op);
   if (!gate.ok) {

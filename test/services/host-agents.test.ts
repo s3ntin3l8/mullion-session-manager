@@ -63,6 +63,9 @@ function agent(bin: string, available: boolean, kind: "agent" | "shell" = "agent
   };
 }
 
+// This suite tests the unread/legacy behaviour itself (test/helpers/default-host-protocol.ts).
+process.env.MULLION_TEST_REAL_PROTOCOL = "1";
+
 function fakeApp(tracker: InstanceType<typeof HostAgentTracker> | undefined) {
   return {
     hostAgentTracker: tracker,

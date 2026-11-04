@@ -293,11 +293,12 @@ export function unsupportedOperation(hostId: string, op: string): UnsupportedGat
  * Gates an operation on the host's negotiated support. A host whose protocol
  * has not been read yet is read as the legacy baseline (issue #2596); callers
  * that can wait use `gateOperation`, which makes one bounded read first. The
- * local host always passes; a host outside the primary's protocol range fails
+ * local host always passes (as does an app with no tracker, i.e. no negotiation
+ * machinery at all); a host outside the primary's protocol range fails
  * every operation.
  */
 export function requireOperation(app: FastifyInstance, hostId: string, op: string): OperationGate {
-  if (hostId === LOCAL_HOST_ID) return { ok: true };
+  if (hostId === LOCAL_HOST_ID || !app.hostAgentTracker) return { ok: true };
   const protocol = effectiveProtocol(app, hostId);
   // "updates" is the remedy for an incompatible protocol, so it is never
   // blocked by one (only by the agent not having the route at all).
@@ -322,7 +323,9 @@ export function requireLaunchOptions(
   hostId: string,
   required: readonly string[],
 ): OperationGate {
-  if (required.length === 0 || hostId === LOCAL_HOST_ID) return { ok: true };
+  if (required.length === 0 || hostId === LOCAL_HOST_ID || !app.hostAgentTracker) {
+    return { ok: true };
+  }
   const protocol = effectiveProtocol(app, hostId);
   const missing = required.filter((opt) => !protocol.launchOptions.includes(opt));
   if (missing.length === 0) return { ok: true };
@@ -390,6 +393,7 @@ export function ensureHostProtocol(app: FastifyInstance, hostId: string): Promis
 
 /** `ensureHostProtocol` for every registered remote host, before a placement reads them. */
 export async function ensureRemoteHostProtocols(app: FastifyInstance): Promise<void> {
+  if (!app.db || !app.hostAgentTracker) return;
   const ids = app.db
     .select({ id: hosts.id })
     .from(hosts)

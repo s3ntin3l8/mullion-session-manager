@@ -779,7 +779,12 @@ export async function discoverCommittedScaffoldOnHost(
   if (hostId === LOCAL_HOST_ID) {
     return discoverCommittedScaffold(scaffoldCwd);
   }
-  const result = await viaRemote(app, hostId, (client) => client.scaffoldScan(scaffoldCwd));
+  const result = await viaRemote(
+    app,
+    hostId,
+    (client) => client.scaffoldScan(scaffoldCwd),
+    "scaffold",
+  );
   if (result.ok) return result.value;
   // Hermes review round 2, PR #1150 — a transient blip (host unreachable)
   // or a version-skewed agent build predating this route (unsupported)

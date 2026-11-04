@@ -2314,15 +2314,19 @@ export async function generateScaffoldContent(
     // `"unsupported-agent"` outcome below, carried inside a successful
     // `ok: true` response instead — see that type's own doc comment for
     // why).
-    const result = await viaRemote(opts.app, opts.hostId, (client) =>
-      client.resolveRunGenerationTurn(
-        opts.cwd,
-        opts.slug,
-        baseRef,
-        opts.agentCommand,
-        prompt,
-        timeoutMs,
-      ),
+    const result = await viaRemote(
+      opts.app,
+      opts.hostId,
+      (client) =>
+        client.resolveRunGenerationTurn(
+          opts.cwd,
+          opts.slug,
+          baseRef,
+          opts.agentCommand,
+          prompt,
+          timeoutMs,
+        ),
+      "scaffold",
     );
     if (!result.ok) {
       throw new GenerationSpawnError(
