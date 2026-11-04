@@ -272,6 +272,8 @@ import { githubApi } from "./github.js";
 import { gitApi } from "./git.js";
 import { hostsApi } from "./hosts.js";
 import { bridgesApi } from "./bridges.js";
+import { hostPairingsApi } from "./hostPairings.js";
+export type { HostPairingCreated, HostPairingState, HostPairingSummary } from "./hostPairings.js";
 import { workspacesApi } from "./workspaces.js";
 import { settingsApi } from "./settings.js";
 import { dockerApi } from "./docker.js";
@@ -297,6 +299,7 @@ export const api = {
   ...gitApi,
   ...hostsApi,
   ...bridgesApi,
+  ...hostPairingsApi,
   ...workspacesApi,
   ...settingsApi,
   ...dockerApi,

@@ -487,6 +487,9 @@ export interface Host {
   // revoked it. Never the credential. Absent from an older primary.
   hasMachineIdentity?: boolean;
   machineIdentityRevoked?: boolean;
+  // Issue #2449 — created by redeeming a one-time pairing code. Absent from an
+  // older primary.
+  paired?: boolean;
   // Issue #2582 — ids of older, offline, session-free enrolled rows this host
   // probably replaced. Absent from an older primary.
   possibleDuplicateOf?: string[];
