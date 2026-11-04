@@ -1367,6 +1367,15 @@ each caller deriving its own. The rules:
 - **Without a `sessionId`** a request uses the explicit project default: the
   project's host and `projects.cwd`.
 
+The agent's worktree list is cached for **10 seconds** per (host, checkout),
+so a file tree or editor asking about the same session on every request does
+not ask the agent every request. The cache never answers a miss: a cwd the
+cached list does not mention is re-checked against the agent before it is
+refused, so a worktree created seconds ago is still accepted. The listing is
+dropped when Mullion itself changes a worktree on that host, and when the
+host's address or credentials change (a listing fetched under the old ones may
+come from a different agent). Failures are not cached.
+
 Errors map to HTTP as `invalid_context` (including an agent 4xx about the
 session's directory, e.g. outside its `PROJECTS_ROOTS`) → 400,
 `host_unavailable` (host not registered, no address, unreachable, rejecting our

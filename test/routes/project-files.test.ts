@@ -948,12 +948,14 @@ describe("project-files routes", () => {
       });
       const url = `/api/projects/${projectId}/file?path=.env&sessionId=${sessionId}`;
       expect((await primary.inject({ method: "GET", url })).json().content).toBe("WT=1\n");
-      spy.mockRejectedValue(new Error("down"));
-      expect((await primary.inject({ method: "GET", url })).statusCode).toBe(503);
       spy.mockRestore();
+      // The host goes away entirely. The resolver may still have the
+      // worktree listing cached (#2583), but the file read itself reaches
+      // the agent, so the request still fails with 503.
+      await agentApp.close();
+      expect((await primary.inject({ method: "GET", url })).statusCode).toBe(503);
       fs.rmSync(sibling, { recursive: true, force: true });
       await primary.close();
-      await agentApp.close();
     });
 
     it("round-trips mkdir/rename/delete through the agent", async () => {
