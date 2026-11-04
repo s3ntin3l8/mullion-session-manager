@@ -452,6 +452,8 @@ describe("a session can be targeted at a host or platform (issue #1951)", () => 
       vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
         ok: false,
         reason: "unsupported",
+        updateHint: "update the host",
+        detail: "host does not support git",
       });
       const res = await createSessionRecord(app, {
         projectId,

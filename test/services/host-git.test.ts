@@ -124,7 +124,11 @@ describe("host-git.ts", () => {
 
       const result = await resolveHostGitStatus(fakeApp, "remote-host-1", "/remote/worktree");
 
-      expect(result).toEqual({ ok: false, reason: "unsupported" });
+      expect(result).toMatchObject({
+        ok: false,
+        reason: "unsupported",
+        updateHint: expect.stringContaining("Update"),
+      });
     });
 
     it("remote: HostUnreachableError maps to reason 'unreachable' with a detail", async () => {
@@ -277,7 +281,11 @@ describe("host-git.ts", () => {
         "ghp_x",
       );
 
-      expect(result).toEqual({ ok: false, reason: "unsupported" });
+      expect(result).toMatchObject({
+        ok: false,
+        reason: "unsupported",
+        updateHint: expect.stringContaining("Update"),
+      });
     });
   });
 
@@ -386,7 +394,11 @@ describe("host-git.ts", () => {
 
       const result = await commitHostWipChanges(fakeApp, "remote-host-1", "/remote/worktree");
 
-      expect(result).toEqual({ ok: false, reason: "unsupported" });
+      expect(result).toMatchObject({
+        ok: false,
+        reason: "unsupported",
+        updateHint: expect.stringContaining("Update"),
+      });
     });
   });
 
@@ -454,7 +466,11 @@ describe("host-git.ts", () => {
         hostId: "remote-host-1",
       });
 
-      expect(result).toEqual({ ok: false, reason: "unsupported" });
+      expect(result).toMatchObject({
+        ok: false,
+        reason: "unsupported",
+        updateHint: expect.stringContaining("Update"),
+      });
     });
   });
 

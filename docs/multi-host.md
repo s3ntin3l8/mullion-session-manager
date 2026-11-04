@@ -1272,13 +1272,48 @@ they do not know. So the agent also answers a handshake,
   existing epoch guard. A failed read keeps the previous reading; `null` means
   not read yet.
 - **Helpers.** `hostSupports(app, hostId, op)` and `hostLaunchOptions(app,
-hostId)` (`src/services/host-agents.ts`). An unnegotiated host supports
-  nothing; the local host is this build. **Nothing is gated on them yet** —
-  launches and operations are a follow-up — only the Hosts API uses them.
+hostId)` (`src/services/host-agents.ts`) read the cache; an unnegotiated host
+  supports nothing by them, and the local host is this build. The gates below
+  use `requireOperation` and `requireLaunchOptions`, which instead **fail open
+  on a host whose protocol has not been read yet** (the short window between
+  registering and the first handshake) and read a legacy agent through the
+  baseline.
 - **Hosts API / UI.** `GET /api/hosts` adds `protocol: { protocolVersion,
 incompatible, missingOperations, legacy } | null`; Settings → Hosts shows the
   version, "incompatible" and the missing operations. The remedy is the row's
   existing **Update** action.
+
+### Gating launches and operations on negotiated support
+
+Issue [#2569](https://github.com/s3ntin3l8/mullion-session-manager/issues/2569)
+— version skew is no longer handled by scattered 404 checks.
+
+- **`requireOperation(app, hostId, op)`** returns `{ok: true}` or `{ok: false,
+code: "unsupported", missing, updateHint, message}`. The three former ad-hoc 404
+  mappings use it: `viaRemote` in `host-git.ts` (git → `reason:
+"unsupported"`, now also carrying `updateHint` and a `detail`), the remote
+  session control relay in `session-backend.ts` (still HTTP 501), and the
+  update probe in `routes/hosts.ts` (still `updatable: false`). A 404 from a
+  host whose protocol was never read maps to the same refusal, so existing
+  status codes are unchanged. An incompatible protocol fails every operation
+  except `updates`, which is the remedy.
+- **Launch options.** Before any worktree or process exists,
+  `createSessionRecord` refuses a launch whose chosen host does not list a
+  field the launch needs (`409`, reason `host-unsupported`; the text names the
+  host and the option and points at the host's **Update** action). Required
+  means a field that would change behaviour: `model`, `smallModel`,
+  `skipPermissions: true`, `initialPrompt`/`seedPrompt`, `env`, `taskId`,
+  `gitIdentity`, `githubAuth`, an injection flag set to `false`, and the
+  injected briefing/skill/conventions text (`launch-requirements.ts`). Settings
+  and caller-set fields are checked before the worktree is cut; the
+  DB-held briefing/skill and the minted GitHub credential are only known later
+  and are checked on the full spawn body, unwinding like a spawn failure.
+- **Auto and targeted placement** skip a host known to lack a required launch
+  option or operation, and name the skipped host in the recorded placement
+  reason (`skipped <host>: host does not support the model launch option`).
+  A host whose protocol is unknown stays eligible, like an unknown CLI list.
+- **UI.** Settings → Hosts shows each host's missing operations and launch
+  options; the remedy is the row's existing **Update** action.
 
 ## Capacity reporting
 

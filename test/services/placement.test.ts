@@ -646,3 +646,53 @@ describe("project steering flags (issue #2241)", () => {
     expect(decision.excluded[0].reason).toBe("project allows only darwin hosts");
   });
 });
+
+describe("negotiated support (issue #2569)", () => {
+  const protocol = (launchOptions: string[], operations = ["sessions", "git-worktrees"]) => ({
+    protocolVersion: 1,
+    legacy: false,
+    operations,
+    launchOptions,
+  });
+
+  it("skips a host known to lack a required launch option and says so in the reason", () => {
+    const decision = chooseHost(
+      [
+        candidate({ hostId: "old", protocol: protocol(["env"]), capacity: capacity(0, 8) }),
+        candidate({
+          hostId: "new",
+          protocol: protocol(["env", "model"]),
+          capacity: capacity(4, 8),
+        }),
+      ],
+      context({ requiredLaunchOptions: ["model"] }),
+    );
+    expect(decision.hostId).toBe("new");
+    expect(decision.excluded).toEqual([
+      { hostId: "old", reason: "host does not support the model launch option (update the host)" },
+    ]);
+    expect(decision.reason).toContain("skipped old: host does not support the model launch option");
+  });
+
+  it("skips a host that lacks a required operation or speaks an incompatible protocol", () => {
+    const decision = chooseHost(
+      [
+        candidate({ hostId: "no-wt", protocol: protocol([], ["sessions"]) }),
+        candidate({ hostId: "future", protocol: { ...protocol([]), protocolVersion: 9 } }),
+        candidate({ hostId: "ok", protocol: protocol([]), capacity: capacity(6, 8) }),
+      ],
+      context({ requiredOperations: ["git-worktrees"] }),
+    );
+    expect(decision.hostId).toBe("ok");
+    expect(decision.excluded.map((e) => e.hostId)).toEqual(["no-wt", "future"]);
+    expect(decision.excluded[0].reason).toContain("git-worktrees operation");
+    expect(decision.excluded[1].reason).toContain("protocol");
+  });
+
+  it("fails open on an un-negotiated host and ignores support when nothing is required", () => {
+    const hosts = [candidate({ hostId: "unknown", protocol: null })];
+    expect(chooseHost(hosts, context({ requiredLaunchOptions: ["model"] })).hostId).toBe("unknown");
+    const legacy = [candidate({ hostId: "legacy", protocol: protocol([]) })];
+    expect(chooseHost(legacy, context()).hostId).toBe("legacy");
+  });
+});

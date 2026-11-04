@@ -107,6 +107,7 @@ describe("HostsSection token rotation", () => {
             protocolVersion: 1,
             incompatible: false,
             missingOperations: [],
+            missingLaunchOptions: [],
             legacy: false,
           },
         }),
@@ -117,6 +118,7 @@ describe("HostsSection token rotation", () => {
             protocolVersion: null,
             incompatible: false,
             missingOperations: ["updates"],
+            missingLaunchOptions: ["model"],
             legacy: true,
           },
         }),
@@ -127,6 +129,7 @@ describe("HostsSection token rotation", () => {
             protocolVersion: 9,
             incompatible: true,
             missingOperations: [],
+            missingLaunchOptions: [],
             legacy: false,
           },
         }),
@@ -136,7 +139,7 @@ describe("HostsSection token rotation", () => {
     render(<HostsSection />);
     expect(screen.getByTestId("host-protocol-ok")).toHaveTextContent("protocol v1");
     expect(screen.getByTestId("host-protocol-old")).toHaveTextContent(
-      "protocol: legacy · missing: updates — update this host",
+      "protocol: legacy · missing: updates — update this host · launch options: model unavailable",
     );
     expect(screen.getByTestId("host-protocol-bad")).toHaveTextContent(
       "protocol v9 · incompatible — update this host",

@@ -170,7 +170,11 @@ describe("agent-bundle-state.ts", () => {
 
       const result = await removeHostBundle(fakeApp, "remote-host-1");
 
-      expect(result).toEqual({ ok: false, reason: "unsupported" });
+      expect(result).toMatchObject({
+        ok: false,
+        reason: "unsupported",
+        updateHint: expect.stringContaining("Update"),
+      });
     });
   });
 });

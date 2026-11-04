@@ -28,6 +28,7 @@ import {
   protocolStatus,
   refreshHostProtocolSoon,
   refreshLocalAgents,
+  requireOperation,
 } from "../services/host-agents.js";
 import { resolveReleaseByTag, UpdateCheckError } from "../services/update-checker.js";
 import type { ReleaseByTagResult } from "../services/update-checker.js";
@@ -479,6 +480,20 @@ export async function hostsRoute(app: FastifyInstance) {
     if (pending) return pending;
     const client = getRemoteHostClient(app, id);
 
+    // The primary's own release, as a host's update row reads when the host
+    // cannot be updated from here (the "updates" operation is not negotiated).
+    const updatesUnavailable = (hostVersion: string) => ({
+      hostVersion,
+      primaryVersion: appVersion,
+      upToDate: hostVersion === appVersion,
+      updatable: false,
+      unavailableReason:
+        "This agent's build predates auto-update — update it by hand once (see deploy/README.md), after which every future update can go through this button.",
+      assetUrl: null,
+      checksumUrl: null,
+      status: { phase: "unavailable" as const },
+    });
+
     let hostVersion: string;
     try {
       hostVersion = (await client.resolveConfig()).version;
@@ -488,28 +503,18 @@ export async function hostsRoute(app: FastifyInstance) {
       return reply.serviceUnavailable(`Host ${id} is unreachable`);
     }
 
+    if (!requireOperation(app, id, "updates").ok) return updatesUnavailable(hostVersion);
+
     let status: UpdateStatus;
     try {
       status = await client.getUpdateStatus();
     } catch (err) {
       // A 404 here specifically means this agent's build predates #647's
-      // /internal/updates/* routes — the same statusCode === 404 "old
-      // agent build" discipline host-git.ts's viaRemote uses, not any
-      // other 4xx (a genuine request failure would be conflated with a
-      // version-skew message that tells the operator to do the wrong
-      // thing).
+      // /internal/updates/* routes (the "updates" operation, issue #2569) —
+      // not any other 4xx, which would be conflated with a version-skew
+      // message that tells the operator to do the wrong thing.
       if (err instanceof HostRequestError && err.statusCode === 404) {
-        return {
-          hostVersion,
-          primaryVersion: appVersion,
-          upToDate: hostVersion === appVersion,
-          updatable: false,
-          unavailableReason:
-            "This agent's build predates auto-update — update it by hand once (see deploy/README.md), after which every future update can go through this button.",
-          assetUrl: null,
-          checksumUrl: null,
-          status: { phase: "unavailable" },
-        };
+        return updatesUnavailable(hostVersion);
       }
       if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
       app.log.warn({ hostId: id, err }, "host unreachable, update status unavailable");

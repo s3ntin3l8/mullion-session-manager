@@ -40,6 +40,9 @@ const {
   refreshHostProtocolSoon,
   refreshLocalAgents,
   refreshRemoteHostAgents,
+  requireLaunchOptions,
+  requireOperation,
+  unsupportedOperation,
 } = await import("../../src/services/host-agents.js");
 const { HostRequestError } = await import("../../src/services/remote-host-client.js");
 const { AGENT_OPERATIONS, LEGACY_BASELINE, PROTOCOL_VERSION } =
@@ -377,5 +380,69 @@ describe("protocol negotiation (issue #2248)", () => {
     expect(tracker.get("mac")?.protocol).toBeNull();
     expect(tracker.isStale("mac", 60_000)).toBe(true);
     await vi.waitFor(() => expect(hostSupports(app, "mac", "browser")).toBe(true));
+  });
+});
+
+describe("requireOperation / requireLaunchOptions (issue #2569)", () => {
+  function appWith(protocol: Record<string, unknown> | null) {
+    const tracker = new HostAgentTracker();
+    tracker.record("peer", {
+      agents: null,
+      capabilities: null,
+      mullionVersion: null,
+      protocol: protocol as never,
+    });
+    return fakeApp(tracker);
+  }
+  const current = {
+    protocolVersion: PROTOCOL_VERSION,
+    legacy: false,
+    operations: ["sessions", "git"],
+    launchOptions: ["env", "model"],
+  };
+
+  it("passes the local host, an un-negotiated host and a supported operation", () => {
+    expect(requireOperation(appWith(null), "local", "browser")).toEqual({ ok: true });
+    expect(requireOperation(appWith(null), "peer", "browser")).toEqual({ ok: true });
+    expect(requireOperation(appWith(current), "peer", "git")).toEqual({ ok: true });
+  });
+
+  it("refuses an operation the host lacks, naming it with the Update hint", () => {
+    const gate = requireOperation(appWith(current), "peer", "browser");
+    expect(gate).toMatchObject({ ok: false, code: "unsupported", missing: ["browser"] });
+    expect(gate.ok === false && gate.updateHint).toMatch(/Update/);
+    expect(gate.ok === false && gate.message).toContain("peer");
+  });
+
+  it("reads a legacy peer through the baseline and refuses every operation on an incompatible one", () => {
+    const old = { ...LEGACY_BASELINE, legacy: true };
+    expect(requireOperation(appWith(old), "peer", "sessions")).toEqual({ ok: true });
+    expect(requireOperation(appWith(old), "peer", "updates")).toMatchObject({ ok: false });
+    const future = { ...current, protocolVersion: PROTOCOL_VERSION + 1 };
+    expect(requireOperation(appWith(future), "peer", "git")).toMatchObject({
+      ok: false,
+      message: expect.stringContaining("incompatible"),
+    });
+    // Update is the remedy for an incompatible protocol, so it is never blocked by one.
+    expect(
+      requireOperation(appWith({ ...future, operations: ["updates"] }), "peer", "updates"),
+    ).toEqual({ ok: true });
+  });
+
+  it("refuses the launch options a host does not list, and only those", () => {
+    const app = appWith(current);
+    expect(requireLaunchOptions(app, "peer", ["env", "model"])).toEqual({ ok: true });
+    expect(requireLaunchOptions(app, "peer", [])).toEqual({ ok: true });
+    const gate = requireLaunchOptions(app, "peer", ["model", "gitIdentity", "githubAuth"]);
+    expect(gate).toMatchObject({ ok: false, missing: ["gitIdentity", "githubAuth"] });
+    expect(requireLaunchOptions(appWith(null), "peer", ["model"])).toEqual({ ok: true });
+    expect(requireLaunchOptions(app, "local", ["model"])).toEqual({ ok: true });
+  });
+
+  it("builds the same refusal a 404 maps to", () => {
+    expect(unsupportedOperation("peer", "git")).toMatchObject({
+      code: "unsupported",
+      missing: ["git"],
+    });
   });
 });

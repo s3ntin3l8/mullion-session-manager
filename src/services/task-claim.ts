@@ -357,6 +357,14 @@ const BLOCKED_HOLD_PREFIX = "Waiting for ";
 // the watcher's display pass keep the stored blockers current in between.
 const BLOCKED_HOLD_RECHECK_MS = 5 * 60 * 1000;
 
+// Issue #2569 — what every Task Master worker launch needs of its host: a
+// worktree and an initial prompt tied to the task. Placement skips a host
+// whose agent is known to lack them; the launch gate refuses the rest.
+const TASK_LAUNCH_NEEDS = {
+  requiredOperations: ["sessions", "git-worktrees"],
+  requiredLaunchOptions: ["initialPrompt", "taskId"],
+} as const;
+
 function blockedHoldDetail(blockedBy: string | null): string {
   const blockers = parseBlockedBy(blockedBy) ?? [];
   const names = blockers.map((b) => (b.number > 0 ? `#${b.number}` : b.title));
@@ -616,6 +624,7 @@ export async function dispatchClaimedTask(
       unattended: true,
       requestedBy: "the task's requirement",
       requiredAgent,
+      ...TASK_LAUNCH_NEEDS,
     });
     if (!targeted.ok && targeted.transient) {
       const requires = `this task requires ${describeTarget(requirement)} (from ${describeRequirementSource(requirement)})`;
@@ -646,6 +655,7 @@ export async function dispatchClaimedTask(
       project: placementProject,
       unattended: true,
       requiredAgent,
+      ...TASK_LAUNCH_NEEDS,
     });
     // Issue #2241 — the project's platform flag leaves no host. Same rule as a
     // directive: hold while a host that satisfies it could come online, fail
@@ -983,6 +993,11 @@ export async function dispatchClaimedTask(
           : "worktree creation failed";
         await release(reason);
         return { ok: false, reason: "worktree-failed", detail: reason };
+      }
+      if (result.reason === "host-unsupported") {
+        // Issue #2569 — nothing was created; say which option the host lacks.
+        await release(result.detail);
+        return { ok: false, reason: "spawn-failed", detail: result.detail };
       }
       await release("session spawn failed");
       return { ok: false, reason: "spawn-failed" };
