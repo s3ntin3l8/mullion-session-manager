@@ -200,10 +200,10 @@ describe("Source Control header", () => {
     renderView();
     await ready();
     await userEvent.click(screen.getByRole("button", { name: /^Pull/ }));
-    await waitFor(() => expect(m.postProjectGitPull).toHaveBeenCalledWith(1));
+    await waitFor(() => expect(m.postProjectGitPull).toHaveBeenCalledWith(1, undefined));
     await waitFor(() => expect(m.getProjectGitStatus).toHaveBeenCalledWith(1, { fresh: true }));
     await userEvent.click(screen.getByRole("button", { name: "Fetch" }));
-    await waitFor(() => expect(m.postProjectGitFetch).toHaveBeenCalledWith(1));
+    await waitFor(() => expect(m.postProjectGitFetch).toHaveBeenCalledWith(1, undefined));
   });
 
   it("explains a refused pull and a failed fetch", async () => {
@@ -241,6 +241,7 @@ describe("Changes", () => {
     expect((actions as { onOpenFile: ReturnType<typeof vi.fn> }).onOpenFile).toHaveBeenCalledWith(
       1,
       "src/a.ts",
+      undefined,
     );
   });
 

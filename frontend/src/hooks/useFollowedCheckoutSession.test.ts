@@ -28,6 +28,12 @@ describe("useFollowedCheckoutSession", () => {
     expect(follow(4)).toBeNull();
   });
 
+  it("is the session when it runs on another host, even at the project's own path", () => {
+    const remote = makeSession({ id: 12, projectId: 4, cwd: "/work/app", resolvedHostId: "mac" });
+    resetStore({ projects: [project], sessions: [remote], activePanelId: "session-12" });
+    expect(follow(4)).toBe(12);
+  });
+
   it("is null for a panel that belongs to no session, or none focused", () => {
     resetStore({ projects: [project], sessions: [worktree], activePanelId: "git-4" });
     expect(follow(4)).toBeNull();

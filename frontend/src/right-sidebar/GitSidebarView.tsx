@@ -11,12 +11,14 @@ import { useRepoUrl } from "../git/useRepoUrl.js";
 import { WorktreesSection } from "../git/WorktreesSection.js";
 import { PromoteDialog } from "../PromoteDialog.js";
 import { useMullionLinks } from "../hooks/useMullionLinks.js";
+import { contextKey, sessionHostId } from "../lib/checkoutContext.js";
 import { describeError } from "../lib/describeError.js";
 import { useDashboardStore } from "../store/index.js";
 import { ConfirmButton } from "../ui/ConfirmButton.js";
 import { PullIcon, RefreshIcon, CheckIcon } from "../ui/icons.js";
 import { Toggle } from "../ui/primitives.js";
 import { Button } from "../ui/sidebar/index.js";
+import { CheckoutChip } from "./CheckoutChip.js";
 import { SidebarHeader } from "./SidebarHeader.js";
 import { VIEW_TITLES } from "./viewTitles.js";
 import type { RightSidebarViewProps } from "./views.js";
@@ -24,7 +26,12 @@ import type { RightSidebarViewProps } from "./views.js";
 type Page = { kind: "list" } | { kind: "branch"; name: string } | { kind: "prune" };
 
 /** The Source Control rail view: changes, branches (with drilldown and prune), worktrees. */
-export function GitSidebarView({ projectId, actions }: RightSidebarViewProps) {
+export function GitSidebarView({
+  projectId,
+  checkoutSessionId = null,
+  checkoutChoice,
+  actions,
+}: RightSidebarViewProps) {
   // The page is tied to the project it was opened for: this view does not
   // remount on a project switch, and another project's branch is meaningless here.
   const [pageState, setPage] = useState<{ projectId: number; page: Page }>({
@@ -60,7 +67,18 @@ export function GitSidebarView({ projectId, actions }: RightSidebarViewProps) {
 
   const project = useDashboardStore((s) => s.projects.find((p) => p.id === projectId));
   const hosts = useDashboardStore((s) => s.hosts);
-  const status = useDashboardStore((s) => s.gitStatuses[projectId]);
+  // The changes and the fetch/pull follow the focused session's checkout (and
+  // its host); branches, worktrees and clone health are the project repository's.
+  const sessionId = checkoutSessionId ?? undefined;
+  const status = useDashboardStore((s) =>
+    sessionId === undefined ? s.gitStatuses[projectId] : s.sessionGitStatuses[sessionId],
+  );
+  const sessionHost = useDashboardStore((s) => {
+    const session = sessionId === undefined ? null : s.sessions.find((x) => x.id === sessionId);
+    const proj = s.projects.find((p) => p.id === projectId);
+    return session && proj ? sessionHostId(session, proj) : null;
+  });
+  const ctxKey = contextKey(projectId, sessionId, sessionHost ?? "");
   const sessions = useDashboardStore((s) => s.sessions);
   const requestOpenSession = useDashboardStore((s) => s.requestOpenSession);
   const declinePromote = useDashboardStore((s) => s.declinePromote);
@@ -77,16 +95,23 @@ export function GitSidebarView({ projectId, actions }: RightSidebarViewProps) {
   const links = useMullionLinks(projectId);
   const data = useBranchData(projectId);
 
-  const [fetching, setFetching] = useState(false);
-  const [pulling, setPulling] = useState(false);
-  const [syncError, setSyncError] = useState<string | null>(null);
+  // A fetch or pull belongs to the checkout it was started in: it runs against
+  // that session's host, writes its result to that checkout's status, and only
+  // shows its progress / error while that checkout is the one on screen.
+  const [pending, setPending] = useState<{ key: string; kind: "fetch" | "pull" } | null>(null);
+  const [syncErr, setSyncErr] = useState<{ key: string; message: string } | null>(null);
+  const fetching = pending?.key === ctxKey && pending.kind === "fetch";
+  const pulling = pending?.key === ctxKey && pending.kind === "pull";
+  const syncError = syncErr?.key === ctxKey ? syncErr.message : null;
   const [promoteOpen, setPromoteOpen] = useState(false);
 
-  const writeStatus = async () => {
-    const next = await api.getProjectGitStatus(projectId, { fresh: true });
-    useDashboardStore.setState((s) => ({
-      gitStatuses: { ...s.gitStatuses, [projectId]: next ?? null },
-    }));
+  const writeStatus = async (forSession: number | undefined = sessionId) => {
+    const next = await api.getProjectGitStatus(projectId, { fresh: true, sessionId: forSession });
+    useDashboardStore.setState((s) =>
+      forSession === undefined
+        ? { gitStatuses: { ...s.gitStatuses, [projectId]: next ?? null } }
+        : { sessionGitStatuses: { ...s.sessionGitStatuses, [forSession]: next ?? null } },
+    );
   };
 
   const reloadAll = useCallback(() => {
@@ -101,34 +126,38 @@ export function GitSidebarView({ projectId, actions }: RightSidebarViewProps) {
   });
 
   const doFetch = async () => {
-    setFetching(true);
-    setSyncError(null);
+    const key = ctxKey;
+    const forSession = sessionId;
+    setPending({ key, kind: "fetch" });
+    setSyncErr(null);
     try {
-      await fetchProjectGit(projectId);
-      await writeStatus();
+      await fetchProjectGit(projectId, forSession);
+      await writeStatus(forSession);
       reloadAll();
     } catch (err) {
-      setSyncError(describeError(err, "Could not fetch — try again."));
+      setSyncErr({ key, message: describeError(err, "Could not fetch — try again.") });
     } finally {
-      setFetching(false);
+      setPending((p) => (p?.key === key ? null : p));
     }
   };
 
   const doPull = async () => {
-    setPulling(true);
-    setSyncError(null);
+    const key = ctxKey;
+    const forSession = sessionId;
+    setPending({ key, kind: "pull" });
+    setSyncErr(null);
     try {
-      const result = await pullProjectGit(projectId);
+      const result = await pullProjectGit(projectId, forSession);
       if (result.pulled) {
-        await writeStatus();
+        await writeStatus(forSession);
         reloadAll();
       } else {
-        setSyncError(pullReasonMessage(result.reason, result.detail));
+        setSyncErr({ key, message: pullReasonMessage(result.reason, result.detail) });
       }
     } catch (err) {
-      setSyncError(describeError(err, "Pull request failed — try again."));
+      setSyncErr({ key, message: describeError(err, "Pull request failed — try again.") });
     } finally {
-      setPulling(false);
+      setPending((p) => (p?.key === key ? null : p));
     }
   };
 
@@ -182,9 +211,9 @@ export function GitSidebarView({ projectId, actions }: RightSidebarViewProps) {
         </>
       )}
       {!status.isClean && ` · ${status.files.length} changed`}
-      {hostName && ` · on ${hostName}`}
+      {sessionId === undefined && hostName && ` · on ${hostName}`}
     </>
-  ) : hostName ? (
+  ) : sessionId === undefined && hostName ? (
     `on ${hostName}`
   ) : undefined;
 
@@ -234,7 +263,14 @@ export function GitSidebarView({ projectId, actions }: RightSidebarViewProps) {
             : []
         }
       />
+      <CheckoutChip projectId={projectId} sessionId={checkoutSessionId} choice={checkoutChoice} />
       <div className="sc-scroll">
+        {sessionId !== undefined && (
+          <div className="sc-note">
+            Changes, fetch and pull are this session&apos;s checkout. Branches, worktrees and
+            auto-fetch below are the project&apos;s repository.
+          </div>
+        )}
         <div className="sc-autofetch">
           <Toggle
             size="small"
@@ -292,7 +328,8 @@ export function GitSidebarView({ projectId, actions }: RightSidebarViewProps) {
 
         <ChangesSection
           projectId={projectId}
-          onEditFile={(path) => actions.onOpenFile(projectId, path)}
+          sessionId={checkoutSessionId}
+          onEditFile={(path) => actions.onOpenFile(projectId, path, sessionId)}
         />
 
         {data.kind === "loading" && <div className="sc-empty">Loading branches…</div>}

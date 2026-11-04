@@ -245,8 +245,8 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
   },
 
   // Manual git fetch for a project — runs `git fetch origin` now.
-  fetchProjectGit: async (projectId: number) => {
-    await api.postProjectGitFetch(projectId);
+  fetchProjectGit: async (projectId: number, sessionId?: number) => {
+    await api.postProjectGitFetch(projectId, sessionId);
     get().bumpGitRefreshTrigger();
   },
 
@@ -271,8 +271,8 @@ export const createGitSlice: StateCreator<DashboardState, [], [], GitSlice> = (s
   },
 
   // Issue #745 — Manual fast-forward git pull for a project.
-  pullProjectGit: async (projectId: number) => {
-    const res = await api.postProjectGitPull(projectId);
+  pullProjectGit: async (projectId: number, sessionId?: number) => {
+    const res = await api.postProjectGitPull(projectId, sessionId);
     get().bumpGitRefreshTrigger();
     return res;
   },

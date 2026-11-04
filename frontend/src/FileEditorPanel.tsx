@@ -27,6 +27,7 @@ import {
 import { isMacPlatform } from "./browserKeyMap.js";
 import { ConfirmButton } from "./ui/ConfirmButton.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
+import { hasOwnCheckout, sessionHostId } from "./lib/checkoutContext.js";
 import { useDashboardStore } from "./store/index.js";
 import { Dropdown, TextInput } from "./ui/primitives.js";
 
@@ -976,9 +977,8 @@ function FileEditorBody({
 export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
   const [sessionId, setSessionId] = useState<number | undefined>(params.sessionId);
   const [dirty, setDirty] = useState(false);
-  const projectCwd = useDashboardStore(
-    (s) => s.projects.find((p) => p.id === params.projectId)?.cwd,
-  );
+  const project = useDashboardStore((s) => s.projects.find((p) => p.id === params.projectId));
+  const hosts = useDashboardStore((s) => s.hosts);
   const allSessions = useDashboardStore((s) => s.sessions);
 
   // A re-target from outside (git row "Edit", a terminal path link) bumps
@@ -1004,16 +1004,28 @@ export function FileEditorPanel({ params }: { params: FileEditorPanelParams }) {
   }, [params.rev, params.sessionId]);
 
   const roots = useMemo(() => {
+    // One root per checkout: the same path on two hosts is two roots.
     const seen = new Set<string>();
     const list: Array<{ sessionId: number; label: string }> = [];
+    if (!project) return list;
     for (const s of allSessions) {
       if (s.projectId !== params.projectId || s.status !== "active" || !s.cwd) continue;
-      if (s.cwd === projectCwd || seen.has(s.cwd)) continue;
-      seen.add(s.cwd);
-      list.push({ sessionId: s.id, label: s.cwd.split("/").filter(Boolean).pop() ?? s.cwd });
+      if (!hasOwnCheckout(s, project)) continue;
+      const hostId = sessionHostId(s, project);
+      const checkoutKey = `${hostId}\0${s.cwd}`;
+      if (seen.has(checkoutKey)) continue;
+      seen.add(checkoutKey);
+      const dir = s.cwd.split("/").filter(Boolean).pop() ?? s.cwd;
+      list.push({
+        sessionId: s.id,
+        label:
+          hostId === project.hostId
+            ? dir
+            : `${dir} on ${hosts.find((h) => h.id === hostId)?.name ?? hostId}`,
+      });
     }
     return list;
-  }, [allSessions, params.projectId, projectCwd]);
+  }, [allSessions, params.projectId, project, hosts]);
 
   return (
     <div className="file-editor-shell">

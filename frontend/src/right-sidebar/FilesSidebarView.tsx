@@ -6,7 +6,8 @@ import { useTreeDropTarget } from "../hooks/useTreeDropTarget.js";
 import { hasDirtyFileUnder, useDirtyFilesVersion } from "../lib/dirtyFiles.js";
 import { endFileDrag, startFileDrag, type FileDragPayload } from "../lib/fileDrag.js";
 import { emitFilePathGone } from "../lib/filePathEvents.js";
-import { baseName, joinRel } from "../lib/fileTreeMove.js";
+import { joinRel } from "../lib/fileTreeMove.js";
+import { contextKey, sessionHostId } from "../lib/checkoutContext.js";
 import { joinAbs } from "../lib/posixPath.js";
 import { useDashboardStore } from "../store/index.js";
 import { KebabMenu, type KebabMenuItem } from "../ui/KebabMenu.js";
@@ -23,6 +24,7 @@ import {
   FolderIcon,
   RefreshIcon,
 } from "../ui/icons.js";
+import { CheckoutChip } from "./CheckoutChip.js";
 import { SidebarHeader } from "./SidebarHeader.js";
 import { VIEW_TITLES } from "./viewTitles.js";
 import { EmptyStateNote } from "../ui/EmptyState.js";
@@ -44,8 +46,10 @@ const ROOT_DROP_KEY = "\0root";
 const BLOCKED_TITLE = "Save or discard your changes first";
 
 // A lazily loaded file tree for the right sidebar. It follows the focused
-// session: for a session in its own git worktree the tree is that worktree's
-// (what the agent is editing), otherwise the project's. A click on a file opens
+// session: for a session in its own git worktree, or on another host, the tree
+// is that checkout's (what the agent is editing), otherwise the project's. A
+// checkout the backend can't root the tree at is shown as unavailable — never
+// replaced by another checkout's files. A click on a file opens
 // it in an editor-only panel; every row has a ⋯ menu (also on right-click) for
 // open / download / copy path / rename / delete, rows drag onto a folder to move
 // them or onto a terminal to reference them, and files dropped in from the OS
@@ -53,6 +57,7 @@ const BLOCKED_TITLE = "Save or discard your changes first";
 export function FilesSidebarView({
   projectId,
   checkoutSessionId = null,
+  checkoutChoice,
   actions,
 }: RightSidebarViewProps) {
   const [dirs, setDirs] = useState<Record<string, DirState>>({});
@@ -67,20 +72,21 @@ export function FilesSidebarView({
   // though the pointer isn't hovering them.
   const [menuRow, setMenuRow] = useState<string | null>(null);
 
-  // Which checkout the tree shows: the followed session's worktree, unless the
-  // user flipped to the project root or the backend refused the worktree.
-  const [showProjectRoot, setShowProjectRoot] = useState(false);
-  const [rootRefused, setRootRefused] = useState(false);
-  const [lastCheckout, setLastCheckout] = useState(checkoutSessionId);
-  if (checkoutSessionId !== lastCheckout) {
-    // Following a different session: forget the last one's override.
-    setLastCheckout(checkoutSessionId);
-    setShowProjectRoot(false);
-    setRootRefused(false);
-  }
-  const sessionId =
-    !showProjectRoot && !rootRefused && checkoutSessionId !== null ? checkoutSessionId : undefined;
-  const rootKey = `${projectId}:${sessionId ?? ""}`;
+  // Which checkout the tree shows: the followed session's, unless the user
+  // chose the project's default (the choice is the parent's, shared with the
+  // Source Control view).
+  const sessionId = checkoutSessionId ?? undefined;
+  const project = useDashboardStore((s) => s.projects.find((p) => p.id === projectId));
+  const sessionHost = useDashboardStore((s) => {
+    if (sessionId === undefined) return null;
+    const session = s.sessions.find((x) => x.id === sessionId);
+    return session && project ? sessionHostId(session, project) : null;
+  });
+  // The host is part of the root's identity: the same path on two hosts is two trees.
+  const rootKey = contextKey(projectId, sessionId, sessionHost ?? project?.hostId ?? "");
+  // Set when the checkout's root can't be listed.
+  const [rootError, setRootError] = useState<{ key: string; message: string } | null>(null);
+  const unavailable = rootError?.key === rootKey ? rootError.message : null;
   const projectCwd = useDashboardStore((s) => s.projects.find((p) => p.id === projectId)?.cwd);
   const sessionCwd = useDashboardStore((s) =>
     sessionId === undefined ? undefined : s.sessions.find((x) => x.id === sessionId)?.cwd,
@@ -102,14 +108,18 @@ export function FilesSidebarView({
           ...prev,
           [dirPath]: { entries: listing.entries, truncated: listing.truncated },
         }));
+        if (dirPath === "") setRootError(null);
         setError(null);
       } catch (err) {
         if (activeRoot.current !== rootKey) return;
-        // The backend won't root the tree at that session (its directory moved
-        // outside the project, or it can't be verified): fall back to the
-        // project's own checkout rather than showing a dead tree.
-        if (dirPath === "" && sessionId !== undefined && err instanceof ApiError) {
-          setRootRefused(true);
+        // The backend won't root the tree at this checkout (its directory
+        // moved, or its host can't be reached): say so. Showing the project's
+        // files instead would pass them off as this checkout's.
+        if (dirPath === "") {
+          setRootError({
+            key: rootKey,
+            message: err instanceof ApiError ? err.message : "Couldn't list files",
+          });
           return;
         }
         setError(err instanceof ApiError ? err.message : "Couldn't list files");
@@ -166,6 +176,8 @@ export function FilesSidebarView({
   const relist = useCallback(
     (changed: string[]) => {
       refreshGitStatuses(); // a rename/move/delete changed the working tree
+      // The edit was made in a checkout that is no longer on screen.
+      if (activeRoot.current !== rootKey) return;
       for (const dirPath of changed) {
         if (dirPath === "" || expandedRef.current.has(dirPath)) void loadDir(dirPath);
         else
@@ -175,7 +187,7 @@ export function FilesSidebarView({
           });
       }
     },
-    [loadDir],
+    [loadDir, rootKey],
   );
 
   // A file or folder (and everything under it) is gone from `path`: drop its
@@ -183,12 +195,15 @@ export function FilesSidebarView({
   const forgetPath = useCallback(
     (path: string) => {
       const under = (k: string) => k === path || k.startsWith(`${path}/`);
+      // The editors that were open on it are bound to the checkout the edit
+      // ran in, which may no longer be the one shown.
+      emitFilePathGone({ projectId, sessionId, path });
+      if (activeRoot.current !== rootKey) return;
       setDirs((prev) => Object.fromEntries(Object.entries(prev).filter(([k]) => !under(k))));
       setExpanded((prev) => new Set([...prev].filter((k) => !under(k))));
       setSelectedDir((cur) => (under(cur) ? "" : cur));
-      emitFilePathGone({ projectId, sessionId, path });
     },
-    [projectId, sessionId],
+    [projectId, sessionId, rootKey],
   );
 
   const mutations = useFileTreeMutations({ projectId, sessionId, onChanged: relist });
@@ -497,8 +512,6 @@ export function FilesSidebarView({
     );
   };
 
-  const rootLabel = rootCwd !== null && sessionId !== undefined ? baseName(rootCwd) : null;
-
   return (
     <div
       className={`files-sidebar-view${dropKey === ROOT_DROP_KEY ? " file-drop-target" : ""}`}
@@ -513,14 +526,6 @@ export function FilesSidebarView({
       />
       <SidebarHeader
         label={VIEW_TITLES.files}
-        contextTitle={rootCwd ?? undefined}
-        context={
-          rootRefused
-            ? "Project root"
-            : rootLabel !== null
-              ? `Worktree: ${rootLabel}`
-              : "Project root"
-        }
         actions={[
           { key: "refresh", label: "Refresh", icon: RefreshIcon, onClick: refresh },
           {
@@ -556,23 +561,9 @@ export function FilesSidebarView({
           },
         ]}
       />
-      {checkoutSessionId !== null && (
-        <div className="files-root-chip">
-          {rootRefused && (
-            <span className="files-root-chip-label" title={rootCwd ?? undefined}>
-              Project root (this worktree can&apos;t be browsed here)
-            </span>
-          )}
-          {!rootRefused && (
-            <button
-              type="button"
-              className="git-panel-fetch-btn"
-              onClick={() => setShowProjectRoot((v) => !v)}
-            >
-              {showProjectRoot ? "Show worktree" : "Show project root"}
-            </button>
-          )}
-        </div>
+      <CheckoutChip projectId={projectId} sessionId={checkoutSessionId} choice={checkoutChoice} />
+      {unavailable !== null && (
+        <EmptyStateNote>This checkout isn&apos;t available: {unavailable}</EmptyStateNote>
       )}
       {newEntry && (
         <TextInput
@@ -597,8 +588,8 @@ export function FilesSidebarView({
         onCancel={tree.uploads.cancel}
         onDismiss={tree.uploads.dismissErrors}
       />
-      {error && <EmptyStateNote>{error}</EmptyStateNote>}
-      {renderDir("", 0)}
+      {error && unavailable === null && <EmptyStateNote>{error}</EmptyStateNote>}
+      {unavailable === null && renderDir("", 0)}
     </div>
   );
 }

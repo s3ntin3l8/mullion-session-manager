@@ -16,15 +16,26 @@ const STATUS_TONE: Record<GitFileStatus["status"], Tone> = {
 
 export interface ChangesSectionProps {
   projectId: number;
+  /** The session whose checkout the changes are read from; null = the project's default. */
+  sessionId?: number | null;
   onEditFile: (path: string) => void;
 }
 
 /** The working-tree changes, one SidebarRow per file with the inline diff. */
-export function ChangesSection({ projectId, onEditFile }: ChangesSectionProps) {
-  const status = useDashboardStore((s) => s.gitStatuses[projectId]);
-  const problem = useDashboardStore((s) => s.gitProblems[projectId]);
-  const [expanded, setExpanded] = useState<{ projectId: number; path: string } | null>(null);
-  const openPath = expanded?.projectId === projectId ? expanded.path : null;
+export function ChangesSection({ projectId, sessionId = null, onEditFile }: ChangesSectionProps) {
+  const status = useDashboardStore((s) =>
+    sessionId === null ? s.gitStatuses[projectId] : s.sessionGitStatuses[sessionId],
+  );
+  // Problems are tracked per project; a session's checkout has none of its own.
+  const problem = useDashboardStore((s) => (sessionId === null ? s.gitProblems[projectId] : null));
+  // The open diff belongs to the checkout it was opened in.
+  const [expanded, setExpanded] = useState<{
+    projectId: number;
+    sessionId: number | null;
+    path: string;
+  } | null>(null);
+  const openPath =
+    expanded?.projectId === projectId && expanded.sessionId === sessionId ? expanded.path : null;
 
   return (
     <SidebarSection
@@ -39,7 +50,13 @@ export function ChangesSection({ projectId, onEditFile }: ChangesSectionProps) {
         </div>
       )}
       {!status ? (
-        <div className="sc-empty">{problem ? problem.message : "Not a git repository."}</div>
+        <div className="sc-empty">
+          {problem
+            ? problem.message
+            : sessionId === null
+              ? "Not a git repository."
+              : "No git status for this checkout (not a repository, or its host is unreachable)."}
+        </div>
       ) : status.isClean ? (
         <div className="sc-empty">Working tree clean</div>
       ) : (
@@ -70,11 +87,17 @@ export function ChangesSection({ projectId, onEditFile }: ChangesSectionProps) {
                   isDirectory
                     ? undefined
                     : () =>
-                        setExpanded(openPath === file.path ? null : { projectId, path: file.path })
+                        setExpanded(
+                          openPath === file.path ? null : { projectId, sessionId, path: file.path },
+                        )
                 }
               />
               {!isDirectory && openPath === file.path && (
-                <ProjectFileDiff projectId={projectId} filePath={file.path} />
+                <ProjectFileDiff
+                  projectId={projectId}
+                  sessionId={sessionId ?? undefined}
+                  filePath={file.path}
+                />
               )}
             </div>
           );
