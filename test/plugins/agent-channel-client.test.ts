@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -162,5 +162,38 @@ describe("agent channel client (#2450)", () => {
     const n = primary.connections();
     await new Promise((r) => setTimeout(r, 1300));
     expect(primary.connections()).toBe(n);
+  });
+
+  describe("plain-text primary warning", () => {
+    async function warningsFor(primaryUrl: string): Promise<string[]> {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-channel-client-"));
+      dirs.push(dir);
+      const app = Fastify();
+      const warn = vi.spyOn(app.log, "warn");
+      app.decorate("config", {
+        MULLION_ROLE: "agent",
+        MULLION_PRIMARY_URL: primaryUrl,
+        SESSIONS_DIR: dir,
+      } as never);
+      await app.register(agentChannelClientPlugin);
+      apps.push(app);
+      await app.ready();
+      return warn.mock.calls.map((c) => String(c[0]));
+    }
+
+    it("warns once for http:// on a non-loopback host", async () => {
+      const warnings = await warningsFor("http://primary.example.com:3000");
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(/plain http/);
+    });
+
+    it.each([
+      "https://primary.example.com",
+      "http://127.0.0.1:3000",
+      "http://localhost:3000",
+      "http://[::1]:3000",
+    ])("does not warn for %s", async (url) => {
+      expect(await warningsFor(url)).toEqual([]);
+    });
   });
 });

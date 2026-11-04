@@ -6,6 +6,7 @@ import { resolveSessionHostId } from "./session-live-info.js";
 import { resolveProjectDock } from "./project-config.js";
 import { isPortInUse } from "./port-probe.js";
 import { findSessionHoldingPort } from "./dev-server-detect.js";
+import { parseHostCwds, projectCwdOnHost } from "./placement.js";
 
 // Issue #2069 — Mullion never picks a dev-server port, so two dock sessions
 // for one control (two worktrees, a second tab, MCP, the CLI) silently race
@@ -42,7 +43,8 @@ export function portInUseMessage(port: number, holderSessionId?: number): string
  * control is not refused because the dev server is up. Local-host projects
  * only: the probe is a loopback bind on this machine. `hostId` is the host
  * the session will actually run on (an explicit launch target); it defaults to
- * the project's host. A session bound for another host is never probed here,
+ * the project's host. The dock config is read from the project's checkout on
+ * this host (`projectCwdOnHost`); none there means no conflict. A session bound for another host is never probed here,
  * and only holders on this host count — the same port elsewhere is no conflict.
  */
 export async function checkDockPortConflict(
@@ -54,9 +56,13 @@ export async function checkDockPortConflict(
   const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
   if (!project || (hostId ?? project.hostId) !== LOCAL_HOST_ID) return null;
 
-  const controls = resolveProjectDock(project.cwd, app.config.CRS_CONFIG_DIR).filter(
-    (c) => !c.docker,
-  );
+  // The dock config is read from the project's checkout on THIS host: a
+  // remote project launched locally has its local checkout in `hostCwds`, not
+  // at `project.cwd` (a path on the remote host). No checkout here, no probe.
+  const localCwd = projectCwdOnHost(project, LOCAL_HOST_ID, parseHostCwds(project.hostCwds));
+  if (localCwd === null) return null;
+
+  const controls = resolveProjectDock(localCwd, app.config.CRS_CONFIG_DIR).filter((c) => !c.docker);
   const control = controls.find((c) => c.command === command);
   if (!control) return null;
 

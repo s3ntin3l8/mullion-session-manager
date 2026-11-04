@@ -58,6 +58,13 @@ MULLION_AGENT_ADVERTISE_URL=http://192.168.1.20:4000   # optional; defaults to h
 MULLION_AGENT_NAME=home-server                          # optional; defaults to the hostname
 ```
 
+> **Use `https://` for `MULLION_PRIMARY_URL` outside a trusted network.** The
+> outbound agent channel (`/ws/agent-channel`) sends the machine credential in
+> its first frame, so over a plain `http://` primary (`ws://`) it crosses the
+> network in cleartext. The agent logs a warning once at startup when the URL
+> is `http://` and not loopback; it does not refuse to run (a trusted LAN is a
+> legitimate setup), so terminate TLS in front of the primary for anything else.
+
 ...and, on the primary:
 
 ```bash
@@ -141,6 +148,13 @@ in `machine_credential`.
   put the new token in the agent's `.env`, delete `agent-identity.json`, then
   restart. A credential unused for 90 days is rejected the same way as a
   revoked one, so the agent log's "revoked or unknown" can also mean expiry.
+  **Accepted disclosure:** on the unauthenticated channel handshake
+  (`/ws/agent-channel`) a revoked host id is answered `revoked` before any
+  credential is compared, so a caller who guesses an id can tell a revoked host
+  from an unknown one. The agent needs the distinction to retry slowly instead
+  of hammering a dead identity. Host ids are server-issued random UUIDs and the
+  route is rate-limited, so the leak is only existence-and-revoked-state of an
+  already-unguessable id; it is documented, not redesigned.
   Because the grace credential slides on use, a replaced credential (a
   displaced agent, or a leaked copy of the state file) stays valid while
   its holder keeps presenting it, and each acceptance hands it the live
