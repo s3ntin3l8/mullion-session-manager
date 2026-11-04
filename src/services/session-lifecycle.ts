@@ -49,8 +49,11 @@ import {
   projectCwdOnHost,
   resolvePlacement,
   resolveTargetHost,
+  type LaunchNeeds,
   type PlacementTarget,
 } from "./placement.js";
+import { requireLaunchOptions, requireOperation } from "./host-agents.js";
+import { requiredLaunchOptions, type LaunchFields } from "./launch-requirements.js";
 import { isReservedSessionEnvKey } from "./session-env-keys.js";
 import { commandAgentBin } from "./hook-adapters/index.js";
 import {
@@ -492,6 +495,11 @@ export type CreateSessionResult =
   // the job is done; every other caller treats it as a refusal.
   | { ok: false; reason: "preparing-checkout"; projectId: number; hostId: string; detail: string }
   | { ok: false; reason: "child-cap-exceeded" }
+  // Issue #2569 — the chosen host's agent does not negotiate an operation or a
+  // launch option this launch needs, so starting it there would silently drop
+  // the field. `detail` names the host and the missing option and points at
+  // the host's Update action. Refused before any worktree or process exists.
+  | { ok: false; reason: "host-unsupported"; detail: string }
   // Hermes review, this PR — validated here (not just dock-config.ts's write
   // path), so a direct full-scope `POST /api/sessions` caller carrying `env`
   // is bound by the same reserved-key rules as a dock control. See
@@ -1032,6 +1040,7 @@ function resolveSessionPlacement(
   app: FastifyInstance,
   project: ProjectRow,
   params: CreateSessionParams,
+  needs: LaunchNeeds,
 ):
   | { ok: true; placement: SessionPlacement }
   | { ok: false; reason: "host-unknown-project" | "no-target-host"; detail: string }
@@ -1050,6 +1059,7 @@ function resolveSessionPlacement(
       target: params.target,
       unattended: params.unattended === true,
       requiredAgent: commandAgentBin(params.command) ?? undefined,
+      ...needs,
       // Issue #2241 — an explicit launcher/caller target must satisfy the
       // project's platform flag (a Task Master directive does not come here).
       checkProjectFlags: true,
@@ -1114,6 +1124,7 @@ function resolveSessionPlacement(
     },
     unattended: params.unattended === true,
     requiredAgent: commandAgentBin(params.command) ?? undefined,
+    ...needs,
   });
 
   // Issue #2241 — the project's platform flag leaves no host: refuse (409)
@@ -1209,7 +1220,21 @@ async function createSessionRecordInner(
   // decision carries the project's path ON THAT HOST — a session runs in a
   // directory, so the host and the directory have to agree, and the worktree
   // is cut from the project root ON THAT HOST.
-  const placementResult = resolveSessionPlacement(app, project, params);
+  //
+  // Read once per create (issue #1525): the live-child cap at insert and
+  // every injection default in resolveSpawnInputs come from this snapshot.
+  const sessionSettings = getStoredSettings(app.db).sessions;
+  // Issue #2569 — what this launch needs of its host, known before anything
+  // exists: Auto and a target skip hosts that lack it, an explicit host is
+  // refused below.
+  const needs: LaunchNeeds = {
+    requiredOperations:
+      params.worktree || params.isolate ? ["sessions", "git-worktrees"] : ["sessions"],
+    requiredLaunchOptions: requiredLaunchOptions(
+      earlyLaunchFields(project, params, sessionSettings),
+    ),
+  };
+  const placementResult = resolveSessionPlacement(app, project, params, needs);
   if (!placementResult.ok) {
     if (placementResult.reason === "preparing-checkout") return placementResult;
     return { ok: false, reason: placementResult.reason, detail: placementResult.detail };
@@ -1218,12 +1243,15 @@ async function createSessionRecordInner(
   const placementHost = placement.hostId;
   rb.hostId = placementHost;
 
+  // Issue #2569 — whichever way the host was chosen, it must negotiate what
+  // this launch needs BEFORE the worktree is cut or the row inserted: an
+  // agent's spawn schema strips a field it does not know, so the launch would
+  // otherwise start without it.
+  const unsupported = checkHostSupport(app, placementHost, needs);
+  if (unsupported !== null) return { ok: false, reason: "host-unsupported", detail: unsupported };
+
   const parent = validateParent(app, params);
   if (!parent.ok) return parent.result;
-
-  // Read once per create (issue #1525): the live-child cap at insert and
-  // every injection default in resolveSpawnInputs come from this snapshot.
-  const sessionSettings = getStoredSettings(app.db).sessions;
 
   const prepared = await prepareWorktree(app, project, params, rb, placement);
   if (!prepared.ok) return prepared.result;
@@ -1618,6 +1646,52 @@ async function stashSeedBestEffort(
 // agent-role host has no settings DB of its own (plugins/hooks.ts), so each
 // value must already be definite by the time it reaches spawn(), never
 // re-derived downstream.
+/** The refusal text when `hostId` does not negotiate what the launch needs; null when it does. */
+function checkHostSupport(app: FastifyInstance, hostId: string, needs: LaunchNeeds): string | null {
+  for (const op of needs.requiredOperations ?? []) {
+    const gate = requireOperation(app, hostId, op);
+    if (!gate.ok) return gate.message;
+  }
+  const gate = requireLaunchOptions(app, hostId, needs.requiredLaunchOptions ?? []);
+  return gate.ok ? null : gate.message;
+}
+
+/**
+ * The launch fields knowable before placement: what the caller set, plus the
+ * ones `resolveSpawnInputs` derives from settings alone (git identity, the
+ * injection flags, the conventions text). The DB-held briefing/skill and the
+ * GitHub credential need I/O and are checked on the full spawn body instead.
+ */
+function earlyLaunchFields(
+  project: ProjectRow,
+  params: CreateSessionParams,
+  sessionSettings: ReturnType<typeof getStoredSettings>["sessions"],
+): LaunchFields {
+  const conventions =
+    (project.injectWorkflowConventions ?? true) &&
+    !(project.suppressConventionsInjectionAfterScaffold ?? false) &&
+    sessionSettings.workflowConventionsText.length > 0
+      ? sessionSettings.workflowConventionsText
+      : undefined;
+  return {
+    skipPermissions: params.skipPermissions,
+    initialPrompt: params.initialPrompt,
+    seedPrompt: params.seedPrompt,
+    env: params.env,
+    briefingOverride: params.briefingOverride,
+    projectSkill: params.projectSkill,
+    projectReviewerAgent: params.projectReviewerAgent,
+    model: params.model,
+    smallModel: params.smallModel,
+    taskId: params.taskId,
+    gitIdentity: resolveGitIdentity(project.gitIdentity, sessionSettings.gitIdentity),
+    injectAgentGuide: project.injectAgentGuide ?? sessionSettings.injectAgentGuide,
+    injectProjectBriefing: project.injectProjectBriefing ?? sessionSettings.injectProjectBriefing,
+    injectMullionBundle: sessionSettings.injectMullionBundle,
+    workflowConventionsText: conventions,
+  };
+}
+
 async function resolveSpawnInputs(
   app: FastifyInstance,
   project: ProjectRow,
@@ -1784,7 +1858,16 @@ async function spawnOrRollback(
 ): Promise<Step<{ initialPromptApplied: boolean | undefined }>> {
   const { injectAgentGuide, injectProjectBriefing, injectMullionBundle, taskId } = spawnOpts;
   let spawnResult;
+  let unsupported: string | null = null;
   try {
+    // Issue #2569 — fields only known now (the DB-held briefing/skill, the
+    // minted GitHub credential): the same gate over the full spawn body. The
+    // worktree and row already exist, so a refusal unwinds through the same
+    // catch as a spawn failure.
+    unsupported = checkHostSupport(app, placementHost, {
+      requiredLaunchOptions: requiredLaunchOptions(spawnOpts),
+    });
+    if (unsupported !== null) throw new Error(unsupported);
     spawnResult = await resolveBackend(app, placementHost).spawn(spawnOpts);
     // Version-skew safety net — "echoed back, not assumed" (SpawnResult's
     // own doc comment), logged rather than threaded up into
@@ -1862,6 +1945,12 @@ async function spawnOrRollback(
     app.pty.discardPendingSeed(String(sessionId));
     await rollbackCreate(app, rb);
     app.log.error({ err, hostId: placementHost }, "session spawn failed, rolled back row");
+    if (unsupported !== null) {
+      return {
+        ok: false,
+        result: { ok: false, reason: "host-unsupported", detail: unsupported },
+      };
+    }
     return {
       ok: false,
       result: {

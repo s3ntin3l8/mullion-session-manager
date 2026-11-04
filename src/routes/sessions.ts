@@ -834,6 +834,11 @@ export async function sessionsRoute(app: FastifyInstance) {
           // online and mapped for the project.
           return reply.conflict(result.detail);
         }
+        if (result.reason === "host-unsupported") {
+          // Issue #2569 — the host's agent would drop a field this launch
+          // asked for; the detail names it and points at the host's Update.
+          return reply.conflict(result.detail);
+        }
         if (result.reason === "cwd-outside-project") {
           return reply.badRequest(
             "cwd must resolve inside the project directory or be a registered git worktree of its repo",

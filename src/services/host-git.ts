@@ -25,6 +25,7 @@ import { getFileDiff } from "./git-diff.js";
 import type { CommitDetail, CommitLogEntry } from "./git-log.js";
 import { commitWipChanges, type CommitWipChangesResult } from "./git-worktree.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
+import { requireOperation, unsupportedOperation } from "./host-agents.js";
 import {
   getRemoteHostClient,
   HostRequestError,
@@ -39,6 +40,10 @@ export type HostGitResult<T> =
        * agent build predating #484's proxy routes) — a version-skew gap,
        * not a connectivity problem. */
       reason: "unsupported";
+      /** Points at the per-host Update action (issue #2569). */
+      updateHint: string;
+      /** Names the host and what it lacks, ending with the hint. */
+      detail: string;
     }
   | {
       ok: false;
@@ -96,13 +101,28 @@ export async function viaRemote<T>(
   app: FastifyInstance,
   hostId: string,
   fn: (client: ReturnType<typeof getRemoteHostClient>) => Promise<T>,
+  // The negotiated operation `fn` calls (issue #2569): checked before the
+  // request, and what a 404 is reported as lacking.
+  op = "this operation",
 ): Promise<HostGitResult<T>> {
+  const gate = requireOperation(app, hostId, op);
+  if (!gate.ok) {
+    return { ok: false, reason: "unsupported", updateHint: gate.updateHint, detail: gate.message };
+  }
   try {
     const value = await fn(getRemoteHostClient(app, hostId));
     return { ok: true, value };
   } catch (err) {
     if (err instanceof HostRequestError) {
-      if (err.statusCode === 404) return { ok: false, reason: "unsupported" };
+      if (err.statusCode === 404) {
+        const refusal = unsupportedOperation(hostId, op);
+        return {
+          ok: false,
+          reason: "unsupported",
+          updateHint: refusal.updateHint,
+          detail: refusal.message,
+        };
+      }
       return { ok: false, reason: "unreachable", detail: err.message, status: err.statusCode };
     }
     const detail =
@@ -115,6 +135,15 @@ export async function viaRemote<T>(
   }
 }
 
+/** `viaRemote` for the git route family: gated on the host's negotiated `git` support. */
+function viaGit<T>(
+  app: FastifyInstance,
+  hostId: string,
+  fn: (client: ReturnType<typeof getRemoteHostClient>) => Promise<T>,
+): Promise<HostGitResult<T>> {
+  return viaRemote(app, hostId, fn, "git");
+}
+
 /**
  * The branch `cwd` is on, on a remote host (issue #2007) — the preview
  * route's counterpart to its local `.git/HEAD` read. A detached HEAD comes
@@ -125,7 +154,7 @@ export function resolveHostGitBranch(
   hostId: string,
   cwd: string,
 ): Promise<HostGitResult<string | null>> {
-  return viaRemote(app, hostId, async (client) => {
+  return viaGit(app, hostId, async (client) => {
     const branch = await client.resolveGitBranch(cwd);
     // The agent's /internal/git-branch allows a detached HEAD, reported as a
     // 7-char SHA; that is not a branch (the local read passes allowDetached:
@@ -152,7 +181,7 @@ export async function resolveHostGitStatus(
     const status = await getGitStatus(cwd, { forceFresh: true });
     return { ok: true, value: { isRepo: true, status } };
   }
-  return viaRemote(app, hostId, (client) => client.resolveGitStatus(cwd, { fresh: true }));
+  return viaGit(app, hostId, (client) => client.resolveGitStatus(cwd, { fresh: true }));
 }
 
 /**
@@ -171,7 +200,7 @@ export async function resolveHostBranches(
   if (hostId === LOCAL_HOST_ID) {
     return { ok: true, value: (await listBranches(cwd, { detail: true })) ?? [] };
   }
-  return viaRemote(app, hostId, async (client) => {
+  return viaGit(app, hostId, async (client) => {
     const result = await client.resolveGitBranches(cwd, true);
     return result?.branches ?? [];
   });
@@ -194,7 +223,7 @@ export async function resolveHostBaseRef(
     const sha = await resolveCommitSha(cwd, baseRef);
     return { ok: true, value: { baseRef, sha } };
   }
-  return viaRemote(app, hostId, (client) => client.resolveHostBaseRef(cwd));
+  return viaGit(app, hostId, (client) => client.resolveHostBaseRef(cwd));
 }
 
 /**
@@ -217,7 +246,7 @@ export async function pushHostBranch(
     const value = await pushBranch(cwd, branch, token);
     return { ok: true, value };
   }
-  return viaRemote(app, hostId, (client) => client.resolvePushBranch(cwd, branch, token));
+  return viaGit(app, hostId, (client) => client.resolvePushBranch(cwd, branch, token));
 }
 
 /**
@@ -245,7 +274,7 @@ export async function cloneHostCheckout(
   if (hostId === LOCAL_HOST_ID) {
     return { ok: true, value: await cloneCheckout(app, { ...opts, token }) };
   }
-  return viaRemote(app, hostId, (client) => client.resolveGitClone(opts.url, opts.name, token));
+  return viaGit(app, hostId, (client) => client.resolveGitClone(opts.url, opts.name, token));
 }
 
 /**
@@ -270,7 +299,7 @@ export async function resolveHostFileDiff(
   if (hostId === LOCAL_HOST_ID) {
     return { ok: true, value: await getFileDiff(cwd, filePath) };
   }
-  return viaRemote(app, hostId, async (client) => {
+  return viaGit(app, hostId, async (client) => {
     const { patch } = await client.resolveGitFileDiff(cwd, filePath);
     return patch;
   });
@@ -304,7 +333,7 @@ export async function commitHostWipChanges(
   if (hostId === LOCAL_HOST_ID) {
     return { ok: true, value: await commitWipChanges(cwd, message, identity) };
   }
-  return viaRemote(app, hostId, (client) => client.resolveCommitWipChanges(cwd, message, identity));
+  return viaGit(app, hostId, (client) => client.resolveCommitWipChanges(cwd, message, identity));
 }
 
 /**
@@ -331,7 +360,7 @@ export async function resolveRepoRefResult(
   if (project.hostId === LOCAL_HOST_ID) {
     return { ok: true, value: parseGitRemote(project.cwd) };
   }
-  return viaRemote(app, project.hostId, (client) => client.resolveGitHubRepo(project.cwd));
+  return viaGit(app, project.hostId, (client) => client.resolveGitHubRepo(project.cwd));
 }
 
 /**
@@ -367,7 +396,7 @@ export function resolveHostGitLog(
   cwd: string,
   opts: { worktree?: string; skip: number; limit: number; scope: "all" | "head" },
 ): Promise<HostGitResult<HostHistoryValue<CommitLogEntry[] | null>>> {
-  return viaRemote(app, hostId, async (client) => {
+  return viaGit(app, hostId, async (client) => {
     const r = await client.resolveGitLog(cwd, opts);
     return r.forbidden ? { forbidden: true } : { forbidden: false, value: r.commits };
   });
@@ -380,7 +409,7 @@ export function resolveHostGitCommit(
   sha: string,
   worktree?: string,
 ): Promise<HostGitResult<HostHistoryValue<CommitDetail | null>>> {
-  return viaRemote(app, hostId, async (client) => {
+  return viaGit(app, hostId, async (client) => {
     const r = await client.resolveGitCommit(cwd, sha, worktree);
     return r.forbidden ? { forbidden: true } : { forbidden: false, value: r.detail };
   });
@@ -394,7 +423,7 @@ export function resolveHostGitCommitFile(
   filePath: string,
   worktree?: string,
 ): Promise<HostGitResult<HostHistoryValue<string | null>>> {
-  return viaRemote(app, hostId, async (client) => {
+  return viaGit(app, hostId, async (client) => {
     const r = await client.resolveGitCommitFile(cwd, sha, filePath, worktree);
     return r.forbidden ? { forbidden: true } : { forbidden: false, value: r.patch };
   });

@@ -236,6 +236,81 @@ export function hostLaunchOptions(app: FastifyInstance, hostId: string): string[
   return hostProtocol(app, hostId)?.launchOptions ?? [];
 }
 
+/** Where the remedy for a gated operation lives: the per-host Update action. */
+export const UPDATE_HINT =
+  "update this host's Mullion from Settings → Hosts (the host's Update action)";
+
+/** A gated operation or launch option: the host's agent cannot do it (issue #2569). */
+export interface UnsupportedGate {
+  ok: false;
+  code: "unsupported";
+  /** What the host lacks: an operation name, or the launch options it would ignore. */
+  missing: string[];
+  /** Points at the existing per-host Update action. */
+  updateHint: string;
+  /** Human-readable, names the host and what it lacks; ends with the hint. */
+  message: string;
+}
+export type OperationGate = { ok: true } | UnsupportedGate;
+
+/** The refusal for `op` on `hostId`: also what a 404 from an agent without the route maps to. */
+export function unsupportedOperation(hostId: string, op: string): UnsupportedGate {
+  return {
+    ok: false,
+    code: "unsupported",
+    missing: [op],
+    updateHint: UPDATE_HINT,
+    message: `host ${hostId} does not support ${op} — ${UPDATE_HINT}`,
+  };
+}
+
+/**
+ * Gates an operation on the host's negotiated support. A host whose protocol
+ * has not been read yet passes (the route's own 404 is mapped to the same
+ * refusal by the caller via `unsupportedOperation`), as does the local host; a
+ * host outside the primary's protocol range fails every operation.
+ */
+export function requireOperation(app: FastifyInstance, hostId: string, op: string): OperationGate {
+  if (hostId === LOCAL_HOST_ID) return { ok: true };
+  const protocol = hostProtocol(app, hostId);
+  if (!protocol) return { ok: true };
+  // "updates" is the remedy for an incompatible protocol, so it is never
+  // blocked by one (only by the agent not having the route at all).
+  if (op !== "updates" && !protocol.legacy && !isProtocolCompatible(protocol.protocolVersion)) {
+    return {
+      ...unsupportedOperation(hostId, op),
+      message: `host ${hostId} speaks an incompatible agent protocol (v${protocol.protocolVersion}) — ${UPDATE_HINT}`,
+    };
+  }
+  return protocol.operations.includes(op) ? { ok: true } : unsupportedOperation(hostId, op);
+}
+
+/**
+ * Gates a launch on the options it needs. A field an agent's spawn schema does
+ * not list is silently stripped, so a launch needing one is refused rather than
+ * started without it. A host whose protocol has not been read yet passes (the
+ * window between registering and the first handshake; the spawn echo checks
+ * still log a stripped field there); a legacy agent is read as the baseline.
+ */
+export function requireLaunchOptions(
+  app: FastifyInstance,
+  hostId: string,
+  required: readonly string[],
+): OperationGate {
+  if (required.length === 0 || hostId === LOCAL_HOST_ID) return { ok: true };
+  const protocol = hostProtocol(app, hostId);
+  if (!protocol) return { ok: true };
+  const missing = required.filter((opt) => !protocol.launchOptions.includes(opt));
+  if (missing.length === 0) return { ok: true };
+  return {
+    ok: false,
+    code: "unsupported",
+    missing,
+    updateHint: UPDATE_HINT,
+    message: `host ${hostId} does not support the launch option${missing.length > 1 ? "s" : ""} ${missing.join(", ")} — ${UPDATE_HINT}`,
+  };
+}
+
 /** The negotiated protocol for a remote host; null until first read. */
 export function hostProtocol(app: FastifyInstance, hostId: string): HostProtocol | null {
   return app.hostAgentTracker?.get(hostId)?.protocol ?? null;
@@ -251,6 +326,9 @@ export function protocolStatus(
     protocolVersion: protocol.legacy ? null : protocol.protocolVersion,
     incompatible: !protocol.legacy && !isProtocolCompatible(protocol.protocolVersion),
     missingOperations: registryOperations.filter((op) => !protocol.operations.includes(op)),
+    missingLaunchOptions: localProtocolInfo().launchOptions.filter(
+      (option) => !protocol.launchOptions.includes(option),
+    ),
     legacy: protocol.legacy,
   };
 }

@@ -124,5 +124,7 @@ export interface HostProtocolStatus {
   incompatible: boolean;
   /** Registry operations the host does not support (the remedy is Update). */
   missingOperations: string[];
+  /** Launch options the host would silently drop; a launch needing one is refused. */
+  missingLaunchOptions: string[];
   legacy: boolean;
 }

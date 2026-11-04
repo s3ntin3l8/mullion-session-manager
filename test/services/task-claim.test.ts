@@ -1870,7 +1870,7 @@ describe("claimTask", () => {
       vi.spyOn(hostGitModule, "resolveHostBaseRef").mockResolvedValue({
         ok: false,
         reason: "unsupported",
-      });
+      } as never);
 
       const outcome = await claimAndDispatch(app, task.id, { auto: false });
 

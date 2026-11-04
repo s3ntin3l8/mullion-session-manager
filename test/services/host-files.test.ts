@@ -301,7 +301,11 @@ describe("host-files.ts", () => {
 
       const result = await writeHostFiles(fakeApp, "remote-host-1", "/x", []);
 
-      expect(result).toEqual({ ok: false, reason: "unsupported" });
+      expect(result).toMatchObject({
+        ok: false,
+        reason: "unsupported",
+        updateHint: expect.stringContaining("Update"),
+      });
     });
   });
 });

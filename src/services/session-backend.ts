@@ -51,6 +51,7 @@ import {
 import type { PromoteDecision } from "../plugins/hooks.js";
 import { adapterHasInitialPromptArgs } from "./hook-adapters/index.js";
 import { compileOutputMatcher, waitForOutput } from "./output-wait.js";
+import { requireOperation, unsupportedOperation } from "./host-agents.js";
 import {
   deliverPrompt,
   REMOTE_WAIT_CHUNK_MS,
@@ -836,12 +837,14 @@ class RemoteBackend implements SessionBackend {
   }
 
   async getTranscript(id: string, query: TranscriptQuery): Promise<TranscriptResult> {
+    const gate = requireOperation(this.app, this.hostId, "session-transcript");
+    if (!gate.ok) return { ok: false, status: 501, error: gate.message };
     try {
       return await this.client.resolveTranscript(id, query);
     } catch (err) {
       // A refusal is a value, like prompt/wait: an agent too old for the route
       // (404), a rejection, or an unreachable host each get their own status.
-      return { ok: false, ...this.remoteRefusal(err, "transcript reads") };
+      return { ok: false, ...this.remoteRefusal(err, "session-transcript") };
     }
   }
 
@@ -873,11 +876,13 @@ class RemoteBackend implements SessionBackend {
   }
 
   async prompt(id: string, opts: { text: string; submit: boolean }): Promise<PromptOutcome> {
+    const gate = requireOperation(this.app, this.hostId, "session-control");
+    if (!gate.ok) return { ok: false, status: 501, error: gate.message };
     try {
       const delivered = await this.client.resolvePrompt(id, opts);
       return { ok: true, outputOffset: delivered.outputOffset, afterSeq: delivered.afterSeq };
     } catch (err) {
-      return { ok: false, ...this.remoteRefusal(err, "prompts") };
+      return { ok: false, ...this.remoteRefusal(err, "session-control") };
     }
   }
 
@@ -908,7 +913,7 @@ class RemoteBackend implements SessionBackend {
           ...(cursor !== undefined ? { afterOffset: cursor } : {}),
         });
       } catch (err) {
-        return { failed: true, ...this.remoteRefusal(err, "output waits") };
+        return { failed: true, ...this.remoteRefusal(err, "session-control") };
       }
       if ("notRunning" in chunk) return { notRunning: true };
       if ("matched" in chunk && chunk.matched) return chunk;
@@ -925,13 +930,10 @@ class RemoteBackend implements SessionBackend {
    * discards the body of a 5xx); a 404 is an agent build too old to have the
    * route at all; anything else is a rejection or an unreachable host.
    */
-  private remoteRefusal(err: unknown, what: string): { status: number; error: string } {
+  private remoteRefusal(err: unknown, op: string): { status: number; error: string } {
     if (err instanceof HostRequestError) {
       if (err.statusCode === 404) {
-        return {
-          status: 501,
-          error: `this host's Mullion is too old to accept ${what} for its sessions — upgrade it`,
-        };
+        return { status: 501, error: unsupportedOperation(this.hostId, op).message };
       }
       if (err.statusCode === 422) {
         try {

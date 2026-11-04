@@ -311,7 +311,7 @@ export async function readHostFiles(
   if (hostId === LOCAL_HOST_ID) {
     return { ok: true, value: readFilesLocally(cwd, relPaths) };
   }
-  return viaRemote(app, hostId, (client) => client.readFiles(cwd, relPaths));
+  return viaRemote(app, hostId, (client) => client.readFiles(cwd, relPaths), "project-files");
 }
 
 /**
@@ -335,9 +335,14 @@ export async function writeHostFiles(
   if (hostId === LOCAL_HOST_ID) {
     return { ok: true, value: writeEntriesLocally(cwd, entries, opts) };
   }
-  return viaRemote(app, hostId, async (client) => {
-    const res = await client.writeFiles(cwd, entries, opts?.stage);
-    // An older agent build replies `{ok: true}` with no list.
-    return { ignored: (res?.ignored as IgnoredPath[] | undefined) ?? [] };
-  });
+  return viaRemote(
+    app,
+    hostId,
+    async (client) => {
+      const res = await client.writeFiles(cwd, entries, opts?.stage);
+      // An older agent build replies `{ok: true}` with no list.
+      return { ignored: (res?.ignored as IgnoredPath[] | undefined) ?? [] };
+    },
+    "project-files",
+  );
 }

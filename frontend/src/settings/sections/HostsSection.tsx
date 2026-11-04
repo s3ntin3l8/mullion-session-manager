@@ -101,6 +101,10 @@ function HostProtocolLine({ host }: { host: Host }) {
   else if (protocol.missingOperations.length > 0) {
     parts.push(`missing: ${protocol.missingOperations.join(", ")} — update this host`);
   }
+  // Issue #2569 — launches needing one of these are refused until it is updated.
+  if (!protocol.incompatible && protocol.missingLaunchOptions.length > 0) {
+    parts.push(`launch options: ${protocol.missingLaunchOptions.join(", ")} unavailable`);
+  }
   return (
     <span data-testid={`host-protocol-${host.id}`}>
       {" · "}

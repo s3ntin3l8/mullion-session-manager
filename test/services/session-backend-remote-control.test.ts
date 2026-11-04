@@ -79,7 +79,7 @@ describe("RemoteBackend.prompt", () => {
     clientMock.resolvePrompt.mockRejectedValue(new HostRequestError("mac-1", 404, "Not Found"));
     const out = await backend().prompt("5", { text: "go", submit: true });
     expect(out).toMatchObject({ ok: false, status: 501 });
-    expect(out.ok === false && out.error).toMatch(/too old.*upgrade/);
+    expect(out.ok === false && out.error).toMatch(/does not support session-control.*Update/);
   });
 
   it("reports an unparseable 422 and any other rejection as 502", async () => {

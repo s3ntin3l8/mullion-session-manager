@@ -8,7 +8,8 @@ import {
 } from "../shared/constants.js";
 import { listHosts } from "./host-registry.js";
 import { measureHostCapacity, type HostCapacity } from "./host-capacity.js";
-import { isOlderVersion, refreshLocalAgents } from "./host-agents.js";
+import { hostProtocol, isOlderVersion, refreshLocalAgents } from "./host-agents.js";
+import { isProtocolCompatible, localProtocolInfo } from "../shared/agent-protocol.js";
 import { appVersion } from "../routes/server-info.js";
 import { cachedProjectOrigin, hostProjectsRoots } from "./project-origin.js";
 
@@ -113,6 +114,21 @@ export interface PlacementCandidate {
   capabilities?: string[] | null;
   /** The host's Mullion version, for flagging an agent older than the primary. */
   mullionVersion?: string | null;
+  /**
+   * What the host's agent negotiated (issue #2569). Null or absent = UNKNOWN
+   * (not read yet): like `agents`, only a host KNOWN to lack a required
+   * operation or launch option is excluded. A legacy agent carries the
+   * explicit legacy baseline.
+   */
+  protocol?: CandidateProtocol | null;
+}
+
+/** The part of a negotiated protocol placement reads. */
+export interface CandidateProtocol {
+  protocolVersion: number;
+  legacy: boolean;
+  operations: readonly string[];
+  launchOptions: readonly string[];
 }
 
 /** What the caller knows about the session being placed. */
@@ -162,6 +178,14 @@ export interface PlacementContext {
    * directive does not override it.
    */
   requiredCapabilities?: readonly string[];
+  /**
+   * Launch options (spawn-body fields) the session needs its host to accept
+   * (issue #2569): a host KNOWN not to list one would drop it silently, so it
+   * is excluded. Unknown protocol fails open.
+   */
+  requiredLaunchOptions?: readonly string[];
+  /** Operations (route families) the launch needs; excluded like launch options. */
+  requiredOperations?: readonly string[];
   /** The primary's own version, to flag a chosen agent that runs an older one. */
   primaryVersion?: string;
 }
@@ -484,6 +508,13 @@ export function chooseHost(
   ) {
     notes.push(`agent v${chosen.mullionVersion}, older than the primary`);
   }
+  // Issue #2569 — name the hosts skipped for lacking negotiated support, so
+  // the recorded reason explains why a capable-looking host was passed over.
+  for (const skipped of decision.excluded) {
+    if (skipped.reason.startsWith(UNSUPPORTED_PREFIX)) {
+      notes.push(`skipped ${skipped.hostId}: ${skipped.reason}`);
+    }
+  }
   return notes.length === 0
     ? decision
     : { ...decision, reason: `${decision.reason} (${notes.join("; ")})` };
@@ -616,7 +647,36 @@ function exclusionReason(candidate: PlacementCandidate, context: PlacementContex
   // unknown fails open (`chooseHost` notes it).
   const lacking = missingCapability(candidate, context);
   if (lacking !== null) return `host lacks capability: ${lacking}`;
+  // Issue #2569 — a host KNOWN not to negotiate what the launch needs.
+  const unsupported = unsupportedBy(candidate, context);
+  if (unsupported !== null) return `${UNSUPPORTED_PREFIX}${unsupported} (update the host)`;
   return null;
+}
+
+/** Marks an exclusion reason as negotiated-support, so `chooseHost` can surface it. */
+const UNSUPPORTED_PREFIX = "host does not support ";
+
+/** What the launch needs that the candidate's negotiated protocol lacks, or null. */
+function unsupportedBy(
+  candidate: PlacementCandidate,
+  context: Pick<PlacementContext, "requiredLaunchOptions" | "requiredOperations">,
+): string | null {
+  const protocol = candidate.protocol;
+  if (!protocol) return null;
+  if (!protocol.legacy && !isProtocolCompatible(protocol.protocolVersion)) {
+    return `this primary's agent protocol (host speaks v${protocol.protocolVersion})`;
+  }
+  const lackingOperations = (context.requiredOperations ?? []).filter(
+    (op) => !protocol.operations.includes(op),
+  );
+  const lackingOptions = (context.requiredLaunchOptions ?? []).filter(
+    (option) => !protocol.launchOptions.includes(option),
+  );
+  const parts = [
+    ...lackingOperations.map((op) => `the ${op} operation`),
+    ...lackingOptions.map((option) => `the ${option} launch option`),
+  ];
+  return parts.length === 0 ? null : parts.join(", ");
 }
 
 function missingCapability(
@@ -764,6 +824,8 @@ function collectCandidates(
       role: host.role,
       // Issue #2240 — the CLIs this host has (null while unknown) and its version.
       agents: app.hostAgentTracker?.get(host.id)?.agents ?? null,
+      // Issue #2569 — what the host negotiated (null while unknown).
+      protocol: isLocal ? { ...localProtocolInfo(), legacy: false } : hostProtocol(app, host.id),
       // Issue #2306 — likewise the host's capabilities (null while unknown).
       capabilities: app.hostAgentTracker?.get(host.id)?.capabilities ?? null,
       mullionVersion: isLocal
@@ -812,6 +874,7 @@ function decide(
   unattended: boolean,
   announce: boolean,
   requiredAgent?: string | readonly string[],
+  launch: LaunchNeeds = {},
 ): PlacementDecision {
   // Issue #2241 — the project's steering flags only bite on the "auto" path:
   // a pinned project goes to its own host whatever they say.
@@ -879,6 +942,7 @@ function decide(
     platforms: constraints.platform,
     requiredAgent,
     requiredCapabilities: constraints.capabilities,
+    ...launch,
     primaryVersion: appVersion,
   };
   let decision = chooseHost(collected.candidates, context);
@@ -901,6 +965,12 @@ function decide(
     );
   }
   return decision;
+}
+
+/** What a launch needs of its host beyond a CLI (issue #2569). */
+export interface LaunchNeeds {
+  requiredLaunchOptions?: readonly string[];
+  requiredOperations?: readonly string[];
 }
 
 /** The active flags in words: `project allows only darwin hosts; project requires xcode`. */
@@ -948,6 +1018,9 @@ function refuseForFlags(
     if (bin !== null) why.add(`a matching host has no ${bin} CLI`);
     const lacking = missingCapability(candidate, context);
     if (lacking !== null) why.add(`a matching host lacks ${lacking}`);
+    if (unsupportedBy(candidate, context) !== null) {
+      why.add("a matching host's agent does not support what this launch needs (update it)");
+    }
   }
   if (passing.length < byPlatform.length) {
     why.add("a matching host is a burst host (this project does not allow burst hosts)");
@@ -960,7 +1033,9 @@ function refuseForFlags(
       (candidate.projectCwd !== null || candidate.needsCheckout === true) &&
       missingAgent(candidate, context) === null &&
       // A host known to lack a capability never gains it by waiting.
-      missingCapability(candidate, context) === null,
+      missingCapability(candidate, context) === null &&
+      // Nor does an agent gain a launch option without being updated.
+      unsupportedBy(candidate, context) === null,
   );
   const detail = `no eligible host satisfies this project's placement flags (${flag}; ${[...why].join("; ")})`;
   return {
@@ -994,9 +1069,9 @@ export function resolvePlacement(
     unattended: boolean;
     /** The agent CLI(s) the session needs on its host (issue #2240). */
     requiredAgent?: string | readonly string[];
-  },
+  } & LaunchNeeds,
 ): PlacementDecision {
-  return decide(app, opts.project, opts.unattended, true, opts.requiredAgent);
+  return decide(app, opts.project, opts.unattended, true, opts.requiredAgent, opts);
 }
 
 /**
@@ -1124,7 +1199,7 @@ export function resolveTargetHost(
      * is always applied (issue #2306).
      */
     checkProjectFlags?: boolean;
-  },
+  } & LaunchNeeds,
 ): TargetPlacementResult {
   const refusal = (
     transient: boolean,
@@ -1168,7 +1243,12 @@ export function resolveTargetHost(
     (candidate) => platformFlagState(candidate.platform, flagPlatforms) === "ok",
   );
 
-  const agentContext = { requiredAgent: opts.requiredAgent, requiredCapabilities };
+  const agentContext = {
+    requiredAgent: opts.requiredAgent,
+    requiredCapabilities,
+    requiredLaunchOptions: opts.requiredLaunchOptions,
+    requiredOperations: opts.requiredOperations,
+  };
   const decision = chooseHost(matching, {
     pinnedHostId: opts.project.hostId,
     unattended: opts.unattended,
@@ -1177,6 +1257,8 @@ export function resolveTargetHost(
     allowBurst: true,
     requiredAgent: opts.requiredAgent,
     requiredCapabilities,
+    requiredLaunchOptions: opts.requiredLaunchOptions,
+    requiredOperations: opts.requiredOperations,
     primaryVersion: appVersion,
   });
   // chooseHost falls back to the pinned host when nothing is eligible; for a
@@ -1196,6 +1278,8 @@ export function resolveTargetHost(
         // A host known to lack the CLI never gains it by waiting.
         missingAgent(candidate, agentContext) === null &&
         missingCapability(candidate, agentContext) === null &&
+        // An agent only gains a launch option by being updated.
+        unsupportedBy(candidate, agentContext) === null &&
         (wantedHost === null || candidate.hostId === wantedHost) &&
         (wantedPlatform === undefined ||
           (candidate.platform ?? "").toLowerCase() === wantedPlatform ||
@@ -1213,6 +1297,10 @@ export function resolveTargetHost(
       if (bin !== null) why.push(`a matching host has no ${bin} CLI`);
       const lacking = missingCapability(candidate, agentContext);
       if (lacking !== null) why.push(`a matching host lacks ${lacking}`);
+      const unsupported = unsupportedBy(candidate, agentContext);
+      if (unsupported !== null) {
+        why.push(`${candidate.hostId} does not support ${unsupported} (update the host)`);
+      }
     }
     // The target exists but the project's flag rules it out; the caller named
     // it, so saying what the project allows leaks nothing.
@@ -1257,7 +1345,7 @@ export function previewPlacement(
     unattended?: boolean;
     /** The agent CLI the launch would need on its host (issue #2240). */
     requiredAgent?: string | readonly string[];
-  },
+  } & LaunchNeeds,
 ): PlacementDecision {
-  return decide(app, opts.project, opts.unattended ?? false, false, opts.requiredAgent);
+  return decide(app, opts.project, opts.unattended ?? false, false, opts.requiredAgent, opts);
 }
