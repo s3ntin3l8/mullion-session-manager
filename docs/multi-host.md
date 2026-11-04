@@ -1402,6 +1402,37 @@ agent token with 401/403, or the directory can't be verified) → 503,
 status targets read the recorded cwd as is (`trustSessionCwd`) because they
 validate it themselves; the host is still the session's own.
 
+### Session-scoped git routes
+
+The Source Control routes under `/api/projects/:id/` accept an optional
+`?sessionId=<id>` query parameter: `git-status`, `git-branches`, `git-branch`,
+`git-log`, `git-commit/:sha`, `git-commit/:sha/file`, `git-health`, and the
+mutating `git-repair`, `git-fetch`, `git-pull`, `git-branch-delete`,
+`git-branch-prune`, `git-checkout`, `git-branch-create` and `git-rebase`. With it
+the route resolves host and directory through `resolveExecutionContext` and
+operates on **that session's checkout** (its host, and its cwd: the main
+checkout or a sibling worktree). Without it the explicit project default
+applies: the project's host and `projects.cwd`. The batch routes
+(`git-statuses?sessionIds=`, `git-diff-stats`) and `git-file-diff?sessionId=`
+use the same resolver, so they agree with the single-session routes.
+
+A session context that cannot be resolved is never replaced by the project's
+host or cwd:
+
+| Resolver error     | HTTP | Body `error`       |
+| ------------------ | ---- | ------------------ |
+| `invalid_context`  | 400  | `invalid_context`  |
+| `host_unavailable` | 503  | `host_unavailable` |
+| `unsupported`      | 501  | `unsupported`      |
+
+A mutation on a session's remote checkout whose agent predates the route
+(a 404 from the agent) also answers 501 `unsupported`; it is never run
+anywhere else. The checkout/create/rebase guard that refuses to move `HEAD`
+under an active session ignores the requesting session itself.
+
+`git-branch` and `git-branch-prune` are local-only today: for a session on a
+remote host they answer 204 (nothing done), as for a remote project.
+
 ## Where a session lives
 
 A session records the host it was spawned on — `sessions.hostId`, written
