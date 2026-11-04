@@ -352,7 +352,8 @@ PR).
   a project's DB-authored pinned note/skill/reviewer subagent, primary-only,
   no host branching — see [`agent-context.md`](agent-context.md)),
   `project-setup` (`POST /api/projects/:id/setup/preview`/`apply`/`generate`,
-  plus `POST .../setup/generate/start`, `GET .../setup/generate/jobs/:jobId`
+  plus `POST .../setup/generate/start`, `GET .../setup/generate/jobs/:jobId`,
+  `POST .../setup/generate/jobs/:jobId/cancel` (202, or 404 when unknown or finished)
   and `GET .../setup/generate/active` to run and poll Generate as a background
   job —
   scaffold a committed briefing region + starter skill/reviewer into a

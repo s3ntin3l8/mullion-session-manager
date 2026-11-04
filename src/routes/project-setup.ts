@@ -1002,6 +1002,13 @@ async function executeScaffoldGeneration(
     throw err;
   }
 
+  // A cancel that landed as the turn finished: composing is not
+  // interruptible, so bail before `finishPreview` registers a preview for a
+  // job the user already cancelled. The job registry ignores this outcome.
+  if (signal?.aborted) {
+    return { ok: false, status: 499, message: "Generation was cancelled" };
+  }
+
   onPhase?.("composing");
   // Issue #1082(c) — the refreshed target(s), and ONLY those, are
   // stripped from the view computeScaffold's write pass sees; every

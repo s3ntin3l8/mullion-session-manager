@@ -1961,7 +1961,9 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
     env: sandboxUsable ? turnEnv(gitEnv()) : gitEnv(),
     timeout: timeoutMs,
     maxBuffer: 16 * 1024 * 1024,
-    ...(signal ? { signal } : {}),
+    // execFile's abort sends one signal; SIGKILL so a CLI that traps SIGTERM
+    // cannot outlive its job (and the scratch worktree removed under it).
+    ...(signal ? { signal, killSignal: "SIGKILL" as const } : {}),
   };
   return new Promise<string>((resolve, reject) => {
     const child = execFile(invocation.bin, invocation.args, execOptions, (err, stdout, stderr) => {

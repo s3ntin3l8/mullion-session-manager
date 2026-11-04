@@ -227,7 +227,7 @@ async function runGenerateJob(
 }
 
 /** Cancels a running job: aborts its agent turn and records it as
- * `cancelled` (not `failed`). Returns false when the job is unknown, belongs to
+ * `cancelled` (not `failed`). Returns null when the job is unknown, belongs to
  * another project, or has already finished. */
 export function cancelGenerateJob(
   jobId: string,

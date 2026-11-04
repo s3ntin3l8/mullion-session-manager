@@ -342,7 +342,7 @@ preview.
 validates the request, checks for the 409 "skill and reviewer already exist"
 conflict and resolves the generating agent synchronously, then starts a
 background job (`202 { jobId }`) with phases
-`preparing` → `agent` → `composing` → `done` | `failed` (one in-flight job per
+`preparing` → `agent` → `composing` → `done` | `failed` | `cancelled` (a cancelled job is never overwritten by the aborted turn's failure; one in-flight job per
 project — a second `generate/start` while one is running attaches to the
 existing job rather than spawning a second turn). Progress and completion are
 polled via `GET /api/projects/:id/setup/generate/jobs/:jobId` and
