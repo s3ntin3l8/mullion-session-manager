@@ -82,6 +82,7 @@ import { resolveBackend } from "../services/session-backend.js";
 import { resolveSessionHostId } from "../services/session-live-info.js";
 import { resolveSessionCwdTargets } from "../services/session-cwd-targets.js";
 import { forwardHostRequestError } from "../services/host-error-reply.js";
+import { loadScopedProject, replyUnsupportedOnAgent } from "../services/session-git-scope.js";
 import {
   claimReclaimSlot,
   recordReclaimed,
@@ -743,6 +744,7 @@ function sessionsInProjectCheckout(
   app: FastifyInstance,
   project: { id: number; hostId: string; cwd: string },
   linkedWorktreePaths: string[],
+  exceptSessionId?: number,
 ): number[] {
   const rows = app.db
     .select({
@@ -758,6 +760,7 @@ function sessionsInProjectCheckout(
     .all();
   const matched: number[] = [];
   for (const row of rows) {
+    if (row.id === exceptSessionId) continue;
     // NULL inherits the project's host — resolveSessionHostId (session-live-info.ts).
     const hostId = row.hostId ?? row.projectHostId;
     if (hostId !== project.hostId) continue;
@@ -1788,15 +1791,15 @@ export async function projectsRoute(app: FastifyInstance) {
   // cache still does its job for that path. Local only for now — a remote-
   // hosted project's Fetch button still shows the agent's own cached read
   // (same limitation Source Control's handleFetch already had).
-  app.get<{ Params: { id: string }; Querystring: { fresh?: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { sessionId?: string; fresh?: string } }>(
     "/api/projects/:id/git-status",
     { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound();
+      const project = await loadScopedProject(app, projectId, request.query.sessionId, reply);
+      if (!project) return reply;
 
       if (project.hostId === LOCAL_HOST_ID) {
         if (!isGitRepo(project.cwd)) {
@@ -1921,15 +1924,15 @@ export async function projectsRoute(app: FastifyInstance) {
   // frontend only calls this when Source Control is opened (git-refs.ts's own
   // doc comment on why). Same "widget just doesn't render" 204 degradation
   // as /git-status.
-  app.get<{ Params: { id: string }; Querystring: { detail?: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { sessionId?: string; detail?: string } }>(
     "/api/projects/:id/git-branches",
     { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound();
+      const project = await loadScopedProject(app, projectId, request.query.sessionId, reply);
+      if (!project) return reply;
 
       // Issue #442 — opt-in isMerged enrichment (extra base-resolution +
       // `git branch --merged` spawns), set only by Source Control's own
@@ -2012,12 +2015,18 @@ export async function projectsRoute(app: FastifyInstance) {
 
   app.get<{
     Params: { id: string };
-    Querystring: { cwd?: string; skip?: string; limit?: string; scope?: string };
+    Querystring: {
+      sessionId?: string;
+      cwd?: string;
+      skip?: string;
+      limit?: string;
+      scope?: string;
+    };
   }>("/api/projects/:id/git-log", gitLogRateLimit, async (request, reply) => {
     const projectId = Number(request.params.id);
     if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
-    const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-    if (!project) return reply.notFound();
+    const project = await loadScopedProject(app, projectId, request.query.sessionId, reply);
+    if (!project) return reply;
     const cwd = await resolveGitLogCwd(project, request.query.cwd);
     if (cwd === "forbidden") return reply.badRequest("cwd is not one of this project's worktrees");
     const skip = request.query.skip === undefined ? 0 : Number(request.query.skip);
@@ -2064,42 +2073,40 @@ export async function projectsRoute(app: FastifyInstance) {
     return { commits, hasMore: commits.length >= Math.min(limit, MAX_LOG_PAGE) };
   });
 
-  app.get<{ Params: { id: string; sha: string }; Querystring: { cwd?: string } }>(
-    "/api/projects/:id/git-commit/:sha",
-    gitLogRateLimit,
-    async (request, reply) => {
-      const projectId = Number(request.params.id);
-      if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
-      if (!isValidSha(request.params.sha)) return reply.badRequest("Invalid commit id");
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound();
-      const cwd = await resolveGitLogCwd(project, request.query.cwd);
-      if (cwd === "forbidden")
-        return reply.badRequest("cwd is not one of this project's worktrees");
-      let detail: Awaited<ReturnType<typeof getCommitDetail>>;
-      if (project.hostId === LOCAL_HOST_ID) {
-        detail = await getCommitDetail(cwd, request.params.sha);
-      } else {
-        const remote = await remoteHistory(project, reply, () =>
-          resolveHostGitCommit(
-            app,
-            project.hostId,
-            project.cwd,
-            request.params.sha,
-            cwd === project.cwd ? undefined : cwd,
-          ),
-        );
-        if (!remote) return reply;
-        detail = remote.value;
-      }
-      if (!detail) return reply.notFound("Commit not found");
-      return detail;
-    },
-  );
+  app.get<{
+    Params: { id: string; sha: string };
+    Querystring: { sessionId?: string; cwd?: string };
+  }>("/api/projects/:id/git-commit/:sha", gitLogRateLimit, async (request, reply) => {
+    const projectId = Number(request.params.id);
+    if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
+    if (!isValidSha(request.params.sha)) return reply.badRequest("Invalid commit id");
+    const project = await loadScopedProject(app, projectId, request.query.sessionId, reply);
+    if (!project) return reply;
+    const cwd = await resolveGitLogCwd(project, request.query.cwd);
+    if (cwd === "forbidden") return reply.badRequest("cwd is not one of this project's worktrees");
+    let detail: Awaited<ReturnType<typeof getCommitDetail>>;
+    if (project.hostId === LOCAL_HOST_ID) {
+      detail = await getCommitDetail(cwd, request.params.sha);
+    } else {
+      const remote = await remoteHistory(project, reply, () =>
+        resolveHostGitCommit(
+          app,
+          project.hostId,
+          project.cwd,
+          request.params.sha,
+          cwd === project.cwd ? undefined : cwd,
+        ),
+      );
+      if (!remote) return reply;
+      detail = remote.value;
+    }
+    if (!detail) return reply.notFound("Commit not found");
+    return detail;
+  });
 
   app.get<{
     Params: { id: string; sha: string };
-    Querystring: { cwd?: string; path?: string };
+    Querystring: { sessionId?: string; cwd?: string; path?: string };
   }>("/api/projects/:id/git-commit/:sha/file", gitLogRateLimit, async (request, reply) => {
     const projectId = Number(request.params.id);
     if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
@@ -2107,8 +2114,8 @@ export async function projectsRoute(app: FastifyInstance) {
     if (!isValidSha(request.params.sha) || !file || !isSafeRepoPath(file)) {
       return reply.badRequest("Invalid commit id or path");
     }
-    const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-    if (!project) return reply.notFound();
+    const project = await loadScopedProject(app, projectId, request.query.sessionId, reply);
+    if (!project) return reply;
     const cwd = await resolveGitLogCwd(project, request.query.cwd);
     if (cwd === "forbidden") return reply.badRequest("cwd is not one of this project's worktrees");
     let patch: string | null;
@@ -2148,15 +2155,15 @@ export async function projectsRoute(app: FastifyInstance) {
   //
   // The doctor lives in src/services/git-doctor.ts so the CLI
   // (scripts/git-doctor.mjs) and this route share one implementation.
-  app.post<{ Params: { id: string } }>(
+  app.post<{ Params: { id: string }; Querystring: { sessionId?: string } }>(
     "/api/projects/:id/git-health",
     { schema: gitFetchParamsSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound();
+      const project = await loadScopedProject(app, projectId, request.query.sessionId, reply);
+      if (!project) return reply;
 
       if (project.hostId === LOCAL_HOST_ID) {
         return await inspectGitClone(project.cwd);
@@ -2198,15 +2205,19 @@ export async function projectsRoute(app: FastifyInstance) {
       additionalProperties: false,
     },
   };
-  app.post<{ Params: { id: string }; Body: { confirm?: boolean } }>(
+  app.post<{
+    Params: { id: string };
+    Querystring: { sessionId?: string };
+    Body: { confirm?: boolean };
+  }>(
     "/api/projects/:id/git-repair",
     { schema: gitRepairParamsSchema, config: { rateLimit: { max: 5, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound();
+      const project = await loadScopedProject(app, projectId, request.query.sessionId, reply);
+      if (!project) return reply;
 
       // The plan is a READ. Only the confirmed repair mutates anything, and
       // only that one takes the in-flight slot.
@@ -2247,6 +2258,8 @@ export async function projectsRoute(app: FastifyInstance) {
             confirm: true,
           });
         } catch (err) {
+          if (replyUnsupportedOnAgent(err, request.query.sessionId, project.hostId, reply))
+            return reply;
           return reply.serviceUnavailable(
             remoteHostFailureMessage(app, project.hostId, err, "the repair"),
           );
@@ -2257,15 +2270,15 @@ export async function projectsRoute(app: FastifyInstance) {
     },
   );
 
-  app.post<{ Params: { id: string } }>(
+  app.post<{ Params: { id: string }; Querystring: { sessionId?: string } }>(
     "/api/projects/:id/git-fetch",
     { schema: gitFetchParamsSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound();
+      const project = await loadScopedProject(app, projectId, request.query.sessionId, reply);
+      if (!project) return reply;
 
       // The clone is claimed for the fetch, so a manual Fetch cannot land
       // inside a repair's own fetch window (issue #1896) — the same registry
@@ -2281,7 +2294,9 @@ export async function projectsRoute(app: FastifyInstance) {
 
         try {
           return await getRemoteHostClient(app, project.hostId).resolveGitFetch(project.cwd);
-        } catch {
+        } catch (err) {
+          if (replyUnsupportedOnAgent(err, request.query.sessionId, project.hostId, reply))
+            return reply;
           return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
         }
       } finally {
@@ -2300,15 +2315,15 @@ export async function projectsRoute(app: FastifyInstance) {
       properties: { id: { type: "string", pattern: "^[1-9][0-9]*$" } },
     },
   };
-  app.post<{ Params: { id: string } }>(
+  app.post<{ Params: { id: string }; Querystring: { sessionId?: string } }>(
     "/api/projects/:id/git-pull",
     { schema: gitPullParamsSchema, config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound();
+      const project = await loadScopedProject(app, projectId, request.query.sessionId, reply);
+      if (!project) return reply;
 
       // The clone is claimed for the pull: it fetches and merges, and the
       // merge writes the index the repair rewrites (issue #1896).
@@ -2323,7 +2338,9 @@ export async function projectsRoute(app: FastifyInstance) {
 
         try {
           return await getRemoteHostClient(app, project.hostId).resolveGitPull(project.cwd);
-        } catch {
+        } catch (err) {
+          if (replyUnsupportedOnAgent(err, request.query.sessionId, project.hostId, reply))
+            return reply;
           return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
         }
       } finally {
@@ -2351,7 +2368,11 @@ export async function projectsRoute(app: FastifyInstance) {
       },
     },
   };
-  app.post<{ Params: { id: string }; Body: { name: string; force?: boolean } }>(
+  app.post<{
+    Params: { id: string };
+    Querystring: { sessionId?: string };
+    Body: { name: string; force?: boolean };
+  }>(
     "/api/projects/:id/git-branch-delete",
     {
       schema: gitBranchDeleteBodySchema,
@@ -2361,8 +2382,8 @@ export async function projectsRoute(app: FastifyInstance) {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
 
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound();
+      const project = await loadScopedProject(app, projectId, request.query.sessionId, reply);
+      if (!project) return reply;
 
       const { name, force } = request.body;
 
@@ -2398,6 +2419,8 @@ export async function projectsRoute(app: FastifyInstance) {
       try {
         return await backend.deleteBranch(project.cwd, name, { force });
       } catch (err) {
+        if (replyUnsupportedOnAgent(err, request.query.sessionId, project.hostId, reply))
+          return reply;
         app.log.warn({ hostId: project.hostId, err }, "host unreachable, git branch delete failed");
         return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
       }
@@ -2420,6 +2443,7 @@ export async function projectsRoute(app: FastifyInstance) {
 
   async function runGuardedBranchOp(
     projectId: number,
+    sessionId: string | undefined,
     reply: FastifyReply,
     opts: { movesHead: boolean; label: string },
     op: (
@@ -2427,8 +2451,8 @@ export async function projectsRoute(app: FastifyInstance) {
       project: typeof projects.$inferSelect,
     ) => Promise<GitBranchOpResult>,
   ): Promise<GitBranchOpResult | FastifyReply> {
-    const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-    if (!project) return reply.notFound();
+    const project = await loadScopedProject(app, projectId, sessionId, reply);
+    if (!project) return reply;
     if (isCloneBusy(project.hostId, project.cwd)) {
       return { ok: false, reason: "busy", detail: "A git operation is already running" };
     }
@@ -2450,7 +2474,12 @@ export async function projectsRoute(app: FastifyInstance) {
         const linked = (worktrees ?? [])
           .filter((w) => !w.isMain && !isWithinAnyWorktree(project.cwd, [w.path]))
           .map((w) => w.path);
-        const sessionIds = sessionsInProjectCheckout(app, project, linked);
+        const sessionIds = sessionsInProjectCheckout(
+          app,
+          project,
+          linked,
+          sessionId === undefined ? undefined : Number(sessionId),
+        );
         if (sessionIds.length > 0) {
           return { ok: false, reason: "sessions-active", detail: sessionIds.join(",") };
         }
@@ -2458,6 +2487,7 @@ export async function projectsRoute(app: FastifyInstance) {
       return await op(backend, project);
     } catch (err) {
       if (!(err instanceof HostUnreachableError || err instanceof HostRequestError)) throw err;
+      if (replyUnsupportedOnAgent(err, sessionId, project.hostId, reply)) return reply;
       return reply.serviceUnavailable(
         remoteHostFailureMessage(app, project.hostId, err, `git ${opts.label}`),
       );
@@ -2466,7 +2496,11 @@ export async function projectsRoute(app: FastifyInstance) {
     }
   }
 
-  app.post<{ Params: { id: string }; Body: { branch: string } }>(
+  app.post<{
+    Params: { id: string };
+    Querystring: { sessionId?: string };
+    Body: { branch: string };
+  }>(
     "/api/projects/:id/git-checkout",
     {
       schema: {
@@ -2483,13 +2517,18 @@ export async function projectsRoute(app: FastifyInstance) {
     async (request, reply) =>
       runGuardedBranchOp(
         Number(request.params.id),
+        request.query.sessionId,
         reply,
         { movesHead: true, label: "checkout" },
         (backend, project) => backend.checkoutBranch(project.cwd, request.body.branch),
       ),
   );
 
-  app.post<{ Params: { id: string }; Body: { name: string; from: string; checkout?: boolean } }>(
+  app.post<{
+    Params: { id: string };
+    Querystring: { sessionId?: string };
+    Body: { name: string; from: string; checkout?: boolean };
+  }>(
     "/api/projects/:id/git-branch-create",
     {
       schema: {
@@ -2512,6 +2551,7 @@ export async function projectsRoute(app: FastifyInstance) {
       // Creating a branch alone moves nothing; switching to it does.
       return runGuardedBranchOp(
         Number(request.params.id),
+        request.query.sessionId,
         reply,
         { movesHead: checkout === true, label: "branch create" },
         (backend, project) => backend.createBranch(project.cwd, name, from, { checkout }),
@@ -2519,7 +2559,11 @@ export async function projectsRoute(app: FastifyInstance) {
     },
   );
 
-  app.post<{ Params: { id: string }; Body: { onto?: string } }>(
+  app.post<{
+    Params: { id: string };
+    Querystring: { sessionId?: string };
+    Body: { onto?: string };
+  }>(
     "/api/projects/:id/git-rebase",
     {
       schema: {
@@ -2535,6 +2579,7 @@ export async function projectsRoute(app: FastifyInstance) {
     async (request, reply) =>
       runGuardedBranchOp(
         Number(request.params.id),
+        request.query.sessionId,
         reply,
         { movesHead: true, label: "rebase" },
         (backend, project) => backend.rebaseBranch(project.cwd, request.body?.onto),
@@ -2544,7 +2589,7 @@ export async function projectsRoute(app: FastifyInstance) {
   // A3 — one branch's drilldown: upstream / base ahead-behind, the commits
   // only it has, worktree, task claim and PR. Local projects only (a remote
   // host's git is behind the agent; History on remote hosts is A4's seam).
-  app.get<{ Params: { id: string }; Querystring: { name?: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { sessionId?: string; name?: string } }>(
     "/api/projects/:id/git-branch",
     { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
     async (request, reply) => {
@@ -2552,8 +2597,8 @@ export async function projectsRoute(app: FastifyInstance) {
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
       const name = request.query.name;
       if (!name || !isPlainBranchName(name)) return reply.badRequest("Invalid branch name");
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound();
+      const project = await loadScopedProject(app, projectId, request.query.sessionId, reply);
+      if (!project) return reply;
       if (project.hostId !== LOCAL_HOST_ID) {
         reply.code(204);
         return;
@@ -2599,6 +2644,7 @@ export async function projectsRoute(app: FastifyInstance) {
   };
   app.post<{
     Params: { id: string };
+    Querystring: { sessionId?: string };
     Body: { dryRun?: boolean; confirm?: boolean; names?: string[] };
   }>(
     "/api/projects/:id/git-branch-prune",
@@ -2609,8 +2655,8 @@ export async function projectsRoute(app: FastifyInstance) {
     async (request, reply) => {
       const projectId = Number(request.params.id);
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
-      const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-      if (!project) return reply.notFound();
+      const project = await loadScopedProject(app, projectId, request.query.sessionId, reply);
+      if (!project) return reply;
 
       const { dryRun, names } = request.body ?? {};
       // Deleting needs an explicit confirm; dryRun:true always wins.
