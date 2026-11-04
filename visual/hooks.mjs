@@ -46,7 +46,20 @@ function warmUp(page) {
   return warmed;
 }
 
-export async function beforeScene({ context }) {
+export async function beforeScene({ context, cfg }) {
+  const demoUrl = cfg.demo.url;
+  // Writes land now, and the layout the last scene saved (an open pane, say) is
+  // stored server-side, so every scene after it would start from that instead of
+  // a fresh workspace. Deleting the workspaces and reading the list back
+  // re-seeds the one default row with no layout, which is what a first load
+  // looks like. Session state is not reset: opening a session in `dashboard`
+  // clears its attention, so the bell's count in a lone ROUTES=kanban run still
+  // differs from the full run the baselines come from (CI always runs them all).
+  const workspaces = await (await context.request.get(`${demoUrl}/api/workspaces`)).json();
+  for (const workspace of workspaces) {
+    await context.request.delete(`${demoUrl}/api/workspaces/${workspace.id}`);
+  }
+  await context.request.get(`${demoUrl}/api/workspaces`);
   // The low-disk banner would sit over every shot. The browser clock is frozen
   // by scenes.json `clock`, so Date.now() here is the same instant the app sees.
   await context.addInitScript(() => {

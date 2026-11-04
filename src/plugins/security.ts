@@ -172,7 +172,17 @@ export const securityPlugin = fp(async (app: FastifyInstance) => {
     // `remoteAddress` inject option sets (see control-socket.ts's
     // injectRoute) and is never influenced by trustProxy/XFF parsing either
     // way, so this check stays correct regardless of that future config.
+    //
+    // The throwaway demo instance (MULLION_DEMO, scripts/demo/instance.mjs)
+    // is exempt for reads. Loopback only, no login, and a renderer reloads its
+    // pages dozens of times a minute, which trips the per-route read limiters
+    // (project-github.ts 30/min, project-files.ts) and fills screenshots and
+    // visual-check consoles with 429s. This predicate is inherited by every
+    // per-route limiter, which RATE_LIMIT_MAX alone does not reach. Writes
+    // (and so the login and per-route write limits) stay limited: it is the
+    // GET/HEAD verbs only, so those code paths are still exercised there.
     allowList: (request) =>
+      (app.config.MULLION_DEMO && (request.method === "GET" || request.method === "HEAD")) ||
       request.raw.socket.remoteAddress === CONTROL_SOCKET_ADDR ||
       (previewHostPattern !== null && isPreviewHost(request.headers.host, previewHostPattern)) ||
       // Only GET/HEAD — a write verb against a static-shell-shaped path

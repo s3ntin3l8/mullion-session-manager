@@ -33,14 +33,7 @@
         "nodes": 10
       }
     ],
-    "console": [
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "[store] failed to save workspace layout: ApiError: cross-origin request rejected\n    at request (http://127.0.0.1:3957/src/api/client.ts:324:9)\n    at async Object.saveWorkspaceLayout (http://127.0.0.1:3957/src/store/slices/workspaces.ts:40:20)"
-    ]
+    "console": []
   },
   "dashboard.desktop.light.png": {
     "status": 200,
@@ -76,12 +69,7 @@
         "nodes": 10
       }
     ],
-    "console": [
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "[store] failed to save workspace layout: ApiError: cross-origin request rejected\n    at request (http://127.0.0.1:3957/src/api/client.ts:324:9)\n    at async Object.saveWorkspaceLayout (http://127.0.0.1:3957/src/store/slices/workspaces.ts:40:20)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)"
-    ]
+    "console": []
   },
   "kanban.desktop.dark.png": {
     "status": 200,
@@ -112,10 +100,7 @@
         "nodes": 19
       }
     ],
-    "console": [
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)"
-    ]
+    "console": []
   },
   "kanban.desktop.light.png": {
     "status": 200,
@@ -146,10 +131,7 @@
         "nodes": 19
       }
     ],
-    "console": [
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)"
-    ]
+    "console": []
   },
   "github-pr.desktop.dark.png": {
     "status": 200,
@@ -185,10 +167,7 @@
         "nodes": 12
       }
     ],
-    "console": [
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)"
-    ]
+    "console": []
   },
   "github-pr.desktop.light.png": {
     "status": 200,
@@ -224,13 +203,6 @@
         "nodes": 12
       }
     ],
-    "console": [
-      "Failed to load resource: the server responded with a status of 429 (Too Many Requests)",
-      "Failed to load resource: the server responded with a status of 429 (Too Many Requests)",
-      "Failed to load resource: the server responded with a status of 429 (Too Many Requests)",
-      "Failed to load resource: the server responded with a status of 429 (Too Many Requests)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)"
-    ]
+    "console": []
   }
 }

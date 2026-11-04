@@ -150,3 +150,28 @@ describe("vite.config dev server file access", () => {
     }
   });
 });
+
+describe("vite.config dev proxy", () => {
+  // The backend refuses a write whose Origin is not the Host it received, so the
+  // proxy must forward the browser's Host instead of rewriting it to the target's.
+  // The whole shape is pinned: the string shorthand this replaced also meant a
+  // target, and /ws needs `ws` to upgrade at all.
+  it("forwards /api and /ws to the backend with the browser's Host header", async () => {
+    // vite.config.ts reads BACKEND_URL once, at import, so follow the ambient value.
+    const expectedTarget = process.env.BACKEND_URL || "http://localhost:3450";
+    const resolved = await config({ command: "serve", mode: "development" });
+    const proxy = (
+      resolved as {
+        server: {
+          proxy: Record<string, { target?: string; ws?: boolean; changeOrigin?: boolean }>;
+        };
+      }
+    ).server.proxy;
+    expect(proxy["/api"]).toEqual({ target: expectedTarget, changeOrigin: false });
+    expect(proxy["/ws"]).toEqual({
+      target: expectedTarget,
+      ws: true,
+      changeOrigin: false,
+    });
+  });
+});
