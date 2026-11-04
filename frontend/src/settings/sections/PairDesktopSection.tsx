@@ -91,7 +91,10 @@ export function PairDesktopSection() {
       .catch(() => undefined);
   };
 
-  const live = created && pairings.find((p) => p.id === created.id)?.state === "pending";
+  // Default to "pending" until the list poll catches up, so a slow or failed
+  // GET never hides the one-time code the create call just returned.
+  const live =
+    created && (pairings.find((p) => p.id === created.id)?.state ?? "pending") === "pending";
   const visible = pairings.filter((p) => p.state !== "revoked" && p.state !== "expired");
 
   return (
