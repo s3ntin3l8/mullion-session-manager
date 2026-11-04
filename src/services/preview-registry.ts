@@ -1,7 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
-import { and, desc, eq, isNotNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNotNull } from "drizzle-orm";
 import { previews, projects, sessions } from "../db/schema.js";
+import { resolveSessionHostId } from "./session-live-info.js";
 
 // Never a decodable/encoded target (see schema.ts) — an opaque random slug,
 // used verbatim as the "preview-<slug>" DNS label. crypto.randomUUID()'s
@@ -127,13 +128,32 @@ export function getOrCreateProjectPreview(
       .from(sessions)
       .where(eq(sessions.id, sessionId))
       .all();
-    if (session?.projectId === projectId) {
+    if (session?.projectId === projectId && !holdsOtherHostBinding(app, row, sessionId)) {
       app.db.update(previews).set({ sessionId }).where(eq(previews.slug, row.slug)).run();
       row = { ...row, sessionId };
     }
   }
 
   return toSummary(row);
+}
+
+/**
+ * Whether the preview is already bound to a live session on a different host
+ * than `sessionId`'s. The checkout preview is one row per project, so a later
+ * accept from a session elsewhere must not repoint an open preview at another
+ * machine: the preview keeps its original target until that session is gone.
+ */
+function holdsOtherHostBinding(app: FastifyInstance, row: PreviewRow, sessionId: number): boolean {
+  if (row.sessionId === null || row.sessionId === sessionId) return false;
+  const rows = app.db
+    .select()
+    .from(sessions)
+    .where(inArray(sessions.id, [row.sessionId, sessionId]))
+    .all();
+  const current = rows.find((s) => s.id === row.sessionId);
+  const incoming = rows.find((s) => s.id === sessionId);
+  if (!current || !incoming || current.status !== "active") return false;
+  return resolveSessionHostId(app, current) !== resolveSessionHostId(app, incoming);
 }
 
 /** The branch preview row for (project, branch), if one was ever created. */
@@ -180,14 +200,34 @@ export function bindBranchPreview(
   return row ? toSummary(row) : undefined;
 }
 
-/** Every port a branch preview currently holds — what a new one must avoid. */
-export function listUpstreamPorts(app: FastifyInstance): Set<number> {
+/**
+ * Every port a branch preview currently holds on `hostId` — what a new one on
+ * that host must avoid. A port belongs to the host of the session bound to
+ * the preview, so the same number on two hosts is no conflict. A row with no
+ * bound session holds nothing on any host. Not a full cross-session
+ * inventory: only ports Mullion itself handed to branch previews.
+ */
+export function listUpstreamPorts(app: FastifyInstance, hostId: string): Set<number> {
   const rows = app.db
-    .select({ port: previews.upstreamPort })
+    .select({
+      port: previews.upstreamPort,
+      sessionProjectId: sessions.projectId,
+      sessionHostId: sessions.hostId,
+    })
     .from(previews)
+    .innerJoin(sessions, eq(sessions.id, previews.sessionId))
     .where(isNotNull(previews.upstreamPort))
     .all();
-  return new Set(rows.flatMap((r) => (r.port === null ? [] : [r.port])));
+  const ports = new Set<number>();
+  for (const r of rows) {
+    if (r.port === null) continue;
+    const owner = resolveSessionHostId(app, {
+      projectId: r.sessionProjectId,
+      hostId: r.sessionHostId,
+    });
+    if (owner === hostId) ports.add(r.port);
+  }
+  return ports;
 }
 
 // One row per registered URL (see schema.ts) — unlike the project case above,

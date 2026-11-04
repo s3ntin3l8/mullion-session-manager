@@ -209,8 +209,9 @@ async function clearStaleWorktree(
   }
 }
 
-// Ports handed out to a create that hasn't bound its row yet.
-const reservedPorts = new Set<number>();
+// Ports handed out to a create that hasn't bound its row yet, per host: the
+// same port number on two hosts is not a conflict.
+const reservedPorts = new Map<string, Set<number>>();
 
 // Concurrent requests for the same (project, branch) share one create: the
 // row upsert alone would keep the table consistent, but both callers would
@@ -283,12 +284,18 @@ async function createBranchPreview(
   // Held from allocation until the row is bound: concurrent creates for
   // different branches don't share the inflight entry, and would otherwise
   // only see each other's ports once bound.
-  const port = await allocatePreviewPort(new Set([...listUpstreamPorts(app), ...reservedPorts]));
-  reservedPorts.add(port);
+  // Branch previews are local-only today (see the header), so the port lives
+  // on the local host; the inventory is keyed by host for when that changes.
+  const hostId = LOCAL_HOST_ID;
+  const held = reservedPorts.get(hostId) ?? new Set<number>();
+  reservedPorts.set(hostId, held);
+  const port = await allocatePreviewPort(new Set([...listUpstreamPorts(app, hostId), ...held]));
+  held.add(port);
   try {
     return await startOnPort(app, projectId, branch, control, port);
   } finally {
-    reservedPorts.delete(port);
+    held.delete(port);
+    if (held.size === 0) reservedPorts.delete(hostId);
   }
 }
 

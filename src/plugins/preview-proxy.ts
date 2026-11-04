@@ -6,8 +6,8 @@ import { eq } from "drizzle-orm";
 import type { Duplex } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { WebSocket as NodeWebSocket, WebSocketServer } from "ws";
-import { projects, projectPreviewTargets, sessions } from "../db/schema.js";
-import { resolveSessionHostId } from "../services/session-live-info.js";
+import { projects, projectPreviewTargets } from "../db/schema.js";
+import { resolveExecutionContext } from "../services/execution-context.js";
 import { getPreviewBySlug } from "../services/preview-registry.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
@@ -231,7 +231,10 @@ function buildUpstreamUrl(
 // same fixed PREVIEW_UNAVAILABLE_MESSAGE (see handlePreviewRequest).
 type PreviewResolution = { ok: true; target: PreviewTarget } | { ok: false; status: 404 | 503 };
 
-function resolvePreviewTarget(app: FastifyInstance, slug: string): PreviewResolution {
+async function resolvePreviewTarget(
+  app: FastifyInstance,
+  slug: string,
+): Promise<PreviewResolution> {
   const preview = getPreviewBySlug(app, slug);
   if (!preview) {
     app.log.warn({ slug }, "preview proxy: unknown preview slug");
@@ -264,25 +267,42 @@ function resolvePreviewTarget(app: FastifyInstance, slug: string): PreviewResolu
   if (preview.projectId === null) return { ok: false, status: 404 };
   const [project] = app.db.select().from(projects).where(eq(projects.id, preview.projectId)).all();
   if (!project) return { ok: false, status: 404 };
+  // The bound session owns the target: its host (never the project's) is
+  // where the dev server runs, and "localhost" in the project's devServerUrl
+  // means that host. A bound session that can't be resolved is unavailable,
+  // not a reason to fall back to the project's host (issue #2247); only a
+  // preview with no session at all is project-default, i.e. explicitly
+  // project-scoped.
+  let hostId = project.hostId;
+  if (preview.sessionId !== null) {
+    const ctx = await resolveExecutionContext(
+      app,
+      { projectId: project.id, sessionId: preview.sessionId },
+      { trustSessionCwd: true },
+    );
+    if (!ctx.ok) {
+      app.log.warn(
+        { slug, sessionId: preview.sessionId, error: ctx.error },
+        "preview proxy: the bound session's host is unavailable",
+      );
+      return { ok: false, status: 503 };
+    }
+    hostId = ctx.context.hostId;
+  } else if (preview.upstreamPort !== null) {
+    // A branch preview's port only means something on its session's host.
+    return { ok: false, status: 503 };
+  }
   // Issues #2016/#2018 — a branch preview targets the port its own dock
-  // session was told to bind, on that session's host, never the project's
-  // devServerUrl (which serves the checkout).
+  // session was told to bind, never the project's devServerUrl (which serves
+  // the checkout).
   if (preview.upstreamPort !== null) {
-    const [session] =
-      preview.sessionId === null
-        ? []
-        : app.db
-            .select({ projectId: sessions.projectId, hostId: sessions.hostId })
-            .from(sessions)
-            .where(eq(sessions.id, preview.sessionId))
-            .all();
     return {
       ok: true,
       target: {
         kind: "project",
         devServerUrl: String(preview.upstreamPort),
         projectId: project.id,
-        hostId: session ? resolveSessionHostId(app, session) : project.hostId,
+        hostId,
       },
     };
   }
@@ -295,12 +315,7 @@ function resolvePreviewTarget(app: FastifyInstance, slug: string): PreviewResolu
   }
   return {
     ok: true,
-    target: {
-      kind: "project",
-      devServerUrl: project.devServerUrl,
-      projectId: project.id,
-      hostId: project.hostId,
-    },
+    target: { kind: "project", devServerUrl: project.devServerUrl, projectId: project.id, hostId },
   };
 }
 
@@ -358,7 +373,7 @@ async function handlePreviewRequest(
   reply: FastifyReply,
   slug: string,
 ) {
-  const resolution = resolvePreviewTarget(app, slug);
+  const resolution = await resolvePreviewTarget(app, slug);
   if (!resolution.ok) {
     addPreviewErrorCorsHeaders(request, reply);
     // Hermes review, PR #579: reply.notFound() with no argument falls back
@@ -564,7 +579,7 @@ async function handlePreviewWsUpgrade(
     }
   }
 
-  const resolution = resolvePreviewTarget(app, slug);
+  const resolution = await resolvePreviewTarget(app, slug);
   if (!resolution.ok) {
     return rejectUpgrade(
       socket,

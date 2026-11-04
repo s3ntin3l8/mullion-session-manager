@@ -23,6 +23,10 @@ import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
+import {
+  executionContextErrorStatus,
+  resolveExecutionContext,
+} from "../services/execution-context.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { forwardHostRequestError } from "../services/host-error-reply.js";
 import {
@@ -73,12 +77,41 @@ export async function dockConfigRoute(app: FastifyInstance) {
     return project ?? null;
   }
 
+  // Where the config lives: the project's own checkout by default, or — with
+  // `?sessionId=` — the execution host and checkout of that session (issue
+  // #2247). An unresolvable session is an error, never the project's host.
+  async function resolveTarget(
+    project: NonNullable<ReturnType<typeof getProjectOr404>>,
+    sessionIdParam: string | undefined,
+  ): Promise<
+    { ok: true; hostId: string; cwd: string } | { ok: false; status: number; message: string }
+  > {
+    if (sessionIdParam === undefined) return { ok: true, hostId: project.hostId, cwd: project.cwd };
+    const sessionId = Number(sessionIdParam);
+    if (!Number.isInteger(sessionId))
+      return { ok: false, status: 400, message: "Invalid session id" };
+    const resolved = await resolveExecutionContext(
+      app,
+      { projectId: project.id, sessionId },
+      { trustSessionCwd: true },
+    );
+    if (!resolved.ok) {
+      return {
+        ok: false,
+        status: executionContextErrorStatus(resolved.error.code),
+        message: resolved.error.message,
+      };
+    }
+    // The config is the checkout's, not a subdirectory's.
+    return { ok: true, hostId: resolved.context.hostId, cwd: resolved.context.checkoutRoot };
+  }
+
   // GET /api/projects/:id/dock/config — the raw, per-project
   // `.crs/dock.json` (unmerged — see this file's own header). 200 even for
   // a malformed on-disk file (readDockConfig's `invalid`/`reason`); 503 is
   // reserved for a genuine transient read failure (permission denied) or an
   // unreachable remote host.
-  app.get<{ Params: { id: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { sessionId?: string } }>(
     "/api/projects/:id/dock/config",
     DOCK_CONFIG_RATE_LIMIT,
     async (request, reply) => {
@@ -86,12 +119,17 @@ export async function dockConfigRoute(app: FastifyInstance) {
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
       const project = getProjectOr404(projectId);
       if (!project) return reply.notFound();
+      const target = await resolveTarget(project, request.query.sessionId);
+      if (!target.ok)
+        return reply
+          .code(target.status)
+          .send({ statusCode: target.status, message: target.message });
 
-      if (project.hostId === LOCAL_HOST_ID) {
+      if (target.hostId === LOCAL_HOST_ID) {
         try {
-          return readDockConfig(project.cwd);
+          return readDockConfig(target.cwd);
         } catch (err) {
-          // Unreachable via any current call site (project.cwd is always
+          // Unreachable via any current call site (target.cwd is always
           // path.resolve()d at write time — see resolveDockConfigPath's own
           // comment), kept for the same reason the PUT branch below maps it
           // too: a clean 400 rather than a raw 500 if that upstream
@@ -105,11 +143,11 @@ export async function dockConfigRoute(app: FastifyInstance) {
         }
       }
       try {
-        return await getRemoteHostClient(app, project.hostId).resolveDockConfig(project.cwd);
+        return await getRemoteHostClient(app, target.hostId).resolveDockConfig(target.cwd);
       } catch (err) {
         if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
-        app.log.warn({ hostId: project.hostId, err }, "host unreachable, dock config unavailable");
-        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        app.log.warn({ hostId: target.hostId, err }, "host unreachable, dock config unavailable");
+        return reply.serviceUnavailable(`Host ${target.hostId} is unreachable`);
       }
     },
   );
@@ -119,7 +157,11 @@ export async function dockConfigRoute(app: FastifyInstance) {
   // sends the full, already-merged-client-side list of project-scope
   // controls, same "whole document" contract agent-rules.ts's PUT has for a
   // single target's content).
-  app.put<{ Params: { id: string }; Body: { controls: unknown[] } }>(
+  app.put<{
+    Params: { id: string };
+    Querystring: { sessionId?: string };
+    Body: { controls: unknown[] };
+  }>(
     "/api/projects/:id/dock/config",
     { ...DOCK_CONFIG_RATE_LIMIT, schema: writeDockConfigSchema },
     async (request, reply) => {
@@ -127,6 +169,11 @@ export async function dockConfigRoute(app: FastifyInstance) {
       if (!Number.isInteger(projectId)) return reply.badRequest("Invalid project id");
       const project = getProjectOr404(projectId);
       if (!project) return reply.notFound();
+      const target = await resolveTarget(project, request.query.sessionId);
+      if (!target.ok)
+        return reply
+          .code(target.status)
+          .send({ statusCode: target.status, message: target.message });
 
       let controls;
       try {
@@ -136,10 +183,10 @@ export async function dockConfigRoute(app: FastifyInstance) {
         throw err;
       }
 
-      if (project.hostId === LOCAL_HOST_ID) {
+      if (target.hostId === LOCAL_HOST_ID) {
         try {
-          writeDockConfig(project.cwd, controls);
-          const result: DockConfigReadResult = readDockConfig(project.cwd);
+          writeDockConfig(target.cwd, controls);
+          const result: DockConfigReadResult = readDockConfig(target.cwd);
           return result;
         } catch (err) {
           if (err instanceof DockConfigTooLargeError) return reply.badRequest(err.message);
@@ -152,17 +199,14 @@ export async function dockConfigRoute(app: FastifyInstance) {
         }
       }
       try {
-        return await getRemoteHostClient(app, project.hostId).writeDockConfig(
-          project.cwd,
-          controls,
-        );
+        return await getRemoteHostClient(app, target.hostId).writeDockConfig(target.cwd, controls);
       } catch (err) {
         if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
         app.log.warn(
-          { hostId: project.hostId, err },
+          { hostId: target.hostId, err },
           "host unreachable, could not write dock config",
         );
-        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        return reply.serviceUnavailable(`Host ${target.hostId} is unreachable`);
       }
     },
   );

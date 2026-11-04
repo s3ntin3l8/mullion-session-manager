@@ -226,7 +226,7 @@ describe("branch previews (issues #2016/#2018)", () => {
     expect(preview.sessionId).toBe(
       create.mock.results[0] && (await create.mock.results[0].value).row.id,
     );
-    expect(listUpstreamPorts(app).has(preview.upstreamPort!)).toBe(true);
+    expect(listUpstreamPorts(app, "local").has(preview.upstreamPort!)).toBe(true);
   });
 
   it("never hands a port still held by an unbound create to a concurrent one", async () => {

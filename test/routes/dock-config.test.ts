@@ -68,6 +68,46 @@ describe("dock-config routes", () => {
       await app.close();
     });
 
+    it("reads the config in a session's checkout, and refuses an unresolvable session (#2247)", async () => {
+      const { app, projectId } = await createProject();
+      const { sessions } = await import("../../src/db/schema.js");
+      const local = app.db
+        .insert(sessions)
+        .values({ projectId, command: "x", kind: "dock" })
+        .returning()
+        .get();
+      const ok = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/dock/config?sessionId=${local.id}`,
+      });
+      expect(ok.statusCode).toBe(200);
+
+      // A session on a host with no registration is unavailable: 503, never
+      // the project's own host.
+      const stray = app.db
+        .insert(sessions)
+        .values({ projectId, command: "x", kind: "dock", hostId: "no-such-host" })
+        .returning()
+        .get();
+      const unavailable = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/dock/config?sessionId=${stray.id}`,
+      });
+      expect(unavailable.statusCode).toBe(503);
+
+      const bad = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/dock/config?sessionId=abc`,
+      });
+      expect(bad.statusCode).toBe(400);
+      const missing = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/dock/config?sessionId=999999`,
+      });
+      expect(missing.statusCode).toBe(400);
+      await app.close();
+    });
+
     it("returns an empty, valid result for a fresh project with no dock.json", async () => {
       const { app, projectId } = await createProject();
       const res = await app.inject({

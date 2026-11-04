@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
+import { resolveSessionHostId } from "./session-live-info.js";
 import { resolveProjectDock } from "./project-config.js";
 import { isPortInUse } from "./port-probe.js";
 import { findSessionHoldingPort } from "./dev-server-detect.js";
@@ -39,15 +40,19 @@ export function portInUseMessage(port: number, holderSessionId?: number): string
  * `devServerUrl`, but only for a control that plausibly IS the dev server (the
  * preview-flagged one, or the project's only control) so a git-status or logs
  * control is not refused because the dev server is up. Local-host projects
- * only: the probe is a loopback bind on this machine.
+ * only: the probe is a loopback bind on this machine. `hostId` is the host
+ * the session will actually run on (an explicit launch target); it defaults to
+ * the project's host. A session bound for another host is never probed here,
+ * and only holders on this host count — the same port elsewhere is no conflict.
  */
 export async function checkDockPortConflict(
   app: FastifyInstance,
   projectId: number,
   command: string,
+  hostId?: string,
 ): Promise<DockPortConflict | null> {
   const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
-  if (!project || project.hostId !== LOCAL_HOST_ID) return null;
+  if (!project || (hostId ?? project.hostId) !== LOCAL_HOST_ID) return null;
 
   const controls = resolveProjectDock(project.cwd, app.config.CRS_CONFIG_DIR).filter(
     (c) => !c.docker,
@@ -69,10 +74,11 @@ export async function checkDockPortConflict(
   if (!(await isPortInUse(port))) return null;
 
   const active = app.db
-    .select({ id: sessions.id })
+    .select({ id: sessions.id, projectId: sessions.projectId, hostId: sessions.hostId })
     .from(sessions)
     .where(eq(sessions.status, "active"))
-    .all();
+    .all()
+    .filter((r) => resolveSessionHostId(app, r) === LOCAL_HOST_ID);
   const holder = findSessionHoldingPort(
     app,
     active.map((r) => String(r.id)),
