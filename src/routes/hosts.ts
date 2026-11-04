@@ -10,6 +10,7 @@ import {
   deleteHost,
   getHostRow,
   listHosts,
+  findPossibleDuplicates,
   mintHostToken,
   revokeMachineIdentity,
   updateHost,
@@ -158,6 +159,10 @@ export async function hostsRoute(app: FastifyInstance) {
   // "pending", which this route never hits since /api/hosts itself is a
   // primary-only route.
   app.get("/api/hosts", async () => {
+    const duplicates = findPossibleDuplicates(
+      app,
+      (id) => app.hostHeartbeatTracker?.getHealth(id).status ?? "pending",
+    );
     return listHosts(app).map((host) => {
       const health = app.hostHeartbeatTracker?.getHealth(host.id) ?? {
         status: "pending" as const,
@@ -211,6 +216,8 @@ export async function hostsRoute(app: FastifyInstance) {
         lastSeenAt: toIso(health.lastSeenAt),
         lastCheckedAt: toIso(health.lastCheckedAt),
         capacity,
+        // Issue #2582 — older offline rows this one probably replaced.
+        possibleDuplicateOf: duplicates.get(host.id) ?? [],
       };
     });
   });

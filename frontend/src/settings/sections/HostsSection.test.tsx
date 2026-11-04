@@ -54,6 +54,26 @@ describe("HostsSection token rotation", () => {
     expect(screen.getByText(/waiting for the agent to register/)).toBeInTheDocument();
   });
 
+  it("flags a possible duplicate and offers Remove stale host on the older row only (issue #2582)", async () => {
+    stubFetch({});
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({ id: "old", name: "ctr-old", health: "offline" }),
+        makeHost({ id: "new", name: "ctr-new", possibleDuplicateOf: ["old"] }),
+      ],
+    });
+    const user = userEvent.setup();
+    render(<HostsSection />);
+    expect(screen.getByText(/Possible duplicate of ctr-old/)).toBeInTheDocument();
+    const [oldMenu, newMenu] = screen.getAllByRole("button", { name: "More…" });
+    await user.click(oldMenu);
+    expect(screen.getByText("Remove stale host")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await user.click(newMenu);
+    expect(screen.queryByText("Remove stale host")).not.toBeInTheDocument();
+    expect(screen.getByText("Delete host")).toBeInTheDocument();
+  });
+
   it("shows capability chips, or says capabilities are unknown", () => {
     stubFetch({});
     useDashboardStore.setState({

@@ -1100,6 +1100,19 @@ self-update surface — see "Layout and updates" above and
 Only a host still running a pre-#647 build needs the manual re-run described
 there.
 
+### Persistent `SESSIONS_DIR` for container and image-based agents
+
+An agent keeps its machine identity in `agent-identity.json` under
+`SESSIONS_DIR`. If that directory does not survive a restart (an ephemeral
+container, a re-imaged VM), the agent re-enrolls as a **new host** on every
+boot and the previous row stays offline. Put `SESSIONS_DIR` on persistent
+storage (a mounted volume). Symptom: Settings → Hosts fills with offline rows
+for the same machine, the newer ones marked "Possible duplicate of …", and the
+agent log says "no stored identity found at the state path" on every start.
+Cleanup: use _Remove stale host_ on the offline rows (nothing is merged or
+removed automatically). See
+[`docs/multi-host.md`](../docs/multi-host.md#machine-identity-and-machine-credentials).
+
 ## What still needs a real, live check
 
 Milestones 1–3 were each verified end-to-end against the real running app.

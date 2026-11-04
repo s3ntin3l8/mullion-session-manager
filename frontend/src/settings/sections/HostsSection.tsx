@@ -142,6 +142,11 @@ export function HostsSection() {
       setDrainError(err instanceof Error ? err.message : String(err));
     });
   };
+  // Issue #2582 — the server flags a newer enrolled row as a probable
+  // duplicate of older offline, session-free ones. The older rows are the
+  // ones offered for removal; nothing is ever removed automatically.
+  const staleHostIds = new Set(hosts.flatMap((h) => h.possibleDuplicateOf ?? []));
+  const hostNameById = new Map(hosts.map((h) => [h.id, h.name]));
   const [addOpen, setAddOpen] = useState(false);
   const [editing, setEditing] = useState<Host | null>(null);
   // A freshly rotated token, shown once (the DB only keeps it encrypted).
@@ -432,6 +437,20 @@ export function HostsSection() {
                     {" · "}
                     <HostCapabilitiesLine host={host} />
                     <HostProtocolLine host={host} />
+                    {(host.possibleDuplicateOf?.length ?? 0) > 0 && (
+                      <>
+                        {" · "}
+                        <span
+                          style={{ color: "var(--y)" }}
+                          title="An older offline host with no sessions reports the same URL or hostname — likely this agent's previous registration, left behind when its state file was lost."
+                        >
+                          Possible duplicate of{" "}
+                          {host
+                            .possibleDuplicateOf!.map((id) => hostNameById.get(id) ?? id)
+                            .join(", ")}
+                        </span>
+                      </>
+                    )}
                   </>
                 }
                 trailing={
@@ -571,7 +590,7 @@ export function HostsSection() {
                           : []),
                         {
                           key: "delete",
-                          label: "Delete host",
+                          label: staleHostIds.has(host.id) ? "Remove stale host" : "Delete host",
                           armLabel: "Click again to delete",
                           icon: <CloseIcon size={14} />,
                           danger: true,

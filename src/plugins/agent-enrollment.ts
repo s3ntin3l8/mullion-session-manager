@@ -169,6 +169,7 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
   // operator clears the state file: the agent must not silently regain a
   // revoked identity with its bootstrap token.
   let identityRejected = false;
+  let loggedNoIdentity = false;
 
   async function persistIdentity(session: AgentSession): Promise<void> {
     if (!session.machineCredential) return;
@@ -312,6 +313,13 @@ export const agentEnrollmentPlugin = fp(async (app: FastifyInstance) => {
       let attempt = 0;
       while (!stopped) {
         try {
+          if (!identity && !loggedNoIdentity) {
+            loggedNoIdentity = true;
+            app.log.info(
+              { statePath },
+              "[agent-enrollment] no stored identity found at the state path (first boot, or the state file was lost); registering as a new host. If this repeats on every restart, SESSIONS_DIR is not persistent and duplicate host rows will pile up on the primary",
+            );
+          }
           const session = await callRegister(
             app,
             identity

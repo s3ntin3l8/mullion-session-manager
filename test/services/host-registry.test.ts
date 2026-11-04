@@ -6,7 +6,7 @@ import crypto from "node:crypto";
 import { and, eq, isNotNull, ne } from "drizzle-orm";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
-import { hosts } from "../../src/db/schema.js";
+import { hosts, projects, sessions } from "../../src/db/schema.js";
 import {
   LOCAL_HOST_ID,
   claimHost,
@@ -15,6 +15,7 @@ import {
   decryptToken,
   deleteHost,
   enrollHost,
+  findPossibleDuplicates,
   getHostRow,
   HostHasProjectsError,
   listHosts,
@@ -695,6 +696,80 @@ describe("host-registry", () => {
       clearHostSession(app, registered.hostId);
       expect(getHostRow(app, registered.hostId)).toBeDefined();
       await app.close();
+    });
+  });
+  describe("findPossibleDuplicates (issue #2582)", () => {
+    // enrollHost stamps createdAt to the second; backdate so "older" is unambiguous.
+    const enroll = (baseUrl: string, hostname: string, ageSec: number) => {
+      const app = appRef!;
+      const { hostId } = enrollHost(app, { baseUrl, hostname, wantsMachineCredential: true });
+      app.db
+        .update(hosts)
+        .set({ createdAt: new Date(Date.now() - ageSec * 1000) })
+        .where(eq(hosts.id, hostId))
+        .run();
+      return hostId;
+    };
+    let appRef: Awaited<ReturnType<typeof buildApp>> | undefined;
+    const u = () => `http://dup-${crypto.randomUUID()}:1`;
+
+    it("flags the newer row when a lost state file left an offline row with the same URL", async () => {
+      appRef = await buildApp();
+      const url = u();
+      const stale = enroll(url, "ctr-a", 100);
+      const fresh = enroll(url, "ctr-a", 0);
+      const health = (id: string) => (id === stale ? "offline" : "online");
+      expect(findPossibleDuplicates(appRef, health).get(fresh)).toEqual([stale]);
+      await appRef.close();
+    });
+
+    it("flags by self-reported hostname when the URL differs", async () => {
+      appRef = await buildApp();
+      const name = `h-${crypto.randomUUID()}`;
+      const stale = enroll(u(), name, 100);
+      const fresh = enroll(u(), name, 0);
+      const map = findPossibleDuplicates(appRef, (id) => (id === stale ? "offline" : "online"));
+      expect(map.get(fresh)).toEqual([stale]);
+      expect(map.has(stale)).toBe(false);
+      await appRef.close();
+    });
+
+    it("does not flag two live agents sharing a URL", async () => {
+      appRef = await buildApp();
+      const url = u();
+      const a = enroll(url, "x", 100);
+      const b = enroll(url, "x", 0);
+      expect(findPossibleDuplicates(appRef, () => "online").has(b)).toBe(false);
+      expect(findPossibleDuplicates(appRef, () => "online").has(a)).toBe(false);
+      await appRef.close();
+    });
+
+    it("does not offer a host with an active session", async () => {
+      appRef = await buildApp();
+      const url = u();
+      const stale = enroll(url, "x", 100);
+      const fresh = enroll(url, "x", 0);
+      const [project] = appRef.db
+        .insert(projects)
+        .values({ name: "p", cwd: "/tmp/p", hostId: stale })
+        .returning()
+        .all();
+      appRef.db.insert(sessions).values({ projectId: project.id, command: "bash" }).run();
+      const health = (id: string) => (id === stale ? "offline" : "online");
+      expect(findPossibleDuplicates(appRef, health).has(fresh)).toBe(false);
+      await appRef.close();
+    });
+
+    it("clears the flag once the stale row is deleted", async () => {
+      appRef = await buildApp();
+      const url = u();
+      const stale = enroll(url, "x", 100);
+      const fresh = enroll(url, "x", 0);
+      const health = (id: string) => (id === stale ? "offline" : "online");
+      expect(findPossibleDuplicates(appRef, health).has(fresh)).toBe(true);
+      deleteHost(appRef, stale);
+      expect(findPossibleDuplicates(appRef, health).has(fresh)).toBe(false);
+      await appRef.close();
     });
   });
 });
