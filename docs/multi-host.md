@@ -145,6 +145,24 @@ in `machine_credential`.
   displaced agent, or a leaked copy of the state file) stays valid while
   its holder keeps presenting it, and each acceptance hands it the live
   current credential; revocation is the only way to end its life.
+- **`SESSIONS_DIR` must be persistent.** The identity lives in
+  `agent-identity.json` under the agent's `SESSIONS_DIR`. A container or
+  image-based agent whose data dir does not survive a restart (an ephemeral
+  container, a re-imaged VM) has no identity at boot, so it enrolls with the
+  fleet secret and the primary creates a **new** host row each time, leaving
+  the previous one offline. Mount `SESSIONS_DIR` on a volume or other
+  persistent storage. The agent logs once at info level when it registers
+  without a stored identity ("no stored identity found at the state path");
+  seeing that on every restart means the state path is not persistent.
+  The primary never merges these rows by URL or hostname (that is the
+  hijack risk the identity removed). Instead `GET /api/hosts` marks the newer
+  row with `possibleDuplicateOf`: older enrolled rows with the same advertised
+  `baseUrl` or self-reported hostname that are offline and have no active
+  session. Settings → Hosts shows "Possible duplicate of <name>" on the newer
+  row and offers _Remove stale host_ on the stale ones, which is the normal
+  delete (with its confirmation, and its refusal while projects still
+  reference the host). Two live agents sharing a URL are not flagged. Nothing
+  is deleted automatically.
 - **Shared per-host token.** If a second agent claims a row with the same
   per-host token, the incumbent's credential moves to the grace slot and
   the primary logs a warning; the displaced agent converges onto the new

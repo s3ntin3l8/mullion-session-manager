@@ -487,6 +487,9 @@ export interface Host {
   // revoked it. Never the credential. Absent from an older primary.
   hasMachineIdentity?: boolean;
   machineIdentityRevoked?: boolean;
+  // Issue #2582 — ids of older, offline, session-free enrolled rows this host
+  // probably replaced. Absent from an older primary.
+  possibleDuplicateOf?: string[];
   health: HostHealthStatus;
   // Not currently rendered anywhere — kept for a future "last seen Nm ago"
   // affordance (would make a "degraded" host more actionable than a bare

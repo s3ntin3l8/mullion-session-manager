@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
 import { eq, and, isNotNull, isNull, ne } from "drizzle-orm";
-import { hosts, projects } from "../db/schema.js";
+import { hosts, projects, sessions } from "../db/schema.js";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
 // LOCAL_HOST_ID now physically lives in src/shared/constants.ts
 // (re-exported by the frontend too, from the same file — see
@@ -119,6 +119,70 @@ function toSummary(row: HostRow): HostSummary {
 
 export function listHosts(app: FastifyInstance): HostSummary[] {
   return app.db.select().from(hosts).all().map(toSummary);
+}
+
+function reportedHostname(row: HostRow): string | null {
+  if (!row.agentMetadata) return null;
+  try {
+    const meta: unknown = JSON.parse(row.agentMetadata);
+    const hostname = (meta as { hostname?: unknown } | null)?.hostname;
+    return typeof hostname === "string" && hostname.trim() !== "" ? hostname.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Issue #2582 — flags probable duplicate rows left by an agent that lost its
+ * identity (its state file did not survive a restart) and so re-enrolled as a
+ * new host. Computed on read, no column; never merges or deletes anything.
+ *
+ * Returns newer-host-id -> ids of OLDER enrolled rows that share its advertised
+ * baseUrl or self-reported hostname, are offline, and have no active session.
+ * Two live agents behind one URL are never flagged: neither is offline.
+ * `healthOf` is the heartbeat verdict, so this module stays free of the tracker.
+ */
+export function findPossibleDuplicates(
+  app: FastifyInstance,
+  healthOf: (hostId: string) => string,
+): Map<string, string[]> {
+  const enrolled = app.db
+    .select()
+    .from(hosts)
+    .where(eq(hosts.origin, "enrolled"))
+    .all()
+    .filter((r) => r.id !== LOCAL_HOST_ID);
+  const result = new Map<string, string[]>();
+  if (enrolled.length < 2) return result;
+
+  // A session runs on its own host when it has one, else its project's.
+  const busy = new Set<string>();
+  const active = app.db
+    .select({ sessionHost: sessions.hostId, projectHost: projects.hostId })
+    .from(sessions)
+    .leftJoin(projects, eq(sessions.projectId, projects.id))
+    .where(eq(sessions.status, "active"))
+    .all();
+  for (const a of active) {
+    const id = a.sessionHost ?? a.projectHost;
+    if (id) busy.add(id);
+  }
+
+  const stale = enrolled.filter((r) => healthOf(r.id) === "offline" && !busy.has(r.id));
+  for (const newer of enrolled) {
+    const hostname = reportedHostname(newer);
+    const olderIds = stale
+      .filter(
+        (old) =>
+          old.id !== newer.id &&
+          old.createdAt.getTime() < newer.createdAt.getTime() &&
+          ((newer.baseUrl !== null && old.baseUrl === newer.baseUrl) ||
+            (hostname !== null && reportedHostname(old) === hostname)),
+      )
+      .map((old) => old.id);
+    if (olderIds.length > 0) result.set(newer.id, olderIds);
+  }
+  return result;
 }
 
 /** Internal use only (session-backend.ts, remote-host-client.ts) — includes
