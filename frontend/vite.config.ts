@@ -167,8 +167,12 @@ export default defineConfig(({ command, mode }) => {
         ],
       },
       proxy: {
-        "/api": backendUrl,
-        "/ws": { target: backendUrl, ws: true },
+        // The string shorthand means `changeOrigin: true`, which rewrites Host
+        // to the backend's. The backend compares a write's Origin (the page's,
+        // i.e. Vite's) with the Host it sees (src/services/request-scheme.ts),
+        // so every PUT/POST/PATCH through the proxy was refused as cross-origin.
+        "/api": { target: backendUrl, changeOrigin: false },
+        "/ws": { target: backendUrl, ws: true, changeOrigin: false },
       },
     },
   };

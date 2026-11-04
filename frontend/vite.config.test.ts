@@ -150,3 +150,15 @@ describe("vite.config dev server file access", () => {
     }
   });
 });
+
+describe("vite.config dev proxy", () => {
+  // The backend refuses a write whose Origin is not the Host it received, so the
+  // proxy must forward the browser's Host instead of rewriting it to the target's.
+  it("keeps the browser's Host header on /api and /ws", async () => {
+    const resolved = await config({ command: "serve", mode: "development" });
+    const proxy = (resolved as { server: { proxy: Record<string, { changeOrigin?: boolean }> } })
+      .server.proxy;
+    expect(proxy["/api"]?.changeOrigin).toBe(false);
+    expect(proxy["/ws"]?.changeOrigin).toBe(false);
+  });
+});

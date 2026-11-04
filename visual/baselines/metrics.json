@@ -33,14 +33,7 @@
         "nodes": 10
       }
     ],
-    "console": [
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "[store] failed to save workspace layout: ApiError: cross-origin request rejected\n    at request (http://127.0.0.1:3957/src/api/client.ts:324:9)\n    at async Object.saveWorkspaceLayout (http://127.0.0.1:3957/src/store/slices/workspaces.ts:40:20)"
-    ]
+    "console": []
   },
   "dashboard.desktop.light.png": {
     "status": 200,
@@ -76,12 +69,7 @@
         "nodes": 10
       }
     ],
-    "console": [
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "[store] failed to save workspace layout: ApiError: cross-origin request rejected\n    at request (http://127.0.0.1:3957/src/api/client.ts:324:9)\n    at async Object.saveWorkspaceLayout (http://127.0.0.1:3957/src/store/slices/workspaces.ts:40:20)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)"
-    ]
+    "console": []
   },
   "kanban.desktop.dark.png": {
     "status": 200,
@@ -92,6 +80,11 @@
     "offscreenSample": [],
     "axe": [
       {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 4
+      },
+      {
         "id": "heading-order",
         "impact": "moderate",
         "nodes": 1
@@ -99,12 +92,12 @@
       {
         "id": "label-content-name-mismatch",
         "impact": "serious",
-        "nodes": 2
+        "nodes": 10
       },
       {
         "id": "nested-interactive",
         "impact": "serious",
-        "nodes": 9
+        "nodes": 18
       },
       {
         "id": "region",
@@ -112,10 +105,7 @@
         "nodes": 19
       }
     ],
-    "console": [
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)"
-    ]
+    "console": []
   },
   "kanban.desktop.light.png": {
     "status": 200,
@@ -126,6 +116,11 @@
     "offscreenSample": [],
     "axe": [
       {
+        "id": "color-contrast",
+        "impact": "serious",
+        "nodes": 4
+      },
+      {
         "id": "heading-order",
         "impact": "moderate",
         "nodes": 1
@@ -133,12 +128,12 @@
       {
         "id": "label-content-name-mismatch",
         "impact": "serious",
-        "nodes": 2
+        "nodes": 10
       },
       {
         "id": "nested-interactive",
         "impact": "serious",
-        "nodes": 9
+        "nodes": 18
       },
       {
         "id": "region",
@@ -146,10 +141,7 @@
         "nodes": 19
       }
     ],
-    "console": [
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)"
-    ]
+    "console": []
   },
   "github-pr.desktop.dark.png": {
     "status": 200,
@@ -162,7 +154,7 @@
       {
         "id": "color-contrast",
         "impact": "serious",
-        "nodes": 2
+        "nodes": 4
       },
       {
         "id": "heading-order",
@@ -172,23 +164,20 @@
       {
         "id": "label-content-name-mismatch",
         "impact": "serious",
-        "nodes": 6
+        "nodes": 7
       },
       {
         "id": "nested-interactive",
         "impact": "serious",
-        "nodes": 9
+        "nodes": 10
       },
       {
         "id": "region",
         "impact": "moderate",
-        "nodes": 12
+        "nodes": 10
       }
     ],
-    "console": [
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)"
-    ]
+    "console": []
   },
   "github-pr.desktop.light.png": {
     "status": 200,
@@ -201,7 +190,7 @@
       {
         "id": "color-contrast",
         "impact": "serious",
-        "nodes": 2
+        "nodes": 4
       },
       {
         "id": "heading-order",
@@ -211,26 +200,19 @@
       {
         "id": "label-content-name-mismatch",
         "impact": "serious",
-        "nodes": 6
+        "nodes": 7
       },
       {
         "id": "nested-interactive",
         "impact": "serious",
-        "nodes": 9
+        "nodes": 10
       },
       {
         "id": "region",
         "impact": "moderate",
-        "nodes": 12
+        "nodes": 10
       }
     ],
-    "console": [
-      "Failed to load resource: the server responded with a status of 429 (Too Many Requests)",
-      "Failed to load resource: the server responded with a status of 429 (Too Many Requests)",
-      "Failed to load resource: the server responded with a status of 429 (Too Many Requests)",
-      "Failed to load resource: the server responded with a status of 429 (Too Many Requests)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)",
-      "Failed to load resource: the server responded with a status of 403 (Forbidden)"
-    ]
+    "console": []
   }
 }
