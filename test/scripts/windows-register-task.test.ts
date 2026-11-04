@@ -241,16 +241,29 @@ describeOnWindows("deploy/windows/register-task.ps1", () => {
       dirs.push(dir);
       const file = path.join(dir, "rcedit-x64.exe");
       // Downloaded by PowerShell (as the bootstrap does), not by this process.
-      await run(
-        "powershell.exe",
-        [
-          "-NoProfile",
-          "-NonInteractive",
-          "-Command",
-          `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri '${RCEDIT_URL}' -OutFile '${file}'`,
-        ],
-        { env: windowsPowerShellEnv(process.env), windowsHide: true, timeout: 120_000 },
-      );
+      // GitHub's release CDN occasionally stalls on a runner, so a stalled
+      // attempt is cut short and retried rather than eating the whole test
+      // budget; a checksum mismatch below still fails outright.
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await run(
+            "powershell.exe",
+            [
+              "-NoProfile",
+              "-NonInteractive",
+              "-Command",
+              `[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; Invoke-WebRequest -UseBasicParsing -Uri '${RCEDIT_URL}' -OutFile '${file}'`,
+            ],
+            { env: windowsPowerShellEnv(process.env), windowsHide: true, timeout: 30_000 },
+          );
+          lastError = undefined;
+          break;
+        } catch (err) {
+          lastError = err;
+        }
+      }
+      if (lastError) throw lastError;
       const got = createHash("sha256").update(fs.readFileSync(file)).digest("hex");
       if (got !== RCEDIT_SHA256) {
         throw new Error(`rcedit checksum ${got} does not match the pin ${RCEDIT_SHA256}`);
@@ -278,7 +291,7 @@ describeOnWindows("deploy/windows/register-task.ps1", () => {
       );
       expect(stdout.trim()).toBe("Mullion agent|Mullion|mullion-agent.exe");
       expect(await versionOf(copyOf(f))).toBe(`v${process.versions.node}`);
-    }, 150_000);
+    }, 180_000);
   });
 
   it("does not let a trailing backslash on the install root swallow the task name", async () => {
