@@ -1,7 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
 import { eq, and, isNotNull, isNull, ne } from "drizzle-orm";
-import { hosts, projects, sessions } from "../db/schema.js";
+import { hostPairings, hosts, projects, sessions } from "../db/schema.js";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
 // LOCAL_HOST_ID now physically lives in src/shared/constants.ts
 // (re-exported by the frontend too, from the same file — see
@@ -51,6 +51,10 @@ export interface HostSummary {
   // credential itself.
   hasMachineIdentity: boolean;
   machineIdentityRevoked: boolean;
+  // Issue #2449 — created by redeeming a one-time pairing code (vs headless
+  // enrollment or a manual add). Set by listHosts; pairing success is separate
+  // from transport reachability, which the heartbeat reports.
+  paired: boolean;
   // baseUrl is null for "local" and for a "manual" host added without one
   // (Settings -> Add host, token minted by the primary) that is still
   // waiting for its agent: claimHost fills it in from the agent's own
@@ -114,11 +118,24 @@ function toSummary(row: HostRow): HostSummary {
     role: row.role,
     hasMachineIdentity: row.machineCredentialEnc !== null,
     machineIdentityRevoked: row.machineCredentialRevokedAt !== null,
+    paired: false,
   };
 }
 
 export function listHosts(app: FastifyInstance): HostSummary[] {
-  return app.db.select().from(hosts).all().map(toSummary);
+  const paired = new Set(
+    app.db
+      .select({ id: hostPairings.redeemedHostId })
+      .from(hostPairings)
+      .where(isNotNull(hostPairings.redeemedHostId))
+      .all()
+      .map((r) => r.id),
+  );
+  return app.db
+    .select()
+    .from(hosts)
+    .all()
+    .map((row) => ({ ...toSummary(row), paired: paired.has(row.id) }));
 }
 
 function reportedHostname(row: HostRow): string | null {
@@ -569,6 +586,64 @@ function insertEnrolledHost(app: FastifyInstance, input: RegisterAgentInput): Ho
     })
     .run();
   return withMachineCredential(app, issueSession(app, id), input);
+}
+
+/**
+ * Issue #2449 — creates the host row for a redeemed pairing code, with its
+ * session and machine credential. Always a machine identity (a paired agent
+ * persists one by definition) and never baseUrl-deduped. `baseUrl` is optional:
+ * an outbound-only Helper has no URL to advertise, so the row simply stays
+ * "pending" for the heartbeat until the outbound channel lands. The caller
+ * wraps this in the transaction that consumes the code.
+ */
+export function createPairedHost(
+  app: FastifyInstance,
+  input: Omit<RegisterAgentInput, "baseUrl" | "wantsMachineCredential"> & { baseUrl?: string },
+): HostRegistration {
+  const id = crypto.randomUUID();
+  app.db
+    .insert(hosts)
+    .values({
+      id,
+      name: input.name?.trim() || input.hostname,
+      baseUrl: input.baseUrl ?? null,
+      authTokenEnc: null,
+      origin: "enrolled",
+      agentMetadata: JSON.stringify({
+        hostname: input.hostname,
+        capabilities: input.capabilities ?? null,
+      }),
+      platform: input.platform ?? null,
+    })
+    .run();
+  return { ...issueSession(app, id), machineCredential: issueMachineCredential(app, id) };
+}
+
+/**
+ * Issue #2449 — a retried pairing redeem whose response was lost: the host
+ * already exists, so hand the Helper a fresh session and credential for the
+ * SAME identity. Refuses a revoked, unknown or already-renewed identity (the
+ * Helper evidently received the first response and is using it).
+ */
+export function reissuePairedIdentity(
+  app: FastifyInstance,
+  hostId: string,
+): HostRegistration | null {
+  const row = getHostRow(app, hostId);
+  if (!row || row.id === LOCAL_HOST_ID || row.machineCredentialRevokedAt) return null;
+  if (!row.machineCredentialEnc || row.machineCredentialRotatedAt) return null;
+  // Overwrite rather than rotate: the credential the Helper never received is
+  // simply discarded, no grace slot, so any number of lost responses converge.
+  const credential = crypto.randomBytes(32).toString("hex");
+  app.db
+    .update(hosts)
+    .set({
+      machineCredentialEnc: app.encryption.encryptString(credential),
+      machineCredentialExpiresAt: new Date(Date.now() + MACHINE_CREDENTIAL_TTL_MS),
+    })
+    .where(eq(hosts.id, hostId))
+    .run();
+  return { ...issueSession(app, hostId), machineCredential: credential };
 }
 
 /**

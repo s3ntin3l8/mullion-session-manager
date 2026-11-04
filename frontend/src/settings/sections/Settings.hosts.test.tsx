@@ -82,6 +82,8 @@ describe("Settings -> Hosts", () => {
       // what this file's own tests care about; not asserted on by any test
       // here (see Settings.bridges.test.tsx for that).
       "GET /api/bridges": () => jsonResponse(200, []),
+      // Issue #2449 — the Pair a desktop panel lists pairing codes on mount.
+      "GET /api/host-pairings": () => jsonResponse(200, []),
       "DELETE /api/hosts/:id": ({ params, query }) => {
         const host = hostsDb.find((h) => h.id === params.id);
         if (!host) return jsonResponse(404, { message: "not found" });

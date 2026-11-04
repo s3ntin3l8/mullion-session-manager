@@ -114,6 +114,34 @@ export const hosts = sqliteTable("hosts", {
     .$defaultFn(() => new Date()),
 });
 
+// Issue #2449 / epic #2230 — one-time EXECUTION-HOST pairing codes. A code is
+// a 10-minute, single-use bootstrap credential an operator generates in the
+// dashboard and hands to the desktop Helper as a `mullion://pair` link.
+// Redeeming it creates the `hosts` row and its machine identity (#2568) in one
+// transaction. Its own table (not a half-built `hosts` row) so an unredeemed or
+// abandoned code leaves no host behind. `redeemedHostId` is deliberately not a
+// foreign key: deleting the host must not be blocked by, or cascade into, the
+// audit trail of how it was paired.
+export const hostPairings = sqliteTable("host_pairings", {
+  id: text("id").primaryKey(),
+  // Encrypted at rest; nulled once redeemed-and-past-retry-window, expired or
+  // revoked so a dead code leaves no secret behind.
+  codeEnc: text("code_enc"),
+  expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
+  // Free-form operator label ("Mac mini"), informational.
+  label: text("label"),
+  redeemedAt: integer("redeemed_at", { mode: "timestamp" }),
+  redeemedHostId: text("redeemed_host_id"),
+  // sha256 of the Helper's per-attempt request id. Lets a retried redeem whose
+  // response was lost converge on the SAME host instead of minting a duplicate.
+  redeemRequestHash: text("redeem_request_hash"),
+  // Operator cancelled the code (or it was superseded); final.
+  revokedAt: integer("revoked_at", { mode: "timestamp" }),
+  createdAt: integer("created_at", { mode: "timestamp" })
+    .notNull()
+    .$defaultFn(() => new Date()),
+});
+
 // Issue #820 — a laptop/PC "helper" that dials OUT to the primary over
 // `/ws/agent-bridge`, carrying its SSH agent's traffic to every host that
 // needs it (see src/services/ssh-agent-mux.ts / ssh-agent-filter.ts and

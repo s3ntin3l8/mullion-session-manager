@@ -193,6 +193,71 @@ via self-registration, immediately — this is what makes token rotation a
 real response to a suspected leak rather than a no-op once a host has
 switched to session-based auth.
 
+### Pairing a desktop Helper (one-time code)
+
+For a Mac or Windows machine running the Mullion Helper, the dashboard
+generates a **one-time pairing link** instead of handing out the fleet
+enrollment secret. Settings → Hosts → **Pair a desktop** → _Generate pairing
+link_. Pairing grants **execution permission only**: it does not share an SSH
+key (that is the separate SSH-agent bridge pairing), and it leaves headless
+Ansible enrollment and manually configured hosts untouched. Both onboarding
+methods converge on the same stable host identity and renewable machine
+credential (see "Machine identity and machine credentials").
+
+**The link.** `mullion://pair?url=<primary url>&code=<code>`, both
+URL-encoded. It carries the primary's URL and the bootstrap code and nothing
+else — never a durable credential or the enrollment secret, and the code is
+never logged. A link with another scheme or action, a non-http(s) `url`, a
+code that is not 64 lowercase hex characters, or any extra parameter is
+invalid and the Helper must refuse it. The dashboard also shows the server
+address and code separately, so a Helper that cannot receive the deep link
+(not installed, or the OS did not route it) can be given them by hand; the
+panel links to the Helper download for the not-installed case, and _Open in
+Helper_ retries the link.
+
+**The code.** 10 minutes, single use. Generating another does not invalidate
+earlier ones; _Cancel_ withdraws a pending code. Operators see each code as
+`pending` → `paired` → `connected`:
+
+- **pending** — issued, not yet redeemed.
+- **paired** — redeemed: the host row, identity and credential exist.
+- **connected** — paired _and_ the primary's heartbeat reaches it. While the
+  outbound-channel rollout is incomplete a paired host that advertises no URL
+  stays `paired`, not `connected`; pairing success is deliberately separate
+  from transport reachability.
+
+**Redeeming** (`POST /api/internal/pair`, unauthenticated, rate limited — the
+code is the credential):
+
+```json
+{
+  "code": "<64 hex>",
+  "requestId": "<Helper-generated, persisted before the first call>",
+  "hostname": "mac-mini",
+  "name": "optional display name",
+  "baseUrl": "optional http(s) URL — omit if the Helper has none to advertise",
+  "platform": "darwin",
+  "capabilities": {}
+}
+```
+
+`200` returns `host_id`, `session_id`, `session_secret`, `expires_at` and
+`machine_credential`, exactly as `/api/internal/register` does; the Helper
+persists `{host_id, machine_credential}` and from then on registers with
+those (`machineCredential` + `hostId`), never the code. Every failure —
+unknown, malformed, expired, cancelled or replayed code — is the same `401`,
+so the response does not say which. `400` is a malformed body.
+
+**Replay, retry and recovery.** The code is consumed in the same transaction
+that creates the host, so concurrent redemptions yield exactly one host. A
+second redeem is refused — except a retry carrying the **same `requestId`**
+within 10 minutes of the first, _before_ the Helper has renewed its
+credential: that converges onto the same host and issues a fresh credential
+(discarding the one the Helper never received), so an interrupted setup
+creates no duplicate identity. A new `requestId`, a renewed or revoked host,
+or a later retry needs a new code. Revoking a host
+(`POST /api/hosts/:id/revoke`) is final for its pairing too.
+
 ### Generated token (recommended for a single host)
 
 **Settings → Hosts & SSH bridges → Add a host**, with just a name. The primary

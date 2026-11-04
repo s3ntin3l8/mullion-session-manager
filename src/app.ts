@@ -65,6 +65,7 @@ import { pushRoute } from "./routes/push.js";
 import { internalRoutes } from "./routes/internal.js";
 import { hostsRoute } from "./routes/hosts.js";
 import { enrollmentRoute } from "./routes/enrollment.js";
+import { hostPairingRoute } from "./routes/host-pairing.js";
 import { agentBridgeRoute } from "./routes/agent-bridge.js";
 import { agentBridgePlugin } from "./plugins/agent-bridge.js";
 import { sshAgentFanoutPlugin } from "./plugins/ssh-agent-fanout.js";
@@ -582,6 +583,7 @@ export async function buildApp() {
   await app.register(pushRoute);
   await app.register(hostsRoute);
   await app.register(enrollmentRoute);
+  await app.register(hostPairingRoute);
   // agentBridgePlugin decorates app.connectedBridges — must register
   // before agentBridgeRoute, which reads/writes it (see the plugin's own
   // comment on why this needs fastify-plugin at all). sshAgentFanoutPlugin

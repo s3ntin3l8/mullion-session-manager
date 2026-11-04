@@ -21,6 +21,7 @@ import {
 } from "../../ui/primitives.js";
 import { ErrorText } from "../../ui/ErrorText.js";
 import { BridgesSection } from "./BridgesSection.js";
+import { PairDesktopSection } from "./PairDesktopSection.js";
 import { HostHeartbeatSetting } from "../RuntimeSettings.js";
 
 // Issue #647 / roadmap 7.8 — separate from ServerInfoSection's own
@@ -431,7 +432,10 @@ export function HostsSection() {
                 title={host.name}
                 subtitle={
                   <>
-                    {host.baseUrl ?? "waiting for the agent to register"}
+                    {host.baseUrl ??
+                      (host.paired
+                        ? "paired — waiting for the Helper to connect"
+                        : "waiting for the agent to register")}
                     {" · "}
                     <HostCapacityLine host={host} />
                     {" · "}
@@ -685,6 +689,10 @@ export function HostsSection() {
 
       <div style={{ marginTop: 16 }}>
         <HostHeartbeatSetting />
+      </div>
+
+      <div style={{ marginTop: 28 }}>
+        <PairDesktopSection />
       </div>
 
       <div style={{ marginTop: 28 }}>

@@ -81,6 +81,9 @@ function isProtectedPath(pathname: string): boolean {
   if (PREVIEW_OPEN_PATH_PATTERN.test(pathname)) return false;
   if (pathname === "/api/internal/register") return false;
   if (pathname === "/api/internal/deregister") return false;
+  // Issue #2449 — a desktop Helper redeeming a one-time pairing code; the code
+  // is its credential, same posture as /register.
+  if (pathname === "/api/internal/pair") return false;
   if (pathname === "/api/webhooks/github") return false;
   // Issue #820 — the SSH-agent bridge's helper-facing WS connection
   // (routes/agent-bridge.ts). Same shape as the two /api/internal/*
