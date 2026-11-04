@@ -157,7 +157,8 @@ describe("vite.config dev proxy", () => {
   // The whole shape is pinned: the string shorthand this replaced also meant a
   // target, and /ws needs `ws` to upgrade at all.
   it("forwards /api and /ws to the backend with the browser's Host header", async () => {
-    vi.stubEnv("BACKEND_URL", "");
+    // vite.config.ts reads BACKEND_URL once, at import, so follow the ambient value.
+    const expectedTarget = process.env.BACKEND_URL || "http://localhost:3450";
     const resolved = await config({ command: "serve", mode: "development" });
     const proxy = (
       resolved as {
@@ -166,9 +167,9 @@ describe("vite.config dev proxy", () => {
         };
       }
     ).server.proxy;
-    expect(proxy["/api"]).toEqual({ target: "http://localhost:3450", changeOrigin: false });
+    expect(proxy["/api"]).toEqual({ target: expectedTarget, changeOrigin: false });
     expect(proxy["/ws"]).toEqual({
-      target: "http://localhost:3450",
+      target: expectedTarget,
       ws: true,
       changeOrigin: false,
     });

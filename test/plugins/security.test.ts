@@ -207,18 +207,45 @@ describe("security plugin", () => {
     expect(third.statusCode).toBe(429);
   });
 
-  it("does not rate-limit the demo instance (MULLION_DEMO), which a renderer reloads constantly", async () => {
-    process.env.RATE_LIMIT_MAX = "2";
-    process.env.MULLION_DEMO = "true";
-    try {
-      const app = await buildTestApp();
-      for (let i = 0; i < 5; i++) {
-        const res = await app.inject({ method: "GET", url: "/api/sessions" });
-        expect(res.statusCode).toBe(200);
+  describe("demo instance (MULLION_DEMO)", () => {
+    // /api/projects/:id/agent-rules has its own 30/min limiter (the shape of the
+    // project-github.ts reads that filled the demo's console with 429s), and an
+    // unknown project answers 404 straight away, so a burst needs no fixtures.
+    const burst = async (app: Awaited<ReturnType<typeof buildTestApp>>) => {
+      const codes: number[] = [];
+      for (let i = 0; i < 35; i++) {
+        const res = await app.inject({ method: "GET", url: "/api/projects/999999/agent-rules" });
+        codes.push(res.statusCode);
       }
-    } finally {
+      return codes;
+    };
+
+    afterEach(() => {
       delete process.env.MULLION_DEMO;
-    }
+    });
+
+    it("still limits a per-route read burst outside the demo", async () => {
+      const app = await buildTestApp();
+      expect(await burst(app)).toContain(429);
+    });
+
+    it("lets a per-route read burst through, which a renderer reloading pages produces", async () => {
+      process.env.MULLION_DEMO = "true";
+      const app = await buildTestApp();
+      expect(await burst(app)).not.toContain(429);
+    });
+
+    it("keeps limiting writes, so the limiter paths stay exercised", async () => {
+      process.env.MULLION_DEMO = "true";
+      process.env.RATE_LIMIT_MAX = "2";
+      const app = await buildTestApp();
+      const codes: number[] = [];
+      for (let i = 0; i < 5; i++) {
+        const res = await app.inject({ method: "POST", url: "/api/sessions", payload: {} });
+        codes.push(res.statusCode);
+      }
+      expect(codes).toContain(429);
+    });
   });
 
   it("no per-route rateLimit `max` equals the global RATE_LIMIT_MAX default (issue #1006)", () => {
