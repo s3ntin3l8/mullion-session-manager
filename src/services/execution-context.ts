@@ -14,7 +14,8 @@ import { LOCAL_HOST_ID, getHostRow } from "./host-registry.js";
 import { parseHostCwds, projectCwdOnHost } from "./placement.js";
 import { resolveSessionHostId } from "./session-live-info.js";
 import { isSiblingWorktreeCwd } from "./session-lifecycle.js";
-import { getRemoteHostClient, HostRequestError } from "./remote-host-client.js";
+import { HostRequestError } from "./remote-host-client.js";
+import { isRemoteWorktree } from "./remote-worktree-cache.js";
 
 export type ExecutionContextRef =
   { projectId: number; sessionId: number } | { projectId: number; projectDefault: true };
@@ -170,8 +171,13 @@ export async function resolveExecutionContext(
   // a registered worktree of it, which only the agent can list.
   if (isWithin(p, projectRoot, sessionCwd)) return inside;
   try {
-    const listed = await getRemoteHostClient(app, hostId).resolveGitBranches(root);
-    const found = listed?.worktrees.some((wt) => p.resolve(wt.path) === sessionCwd);
+    // Issue #2583 — the agent's worktree list is cached briefly, so a file
+    // tree asking about the same session on every request does not ask the
+    // agent every request. A cwd the cached list does not mention is still
+    // re-checked against the agent (the cache never answers a miss).
+    const found = await isRemoteWorktree(app, host, root, (paths) =>
+      paths.some((wt) => p.resolve(wt) === sessionCwd),
+    );
     return found
       ? { ok: true, context: { ...base, cwd: sessionCwd, checkoutRoot: sessionCwd } }
       : fail("invalid_context", outsideMsg);

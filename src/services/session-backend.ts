@@ -15,6 +15,7 @@ import type { SessionLiveness } from "./session-process.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient, HostRequestError, type SpawnResult } from "./remote-host-client.js";
+import { invalidateRemoteWorktreeCache } from "./remote-worktree-cache.js";
 import { saveSessionFileUpload, saveSessionUpload, uploadRetentionMs } from "./session-upload.js";
 import {
   taskReviewFindingsPath,
@@ -724,6 +725,27 @@ class RemoteBackend implements SessionBackend {
     return getRemoteHostClient(this.app, this.hostId);
   }
 
+  /**
+   * Issue #2583 — a worktree change on this host invalidates the resolver's
+   * cached worktree listing (it answers "is this directory one of the repo's
+   * worktrees?", and that answer is about to change).
+   *
+   * Invalidated AFTER the change lands, so a listing fetched WHILE the change
+   * was in flight is not the one that gets stored — and so the next lookup
+   * asks the agent about the state the change produced.
+   *
+   * `this.client` is read by the caller before this runs, so a host row that
+   * cannot produce a client still throws synchronously, exactly as it did
+   * before (see session-lifecycle.ts's own note about that getter).
+   */
+  private async changedWorktrees<T>(result: Promise<T>): Promise<T> {
+    try {
+      return await result;
+    } finally {
+      invalidateRemoteWorktreeCache(this.app, this.hostId);
+    }
+  }
+
   spawn(opts: SpawnOpts): Promise<SpawnResult> {
     // Issue #271 follow-up — `resumeAgentSessionId` is deliberately dropped
     // here rather than forwarded: see SessionBackend.spawn's own doc comment
@@ -935,15 +957,15 @@ class RemoteBackend implements SessionBackend {
     seed: string,
     branchName?: string,
   ): Promise<CreateWorktreeResult> {
-    return this.client.resolveCreateWorktree(cwd, baseRef, seed, branchName);
+    return this.changedWorktrees(this.client.resolveCreateWorktree(cwd, baseRef, seed, branchName));
   }
 
   checkoutBranchWorktree(cwd: string, branch: string): Promise<WorktreeResult | null> {
-    return this.client.resolveCheckoutBranchWorktree(cwd, branch);
+    return this.changedWorktrees(this.client.resolveCheckoutBranchWorktree(cwd, branch));
   }
 
   removeWorktree(worktreePath: string, parentCwd?: string): Promise<boolean> {
-    return this.client.resolveRemoveWorktree(worktreePath, parentCwd);
+    return this.changedWorktrees(this.client.resolveRemoveWorktree(worktreePath, parentCwd));
   }
 
   syncWorktree(worktreePath: string, branch: string): Promise<boolean> {
@@ -951,7 +973,7 @@ class RemoteBackend implements SessionBackend {
   }
 
   resumeTaskWorktree(cwd: string, branchName: string): Promise<WorktreeResult | null> {
-    return this.client.resolveResumeTaskWorktree(cwd, branchName);
+    return this.changedWorktrees(this.client.resolveResumeTaskWorktree(cwd, branchName));
   }
 
   listTaskWorktreeDirs(cwd: string): Promise<string[]> {
@@ -967,11 +989,11 @@ class RemoteBackend implements SessionBackend {
   }
 
   removeWorktreeIfClean(worktreePath: string, parentCwd?: string): Promise<RemoveIfCleanResult> {
-    return this.client.resolveRemoveWorktreeIfClean(worktreePath, parentCwd);
+    return this.changedWorktrees(this.client.resolveRemoveWorktreeIfClean(worktreePath, parentCwd));
   }
 
   pruneWorktrees(cwd: string, orphanPaths: string[]): Promise<PruneWorktreesResult> {
-    return this.client.resolvePruneWorktrees(cwd, orphanPaths);
+    return this.changedWorktrees(this.client.resolvePruneWorktrees(cwd, orphanPaths));
   }
 
   clearOrphanedTaskWorktree(
@@ -979,7 +1001,9 @@ class RemoteBackend implements SessionBackend {
     worktreePath: string,
     branchName: string,
   ): Promise<ClearOrphanedTaskWorktreeResult> {
-    return this.client.resolveClearOrphanedTaskWorktree(cwd, worktreePath, branchName);
+    return this.changedWorktrees(
+      this.client.resolveClearOrphanedTaskWorktree(cwd, worktreePath, branchName),
+    );
   }
 
   deleteBranch(cwd: string, name: string, opts?: { force?: boolean }): Promise<DeleteBranchResult> {
@@ -1008,11 +1032,13 @@ class RemoteBackend implements SessionBackend {
     worktreePath: string,
     opts?: { force?: boolean },
   ): Promise<RemoveListedWorktreeResult> {
-    return this.client.resolveRemoveListedWorktree(cwd, worktreePath, opts?.force);
+    return this.changedWorktrees(
+      this.client.resolveRemoveListedWorktree(cwd, worktreePath, opts?.force),
+    );
   }
 
   pruneWorktreeMetadata(cwd: string): Promise<{ pruned: boolean }> {
-    return this.client.resolvePruneWorktreeMetadata(cwd);
+    return this.changedWorktrees(this.client.resolvePruneWorktreeMetadata(cwd));
   }
 
   // #760 — mirrors LocalBackend's own pair exactly, over the wire. `null`
