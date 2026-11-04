@@ -433,15 +433,15 @@ describe("preview proxy plugin (issue #28, phase 2)", () => {
     expect(res.statusCode).toBe(200);
     expect(res.json().path).toBe("/branch/asset.js");
 
-    // Unbound from its session (deleted), the port still resolves on the
-    // project's own host.
+    // Its session deleted, the port means nothing on the project's host: the
+    // preview is unavailable rather than falling back to it (#2247).
     app.db.delete(sessions).run();
     const again = await app.inject({
       method: "GET",
       url: "/",
       headers: { host: `preview-${row.slug}.${PREVIEW_BASE_HOST}` },
     });
-    expect(again.statusCode).toBe(200);
+    expect(again.statusCode).toBe(503);
     await app.close();
   });
 

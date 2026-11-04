@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects, projectPreviewTargets } from "../db/schema.js";
+import { resolveExecutionContext } from "../services/execution-context.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { readGitBranch } from "../services/git-branch.js";
 import { getPreviewWorktree } from "../services/git-worktree.js";
@@ -122,22 +123,35 @@ async function resolvePreviewBranch(
   if (preview.kind !== "project" || preview.projectId === null) return null;
   // A branch preview's branch is its own column, never derived.
   if (preview.branch) return preview.branch;
-  const [project] = app.db
-    .select({ cwd: projects.cwd, hostId: projects.hostId })
-    .from(projects)
-    .where(eq(projects.id, preview.projectId))
-    .all();
-  if (!project) return null;
-
+  // A bound session owns the target: its own host and checkout answer, and an
+  // unresolvable one yields null rather than the project checkout's branch
+  // (issue #2247).
+  let hostId: string;
+  let cwd: string;
   if (preview.sessionId !== null) {
     const liveBranch = live.get(preview.sessionId);
     if (liveBranch) return liveBranch;
     const worktree = getPreviewWorktree(preview.sessionId);
     if (worktree?.branch) return worktree.branch;
+    const resolved = await resolveExecutionContext(
+      app,
+      { projectId: preview.projectId, sessionId: preview.sessionId },
+      { trustSessionCwd: true },
+    );
+    if (!resolved.ok) return null;
+    ({ hostId, cwd } = resolved.context);
+  } else {
+    // Session-less: explicitly project-scoped, the project's own checkout.
+    const [project] = app.db
+      .select({ cwd: projects.cwd, hostId: projects.hostId })
+      .from(projects)
+      .where(eq(projects.id, preview.projectId))
+      .all();
+    if (!project) return null;
+    ({ hostId, cwd } = project);
   }
-
-  if (project.hostId === LOCAL_HOST_ID) return readGitBranch(project.cwd, { allowDetached: false });
-  const result = await resolveHostGitBranch(app, project.hostId, project.cwd);
+  if (hostId === LOCAL_HOST_ID) return readGitBranch(cwd, { allowDetached: false });
+  const result = await resolveHostGitBranch(app, hostId, cwd);
   return result.ok ? result.value : null;
 }
 

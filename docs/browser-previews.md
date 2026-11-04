@@ -334,6 +334,37 @@ to an arbitrary host or port. The remote host portion of the project's
 `MULLION_AGENT_TOKEN` or a compromised primary can only reach ports on that
 agent's own loopback, never pivot into its LAN.
 
+### Which host a preview targets
+
+A preview resolves its target from the **session it is bound to**, through the
+shared execution-context resolver, not from the project's configured host:
+
+- A preview **bound to a session** (a checkout preview whose dev server a
+  session announced, or a branch preview's dock session) is served from that
+  session's host. "localhost" in the project's `devServerUrl` means the
+  _owning_ host's loopback, never the primary's or the project's.
+- A bound session that can't be resolved — its host is unreachable or
+  unregistered, the project has no checkout there, or (for a branch preview)
+  the session is gone — makes the preview answer `503`. It never falls back to
+  the project's host.
+- A preview **with no session** is project-default: explicitly scoped to the
+  project's own host and `devServerUrl`.
+- An open preview keeps its original target. The checkout preview is one row
+  per project; a later dev-server accept from a session on a _different_ host
+  does not repoint it while the original session is still active. Once that
+  session ends, the next accept rebinds it.
+- `GET`/`PUT /api/projects/:id/dock/config` take an optional `?sessionId=` to
+  read or write the dock config in that session's host and checkout; without
+  it they act on the project's own checkout.
+- The dock-session port-in-use check (`409 port_in_use`) probes only the host
+  the session will run on, and only counts holders on that host.
+
+Branch-preview ports are tracked per host (`listUpstreamPorts(app, hostId)`
+and the in-flight reservations), so the same port on two hosts is not a
+conflict. This is only the ports Mullion itself handed to branch previews; a
+full cross-session port inventory and remote branch-preview allocation remain
+separate work.
+
 ## Security
 
 - External preview URLs are validated with the same SSRF-guard classifier
