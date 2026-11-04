@@ -80,11 +80,6 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "color-contrast",
-        "impact": "serious",
-        "nodes": 4
-      },
-      {
         "id": "heading-order",
         "impact": "moderate",
         "nodes": 1
@@ -92,12 +87,12 @@
       {
         "id": "label-content-name-mismatch",
         "impact": "serious",
-        "nodes": 10
+        "nodes": 2
       },
       {
         "id": "nested-interactive",
         "impact": "serious",
-        "nodes": 18
+        "nodes": 9
       },
       {
         "id": "region",
@@ -116,11 +111,6 @@
     "offscreenSample": [],
     "axe": [
       {
-        "id": "color-contrast",
-        "impact": "serious",
-        "nodes": 4
-      },
-      {
         "id": "heading-order",
         "impact": "moderate",
         "nodes": 1
@@ -128,12 +118,12 @@
       {
         "id": "label-content-name-mismatch",
         "impact": "serious",
-        "nodes": 10
+        "nodes": 2
       },
       {
         "id": "nested-interactive",
         "impact": "serious",
-        "nodes": 18
+        "nodes": 9
       },
       {
         "id": "region",
@@ -154,7 +144,7 @@
       {
         "id": "color-contrast",
         "impact": "serious",
-        "nodes": 4
+        "nodes": 2
       },
       {
         "id": "heading-order",
@@ -164,17 +154,17 @@
       {
         "id": "label-content-name-mismatch",
         "impact": "serious",
-        "nodes": 7
+        "nodes": 6
       },
       {
         "id": "nested-interactive",
         "impact": "serious",
-        "nodes": 10
+        "nodes": 9
       },
       {
         "id": "region",
         "impact": "moderate",
-        "nodes": 10
+        "nodes": 12
       }
     ],
     "console": []
@@ -190,7 +180,7 @@
       {
         "id": "color-contrast",
         "impact": "serious",
-        "nodes": 4
+        "nodes": 2
       },
       {
         "id": "heading-order",
@@ -200,17 +190,17 @@
       {
         "id": "label-content-name-mismatch",
         "impact": "serious",
-        "nodes": 7
+        "nodes": 6
       },
       {
         "id": "nested-interactive",
         "impact": "serious",
-        "nodes": 10
+        "nodes": 9
       },
       {
         "id": "region",
         "impact": "moderate",
-        "nodes": 10
+        "nodes": 12
       }
     ],
     "console": []

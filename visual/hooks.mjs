@@ -46,7 +46,21 @@ function warmUp(page) {
   return warmed;
 }
 
+// scenes.json `demo.url`: beforeScene has a context but no page to resolve a
+// relative URL against.
+const DEMO_URL = "http://127.0.0.1:3957";
+
 export async function beforeScene({ context }) {
+  // Writes land now, and the layout the last scene saved (an open pane, say) is
+  // stored server-side, so every scene after it would start from that instead of
+  // a fresh workspace and a lone scene (ROUTES=kanban) would not match a full run.
+  // Deleting the workspaces and reading the list back re-seeds the one default
+  // row with no layout, which is what a first load looks like.
+  const workspaces = await (await context.request.get(`${DEMO_URL}/api/workspaces`)).json();
+  for (const workspace of workspaces) {
+    await context.request.delete(`${DEMO_URL}/api/workspaces/${workspace.id}`);
+  }
+  await context.request.get(`${DEMO_URL}/api/workspaces`);
   // The low-disk banner would sit over every shot. The browser clock is frozen
   // by scenes.json `clock`, so Date.now() here is the same instant the app sees.
   await context.addInitScript(() => {

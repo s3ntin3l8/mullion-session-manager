@@ -207,6 +207,20 @@ describe("security plugin", () => {
     expect(third.statusCode).toBe(429);
   });
 
+  it("does not rate-limit the demo instance (MULLION_DEMO), which a renderer reloads constantly", async () => {
+    process.env.RATE_LIMIT_MAX = "2";
+    process.env.MULLION_DEMO = "true";
+    try {
+      const app = await buildTestApp();
+      for (let i = 0; i < 5; i++) {
+        const res = await app.inject({ method: "GET", url: "/api/sessions" });
+        expect(res.statusCode).toBe(200);
+      }
+    } finally {
+      delete process.env.MULLION_DEMO;
+    }
+  });
+
   it("no per-route rateLimit `max` equals the global RATE_LIMIT_MAX default (issue #1006)", () => {
     // frontend/src/api/client.ts's global 429 gate (issue #1006) tells a
     // global-bucket 429 apart from a per-route one by comparing the 429
