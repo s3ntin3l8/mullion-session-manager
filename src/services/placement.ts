@@ -8,7 +8,7 @@ import {
 } from "../shared/constants.js";
 import { listHosts } from "./host-registry.js";
 import { measureHostCapacity, type HostCapacity } from "./host-capacity.js";
-import { hostProtocol, isOlderVersion, refreshLocalAgents } from "./host-agents.js";
+import { effectiveProtocol, isOlderVersion, refreshLocalAgents } from "./host-agents.js";
 import { isProtocolCompatible, localProtocolInfo } from "../shared/agent-protocol.js";
 import { appVersion } from "../routes/server-info.js";
 import { cachedProjectOrigin, hostProjectsRoots } from "./project-origin.js";
@@ -181,7 +181,7 @@ export interface PlacementContext {
   /**
    * Launch options (spawn-body fields) the session needs its host to accept
    * (issue #2569): a host KNOWN not to list one would drop it silently, so it
-   * is excluded. Unknown protocol fails open.
+   * is excluded. An unread protocol reads as the legacy baseline (#2596).
    */
   requiredLaunchOptions?: readonly string[];
   /** Operations (route families) the launch needs; excluded like launch options. */
@@ -661,6 +661,7 @@ function unsupportedBy(
   candidate: PlacementCandidate,
   context: Pick<PlacementContext, "requiredLaunchOptions" | "requiredOperations">,
 ): string | null {
+  // An unread protocol is the legacy baseline (issue #2596), set by the collector.
   const protocol = candidate.protocol;
   if (!protocol) return null;
   if (!protocol.legacy && !isProtocolCompatible(protocol.protocolVersion)) {
@@ -825,7 +826,9 @@ function collectCandidates(
       // Issue #2240 — the CLIs this host has (null while unknown) and its version.
       agents: app.hostAgentTracker?.get(host.id)?.agents ?? null,
       // Issue #2569 — what the host negotiated (null while unknown).
-      protocol: isLocal ? { ...localProtocolInfo(), legacy: false } : hostProtocol(app, host.id),
+      protocol: isLocal
+        ? { ...localProtocolInfo(), legacy: false }
+        : effectiveProtocol(app, host.id),
       // Issue #2306 — likewise the host's capabilities (null while unknown).
       capabilities: app.hostAgentTracker?.get(host.id)?.capabilities ?? null,
       mullionVersion: isLocal

@@ -35,7 +35,10 @@ const {
   availableAgentBins,
   isOlderVersion,
   hostLaunchOptions,
+  gateLaunchOptions,
+  gateOperation,
   hostSupports,
+  PROTOCOL_READ_TIMEOUT_MS,
   protocolStatus,
   refreshHostProtocolSoon,
   refreshLocalAgents,
@@ -316,11 +319,12 @@ describe("protocol negotiation (issue #2248)", () => {
     });
   });
 
-  it("treats an unnegotiated host as supporting nothing, and keeps a reading on a transient failure", async () => {
+  it("treats an unnegotiated host as the legacy baseline, and keeps a reading on a transient failure", async () => {
     const tracker = new HostAgentTracker();
     const app = fakeApp(tracker);
-    expect(hostSupports(app, "mac", "sessions")).toBe(false);
-    expect(hostLaunchOptions(app, "mac")).toEqual([]);
+    expect(hostSupports(app, "mac", "sessions")).toBe(true);
+    expect(hostSupports(app, "mac", "updates")).toBe(false);
+    expect(hostLaunchOptions(app, "mac")).toEqual(LEGACY_BASELINE.launchOptions);
     expect(protocolStatus(null)).toBeNull();
     client.detectProtocol.mockResolvedValue({
       protocolVersion: 1,
@@ -377,7 +381,9 @@ describe("protocol negotiation (issue #2248)", () => {
       launchOptions: [],
     });
     refreshHostProtocolSoon(app, "mac");
-    expect(tracker.get("mac")?.protocol).toBeNull();
+    // The last known reading is still served while the refresh is pending.
+    expect(tracker.get("mac")?.protocol).toMatchObject({ operations: ["git"] });
+    expect(tracker.get("mac")?.protocolStale).toBe(true);
     expect(tracker.isStale("mac", 60_000)).toBe(true);
     await vi.waitFor(() => expect(hostSupports(app, "mac", "browser")).toBe(true));
   });
@@ -403,8 +409,12 @@ describe("requireOperation / requireLaunchOptions (issue #2569)", () => {
 
   it("passes the local host, an un-negotiated host and a supported operation", () => {
     expect(requireOperation(appWith(null), "local", "browser")).toEqual({ ok: true });
-    expect(requireOperation(appWith(null), "peer", "browser")).toEqual({ ok: true });
     expect(requireOperation(appWith(current), "peer", "git")).toEqual({ ok: true });
+  });
+
+  it("reads an un-negotiated host as the legacy baseline", () => {
+    expect(requireOperation(appWith(null), "peer", "sessions")).toEqual({ ok: true });
+    expect(requireOperation(appWith(null), "peer", "updates")).toMatchObject({ ok: false });
   });
 
   it("refuses an operation the host lacks, naming it with the Update hint", () => {
@@ -435,7 +445,11 @@ describe("requireOperation / requireLaunchOptions (issue #2569)", () => {
     expect(requireLaunchOptions(app, "peer", [])).toEqual({ ok: true });
     const gate = requireLaunchOptions(app, "peer", ["model", "gitIdentity", "githubAuth"]);
     expect(gate).toMatchObject({ ok: false, missing: ["gitIdentity", "githubAuth"] });
-    expect(requireLaunchOptions(appWith(null), "peer", ["model"])).toEqual({ ok: true });
+    expect(requireLaunchOptions(appWith(null), "peer", ["model"])).toMatchObject({
+      ok: false,
+      missing: ["model"],
+    });
+    expect(requireLaunchOptions(appWith(null), "peer", ["env"])).toEqual({ ok: true });
     expect(requireLaunchOptions(app, "local", ["model"])).toEqual({ ok: true });
   });
 
@@ -444,5 +458,79 @@ describe("requireOperation / requireLaunchOptions (issue #2569)", () => {
       code: "unsupported",
       missing: ["git"],
     });
+  });
+});
+
+describe("bounded protocol read before a gate (issue #2596)", () => {
+  const currentProtocol = {
+    protocolVersion: PROTOCOL_VERSION,
+    operations: ["sessions"],
+    launchOptions: ["env", "model"],
+  };
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client.detectAgents.mockResolvedValue([]);
+    client.detectCapabilities.mockResolvedValue({ capabilities: [] });
+    client.resolveConfig.mockResolvedValue({ version: "0.3.1" });
+  });
+
+  it("refuses a launch needing model on a legacy host and allows it on a current one", async () => {
+    client.detectProtocol.mockRejectedValue(new HostRequestError("old", 404, ""));
+    const legacy = fakeApp(new HostAgentTracker());
+    expect(await gateLaunchOptions(legacy, "old", ["model"])).toMatchObject({
+      ok: false,
+      missing: ["model"],
+    });
+
+    client.detectProtocol.mockResolvedValue(currentProtocol);
+    const current = fakeApp(new HostAgentTracker());
+    expect(await gateLaunchOptions(current, "new", ["model"])).toEqual({ ok: true });
+    expect(await gateOperation(current, "new", "sessions")).toEqual({ ok: true });
+  });
+
+  it("keeps a known protocol across a renewal", async () => {
+    client.detectProtocol.mockResolvedValue(currentProtocol);
+    const tracker = new HostAgentTracker();
+    const app = fakeApp(tracker);
+    await refreshRemoteHostAgents(app, "mac");
+    tracker.markProtocolStale("mac");
+    expect(tracker.get("mac")?.protocol).toMatchObject({ launchOptions: ["env", "model"] });
+    expect(requireLaunchOptions(app, "mac", ["model"])).toEqual({ ok: true });
+  });
+
+  it("falls back to the baseline without caching when the read times out or fails", async () => {
+    vi.useFakeTimers();
+    try {
+      client.detectAgents.mockReturnValue(new Promise(() => {}));
+      const tracker = new HostAgentTracker();
+      const app = fakeApp(tracker);
+      const gate = gateLaunchOptions(app, "mac", ["model"]);
+      await vi.advanceTimersByTimeAsync(PROTOCOL_READ_TIMEOUT_MS + 1);
+      expect(await gate).toMatchObject({ ok: false, missing: ["model"] });
+      expect(tracker.get("mac")).toBeUndefined();
+      expect(tracker.ensuring.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // A non-404 failure of the handshake: baseline for this decision, nothing cached.
+    client.detectAgents.mockResolvedValue([]);
+    client.detectProtocol.mockRejectedValue(new HostRequestError("mac", 502, ""));
+    const tracker = new HostAgentTracker();
+    const app = fakeApp(tracker);
+    expect(await gateLaunchOptions(app, "mac", ["model"])).toMatchObject({ ok: false });
+    expect(tracker.get("mac")?.protocol ?? null).toBeNull();
+  });
+
+  it("shares one read between concurrent gates", async () => {
+    client.detectProtocol.mockResolvedValue(currentProtocol);
+    const app = fakeApp(new HostAgentTracker());
+    const gates = await Promise.all([
+      gateLaunchOptions(app, "mac", ["model"]),
+      gateLaunchOptions(app, "mac", ["model"]),
+      gateOperation(app, "mac", "sessions"),
+    ]);
+    expect(gates).toEqual([{ ok: true }, { ok: true }, { ok: true }]);
+    expect(client.detectProtocol).toHaveBeenCalledTimes(1);
   });
 });

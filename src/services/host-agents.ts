@@ -11,6 +11,7 @@ import {
   type HostProtocolStatus,
 } from "../shared/agent-protocol.js";
 import { getRemoteHostClient, HostRequestError } from "./remote-host-client.js";
+import { hosts } from "../db/schema.js";
 
 /**
  * The AGENT-CLI signal — which agent CLIs a host has installed, and which
@@ -37,6 +38,11 @@ export interface HostAgentEntry {
   projectsRoots?: string[] | null;
   /** The negotiated protocol (issue #2248); absent/null when not read yet. */
   protocol?: HostProtocol | null;
+  /**
+   * The protocol is the last known reading, kept across a re-registration or
+   * renewal while a refresh is pending (issue #2596); false/absent once read.
+   */
+  protocolStale?: boolean;
   checkedAt: number;
 }
 
@@ -61,6 +67,10 @@ export class HostAgentTracker {
   readonly refreshing = new Set<string>();
   /** Bumped by `invalidateHost`, so a read started before it cannot record. */
   private epochs = new Map<string, number>();
+  /** The refresh in flight per host, so a gate can wait on the read already running. */
+  readonly inflight = new Map<string, Promise<void>>();
+  /** The bounded read a gate started per host, shared by concurrent gates (issue #2596). */
+  readonly ensuring = new Map<string, Promise<HostProtocol>>();
 
   epoch(hostId: string): number {
     return this.epochs.get(hostId) ?? 0;
@@ -88,12 +98,14 @@ export class HostAgentTracker {
 
   /**
    * The host re-registered or was updated, so its negotiated protocol may
-   * describe a previous build: forget it and make the entry stale, so the next
-   * heartbeat re-reads. The agent list and capabilities are kept (stale, real).
+   * describe a previous build: keep serving the last known reading (dropping it
+   * would let a gate pass ungated, issue #2596), flag it stale and make the
+   * entry stale, so the next heartbeat re-reads. The agent list and
+   * capabilities are kept too (stale, real).
    */
   markProtocolStale(hostId: string): void {
     const entry = this.entries.get(hostId);
-    if (entry) this.entries.set(hostId, { ...entry, protocol: null, checkedAt: 0 });
+    if (entry) this.entries.set(hostId, { ...entry, protocolStale: true, checkedAt: 0 });
   }
 
   /** Call when the host's baseUrl/token changes: the list described another agent. */
@@ -116,15 +128,16 @@ export function agentsTtlMs(app: FastifyInstance): number {
  * the list (an agent build without the route) records "unknown"; any other
  * failure throws and leaves the previous entry alone (stale, but real).
  */
-export async function refreshRemoteHostAgents(app: FastifyInstance, hostId: string): Promise<void> {
+export function refreshRemoteHostAgents(app: FastifyInstance, hostId: string): Promise<void> {
   const tracker = app.hostAgentTracker;
-  if (!tracker || tracker.refreshing.has(hostId)) return;
+  if (!tracker || tracker.refreshing.has(hostId)) return Promise.resolve();
   tracker.refreshing.add(hostId);
-  try {
-    await readRemoteHostAgents(app, tracker, hostId);
-  } finally {
+  const run = readRemoteHostAgents(app, tracker, hostId).finally(() => {
     tracker.refreshing.delete(hostId);
-  }
+    tracker.inflight.delete(hostId);
+  });
+  tracker.inflight.set(hostId, run);
+  return run;
 }
 
 async function readRemoteHostAgents(
@@ -162,15 +175,27 @@ async function readRemoteHostAgents(
   // The handshake: a 404 is an agent that predates it, which is the explicit
   // legacy baseline; any other failure keeps the previous reading.
   let protocol: HostProtocol | null = tracker.get(hostId)?.protocol ?? null;
+  let protocolStale = tracker.get(hostId)?.protocolStale ?? false;
   try {
     protocol = { ...(await client.detectProtocol()), legacy: false };
+    protocolStale = false;
   } catch (err) {
-    if (err instanceof HostRequestError && err.statusCode === 404) protocol = LEGACY_PROTOCOL;
+    if (err instanceof HostRequestError && err.statusCode === 404) {
+      protocol = LEGACY_PROTOCOL;
+      protocolStale = false;
+    }
   }
   // The host's address or token changed while we were reading: this list
   // describes the OLD agent, so it must not be recorded as fresh.
   if (tracker.epoch(hostId) !== epoch) return;
-  tracker.record(hostId, { agents, capabilities, mullionVersion, projectsRoots, protocol });
+  tracker.record(hostId, {
+    agents,
+    capabilities,
+    mullionVersion,
+    projectsRoots,
+    protocol,
+    protocolStale,
+  });
 }
 
 // Per app: tests (and nothing else) build many Fastify instances in one process.
@@ -209,8 +234,8 @@ export function refreshLocalAgents(app: FastifyInstance): void {
 }
 
 /**
- * Re-reads a host's protocol soon after it re-registered or was updated: drops
- * the old reading, then refreshes best-effort (the agent may still be coming
+ * Re-reads a host's protocol soon after it re-registered or was updated: marks
+ * the old reading stale (still served meanwhile), then refreshes best-effort (the agent may still be coming
  * back, in which case the stale entry makes the next heartbeat retry).
  */
 export function refreshHostProtocolSoon(app: FastifyInstance, hostId: string): void {
@@ -222,18 +247,18 @@ export function refreshHostProtocolSoon(app: FastifyInstance, hostId: string): v
 
 /**
  * Whether the host's agent supports `op`. Unknown (not negotiated yet) reads
- * as unsupported: callers that must fail open on unknown ask `hostProtocol`.
+ * as the legacy baseline (issue #2596), like every gate.
  * The local host is this build, so it supports everything it registers.
  */
 export function hostSupports(app: FastifyInstance, hostId: string, op: string): boolean {
   if (hostId === LOCAL_HOST_ID) return localProtocolInfo().operations.includes(op);
-  return hostProtocol(app, hostId)?.operations.includes(op) ?? false;
+  return effectiveProtocol(app, hostId).operations.includes(op);
 }
 
-/** The launch options (spawn-body fields) the host's agent accepts; `[]` when unknown. */
+/** The launch options (spawn-body fields) the host's agent accepts; the legacy baseline's when unknown. */
 export function hostLaunchOptions(app: FastifyInstance, hostId: string): string[] {
   if (hostId === LOCAL_HOST_ID) return localProtocolInfo().launchOptions;
-  return hostProtocol(app, hostId)?.launchOptions ?? [];
+  return effectiveProtocol(app, hostId).launchOptions;
 }
 
 /** Where the remedy for a gated operation lives: the per-host Update action. */
@@ -266,14 +291,14 @@ export function unsupportedOperation(hostId: string, op: string): UnsupportedGat
 
 /**
  * Gates an operation on the host's negotiated support. A host whose protocol
- * has not been read yet passes (the route's own 404 is mapped to the same
- * refusal by the caller via `unsupportedOperation`), as does the local host; a
- * host outside the primary's protocol range fails every operation.
+ * has not been read yet is read as the legacy baseline (issue #2596); callers
+ * that can wait use `gateOperation`, which makes one bounded read first. The
+ * local host always passes; a host outside the primary's protocol range fails
+ * every operation.
  */
 export function requireOperation(app: FastifyInstance, hostId: string, op: string): OperationGate {
   if (hostId === LOCAL_HOST_ID) return { ok: true };
-  const protocol = hostProtocol(app, hostId);
-  if (!protocol) return { ok: true };
+  const protocol = effectiveProtocol(app, hostId);
   // "updates" is the remedy for an incompatible protocol, so it is never
   // blocked by one (only by the agent not having the route at all).
   if (op !== "updates" && !protocol.legacy && !isProtocolCompatible(protocol.protocolVersion)) {
@@ -288,9 +313,9 @@ export function requireOperation(app: FastifyInstance, hostId: string, op: strin
 /**
  * Gates a launch on the options it needs. A field an agent's spawn schema does
  * not list is silently stripped, so a launch needing one is refused rather than
- * started without it. A host whose protocol has not been read yet passes (the
- * window between registering and the first handshake; the spawn echo checks
- * still log a stripped field there); a legacy agent is read as the baseline.
+ * started without it. A host whose protocol has not been read yet is read as
+ * the legacy baseline (issue #2596), the same as a legacy agent; callers that
+ * can wait use `gateLaunchOptions`, which makes one bounded read first.
  */
 export function requireLaunchOptions(
   app: FastifyInstance,
@@ -298,8 +323,7 @@ export function requireLaunchOptions(
   required: readonly string[],
 ): OperationGate {
   if (required.length === 0 || hostId === LOCAL_HOST_ID) return { ok: true };
-  const protocol = hostProtocol(app, hostId);
-  if (!protocol) return { ok: true };
+  const protocol = effectiveProtocol(app, hostId);
   const missing = required.filter((opt) => !protocol.launchOptions.includes(opt));
   if (missing.length === 0) return { ok: true };
   return {
@@ -314,6 +338,85 @@ export function requireLaunchOptions(
 /** The negotiated protocol for a remote host; null until first read. */
 export function hostProtocol(app: FastifyInstance, hostId: string): HostProtocol | null {
   return app.hostAgentTracker?.get(hostId)?.protocol ?? null;
+}
+
+/** The protocol a decision should use: the last known reading, else the legacy baseline. Never cached. */
+export function effectiveProtocol(app: FastifyInstance, hostId: string): HostProtocol {
+  return hostProtocol(app, hostId) ?? LEGACY_PROTOCOL;
+}
+
+/** How long a gate waits for the one read it makes of an unread protocol. */
+export const PROTOCOL_READ_TIMEOUT_MS = 3000;
+
+/**
+ * Makes sure a remote host's protocol is known before a gate decides on it
+ * (issue #2596). A known protocol (even a stale one) returns at once. An
+ * unknown one costs one bounded read through `refreshRemoteHostAgents`, shared
+ * by concurrent callers and by a background refresh already running; if it
+ * times out or fails (other than the 404 that records the legacy baseline),
+ * this decision uses the legacy baseline and nothing is cached, so the next
+ * gate tries again.
+ */
+export function ensureHostProtocol(app: FastifyInstance, hostId: string): Promise<HostProtocol> {
+  if (hostId === LOCAL_HOST_ID) return Promise.resolve({ ...localProtocolInfo(), legacy: false });
+  const known = hostProtocol(app, hostId);
+  if (known) return Promise.resolve(known);
+  const tracker = app.hostAgentTracker;
+  if (!tracker) return Promise.resolve(LEGACY_PROTOCOL);
+  const shared = tracker.ensuring.get(hostId);
+  if (shared) return shared;
+  const read = (async (): Promise<HostProtocol> => {
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const pending = tracker.inflight.get(hostId) ?? refreshRemoteHostAgents(app, hostId);
+      await Promise.race([
+        pending,
+        new Promise<void>((resolve) => {
+          timer = setTimeout(resolve, PROTOCOL_READ_TIMEOUT_MS);
+        }),
+      ]);
+    } catch (err) {
+      app.log.debug({ err, hostId }, "[host-agents] bounded protocol read failed");
+    } finally {
+      clearTimeout(timer);
+    }
+    return hostProtocol(app, hostId) ?? LEGACY_PROTOCOL;
+  })().finally(() => {
+    tracker.ensuring.delete(hostId);
+  });
+  tracker.ensuring.set(hostId, read);
+  return read;
+}
+
+/** `ensureHostProtocol` for every registered remote host, before a placement reads them. */
+export async function ensureRemoteHostProtocols(app: FastifyInstance): Promise<void> {
+  const ids = app.db
+    .select({ id: hosts.id })
+    .from(hosts)
+    .all()
+    .map((h) => h.id)
+    .filter((id) => id !== LOCAL_HOST_ID);
+  await Promise.all(ids.map((id) => ensureHostProtocol(app, id)));
+}
+
+/** `requireOperation` after one bounded read of an unread protocol. */
+export async function gateOperation(
+  app: FastifyInstance,
+  hostId: string,
+  op: string,
+): Promise<OperationGate> {
+  await ensureHostProtocol(app, hostId);
+  return requireOperation(app, hostId, op);
+}
+
+/** `requireLaunchOptions` after one bounded read of an unread protocol. */
+export async function gateLaunchOptions(
+  app: FastifyInstance,
+  hostId: string,
+  required: readonly string[],
+): Promise<OperationGate> {
+  if (required.length > 0) await ensureHostProtocol(app, hostId);
+  return requireLaunchOptions(app, hostId, required);
 }
 
 /** The Hosts API's view of a protocol; null while it is not known. */

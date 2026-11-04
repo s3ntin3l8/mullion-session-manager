@@ -37,6 +37,7 @@ import {
   type SessionBackend,
 } from "./session-backend.js";
 import { HostRequestError } from "./remote-host-client.js";
+import { ensureRemoteHostProtocols } from "./host-agents.js";
 import { resolveHostBaseRef, resolveRepoRef } from "./host-git.js";
 import { resolveGitHubToken } from "./github-integration.js";
 import { dependencyGate, parseBlockedBy, refreshTaskBlockers } from "./task-dependencies.js";
@@ -616,6 +617,8 @@ export async function dispatchClaimedTask(
     .map((c) => (c === null ? null : commandAgentBin(c)))
     .filter((bin, i, all): bin is string => bin !== null && all.indexOf(bin) === i);
 
+  // Issue #2596 — read any unread host protocol (bounded) before placement.
+  await ensureRemoteHostProtocols(app);
   let placement: PlacementDecision;
   if (requirement !== null) {
     const targeted = resolveTargetHost(app, {
