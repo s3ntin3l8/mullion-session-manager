@@ -61,6 +61,7 @@ const GENERATE_PHASE_LABELS: Record<ScaffoldGenerateJobPhase, string> = {
   composing: "Composing the scaffold…",
   done: "Finished",
   failed: "Failed",
+  cancelled: "Cancelled",
 };
 
 /** What the job's turn does with instruction content already in the repo. */
@@ -498,6 +499,32 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [jobRunning]);
+
+  // Issue #2584 — stop the running job. No error banner: the user asked for
+  // it. The job is dropped from the draft, which also stops the poll.
+  const [cancelling, setCancelling] = useState(false);
+  const handleCancelGenerate = useCallback(async () => {
+    if (!generateJobId) return;
+    setCancelling(true);
+    try {
+      await api.cancelGenerateJob(projectId, generateJobId);
+      patch({ generateJob: null, error: null });
+    } catch (err) {
+      if (err instanceof ApiError && err.statusCode === 404) {
+        // Already finished (or gone) server-side: take its real outcome
+        // instead of dropping a result the user could still use.
+        try {
+          applyJobUpdate(await api.getGenerateJob(projectId, generateJobId));
+        } catch {
+          patch({ generateJob: null });
+        }
+      } else {
+        patch({ error: err instanceof ApiError ? err.message : "Failed to cancel" });
+      }
+    } finally {
+      setCancelling(false);
+    }
+  }, [projectId, generateJobId, patch, applyJobUpdate]);
 
   // `skillAndReviewer` overrides the stored toggle for the one call that
   // flips it (the ignored-paths "leave out" choice), which would otherwise
@@ -974,6 +1001,14 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
                 Elapsed {formatElapsed(now - generateJob.startedAt)}
               </div>
               <div>Safe to close this panel; it keeps running.</div>
+              <button
+                className="git-panel-fetch-btn"
+                data-testid="generate-cancel"
+                onClick={() => void handleCancelGenerate()}
+                disabled={cancelling}
+              >
+                Cancel
+              </button>
             </div>
           )}
           {offerRefresh && (

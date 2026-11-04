@@ -41,6 +41,8 @@ function mockFetch(opts: {
   startGenerate?: (body: unknown) => Response | Promise<Response>;
   // GET /setup/generate/jobs/:jobId — the job's current state.
   job?: (jobId: string) => Response | Promise<Response>;
+  // POST /setup/generate/jobs/:jobId/cancel (#2584).
+  cancel?: (jobId: string) => Response | Promise<Response>;
   // GET /setup/generate/active — the project's current job (204 = none).
   activeGenerate?: () => Response | Promise<Response>;
   // Hermes review, PR #1200 round 3 (suggestion) — the panel now fetches
@@ -60,6 +62,14 @@ function mockFetch(opts: {
     if (url.endsWith("/setup/generate/start") && init?.method === "POST") {
       return Promise.resolve(
         opts.startGenerate ? opts.startGenerate(body) : jsonResponse(202, { jobId: "job1" }),
+      );
+    }
+    if (/\/setup\/generate\/jobs\/[^/]+\/cancel$/.test(url) && init?.method === "POST") {
+      const jobId = url.split("/").slice(-2)[0];
+      return Promise.resolve(
+        opts.cancel
+          ? opts.cancel(jobId)
+          : jsonResponse(202, { ...finishedJob(), phase: "cancelled" }),
       );
     }
     if (/\/setup\/generate\/jobs\/[^/]+$/.test(url)) {
@@ -282,6 +292,30 @@ describe("ProjectSetupPanel", () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+
+    it("cancels a running job: stops the poll, returns to the form and shows no error", async () => {
+      const startedAt = Date.now() - 5_000;
+      const cancel = vi.fn(() =>
+        jsonResponse(202, { ...runningJob(startedAt), phase: "cancelled" }),
+      );
+      const fetchMock = mockFetch({
+        activeGenerate: () => jsonResponse(200, runningJob(startedAt)),
+        job: () => jsonResponse(200, runningJob(startedAt)),
+        cancel,
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+
+      await userEvent.click(await screen.findByTestId("generate-cancel"));
+
+      await waitFor(() =>
+        expect(screen.queryByTestId("generate-progress")).not.toBeInTheDocument(),
+      );
+      expect(cancel).toHaveBeenCalledWith("job9");
+      expect(useDashboardStore.getState().scaffoldDrafts[1]?.generateJob).toBeNull();
+      expect(useDashboardStore.getState().scaffoldDrafts[1]?.error).toBeNull();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
 
     it("reattaches to a running job when the panel opens again", async () => {

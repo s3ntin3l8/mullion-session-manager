@@ -263,6 +263,33 @@ describe("defaultSpawnGenerationTurn — sandbox composition (issue #1081 covera
     });
   });
 
+  it("passes an abort signal (and a SIGKILL killSignal) through to execFile only when given one", async () => {
+    const controller = new AbortController();
+    await defaultSpawnGenerationTurn({
+      agentCommand: "claude",
+      cwd: scratchDir,
+      prompt: "p",
+      timeoutMs: 5000,
+      signal: controller.signal,
+    });
+    const withSignal = execFileMock.mock.calls[1][2] as {
+      signal?: AbortSignal;
+      killSignal?: string;
+    };
+    expect(withSignal.signal).toBe(controller.signal);
+    expect(withSignal.killSignal).toBe("SIGKILL");
+
+    resetSandboxCapabilityCache();
+    execFileMock.mockClear();
+    await defaultSpawnGenerationTurn({
+      agentCommand: "claude",
+      cwd: scratchDir,
+      prompt: "p",
+      timeoutMs: 5000,
+    });
+    expect(execFileMock.mock.calls[1][2]).not.toHaveProperty("signal");
+  });
+
   it("falls back to the unwrapped invocation when the capability probe reports unusable", async () => {
     smokeProbeSucceeds = false;
 

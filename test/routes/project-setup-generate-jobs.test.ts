@@ -86,7 +86,7 @@ async function waitForJobTerminal(
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    if (body.phase === "done" || body.phase === "failed") {
+    if (body.phase === "done" || body.phase === "failed" || body.phase === "cancelled") {
       return body;
     }
     await new Promise((r) => setTimeout(r, 10));
@@ -385,6 +385,88 @@ describe("project-setup background generate job routes (issue #2429)", () => {
     expect(JSON.stringify(fields)).not.toMatch(/[\r\n]/);
     expect(msg).not.toMatch(/[\r\n]/);
 
+    await app.close();
+  });
+
+  it("POST generate/jobs/:jobId/cancel aborts the running turn, records the job as cancelled and 404s afterwards", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+    let turnSignal: AbortSignal | undefined;
+    vi.mocked(generateScaffoldContent).mockImplementation(
+      (opts) =>
+        new Promise((_res, rej) => {
+          turnSignal = opts.signal;
+          opts.signal?.addEventListener("abort", () =>
+            rej(new GenerationSpawnError("claude", "aborted")),
+          );
+        }),
+    );
+
+    const start = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/generate/start`,
+      payload: { slug: "demo" },
+    });
+    const { jobId } = start.json();
+    for (let i = 0; i < 100 && !turnSignal; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(turnSignal?.aborted).toBe(false);
+
+    const cancel = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/generate/jobs/${jobId}/cancel`,
+    });
+    expect(cancel.statusCode).toBe(202);
+    expect(cancel.json()).toMatchObject({ jobId, phase: "cancelled" });
+    expect(turnSignal?.aborted).toBe(true);
+
+    // The aborted turn's rejection does not turn the cancel into a failure.
+    await new Promise((r) => setTimeout(r, 50));
+    const polled = await app.inject({
+      method: "GET",
+      url: `/api/projects/${projectId}/setup/generate/jobs/${jobId}`,
+    });
+    expect(polled.json().phase).toBe("cancelled");
+    expect(polled.json().error).toBeUndefined();
+
+    const again = await app.inject({
+      method: "POST",
+      url: `/api/projects/${projectId}/setup/generate/jobs/${jobId}/cancel`,
+    });
+    expect(again.statusCode).toBe(404);
+
+    await app.close();
+  });
+
+  it("POST generate/jobs/:jobId/cancel is 404 for an unknown job, another project's job and a finished job", async () => {
+    const app = await buildApp();
+    const projectId = await createProject(app, repoDir);
+    const otherDir = fs.mkdtempSync(path.join(os.tmpdir(), "project-setup-jobs-other-"));
+    initRepo(otherDir);
+    try {
+      const otherId = await createProject(app, otherDir, "other");
+      mockValidGeneration("demo");
+      const start = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate/start`,
+        payload: { slug: "demo" },
+      });
+      const { jobId } = start.json();
+      await waitForJobTerminal(app, projectId, jobId);
+
+      for (const [pid, id] of [
+        [projectId, "no-such-job"],
+        [otherId, jobId],
+        [projectId, jobId],
+      ] as const) {
+        const res = await app.inject({
+          method: "POST",
+          url: `/api/projects/${pid}/setup/generate/jobs/${id}/cancel`,
+        });
+        expect(res.statusCode).toBe(404);
+      }
+    } finally {
+      fs.rmSync(otherDir, { recursive: true, force: true });
+    }
     await app.close();
   });
 
