@@ -275,6 +275,11 @@ export interface MuxConnectionOptions {
    * call site (e.g. "odd" for the side that dials out as the WS client,
    * "even" for the side that accepts the WS connection). */
   channelIdParity: "even" | "odd";
+  /** Issue #2450 — close the connection when `socket.bufferedAmount` exceeds
+   * this many bytes at the moment a frame is queued: a stalled link would
+   * otherwise let the outgoing queue grow without bound. Omitted = no check
+   * (the ssh-agent callers rely on per-channel windows alone). */
+  maxBufferedBytes?: number;
 }
 
 export interface MuxConnection {
@@ -603,6 +608,15 @@ export function createMuxConnection(
     // simply swallowed — every channel is force-closed locally in
     // `teardown()` regardless, so there is no reply to lose.
     if (socket.readyState !== socket.OPEN) return;
+    if (opts.maxBufferedBytes !== undefined && socket.bufferedAmount > opts.maxBufferedBytes) {
+      // The peer is not draining. Dropping the frame would corrupt the
+      // stream, so the whole connection goes: every channel is closed
+      // locally, and terminate() frees the queued bytes instead of waiting
+      // on a close handshake that a stalled peer will never answer.
+      teardown(`send buffer exceeded ${opts.maxBufferedBytes} bytes`);
+      socket.terminate();
+      return;
+    }
     socket.send(frame);
   }
 

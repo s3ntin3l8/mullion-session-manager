@@ -1729,6 +1729,13 @@ restricted to the current user and SYSTEM like the hook and control endpoints). 
 their tokens). The relay adds no authority beyond that: the host binding limits it to sessions
 that the primary itself placed on that host, and none of it reaches full scope.
 
+## Outbound agent channel
+
+An enrolled agent also dials the primary and holds an authenticated outbound
+WebSocket. It carries no operations yet; see [agent-channel.md](agent-channel.md)
+for the contract. `GET /api/hosts` reports it as `channel`, separate from the
+credential state.
+
 ## Current limitations
 
 - Self-registration has no admin-approval queue — any holder of
