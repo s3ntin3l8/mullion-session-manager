@@ -121,7 +121,13 @@ describe("reconcileExitedSessions", () => {
     return app;
   }
 
-  async function createSession(app: Awaited<ReturnType<typeof buildApp>>) {
+  // Rows are created already older than the new-session grace (#2602) unless
+  // a test asks for a fresh one, so the existing cases keep exercising the
+  // flip itself.
+  async function createSession(
+    app: Awaited<ReturnType<typeof buildApp>>,
+    opts: { ageMs?: number } = {},
+  ) {
     const project = await app.inject({
       method: "POST",
       url: "/api/projects",
@@ -132,7 +138,18 @@ describe("reconcileExitedSessions", () => {
       url: "/api/sessions",
       payload: { projectId: project.json().id, command: "bash" },
     });
-    return created.json().id as number;
+    const id = created.json().id as number;
+    app.db
+      .update(sessions)
+      .set({ createdAt: new Date(Date.now() - (opts.ageMs ?? 60_000)) })
+      .where(eq(sessions.id, id))
+      .run();
+    return id;
+  }
+
+  async function statusOf(app: Awaited<ReturnType<typeof buildApp>>, id: number) {
+    const res = await app.inject({ method: "GET", url: "/api/sessions" });
+    return (res.json() as Array<{ id: number; status: string }>).find((s) => s.id === id)?.status;
   }
 
   // Runs first, deliberately, while the shared test-file DB still has zero
@@ -377,6 +394,65 @@ describe("reconcileExitedSessions", () => {
       (s) => s.id === sessionId,
     );
     expect(row?.status).toBe("exited");
+  });
+
+  // #2602 — a just-created session's scope does not exist yet.
+  it("does not flip a row younger than the grace, even when the listing lacks its scope", async () => {
+    const app = await openTestApp();
+    const sessionId = await createSession(app, { ageMs: 1_000 });
+    mockMasterAlive(app, false);
+
+    await reconcileExitedSessions(app);
+
+    expect(await statusOf(app, sessionId)).toBe("active");
+  });
+
+  it("does not flip when a first dead reading is followed by an alive re-read", async () => {
+    const app = await openTestApp();
+    const sessionId = await createSession(app);
+    const spy = vi
+      .spyOn(app.pty, "isMasterAliveStateBatch")
+      .mockImplementationOnce(async (ids: string[]) =>
+        Object.fromEntries(ids.map((i) => [i, "dead"])),
+      )
+      .mockImplementation(async (ids: string[]) =>
+        Object.fromEntries(ids.map((i) => [i, "alive"])),
+      );
+
+    await reconcileExitedSessions(app);
+
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(await statusOf(app, sessionId)).toBe("active");
+  });
+
+  it("does not flip when the re-read is unknown", async () => {
+    const app = await openTestApp();
+    const sessionId = await createSession(app);
+    vi.spyOn(app.pty, "isMasterAliveStateBatch")
+      .mockImplementationOnce(async (ids: string[]) =>
+        Object.fromEntries(ids.map((i) => [i, "dead"])),
+      )
+      .mockImplementation(async (ids: string[]) =>
+        Object.fromEntries(ids.map((i) => [i, "unknown"])),
+      );
+
+    await reconcileExitedSessions(app);
+
+    expect(await statusOf(app, sessionId)).toBe("active");
+  });
+
+  // The observed ordering: row inserted, reconcile tick, scope appears after.
+  it("regression: a tick before the scope exists leaves the row active and the task alive (#2602)", async () => {
+    const app = await openTestApp();
+    const sessionId = await createSession(app, { ageMs: 0 });
+    mockMasterAlive(app, false);
+
+    await reconcileExitedSessions(app); // scope not there yet
+    expect(await statusOf(app, sessionId)).toBe("active");
+
+    mockMasterAlive(app, true); // scope appears
+    await reconcileExitedSessions(app);
+    expect(await statusOf(app, sessionId)).toBe("active");
   });
 
   // B9 — once the liveness check confirms the process is genuinely gone, any
@@ -1114,7 +1190,11 @@ describe("reconcileExitedSessions", () => {
       const { sessions } = await import("../../src/db/schema.js");
       const [remoteRow] = app.db
         .insert(sessions)
-        .values({ projectId: project.json().id, command: "bash" })
+        .values({
+          projectId: project.json().id,
+          command: "bash",
+          createdAt: new Date(Date.now() - 60_000),
+        })
         .returning()
         .all();
 
