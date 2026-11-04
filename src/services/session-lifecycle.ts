@@ -1337,17 +1337,6 @@ async function createSessionRecordInner(
     created.id,
     placementHost,
   );
-  // Issue #2569 — fields only known now (the DB-held briefing/skill, the
-  // minted GitHub credential): the same gate over the full spawn body. The
-  // worktree and row already exist, so this unwinds them like a spawn failure.
-  const lateUnsupported = checkHostSupport(app, placementHost, {
-    requiredLaunchOptions: requiredLaunchOptions(spawnOpts),
-  });
-  if (lateUnsupported !== null) {
-    untrackSessionGithubAuth(String(created.id));
-    app.pty.discardPendingSeed(String(created.id));
-    return { ok: false, reason: "host-unsupported", detail: lateUnsupported };
-  }
   const spawned = await spawnOrRollback(app, project, created.id, spawnOpts, rb, placementHost);
   if (!spawned.ok) return spawned.result;
 
@@ -1869,7 +1858,16 @@ async function spawnOrRollback(
 ): Promise<Step<{ initialPromptApplied: boolean | undefined }>> {
   const { injectAgentGuide, injectProjectBriefing, injectMullionBundle, taskId } = spawnOpts;
   let spawnResult;
+  let unsupported: string | null = null;
   try {
+    // Issue #2569 — fields only known now (the DB-held briefing/skill, the
+    // minted GitHub credential): the same gate over the full spawn body. The
+    // worktree and row already exist, so a refusal unwinds through the same
+    // catch as a spawn failure.
+    unsupported = checkHostSupport(app, placementHost, {
+      requiredLaunchOptions: requiredLaunchOptions(spawnOpts),
+    });
+    if (unsupported !== null) throw new Error(unsupported);
     spawnResult = await resolveBackend(app, placementHost).spawn(spawnOpts);
     // Version-skew safety net — "echoed back, not assumed" (SpawnResult's
     // own doc comment), logged rather than threaded up into
@@ -1947,6 +1945,12 @@ async function spawnOrRollback(
     app.pty.discardPendingSeed(String(sessionId));
     await rollbackCreate(app, rb);
     app.log.error({ err, hostId: placementHost }, "session spawn failed, rolled back row");
+    if (unsupported !== null) {
+      return {
+        ok: false,
+        result: { ok: false, reason: "host-unsupported", detail: unsupported },
+      };
+    }
     return {
       ok: false,
       result: {
