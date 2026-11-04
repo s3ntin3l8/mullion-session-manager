@@ -142,12 +142,20 @@ export const agentChannelClientPlugin = fp(async (app: FastifyInstance) => {
       ws.off("message", onHandshakeReply);
       let frame: AgentChannelReadyFrame | AgentChannelErrorFrame | null = null;
       try {
-        if (!isBinary) frame = JSON.parse(Buffer.from(data as Buffer).toString("utf8"));
+        if (!isBinary) {
+          const buf = Array.isArray(data)
+            ? Buffer.concat(data)
+            : data instanceof ArrayBuffer
+              ? Buffer.from(data)
+              : (data as Buffer);
+          frame = JSON.parse(buf.toString("utf8"));
+        }
       } catch {
         frame = null;
       }
       if (frame?.type === "ready" && frame.hostId === identity.hostId) {
         ready = true;
+        clearTimeout(replyTimer);
         status.state = "ready";
         status.lastError = null;
         status.connectedAt = Date.now();

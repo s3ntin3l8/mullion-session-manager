@@ -1,6 +1,7 @@
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket as NodeWebSocket } from "ws";
+import { AgentChannelCloseCode } from "../shared/agent-channel.js";
 import type { MuxConnection } from "../services/ssh-agent-mux.js";
 
 // Issue #2450 — decorates `app.agentChannels` (routes/agent-channel.ts
@@ -26,7 +27,8 @@ export const agentChannelPlugin = fp(async (app: FastifyInstance) => {
   const channels = new Map<string, ConnectedAgentChannel>();
   app.decorate("agentChannels", channels);
   app.addHook("onClose", async () => {
-    for (const channel of channels.values()) channel.close(1001, "primary shutting down");
+    for (const channel of channels.values())
+      channel.close(AgentChannelCloseCode.Shutdown, "primary shutting down");
     channels.clear();
   });
 });
