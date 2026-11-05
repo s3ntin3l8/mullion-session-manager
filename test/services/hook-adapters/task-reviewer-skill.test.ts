@@ -134,6 +134,15 @@ describe("task-reviewer skill — elaborates buildReviewPrompt, does not restate
     }
   });
 
+  it("the review prompt asks for the focus array with the statuses the skill explains", () => {
+    expect(REVIEW_PROMPT).toContain('"focus"');
+    expect(REVIEW_PROMPT).toContain('"clear" | "finding" | "not-checked"');
+    for (const status of ["clear", "finding", "not-checked"]) {
+      expect(skillBodyNoFrontmatter).toContain(`**${status}**`);
+    }
+    expect(skillBodyNoFrontmatter).toContain("## Review focus");
+  });
+
   it("the skill names the declared-decision prefixes the worker prompt asks for", () => {
     for (const prefix of ["Decision:", "Skipped:", "Deferred:", "Not run locally:"]) {
       expect(WORKER_PREAMBLE).toContain(prefix);

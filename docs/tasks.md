@@ -430,6 +430,15 @@ approval` (generic on purpose, no title: a notification tray is outside the
   those lines for the reviewer (to judge, not to trust) and in the PR
   description under "Worker decisions". Details:
   [`tasks-internals.md`](tasks-internals.md#review-agent-mechanics).
+- **An issue can name a review focus.** An optional `## Review focus`
+  section in the issue body (bullets until the next `##` heading, at most 12
+  of 300 characters) is passed to the reviewer as "The issue author asks you
+  to specifically examine", and the reviewer reports each bullet as `clear`,
+  `finding` (backed by a finding) or `not-checked` in a "Review focus" section
+  of the review and the PR comment. A `not-checked` entry is shown prominently
+  in the notes but does not change the verdict; follow-up rounds re-check only
+  `finding` and `not-checked` items. Use it for risky work — auth, transport,
+  migrations, concurrency. Parsing lives in `src/services/task-review-focus.ts`.
 - **Live updates (`#488`, ingest events added by `#490a`).** The board
   connects to `/ws/tasks` (`src/routes/ws-tasks.ts`) once on mount and
   refetches (debounced ~250ms) whenever an event arrives — a task moved

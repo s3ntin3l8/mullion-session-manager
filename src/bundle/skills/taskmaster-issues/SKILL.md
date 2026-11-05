@@ -146,6 +146,16 @@ and your body is literally what the review agent judges the diff against.
 wandering, and stops a reviewer flagging a deliberate omission as a
 defect.
 
+**Name a review focus for risky work.** An optional `## Review focus`
+section (bullets, until the next `##` heading; at most 12 of 300 characters)
+hands the task reviewer the defects you know matter, and it must report on
+each one as `clear`, `finding` or `not-checked`. Use it for auth and secret
+comparison (constant-time compare, credential outliving its channel),
+transport (reconnect loops after a supersede close, unbounded buffering),
+migrations (rollback, existing rows) and concurrency (races, concurrent
+redemption, shared rate-limit buckets) — not for routine changes, where the
+Scope list is enough. It is a section, not a directive line.
+
 **Don't put PR mechanics in Scope.** Mullion pushes the branch, opens the
 PR, and closes the issue once a human approves — the worker is explicitly
 told not to. A Scope item asking it to open a PR, request a review, merge,

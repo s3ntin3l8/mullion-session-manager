@@ -39,6 +39,14 @@
 import path from "node:path";
 
 import { getAdapterDelegationHint } from "./hook-adapters/index.js";
+import {
+  focusNotes,
+  normalizeFocus,
+  parseReviewFocus,
+  renderFocusSection,
+  reviewFocusPromptLines,
+  type FocusCheck,
+} from "./task-review-focus.js";
 
 /**
  * Greedily wraps `text` to `width` columns, breaking on whitespace and
@@ -624,6 +632,10 @@ export interface ParsedReviewFindings {
    * (`deriveVerdict`); a `deviated` one that cites no declared decision has
    * already been turned into `missing` here. */
   scope: ScopeCheck[];
+  /** The reviewer's report on each item of the issue's `## Review focus`
+   * section (#2600). Empty when it reported none. A `not-checked` entry also
+   * lands in `notes`; no entry changes the verdict by itself. */
+  focus: FocusCheck[];
   /** `true` only when `raw` parsed as the JSON contract `buildReviewPrompt`
    * asks for; `false` on the freeform-fallback branch, where `summary` holds
    * the ENTIRE raw file content rather than one verdict sentence.
@@ -836,7 +848,8 @@ export function parseReviewFindings(
       const claimed = rec.verdict === "clean" ? "approved" : (rec.verdict as string);
       const scope = normalizeScope(rec.scope);
       const verdict = deriveVerdict({ findings, previous, scope, claimed });
-      const notes = normalizeStringArray(rec.notes);
+      const focus = normalizeFocus(rec.focus);
+      const notes = [...focusNotes(focus, findings.length), ...normalizeStringArray(rec.notes)];
       if (verdict !== claimed) {
         // The findings, not the field, decide — but say so, so a human reading
         // the review can see the reviewer's own word disagreed.
@@ -851,6 +864,7 @@ export function parseReviewFindings(
         looksGood: normalizeStringArray(rec.looksGood),
         previous,
         scope,
+        focus,
         structured: true,
       };
     }
@@ -867,6 +881,7 @@ export function parseReviewFindings(
     looksGood: [],
     previous: [],
     scope: [],
+    focus: [],
     structured: false,
   };
 }
@@ -1028,6 +1043,7 @@ export function renderReviewFindingsMarkdown(
     parsed.notes.length > 0 ||
     parsed.looksGood.length > 0 ||
     parsed.scope.length > 0 ||
+    parsed.focus.length > 0 ||
     parsed.previous.length > 0;
   if (parsed.summary.length > MAX_STRUCTURED_SUMMARY_LENGTH && !hasOtherStructure) {
     return parsed.summary;
@@ -1060,6 +1076,7 @@ export function renderReviewFindingsMarkdown(
   lines.push(...renderTextSection("Verified", parsed.verified, /* omitIfEmpty */ true));
   lines.push(...renderTextSection("Notes", parsed.notes, /* omitIfEmpty */ true));
   lines.push(...renderScopeSection(parsed.scope));
+  lines.push(...renderFocusSection(parsed.focus));
   lines.push(...renderTextSection("Looks Good", parsed.looksGood, /* omitIfEmpty */ false));
   return lines.join("\n").trimEnd();
 }
@@ -1346,6 +1363,7 @@ export function buildReviewPrompt(opts: {
           "",
         ]
       : []),
+    ...reviewFocusPromptLines(parseReviewFocus(opts.task.body)),
     ...outputLines,
     "{",
     '  "verdict": "approved" | "approved-with-suggestions" | "changes-requested",',
@@ -1364,14 +1382,19 @@ export function buildReviewPrompt(opts: {
     '      "status": "met" | "partial" | "missing" | "deviated",',
     '      "evidence": "the code or test that satisfies it, or the declared decision" }',
     "  ],",
+    '  "focus": [',
+    '    { "item": "a Review focus bullet of the issue",',
+    '      "status": "clear" | "finding" | "not-checked",',
+    '      "evidence": "what you examined, or the finding it corresponds to" }',
+    "  ],",
     '  "verified": ["what you actually ran/checked, e.g. the exact commands"],',
     '  "notes": ["cross-cutting observations that do not anchor to one line"],',
     '  "looksGood": ["what is solid about this change"]',
     "}",
     "",
-    "`previous`/`scope`/`verified`/`notes`/`looksGood` are all optional arrays —",
-    "omit any that don't apply, but keep `summary` to one sentence: the detail",
-    "belongs in `verified`, not folded into `summary`.",
+    "`previous`/`scope`/`focus`/`verified`/`notes`/`looksGood` are all optional",
+    "arrays — omit any that don't apply, but keep `summary` to one sentence: the",
+    "detail belongs in `verified`, not folded into `summary`.",
     "",
     "`scope` has one entry per Scope checkbox. `missing` and `partial` send the task",
     "back. `deviated` means the diff departs from the item on purpose: its evidence",
@@ -1441,7 +1464,8 @@ export function buildReviewPrompt(opts: {
                 "Earlier suggestions are not tracked: leave them out of `previous`.",
               ]),
           "Re-check only the Scope items the earlier review reported as `missing` or",
-          "`partial`, but still confirm the final state of the branch.",
+          "`partial`, but still confirm the final state of the branch. Likewise re-check",
+          "only the `focus` items the earlier review reported as `finding` or `not-checked`.",
           "A NEW problem in code this round did not change, which the earlier review",
           "could have raised, blocks only if it is critical; otherwise it is a",
           "suggestion. Likewise a problem that already exists on the base branch.",
