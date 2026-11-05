@@ -266,7 +266,9 @@ describe("resolveHostTransport", () => {
     expect(resolveHostTransport(app, "h").kind).toBe("inbound");
     bindChannelHost(app, "h");
     expect(resolveHostTransport(app, "h").kind).toBe("channel-down");
-    const channel = { carriedOperations: ["channel-requests"] } as ConnectedAgentChannel;
+    const channel = {
+      carriedOperations: ["channel-requests"],
+    } as unknown as ConnectedAgentChannel;
     app.agentChannels.set("h", channel);
     expect(resolveHostTransport(app, "h")).toEqual({ kind: "channel", channel });
     app.agentChannels.set("h", { carriedOperations: [] } as unknown as ConnectedAgentChannel);
