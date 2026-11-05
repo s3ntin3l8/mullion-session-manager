@@ -11,6 +11,7 @@ import {
   AGENT_CHANNEL_MAX_CHANNELS,
   AGENT_CHANNEL_PATH,
   AGENT_CHANNEL_REJECTED_RETRY_MS,
+  AGENT_CHANNEL_SUPERSEDED_RETRY_MS,
   AgentChannelCloseCode,
   backoffDelayMs,
   type AgentChannelAuthFrame,
@@ -35,6 +36,9 @@ export type AgentChannelClientState =
   | "ready"
   /** The primary refused the identity or protocol; retrying slowly. */
   | "rejected"
+  /** A newer connection for this host took over; waiting a long interval
+   * before redialing rather than fighting it. */
+  | "superseded"
   /** Waiting out a backoff after a failed or dropped connection. */
   | "backoff";
 
@@ -134,6 +138,14 @@ export const agentChannelClientPlugin = fp(async (app: FastifyInstance) => {
         settle("rejected", rejected, AGENT_CHANNEL_REJECTED_RETRY_MS);
       } else if (closeCode === AgentChannelCloseCode.Revoked) {
         settle("rejected", "identity revoked", AGENT_CHANNEL_REJECTED_RETRY_MS);
+      } else if (closeCode === AgentChannelCloseCode.Superseded) {
+        // Another daemon holds this credential. Neither reset the curve nor
+        // redial on it: a short retry would supersede the other side in turn.
+        settle(
+          "superseded",
+          "superseded by a newer connection",
+          Math.round(AGENT_CHANNEL_SUPERSEDED_RETRY_MS * (0.8 + 0.4 * Math.random())),
+        );
       } else {
         // A connection that reached ready and then dropped restarts the
         // curve; one that never got there keeps climbing it.

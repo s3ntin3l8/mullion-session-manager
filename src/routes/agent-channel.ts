@@ -9,6 +9,7 @@ import {
   AGENT_CHANNEL_MAX_CHANNELS,
   AGENT_CHANNEL_MAX_HANDSHAKE_BYTES,
   AGENT_CHANNEL_PATH,
+  AGENT_CHANNEL_SUPERSEDE_WARN_WINDOW_MS,
   AgentChannelCloseCode,
   parseAuthFrame,
   protocolMismatch,
@@ -46,6 +47,8 @@ export function closeAgentChannel(app: FastifyInstance, hostId: string, code: nu
 }
 
 export async function agentChannelRoute(app: FastifyInstance) {
+  // When each host was last superseded, to spot two daemons on one credential.
+  const lastSupersededAt = new Map<string, number>();
   app.get(
     AGENT_CHANNEL_PATH,
     {
@@ -127,7 +130,19 @@ export async function agentChannelRoute(app: FastifyInstance) {
         // old one is closed (and its channels, so in-flight work is
         // cancelled) BEFORE the new one is registered.
         const previous = app.agentChannels.get(hostId);
-        previous?.close(AgentChannelCloseCode.Superseded, "superseded by a newer connection");
+        if (previous) {
+          const now = Date.now();
+          const last = lastSupersededAt.get(hostId);
+          if (last !== undefined && now - last <= AGENT_CHANNEL_SUPERSEDE_WARN_WINDOW_MS) {
+            // Host id only: never the credential or peer-supplied detail.
+            app.log.warn(
+              { hostId },
+              "[agent-channel] host superseded twice within 60s: two daemons appear to share one machine credential",
+            );
+          }
+          lastSupersededAt.set(hostId, now);
+          previous.close(AgentChannelCloseCode.Superseded, "superseded by a newer connection");
+        }
 
         const mux = createMuxConnection(socket, {
           channelIdParity: "even",

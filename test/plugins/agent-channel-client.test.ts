@@ -2,12 +2,17 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import { setTimeout as realSleep } from "node:timers/promises";
 import Fastify, { type FastifyInstance } from "fastify";
 import { WebSocketServer, type WebSocket } from "ws";
 import { agentChannelClientPlugin } from "../../src/plugins/agent-channel-client.js";
 import { saveAgentIdentity, identityStatePath } from "../../src/services/agent-identity.js";
 import { createMuxConnection } from "../../src/services/ssh-agent-mux.js";
-import { AgentChannelCloseCode } from "../../src/shared/agent-channel.js";
+import {
+  AGENT_CHANNEL_REJECTED_RETRY_MS,
+  AGENT_CHANNEL_SUPERSEDED_RETRY_MS,
+  AgentChannelCloseCode,
+} from "../../src/shared/agent-channel.js";
 
 // The agent-side dialer against a stand-in primary. Vitest's fake timers are
 // not used: the first dial is immediate and a clean drop redials after the
@@ -127,13 +132,103 @@ describe("agent channel client (#2450)", () => {
     expect(primary.connections()).toBe(1);
   });
 
-  it("does not claim readiness when superseded and retries", async () => {
-    const primary = await startPrimary((_f, ws, n) => {
+  describe("superseded (fake timers)", () => {
+    afterEach(() => vi.useRealTimers());
+    // Minutes of fake time in 1 s steps, each yielding to real socket I/O.
+    vi.setConfig({ testTimeout: 30_000 });
+
+    // Real sockets, fake timers: advance in small steps, yielding to real I/O.
+    // One-second steps stay far under the 10 s handshake timeout, and each
+    // step lets pending socket I/O finish before time moves on.
+    async function settleIo(): Promise<void> {
+      // node:timers/promises is not patched by the fake clock: real I/O time.
+      await realSleep(5);
+    }
+    async function advance(ms: number, step = 1000): Promise<void> {
+      for (let left = ms; left > 0; left -= step) {
+        await vi.advanceTimersByTimeAsync(Math.min(step, left));
+        await settleIo();
+      }
+    }
+    // A stand-in primary that also speaks the mux, so it answers the agent's
+    // keepalive PINGs; without one a held connection drops after ~25 s.
+    const readyMux = (ws: WebSocket) => {
       ready(ws);
-      if (n === 1) setTimeout(() => ws.close(AgentChannelCloseCode.Superseded, "superseded"), 20);
+      createMuxConnection(ws, { channelIdParity: "even" });
+    };
+    const fake = () =>
+      vi.useFakeTimers({
+        toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+      });
+
+    it("does not redial on the short curve after a 4001, only after the long interval", async () => {
+      fake();
+      const primary = await startPrimary((_f, ws, n) => {
+        readyMux(ws);
+        if (n === 1) ws.close(AgentChannelCloseCode.Superseded, "superseded");
+      });
+      const app = await startAgent(primary.url);
+      await advance(2000);
+      await settleIo();
+      expect(primary.connections()).toBe(1);
+      expect(app.agentChannelStatus.state).toBe("superseded");
+      expect(app.agentChannelStatus.lastError).toBe("superseded by a newer connection");
+      await advance(AGENT_CHANNEL_SUPERSEDED_RETRY_MS - 2000 - 60_000);
+      expect(primary.connections()).toBe(1);
+      await advance(AGENT_CHANNEL_SUPERSEDED_RETRY_MS);
+      await settleIo();
+      expect(primary.connections()).toBe(2);
     });
-    await startAgent(primary.url);
-    await waitUntil(() => primary.connections() >= 2);
+
+    it("a plain drop after ready still redials within about a second", async () => {
+      fake();
+      const primary = await startPrimary((_f, ws, n) => {
+        ready(ws);
+        if (n === 1) ws.terminate();
+      });
+      const app = await startAgent(primary.url);
+      await advance(2500);
+      await settleIo();
+      expect(primary.connections()).toBe(2);
+      expect(app.agentChannelStatus.state).toBe("ready");
+    });
+
+    it("revoked still waits the rejected interval", async () => {
+      fake();
+      const primary = await startPrimary((_f, ws, n) => {
+        ready(ws);
+        if (n === 1) ws.close(AgentChannelCloseCode.Revoked, "revoked");
+      });
+      const app = await startAgent(primary.url);
+      await advance(5000);
+      await settleIo();
+      expect(primary.connections()).toBe(1);
+      expect(app.agentChannelStatus).toMatchObject({
+        state: "rejected",
+        lastError: "identity revoked",
+      });
+      await advance(AGENT_CHANNEL_REJECTED_RETRY_MS);
+      await settleIo();
+      expect(primary.connections()).toBe(2);
+    });
+
+    it("two clients sharing one credential make a bounded number of connects", async () => {
+      fake();
+      // Like the real primary: a new connection supersedes the previous one.
+      let current: WebSocket | undefined;
+      const primary = await startPrimary((_f, ws) => {
+        current?.close(AgentChannelCloseCode.Superseded, "superseded");
+        current = ws;
+        readyMux(ws);
+      });
+      await startAgent(primary.url);
+      await startAgent(primary.url);
+      await advance(10 * 60_000);
+      await settleIo();
+      // Unbounded fighting would be ~600 connects (1 s curve); the long
+      // interval allows a handful over ten minutes.
+      expect(primary.connections()).toBeLessThanOrEqual(6);
+    });
   });
 
   it("refuses peer-initiated channels (nothing is carried yet)", async () => {

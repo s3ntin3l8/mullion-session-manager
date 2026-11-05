@@ -27,6 +27,13 @@ export const AGENT_CHANNEL_MAX_HANDSHAKE_BYTES = 16 * 1024;
 export const AGENT_CHANNEL_BACKOFF = { minMs: 1_000, maxMs: 60_000 } as const;
 /** A rejected identity or protocol will not fix itself quickly: retry slowly. */
 export const AGENT_CHANNEL_REJECTED_RETRY_MS = 5 * 60_000;
+/** Superseded by a newer connection for the same host (two daemons sharing one
+ * credential): redialing at once would kick the other side in a loop, so wait
+ * this long, with the same +-20% jitter as the backoff so two clients drift
+ * apart rather than moving in lockstep. */
+export const AGENT_CHANNEL_SUPERSEDED_RETRY_MS = 5 * 60_000;
+/** The primary warns when one host is superseded twice within this window. */
+export const AGENT_CHANNEL_SUPERSEDE_WARN_WINDOW_MS = 60_000;
 
 /** WebSocket close codes (4000-4999 are application-defined). */
 export const AgentChannelCloseCode = {
