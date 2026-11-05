@@ -2,15 +2,18 @@ import type { FastifyInstance } from "fastify";
 import type { WebSocket as NodeWebSocket, RawData } from "ws";
 import { checkMachineCredential, markChannelConnected } from "../services/host-registry.js";
 import { createMuxConnection } from "../services/ssh-agent-mux.js";
+import { bindChannelHost, unbindChannelHost } from "../services/agent-channel-tunnel.js";
 import { AGENT_OPERATIONS, localProtocolInfo } from "../shared/agent-protocol.js";
 import {
   AGENT_CHANNEL_HANDSHAKE_TIMEOUT_MS,
   AGENT_CHANNEL_MAX_BUFFERED_BYTES,
   AGENT_CHANNEL_MAX_CHANNELS,
+  AGENT_CHANNEL_CREDENTIAL_RECHECK_MS,
   AGENT_CHANNEL_MAX_HANDSHAKE_BYTES,
   AGENT_CHANNEL_PATH,
   AGENT_CHANNEL_SUPERSEDE_WARN_WINDOW_MS,
   AgentChannelCloseCode,
+  carriedOperationsFor,
   parseAuthFrame,
   protocolMismatch,
   type AgentChannelErrorCode,
@@ -21,8 +24,8 @@ import type { ConnectedAgentChannel } from "../plugins/agent-channel.js";
 // Issue #2450 — the primary side of an execution agent's OUTBOUND channel.
 // Modelled on routes/agent-bridge.ts (exempt from the normal auth gate, first
 // JSON frame within a handshake timeout, then the mux), but authenticated by
-// the host's machine credential (#2568) and bound to that host id. Nothing is
-// carried yet: operations migrate in #2451 / #2571. Contract:
+// the host's machine credential (#2568) and bound to that host id. It carries
+// request/response operations (#2451; streams follow in #2571). Contract:
 // docs/agent-channel.md.
 
 const CONNECT_RATE_LIMIT = { max: 30, timeWindow: "1 minute" };
@@ -43,7 +46,18 @@ function reject(
 
 /** Closes the host's channel, if any. Used on revoke / delete. */
 export function closeAgentChannel(app: FastifyInstance, hostId: string, code: number): void {
+  if (code === AgentChannelCloseCode.Revoked) unbindChannelHost(app, hostId);
   app.agentChannels.get(hostId)?.close(code, "closed by primary");
+}
+
+/** Test seam: how often an open channel's credential is re-validated. */
+let credentialRecheckMs = AGENT_CHANNEL_CREDENTIAL_RECHECK_MS;
+export function overrideCredentialRecheckForTests(ms: number): () => void {
+  const previous = credentialRecheckMs;
+  credentialRecheckMs = ms;
+  return () => {
+    credentialRecheckMs = previous;
+  };
 }
 
 export async function agentChannelRoute(app: FastifyInstance) {
@@ -149,6 +163,7 @@ export async function agentChannelRoute(app: FastifyInstance) {
           maxChannels: AGENT_CHANNEL_MAX_CHANNELS,
           maxBufferedBytes: AGENT_CHANNEL_MAX_BUFFERED_BYTES,
         });
+        const carried = carriedOperationsFor(negotiated);
         const entry: ConnectedAgentChannel = {
           hostId,
           socket,
@@ -156,8 +171,11 @@ export async function agentChannelRoute(app: FastifyInstance) {
           connectedAt: Date.now(),
           protocolVersion: auth.protocol.protocolVersion,
           negotiatedOperations: negotiated,
-          carriedOperations: [],
+          carriedOperations: carried,
+          terminal: null,
           close: (code, reason) => {
+            if (code === AgentChannelCloseCode.Revoked) entry.terminal = "revoked";
+            else if (code === AgentChannelCloseCode.Expired) entry.terminal = "expired";
             // Our code first, then the mux teardown: mux.close() skips its
             // own plain socket.close() once the socket is no longer OPEN,
             // and cancels every channel (and so its in-flight work) now.
@@ -167,9 +185,28 @@ export async function agentChannelRoute(app: FastifyInstance) {
         };
         app.agentChannels.set(hostId, entry);
         markChannelConnected(app, hostId);
-        // Nothing is carried yet: refuse every peer-initiated channel.
+        // Request/response operations are carried (#2451) once negotiated;
+        // the agent serves them, so a peer-initiated channel is refused.
+        if (carried.length > 0) bindChannelHost(app, hostId);
+        else unbindChannelHost(app, hostId);
         mux.onChannel((channel) => channel.close());
+
+        // Re-validate the credential this channel authenticated with while it
+        // is open (#2451): connect-time only would let a channel outlive its
+        // 90-day expiry or the end of the previous-credential grace window.
+        // Revocation and host deletion close it directly (closeAgentChannel).
+        const recheck = setInterval(() => {
+          const result = checkMachineCredential(app, hostId, auth.credential);
+          if (result === "ok") return;
+          app.log.info({ hostId, result }, "agent channel credential no longer valid");
+          entry.close(
+            result === "revoked" ? AgentChannelCloseCode.Revoked : AgentChannelCloseCode.Expired,
+            result === "revoked" ? "identity revoked" : "credential expired",
+          );
+        }, credentialRecheckMs);
+        recheck.unref?.();
         mux.onClose((reason) => {
+          clearInterval(recheck);
           // Only remove OUR entry: a superseding connection may already own the slot.
           if (app.agentChannels.get(hostId) === entry) app.agentChannels.delete(hostId);
           app.log.info({ hostId, reason }, "agent channel closed");
@@ -181,7 +218,7 @@ export async function agentChannelRoute(app: FastifyInstance) {
           hostId,
           protocolVersion: localProtocolInfo().protocolVersion,
           negotiatedOperations: negotiated,
-          carriedOperations: [],
+          carriedOperations: carried,
         };
         socket.send(JSON.stringify(ready));
       }

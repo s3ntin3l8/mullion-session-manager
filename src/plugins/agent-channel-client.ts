@@ -1,8 +1,10 @@
+import crypto from "node:crypto";
 import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 import { WebSocket as NodeWebSocket } from "ws";
 import { identityStatePath, loadAgentIdentity } from "../services/agent-identity.js";
 import { createMuxConnection, type MuxConnection } from "../services/ssh-agent-mux.js";
+import { serveChannelRequest } from "../services/agent-channel-tunnel.js";
 import { toWsUrl } from "../services/ws-pipe.js";
 import { localProtocolInfo } from "../shared/agent-protocol.js";
 import {
@@ -25,9 +27,10 @@ import {
 // Helper: closing or updating Helper does not touch it, and nothing here
 // depends on the tray being alive.
 //
-// Nothing is carried yet (operations migrate in #2451 / #2571), so the
-// primary's peer-initiated channels are refused and `ready` only means "an
-// authenticated, compatible channel is open".
+// Request/response operations are served over the channel (#2451): each
+// primary-opened mux channel is one HTTP-shaped request, replayed into this
+// agent's own Fastify instance with a process-local credential (see
+// services/agent-channel-tunnel.ts). Streams migrate in #2571.
 
 export type AgentChannelClientState =
   /** No identity, no primary URL, or not started: nothing to dial. */
@@ -64,6 +67,11 @@ export const agentChannelClientPlugin = fp(async (app: FastifyInstance) => {
     carriedOperations: [],
   };
   app.decorate("agentChannelStatus", status);
+  // The credential the channel's replayed requests present to routes/internal.ts
+  // (#2451). Random per process, never sent anywhere: the channel itself is
+  // what authenticated the primary's request.
+  const requestAuthToken = crypto.randomBytes(32).toString("hex");
+  app.decorate("agentChannelRequestToken", requestAuthToken);
   if (app.config.MULLION_ROLE !== "agent" || !app.config.MULLION_PRIMARY_URL) return;
 
   // The first frame carries the machine credential, so a plain-text primary
@@ -138,6 +146,11 @@ export const agentChannelClientPlugin = fp(async (app: FastifyInstance) => {
         settle("rejected", rejected, AGENT_CHANNEL_REJECTED_RETRY_MS);
       } else if (closeCode === AgentChannelCloseCode.Revoked) {
         settle("rejected", "identity revoked", AGENT_CHANNEL_REJECTED_RETRY_MS);
+      } else if (closeCode === AgentChannelCloseCode.Expired) {
+        // The credential this connection authenticated with aged out; the
+        // persisted identity is re-read on redial, so retry on the normal curve.
+        if (ready) attempt = 0;
+        settle("backoff", "credential expired; redialing", backoffDelayMs(attempt++));
       } else if (closeCode === AgentChannelCloseCode.Superseded) {
         // Another daemon holds this credential. Neither reset the curve nor
         // redial on it: a short retry would supersede the other side in turn.
@@ -185,8 +198,7 @@ export const agentChannelClientPlugin = fp(async (app: FastifyInstance) => {
         status.state = "ready";
         status.lastError = null;
         status.connectedAt = Date.now();
-        // Nothing is carried until a migration lands: report what the primary
-        // says, which is empty today.
+        // Report what the primary says it carries over this channel.
         status.carriedOperations = frame.carriedOperations ?? [];
         // We dialed, so we are the "odd" side (the primary accepts as "even").
         mux = createMuxConnection(ws, {
@@ -194,7 +206,7 @@ export const agentChannelClientPlugin = fp(async (app: FastifyInstance) => {
           maxChannels: AGENT_CHANNEL_MAX_CHANNELS,
           maxBufferedBytes: AGENT_CHANNEL_MAX_BUFFERED_BYTES,
         });
-        mux.onChannel((channel) => channel.close());
+        mux.onChannel((channel) => serveChannelRequest(app, channel, requestAuthToken));
         app.log.info({ hostId: identity.hostId }, "[agent-channel] ready");
         return;
       }
@@ -241,5 +253,8 @@ declare module "fastify" {
     /** Agent role: the outbound channel's state (readiness is separate from
      * pairing / credential state). Always "idle" on a primary. */
     agentChannelStatus: AgentChannelClientStatus;
+    /** Agent role: the token the channel's replayed requests present to the
+     * internal API's auth gate (#2451). Empty/unused on a primary. */
+    agentChannelRequestToken: string;
   }
 }

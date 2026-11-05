@@ -1845,9 +1845,40 @@ that the primary itself placed on that host, and none of it reaches full scope.
 ## Outbound agent channel
 
 An enrolled agent also dials the primary and holds an authenticated outbound
-WebSocket. It carries no operations yet; see [agent-channel.md](agent-channel.md)
-for the contract. `GET /api/hosts` reports it as `channel`, separate from the
-credential state.
+WebSocket. It carries the primary's request/response operations (#2451; streams
+follow in #2571); see [agent-channel.md](agent-channel.md) for the contract.
+`GET /api/hosts` reports it as `channel`, separate from the credential state.
+
+### Mixed fleets: which transport a host uses
+
+| Agent                                                                                    | Transport for request/response calls                                                                                                                                                                                   |
+| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Predates the channel or `channel-requests` (older build, manual/static-token deployment) | Inbound, to the advertised URL, as before.                                                                                                                                                                             |
+| Negotiated `channel-requests`, channel up                                                | The outbound channel. The advertised URL is not dialed for these calls.                                                                                                                                                |
+| Negotiated `channel-requests`, channel down                                              | Fails as unreachable (the host reads as down). It does **not** fall back to the advertised URL: a mutation whose result is unknown must not be repeated on another transport. The channel redials with 1-60 s backoff. Replacing the agent with one that cannot dial (a legacy build, no identity) leaves the host in this state until its row is revoked or deleted, or the primary restarts. |
+
+Streams (terminal attach, events, the control relay, ssh-agent, previews, file
+transfers) and the `/health` ping still dial the advertised URL until #2571 /
+#2572, so a host still needs that URL and inbound reachability for them.
+
+If the link drops while a **mutation** (spawn, prompt, a git push/commit, a file
+write) is in flight, the caller gets an explicit unknown-outcome error
+(`HostOutcomeUnknownError`: "lost the outbound connection mid-request; the
+outcome is unknown and the request was not repeated"). Check the result before
+re-running it: the session list after a spawn, `git status` / the branch's log
+after a git mutation, the transcript after a prompt. Reads simply report the
+host as unreachable and can be retried.
+
+**Troubleshooting.** Host shows offline but the agent runs: check `channel.ready`
+on `GET /api/hosts` and the agent's `agentChannelStatus` (`rejected` = identity
+or protocol refused, `superseded` = another daemon shares the credential,
+`backoff` = redialing). A channel that keeps closing with code 4004 means the
+credential expired: the agent must have renewed (check its renewal against the
+primary); 4002 means revoked or deleted. A calls-fail-but-agent-is-reachable
+host that was just upgraded: its channel must reach `ready` with
+`carriedOperations: ["channel-requests"]`; an agent without it keeps the inbound
+URL. A request that fails with 400 "path not carried by the channel" was not an
+`/internal/*` API path.
 
 A newer connection for the same host replaces the older one (close code 4001).
 The superseded agent does not fight back: it keeps its backoff curve, reports

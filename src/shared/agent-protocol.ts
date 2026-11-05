@@ -40,6 +40,10 @@ export const AGENT_OPERATIONS = [
   "scaffold",
   "bundle-sync",
   "terminal-palette",
+  // Issue #2451: the agent serves request/response operations over its OUTBOUND
+  // channel (src/shared/agent-channel.ts). A support flag for the transport,
+  // not a route family.
+  "channel-requests",
 ] as const;
 export type AgentOperation = (typeof AGENT_OPERATIONS)[number];
 
@@ -84,7 +88,12 @@ export function localProtocolInfo(): AgentProtocolInfo {
   };
 }
 
-const LATE_OPERATIONS: ReadonlySet<string> = new Set(["agent-detect", "capabilities", "updates"]);
+const LATE_OPERATIONS: ReadonlySet<string> = new Set([
+  "agent-detect",
+  "capabilities",
+  "updates",
+  "channel-requests",
+]);
 
 /**
  * What an agent that predates the handshake (404 on `/internal/protocol`) is

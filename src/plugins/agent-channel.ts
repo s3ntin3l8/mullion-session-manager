@@ -17,8 +17,12 @@ export interface ConnectedAgentChannel {
   readonly connectedAt: number;
   readonly protocolVersion: number;
   readonly negotiatedOperations: readonly string[];
-  /** Always empty today; see AgentChannelReadyFrame.carriedOperations. */
+  /** See AgentChannelReadyFrame.carriedOperations. */
   readonly carriedOperations: readonly string[];
+  /** Set by `close` when the primary ended the channel because the host's
+   * identity was revoked / deleted or its credential expired (#2451), so an
+   * in-flight operation can fail as rejected rather than unreachable. */
+  terminal: "revoked" | "expired" | null;
   /** Closes the socket with an application code. */
   close(code: number, reason: string): void;
 }
