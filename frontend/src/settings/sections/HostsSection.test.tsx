@@ -54,6 +54,24 @@ describe("HostsSection token rotation", () => {
     expect(screen.getByText(/waiting for the agent to register/)).toBeInTheDocument();
   });
 
+  it("shows an outbound-only host as connected without an address (issue #2572)", () => {
+    stubFetch({});
+    useDashboardStore.setState({
+      hosts: [
+        makeHost({
+          id: "h1",
+          name: "laptop",
+          baseUrl: null,
+          health: "online",
+          hasMachineIdentity: true,
+        }),
+      ],
+    });
+    render(<HostsSection />);
+    expect(screen.getByText(/connected over the outbound channel/)).toBeInTheDocument();
+    expect(screen.queryByText(/waiting for the agent/)).not.toBeInTheDocument();
+  });
+
   it("flags a possible duplicate and offers Remove stale host on the older row only (issue #2582)", async () => {
     stubFetch({});
     useDashboardStore.setState({

@@ -66,14 +66,31 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-function resolveAdvertiseUrl(app: FastifyInstance): string {
-  if (app.config.MULLION_AGENT_ADVERTISE_URL) return app.config.MULLION_AGENT_ADVERTISE_URL;
+function legacyAdvertiseUrl(app: FastifyInstance): string {
   return `http://${os.hostname()}:${app.config.PORT}`;
+}
+
+function isLoopbackListenHost(host: string): boolean {
+  const h = host.replace(/^\[|\]$/g, "").toLowerCase();
+  return h === "localhost" || h === "::1" || /^127(\.\d{1,3}){3}$/.test(h);
+}
+
+// Issue #2572 — what this agent tells the primary about where to reach it, or
+// undefined when it advertises nothing and is reached over its outbound
+// channel. An explicit MULLION_AGENT_ADVERTISE_URL always wins. Without one, an
+// agent that was told to listen on a non-loopback address keeps the old
+// hostname:PORT guess (a deployment that set HOST/PORT for inbound use and
+// never an advertise URL must not change behaviour on upgrade); one that only
+// listens on loopback has no address anyone could dial, so it advertises none.
+function resolveAdvertiseUrl(app: FastifyInstance): string | undefined {
+  if (app.config.MULLION_AGENT_ADVERTISE_URL) return app.config.MULLION_AGENT_ADVERTISE_URL;
+  return isLoopbackListenHost(app.config.HOST) ? undefined : legacyAdvertiseUrl(app);
 }
 
 async function callRegister(
   app: FastifyInstance,
   opts: { token?: string; hostId?: string; machineCredential?: string },
+  advertiseUrl: string | undefined = resolveAdvertiseUrl(app),
 ): Promise<AgentSession> {
   const body = {
     token: opts.token,
@@ -82,7 +99,7 @@ async function callRegister(
     // Issue #2568 — a registration authenticated by the bootstrap token asks
     // for a persistent identity; an identity-authenticated one already has it.
     wantsMachineCredential: opts.machineCredential ? undefined : true,
-    baseUrl: resolveAdvertiseUrl(app),
+    baseUrl: advertiseUrl,
     hostname: os.hostname(),
     name: app.config.MULLION_AGENT_NAME || undefined,
     // Issue #1721 / roadmap 8.7 — the agent's own platform, free-form and
@@ -105,6 +122,12 @@ async function callRegister(
     },
   );
   if (!res.ok) {
+    // A primary that predates #2572 requires a baseUrl and answers 400 without
+    // one. Fall back to the old guess once so a new agent still registers
+    // against it (it will be reached inbound, exactly as before).
+    if (res.status === 400 && advertiseUrl === undefined) {
+      return callRegister(app, opts, legacyAdvertiseUrl(app));
+    }
     throw new RegisterRejectedError(res.status);
   }
   const json = (await res.json()) as RegisterResponse;

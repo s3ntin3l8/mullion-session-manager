@@ -363,7 +363,11 @@ export interface HostRegistration {
 }
 
 export interface RegisterAgentInput {
-  baseUrl: string;
+  // Issue #2572 — absent for an outbound-capable agent that advertises no
+  // address (it dials the primary and is reached over that channel). Only a
+  // registration that gets a machine identity may omit it: the legacy path has
+  // nothing else to match or reach the agent by.
+  baseUrl?: string;
   hostname: string;
   name?: string;
   capabilities?: unknown;
@@ -489,7 +493,8 @@ export function claimHost(
   app.db
     .update(hosts)
     .set({
-      baseUrl: input.baseUrl,
+      // An agent that advertises no address leaves the admin's (or no) URL alone.
+      ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
       origin: "manual",
       agentMetadata: JSON.stringify({
         hostname: input.hostname,
@@ -536,7 +541,10 @@ export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): Hos
   // every later registration, so baseUrl is not an identity for it: two
   // agents sharing an advertised URL each get their own row (and credential)
   // instead of re-stealing one. Only the legacy path below still dedupes.
-  if (input.wantsMachineCredential) return insertEnrolledHost(app, input);
+  if (input.wantsMachineCredential || input.baseUrl === undefined) {
+    return insertEnrolledHost(app, input);
+  }
+  const baseUrl = input.baseUrl;
   const metadata = JSON.stringify({
     hostname: input.hostname,
     capabilities: input.capabilities ?? null,
@@ -547,7 +555,7 @@ export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): Hos
     .where(
       and(
         eq(hosts.origin, "enrolled"),
-        eq(hosts.baseUrl, input.baseUrl),
+        eq(hosts.baseUrl, baseUrl),
         isNull(hosts.machineCredentialRevokedAt),
         // A row with a machine identity belongs to an agent that presents it;
         // a legacy agent must not be able to take it over by URL.
@@ -569,7 +577,7 @@ export function enrollHost(app: FastifyInstance, input: RegisterAgentInput): Hos
     // note on baseUrl uniqueness.
     if (existing.sessionExpiresAt && existing.sessionExpiresAt.getTime() > Date.now()) {
       app.log.warn(
-        { hostId: existing.id, baseUrl: input.baseUrl },
+        { hostId: existing.id, baseUrl },
         "[host-registry] enrollHost reused a row with a still-live session — either a retried " +
           "registration from the same agent, or two agents advertising the same baseUrl",
       );
@@ -608,7 +616,7 @@ function insertEnrolledHost(app: FastifyInstance, input: RegisterAgentInput): Ho
     .values({
       id,
       name: input.name?.trim() || input.hostname,
-      baseUrl: input.baseUrl,
+      baseUrl: input.baseUrl ?? null,
       authTokenEnc: null,
       origin: "enrolled",
       agentMetadata: metadata,
@@ -782,8 +790,14 @@ export function renewMachineCredential(
 
   const selfReport = {
     // The identity is the host id, so the advertised URL follows the agent
-    // (it may have moved); this is what replaces the baseUrl dedupe.
-    baseUrl: input.baseUrl,
+    // (it may have moved); this is what replaces the baseUrl dedupe. An agent
+    // that now advertises none (#2572) clears an enrolled row's stale URL; an
+    // admin-set URL on a manual row is the admin's, so it is left alone.
+    ...(input.baseUrl !== undefined
+      ? { baseUrl: input.baseUrl }
+      : row.origin === "enrolled"
+        ? { baseUrl: null }
+        : {}),
     agentMetadata: JSON.stringify({
       hostname: input.hostname,
       capabilities: input.capabilities ?? null,

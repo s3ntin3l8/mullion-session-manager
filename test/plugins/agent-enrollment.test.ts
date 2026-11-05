@@ -112,6 +112,96 @@ describe("agentEnrollmentPlugin", () => {
     }
   });
 
+  it("advertises no URL when it only listens on loopback and none is configured (#2572)", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, {
+        host_id: "host-n",
+        session_id: "sess-n",
+        session_secret: "secret-n", // pragma: allowlist secret
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+      }),
+    );
+    const app = await buildApp();
+    try {
+      await app.ready();
+      await waitUntil(() => app.agentSession !== undefined);
+      const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+      expect(body).not.toHaveProperty("baseUrl");
+      expect(body.wantsMachineCredential).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("keeps the hostname:PORT guess for an agent told to listen on a routable address (#2572)", async () => {
+    process.env.HOST = "0.0.0.0";
+    process.env.PORT = "4123";
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, {
+        host_id: "host-l",
+        session_id: "sess-l",
+        session_secret: "secret-l", // pragma: allowlist secret
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+      }),
+    );
+    const app = await buildApp();
+    try {
+      await app.ready();
+      await waitUntil(() => app.agentSession !== undefined);
+      const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+      expect(body.baseUrl).toBe(`http://${os.hostname()}:4123`);
+    } finally {
+      await app.close();
+      delete process.env.HOST;
+      delete process.env.PORT;
+    }
+  });
+
+  it("sends an explicit advertise URL unchanged (#2572)", async () => {
+    process.env.MULLION_AGENT_ADVERTISE_URL = "http://agent.example:4000";
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, {
+        host_id: "host-e",
+        session_id: "sess-e",
+        session_secret: "secret-e", // pragma: allowlist secret
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+      }),
+    );
+    const app = await buildApp();
+    try {
+      await app.ready();
+      await waitUntil(() => app.agentSession !== undefined);
+      const body = JSON.parse((fetchMock.mock.calls[0] as [string, RequestInit])[1].body as string);
+      expect(body.baseUrl).toBe("http://agent.example:4000");
+    } finally {
+      await app.close();
+      delete process.env.MULLION_AGENT_ADVERTISE_URL;
+    }
+  });
+
+  it("falls back to the old address guess once against a primary that requires a baseUrl (#2572)", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(400, { message: "body must have baseUrl" }));
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, {
+        host_id: "host-f",
+        session_id: "sess-f",
+        session_secret: "secret-f", // pragma: allowlist secret
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+      }),
+    );
+    const app = await buildApp();
+    try {
+      await app.ready();
+      await waitUntil(() => app.agentSession !== undefined);
+      const second = JSON.parse(
+        (fetchMock.mock.calls[1] as [string, RequestInit])[1].body as string,
+      );
+      expect(second.baseUrl).toMatch(/^http:\/\/.+:\d+$/);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("retries with backoff when the primary is unreachable, then succeeds", async () => {
     fetchMock.mockRejectedValueOnce(new Error("connect ECONNREFUSED")).mockResolvedValue(
       jsonResponse(200, {

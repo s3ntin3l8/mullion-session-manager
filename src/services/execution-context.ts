@@ -106,7 +106,7 @@ export async function resolveExecutionContext(
   }
 
   const host = getHostRow(app, hostId);
-  if (!host || (hostId !== LOCAL_HOST_ID && !host.baseUrl)) {
+  if (!host || (hostId !== LOCAL_HOST_ID && !host.baseUrl && !host.machineCredentialEnc)) {
     return fail("host_unavailable", `Host ${hostId} is not available`);
   }
   const flavour =

@@ -46,7 +46,9 @@ interface RegisterBody {
   // Issue #2568 — the agent persists an identity and wants a credential
   // issued on this (first) registration.
   wantsMachineCredential?: boolean;
-  baseUrl: string;
+  // Issue #2572 — omitted by an outbound-capable agent with no address to
+  // advertise; required of one that gets no machine identity.
+  baseUrl?: string;
   hostname: string;
   name?: string;
   capabilities?: unknown;
@@ -59,7 +61,7 @@ interface RegisterBody {
 const registerSchema = {
   body: {
     type: "object",
-    required: ["baseUrl", "hostname"],
+    required: ["hostname"],
     additionalProperties: false,
     properties: {
       token: { type: "string", minLength: 1 },
@@ -172,8 +174,14 @@ export async function enrollmentRoute(app: FastifyInstance) {
         platform,
       } = request.body;
 
-      if (!isAllowedHttpUrl(baseUrl, { allowLoopback: true, allowPrivate: true })) {
+      if (
+        baseUrl !== undefined &&
+        !isAllowedHttpUrl(baseUrl, { allowLoopback: true, allowPrivate: true })
+      ) {
         return reply.badRequest("baseUrl must be a valid http(s) URL");
+      }
+      if (baseUrl === undefined && !machineCredential && !wantsMachineCredential) {
+        return reply.badRequest("baseUrl is required unless a machine identity is used");
       }
       const input: RegisterAgentInput = {
         baseUrl,

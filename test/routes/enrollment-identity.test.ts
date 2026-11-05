@@ -7,6 +7,8 @@ import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts } from "../../src/db/schema.js";
 import { createHost, getHostRow, listHosts } from "../../src/services/host-registry.js";
+import { getRemoteHostClient } from "../../src/services/remote-host-client.js";
+import { HostUnreachableError } from "../../src/services/remote-host-errors.js";
 
 // Issue #2568 — persistent machine identity and renewable machine credentials.
 const tmpDb = path.join(os.tmpdir(), `enrollment-identity-test-${process.pid}.db`);
@@ -204,5 +206,77 @@ describe("machine identity (issue #2568)", () => {
       await register({ token: "fleet-secret", baseUrl: "http://10.1.0.70:4000" })
     ).json();
     expect(legacy.host_id).not.toBe(identity.host_id);
+  });
+
+  // Issue #2572 — an outbound-capable agent advertises no address.
+  describe("registration without an advertised URL (issue #2572)", () => {
+    const registerNoUrl = (payload: Record<string, unknown>) =>
+      app.inject({
+        method: "POST",
+        url: "/api/internal/register",
+        payload: { hostname: "laptop", ...payload },
+      });
+
+    it("enrolls a host with no baseUrl and keeps it addressable as a remote host", async () => {
+      const res = await registerNoUrl({ token: "fleet-secret", wantsMachineCredential: true });
+      expect(res.statusCode).toBe(200);
+      const body = res.json();
+      const row = getHostRow(app, body.host_id)!;
+      expect(row.baseUrl).toBeNull();
+      expect(row.origin).toBe("enrolled");
+      expect(listHosts(app).find((h) => h.id === body.host_id)?.hasMachineIdentity).toBe(true);
+      // Reached over its channel, so a client exists; an inbound-only call is
+      // refused as unreachable instead of dialing nothing.
+      const client = getRemoteHostClient(app, body.host_id);
+      await expect(client.getDevServerStatus(1, "http")).rejects.toBeInstanceOf(
+        HostUnreachableError,
+      );
+      expect(await client.ping()).toBe(false);
+    });
+
+    it("gives two url-less agents their own rows (identity, not address)", async () => {
+      const a = (
+        await registerNoUrl({ token: "fleet-secret", wantsMachineCredential: true })
+      ).json();
+      const b = (
+        await registerNoUrl({ token: "fleet-secret", wantsMachineCredential: true })
+      ).json();
+      expect(a.host_id).not.toBe(b.host_id);
+    });
+
+    it("keeps identity on a rerun: renewal without a URL reuses the row and clears a stale URL", async () => {
+      const first = (await enroll({ baseUrl: "http://10.1.0.90:4000" })).json();
+      const res = await registerNoUrl({
+        hostId: first.host_id,
+        machineCredential: first.machine_credential,
+      });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().host_id).toBe(first.host_id);
+      expect(getHostRow(app, first.host_id)!.baseUrl).toBeNull();
+    });
+
+    it("refuses a legacy registration (no machine identity) without a URL", async () => {
+      const res = await registerNoUrl({ token: "fleet-secret" });
+      expect(res.statusCode).toBe(400);
+    });
+
+    it("lets a claimed manual host keep its admin-set URL when the agent advertises none", async () => {
+      const manual = createHost(app, {
+        name: "manual",
+        baseUrl: "http://10.1.0.99:4000",
+        token: "manual-token", // pragma: allowlist secret
+      });
+      const res = await registerNoUrl({ token: "manual-token", wantsMachineCredential: true });
+      expect(res.statusCode).toBe(200);
+      expect(res.json().host_id).toBe(manual.id);
+      const row = getHostRow(app, manual.id)!;
+      expect(row.baseUrl).toBe("http://10.1.0.99:4000");
+      // And a later url-less renewal leaves it too (manual rows are the admin's).
+      await registerNoUrl({
+        hostId: manual.id,
+        machineCredential: res.json().machine_credential,
+      });
+      expect(getHostRow(app, manual.id)!.baseUrl).toBe("http://10.1.0.99:4000");
+    });
   });
 });

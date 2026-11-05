@@ -274,7 +274,17 @@ async function sweep(
   // A host row with baseUrl === null is an enrollment-created row (#245)
   // still awaiting its first registration call — pinging it would just
   // render every pending row "offline" every cycle instead of "pending".
-  const remoteHosts = allHosts.filter((h) => h.baseUrl !== null);
+  //
+  // Issue #2572 — an outbound-only agent has no baseUrl at all and is probed
+  // over its channel: swept while that channel is up, and for as long as it has
+  // a verdict to keep current (so a dropped channel reads offline, not stale).
+  // Before its first connection it stays "pending".
+  const remoteHosts = allHosts.filter(
+    (h) =>
+      h.baseUrl !== null ||
+      app.agentChannels?.has(h.id) === true ||
+      (h.hasMachineIdentity && tracker.getHealth(h.id).status !== "pending"),
+  );
   const recovered: string[] = [];
   const cameOnline: string[] = [];
   await Promise.all(

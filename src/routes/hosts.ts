@@ -153,7 +153,9 @@ function onHostCredentialsChanged(app: FastifyInstance, id: string): void {
 function pendingHostReply(app: FastifyInstance, id: string, reply: FastifyReply) {
   const row = getHostRow(app, id);
   if (!row) return reply.notFound();
-  if (row.baseUrl === null) {
+  // An outbound-only agent (#2572) has no address by design; it is reached over
+  // its channel, so only a row with neither is still waiting for its agent.
+  if (row.baseUrl === null && row.machineCredentialEnc === null) {
     return reply.conflict(
       `${row.name} hasn't registered yet — run its install command on the agent first`,
     );
