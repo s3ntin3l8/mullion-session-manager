@@ -20,3 +20,10 @@ assignees: ""
 - [ ] <!-- Requirement 2 -->
 - [ ] <!-- Update docs/*.md if there are user-facing behavior/CLI changes -->
 - [ ] <!-- Test coverage additions/modifications -->
+
+<!-- Optional, for risky work (auth, transport, migrations, concurrency): the task reviewer must report on each bullet.
+## Review focus
+
+- Constant-time comparison of the secret
+- Race between a supersede close and a reconnect
+-->

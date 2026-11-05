@@ -107,6 +107,25 @@ reason doesn't hold), file that as a finding on the line it affects. Also check
 the Out of scope list: work done there is a finding, because it is unreviewed
 surface the issue ruled out.
 
+## Report on the issue author's review focus
+
+If the issue has a `## Review focus` section, your prompt lists its bullets
+under "The issue author asks you to specifically examine". The author knows
+which risks apply here (a race, a fail-open gate, an unbounded buffer), so
+report on every bullet in `focus`:
+
+- **clear** — you examined it and it holds. Name what you looked at in
+  `evidence`; "looks fine" is not evidence.
+- **finding** — you found a defect. It must correspond to a finding in
+  `findings`; cite it in `evidence`. Without one, Mullion notes the mismatch
+  and the entry does nothing.
+- **not-checked** — you did not get to it. Say so rather than guess `clear`:
+  Mullion shows it prominently in the notes. It does not change the verdict by
+  itself, but it tells the human that part of the review is missing.
+
+On a follow-up round, re-check only the focus items the earlier round reported
+as `finding` or `not-checked`.
+
 ## A follow-up round is a delta review
 
 If your prompt includes the findings of an earlier review, you are checking

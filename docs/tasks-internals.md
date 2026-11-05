@@ -668,7 +668,10 @@ verified?, notes?, looksGood?}` — `summary` is one verdict sentence;
   on a follow-up round, a disposition `{ref, status: addressed | still-open |
 re-broken, evidence}` for each earlier finding; `scope` is `[{item, status:
 met | partial | missing | deviated, evidence}]`, one entry per Scope checkbox
-  of the issue (see "Scope check" below); `verified`/`notes`/
+  of the issue (see "Scope check" below); `focus` is `[{item, status: clear |
+finding | not-checked, evidence}]`, one per bullet of the issue's `## Review
+focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
+  and no entry changes the verdict); `verified`/`notes`/
   `looksGood` are optional string arrays for what was checked, cross-cutting
   observations that don't anchor to a line, and what's solid about the
   change, respectively. **The verdict is derived, not trusted**
