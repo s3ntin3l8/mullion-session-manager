@@ -43,7 +43,48 @@ export const AgentChannelCloseCode = {
   Revoked: 4002,
   /** The primary is shutting down. */
   Shutdown: 4003,
+  /** The credential the channel authenticated with expired, or its
+   * previous-credential grace window ended (#2451). Unlike Revoked the
+   * identity may be fine: the agent redials with its renewed credential. */
+  Expired: 4004,
 } as const;
+
+/** The operation name an agent advertises when it serves request/response
+ * operations over the channel, and the only operation a channel carries
+ * (#2451). Streams (attach, events, control relay, ssh-agent, preview, file
+ * transfers) stay on the inbound transport until #2571. */
+export const AGENT_CHANNEL_REQUESTS_OPERATION = "channel-requests";
+
+/** How often an open channel's credential is re-validated (#2451). */
+export const AGENT_CHANNEL_CREDENTIAL_RECHECK_MS = 60_000;
+
+/** Largest request/response head (method, path, headers) on a tunnelled request. */
+export const AGENT_CHANNEL_MAX_HEAD_BYTES = 64 * 1024;
+/** Largest tunnelled response body the primary buffers. */
+export const AGENT_CHANNEL_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
+
+/** The first line of a tunnelled request: JSON, terminated by "\n"; the raw
+ * request body follows, then EOF. */
+export interface ChannelRequestHead {
+  method: string;
+  /** Path and query, verbatim (always under /internal/). */
+  path: string;
+  headers: Record<string, string>;
+}
+
+/** The first line of a tunnelled response: JSON, terminated by "\n"; the raw
+ * body follows, then EOF. */
+export interface ChannelResponseHead {
+  status: number;
+  headers: Record<string, string>;
+}
+
+/** What a channel carries given what both ends negotiated. */
+export function carriedOperationsFor(negotiated: readonly string[]): string[] {
+  return negotiated.includes(AGENT_CHANNEL_REQUESTS_OPERATION)
+    ? [AGENT_CHANNEL_REQUESTS_OPERATION]
+    : [];
+}
 
 export type AgentChannelErrorCode =
   "bad-handshake" | "invalid-credential" | "revoked" | "incompatible-protocol";
@@ -63,8 +104,9 @@ export interface AgentChannelReadyFrame {
   protocolVersion: number;
   /** Operations both ends advertise (the support set, not what is carried). */
   negotiatedOperations: string[];
-  /** Operations actually carried over this channel. Empty until each
-   * operation's migration lands (#2451, #2571); never claim one earlier. */
+  /** Operations actually carried over this channel: "channel-requests" once
+   * both ends negotiate it (#2451); streams follow in #2571. Never claim one
+   * earlier. */
   carriedOperations: string[];
 }
 

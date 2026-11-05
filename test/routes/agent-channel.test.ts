@@ -6,7 +6,14 @@ import { WebSocket as NodeWebSocket } from "ws";
 import type { FastifyInstance } from "fastify";
 import { buildTestApp } from "../helpers/app.js";
 import { closeDb } from "../../src/db/client.js";
-import { enrollHost, revokeMachineIdentity } from "../../src/services/host-registry.js";
+import { eq } from "drizzle-orm";
+import { hosts } from "../../src/db/schema.js";
+import {
+  enrollHost,
+  renewMachineCredential,
+  revokeMachineIdentity,
+} from "../../src/services/host-registry.js";
+import { overrideCredentialRecheckForTests } from "../../src/routes/agent-channel.js";
 import { localProtocolInfo } from "../../src/shared/agent-protocol.js";
 import { AgentChannelCloseCode } from "../../src/shared/agent-channel.js";
 
@@ -89,8 +96,8 @@ describe("GET /ws/agent-channel (#2450)", () => {
     const { reply: r } = await handshake(authFrame(id));
     expect(r.type).toBe("ready");
     expect(r.hostId).toBe(id.hostId);
-    // Nothing is carried until an operation's migration lands.
-    expect(r.carriedOperations).toEqual([]);
+    // Request/response operations ride the channel once both ends negotiate it.
+    expect(r.carriedOperations).toEqual(["channel-requests"]);
     expect(r.negotiatedOperations).toContain("sessions");
     expect(app.agentChannels.get(id.hostId)?.hostId).toBe(id.hostId);
   });
@@ -110,7 +117,62 @@ describe("GET /ws/agent-channel (#2450)", () => {
     await handshake(authFrame(id));
     const after = await list();
     expect(after.channel.ready).toBe(true);
-    expect(after.channel.carriedOperations).toEqual([]);
+    expect(after.channel.carriedOperations).toEqual(["channel-requests"]);
+  });
+
+  it("carries nothing for an agent that does not advertise the request transport", async () => {
+    const id = enroll();
+    const legacy = {
+      ...localProtocolInfo(),
+      operations: localProtocolInfo().operations.filter((op) => op !== "channel-requests"),
+    };
+    const { reply: r } = await handshake(authFrame(id, legacy));
+    expect(r.type).toBe("ready");
+    expect(r.carriedOperations).toEqual([]);
+  });
+
+  it("closes an open channel when its credential expires, and says why (#2451)", async () => {
+    const restore = overrideCredentialRecheckForTests(20);
+    try {
+      const id = enroll();
+      const { ws } = await handshake(authFrame(id));
+      const entry = app.agentChannels.get(id.hostId)!;
+      const gone = closed(ws);
+      app.db
+        .update(hosts)
+        .set({ machineCredentialExpiresAt: new Date(Date.now() - 1000) })
+        .where(eq(hosts.id, id.hostId))
+        .run();
+      expect(await gone).toBe(AgentChannelCloseCode.Expired);
+      expect(entry.terminal).toBe("expired");
+      await waitUntil(() => !app.agentChannels.has(id.hostId));
+    } finally {
+      restore();
+    }
+  });
+
+  it("closes an open channel once the previous credential's grace window ends (#2451)", async () => {
+    const restore = overrideCredentialRecheckForTests(20);
+    try {
+      const id = enroll();
+      const { ws } = await handshake(authFrame(id));
+      const gone = closed(ws);
+      // The agent renewed: the channel's credential is now only the graced previous one.
+      const renewed = renewMachineCredential(app, id.hostId, id.credential, {
+        baseUrl: "http://laptop:4000",
+        hostname: "laptop",
+      });
+      expect(renewed).toBeTruthy();
+      // ...and the grace window ends.
+      app.db
+        .update(hosts)
+        .set({ machineCredentialRotatedAt: new Date(Date.now() - 365 * 24 * 3600 * 1000) })
+        .where(eq(hosts.id, id.hostId))
+        .run();
+      expect(await gone).toBe(AgentChannelCloseCode.Expired);
+    } finally {
+      restore();
+    }
   });
 
   it("rejects a wrong credential and an unknown host without binding anything", async () => {

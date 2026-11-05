@@ -39,12 +39,18 @@ import type { CommitDetail, CommitLogEntry } from "./git-log.js";
 import type { UpdateStatus, ApplyUpdateBody } from "./update-apply.js";
 import { getHostRow, decryptToken } from "./host-registry.js";
 import {
-  assertAllowedUrl,
-  findSsrfBlock,
-  getPinnedDispatcher,
-  getPinnedWsAgent,
-  type SsrfBlockedError,
-} from "./pinned-connect.js";
+  requestViaChannel,
+  resolveHostTransport,
+  type HostTransport,
+} from "./agent-channel-tunnel.js";
+import { HostRequestError, HostUnreachableError } from "./remote-host-errors.js";
+
+export {
+  HostOutcomeUnknownError,
+  HostRequestError,
+  HostUnreachableError,
+} from "./remote-host-errors.js";
+import { assertAllowedUrl, getPinnedDispatcher, getPinnedWsAgent } from "./pinned-connect.js";
 import type { UrlGuardPolicy } from "./url-guard.js";
 import type { PromoteDecision } from "../plugins/hooks.js";
 import type {
@@ -77,58 +83,12 @@ import { DEFAULT_SETUP_TIMEOUT_MS, type SetupRunResult } from "./setup-recipe-sh
 // token) is only settable via the `ws` package's client, not the global
 // WebSocket — see src/routes/internal.test.ts's identical reasoning.
 
-export class HostUnreachableError extends Error {
-  /** Set when this "unreachable" was actually the SSRF guard refusing to
-   * connect (issue #250), not a network failure. Without it the two are
-   * indistinguishable to every caller — a blocked host would just go red in
-   * the hosts panel with nothing to explain why. */
-  readonly ssrfBlocked: SsrfBlockedError | null;
-
-  constructor(hostId: string, cause: unknown) {
-    // fetch() reports a lookup failure as `TypeError: fetch failed` with the
-    // real error on `.cause`, so the useful message is two levels down —
-    // hoist it into this message rather than making every log site dig.
-    const blocked = findSsrfBlock(cause);
-    const detail = blocked
-      ? blocked.message
-      : cause instanceof Error
-        ? cause.message
-        : String(cause);
-    super(`Host ${hostId} is unreachable: ${detail}`);
-    this.name = "HostUnreachableError";
-    this.cause = cause;
-    this.ssrfBlocked = blocked;
-  }
-}
-
-/** The agent responded — it IS reachable — but rejected the request (4xx):
- * a real client-side error (a malformed body, an unknown session id), not
- * a connectivity problem. Distinct from HostUnreachableError so a caller
- * that cares can tell "the agent said no" apart from "couldn't reach it"
- * (e.g. never treat a 4xx as grounds to skip reconciling a host — the host
- * is fine). Existing callers that just want "did this succeed" keep
- * working unchanged since this is still a thrown Error either way. */
 /** What an agent's `/internal/sessions/:id/wait-output` answers (issue #1951). */
 export type RemoteWaitOutputResult =
   | { matched: true; text: string; line: string; outputOffset: number }
   | { matched: false; timedOut: true; outputOffset: number }
   | { matched: false; gone: true; outputOffset: number }
   | { notRunning: true };
-
-export class HostRequestError extends Error {
-  constructor(
-    hostId: string,
-    public readonly statusCode: number,
-    // Issue #431, Hermes review on PR #458 — retained (not just folded into
-    // the message string) so a caller that wants to forward the agent's
-    // actual rejection reason (e.g. a JSON {message} body) to its own
-    // response doesn't have to re-parse it back out of `.message`.
-    public readonly body: string,
-  ) {
-    super(`Host ${hostId} rejected the request: HTTP ${statusCode}${body ? ` — ${body}` : ""}`);
-    this.name = "HostRequestError";
-  }
-}
 
 // A network blip must never read as "the agent said no sessions are alive"
 // (landmine #1 — an unreachable host's sessions must be skipped, not
@@ -579,6 +539,11 @@ export class RemoteHostClient {
     sessionSecret: string | null;
   } | null;
 
+  // Issue #2451 — how this host is reached right now (see
+  // agent-channel-tunnel.ts's resolveHostTransport). Absent for a client built
+  // without an app (tests, tools): always inbound.
+  private readonly resolveTransport?: () => HostTransport;
+
   private liveStatusCache: {
     key: string;
     ts: number;
@@ -601,6 +566,7 @@ export class RemoteHostClient {
     token: string;
     sessionSecret?: string | null;
     refreshCredentials?: () => { token: string; sessionSecret: string | null } | null;
+    resolveTransport?: () => HostTransport;
   }) {
     this.hostId = opts.hostId;
     this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
@@ -608,6 +574,7 @@ export class RemoteHostClient {
     this.token = opts.token;
     this.sessionSecret = opts.sessionSecret ?? null;
     this.refreshCredentials = opts.refreshCredentials;
+    this.resolveTransport = opts.resolveTransport;
   }
 
   // Connection-time SSRF pinning (issue #250) — every outbound call in this
@@ -704,6 +671,18 @@ export class RemoteHostClient {
     init?: RequestInit,
     timeoutMs: number = defaultRequestTimeoutMs,
   ): Promise<T> {
+    const transport = this.resolveTransport?.() ?? { kind: "inbound" as const };
+    if (transport.kind === "channel") {
+      return requestViaChannel<T>(this.hostId, transport.channel, path, init, timeoutMs);
+    }
+    if (transport.kind === "channel-down") {
+      // Negotiated the outbound channel and it is down: report it, do not dial
+      // the advertised URL (a mutation must not silently change transports).
+      throw new HostUnreachableError(
+        this.hostId,
+        new Error("outbound channel is not connected (not falling back to the advertised URL)"),
+      );
+    }
     let res = await this.rawFetch(path, init, timeoutMs);
     // Retry-once-on-401 (issue #245 / roadmap 7.1): a session credential
     // this client was built with can go stale if the agent renewed it
@@ -2617,6 +2596,7 @@ export function getRemoteHostClient(app: FastifyInstance, hostId: string): Remot
   const client = new RemoteHostClient({
     hostId,
     baseUrl: row.baseUrl,
+    resolveTransport: () => resolveHostTransport(app, hostId),
     token: credentials.token,
     sessionSecret: credentials.sessionSecret,
     // Only a registered (has-or-had-a-session) host gets a refresh

@@ -163,6 +163,7 @@ import {
 import { buildUpstreamRequestHeaders, relayFetchResponse } from "../services/http-proxy.js";
 import { pipeWsFrames, toWsUrl } from "../services/ws-pipe.js";
 import { timingSafeTokenMatch } from "../services/crypto-utils.js";
+import { matchesStaticAgentCredential } from "../services/internal-agent-auth.js";
 import {
   SIGNATURE_HEADER,
   TIMESTAMP_HEADER,
@@ -670,13 +671,7 @@ export async function internalRoutes(app: FastifyInstance) {
   app.addHook("onRequest", async (request, reply) => {
     const header = request.headers.authorization;
     const provided = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : "";
-    const matchesStaticToken =
-      app.config.MULLION_AGENT_TOKEN.trim() !== "" &&
-      // Issue #1059 — both fixed-length tokens (MULLION_AGENT_TOKEN is
-      // server-configured; the inbound bearer is the same value);
-      // timingSafeTokenMatch's length-side-channel is fine here. See
-      // crypto-utils.ts for the full constraint.
-      timingSafeTokenMatch(provided, app.config.MULLION_AGENT_TOKEN);
+    const matchesStaticToken = matchesStaticAgentCredential(app, request, provided);
     // Hermes review, PR #528: the TTL must actually bound a leaked session
     // credential on THIS (accepting) side too, not just on the issuing
     // side (resolveCurrentCredentials/rotateSession already check it). Without

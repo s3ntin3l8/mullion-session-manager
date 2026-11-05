@@ -3,10 +3,9 @@
 Issue #2450, epic #2230. Enrollment is agent-initiated, but ongoing control
 still dials the agent's advertised address (`src/services/remote-host-client.ts`),
 which needs inbound reachability on laptops. This channel is the transport
-seam that lets the **agent dial the primary** instead. It carries **no
-operations yet**: request/response operations move over it in #2451, streams in
-#2571, and #2572 drops the advertised URL. Until then the channel is
-established, authenticated and observable, nothing more.
+seam that lets the **agent dial the primary** instead. Since #2451 it carries
+the primary's **request/response** operations (below); streams move over it in
+#2571, and #2572 drops the advertised URL.
 
 ## Endpoint and handshake
 
@@ -21,14 +20,69 @@ types live in `src/shared/agent-channel.ts`.
 2. The primary replies `{"type":"ready","hostId","protocolVersion","negotiatedOperations","carriedOperations"}`
    or `{"type":"error","code","message"}` and closes.
    - `negotiatedOperations`: operations both ends know (support, not use).
-   - `carriedOperations`: operations actually carried by this channel. **Always
-     `[]` until each migration lands**; nothing may claim an operation earlier.
+   - `carriedOperations`: operations actually carried by this channel.
+     `["channel-requests"]` when both ends negotiated that operation (an agent
+     advertises it when it can serve the tunnel below), otherwise `[]`. Nothing
+     may claim an operation earlier than its migration.
 3. Error codes: `bad-handshake`, `invalid-credential`, `revoked`,
    `incompatible-protocol`. The credential is checked first, so an
    unauthenticated peer learns nothing about protocol support.
 4. After `ready` the socket carries the binary mux of
    `src/services/ssh-agent-mux.ts`. The primary is the "even" side, the agent
    (the dialer) the "odd" side. Peer-initiated channels are refused for now.
+
+## Request/response operations (#2451)
+
+Every `RemoteHostClient` call that goes through `request()` (JSON calls, the
+session upload and the update calls included) rides the channel when the host
+negotiated `channel-requests`. The primary opens one mux channel per request and
+sends a head line (JSON + `\n`: `method`, `path`, `headers`), the raw body and
+EOF; the agent answers a head line (`status`, `headers`), the raw body and EOF.
+The agent **does not reimplement anything**: it replays the request into its own
+Fastify instance (`app.inject`), so each `/internal/*` route, its validation and
+its authorization are the ones the inbound transport runs. The differences:
+
+- **Credential.** The channel was authenticated by the machine credential and is
+  bound to one host id, so the primary can only reach a host over _that host's_
+  channel. The replay presents a per-process random token
+  (`x-mullion-channel-auth`) that `routes/internal.ts` accepts instead of the
+  bearer + signature; the peer cannot choose it (the agent overwrites that
+  header and forwards nothing but `content-type`, `accept` and `x-mullion-*`).
+  Per-session authorization stays where it was (the primary's routes, the
+  agent's session lookups).
+- **Only the agent API.** Paths must start with `/internal/`, may not contain a
+  dot segment, control characters or `/internal/ws/`; anything else is answered
+  400 without being replayed.
+- **Timeouts** are the same per-call budgets as inbound and cover opening the
+  channel, sending and the full response. Bodies are bounded (64 MiB).
+- **Errors keep their meaning.** A 4xx from the agent is a rejection
+  (`HostRequestError`); a 5xx or a transport failure is `HostUnreachableError`.
+
+Streams stay on the inbound transport until #2571: attach, events, the control
+relay, ssh-agent, preview HTTP/WS, the file-browser transfers
+(`uploadProjectFile` / `downloadProjectFile`) and the unauthenticated `/health`
+ping.
+
+### Never replayed, never switched
+
+- A failure **before** the request started sending (the channel could not be
+  opened) is plain unreachability: nothing ran.
+- A failure **after** it started (the link dropped, the request timed out) on a
+  non-idempotent request surfaces as `HostOutcomeUnknownError` (a
+  `HostUnreachableError` with `outcomeUnknown: true`): the agent may have
+  applied it. It is **never retried** by the client and **never repeated on the
+  inbound URL**. Read-only requests (GETs and a short list of read-only POSTs,
+  `isIdempotentRequest`) report plain unreachability. The caller checks the
+  result (session list, `git status`) before deciding to run it again.
+- The transport is chosen from **negotiated support**, not from whether a socket
+  happens to be open. Once a host has negotiated `channel-requests` in this
+  primary process, its requests fail as unreachable while the channel is down
+  rather than falling back to the advertised URL. A host that never negotiated
+  it (an older agent, a manual deployment) keeps using the inbound URL.
+  Revoking or deleting the host, or a handshake that no longer negotiates it,
+  clears the binding. After a primary restart the binding is empty until the
+  agent redials (seconds): requests in that gap use the inbound URL if there is
+  one.
 
 ## Binding and revocation
 
@@ -39,6 +93,14 @@ credential and a graced previous one but never rotates or slides expiry, so
 redialing does not churn the credential (renewal stays on the HTTP path).
 `POST /api/hosts/:id/revoke` and host deletion close a live channel with code
 4002 immediately; a revoked identity is refused with `revoked`.
+
+The credential is also **re-validated while the channel is open** (every 60 s):
+once the 90-day expiry passes, or the previous-credential grace window ends
+after a renewal, the primary closes the channel with code 4004 (`expired`). The
+agent re-reads its persisted (renewed) identity and redials on its normal
+backoff. An operation in flight when the primary closes the channel for
+revocation or expiry fails as **rejected** (`HostRequestError` 401), not as
+unreachable.
 
 ## Replacement, limits, backpressure
 
@@ -56,7 +118,8 @@ redialing does not churn the credential (renewal stays on the HTTP path).
   `ws.bufferedAmount` ceiling **on both sides**. The mux closes (terminates)
   the connection rather than queue past it (`maxBufferedBytes`).
 - A disconnect closes every channel on it, which is the cancellation signal
-  for in-flight work. Mutations are never replayed automatically.
+  for in-flight work. Mutations are never replayed automatically. An agent that
+  never receives a complete request closes the channel after two minutes.
 
 ## Reconnect
 

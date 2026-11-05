@@ -9,6 +9,10 @@ import { agentChannelClientPlugin } from "../../src/plugins/agent-channel-client
 import { saveAgentIdentity, identityStatePath } from "../../src/services/agent-identity.js";
 import { createMuxConnection } from "../../src/services/ssh-agent-mux.js";
 import {
+  AGENT_CHANNEL_AUTH_HEADER,
+  channelFetch,
+} from "../../src/services/agent-channel-tunnel.js";
+import {
   AGENT_CHANNEL_REJECTED_RETRY_MS,
   AGENT_CHANNEL_SUPERSEDED_RETRY_MS,
   AgentChannelCloseCode,
@@ -99,6 +103,44 @@ describe("agent channel client (#2450)", () => {
     expect(seen).toMatchObject({ type: "auth", hostId: "host-1", credential: "c".repeat(64) });
     expect((seen!.protocol as { protocolVersion: number }).protocolVersion).toBe(1);
     expect(app.agentChannelStatus.carriedOperations).toEqual([]);
+  });
+
+  it("serves a request the primary opens on the channel through the agent's own routes (#2451)", async () => {
+    let response: { status: number; body: string } | undefined;
+    const primary = await startPrimary((_frame, ws) => {
+      ready(ws);
+      const mux = createMuxConnection(ws as never, { channelIdParity: "even" });
+      void channelFetch({ mux, terminal: null } as never, {
+        method: "GET",
+        path: "/internal/ping",
+        timeoutMs: 3000,
+      }).then((res) => {
+        response = { status: res.status, body: res.body.toString("utf8") };
+      });
+    });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "agent-channel-client-"));
+    dirs.push(dir);
+    await saveAgentIdentity(identityStatePath(dir), {
+      hostId: "host-1",
+      machineCredential: "c".repeat(64),
+    });
+    const app = Fastify();
+    app.decorate("config", {
+      MULLION_ROLE: "agent",
+      MULLION_PRIMARY_URL: primary.url,
+      SESSIONS_DIR: dir,
+    } as never);
+    await app.register(agentChannelClientPlugin);
+    // The same shape of gate routes/internal.ts applies.
+    app.get("/internal/ping", async (request, reply) =>
+      request.headers[AGENT_CHANNEL_AUTH_HEADER] === app.agentChannelRequestToken
+        ? { pong: true }
+        : reply.code(401).send({ message: "no" }),
+    );
+    apps.push(app);
+    await app.ready();
+    await waitUntil(() => response !== undefined);
+    expect(response).toEqual({ status: 200, body: '{"pong":true}' });
   });
 
   it("reconnects after the connection drops", async () => {
@@ -231,7 +273,7 @@ describe("agent channel client (#2450)", () => {
     });
   });
 
-  it("refuses peer-initiated channels (nothing is carried yet)", async () => {
+  it("answers a malformed peer-initiated request and closes the channel", async () => {
     let peer: WebSocket | undefined;
     const primary = await startPrimary((_f, ws) => {
       peer = ws;
@@ -242,7 +284,10 @@ describe("agent channel client (#2450)", () => {
     // The stand-in primary speaks the mux ("even", as the real one does).
     const mux = createMuxConnection(peer!, { channelIdParity: "even" });
     const channel = await mux.openChannel();
-    // The agent may close before this continuation runs; `closed` covers that.
+    channel.send(Buffer.from("not json\n"));
+    channel.eof();
+    // The agent answers 400 and closes (it may do so before this continuation
+    // runs; `closed` covers that).
     await waitUntil(() => channel.closed);
     expect(app.agentChannelStatus.state).toBe("ready");
   });
