@@ -1294,6 +1294,20 @@ On give-up (`reviewing → failed`): a still-open draft PR is closed
 since a budget/session-death failure never reaches `reviewing` in the first
 place and so never has a draft to close.
 
+### Session-death hook guards (#2602)
+
+The session reconciler (`session-reconciler.ts`) is what fails a task whose
+session exits before `reviewing`. It can read "dead" for a session whose scope
+does not exist _yet_ (the row is inserted before the spawn creates the scope,
+and the scope listing is cached for 400 ms), so two guards sit in front of the
+flip: a row younger than 20 s (`NEW_SESSION_GRACE_MS`) is never flipped, and a
+"dead" reading is re-verified once with the scope cache dropped — only a second
+"dead" flips; "alive"/"unknown" leaves the row `active`. As a backstop, the
+in-progress sweep in `task-reconciler.ts` repairs a row that still ended up
+`exited` while its scope is `alive`: it sets it back to `active`
+(compare-and-set on `status = 'exited'`, at most once per session, never for
+"dead"/"unknown") and lets the normal sweep handle the task next pass.
+
 ### Merge on approve
 
 By default, approving a task does everything above and stops — the PR is

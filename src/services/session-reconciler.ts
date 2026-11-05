@@ -3,12 +3,20 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { projects, sessions, tasks } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { resolveBackend, warnHostError } from "./session-backend.js";
-import type { SessionLiveness } from "./session-process.js";
+import { invalidateOwnedScopesCache, type SessionLiveness } from "./session-process.js";
 import { closeSessionBrowserBindings } from "./session-browsers.js";
 import { cleanupPreviewWorktree } from "./git-worktree.js";
 import { reclaimSessionWorktree } from "./session-worktree-reclaim.js";
 import { syncTaskTransition } from "./task-github-sync.js";
 import { recordTaskTransition } from "./task-state.js";
+
+/**
+ * A row younger than this is never flipped to "exited" (see reconcileRow): the
+ * row is inserted before the spawn creates the session's scope, so a probe in
+ * that window — or a listing cached from before the scope appeared — reads
+ * "dead" for a session that is simply not running yet (#2602).
+ */
+export const NEW_SESSION_GRACE_MS = 20_000;
 
 /**
  * Detects sessions whose program exited on its own — user typed `exit`, a
@@ -32,6 +40,11 @@ import { recordTaskTransition } from "./task-state.js";
  * mass-flip its sessions to "exited" (the dtach masters are almost
  * certainly still fine; only an affirmative "not alive" from a *reachable*
  * host is trusted).
+ *
+ * Two guards keep a *just-created* session from being declared dead before its
+ * scope exists (#2602): a row younger than NEW_SESSION_GRACE_MS is never
+ * flipped, and a "dead" reading is re-verified once against a fresh scope
+ * listing (the 400 ms listing cache dropped) before the destructive flip.
  */
 export async function reconcileExitedSessions(app: FastifyInstance): Promise<void> {
   // Issue #1722 / roadmap 8.8 — the host is the SESSION's own, not its
@@ -137,6 +150,36 @@ async function reconcileRow(
     return;
   }
   if (liveness !== "dead") return;
+
+  // #2602 — grace for a just-created session: its scope may not exist yet.
+  const ageMs = Date.now() - row.session.createdAt.getTime();
+  if (ageMs < NEW_SESSION_GRACE_MS) {
+    app.log.debug(
+      { sessionId: row.session.id, hostId, ageMs },
+      "session reconcile: session is younger than the grace, not flipping it to exited",
+    );
+    return;
+  }
+
+  // #2602 — re-verify before the destructive step: the first reading may come
+  // from a listing cached before the scope appeared. Only a second "dead"
+  // flips the row; "alive"/"unknown" (or a failed re-read) leaves it active.
+  invalidateOwnedScopesCache();
+  let recheck: SessionLiveness | undefined;
+  try {
+    recheck = (await resolveBackend(app, hostId).liveness([String(row.session.id)]))[
+      String(row.session.id)
+    ];
+  } catch {
+    recheck = undefined;
+  }
+  if (recheck !== "dead") {
+    app.log.info(
+      { sessionId: row.session.id, hostId, recheck },
+      "session reconcile: liveness re-read did not confirm the session is dead, leaving it active",
+    );
+    return;
+  }
 
   // Stop tracking our now-orphaned attach-client, if any (only
   // meaningful for a local session — a remote agent's own PtyManager

@@ -6,7 +6,7 @@ import type { SessionStatus } from "../shared/types.js";
 // createSessionRecord is pure business logic filed under services/
 // (session-lifecycle.ts) precisely so a service can reuse it directly.
 import { createSessionRecord, killSession } from "./session-lifecycle.js";
-import { resolveSessionHostId, resolveTaskWorkerHost } from "./session-live-info.js";
+import { repairExited, resolveSessionHostId, resolveTaskWorkerHost } from "./session-live-info.js";
 import { parseHostCwds, projectCwdOnHost } from "./placement.js";
 // closeSessionBrowserBindings — the same "confirmed-terminate" side effect
 // reseedTaskIfSessionExited's own force path applies (task-reseed.ts); see
@@ -5588,7 +5588,7 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
           // against the session row directly, and needs to coordinate with
           // worktree cleanup); this pass must not race it with a conflicting
           // write, so it just leaves an exited-session task alone.
-          if (derived.status === "exited") continue;
+          if (await repairExited(app, hostId, task.id, session, derived.status)) continue;
 
           // A "claimed" task's own reconciliation (both "-> reviewing" on a
           // fast-finishing first turn, and "-> in_progress" on any other
