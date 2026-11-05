@@ -350,7 +350,9 @@ describe("SourceControlSection (issue #433 scope B)", () => {
     await user.click(screen.getByText("Source Control"));
     await user.click(screen.getByText("src/foo.ts"));
 
-    await waitFor(() => expect(api.getProjectGitFileDiff).toHaveBeenCalledWith(1, "src/foo.ts"));
+    await waitFor(() =>
+      expect(api.getProjectGitFileDiff).toHaveBeenCalledWith(1, "src/foo.ts", undefined),
+    );
     await waitFor(() => expect(screen.getByText("+new")).toBeTruthy());
   });
 
@@ -367,7 +369,9 @@ describe("SourceControlSection (issue #433 scope B)", () => {
     await user.click(screen.getByText("Source Control"));
     await user.click(screen.getByText(/Fetch/));
 
-    await waitFor(() => expect(api.postProjectGitFetch).toHaveBeenCalledWith(PROJECT_A.id));
+    await waitFor(() =>
+      expect(api.postProjectGitFetch).toHaveBeenCalledWith(PROJECT_A.id, undefined),
+    );
     await waitFor(() =>
       expect(api.getProjectGitStatus).toHaveBeenCalledWith(PROJECT_A.id, { fresh: true }),
     );
@@ -554,7 +558,9 @@ describe("SourceControlSection (issue #433 scope B)", () => {
     expect(pullButton).not.toBeDisabled();
 
     await user.click(pullButton);
-    await waitFor(() => expect(api.postProjectGitPull).toHaveBeenCalledWith(PROJECT_A.id));
+    await waitFor(() =>
+      expect(api.postProjectGitPull).toHaveBeenCalledWith(PROJECT_A.id, undefined),
+    );
     await waitFor(() =>
       expect(api.getProjectGitStatus).toHaveBeenCalledWith(PROJECT_A.id, { fresh: true }),
     );

@@ -6,7 +6,7 @@ import { FilesSidebarView } from "./FilesSidebarView.js";
 import { api, ApiError } from "../api/index.js";
 import type * as ApiModule from "../api/index.js";
 import type { ProjectDirEntry } from "../api/index.js";
-import { makeProject, makeSession } from "../test/fixtures.js";
+import { makeHost, makeProject, makeSession } from "../test/fixtures.js";
 import { resetStore } from "../test/resetStore.js";
 import { useDashboardStore } from "../store/index.js";
 import { setFileDirty } from "../lib/dirtyFiles.js";
@@ -236,7 +236,8 @@ describe("FilesSidebarView", () => {
   it("shows the API error message when listing fails", async () => {
     vi.mocked(api.listProjectFiles).mockRejectedValue(new ApiError("Nope", 403));
     renderView();
-    expect(await screen.findByText("Nope")).toBeTruthy();
+    // The root can't be listed: the checkout is unavailable, with the reason.
+    expect(await screen.findByText(/This checkout isn't available: Nope/)).toBeTruthy();
   });
 
   describe("upload", () => {
@@ -415,49 +416,128 @@ describe("FilesSidebarView", () => {
       render(<FilesSidebarView projectId={4} checkoutSessionId={9} actions={actions} />);
       await screen.findByText("README.md");
       expect(api.listProjectFiles).toHaveBeenCalledWith(4, "", 9);
-      expect(screen.getByText("Worktree: feat-x")).toBeTruthy();
+      expect(screen.getByText("local · feat-x")).toBeTruthy();
       await user.click(screen.getByText("README.md"));
       expect(actions.onOpenFile).toHaveBeenCalledWith(4, "README.md", 9);
     });
 
-    it("flips to the project root and back", async () => {
+    it("offers the project default checkout as an explicit choice", async () => {
       const user = userEvent.setup();
-      render(<FilesSidebarView projectId={4} checkoutSessionId={9} actions={actions} />);
+      const onChange = vi.fn();
+      const choice = { followedSessionId: 9, projectDefault: false, onChange };
+      const { rerender } = render(
+        <FilesSidebarView
+          projectId={4}
+          checkoutSessionId={9}
+          checkoutChoice={choice}
+          actions={actions}
+        />,
+      );
       await screen.findByText("README.md");
-      await user.click(screen.getByRole("button", { name: "Show project root" }));
+      await user.click(screen.getByRole("button", { name: "Show project default" }));
+      expect(onChange).toHaveBeenCalledWith(true);
+      // The parent resolves the choice to the project's own checkout.
+      rerender(
+        <FilesSidebarView
+          projectId={4}
+          checkoutSessionId={null}
+          checkoutChoice={{ ...choice, projectDefault: true }}
+          actions={actions}
+        />,
+      );
       await waitFor(() => expect(api.listProjectFiles).toHaveBeenLastCalledWith(4, "", undefined));
-      expect(screen.getByText("Project root")).toBeTruthy();
-      await user.click(screen.getByRole("button", { name: "Show worktree" }));
-      await waitFor(() => expect(api.listProjectFiles).toHaveBeenLastCalledWith(4, "", 9));
+      expect(screen.getByText("local · Project default")).toBeTruthy();
+      await user.click(screen.getByRole("button", { name: "Show session checkout" }));
+      expect(onChange).toHaveBeenLastCalledWith(false);
     });
 
-    it("falls back to the project root, and says so, when the backend refuses the worktree", async () => {
+    it("shows the checkout as unavailable, never the project's files, when it can't be listed", async () => {
       vi.mocked(api.listProjectFiles).mockImplementation(async (_id, path = "", sid) => {
         if (sid !== undefined) throw new ApiError("outside the project", 400);
         return { path, entries: LISTINGS[path] ?? [], truncated: false };
       });
       render(<FilesSidebarView projectId={4} checkoutSessionId={9} actions={actions} />);
-      expect(await screen.findByText("README.md")).toBeTruthy();
-      expect(screen.getByText(/this worktree can't be browsed here/)).toBeTruthy();
-      expect(screen.queryByRole("button", { name: "Show worktree" })).toBeNull();
+      expect(
+        await screen.findByText(/This checkout isn't available: outside the project/),
+      ).toBeTruthy();
+      expect(screen.queryByText("README.md")).toBeNull();
+      // No second, project-rooted request was made behind the user's back.
+      expect(vi.mocked(api.listProjectFiles).mock.calls.every((c) => c[2] === 9)).toBe(true);
     });
 
-    it("forgets the override when a different session is followed", async () => {
+    it("ignores a listing that resolves after another checkout was followed", async () => {
+      let release!: (v: { path: string; entries: ProjectDirEntry[]; truncated: boolean }) => void;
+      vi.mocked(api.listProjectFiles).mockImplementation((_id, path = "", sid) =>
+        sid === 9
+          ? new Promise((r) => {
+              release = r;
+            })
+          : Promise.resolve({ path, entries: [entry("other.txt", "file")], truncated: false }),
+      );
+      const { rerender } = render(
+        <FilesSidebarView projectId={4} checkoutSessionId={9} actions={actions} />,
+      );
+      rerender(<FilesSidebarView projectId={4} checkoutSessionId={10} actions={actions} />);
+      await screen.findByText("other.txt");
+      await act(async () =>
+        release({ path: "", entries: [entry("stale.txt", "file")], truncated: false }),
+      );
+      expect(screen.queryByText("stale.txt")).toBeNull();
+      expect(screen.getByText("other.txt")).toBeTruthy();
+    });
+
+    it("keeps an edit bound to the checkout it started in when focus moves on", async () => {
+      const gone: FilePathGone[] = [];
+      const unsubscribe = subscribeFilePathGone((e) => gone.push(e));
+      let finish!: (v: { path: string }) => void;
+      vi.mocked(api.deleteProjectPath).mockImplementation(
+        () =>
+          new Promise((r) => {
+            finish = r;
+          }),
+      );
       const user = userEvent.setup();
       const { rerender } = render(
         <FilesSidebarView projectId={4} checkoutSessionId={9} actions={actions} />,
       );
       await screen.findByText("README.md");
-      await user.click(screen.getByRole("button", { name: "Show project root" }));
-      rerender(<FilesSidebarView projectId={4} checkoutSessionId={10} actions={actions} />);
-      await waitFor(() => expect(api.listProjectFiles).toHaveBeenLastCalledWith(4, "", 10));
+      await user.click(
+        within(rowOf("README.md")).getByRole("button", { name: "Actions for README.md" }),
+      );
+      await user.click(screen.getByRole("menuitem", { name: "Delete" }));
+      await user.click(screen.getByRole("menuitem", { name: /Click again to delete/ }));
+      expect(api.deleteProjectPath).toHaveBeenCalledWith(4, "README.md", 9);
+      rerender(<FilesSidebarView projectId={4} checkoutSessionId={null} actions={actions} />);
+      await screen.findByText("README.md");
+      await act(async () => finish({ path: "README.md" }));
+      // The project's tree still lists its own README; the event names session 9.
+      expect(screen.getByText("README.md")).toBeTruthy();
+      expect(gone).toEqual([{ projectId: 4, sessionId: 9, path: "README.md" }]);
+      unsubscribe();
     });
 
     it("shows no chip for a session in the project's own checkout", async () => {
       render(<FilesSidebarView projectId={4} checkoutSessionId={null} actions={actions} />);
       await screen.findByText("README.md");
-      expect(screen.queryByText(/Worktree:/)).toBeNull();
-      expect(screen.queryByRole("button", { name: "Show project root" })).toBeNull();
+      expect(screen.getByText("local · Project default")).toBeTruthy();
+      expect(screen.queryByRole("button", { name: "Show project default" })).toBeNull();
+    });
+  });
+
+  describe("session on another host", () => {
+    it("is rooted at that host's checkout even at the project's own path", async () => {
+      resetStore({
+        projects: [makeProject({ id: 4, cwd: "/work/app" })],
+        sessions: [makeSession({ id: 9, projectId: 4, cwd: "/work/app", resolvedHostId: "mac" })],
+        hosts: [
+          makeHost({ id: "local", name: "Primary" }),
+          makeHost({ id: "mac", name: "Mac mini" }),
+        ],
+      });
+      render(<FilesSidebarView projectId={4} checkoutSessionId={9} actions={actions} />);
+      await screen.findByText("README.md");
+      expect(api.listProjectFiles).toHaveBeenCalledWith(4, "", 9);
+      expect(screen.getByText("Mac mini · app")).toBeTruthy();
     });
   });
 

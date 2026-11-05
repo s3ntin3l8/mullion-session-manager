@@ -22,6 +22,10 @@ import type {
 } from "./types.js";
 import type { GitStatus, GitDiffStats } from "../../../src/shared/types.js";
 
+function sessionQuery(sessionId: number | undefined): string {
+  return sessionId === undefined ? "" : `?sessionId=${sessionId}`;
+}
+
 export const gitApi = {
   // Commit history for the Git sidebar. undefined (204) when the project
   // isn't a local git repo. `cwd` scopes to one of the project's worktrees.
@@ -57,10 +61,17 @@ export const gitApi = {
   // backend's ~5s git-status cache — pass it only for an explicit user
   // "Fetch" action (SourceControlSection), never the 4s
   // live-refresh poll, which should keep benefiting from that cache.
-  getProjectGitStatus: (projectId: number, opts: { fresh?: boolean } = {}) =>
-    request<GitStatus | undefined>(
-      `/api/projects/${projectId}/git-status${opts.fresh ? "?fresh=1" : ""}`,
-    ),
+  // `sessionId` (issue #2570) reads that session's host and checkout instead of
+  // the project's default one; the server never falls back to the latter.
+  getProjectGitStatus: (projectId: number, opts: { fresh?: boolean; sessionId?: number } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.fresh) params.set("fresh", "1");
+    if (opts.sessionId !== undefined) params.set("sessionId", String(opts.sessionId));
+    const qs = params.toString();
+    return request<GitStatus | undefined>(
+      `/api/projects/${projectId}/git-status${qs ? `?${qs}` : ""}`,
+    );
+  },
 
   // Batch git-status for the sidebar's live-refresh loop: replaces N
   // parallel per-project requests with a single request. Returns
@@ -109,10 +120,12 @@ export const gitApi = {
   },
 
   // Manual git fetch trigger — runs `git fetch origin` for this project now.
-  postProjectGitFetch: (projectId: number) =>
-    request<{ success: boolean; error?: string }>(`/api/projects/${projectId}/git-fetch`, {
-      method: "POST",
-    }),
+  // `sessionId` runs it on that session's host and checkout (issue #2570).
+  postProjectGitFetch: (projectId: number, sessionId?: number) =>
+    request<{ success: boolean; error?: string }>(
+      `/api/projects/${projectId}/git-fetch${sessionQuery(sessionId)}`,
+      { method: "POST" },
+    ),
 
   // Issue #1851 — a READ-ONLY health check on this project's clone: has a
   // background `git gc` damaged it? It never mutates anything — the repair
@@ -133,8 +146,8 @@ export const gitApi = {
     }),
 
   // Issue #745 — Manual fast-forward git pull trigger (`git merge --ff-only @{u}`).
-  postProjectGitPull: (projectId: number) =>
-    request<GitPullResult>(`/api/projects/${projectId}/git-pull`, {
+  postProjectGitPull: (projectId: number, sessionId?: number) =>
+    request<GitPullResult>(`/api/projects/${projectId}/git-pull${sessionQuery(sessionId)}`, {
       method: "POST",
     }),
 
@@ -234,8 +247,18 @@ export const gitApi = {
 
   // Same endpoint, keyed by project instead of session (issue #433's Source
   // Control sidebar section, which has no session to anchor to).
-  getProjectGitFileDiff: (projectId: number, path: string): Promise<GitFileDiffResponse> =>
-    request<GitFileDiffResponse>(
-      `/api/projects/git-file-diff?projectId=${projectId}&path=${encodeURIComponent(path)}`,
-    ),
+  getProjectGitFileDiff: (
+    projectId: number,
+    path: string,
+    sessionId?: number,
+  ): Promise<GitFileDiffResponse> =>
+    // A session's diff is that session's checkout on its host; the route takes
+    // exactly one of projectId / sessionId.
+    sessionId === undefined
+      ? request<GitFileDiffResponse>(
+          `/api/projects/git-file-diff?projectId=${projectId}&path=${encodeURIComponent(path)}`,
+        )
+      : request<GitFileDiffResponse>(
+          `/api/projects/git-file-diff?sessionId=${sessionId}&path=${encodeURIComponent(path)}`,
+        ),
 };

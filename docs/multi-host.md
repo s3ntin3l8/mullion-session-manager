@@ -1566,6 +1566,41 @@ under an active session ignores the requesting session itself.
 `git-branch` and `git-branch-prune` are local-only today: for a session on a
 remote host they answer 204 (nothing done), as for a remote project.
 
+### Files and Source Control follow the focused session
+
+The right sidebar's **Files** and **Source Control** views are bound to an
+execution context: the project, the session, and the host that session runs on.
+Focusing a session's panel selects its checkout when that checkout is not the
+project's default one — a git worktree (inside `.mullion-worktrees/` or a
+sibling directory) **or any session on another host, including one at exactly
+the project's path** (the same path on two hosts is two checkouts). A session in
+the project's own checkout, or a panel that belongs to no session, selects the
+project default.
+
+- A compact `host · checkout · branch` label sits at the top of both views, and
+  a button switches between the focused session's checkout and the **project
+  default**. The choice is shared by both views and resets when a different
+  session is focused.
+- Files lists, reads, writes, uploads, renames and deletes go through the file
+  routes with `?sessionId=`; Source Control reads `git-status` / `git-file-diff`
+  and runs `git-fetch` / `git-pull` with it. The branch, worktree and clone-health
+  sections below the changes are the project repository's and say so.
+- A checkout that cannot be reached (its directory is gone, its host is down, its
+  agent is too old) is shown as **unavailable** with the server's reason. The view
+  never falls back to the project's files or git state: showing another checkout's
+  tree under this checkout's label would be worse than an error.
+- Request, cache and in-flight keys include the project, the session and the
+  host. A listing, status or diff that resolves after another checkout was
+  focused is dropped.
+- Work stays bound to where it started. An open editor keeps its own
+  `sessionId` (and is never re-targeted over unsaved edits); a save, rename,
+  delete, fetch or pull runs against the checkout it was issued from and writes
+  its result and error back to that checkout only. Focus moving on never
+  redirects it: its outcome is shown again when that checkout is focused.
+
+The filesystem authorization of the file routes and the external-file viewer's
+boundaries are unchanged.
+
 ## Where a session lives
 
 A session records the host it was spawned on — `sessions.hostId`, written

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Dropdown } from "../ui/primitives.js";
 import { CloseIcon, FollowIcon, PinIcon } from "../ui/icons.js";
 import type { FollowedProject } from "../hooks/useFollowedProject.js";
-import { useFollowedCheckoutSession } from "../hooks/useFollowedCheckoutSession.js";
+import { useCheckoutTarget } from "../hooks/useCheckoutTarget.js";
 import { SidebarDetailSlotContext } from "../ui/sidebar/detailSlot.js";
 import {
   SidebarRepoTitleContext,
@@ -33,7 +33,7 @@ export function RightSidebarPanel({
 }: RightSidebarPanelProps) {
   const View = view.Component;
   const projectId = followed.effectiveProjectId;
-  const checkoutSessionId = useFollowedCheckoutSession(projectId);
+  const { checkoutSessionId, choice } = useCheckoutTarget(projectId);
   const [toolbarSlot, setToolbarSlot] = useState<HTMLElement | null>(null);
   const [stripSlot, setStripSlot] = useState<HTMLElement | null>(null);
   const [detailSlot, setDetailSlot] = useState<HTMLElement | null>(null);
@@ -107,6 +107,7 @@ export function RightSidebarPanel({
                   <View
                     projectId={projectId}
                     checkoutSessionId={checkoutSessionId}
+                    checkoutChoice={choice}
                     actions={actions}
                   />
                 </SidebarRepoTitleContext.Provider>

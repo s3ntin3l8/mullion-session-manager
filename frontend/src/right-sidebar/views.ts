@@ -1,4 +1,5 @@
 import type { ComponentType, SVGProps } from "react";
+import type { CheckoutChoice } from "../hooks/useCheckoutTarget.js";
 import { useDashboardStore } from "../store/index.js";
 import { needsYouTasks } from "../github/taskMasterSummary.js";
 import { ATTENTION_ORDER, PHASE_LABEL, attentionSummary } from "../github/prPhase.js";
@@ -45,6 +46,9 @@ export interface RightSidebarViewProps {
    * when that differs from the project's — null otherwise. Only views that
    * browse files care. */
   checkoutSessionId?: number | null;
+  /** The followed session and the user's project-default override, for the
+   * chip that lets them flip between the two. */
+  checkoutChoice?: CheckoutChoice;
   actions: RightSidebarActions;
 }
 

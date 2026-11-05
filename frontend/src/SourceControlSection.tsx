@@ -46,9 +46,11 @@ function syncSummary(status: GitStatus): string {
 export interface ProjectFileDiffProps {
   projectId: number;
   filePath: string;
+  /** Diff that session's checkout (on its host) instead of the project's default one. */
+  sessionId?: number;
 }
 
-export function ProjectFileDiff({ projectId, filePath }: ProjectFileDiffProps) {
+export function ProjectFileDiff({ projectId, filePath, sessionId }: ProjectFileDiffProps) {
   const [diffLines, setDiffLines] = useState<DiffLine[] | null | undefined>(undefined);
   const gitRefreshTrigger = useDashboardStore((s) => s.gitRefreshTrigger);
 
@@ -58,10 +60,10 @@ export function ProjectFileDiff({ projectId, filePath }: ProjectFileDiffProps) {
   // expanded unmounts this instance and mounts a fresh one rather than
   // reusing it. Same shape as Sidebar.tsx's own SessionFileDiff.
   useAsyncData(
-    () => api.getProjectGitFileDiff(projectId, filePath),
+    () => api.getProjectGitFileDiff(projectId, filePath, sessionId),
     (r) => setDiffLines(r.patch ? parseUnifiedDiff(r.patch) : null),
     () => setDiffLines(null),
-    [projectId, filePath, gitRefreshTrigger],
+    [projectId, filePath, sessionId, gitRefreshTrigger],
   );
 
   if (diffLines === undefined) {
