@@ -19,7 +19,9 @@ import { fileURLToPath } from "node:url";
 import { gitEnv } from "../../src/services/git-env.js";
 import {
   INDEX_PATH,
+  CONTENT_CAP,
   formatReferences,
+  formatReferencesWithContent,
   loadIndex,
   matchReferences,
   runCli,
@@ -132,6 +134,77 @@ describe("loadIndex", () => {
   it("names the missing file", () => {
     const empty = fs.mkdtempSync(path.join(os.tmpdir(), "review-references-empty-"));
     expect(() => loadIndex(empty)).toThrow(/cannot read/);
+  });
+});
+
+describe("--content", () => {
+  const BOTH = ["src/services/task-reconciler.ts", "frontend/src/dock/x.tsx"].join("\n") + "\n";
+
+  function withFiles(sizes: Record<string, number>): string {
+    const root = fixture();
+    for (const [ref, size] of Object.entries(sizes)) {
+      const file = path.join(root, ref);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, `BODY-${path.basename(ref)}\n` + "x".repeat(size));
+    }
+    return root;
+  }
+
+  it("inlines the full text of every matched reference after the list", () => {
+    const root = withFiles({ [INDEX[0].ref]: 10, [INDEX[1].ref]: 10 });
+    const plain = run(root, ["--files", "-"], BOTH).stdout;
+    const r = run(root, ["--files", "-", "--content"], BOTH);
+    expect(r.code).toBe(0);
+    expect(r.stdout.startsWith(plain)).toBe(true);
+    expect(r.stdout).toContain(`===== ${INDEX[0].ref} =====`);
+    expect(r.stdout).toContain("BODY-task-loop.md");
+    expect(r.stdout).toContain("BODY-dock.md");
+    expect(r.stdout).not.toContain("Not inlined");
+  });
+
+  it("leaves the default output unchanged and says so when nothing matches", () => {
+    const root = withFiles({ [INDEX[0].ref]: 10 });
+    expect(run(root, ["--files", "-"], BOTH).stdout).not.toContain("BODY-");
+    expect(run(root, ["--files", "-", "--content"], "README.md\n").stdout).toBe(
+      "No area-specific references match this diff.\n",
+    );
+  });
+
+  it("stops at the cap and names the references it left out", () => {
+    const root = withFiles({ [INDEX[0].ref]: CONTENT_CAP - 100, [INDEX[1].ref]: 500 });
+    const r = run(root, ["--files", "-", "--content"], BOTH);
+    expect(r.stdout).toContain("BODY-task-loop.md");
+    expect(r.stdout).not.toContain("BODY-dock.md");
+    expect(r.stdout).toMatch(
+      /Not inlined \(read these too\):\n- \.claude\/skills\/x\/references\/dock\.md/,
+    );
+  });
+
+  it("does not inline a later reference once an earlier one overflowed", () => {
+    const m = [
+      { ref: "a.md", paths: ["a"], summary: "a", matched: ["a"] },
+      { ref: "b.md", paths: ["b"], summary: "b", matched: ["b"] },
+      { ref: "c.md", paths: ["c"], summary: "c", matched: ["c"] },
+    ];
+    const text: Record<string, string> = { "a.md": "AA", "b.md": "BBBBBB", "c.md": "C" };
+    const out = formatReferencesWithContent(m, (r: string) => text[r], 5);
+    expect(out).toContain("AA");
+    expect(out).not.toContain("BBBBBB");
+    expect(out).not.toMatch(/^C$/m);
+    expect(out).toMatch(/Not inlined[^]*- b\.md\n- c\.md/);
+  });
+
+  it("adds a content field per match with --json", () => {
+    const root = withFiles({ [INDEX[1].ref]: 5 });
+    const r = run(root, ["--files", "-", "--json", "--content"], "frontend/src/dock/x.tsx\n");
+    const [m] = JSON.parse(r.stdout);
+    expect(m.content).toBe("BODY-dock.md\nxxxxx");
+    expect(m.ref).toBe(INDEX[1].ref);
+  });
+
+  it("exits 2 when a matched reference file is missing", () => {
+    const r = run(fixture(), ["--files", "-", "--content"], BOTH);
+    expect(r.code).toBe(2);
   });
 });
 

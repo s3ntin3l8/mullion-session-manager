@@ -199,10 +199,10 @@ How this repo applies the conventions above — facts and commands, not rules.
 - `make format` — fixes a failing `make format-check` in place (repo-wide,
   covers `frontend/` too).
 - `npm run db:generate` — after any `src/db/schema.ts` edit.
-- `node scripts/review-references.mjs` — lists the per-area review references
-  (`.claude/skills/mullion-review-invariants/references/`) that match the
-  diff's changed files; read what it prints before reviewing or changing those
-  areas.
+- `node scripts/review-references.mjs --content` — lists the per-area review
+  references (`.claude/skills/mullion-review-invariants/references/`) that
+  match the diff's changed files and prints their text; review against what it
+  prints before reviewing or changing those areas.
 
 ## Secrets
 
