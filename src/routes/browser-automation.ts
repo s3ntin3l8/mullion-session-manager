@@ -763,6 +763,18 @@ export async function browserAutomationRoute(app: FastifyInstance): Promise<void
   // project's host or checkout. `page` is null for a remote target (the
   // owning agent runs the browser).
   async function resolveSessionTarget(sessionId: number): Promise<Resolved> {
+    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    if (!row) return { ok: false, status: 404, message: `No session ${sessionId}` };
+
+    const resolved = await resolveSessionBrowserTarget(app, row.projectId, sessionId);
+    if (!resolved.ok) return resolved;
+    const { target } = resolved;
+    // A remote target is driven by its own agent, whose browser setting
+    // decides; this primary's switch only governs the browsers it hosts.
+    if (target.hostId !== LOCAL_HOST_ID) {
+      recordSessionBrowserBinding(app, sessionId, target);
+      return { ok: true, target, page: null };
+    }
     if (!app.browserEnabled) {
       return {
         ok: false,
@@ -771,16 +783,9 @@ export async function browserAutomationRoute(app: FastifyInstance): Promise<void
           "Browser feature is disabled — turn it on in Settings → Browser (or set BROWSER_ENABLED=true), then restart the Mullion server.",
       };
     }
-    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
-    if (!row) return { ok: false, status: 404, message: `No session ${sessionId}` };
-
-    const resolved = await resolveSessionBrowserTarget(app, row.projectId, sessionId);
-    if (!resolved.ok) return resolved;
-    const { target } = resolved;
     // Driving a session's browser binds it, so closing the session closes a
     // target nobody else uses (also when only the agent ever opened it).
     recordSessionBrowserBinding(app, sessionId, target);
-    if (target.hostId !== LOCAL_HOST_ID) return { ok: true, target, page: null };
 
     try {
       const managed = await app.browser.getOrLaunch(target);
