@@ -97,7 +97,7 @@ describe("GET /ws/agent-channel (#2450)", () => {
     expect(r.type).toBe("ready");
     expect(r.hostId).toBe(id.hostId);
     // Request/response operations ride the channel once both ends negotiate it.
-    expect(r.carriedOperations).toEqual(["channel-requests"]);
+    expect(r.carriedOperations).toEqual(["channel-requests", "channel-streams"]);
     expect(r.negotiatedOperations).toContain("sessions");
     expect(app.agentChannels.get(id.hostId)?.hostId).toBe(id.hostId);
   });
@@ -117,18 +117,31 @@ describe("GET /ws/agent-channel (#2450)", () => {
     await handshake(authFrame(id));
     const after = await list();
     expect(after.channel.ready).toBe(true);
-    expect(after.channel.carriedOperations).toEqual(["channel-requests"]);
+    expect(after.channel.carriedOperations).toEqual(["channel-requests", "channel-streams"]);
   });
 
   it("carries nothing for an agent that does not advertise the request transport", async () => {
     const id = enroll();
     const legacy = {
       ...localProtocolInfo(),
-      operations: localProtocolInfo().operations.filter((op) => op !== "channel-requests"),
+      operations: localProtocolInfo().operations.filter(
+        (op) => op !== "channel-requests" && op !== "channel-streams",
+      ),
     };
     const { reply: r } = await handshake(authFrame(id, legacy));
     expect(r.type).toBe("ready");
     expect(r.carriedOperations).toEqual([]);
+  });
+
+  it("carries only requests for an agent that predates the stream transport (#2571)", async () => {
+    const id = enroll();
+    const older = {
+      ...localProtocolInfo(),
+      operations: localProtocolInfo().operations.filter((op) => op !== "channel-streams"),
+    };
+    const { reply: r } = await handshake(authFrame(id, older));
+    expect(r.type).toBe("ready");
+    expect(r.carriedOperations).toEqual(["channel-requests"]);
   });
 
   it("closes an open channel when its credential expires, and says why (#2451)", async () => {

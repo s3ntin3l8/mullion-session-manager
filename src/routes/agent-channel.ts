@@ -187,7 +187,7 @@ export async function agentChannelRoute(app: FastifyInstance) {
         markChannelConnected(app, hostId);
         // Request/response operations are carried (#2451) once negotiated;
         // the agent serves them, so a peer-initiated channel is refused.
-        if (carried.length > 0) bindChannelHost(app, hostId);
+        if (carried.length > 0) bindChannelHost(app, hostId, carried);
         else unbindChannelHost(app, hostId);
         mux.onChannel((channel) => channel.close());
 

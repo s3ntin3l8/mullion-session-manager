@@ -379,7 +379,13 @@ export function proxyToRemoteAttach(
   upstream.on("close", clearResyncTimer);
 
   upstream.once("open", () => {
-    app.log.info({ hostId, sessionId: opts.id }, "remote terminal ws attached");
+    // `resumed` (outbound channel only, #2571): the agent confirms this attach
+    // re-establishes one the lost link carried; the scrollback replay on attach
+    // is what resynchronizes the terminal.
+    app.log.info(
+      { hostId, sessionId: opts.id, resumed: (upstream as { resumed?: boolean }).resumed === true },
+      "remote terminal ws attached",
+    );
     for (const frame of queued.splice(0)) upstream.send(frame.data, { binary: frame.isBinary });
 
     upstream.on("message", (data, isBinary) => {

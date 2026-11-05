@@ -31,6 +31,12 @@ import {
 // Nothing here ever retries or falls back to another transport: whether a
 // failed exchange may be repeated is the caller's decision.
 
+/** Receives a channel's inbound bytes / half-close from whoever owns its listeners. */
+export interface ChannelSink {
+  data(chunk: Buffer): void;
+  eof(): void;
+}
+
 /** Set by the agent's replay and accepted by routes/internal.ts's auth gate. */
 export const AGENT_CHANNEL_AUTH_HEADER = "x-mullion-channel-auth";
 
@@ -330,11 +336,11 @@ export async function requestViaChannel<T>(
  * agent's own Fastify instance and writes the response back. Anything that is
  * not a plain /internal/* request is answered 4xx without being replayed.
  */
-export function serveChannelRequest(
+export function createRequestSink(
   app: FastifyInstance,
   channel: MuxChannel,
   authToken: string,
-): void {
+): ChannelSink {
   const parser = new HeadAndBodyParser();
   const write = makeWriter(channel);
   let dispatched = false;
@@ -363,15 +369,15 @@ export function serveChannelRequest(
       Buffer.from(JSON.stringify({ message })),
     );
 
-  channel.onData((chunk) => {
+  const onData = (chunk: Buffer) => {
     channel.acknowledgeConsumed(chunk.length);
     if (dispatched) return;
     if (!parser.push(chunk, AGENT_CHANNEL_MAX_RESPONSE_BYTES)) {
       dispatched = true;
       void refuse(413, "request too large").finally(() => channel.close());
     }
-  });
-  channel.onEof(() => {
+  };
+  const onEof = () => {
     if (dispatched) return;
     dispatched = true;
     void (async () => {
@@ -421,22 +427,40 @@ export function serveChannelRequest(
         channel.close();
       }
     })();
-  });
+  };
+  return { data: onData, eof: onEof };
+}
+
+/** Wires a request sink straight onto the channel's own listeners. */
+export function serveChannelRequest(
+  app: FastifyInstance,
+  channel: MuxChannel,
+  authToken: string,
+): void {
+  const sink = createRequestSink(app, channel, authToken);
+  channel.onData(sink.data);
+  channel.onEof(sink.eof);
 }
 
 // --- primary side: which hosts ride the channel ------------------------------
 
-// Hosts whose channel has negotiated the request transport during this
-// process's life. Once bound, a host's requests never fall back to the inbound
-// URL when the channel is down: a mutation whose outcome is unknown must not be
-// repeated on another transport (#2451). Cleared on revoke / delete / a
-// handshake that no longer negotiates it.
-const boundHosts = new WeakMap<FastifyInstance, Set<string>>();
+// Operations each host's channel has negotiated during this process's life.
+// Once bound, a host's traffic for that operation never falls back to the
+// inbound URL when the channel is down: a mutation whose outcome is unknown
+// must not be repeated on another transport (#2451), and a stream must not
+// silently change transport under its consumer (#2571). Replaced on every
+// handshake (so one that no longer negotiates an operation clears it) and
+// cleared on revoke / delete.
+const boundHosts = new WeakMap<FastifyInstance, Map<string, ReadonlySet<string>>>();
 
-export function bindChannelHost(app: FastifyInstance, hostId: string): void {
-  let set = boundHosts.get(app);
-  if (!set) boundHosts.set(app, (set = new Set()));
-  set.add(hostId);
+export function bindChannelHost(
+  app: FastifyInstance,
+  hostId: string,
+  operations: readonly string[] = [AGENT_CHANNEL_REQUESTS_OPERATION],
+): void {
+  let map = boundHosts.get(app);
+  if (!map) boundHosts.set(app, (map = new Map()));
+  map.set(hostId, new Set(operations));
 }
 
 export function unbindChannelHost(app: FastifyInstance, hostId: string): void {
@@ -450,10 +474,16 @@ export type HostTransport =
   | { kind: "inbound" };
 
 /** Chosen from negotiated support, not from whether a socket happens to be open. */
-export function resolveHostTransport(app: FastifyInstance, hostId: string): HostTransport {
+export function resolveHostTransport(
+  app: FastifyInstance,
+  hostId: string,
+  operation: string = AGENT_CHANNEL_REQUESTS_OPERATION,
+): HostTransport {
   const channel = app.agentChannels.get(hostId);
-  if (channel && channel.carriedOperations.includes(AGENT_CHANNEL_REQUESTS_OPERATION)) {
+  if (channel && channel.carriedOperations.includes(operation)) {
     return { kind: "channel", channel };
   }
-  return boundHosts.get(app)?.has(hostId) ? { kind: "channel-down" } : { kind: "inbound" };
+  return boundHosts.get(app)?.get(hostId)?.has(operation)
+    ? { kind: "channel-down" }
+    : { kind: "inbound" };
 }

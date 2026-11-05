@@ -146,9 +146,12 @@ import { FILE_STREAM_CONTENT_TYPE } from "../shared/constants.js";
 import { getCachedAgents } from "../services/agent-detect.js";
 import { registerProbeRoutes } from "./internal-probes.js";
 import { resolveGlobalPresets } from "./actions.js";
-import { attachSocketToSession } from "./terminal.js";
-import { attachLocalEventsSocket, attachCursorsAndSeenBroadcast } from "./events.js";
-import { createMuxConnection } from "../services/ssh-agent-mux.js";
+import {
+  acceptAttachStream,
+  acceptEventsStream,
+  acceptSshAgentStream,
+  attachQueryError,
+} from "./internal-streams.js";
 import { acceptControlRelayConnection } from "../plugins/control-relay.js";
 import { resolveSshAuthSock } from "../services/ssh-agent-socket.js";
 import type { SessionInfo } from "../services/pty-manager.js";
@@ -197,10 +200,7 @@ import { adapterHasInitialPromptArgs } from "../services/hook-adapters/index.js"
 import { explicitModelError } from "../services/task-model-resolve.js";
 import { setSessionGithubAuth, type SessionGithubAuth } from "../services/session-github-token.js";
 import {
-  SESSION_ID_PATTERN,
   SESSION_ID_PARAMS_SCHEMA,
-  MAX_SESSION_ENV_ENTRIES,
-  MAX_SESSION_ENV_VALUE_LENGTH,
   spawnSessionSchema,
   sessionGithubAuthSchema,
   liveStatusSchema,
@@ -3083,71 +3083,12 @@ export async function internalRoutes(app: FastifyInstance) {
       websocket: true,
       config: INTERNAL_RATE_LIMIT.config,
       preValidation: async (request, reply) => {
-        const query = request.query as Record<string, string | undefined>;
-        if (!query.id || !query.cwd || !query.command) {
-          return reply.badRequest("id, cwd, and command query params are required");
-        }
-        // Same shape as SESSION_ID_PARAMS_SCHEMA's `id` field
-        // (internal-schemas.ts) — this route takes id as a query param, not
-        // a JSON body, so it can't use the ajv schema directly, but the id
-        // flows into the exact same scopeUnitName(instanceId, id) sink
-        // (pty-manager.ts) either way.
-        if (!SESSION_ID_PATTERN.test(query.id)) {
-          return reply.badRequest("id must match ^[A-Za-z0-9_-]+$");
-        }
-        // Issue #822 — the primary echoes the session's env back on every
-        // attach (see remote-host-client.ts's openAttach), since this agent
-        // is DB-less and has nowhere else to recover it from on a
-        // re-bootstrap (Session.spawnInternal, via this same
-        // attachSocketToSession -> getOrCreate call below). Malformed JSON
-        // here would otherwise reach getOrCreate as a raw string, not the
-        // object it expects — reject it before the upgrade completes,
-        // same posture as the id-pattern check just above.
-        if (query.env !== undefined) {
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(query.env);
-          } catch {
-            return reply.badRequest("env must be valid JSON");
-          }
-          if (
-            !parsed ||
-            typeof parsed !== "object" ||
-            Array.isArray(parsed) ||
-            Object.values(parsed).some((v) => typeof v !== "string")
-          ) {
-            return reply.badRequest("env must be a JSON object of strings");
-          }
-          // Same bounds as spawnSessionSchema's `env` property — this route
-          // takes env as a hand-parsed query string, not a JSON body, so
-          // ajv never sees it and these checks have to be repeated by hand.
-          const entries = Object.entries(parsed as Record<string, string>);
-          if (entries.length > MAX_SESSION_ENV_ENTRIES) {
-            return reply.badRequest(`env must have at most ${MAX_SESSION_ENV_ENTRIES} entries`);
-          }
-          if (entries.some(([, v]) => v.length > MAX_SESSION_ENV_VALUE_LENGTH)) {
-            return reply.badRequest(
-              `env values must be at most ${MAX_SESSION_ENV_VALUE_LENGTH} characters`,
-            );
-          }
-        }
+        const error = attachQueryError(request.query as Record<string, string | undefined>);
+        if (error !== null) return reply.badRequest(error);
       },
     },
     (socket, req) => {
-      const query = req.query as Record<string, string | undefined>;
-      const cols = Number(query.cols) || 80;
-      const rows = Number(query.rows) || 24;
-
-      attachSocketToSession(app, socket, {
-        id: query.id as string,
-        cwd: expandHome(query.cwd as string),
-        command: query.command as string,
-        cols,
-        rows,
-        ...(query.env !== undefined
-          ? { env: JSON.parse(query.env) as Record<string, string> }
-          : {}),
-      });
+      acceptAttachStream(app, socket, req.query as Record<string, string | undefined>);
     },
   );
 
@@ -3176,22 +3117,7 @@ export async function internalRoutes(app: FastifyInstance) {
   app.get<{ Querystring: { cursors?: string } }>(
     "/internal/ws/events",
     { websocket: true, config: INTERNAL_RATE_LIMIT.config },
-    (socket, req) => {
-      // Hermes review, PR #1493 — exactly "1", not merely "present", so this
-      // matches the documented contract byte-for-byte: RemoteHostClient.
-      // openEventsStream's own `?cursors=1` is the only value any caller
-      // ever sends. Not a security boundary either way (the flag only
-      // decides whether THIS agent emits an extra frame, never a privilege
-      // check), but a stray `?cursors=` or `?cursors=0` from a future/buggy
-      // caller should read as "flag not set", not "flag set to something
-      // weird".
-      if (req.query.cursors === "1") {
-        const onSeenAdvanced = attachCursorsAndSeenBroadcast(app, socket);
-        attachLocalEventsSocket(app, socket, { onSeenAdvanced });
-      } else {
-        attachLocalEventsSocket(app, socket);
-      }
-    },
+    (socket, req) => acceptEventsStream(app, socket, req.query),
   );
 
   // Issue #820 — the agent-side half of the SSH-agent bridge's fan-out
@@ -3219,42 +3145,7 @@ export async function internalRoutes(app: FastifyInstance) {
   app.get(
     "/internal/ws/ssh-agent",
     { websocket: true, config: INTERNAL_RATE_LIMIT.config },
-    (socket) => {
-      const holder = app.sshAgentBridgeConnection;
-      // Superseding, not accumulating — mirrors routes/agent-bridge.ts's
-      // own `trackBridge`: a reconnect landing before the OLD TCP
-      // connection has noticed it's dead (a flake, not a clean
-      // disconnect) must not leave that old connection's channels
-      // orphaned. MuxConnection.close() closes every one of its own open
-      // channels plus the underlying socket.
-      if (holder.current) {
-        app.log.debug({}, "ssh-agent: superseding an already-live primary<->agent connection");
-        holder.current.close();
-      }
-      // THIS side (the agent) accepts the connection — the primary dials
-      // out as the WS client to reach this route. Per ssh-agent-mux.ts's
-      // own dial-out/accept parity convention ("odd" for the dialer,
-      // "even" for the accepter), the agent is "even" here; whatever
-      // dials in (PR5c) must use "odd" to match. This is a DIFFERENT
-      // connection from routes/agent-bridge.ts's /ws/agent-bridge (where
-      // the LAPTOP dials out and the primary accepts, so primary is
-      // "even" THERE) — the two parity pairings are independent of each
-      // other, not mirror images to keep in sync.
-      const mux = createMuxConnection(socket, { channelIdParity: "even" });
-      holder.current = mux;
-      app.log.debug({}, "ssh-agent: primary<->agent connection established");
-      // Only clear `current` if it's STILL this same connection — a
-      // newer one may have already superseded it (the branch above) by
-      // the time this fires, in which case clearing would incorrectly
-      // drop the live replacement instead of the dead connection this
-      // listener is actually for.
-      mux.onClose((reason) => {
-        if (holder.current === mux) {
-          holder.current = null;
-          app.log.debug({ reason }, "ssh-agent: primary<->agent connection closed");
-        }
-      });
-    },
+    (socket) => acceptSshAgentStream(app, socket),
   );
 
   // Issue #1656 — the agent half of the control relay's transport: the

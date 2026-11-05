@@ -4,7 +4,14 @@ import type { FastifyInstance } from "fastify";
 import { WebSocket as NodeWebSocket } from "ws";
 import { identityStatePath, loadAgentIdentity } from "../services/agent-identity.js";
 import { createMuxConnection, type MuxConnection } from "../services/ssh-agent-mux.js";
-import { serveChannelRequest } from "../services/agent-channel-tunnel.js";
+import { serveChannel, type AgentStreamHandlers } from "../services/agent-channel-streams.js";
+import { acceptControlRelayConnection } from "./control-relay.js";
+import {
+  acceptAttachStream,
+  acceptEventsStream,
+  acceptSshAgentStream,
+  attachQueryError,
+} from "../routes/internal-streams.js";
 import { toWsUrl } from "../services/ws-pipe.js";
 import { localProtocolInfo } from "../shared/agent-protocol.js";
 import {
@@ -30,7 +37,8 @@ import {
 // Request/response operations are served over the channel (#2451): each
 // primary-opened mux channel is one HTTP-shaped request, replayed into this
 // agent's own Fastify instance with a process-local credential (see
-// services/agent-channel-tunnel.ts). Streams migrate in #2571.
+// services/agent-channel-tunnel.ts). The four streams (attach, events, control
+// relay, ssh-agent) are served over it too (#2571, agent-channel-streams.ts).
 
 export type AgentChannelClientState =
   /** No identity, no primary URL, or not started: nothing to dial. */
@@ -59,6 +67,15 @@ function isLoopbackHost(hostname: string): boolean {
 }
 
 export const agentChannelClientPlugin = fp(async (app: FastifyInstance) => {
+  // The same bodies the inbound /internal/ws/* routes run (#2571), so a stream
+  // carried over the channel is validated and behaves identically.
+  const streamHandlers: AgentStreamHandlers = {
+    validateAttach: attachQueryError,
+    attach: (socket, query) => acceptAttachStream(app, socket, query),
+    events: (socket, query) => acceptEventsStream(app, socket, query),
+    controlRelay: (socket) => acceptControlRelayConnection(app, socket as unknown as NodeWebSocket),
+    sshAgent: (socket) => acceptSshAgentStream(app, socket as unknown as NodeWebSocket),
+  };
   const status: AgentChannelClientStatus = {
     state: "idle",
     hostId: null,
@@ -206,7 +223,7 @@ export const agentChannelClientPlugin = fp(async (app: FastifyInstance) => {
           maxChannels: AGENT_CHANNEL_MAX_CHANNELS,
           maxBufferedBytes: AGENT_CHANNEL_MAX_BUFFERED_BYTES,
         });
-        mux.onChannel((channel) => serveChannelRequest(app, channel, requestAuthToken));
+        mux.onChannel((channel) => serveChannel(app, channel, requestAuthToken, streamHandlers));
         app.log.info({ hostId: identity.hostId }, "[agent-channel] ready");
         return;
       }
