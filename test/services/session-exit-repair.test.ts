@@ -103,6 +103,18 @@ describe("repairExited (#2602)", () => {
     expect(row().status).toBe("exited");
   });
 
+  it("a dead verdict does not consume the one-shot; a later alive probe repairs", async () => {
+    const { app, row } = await setup("dead");
+    await repairExited(app, "local", 1, row(), "exited");
+    expect(row().status).toBe("exited");
+
+    vi.spyOn(app.pty, "isMasterAliveStateBatch").mockImplementation(async (ids: string[]) =>
+      Object.fromEntries(ids.map((i) => [i, "alive"])),
+    );
+    await repairExited(app, "local", 1, row(), "exited");
+    expect(row().status).toBe("active");
+  });
+
   it("does nothing for a session that does not derive exited", async () => {
     const { app, row } = await setup("alive");
 

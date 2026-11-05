@@ -450,6 +450,12 @@ describe("reconcileExitedSessions", () => {
     await reconcileExitedSessions(app); // scope not there yet
     expect(await statusOf(app, sessionId)).toBe("active");
 
+    // Past the grace, with the scope now there: still active.
+    app.db
+      .update(sessions)
+      .set({ createdAt: new Date(Date.now() - 60_000) })
+      .where(eq(sessions.id, sessionId))
+      .run();
     mockMasterAlive(app, true); // scope appears
     await reconcileExitedSessions(app);
     expect(await statusOf(app, sessionId)).toBe("active");

@@ -7,7 +7,7 @@ import { deriveSessionStatus } from "./session-status.js";
 import { getPreviewWorktree } from "./git-worktree.js";
 import { resolveBackend } from "./session-backend.js";
 import { HostRequestError } from "./remote-host-client.js";
-import type { SessionLiveness } from "./session-process.js";
+import { invalidateOwnedScopesCache, type SessionLiveness } from "./session-process.js";
 
 // Every SessionInfo field EXCEPT the ones `row` (the DB row) already carries
 // under the same name (id/cwd/command/createdAt) or that are never exposed
@@ -444,8 +444,12 @@ function parseEnvColumn(
   }
 }
 
-/** Sessions already repaired by repairExited — the repair runs at most once per session. */
-const repairedSessionIds = new Set<number>();
+/**
+ * Sessions already repaired by repairExited — the repair runs at most once per
+ * session. Keyed id -> createdAt so a reused ROWID (sessions.id has no
+ * AUTOINCREMENT) is not mistaken for an already-repaired session.
+ */
+const repairedSessionIds = new Map<number, number>();
 
 /**
  * #2602 — for the task sweep: returns true when a task's session derives
@@ -455,7 +459,9 @@ const repairedSessionIds = new Set<number>();
  * only an affirmative "alive" repairs — "dead" and "unknown" leave the row
  * alone — and the flip back is CAS'd on `status = 'exited'`. Even a repaired
  * session still returns true for this pass; the normal sweep handles the task
- * on its next one.
+ * on its next one. The repair restores only the row: side effects of the
+ * earlier flip (state/token files dropped by terminate, preview worktree and
+ * browser-binding cleanup) are not undone — inherent to a backstop.
  */
 export async function repairExited(
   app: FastifyInstance,
@@ -465,9 +471,16 @@ export async function repairExited(
   derivedStatus: string,
 ): Promise<boolean> {
   if (derivedStatus !== "exited") return false;
-  if (session.status !== "exited" || repairedSessionIds.has(session.id)) return true;
+  if (
+    session.status !== "exited" ||
+    repairedSessionIds.get(session.id) === session.createdAt.getTime()
+  ) {
+    return true;
+  }
   let liveness: SessionLiveness | undefined;
   try {
+    // Never re-read the (400 ms cached) listing that produced the wrong verdict.
+    invalidateOwnedScopesCache();
     liveness = (await resolveBackend(app, hostId).liveness([String(session.id)]))[
       String(session.id)
     ];
@@ -475,7 +488,7 @@ export async function repairExited(
     return true;
   }
   if (liveness !== "alive") return true;
-  repairedSessionIds.add(session.id);
+  repairedSessionIds.set(session.id, session.createdAt.getTime());
   const res = app.db
     .update(sessions)
     .set({ status: "active" })
