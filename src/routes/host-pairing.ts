@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import {
   issueHostPairingCode,
   listHostPairings,
+  pairingRedeemWouldProceed,
   redeemHostPairingCode,
   revokeHostPairing,
 } from "../services/host-pairing.js";
@@ -27,7 +28,9 @@ const ISSUE_RATE_LIMIT = { max: 20, timeWindow: "1 minute" };
 // The unauthenticated redeem counts FAILED attempts only (401/400): a success
 // consumes a one-time code and unrelated traffic is not counted, so neither can
 // exhaust it. Keyed on the raw peer, which behind a reverse proxy is the proxy
-// (docs/auth.md, "Current limitations"), hence the count of failures only.
+// (docs/auth.md, "Current limitations"), so the bucket is shared; a request that
+// carries a live code (or a same-request retry) therefore bypasses the block, so
+// other clients' junk cannot deny a legitimate pairing.
 const REDEEM_FAILURE_LIMIT = { max: 20, windowMs: 60_000 };
 
 interface CreateBody {
@@ -88,6 +91,8 @@ function respond(result: HostRegistration) {
 
 export async function hostPairingRoute(app: FastifyInstance) {
   const redeemFailures = createFailureRateLimiter(REDEEM_FAILURE_LIMIT);
+  // Requests whose code matched a live pairing; they never count as failures.
+  const matchedRedeems = new WeakSet<object>();
 
   app.post<{ Body: CreateBody }>(
     "/api/host-pairings",
@@ -135,10 +140,23 @@ export async function hostPairingRoute(app: FastifyInstance) {
       config: { rateLimit: false },
       preValidation: async (request, reply) => {
         if (!redeemFailures.isBlocked(request.ip)) return;
+        // Blocked address: the body is parsed but not yet validated, so check
+        // its shape, then do the hash lookup. Only non-matching requests get 429.
+        const body = request.body as Partial<RedeemBody> | null | undefined;
+        if (
+          typeof body?.code === "string" &&
+          typeof body.requestId === "string" &&
+          PAIRING_CODE_PATTERN.test(body.code) &&
+          pairingRedeemWouldProceed(app, body.code, body.requestId)
+        ) {
+          matchedRedeems.add(request);
+          return;
+        }
         reply.header("retry-after", String(redeemFailures.retryAfterSeconds(request.ip)));
         return reply.tooManyRequests("too many failed pairing attempts");
       },
       onResponse: async (request, reply) => {
+        if (matchedRedeems.has(request)) return;
         if (reply.statusCode === 400 || reply.statusCode === 401) {
           redeemFailures.recordFailure(request.ip);
         }

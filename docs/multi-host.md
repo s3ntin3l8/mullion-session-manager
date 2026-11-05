@@ -256,7 +256,11 @@ earlier ones; _Cancel_ withdraws a pending code. Operators see each code as
 credential). Only _failed_ attempts (`400`/`401`) count toward its limit of 20
 per minute per peer address, answered with `429` and `Retry-After`; successful
 redeems and unrelated traffic do not. Behind a reverse proxy the peer is the
-proxy, so that is one shared failure bucket. Issuing a code
+proxy, so that is one shared failure bucket. Once an address has used up the
+budget, a request whose code still matches an unredeemed, unexpired, unrevoked
+pairing (or a same-`requestId` retry of a redeemed one inside its retry window)
+is processed anyway and never counts as a failure; only non-matching requests
+get the `429`, so other clients' junk cannot deny a legitimate pairing. Issuing a code
 (`POST /api/host-pairings`) has its own separate limit. Codes are stored only
 as a SHA-256 hash and looked up by it. `name` ≤ 120, `hostname` ≤ 255,
 `platform` ≤ 64 characters; `capabilities` is at most 64 strings of ≤ 64
