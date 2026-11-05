@@ -23,6 +23,12 @@
 //   node scripts/review-references.mjs --base <ref> --head <ref>
 //   node scripts/review-references.mjs --files -            changed paths on stdin
 //   node scripts/review-references.mjs --json               machine-readable
+//   node scripts/review-references.mjs --content            also print each reference's text
+//
+// `--content` exists because a list of paths is only a request to read them:
+// a reviewer under a small tool budget skips the reads, and then the notes
+// cannot affect the verdict. With it, one command puts the text in context.
+// Past CONTENT_CAP characters the later references are listed by path instead.
 //
 // Exit codes: 0 (including "nothing matches"), 2 for a bad invocation or a
 // malformed index — a broken index must be loud, not an empty answer.
@@ -85,6 +91,35 @@ export function matchReferences(index, files) {
   return result;
 }
 
+// Total characters of reference text `--content` inlines. Past it the remaining
+// references are named by path, never dropped.
+export const CONTENT_CAP = 40000;
+
+/**
+ * The listing followed by the text of each matched reference, in index order,
+ * until the next one would push the total past `cap`; the rest are named under
+ * "Not inlined". `read` maps a repo-relative ref to its text.
+ */
+export function formatReferencesWithContent(matches, read, cap = CONTENT_CAP) {
+  const out = [formatReferences(matches)];
+  if (matches.length === 0) return out[0];
+  const skipped = [];
+  let used = 0;
+  for (const m of matches) {
+    const text = read(m.ref);
+    if (skipped.length > 0 || used + text.length > cap) {
+      skipped.push(m.ref);
+      continue;
+    }
+    used += text.length;
+    out.push(`\n===== ${m.ref} =====\n\n${text.endsWith("\n") ? text : text + "\n"}`);
+  }
+  if (skipped.length > 0) {
+    out.push("\nNot inlined (read these too):", ...skipped.map((r) => `- ${r}`), "");
+  }
+  return out.join("\n");
+}
+
 /** Human-readable listing, or the "nothing matches" line. */
 export function formatReferences(matches) {
   if (matches.length === 0) return "No area-specific references match this diff.\n";
@@ -142,7 +177,7 @@ function defaultBase(root) {
 }
 
 function parseArgs(argv) {
-  const opts = { base: undefined, head: "HEAD", stdin: false, json: false };
+  const opts = { base: undefined, head: "HEAD", stdin: false, json: false, content: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--base" || a === "--head") {
@@ -154,6 +189,8 @@ function parseArgs(argv) {
       opts.stdin = true;
     } else if (a === "--json") {
       opts.json = true;
+    } else if (a === "--content") {
+      opts.content = true;
     } else {
       throw new Error(`unknown argument: ${a}`);
     }
@@ -182,7 +219,16 @@ export function runCli(
           .filter(Boolean)
       : gitChangedFiles(root, opts.base ?? defaultBase(root), opts.head);
     const matches = matchReferences(index, files);
-    const stdout = opts.json ? JSON.stringify(matches, null, 2) + "\n" : formatReferences(matches);
+    const read = (ref) => readFileSync(path.join(root, ref), "utf8");
+    let stdout;
+    if (opts.json) {
+      const shown = opts.content ? matches.map((m) => ({ ...m, content: read(m.ref) })) : matches;
+      stdout = JSON.stringify(shown, null, 2) + "\n";
+    } else {
+      stdout = opts.content
+        ? formatReferencesWithContent(matches, read)
+        : formatReferences(matches);
+    }
     return { code: 0, stdout, stderr: "" };
   } catch (err) {
     return {

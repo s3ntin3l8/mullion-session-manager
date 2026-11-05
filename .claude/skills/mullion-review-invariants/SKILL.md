@@ -17,11 +17,12 @@ Beyond the checklist below, `references/` holds one note per area where a
 plausible-looking change breaks something the diff does not show. Which ones
 apply to a diff is decided by path, not by judgement: run
 
-    node scripts/review-references.mjs
+    node scripts/review-references.mjs --content
 
 from the checkout under review (it diffs `origin/main...HEAD`; `--base <ref>
---head <ref>` overrides, `--files -` reads changed paths from stdin) and read
-every reference it lists before judging the diff. `references.json` is the
+--head <ref>` overrides, `--files -` reads changed paths from stdin) and review
+against the reference text it prints (`--content` inlines it; read any it lists
+under "Not inlined" too) before judging the diff. `references.json` is the
 index; the same areas are:
 
 | Reference                                                                             | Read it when a diff touches                                                |
