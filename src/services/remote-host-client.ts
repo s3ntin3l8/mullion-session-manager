@@ -43,6 +43,11 @@ import {
   resolveHostTransport,
   type HostTransport,
 } from "./agent-channel-tunnel.js";
+import { attachStreamQuery, openStreamOnTransport } from "./agent-channel-streams.js";
+import {
+  AGENT_CHANNEL_STREAMS_OPERATION,
+  type AgentChannelStreamKind,
+} from "../shared/agent-channel.js";
 import { HostRequestError, HostUnreachableError } from "./remote-host-errors.js";
 
 export {
@@ -542,7 +547,9 @@ export class RemoteHostClient {
   // Issue #2451 — how this host is reached right now (see
   // agent-channel-tunnel.ts's resolveHostTransport). Absent for a client built
   // without an app (tests, tools): always inbound.
-  private readonly resolveTransport?: () => HostTransport;
+  private readonly resolveTransport?: (operation?: string) => HostTransport;
+  // The app, for opening streams over the outbound channel (#2571).
+  private readonly channelApp?: FastifyInstance;
 
   private liveStatusCache: {
     key: string;
@@ -566,7 +573,8 @@ export class RemoteHostClient {
     token: string;
     sessionSecret?: string | null;
     refreshCredentials?: () => { token: string; sessionSecret: string | null } | null;
-    resolveTransport?: () => HostTransport;
+    resolveTransport?: (operation?: string) => HostTransport;
+    channelApp?: FastifyInstance;
   }) {
     this.hostId = opts.hostId;
     this.baseUrl = opts.baseUrl.replace(/\/+$/, "");
@@ -575,6 +583,7 @@ export class RemoteHostClient {
     this.sessionSecret = opts.sessionSecret ?? null;
     this.refreshCredentials = opts.refreshCredentials;
     this.resolveTransport = opts.resolveTransport;
+    this.channelApp = opts.channelApp;
   }
 
   // Connection-time SSRF pinning (issue #250) — every outbound call in this
@@ -2191,6 +2200,29 @@ export class RemoteHostClient {
     return result.content;
   }
 
+  /** The bearer+signature-authed inbound WebSocket to one `/internal/ws/*` route. */
+  private inboundStream(requestTarget: string, capPayload: boolean): NodeWebSocket {
+    return new NodeWebSocket(`${this.wsBaseUrl}${requestTarget}`, {
+      headers: {
+        authorization: `Bearer ${this.token}`,
+        ...this.signatureHeaders("GET", requestTarget, undefined),
+      },
+      ...(capPayload ? { maxPayload: 1024 * 1024 } : {}),
+      ...this.pinnedWsOptions(),
+    });
+  }
+
+  /** Issue #2571 — a stream over the outbound channel, or null for the inbound
+   * transport (see openStreamOnTransport). */
+  private channelStream(
+    kind: AgentChannelStreamKind,
+    identity: string,
+    query?: Record<string, string>,
+  ): NodeWebSocket | null {
+    const transport = this.resolveTransport?.(AGENT_CHANNEL_STREAMS_OPERATION);
+    return openStreamOnTransport(this.channelApp, transport, kind, identity, query);
+  }
+
   /**
    * Opens (but does not wait for) a WS connection to this agent's
    * `/internal/ws/attach`, bearer-authed via a request header (the `ws`
@@ -2199,6 +2231,8 @@ export class RemoteHostClient {
    * lifecycle and the actual byte piping; this just constructs the socket.
    */
   openAttach(opts: OpenAttachOptions): NodeWebSocket {
+    const viaChannel = this.channelStream("attach", opts.id, attachStreamQuery(opts));
+    if (viaChannel) return viaChannel;
     const query = new URLSearchParams({
       id: opts.id,
       cwd: opts.cwd,
@@ -2213,13 +2247,7 @@ export class RemoteHostClient {
       query.set("env", JSON.stringify(opts.env));
     }
     const requestTarget = `/internal/ws/attach?${query.toString()}`;
-    return new NodeWebSocket(`${this.wsBaseUrl}${requestTarget}`, {
-      headers: {
-        authorization: `Bearer ${this.token}`,
-        ...this.signatureHeaders("GET", requestTarget, undefined),
-      },
-      ...this.pinnedWsOptions(),
-    });
+    return this.inboundStream(requestTarget, false);
   }
 
   browserAutomationAction(sessionId: number, projectId: number, body: unknown): Promise<unknown> {
@@ -2240,13 +2268,7 @@ export class RemoteHostClient {
 
   openBrowserWs(sessionId: number, projectId: number): NodeWebSocket {
     const requestTarget = `/internal/ws/browser/${sessionId}?projectId=${projectId}`;
-    return new NodeWebSocket(`${this.wsBaseUrl}${requestTarget}`, {
-      headers: {
-        authorization: `Bearer ${this.token}`,
-        ...this.signatureHeaders("GET", requestTarget, undefined),
-      },
-      ...this.pinnedWsOptions(),
-    });
+    return this.inboundStream(requestTarget, false);
   }
 
   /**
@@ -2285,15 +2307,11 @@ export class RemoteHostClient {
    * than unconditional.
    */
   openEventsStream(opts?: { cursors?: boolean }): NodeWebSocket {
+    const cursors = opts?.cursors ? { cursors: "1" } : undefined;
+    const viaChannel = this.channelStream("events", cursors ? "cursors" : "", cursors);
+    if (viaChannel) return viaChannel;
     const requestTarget = opts?.cursors ? "/internal/ws/events?cursors=1" : "/internal/ws/events";
-    return new NodeWebSocket(`${this.wsBaseUrl}${requestTarget}`, {
-      headers: {
-        authorization: `Bearer ${this.token}`,
-        ...this.signatureHeaders("GET", requestTarget, undefined),
-      },
-      maxPayload: 1024 * 1024,
-      ...this.pinnedWsOptions(),
-    });
+    return this.inboundStream(requestTarget, true);
   }
 
   /**
@@ -2311,15 +2329,10 @@ export class RemoteHostClient {
    * legitimately be.
    */
   openSshAgentStream(): NodeWebSocket {
+    const viaChannel = this.channelStream("ssh-agent", "");
+    if (viaChannel) return viaChannel;
     const requestTarget = "/internal/ws/ssh-agent";
-    return new NodeWebSocket(`${this.wsBaseUrl}${requestTarget}`, {
-      headers: {
-        authorization: `Bearer ${this.token}`,
-        ...this.signatureHeaders("GET", requestTarget, undefined),
-      },
-      maxPayload: 1024 * 1024,
-      ...this.pinnedWsOptions(),
-    });
+    return this.inboundStream(requestTarget, true);
   }
 
   /**
@@ -2329,15 +2342,10 @@ export class RemoteHostClient {
    * here; `maxPayload` matches the mux's largest Data frame.
    */
   openControlRelayStream(): NodeWebSocket {
+    const viaChannel = this.channelStream("control-relay", "");
+    if (viaChannel) return viaChannel;
     const requestTarget = "/internal/ws/control-relay";
-    return new NodeWebSocket(`${this.wsBaseUrl}${requestTarget}`, {
-      headers: {
-        authorization: `Bearer ${this.token}`,
-        ...this.signatureHeaders("GET", requestTarget, undefined),
-      },
-      maxPayload: 1024 * 1024,
-      ...this.pinnedWsOptions(),
-    });
+    return this.inboundStream(requestTarget, true);
   }
 
   /**
@@ -2383,13 +2391,7 @@ export class RemoteHostClient {
 
   openConfiguredPreviewWs(url: string): NodeWebSocket {
     const requestTarget = `/internal/ws/configured-preview?${new URLSearchParams({ url })}`;
-    return new NodeWebSocket(`${this.wsBaseUrl}${requestTarget}`, {
-      headers: {
-        authorization: `Bearer ${this.token}`,
-        ...this.signatureHeaders("GET", requestTarget, undefined),
-      },
-      ...this.pinnedWsOptions(),
-    });
+    return this.inboundStream(requestTarget, false);
   }
 
   private async openPreviewHttpRequest(
@@ -2458,13 +2460,7 @@ export class RemoteHostClient {
   openPreviewWs(port: number, pathAndQuery: string): NodeWebSocket {
     const query = new URLSearchParams({ port: String(port), path: pathAndQuery });
     const requestTarget = `/internal/ws/preview?${query.toString()}`;
-    return new NodeWebSocket(`${this.wsBaseUrl}${requestTarget}`, {
-      headers: {
-        authorization: `Bearer ${this.token}`,
-        ...this.signatureHeaders("GET", requestTarget, undefined),
-      },
-      ...this.pinnedWsOptions(),
-    });
+    return this.inboundStream(requestTarget, false);
   }
 
   /** Best-effort reachability probe for the Settings hosts panel's "test
@@ -2596,7 +2592,8 @@ export function getRemoteHostClient(app: FastifyInstance, hostId: string): Remot
   const client = new RemoteHostClient({
     hostId,
     baseUrl: row.baseUrl,
-    resolveTransport: () => resolveHostTransport(app, hostId),
+    resolveTransport: (operation) => resolveHostTransport(app, hostId, operation),
+    channelApp: app,
     token: credentials.token,
     sessionSecret: credentials.sessionSecret,
     // Only a registered (has-or-had-a-session) host gets a refresh

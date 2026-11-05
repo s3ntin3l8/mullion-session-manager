@@ -1805,7 +1805,8 @@ agent carries each connection to the primary:
 1. The **primary dials** `/internal/ws/control-relay` on every enrolled agent host (an agent never
    dials out), the same way it dials the SSH-agent bridge, and keeps the connection up with the
    same reconnect backoff. An agent without the route (404) is probed again only every ten
-   minutes.
+   minutes. For an agent that negotiated `channel-streams` the "dial" is a stream on its outbound
+   channel instead (see [Outbound agent channel](#outbound-agent-channel)); nothing else about the relay changes.
 2. A session connects to `relay.sock` and sends the usual `{"token": …}` handshake. **The agent
    validates the token itself** (only it can resolve its sessions' tokens), opens a mux channel
    and writes one header line naming the session. The agent refuses a handshake with no live
@@ -1845,21 +1846,36 @@ that the primary itself placed on that host, and none of it reaches full scope.
 ## Outbound agent channel
 
 An enrolled agent also dials the primary and holds an authenticated outbound
-WebSocket. It carries the primary's request/response operations (#2451; streams
-follow in #2571); see [agent-channel.md](agent-channel.md) for the contract.
+WebSocket. It carries the primary's request/response operations (#2451) and the
+four streams (#2571: terminal attach, events, the control relay and ssh-agent); see [agent-channel.md](agent-channel.md) for the contract.
 `GET /api/hosts` reports it as `channel`, separate from the credential state.
 
 ### Mixed fleets: which transport a host uses
 
-| Agent                                                                                    | Transport for request/response calls                                                                                                                                                                                                                                                                                                                                                           |
+| Agent                                                                                    | Transport for request/response calls and streams                                                                                                                                                                                                                                                                                                                                               |
 | ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Predates the channel or `channel-requests` (older build, manual/static-token deployment) | Inbound, to the advertised URL, as before.                                                                                                                                                                                                                                                                                                                                                     |
 | Negotiated `channel-requests`, channel up                                                | The outbound channel. The advertised URL is not dialed for these calls.                                                                                                                                                                                                                                                                                                                        |
 | Negotiated `channel-requests`, channel down                                              | Fails as unreachable (the host reads as down). It does **not** fall back to the advertised URL: a mutation whose result is unknown must not be repeated on another transport. The channel redials with 1-60 s backoff. Replacing the agent with one that cannot dial (a legacy build, no identity) leaves the host in this state until its row is revoked or deleted, or the primary restarts. |
 
-Streams (terminal attach, events, the control relay, ssh-agent, previews, file
-transfers) and the `/health` ping still dial the advertised URL until #2571 /
-#2572, so a host still needs that URL and inbound reachability for them.
+Streams are chosen the same way by their own negotiated operation,
+`channel-streams`: an agent that advertises it carries terminal attach, events,
+the control relay and ssh-agent forwarding over the channel; one that only
+negotiated `channel-requests` keeps dialing the advertised URL for those four. Once a host
+has negotiated `channel-streams`, a stream whose channel is down fails as
+unreachable and is **never** opened on the advertised URL. Previews, the
+browser WebSocket, the file-browser transfers and the `/health` ping still dial
+the advertised URL until #2572, so a host still needs that URL and inbound
+reachability for them.
+
+The existing limits are unchanged: 64 relayed control-relay connections per host
+and 16 open streams per connection (nested inside one channel stream), 256 ssh-agent channels,
+and 64 channels per outbound connection in total. Each attach, events,
+control-relay and ssh-agent stream occupies one of the channel's 64 slots.
+A stream refused by the agent (an invalid attach, say) is a rejection and
+reads like the inbound 4xx; a stream the lost link carried is closed, and the
+reopened one is flagged `resumed` (logged by the primary), after which the
+usual re-attach scrollback replay / events replay snapshot resynchronizes it.
 
 If the link drops while a **mutation** (spawn, prompt, a git push/commit, a file
 write) is in flight, the caller gets an explicit unknown-outcome error

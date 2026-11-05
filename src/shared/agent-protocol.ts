@@ -44,6 +44,8 @@ export const AGENT_OPERATIONS = [
   // channel (src/shared/agent-channel.ts). A support flag for the transport,
   // not a route family.
   "channel-requests",
+  // Issue #2571: attach, events, control relay and ssh-agent over the channel.
+  "channel-streams",
 ] as const;
 export type AgentOperation = (typeof AGENT_OPERATIONS)[number];
 
@@ -93,6 +95,7 @@ const LATE_OPERATIONS: ReadonlySet<string> = new Set([
   "capabilities",
   "updates",
   "channel-requests",
+  "channel-streams",
 ]);
 
 /**

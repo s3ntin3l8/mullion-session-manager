@@ -50,10 +50,46 @@ export const AgentChannelCloseCode = {
 } as const;
 
 /** The operation name an agent advertises when it serves request/response
- * operations over the channel, and the only operation a channel carries
- * (#2451). Streams (attach, events, control relay, ssh-agent, preview, file
- * transfers) stay on the inbound transport until #2571. */
+ * operations over the channel (#2451). */
 export const AGENT_CHANNEL_REQUESTS_OPERATION = "channel-requests";
+
+/** Advertised by an agent that also serves the four streams over the channel
+ * (#2571): terminal attach, events, the control relay and the ssh-agent
+ * stream. Preview HTTP/WS, the browser WS and the file-browser transfers stay
+ * on the inbound transport. */
+export const AGENT_CHANNEL_STREAMS_OPERATION = "channel-streams";
+
+/** The stream kinds a channel can carry, named in the stream open head. */
+export const AGENT_CHANNEL_STREAM_KINDS = [
+  "attach",
+  "events",
+  "control-relay",
+  "ssh-agent",
+] as const;
+export type AgentChannelStreamKind = (typeof AGENT_CHANNEL_STREAM_KINDS)[number];
+
+/** Largest single WebSocket-shaped message carried on a stream channel; the
+ * same 1 MiB cap the inbound sockets enforce (`maxPayload`). */
+export const AGENT_CHANNEL_MAX_STREAM_MESSAGE_BYTES = 1024 * 1024;
+
+/** The first line of a stream channel (primary -> agent): JSON + "\n". It
+ * is told apart from a request head by the `stream` key. */
+export interface ChannelStreamOpenHead {
+  stream: AgentChannelStreamKind;
+  /** attach: the query params of `/internal/ws/attach`; events: `{cursors:"1"}`. */
+  query?: Record<string, string>;
+  /** True when the primary had a stream of this kind for this host before the
+   * channel was lost, so the agent knows this is a re-establishment (#2571). */
+  resumed?: boolean;
+}
+
+/** The agent's answer (JSON + "\n"): 200 accepts, anything else rejects. */
+export interface ChannelStreamAcceptHead {
+  status: number;
+  message?: string;
+  /** Echo of `resumed`, so the primary's socket can surface it explicitly. */
+  resumed?: boolean;
+}
 
 /** How often an open channel's credential is re-validated (#2451). */
 export const AGENT_CHANNEL_CREDENTIAL_RECHECK_MS = 60_000;
@@ -81,9 +117,9 @@ export interface ChannelResponseHead {
 
 /** What a channel carries given what both ends negotiated. */
 export function carriedOperationsFor(negotiated: readonly string[]): string[] {
-  return negotiated.includes(AGENT_CHANNEL_REQUESTS_OPERATION)
-    ? [AGENT_CHANNEL_REQUESTS_OPERATION]
-    : [];
+  return [AGENT_CHANNEL_REQUESTS_OPERATION, AGENT_CHANNEL_STREAMS_OPERATION].filter((op) =>
+    negotiated.includes(op),
+  );
 }
 
 export type AgentChannelErrorCode =
@@ -104,9 +140,9 @@ export interface AgentChannelReadyFrame {
   protocolVersion: number;
   /** Operations both ends advertise (the support set, not what is carried). */
   negotiatedOperations: string[];
-  /** Operations actually carried over this channel: "channel-requests" once
-   * both ends negotiate it (#2451); streams follow in #2571. Never claim one
-   * earlier. */
+  /** Operations actually carried over this channel: "channel-requests" (#2451)
+   * and "channel-streams" (#2571) once both ends negotiate them. Never claim
+   * one earlier. */
   carriedOperations: string[];
 }
 

@@ -178,6 +178,12 @@ export function startRemoteEventSubscriber(
       sub.connectTimeoutTimer = null;
       sub.attempt = 0; // reset backoff on a successful connect
       sub.hasLoggedFailure = false; // a fresh failure streak should log again
+      // Over the outbound channel (#2571) the agent says explicitly that this
+      // stream re-establishes one the lost link carried; the events replay
+      // snapshot on connect is what resynchronizes it.
+      if ((socket as { resumed?: boolean }).resumed === true) {
+        app.log.info({ hostId: sub.hostId }, "[remote-event-subscriber] events stream resumed");
+      }
     });
 
     // Read-only subscription: this deliberately never calls `socket.send()`
