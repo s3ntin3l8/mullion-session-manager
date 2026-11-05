@@ -420,6 +420,16 @@ approval` (generic on purpose, no title: a notification tray is outside the
   timeline and — when a review agent is configured — a distinct "Review"
   card with the review agent's own timeline, its captured findings text,
   and (once the task has auto-returned) a round indicator.
+- **The review checks the diff against the issue's Scope.** The reviewer
+  reports each Scope checkbox as `met`, `partial`, `missing` or `deviated`,
+  shown as a "Scope check" section in the review and on the PR. A `missing` or
+  `partial` item sends the task back; a `deviated` one is accepted only when
+  the worker declared the departure. The worker is asked to record each
+  departure, skip, deferral and unrun check as a commit-body line starting
+  `Decision:`, `Skipped:`, `Deferred:` or `Not run locally:`; Mullion lists
+  those lines for the reviewer (to judge, not to trust) and in the PR
+  description under "Worker decisions". Details:
+  [`tasks-internals.md`](tasks-internals.md#review-agent-mechanics).
 - **Live updates (`#488`, ingest events added by `#490a`).** The board
   connects to `/ws/tasks` (`src/routes/ws-tasks.ts`) once on mount and
   refetches (debounced ~250ms) whenever an event arrives — a task moved

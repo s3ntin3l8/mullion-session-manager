@@ -164,6 +164,34 @@ export async function getCommitLog(
   return entries;
 }
 
+/**
+ * Full messages (subject + body) of the commits `baseRef..HEAD` of the
+ * checkout at `cwd`, newest first, at most `limit` — what a task worker wrote
+ * about its own departures from the spec (`task-decisions.ts`). `baseRef` is a
+ * ref the caller resolved itself (`resolveHostBaseRef`); a leading `-` is
+ * refused so it can never be read as a flag. Null for a non-repo, an
+ * unresolvable ref or a failed git call.
+ */
+export async function getCommitMessagesAhead(
+  cwd: string,
+  baseRef: string,
+  limit = 50,
+): Promise<string[] | null> {
+  if (baseRef.length === 0 || baseRef.startsWith("-") || !(await isRepo(cwd))) return null;
+  const out = await runGit(cwd, [
+    "log",
+    `--max-count=${Math.min(Math.max(Math.trunc(limit), 1), MAX_LOG_PAGE)}`,
+    `--format=%B${RECORD}`,
+    `${baseRef}..HEAD`,
+    "--",
+  ]);
+  if (out === null) return null;
+  return out
+    .split(RECORD)
+    .map((m) => m.trim())
+    .filter(Boolean);
+}
+
 export async function getCommitDetail(cwd: string, sha: string): Promise<CommitDetail | null> {
   if (!isValidSha(sha) || !(await isRepo(cwd))) return null;
   const [meta, stat] = await Promise.all([

@@ -54,7 +54,7 @@ export class GitHubWriteScopeError extends GitHubApiError {
   }
 }
 
-async function githubRequest<T>(
+export async function githubRequest<T>(
   token: string,
   owner: string,
   repo: string,

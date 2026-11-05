@@ -83,6 +83,30 @@ fixed before merge?
   room: the file, the line, and the concrete fix — not just the observation
   that something looks off.
 
+## Check the diff against the issue's Scope
+
+The issue's Scope checkboxes are the contract; "a behavior that doesn't match
+what the issue asked for" is only checkable item by item. Your prompt asks for
+a `scope` entry per checkbox, so do it as its own pass rather than as a side
+effect of reading the diff:
+
+- **met** — you found the code or test that satisfies it. Name it in
+  `evidence`; "looks done" is not evidence.
+- **partial** — some of it is there. Say which part is missing.
+- **missing** — nothing in the diff does it.
+- **deviated** — the diff departs from the item on purpose. Only valid when the
+  worker declared the departure: the prompt lists the worker's `Decision:`,
+  `Skipped:`, `Deferred:` and `Not run locally:` lines, and your `evidence` must
+  quote the one that covers this item. A departure it never declared is
+  `missing`, and Mullion treats a `deviated` entry that cites none that way.
+
+`missing` and `partial` send the task back, like a warning does. A `deviated`
+item does not block by itself, but a declared decision is a claim to judge, not
+a fact: if the decision is wrong (it drops something the issue needs, or its
+reason doesn't hold), file that as a finding on the line it affects. Also check
+the Out of scope list: work done there is a finding, because it is unreviewed
+surface the issue ruled out.
+
 ## A follow-up round is a delta review
 
 If your prompt includes the findings of an earlier review, you are checking
@@ -90,6 +114,8 @@ a fix, not reviewing the task again from scratch.
 
 - **Scope your new findings to what changed.** Review the range since the
   last reviewed commit and don't re-file the earlier findings as new ones.
+  Re-check only the Scope items the earlier round reported as `missing` or
+  `partial`; the ones it found `met` were already looked at.
   But still check the final state of the branch: a later commit can re-break
   something an earlier one fixed, and a delta diff can't show that.
 - **Give every earlier finding a status in `previous`:** addressed (with the

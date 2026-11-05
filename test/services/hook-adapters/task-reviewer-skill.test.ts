@@ -123,6 +123,24 @@ describe("task-reviewer skill — elaborates buildReviewPrompt, does not restate
   // The skill must not re-paste the mechanical contract it's elaborating
   // on — the JSON shape block and the atomic-write recipe belong in the
   // force-delivered prompt only.
+  // The scope pass: the prompt asks for a `scope` array and the skill explains
+  // how to fill it, so a reworded status word or decision prefix on either
+  // side fails here instead of leaving the skill describing a different contract.
+  it("the review prompt asks for the scope array with the statuses the skill explains", () => {
+    expect(REVIEW_PROMPT).toContain('"scope"');
+    expect(REVIEW_PROMPT).toContain('"met" | "partial" | "missing" | "deviated"');
+    for (const status of ["met", "partial", "missing", "deviated"]) {
+      expect(skillBodyNoFrontmatter).toContain(`**${status}**`);
+    }
+  });
+
+  it("the skill names the declared-decision prefixes the worker prompt asks for", () => {
+    for (const prefix of ["Decision:", "Skipped:", "Deferred:", "Not run locally:"]) {
+      expect(WORKER_PREAMBLE).toContain(prefix);
+      expect(skillBodyNoFrontmatter).toContain(prefix);
+    }
+  });
+
   it("does not re-paste the JSON verdict shape", () => {
     expect(skillBodyNoFrontmatter).not.toContain(
       '"verdict": "approved" | "approved-with-suggestions" | "changes-requested"',

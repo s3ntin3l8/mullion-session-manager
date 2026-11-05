@@ -356,6 +356,11 @@ export function buildTaskMasterPreamble(opts: WorkerPreambleOptions): string {
     "  permission prompt — a question you ask instead of answering yourself ends",
     "  your turn with no commits, which fails the task outright. Decide, and record",
     "  the decision and why in your commit message.",
+    "- Record each departure from the issue, each item you skipped and each check",
+    "  you could not run as its own line in a commit body, starting `Decision:`,",
+    "  `Skipped:`, `Deferred:` or `Not run locally:`. Mullion shows those lines to",
+    "  the reviewer and in the pull request description, so say what and why in one",
+    "  line each.",
   );
 
   if (commitTitlePath) {
@@ -589,6 +594,13 @@ export interface ReviewDisposition {
   evidence: string;
 }
 
+/** How one Scope checkbox of the issue fared in the reviewer's check. */
+export interface ScopeCheck {
+  item: string;
+  status: "met" | "partial" | "missing" | "deviated";
+  evidence: string;
+}
+
 export interface ParsedReviewFindings {
   verdict: ReviewVerdict;
   summary: string;
@@ -607,6 +619,11 @@ export interface ParsedReviewFindings {
    * Empty on a first round. A `still-open`/`re-broken` entry forces
    * `changes-requested` whatever `findings` says (`deriveVerdict`). */
   previous: ReviewDisposition[];
+  /** The reviewer's verdict on each Scope checkbox of the issue. Empty when it
+   * reported none. A `missing`/`partial` entry forces `changes-requested`
+   * (`deriveVerdict`); a `deviated` one that cites no declared decision has
+   * already been turned into `missing` here. */
+  scope: ScopeCheck[];
   /** `true` only when `raw` parsed as the JSON contract `buildReviewPrompt`
    * asks for; `false` on the freeform-fallback branch, where `summary` holds
    * the ENTIRE raw file content rather than one verdict sentence.
@@ -685,12 +702,51 @@ function normalizeDispositions(raw: unknown): ReviewDisposition[] {
   return out;
 }
 
+/** The line starts a declared decision can be quoted with (the worker prompt's
+ * `Decision:` / `Skipped:` / `Deferred:` / `Not run locally:` commit lines). */
+const DECLARED_DECISION_RE = /(?:^|[\s"'`(])(?:decision|skipped|deferred|not run locally):/i;
+
+function normalizeScope(raw: unknown): ScopeCheck[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ScopeCheck[] = [];
+  for (const c of raw) {
+    if (c === null || typeof c !== "object") continue;
+    const rec = c as Record<string, unknown>;
+    if (typeof rec.item !== "string" || rec.item.length === 0) continue;
+    const status =
+      rec.status === "met" ||
+      rec.status === "partial" ||
+      rec.status === "missing" ||
+      rec.status === "deviated"
+        ? rec.status
+        : null;
+    if (status === null) continue;
+    const evidence = typeof rec.evidence === "string" ? rec.evidence : "";
+    // A departure is only a stated decision if the worker declared it: one
+    // that cites none is a requirement left undone.
+    if (status === "deviated" && !DECLARED_DECISION_RE.test(evidence)) {
+      out.push({
+        item: rec.item,
+        status: "missing",
+        evidence: `Reported as deviated without citing a declared decision.${evidence ? ` ${evidence}` : ""}`,
+      });
+      continue;
+    }
+    out.push({ item: rec.item, status, evidence });
+  }
+  return out;
+}
+
 /**
  * The verdict, derived from what the reviewer actually found rather than
  * from a field it could write inconsistently with its own findings:
  *
  * 1. an earlier blocker still `still-open`/`re-broken` → `changes-requested`
  *    (an unfixed blocker keeps blocking even if this round forgot to list it);
+ * 1b. a Scope item that is `missing`/`partial` → `changes-requested` too, and
+ *    so is a `deviated` one whose `evidence` cites no declared decision (it
+ *    counts as `missing`). A cited `deviated` item is a stated decision and
+ *    does not block by itself;
  * 2. otherwise the highest finding severity decides — any `critical`/`warning`
  *    (or severity-less) finding → `changes-requested`, only `suggestion`s →
  *    `approved-with-suggestions`, no findings → `approved`.
@@ -707,9 +763,20 @@ function normalizeDispositions(raw: unknown): ReviewDisposition[] {
 export function deriveVerdict(parts: {
   findings: ReviewFinding[];
   previous: ReviewDisposition[];
+  scope?: ScopeCheck[];
   claimed: string;
 }): ReviewVerdict {
   if (parts.previous.some((d) => d.status !== "addressed")) return "changes-requested";
+  if (
+    (parts.scope ?? []).some(
+      (c) =>
+        c.status === "missing" ||
+        c.status === "partial" ||
+        (c.status === "deviated" && !DECLARED_DECISION_RE.test(c.evidence)),
+    )
+  ) {
+    return "changes-requested";
+  }
   if (parts.findings.length === 0) {
     return parts.claimed === "changes-requested" ? "changes-requested" : "approved";
   }
@@ -767,7 +834,8 @@ export function parseReviewFindings(
       // stopped it from forcing `changes-requested` over a skipped nit.
       const previous = opts.ignorePrevious ? [] : normalizeDispositions(rec.previous);
       const claimed = rec.verdict === "clean" ? "approved" : (rec.verdict as string);
-      const verdict = deriveVerdict({ findings, previous, claimed });
+      const scope = normalizeScope(rec.scope);
+      const verdict = deriveVerdict({ findings, previous, scope, claimed });
       const notes = normalizeStringArray(rec.notes);
       if (verdict !== claimed) {
         // The findings, not the field, decide — but say so, so a human reading
@@ -782,6 +850,7 @@ export function parseReviewFindings(
         notes,
         looksGood: normalizeStringArray(rec.looksGood),
         previous,
+        scope,
         structured: true,
       };
     }
@@ -797,6 +866,7 @@ export function parseReviewFindings(
     notes: [],
     looksGood: [],
     previous: [],
+    scope: [],
     structured: false,
   };
 }
@@ -848,6 +918,17 @@ function renderFindingsSection(
       ? [`- ${items.length} finding(s) anchored inline below`]
       : items.map((f) => `- ${severityPrefix(f.severity)}**${f.path}:${f.line}** — ${f.body}`);
   return [`### ${heading}`, ...lines, ""];
+}
+
+/** The "Scope check" section: one line per Scope item with its status. Omitted
+ * when the reviewer reported none. */
+function renderScopeSection(scope: ScopeCheck[]): string[] {
+  if (scope.length === 0) return [];
+  return [
+    "### Scope check",
+    ...scope.map((c) => `- **${c.status}** — ${c.item}${c.evidence ? `: ${c.evidence}` : ""}`),
+    "",
+  ];
 }
 
 function renderTextSection(heading: string, items: string[], omitIfEmpty: boolean): string[] {
@@ -920,6 +1001,13 @@ export function renderReviewFindingsMarkdown(
         );
       }
     }
+    for (const c of parsed.scope) {
+      if (c.status === "missing" || c.status === "partial") {
+        lines.push(
+          `- Scope item ${c.status === "partial" ? "only partly done" : "not done"}: **${c.item}**${c.evidence ? ` — ${c.evidence}` : ""}`,
+        );
+      }
+    }
     for (const n of parsed.notes) lines.push(`- ${n}`);
     return lines.join("\n").trimEnd();
   }
@@ -939,6 +1027,7 @@ export function renderReviewFindingsMarkdown(
     parsed.verified.length > 0 ||
     parsed.notes.length > 0 ||
     parsed.looksGood.length > 0 ||
+    parsed.scope.length > 0 ||
     parsed.previous.length > 0;
   if (parsed.summary.length > MAX_STRUCTURED_SUMMARY_LENGTH && !hasOtherStructure) {
     return parsed.summary;
@@ -970,6 +1059,7 @@ export function renderReviewFindingsMarkdown(
   lines.push(...renderFindingsSection("Suggestions", suggestions, findingsMode));
   lines.push(...renderTextSection("Verified", parsed.verified, /* omitIfEmpty */ true));
   lines.push(...renderTextSection("Notes", parsed.notes, /* omitIfEmpty */ true));
+  lines.push(...renderScopeSection(parsed.scope));
   lines.push(...renderTextSection("Looks Good", parsed.looksGood, /* omitIfEmpty */ false));
   return lines.join("\n").trimEnd();
 }
@@ -1117,6 +1207,9 @@ const REVIEW_METHOD_LINES = [
   "  testing, performance and docs.",
   "- Verify before you flag: re-read the head-side code and grep for the claim",
   "  you are about to make.",
+  "- Check the diff against the issue's Scope: for every Scope checkbox of the",
+  "  task, find the code or test that satisfies it, and check that nothing listed",
+  "  under Out of scope was done. Report each Scope item in `scope`.",
   "",
 ];
 
@@ -1180,6 +1273,9 @@ export function buildReviewPrompt(opts: {
    * from `reviewedSha..HEAD`, plus a disposition for each earlier finding).
    * Omitted on a first review. */
   priorRound?: { reviewedSha: string | null; findings: string; approved?: boolean };
+  /** The worker's `Decision:` / `Skipped:` / `Deferred:` / `Not run locally:`
+   * commit-body lines (`task-decisions.ts`), already redacted and capped. */
+  declaredDecisions?: string[];
 }): string {
   const output = opts.output ?? "file";
   const workspace = opts.workspace ?? "worktree";
@@ -1243,6 +1339,13 @@ export function buildReviewPrompt(opts: {
           "",
         ]
       : []),
+    ...(opts.declaredDecisions && opts.declaredDecisions.length > 0
+      ? [
+          "Declared by the worker (judge them, do not take them as given):",
+          ...opts.declaredDecisions.map((d) => `- ${d}`),
+          "",
+        ]
+      : []),
     ...outputLines,
     "{",
     '  "verdict": "approved" | "approved-with-suggestions" | "changes-requested",',
@@ -1256,14 +1359,25 @@ export function buildReviewPrompt(opts: {
     '    { "ref": "path:line of an earlier finding", "status": "addressed" | "still-open" | "re-broken",',
     '      "evidence": "the commit or the command you re-ran" }',
     "  ],",
+    '  "scope": [',
+    '    { "item": "a Scope checkbox of the issue",',
+    '      "status": "met" | "partial" | "missing" | "deviated",',
+    '      "evidence": "the code or test that satisfies it, or the declared decision" }',
+    "  ],",
     '  "verified": ["what you actually ran/checked, e.g. the exact commands"],',
     '  "notes": ["cross-cutting observations that do not anchor to one line"],',
     '  "looksGood": ["what is solid about this change"]',
     "}",
     "",
-    "`previous`/`verified`/`notes`/`looksGood` are all optional arrays — omit any",
-    "that don't apply, but keep `summary` to one sentence: the detail belongs in",
-    "`verified`, not folded into `summary`.",
+    "`previous`/`scope`/`verified`/`notes`/`looksGood` are all optional arrays —",
+    "omit any that don't apply, but keep `summary` to one sentence: the detail",
+    "belongs in `verified`, not folded into `summary`.",
+    "",
+    "`scope` has one entry per Scope checkbox. `missing` and `partial` send the task",
+    "back. `deviated` means the diff departs from the item on purpose: its evidence",
+    "must quote the worker's declared decision (a `Decision:`, `Skipped:`,",
+    "`Deferred:` or `Not run locally:` line) — a `deviated` entry that cites none is",
+    "treated as `missing`, and a declared decision you disagree with is a finding.",
     "",
     "Severity is what decides the outcome, so assign it honestly:",
     "- critical — security, data loss, a crash, or broken core behavior.",
@@ -1326,6 +1440,8 @@ export function buildReviewPrompt(opts: {
                 "not fixed keeps its severity and keeps the verdict at changes-requested.",
                 "Earlier suggestions are not tracked: leave them out of `previous`.",
               ]),
+          "Re-check only the Scope items the earlier review reported as `missing` or",
+          "`partial`, but still confirm the final state of the branch.",
           "A NEW problem in code this round did not change, which the earlier review",
           "could have raised, blocks only if it is critical; otherwise it is a",
           "suggestion. Likewise a problem that already exists on the base branch.",
