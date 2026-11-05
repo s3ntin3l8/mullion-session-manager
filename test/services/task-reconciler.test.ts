@@ -3413,7 +3413,8 @@ describe("reconcileTasks", () => {
         mockResolveReviewerToken.mockResolvedValue("reviewer_tok");
         mockCreatePullRequestReview.mockResolvedValue({ id: 999, htmlUrl: "https://x" });
 
-        vi.useFakeTimers();
+        // Date only: the in-flight task sweep may probe a leftover exited session (#2602), and a fully faked clock stalls that probe.
+        vi.useFakeTimers({ toFake: ["Date"] });
         try {
           await reconcileTasks(app);
           expect(mockCreatePullRequestReview).toHaveBeenCalledTimes(1);
