@@ -2,6 +2,7 @@ import fp from "fastify-plugin";
 import env from "@fastify/env";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { normalizePairingOrigin } from "../shared/pairing-link.js";
 import { parseEnv } from "node:util";
 import {
   DEFAULT_DEVICE_EMULATOR_GPU,
@@ -640,6 +641,13 @@ export const schema = {
       type: "string",
       default: "",
     },
+    // Issue #2597 — the primary's public origin (e.g. https://mullion.example.com),
+    // used for the pairing link instead of the request's Host header, which a
+    // reverse proxy may rewrite. Empty = derive from the request.
+    MULLION_PUBLIC_URL: {
+      type: "string",
+      default: "",
+    },
     // HMAC secret for webhook payload verification. If empty on first enable,
     // the webhook registration service auto-generates one. Once set, persists
     // across restarts so already-registered webhooks keep working.
@@ -1043,6 +1051,18 @@ export const envPlugin = fp(async (app) => {
     }
   }
 
+  if (app.config.MULLION_PUBLIC_URL) {
+    const origin = normalizePairingOrigin(app.config.MULLION_PUBLIC_URL);
+    if (origin === null) {
+      throw new Error("MULLION_PUBLIC_URL must be an http(s) origin without credentials");
+    }
+    // Only a bare origin: a path, query or fragment would be silently dropped
+    // from the pairing link, which is worse than refusing to boot.
+    if (new URL(app.config.MULLION_PUBLIC_URL).href !== `${origin}/`) {
+      throw new Error("MULLION_PUBLIC_URL must be an origin (scheme://host[:port]) with no path");
+    }
+  }
+
   // Issue #245 / roadmap 7.1 — MULLION_PRIMARY_URL isn't restricted to
   // https:// the way MULLION_WEBHOOK_BASE_URL is above (a primary reached
   // over a private network/VPN on plain http is the common case for this
@@ -1158,6 +1178,7 @@ declare module "fastify" {
       MULLION_SSH_AUTH_SOCK: string;
       MULLION_SCAFFOLD_GENERATE_SANDBOX_ENABLED: boolean;
       MULLION_WEBHOOK_BASE_URL: string;
+      MULLION_PUBLIC_URL: string;
       MULLION_WEBHOOK_SECRET: string;
       GITHUB_POLL_INTERVAL_ACTIVE: number;
       GITHUB_POLL_INTERVAL_QUIET: number;

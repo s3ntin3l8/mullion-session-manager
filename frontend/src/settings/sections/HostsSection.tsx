@@ -440,6 +440,17 @@ export function HostsSection() {
                       (host.paired
                         ? "paired — waiting for the Helper to connect"
                         : "waiting for the agent to register")}
+                    {host.unclaimed && (
+                      <>
+                        {" · "}
+                        <span
+                          style={{ color: "var(--y)" }}
+                          title="The pairing code was redeemed but the Helper never renewed its credential or connected. Revoke the identity or remove the host."
+                        >
+                          Paired, never connected
+                        </span>
+                      </>
+                    )}
                     {" · "}
                     <HostCapacityLine host={host} />
                     {" · "}

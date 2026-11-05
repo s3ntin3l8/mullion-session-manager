@@ -6,6 +6,7 @@ describe("derivePairingStage (issue #2449)", () => {
     { id: "up", health: "online" as const },
     { id: "down", health: "offline" as const },
     { id: "new", health: "pending" as const },
+    { id: "stuck", health: "pending" as const, unclaimed: true },
   ];
   it("keeps pending, expired and revoked as they are", () => {
     for (const state of ["pending", "expired", "revoked"] as const) {
@@ -17,5 +18,8 @@ describe("derivePairingStage (issue #2449)", () => {
     expect(derivePairingStage({ state: "paired", host_id: "down" }, hosts)).toBe("paired");
     expect(derivePairingStage({ state: "paired", host_id: "new" }, hosts)).toBe("paired");
     expect(derivePairingStage({ state: "paired", host_id: "gone" }, hosts)).toBe("paired");
+  });
+  it("reports a paired host that never took delivery as unclaimed", () => {
+    expect(derivePairingStage({ state: "paired", host_id: "stuck" }, hosts)).toBe("unclaimed");
   });
 });

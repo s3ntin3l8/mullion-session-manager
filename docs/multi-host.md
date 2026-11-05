@@ -222,8 +222,13 @@ credential (see "Machine identity and machine credentials").
 URL-encoded. It carries the primary's URL and the bootstrap code and nothing
 else — never a durable credential or the enrollment secret, and the code is
 never logged. A link with another scheme or action, a non-http(s) `url`, a
-code that is not 64 lowercase hex characters, or any extra parameter is
-invalid and the Helper must refuse it. The dashboard also shows the server
+`url` carrying userinfo (`user:pass@`), a code that is not 64 lowercase hex
+characters, or any extra parameter is invalid and the Helper must refuse it;
+a valid `url` is reduced to its origin. `parsePairingLink`
+(`src/shared/pairing-link.ts`) is the reference for the Helper's own parser
+(the dashboard only builds, displays and copies the link). The `url` is the
+primary's `MULLION_PUBLIC_URL` when set (see `deploy/README.md`), otherwise
+derived from the request's `Host` and scheme. The dashboard also shows the server
 address and code separately, so a Helper that cannot receive the deep link
 (not installed, or the OS did not route it) can be given them by hand; the
 panel links to the Helper download for the not-installed case, and _Open in
@@ -235,13 +240,27 @@ earlier ones; _Cancel_ withdraws a pending code. Operators see each code as
 
 - **pending** — issued, not yet redeemed.
 - **paired** — redeemed: the host row, identity and credential exist.
+- **unclaimed** — paired, but the retry window has passed with no credential
+  renewal and no outbound channel ever connected: the Helper never took
+  delivery of its identity (for example the redeem response was lost and the
+  retry came too late). `GET /api/hosts` reports `unclaimed: true` and the
+  Hosts UI shows "Paired, never connected" with the usual _Revoke identity_
+  and _Delete host_ actions. A healthy outbound-only host is not flagged: its
+  channel connects.
 - **connected** — paired _and_ the primary's heartbeat reaches it. While the
   outbound-channel rollout is incomplete a paired host that advertises no URL
   stays `paired`, not `connected`; pairing success is deliberately separate
   from transport reachability.
 
-**Redeeming** (`POST /api/internal/pair`, unauthenticated, rate limited — the
-code is the credential):
+**Redeeming** (`POST /api/internal/pair`, unauthenticated — the code is the
+credential). Only _failed_ attempts (`400`/`401`) count toward its limit of 20
+per minute per peer address, answered with `429` and `Retry-After`; successful
+redeems and unrelated traffic do not. Behind a reverse proxy the peer is the
+proxy, so that is one shared failure bucket. Issuing a code
+(`POST /api/host-pairings`) has its own separate limit. Codes are stored only
+as a SHA-256 hash and looked up by it. `name` ≤ 120, `hostname` ≤ 255,
+`platform` ≤ 64 characters; `capabilities` is at most 64 strings of ≤ 64
+characters:
 
 ```json
 {
@@ -251,7 +270,7 @@ code is the credential):
   "name": "optional display name",
   "baseUrl": "optional http(s) URL — omit if the Helper has none to advertise",
   "platform": "darwin",
-  "capabilities": {}
+  "capabilities": ["xcode"]
 }
 ```
 

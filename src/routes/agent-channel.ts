@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket as NodeWebSocket, RawData } from "ws";
-import { checkMachineCredential } from "../services/host-registry.js";
+import { checkMachineCredential, markChannelConnected } from "../services/host-registry.js";
 import { createMuxConnection } from "../services/ssh-agent-mux.js";
 import { AGENT_OPERATIONS, localProtocolInfo } from "../shared/agent-protocol.js";
 import {
@@ -151,6 +151,7 @@ export async function agentChannelRoute(app: FastifyInstance) {
           },
         };
         app.agentChannels.set(hostId, entry);
+        markChannelConnected(app, hostId);
         // Nothing is carried yet: refuse every peer-initiated channel.
         mux.onChannel((channel) => channel.close());
         mux.onClose((reason) => {

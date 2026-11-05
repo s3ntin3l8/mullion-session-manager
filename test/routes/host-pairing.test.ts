@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
+import crypto from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
@@ -8,7 +9,12 @@ import { closeDb } from "../../src/db/client.js";
 import { hostPairings, hosts } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
 import { parsePairingLink } from "../../src/shared/pairing-link.js";
-import { listHosts } from "../../src/services/host-registry.js";
+import { listHosts, markChannelConnected } from "../../src/services/host-registry.js";
+import {
+  consumeHostPairing,
+  issueHostPairingCode,
+  listHostPairings,
+} from "../../src/services/host-pairing.js";
 
 // Issue #2449 — one-time execution-host pairing.
 const tmpDb = path.join(os.tmpdir(), `host-pairing-test-${process.pid}.db`);
@@ -102,7 +108,7 @@ describe("host pairing (issue #2449)", () => {
     expect(pairedRows()).toHaveLength(1);
   });
 
-  it("lets only one of many concurrent redemptions win", async () => {
+  it("lets only one of many redemptions win", async () => {
     const p = await create();
     const results = await Promise.all(
       Array.from({ length: 6 }, (_, i) => redeem(p.code, { requestId: `request-conc-${i}` })),
@@ -110,6 +116,144 @@ describe("host pairing (issue #2449)", () => {
     expect(results.filter((r) => r.statusCode === 200)).toHaveLength(1);
     expect(results.filter((r) => r.statusCode === 401)).toHaveLength(5);
     expect(pairedRows()).toHaveLength(1);
+  });
+
+  // better-sqlite3 is synchronous, so inject() calls never interleave and the
+  // test above passes even without the guarded UPDATE. Two consumers holding
+  // the SAME unredeemed row is the race the guard exists for.
+  it("consumes a pairing row only once when two callers both saw it unredeemed", async () => {
+    const issued = issueHostPairingCode(app);
+    const row = app.db.select().from(hostPairings).where(eq(hostPairings.id, issued.id)).get()!;
+    const input = { requestId: "request-race", hostname: "mac-mini" };
+    const first = consumeHostPairing(app, row, "hash-1", input);
+    const second = consumeHostPairing(app, row, "hash-2", input);
+    expect(first).not.toBeNull();
+    expect(second).toBeNull();
+    expect(pairedRows()).toHaveLength(1);
+  });
+
+  it("stores only a hash of the code, never the code", async () => {
+    const p = await create();
+    const row = app.db.select().from(hostPairings).where(eq(hostPairings.id, p.id)).get()!;
+    expect(row.codeHash).toBe(crypto.createHash("sha256").update(p.code).digest("hex"));
+    expect(JSON.stringify(row)).not.toContain(p.code);
+    expect("codeEnc" in row).toBe(false);
+  });
+
+  it("drops the lookup hash once the retry window has passed", async () => {
+    const p = await create();
+    await redeem(p.code);
+    app.db
+      .update(hostPairings)
+      .set({ redeemedAt: new Date(Date.now() - 11 * 60 * 1000) })
+      .where(eq(hostPairings.id, p.id))
+      .run();
+    listHostPairings(app);
+    const row = app.db.select().from(hostPairings).where(eq(hostPairings.id, p.id)).get()!;
+    expect(row.codeHash).toBeNull();
+  });
+
+  describe("unclaimed pairings", () => {
+    const pairAndAge = async (minutes: number) => {
+      const p = await create();
+      const body = (await redeem(p.code)).json();
+      app.db
+        .update(hostPairings)
+        .set({ redeemedAt: new Date(Date.now() - minutes * 60 * 1000) })
+        .where(eq(hostPairings.id, p.id))
+        .run();
+      return body.host_id as string;
+    };
+    const apiHost = async (id: string) => {
+      const list = (await app.inject({ method: "GET", url: "/api/hosts" })).json() as Array<{
+        id: string;
+        unclaimed: boolean;
+        paired: boolean;
+      }>;
+      const host = list.find((h) => h.id === id);
+      if (!host) throw new Error(`host ${id} not listed`);
+      return host;
+    };
+
+    it("is not flagged inside the retry window", async () => {
+      const id = await pairAndAge(1);
+      expect((await apiHost(id)).unclaimed).toBe(false);
+    });
+
+    it("is flagged once the window passed with no renewal and no channel", async () => {
+      const id = await pairAndAge(11);
+      expect(await apiHost(id)).toMatchObject({ paired: true, unclaimed: true });
+    });
+
+    it("is not flagged once the Helper renewed its credential", async () => {
+      const id = await pairAndAge(11);
+      app.db
+        .update(hosts)
+        .set({ machineCredentialRotatedAt: new Date() })
+        .where(eq(hosts.id, id))
+        .run();
+      expect((await apiHost(id)).unclaimed).toBe(false);
+    });
+
+    it("is not flagged once a channel has connected", async () => {
+      const id = await pairAndAge(11);
+      markChannelConnected(app, id);
+      expect((await apiHost(id)).unclaimed).toBe(false);
+      const first = app.db.select().from(hosts).where(eq(hosts.id, id)).get()!
+        .channelFirstConnectedAt;
+      markChannelConnected(app, id);
+      expect(
+        app.db.select().from(hosts).where(eq(hosts.id, id)).get()!.channelFirstConnectedAt,
+      ).toEqual(first);
+    });
+
+    it("is not flagged for a revoked identity or a non-paired host", async () => {
+      const id = await pairAndAge(11);
+      await app.inject({ method: "POST", url: `/api/hosts/${id}/revoke` });
+      expect((await apiHost(id)).unclaimed).toBe(false);
+      expect((await apiHost("local")).unclaimed).toBe(false);
+    });
+  });
+
+  describe("rate limits", () => {
+    it("counts only failed redeems toward the redeem limit", async () => {
+      // 25 successful redeems do not use up the failure budget.
+      for (let i = 0; i < 25; i++) {
+        const issued = issueHostPairingCode(app);
+        expect((await redeem(issued.code, { requestId: `request-ok-${i}` })).statusCode).toBe(200);
+      }
+      for (let i = 0; i < 20; i++) expect((await redeem("cd".repeat(32))).statusCode).toBe(401);
+      const blocked = await redeem("cd".repeat(32));
+      expect(blocked.statusCode).toBe(429);
+      expect(Number(blocked.headers["retry-after"])).toBeGreaterThanOrEqual(1);
+      // Blocked means blocked: even a valid code waits.
+      const valid = issueHostPairingCode(app);
+      expect((await redeem(valid.code, { requestId: "request-late" })).statusCode).toBe(429);
+    });
+
+    it("counts schema failures (400) as failures", async () => {
+      for (let i = 0; i < 20; i++) {
+        expect(
+          (await app.inject({ method: "POST", url: "/api/internal/pair", payload: { code: "x" } }))
+            .statusCode,
+        ).toBe(400);
+      }
+      expect((await redeem("cd".repeat(32))).statusCode).toBe(429);
+    });
+
+    it("is not exhausted by unrelated traffic", async () => {
+      for (let i = 0; i < 30; i++) await app.inject({ method: "GET", url: "/api/hosts" });
+      const p = await create();
+      expect((await redeem(p.code)).statusCode).toBe(200);
+    });
+
+    it("gives the authenticated issue route its own bucket", async () => {
+      for (let i = 0; i < 20; i++) await create();
+      const over = await app.inject({ method: "POST", url: "/api/host-pairings", payload: {} });
+      expect(over.statusCode).toBe(429);
+      // The redeem route is unaffected by the issue route's bucket.
+      expect((await redeem("cd".repeat(32))).statusCode).toBe(401);
+    });
   });
 
   it("rejects an expired code", async () => {
@@ -214,6 +358,17 @@ describe("host pairing (issue #2449)", () => {
     expect(listHosts(app).every((h) => h.origin === "manual" || h.paired)).toBe(true);
   });
 
+  it("bounds the redeem body field sizes", async () => {
+    const p = await create();
+    expect((await redeem(p.code, { name: "n".repeat(121) })).statusCode).toBe(400);
+    expect((await redeem(p.code, { hostname: "h".repeat(256) })).statusCode).toBe(400);
+    expect((await redeem(p.code, { capabilities: ["c".repeat(65)] })).statusCode).toBe(400);
+    expect(
+      (await redeem(p.code, { capabilities: Array.from({ length: 65 }, () => "c") })).statusCode,
+    ).toBe(400);
+    expect((await redeem(p.code, { capabilities: ["xcode", "docker"] })).statusCode).toBe(200);
+  });
+
   it("validates the redeem body", async () => {
     const p = await create();
     expect((await redeem(p.code, { baseUrl: "ftp://x" })).statusCode).toBe(400);
@@ -222,4 +377,45 @@ describe("host pairing (issue #2449)", () => {
         .statusCode,
     ).toBe(400);
   });
+});
+
+describe("pairing link public URL (issue #2597)", () => {
+  const tmp = path.join(os.tmpdir(), `host-pairing-url-test-${process.pid}.db`);
+  beforeAll(() => {
+    fs.rmSync(tmp, { force: true });
+    process.env.DATABASE_URL = `file:${tmp}`;
+  });
+  afterEach(() => {
+    delete process.env.MULLION_PUBLIC_URL;
+  });
+  afterAll(() => {
+    closeDb();
+    fs.rmSync(tmp, { force: true });
+    delete process.env.DATABASE_URL;
+  });
+
+  it("uses MULLION_PUBLIC_URL instead of the request headers", async () => {
+    process.env.MULLION_PUBLIC_URL = "https://mullion.example.com";
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "POST",
+        url: "/api/host-pairings",
+        headers: { host: "internal-proxy:4000" },
+        payload: {},
+      });
+      expect(res.json().url).toBe("https://mullion.example.com");
+      expect(parsePairingLink(res.json().pairing_link)?.url).toBe("https://mullion.example.com");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it.each(["ftp://x.test", "https://u:p@x.test", "https://x.test/base", "not a url"])(
+    "refuses to boot with %s",
+    async (value) => {
+      process.env.MULLION_PUBLIC_URL = value;
+      await expect(buildApp()).rejects.toThrow(/MULLION_PUBLIC_URL/);
+    },
+  );
 });
