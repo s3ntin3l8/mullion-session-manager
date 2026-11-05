@@ -25,7 +25,7 @@ import { getFileDiff } from "./git-diff.js";
 import type { CommitDetail, CommitLogEntry } from "./git-log.js";
 import { commitWipChanges, type CommitWipChangesResult } from "./git-worktree.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
-import { requireOperation, unsupportedOperation } from "./host-agents.js";
+import { gateOperation, unsupportedOperation } from "./host-agents.js";
 import {
   getRemoteHostClient,
   HostRequestError,
@@ -103,9 +103,9 @@ export async function viaRemote<T>(
   fn: (client: ReturnType<typeof getRemoteHostClient>) => Promise<T>,
   // The negotiated operation `fn` calls (issue #2569): checked before the
   // request, and what a 404 is reported as lacking.
-  op = "this operation",
+  op: string,
 ): Promise<HostGitResult<T>> {
-  const gate = requireOperation(app, hostId, op);
+  const gate = await gateOperation(app, hostId, op);
   if (!gate.ok) {
     return { ok: false, reason: "unsupported", updateHint: gate.updateHint, detail: gate.message };
   }

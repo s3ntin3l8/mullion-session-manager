@@ -52,7 +52,7 @@ import {
   type LaunchNeeds,
   type PlacementTarget,
 } from "./placement.js";
-import { requireLaunchOptions, requireOperation } from "./host-agents.js";
+import { ensureRemoteHostProtocols, gateLaunchOptions, gateOperation } from "./host-agents.js";
 import { requiredLaunchOptions, type LaunchFields } from "./launch-requirements.js";
 import { isReservedSessionEnvKey } from "./session-env-keys.js";
 import { commandAgentBin } from "./hook-adapters/index.js";
@@ -779,7 +779,12 @@ export async function discoverCommittedScaffoldOnHost(
   if (hostId === LOCAL_HOST_ID) {
     return discoverCommittedScaffold(scaffoldCwd);
   }
-  const result = await viaRemote(app, hostId, (client) => client.scaffoldScan(scaffoldCwd));
+  const result = await viaRemote(
+    app,
+    hostId,
+    (client) => client.scaffoldScan(scaffoldCwd),
+    "scaffold",
+  );
   if (result.ok) return result.value;
   // Hermes review round 2, PR #1150 — a transient blip (host unreachable)
   // or a version-skewed agent build predating this route (unsupported)
@@ -1234,6 +1239,9 @@ async function createSessionRecordInner(
       earlyLaunchFields(project, params, sessionSettings),
     ),
   };
+  // Issue #2596 — read every unread host protocol (bounded) before placement
+  // decides on it; an unread one would otherwise be gated as the legacy baseline.
+  await ensureRemoteHostProtocols(app);
   const placementResult = resolveSessionPlacement(app, project, params, needs);
   if (!placementResult.ok) {
     if (placementResult.reason === "preparing-checkout") return placementResult;
@@ -1247,7 +1255,7 @@ async function createSessionRecordInner(
   // this launch needs BEFORE the worktree is cut or the row inserted: an
   // agent's spawn schema strips a field it does not know, so the launch would
   // otherwise start without it.
-  const unsupported = checkHostSupport(app, placementHost, needs);
+  const unsupported = await checkHostSupport(app, placementHost, needs);
   if (unsupported !== null) return { ok: false, reason: "host-unsupported", detail: unsupported };
 
   const parent = validateParent(app, params);
@@ -1647,12 +1655,16 @@ async function stashSeedBestEffort(
 // value must already be definite by the time it reaches spawn(), never
 // re-derived downstream.
 /** The refusal text when `hostId` does not negotiate what the launch needs; null when it does. */
-function checkHostSupport(app: FastifyInstance, hostId: string, needs: LaunchNeeds): string | null {
+async function checkHostSupport(
+  app: FastifyInstance,
+  hostId: string,
+  needs: LaunchNeeds,
+): Promise<string | null> {
   for (const op of needs.requiredOperations ?? []) {
-    const gate = requireOperation(app, hostId, op);
+    const gate = await gateOperation(app, hostId, op);
     if (!gate.ok) return gate.message;
   }
-  const gate = requireLaunchOptions(app, hostId, needs.requiredLaunchOptions ?? []);
+  const gate = await gateLaunchOptions(app, hostId, needs.requiredLaunchOptions ?? []);
   return gate.ok ? null : gate.message;
 }
 
@@ -1864,7 +1876,7 @@ async function spawnOrRollback(
     // minted GitHub credential): the same gate over the full spawn body. The
     // worktree and row already exist, so a refusal unwinds through the same
     // catch as a spawn failure.
-    unsupported = checkHostSupport(app, placementHost, {
+    unsupported = await checkHostSupport(app, placementHost, {
       requiredLaunchOptions: requiredLaunchOptions(spawnOpts),
     });
     if (unsupported !== null) throw new Error(unsupported);

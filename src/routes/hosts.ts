@@ -30,7 +30,7 @@ import {
   protocolStatus,
   refreshHostProtocolSoon,
   refreshLocalAgents,
-  requireOperation,
+  gateOperation,
 } from "../services/host-agents.js";
 import { resolveReleaseByTag, UpdateCheckError } from "../services/update-checker.js";
 import type { ReleaseByTagResult } from "../services/update-checker.js";
@@ -519,7 +519,7 @@ export async function hostsRoute(app: FastifyInstance) {
       return reply.serviceUnavailable(`Host ${id} is unreachable`);
     }
 
-    if (!requireOperation(app, id, "updates").ok) return updatesUnavailable(hostVersion);
+    if (!(await gateOperation(app, id, "updates")).ok) return updatesUnavailable(hostVersion);
 
     let status: UpdateStatus;
     try {

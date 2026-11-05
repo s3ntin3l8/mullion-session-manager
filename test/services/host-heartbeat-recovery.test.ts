@@ -425,12 +425,16 @@ describe("startHostHeartbeat: agent list refresh", () => {
   });
 
   it("keeps sweeping when the refresh fails", async () => {
+    // Reads the tracker as it is: the default-protocol test shim would answer
+    // for the unrecorded host.
+    vi.stubEnv("MULLION_TEST_REAL_PROTOCOL", "1");
     detectAgentsMock.mockRejectedValue(new Error("boom"));
     const app = fakeApp();
     const cleanup = startHostHeartbeat(app, undefined, undefined, undefined, vi.fn());
     await vi.advanceTimersByTimeAsync(31_000);
     await waitForAssertion(() => expect(detectAgentsMock).toHaveBeenCalled());
     expect(app.hostAgentTracker?.get("h1")).toBeUndefined();
+    vi.unstubAllEnvs();
     expect(pingMock.mock.calls.length).toBeGreaterThan(1);
     cleanup();
   });

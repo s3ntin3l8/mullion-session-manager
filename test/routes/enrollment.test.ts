@@ -9,6 +9,11 @@ import { createHost, getHostRow } from "../../src/services/host-registry.js";
 const tmpDb = path.join(os.tmpdir(), `enrollment-test-${process.pid}.db`);
 
 describe("POST /api/internal/register (issue #245 / roadmap 7.1)", () => {
+  // Claiming a host opens a fan-out connection to its (unroutable, fake)
+  // baseUrl, and app.close() waits ~10 s on that connect; on a loaded CI shard
+  // the default 20 s budget is not enough (seen on #2596).
+  vi.setConfig({ testTimeout: 60_000 });
+
   beforeAll(() => {
     fs.rmSync(tmpDb, { force: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;

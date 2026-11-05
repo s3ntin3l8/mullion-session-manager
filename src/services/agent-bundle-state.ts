@@ -119,10 +119,15 @@ export async function getHostBundleDisabled(
   if (hostId === LOCAL_HOST_ID) {
     return { ok: true, value: readAgentBundleDisabled() };
   }
-  return viaRemote(app, hostId, async (client) => {
-    const { disabled } = await client.getAgentBundleState();
-    return disabled;
-  });
+  return viaRemote(
+    app,
+    hostId,
+    async (client) => {
+      const { disabled } = await client.getAgentBundleState();
+      return disabled;
+    },
+    "bundle-sync",
+  );
 }
 
 /**
@@ -169,5 +174,5 @@ export async function removeHostBundle(
     const result = await uninstallBundleContent();
     return { ok: true, value: result };
   }
-  return viaRemote(app, hostId, (client) => client.removeAgentBundle(disabled));
+  return viaRemote(app, hostId, (client) => client.removeAgentBundle(disabled), "bundle-sync");
 }

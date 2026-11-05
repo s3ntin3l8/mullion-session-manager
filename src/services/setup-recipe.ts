@@ -286,8 +286,11 @@ export async function readSessionSetupLog(
   if (hostId === LOCAL_HOST_ID) {
     return readLocalSetupLog(app.config.SESSIONS_DIR, String(sessionId));
   }
-  const result = await viaRemote(app, hostId, (client) =>
-    client.resolveSetupLog(String(sessionId)),
+  const result = await viaRemote(
+    app,
+    hostId,
+    (client) => client.resolveSetupLog(String(sessionId)),
+    "setup",
   );
   return result.ok ? result.value : null;
 }
@@ -302,8 +305,11 @@ export async function runSetupOnHost(
   if (hostId === LOCAL_HOST_ID) {
     return await execSetupRecipe({ ...opts, sessionsDir: app.config.SESSIONS_DIR });
   }
-  const result = await viaRemote(app, hostId, (client) =>
-    client.resolveRunSetup(opts.cwd, opts.recipe, opts.logKey),
+  const result = await viaRemote(
+    app,
+    hostId,
+    (client) => client.resolveRunSetup(opts.cwd, opts.recipe, opts.logKey),
+    "setup",
   );
   if (result.ok) return result.value;
   return {

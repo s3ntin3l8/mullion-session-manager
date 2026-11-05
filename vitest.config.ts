@@ -4,7 +4,7 @@ import { coverageConfig, maxWorkers, reporters, worktreeExcludes } from "./vites
 export default defineConfig({
   test: {
     globals: true,
-    setupFiles: ["./test/setup.ts"],
+    setupFiles: ["./test/setup.ts", "./test/helpers/default-host-protocol.ts"],
     // Tripwire (issues #1602, #1649): fails the run if it changed the
     // checkout's own .git/config.
     globalSetup: ["./test/global-setup.ts"],

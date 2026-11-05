@@ -1370,12 +1370,17 @@ they do not know. So the agent also answers a handshake,
   existing epoch guard. A failed read keeps the previous reading; `null` means
   not read yet.
 - **Helpers.** `hostSupports(app, hostId, op)` and `hostLaunchOptions(app,
-hostId)` (`src/services/host-agents.ts`) read the cache; an unnegotiated host
-  supports nothing by them, and the local host is this build. The gates below
-  use `requireOperation` and `requireLaunchOptions`, which instead **fail open
-  on a host whose protocol has not been read yet** (the short window between
-  registering and the first handshake) and read a legacy agent through the
-  baseline.
+hostId)` (`src/services/host-agents.ts`) read the cache; the local host is this
+  build. **A protocol that has not been read reads as the legacy baseline**
+  (`LEGACY_BASELINE`), never as "everything supported", in these helpers and in
+  `requireOperation`, `requireLaunchOptions` and placement alike. Launches and
+  operations go through `gateOperation` / `gateLaunchOptions`, which first make
+  one bounded read (`ensureHostProtocol`: `refreshRemoteHostAgents`, 3 s;
+  concurrent gates for a host share it). If the read times out or fails with a
+  non-404 error, that decision uses the baseline and nothing is cached, so the
+  next gate reads again. A re-registration, renewal or applied update keeps the
+  last known protocol (flagged `protocolStale`) and refreshes in the
+  background, so a routine renewal never opens an ungated window.
 - **Hosts API / UI.** `GET /api/hosts` adds `protocol: { protocolVersion,
 incompatible, missingOperations, legacy } | null`; Settings → Hosts shows the
   version, "incompatible" and the missing operations. The remedy is the row's
@@ -1409,7 +1414,12 @@ code: "unsupported", missing, updateHint, message}`. The three former ad-hoc 404
 - **Auto and targeted placement** skip a host known to lack a required launch
   option or operation, and name the skipped host in the recorded placement
   reason (`skipped <host>: host does not support the model launch option`).
-  A host whose protocol is unknown stays eligible, like an unknown CLI list.
+  A host whose protocol is unknown is read once (bounded) first, then judged
+  as the legacy baseline if that read fails.
+- **Old agents refuse newer launches.** A host whose agent lacks `taskId`,
+  `gitIdentity`, `githubAuth` or the other newer launch options refuses Task
+  Master worker launches and any launch that uses them; the remedy is the
+  host's **Update** action.
 - **UI.** Settings → Hosts shows each host's missing operations and launch
   options; the remedy is the row's existing **Update** action.
 

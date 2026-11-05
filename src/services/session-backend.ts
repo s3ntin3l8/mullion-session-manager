@@ -51,7 +51,7 @@ import {
 import type { PromoteDecision } from "../plugins/hooks.js";
 import { adapterHasInitialPromptArgs } from "./hook-adapters/index.js";
 import { compileOutputMatcher, waitForOutput } from "./output-wait.js";
-import { requireOperation, unsupportedOperation } from "./host-agents.js";
+import { gateOperation, unsupportedOperation } from "./host-agents.js";
 import {
   deliverPrompt,
   REMOTE_WAIT_CHUNK_MS,
@@ -837,7 +837,7 @@ class RemoteBackend implements SessionBackend {
   }
 
   async getTranscript(id: string, query: TranscriptQuery): Promise<TranscriptResult> {
-    const gate = requireOperation(this.app, this.hostId, "session-transcript");
+    const gate = await gateOperation(this.app, this.hostId, "session-transcript");
     if (!gate.ok) return { ok: false, status: 501, error: gate.message };
     try {
       return await this.client.resolveTranscript(id, query);
@@ -876,7 +876,7 @@ class RemoteBackend implements SessionBackend {
   }
 
   async prompt(id: string, opts: { text: string; submit: boolean }): Promise<PromptOutcome> {
-    const gate = requireOperation(this.app, this.hostId, "session-control");
+    const gate = await gateOperation(this.app, this.hostId, "session-control");
     if (!gate.ok) return { ok: false, status: 501, error: gate.message };
     try {
       const delivered = await this.client.resolvePrompt(id, opts);
