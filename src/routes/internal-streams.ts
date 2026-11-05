@@ -75,10 +75,10 @@ export function acceptAttachStream(
 export function acceptEventsStream(
   app: FastifyInstance,
   socket: StreamSocket,
-  query: { cursors?: string },
+  query: { cursors?: string } | undefined,
 ): void {
   // Exactly "1", not merely present (the documented contract of #1459).
-  if (query.cursors === "1") {
+  if (query?.cursors === "1") {
     const onSeenAdvanced = attachCursorsAndSeenBroadcast(app, socket);
     attachLocalEventsSocket(app, socket, { onSeenAdvanced });
   } else {

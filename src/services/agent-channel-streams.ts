@@ -60,6 +60,7 @@ export function openChannelStream(
     }
   }, STREAM_ACCEPT_TIMEOUT_MS);
   timer.unref?.();
+  socket.once("open", () => clearTimeout(timer));
   socket.once("close", () => clearTimeout(timer));
 
   entry.mux.openChannel().then(
@@ -211,9 +212,7 @@ export function serveChannel(
       return null;
     }
     // The open head was never handed to ingest(), so its bytes are released here.
-    queueMicrotask(() => {
-      if (rest.length > 0) socket.ingest(rest);
-    });
+    if (rest.length > 0) socket.ingest(rest);
     return { data: (c) => socket.ingest(c), eof: () => socket.ingestEof() };
   };
 
