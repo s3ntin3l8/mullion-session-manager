@@ -3,6 +3,7 @@ import type { projects, tasks } from "../db/schema.js";
 import { resolveRepoRef } from "./host-git.js";
 import { resolveGitHubToken } from "./github-integration.js";
 import { getPullRequestByNumber } from "./github-write.js";
+import { collectDeclaredDecisions } from "./task-decisions.js";
 
 /**
  * What the previous review round found, for a FOLLOW-UP review's delta
@@ -73,4 +74,22 @@ export async function resolveReviewHeadSha(
     app.log.warn({ err }, "task review: could not read the PR head — spawning without it");
     return null;
   }
+}
+
+/**
+ * What the review prompt needs to know about the branch's history: the
+ * previous round (a follow-up review is a delta) and the decisions the worker
+ * declared in its commit bodies (#2599).
+ */
+export async function reviewPromptContext(
+  app: FastifyInstance,
+  task: typeof tasks.$inferSelect,
+  project: typeof projects.$inferSelect,
+  ciHeadSha: string | undefined,
+  hostId: string,
+) {
+  return {
+    priorRound: priorRoundFor(task, await resolveReviewHeadSha(app, task, project, ciHeadSha)),
+    declaredDecisions: await collectDeclaredDecisions(app, task, project, hostId),
+  };
 }

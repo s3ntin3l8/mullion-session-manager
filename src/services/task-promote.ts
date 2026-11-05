@@ -64,6 +64,7 @@ import {
   updatePullRequestTitle,
   GitHubWriteScopeError,
 } from "./github-write.js";
+import { getPullRequestBody, updatePullRequestBody } from "./github-pr-body.js";
 import { GitHubApiError } from "./github.js";
 import {
   resolveHostGitStatus,
@@ -75,6 +76,11 @@ import { recordGithubSyncError, clearGithubSyncError } from "./task-github-sync.
 import { broadcastTaskEvent } from "./task-events.js";
 import { notifyTaskNeedsAttention } from "./push-delivery.js";
 import { resolvePrTitle } from "./task-prompt.js";
+import {
+  applyWorkerDecisionsSection,
+  collectDeclaredDecisions,
+  renderWorkerDecisionsSection,
+} from "./task-decisions.js";
 import {
   evaluateWorkflowGate,
   recordWorkflowHold,
@@ -507,6 +513,36 @@ async function syncPrTitleIfNeeded(
 }
 
 /**
+ * Re-syncs the "Worker decisions" section of an already-open PR after a new
+ * push: reads the live description and replaces only that section, so a body
+ * a human edited keeps its edits. Skips the PATCH when nothing changes, and —
+ * like `syncPrTitleIfNeeded` — only warns on failure.
+ */
+async function syncWorkerDecisions(
+  app: FastifyInstance,
+  task: TaskRow,
+  repoRef: GitHubRepoRef,
+  token: string,
+  prNumber: number,
+  decisions: string[],
+): Promise<void> {
+  // A branch only ever gains commits, so nothing declared means nothing to
+  // add and no section of ours to refresh: skip the two GitHub calls.
+  if (decisions.length === 0) return;
+  try {
+    const live = await getPullRequestBody(token, repoRef.owner, repoRef.repo, prNumber);
+    const next = applyWorkerDecisionsSection(live, decisions);
+    if (next === live) return;
+    await updatePullRequestBody(token, repoRef.owner, repoRef.repo, prNumber, next);
+  } catch (err) {
+    app.log.warn(
+      { err, taskId: task.id, prNumber },
+      "task promote: failed to re-sync the PR's worker decisions — leaving the live description as-is",
+    );
+  }
+}
+
+/**
  * #486 — if a previous create attempt already pushed AND created a PR but
  * failed before the caller recorded `prNumber`/`prUrl` (e.g. the process
  * crashed in between), a retry's `createPullRequest` call gets GitHub's 422
@@ -521,9 +557,11 @@ async function createOrRecoverPR(
   token: string,
   base: string,
   draft: boolean,
+  decisions: string[],
 ): Promise<PromoteOutcome> {
   const closesLine = task.issueNumber !== null ? `\n\nCloses #${task.issueNumber}` : "";
-  const body = `${task.body ?? ""}${closesLine}\n\n---\nOpened by Mullion Task Master.`;
+  const decisionsSection = renderWorkerDecisionsSection(decisions);
+  const body = `${task.body ?? ""}${closesLine}${decisionsSection ? `\n\n${decisionsSection}` : ""}\n\n---\nOpened by Mullion Task Master.`;
 
   try {
     const pr = await createPullRequest(token, repoRef.owner, repoRef.repo, {
@@ -580,6 +618,7 @@ async function createOrRecoverPR(
         // correct it before attemptMerge reads pr.title for the squash-merge
         // commit message. See syncPrTitleIfNeeded's own doc comment.
         await syncPrTitleIfNeeded(app, task, repoRef, token, existing.number, existing.title);
+        await syncWorkerDecisions(app, task, repoRef, token, existing.number, decisions);
         clearGithubSyncError(app, task.id);
         return { ok: true, prUrl: existing.htmlUrl, prNumber: existing.number };
       }
@@ -630,6 +669,14 @@ export async function openDraftPRForTask(
     // the call count for a branch whose whole point is "nothing left to
     // create, just push." See that function's own doc comment.
     await syncPrTitleIfNeeded(app, task, repoRef, token, task.prNumber);
+    await syncWorkerDecisions(
+      app,
+      task,
+      repoRef,
+      token,
+      task.prNumber,
+      await collectDeclaredDecisions(app, task, project, worktreeHostId ?? project.hostId),
+    );
     clearGithubSyncError(app, task.id);
     // #972 — task.prUrl can still be null here on a row that predates
     // retryTask clearing prUrl/prNumber together (a retry that cleared only
@@ -685,7 +732,15 @@ export async function openDraftPRForTask(
   );
   if (pushFailure) return pushFailure;
 
-  return createOrRecoverPR(app, task, repoRef, token, base, /* draft */ true);
+  return createOrRecoverPR(
+    app,
+    task,
+    repoRef,
+    token,
+    base,
+    /* draft */ true,
+    await collectDeclaredDecisions(app, task, project, worktreeHostId ?? project.hostId),
+  );
 }
 
 /**
@@ -745,6 +800,14 @@ export async function promoteTaskToPR(
       // calls in the common (unchanged) case. See that function's own doc
       // comment.
       await syncPrTitleIfNeeded(app, task, repoRef, token, task.prNumber, pr.title);
+      await syncWorkerDecisions(
+        app,
+        task,
+        repoRef,
+        token,
+        task.prNumber,
+        await collectDeclaredDecisions(app, task, project, worktreeHostId ?? project.hostId),
+      );
       clearGithubSyncError(app, task.id);
       return { ok: true, prUrl: pr.htmlUrl, prNumber: pr.number };
     } catch (err) {
@@ -778,7 +841,15 @@ export async function promoteTaskToPR(
   );
   if (pushFailure) return pushFailure;
 
-  return createOrRecoverPR(app, task, repoRef, token, base, /* draft */ false);
+  return createOrRecoverPR(
+    app,
+    task,
+    repoRef,
+    token,
+    base,
+    /* draft */ false,
+    await collectDeclaredDecisions(app, task, project, worktreeHostId ?? project.hostId),
+  );
 }
 
 /**

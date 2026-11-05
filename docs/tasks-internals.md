@@ -661,17 +661,21 @@ reviewing` transition itself — `task-reconciler.ts`'s
   `taskReviewFindingsPath` — writing inside the worktree would dirty it and
   block approve's own clean-tree check), as JSON:
   `{verdict: "approved" | "approved-with-suggestions" | "changes-requested",
-summary, findings: [{path, line, side, severity, body}], previous?,
+summary, findings: [{path, line, side, severity, body}], previous?, scope?,
 verified?, notes?, looksGood?}` — `summary` is one verdict sentence;
   `severity` is `critical | warning | suggestion` (the old `blocker`/`major`/
   `minor`/`nit` and a `clean` verdict are accepted as aliases); `previous` is,
   on a follow-up round, a disposition `{ref, status: addressed | still-open |
-re-broken, evidence}` for each earlier finding; `verified`/`notes`/
+re-broken, evidence}` for each earlier finding; `scope` is `[{item, status:
+met | partial | missing | deviated, evidence}]`, one entry per Scope checkbox
+  of the issue (see "Scope check" below); `verified`/`notes`/
   `looksGood` are optional string arrays for what was checked, cross-cutting
   observations that don't anchor to a line, and what's solid about the
   change, respectively. **The verdict is derived, not trusted**
   (`deriveVerdict`, `task-prompt.ts`): any `still-open`/`re-broken` earlier
-  finding, or any `critical`/`warning`/severity-less finding, makes it
+  finding, any `missing`/`partial` scope item (or a `deviated` one that cites
+  no declared decision, which counts as `missing`), or any
+  `critical`/`warning`/severity-less finding, makes it
   `changes-requested`; only `suggestion` findings make it
   `approved-with-suggestions`; none make it `approved`. The reviewer's own
   `verdict` field is only cross-checked — a disagreement is logged into
@@ -689,13 +693,35 @@ re-broken, evidence}` for each earlier finding; `verified`/`notes`/
   `### Critical` (severity `critical`), `### Warnings`
   (`warning`/unset), `### Suggestions` (`suggestion`) — each with `- None`
   when empty — preceded by `### Earlier findings` on a follow-up round and
-  followed by `### Verified`/`### Notes`/`### Looks Good` when
+  followed by `### Verified`/`### Notes`/`### Scope check`/`### Looks Good` when
   non-empty. A freeform (non-JSON) review renders verbatim instead, since
   its `summary` holds the whole file, not one sentence. So does a structured
   review whose `summary` is over 300 characters _and_ whose `findings`,
-  `verified`, `notes`, `looksGood` and `previous` are all empty (the old
+  `verified`, `notes`, `looksGood`, `scope` and `previous` are all empty (the old
   whole-review-in-`summary` shape); a long `summary` beside any of those
   still gets the sections.
+
+  **Scope check and declared decisions (#2599).** `REVIEW_METHOD_LINES` tells
+  the reviewer to find, for every Scope checkbox, the code or test that
+  satisfies it and to check that nothing under Out of scope was done. The
+  result is the `scope` array, normalized as tolerantly as the others (not an
+  array → `[]`; entries without an `item` or with an unknown `status` are
+  dropped). `deviated` is only valid for a departure the worker declared: the
+  worker prompt asks it to put each departure, skip, deferral and unrun check
+  in a commit-body line starting `Decision:`, `Skipped:`, `Deferred:` or
+  `Not run locally:`, and a `deviated` entry whose `evidence` quotes none of
+  those prefixes is rewritten to `missing` at parse time. The section renders
+  in the PR review body and the comment (one line per item and status), and
+  its unmet items reach the worker in the review-feedback prompt. A follow-up
+  round re-checks only the items earlier reported `missing`/`partial`, but
+  still confirms the branch's final state. `task-decisions.ts` collects the
+  worker's lines from `git log <base>..HEAD` (a remote host is read through its
+  history routes): line-start prefixes only, subject lines skipped, at most 20
+  lines of 300 characters, redacted with `redactSecrets` before the cut. They
+  go into the review prompt under "Declared by the worker (judge them, do not
+  take them as given)" and, under `### Worker decisions`, into the PR
+  description. The external review relay's prompt is out of scope and does not
+  carry them.
 
   A missing file is treated as **inconclusive**, not "no findings" and not
   "approved" — but not on the very first tick that observes it missing.
@@ -1271,7 +1297,11 @@ case now), it's marked ready for review; otherwise a PR is opened directly,
 non-draft, the same fallback behavior this had before drafts existed (title
 from the task title, body from the task body plus a `Closes #N` line when a
 GitHub issue is linked — a local-only task still gets a PR, it just has no
-issue to close). These steps are ordered so that any failure leaves the
+issue to close). When the worker declared decisions in its commit bodies, the
+body also carries a `### Worker decisions` section, written between
+`<!-- mullion:worker-decisions -->` markers when the draft PR is opened and
+re-synced (only that section; a human-edited rest of the description is kept)
+on every later push to the draft and at approve. These steps are ordered so that any failure leaves the
 task in `reviewing`, untouched and safely retryable — never half-promoted.
 
 On reject (`reviewing → in_progress`): the feedback is typed into the
