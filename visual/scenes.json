@@ -189,7 +189,7 @@
       ],
       "baseline": true,
       "emphasis": {
-        "css": "button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; }"
+        "css": "button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
       }
     },
     {
@@ -211,7 +211,7 @@
       "settle": ".xterm-screen",
       "baseline": true,
       "emphasis": {
-        "css": "button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; }"
+        "css": "button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
       }
     },
     {
