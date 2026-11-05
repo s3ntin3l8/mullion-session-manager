@@ -4,6 +4,7 @@ import type { GitIdentity } from "./git-env.js";
 import type { SessionGithubAuth } from "./session-github-token.js";
 import type { TerminalPalette } from "./terminal-query-reply.js";
 import type { TranscriptQuery, TranscriptResult } from "./session-transcript.js";
+import type { FastifyInstance } from "fastify";
 import crypto from "node:crypto";
 import path from "node:path";
 import { FILE_STREAM_CONTENT_TYPE } from "../shared/constants.js";
