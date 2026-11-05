@@ -28,7 +28,9 @@
 // `--content` exists because a list of paths is only a request to read them:
 // a reviewer under a small tool budget skips the reads, and then the notes
 // cannot affect the verdict. With it, one command puts the text in context.
-// Past CONTENT_CAP characters the later references are listed by path instead.
+// Past CONTENT_CAP characters the later references are listed by path instead,
+// and a note the tree lacks is named (and the exit code is 2) without stopping
+// the others from printing.
 //
 // Exit codes: 0 (including "nothing matches"), 2 for a bad invocation or a
 // malformed index — a broken index must be loud, not an empty answer.
@@ -91,31 +93,57 @@ export function matchReferences(index, files) {
   return result;
 }
 
-// Total characters of reference text `--content` inlines. Past it the remaining
-// references are named by path, never dropped.
-export const CONTENT_CAP = 40000;
+// Total characters `--content` prints: the listing, then each note's header and
+// text. It sits below the ~30,000 characters Claude Code's Bash tool returns
+// inline (past that the tool returns a file path and a short preview, which
+// would cut the later notes). The "Not inlined" / "Could not read" lists after
+// the notes add about 100 characters per name, which that headroom absorbs.
+// References past the cap are named by path, never dropped.
+export const CONTENT_CAP = 28000;
 
 /**
  * The listing followed by the text of each matched reference, in index order,
- * until the next one would push the total past `cap`; the rest are named under
- * "Not inlined". `read` maps a repo-relative ref to its text.
+ * while the printed text stays within `cap` characters (the listing, each
+ * note's header and its body). `read` maps a repo-relative ref to its text, or
+ * to null when the file cannot be read.
+ *
+ * The first readable note is always inlined. Once a note does not fit, it and
+ * every later note are named under "Not inlined": a later, smaller note is
+ * never inlined ahead of a skipped one, so the reviewer never holds a later
+ * note without an earlier one. A note that cannot be read is named under
+ * "Could not read" and does not stop the others from printing.
  */
 export function formatReferencesWithContent(matches, read, cap = CONTENT_CAP) {
   const out = [formatReferences(matches)];
   if (matches.length === 0) return out[0];
   const skipped = [];
-  let used = 0;
+  const unreadable = [];
+  let used = out[0].length;
+  let inlined = 0;
   for (const m of matches) {
     const text = read(m.ref);
-    if (skipped.length > 0 || used + text.length > cap) {
+    if (text === null) {
+      unreadable.push(m.ref);
+      continue;
+    }
+    const block = `\n===== ${m.ref} =====\n\n${text.endsWith("\n") ? text : text + "\n"}`;
+    if (skipped.length > 0 || (inlined > 0 && used + block.length > cap)) {
       skipped.push(m.ref);
       continue;
     }
-    used += text.length;
-    out.push(`\n===== ${m.ref} =====\n\n${text.endsWith("\n") ? text : text + "\n"}`);
+    used += block.length;
+    inlined += 1;
+    out.push(block);
   }
   if (skipped.length > 0) {
     out.push("\nNot inlined (read these too):", ...skipped.map((r) => `- ${r}`), "");
+  }
+  if (unreadable.length > 0) {
+    out.push(
+      "\nCould not read (the index names them but the tree lacks them; fix references.json):",
+      ...unreadable.map((r) => `- ${r}`),
+      "",
+    );
   }
   return out.join("\n");
 }
@@ -219,7 +247,15 @@ export function runCli(
           .filter(Boolean)
       : gitChangedFiles(root, opts.base ?? defaultBase(root), opts.head);
     const matches = matchReferences(index, files);
-    const read = (ref) => readFileSync(path.join(root, ref), "utf8");
+    const unreadable = [];
+    const read = (ref) => {
+      try {
+        return readFileSync(path.join(root, ref), "utf8");
+      } catch {
+        unreadable.push(ref);
+        return null;
+      }
+    };
     let stdout;
     if (opts.json) {
       const shown = opts.content ? matches.map((m) => ({ ...m, content: read(m.ref) })) : matches;
@@ -228,6 +264,14 @@ export function runCli(
       stdout = opts.content
         ? formatReferencesWithContent(matches, read)
         : formatReferences(matches);
+    }
+    if (unreadable.length > 0) {
+      const names = [...new Set(unreadable)].join(", ");
+      return {
+        code: 2,
+        stdout,
+        stderr: `review-references: cannot read ${names} (named in the index, missing from the tree)\n`,
+      };
     }
     return { code: 0, stdout, stderr: "" };
   } catch (err) {
