@@ -3,14 +3,15 @@ import type { Browser, BrowserContext, Page } from "playwright";
 import { mkdirSync, existsSync } from "node:fs";
 import { rm, stat } from "node:fs/promises";
 import path from "node:path";
+import { createHash } from "node:crypto";
 
-// Manages a pool of Playwright Chromium instances, one per project (Phase 3,
+// Manages a pool of Playwright Chromium instances, one per execution target (Phase 3,
 // issue #179) — the CDP-controllable browser agents script via 3.2's WS
 // frame stream and 3.5's automation API. Distinct from the existing
 // iframe-based BrowserPanel/preview-host proxy: that's an unauthenticated
 // dev-server preview, this is a real browser process this app drives.
 //
-// An instance is launched lazily on first getOrLaunch(projectId) and reused
+// An instance is launched lazily on first getOrLaunch(target) and reused
 // across pane open/close — closing the pane doesn't kill the browser, only
 // closeForProject/closeAll do. This mirrors PtyManager's "spawned once, kept
 // alive independent of viewer count" model (src/services/pty-manager.ts).
@@ -63,6 +64,49 @@ export interface BrowserManagerOptions {
   onDownloadError?: (projectId: number, err: unknown) => void;
 }
 
+/** The execution target a browser belongs to (issue #2448): the project plus
+ * the host and checkout its work lives in. Two sessions on the same target
+ * share one browser (cookies, navigation, downloads); a different host or
+ * checkout gets its own, so a session placed elsewhere never inspects another
+ * checkout's application. `localhost` in a page is interpreted by the machine
+ * running the browser, which is the target's host. */
+export interface BrowserTarget {
+  projectId: number;
+  hostId: string;
+  /** Absolute checkout directory on `hostId` (a sibling worktree is its own). */
+  checkoutRoot: string;
+  /** The project's default checkout on its default host: keeps the storage
+   * state this project's browser had before targets existed (`project-<id>.json`)
+   * instead of sharing it with unrelated checkouts. */
+  legacy: boolean;
+}
+
+/** Stable pool key. A pool only ever holds browsers running on its own
+ * machine (the primary's for its local host, each agent's for itself), so the
+ * checkout path identifies the target within it; two hosts with the same path
+ * live in different pools. NUL-separated so no path can collide with another. */
+export function browserTargetKey(target: BrowserTarget): string {
+  return [target.projectId, target.checkoutRoot].join("\0");
+}
+
+/** The query string naming a target on an agent's browser routes. */
+export function browserTargetQuery(target: BrowserTarget): string {
+  const { projectId, hostId, checkoutRoot } = target;
+  return new URLSearchParams({
+    projectId: String(projectId),
+    hostId,
+    checkoutRoot,
+    legacy: target.legacy ? "1" : "0",
+  }).toString();
+}
+
+/** Short filesystem-safe id for a target's on-disk state. */
+function targetFileId(target: BrowserTarget): string {
+  if (target.legacy) return `project-${target.projectId}`;
+  const digest = createHash("sha1").update(browserTargetKey(target)).digest("hex").slice(0, 16);
+  return `project-${target.projectId}-${digest}`;
+}
+
 export interface ConsoleLogEntry {
   type: string;
   text: string;
@@ -99,6 +143,7 @@ const MAX_DOWNLOADS = 50;
 
 export interface ManagedBrowser {
   projectId: number;
+  target: BrowserTarget;
   browser: Browser;
   context: BrowserContext;
   page: Page;
@@ -129,12 +174,12 @@ export class BrowserManager {
   private readonly loadCookies?: (projectId: number) => LaunchCookie[] | Promise<LaunchCookie[]>;
   private readonly onCookieLoadError?: (projectId: number, err: unknown) => void;
   private readonly onDownloadError?: (projectId: number, err: unknown) => void;
-  private readonly instances = new Map<number, ManagedBrowser>();
+  private readonly instances = new Map<string, ManagedBrowser>();
   // Instances closeForProject/closeAll are actively tearing down — guards
   // the 'disconnected' listener below from re-deleting an entry that a
   // concurrent getOrLaunch() call has already replaced with a fresh one for
   // the same projectId.
-  private readonly closing = new Set<number>();
+  private readonly closing = new Set<string>();
 
   constructor(options: BrowserManagerOptions) {
     this.enabled = options.enabled;
@@ -154,12 +199,21 @@ export class BrowserManager {
     return this.instances.size;
   }
 
-  get(projectId: number): ManagedBrowser | undefined {
-    return this.instances.get(projectId);
+  get(target: BrowserTarget): ManagedBrowser | undefined {
+    return this.instances.get(browserTargetKey(target));
   }
 
-  private storageStatePath(projectId: number): string {
-    return path.join(this.dataDir, `project-${projectId}.json`);
+  /** Every running browser of a project, across its targets. */
+  listForProject(projectId: number): ManagedBrowser[] {
+    return [...this.instances.values()].filter((m) => m.projectId === projectId);
+  }
+
+  private storageStatePath(target: BrowserTarget): string {
+    return path.join(this.dataDir, `${targetFileId(target)}.json`);
+  }
+
+  private downloadsDir(target: BrowserTarget): string {
+    return path.join(this.dataDir, "downloads", targetFileId(target));
   }
 
   /** Returns the pooled browser/context/page for a project, launching a
@@ -167,12 +221,14 @@ export class BrowserManager {
    * re-entrant-safe for concurrent calls with the same projectId (callers —
    * the 3.2 WS route and 3.5 automation API — are expected to serialize per
    * session, matching how a single browser tab is used). */
-  async getOrLaunch(projectId: number): Promise<ManagedBrowser> {
+  async getOrLaunch(target: BrowserTarget): Promise<ManagedBrowser> {
     if (!this.enabled) throw new Error(BROWSER_DISABLED_MESSAGE);
 
-    const existing = this.instances.get(projectId);
+    const { projectId } = target;
+    const key = browserTargetKey(target);
+    const existing = this.instances.get(key);
     if (existing && existing.browser.isConnected()) return existing;
-    if (existing) this.instances.delete(projectId);
+    if (existing) this.instances.delete(key);
 
     if (this.instances.size >= this.maxInstances) {
       throw new Error(
@@ -203,7 +259,7 @@ export class BrowserManager {
     // sweep resolving afterward would delete the file it just legitimately
     // saved. Awaiting here keeps the sweep strictly ordered before the page
     // (and thus before any possible download) exists at all.
-    await rm(path.join(this.dataDir, "downloads", `project-${projectId}`), {
+    await rm(this.downloadsDir(target), {
       recursive: true,
       force: true,
     }).catch(() => {});
@@ -217,7 +273,7 @@ export class BrowserManager {
       args: ["--no-sandbox"],
     });
 
-    const storageStatePath = this.storageStatePath(projectId);
+    const storageStatePath = this.storageStatePath(target);
     const context = await browser.newContext(
       existsSync(storageStatePath) ? { storageState: storageStatePath } : {},
     );
@@ -248,6 +304,7 @@ export class BrowserManager {
 
     const managed: ManagedBrowser = {
       projectId,
+      target,
       browser,
       context,
       page,
@@ -291,7 +348,7 @@ export class BrowserManager {
     // Playwright deletes its temp copy when the context closes.
     page.on("download", async (download) => {
       try {
-        const dir = path.join(this.dataDir, "downloads", `project-${projectId}`);
+        const dir = this.downloadsDir(target);
         mkdirSync(dir, { recursive: true });
         const sanitized = sanitizeDownloadFilename(download.suggestedFilename());
         const savedPath = path.join(dir, `${Date.now()}-${sanitized}`);
@@ -348,11 +405,11 @@ export class BrowserManager {
     // `instances` and doesn't want this listener to race that removal for a
     // *different*, newer instance that might already occupy the same key.
     browser.on("disconnected", () => {
-      if (this.closing.has(projectId)) return;
-      if (this.instances.get(projectId) === managed) this.instances.delete(projectId);
+      if (this.closing.has(key)) return;
+      if (this.instances.get(key) === managed) this.instances.delete(key);
     });
 
-    this.instances.set(projectId, managed);
+    this.instances.set(key, managed);
     return managed;
   }
 
@@ -363,22 +420,23 @@ export class BrowserManager {
    * the next getOrLaunch() call relaunches it, rather than proactively
    * relaunching browsers nobody is currently viewing. */
   healthCheck(): void {
-    for (const [projectId, managed] of this.instances) {
-      if (!managed.browser.isConnected()) this.instances.delete(projectId);
+    for (const [key, managed] of this.instances) {
+      if (!managed.browser.isConnected()) this.instances.delete(key);
     }
   }
 
-  /** Persists storage state (cookies/localStorage) and closes the project's
+  /** Persists storage state (cookies/localStorage) and closes one target's
    * browser, if one is running. Safe to call when none is running. */
-  async closeForProject(projectId: number): Promise<void> {
-    const existing = this.instances.get(projectId);
+  async closeTarget(target: BrowserTarget): Promise<void> {
+    const key = browserTargetKey(target);
+    const existing = this.instances.get(key);
     if (!existing) return;
 
-    this.closing.add(projectId);
-    this.instances.delete(projectId);
+    this.closing.add(key);
+    this.instances.delete(key);
     try {
       if (existing.browser.isConnected()) {
-        await existing.context.storageState({ path: this.storageStatePath(projectId) });
+        await existing.context.storageState({ path: this.storageStatePath(target) });
       }
     } catch {
       // Best-effort persistence — a browser that's already gone (crash,
@@ -386,11 +444,17 @@ export class BrowserManager {
       // any other already-dead session's teardown.
     }
     await existing.browser.close().catch(() => {});
-    this.closing.delete(projectId);
+    this.closing.delete(key);
+  }
+
+  /** Closes every target's browser of a project (project deleted or merged
+   * away). Safe to call when none is running. */
+  async closeForProject(projectId: number): Promise<void> {
+    await Promise.all(this.listForProject(projectId).map((m) => this.closeTarget(m.target)));
   }
 
   /** Closes every pooled browser — called from the plugin's onClose hook. */
   async closeAll(): Promise<void> {
-    await Promise.all([...this.instances.keys()].map((id) => this.closeForProject(id)));
+    await Promise.all([...this.instances.values()].map((m) => this.closeTarget(m.target)));
   }
 }

@@ -21,6 +21,18 @@ If `mullion browser <action>` (or the MCP tools) reply that the browser
 feature is disabled (Settings → Browser → Enable browser is off, or `BROWSER_ENABLED` is unset), that's the reason, not a bug —
 fall back to another browser tool then.
 
+## Which browser you get
+
+The browser is bound to **your session's execution target** — its host and
+checkout (the project directory or your worktree). Sessions on the same
+checkout share one browser (cookies, navigation, downloads); a different
+worktree or host has its own. `localhost` is the **target host's** loopback, so
+in a session placed on another machine it is that machine's dev server. If the
+target can't be resolved or its host is too old for per-target browsers you get
+an error (400/501/503), never another checkout's browser — update the host or fix
+the placement instead of working around it. Your binding stays on its original
+target even if the human switches focus to another session.
+
 ## Actions
 
 `mullion browser <action>` (or the MCP `browser_action`/`use_browser`

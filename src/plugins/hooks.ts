@@ -20,6 +20,10 @@ import {
   resolveSearchRoot,
 } from "../routes/browser-automation.js";
 import type { AgentAction, FindElementsBody } from "../routes/browser-automation.js";
+import type { BrowserTarget } from "../services/browser-manager.js";
+import { resolveSessionBrowserTarget } from "../services/browser-target.js";
+import { recordSessionBrowserBinding } from "../services/session-browsers.js";
+import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import {
   agentGuideSourceExists,
   buildAgentGuideBlock,
@@ -671,9 +675,46 @@ function handleConnection(
             continue;
           }
 
+          // The session's own execution target (issue #2448). The primary
+          // resolves it through the shared resolver, so the agent drives the
+          // browser the panel shows. An agent host has no DB to resolve with:
+          // it names the session's own directory as the checkout, which can
+          // only ever be narrower than the primary's answer (never another
+          // checkout's browser); the remote relay path is tracked separately.
+          let target: BrowserTarget;
+          if (app.db) {
+            const resolved = await resolveSessionBrowserTarget(app, projectId, Number(sessionId));
+            if (!resolved.ok || resolved.target.hostId !== LOCAL_HOST_ID) {
+              if (socket.writable) {
+                socket.write(
+                  `${JSON.stringify({
+                    error: resolved.ok
+                      ? "This session's browser runs on another host; use the session browser API."
+                      : resolved.message,
+                  })}\n`,
+                );
+              }
+              continue;
+            }
+            target = resolved.target;
+            recordSessionBrowserBinding(app, Number(sessionId), target);
+          } else if (session?.cwd) {
+            target = {
+              projectId,
+              hostId: LOCAL_HOST_ID,
+              checkoutRoot: session.cwd,
+              legacy: false,
+            };
+          } else {
+            if (socket.writable) {
+              socket.write(`${JSON.stringify({ error: "Session directory is unknown" })}\n`);
+            }
+            continue;
+          }
+
           let page: Page;
           try {
-            const managed = await app.browser.getOrLaunch(projectId);
+            const managed = await app.browser.getOrLaunch(target);
             page = managed.page;
           } catch (err) {
             if (socket.writable) {
@@ -706,7 +747,7 @@ function handleConnection(
               actionResult = await executeBrowserFind(app, root, findBody);
             } else {
               const actionBody: AgentAction = msg as unknown as AgentAction;
-              actionResult = await executeBrowserAction(app, page, actionBody, projectId);
+              actionResult = await executeBrowserAction(app, page, actionBody, target);
             }
 
             if (socket.writable) {

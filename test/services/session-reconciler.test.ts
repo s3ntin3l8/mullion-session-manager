@@ -558,22 +558,26 @@ describe("reconcileExitedSessions", () => {
     cleanupSpy.mockRestore();
   });
 
-  it("closes a bound project browser once its session flips to exited (#182)", async () => {
+  it("closes a bound target browser once its session flips to exited (#182)", async () => {
     const app = await openTestApp();
     const sessionId = await createSession(app);
     const { sessions } = await import("../../src/db/schema.js");
     const { eq } = await import("drizzle-orm");
     const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
     const { recordSessionBrowserBinding } = await import("../../src/services/session-browsers.js");
-    recordSessionBrowserBinding(app, sessionId, row.projectId);
-    const closeForProjectSpy = vi
-      .spyOn(app.browser, "closeForProject")
-      .mockResolvedValue(undefined);
+    const target = {
+      projectId: row.projectId,
+      hostId: "local",
+      checkoutRoot: "/tmp",
+      legacy: true,
+    };
+    recordSessionBrowserBinding(app, sessionId, target);
+    const closeTargetSpy = vi.spyOn(app.browser, "closeTarget").mockResolvedValue(undefined);
     mockMasterAlive(app, false);
 
     await reconcileExitedSessions(app);
 
-    expect(closeForProjectSpy).toHaveBeenCalledWith(row.projectId);
+    expect(closeTargetSpy).toHaveBeenCalledWith(target);
   });
 
   describe("Task Master (6.2/#215, issue #282)", () => {

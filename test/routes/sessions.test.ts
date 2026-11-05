@@ -181,6 +181,9 @@ async function waitUntil(check: () => boolean | Promise<boolean>) {
   throw new Error("condition never became true");
 }
 
+const localTarget = (projectId: number) =>
+  ({ projectId, hostId: "local", checkoutRoot: "/tmp", legacy: true }) as const;
+
 describe("sessions route", () => {
   // SESSIONS_DIR is already isolated per test file by test/setup.ts.
   beforeAll(() => {
@@ -1605,7 +1608,7 @@ describe("sessions route", () => {
       const sessionId = created.json().id as number;
       const { recordSessionBrowserBinding } =
         await import("../../src/services/session-browsers.js");
-      recordSessionBrowserBinding(app, sessionId, projectId);
+      recordSessionBrowserBinding(app, sessionId, localTarget(projectId));
 
       const res = await app.inject({ method: "GET", url: `/api/sessions/${sessionId}/browser` });
       expect(res.statusCode).toBe(200);
@@ -1614,7 +1617,7 @@ describe("sessions route", () => {
       await app.close();
     });
 
-    it("DELETE /api/sessions/:id closes the session's project browser (issue #182)", async () => {
+    it("DELETE /api/sessions/:id closes the session's target browser (issue #182)", async () => {
       const app = await buildApp();
       const projectId = await createProject(app);
       const created = await app.inject({
@@ -1625,14 +1628,12 @@ describe("sessions route", () => {
       const sessionId = created.json().id as number;
       const { recordSessionBrowserBinding } =
         await import("../../src/services/session-browsers.js");
-      recordSessionBrowserBinding(app, sessionId, projectId);
-      const closeForProjectSpy = vi
-        .spyOn(app.browser, "closeForProject")
-        .mockResolvedValue(undefined);
+      recordSessionBrowserBinding(app, sessionId, localTarget(projectId));
+      const closeTargetSpy = vi.spyOn(app.browser, "closeTarget").mockResolvedValue(undefined);
 
       const killed = await app.inject({ method: "DELETE", url: `/api/sessions/${sessionId}` });
       expect(killed.statusCode).toBe(204);
-      expect(closeForProjectSpy).toHaveBeenCalledWith(projectId);
+      expect(closeTargetSpy).toHaveBeenCalledWith(localTarget(projectId));
 
       const after = await app.inject({ method: "GET", url: `/api/sessions/${sessionId}/browser` });
       expect(after.json()).toEqual([]);

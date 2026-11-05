@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
+import { bindingBrowserTarget } from "./browser-target.js";
+import { listSessionBrowserBindings } from "./session-browsers.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import type { SessionInfo } from "./pty-manager.js";
 import { deriveSessionStatus } from "./session-status.js";
@@ -120,6 +122,16 @@ function buildLiveInfo(info: SessionInfo | null | undefined): Pick<SessionInfo, 
   return live;
 }
 
+// The browser the session's own binding points at, if one is running — the
+// session's target, never "some browser of the project" (issue #2448).
+function sessionBrowser(app: FastifyInstance, row: typeof sessions.$inferSelect) {
+  const [binding] = listSessionBrowserBindings(app, row.id);
+  if (!binding) return undefined;
+  const [project] = app.db.select().from(projects).where(eq(projects.id, row.projectId)).all();
+  const target = project ? bindingBrowserTarget(project, binding) : null;
+  return target ? app.browser.get(target) : undefined;
+}
+
 // Perf audit finding A6 — `hostId` is a required parameter, not resolved
 // internally: every call site already knows it (either passed in directly,
 // as withLiveStatus does, or batched up-front via the projectId->hostId map
@@ -148,8 +160,8 @@ export function withLiveInfo(
   const live = buildLiveInfo(info);
   let browserUrl = live.browserUrl;
 
-  if (hostId === LOCAL_HOST_ID && app.browserEnabled) {
-    const managed = app.browser.get(row.projectId);
+  if (hostId === LOCAL_HOST_ID && app.browserEnabled && app.browser.instanceCount > 0) {
+    const managed = sessionBrowser(app, row);
     if (managed && managed.browser.isConnected()) {
       try {
         browserUrl = managed.page.url();

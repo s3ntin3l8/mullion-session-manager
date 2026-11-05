@@ -32,6 +32,8 @@ vi.mock("playwright", () => ({
   },
 }));
 
+const TARGET = { projectId: 1, hostId: "local", checkoutRoot: "/x", legacy: true };
+
 describe("browser plugin", () => {
   let dataDir: string;
 
@@ -45,7 +47,7 @@ describe("browser plugin", () => {
     const app = await buildTestApp();
     expect(app.browser).toBeDefined();
     expect(app.browser.isEnabled()).toBe(false);
-    await expect(app.browser.getOrLaunch(1)).rejects.toThrow(/disabled/i);
+    await expect(app.browser.getOrLaunch(TARGET)).rejects.toThrow(/disabled/i);
   });
 
   it("closes every pooled browser on app close when enabled", async () => {
@@ -58,7 +60,7 @@ describe("browser plugin", () => {
 
     const app = await buildTestApp();
     expect(app.browser.isEnabled()).toBe(true);
-    await app.browser.getOrLaunch(1);
+    await app.browser.getOrLaunch(TARGET);
     expect(app.browser.instanceCount).toBe(1);
 
     // Asserted on directly below (post-close pool state), not just

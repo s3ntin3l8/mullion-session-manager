@@ -123,6 +123,14 @@ vi.mock("playwright", () => ({
 const { BrowserManager } = await import("../../src/services/browser-manager.js");
 const { chromium } = await import("playwright");
 
+/** A project-default (legacy-mapped) target on the local host. */
+const target = (projectId: number, checkoutRoot = `/work/p${projectId}`) => ({
+  projectId,
+  hostId: "local",
+  checkoutRoot,
+  legacy: true,
+});
+
 describe("BrowserManager", () => {
   let dataDir: string;
   let manager: InstanceType<typeof BrowserManager>;
@@ -149,71 +157,116 @@ describe("BrowserManager", () => {
       dataDir: disabledDataDir,
     });
     expect(disabled.isEnabled()).toBe(false);
-    await expect(disabled.getOrLaunch(1)).rejects.toThrow(/disabled/i);
+    await expect(disabled.getOrLaunch(target(1))).rejects.toThrow(/disabled/i);
     expect(fs.existsSync(disabledDataDir)).toBe(false);
   });
 
   it("launches headless Chromium with --no-sandbox", async () => {
-    await manager.getOrLaunch(1);
+    await manager.getOrLaunch(target(1));
     expect(vi.mocked(chromium.launch)).toHaveBeenCalledWith(
       expect.objectContaining({ headless: true, args: expect.arrayContaining(["--no-sandbox"]) }),
     );
   });
 
   it("reuses the pooled browser for the same project", async () => {
-    const first = await manager.getOrLaunch(1);
-    const second = await manager.getOrLaunch(1);
+    const first = await manager.getOrLaunch(target(1));
+    const second = await manager.getOrLaunch(target(1));
     expect(second).toBe(first);
     expect(launchedBrowsers).toHaveLength(1);
   });
 
   it("launches separate instances per project", async () => {
-    await manager.getOrLaunch(1);
-    await manager.getOrLaunch(2);
+    await manager.getOrLaunch(target(1));
+    await manager.getOrLaunch(target(2));
     expect(launchedBrowsers).toHaveLength(2);
     expect(manager.instanceCount).toBe(2);
   });
 
   it("enforces maxInstances", async () => {
-    await manager.getOrLaunch(1);
-    await manager.getOrLaunch(2);
-    await expect(manager.getOrLaunch(3)).rejects.toThrow(/pool exhausted/i);
+    await manager.getOrLaunch(target(1));
+    await manager.getOrLaunch(target(2));
+    await expect(manager.getOrLaunch(target(3))).rejects.toThrow(/pool exhausted/i);
     expect(launchedBrowsers).toHaveLength(2);
   });
 
   it("auto-restarts (relaunches) after a crash", async () => {
-    const first = await manager.getOrLaunch(1);
+    const first = await manager.getOrLaunch(target(1));
     (first.browser as unknown as FakeBrowser).simulateCrash();
-    const second = await manager.getOrLaunch(1);
+    const second = await manager.getOrLaunch(target(1));
     expect(second).not.toBe(first);
     expect(launchedBrowsers).toHaveLength(2);
   });
 
   it("healthCheck evicts a disconnected instance lazily (no proactive relaunch)", async () => {
-    const first = await manager.getOrLaunch(1);
+    const first = await manager.getOrLaunch(target(1));
     (first.browser as unknown as FakeBrowser).connected = false;
     manager.healthCheck();
-    expect(manager.get(1)).toBeUndefined();
+    expect(manager.get(target(1))).toBeUndefined();
     expect(launchedBrowsers).toHaveLength(1); // no relaunch until next getOrLaunch
   });
 
   it("persists storage state and closes the browser on closeForProject", async () => {
-    const managed = await manager.getOrLaunch(1);
+    const managed = await manager.getOrLaunch(target(1));
     await manager.closeForProject(1);
     expect((managed.context as unknown as FakeContext).storageStateSpy).toHaveBeenCalledWith({
       path: path.join(dataDir, "project-1.json"),
     });
     expect((managed.browser as unknown as FakeBrowser).closeSpy).toHaveBeenCalled();
-    expect(manager.get(1)).toBeUndefined();
+    expect(manager.get(target(1))).toBeUndefined();
   });
 
   it("closeForProject is a no-op when nothing is running for that project", async () => {
     await expect(manager.closeForProject(999)).resolves.toBeUndefined();
   });
 
+  describe("execution targets (#2448)", () => {
+    it("reuses one browser for the same target, however many sessions ask", async () => {
+      const first = await manager.getOrLaunch(target(1, "/work/a"));
+      const second = await manager.getOrLaunch(target(1, "/work/a"));
+      expect(second).toBe(first);
+      expect(launchedBrowsers).toHaveLength(1);
+    });
+
+    it("isolates two checkouts of the same project: own browser, own cookies/storage file", async () => {
+      const main = await manager.getOrLaunch(target(1, "/work/main"));
+      const wt = await manager.getOrLaunch({ ...target(1, "/work/wt"), legacy: false });
+      expect(wt).not.toBe(main);
+      expect(launchedBrowsers).toHaveLength(2);
+      await manager.closeTarget(main.target);
+      await manager.closeTarget(wt.target);
+      const paths = [main, wt].map(
+        (m) => (m.context as unknown as FakeContext).storageStateSpy.mock.calls[0]![0]!.path,
+      );
+      // The default target keeps the pre-target file; the other never shares it.
+      expect(paths[0]).toBe(path.join(dataDir, "project-1.json"));
+      expect(paths[1]).toMatch(/project-1-[0-9a-f]{16}\.json$/);
+      expect(paths[1]).not.toBe(paths[0]);
+    });
+
+    it("keeps separate download directories per target", async () => {
+      const a = await manager.getOrLaunch(target(1, "/work/a"));
+      const b = await manager.getOrLaunch({ ...target(1, "/work/b"), legacy: false });
+      expect(a).not.toBe(b);
+      expect(manager.get(target(1, "/work/a"))).toBe(a);
+      expect(manager.get(target(1, "/work/b"))).toBe(b);
+    });
+
+    it("closeTarget closes only that target; closeForProject closes the rest of a project's", async () => {
+      const a = await manager.getOrLaunch(target(1, "/work/a"));
+      const b = await manager.getOrLaunch(target(1, "/work/b"));
+      await manager.closeTarget(a.target);
+      expect(manager.get(a.target)).toBeUndefined();
+      expect(manager.get(b.target)).toBe(b);
+      const other = await manager.getOrLaunch(target(2));
+      await manager.closeForProject(1);
+      expect(manager.get(b.target)).toBeUndefined();
+      expect(manager.get(other.target)).toBe(other);
+    });
+  });
+
   it("closeAll closes every pooled browser", async () => {
-    const one = await manager.getOrLaunch(1);
-    const two = await manager.getOrLaunch(2);
+    const one = await manager.getOrLaunch(target(1));
+    const two = await manager.getOrLaunch(target(2));
     await manager.closeAll();
     expect((one.browser as unknown as FakeBrowser).closeSpy).toHaveBeenCalled();
     expect((two.browser as unknown as FakeBrowser).closeSpy).toHaveBeenCalled();
@@ -221,9 +274,9 @@ describe("BrowserManager", () => {
   });
 
   it("reuses persisted storage state on relaunch after a clean close", async () => {
-    await manager.getOrLaunch(1);
+    await manager.getOrLaunch(target(1));
     await manager.closeForProject(1);
-    await manager.getOrLaunch(1);
+    await manager.getOrLaunch(target(1));
     const secondContext = launchedBrowsers[1].contexts[0];
     expect(secondContext.storageStateOptions?.storageState).toBe(
       path.join(dataDir, "project-1.json"),
@@ -231,7 +284,7 @@ describe("BrowserManager", () => {
   });
 
   it("does not pass storageState on first launch (nothing persisted yet)", async () => {
-    await manager.getOrLaunch(1);
+    await manager.getOrLaunch(target(1));
     expect(launchedBrowsers[0].contexts[0].storageStateOptions?.storageState).toBeUndefined();
   });
 
@@ -250,7 +303,7 @@ describe("BrowserManager", () => {
       const loadCookies = vi.fn().mockResolvedValue(cookies);
       const withHook = new BrowserManager({ enabled: true, maxInstances: 2, dataDir, loadCookies });
 
-      const managed = await withHook.getOrLaunch(1);
+      const managed = await withHook.getOrLaunch(target(1));
 
       expect(loadCookies).toHaveBeenCalledWith(1);
       expect((managed.context as unknown as FakeContext).addCookiesSpy).toHaveBeenCalledWith(
@@ -262,7 +315,7 @@ describe("BrowserManager", () => {
       const loadCookies = vi.fn().mockResolvedValue([]);
       const withHook = new BrowserManager({ enabled: true, maxInstances: 2, dataDir, loadCookies });
 
-      const managed = await withHook.getOrLaunch(1);
+      const managed = await withHook.getOrLaunch(target(1));
 
       expect((managed.context as unknown as FakeContext).addCookiesSpy).not.toHaveBeenCalled();
     });
@@ -279,7 +332,7 @@ describe("BrowserManager", () => {
         onCookieLoadError,
       });
 
-      await expect(withHook.getOrLaunch(1)).resolves.toBeDefined();
+      await expect(withHook.getOrLaunch(target(1))).resolves.toBeDefined();
       expect(onCookieLoadError).toHaveBeenCalledWith(1, loadError);
     });
 
@@ -287,13 +340,13 @@ describe("BrowserManager", () => {
       const loadCookies = vi.fn().mockRejectedValue(new Error("decrypt failed"));
       const withHook = new BrowserManager({ enabled: true, maxInstances: 2, dataDir, loadCookies });
 
-      await expect(withHook.getOrLaunch(1)).resolves.toBeDefined();
+      await expect(withHook.getOrLaunch(target(1))).resolves.toBeDefined();
     });
 
     it("never calls loadCookies when it isn't provided", async () => {
       // `manager` (the describe block's default instance) has no loadCookies
       // configured — this just confirms launching still works with none.
-      const managed = await manager.getOrLaunch(1);
+      const managed = await manager.getOrLaunch(target(1));
       expect((managed.context as unknown as FakeContext).addCookiesSpy).not.toHaveBeenCalled();
     });
   });
@@ -314,7 +367,7 @@ describe("BrowserManager", () => {
     }
 
     it("saves a completed download and records it in managed.downloads", async () => {
-      const managed = await manager.getOrLaunch(1);
+      const managed = await manager.getOrLaunch(target(1));
       const page = managed.page as unknown as FakePage;
       const download = new FakeDownload("report.csv");
 
@@ -331,7 +384,7 @@ describe("BrowserManager", () => {
     });
 
     it("sanitizes a suggestedFilename containing path separators and '..' traversal, never escaping the intended directory", async () => {
-      const managed = await manager.getOrLaunch(1);
+      const managed = await manager.getOrLaunch(target(1));
       const page = managed.page as unknown as FakePage;
       const download = new FakeDownload("../../../etc/passwd");
 
@@ -347,7 +400,7 @@ describe("BrowserManager", () => {
     });
 
     it("sanitizes backslashes too (Windows-style traversal), not just forward slashes", async () => {
-      const managed = await manager.getOrLaunch(1);
+      const managed = await manager.getOrLaunch(target(1));
       const page = managed.page as unknown as FakePage;
       const download = new FakeDownload("..\\..\\windows\\system32\\evil.exe");
 
@@ -362,7 +415,7 @@ describe("BrowserManager", () => {
     });
 
     it("evicts the oldest entries beyond the 50-entry cap and deletes their files", async () => {
-      const managed = await manager.getOrLaunch(1);
+      const managed = await manager.getOrLaunch(target(1));
       const page = managed.page as unknown as FakePage;
       const dir = path.join(dataDir, "downloads", "project-1");
 
@@ -403,7 +456,7 @@ describe("BrowserManager", () => {
       // relaunch): a file saved before close() must not survive an
       // unrelated fresh launch finding it still on disk with nothing
       // tracking it anymore.
-      const first = await manager.getOrLaunch(1);
+      const first = await manager.getOrLaunch(target(1));
       const firstPage = first.page as unknown as FakePage;
       firstPage.emit("download", new FakeDownload("stale-from-before-restart.csv"));
       await flush(() => first.downloads.length === 1);
@@ -412,7 +465,7 @@ describe("BrowserManager", () => {
 
       await manager.closeForProject(1);
 
-      const second = await manager.getOrLaunch(1);
+      const second = await manager.getOrLaunch(target(1));
       expect(second).not.toBe(first);
       expect(second.downloads).toHaveLength(0);
       // The directory itself may or may not still exist (rm -rf then a
@@ -430,7 +483,7 @@ describe("BrowserManager", () => {
         dataDir,
         onDownloadError,
       });
-      const managed = await withHook.getOrLaunch(1);
+      const managed = await withHook.getOrLaunch(target(1));
       const page = managed.page as unknown as FakePage;
       const download = new FakeDownload("report.csv");
       const saveError = new Error("disk full");
@@ -447,7 +500,7 @@ describe("BrowserManager", () => {
       // `manager` (the describe block's default instance) has no
       // onDownloadError configured — confirms the happy path doesn't depend
       // on that hook being wired.
-      const managed = await manager.getOrLaunch(1);
+      const managed = await manager.getOrLaunch(target(1));
       const page = managed.page as unknown as FakePage;
 
       page.emit("download", new FakeDownload("a.csv"));

@@ -186,16 +186,7 @@ import {
   spawnSelfUpdate,
   type ApplyUpdateBody,
 } from "../services/update-apply.js";
-import type { Page } from "playwright";
-import {
-  executeBrowserAction,
-  executeBrowserFind,
-  resolveSearchRoot,
-  agentActionSchema,
-  findElementsSchema,
-} from "./browser-automation.js";
-import type { AgentAction, FindElementsBody } from "./browser-automation.js";
-import { attachSocketToBrowser } from "./browser.js";
+import { registerBrowserRoutes } from "./internal-browser.js";
 import { adapterHasInitialPromptArgs } from "../services/hook-adapters/index.js";
 import { explicitModelError } from "../services/task-model-resolve.js";
 import { setSessionGithubAuth, type SessionGithubAuth } from "../services/session-github-token.js";
@@ -2655,10 +2646,15 @@ export async function internalRoutes(app: FastifyInstance) {
         if (info && app.browserEnabled && sessionProjectIds) {
           const projectId = sessionProjectIds[id];
           if (projectId !== undefined) {
-            const managed = app.browser.get(projectId);
-            if (managed && managed.browser.isConnected()) {
+            // This agent has no way to tell which checkout the session is on,
+            // so only an unambiguous answer (one running browser for the
+            // project) is reported — never another target's page.
+            const running = app.browser
+              .listForProject(projectId)
+              .filter((m) => m.browser.isConnected());
+            if (running.length === 1) {
               try {
-                info.browserUrl = managed.page.url();
+                info.browserUrl = running[0].page.url();
               } catch {
                 // Best-effort
               }
@@ -3350,114 +3346,7 @@ export async function internalRoutes(app: FastifyInstance) {
     },
   );
 
-  app.post<{ Params: { id: string }; Querystring: { projectId: string }; Body: AgentAction }>(
-    "/internal/sessions/:id/browser",
-    {
-      ...INTERNAL_RATE_LIMIT,
-      schema: {
-        params: SESSION_ID_PARAMS_SCHEMA,
-        body: agentActionSchema.body,
-      },
-    },
-    async (request, reply) => {
-      const sessionId = Number(request.params.id);
-      const projectId = Number(request.query.projectId);
-      if (!Number.isInteger(sessionId) || !Number.isInteger(projectId)) {
-        return reply.badRequest("Invalid session id or project id");
-      }
-
-      if (!app.browserEnabled) {
-        return reply.badRequest("Browser feature is disabled");
-      }
-
-      let page: Page;
-      try {
-        const managed = await app.browser.getOrLaunch(projectId);
-        page = managed.page;
-      } catch (err) {
-        return reply.badGateway((err as Error).message);
-      }
-
-      try {
-        return await executeBrowserAction(app, page, request.body, projectId);
-      } catch (err) {
-        return reply.badRequest((err as Error).message);
-      }
-    },
-  );
-
-  app.post<{ Params: { id: string }; Querystring: { projectId: string }; Body: FindElementsBody }>(
-    "/internal/sessions/:id/browser/find",
-    {
-      ...INTERNAL_RATE_LIMIT,
-      schema: {
-        params: SESSION_ID_PARAMS_SCHEMA,
-        body: findElementsSchema.body,
-      },
-    },
-    async (request, reply) => {
-      const sessionId = Number(request.params.id);
-      const projectId = Number(request.query.projectId);
-      if (!Number.isInteger(sessionId) || !Number.isInteger(projectId)) {
-        return reply.badRequest("Invalid session id or project id");
-      }
-
-      if (!app.browserEnabled) {
-        return reply.badRequest("Browser feature is disabled");
-      }
-
-      let page: Page;
-      try {
-        const managed = await app.browser.getOrLaunch(projectId);
-        page = managed.page;
-      } catch (err) {
-        return reply.badGateway((err as Error).message);
-      }
-
-      try {
-        // Mirrors the REST route's own resolve-then-call pattern (see
-        // browser-automation.ts's own POST /browser/find handler) —
-        // executeBrowserFind expects an already-resolved SearchRoot, unlike
-        // executeBrowserAction above, which still resolves `frame`
-        // internally. Missing this call would silently search the
-        // top-level document instead of a named iframe for every
-        // multi-host `find` (RemoteHostClient.browserAutomationFind posts
-        // here), with no error — caught by code review, PR #429.
-        const root = await resolveSearchRoot(page, request.body.frame);
-        return await executeBrowserFind(app, root, request.body);
-      } catch (err) {
-        return reply.badRequest((err as Error).message);
-      }
-    },
-  );
-
-  app.get<{ Params: { sessionId: string } }>(
-    "/internal/ws/browser/:sessionId",
-    {
-      websocket: true,
-      config: INTERNAL_RATE_LIMIT.config,
-      preValidation: async (request, reply) => {
-        if (!app.browserEnabled) {
-          return reply.badRequest("Browser feature is disabled");
-        }
-        const sessionId = Number(request.params.sessionId);
-        if (!Number.isInteger(sessionId)) {
-          return reply.badRequest("Invalid sessionId");
-        }
-        const query = request.query as Record<string, string | undefined>;
-        const projectId = Number(query.projectId);
-        if (!Number.isInteger(projectId)) {
-          return reply.badRequest("Invalid projectId");
-        }
-      },
-    },
-    (socket, req) => {
-      const sessionId = Number(req.params.sessionId);
-      const query = req.query as Record<string, string | undefined>;
-      const projectId = Number(query.projectId);
-      void attachSocketToBrowser(app, socket, { sessionId, projectId });
-    },
-  );
+  registerBrowserRoutes(app, INTERNAL_RATE_LIMIT);
 
   // No project lookup here — dev-server-status is a live TCP/HTTP probe of
   // this agent's own loopback, not a DB read (this agent has no DB; see

@@ -214,7 +214,7 @@ describe("multi-host proxy — browser automation (issue #407)", () => {
     // (not e.g. a coincidentally-matching local one) — the agent's
     // BrowserManager should now have exactly one live instance for this
     // project.
-    expect(agent.app.browser.get(projectId)).toBeDefined();
+    expect(agent.app.browser.listForProject(projectId)).toHaveLength(1);
   });
 
   it("proxies browser.find the same way", async () => {

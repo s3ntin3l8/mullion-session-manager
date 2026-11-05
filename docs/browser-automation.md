@@ -8,15 +8,32 @@ The browser pane is fully integrated into the tiled Dockview layout (`BrowserPan
 
 ## Architecture & Lifecycle
 
-- **Pooled Playwright Instance:** Browsers are managed by `BrowserManager` (`src/services/browser-manager.ts`). Mullion runs **one Chromium browser instance per project**, rather than per session.
+- **Pooled Playwright Instance:** Browsers are managed by `BrowserManager` (`src/services/browser-manager.ts`). Mullion runs **one Chromium browser instance per execution target** — see below — rather than per session.
 - **On-Demand Launch:** Chromium launches headlessly on the host the first time a bound session is opened or an automation call is made. It is gated by `BROWSER_ENABLED=true` in `.env`.
 - **SSRF & Security Guards:** Headless Chromium is launched with `--no-sandbox` (for container compatibility) but is strictly restricted by `src/routes/browser.ts` to navigate **only** to `http://` or `https://` schemes. Direct filesystem (`file://`) or internal (`chrome://`) navigation is blocked to prevent local data exfiltration.
 
 ---
 
+## Execution targets
+
+A browser belongs to an **execution target**: the project plus the **host** and **checkout** (the project directory or a sibling worktree) a session works in. The target comes from the same execution-context resolver the session git routes and previews use (`src/services/browser-target.ts`), so the browser panel (`/ws/browser/:sessionId`), the agent's automation (`POST /api/sessions/:id/browser`, `/find`, and the `use_browser` hook path) and the session's preview all point at the same place.
+
+- **Reuse:** sessions sharing a target share one browser (cookies, navigation, downloads). It is launched lazily on first use; there is never a Chromium per coding session.
+- **Isolation:** a different checkout (worktree) or a different host gets its own browser, with its own cookies, navigation history, downloads and persisted storage state, even when the path or the dev-server port is the same on both.
+- **`localhost` is the target host's:** a remote session's browser runs on its agent, so `http://localhost:5173` there is that machine's loopback.
+- **Binding:** the target is fixed when a panel opens or automation first drives the session (`session_browsers.target_host_id` / `target_checkout_root`). Changing which session is focused, or later re-placing a session, never re-points an open panel or an existing binding.
+- **No fallback:** a target that cannot be resolved (host unavailable, directory outside the project) is reported (400/503); a host whose Mullion predates per-target browsers (no `browser-targets` operation in its agent protocol) is reported as unsupported (501, with an update hint). Mullion never substitutes the project's host or checkout.
+- **Project-only callers** (no session) must ask for the project default explicitly (`resolveProjectDefaultBrowserTarget`); the pool has no "the project's browser" lookup any more.
+- **Legacy mapping:** the project's default checkout on its default host keeps the storage state it had before targets (`project-<id>.json`). Every other target gets its own `project-<id>-<hash>.json`, so state is never shared across unrelated checkouts. A binding row written before targets (NULL target columns) maps to that default target.
+- **Cleanup:** when the last session bound to a target ends, that target's browser is closed (storage state saved) — on the primary for a local target, via `POST /internal/browser/close` on the owning agent for a remote one. Deleting or merging a project closes all of its targets. An older agent cannot be asked to close; its browser lives until the agent restarts.
+- **Imported cookie profiles** belong to the project and are applied to every one of its targets when they launch.
+- **Agent-host sessions:** a session started on an agent talking to that agent's own hook socket names its working directory as the checkout, which can only be narrower than the primary's answer (never another checkout's browser). Verifying the relay path from a remote-host session is tracked separately.
+
+---
+
 ## 1. REST API for Agent Browser Control
 
-Agents control the bound project browser by sending requests to the following endpoints. They share the same authentication and network boundaries as the rest of the Mullion API.
+Agents control the session's bound browser by sending requests to the following endpoints. They share the same authentication and network boundaries as the rest of the Mullion API.
 
 ### `POST /api/sessions/:id/browser`
 
