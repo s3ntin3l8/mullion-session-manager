@@ -86,7 +86,7 @@
       ],
       "settle": 500,
       "emphasis": {
-        "css": ".discover-block { display: none !important; }"
+        "css": ".discover-block { display: none !important; } button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; }"
       }
     },
     {
@@ -119,7 +119,7 @@
         }
       ],
       "emphasis": {
-        "css": ".discover-block { display: none !important; }"
+        "css": ".discover-block { display: none !important; } button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; }"
       }
     },
     {
@@ -186,7 +186,11 @@
         {
           "wait": 800
         }
-      ]
+      ],
+      "baseline": true,
+      "emphasis": {
+        "css": "button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
+      }
     },
     {
       "name": "terminal",
@@ -204,7 +208,11 @@
           "click": ".session-item:has-text(\"mobile-demo.sh\")"
         }
       ],
-      "settle": ".xterm-screen"
+      "settle": ".xterm-screen",
+      "baseline": true,
+      "emphasis": {
+        "css": "button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
+      }
     },
     {
       "name": "terminal-stream",
