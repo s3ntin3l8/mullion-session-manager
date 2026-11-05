@@ -206,6 +206,39 @@ describe("--content", () => {
     const r = run(fixture(), ["--files", "-", "--content"], BOTH);
     expect(r.code).toBe(2);
   });
+
+  it("still prints the notes it can read, and names the one it cannot", () => {
+    const root = withFiles({ [INDEX[1].ref]: 10 });
+    const r = run(root, ["--files", "-", "--content"], BOTH);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain(INDEX[0].ref);
+    expect(r.stdout).toContain("BODY-dock.md");
+    expect(r.stdout).toMatch(/Could not read[^]*- \.claude\/skills\/x\/references\/task-loop\.md/);
+  });
+
+  it("counts the listing and each note's header against the cap, not only the bodies", () => {
+    const m = [
+      { ref: "a.md", paths: ["a"], summary: "a", matched: ["a"] },
+      { ref: "b.md", paths: ["b"], summary: "b", matched: ["b"] },
+    ];
+    const text: Record<string, string> = { "a.md": "A".repeat(1000), "b.md": "B".repeat(1000) };
+    // 2,000 characters of bodies fit a 2,100 cap; the printed text does not.
+    const out = formatReferencesWithContent(m, (r: string) => text[r], 2100);
+    expect(out).toContain("A".repeat(1000));
+    expect(out).not.toContain("B".repeat(1000));
+    expect(out.split("Not inlined")[0].length).toBeLessThanOrEqual(2100);
+  });
+
+  it("always inlines the first note, even when it alone is over the cap", () => {
+    const m = [
+      { ref: "a.md", paths: ["a"], summary: "a", matched: ["a"] },
+      { ref: "b.md", paths: ["b"], summary: "b", matched: ["b"] },
+    ];
+    const text: Record<string, string> = { "a.md": "A".repeat(2000), "b.md": "B" };
+    const out = formatReferencesWithContent(m, (r: string) => text[r], 100);
+    expect(out).toContain("A".repeat(2000));
+    expect(out).toMatch(/Not inlined[^]*- b\.md/);
+  });
 });
 
 describe("review-references.mjs CLI", () => {

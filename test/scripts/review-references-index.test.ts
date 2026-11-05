@@ -10,7 +10,13 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { gitEnv } from "../../src/services/git-env.js";
-import { INDEX_PATH, loadIndex, matchReferences } from "../../scripts/review-references.mjs";
+import {
+  CONTENT_CAP,
+  INDEX_PATH,
+  formatReferencesWithContent,
+  loadIndex,
+  matchReferences,
+} from "../../scripts/review-references.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const skillDir = path.join(root, ".claude/skills/mullion-review-invariants");
@@ -141,5 +147,33 @@ describe("mullion-review-invariants reference index", () => {
       expect.arrayContaining(["task-reconcile-loop.md", "task-review-ingest-and-handle.md"]),
     );
     expect(matchReferences(index, ["README.md", "docs/cli.md"])).toEqual([]);
+  });
+});
+
+describe("--content over the real references", () => {
+  const read = (ref: string) => fs.readFileSync(path.join(root, ref), "utf8");
+  const all = index.map((e: { ref: string; paths: string[]; summary: string }) => ({
+    ...e,
+    matched: ["x"],
+  }));
+
+  it("keeps the cap under the ~30,000 characters a Bash tool result inlines", () => {
+    // Past that window the tool returns a file path and a preview, cutting the
+    // later notes. The cap is why the notes can be inlined at all.
+    expect(CONTENT_CAP).toBeLessThanOrEqual(30_000);
+  });
+
+  it("fits any single note under the cap, so the always-inlined first note never overflows it", () => {
+    for (const m of all) {
+      const out = formatReferencesWithContent([m], read);
+      expect(out.length, m.ref).toBeLessThanOrEqual(CONTENT_CAP);
+      expect(out, m.ref).not.toContain("Not inlined");
+    }
+  });
+
+  it("keeps the printed text within the cap when every note matches, and names the overflow", () => {
+    const out = formatReferencesWithContent(all, read);
+    expect(out.split("Not inlined")[0].length).toBeLessThanOrEqual(CONTENT_CAP);
+    expect(out).toContain("Not inlined");
   });
 });
