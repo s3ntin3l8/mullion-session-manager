@@ -10,8 +10,19 @@ import { afterAll, beforeAll } from "vitest";
 let restore: (() => void) | undefined;
 afterAll(() => restore?.());
 beforeAll(async () => {
-  const { HostAgentTracker } = await import("../../src/services/host-agents.js");
-  const { localProtocolInfo } = await import("../../src/shared/agent-protocol.js");
+  // A suite that partially mocks a module host-agents pulls in (git-run,
+  // node:fs, ...) cannot load it here, and such a suite never gates a launch,
+  // so skip the default rather than fail its import.
+  let mods;
+  try {
+    mods = {
+      ...(await import("../../src/services/host-agents.js")),
+      ...(await import("../../src/shared/agent-protocol.js")),
+    };
+  } catch {
+    return;
+  }
+  const { HostAgentTracker, localProtocolInfo } = mods;
   const proto = HostAgentTracker.prototype as typeof HostAgentTracker.prototype & {
     __defaultProtocol?: true;
   };
