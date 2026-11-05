@@ -46,6 +46,11 @@ export interface AgentChannelClientStatus {
   carriedOperations: string[];
 }
 
+function isLoopbackHost(hostname: string): boolean {
+  const h = hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return h === "localhost" || h === "::1" || /^127(\.\d{1,3}){3}$/.test(h);
+}
+
 export const agentChannelClientPlugin = fp(async (app: FastifyInstance) => {
   const status: AgentChannelClientStatus = {
     state: "idle",
@@ -56,6 +61,15 @@ export const agentChannelClientPlugin = fp(async (app: FastifyInstance) => {
   };
   app.decorate("agentChannelStatus", status);
   if (app.config.MULLION_ROLE !== "agent" || !app.config.MULLION_PRIMARY_URL) return;
+
+  // The first frame carries the machine credential, so a plain-text primary
+  // URL exposes it on the wire. Warned, not refused: a trusted LAN is legitimate.
+  const primaryUrl = new URL(app.config.MULLION_PRIMARY_URL);
+  if (primaryUrl.protocol === "http:" && !isLoopbackHost(primaryUrl.hostname)) {
+    app.log.warn(
+      `[agent-channel] MULLION_PRIMARY_URL is plain http://; the machine credential is sent unencrypted. Use https:// outside a trusted network.`,
+    );
+  }
 
   const channelUrl = (() => {
     const url = toWsUrl(new URL(app.config.MULLION_PRIMARY_URL));

@@ -27,6 +27,10 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
+const { projects } = await import("../../src/db/schema.js");
+const { eq } = await import("drizzle-orm");
+const { checkDockPortConflict } = await import("../../src/services/dock-port-check.js");
+const { LOCAL_HOST_ID } = await import("../../src/services/host-registry.js");
 
 const tmpDb = path.join(os.tmpdir(), `sessions-dock-port-${process.pid}.db`);
 
@@ -172,5 +176,47 @@ describe("POST /api/sessions — dock port conflict", () => {
       payload: { projectId, command: "tail -f log", kind: "dock" },
     });
     expect(res.statusCode).toBe(201);
+  });
+
+  describe("remote project launched on the local host", () => {
+    const localCheckout = fs.mkdtempSync(path.join(os.tmpdir(), "dock-port-local-"));
+    afterAll(() => fs.rmSync(localCheckout, { recursive: true, force: true }));
+
+    async function remoteProject(hostCwds: Record<string, string> | null) {
+      const id = await projectFor();
+      app.db
+        .update(projects)
+        .set({
+          hostId: "remote-1",
+          cwd: "/nonexistent/remote/path",
+          hostCwds: hostCwds ? JSON.stringify(hostCwds) : null,
+        })
+        .where(eq(projects.id, id))
+        .run();
+      return id;
+    }
+
+    it("reads the local checkout's dock config, not the remote path", async () => {
+      const server = await listen();
+      servers.push(server);
+      const port = (server.address() as AddressInfo).port;
+      fs.mkdirSync(path.join(localCheckout, ".crs"), { recursive: true });
+      fs.writeFileSync(
+        path.join(localCheckout, ".crs", "dock.json"),
+        JSON.stringify({ controls: [{ id: "dev", title: "Dev", command: "npm run dev", port }] }),
+      );
+      const id = await remoteProject({ [LOCAL_HOST_ID]: localCheckout });
+      const conflict = await checkDockPortConflict(app, id, "npm run dev", LOCAL_HOST_ID);
+      expect(conflict).toMatchObject({ port });
+    });
+
+    it("skips the probe when the project has no checkout on the local host", async () => {
+      const server = await listen();
+      servers.push(server);
+      const port = (server.address() as AddressInfo).port;
+      writeDock([{ id: "dev", title: "Dev", command: "npm run dev", port }]);
+      const id = await remoteProject(null);
+      expect(await checkDockPortConflict(app, id, "npm run dev", LOCAL_HOST_ID)).toBeNull();
+    });
   });
 });
