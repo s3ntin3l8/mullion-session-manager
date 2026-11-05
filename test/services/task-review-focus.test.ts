@@ -32,6 +32,13 @@ describe("parseReviewFocus (#2600)", () => {
       "four",
     ]);
     expect(parseReviewFocus("## Review focus\n\n<!-- - example -->\n\n## Scope\n- x")).toEqual([]);
+    // Nested/spliced and unterminated comments do not leave a live `<!--` behind.
+    expect(parseReviewFocus("## Review focus\n<!<!-- a -->-- - hidden -->\n- real")).toEqual([
+      "real",
+    ]);
+    expect(parseReviewFocus("## Review focus\n- kept\n<!-- - unterminated\n- gone")).toEqual([
+      "kept",
+    ]);
     expect(parseReviewFocus("## Review focus\n- a\n## Scope\n- b")).toEqual(["a"]);
   });
 

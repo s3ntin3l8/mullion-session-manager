@@ -12,6 +12,20 @@ const NEXT_HEADING_RE = /^#{1,2}[ \t]/;
 const BULLET_RE = /^[ \t]{0,3}(?:[-*+]|\d+[.)])[ \t]+(.*)$/;
 const FENCE_RE = /^[ \t]{0,3}(?:```|~~~)/;
 
+/** Remove HTML comments until none is left: a single pass can splice a new
+ * `<!--` together from the pieces around a removed comment (`<!<!---->--`), and
+ * an unterminated `<!--` swallows the rest of the body, as a renderer would. */
+function stripHtmlComments(text: string): string {
+  let prev: string;
+  let cur = text;
+  do {
+    prev = cur;
+    cur = cur.replace(/<!--[\s\S]*?-->/g, "");
+  } while (cur !== prev);
+  const open = cur.indexOf("<!--");
+  return open === -1 ? cur : cur.slice(0, open);
+}
+
 /**
  * The bullets of the `## Review focus` section of an issue body, in order:
  * lines after that heading up to the next `#`/`##` heading, at most
@@ -22,7 +36,7 @@ const FENCE_RE = /^[ \t]{0,3}(?:```|~~~)/;
  */
 export function parseReviewFocus(body: string | null | undefined): string[] {
   if (!body) return [];
-  const lines = body.replace(/<!--[\s\S]*?-->/g, "").split(/\r?\n/);
+  const lines = stripHtmlComments(body).split(/\r?\n/);
   const out: string[] = [];
   let inSection = false;
   let inFence = false;
