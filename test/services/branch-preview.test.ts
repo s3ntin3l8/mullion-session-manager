@@ -383,6 +383,27 @@ describe("branch previews (issues #2016/#2018)", () => {
     );
   });
 
+  it("binds the kept session when the spawn outcome is unknown instead of failing (#2637)", async () => {
+    const { cwd } = repo();
+    writeDock(cwd, [{ id: "dev", title: "Dev", command: "npm run dev" }]);
+    const projectId = insertProject(app, cwd);
+    const keptId = app.db
+      .insert(sessions)
+      .values({ projectId, command: "npm run dev", kind: "dock", cwd, status: "active" })
+      .returning()
+      .get().id;
+    vi.spyOn(lifecycleModule, "createSessionRecord").mockResolvedValue({
+      ok: false,
+      reason: "outcome-unknown",
+      sessionId: keptId,
+    } as never);
+
+    const preview = await getOrCreateBranchPreview(app, projectId, "feat/x");
+
+    expect(preview.sessionId).toBe(keptId);
+    expect(preview.upstreamPort).not.toBeNull();
+  });
+
   describe("a preview worktree left on disk", () => {
     it("is recut when no live session runs in it", async () => {
       const { cwd } = repo();

@@ -534,6 +534,12 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
       };
       const result = await createSessionRecord(app, sessionParams);
       if (result.ok) return { ok: true, sessionId: result.row.id, control };
+      // #2637 — createSessionRecord kept the row of an unknown-outcome spawn:
+      // the stack may be starting, so hand that session back (findActiveStackSession
+      // sees it next time) rather than "nothing was created".
+      if (result.reason === "outcome-unknown" && result.sessionId !== undefined) {
+        return { ok: true, sessionId: result.sessionId, control, reused: true };
+      }
       if (result.reason !== "unique-conflict") return { ok: false };
 
       // Issue #1223 — createSessionRecord hit sessions_stack_identity_unique.
@@ -597,7 +603,12 @@ export async function projectDockerRoute(app: FastifyInstance): Promise<void> {
       // Retry once. If this ALSO hits unique-conflict, some other actor won
       // an exceedingly rare double-race — give up rather than loop.
       const retried = await createSessionRecord(app, sessionParams);
-      if (!retried.ok) return { ok: false };
+      if (!retried.ok) {
+        if (retried.reason === "outcome-unknown" && retried.sessionId !== undefined) {
+          return { ok: true, sessionId: retried.sessionId, control, reused: true };
+        }
+        return { ok: false };
+      }
       return { ok: true, sessionId: retried.row.id, control };
     });
   }

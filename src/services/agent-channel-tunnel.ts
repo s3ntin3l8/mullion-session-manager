@@ -602,10 +602,16 @@ async function exchange(
  * channel the primary ended (revoked / expired) is a 401, anything else is the
  * host being unreachable.
  */
-export function mapChannelError(hostId: string, err: unknown, method: string, path: string): Error {
+export function mapChannelError(
+  hostId: string,
+  err: unknown,
+  method: string,
+  path: string,
+  body?: string | Buffer | null,
+): Error {
   if (err instanceof ChannelBusyError) return new HostBusyError(hostId, err);
   if (!(err instanceof ChannelTransportError)) return new HostUnreachableError(hostId, err);
-  if (err.phase === "after-send" && !isIdempotentRequest(method, path)) {
+  if (err.phase === "after-send" && !isIdempotentRequest(method, path, body)) {
     return new HostOutcomeUnknownError(hostId, err);
   }
   if (err.terminal) return new HostRequestError(hostId, 401, err.message);
@@ -664,7 +670,7 @@ export async function requestViaChannel<T>(
       timeoutMs,
     });
   } catch (err) {
-    throw mapChannelError(hostId, err, method, path);
+    throw mapChannelError(hostId, err, method, path, body);
   }
   const refusal = refusalForStatus(hostId, res.status, () => res.body.toString("utf8"));
   if (refusal) throw refusal;

@@ -311,6 +311,29 @@ describe("reseedTaskIfSessionExited", () => {
     expect(updated.sessionId).toBe(task.sessionId);
   });
 
+  it("adopts the kept session on an unknown spawn outcome and does not re-seed again while it is alive (#2637)", async () => {
+    const { task } = insertTaskWithSession("exited");
+    const kept = insertSessionRow("active");
+    mockCreateSessionRecord.mockResolvedValue({
+      ok: false,
+      reason: "outcome-unknown",
+      sessionId: kept.id,
+    });
+
+    const result = await reseedTaskIfSessionExited(app, task, project, "prompt", "test reject");
+
+    expect(result).toBe(true);
+    const [updated] = app.db.select().from(tasks).where(eq(tasks.id, task.id)).all();
+    expect(updated.sessionId).toBe(kept.id);
+    expect(updated.seedDelivered).toBe(false);
+
+    // The next tick sees a live session bound to the task: no second spawn.
+    mockCreateSessionRecord.mockClear();
+    const again = await reseedTaskIfSessionExited(app, updated, project, "prompt", "test reject");
+    expect(again).toBe(false);
+    expect(mockCreateSessionRecord).not.toHaveBeenCalled();
+  });
+
   // Hermes review, PR #580 — the final sessionId write had no status guard;
   // force:true's new caller (task-reconciler.ts's review-feedback
   // auto-return) makes the window between its own CAS (reviewing ->

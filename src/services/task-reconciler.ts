@@ -1842,7 +1842,10 @@ async function attemptAutoRebase(
     unattended: true,
     hostId: workerHostId,
   });
-  if (!result.ok) {
+  // #2637 — an unknown outcome keeps the session row: adopt it below like a
+  // successful spawn, so the next tick does not spawn a second rebase worker.
+  const kept = !result.ok && result.reason === "outcome-unknown" ? result.sessionId : undefined;
+  if (!result.ok && kept === undefined) {
     if (hasReviewHandle(task)) {
       app.db
         .update(tasks)
@@ -1857,18 +1860,16 @@ async function attemptAutoRebase(
     );
     return;
   }
-  const seedDelivered = resolveSeedDelivered(
-    seedCapable,
-    workerHostId,
-    result.initialPromptApplied,
-  );
+  const spawnedSessionId = result.ok ? result.row.id : kept!;
+  const seedDelivered =
+    result.ok && resolveSeedDelivered(seedCapable, workerHostId, result.initialPromptApplied);
 
   // CAS on status in ["done", "reviewing"] — guards against a concurrent transition
   // out of reviewing or done while spawning.
   const updated = app.db
     .update(tasks)
     .set({
-      sessionId: result.row.id,
+      sessionId: spawnedSessionId,
       reviewSessionId: null,
       reviewFindingsIngestedSessionId: null,
       ...CLEARED_REVIEW_RUN,
@@ -1890,14 +1891,15 @@ async function attemptAutoRebase(
         .run();
     }
     app.log.warn(
-      { taskId: task.id, newSessionId: result.row.id },
+      { taskId: task.id, newSessionId: spawnedSessionId },
       "task auto-rebase: lost a race with a concurrent transition — the freshly spawned session is orphaned, left for a human to notice",
     );
+    if (!result.ok) await killSession(app, spawnedSessionId); // nothing points at it
     return;
   }
 
   app.log.info(
-    { taskId: task.id, sessionId: result.row.id, attempt: task.rebaseAttempts + 1 },
+    { taskId: task.id, sessionId: spawnedSessionId, attempt: task.rebaseAttempts + 1 },
     "task auto-rebase: spawned a worker to resolve a merge conflict",
   );
 }

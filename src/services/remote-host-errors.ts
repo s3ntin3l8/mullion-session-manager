@@ -5,14 +5,34 @@ import { findSsrfBlock, type SsrfBlockedError } from "./pinned-connect.js";
 // same errors without importing the client. remote-host-client.ts re-exports
 // them, so existing imports are unchanged.
 
-/** Read-only POSTs; every other non-GET request is treated as a mutation. */
+/**
+ * Read-only POSTs; every other non-GET request is treated as a mutation. A
+ * test pins this list against the `/internal` POST routes, so a new route has
+ * to be classified (here, or in the mutation list that test keeps).
+ */
 const IDEMPOTENT_POST_PATHS =
-  /^\/internal\/(sessions\/(live|liveness)|project-files\/(list|read|stat|search)|scaffold-scan)(\?|$)/;
+  /^\/internal\/(sessions\/(live|liveness)|project-files\/(list|read|stat|search|download)|scaffold-scan|read-files|worktrees\/compare-paths)(\?|$)/;
 
-export function isIdempotentRequest(method: string, path: string): boolean {
-  return (
-    method === "GET" || method === "HEAD" || (method === "POST" && IDEMPOTENT_POST_PATHS.test(path))
-  );
+/** `/internal/git-repair` is a read-only plan unless the body says `confirm: true`. */
+const GIT_REPAIR_PATH = /^\/internal\/git-repair(\?|$)/;
+
+export function isIdempotentRequest(
+  method: string,
+  path: string,
+  body?: string | Buffer | null,
+): boolean {
+  if (method === "GET" || method === "HEAD") return true;
+  if (method !== "POST") return false;
+  if (IDEMPOTENT_POST_PATHS.test(path)) return true;
+  if (GIT_REPAIR_PATH.test(path) && body !== undefined && body !== null) {
+    try {
+      const parsed = JSON.parse(body.toString()) as { confirm?: unknown };
+      return parsed.confirm !== true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 export class HostUnreachableError extends Error {
