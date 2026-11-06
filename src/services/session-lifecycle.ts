@@ -33,6 +33,7 @@ import { resolveBackend, warnHostError, type SpawnOpts } from "./session-backend
 import { reclaimSessionWorktree } from "./session-worktree-reclaim.js";
 import { listWorktrees } from "./git-refs.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
+import { isOutcomeUnknown } from "./remote-host-errors.js";
 import { resolveHostBaseRef, resolveRepoRef, viaRemote } from "./host-git.js";
 import {
   resolveSessionGithubAuth,
@@ -285,6 +286,13 @@ export async function resolveWorktreeCwd(
     if (classification === "busy") {
       return { created: false, reason: "host-busy", detail: `Host ${hostId} is busy` };
     }
+    if (isOutcomeUnknown(err)) {
+      return {
+        created: false,
+        reason: "host-outcome-unknown",
+        detail: err instanceof Error ? err.message : String(err),
+      };
+    }
     return {
       created: false,
       reason: "host-unreachable",
@@ -320,14 +328,21 @@ function logPreviewWorktreeHostError(
   alreadyWarned: boolean,
 ): false {
   if (!alreadyWarned) {
-    warnHostError(
-      app.log,
-      { hostId, worktreePath },
-      err,
-      `preview worktree ${op}: host rejected the request (will keep retrying, further failures suppressed until it succeeds once)`,
-      `preview worktree ${op}: host unreachable (further failures suppressed until it succeeds once)`,
-      `preview worktree ${op}: host busy (will keep retrying, further failures suppressed until it succeeds once)`,
-    );
+    if (isOutcomeUnknown(err)) {
+      app.log.warn(
+        { hostId, worktreePath, err },
+        `preview worktree ${op}: connection lost mid-request, outcome unknown`,
+      );
+    } else {
+      warnHostError(
+        app.log,
+        { hostId, worktreePath },
+        err,
+        `preview worktree ${op}: host rejected the request (will keep retrying, further failures suppressed until it succeeds once)`,
+        `preview worktree ${op}: host unreachable (further failures suppressed until it succeeds once)`,
+        `preview worktree ${op}: host busy (will keep retrying, further failures suppressed until it succeeds once)`,
+      );
+    }
   }
   return false;
 }
@@ -481,6 +496,9 @@ export type CreateSessionResult =
   // the misleading raw "spawn systemd-run ENOENT"), so callers that log a
   // spawn failure (task-reseed.ts) can say what actually happened.
   | { ok: false; reason: "spawn-failed"; detail?: string }
+  // Issue #2621 — an in-flight mutation over the outbound channel whose connection
+  // closed, so whether the spawn or worktree operation executed on the host is unknown.
+  | { ok: false; reason: "outcome-unknown"; detail?: string; sessionId?: number }
   // Phase 5 (Track B, issue #193 5.3b) — parentSessionId validation
   // failures, all clean 4xx per the roadmap's security guardrails for
   // sessions.spawn_child (never a 500).
@@ -1482,6 +1500,16 @@ async function prepareWorktree(
         { hostId: placement.hostId, err },
         "checkoutBranchWorktree: host unreachable or rejected the request",
       );
+      if (isOutcomeUnknown(err)) {
+        return {
+          ok: false,
+          result: {
+            ok: false,
+            reason: "outcome-unknown",
+            detail: err instanceof Error ? err.message : String(err),
+          },
+        };
+      }
       return fail("worktree-failed");
     }
     if (!result) return fail("worktree-failed");
@@ -1509,7 +1537,12 @@ async function prepareWorktree(
     if (!resolved.created || !resolved.path) {
       return {
         ok: false,
-        result: { ok: false, reason: "worktree-failed", detail: resolved.detail },
+        result: {
+          ok: false,
+          reason:
+            resolved.reason === "host-outcome-unknown" ? "outcome-unknown" : "worktree-failed",
+          detail: resolved.detail,
+        },
       };
     }
     // The worktree is created on the PLACEMENT host (issue #1724) — see the
@@ -1957,6 +1990,30 @@ async function spawnOrRollback(
     // its hookToken -> id entry until the process restarts. A no-op for the
     // remote case.
     app.pty.kill(String(sessionId));
+    if (unsupported === null && isOutcomeUnknown(err)) {
+      // #2621 — the channel closed after the spawn request was written: the
+      // agent may well have started the session. Rolling back would delete
+      // the row, worktree and branch the caller is told to re-check (and
+      // strand a live agent in a removed cwd), so everything stays put;
+      // `rb.done` turns createSessionRecord's own rollback into a no-op and
+      // `sessionId` lets the caller find the row. The GitHub-auth tracking
+      // stays too: the session may be live on the host, and
+      // refreshSessionGithubAuth is what re-sends its renewed credential.
+      rb.done = true;
+      app.log.warn(
+        { err, hostId: placementHost, sessionId },
+        "session spawn outcome unknown, keeping the row and worktree",
+      );
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          reason: "outcome-unknown",
+          detail: err instanceof Error ? err.message : undefined,
+          sessionId: Number(sessionId),
+        },
+      };
+    }
     untrackSessionGithubAuth(String(sessionId));
     // B9 — the row itself is deleted right below, so this id is genuinely
     // done: discard any stashed seed too rather than leaking it forever

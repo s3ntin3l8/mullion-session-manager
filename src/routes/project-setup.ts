@@ -33,6 +33,7 @@ import {
 } from "../services/host-git.js";
 import { readHostFiles, writeHostFiles, type IgnoredPath } from "../services/host-files.js";
 import { HostRequestError } from "../services/remote-host-client.js";
+import { isOutcomeUnknown } from "../services/remote-host-errors.js";
 import { PathEscapeError, resolveWithin } from "../services/safe-path.js";
 import { getToken } from "../services/github-integration.js";
 import { createPullRequest, findPullRequestByHead } from "../services/github-write.js";
@@ -424,7 +425,8 @@ async function reuseOrCreateWorktree(
     app.log.warn({ hostId, err }, "reuseOrCreateWorktree: host unreachable");
     return {
       created: false,
-      reason: "host-unreachable",
+      // #2621 — a create that may have landed is not "unreachable": say so.
+      reason: isOutcomeUnknown(err) ? "host-outcome-unknown" : "host-unreachable",
       detail: err instanceof Error ? err.message : String(err),
     };
   }
@@ -1376,7 +1378,9 @@ export async function projectSetupRoute(app: FastifyInstance) {
         return reply.internalServerError(
           commitResult.reason === "unsupported"
             ? "This host's agent build doesn't support committing scaffold changes yet — update the agent build (see issue #895)."
-            : `Could not commit the scaffold branch: ${commitResult.detail}`,
+            : commitResult.reason === "outcome-unknown"
+              ? `Host connection lost mid-request; commit outcome is unknown: ${commitResult.detail}`
+              : `Could not commit the scaffold branch: ${commitResult.detail}`,
         );
       }
       if (!commitResult.value.committed && commitResult.value.error) {

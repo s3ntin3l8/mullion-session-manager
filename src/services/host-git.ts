@@ -31,7 +31,7 @@ import {
   HostRequestError,
   HostUnreachableError,
 } from "./remote-host-client.js";
-import { isHostBusyError } from "./remote-host-errors.js";
+import { isHostBusyError, isOutcomeUnknown } from "./remote-host-errors.js";
 
 export type HostGitResult<T> =
   | { ok: true; value: T }
@@ -54,6 +54,14 @@ export type HostGitResult<T> =
       reason: "busy";
       detail: string;
       retryable: true;
+    }
+  | {
+      ok: false;
+      /** Issue #2621 — a mutation over the outbound channel whose connection was
+       * lost mid-request; whether the operation ran on the host is unknown. */
+      reason: "outcome-unknown";
+      detail: string;
+      status?: number;
     }
   | {
       ok: false;
@@ -137,6 +145,13 @@ export async function viaRemote<T>(
         };
       }
       return { ok: false, reason: "unreachable", detail: err.message, status: err.statusCode };
+    }
+    if (isOutcomeUnknown(err)) {
+      return {
+        ok: false,
+        reason: "outcome-unknown",
+        detail: err instanceof Error ? err.message : String(err),
+      };
     }
     const detail =
       err instanceof HostUnreachableError

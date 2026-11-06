@@ -856,6 +856,18 @@ export async function sessionsRoute(app: FastifyInstance) {
         if (result.reason === "reserved-env-key") {
           return reply.badRequest(`env key "${result.detail}" is reserved and cannot be set`);
         }
+        if (result.reason === "outcome-unknown") {
+          // #2621 — name the kept session so the caller re-checks it rather
+          // than blindly retrying into a second one.
+          return reply.code(503).send({
+            statusCode: 503,
+            error: "Service Unavailable",
+            message: result.detail
+              ? `Host connection lost mid-request; spawn outcome is unknown: ${result.detail}`
+              : "Host connection lost mid-request; spawn outcome is unknown",
+            sessionId: result.sessionId,
+          });
+        }
         return reply.badGateway("Failed to spawn session on host");
       }
 
@@ -1164,6 +1176,22 @@ export async function sessionsRoute(app: FastifyInstance) {
         // worktree and the branch atomically, and this only runs when the
         // very next step (spawn) failed — no agent, no commit, ever
         // touched it.
+        // #2621 — the spawn may have landed, so "no agent, no commit ever
+        // touched it" below does not hold: the promoted session can be live in
+        // this worktree. Leave the worktree and branch for the caller to
+        // re-check instead of deleting them.
+        if (created.reason === "outcome-unknown") {
+          // #2621 — name the kept session so the caller re-checks it rather
+          // than blindly retrying into a second one.
+          return reply.code(503).send({
+            statusCode: 503,
+            error: "Service Unavailable",
+            message: created.detail
+              ? `Host connection lost mid-request; spawn outcome is unknown: ${created.detail}`
+              : "Host connection lost mid-request; spawn outcome is unknown",
+            sessionId: created.sessionId,
+          });
+        }
         const backend = resolveBackend(app, srcHostId);
         try {
           await backend.removeWorktree(worktreePath, repoCwd);

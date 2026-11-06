@@ -1,6 +1,6 @@
 import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { projects, tasks } from "../db/schema.js";
+import { projects, sessions, tasks } from "../db/schema.js";
 // createSessionRecord/withLiveStatus are pure business logic, filed under
 // services/ (session-lifecycle.ts/session-live-info.ts) precisely so a
 // service can reuse them directly rather than reaching into routes/ — see
@@ -1002,6 +1002,58 @@ export async function dispatchClaimedTask(
         await release(result.detail);
         return { ok: false, reason: "spawn-failed", detail: result.detail };
       }
+      if (result.reason === "outcome-unknown") {
+        const reason = result.detail
+          ? `session spawn outcome unknown on host ${placement.hostId}: ${result.detail}`
+          : "session spawn outcome unknown";
+        // #2621 — the spawn may have landed, so releasing would let the next
+        // dispatch's orphan-clear delete the kept worktree and force-delete
+        // the branch under a live agent, then spawn a second worker. Adopt
+        // the kept session row instead: if the agent started it is the
+        // worker; if not, the ordinary dead-session handling takes over.
+        const kept =
+          result.sessionId === undefined
+            ? undefined
+            : app.db.select().from(sessions).where(eq(sessions.id, result.sessionId)).get();
+        if (kept !== undefined) {
+          const adopted = app.db
+            .update(tasks)
+            .set({
+              sessionId: kept.id,
+              worktreePath: kept.cwd,
+              branchName,
+              agentCommand: command,
+              model,
+              smallModel,
+              placementRequirement: requirementJson,
+              baseSha,
+              seedDelivered: false,
+              failureReason: reason,
+              dispatchHeld: false,
+              dispatchFailingSince: null,
+            })
+            .where(and(eq(tasks.id, taskId), eq(tasks.status, "in_progress")))
+            .run();
+          if (adopted.changes === 0) {
+            // The task left "in_progress" while the spawn was in flight:
+            // nothing points at the kept row, so reap it rather than leave an
+            // untracked, possibly live unattended agent.
+            app.log.warn(
+              { taskId, sessionId: kept.id },
+              "task dispatch: task changed while its worker was spawning — killing the orphaned session",
+            );
+            await killSession(app, kept.id);
+          } else {
+            app.log.warn(
+              { taskId, sessionId: kept.id, hostId: placement.hostId },
+              "task dispatch: spawn outcome unknown, adopted the kept session",
+            );
+          }
+          return { ok: false, reason: "spawn-failed", detail: reason };
+        }
+        await release(reason);
+        return { ok: false, reason: "spawn-failed", detail: reason };
+      }
       await release("session spawn failed");
       return { ok: false, reason: "spawn-failed" };
     }
@@ -1531,8 +1583,66 @@ export async function retryTask(
       placementReason: `task #${task.id} retry joins its worker's host ${workerHostId} (the worktree lives there)`,
     });
     if (!result.ok) {
-      await release("session spawn failed", worktree);
-      return { ok: false, reason: "spawn-failed" };
+      const reason =
+        result.reason === "outcome-unknown"
+          ? (result.detail ?? "session spawn outcome unknown")
+          : "session spawn failed";
+      // #2621 — same adoption as dispatchClaimedTask: the retry's spawn may
+      // have landed in the task's worktree, so point the task at the kept
+      // row instead of releasing it into a second respawn.
+      const kept =
+        result.reason === "outcome-unknown" && result.sessionId !== undefined
+          ? app.db.select().from(sessions).where(eq(sessions.id, result.sessionId)).get()
+          : undefined;
+      if (kept !== undefined) {
+        const keptPatch: Partial<typeof tasks.$inferInsert> = {
+          status: "in_progress",
+          startedAt: new Date(),
+          sessionId: kept.id,
+          worktreePath: kept.cwd,
+          agentCommand: command,
+          model: model ?? null,
+          smallModel: smallModel ?? null,
+          seedDelivered: false,
+          failureReason: reason,
+          dispatchFailingSince: null,
+          completedAt: null,
+          // Issue #1038 — same stale-announcement clears as the success patch.
+          autoReturnCapAnnouncedAt: null,
+          needsHumanReason: null,
+          approvalCarriedAt: null,
+        };
+        if (opts.agent !== undefined) keptPatch.agent = opts.agent;
+        if (opts.reviewAgent !== undefined) keptPatch.reviewAgent = opts.reviewAgent;
+        Object.assign(keptPatch, agentChangeModelPatch);
+        const adopted = app.db
+          .update(tasks)
+          .set(keptPatch)
+          .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
+          .run();
+        committed = true;
+        if (adopted.changes === 0) {
+          // The task moved on while the retry's spawn was in flight: nothing
+          // points at the kept row, so reap it.
+          app.log.warn(
+            { taskId, sessionId: kept.id },
+            "task retry: task changed while its worker was spawning — killing the orphaned session",
+          );
+          await killSession(app, kept.id);
+          return { ok: false, reason: "spawn-failed", detail: reason };
+        }
+        recordTaskTransition(app, {
+          taskId,
+          projectId: project.id,
+          from: "failed",
+          to: "in_progress",
+          via: "retry",
+          context: { command, outcomeUnknown: true },
+        });
+        return { ok: false, reason: "spawn-failed", detail: reason };
+      }
+      await release(reason, worktree);
+      return { ok: false, reason: "spawn-failed", detail: reason };
     }
 
     // Issue #1724 — the retry runs on the worker host (it resumes the

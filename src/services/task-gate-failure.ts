@@ -108,11 +108,15 @@ export async function failReviewingGate(
           hostId: workerHostId,
           worktreePath: task.worktreePath,
           reason: commitResult.reason,
-          ...(commitResult.reason === "unreachable" ? { detail: commitResult.detail } : {}),
+          ...(commitResult.reason === "unreachable" || commitResult.reason === "outcome-unknown"
+            ? { detail: commitResult.detail }
+            : {}),
         },
         commitResult.reason === "unsupported"
           ? "task reconcile: WIP salvage skipped — this host's agent build doesn't support committing WIP changes yet (see issue #1100), failing the reviewing gate open"
-          : "task reconcile: WIP salvage skipped — host unreachable, failing the reviewing gate open",
+          : commitResult.reason === "outcome-unknown"
+            ? "task reconcile: WIP salvage outcome unknown — failing the reviewing gate open"
+            : "task reconcile: WIP salvage skipped — host unreachable, failing the reviewing gate open",
       );
       return;
     }

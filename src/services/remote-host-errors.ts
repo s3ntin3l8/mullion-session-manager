@@ -57,6 +57,21 @@ export class HostOutcomeUnknownError extends HostUnreachableError {
   }
 }
 
+/**
+ * Returns true if the error indicates a mid-request channel disconnect where
+ * the operation may or may not have executed on the host. Callers must not retry
+ * mutating requests when this returns true without first checking host state.
+ */
+export function isOutcomeUnknown(err: unknown): err is HostOutcomeUnknownError {
+  return (
+    err instanceof HostOutcomeUnknownError ||
+    (Boolean(err) &&
+      typeof err === "object" &&
+      "outcomeUnknown" in (err as Record<string, unknown>) &&
+      Boolean((err as Record<string, unknown>).outcomeUnknown))
+  );
+}
+
 /** The agent responded — it IS reachable — but rejected the request (4xx):
  * a real client-side error (a malformed body, an unknown session id), not
  * a connectivity problem. Distinct from HostUnreachableError so a caller

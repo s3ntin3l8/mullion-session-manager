@@ -75,7 +75,7 @@ import {
   HostRequestError,
   HostUnreachableError,
 } from "../services/remote-host-client.js";
-import { isHostBusyError } from "../services/remote-host-errors.js";
+import { isHostBusyError, isOutcomeUnknown } from "../services/remote-host-errors.js";
 import { previewPlacement } from "../services/placement.js";
 import { commandAgentBin } from "../services/hook-adapters/index.js";
 import { portFromUrl } from "../plugins/preview-proxy.js";
@@ -853,16 +853,13 @@ async function maybeRegisterProjectWebhook(
  * fact, and the wrong one here — the 503 stays, but the message says which
  * it was.
  */
-function remoteHostFailureMessage(
-  app: FastifyInstance,
-  hostId: string,
-  err: unknown,
-  what: string,
-): string {
+function hostFailMsg(app: FastifyInstance, hostId: string, err: unknown, what: string): string {
   const message =
     err instanceof HostRequestError
       ? `Host ${hostId} rejected ${what}: ${err.message}`
-      : `Host ${hostId} is unreachable`;
+      : isOutcomeUnknown(err)
+        ? `Host ${hostId} connection lost mid-request; outcome of ${what} is unknown: ${err.message}`
+        : `Host ${hostId} is unreachable`;
   app.log.warn({ hostId, err }, message);
   return message;
 }
@@ -2171,9 +2168,7 @@ export async function projectsRoute(app: FastifyInstance) {
       try {
         return await getRemoteHostClient(app, project.hostId).resolveGitHealth(project.cwd);
       } catch (err) {
-        return reply.serviceUnavailable(
-          remoteHostFailureMessage(app, project.hostId, err, "the health check"),
-        );
+        return reply.serviceUnavailable(hostFailMsg(app, project.hostId, err, "the health check"));
       }
     },
   );
@@ -2229,9 +2224,7 @@ export async function projectsRoute(app: FastifyInstance) {
             confirm: false,
           });
         } catch (err) {
-          return reply.serviceUnavailable(
-            remoteHostFailureMessage(app, project.hostId, err, "the repair"),
-          );
+          return reply.serviceUnavailable(hostFailMsg(app, project.hostId, err, "the repair"));
         }
       }
 
@@ -2259,9 +2252,7 @@ export async function projectsRoute(app: FastifyInstance) {
         } catch (err) {
           if (replyUnsupportedOnAgent(err, request.query.sessionId, project.hostId, reply))
             return reply;
-          return reply.serviceUnavailable(
-            remoteHostFailureMessage(app, project.hostId, err, "the repair"),
-          );
+          return reply.serviceUnavailable(hostFailMsg(app, project.hostId, err, "the repair"));
         }
       } finally {
         releaseClone(project.hostId, project.cwd);
@@ -2340,7 +2331,7 @@ export async function projectsRoute(app: FastifyInstance) {
         } catch (err) {
           if (replyUnsupportedOnAgent(err, request.query.sessionId, project.hostId, reply))
             return reply;
-          return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+          return reply.serviceUnavailable(hostFailMsg(app, project.hostId, err, "git pull"));
         }
       } finally {
         releaseClone(project.hostId, project.cwd);
@@ -2420,8 +2411,7 @@ export async function projectsRoute(app: FastifyInstance) {
       } catch (err) {
         if (replyUnsupportedOnAgent(err, request.query.sessionId, project.hostId, reply))
           return reply;
-        app.log.warn({ hostId: project.hostId, err }, "host unreachable, git branch delete failed");
-        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        return reply.serviceUnavailable(hostFailMsg(app, project.hostId, err, "git branch delete"));
       }
     },
   );
@@ -2492,9 +2482,7 @@ export async function projectsRoute(app: FastifyInstance) {
       }
       if (!(err instanceof HostUnreachableError || err instanceof HostRequestError)) throw err;
       if (replyUnsupportedOnAgent(err, sessionId, project.hostId, reply)) return reply;
-      return reply.serviceUnavailable(
-        remoteHostFailureMessage(app, project.hostId, err, `git ${opts.label}`),
-      );
+      return reply.serviceUnavailable(hostFailMsg(app, project.hostId, err, `git ${opts.label}`));
     } finally {
       releaseClone(project.hostId, project.cwd);
     }
@@ -2887,8 +2875,7 @@ export async function projectsRoute(app: FastifyInstance) {
         }
         return result;
       } catch (err) {
-        app.log.warn({ hostId: target.hostId, err }, "host unreachable, worktree remove failed");
-        return reply.serviceUnavailable(`Host ${target.hostId} is unreachable`);
+        return reply.serviceUnavailable(hostFailMsg(app, target.hostId, err, "worktree remove"));
       } finally {
         if (owner) releaseReclaimSlot(owner.id);
       }

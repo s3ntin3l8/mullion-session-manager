@@ -69,7 +69,8 @@ const {
 } = await import("../../src/services/host-git.js");
 const { HostRequestError, HostUnreachableError } =
   await import("../../src/services/remote-host-client.js");
-const { HostBusyError } = await import("../../src/services/remote-host-errors.js");
+const { HostBusyError, HostOutcomeUnknownError } =
+  await import("../../src/services/remote-host-errors.js");
 
 const fakeApp = { config: {} } as never;
 
@@ -156,6 +157,18 @@ describe("host-git.ts", () => {
     // caller of this module gets the same "never propagates an uncaught
     // throw" guarantee task-claim.ts's claimTask/retryTask already give
     // themselves individually, without each one needing its own try/catch.
+    it("remote: an outcome-unknown error maps to reason 'outcome-unknown', not 'unreachable' (#2621)", async () => {
+      mockGetRemoteHostClient.mockReturnValue({
+        resolveGitStatus: vi
+          .fn()
+          .mockRejectedValue(new HostOutcomeUnknownError("h1", new Error("channel closed"))),
+      });
+
+      const result = await resolveHostGitStatus(fakeApp, "remote-host-1", "/x");
+
+      expect(result).toMatchObject({ ok: false, reason: "outcome-unknown" });
+    });
+
     it("remote: an unrelated thrown error resolves ok:false, reason:unreachable — never re-thrown", async () => {
       mockGetRemoteHostClient.mockReturnValue({
         resolveGitStatus: vi.fn().mockRejectedValue(new Error("boom")),

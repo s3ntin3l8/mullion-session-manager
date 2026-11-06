@@ -479,4 +479,131 @@ describe("#2416 — the states that used to be swallowed", () => {
       }
     });
   });
+
+  describe("unknown outcome handling on mutating vs read-only operations", () => {
+    it("retries a read-only re-review request after HostOutcomeUnknownError", async () => {
+      const { HostOutcomeUnknownError } = await import("../../src/services/remote-host-client.js");
+      const app = await buildApp();
+      try {
+        mockResolveHostGitStatus.mockResolvedValue(gitStatus("different-sha"));
+        const { taskId, sessionId } = await createSessionAndTaskWithBase(app, "in_progress");
+        const verdictAt = new Date();
+        app.db
+          .update(tasks)
+          .set({
+            approvalCarriedAt: new Date(),
+            lastReviewVerdictAt: verdictAt,
+            lastReviewVerdict: "approved",
+            reviewSessionId: sessionId,
+          })
+          .where(eq(tasks.id, taskId))
+          .run();
+
+        let calls = 0;
+        const sessionBackendModule = await import("../../src/services/session-backend.js");
+        const realResolveBackend = sessionBackendModule.resolveBackend;
+        const spy = vi
+          .spyOn(sessionBackendModule, "resolveBackend")
+          .mockImplementation((appArg, hostId) => {
+            const real = realResolveBackend(appArg, hostId);
+            return new Proxy(real, {
+              get(target, prop, receiver) {
+                if (prop === "readTaskRereviewRequest") {
+                  return () => {
+                    calls++;
+                    if (calls === 1) {
+                      return Promise.reject(
+                        new HostOutcomeUnknownError("h", new Error("connection dropped")),
+                      );
+                    }
+                    return Promise.resolve(null);
+                  };
+                }
+                const value = Reflect.get(target, prop, receiver);
+                return typeof value === "function" ? value.bind(target) : value;
+              },
+            });
+          });
+
+        const now = Date.now();
+        vi.spyOn(app.pty, "get").mockReturnValue({
+          toInfo: () => fakeInfo({ lastTurnEndedAt: now, workFinishedAt: now }),
+        } as never);
+
+        await reconcileTasks(app);
+        expect((await getTask(app, taskId)).status).toBe("in_progress");
+        expect(calls).toBe(1);
+
+        // Next tick retries the read-only call
+        await reconcileTasks(app);
+        expect(calls).toBe(2);
+
+        spy.mockRestore();
+      } finally {
+        await app.close();
+      }
+    });
+
+    it("does not spawn again when a reconciler pass gets an unknown outcome from a spawn", async () => {
+      const app = await buildApp();
+      try {
+        mockResolveHostGitStatus.mockResolvedValue(gitStatus("sha-123"));
+        const { taskId } = await createSessionAndTaskWithBase(app, "in_progress");
+        app.db
+          .update(tasks)
+          .set({
+            status: "reviewing",
+            reviewSessionId: null,
+            reviewSpawnClaimedAt: null,
+          })
+          .where(eq(tasks.id, taskId))
+          .run();
+
+        const taskRow = await getTask(app, taskId);
+        const spawnedRowId = taskRow.sessionId as number;
+        await app.inject({
+          method: "PATCH",
+          url: `/api/projects/${taskRow.projectId}`,
+          payload: { defaultReviewAgent: "codex" },
+        });
+
+        const sessionsModule = await import("../../src/services/session-lifecycle.js");
+        const actualCreateSessionRecord = sessionsModule.createSessionRecord;
+        let spawnAttempts = 0;
+        vi.spyOn(sessionsModule, "createSessionRecord").mockImplementation(async (a, opts) => {
+          if (opts.projectId === taskRow.projectId) {
+            spawnAttempts++;
+            // createSessionRecord now keeps the row of an unknown-outcome spawn
+            // and reports its id; any existing session row stands in for it.
+            return {
+              ok: false,
+              reason: "outcome-unknown",
+              detail: "mid-request drop",
+              sessionId: spawnedRowId,
+            };
+          }
+          return actualCreateSessionRecord(a, opts);
+        });
+
+        await reconcileTasks(app);
+
+        let row = await getTask(app, taskId);
+        expect(row.status).toBe("reviewing");
+        // The kept session row is adopted as the reviewer, so the stale-claim
+        // sweep has nothing left to respawn.
+        expect(row.reviewSessionId).toBe(spawnedRowId);
+        expect(row.reviewSpawnClaimedAt).not.toBeNull();
+        expect(spawnAttempts).toBe(1);
+
+        // Second tick — must NOT spawn again because the outcome was unknown.
+        await reconcileTasks(app);
+
+        row = await getTask(app, taskId);
+        expect(row.reviewSessionId).toBe(spawnedRowId);
+        expect(spawnAttempts).toBe(1);
+      } finally {
+        await app.close();
+      }
+    });
+  });
 });

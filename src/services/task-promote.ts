@@ -438,7 +438,9 @@ async function pushForPromotion(
     const detail =
       pushResult.reason === "unsupported"
         ? "This host's agent build doesn't support pushing a task's branch yet — update it and retry"
-        : `Could not reach the task's host: ${pushResult.detail}`;
+        : pushResult.reason === "outcome-unknown"
+          ? `Host connection lost mid-request; push outcome is unknown: ${pushResult.detail}`
+          : `Could not reach the task's host: ${pushResult.detail}`;
     recordGithubSyncError(app, task.id, detail);
     return { ok: false, reason: "push-failed", detail };
   }

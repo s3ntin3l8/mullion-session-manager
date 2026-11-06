@@ -25,6 +25,7 @@ import {
   HostUnreachableError,
   RemoteHostClient,
 } from "../../src/services/remote-host-client.js";
+import { isOutcomeUnknown } from "../../src/services/remote-host-errors.js";
 import type { ConnectedAgentChannel } from "../../src/plugins/agent-channel.js";
 
 // Both ends of the request tunnel over a real loopback WebSocket, against a
@@ -242,7 +243,7 @@ describe("request/response over the outbound channel (#2451)", () => {
     expect(err).not.toBeInstanceOf(HostOutcomeUnknownError);
   });
 
-  it("fails an in-flight operation as rejected when the primary ended the channel for its credential", async () => {
+  it("raises HostOutcomeUnknownError when a non-idempotent POST is in flight when the channel is closed with expired", async () => {
     const r = await rig((agent) => {
       agent.post("/internal/uploads", async () => {
         await sleep(300);
@@ -254,8 +255,37 @@ describe("request/response over the outbound channel (#2451)", () => {
     (r.entry as { terminal: string | null }).terminal = "expired";
     r.entry.close(4004, "credential expired");
     const err = await pending;
+    expect(err).toBeInstanceOf(HostOutcomeUnknownError);
+    expect(isOutcomeUnknown(err)).toBe(true);
+  });
+
+  it("raises HostRequestError 401 when a POST fails before send on a closed channel with expired terminal reason", async () => {
+    const r = await rig((agent) => {
+      agent.post("/internal/uploads", async () => ({ path: "/x" }));
+    });
+    (r.entry as { terminal: string | null }).terminal = "expired";
+    r.entry.close(4004, "credential expired");
+    const pending = r.client.uploadFile("/w", Buffer.from("x"), "a.txt").catch((e: unknown) => e);
+    const err = await pending;
     expect(err).toBeInstanceOf(HostRequestError);
     expect((err as HostRequestError).statusCode).toBe(401);
+  });
+
+  it("raises HostRequestError 401 on a revoked close of an idempotent GET in flight", async () => {
+    const r = await rig((agent) => {
+      agent.get("/internal/config", async () => {
+        await sleep(300);
+        return { role: "agent" };
+      });
+    });
+    const pending = r.client.resolveConfig().catch((e: unknown) => e);
+    await sleep(50);
+    (r.entry as { terminal: string | null }).terminal = "revoked";
+    r.entry.close(4002, "identity revoked");
+    const err = await pending;
+    expect(err).toBeInstanceOf(HostRequestError);
+    expect((err as HostRequestError).statusCode).toBe(401);
+    expect(isOutcomeUnknown(err)).toBe(false);
   });
 
   it("enforces the request timeout, reporting that the request had started", async () => {
