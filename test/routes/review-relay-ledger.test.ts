@@ -252,6 +252,26 @@ describe("review-request status for a review started outside this Mullion", () =
         );
       });
 
+      it("does not close the relay record's marker with a ledger run's outcome", async () => {
+        // The record is for an older head; the answer is the new head's marker.
+        mocks.getReviewRunForPr.mockReturnValue({
+          runId: "run_old",
+          dispatchedAt: 1_000_000,
+          headSha: "old-sha",
+          markerCheckRunId: 4242,
+        });
+        mocks.getHermesReviewStatus.mockResolvedValue(ledgerStatus({ status: "failed" }));
+        await get(sessionId);
+        expect(mocks.completeReviewMarkerCheckRun).toHaveBeenCalledTimes(1);
+        expect(mocks.completeReviewMarkerCheckRun).toHaveBeenCalledWith(
+          "ghs_checks",
+          "acme",
+          "widgets",
+          77,
+          "failure",
+        );
+      });
+
       it("leaves a marker that is already closed alone", async () => {
         mocks.getHermesReviewStatus.mockResolvedValue(
           ledgerStatus({ status: "failed", ledger: { checkRunId: 77, open: false } }),

@@ -269,6 +269,38 @@ describe("hermes review relay — ledger marker", () => {
         expect(result).not.toHaveProperty("source");
       });
 
+      describe("when the relay's run is for an older head", () => {
+        const NEW_HEAD = { headSha: "def5678" };
+        const byRun = (statuses: Record<string, string>) => async (url: string) => {
+          const id = url.split("/").at(-1) as string;
+          return new Response(JSON.stringify({ run_id: id, status: statuses[id] ?? "running" }), {
+            status: 200,
+          });
+        };
+
+        it("answers with the new head's marker, not the old run", async () => {
+          await requestHermesReview(app, PR); // run_1, for abc1234
+          withMarkers(markerRun());
+          runEndpoint = byRun({ run_1: "completed", run_wf: "running" });
+          const result = await status(NEW_HEAD);
+          expect(result).toMatchObject({
+            runId: "run_wf",
+            status: "running",
+            source: "ledger",
+            headSha: "def5678",
+          });
+        });
+
+        it("falls back to the relay's run when the new head has no marker", async () => {
+          await requestHermesReview(app, PR);
+          withMarkers();
+          runEndpoint = byRun({ run_1: "completed" });
+          const result = await status(NEW_HEAD);
+          expect(result).toMatchObject({ runId: "run_1", status: "completed" });
+          expect(result).not.toHaveProperty("source");
+        });
+      });
+
       it("flags a relay-tracked run that is still running past the window", async () => {
         await requestHermesReview(app, PR);
         runEndpoint = async () =>
@@ -309,6 +341,28 @@ describe("hermes review relay — ledger marker", () => {
       ])("lets the request through for %s", async (_name, marker, runStatus) => {
         withMarkers(marker);
         runEndpoint = hermesRun(runStatus);
+        await expect(request()).resolves.toMatchObject({ runId: "run_1" });
+      });
+
+      it("still sees the head's live marker when the relay's run was for an older head", async () => {
+        await requestHermesReview(app, PR); // run_1, for abc1234
+        withMarkers(markerRun());
+        runEndpoint = async (url) =>
+          url.endsWith("run_1")
+            ? new Response(JSON.stringify({ run_id: "run_1", status: "completed" }), {
+                status: 200,
+              })
+            : hermesRun("running")();
+        await expect(
+          requestHermesReview(app, { ...PR, headSha: "def5678", githubToken: TOKEN }),
+        ).rejects.toMatchObject({ name: "ReviewInFlightError", runId: "run_wf" });
+      });
+
+      it("does not let a run wedged past the stuck window block the head", async () => {
+        // The relay cannot stop a run it did not dispatch, so refusing on it
+        // would block the head until Hermes drops the run.
+        withMarkers(markerRun({ started_at: minutesAgo(90) }));
+        runEndpoint = hermesRun("running");
         await expect(request()).resolves.toMatchObject({ runId: "run_1" });
       });
 

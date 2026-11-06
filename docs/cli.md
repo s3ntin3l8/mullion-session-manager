@@ -511,8 +511,9 @@ review`; **empty = the ledger is off**, like `hermes-review-ledger: off`), and
   Hermes says the run failed, was cancelled or interrupted), `lost_run` (open,
   past an hour, and Hermes no longer knows the run) or `overdue` (still
   running past an hour). Tell the human; do not @mention the review bot, which
-  only queues another run behind the dead one — a dead run is no longer "in
-  flight", so `review` may be requested again. Status also closes such an
+  only queues another run behind the dead one — a dead run, or a workflow-started
+  one still "working" past an hour, is no longer "in flight", so `review` may be
+  requested again. Status also closes such an
   orphaned marker when its run finished (`success` or `failure`, `neutral` for
   a lost run past two hours), so the pending check clears — only if the GitHub
   App that wrote the marker is the one Mullion writes with. `not_found` means

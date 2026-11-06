@@ -789,18 +789,19 @@ async function findLiveRun(
   key: string,
 ): Promise<{ runId: string; headSha?: string } | null> {
   const record = getRunForTarget(target.kind, target.owner, target.repo, target.number);
-  if (!record) return findLiveMarkerRun(app, target, root, key);
-  try {
-    const status = await fetchRun(root, key, record);
-    // An unreadable status is not proof of a live run (it is also not proof of
-    // a finished one): treat it as not live, so a request is never dropped.
-    if (!status.status) return null;
-    if (isTerminal(status.status)) return null;
-    if (isGone(status.status)) return null;
-    return record;
-  } catch {
-    return null;
+  if (record) {
+    try {
+      const status = await fetchRun(root, key, record);
+      // An unreadable status is not proof of a live run (it is also not proof of
+      // a finished one): treat it as not live, so a request is never dropped.
+      if (status.status && !isTerminal(status.status) && !isGone(status.status)) return record;
+    } catch {
+      // Not live — fall through to the head's marker.
+    }
   }
+  // The run index is keyed by PR, not by head: a finished run on an older head
+  // must not hide a review the repository's own workflow started on this one.
+  return findLiveMarkerRun(app, target, root, key);
 }
 
 /**
@@ -827,6 +828,11 @@ async function findLiveMarkerRun(
     readToken: target.githubToken,
   });
   if (!marker?.open) return null;
+  // A review takes 10-30 minutes. One still "working" past the stuck window is
+  // wedged (status reports it as overdue), and this Mullion cannot stop a run it
+  // did not dispatch — refusing on it would block the head until Hermes drops the
+  // run, so it no longer counts as in flight.
+  if (Date.now() - Date.parse(marker.startedAt) > REVIEW_STUCK_AFTER_MS) return null;
   try {
     const { status } = await getRun({ root, key }, marker.runId);
     if (!status || isTerminal(status) || isGone(status)) return null;
@@ -1477,7 +1483,10 @@ export async function getRelayStatus(
   const key = assertReviewerConfigured(app);
   const root = baseUrl(getStoredSettings(app.db).reviewRelay.apiUrl);
   const record = getRunForTarget(target.kind, target.owner, target.repo, target.number);
-  if (!record) {
+  // A relay run for an older head does not describe this one: when the PR has
+  // moved on, the head's own marker is the better answer (and the relay's run
+  // is still the fallback).
+  if (!record || (target.headSha !== undefined && record.headSha !== target.headSha)) {
     const marker =
       target.kind === "pull_request" && target.headSha && target.readToken
         ? await findHeadMarkerRun(app, {
@@ -1518,14 +1527,16 @@ export async function getRelayStatus(
     }
     // Nothing tracked here and no marker on the head. Hermes still holds a run
     // under the idempotency key but offers no lookup by key, so say so plainly.
-    return {
-      provider: "hermes",
-      status: "not_found",
-      repo: `${target.owner}/${target.repo}`,
-      number: target.number,
-      prNumber: target.number,
-      kind: target.kind,
-    };
+    if (!record) {
+      return {
+        provider: "hermes",
+        status: "not_found",
+        repo: `${target.owner}/${target.repo}`,
+        number: target.number,
+        prNumber: target.number,
+        kind: target.kind,
+      };
+    }
   }
   const status = await fetchRun(root, key, record);
   // Only "overdue" applies to a run the relay tracks: its own marker closer

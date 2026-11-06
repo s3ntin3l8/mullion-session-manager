@@ -817,10 +817,12 @@ export async function reviewRequestRoute(app: FastifyInstance) {
           readToken: target.markerReadToken ?? token,
         });
         const record = getReviewRunForPr(owner, repo, prNumber);
+        const ledger = "ledger" in status ? status.ledger : undefined;
         // Close the in-flight marker once the run it names has finished, so a
         // later request does not mistake a finished review for a live one.
-        // The shared workflow closes its own marker the same way.
-        if (record?.markerCheckRunId && target.markerToken) {
+        // The shared workflow closes its own marker the same way. (Not when the
+        // answer is the head's ledger marker: its run is not the record's.)
+        if (!ledger && record?.markerCheckRunId && target.markerToken) {
           const conclusion = markerConclusionForRunStatus(status.status);
           if (conclusion) {
             try {
@@ -841,7 +843,6 @@ export async function reviewRequestRoute(app: FastifyInstance) {
         // An orphaned marker: the run behind the head's "Hermes review" check
         // is not one this Mullion tracks, so the sweep never closes it and the
         // check stays pending after its run is gone.
-        const ledger = "ledger" in status ? status.ledger : undefined;
         const startedAtMs = "dispatchedAt" in status ? Date.parse(status.dispatchedAt) : NaN;
         // The marker's id is the route's business, not the caller's.
         const { ledger: _ledger, ...publicStatus } = status as typeof status & {
@@ -876,7 +877,7 @@ export async function reviewRequestRoute(app: FastifyInstance) {
             target,
             // A review found through the ledger has no relay record: match its
             // landed review by when the marker's run started.
-            record ?? (ledger ? { dispatchedAt: startedAtMs } : null),
+            ledger ? { dispatchedAt: startedAtMs } : record,
           ),
         };
       } catch (err) {
