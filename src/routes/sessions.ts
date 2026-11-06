@@ -1171,6 +1171,17 @@ export async function sessionsRoute(app: FastifyInstance) {
         // worktree and the branch atomically, and this only runs when the
         // very next step (spawn) failed — no agent, no commit, ever
         // touched it.
+        // #2621 — the spawn may have landed, so "no agent, no commit ever
+        // touched it" below does not hold: the promoted session can be live in
+        // this worktree. Leave the worktree and branch for the caller to
+        // re-check instead of deleting them.
+        if (created.reason === "outcome-unknown") {
+          return reply.serviceUnavailable(
+            created.detail
+              ? `Host connection lost mid-request; spawn outcome is unknown: ${created.detail}`
+              : "Host connection lost mid-request; spawn outcome is unknown",
+          );
+        }
         const backend = resolveBackend(app, srcHostId);
         try {
           await backend.removeWorktree(worktreePath, repoCwd);
@@ -1183,13 +1194,6 @@ export async function sessionsRoute(app: FastifyInstance) {
           });
         } catch {
           // Best-effort, same posture as removeWorktree above.
-        }
-        if (created.reason === "outcome-unknown") {
-          return reply.serviceUnavailable(
-            created.detail
-              ? `Host connection lost mid-request; spawn outcome is unknown: ${created.detail}`
-              : "Host connection lost mid-request; spawn outcome is unknown",
-          );
         }
         return reply.badGateway("Failed to spawn the promoted session");
       }

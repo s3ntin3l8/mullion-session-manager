@@ -498,7 +498,7 @@ export type CreateSessionResult =
   | { ok: false; reason: "spawn-failed"; detail?: string }
   // Issue #2621 — an in-flight mutation over the outbound channel whose connection
   // closed, so whether the spawn or worktree operation executed on the host is unknown.
-  | { ok: false; reason: "outcome-unknown"; detail?: string }
+  | { ok: false; reason: "outcome-unknown"; detail?: string; sessionId?: number }
   // Phase 5 (Track B, issue #193 5.3b) — parentSessionId validation
   // failures, all clean 4xx per the roadmap's security guardrails for
   // sessions.spawn_child (never a 500).
@@ -1996,6 +1996,28 @@ async function spawnOrRollback(
     // (see PtyManager.discardPendingSeed's own doc comment for why kill()
     // itself deliberately does NOT do this).
     app.pty.discardPendingSeed(String(sessionId));
+    if (unsupported === null && isOutcomeUnknown(err)) {
+      // #2621 — the channel closed after the spawn request was written: the
+      // agent may well have started the session. Rolling back would delete
+      // the row, worktree and branch the caller is told to re-check (and
+      // strand a live agent in a removed cwd), so everything stays put;
+      // `rb.done` turns createSessionRecord's own rollback into a no-op and
+      // `sessionId` lets the caller find the row.
+      rb.done = true;
+      app.log.warn(
+        { err, hostId: placementHost, sessionId },
+        "session spawn outcome unknown, keeping the row and worktree",
+      );
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          reason: "outcome-unknown",
+          detail: err instanceof Error ? err.message : undefined,
+          sessionId: Number(sessionId),
+        },
+      };
+    }
     await rollbackCreate(app, rb);
     app.log.error({ err, hostId: placementHost }, "session spawn failed, rolled back row");
     if (unsupported !== null) {
@@ -2008,7 +2030,7 @@ async function spawnOrRollback(
       ok: false,
       result: {
         ok: false,
-        reason: isOutcomeUnknown(err) ? "outcome-unknown" : "spawn-failed",
+        reason: "spawn-failed",
         detail: err instanceof Error ? err.message : undefined,
       },
     };

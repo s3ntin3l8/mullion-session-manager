@@ -1957,6 +1957,10 @@ usual re-attach scrollback replay / events replay snapshot resynchronizes it.
   without first re-reading the state it would change (session existence, worktree
   existence, HEAD moved); where they cannot, they surface "outcome unknown" to the
   caller or task failure reason.
+  A failed spawn with an unknown outcome also **keeps** the session row, worktree
+  and branch (no rollback, no promote-route cleanup), so the state the caller is
+  told to re-check still exists; a Task Master review spawn adopts that row as the
+  task's reviewer rather than leaving the decision to the stale-claim sweep.
 - **`HostUnreachableError`**: A network failure before sending, a dropped link on an
   idempotent request, or a 5xx HTTP response. Read-only calls and idempotent probes
   keep retrying as before.

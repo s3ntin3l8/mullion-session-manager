@@ -560,6 +560,7 @@ describe("#2416 — the states that used to be swallowed", () => {
           .run();
 
         const taskRow = await getTask(app, taskId);
+        const spawnedRowId = taskRow.sessionId as number;
         await app.inject({
           method: "PATCH",
           url: `/api/projects/${taskRow.projectId}`,
@@ -572,7 +573,14 @@ describe("#2416 — the states that used to be swallowed", () => {
         vi.spyOn(sessionsModule, "createSessionRecord").mockImplementation(async (a, opts) => {
           if (opts.projectId === taskRow.projectId) {
             spawnAttempts++;
-            return { ok: false, reason: "outcome-unknown", detail: "mid-request drop" };
+            // createSessionRecord now keeps the row of an unknown-outcome spawn
+            // and reports its id; any existing session row stands in for it.
+            return {
+              ok: false,
+              reason: "outcome-unknown",
+              detail: "mid-request drop",
+              sessionId: spawnedRowId,
+            };
           }
           return actualCreateSessionRecord(a, opts);
         });
@@ -581,7 +589,9 @@ describe("#2416 — the states that used to be swallowed", () => {
 
         let row = await getTask(app, taskId);
         expect(row.status).toBe("reviewing");
-        expect(row.reviewSessionId).toBeNull();
+        // The kept session row is adopted as the reviewer, so the stale-claim
+        // sweep has nothing left to respawn.
+        expect(row.reviewSessionId).toBe(spawnedRowId);
         expect(row.reviewSpawnClaimedAt).not.toBeNull();
         expect(spawnAttempts).toBe(1);
 
@@ -589,7 +599,7 @@ describe("#2416 — the states that used to be swallowed", () => {
         await reconcileTasks(app);
 
         row = await getTask(app, taskId);
-        expect(row.reviewSessionId).toBeNull();
+        expect(row.reviewSessionId).toBe(spawnedRowId);
         expect(spawnAttempts).toBe(1);
       } finally {
         await app.close();

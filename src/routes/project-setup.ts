@@ -33,6 +33,7 @@ import {
 } from "../services/host-git.js";
 import { readHostFiles, writeHostFiles, type IgnoredPath } from "../services/host-files.js";
 import { HostRequestError } from "../services/remote-host-client.js";
+import { isOutcomeUnknown } from "../services/remote-host-errors.js";
 import { PathEscapeError, resolveWithin } from "../services/safe-path.js";
 import { getToken } from "../services/github-integration.js";
 import { createPullRequest, findPullRequestByHead } from "../services/github-write.js";
@@ -424,7 +425,8 @@ async function reuseOrCreateWorktree(
     app.log.warn({ hostId, err }, "reuseOrCreateWorktree: host unreachable");
     return {
       created: false,
-      reason: "host-unreachable",
+      // #2621 — a create that may have landed is not "unreachable": say so.
+      reason: isOutcomeUnknown(err) ? "host-outcome-unknown" : "host-unreachable",
       detail: err instanceof Error ? err.message : String(err),
     };
   }
