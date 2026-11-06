@@ -211,4 +211,62 @@ describe("an unknown spawn outcome is surfaced to the task (#2621)", () => {
     fs.rmSync(cwd, { recursive: true, force: true });
     await app.close();
   });
+  it("dispatch reaps the kept session when the task moved on during the spawn", async () => {
+    const { app, cwd, row, rowNow } = await setup();
+    const sessionId = Number(
+      app.db
+        .insert(sessions)
+        .values({ projectId: row.projectId, command: "bash", cwd: "/tmp/kept" })
+        .run().lastInsertRowid,
+    );
+    vi.spyOn(sessionsModule, "createSessionRecord").mockImplementation(async () => {
+      app.db.update(tasks).set({ status: "failed" }).where(eq(tasks.id, row.id)).run();
+      return { ok: false, reason: "outcome-unknown", detail: "channel closed", sessionId };
+    });
+    const kill = vi.spyOn(sessionsModule, "killSession").mockResolvedValue(undefined as never);
+
+    await enqueueTask(app, row.id, { auto: false });
+    await dispatchClaimedTask(app, row.id);
+
+    expect(rowNow().status).toBe("failed");
+    expect(rowNow().sessionId).not.toBe(sessionId);
+    expect(kill).toHaveBeenCalledWith(app, sessionId);
+
+    vi.restoreAllMocks();
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("retry reaps the kept session when the task moved on during the spawn", async () => {
+    const { app, cwd, row, rowNow } = await setup();
+    const branchName = deriveTaskBranchName(row);
+    const created = await createWorktree({ cwd, baseRef: "main", seed: branchName, branchName });
+    app.db
+      .update(tasks)
+      .set({ status: "failed", worktreePath: created.path as string, branchName })
+      .where(eq(tasks.id, row.id))
+      .run();
+    const sessionId = Number(
+      app.db
+        .insert(sessions)
+        .values({ projectId: row.projectId, command: "bash", cwd: created.path as string })
+        .run().lastInsertRowid,
+    );
+    vi.spyOn(sessionsModule, "createSessionRecord").mockImplementation(async () => {
+      app.db.update(tasks).set({ status: "ready" }).where(eq(tasks.id, row.id)).run();
+      return { ok: false, reason: "outcome-unknown", detail: "channel closed", sessionId };
+    });
+    const kill = vi.spyOn(sessionsModule, "killSession").mockResolvedValue(undefined as never);
+
+    const outcome = await retryTask(app, row.id);
+
+    expect(outcome).toMatchObject({ ok: false, reason: "spawn-failed" });
+    expect(rowNow().status).toBe("ready");
+    expect(rowNow().sessionId).not.toBe(sessionId);
+    expect(kill).toHaveBeenCalledWith(app, sessionId);
+
+    vi.restoreAllMocks();
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
 });
