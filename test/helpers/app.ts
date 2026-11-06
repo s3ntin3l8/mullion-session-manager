@@ -123,17 +123,30 @@ export async function buildTestApp(): Promise<FastifyInstance> {
  * The caller closes the returned app itself; `buildTestApp()` is not used
  * here because it closes from `onTestFinished`, which is the wrong hook for
  * an app that must be built and closed inside `afterEach`.
+ *
+ * The directory this helper creates is removed once the app closes: it is
+ * created per call, and a test file that tears down an app after every test
+ * would otherwise leave one directory per test behind under the OS temp dir.
+ * `test/setup.ts` cleans up the file-level SESSIONS_DIR, not these.
  */
 export async function buildTeardownApp(prefix: string): Promise<FastifyInstance> {
   const previousSessionsDir = process.env.SESSIONS_DIR;
-  process.env.SESSIONS_DIR = uniqueSessionsDir(prefix);
+  const sessionsDir = uniqueSessionsDir(prefix);
+  process.env.SESSIONS_DIR = sessionsDir;
+  let app: FastifyInstance;
   try {
     const { buildApp } = await import("../../src/app.js");
-    return await buildApp();
+    app = await buildApp();
   } finally {
     if (previousSessionsDir === undefined) delete process.env.SESSIONS_DIR;
     else process.env.SESSIONS_DIR = previousSessionsDir;
   }
+  // Remove the scratch directory when the app closes, so a caller that
+  // closes the app (the normal shape) leaves nothing behind.
+  app.addHook("onClose", async () => {
+    fs.rmSync(sessionsDir, { recursive: true, force: true });
+  });
+  return app;
 }
 
 /**

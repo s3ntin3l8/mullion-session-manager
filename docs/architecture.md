@@ -299,7 +299,7 @@ PR).
   revoke/list), `review-relay` (`POST /api/sessions/:id/review-request` and
   `/review-stop` — the per-session review requests the relay dispatches, and
   `POST /api/sessions/:id/triage-request` for a triage run — see
-  [`review-relay.md`](review-relay.md)), `reviews` (`GET /api/reviews` — the
+  [`github-integration.md`](github-integration.md)), `reviews` (`GET /api/reviews` — the
   operator-facing list of the review runs THIS Mullion dispatched (Settings →
   Integrations → Review relay → Recent reviews); unlike the per-session ops
   in `review-relay`, this is not pinned to a session, so the operator can
