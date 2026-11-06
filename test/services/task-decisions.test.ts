@@ -157,4 +157,18 @@ describe("worker decisions PR section", () => {
     expect(cleared).toContain("Issue discussing <!-- /mullion:worker-decisions -->");
     expect(cleared).toContain("<!-- mullion:worker-decisions --> unclosed markers.");
   });
+
+  it("still replaces or removes a section whose heading was edited", () => {
+    const first = applyWorkerDecisionsSection("Issue body\n\n---\nfooter", ["Decision: a"]);
+    const renamed = first.replace("### Worker decisions", "### Decisions the worker made");
+    const updated = applyWorkerDecisionsSection(renamed, ["Decision: b"]);
+    expect(updated).toContain("- Decision: b");
+    expect(updated).not.toContain("Decision: a");
+    expect(updated.match(/<!-- mullion:worker-decisions -->/g)).toHaveLength(1);
+    expect(updated).toContain("\n\n---\nfooter");
+    const cleared = applyWorkerDecisionsSection(renamed, []);
+    expect(cleared).not.toContain("mullion:worker-decisions");
+    expect(cleared).toContain("Issue body");
+    expect(cleared).toContain("\n\n---\nfooter");
+  });
 });

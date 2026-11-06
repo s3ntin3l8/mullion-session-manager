@@ -99,9 +99,17 @@ export async function collectDeclaredDecisions(
 
 const SECTION_START = "<!-- mullion:worker-decisions -->";
 const SECTION_END = "<!-- /mullion:worker-decisions -->";
+// The issue body is prepended to the PR description, so the section we wrote
+// is the LAST complete block: `applyWorkerDecisionsSection` takes the last
+// match, never the first.
 const SECTION_RE = new RegExp(
   `\\r?\\n*${SECTION_START}\\r?\\n### Worker decisions(?:(?!${SECTION_START})[\\s\\S])*?${SECTION_END}`,
   "g",
+);
+
+const RENAMED_SECTION_RE = new RegExp(
+  `\\r?\\n*^${SECTION_START}\\r?\\n#{1,6} [^\\n]*\\n(?:(?!${SECTION_START})[\\s\\S])*?${SECTION_END}`,
+  "gm",
 );
 
 /**
@@ -152,6 +160,17 @@ export function applyWorkerDecisionsSection(body: string, decisions: string[]): 
     const endIndex = startIndex + lastMatch[0].length;
     const replacement = section === "" ? "" : `\n\n${section}`;
     return `${body.slice(0, startIndex)}${replacement}${body.slice(endIndex)}`;
+  }
+  // A human renamed the heading, so the heading-qualified match found nothing:
+  // replace the block we wrote (start marker on its own line, any heading line,
+  // up to its end marker) instead of appending a second section. A lookalike
+  // marker inside prose has no heading line after it and is left alone.
+  const renamed = [...body.matchAll(RENAMED_SECTION_RE)];
+  if (renamed.length > 0) {
+    const last = renamed[renamed.length - 1];
+    const startIndex = last.index!;
+    const replacement = section === "" ? "" : `\n\n${section}`;
+    return `${body.slice(0, startIndex)}${replacement}${body.slice(startIndex + last[0].length)}`;
   }
   if (section === "") return body;
   const footer = body.lastIndexOf("\n\n---\n");
