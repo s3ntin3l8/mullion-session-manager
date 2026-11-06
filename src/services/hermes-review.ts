@@ -832,7 +832,10 @@ async function findLiveMarkerRun(
   // wedged (status reports it as overdue), and this Mullion cannot stop a run it
   // did not dispatch — refusing on it would block the head until Hermes drops the
   // run, so it no longer counts as in flight.
-  if (Date.now() - Date.parse(marker.startedAt) > REVIEW_STUCK_AFTER_MS) return null;
+  // A marker with no start time (GitHub leaves it empty for a queued check run)
+  // cannot be aged, and blocking on it would be indefinite: treat it as wedged.
+  const startedAtMs = Date.parse(marker.startedAt);
+  if (Number.isNaN(startedAtMs) || Date.now() - startedAtMs > REVIEW_STUCK_AFTER_MS) return null;
   try {
     const { status } = await getRun({ root, key }, marker.runId);
     if (!status || isTerminal(status) || isGone(status)) return null;

@@ -34,12 +34,13 @@ export const TASK_PUSH_REQUEST_TIMEOUT_MS = 240_000;
 export const REVIEW_STATUS_NOTE =
   "A review this Mullion did not dispatch (the repository's own workflow started it, or " +
   'the server restarted) is found through the PR\'s "Hermes review" check and comes back ' +
-  'with source: "ledger". stuck: true (stuckReason dead_run, lost_run or overdue) means ' +
-  "nothing is working on it any more: tell the human, and do NOT @mention the review bot — " +
-  "that queues another run behind the dead one. A dead run no longer counts as in flight, " +
-  "so request_review may be called again. not_found means there is no run known here and " +
-  "no review check on the PR's head; unknown means Hermes answered with something " +
-  "unreadable — retry later.";
+  'with source: "ledger". stuck: true means it will not finish on its own: with stuckReason ' +
+  "dead_run or lost_run nothing is working on it any more; with overdue Hermes still calls it " +
+  "running after an hour (stop_review stops it if you requested it). Either way tell the " +
+  "human, and do NOT @mention the review bot — that queues another run behind the stuck one. " +
+  "A dead run no longer counts as in flight, so request_review may be called again. not_found " +
+  "without a runId means there is no run known here and no review check on the PR's head; " +
+  "unknown means Hermes answered with something unreadable — retry later.";
 
 /**
  * The first lines of `mullion review status`: the run and its state, where it
@@ -47,7 +48,9 @@ export const REVIEW_STATUS_NOTE =
  * `not_found` is a single line.
  */
 export function reviewStatusLines(r) {
-  if (r.status === "not_found") {
+  // "No run known" only when there is no run: a ledger answer, or a relay run
+  // Hermes has lost, keeps its run id and Hermes' own `not_found` status.
+  if (r.status === "not_found" && !r.runId) {
     return [
       `no review run known for ${r.repo}#${r.prNumber} — none requested from this Mullion (or the server restarted), and no "Hermes review" check on the PR's head`,
     ];
@@ -59,7 +62,12 @@ export function reviewStatusLines(r) {
   const lines = [`review run ${r.runId} for ${r.repo}#${r.prNumber}: ${r.status}${origin}`];
   // The one thing an agent must not do about a dead review is @mention the bot:
   // that queues another run behind it (the relay's own rule).
-  if (r.stuck) {
+  if (r.stuck && r.stuckReason === "overdue") {
+    // Hermes still calls it running, so "nothing is working on it" would be wrong.
+    lines.push(
+      `stuck (overdue) — Hermes still reports it ${r.status} after an hour, so it is likely wedged; stop it with "mullion review stop ${r.runId}" if you requested it, otherwise tell the human; do not @mention the review bot`,
+    );
+  } else if (r.stuck) {
     lines.push(
       `stuck (${r.stuckReason}) — nothing is working on this review; tell the human, and do not @mention the review bot`,
     );

@@ -1800,7 +1800,7 @@ function markerNote(result) {
 
 function formatReviewStatus(r) {
   const lines = reviewStatusLines(r);
-  if (r.status === "not_found") return lines[0];
+  if (r.status === "not_found" && !r.runId) return lines[0];
   if (r.shuttingDown) lines.push("the review gateway is shutting down");
   if (r.error) lines.push(`error: ${r.error}`);
   if (r.output) lines.push(`reply: ${r.output}`);

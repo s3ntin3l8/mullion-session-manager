@@ -366,6 +366,13 @@ describe("hermes review relay — ledger marker", () => {
         await expect(request()).resolves.toMatchObject({ runId: "run_1" });
       });
 
+      it("does not block indefinitely on a marker with no start time", async () => {
+        // GitHub leaves started_at empty for a queued check run; it cannot be aged.
+        withMarkers(markerRun({ started_at: null }));
+        runEndpoint = hermesRun("running");
+        await expect(request()).resolves.toMatchObject({ runId: "run_1" });
+      });
+
       it("lets the request through when the marker cannot be read", async () => {
         checkRuns = async () => new Response("boom", { status: 500 });
         await expect(request()).resolves.toMatchObject({ runId: "run_1" });

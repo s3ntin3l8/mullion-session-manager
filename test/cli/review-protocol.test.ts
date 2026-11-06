@@ -32,6 +32,37 @@ describe("reviewStatusLines", () => {
     expect(lines[1]).toContain("do not @mention the review bot");
   });
 
+  it("keeps a ledger answer whose run Hermes lost, with the lost_run advice", () => {
+    // Hermes' own status is `not_found`, but there IS a run: the marker names it.
+    const lines = reviewStatusLines({
+      ...base,
+      status: "not_found",
+      source: "ledger",
+      stuck: true,
+      stuckReason: "lost_run",
+    });
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("review run run_wf for acme/widgets#42: not_found");
+    expect(lines[0]).toContain("started outside this Mullion");
+    expect(lines[0]).not.toContain("no review run known");
+    expect(lines[1]).toContain("stuck (lost_run)");
+    expect(lines[1]).toContain("do not @mention the review bot");
+  });
+
+  it("does not say nothing is working on an overdue run Hermes still calls running", () => {
+    const [, advice] = reviewStatusLines({
+      ...base,
+      status: "running",
+      stuck: true,
+      stuckReason: "overdue",
+    });
+    expect(advice).toContain("stuck (overdue)");
+    expect(advice).toContain("still reports it running");
+    expect(advice).not.toContain("nothing is working");
+    expect(advice).toContain("mullion review stop run_wf");
+    expect(advice).toContain("do not @mention the review bot");
+  });
+
   it("is a single line for not_found, naming the missing review check", () => {
     const lines = reviewStatusLines({ status: "not_found", repo: "acme/widgets", prNumber: 42 });
     expect(lines).toHaveLength(1);
