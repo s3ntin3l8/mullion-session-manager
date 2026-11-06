@@ -328,7 +328,12 @@ describe("browser route (/ws/browser/:sessionId)", () => {
     // exhausted" — exercising the route's launch-failure path without
     // reaching into BrowserManager internals.
     for (let i = 0; i < 4; i++) {
-      await app.browser.getOrLaunch(9000 + i);
+      await app.browser.getOrLaunch({
+        projectId: 9000 + i,
+        hostId: "local",
+        checkoutRoot: `/x/${i}`,
+        legacy: true,
+      });
     }
 
     const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/browser/${sessionId}`);

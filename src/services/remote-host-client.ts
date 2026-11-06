@@ -1,4 +1,5 @@
 import type { AgentProtocolInfo } from "../shared/agent-protocol.js";
+import { browserTargetQuery, type BrowserTarget } from "./browser-manager.js";
 import { renderScrollback } from "./scrollback-render.js";
 import type { GitIdentity } from "./git-env.js";
 import type { SessionGithubAuth } from "./session-github-token.js";
@@ -2262,24 +2263,25 @@ export class RemoteHostClient {
     return this.inboundStream(requestTarget, false);
   }
 
-  browserAutomationAction(sessionId: number, projectId: number, body: unknown): Promise<unknown> {
-    return this.request(`/internal/sessions/${sessionId}/browser?projectId=${projectId}`, {
+  /** POST to an agent browser route, naming the target in the query. */
+  postBrowser(path: string, target: BrowserTarget, body?: unknown): Promise<unknown> {
+    return this.request(`${path}?${browserTargetQuery(target)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: body === undefined ? undefined : JSON.stringify(body),
     });
   }
 
-  browserAutomationFind(sessionId: number, projectId: number, body: unknown): Promise<unknown> {
-    return this.request(`/internal/sessions/${sessionId}/browser/find?projectId=${projectId}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
+  browserAutomationAction(sessionId: number, target: BrowserTarget, body: unknown) {
+    return this.postBrowser(`/internal/sessions/${sessionId}/browser`, target, body);
   }
 
-  openBrowserWs(sessionId: number, projectId: number): NodeWebSocket {
-    const requestTarget = `/internal/ws/browser/${sessionId}?projectId=${projectId}`;
+  browserAutomationFind(sessionId: number, target: BrowserTarget, body: unknown) {
+    return this.postBrowser(`/internal/sessions/${sessionId}/browser/find`, target, body);
+  }
+
+  openBrowserWs(sessionId: number, target: BrowserTarget): NodeWebSocket {
+    const requestTarget = `/internal/ws/browser/${sessionId}?${browserTargetQuery(target)}`;
     return this.inboundStream(requestTarget, false);
   }
 

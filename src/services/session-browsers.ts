@@ -1,6 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { eq, and, ne } from "drizzle-orm";
-import { sessionBrowsers } from "../db/schema.js";
+import { projects, sessionBrowsers } from "../db/schema.js";
+import { browserTargetKey, type BrowserTarget } from "./browser-manager.js";
+import { BROWSER_TARGETS_OPERATION, bindingBrowserTarget } from "./browser-target.js";
+import { requireOperation } from "./host-agents.js";
+import { LOCAL_HOST_ID } from "./host-registry.js";
+import { getRemoteHostClient } from "./remote-host-client.js";
 
 // Phase 3, issue #182 — the sessionId<->projectId binding table itself
 // (schema.ts) has the full rationale for why this is one row per session
@@ -9,25 +14,29 @@ import { sessionBrowsers } from "../db/schema.js";
 // across every session in it, so there's nothing distinct for a second
 // binding to point at yet.
 
-/** Upserts the (sessionId, projectId) binding — called from
- * attachSocketToBrowser (routes/browser.ts) on every successful connect, so
- * `lastAttachedAt` also tracks "was this session's browser recently used." */
+/** Upserts the (sessionId, projectId, target) binding — called whenever a
+ * session's browser is attached or driven, so `lastAttachedAt` also tracks
+ * "was this session's browser recently used." The target is written once and
+ * never re-set: an open panel stays on its original target even if the
+ * session's placement or the user's focus later changes. */
 export function recordSessionBrowserBinding(
   app: FastifyInstance,
   sessionId: number,
-  projectId: number,
+  target: BrowserTarget,
 ): void {
   const now = new Date();
   app.db
     .insert(sessionBrowsers)
-    .values({ sessionId, projectId, createdAt: now, lastAttachedAt: now })
+    .values({
+      sessionId,
+      projectId: target.projectId,
+      targetHostId: target.hostId,
+      targetCheckoutRoot: target.checkoutRoot,
+      createdAt: now,
+      lastAttachedAt: now,
+    })
     .onConflictDoUpdate({
       target: sessionBrowsers.sessionId,
-      // projectId isn't re-set here: a session's projectId is immutable
-      // (routes/browser.ts always resolves it fresh from the session's own
-      // row), so re-writing it on every reconnect would only ever write
-      // back the same value it already has — this way the upsert's
-      // *actual* effect (bump lastAttachedAt) is unambiguous.
       set: { lastAttachedAt: now },
     })
     .run();
@@ -76,23 +85,52 @@ export function closeSessionBrowserBindings(app: FastifyInstance, sessionId: num
 
     app.db.delete(sessionBrowsers).where(eq(sessionBrowsers.sessionId, sessionId)).run();
 
-    const projectIds = new Set(bindings.map((b) => b.projectId));
-    for (const projectId of projectIds) {
-      const [stillBound] = app.db
+    for (const binding of bindings) {
+      const [project] = app.db
+        .select()
+        .from(projects)
+        .where(eq(projects.id, binding.projectId))
+        .all();
+      if (!project) continue;
+      const target = bindingBrowserTarget(project, binding);
+      if (!target) continue;
+      const key = `${target.hostId}\0${browserTargetKey(target)}`;
+      const stillBound = app.db
         .select()
         .from(sessionBrowsers)
         .where(
-          and(eq(sessionBrowsers.projectId, projectId), ne(sessionBrowsers.sessionId, sessionId)),
+          and(
+            eq(sessionBrowsers.projectId, binding.projectId),
+            ne(sessionBrowsers.sessionId, sessionId),
+          ),
         )
-        .limit(1)
-        .all();
-      if (stillBound) continue; // another session still uses this project's browser
+        .all()
+        .some((other) => {
+          const otherTarget = bindingBrowserTarget(project, other);
+          return (
+            otherTarget !== null &&
+            `${otherTarget.hostId}\0${browserTargetKey(otherTarget)}` === key
+          );
+        });
+      if (stillBound) continue; // another session still uses this target's browser
 
-      app.browser.closeForProject(projectId).catch((err) => {
-        app.log.warn({ err, projectId, sessionId }, "failed to close session's project browser");
+      closeBrowserTarget(app, target).catch((err) => {
+        app.log.warn({ err, target, sessionId }, "failed to close session's browser target");
       });
     }
   } catch (err) {
     app.log.warn({ err, sessionId }, "failed to tear down session's browser binding");
   }
+}
+
+/** Closes one target's browser on the host that runs it: this process for the
+ * local host, the owning agent otherwise. A host that cannot be reached or
+ * predates per-target browsers keeps its browser until it restarts. */
+async function closeBrowserTarget(app: FastifyInstance, target: BrowserTarget): Promise<void> {
+  if (target.hostId === LOCAL_HOST_ID) {
+    await app.browser.closeTarget(target);
+    return;
+  }
+  if (!requireOperation(app, target.hostId, BROWSER_TARGETS_OPERATION).ok) return;
+  await getRemoteHostClient(app, target.hostId).postBrowser("/internal/browser/close", target);
 }

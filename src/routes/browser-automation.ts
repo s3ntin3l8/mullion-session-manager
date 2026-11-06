@@ -1,12 +1,14 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import type { Frame, Page } from "playwright";
 import { eq } from "drizzle-orm";
 import fs from "node:fs";
-import { sessions, projects } from "../db/schema.js";
+import { sessions } from "../db/schema.js";
 import { isSafeNavigationUrl } from "./browser.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
-import type { DownloadEntry } from "../services/browser-manager.js";
+import type { BrowserTarget, DownloadEntry } from "../services/browser-manager.js";
+import { resolveSessionBrowserTarget } from "../services/browser-target.js";
+import { recordSessionBrowserBinding } from "../services/session-browsers.js";
 
 // Phase 3, issue #183 — REST API for an agent to control a session's bound
 // browser programmatically: navigate/snapshot/click/fill/eval/screenshot,
@@ -457,7 +459,7 @@ export async function executeBrowserAction(
   app: FastifyInstance,
   page: Page,
   body: AgentAction,
-  projectId: number,
+  target: BrowserTarget,
 ): Promise<Record<string, unknown>> {
   // Issue #382 (3.11) — extracted once, ahead of the switch, so every guard
   // below (and the trailing response fold) sees the same value regardless
@@ -586,7 +588,7 @@ export async function executeBrowserAction(
       break;
     }
     case "dialog": {
-      const managed = await app.browser.getOrLaunch(projectId);
+      const managed = await app.browser.getOrLaunch(target);
       if (body.value) {
         managed.dialogAction = body.value;
       } else {
@@ -644,12 +646,12 @@ export async function executeBrowserAction(
       break;
     }
     case "console": {
-      const managed = await app.browser.getOrLaunch(projectId);
+      const managed = await app.browser.getOrLaunch(target);
       result = { logs: managed.consoleLogs };
       break;
     }
     case "errors": {
-      const managed = await app.browser.getOrLaunch(projectId);
+      const managed = await app.browser.getOrLaunch(target);
       result = { errors: managed.pageErrors };
       break;
     }
@@ -662,7 +664,7 @@ export async function executeBrowserAction(
       // to timeout_ms for the listener to push a first entry — it never
       // itself waits on `page.waitForEvent("download")`, which would miss a
       // download that already started/finished before this call.
-      const managed = await app.browser.getOrLaunch(projectId);
+      const managed = await app.browser.getOrLaunch(target);
       const timeoutMs = clampDownloadTimeoutMs(body.timeout_ms);
       const maxBytes = clampDownloadMaxBytes(body.max_bytes);
       const wantContents = body.contents === true;
@@ -708,7 +710,7 @@ export async function executeBrowserAction(
   // not whichever context a `frame` field happened to scope this one
   // action to.
   const [snapshot, title] = await Promise.all([snapshotPage(root), page.title()]);
-  const managed = await app.browser.getOrLaunch(projectId);
+  const managed = await app.browser.getOrLaunch(target);
   return {
     ok: true,
     url: page.url(),
@@ -751,12 +753,28 @@ export async function executeBrowserFind(
 }
 
 export async function browserAutomationRoute(app: FastifyInstance): Promise<void> {
-  async function resolveSessionPage(
-    sessionId: number,
-  ): Promise<
-    | { ok: true; page: Page; projectId: number }
-    | { ok: false; status: 400 | 404 | 502; message: string }
-  > {
+  type Resolved =
+    | { ok: true; target: BrowserTarget; page: Page | null }
+    | { ok: false; status: 400 | 404 | 501 | 502 | 503; message: string };
+
+  // The session's own execution target (host + checkout), resolved through the
+  // same resolver as the browser panel, so the agent drives the browser the
+  // human sees. Refusals are reported as such: there is no fallback to the
+  // project's host or checkout. `page` is null for a remote target (the
+  // owning agent runs the browser).
+  async function resolveSessionTarget(sessionId: number): Promise<Resolved> {
+    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    if (!row) return { ok: false, status: 404, message: `No session ${sessionId}` };
+
+    const resolved = await resolveSessionBrowserTarget(app, row.projectId, sessionId);
+    if (!resolved.ok) return resolved;
+    const { target } = resolved;
+    // A remote target is driven by its own agent, whose browser setting
+    // decides; this primary's switch only governs the browsers it hosts.
+    if (target.hostId !== LOCAL_HOST_ID) {
+      recordSessionBrowserBinding(app, sessionId, target);
+      return { ok: true, target, page: null };
+    }
     if (!app.browserEnabled) {
       return {
         ok: false,
@@ -765,19 +783,21 @@ export async function browserAutomationRoute(app: FastifyInstance): Promise<void
           "Browser feature is disabled — turn it on in Settings → Browser (or set BROWSER_ENABLED=true), then restart the Mullion server.",
       };
     }
-    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
-    if (!row) return { ok: false, status: 404, message: `No session ${sessionId}` };
+    // Driving a session's browser binds it, so closing the session closes a
+    // target nobody else uses (also when only the agent ever opened it).
+    recordSessionBrowserBinding(app, sessionId, target);
 
     try {
-      const managed = await app.browser.getOrLaunch(row.projectId);
-      return { ok: true, page: managed.page, projectId: row.projectId };
+      const managed = await app.browser.getOrLaunch(target);
+      return { ok: true, target, page: managed.page };
     } catch (err) {
-      app.log.error(
-        { err, sessionId, projectId: row.projectId },
-        "failed to launch project browser",
-      );
+      app.log.error({ err, sessionId, target }, "failed to launch target browser");
       return { ok: false, status: 502, message: (err as Error).message };
     }
+  }
+
+  function refuse(reply: FastifyReply, resolved: Extract<Resolved, { ok: false }>) {
+    return reply.send(app.httpErrors.createError(resolved.status, resolved.message));
   }
 
   app.post<{ Params: { id: string }; Body: AgentAction }>(
@@ -787,45 +807,28 @@ export async function browserAutomationRoute(app: FastifyInstance): Promise<void
       const sessionId = Number(request.params.id);
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
 
-      const [sessionRow] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
-      if (!sessionRow) return reply.notFound(`No session ${sessionId}`);
+      const resolved = await resolveSessionTarget(sessionId);
+      if (!resolved.ok) return refuse(reply, resolved);
+      const { target, page } = resolved;
 
-      const [project] = app.db
-        .select()
-        .from(projects)
-        .where(eq(projects.id, sessionRow.projectId))
-        .all();
-      if (!project) return reply.notFound(`No project for session ${sessionId}`);
-
-      if (project.hostId !== LOCAL_HOST_ID) {
+      if (!page) {
         try {
-          const client = getRemoteHostClient(app, project.hostId);
-          const response = await client.browserAutomationAction(
+          return await getRemoteHostClient(app, target.hostId).browserAutomationAction(
             sessionId,
-            project.id,
+            target,
             request.body,
           );
-          return response;
         } catch (err) {
           app.log.error(
-            { err, sessionId, hostId: project.hostId },
+            { err, sessionId, hostId: target.hostId },
             "failed to forward browser action to agent",
           );
           return reply.badGateway((err as Error).message);
         }
       }
 
-      const resolved = await resolveSessionPage(sessionId);
-      if (!resolved.ok) {
-        if (resolved.status === 404) return reply.notFound(resolved.message);
-        if (resolved.status === 502) return reply.badGateway(resolved.message);
-        return reply.badRequest(resolved.message);
-      }
-      const { page, projectId } = resolved;
-
       try {
-        const response = await executeBrowserAction(app, page, request.body, projectId);
-        return response;
+        return await executeBrowserAction(app, page, request.body, target);
       } catch (err) {
         app.log.warn(
           { err, sessionId, action: request.body.action },
@@ -843,42 +846,29 @@ export async function browserAutomationRoute(app: FastifyInstance): Promise<void
       const sessionId = Number(request.params.id);
       if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
 
-      const [sessionRow] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
-      if (!sessionRow) return reply.notFound(`No session ${sessionId}`);
+      const resolved = await resolveSessionTarget(sessionId);
+      if (!resolved.ok) return refuse(reply, resolved);
+      const { target, page } = resolved;
 
-      const [project] = app.db
-        .select()
-        .from(projects)
-        .where(eq(projects.id, sessionRow.projectId))
-        .all();
-      if (!project) return reply.notFound(`No project for session ${sessionId}`);
-
-      if (project.hostId !== LOCAL_HOST_ID) {
+      if (!page) {
         try {
-          const client = getRemoteHostClient(app, project.hostId);
-          const response = await client.browserAutomationFind(sessionId, project.id, request.body);
-          return response;
+          return await getRemoteHostClient(app, target.hostId).browserAutomationFind(
+            sessionId,
+            target,
+            request.body,
+          );
         } catch (err) {
           app.log.error(
-            { err, sessionId, hostId: project.hostId },
+            { err, sessionId, hostId: target.hostId },
             "failed to forward browser find to agent",
           );
           return reply.badGateway((err as Error).message);
         }
       }
 
-      const resolved = await resolveSessionPage(sessionId);
-      if (!resolved.ok) {
-        if (resolved.status === 404) return reply.notFound(resolved.message);
-        if (resolved.status === 502) return reply.badGateway(resolved.message);
-        return reply.badRequest(resolved.message);
-      }
-      const { page } = resolved;
-
       try {
         const root = await resolveSearchRoot(page, request.body.frame);
-        const response = await executeBrowserFind(app, root, request.body);
-        return response;
+        return await executeBrowserFind(app, root, request.body);
       } catch (err) {
         app.log.warn({ err, sessionId }, "browser automation find failed");
         return reply.badRequest((err as Error).message);

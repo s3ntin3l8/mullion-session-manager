@@ -3,7 +3,9 @@ import type { WebSocket } from "@fastify/websocket";
 import type { Page, Frame } from "playwright";
 import { createHash } from "node:crypto";
 import { eq } from "drizzle-orm";
-import { sessions, projects } from "../db/schema.js";
+import { sessions } from "../db/schema.js";
+import type { BrowserTarget } from "../services/browser-manager.js";
+import { resolveSessionBrowserTarget } from "../services/browser-target.js";
 import { recordSessionBrowserBinding } from "../services/session-browsers.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
@@ -18,11 +20,11 @@ import { getStoredSettings } from "../services/settings.js";
 // queuing them, and per-connection state is torn down on socket close.
 //
 // Keyed by :sessionId (matching #180's own route shape) but resolves to the
-// session's *project* browser — BrowserManager pools one Chromium instance
-// per project (#179), not per session. Explicit session<->browser binding
-// (which browser a session's automation calls target by default) is #182;
-// this route only needs the session's project to find/launch the right
-// pooled instance.
+// session's *execution target* browser (issue #2448) — BrowserManager pools
+// one Chromium instance per target (project + host + checkout), not per
+// session, so sessions sharing a checkout share a browser and a session on
+// another host or worktree gets its own. The target is resolved through the
+// shared execution-context resolver and bound when the panel opens.
 //
 // Frame capture is per-connection, not fanned out from a single shared
 // capture loop: simpler and correct for the common case (one viewer per
@@ -403,22 +405,25 @@ async function dispatchInput(
 
 export interface AttachBrowserParams {
   sessionId: number;
-  projectId: number;
+  /** The execution target the panel is bound to when it opens; it stays on it
+   * for the life of the socket, whatever the session focus does afterwards. */
+  target: BrowserTarget;
 }
 
-/** Attaches a browser WS socket to the session's project browser: launches
- * (or reuses) the pooled Chromium instance, streams diffed JPEG frames at
+/** Attaches a browser WS socket to the target's browser: launches (or reuses)
+ * the pooled Chromium instance, streams diffed JPEG frames at
  * BROWSER_FRAMERATE, and proxies input/navigation. Exported for tests. */
 export async function attachSocketToBrowser(
   app: FastifyInstance,
   socket: WebSocket,
-  { sessionId, projectId }: AttachBrowserParams,
+  { sessionId, target }: AttachBrowserParams,
 ): Promise<void> {
+  const { projectId } = target;
   let managed;
   try {
-    managed = await app.browser.getOrLaunch(projectId);
+    managed = await app.browser.getOrLaunch(target);
   } catch (err) {
-    app.log.error({ err, sessionId, projectId }, "failed to launch project browser");
+    app.log.error({ err, sessionId, target }, "failed to launch target browser");
     if (socket.readyState === socket.OPEN) {
       socket.send(JSON.stringify({ type: "error", message: (err as Error).message }));
       socket.close();
@@ -430,8 +435,9 @@ export async function attachSocketToBrowser(
   // launch) getOrLaunch() above resolves.
   if (socket.readyState !== socket.OPEN) return;
 
-  // #182 — "when a session spawns a browser pane, record the binding."
-  recordSessionBrowserBinding(app, sessionId, projectId);
+  // #182 — "when a session spawns a browser pane, record the binding." An
+  // agent host has no DB; the primary records the binding for its sessions.
+  if (app.hasDecorator("db")) recordSessionBrowserBinding(app, sessionId, target);
 
   const { page, browser } = managed;
   let closed = false;
@@ -535,17 +541,17 @@ export async function attachSocketToBrowser(
 function proxyToRemoteBrowser(
   app: FastifyInstance,
   browserSocket: WebSocket,
-  hostId: string,
   sessionId: number,
-  projectId: number,
+  target: BrowserTarget,
 ): void {
+  const { hostId } = target;
   const closeBrowser = () => {
     if (browserSocket.readyState === browserSocket.OPEN) browserSocket.close();
   };
 
   let upstream: ReturnType<ReturnType<typeof getRemoteHostClient>["openBrowserWs"]>;
   try {
-    upstream = getRemoteHostClient(app, hostId).openBrowserWs(sessionId, projectId);
+    upstream = getRemoteHostClient(app, hostId).openBrowserWs(sessionId, target);
   } catch (err) {
     app.log.error({ err, hostId, sessionId }, "failed to open remote browser WS upgrade");
     closeBrowser();
@@ -608,12 +614,31 @@ export async function browserRoute(app: FastifyInstance): Promise<void> {
       // preValidation above already confirmed this session exists.
       const sessionId = Number(req.params.sessionId);
       const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
-      const [project] = app.db.select().from(projects).where(eq(projects.id, row.projectId)).all();
-      if (project && project.hostId !== LOCAL_HOST_ID) {
-        proxyToRemoteBrowser(app, socket, project.hostId, sessionId, row.projectId);
-      } else {
-        void attachSocketToBrowser(app, socket, { sessionId, projectId: row.projectId });
-      }
+      // The session's own host and checkout, resolved once when the panel
+      // opens: the socket keeps this target for its whole life, and a refused
+      // target is reported, never replaced by the project's.
+      void resolveSessionBrowserTarget(app, row.projectId, sessionId)
+        .then((resolved) => {
+          if (!resolved.ok) {
+            app.log.warn({ sessionId, reason: resolved.message }, "browser target unavailable");
+            if (socket.readyState === socket.OPEN) {
+              socket.send(JSON.stringify({ type: "error", message: resolved.message }));
+              socket.close();
+            }
+            return;
+          }
+          const { target } = resolved;
+          if (target.hostId !== LOCAL_HOST_ID) {
+            recordSessionBrowserBinding(app, sessionId, target);
+            proxyToRemoteBrowser(app, socket, sessionId, target);
+          } else {
+            return attachSocketToBrowser(app, socket, { sessionId, target });
+          }
+        })
+        .catch((err) => {
+          app.log.error({ err, sessionId }, "failed to attach browser socket");
+          if (socket.readyState === socket.OPEN) socket.close();
+        });
     },
   );
 }

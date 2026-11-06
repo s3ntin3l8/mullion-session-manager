@@ -897,6 +897,14 @@ export const sessionBrowsers = sqliteTable(
     lastAttachedAt: integer("last_attached_at", { mode: "timestamp" })
       .notNull()
       .$defaultFn(() => new Date()),
+    // Issue #2448 — the execution target (host + checkout) this session's
+    // browser was bound to when it was first attached, so a later focus or
+    // placement change never re-points an open panel or automation at another
+    // checkout's browser. Both NULL on a row written before targets existed:
+    // that is the explicit legacy mapping to the project's default target
+    // (project host, project checkout) — see services/session-browsers.ts.
+    targetHostId: text("target_host_id"),
+    targetCheckoutRoot: text("target_checkout_root"),
   },
   (table) => [uniqueIndex("session_browsers_session_id_unique").on(table.sessionId)],
 );

@@ -1956,6 +1956,10 @@ host is superseded twice within 60 s the primary logs a warning naming only the
 host id: two daemons appear to share one machine credential (a cloned VM, a
 restored backup, a duplicated state dir). Give each machine its own enrollment.
 
+## Browser on the session's host and checkout
+
+A session's browser (pane and agent automation) runs on the session's own host and is keyed by its checkout, so two sessions on different hosts or worktrees never share cookies, navigation or downloads, and `localhost` means that host's loopback. A host whose Mullion lacks the `browser-targets` operation is refused with an update hint rather than served a project-wide browser. Details: [browser-automation.md](browser-automation.md#execution-targets).
+
 ## Current limitations
 
 - Self-registration has no admin-approval queue — any holder of

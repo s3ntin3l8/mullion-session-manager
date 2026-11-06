@@ -4,6 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
+import { sessionBrowserTarget } from "../helpers/browser-target.js";
 
 // POST /api/sessions/:id/browser and its /find sibling are plain REST
 // endpoints, so app.inject() (not a real WebSocket) exercises them fully —
@@ -349,9 +350,7 @@ describe("browser automation API (issue #183)", () => {
     delete process.env.BROWSER_ENABLED;
   });
 
-  afterEach(() => {
-    launchedPages.length = 0;
-  });
+  afterEach(() => void (launchedPages.length = 0));
 
   async function createProjectAndSession(app: Awaited<ReturnType<typeof buildApp>>) {
     const project = await app.inject({
@@ -372,8 +371,8 @@ describe("browser automation API (issue #183)", () => {
     // route handler under test. Swallowed when the disabled-flag test below
     // has deliberately turned BROWSER_ENABLED off first — that test never
     // reads launchedPages anyway.
-    await app.browser.getOrLaunch(projectId).catch(() => {});
-    return { projectId, sessionId: session.json().id as number };
+    const sessionId = session.json().id as number;
+    return { projectId, sessionId, target: await sessionBrowserTarget(app, projectId, sessionId) };
   }
 
   it("400s when BROWSER_ENABLED is false", async () => {
@@ -1288,7 +1287,7 @@ describe("browser automation API (issue #183)", () => {
 
     it("clear does not drop a download that completes concurrently, between reading and clearing", async () => {
       const app = await buildApp();
-      const { sessionId, projectId } = await createProjectAndSession(app);
+      const { sessionId, target } = await createProjectAndSession(app);
       const page = launchedPages[0];
       page.emit("download", new FakeDownload("existing.csv"));
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -1297,7 +1296,7 @@ describe("browser automation API (issue #183)", () => {
       // AFTER the route has already read it (to build its response) but
       // BEFORE it splices — by monkeypatching indexOf on the array to push a
       // concurrent entry the first time it's called, mid-clear.
-      const managed = await app.browser.getOrLaunch(projectId);
+      const managed = await app.browser.getOrLaunch(target);
       const originalIndexOf = managed.downloads.indexOf.bind(managed.downloads);
       let injected = false;
       managed.downloads.indexOf = ((...args: Parameters<typeof originalIndexOf>) => {
@@ -1334,7 +1333,7 @@ describe("browser automation API (issue #183)", () => {
 
     it("sanitizes a suggestedFilename containing '../' and path separators before saving", async () => {
       const app = await buildApp();
-      const { sessionId, projectId } = await createProjectAndSession(app);
+      const { sessionId, projectId, target } = await createProjectAndSession(app);
       const page = launchedPages[0];
       page.emit("download", new FakeDownload("../../../etc/passwd"));
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -1349,7 +1348,7 @@ describe("browser automation API (issue #183)", () => {
       const [entry] = res.json().downloads;
       expect(entry.filename).not.toContain("..");
       expect(entry.filename).not.toContain("/");
-      const managed = await app.browser.getOrLaunch(projectId);
+      const managed = await app.browser.getOrLaunch(target);
       const expectedDir = path.join(
         app.config.BROWSER_DATA_DIR,
         "downloads",
@@ -1367,9 +1366,9 @@ describe("browser automation API (issue #183)", () => {
 
     it("evicts the oldest entries beyond the 50-entry cap and deletes their files from disk", async () => {
       const app = await buildApp();
-      const { projectId } = await createProjectAndSession(app);
+      const { target } = await createProjectAndSession(app);
       const page = launchedPages[0];
-      const managed = await app.browser.getOrLaunch(projectId);
+      const managed = await app.browser.getOrLaunch(target);
 
       // Poll for each download's own entry to land before firing the next
       // — a blind fixed sleep here would be flaky (the handler's real,

@@ -457,3 +457,7 @@ Destinations accept a port, `IP:port`, `hostname:port`, or a full HTTP(S) URL wi
 Named targets require `PREVIEW_BASE_HOST`. Each has its own stable pane and preview slug. Reopening or reloading uses its saved destination; removing a target removes its registered preview. Targets are explicit destinations, independent of Docker discovery, monitor lifecycle, bookmarks, and branch/PR previews.
 
 Named targets on remote hosts use a separate authenticated configured-target transport which permits explicit loopback/private HTTP(S) destinations, with DNS pinning and credentials stripped before the onward hop. This expands the capability of the trusted primary for these configured requests; the legacy remote dev-server transport remains loopback-only. Upgrade the owning host if it does not yet support named targets. An unavailable host never causes a fallback to a different connection origin.
+
+## Browser panes follow the session's execution target
+
+The Browser pane and the agent's `use_browser` automation open the session's own execution target (host and checkout), the same one its preview and git routes use, not the project's. A pane stays on the target it was opened on when the session focus changes. See [Browser automation → Execution targets](browser-automation.md#execution-targets).

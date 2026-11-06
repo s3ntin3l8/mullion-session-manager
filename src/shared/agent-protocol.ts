@@ -31,6 +31,7 @@ export const AGENT_OPERATIONS = [
   "dock",
   "previews",
   "browser",
+  "browser-targets",
   "uploads",
   "updates",
   "capacity",
@@ -96,6 +97,7 @@ const LATE_OPERATIONS: ReadonlySet<string> = new Set([
   "updates",
   "channel-requests",
   "channel-streams",
+  "browser-targets",
 ]);
 
 /**
