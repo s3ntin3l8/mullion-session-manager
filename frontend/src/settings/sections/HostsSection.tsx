@@ -437,9 +437,13 @@ export function HostsSection() {
                 subtitle={
                   <>
                     {host.baseUrl ??
-                      (host.paired
-                        ? "paired — waiting for the Helper to connect"
-                        : "waiting for the agent to register")}
+                      (host.health === "online"
+                        ? "connected over the outbound channel"
+                        : host.paired
+                          ? "paired — waiting for the Helper to connect"
+                          : host.hasMachineIdentity
+                            ? "outbound only — waiting for the agent to connect"
+                            : "waiting for the agent to register")}
                     {host.unclaimed && (
                       <>
                         {" · "}

@@ -54,9 +54,13 @@ The agent registers itself against the primary's
 MULLION_ROLE=agent
 MULLION_PRIMARY_URL=https://primary.example.com
 MULLION_ENROLLMENT_TOKEN=<fleet-wide-secret, matches the primary's MULLION_ENROLLMENT_SECRET>
-MULLION_AGENT_ADVERTISE_URL=http://192.168.1.20:4000   # optional; defaults to http://<hostname>:<PORT>
+MULLION_AGENT_ADVERTISE_URL=http://192.168.1.20:4000   # optional; leave unset for an outbound-only agent (below)
 MULLION_AGENT_NAME=home-server                          # optional; defaults to the hostname
 ```
+
+An agent needs **no advertised URL and no inbound port**: it dials the primary
+(see [Outbound-only agents](#outbound-only-agents-no-advertised-url-or-inbound-port)).
+Set `MULLION_AGENT_ADVERTISE_URL` only for a primary that must dial this agent.
 
 > **Use `https://` for `MULLION_PRIMARY_URL` outside a trusted network.** The
 > outbound agent channel (`/ws/agent-channel`) sends the machine credential in
@@ -191,7 +195,9 @@ in `machine_credential`.
   unused extra row, because the agent has no identity yet to dedupe on; delete
   it from the Hosts list.
 
-Advertised URLs must be unique per legacy agent, the same requirement manual
+Advertised URLs must be unique per _legacy_ agent (one without a machine
+identity; an identity-bearing agent is matched by host id and may share or omit
+its URL), the same requirement manual
 registration already has implicitly. `MULLION_AGENT_ADVERTISE_URL`'s
 `http://<hostname>:<PORT>` fallback only produces a unique URL if hostnames
 are actually unique across your fleet (true for most cloud/container
@@ -1854,6 +1860,41 @@ WebSocket. It carries the primary's request/response operations (#2451) and the
 four streams (#2571: terminal attach, events, the control relay and ssh-agent); see [agent-channel.md](agent-channel.md) for the contract.
 `GET /api/hosts` reports it as `channel`, separate from the credential state.
 
+### Outbound-only agents (no advertised URL or inbound port)
+
+An agent that persists a machine identity (every current build) registers with
+the primary and then operates with **no `MULLION_AGENT_ADVERTISE_URL`, no
+`HOST`/`PORT` setting and no inbound firewall rule or port-forward**. Identity
+is the host id and machine credential (#2568), never the address.
+
+What the agent advertises at registration:
+
+| Agent configuration                                          | `baseUrl` sent                                                |
+| ------------------------------------------------------------ | ------------------------------------------------------------- |
+| `MULLION_AGENT_ADVERTISE_URL` set                            | that value (unchanged)                                        |
+| unset, `HOST` listens on a routable address (`0.0.0.0`, LAN) | `http://<hostname>:<PORT>`, the old guess (unchanged)         |
+| unset, `HOST` is loopback (the default)                      | none: the host row has no URL and is reached over its channel |
+
+A primary older than this change requires a URL (it answers 400 without one);
+the agent then retries once with the old `http://<hostname>:<PORT>` guess, so a
+new agent still registers against it and is reached inbound, as before. A
+renewal that sends no URL clears an enrolled row's stale one; a manually-added
+host keeps the URL its admin set.
+
+The Hosts list and `GET /api/hosts` show such a host as `online` once its
+channel is up (the heartbeat probes it over the channel), `pending` before the
+first connection and `offline` after the channel drops; `baseUrl` is `null`.
+Inbound hosts are shown as before. The installer
+(`deploy/install.sh --role agent`) writes neither a URL nor `HOST`/`PORT` unless
+you pass `MULLION_AGENT_ADVERTISE_URL` / `MULLION_AGENT_HOST` /
+`MULLION_AGENT_PORT`, which are still accepted exactly as before; a rerun never
+rewrites an existing `.env`.
+
+**Until #2571 moves streams onto the channel, a host with no URL cannot do
+terminal attach, live events, the control relay, ssh-agent fan-out, previews or
+file transfers** (they fail as unreachable with "no advertised address"). Give
+it a reachable URL (and listen address) if you need those today.
+
 ### Mixed fleets: which transport a host uses
 
 | Agent                                                                                    | Transport for request/response calls and streams                                                                                                                                                                                                                                                                                                                                               |
@@ -1868,9 +1909,10 @@ the control relay and ssh-agent forwarding over the channel; one that only
 negotiated `channel-requests` keeps dialing the advertised URL for those four. Once a host
 has negotiated `channel-streams`, a stream whose channel is down fails as
 unreachable and is **never** opened on the advertised URL. Previews, the
-browser WebSocket, the file-browser transfers and the `/health` ping still dial
-the advertised URL until #2572, so a host still needs that URL and inbound
-reachability for them.
+browser WebSocket and the file-browser transfers still dial the advertised URL,
+so a host with no advertised URL cannot use them. The liveness ping of a host
+with **no** advertised URL goes over the channel (#2572); a host with a URL
+keeps the unauthenticated `/health` probe.
 
 The existing limits are unchanged: 64 relayed control-relay connections per host
 and 16 open streams per connection (nested inside one channel stream), 256 ssh-agent channels,
@@ -1889,7 +1931,12 @@ re-running it: the session list after a spawn, `git status` / the branch's log
 after a git mutation, the transcript after a prompt. Reads simply report the
 host as unreachable and can be retried.
 
-**Troubleshooting.** Host shows offline but the agent runs: check `channel.ready`
+**Troubleshooting.** A host with no URL that never leaves `pending`: its channel
+has not connected; check the agent's log for `[agent-channel]` lines and that
+`MULLION_PRIMARY_URL` is reachable from the agent (outbound `https`/`wss` is
+the only network requirement). An operation failing with "no advertised
+address" is a stream that has not migrated yet (above). Host shows offline but
+the agent runs: check `channel.ready`
 on `GET /api/hosts` and the agent's `agentChannelStatus` (`rejected` = identity
 or protocol refused, `superseded` = another daemon shares the credential,
 `backoff` = redialing). A channel that keeps closing with code 4004 means the

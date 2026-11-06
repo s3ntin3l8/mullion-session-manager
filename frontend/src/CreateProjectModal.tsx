@@ -1064,7 +1064,10 @@ export function CreateProjectModal({
                 { value: LOCAL_HOST_ID, label: "This machine" },
                 ...remoteHosts.map((h) => ({
                   value: h.id,
-                  label: h.baseUrl === null ? `${h.name} (not connected yet)` : h.name,
+                  label:
+                    h.baseUrl === null && h.health !== "online"
+                      ? `${h.name} (not connected yet)`
+                      : h.name,
                 })),
               ]}
             />

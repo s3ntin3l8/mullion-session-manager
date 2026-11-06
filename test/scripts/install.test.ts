@@ -712,7 +712,7 @@ describeOnLinux("deploy/install.sh", () => {
           MULLION_AGENT_TOKEN: "fixture-agent-tok", // pragma: allowlist secret
         },
       });
-      expect(readEnvFile(defaults)).not.toMatch(/^(HOST|PORT)=/m);
+      expect(readEnvFile(defaults)).not.toMatch(/^(HOST|PORT|MULLION_AGENT_ADVERTISE_URL)=/m); // #2572
     });
 
     it("writes the self-registration credential path with no warnings", async () => {

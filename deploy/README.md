@@ -1024,7 +1024,7 @@ step by pre-creating it):
 | `MULLION_AGENT_PROJECTS_ROOTS`   | recommended (warn-only)                                       | comma-separated dirs on this host to scan for project discovery — written to `.env`'s `PROJECTS_ROOTS`. Not fail-closed like the credential paths below: an agent boots fine with this empty, it just has nothing to discover — `install.sh` prints a warning, doesn't refuse to install |
 | `MULLION_AGENT_PRIMARY_URL`      | yes, for self-registration                                    | the primary's base URL — written to `.env`'s `MULLION_PRIMARY_URL`. Use `https://` outside a trusted network: the outbound channel carries the machine credential, and the agent warns at startup on a non-loopback `http://`                                                            |
 | `MULLION_AGENT_ENROLLMENT_TOKEN` | yes, for self-registration                                    | must match the primary's `MULLION_ENROLLMENT_SECRET` — written to `.env`'s `MULLION_ENROLLMENT_TOKEN`                                                                                                                                                                                    |
-| `MULLION_AGENT_ADVERTISE_URL`    | recommended for self-registration                             | this agent's own reachable base URL; see docs/multi-host.md's note on baseUrl uniqueness across a fleet                                                                                                                                                                                  |
+| `MULLION_AGENT_ADVERTISE_URL`    | optional                                                      | this agent's own reachable base URL, only for a primary that must dial it. Not needed (and not written) for an outbound-capable agent: it dials the primary and needs no inbound port; see docs/multi-host.md's "Outbound-only agents"                                                   |
 | `MULLION_AGENT_HOST`             | optional                                                      | the address the agent listens on — written to `.env`'s `HOST`. Unset keeps the server default (`127.0.0.1`), which the primary cannot reach from another machine                                                                                                                         |
 | `MULLION_AGENT_PORT`             | optional                                                      | the port the agent listens on — written to `.env`'s `PORT`. Unset keeps the server default (3000)                                                                                                                                                                                        |
 | `MULLION_AGENT_NAME`             | optional                                                      | human label in the primary's Hosts list; defaults to hostname                                                                                                                                                                                                                            |
@@ -1099,8 +1099,9 @@ whole feature exists for):
     MULLION_AGENT_PROJECTS_ROOTS: "/home/{{ ansible_user }}/projects"
     MULLION_AGENT_PRIMARY_URL: "{{ mullion_primary_url }}"
     MULLION_AGENT_ENROLLMENT_TOKEN: "{{ mullion_enrollment_token }}"
-    # MULLION_AGENT_ADVERTISE_URL: only set this if the agent's hostname
-    # isn't already unique across your fleet — see the env contract above.
+    # No MULLION_AGENT_ADVERTISE_URL, MULLION_AGENT_HOST or MULLION_AGENT_PORT
+    # needed: the agent dials the primary, so no inbound port or URL. Set them
+    # only for a primary that must reach the agent (existing inputs still work).
   no_log: true # this task's `environment:` carries a real secret
 ```
 

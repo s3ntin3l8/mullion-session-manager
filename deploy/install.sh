@@ -625,7 +625,14 @@ EOF
 EOF
     printf 'MULLION_PRIMARY_URL=%s\n' "${MULLION_AGENT_PRIMARY_URL:-}" >>"$MULLION_HOME/.env"
     printf 'MULLION_ENROLLMENT_TOKEN=%s\n' "${MULLION_AGENT_ENROLLMENT_TOKEN:-}" >>"$MULLION_HOME/.env"
-    printf 'MULLION_AGENT_ADVERTISE_URL=%s\n' "${MULLION_AGENT_ADVERTISE_URL:-}" >>"$MULLION_HOME/.env"
+    # Issue #2572: an agent that dials the primary needs no advertised address
+    # (nor an inbound port), so none is generated. Only a caller-supplied value
+    # is written; otherwise the key stays out, with a pointer for the inbound case.
+    if [ -n "${MULLION_AGENT_ADVERTISE_URL:-}" ]; then
+      printf 'MULLION_AGENT_ADVERTISE_URL=%s\n' "$MULLION_AGENT_ADVERTISE_URL" >>"$MULLION_HOME/.env"
+    else
+      printf '# MULLION_AGENT_ADVERTISE_URL=   # only for a primary that must dial this agent (docs/multi-host.md)\n' >>"$MULLION_HOME/.env"
+    fi
     printf 'MULLION_AGENT_NAME=%s\n' "${MULLION_AGENT_NAME:-}" >>"$MULLION_HOME/.env"
     cat >>"$MULLION_HOME/.env" <<'EOF'
 
