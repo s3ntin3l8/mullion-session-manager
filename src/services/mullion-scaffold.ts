@@ -304,6 +304,12 @@ export interface ScaffoldOptions {
      * inside its own `mullion:moved` region; nothing already there is
      * touched. */
     contributingAppend?: string;
+    /** Issue #2646 — the restructure turn's report of passages it left
+     * unchanged, and its lossy-rewrite signal. A conflict about `CLAUDE.md`, or
+     * `possiblyLossy`, keeps CLAUDE.md's body instead of reducing it to the
+     * import. */
+    conflicts?: { file: string }[];
+    possiblyLossy?: boolean;
   };
   /** Issue #2473 — whether this scaffold writes the project's own skill
    * (`.claude/skills/<slug>/SKILL.md`), its reviewer subagent
@@ -696,6 +702,32 @@ function spliceRegionIntoRewrite(body: string, region: string, existingAgentsMd:
   return out;
 }
 
+/** True when the restructure turn reported a passage of `CLAUDE.md` it did not
+ * carry over (a conflict whose `file` is CLAUDE.md), or flagged the rewrite as
+ * lossy. Either way the body of CLAUDE.md must stay: dropping it would lose text
+ * the human has not been told about. */
+function claudeMdHasUncoveredPassages(
+  generated: NonNullable<ScaffoldOptions["generated"]>,
+): boolean {
+  if (generated.possiblyLossy) return true;
+  return (generated.conflicts ?? []).some((c) => /(^|\/)CLAUDE\.md$/i.test(c.file.trim()));
+}
+
+/** Issue #2646 — after a restructure moved CLAUDE.md's instructions into
+ * AGENTS.md, CLAUDE.md keeps only its title line (the first top-level `# `
+ * heading) above the pointer region, so Claude Code does not load the same text
+ * twice (the body plus the import). An empty CLAUDE.md has no title to keep and
+ * is left to the ordinary upsert; line endings follow the existing file. */
+function reduceClaudeMdToTitle(existing: string): string {
+  if (existing.trim().length === 0) return existing;
+  const lines = existing.split("\n");
+  const top = topLevelLines(lines);
+  const title = lines.find((l, i) => top[i] && /^#\s+\S/.test(l.replace(/\r$/, "")));
+  const crlf = existing.includes("\r\n");
+  const out = `${(title ?? "# CLAUDE.md").replace(/\r$/, "")}\n`;
+  return crlf ? out.replace(/\n/g, "\r\n") : out;
+}
+
 /** Removes a hand-written bare `@AGENTS.md` import line (and the HTML comment
  * block directly above it that mentions AGENTS.md) from the parts of a
  * CLAUDE.md outside the scaffold's own pointer region, so the pointer region
@@ -838,13 +870,20 @@ export function computeScaffold(
   // region, so an existing multi-section CLAUDE.md keeps everything else.
   // `stripLegacyScaffoldRegionMirror` guards against a hand-pasted legacy
   // scaffold region (see that function's own doc comment).
+  // Issue #2646 — a restructure (the rewritten AGENTS.md is accepted) also
+  // reduces CLAUDE.md to its title plus the pointer region, unless the turn
+  // reported CLAUDE.md passages it did not carry over: then the body stays and
+  // the conflicts list is what tells the human.
+  const existingClaudeMd = existingFiles["CLAUDE.md"] ?? "";
+  const reduceClaudeMd =
+    !!options.generated?.agentsMdBody && !claudeMdHasUncoveredPassages(options.generated);
   entries.push({
     path: "CLAUDE.md",
     kind: "file",
     contents: upsertMarkedRegion(
-      stripHandWrittenAgentsImport(
-        stripLegacyScaffoldRegionMirror(existingFiles["CLAUDE.md"] ?? ""),
-      ),
+      reduceClaudeMd
+        ? reduceClaudeMdToTitle(existingClaudeMd)
+        : stripHandWrittenAgentsImport(stripLegacyScaffoldRegionMirror(existingClaudeMd)),
       POINTER_MARKER_START,
       POINTER_MARKER_END,
       claudeMdImportBody(),

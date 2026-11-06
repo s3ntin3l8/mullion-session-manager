@@ -556,7 +556,7 @@ function instructionsItem(
     `conventions ("misplaced"), point at something the rewrite renamed or removed ` +
     `("stale-reference"), or are otherwise inconsistent ("other"). One JSON object per line, ` +
     `with exactly the keys "file", "excerpt" (at most 200 characters), "kind", "note" (one ` +
-    `sentence). Between the conflicts markers below; write the single word none if there are none.`
+    `sentence). Mullion reduces CLAUDE.md to its title plus an \`@AGENTS.md\` import, deleting its body: report with file "CLAUDE.md" every passage your AGENTS.md or CONTRIBUTING append does not cover (workflow rules the conventions replace excepted), and Mullion keeps CLAUDE.md as is. Between the conflicts markers below; write the single word none if there are none.`
   );
 }
 
