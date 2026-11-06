@@ -267,16 +267,23 @@ export async function resolveWorktreeCwd(
     // rejection as "host-unreachable" in the 502 body the user sees (the
     // #484 postmortem's "HostRequestError covers any 4xx, not just 404" is
     // exactly this mistake).
-    if (
-      warnHostError(
-        app.log,
-        { hostId },
-        err,
-        "resolveWorktreeCwd: host rejected the request",
-        "resolveWorktreeCwd: host unreachable",
-      )
-    ) {
-      return { created: false, reason: "host-rejected", detail: err.message };
+    const classification = warnHostError(
+      app.log,
+      { hostId },
+      err,
+      "resolveWorktreeCwd: host rejected the request",
+      "resolveWorktreeCwd: host unreachable",
+      "resolveWorktreeCwd: host busy",
+    );
+    if (classification === "rejected") {
+      return {
+        created: false,
+        reason: "host-rejected",
+        detail: err instanceof Error ? err.message : String(err),
+      };
+    }
+    if (classification === "busy") {
+      return { created: false, reason: "host-busy", detail: `Host ${hostId} is busy` };
     }
     return {
       created: false,
@@ -319,6 +326,7 @@ function logPreviewWorktreeHostError(
       err,
       `preview worktree ${op}: host rejected the request (will keep retrying, further failures suppressed until it succeeds once)`,
       `preview worktree ${op}: host unreachable (further failures suppressed until it succeeds once)`,
+      `preview worktree ${op}: host busy (will keep retrying, further failures suppressed until it succeeds once)`,
     );
   }
   return false;

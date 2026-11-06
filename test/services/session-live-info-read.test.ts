@@ -100,7 +100,7 @@ describe("readSessionLiveInfo", () => {
     expect(view.sessionStatusDetail).toBe("host rejected the request (HTTP 403)");
   });
 
-  it("treats a busy host as reachable and reports default live status", async () => {
+  it("treats a busy host as unreachable (nothing observed) and sets failure: 'busy'", async () => {
     const { HostBusyError } = await import("../../src/services/remote-host-errors.js");
     const err = new HostBusyError("mac", new Error("slot cap"));
     liveStatus.mockRejectedValue(err);
@@ -109,13 +109,28 @@ describe("readSessionLiveInfo", () => {
 
     expect(result).toEqual({
       info: null,
-      hostReachable: true,
+      hostReachable: false,
       failure: "busy",
       error: err,
+      hostBusy: true,
     });
     expect(warn).toHaveBeenCalledWith(
       expect.objectContaining({ hostId: "mac", sessionId: 7 }),
       "host busy, reporting default live status",
     );
+  });
+
+  it("hands the busy condition to the session view, reporting suspended with busy detail", async () => {
+    const { HostBusyError } = await import("../../src/services/remote-host-errors.js");
+    liveStatus.mockRejectedValue(new HostBusyError("mac", new Error("slot cap")));
+    const { withLiveStatus } = await import("../../src/services/session-live-info.js");
+    const view = await withLiveStatus(
+      { ...app, config: {}, browser: undefined } as unknown as FastifyInstance,
+      { id: 7, projectId: 1, status: "active", env: null } as never,
+      30_000,
+      "mac",
+    );
+    expect(view.sessionStatus).toBe("suspended");
+    expect(view.sessionStatusDetail).toBe("host busy — may still be running");
   });
 });

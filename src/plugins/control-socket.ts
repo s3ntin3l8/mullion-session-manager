@@ -1009,28 +1009,25 @@ async function readRemoteSession(
     .get();
   if (!row) return { snapshot: null, turnInFlight: false };
   const idleThresholdMs = getStoredSettings(app.db).notifications.idleThresholdSeconds * 1000;
-  const { info, hostReachable, failure, error } = await readSessionLiveInfo(
-    app,
-    row,
-    idleThresholdMs,
-    hostId,
-    { fresh: true },
-  );
+  const live = await readSessionLiveInfo(app, row, idleThresholdMs, hostId, { fresh: true });
   // A host that ANSWERED and refused (a 429 from its rate limit, a stale
   // token) is not a host that is down: reporting it as `suspended` would let a
   // wait run to its timeout blaming a dead host. Throw it, so the wait's
   // consecutive-failure limit ends it with the real reason (and a prompt's
   // pre-check answers 500 with it). An unreachable host stays `suspended`.
-  if (failure === "refused") throw error;
-  const view = withLiveInfo(app, row, info, hostId, { hostReachable });
+  if (live.failure === "refused") throw live.error;
+  const view = withLiveInfo(app, row, live.info, hostId, {
+    hostReachable: live.hostReachable,
+    hostBusy: live.failure === "busy",
+  });
   return {
     snapshot: {
       status: view.sessionStatus,
       severity: view.sessionStatusSeverity,
       detail: view.sessionStatusDetail ?? null,
     },
-    eventSeqHead: info?.eventSeqHead,
-    turnInFlight: info?.agentTurnInFlight === true,
+    eventSeqHead: live.info?.eventSeqHead,
+    turnInFlight: live.info?.agentTurnInFlight === true,
   };
 }
 

@@ -230,11 +230,7 @@ describe("host-git.ts", () => {
 
       const result = await resolveHostBaseRef(fakeApp, "remote-host-1", "/remote/project");
 
-      expect(result.ok).toBe(false);
-      if (!result.ok && result.reason === "busy") {
-        expect(result.reason).toBe("busy");
-        expect(result.retryable).toBe(true);
-      }
+      expect(result).toMatchObject({ ok: false, reason: "busy", retryable: true });
     });
   });
 

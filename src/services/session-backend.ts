@@ -61,14 +61,14 @@ import {
   type WaitOutputRequest,
 } from "./session-prompt.js";
 
+export type HostErrorClassification = "rejected" | "busy" | "unreachable";
+
 /**
- * Logs a failed remote-host call, split the one way every caller needs
- * (issue #1521): a `HostRequestError` means the agent is reachable and
- * REJECTED the request (a persistent condition that recurs on every retry);
- * anything else is an unreachable host (a transient blip). Conflating the
- * two mislabels a rejection as "unreachable" (the #484 postmortem). Returns
- * `true` for a rejection so a caller that also reports the distinction (e.g.
- * a `host-rejected` result) doesn't re-run the instanceof check.
+ * Logs a failed remote-host call, split into rejected, busy, or unreachable.
+ * A `HostRequestError` means the agent is reachable and REJECTED the request;
+ * a busy error means the outbound channel concurrency cap was reached;
+ * anything else is an unreachable host (a transient blip).
+ * Returns the classification string so callers don't re-run instanceof checks.
  */
 export function warnHostError(
   log: FastifyInstance["log"],
@@ -77,14 +77,14 @@ export function warnHostError(
   rejectedMsg: string,
   unreachableMsg: string,
   busyMsg?: string,
-): err is HostRequestError {
+): HostErrorClassification {
   if (isHostBusyError(err)) {
     log.warn({ ...bindings, err }, busyMsg ?? unreachableMsg.replace("unreachable", "busy"));
-    return false;
+    return "busy";
   }
   const rejected = err instanceof HostRequestError;
   log.warn({ ...bindings, err }, rejected ? rejectedMsg : unreachableMsg);
-  return rejected;
+  return rejected ? "rejected" : "unreachable";
 }
 
 /** Options for SessionBackend.spawn — one shape shared by the interface, LocalBackend and RemoteBackend. */

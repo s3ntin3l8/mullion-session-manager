@@ -411,9 +411,11 @@ export async function sessionsRoute(app: FastifyInstance) {
       return rows.map((row) => {
         const hostId = sessionHostIds.get(row.id) ?? LOCAL_HOST_ID;
         const info = liveByHost.get(hostId)?.[String(row.id)];
+        const failed = failedHosts.get(hostId);
         return withLiveInfo(app, row, info, hostId, {
-          hostReachable: !failedHosts.has(hostId) || failedHosts.get(hostId)?.busy === true,
-          hostRefusedStatus: failedHosts.get(hostId)?.refusedStatus,
+          hostReachable: !failedHosts.has(hostId),
+          hostRefusedStatus: failed?.refusedStatus,
+          hostBusy: failed?.busy === true,
         });
       });
     },
@@ -997,6 +999,12 @@ export async function sessionsRoute(app: FastifyInstance) {
         `promote-${sessionId}-${Date.now()}`,
       );
       if (!resolvedWorktree.created || !resolvedWorktree.path || !resolvedWorktree.branch) {
+        if (resolvedWorktree.reason === "host-busy") {
+          return reply.status(503).send({
+            message: resolvedWorktree.detail ?? `Host ${srcHostId} is busy`,
+            retryable: true,
+          });
+        }
         // Issue #677 — surface the actual reason (e.g. "branch already
         // exists") when the backend supplied one, instead of always
         // showing the same generic "check that the base ref exists"
