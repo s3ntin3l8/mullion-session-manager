@@ -1,6 +1,20 @@
 import { describe, it, expect } from "vitest";
-import { createMuxConnection, MuxBusyError } from "../../src/services/ssh-agent-mux.js";
-import { HostBusyError } from "../../src/services/remote-host-errors.js";
+import {
+  createMuxConnection,
+  MuxBusyError,
+  MuxPeerRefusedError,
+} from "../../src/services/ssh-agent-mux.js";
+import {
+  HostBusyError,
+  HostUnreachableError,
+  isHostBusyError,
+  isHostTransientError,
+} from "../../src/services/remote-host-errors.js";
+import {
+  AGENT_CHANNEL_MAX_CHANNELS,
+  AGENT_CHANNEL_MAX_STREAM_CHANNELS,
+  AGENT_CHANNEL_REQUEST_RESERVED_CHANNELS,
+} from "../../src/shared/agent-channel.js";
 
 class FakeSocket {
   readyState = 1;
@@ -151,12 +165,59 @@ describe("ssh-agent-mux slot waiting", () => {
 
   it("constructs HostBusyError with expected fields", () => {
     const errWithCause = new HostBusyError("host-1", new Error("slot cap"));
-    expect(errWithCause.retryable).toBe(true);
+    expect(errWithCause.cause).toBeInstanceOf(Error);
     expect(errWithCause.message).toContain("Host host-1 is busy: slot cap");
     expect(errWithCause.name).toBe("HostBusyError");
 
     const errNoCause = new HostBusyError("host-2");
-    expect(errNoCause.retryable).toBe(true);
+    expect(isHostBusyError(errNoCause)).toBe(true);
+    expect(isHostBusyError({ retryable: true })).toBe(false);
+    expect(isHostBusyError({ name: "HostBusyError" })).toBe(false);
+    expect(isHostTransientError(new HostUnreachableError("h", new Error("x")))).toBe(true);
+    expect(isHostTransientError(errNoCause)).toBe(true);
+    expect(isHostTransientError(new Error("x"))).toBe(false);
     expect(errNoCause.message).toContain("outbound channel concurrency cap reached");
+  });
+
+  it("caps stream opens below maxChannels so requests keep slots", async () => {
+    expect(AGENT_CHANNEL_MAX_STREAM_CHANNELS + AGENT_CHANNEL_REQUEST_RESERVED_CHANNELS).toBe(
+      AGENT_CHANNEL_MAX_CHANNELS,
+    );
+    expect(AGENT_CHANNEL_MAX_STREAM_CHANNELS).toBeLessThanOrEqual(AGENT_CHANNEL_MAX_CHANNELS / 2);
+    const a = new FakeSocket();
+    const b = new FakeSocket();
+    link(a, b);
+    const connA = createMuxConnection(a as never, {
+      maxChannels: AGENT_CHANNEL_MAX_CHANNELS,
+      maxStreamChannels: AGENT_CHANNEL_MAX_STREAM_CHANNELS,
+      channelIdParity: "odd",
+    });
+    createMuxConnection(b as never, {
+      maxChannels: AGENT_CHANNEL_MAX_CHANNELS,
+      channelIdParity: "even",
+    });
+    for (let i = 0; i < AGENT_CHANNEL_MAX_STREAM_CHANNELS; i++) {
+      await connA.openChannel({ stream: true });
+    }
+    // The next stream is refused at once (a stream does not free its slot) ...
+    await expect(connA.openChannel({ stream: true, waitTimeoutMs: 5000 })).rejects.toThrow(
+      MuxBusyError,
+    );
+    // ... while every reserved slot is still available to requests.
+    for (let i = 0; i < AGENT_CHANNEL_REQUEST_RESERVED_CHANNELS; i++) {
+      await connA.openChannel();
+    }
+    await expect(connA.openChannel()).rejects.toThrow(MuxBusyError);
+  });
+
+  it("reports a peer OpenFail as busy", async () => {
+    const a = new FakeSocket();
+    const b = new FakeSocket();
+    link(a, b);
+    const connA = createMuxConnection(a as never, { maxChannels: 8, channelIdParity: "odd" });
+    createMuxConnection(b as never, { maxChannels: 0, channelIdParity: "even" });
+    const err = await connA.openChannel().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(MuxPeerRefusedError);
+    expect(err).toBeInstanceOf(MuxBusyError);
   });
 });

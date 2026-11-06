@@ -32,6 +32,12 @@ describe("hosts route channel binding (#2622)", () => {
       status: "bound to the outbound channel, not connected",
     });
 
+    // A connected channel refuses the unbind
+    app.agentChannels.set(hostId, { carriedOperations: [] } as never);
+    const refused = await app.inject({ method: "POST", url: `/api/hosts/${hostId}/unbind` });
+    expect(refused.statusCode).toBe(409);
+    app.agentChannels.delete(hostId);
+
     // Unbind
     const unbindRes = await app.inject({
       method: "POST",

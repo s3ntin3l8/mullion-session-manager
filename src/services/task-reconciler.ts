@@ -69,7 +69,7 @@ import {
 } from "./task-github-sync.js";
 import { recordTaskTransition } from "./task-state.js";
 import { endIfRebaseEmptied, endReviewingOnPrState } from "./task-review-end.js";
-import { HostUnreachableError } from "./remote-host-client.js";
+import { isHostTransientError } from "./remote-host-errors.js";
 import { spawnReviewAgentNow, unlinkFindingsFileIfPresent } from "./task-review-spawn.js";
 import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
 import {
@@ -5614,14 +5614,14 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
                   );
                 }
               } catch (err) {
-                // A host that is merely unreachable right now may well hold a
+                // A host that is merely unreachable or busy right now may well hold a
                 // request the worker wrote: wait a tick rather than skip a
                 // review it asked for. Anything else (a peer build with no
                 // such route, a 5xx) will not heal by waiting, so carry.
-                if (err instanceof HostUnreachableError) {
+                if (isHostTransientError(err)) {
                   app.log.warn(
                     { err, taskId: task.id },
-                    "task reconcile: host unreachable reading the worker's re-review request — retrying next tick",
+                    "task reconcile: host unreachable or busy reading the worker's re-review request — retrying next tick",
                   );
                   // `continue`, not `return`: this is one row of a host's loop,
                   // and the rest of the host's tasks must still transition.

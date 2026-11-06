@@ -63,7 +63,7 @@ export function openChannelStream(
   socket.once("open", () => clearTimeout(timer));
   socket.once("close", () => clearTimeout(timer));
 
-  entry.mux.openChannel().then(
+  entry.mux.openChannel({ stream: true }).then(
     (channel) => {
       socket.bind(channel);
       channel.onData((chunk) => socket.ingest(chunk));

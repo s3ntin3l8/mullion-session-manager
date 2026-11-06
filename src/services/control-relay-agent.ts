@@ -182,7 +182,7 @@ export async function materializeControlRelaySocket(
     }
     let channel: MuxChannel;
     try {
-      channel = await mux.openChannel();
+      channel = await mux.openChannel({ stream: true });
     } catch (err) {
       opts.log?.debug({ err }, "control-relay: could not open a relay channel");
       refuse(socket, 503, "relay-unavailable: could not open a channel to the primary");

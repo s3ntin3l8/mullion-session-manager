@@ -544,6 +544,67 @@ describe("#2416 — the states that used to be swallowed", () => {
       }
     });
 
+    it("skips the tick and retries a re-review request read that found the host busy", async () => {
+      const { HostBusyError } = await import("../../src/services/remote-host-errors.js");
+      const app = await buildApp();
+      try {
+        mockResolveHostGitStatus.mockResolvedValue(gitStatus("different-sha"));
+        const { taskId, sessionId } = await createSessionAndTaskWithBase(app, "in_progress");
+        const verdictAt = new Date();
+        app.db
+          .update(tasks)
+          .set({
+            approvalCarriedAt: new Date(),
+            lastReviewVerdictAt: verdictAt,
+            lastReviewVerdict: "approved",
+            reviewSessionId: sessionId,
+          })
+          .where(eq(tasks.id, taskId))
+          .run();
+
+        let calls = 0;
+        const sessionBackendModule = await import("../../src/services/session-backend.js");
+        const realResolveBackend = sessionBackendModule.resolveBackend;
+        const spy = vi
+          .spyOn(sessionBackendModule, "resolveBackend")
+          .mockImplementation((appArg, hostId) => {
+            const real = realResolveBackend(appArg, hostId);
+            return new Proxy(real, {
+              get(target, prop, receiver) {
+                if (prop === "readTaskRereviewRequest") {
+                  return () => {
+                    calls++;
+                    if (calls === 1) {
+                      return Promise.reject(new HostBusyError("h", new Error("channel cap")));
+                    }
+                    return Promise.resolve(null);
+                  };
+                }
+                const value = Reflect.get(target, prop, receiver);
+                return typeof value === "function" ? value.bind(target) : value;
+              },
+            });
+          });
+
+        const now = Date.now();
+        vi.spyOn(app.pty, "get").mockReturnValue({
+          toInfo: () => fakeInfo({ lastTurnEndedAt: now, workFinishedAt: now }),
+        } as never);
+
+        await reconcileTasks(app);
+        expect((await getTask(app, taskId)).status).toBe("in_progress");
+        expect(calls).toBe(1);
+
+        // Busy is transient like unreachable: not carried as an approval, retried next tick
+        await reconcileTasks(app);
+        expect(calls).toBe(2);
+
+        spy.mockRestore();
+      } finally {
+        await app.close();
+      }
+    });
+
     it("does not spawn again when a reconciler pass gets an unknown outcome from a spawn", async () => {
       const app = await buildApp();
       try {

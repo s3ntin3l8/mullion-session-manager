@@ -14,7 +14,7 @@ import {
   AGENT_CHANNEL_DEFAULT_MAX_RESPONSE_BYTES,
   AGENT_CHANNEL_MAX_HEAD_BYTES,
   AGENT_CHANNEL_MAX_RESPONSE_BYTES,
-  AGENT_CHANNEL_MIN_EXCHANGE_MS,
+  AGENT_CHANNEL_SLOT_WAIT_GRACE_MS,
   AGENT_CHANNEL_REQUESTS_OPERATION,
   AGENT_CHANNEL_SLOT_WAIT_MS,
   type ChannelRequestHead,
@@ -311,7 +311,6 @@ async function exchange(
   let channel: MuxChannel | null = null;
   let timedOut = false;
   let aborted = false;
-  let waitingForSlot = false;
   let abortOpen: ((err: Error) => void) | null = null;
   const limitMs = req.idleTimeoutMs ?? req.timeoutMs;
   const timeoutMessage = `timed out after ${limitMs} ms${req.idleTimeoutMs ? " idle" : ""}`;
@@ -319,13 +318,19 @@ async function exchange(
   const onTimeout = () => {
     timedOut = true;
     channel?.close();
-    if (waitingForSlot) {
-      abortOpen?.(
-        new ChannelBusyError(`timed out after ${limitMs} ms waiting for free channel slot`),
-      );
-    } else {
-      abortOpen?.(fail(timeoutMessage, sendStarted ? "after-send" : "before-send"));
-    }
+    abortOpen?.(fail(timeoutMessage, sendStarted ? "after-send" : "before-send"));
+  };
+  // The slot wait is not charged to the exchange: the timer is stopped while
+  // queued and restarted with the full budget once the slot is granted. The
+  // wait has its own bound, the mux's `waitTimeoutMs`; this backstop covers a
+  // mux that never settles.
+  let slotWaitTimer: NodeJS.Timeout | undefined;
+  const onSlotWaitBackstop = () => {
+    abortOpen?.(
+      new ChannelBusyError(
+        `timed out after ${AGENT_CHANNEL_SLOT_WAIT_MS} ms waiting for free channel slot`,
+      ),
+    );
   };
   const arm = () => {
     clearTimeout(timer);
@@ -340,6 +345,7 @@ async function exchange(
   };
   const release = () => {
     clearTimeout(timer);
+    clearTimeout(slotWaitTimer);
     req.signal?.removeEventListener("abort", onAbort);
   };
   if (req.signal?.aborted) throw fail("aborted", "before-send");
@@ -348,11 +354,6 @@ async function exchange(
   // A streamed response outlives this call: its Readable owns the channel and
   // the timer from the head on.
   let handedOff = false;
-
-  const slotWaitTimeoutMs = Math.min(
-    AGENT_CHANNEL_SLOT_WAIT_MS,
-    Math.max(0, limitMs - AGENT_CHANNEL_MIN_EXCHANGE_MS),
-  );
 
   try {
     channel = await new Promise<MuxChannel>((resolve, reject) => {
@@ -363,14 +364,21 @@ async function exchange(
       };
       entry.mux
         .openChannel({
-          waitTimeoutMs: slotWaitTimeoutMs,
+          waitTimeoutMs: AGENT_CHANNEL_SLOT_WAIT_MS,
           onWaiting: () => {
-            waitingForSlot = true;
+            clearTimeout(timer);
+            slotWaitTimer = setTimeout(
+              onSlotWaitBackstop,
+              AGENT_CHANNEL_SLOT_WAIT_MS + AGENT_CHANNEL_SLOT_WAIT_GRACE_MS,
+            );
+          },
+          onSlotAcquired: () => {
+            clearTimeout(slotWaitTimer);
+            if (!settled) arm();
           },
         })
         .then(
           (ch) => {
-            waitingForSlot = false;
             if (settled) {
               ch.close();
               return;
@@ -379,14 +387,10 @@ async function exchange(
             resolve(ch);
           },
           (err: unknown) => {
-            waitingForSlot = false;
             if (settled) return;
             settled = true;
-            if (
-              err instanceof MuxBusyError ||
-              (err instanceof Error && err.message.includes("channel cap"))
-            ) {
-              reject(new ChannelBusyError(err instanceof Error ? err.message : String(err)));
+            if (err instanceof MuxBusyError) {
+              reject(new ChannelBusyError(err.message));
             } else {
               reject(fail(err instanceof Error ? err.message : String(err), "before-send"));
             }

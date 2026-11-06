@@ -257,6 +257,9 @@ export interface MuxChannel {
 
 export interface MuxConnectionOptions {
   maxChannels?: number;
+  /** Total channels at which `openChannel({stream: true})` is refused. Omitted =
+   * `maxChannels`. Requests may still use every slot up to `maxChannels`. */
+  maxStreamChannels?: number;
   /** Which parity this side allocates its own channel ids from — REQUIRED,
    * with no default, and the two ends of a connection must be given
    * opposite values. This is the fix for a real bug caught in review
@@ -289,7 +292,22 @@ export class MuxBusyError extends Error {
   }
 }
 
+/** The peer answered an Open with OpenFail: it is at its own channel cap (or
+ * refusing), so the caller treats it like a local cap, not a lost connection. */
+export class MuxPeerRefusedError extends MuxBusyError {
+  constructor(channelId: number) {
+    super(`ssh-agent-mux: peer refused channel ${channelId} (at its channel cap)`);
+    this.name = "MuxPeerRefusedError";
+  }
+}
+
 export interface OpenChannelOptions {
+  /** A long-lived stream rather than a request/response exchange. Refused at
+   * once (no waiting: a stream does not free its slot) once the connection
+   * holds `maxStreamChannels`, which keeps the rest for requests. */
+  stream?: boolean;
+  /** Called when a queued open gets its slot, before the peer is asked. */
+  onSlotAcquired?: () => void;
   /** When at maxChannels, wait up to this long for a slot before rejecting with MuxBusyError. */
   waitTimeoutMs?: number;
   /** Cancels waiting in the slot queue. */
@@ -594,6 +612,7 @@ export function createMuxConnection(
   opts: MuxConnectionOptions,
 ): MuxConnection {
   const maxChannels = opts.maxChannels ?? DEFAULT_MAX_CHANNELS;
+  const maxStreamChannels = Math.min(opts.maxStreamChannels ?? maxChannels, maxChannels);
   const channels = new Map<number, ChannelImpl>();
   const pendingOpens = new Map<
     number,
@@ -732,6 +751,13 @@ export function createMuxConnection(
 
   function openChannel(opts?: OpenChannelOptions): Promise<MuxChannel> {
     if (closed) return Promise.reject(new Error("ssh-agent-mux: connection already closed"));
+    if (opts?.stream && channels.size + pendingOpens.size >= maxStreamChannels) {
+      return Promise.reject(
+        new MuxBusyError(
+          `ssh-agent-mux: stream channel cap (${maxStreamChannels} of ${maxChannels}) reached`,
+        ),
+      );
+    }
     if (channels.size + pendingOpens.size >= maxChannels) {
       if (!opts?.waitTimeoutMs || opts.waitTimeoutMs <= 0) {
         return Promise.reject(
@@ -750,6 +776,7 @@ export function createMuxConnection(
             if (timer !== null) clearTimeout(timer);
             waiter.cleanup?.();
             onAbort = null;
+            opts.onSlotAcquired?.();
             openChannel().then(resolve, reject);
           },
           reject: (err: Error) => {
@@ -905,7 +932,7 @@ export function createMuxConnection(
       const pending = pendingOpens.get(frame.channelId);
       if (pending === undefined) return;
       pendingOpens.delete(frame.channelId);
-      pending.reject(new Error(`ssh-agent-mux: peer refused channel ${frame.channelId}`));
+      pending.reject(new MuxPeerRefusedError(frame.channelId));
       drainSlotWaiters();
       return;
     }
