@@ -1001,7 +1001,8 @@ export interface ScaffoldDraft {
   existingInstructions: ExistingInstructionsMode;
   preview: ScaffoldPreview | null;
   // When the server created `preview` (epoch ms); the server drops it after
-  // PREVIEW_TTL_MS, so a restore older than that discards it.
+  // its TTL (15 min for a template, 24 h for an agent-generated one), so a
+  // restore older than that discards it.
   previewCreatedAt: number | null;
   applyResult: ScaffoldApplyResult | null;
   // The background generation job for this project, while one is running

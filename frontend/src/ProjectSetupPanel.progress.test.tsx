@@ -459,7 +459,7 @@ describe("ProjectSetupPanel", () => {
           await vi.advanceTimersByTimeAsync(0);
         });
 
-        expect(screen.getByText(/generation job is gone/)).toBeInTheDocument();
+        expect(screen.getByText(/generation result is gone/)).toBeInTheDocument();
         expect(screen.queryByTestId("generate-progress")).not.toBeInTheDocument();
         await act(async () => {
           await vi.advanceTimersByTimeAsync(10_000);

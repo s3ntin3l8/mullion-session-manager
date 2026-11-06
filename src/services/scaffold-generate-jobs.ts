@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyBaseLogger } from "fastify";
-import type { ExistingInstructionsMode } from "../shared/constants.js";
+import {
+  GENERATED_PREVIEW_TTL_MS,
+  PREVIEW_TTL_MS,
+  type ExistingInstructionsMode,
+} from "../shared/constants.js";
 import { agentLogLabel, type ScaffoldConflict } from "./scaffold-generate.js";
 
 // Issue #2429 — in-memory registry for background scaffold-generation jobs.
@@ -8,7 +12,18 @@ import { agentLogLabel, type ScaffoldConflict } from "./scaffold-generate.js";
 // lost on a Mullion restart: a restart also kills the spawned agent child, so
 // persisting job records to SQLite would buy nothing.
 
-export const PREVIEW_TTL_MS = 15 * 60 * 1000;
+export { GENERATED_PREVIEW_TTL_MS, PREVIEW_TTL_MS };
+
+export function previewTtlMs(generated: boolean): number {
+  return generated ? GENERATED_PREVIEW_TTL_MS : PREVIEW_TTL_MS;
+}
+
+export function isPreviewExpired(
+  record: { createdAt: number; generated: boolean },
+  now = Date.now(),
+): boolean {
+  return now - record.createdAt > previewTtlMs(record.generated);
+}
 
 export const GENERATE_JOB_PHASES = [
   "preparing",
@@ -130,12 +145,16 @@ function removeJob(job: GenerateJob): void {
   }
 }
 
-/** Sweeps finished jobs whose `finishedAt` is older than `PREVIEW_TTL_MS`.
- * Running jobs do not have `finishedAt` and are bounded by the agent turn's
- * timeout instead. */
+/** Sweeps finished jobs whose `finishedAt` is past their TTL: a `done` job
+ * holding a result lives `GENERATED_PREVIEW_TTL_MS`, a failed or cancelled one
+ * `PREVIEW_TTL_MS`. Running jobs do not have `finishedAt` and are bounded by
+ * the agent turn's timeout instead. */
 export function sweepExpiredGenerateJobs(now = Date.now()): void {
   for (const job of jobsById.values()) {
-    if (job.finishedAt !== undefined && now - job.finishedAt > PREVIEW_TTL_MS) {
+    if (
+      job.finishedAt !== undefined &&
+      isPreviewExpired({ createdAt: job.finishedAt, generated: job.result !== undefined }, now)
+    ) {
       removeJob(job);
     }
   }

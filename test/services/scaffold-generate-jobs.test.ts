@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
+  GENERATED_PREVIEW_TTL_MS,
   PREVIEW_TTL_MS,
+  isPreviewExpired,
   startGenerateJob,
   cancelGenerateJob,
   getGenerateJob,
@@ -203,7 +205,7 @@ describe("scaffold-generate-jobs registry", () => {
     expect(thrown.job.error).toEqual({ status: 500, message: "unexpected boom" });
   });
 
-  it("expires finished jobs after PREVIEW_TTL_MS and deletes jobs when their previewId is evicted", async () => {
+  it("expires finished jobs after GENERATED_PREVIEW_TTL_MS and deletes jobs when their previewId is evicted", async () => {
     let now = 10_000;
     const { job } = startGenerateJob({
       projectId: 1,
@@ -226,13 +228,16 @@ describe("scaffold-generate-jobs registry", () => {
     expect(job.phase).toBe("done");
     expect(job.finishedAt).toBe(12_000);
 
-    // Still live at finishedAt + PREVIEW_TTL_MS.
-    expect(getGenerateJob(job.id, 12_000 + PREVIEW_TTL_MS)).not.toBeNull();
-    expect(getActiveGenerateJob(1, 12_000 + PREVIEW_TTL_MS)).not.toBeNull();
+    // A finished agent result outlives the template preview TTL.
+    expect(getGenerateJob(job.id, 12_000 + PREVIEW_TTL_MS + 1)).not.toBeNull();
 
-    // Expired 1 ms past PREVIEW_TTL_MS.
-    expect(getGenerateJob(job.id, 12_000 + PREVIEW_TTL_MS + 1)).toBeNull();
-    expect(getActiveGenerateJob(1, 12_000 + PREVIEW_TTL_MS + 1)).toBeNull();
+    // Still live at finishedAt + GENERATED_PREVIEW_TTL_MS (and well past the template TTL).
+    expect(getGenerateJob(job.id, 12_000 + GENERATED_PREVIEW_TTL_MS)).not.toBeNull();
+    expect(getActiveGenerateJob(1, 12_000 + GENERATED_PREVIEW_TTL_MS)).not.toBeNull();
+
+    // Expired 1 ms past GENERATED_PREVIEW_TTL_MS.
+    expect(getGenerateJob(job.id, 12_000 + GENERATED_PREVIEW_TTL_MS + 1)).toBeNull();
+    expect(getActiveGenerateJob(1, 12_000 + GENERATED_PREVIEW_TTL_MS + 1)).toBeNull();
 
     // A job whose previewId is explicitly deleted (apply or preview eviction) is removed immediately.
     const second = startGenerateJob({
@@ -336,5 +341,43 @@ describe("scaffold-generate-jobs registry", () => {
     expect(getGenerateJob(job.id)?.error).toBeUndefined();
     expect(getInFlightGenerateJob(7)).toBeNull();
     expect(cancelGenerateJob(job.id, 7)).toBeNull();
+  });
+
+  it("keeps a failed job only PREVIEW_TTL_MS: it holds no result worth keeping", async () => {
+    let now = 10_000;
+    const { job } = startGenerateJob({
+      projectId: 3,
+      slug: "demo3",
+      agent: "claude",
+      mode: "keep",
+      now: () => now,
+      run: async () => {
+        now = 11_000;
+        return { ok: false, status: 502, message: "boom" };
+      },
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(job.phase).toBe("failed");
+    expect(getGenerateJob(job.id, 11_000 + PREVIEW_TTL_MS)).not.toBeNull();
+    expect(getGenerateJob(job.id, 11_000 + PREVIEW_TTL_MS + 1)).toBeNull();
+  });
+});
+
+describe("isPreviewExpired", () => {
+  it("expires a template preview after 15 minutes and a generated one after 24 hours", () => {
+    const createdAt = 1_000;
+    expect(isPreviewExpired({ createdAt, generated: false }, createdAt + PREVIEW_TTL_MS)).toBe(
+      false,
+    );
+    expect(isPreviewExpired({ createdAt, generated: false }, createdAt + PREVIEW_TTL_MS + 1)).toBe(
+      true,
+    );
+    expect(isPreviewExpired({ createdAt, generated: true }, createdAt + PREVIEW_TTL_MS + 1)).toBe(
+      false,
+    );
+    expect(
+      isPreviewExpired({ createdAt, generated: true }, createdAt + GENERATED_PREVIEW_TTL_MS + 1),
+    ).toBe(true);
   });
 });

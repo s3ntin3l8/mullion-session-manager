@@ -8,7 +8,7 @@ import { closeDb } from "../../src/db/client.js";
 import { gitEnv } from "../../src/services/git-env.js";
 import {
   clearGenerateJobsForTests,
-  PREVIEW_TTL_MS,
+  GENERATED_PREVIEW_TTL_MS,
 } from "../../src/services/scaffold-generate-jobs.js";
 import type * as GithubIntegration from "../../src/services/github-integration.js";
 import type * as ScaffoldGenerate from "../../src/services/scaffold-generate.js";
@@ -318,9 +318,11 @@ describe("project-setup background generate job routes (issue #2429)", () => {
       });
       expect(crossProject.statusCode).toBe(404);
 
-      // Advance Date.now past PREVIEW_TTL_MS: both job status and active expire.
+      // Advance Date.now past GENERATED_PREVIEW_TTL_MS: both job status and active expire.
       const realNow = Date.now();
-      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(realNow + PREVIEW_TTL_MS + 1000);
+      const nowSpy = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(realNow + GENERATED_PREVIEW_TTL_MS + 1000);
       try {
         const expiredJob = await app.inject({
           method: "GET",

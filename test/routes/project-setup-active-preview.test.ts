@@ -6,7 +6,11 @@ import { execFileSync } from "node:child_process";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { gitEnv } from "../../src/services/git-env.js";
-import { PREVIEW_TTL_MS } from "../../src/services/scaffold-generate-jobs.js";
+import { deriveWorktreePath } from "../../src/services/git-worktree.js";
+import {
+  GENERATED_PREVIEW_TTL_MS,
+  PREVIEW_TTL_MS,
+} from "../../src/services/scaffold-generate-jobs.js";
 import type * as GithubIntegration from "../../src/services/github-integration.js";
 import type * as ScaffoldGenerate from "../../src/services/scaffold-generate.js";
 
@@ -126,6 +130,92 @@ describe("project-setup route", () => {
       expect(body.sandboxed).toBe(true);
       expect(body.agent).toBe(gen.json().agent);
       expect(body.instructionsMode).toBe("keep");
+      await app.close();
+    });
+
+    it("keeps a generated preview past the template TTL, and drops it after the generated TTL", async () => {
+      mockValidGeneration("gen-keep");
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+      const gen = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "gen-keep" },
+      });
+      expect(gen.statusCode).toBe(200);
+      const url = `/api/projects/${projectId}/setup/preview/active`;
+      const realNow = Date.now();
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(realNow + PREVIEW_TTL_MS + 1000);
+      try {
+        const kept = await app.inject({ method: "GET", url });
+        expect(kept.statusCode).toBe(200);
+        expect(kept.json().previewId).toBe(gen.json().previewId);
+        nowSpy.mockReturnValue(realNow + GENERATED_PREVIEW_TTL_MS + 1000);
+        expect((await app.inject({ method: "GET", url })).statusCode).toBe(204);
+      } finally {
+        nowSpy.mockRestore();
+      }
+      await app.close();
+    });
+
+    it("recreates the worktree of a generated record older than the reuse window", async () => {
+      mockValidGeneration("gen-age");
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+      const gen = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "gen-age" },
+      });
+      expect(gen.statusCode).toBe(200);
+      const sentinel = path.join(deriveWorktreePath(repoDir, "setup-gen-age"), "sentinel.txt");
+      fs.writeFileSync(sentinel, "left behind by the generate");
+
+      // A generated record is kept for a day, but its worktree's base ref is old
+      // after the reuse window: a re-preview then starts from a fresh checkout.
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.now() + PREVIEW_TTL_MS + 1000);
+      try {
+        const late = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/setup/preview`,
+          payload: { slug: "gen-age" },
+        });
+        expect(late.statusCode).toBe(200);
+        expect(fs.existsSync(sentinel)).toBe(false);
+      } finally {
+        nowSpy.mockRestore();
+      }
+      await app.close();
+    });
+
+    it("a newer preview for the slug supersedes the older previewId, which can no longer apply", async () => {
+      mockValidGeneration("gen-super");
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+      const gen = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "gen-super" },
+      });
+      expect(gen.statusCode).toBe(200);
+      const again = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/preview`,
+        payload: { slug: "gen-super" },
+      });
+      expect(again.statusCode).toBe(200);
+      expect(again.json().previewId).not.toBe(gen.json().previewId);
+      const stale = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/apply`,
+        payload: { previewId: gen.json().previewId },
+      });
+      expect(stale.statusCode).toBe(400);
+      const active = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/setup/preview/active`,
+      });
+      expect(active.json().previewId).toBe(again.json().previewId);
       await app.close();
     });
 

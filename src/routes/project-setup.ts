@@ -57,7 +57,7 @@ import {
   type ScaffoldConflict,
 } from "../services/scaffold-generate.js";
 import {
-  PREVIEW_TTL_MS,
+  isPreviewExpired,
   startGenerateJob,
   getGenerateJob,
   getActiveGenerateJob,
@@ -115,7 +115,8 @@ import {
 // separate string-vs-string differ this repo doesn't otherwise have.
 // Apply's own request carries back the exact previewId that write produced
 // so a stale preview (the underlying repo changed between preview and
-// apply) can't be blindly re-applied — see PREVIEW_TTL_MS below.
+// apply) can't be blindly re-applied — a template preview is kept 15 minutes, an
+// agent-generated one 24 hours (isPreviewExpired).
 
 const SETUP_RATE_LIMIT = { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } };
 
@@ -529,7 +530,12 @@ function deletePreview(previewId: string): void {
 function sweepExpiredPreviews(now = Date.now()): void {
   sweepExpiredGenerateJobs(now);
   for (const [previewId, record] of previews) {
-    if (now - record.createdAt > PREVIEW_TTL_MS) {
+    if (
+      isPreviewExpired(
+        { createdAt: record.createdAt, generated: Boolean(record.snapshot.generated) },
+        now,
+      )
+    ) {
       deletePreview(previewId);
     }
   }
@@ -611,6 +617,12 @@ interface ReadyWorktree {
 // `reuseOrCreateWorktree` would otherwise see a path that exists but isn't
 // a KNOWN live preview (no PreviewRecord registered yet on a first call)
 // and remove+recreate it.
+// A record's worktree is reused only while it is this fresh, even for a
+// generated record that is kept longer: its base ref ages with it. Its own
+// literal, deliberately NOT derived from PREVIEW_TTL_MS, so raising a TTL never
+// widens how old a reused worktree can be.
+const RECENT_WORKTREE_REUSE_MS = 15 * 60 * 1000;
+
 async function ensureSetupWorktree(
   app: FastifyInstance,
   project: { cwd: string; hostId: string },
@@ -634,6 +646,10 @@ async function ensureSetupWorktree(
   if (
     opts.fresh ||
     liveSlugPreview?.rewroteInstructions ||
+    // A day-old generated record still points at its worktree, but that
+    // worktree's base ref is old: only a recent one is worth reusing.
+    (liveSlugPreview != null &&
+      Date.now() - liveSlugPreview.createdAt > RECENT_WORKTREE_REUSE_MS) ||
     (liveSlugPreview !== null &&
       liveSlugPreview !== undefined &&
       liveSlugPreview.includeSkillAndReviewer !== (opts.includeSkillAndReviewer !== false))
@@ -726,6 +742,12 @@ async function finishPreview(
   const diff = diffs.filter((d): d is string => Boolean(d)).join("\n");
 
   const previewId = randomUUID();
+  // Every record for a slug shares its one scratch worktree, which now holds
+  // THIS preview's content: an earlier previewId must not apply it (it used to
+  // expire within minutes; a generated one is kept for a day).
+  for (const [id, record] of previews) {
+    if (record.projectId === projectId && record.slug === options.slug) deletePreview(id);
+  }
   previews.set(previewId, {
     projectId,
     worktreePath: worktree.path,
