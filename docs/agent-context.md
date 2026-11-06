@@ -350,8 +350,10 @@ polled via `GET /api/projects/:id/setup/generate/jobs/:jobId` and
 rate-limit bucket). Closing the Scaffold panel does not stop the turn: the
 running job and its finished result (or error) survive in the server's
 in-memory registry (`src/services/scaffold-generate-jobs.ts`) until claimed by
-**Apply** or expired after the 15-minute `PREVIEW_TTL_MS` window alongside the
-preview record it points at, so reopening the panel can reattach via
+**Apply**, superseded by a newer preview for the same slug, or expired — 24 hours
+(`GENERATED_PREVIEW_TTL_MS`) for a `done` job with a result and the preview
+record it points at, 15 minutes (`PREVIEW_TTL_MS`) for a failed or cancelled
+job and for template previews — so reopening the panel can reattach via
 `generate/active`. A Mullion server restart loses the job (the registry is
 in-memory only, and a restart also terminates the spawned agent child process).
 

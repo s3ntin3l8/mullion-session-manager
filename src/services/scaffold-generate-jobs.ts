@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { FastifyBaseLogger } from "fastify";
-import type { ExistingInstructionsMode } from "../shared/constants.js";
+import {
+  GENERATED_PREVIEW_TTL_MS,
+  PREVIEW_TTL_MS,
+  type ExistingInstructionsMode,
+} from "../shared/constants.js";
 import { agentLogLabel, type ScaffoldConflict } from "./scaffold-generate.js";
 
 // Issue #2429 — in-memory registry for background scaffold-generation jobs.
@@ -8,12 +12,7 @@ import { agentLogLabel, type ScaffoldConflict } from "./scaffold-generate.js";
 // lost on a Mullion restart: a restart also kills the spawned agent child, so
 // persisting job records to SQLite would buy nothing.
 
-/** How long a template preview is kept: cheap to recompute, so short. */
-export const PREVIEW_TTL_MS = 15 * 60 * 1000;
-/** How long a finished agent result is kept. It cost a full agent turn and is
- * easy to walk away from, so a quarter of an hour is far too short; a new
- * generate or preview for the same slug still supersedes it. */
-export const GENERATED_PREVIEW_TTL_MS = 24 * 60 * 60 * 1000;
+export { GENERATED_PREVIEW_TTL_MS, PREVIEW_TTL_MS };
 
 export function previewTtlMs(generated: boolean): number {
   return generated ? GENERATED_PREVIEW_TTL_MS : PREVIEW_TTL_MS;

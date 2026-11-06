@@ -1,23 +1,17 @@
 import type { StateCreator } from "zustand";
+import { GENERATED_PREVIEW_TTL_MS, PREVIEW_TTL_MS } from "../../../../src/shared/constants.js";
 import type { DashboardState, ScaffoldDraft, ScaffoldSlice } from "../types.js";
 
 // Issue #2478 — the Scaffold panel's form and result, per project. The panel
 // unmounts when the user switches workspace or hub tab, and a finished agent
 // preview costs a full agent turn, so none of it may live in component state.
 
-/** The server drops a template preview after this long (PREVIEW_TTL_MS in
- * src/services/scaffold-generate-jobs.ts). */
-export const SCAFFOLD_PREVIEW_TTL_MS = 15 * 60 * 1000;
-/** ...and an agent-generated one after this (GENERATED_PREVIEW_TTL_MS there):
- * it cost a full agent turn, so it is kept far longer. */
-export const SCAFFOLD_GENERATED_PREVIEW_TTL_MS = 24 * 60 * 60 * 1000;
-
 export function isScaffoldPreviewExpired(
   preview: { generated?: boolean },
   createdAt: number,
   now = Date.now(),
 ): boolean {
-  const ttl = preview.generated ? SCAFFOLD_GENERATED_PREVIEW_TTL_MS : SCAFFOLD_PREVIEW_TTL_MS;
+  const ttl = preview.generated ? GENERATED_PREVIEW_TTL_MS : PREVIEW_TTL_MS;
   return now - createdAt > ttl;
 }
 

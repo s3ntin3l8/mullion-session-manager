@@ -224,3 +224,11 @@ export const FILE_STREAM_CONTENT_TYPE = "application/vnd.mullion.file-stream";
 // silently missed by another.
 export const EXISTING_INSTRUCTIONS_MODES = ["keep", "report", "restructure"] as const;
 export type ExistingInstructionsMode = (typeof EXISTING_INSTRUCTIONS_MODES)[number];
+
+/** How long the server keeps a template scaffold preview. Shared with the
+ * Scaffold panel so the two cannot drift (a panel that outlives the server
+ * offers Apply on a 400; one that expires early discards a live preview). */
+export const PREVIEW_TTL_MS = 15 * 60 * 1000;
+/** How long it keeps an agent-generated one (and its finished job): it cost a
+ * full agent turn and is easy to walk away from. */
+export const GENERATED_PREVIEW_TTL_MS = 24 * 60 * 60 * 1000;
