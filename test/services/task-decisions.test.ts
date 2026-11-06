@@ -4,6 +4,7 @@ import {
   MAX_DECISION_LINE_LENGTH,
   applyWorkerDecisionsSection,
   extractDeclaredDecisions,
+  neutraliseDecisionLine,
   renderWorkerDecisionsSection,
 } from "../../src/services/task-decisions.js";
 
@@ -77,5 +78,83 @@ describe("worker decisions PR section", () => {
     expect(applyWorkerDecisionsSection(withSection, [])).toBe("Text\n\n---\nfooter");
     expect(applyWorkerDecisionsSection("Plain body", [])).toBe("Plain body");
     expect(applyWorkerDecisionsSection("Plain body", ["Skipped: x"])).toContain("Plain body");
+  });
+
+  it("neutralises mentions, comment markers, HTML tags and markdown links/images", () => {
+    const raw =
+      "Decision: ping @someone and @org/team, handle <!-- /mullion:worker-decisions -->, escape <script>alert(1)</script> and [link](https://example.com) and ![img](https://example.com/p.png)";
+    const safe = neutraliseDecisionLine(raw);
+    expect(safe).not.toContain("@someone");
+    expect(safe).toContain("@\u200Bsomeone");
+    expect(safe).toContain("@\u200Borg/team");
+    expect(safe).not.toContain("<!--");
+    expect(safe).not.toContain("-->");
+    expect(safe).toContain("&lt;!-- /mullion:worker-decisions --&gt;");
+    expect(safe).not.toContain("<script>");
+    expect(safe).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(safe).toContain("\\[link\\](https://example.com)");
+    expect(safe).toContain("!\\[img\\](https://example.com/p.png)");
+  });
+
+  it("renders harmless lines with mentions, markers, HTML and markdown links, and refresh replaces only the section", () => {
+    const body = "Initial issue body\n\nCloses #42\n\n---\nOpened by Mullion Task Master.";
+    const decisions = [
+      "Decision: pinged @someone for feedback",
+      "Skipped: <!-- /mullion:worker-decisions --> close attempt",
+      "Deferred: <div class='alert'>HTML content</div> and [docs](https://example.com/guide)",
+    ];
+    const rendered = applyWorkerDecisionsSection(body, decisions);
+
+    // Each renders harmlessly
+    expect(rendered).not.toContain("@someone");
+    expect(rendered).toContain("@\u200Bsomeone");
+    expect(rendered).toContain("&lt;!-- /mullion:worker-decisions --&gt;");
+    // Ensure the section only has exactly one SECTION_START and one SECTION_END
+    expect(rendered.match(/<!-- mullion:worker-decisions -->/g)).toHaveLength(1);
+    expect(rendered.match(/<!-- \/mullion:worker-decisions -->/g)).toHaveLength(1);
+    expect(rendered).not.toContain("<div");
+    expect(rendered).toContain("&lt;div class='alert'&gt;HTML content&lt;/div&gt;");
+    expect(rendered).toContain("\\[docs\\](https://example.com/guide)");
+
+    // Refresh replaces only the section
+    const refreshed = applyWorkerDecisionsSection(rendered, ["Decision: fresh decision only"]);
+    expect(refreshed).toContain("- Decision: fresh decision only");
+    expect(refreshed).not.toContain("@someone");
+    expect(refreshed).not.toContain("&lt;!-- /mullion:worker-decisions --&gt;");
+    expect(refreshed).not.toContain("HTML content");
+    expect(refreshed.match(/Worker decisions/g)).toHaveLength(1);
+    expect(refreshed).toContain("Initial issue body\n\nCloses #42");
+    expect(refreshed).toContain("---\nOpened by Mullion Task Master.");
+  });
+
+  it("still replaces exactly the section it wrote after a body that contains lookalike markers", () => {
+    const bodyWithLookalikes = [
+      "Issue discussing <!-- /mullion:worker-decisions --> closing issues",
+      "and also mentioning <!-- mullion:worker-decisions --> unclosed markers.",
+      "",
+      "Closes #99",
+      "",
+      "---",
+      "Opened by Mullion Task Master.",
+    ].join("\n");
+
+    const withSection = applyWorkerDecisionsSection(bodyWithLookalikes, [
+      "Decision: initial decision",
+    ]);
+    expect(withSection).toContain("Issue discussing <!-- /mullion:worker-decisions -->");
+    expect(withSection).toContain("<!-- mullion:worker-decisions --> unclosed markers.");
+    expect(withSection).toContain("- Decision: initial decision");
+
+    const updated = applyWorkerDecisionsSection(withSection, ["Decision: updated decision"]);
+    expect(updated).toContain("- Decision: updated decision");
+    expect(updated).not.toContain("Decision: initial decision");
+    expect(updated).toContain("Issue discussing <!-- /mullion:worker-decisions -->");
+    expect(updated).toContain("<!-- mullion:worker-decisions --> unclosed markers.");
+    expect(updated.match(/Worker decisions/g)).toHaveLength(1);
+
+    const cleared = applyWorkerDecisionsSection(updated, []);
+    expect(cleared).not.toContain("Worker decisions");
+    expect(cleared).toContain("Issue discussing <!-- /mullion:worker-decisions -->");
+    expect(cleared).toContain("<!-- mullion:worker-decisions --> unclosed markers.");
   });
 });

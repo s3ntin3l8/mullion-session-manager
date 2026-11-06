@@ -99,7 +99,30 @@ export async function collectDeclaredDecisions(
 
 const SECTION_START = "<!-- mullion:worker-decisions -->";
 const SECTION_END = "<!-- /mullion:worker-decisions -->";
-const SECTION_RE = new RegExp(`\\n*${SECTION_START}[\\s\\S]*?${SECTION_END}`);
+const SECTION_RE = new RegExp(
+  `\\r?\\n*${SECTION_START}\\r?\\n### Worker decisions(?:(?!${SECTION_START})[\\s\\S])*?${SECTION_END}`,
+  "g",
+);
+
+/**
+ * Neutralises a declared-decision line so it is safe to render in GitHub
+ * markdown (the PR description and the review comment):
+ * - inserts a zero-width space after `@` to prevent notifying GitHub users;
+ * - escapes `&`, `<` and `>` so `<!--` and `-->` can never appear (preventing
+ *   accidental closing or corruption of the PR section markers) and HTML tags
+ *   render as plain text;
+ * - escapes markdown link and image brackets (`[` and `]`) so links and images
+ *   render as plain text rather than active elements.
+ */
+export function neutraliseDecisionLine(line: string): string {
+  return line
+    .replace(/@(?=[a-zA-Z0-9_/-])/g, "@\u200B")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("[", "\\[")
+    .replaceAll("]", "\\]");
+}
 
 /** The PR-description section for `decisions`, or `""` when there are none.
  * Wrapped in markers so a refresh can replace exactly this section. */
@@ -109,7 +132,7 @@ export function renderWorkerDecisionsSection(decisions: string[]): string {
     SECTION_START,
     "### Worker decisions",
     "",
-    ...decisions.map((d) => `- ${d}`),
+    ...decisions.map((d) => `- ${neutraliseDecisionLine(d)}`),
     SECTION_END,
   ].join("\n");
 }
@@ -122,8 +145,13 @@ export function renderWorkerDecisionsSection(decisions: string[]): string {
  */
 export function applyWorkerDecisionsSection(body: string, decisions: string[]): string {
   const section = renderWorkerDecisionsSection(decisions);
-  if (SECTION_RE.test(body)) {
-    return body.replace(SECTION_RE, () => (section === "" ? "" : `\n\n${section}`));
+  const matches = [...body.matchAll(SECTION_RE)];
+  if (matches.length > 0) {
+    const lastMatch = matches[matches.length - 1];
+    const startIndex = lastMatch.index!;
+    const endIndex = startIndex + lastMatch[0].length;
+    const replacement = section === "" ? "" : `\n\n${section}`;
+    return `${body.slice(0, startIndex)}${replacement}${body.slice(endIndex)}`;
   }
   if (section === "") return body;
   const footer = body.lastIndexOf("\n\n---\n");

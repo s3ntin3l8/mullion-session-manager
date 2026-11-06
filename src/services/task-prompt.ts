@@ -47,6 +47,7 @@ import {
   reviewFocusPromptLines,
   type FocusCheck,
 } from "./task-review-focus.js";
+import { neutraliseDecisionLine } from "./task-decisions.js";
 
 /**
  * Greedily wraps `text` to `width` columns, breaking on whitespace and
@@ -941,7 +942,10 @@ function renderScopeSection(scope: ScopeCheck[]): string[] {
   if (scope.length === 0) return [];
   return [
     "### Scope check",
-    ...scope.map((c) => `- **${c.status}** — ${c.item}${c.evidence ? `: ${c.evidence}` : ""}`),
+    ...scope.map(
+      (c) =>
+        `- **${c.status}** — ${neutraliseDecisionLine(c.item)}${c.evidence ? `: ${neutraliseDecisionLine(c.evidence)}` : ""}`,
+    ),
     "",
   ];
 }

@@ -64,6 +64,17 @@ describe("scope check (#2599)", () => {
       declaredDecisions: [],
     });
     expect(none).not.toContain("Declared by the worker");
+
+    const withMentionsAndTags = buildReviewPrompt({
+      task: TASK,
+      worktreePath: BASE.worktreePath,
+      findingsPath: FINDINGS_PATH,
+      declaredDecisions: ["Decision: asked @someone about <script> [link](url) <!-- marker -->"],
+    });
+    // The reviewer agent sees the raw text to judge what the worker wrote
+    expect(withMentionsAndTags).toContain(
+      "- Decision: asked @someone about <script> [link](url) <!-- marker -->",
+    );
   });
 
   it("the worker prompt asks for the declaration lines", () => {
@@ -150,6 +161,31 @@ describe("scope check (#2599)", () => {
       expect(out).toContain("### Scope check");
       expect(out).toContain("- **met** — Do it: src/a.ts:3");
       expect(out).toContain("- **partial** — Docs: only one page");
+    }
+  });
+
+  it("neutralises mentions, comment markers, HTML tags and markdown links in Scope check evidence", () => {
+    const parsed = parse({
+      scope: [
+        {
+          item: "API change",
+          status: "deviated",
+          evidence:
+            "Decision: asked @someone about <!-- /mullion:worker-decisions --> and <script>alert(1)</script> and [link](url)",
+        },
+      ],
+    });
+    for (const mode of ["comment", "review-body"] as const) {
+      const out = renderReviewFindingsMarkdown(parsed, mode);
+      expect(out).toContain("### Scope check");
+      expect(out).not.toContain("@someone");
+      expect(out).toContain("@\u200Bsomeone");
+      expect(out).not.toContain("<!--");
+      expect(out).not.toContain("-->");
+      expect(out).toContain("&lt;!-- /mullion:worker-decisions --&gt;");
+      expect(out).not.toContain("<script>");
+      expect(out).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+      expect(out).toContain("\\[link\\](url)");
     }
   });
 
