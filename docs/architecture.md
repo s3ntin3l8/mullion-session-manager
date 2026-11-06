@@ -290,7 +290,26 @@ PR).
   read/delete browser previews — see [`browser-previews.md`](browser-previews.md)),
   `events` (`/ws/events` — the live notification-event stream, plus `GET
 /api/events`, the opt-in persisted-history query — see
-  [`socket-api.md`](socket-api.md)), `tasks` (Task Master's CRUD plus its
+  [`socket-api.md`](socket-api.md)), `agent-channel` (`GET
+/internal/agent-channel` — the outbound-channel handshake an agent host
+  dials in on, so a host behind NAT reaches its primary without an inbound
+  port — see [`multi-host.md`](multi-host.md)), `host-pairing`
+  (`GET`/`POST /api/host-pairings` and `POST /api/internal/pair` — the
+  pairing-code surface a new agent host redeems its way in with, plus
+  revoke/list), `review-relay` (`POST /api/sessions/:id/review-request` and
+  `/review-stop` — the per-session review requests the relay dispatches, and
+  `POST /api/sessions/:id/triage-request` for a triage run — see
+  [`review-relay.md`](review-relay.md)), `reviews` (`GET /api/reviews` — the
+  operator-facing list of the review runs THIS Mullion dispatched (Settings →
+  Integrations → Review relay → Recent reviews); unlike the per-session ops
+  in `review-relay`, this is not pinned to a session, so the operator can
+  stop any tracked run), `task-push` (`POST /api/sessions/:id/task-push` —
+  the push a Task Master worker makes THROUGH Mullion instead of with its own
+  git credentials, so the push runs inside the agent's own turn and through
+  the same approval gate as the reconciler's), `task-retry-refusal` (not a
+  route file — the HTTP response for a REFUSED Retry, kept beside
+  `routes/tasks.ts` so that file stays under its size ceiling), `tasks`
+  (Task Master's CRUD plus its
   action verbs — claim/approve/reject/retry/re-review/give-up/archive/
   unarchive/archive-merged/clear-done/merge — see [`tasks.md`](tasks.md)),
   `ws-tasks` (`/ws/tasks` — live task-transition push, see
@@ -317,7 +336,21 @@ PR).
   `internal-schemas` (not a route file at all — the extracted JSON Schema
   bodies/params `internal.ts`'s DB-less agent API registers, kept out of
   `internal.ts` itself to stop ~450 lines of hand-written schema literals
-  drifting from their own parallel TS interfaces), `skills` (per-agent Skill enable/disable),
+  drifting from their own parallel TS interfaces), `internal-probes`
+  (`GET /internal/capabilities` and `GET /internal/protocol` — an agent
+  host's small "what are you" answers, registered from `internal.ts` so they
+  sit behind its auth hook and share its rate limit), `internal-browser`
+  (`POST /internal/sessions/:id/browser[/find]` and `POST
+/internal/browser/close` — the agent-side browser-control surface, the
+  counterpart of `browser-automation`'s primary-side routes), `internal-streams`
+  (not a route file — the agent-side bodies of `/internal/ws/attach`,
+  `/internal/ws/events` and `/internal/ws/ssh-agent`, shared by the inbound
+  routes and by the same streams carried over the outbound channel so both
+  transports validate and behave identically), `demo-fixtures` (demo-only
+  fixture routes — the demo instance needs tasks in states the REST API
+  refuses to create, so this inserts rows directly, the way the route tests
+  do, and the demo instance's routes are not registered in a normal
+  deployment), `skills` (per-agent Skill enable/disable),
   `agent-rules` (per-agent rule-file read/write), `project-files` (the
   file-editor panel's surface — `GET /api/projects/:id/files[?path]` listing,
   `GET`/`PUT`/`DELETE /api/projects/:id/file`, `POST .../files/mkdir` and
@@ -347,7 +380,22 @@ PR).
   `device`/`devices` (`/ws/device/:deviceId` H.264 streaming + input proxy,
   and the `devices` CRUD/action/pair REST surface, respectively) and `avds`
   (AVD listing/creation and installed-system-image/device-profile listing —
-  see [`device-panel.md`](device-panel.md)), `project-urls` (per-project saved external-URL shortcuts), `project-tooling`
+  see [`device-panel.md`](device-panel.md)), `project-urls` (per-project saved external-URL shortcuts), `preview-targets` (`GET`/`PUT
+/api/projects/:id/preview-targets` — the per-project registry of preview
+  destinations, the named targets a browser preview can be opened against),
+  `project-git`/`project-git-writes` (the project's Git surface, split into
+  its read half — the batch and per-project status, refs, diff and log
+  routes, `GET /api/projects/git-*` and `GET /api/projects/:id/git-*` — and
+  its write half: fetch, pull, health, repair, and the branch and worktree
+  operations, `POST /api/projects/:id/git-*`; see
+  [`git-panel.md`](git-panel.md)), `project-github`/`project-github-writes`
+  (the project's GitHub surface — the read half: `GET /api/projects/:id/github`
+  and its issue/CI-jobs sub-routes, and the release-please routes — and the
+  sidebar's own writes: reply to or resolve a review thread, comment on an
+  issue or PR, and submit a PR review; see
+  [`github-integration.md`](github-integration.md)), `project-docker` (the
+  Docker Compose-service routes of the projects API — the per-project
+  discovered services behind the dock panel), `project-tooling`
   (`GET`/`PUT`/`DELETE /api/projects/:id/tooling[/skill|/reviewer-agent]` —
   a project's DB-authored pinned note/skill/reviewer subagent, primary-only,
   no host branching — see [`agent-context.md`](agent-context.md)),

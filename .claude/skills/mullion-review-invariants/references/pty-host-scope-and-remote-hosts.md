@@ -100,7 +100,7 @@ arrays when a key changes.
 
 **Invariant.** A guard on a branch-moving or worktree-removing git route finds
 live sessions by effective cwd and host across every project
-(`sessionsInProjectCheckout` in `src/routes/projects.ts`), never by
+(`sessionsInProjectCheckout` in `src/routes/project-git-writes.ts`), never by
 `sessions.projectId`. A project whose cwd is itself a linked worktree is left out
 of the "other worktrees" list. Git-level refusals answer `200` with a `reason`;
 only an unreachable host, a schema error or an unknown project are error

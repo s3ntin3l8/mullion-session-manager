@@ -4,7 +4,7 @@ Read this when a diff touches batch GET routes, the PR list, PATCH handlers on p
 
 ## 1. Batch GET routes: an absent id is transient, `null` is a durable nothing
 
-**Invariant.** The multi-project batch routes (git statuses, git diff stats, and `/api/projects/git-refs` in `src/routes/projects.ts`) omit a project id when the failure is transient, such as an unreachable host, and emit `null` only for a durable "nothing". The client keeps its last-known-good value for an absent id and clears on a present `null`; `refreshGitRefs` in `frontend/src/store/slices/git.ts` tests `p.id in result.branches` and its siblings. A resolver that collapses "unreachable" into `null` must not feed these maps: use `resolveRepoRefResult`, not the null-collapsing `resolveRepoRef`.
+**Invariant.** The multi-project batch routes (git statuses, git diff stats, and `/api/projects/git-refs` in `src/routes/project-git.ts`) omit a project id when the failure is transient, such as an unreachable host, and emit `null` only for a durable "nothing". The client keeps its last-known-good value for an absent id and clears on a present `null`; `refreshGitRefs` in `frontend/src/store/slices/git.ts` tests `p.id in result.branches` and its siblings. A resolver that collapses "unreachable" into `null` must not feed these maps: use `resolveRepoRefResult`, not the null-collapsing `resolveRepoRef`.
 
 **Breaks.** One briefly unreachable remote host wipes that project's cached PR list and branches from the client.
 
@@ -12,7 +12,7 @@ Read this when a diff touches batch GET routes, the PR list, PATCH handlers on p
 
 ## 2. PR-row fields must be populated on both the batch and the per-project route
 
-**Invariant.** The list the UI renders comes from `usePrList` (`frontend/src/hooks/useGitHubData.ts`): the store's `prsByProject`, filled by the batch route, wins over the panel's own per-project fetch. Any field added to a PR row must be applied on both routes in `src/routes/projects.ts`; both currently wrap their rows in `annotatePrTasks(... overlayRelayRuns(...))`.
+**Invariant.** The list the UI renders comes from `usePrList` (`frontend/src/hooks/useGitHubData.ts`): the store's `prsByProject`, filled by the batch route, wins over the panel's own per-project fetch. Any field added to a PR row must be applied on both routes — the per-project PR handler in `src/routes/project-github.ts` and the batch handler in `src/routes/project-git.ts`; both currently wrap their rows in `annotatePrTasks(... overlayRelayRuns(...))`.
 
 **Breaks.** The field shows on first load via the fallback path, then vanishes after the first store refresh, with no error anywhere.
 
