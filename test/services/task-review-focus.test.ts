@@ -110,6 +110,19 @@ describe("review focus in the review prompt and findings", () => {
     expect(deriveVerdict({ findings: [], previous: [], claimed: "approved" })).toBe("approved");
   });
 
+  it("keeps focus notes raw for the worker prompt and neutralises them in comments", () => {
+    const parsed = parse({
+      verdict: "changes-requested",
+      findings: [{ path: "a.ts", line: 1, severity: "warning", body: "bug" }],
+      focus: [{ item: "rows[0] & <script> @someone", status: "not-checked", evidence: "no time" }],
+    });
+    const worker = renderReviewFindingsMarkdown(parsed, "worker-prompt");
+    expect(worker).toContain("rows[0] & <script> @someone");
+    const comment = renderReviewFindingsMarkdown(parsed, "comment");
+    expect(comment).toContain("rows\\[0\\] &amp; &lt;script&gt; @\u200Bsomeone");
+    expect(comment).not.toContain("<script>");
+  });
+
   it("flags a finding-status entry that has no finding behind it, without changing the verdict", () => {
     const orphan = parse({ focus: [{ item: "races", status: "finding", evidence: "x" }] });
     expect(orphan.verdict).toBe("approved");
@@ -129,5 +142,17 @@ describe("review focus in the review prompt and findings", () => {
     );
     expect(md).toContain("### Review focus");
     expect(md).toContain("- **clear** — races: checked a.ts");
+  });
+});
+
+describe("renderFocusSection neutralisation", () => {
+  it("defuses mentions and HTML in focus items and evidence", async () => {
+    const { renderFocusSection } = await import("../../src/services/task-review-focus.js");
+    const out = renderFocusSection([
+      { item: "ping @someone <b>x</b>", status: "ok", evidence: "see [a](http://x)" },
+    ] as never).join("\n");
+    expect(out).not.toContain("@someone");
+    expect(out).not.toContain("<b>");
+    expect(out).toContain("\\[a\\]");
   });
 });

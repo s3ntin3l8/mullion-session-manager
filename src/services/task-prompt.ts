@@ -40,6 +40,7 @@ import path from "node:path";
 
 import { getAdapterDelegationHint } from "./hook-adapters/index.js";
 import {
+  FOCUS_NOTE_PREFIX,
   focusNotes,
   normalizeFocus,
   parseReviewFocus,
@@ -47,6 +48,7 @@ import {
   reviewFocusPromptLines,
   type FocusCheck,
 } from "./task-review-focus.js";
+import { neutraliseDecisionLine } from "./task-decisions.js";
 
 /**
  * Greedily wraps `text` to `width` columns, breaking on whitespace and
@@ -941,7 +943,10 @@ function renderScopeSection(scope: ScopeCheck[]): string[] {
   if (scope.length === 0) return [];
   return [
     "### Scope check",
-    ...scope.map((c) => `- **${c.status}** — ${c.item}${c.evidence ? `: ${c.evidence}` : ""}`),
+    ...scope.map(
+      (c) =>
+        `- **${c.status}** — ${neutraliseDecisionLine(c.item)}${c.evidence ? `: ${neutraliseDecisionLine(c.evidence)}` : ""}`,
+    ),
     "",
   ];
 }
@@ -1074,7 +1079,13 @@ export function renderReviewFindingsMarkdown(
   lines.push(...renderFindingsSection("Warnings", warnings, findingsMode));
   lines.push(...renderFindingsSection("Suggestions", suggestions, findingsMode));
   lines.push(...renderTextSection("Verified", parsed.verified, /* omitIfEmpty */ true));
-  lines.push(...renderTextSection("Notes", parsed.notes, /* omitIfEmpty */ true));
+  lines.push(
+    ...renderTextSection(
+      "Notes",
+      parsed.notes.map((n) => (n.startsWith(FOCUS_NOTE_PREFIX) ? neutraliseDecisionLine(n) : n)),
+      /* omitIfEmpty */ true,
+    ),
+  );
   lines.push(...renderScopeSection(parsed.scope));
   lines.push(...renderFocusSection(parsed.focus));
   lines.push(...renderTextSection("Looks Good", parsed.looksGood, /* omitIfEmpty */ false));

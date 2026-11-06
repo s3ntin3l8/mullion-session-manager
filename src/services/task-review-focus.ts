@@ -4,6 +4,8 @@
 // report on each one in the findings JSON's `focus` array. It is a section, not
 // a directive line, so it does not interact with the body directives.
 
+import { neutraliseDecisionLine } from "./task-decisions.js";
+
 export const MAX_FOCUS_ITEMS = 12;
 export const MAX_FOCUS_ITEM_LENGTH = 300;
 
@@ -93,12 +95,16 @@ export function normalizeFocus(raw: unknown): FocusCheck[] {
  * Notes for `focus` entries the verdict does not act on: a `not-checked` item
  * is surfaced prominently, and a `finding` entry with no finding behind it is
  * flagged. Neither changes the verdict (`deriveVerdict` reads `findings`).
+ * The text is raw (the worker prompt keeps it so); the comment renderers
+ * neutralise a `FOCUS_NOTE_PREFIX` note.
  */
+export const FOCUS_NOTE_PREFIX = "**Review focus NOT CHECKED:**";
+
 export function focusNotes(focus: FocusCheck[], findingCount: number): string[] {
   const notes: string[] = [];
   for (const c of focus) {
     if (c.status === "not-checked") {
-      notes.push(`**Review focus NOT CHECKED:** ${c.item}${c.evidence ? ` — ${c.evidence}` : ""}`);
+      notes.push(`${FOCUS_NOTE_PREFIX} ${c.item}${c.evidence ? ` — ${c.evidence}` : ""}`);
     }
   }
   if (findingCount === 0 && focus.some((c) => c.status === "finding")) {
@@ -114,7 +120,10 @@ export function renderFocusSection(focus: FocusCheck[]): string[] {
   if (focus.length === 0) return [];
   return [
     "### Review focus",
-    ...focus.map((c) => `- **${c.status}** — ${c.item}${c.evidence ? `: ${c.evidence}` : ""}`),
+    ...focus.map(
+      (c) =>
+        `- **${c.status}** — ${neutraliseDecisionLine(c.item)}${c.evidence ? `: ${neutraliseDecisionLine(c.evidence)}` : ""}`,
+    ),
     "",
   ];
 }

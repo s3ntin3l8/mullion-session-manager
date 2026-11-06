@@ -99,7 +99,51 @@ export async function collectDeclaredDecisions(
 
 const SECTION_START = "<!-- mullion:worker-decisions -->";
 const SECTION_END = "<!-- /mullion:worker-decisions -->";
-const SECTION_RE = new RegExp(`\\n*${SECTION_START}[\\s\\S]*?${SECTION_END}`);
+// The issue body is prepended to the PR description, so the section we wrote
+// is the LAST complete block: `applyWorkerDecisionsSection` takes the last
+// match, never the first.
+const SECTION_RE = new RegExp(
+  `\\r?\\n*${SECTION_START}\\r?\\n### Worker decisions(?:(?!${SECTION_START})[\\s\\S])*?${SECTION_END}`,
+  "g",
+);
+
+const RENAMED_SECTION_RE = new RegExp(
+  `\\r?\\n*^${SECTION_START}\\r?\\n#{1,6} [^\\n]*\\n(?:(?!${SECTION_START})[\\s\\S])*?${SECTION_END}`,
+  "gm",
+);
+
+// The heading line is gone or no longer a heading (deleted, bold, a blank line
+// before it): a line-start start marker.
+const LINE_START_MARKER_RE = new RegExp(`^${SECTION_START}`, "gm");
+// What may follow our block: nothing, or the "---" footer Task Master writes.
+const AFTER_BLOCK_RE = /^\s*---\r?\n/;
+
+/** Whether a block ending at `blockEnd` sits where we write ours: at the end
+ * of the body or directly above the footer. A pair quoted in the issue body is
+ * followed by more issue text. */
+function endsOurBlock(body: string, blockEnd: number): boolean {
+  return blockEnd === body.length || AFTER_BLOCK_RE.test(body.slice(blockEnd));
+}
+
+/**
+ * Neutralises a declared-decision line so it is safe to render in GitHub
+ * markdown (the PR description and the review comment):
+ * - inserts a zero-width space after `@` to prevent notifying GitHub users;
+ * - escapes `&`, `<` and `>` so `<!--` and `-->` can never appear (preventing
+ *   accidental closing or corruption of the PR section markers) and HTML tags
+ *   render as plain text;
+ * - escapes markdown link and image brackets (`[` and `]`) so links and images
+ *   render as plain text rather than active elements.
+ */
+export function neutraliseDecisionLine(line: string): string {
+  return line
+    .replace(/@(?=[a-zA-Z0-9_/-])/g, "@\u200B")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("[", "\\[")
+    .replaceAll("]", "\\]");
+}
 
 /** The PR-description section for `decisions`, or `""` when there are none.
  * Wrapped in markers so a refresh can replace exactly this section. */
@@ -109,7 +153,7 @@ export function renderWorkerDecisionsSection(decisions: string[]): string {
     SECTION_START,
     "### Worker decisions",
     "",
-    ...decisions.map((d) => `- ${d}`),
+    ...decisions.map((d) => `- ${neutraliseDecisionLine(d)}`),
     SECTION_END,
   ].join("\n");
 }
@@ -122,8 +166,46 @@ export function renderWorkerDecisionsSection(decisions: string[]): string {
  */
 export function applyWorkerDecisionsSection(body: string, decisions: string[]): string {
   const section = renderWorkerDecisionsSection(decisions);
-  if (SECTION_RE.test(body)) {
-    return body.replace(SECTION_RE, () => (section === "" ? "" : `\n\n${section}`));
+  const matches = [...body.matchAll(SECTION_RE)];
+  if (matches.length > 0) {
+    const lastMatch = matches[matches.length - 1];
+    const startIndex = lastMatch.index!;
+    const endIndex = startIndex + lastMatch[0].length;
+    if (endsOurBlock(body, endIndex)) {
+      const replacement = section === "" ? "" : `\n\n${section}`;
+      return `${body.slice(0, startIndex)}${replacement}${body.slice(endIndex)}`;
+    }
+  }
+  // A human renamed the heading, so the heading-qualified match found nothing:
+  // replace the block we wrote (start marker on its own line, any heading line,
+  // up to its end marker) instead of appending a second section. A lookalike
+  // marker inside prose has no heading line after it and is left alone.
+  const renamed = [...body.matchAll(RENAMED_SECTION_RE)];
+  if (renamed.length > 0) {
+    const last = renamed[renamed.length - 1];
+    const startIndex = last.index!;
+    const endIndex = startIndex + last[0].length;
+    if (endsOurBlock(body, endIndex)) {
+      const replacement = section === "" ? "" : `\n\n${section}`;
+      return `${body.slice(0, startIndex)}${replacement}${body.slice(endIndex)}`;
+    }
+  }
+  // Heading deleted or replaced by non-heading text: our block is structurally
+  // the last one and ends the body (or sits directly above the footer). A
+  // line-start pair quoted in the issue body is followed by more issue text, so
+  // it fails the tail check and is left alone.
+  const starts = [...body.matchAll(LINE_START_MARKER_RE)];
+  if (starts.length > 0) {
+    const startAt = starts[starts.length - 1].index!;
+    const endAt = body.indexOf(SECTION_END, startAt);
+    if (endAt !== -1) {
+      const blockEnd = endAt + SECTION_END.length;
+      if (endsOurBlock(body, blockEnd)) {
+        const head = body.slice(0, startAt).replace(/(?:\r?\n)+$/, "");
+        const replacement = section === "" ? "" : `\n\n${section}`;
+        return `${head}${replacement}${body.slice(blockEnd)}`;
+      }
+    }
   }
   if (section === "") return body;
   const footer = body.lastIndexOf("\n\n---\n");
