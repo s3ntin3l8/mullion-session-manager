@@ -6,6 +6,7 @@ import { execFileSync } from "node:child_process";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { gitEnv } from "../../src/services/git-env.js";
+import { deriveWorktreePath } from "../../src/services/git-worktree.js";
 import {
   GENERATED_PREVIEW_TTL_MS,
   PREVIEW_TTL_MS,
@@ -151,6 +152,36 @@ describe("project-setup route", () => {
         expect(kept.json().previewId).toBe(gen.json().previewId);
         nowSpy.mockReturnValue(realNow + GENERATED_PREVIEW_TTL_MS + 1000);
         expect((await app.inject({ method: "GET", url })).statusCode).toBe(204);
+      } finally {
+        nowSpy.mockRestore();
+      }
+      await app.close();
+    });
+
+    it("recreates the worktree of a generated record older than the reuse window", async () => {
+      mockValidGeneration("gen-age");
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+      const gen = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "gen-age" },
+      });
+      expect(gen.statusCode).toBe(200);
+      const sentinel = path.join(deriveWorktreePath(repoDir, "setup-gen-age"), "sentinel.txt");
+      fs.writeFileSync(sentinel, "left behind by the generate");
+
+      // A generated record is kept for a day, but its worktree's base ref is old
+      // after the reuse window: a re-preview then starts from a fresh checkout.
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.now() + PREVIEW_TTL_MS + 1000);
+      try {
+        const late = await app.inject({
+          method: "POST",
+          url: `/api/projects/${projectId}/setup/preview`,
+          payload: { slug: "gen-age" },
+        });
+        expect(late.statusCode).toBe(200);
+        expect(fs.existsSync(sentinel)).toBe(false);
       } finally {
         nowSpy.mockRestore();
       }

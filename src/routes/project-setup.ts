@@ -58,7 +58,6 @@ import {
 } from "../services/scaffold-generate.js";
 import {
   isPreviewExpired,
-  PREVIEW_TTL_MS,
   startGenerateJob,
   getGenerateJob,
   getActiveGenerateJob,
@@ -615,10 +614,11 @@ interface ReadyWorktree {
 // `reuseOrCreateWorktree` would otherwise see a path that exists but isn't
 // a KNOWN live preview (no PreviewRecord registered yet on a first call)
 // and remove+recreate it.
-// A record's worktree is reused only while it is this fresh (the template TTL),
-// even for a generated record that is kept longer: its base ref ages with it.
-// Not derived from the sweep, so a TTL change cannot reuse a day-old worktree.
-const RECENT_WORKTREE_REUSE_MS = PREVIEW_TTL_MS;
+// A record's worktree is reused only while it is this fresh, even for a
+// generated record that is kept longer: its base ref ages with it. Its own
+// literal, deliberately NOT derived from PREVIEW_TTL_MS, so raising a TTL never
+// widens how old a reused worktree can be.
+const RECENT_WORKTREE_REUSE_MS = 15 * 60 * 1000;
 
 async function ensureSetupWorktree(
   app: FastifyInstance,

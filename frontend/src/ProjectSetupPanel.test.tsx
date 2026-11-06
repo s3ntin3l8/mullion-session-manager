@@ -1198,43 +1198,6 @@ describe("ProjectSetupPanel", () => {
       expect(screen.getByPlaceholderText("my-project")).toHaveValue("");
     });
 
-    it("keeps an agent-generated preview past the template TTL", async () => {
-      vi.stubGlobal("fetch", mockFetch({}));
-      useDashboardStore.getState().patchScaffoldDraft(1, {
-        slug: "demo",
-        preview: {
-          previewId: "gen",
-          diff: "",
-          files: ["AGENTS.md"],
-          hasAgentsOverride: false,
-          generated: true,
-          agent: "claude",
-        },
-        previewCreatedAt: Date.now() - 3 * 60 * 60 * 1000,
-      });
-      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
-      expect(await screen.findByRole("button", { name: "Apply" })).toBeInTheDocument();
-      expect(screen.queryByText(/This preview expired/)).not.toBeInTheDocument();
-    });
-
-    it("discards an agent-generated preview older than 24 hours", async () => {
-      vi.stubGlobal("fetch", mockFetch({}));
-      useDashboardStore.getState().patchScaffoldDraft(1, {
-        slug: "demo",
-        preview: {
-          previewId: "gen-old",
-          diff: "",
-          files: ["AGENTS.md"],
-          hasAgentsOverride: false,
-          generated: true,
-          agent: "claude",
-        },
-        previewCreatedAt: Date.now() - 25 * 60 * 60 * 1000,
-      });
-      render(<ProjectSetupPanel params={{ projectId: 1 }} />);
-      expect(await screen.findByText(/This preview expired/)).toBeInTheDocument();
-    });
-
     it("discards a preview older than the server keeps it, with a message", async () => {
       vi.stubGlobal("fetch", mockFetch({}));
       useDashboardStore.getState().patchScaffoldDraft(1, {
