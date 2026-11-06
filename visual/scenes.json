@@ -37,7 +37,7 @@
       ],
       "settle": ".xterm-screen",
       "emphasis": {
-        "css": ".discover-block { display: none !important; } body { outline: 6px solid #f0a !important; outline-offset: -6px; }"
+        "css": ".discover-block { display: none !important; } html { filter: invert(1) !important; }"
       }
     },
     {
