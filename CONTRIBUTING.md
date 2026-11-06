@@ -84,6 +84,10 @@ how the CI runner provides both.
 | `make visual-baseline`                                 | regenerates the committed `visual/baselines/` (the scenes flagged `"baseline": true`); commit them with the change that moved the page                               |
 | `make screenshots-audit AUDIT=YYYY-MM-<scope>-<topic>` | every form factor into `docs/audit/assets/<slug>/` (local only)                                                                                                      |
 
+In CI the check also publishes `visual / health`, a separate, non-required check that goes red when a PR adds
+a console error or a serious/critical axe node to any compared shot. Pixel differences stay advisory in the
+sticky comment. Locally, `HEALTH_GATE=1 make visual-check` exits non-zero on the same condition.
+
 `visual/hooks.mjs` holds what a declarative scene cannot: the terminal scenes wait for
 the terminal to settle, then release the demo's held transcript through
 `visual/host-hooks.sh` (the container can reach the demo only over HTTP, and the

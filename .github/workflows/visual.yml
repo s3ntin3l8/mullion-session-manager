@@ -33,3 +33,4 @@ jobs:
     with:
       node-version: "26"
       timeout-minutes: 45
+      health-gate: true
