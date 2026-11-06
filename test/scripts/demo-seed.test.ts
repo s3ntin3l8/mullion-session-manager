@@ -11,6 +11,7 @@ import {
   agentTranscriptScript,
   lastTranscriptLine,
   seedDemo,
+  transcriptEnd,
 } from "../../scripts/demo/seed.mjs";
 import { pinnedPath } from "../helpers/pinned-path.js";
 
@@ -123,6 +124,17 @@ describe("lastTranscriptLine", () => {
 
   it("throws on an all-blank transcript", () => {
     expect(() => lastTranscriptLine(["", "  "])).toThrow("no non-blank line");
+  });
+});
+
+describe("transcriptEnd", () => {
+  it("counts the line break of the last line plus one per trailing blank line", () => {
+    expect(transcriptEnd(["first", "last", "", "  "])).toEqual({ last: "last", lineBreaks: 3 });
+    expect(transcriptEnd(["first", "last"])).toEqual({ last: "last", lineBreaks: 1 });
+  });
+
+  it("throws on an all-blank transcript", () => {
+    expect(() => transcriptEnd(["", "  "])).toThrow("no non-blank line");
   });
 });
 

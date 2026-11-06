@@ -8,7 +8,7 @@
 // already attached and fitted. These hooks are that wait-then-release step,
 // ported from the capture script this replaced.
 import { checkTerminalGeometry, parseSttySize } from "../scripts/demo/geometry.mjs";
-import { AUTH_TRANSCRIPT, MOBILE_TRANSCRIPT, lastTranscriptLine } from "../scripts/demo/seed.mjs";
+import { AUTH_TRANSCRIPT, MOBILE_TRANSCRIPT, transcriptEnd } from "../scripts/demo/seed.mjs";
 
 // Scenes that show a held transcript in a terminal, by the script they open.
 const HELD_SCRIPT = {
@@ -148,13 +148,37 @@ export async function settle({ page, scene, host }) {
 
   await waitForSettledTerminal(page, find, held.script);
   await host("release", held.script);
-  const last = lastTranscriptLine(held.lines);
+  // The last line and the blank lines after it: the script prints them 0.25 s apart, and a shot taken between
+  // them has the cursor one row higher than one taken after (a 384 px difference on the README terminal shot).
+  const { last, lineBreaks } = transcriptEnd(held.lines);
+  const finished = new RegExp(
+    `${last.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\r?\\n){${lineBreaks}}`,
+  );
   await waitUntil(async () => {
     const session = await find();
     if (!session) return false;
     const { b64 } = await api(`/api/sessions/${session.id}/scrollback`);
-    return Buffer.from(b64, "base64").toString("utf8").includes(last);
+    return finished.test(Buffer.from(b64, "base64").toString("utf8"));
   }, `${held.script} to finish its transcript`);
+  // The scrollback being complete is the server's view. A terminal that replays it on attach (every variant after
+  // the first) can still be drawing the last lines, so wait for the cursor to sit where the transcript leaves it.
+  await waitUntil(
+    () =>
+      page.evaluate(
+        ({ tail, breaks }) => {
+          const rows = [...globalThis.document.querySelectorAll(".xterm-rows > div")];
+          const cursor = rows.findIndex((r) => r.querySelector(".xterm-cursor"));
+          if (cursor < 0) return true; // no cursor to read (another renderer): nothing to wait for
+          const text = (r) => r.textContent.replaceAll("\u00a0", " ").trim();
+          const lastText = rows.findLastIndex((r) => text(r) !== "");
+          return (
+            lastText >= 0 && text(rows[lastText]).includes(tail) && cursor - lastText === breaks
+          );
+        },
+        { tail: last.slice(-6), breaks: lineBreaks },
+      ),
+    `the terminal to draw the end of ${held.script}'s transcript`,
+  );
 
   const { terminal } = await api("/api/settings");
   const pty = parseSttySize(await host("size", held.script));
