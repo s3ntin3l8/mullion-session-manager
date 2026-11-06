@@ -35,7 +35,7 @@
     "src/routes/tasks.ts": 1194,
     "src/services/github-write.ts": 1335,
     "src/services/pty-manager.ts": 2033,
-    "src/services/remote-host-client.ts": 1430,
+    "src/services/remote-host-client.ts": 1428,
     "src/services/task-reconciler.ts": 2909,
     "test/cli/core.test.ts": 3353,
     "test/hooks/forwarder-core.test.ts": 2413,

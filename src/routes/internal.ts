@@ -9,12 +9,11 @@ import {
   normalizePreviewDestination,
   CONFIGURED_PREVIEW_POLICY,
 } from "../services/preview-targets.js";
-import { getPinnedDispatcher, getPinnedWsAgent } from "../services/pinned-connect.js";
+import { getPinnedDispatcher } from "../services/pinned-connect.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import path from "node:path";
 import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { Readable } from "node:stream";
-import { WebSocket as NodeWebSocket } from "ws";
 import { pingDevServer } from "./projects.js";
 import { paletteBodySchema } from "./terminal-palette.js";
 import { setTerminalPalette, type TerminalPalette } from "../services/terminal-query-reply.js";
@@ -148,10 +147,17 @@ import { registerProbeRoutes } from "./internal-probes.js";
 import { resolveGlobalPresets } from "./actions.js";
 import {
   acceptAttachStream,
+  acceptConfiguredPreviewStream,
   acceptEventsStream,
+  acceptPreviewStream,
   acceptSshAgentStream,
   attachQueryError,
+  configuredPreviewQueryError,
+  parsePort,
+  previewQueryError,
+  resolveLoopbackPreviewUrl,
 } from "./internal-streams.js";
+import { AGENT_CHANNEL_AUTH_HEADER } from "../services/agent-channel-tunnel.js";
 import { acceptControlRelayConnection } from "../plugins/control-relay.js";
 import { resolveSshAuthSock } from "../services/ssh-agent-socket.js";
 import type { SessionInfo } from "../services/pty-manager.js";
@@ -164,7 +170,6 @@ import {
   uploadRetentionMs,
 } from "../services/session-upload.js";
 import { buildUpstreamRequestHeaders, relayFetchResponse } from "../services/http-proxy.js";
-import { pipeWsFrames, toWsUrl } from "../services/ws-pipe.js";
 import { timingSafeTokenMatch } from "../services/crypto-utils.js";
 import { matchesStaticAgentCredential } from "../services/internal-agent-auth.js";
 import {
@@ -424,11 +429,6 @@ function requireAllWithinRoots(
   return resolved;
 }
 
-// Same shape as projects.ts's DEV_SERVER_PORT_ONLY — a bare 1-65535 port,
-// nothing else. Used for both /internal/preview/:port/* and
-// /internal/ws/preview's ?port= (issue #28 phase 6).
-const PORT_PATTERN = /^\d{1,5}$/;
-
 // A generous, explicit cap for a proxied request body — self-documenting
 // more than load-bearing: Fastify's own bodyLimit check compares against
 // "content-length", and the primary's own hop (preview-proxy.ts) always
@@ -437,57 +437,6 @@ const PORT_PATTERN = /^\d{1,5}$/;
 // check never actually fires. A true cap would need to count bytes as the
 // stream is piped through — left as a known gap, not attempted here.
 const MAX_PREVIEW_BODY_BYTES = 50 * 1024 * 1024;
-
-function parsePort(value: string): number | null {
-  if (!PORT_PATTERN.test(value)) return null;
-  const port = Number(value);
-  return port >= 1 && port <= 65535 ? port : null;
-}
-
-/**
- * Resolves a caller-supplied path+query (from the primary, ultimately
- * derived from a browser's preview request) against this agent's own
- * loopback dev server at `port` — and never anything else. This is the
- * whole security promise of this phase (see projects.ts's own
- * isValidDevServerUrl comment: "the preview proxy forces the connection to
- * the owning agent's own loopback"), so it's deliberately not just "parse
- * and trust": naively string-concatenating `pathAndQuery` into
- * `http://127.0.0.1:${port}${pathAndQuery}` (or its ws:// equivalent) is
- * bypassable — a network-path reference ("//evil.com/x") overrides the
- * host entirely, and a leading "@evil.com/" turns "127.0.0.1:<port>" into
- * HTTP userinfo with "evil.com" as the actual host — both confirmed via
- * `new URL()` directly, not just reasoned about. The fix: `pathAndQuery` is
- * first parsed *alone*, against a throwaway placeholder base, so any
- * authority-like syntax it contains resolves into that placeholder's own
- * host/userinfo — which is then thrown away, keeping only `.pathname` and
- * `.search`. Only those two — guaranteed to start with "/" or be empty,
- * never authority syntax — are then combined with the real,
- * literally-constructed loopback base. The `hostname`/`port` assertion
- * below is redundant with that construction by design; it's still worth
- * asserting outright rather than trusting reasoning about which forms of
- * `pathAndQuery` are safe (see internal.test.ts's adversarial cases for
- * both).
- */
-function resolveLoopbackPreviewUrl(pathAndQuery: string, port: number): URL | null {
-  // Both `new URL()` calls below can throw outright for a sufficiently
-  // malformed `pathAndQuery` (confirmed: a bracketed-but-invalid literal
-  // like "//[::a.b.c.d]/x" throws TypeError rather than just parsing into
-  // something this function would otherwise reject) — every caller already
-  // treats a null return as "reject with 400", so folding a parse failure
-  // into that same null case (Hermes review, PR #48) keeps this function's
-  // contract honest ("tells you whether the input is usable," not "usable
-  // unless it happens to throw") without pushing a try/catch onto every
-  // call site.
-  try {
-    const parsed = new URL(pathAndQuery, "http://internal-preview-placeholder/");
-    const upstreamUrl = new URL(parsed.pathname + parsed.search, `http://127.0.0.1:${port}`);
-    const resolvedPort = upstreamUrl.port === "" ? 80 : Number(upstreamUrl.port);
-    if (upstreamUrl.hostname !== "127.0.0.1" || resolvedPort !== port) return null;
-    return upstreamUrl;
-  } catch {
-    return null;
-  }
-}
 
 /**
  * Issue #247 / roadmap 7.4 — the single source of truth for "this process's
@@ -3176,6 +3125,7 @@ export async function internalRoutes(app: FastifyInstance) {
         const upstream = new URL(destination);
         const headers = buildUpstreamRequestHeaders(request, upstream.host, [
           "authorization",
+          AGENT_CHANNEL_AUTH_HEADER,
           SIGNATURE_HEADER,
           TIMESTAMP_HEADER,
           NONCE_HEADER,
@@ -3210,20 +3160,12 @@ export async function internalRoutes(app: FastifyInstance) {
       websocket: true,
       config: INTERNAL_RATE_LIMIT.config,
       preValidation: async (request, reply) => {
-        const query = request.query as { url?: string };
-        if (!normalizePreviewDestination(query.url ?? ""))
-          return reply.badRequest("Invalid configured preview destination");
+        const error = configuredPreviewQueryError(request.query as { url?: string });
+        if (error !== null) return reply.badRequest(error);
       },
     },
-    (socket, request) => {
-      const destination = normalizePreviewDestination((request.query as { url: string }).url)!;
-      const url = toWsUrl(new URL(destination));
-      const upstream = new NodeWebSocket(url, {
-        headers: { host: new URL(destination).host },
-        agent: getPinnedWsAgent(CONFIGURED_PREVIEW_POLICY, url),
-      });
-      pipeWsFrames(app, socket, upstream, { kind: "configured-preview" });
-    },
+    (socket, request) =>
+      acceptConfiguredPreviewStream(app, socket, request.query as { url: string }),
   );
 
   // The two-hop preview proxy's agent-side half (issue #28 phase 6): the
@@ -3277,7 +3219,12 @@ export async function internalRoutes(app: FastifyInstance) {
         // this same request just authenticated with — before it reaches
         // arbitrary project dev-server code (see buildUpstreamRequestHeaders'
         // own comment on why this exclusion exists).
-        const headers = buildUpstreamRequestHeaders(request, upstreamUrl.host, ["authorization"]);
+        // Over the outbound channel the replay also carries this agent's own
+        // process-local token; it must not reach a dev server either.
+        const headers = buildUpstreamRequestHeaders(request, upstreamUrl.host, [
+          "authorization",
+          AGENT_CHANNEL_AUTH_HEADER,
+        ]);
         const body =
           request.body instanceof Readable
             ? {
@@ -3323,27 +3270,12 @@ export async function internalRoutes(app: FastifyInstance) {
       websocket: true,
       config: INTERNAL_RATE_LIMIT.config,
       preValidation: async (request, reply) => {
-        const query = request.query as Record<string, string | undefined>;
-        const port = query.port !== undefined ? parsePort(query.port) : null;
-        if (port === null) return reply.badRequest("port must be 1-65535");
-        if (query.path === undefined) return reply.badRequest("path query param is required");
-        if (!resolveLoopbackPreviewUrl(query.path, port)) {
-          return reply.badRequest("invalid preview path");
-        }
+        const error = previewQueryError(request.query as Record<string, string | undefined>);
+        if (error !== null) return reply.badRequest(error);
       },
     },
-    (socket, req) => {
-      const query = req.query as Record<string, string | undefined>;
-      // Re-derived, not trusted from preValidation's own run: cheap, pure,
-      // and already proven to succeed by preValidation passing at all.
-      const port = parsePort(query.port as string) as number;
-      const upstreamUrl = resolveLoopbackPreviewUrl(query.path as string, port) as URL;
-
-      const upstream = new NodeWebSocket(toWsUrl(upstreamUrl), {
-        headers: { host: upstreamUrl.host },
-      });
-      pipeWsFrames(app, socket, upstream, { port });
-    },
+    (socket, req) =>
+      acceptPreviewStream(app, socket, req.query as Record<string, string | undefined>),
   );
 
   registerBrowserRoutes(app, INTERNAL_RATE_LIMIT);

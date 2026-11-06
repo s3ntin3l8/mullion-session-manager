@@ -2,6 +2,8 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+import http from "node:http";
+import type { AddressInfo } from "node:net";
 import { AGENT_CHANNEL_AUTH_HEADER } from "../../src/services/agent-channel-tunnel.js";
 
 // Issue #2451 — the internal API's auth gate accepts a request replayed from
@@ -47,5 +49,31 @@ describe("internal routes: requests replayed from the outbound channel (#2451)",
       expect((await get(wrong)).statusCode).toBe(401);
     }
     await app.close();
+  });
+
+  it("does not hand the channel token to a preview's dev server", async () => {
+    let seen: http.IncomingHttpHeaders = {};
+    const dev = http.createServer((req, res) => {
+      seen = req.headers;
+      res.end("ok");
+    });
+    await new Promise<void>((r) => dev.listen(0, "127.0.0.1", r));
+    const devPort = (dev.address() as AddressInfo).port;
+    const app = await buildApp();
+    try {
+      const res = await app.inject({
+        method: "GET",
+        url: `/internal/preview/${devPort}/x`,
+        headers: { [AGENT_CHANNEL_AUTH_HEADER]: app.agentChannelRequestToken, cookie: "a=b" },
+      });
+      expect(res.statusCode).toBe(200);
+      // The replay's own credential never reaches project code; the browser's
+      // headers do.
+      expect(seen[AGENT_CHANNEL_AUTH_HEADER]).toBeUndefined();
+      expect(seen.cookie).toBe("a=b");
+    } finally {
+      await app.close();
+      await new Promise<void>((r) => dev.close(() => r()));
+    }
   });
 });

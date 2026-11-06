@@ -136,6 +136,11 @@ export interface AgentStreamHandlers {
   events(socket: ChannelSocket, query: { cursors?: string }): void;
   controlRelay(socket: ChannelSocket): void;
   sshAgent(socket: ChannelSocket): void;
+  /** Returns why the preview WebSocket must be refused, or null (#2620). */
+  validatePreview(query: Record<string, string | undefined>): string | null;
+  preview(socket: ChannelSocket, query: Record<string, string | undefined>): void;
+  validateConfiguredPreview(query: Record<string, string | undefined>): string | null;
+  configuredPreview(socket: ChannelSocket, query: Record<string, string | undefined>): void;
 }
 
 function parseStreamHead(raw: string): ChannelStreamOpenHead | null {
@@ -200,12 +205,20 @@ export function serveChannel(
     if (head.stream === "attach") {
       const error = handlers.validateAttach(query);
       if (error !== null) return reject(400, error);
+    } else if (head.stream === "preview") {
+      const error = handlers.validatePreview(query);
+      if (error !== null) return reject(400, error);
+    } else if (head.stream === "configured-preview") {
+      const error = handlers.validateConfiguredPreview(query);
+      if (error !== null) return reject(400, error);
     }
     socket.sendRaw(acceptHead(200, undefined, head.resumed === true));
     try {
       if (head.stream === "attach") handlers.attach(socket, query);
       else if (head.stream === "events") handlers.events(socket, query);
       else if (head.stream === "control-relay") handlers.controlRelay(socket);
+      else if (head.stream === "preview") handlers.preview(socket, query);
+      else if (head.stream === "configured-preview") handlers.configuredPreview(socket, query);
       else handlers.sshAgent(socket);
     } catch (err) {
       app.log.warn({ err, stream: head.stream }, "[agent-channel] stream handler failed");

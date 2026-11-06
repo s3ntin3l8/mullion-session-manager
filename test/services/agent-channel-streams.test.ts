@@ -81,6 +81,10 @@ async function rig(overrides: Partial<AgentStreamHandlers> = {}): Promise<Rig> {
     events: echo("events"),
     controlRelay: echo("control-relay"),
     sshAgent: echo("ssh-agent"),
+    validatePreview: (q) => (q.port ? null : "port must be 1-65535"),
+    preview: echo("preview"),
+    validateConfiguredPreview: (q) => (q.url ? null : "Invalid configured preview destination"),
+    configuredPreview: echo("configured-preview"),
     ...overrides,
   };
   agentMux.onChannel((channel) => serveChannel(app, channel, TOKEN, handlers));
@@ -340,6 +344,66 @@ describe("transport selection for streams (#2571)", () => {
     }) as never as ChannelSocket;
     const err = new Promise<Error>((res) => down.once("error", res));
     expect((await err).message).toContain("not falling back");
+  });
+});
+
+describe("preview WebSockets over the channel (#2620)", () => {
+  it("opens both preview kinds on the streams transport and carries frames", async () => {
+    const r = await rig();
+    const ops: Array<string | undefined> = [];
+    const client = new RemoteHostClient({
+      hostId: "h1",
+      baseUrl: "http://127.0.0.1:1",
+      token: "unused",
+      channelApp: r.app,
+      resolveTransport: (op) => {
+        ops.push(op);
+        return { kind: "channel", channel: r.entry };
+      },
+    });
+    const preview = client.openPreviewWs(5173, "/@vite/client?x=1") as never as ChannelSocket;
+    await opened(preview);
+    const configured = client.openConfiguredPreviewWs(
+      "http://127.0.0.1:3000/",
+    ) as never as ChannelSocket;
+    await opened(configured);
+    expect(r.calls).toEqual([
+      { kind: "preview", query: { port: "5173", path: "/@vite/client?x=1" } },
+      { kind: "configured-preview", query: { url: "http://127.0.0.1:3000/" } },
+    ]);
+    expect(new Set(ops)).toEqual(new Set(["channel-streams"]));
+    const got: string[] = [];
+    preview.on("message", (d: Buffer) => got.push(d.toString()));
+    preview.send("hmr", { binary: false });
+    await sleep(100);
+    expect(got).toEqual(["hmr"]);
+  });
+
+  it("refuses an invalid preview as a rejection, and fails (no inbound dial) when the channel is down", async () => {
+    const r = await rig();
+    const s = openChannelStream(r.app, r.entry, "preview", {}) as never as ChannelSocket;
+    const status = new Promise<number>((resolve) =>
+      s.once("unexpected-response", (_req: unknown, res: { statusCode: number }) =>
+        resolve(res.statusCode),
+      ),
+    );
+    expect(await status).toBe(400);
+    expect(r.calls).toHaveLength(0);
+
+    const down = new RemoteHostClient({
+      hostId: "h1",
+      baseUrl: "http://127.0.0.1:1",
+      token: "unused",
+      channelApp: r.app,
+      resolveTransport: () => ({ kind: "channel-down" }),
+    });
+    for (const sock of [
+      down.openPreviewWs(1, "/"),
+      down.openConfiguredPreviewWs("http://127.0.0.1:1/"),
+    ]) {
+      const err = new Promise<Error>((res) => sock.once("error", res));
+      expect((await err).message).toContain("not falling back");
+    }
   });
 });
 
