@@ -637,6 +637,10 @@ async function ensureSetupWorktree(
   if (
     opts.fresh ||
     liveSlugPreview?.rewroteInstructions ||
+    // A day-old generated record still points at its worktree, but that
+    // worktree's base ref is old: only a recent one is worth reusing.
+    (liveSlugPreview != null &&
+      isPreviewExpired({ createdAt: liveSlugPreview.createdAt, generated: false })) ||
     (liveSlugPreview !== null &&
       liveSlugPreview !== undefined &&
       liveSlugPreview.includeSkillAndReviewer !== (opts.includeSkillAndReviewer !== false))
@@ -729,6 +733,12 @@ async function finishPreview(
   const diff = diffs.filter((d): d is string => Boolean(d)).join("\n");
 
   const previewId = randomUUID();
+  // Every record for a slug shares its one scratch worktree, which now holds
+  // THIS preview's content: an earlier previewId must not apply it (it used to
+  // expire within minutes; a generated one is kept for a day).
+  for (const [id, record] of previews) {
+    if (record.projectId === projectId && record.slug === options.slug) deletePreview(id);
+  }
   previews.set(previewId, {
     projectId,
     worktreePath: worktree.path,

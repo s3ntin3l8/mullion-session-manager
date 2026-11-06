@@ -157,6 +157,37 @@ describe("project-setup route", () => {
       await app.close();
     });
 
+    it("a newer preview for the slug supersedes the older previewId, which can no longer apply", async () => {
+      mockValidGeneration("gen-super");
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+      const gen = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "gen-super" },
+      });
+      expect(gen.statusCode).toBe(200);
+      const again = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/preview`,
+        payload: { slug: "gen-super" },
+      });
+      expect(again.statusCode).toBe(200);
+      expect(again.json().previewId).not.toBe(gen.json().previewId);
+      const stale = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/apply`,
+        payload: { previewId: gen.json().previewId },
+      });
+      expect(stale.statusCode).toBe(400);
+      const active = await app.inject({
+        method: "GET",
+        url: `/api/projects/${projectId}/setup/preview/active`,
+      });
+      expect(active.json().previewId).toBe(again.json().previewId);
+      await app.close();
+    });
+
     it("does not return another project's preview, and drops an expired one", async () => {
       const app = await buildApp();
       const projectA = await createProject(app, repoDir);
