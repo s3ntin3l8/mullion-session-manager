@@ -1645,10 +1645,10 @@ uploads, its scope's liveness, the review gate, promote or attention
 acknowledgement waiting on it, the worktree it owns, and the events it
 reports.
 
-The one operation that stays with the **project** is the browser: the
-BrowserManager pools one Chromium **per project** (`browser-manager.ts`), so
-a session's browser is reached through its project's browser, whichever host
-that browser runs on.
+The browser is bound to the session's **execution target** (host and checkout),
+not the project: the primary resolves it and sends it to the agent with the
+spawn, and the agent's browser serves exactly that target (see
+[Browser automation → Execution targets](browser-automation.md#execution-targets)).
 
 The column is **nullable, and `NULL` means "inherit the project's host"** —
 which is every session created before this change, and every session created

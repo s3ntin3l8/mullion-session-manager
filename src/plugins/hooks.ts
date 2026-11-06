@@ -22,6 +22,8 @@ import {
 import type { AgentAction, FindElementsBody } from "../routes/browser-automation.js";
 import type { BrowserTarget } from "../services/browser-manager.js";
 import { resolveSessionBrowserTarget } from "../services/browser-target.js";
+import { sessionBrowserTarget } from "../services/session-browser-targets.js";
+import { agentServesHost } from "../services/agent-identity.js";
 import { recordSessionBrowserBinding } from "../services/session-browsers.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import {
@@ -678,9 +680,9 @@ function handleConnection(
           // The session's own execution target (issue #2448). The primary
           // resolves it through the shared resolver, so the agent drives the
           // browser the panel shows. An agent host has no DB to resolve with:
-          // it names the session's own directory as the checkout, which can
-          // only ever be narrower than the primary's answer (never another
-          // checkout's browser); the remote relay path is tracked separately.
+          // it uses exactly the target the primary sent when it launched the
+          // session (issue #2639) and never derives one from the session's
+          // cwd, which would land on a different pool entry than the panel's.
           let target: BrowserTarget;
           if (app.db) {
             const resolved = await resolveSessionBrowserTarget(app, projectId, Number(sessionId));
@@ -698,18 +700,18 @@ function handleConnection(
             }
             target = resolved.target;
             recordSessionBrowserBinding(app, Number(sessionId), target);
-          } else if (session?.cwd) {
-            target = {
-              projectId,
-              hostId: LOCAL_HOST_ID,
-              checkoutRoot: session.cwd,
-              legacy: false,
-            };
           } else {
-            if (socket.writable) {
-              socket.write(`${JSON.stringify({ error: "Session directory is unknown" })}\n`);
+            const sent = sessionBrowserTarget(sessionId);
+            const refusal = !sent
+              ? "This session has no browser target: the primary that launched it did not send one. Restart the session from an up-to-date primary."
+              : !agentServesHost(app.config.SESSIONS_DIR, sent.hostId)
+                ? "This session's browser target belongs to another host"
+                : null;
+            if (!sent || refusal) {
+              if (socket.writable) socket.write(`${JSON.stringify({ error: refusal })}\n`);
+              continue;
             }
-            continue;
+            target = sent;
           }
 
           let page: Page;

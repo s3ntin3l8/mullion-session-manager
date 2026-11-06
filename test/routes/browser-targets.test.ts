@@ -17,6 +17,7 @@ import {
   resolveProjectDefaultBrowserTarget,
   resolveSessionBrowserTarget,
 } from "../../src/services/browser-target.js";
+import { resolveAgentBrowserTarget } from "../../src/services/session-lifecycle.js";
 import {
   closeSessionBrowserBindings,
   listSessionBrowserBindings,
@@ -285,6 +286,66 @@ describe("browser execution targets", () => {
     expect(
       bindingBrowserTarget(project, { projectId, targetHostId: null, targetCheckoutRoot: null }),
     ).toEqual({ projectId, hostId: a, checkoutRoot: "/work/p", legacy: true });
+  });
+
+  describe("target sent to an agent host at spawn (issue #2639)", () => {
+    function projectRow(projectId: number) {
+      return app.db.select().from(projects).where(eq(projects.id, projectId)).get()!;
+    }
+    function negotiateWith(hostId: string, launchOptions: string[]) {
+      app.hostAgentTracker?.record(hostId, {
+        agents: null,
+        capabilities: null,
+        mullionVersion: null,
+        protocol: {
+          protocolVersion: PROTOCOL_VERSION,
+          legacy: false,
+          operations: [...AGENT_OPERATIONS],
+          launchOptions,
+        },
+      });
+    }
+
+    it("sends the project root, as the primary resolves it, for a session in a subdirectory", async () => {
+      const a = await addHost();
+      negotiateWith(a, ["browserTarget"]);
+      const projectId = addProject("/work/p", a);
+      const sub = addSession(projectId, "/work/p/sub", a);
+      const sent = await resolveAgentBrowserTarget(app, projectRow(projectId), sub, a);
+      const primary = await resolveSessionBrowserTarget(app, projectId, sub);
+      // The same pool key and the legacy storage file as the panel's.
+      expect(sent).toEqual({ projectId, hostId: a, checkoutRoot: "/work/p", legacy: true });
+      expect(primary).toEqual({ ok: true, target: sent });
+    });
+
+    it("sends nothing to an agent without the launch option, or for a local session", async () => {
+      const a = await addHost();
+      negotiateWith(a, []);
+      const projectId = addProject("/work/p", a);
+      const sid = addSession(projectId, "/work/p", a);
+      expect(await resolveAgentBrowserTarget(app, projectRow(projectId), sid, a)).toBeUndefined();
+      expect(
+        await resolveAgentBrowserTarget(app, projectRow(projectId), sid, "local"),
+      ).toBeUndefined();
+    });
+
+    it("sends nothing when the session's host cannot do per-target browsers", async () => {
+      const a = await addHost();
+      app.hostAgentTracker?.record(a, {
+        agents: null,
+        capabilities: null,
+        mullionVersion: null,
+        protocol: {
+          protocolVersion: PROTOCOL_VERSION,
+          legacy: false,
+          operations: AGENT_OPERATIONS.filter((op) => op !== "browser-targets"),
+          launchOptions: ["browserTarget"],
+        },
+      });
+      const projectId = addProject("/work/p", a);
+      const sid = addSession(projectId, "/work/p", a);
+      expect(await resolveAgentBrowserTarget(app, projectRow(projectId), sid, a)).toBeUndefined();
+    });
   });
 
   describe("cleanup", () => {
