@@ -233,7 +233,7 @@
       "emphasis": {
         "css": "button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
       },
-      "tags": ["check"],
+      "tags": ["check", "audit"],
       "motion": "normal"
     },
     {
