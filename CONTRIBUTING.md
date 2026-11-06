@@ -90,6 +90,20 @@ sticky comment. It also fails when the run produced no report at all (the demo d
 no health verdict, so read the run log before assuming a console error. Locally, `HEALTH_GATE=1 make visual-check`
 exits non-zero on a real health finding.
 
+Two workflows keep the images current without a local Docker (both call shared workflows in `s3ntin3l8/.github`):
+
+- **Weekly refresh** (`visual-refresh.yml`, Mondays, or run it from the Actions tab): regenerates the README and PWA
+  screenshots and, only when an image differs from `main` by more than 20 px (re-renders are never byte-identical), opens
+  or updates one `chore(uiux): refresh screenshots` PR from `bot/refresh-screenshots`. Review the images, merge it or close
+  it; the next run rewrites the branch.
+- **`/update-baselines`**: comment it on a pull request (write access, branch in this repository) and CI regenerates
+  `visual/baselines/` and pushes one commit of the images that really changed to that branch, then replies with the list.
+  Forks, closed PRs and commenters without write access are refused with a reply.
+
+Both push with `GITHUB_TOKEN`, so the PR's `pull_request` runs would sit at `action_required` waiting for a maintainer to
+click "Approve and run"; the workflows approve them themselves, only for the commit they just pushed. If checks never start
+on such a PR (the reply or the run log says no held run appeared), approve them by hand in the Actions tab.
+
 `visual/hooks.mjs` holds what a declarative scene cannot: the terminal scenes wait for
 the terminal to settle, then release the demo's held transcript through
 `visual/host-hooks.sh` (the container can reach the demo only over HTTP, and the

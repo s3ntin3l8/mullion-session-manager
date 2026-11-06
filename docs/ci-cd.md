@@ -329,8 +329,10 @@ retries. It is **dormant now**, not a remaining rebase: GitHub reports
 `mergeable_state: "behind"` only while `strict` is on, so with it off a behind
 PR with green checks reports `clean` and is merged directly. If `strict` is
 ever turned back on, a behind PR is refreshed with `gh pr update-branch <pr>`
-(a push made with `GITHUB_TOKEN` triggers no workflows, so it must be a
-user/App token) and that sweep branch becomes live again.
+(a push made with `GITHUB_TOKEN` does create the PR's `pull_request` runs,
+but GitHub holds them at `action_required` until a maintainer approves, as
+the shared visual workflows' spike showed in 2026-11 (PR #2601); a user/App
+token avoids the hold) and that sweep branch becomes live again.
 
 **How this was set and checked.** Set on 2026-10-25 with a PATCH on the
 targeted sub-endpoint, which changes only that field:
