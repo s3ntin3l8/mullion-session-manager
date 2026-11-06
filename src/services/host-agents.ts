@@ -389,8 +389,9 @@ export const PROTOCOL_READ_FAILURE_TTL_MS = 60_000;
  * unknown one costs one bounded read through `refreshRemoteHostAgents`, shared
  * by concurrent callers and by a background refresh already running; if it
  * times out or fails (other than the 404 that records the legacy baseline),
- * this decision uses the legacy baseline and nothing is cached, so the next
- * gate tries again.
+ * this decision uses the legacy baseline and no protocol is cached. The failure
+ * is remembered for `PROTOCOL_READ_FAILURE_TTL_MS` so `ensureRemoteHostProtocols`
+ * stops retrying, but this function (and so every explicit gate) keeps reading.
  */
 export function ensureHostProtocol(app: FastifyInstance, hostId: string): Promise<HostProtocol> {
   if (hostId === LOCAL_HOST_ID) return Promise.resolve({ ...localProtocolInfo(), legacy: false });
@@ -428,8 +429,16 @@ export function ensureHostProtocol(app: FastifyInstance, hostId: string): Promis
   return read;
 }
 
-/** `ensureHostProtocol` for registered remote hosts before a placement reads them (issue #2596, #2625). */
-export async function ensureRemoteHostProtocols(app: FastifyInstance): Promise<void> {
+/**
+ * `ensureHostProtocol` for registered remote hosts before a placement reads them
+ * (issue #2596, #2625). `force` names hosts the caller targets: they are read
+ * despite a remembered failure, so a launch is never judged on a guess for its
+ * own target.
+ */
+export async function ensureRemoteHostProtocols(
+  app: FastifyInstance,
+  opts: { force?: readonly string[] } = {},
+): Promise<void> {
   if (!app.db || !app.hostAgentTracker) return;
   const tracker = app.hostAgentTracker;
   const rows = app.db.select({ id: hosts.id, drained: hosts.drained }).from(hosts).all();
@@ -438,7 +447,7 @@ export async function ensureRemoteHostProtocols(app: FastifyInstance): Promise<v
       if (h.id === LOCAL_HOST_ID) return false;
       if (h.drained) return false;
       if (app.hostHeartbeatTracker?.getHealth(h.id)?.status === "offline") return false;
-      if (tracker.hasRecentProtocolReadFailure(h.id)) return false;
+      if (!opts.force?.includes(h.id) && tracker.hasRecentProtocolReadFailure(h.id)) return false;
       return true;
     })
     .map((h) => h.id);

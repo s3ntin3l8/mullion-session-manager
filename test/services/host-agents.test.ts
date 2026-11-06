@@ -649,6 +649,18 @@ describe("ensureRemoteHostProtocols and failure cooldown (issue #2625)", () => {
     }
   });
 
+  it("a host the caller names is read despite a remembered failure", async () => {
+    const tracker = new HostAgentTracker();
+    const app = fakeApp(tracker, new HostHeartbeatTracker(), [{ id: "named-host" }]);
+    tracker.recordProtocolReadFailure("named-host");
+
+    await ensureRemoteHostProtocols(app);
+    expect(client.detectAgents).toHaveBeenCalledTimes(0);
+
+    await ensureRemoteHostProtocols(app, { force: ["named-host"] });
+    expect(client.detectAgents).toHaveBeenCalledTimes(1);
+  });
+
   it("an offline host is not read at all", async () => {
     const tracker = new HostAgentTracker();
     const heartbeatTracker = new HostHeartbeatTracker();
