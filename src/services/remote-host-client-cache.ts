@@ -104,6 +104,9 @@ export function getRemoteHostClient(app: FastifyInstance, hostId: string): Remot
     hostId,
     baseUrl: row.baseUrl,
     resolveTransport: (operation) => resolveHostTransport(app, hostId, operation),
+    // Streams ride the outbound channel through this app; without it
+    // openStreamOnTransport always answers "inbound" (#2635).
+    channelApp: app,
     token: credentials.token,
     sessionSecret: credentials.sessionSecret,
     // Only a registered (has-or-had-a-session) host gets a refresh
