@@ -2,20 +2,14 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import crypto from "node:crypto";
 import { closeDb } from "../../src/db/client.js";
+import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
 
 const tmpDb = path.join(os.tmpdir(), `dock-config-test-${process.pid}.db`);
 process.env.DATABASE_URL = `file:${tmpDb}`;
 
 // Same "second real buildApp() in `agent` role needs its own SESSIONS_DIR"
 // reasoning as test/routes/agent-rules.test.ts's own uniqueSessionsDir.
-function uniqueSessionsDir(): string {
-  return path.join(
-    os.tmpdir(),
-    `dock-config-agent-sessions-${process.pid}-${crypto.randomBytes(4).toString("hex")}`,
-  );
-}
 
 const { buildApp } = await import("../../src/app.js");
 
@@ -348,7 +342,7 @@ describe("dock-config routes", () => {
         MULLION_ROLE: "agent",
         MULLION_AGENT_TOKEN: token,
         PROJECTS_ROOTS: os.tmpdir(),
-        SESSIONS_DIR: uniqueSessionsDir(),
+        SESSIONS_DIR: uniqueSessionsDir("dock-config"),
       };
       for (const key of Object.keys(agentEnv)) {
         prevEnv[key] = process.env[key];

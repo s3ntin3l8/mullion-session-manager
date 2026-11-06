@@ -7,7 +7,6 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
-import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import type * as GithubIntegration from "../../src/services/github-integration.js";
@@ -20,7 +19,10 @@ import { gitEnv } from "../../src/services/git-env.js";
 import { applySettingsPatch } from "../../src/services/settings.js";
 import { clearHermesKey, setHermesKey } from "../../src/services/hermes-integration.js";
 import { resolveGitHubToken } from "../../src/services/github-integration.js";
+import type { FastifyInstance } from "fastify";
 import { PR_REVIEW_DEFAULTS } from "../helpers/pr-review-defaults.js";
+import { buildTestApp, buildTeardownApp } from "../helpers/app.js";
+import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
 
 // Session creation spawns a real OS process (systemd-run, bootstrapping a
 // dtach master) via PtyManager — faked here the same way as
@@ -127,12 +129,6 @@ const { closeDb } = await import("../../src/db/client.js");
 // their hooksPlugin listeners (registered for both roles) would collide on
 // the same hooks.sock path. Gives each agent instance its own scratch
 // directory instead.
-function uniqueSessionsDir(): string {
-  return path.join(
-    os.tmpdir(),
-    `projects-agent-sessions-${process.pid}-${crypto.randomBytes(4).toString("hex")}`,
-  );
-}
 
 const tmpDb = path.join(os.tmpdir(), `projects-test-${process.pid}.db`);
 
@@ -2283,7 +2279,7 @@ describe("projects route", () => {
     // this block's own SESSIONS_DIR plus an afterEach that closes every
     // tracked app unconditionally, confining any future leak to this block.
     let previousSessionsDir: string | undefined;
-    const sessionsDir = uniqueSessionsDir();
+    const sessionsDir = uniqueSessionsDir("projects");
 
     beforeAll(() => {
       previousSessionsDir = process.env.SESSIONS_DIR;
@@ -2296,44 +2292,20 @@ describe("projects route", () => {
       fs.rmSync(sessionsDir, { recursive: true, force: true });
     });
 
-    let apps: Awaited<ReturnType<typeof buildApp>>[] = [];
-    async function makeApp(): Promise<Awaited<ReturnType<typeof buildApp>>> {
-      const app = await buildApp();
-      apps.push(app);
-      return app;
-    }
-
-    afterEach(async () => {
-      const toClose = apps;
-      apps = [];
-      const hookSocketPath = toClose[0]?.pty.hookSocketPath;
-      const results = await Promise.allSettled(toClose.map((app) => app.close()));
-      const failures = results.filter(
-        (result): result is PromiseRejectedResult => result.status === "rejected",
-      );
-      if (failures.length > 0) {
-        throw new Error(
-          `[afterEach teardown] ${failures.length}/${toClose.length} app.close() call(s) failed: ` +
-            failures.map((f) => String(f.reason)).join("; "),
-        );
-      }
-      if (hookSocketPath) {
-        expect(
-          fs.existsSync(hookSocketPath),
-          `hooks.sock still exists after closing all apps built by this test: ${hookSocketPath}`,
-        ).toBe(false);
-      }
-    });
+    // The apps this block builds are closed by buildTestApp()'s
+    // onTestFinished callback, which also asserts their hooks.sock is gone
+    // — the same guarantee this block's own afterEach used to give by
+    // closing every tracked app itself (issue #525's containment).
 
     it("404s for an unknown project", async () => {
-      const app = await makeApp();
+      const app = await buildTestApp();
       const res = await app.inject({ method: "GET", url: "/api/projects/999999/dock" });
       expect(res.statusCode).toBe(404);
     });
 
     it("returns [] for a project with no .crs/dock.json", async () => {
       const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-dock-empty-"));
-      const app = await makeApp();
+      const app = await buildTestApp();
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
@@ -2362,7 +2334,7 @@ describe("projects route", () => {
         }),
       );
 
-      const app = await makeApp();
+      const app = await buildTestApp();
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
@@ -2393,7 +2365,7 @@ describe("projects route", () => {
     // unconditionally, confining any leak to this block instead of poisoning
     // the rest of the file's buildApp() calls.
     let previousSessionsDir: string | undefined;
-    const sessionsDir = uniqueSessionsDir();
+    const sessionsDir = uniqueSessionsDir("projects");
 
     beforeAll(() => {
       previousSessionsDir = process.env.SESSIONS_DIR;
@@ -2406,13 +2378,6 @@ describe("projects route", () => {
       fs.rmSync(sessionsDir, { recursive: true, force: true });
     });
 
-    let apps: Awaited<ReturnType<typeof buildApp>>[] = [];
-    async function makeApp(): Promise<Awaited<ReturnType<typeof buildApp>>> {
-      const app = await buildApp();
-      apps.push(app);
-      return app;
-    }
-
     let fetchMock: ReturnType<typeof vi.fn>;
 
     beforeEach(() => {
@@ -2422,34 +2387,15 @@ describe("projects route", () => {
 
     afterEach(async () => {
       vi.unstubAllGlobals();
-      const toClose = apps;
-      apps = [];
-      const hookSocketPath = toClose[0]?.pty.hookSocketPath;
-      const results = await Promise.allSettled(toClose.map((app) => app.close()));
-      const failures = results.filter(
-        (result): result is PromiseRejectedResult => result.status === "rejected",
-      );
-      if (failures.length > 0) {
-        throw new Error(
-          `[afterEach teardown] ${failures.length}/${toClose.length} app.close() call(s) failed: ` +
-            failures.map((f) => String(f.reason)).join("; "),
-        );
-      }
-      if (hookSocketPath) {
-        expect(
-          fs.existsSync(hookSocketPath),
-          `hooks.sock still exists after closing all apps built by this test: ${hookSocketPath}`,
-        ).toBe(false);
-      }
 
       // github-integration's `integrations` row is a singleton shared
       // across this whole test file's DB — reset it after every test in
       // this block so a connected token doesn't leak into an unrelated
       // "no token" case (same reasoning as github-integration.test.ts).
-      const app = await buildApp();
+      const teardownApp = await buildTeardownApp("projects-git-teardown");
       const { disconnect } = await import("../../src/services/github-integration.js");
-      disconnect(app);
-      await app.close();
+      disconnect(teardownApp);
+      await teardownApp.close();
     });
 
     describe("git log routes", () => {
@@ -2482,7 +2428,7 @@ describe("projects route", () => {
       }
 
       it("lists commits, then serves one commit's files and a file diff", async () => {
-        const app = await makeApp();
+        const app = await buildTestApp();
         const { dir, id, head } = await repoProject(app);
 
         const log = await app.inject({ method: "GET", url: `/api/projects/${id}/git-log?limit=1` });
@@ -2514,7 +2460,7 @@ describe("projects route", () => {
       });
 
       it("validates ids, paging, scope, sha and path; 404s unknown project/commit", async () => {
-        const app = await makeApp();
+        const app = await buildTestApp();
         const { dir, id } = await repoProject(app);
         const get = (url: string) => app.inject({ method: "GET", url });
 
@@ -2533,7 +2479,7 @@ describe("projects route", () => {
       });
 
       it("accepts a worktree cwd of the project and refuses any other directory", async () => {
-        const app = await makeApp();
+        const app = await buildTestApp();
         const { dir, id } = await repoProject(app);
         const wt = `${dir}-wt`;
         gitIn(dir, "worktree", "add", "-q", "-b", "side", wt);
@@ -2562,7 +2508,7 @@ describe("projects route", () => {
       async function withAgent(
         handler: (url: string) => { status: number; body: unknown },
         run: (ctx: {
-          app: Awaited<ReturnType<typeof makeApp>>;
+          app: FastifyInstance;
           id: number;
           seen: string[];
         }) => Promise<void>,
@@ -2578,7 +2524,7 @@ describe("projects route", () => {
         });
         await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
         const port = (server.address() as { port: number }).port;
-        const app = await makeApp();
+        const app = await buildTestApp();
         try {
           const host = await app.inject({
             method: "POST",
@@ -2720,7 +2666,7 @@ describe("projects route", () => {
 
       it("503s when the host is unreachable", async () => {
         vi.unstubAllGlobals();
-        const app = await makeApp();
+        const app = await buildTestApp();
         const host = await app.inject({
           method: "POST",
           url: "/api/hosts",
@@ -4988,7 +4934,7 @@ describe("projects route", () => {
         MULLION_ROLE: "agent",
         MULLION_AGENT_TOKEN: AGENT_TOKEN,
         PROJECTS_ROOTS: os.tmpdir(),
-        SESSIONS_DIR: uniqueSessionsDir(),
+        SESSIONS_DIR: uniqueSessionsDir("projects"),
       };
       for (const key of Object.keys(agentEnv)) {
         prevEnv[key] = process.env[key];
@@ -7358,11 +7304,11 @@ describe("projects route", () => {
     // live listener that every *later* buildApp() in the whole file
     // (unrelated describe blocks included) would then fail against with a
     // misleading SocketAlreadyListeningError. Giving this block its own
-    // SESSIONS_DIR contains that failure mode to this block; makeApp()
-    // below (closed unconditionally in afterEach) stops it from leaking at
-    // all.
+    // SESSIONS_DIR contains that failure mode to this block; the apps
+    // below (closed unconditionally by buildTestApp()) stop it from
+    // leaking at all.
     let previousSessionsDir: string | undefined;
-    const sessionsDir = uniqueSessionsDir();
+    const sessionsDir = uniqueSessionsDir("projects");
 
     beforeAll(() => {
       previousSessionsDir = process.env.SESSIONS_DIR;
@@ -7377,13 +7323,6 @@ describe("projects route", () => {
       else process.env.SESSIONS_DIR = previousSessionsDir;
       fs.rmSync(sessionsDir, { recursive: true, force: true });
     });
-
-    let apps: Awaited<ReturnType<typeof buildApp>>[] = [];
-    async function makeApp(): Promise<Awaited<ReturnType<typeof buildApp>>> {
-      const app = await buildApp();
-      apps.push(app);
-      return app;
-    }
 
     function jsonRes(status: number, body: unknown) {
       return new Response(JSON.stringify(body), {
@@ -7442,8 +7381,8 @@ describe("projects route", () => {
         await import("../../src/db/schema.js");
       const { GITHUB_PROVIDER } = await import("../../src/services/github-integration.js");
       const { eq: eqOp } = await import("drizzle-orm");
-      // Not tracked via makeApp()/afterEach: this app must be fully closed
-      // before the test body's own makeApp() call runs (same hooks.sock,
+      // Not tracked via buildTestApp(): this app must be fully closed
+      // before the test body's own app call runs (same hooks.sock,
       // same SESSIONS_DIR — see the describe-level comment above), not
       // merely closed *eventually*. try/finally still guarantees the close
       // runs even if one of the deletes below throws.
@@ -7460,44 +7399,10 @@ describe("projects route", () => {
     afterEach(async () => {
       globalThis.fetch = originalFetch;
       delete process.env.MULLION_WEBHOOK_BASE_URL;
-      const toClose = apps;
-      apps = [];
-      // All tracked apps in this block share one hooks.sock (this block's
-      // own SESSIONS_DIR above) — any survivor's path is the same one.
-      const hookSocketPath = toClose[0]?.pty.hookSocketPath;
-      // allSettled (not all): one app's close() rejecting must not skip
-      // closing the rest and re-leak their hooks.sock. Failures are still
-      // surfaced (not swallowed) below — issue #525 is specifically about
-      // a close silently not happening, so this hook must not repeat that.
-      const results = await Promise.allSettled(toClose.map((app) => app.close()));
-      const failures = results.filter(
-        (result): result is PromiseRejectedResult => result.status === "rejected",
-      );
-      if (failures.length > 0) {
-        // Hermes review, PR #526 — "[afterEach teardown]" prefix keeps this
-        // visually distinct from the test's own assertion failure (if any)
-        // in the reporter output, rather than the two being hard to tell
-        // apart.
-        throw new Error(
-          `[afterEach teardown] ${failures.length}/${toClose.length} app.close() call(s) failed: ` +
-            failures.map((f) => String(f.reason)).join("; "),
-        );
-      }
-
-      // Hermes review, PR #526 — deterministic regression guard for #525:
-      // a leaked, still-listening app would leave this file behind instead
-      // of merely making some *later* buildApp() fail with a misleading
-      // SocketAlreadyListeningError.
-      if (hookSocketPath) {
-        expect(
-          fs.existsSync(hookSocketPath),
-          `hooks.sock still exists after closing all apps built by this test: ${hookSocketPath}`,
-        ).toBe(false);
-      }
     });
 
     it("registers a webhook for a project created while webhooks are enabled", async () => {
-      const app = await makeApp();
+      const app = await buildTestApp();
       await enableWebhooksDirect(app);
       const cwd = await githubRepo("acme", "wiring-create");
 
@@ -7530,7 +7435,7 @@ describe("projects route", () => {
     });
 
     it("does not attempt registration when webhooks are disabled (default)", async () => {
-      const app = await makeApp();
+      const app = await buildTestApp();
       const cwd = await githubRepo("acme", "wiring-disabled");
       const fetchMock = vi.fn();
       globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -7547,7 +7452,7 @@ describe("projects route", () => {
     });
 
     it("re-registers when a project's cwd is updated to a different repo", async () => {
-      const app = await makeApp();
+      const app = await buildTestApp();
       await enableWebhooksDirect(app);
       const originalCwd = await githubRepo("acme", "wiring-before");
       const newCwd = await githubRepo("acme", "wiring-after");
@@ -7594,7 +7499,7 @@ describe("projects route", () => {
     // on GitHub and delivering events for a repo this project no longer
     // tracks.
     it("unregisters the previous repo's hook when a project's cwd changes to a different repo", async () => {
-      const app = await makeApp();
+      const app = await buildTestApp();
       await enableWebhooksDirect(app);
       const originalCwd = await githubRepo("acme", "wiring-move-before");
       const newCwd = await githubRepo("acme", "wiring-move-after");
@@ -7663,7 +7568,7 @@ describe("projects route", () => {
     });
 
     it("unregisters the hook when a project with a registered webhook is deleted", async () => {
-      const app = await makeApp();
+      const app = await buildTestApp();
       await enableWebhooksDirect(app);
       const cwd = await githubRepo("acme", "wiring-delete");
 
@@ -7708,7 +7613,7 @@ describe("projects route", () => {
     });
 
     it("#2251 — keeps the shared hook when another project on the same repo remains", async () => {
-      const app = await makeApp();
+      const app = await buildTestApp();
       await enableWebhooksDirect(app);
       const cwdA = await githubRepo("acme", "wiring-shared");
       const cwdB = await githubRepo("Acme", "Wiring-Shared"); // case differs
@@ -7770,7 +7675,7 @@ describe("projects route", () => {
     });
 
     it("#2251 — keeps the hook while another project's host stays unresolvable, even past the import deferral window", async () => {
-      const app = await makeApp();
+      const app = await buildTestApp();
       await enableWebhooksDirect(app);
       const cwdA = await githubRepo("acme", "wiring-ghost-a");
       const cwdB = await githubRepo("acme", "wiring-ghost-b");

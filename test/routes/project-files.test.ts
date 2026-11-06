@@ -11,18 +11,13 @@ import { projects, sessions } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
 import { gitEnv } from "../../src/services/git-env.js";
 import { RemoteHostClient } from "../../src/services/remote-host-client.js";
+import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
 
 const tmpDb = path.join(os.tmpdir(), `project-files-test-${process.pid}.db`);
 process.env.DATABASE_URL = `file:${tmpDb}`;
 
 // Same two-real-app-instances setup as agent-rules.test.ts: the agent gets
 // its own SESSIONS_DIR so its hooks.sock doesn't collide with the primary's.
-function uniqueSessionsDir(): string {
-  return path.join(
-    os.tmpdir(),
-    `project-files-agent-sessions-${process.pid}-${crypto.randomBytes(4).toString("hex")}`,
-  );
-}
 
 const { buildApp } = await import("../../src/app.js");
 
@@ -758,7 +753,7 @@ describe("project-files routes", () => {
         MULLION_ROLE: "agent",
         MULLION_AGENT_TOKEN: token,
         PROJECTS_ROOTS: os.tmpdir(),
-        SESSIONS_DIR: uniqueSessionsDir(),
+        SESSIONS_DIR: uniqueSessionsDir("project-files"),
       };
       for (const key of Object.keys(agentEnv)) {
         prevEnv[key] = process.env[key];
