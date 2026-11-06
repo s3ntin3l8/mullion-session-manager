@@ -8,9 +8,13 @@ import { serveChannel, type AgentStreamHandlers } from "../services/agent-channe
 import { acceptControlRelayConnection } from "./control-relay.js";
 import {
   acceptAttachStream,
+  acceptConfiguredPreviewStream,
   acceptEventsStream,
+  acceptPreviewStream,
   acceptSshAgentStream,
   attachQueryError,
+  configuredPreviewQueryError,
+  previewQueryError,
 } from "../routes/internal-streams.js";
 import { toWsUrl } from "../services/ws-pipe.js";
 import { localProtocolInfo } from "../shared/agent-protocol.js";
@@ -75,6 +79,11 @@ export const agentChannelClientPlugin = fp(async (app: FastifyInstance) => {
     events: (socket, query) => acceptEventsStream(app, socket, query),
     controlRelay: (socket) => acceptControlRelayConnection(app, socket as unknown as NodeWebSocket),
     sshAgent: (socket) => acceptSshAgentStream(app, socket as unknown as NodeWebSocket),
+    validatePreview: previewQueryError,
+    preview: (socket, query) => acceptPreviewStream(app, socket, query),
+    validateConfiguredPreview: configuredPreviewQueryError,
+    configuredPreview: (socket, query) =>
+      acceptConfiguredPreviewStream(app, socket, { url: query.url ?? "" }),
   };
   const status: AgentChannelClientStatus = {
     state: "idle",

@@ -66,9 +66,17 @@ its authorization are the ones the inbound transport runs. The differences:
   (`AGENT_CHANNEL_SLOT_WAIT_MS`) before failing with `HostBusyError` (`retryable: true`),
   which callers treat as retryable rather than marking the host unreachable.
 
-Preview HTTP/WS, the browser WebSocket, the file-browser transfers
-(`uploadProjectFile` / `downloadProjectFile`) and the unauthenticated `/health`
-ping stay on the inbound transport until #2572.
+Since #2620 the same exchange also carries the file-browser transfers
+(`uploadProjectFile` / `downloadProjectFile`, with a streamed request body and a
+streamed response body, under an idle timeout) and the HTTP preview forward
+(`/internal/preview/:port/*`, `/internal/configured-preview`). For the preview
+paths the agent replays all of the browser's request headers except `host`,
+framing, `authorization`, the request-signature headers and `x-mullion-*`, and
+answers with all response headers (a repeated `set-cookie` is an array); the
+other paths keep the narrow `content-type`/`accept`/`x-mullion-*` set and a
+`content-type`-only answer, plus `content-length` where the response has one. The
+health ping is `GET /internal/protocol` over the channel, not `/health`. The
+browser WebSocket stays on the inbound transport.
 
 ## Streams (#2571)
 
@@ -77,7 +85,7 @@ ride the channel when the host negotiated `channel-streams`. Each stream is one
 mux channel (`src/services/agent-channel-streams.ts`):
 
 1. The primary opens a channel and sends an open head line: `{"stream":
-"attach"|"events"|"control-relay"|"ssh-agent","query":{...},"resumed":true?}`.
+"attach"|"events"|"control-relay"|"ssh-agent"|"preview"|"configured-preview","query":{...},"resumed":true?}`.
    `query` is the query string of the matching `/internal/ws/*` route.
 2. The agent answers one accept head line, `{"status":200,"resumed"?}`, or a
    refusal (`400` for an attach that fails validation, `404` for an unknown

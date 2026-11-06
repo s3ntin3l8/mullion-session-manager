@@ -1869,8 +1869,10 @@ that the primary itself placed on that host, and none of it reaches full scope.
 ## Outbound agent channel
 
 An enrolled agent also dials the primary and holds an authenticated outbound
-WebSocket. It carries the primary's request/response operations (#2451) and the
-four streams (#2571: terminal attach, events, the control relay and ssh-agent); see [agent-channel.md](agent-channel.md) for the contract.
+WebSocket. It carries the primary's request/response operations (#2451), which
+include file uploads and downloads, the HTTP preview forward and the health ping
+(#2620), and the streams (#2571: terminal attach, events, the control relay and
+ssh-agent; #2620: the two preview WebSockets); see [agent-channel.md](agent-channel.md) for the contract.
 `GET /api/hosts` reports it as `channel`, separate from the credential state.
 
 ### Outbound-only agents (no advertised URL or inbound port)
@@ -1903,10 +1905,11 @@ you pass `MULLION_AGENT_ADVERTISE_URL` / `MULLION_AGENT_HOST` /
 `MULLION_AGENT_PORT`, which are still accepted exactly as before; a rerun never
 rewrites an existing `.env`.
 
-**Until #2571 moves streams onto the channel, a host with no URL cannot do
-terminal attach, live events, the control relay, ssh-agent fan-out, previews or
-file transfers** (they fail as unreachable with "no advertised address"). Give
-it a reachable URL (and listen address) if you need those today.
+Everything except the browser WebSocket (`/internal/ws/browser/:id`, which
+still dials the advertised URL) rides the channel, so a host with no URL can do
+terminal attach, live events, the control relay, ssh-agent fan-out, previews and
+file transfers; the browser WebSocket fails as unreachable with "no advertised
+address" until it moves too.
 
 ### Mixed fleets: which transport a host uses
 
@@ -1921,11 +1924,30 @@ Streams are chosen the same way by their own negotiated operation,
 the control relay and ssh-agent forwarding over the channel; one that only
 negotiated `channel-requests` keeps dialing the advertised URL for those four. Once a host
 has negotiated `channel-streams`, a stream whose channel is down fails as
-unreachable and is **never** opened on the advertised URL. Previews, the
-browser WebSocket and the file-browser transfers still dial the advertised URL,
-so a host with no advertised URL cannot use them. The liveness ping of a host
-with **no** advertised URL goes over the channel (#2572); a host with a URL
-keeps the unauthenticated `/health` probe.
+unreachable and is **never** opened on the advertised URL.
+
+What rides the channel for a host bound to it (#2620):
+
+| Operation                                                                   | Over the channel                                                                                                                                                    |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| File-browser upload / download (`uploadProjectFile`, `downloadProjectFile`) | `channel-requests`. Streamed: the body moves under the mux send window and the idle (not total) timeout, and a download is read at the consumer's pace.             |
+| HTTP preview forward (`openPreviewHttp`, `openConfiguredPreviewHttp`)       | `channel-requests`. The browser's headers are replayed to the dev server; its `authorization`, signature and every `x-mullion-*` header are dropped on both ends.   |
+| Preview WebSockets (`openPreviewWs`, `openConfiguredPreviewWs`)             | `channel-streams`, as the `preview` and `configured-preview` stream kinds.                                                                                          |
+| Health ping                                                                 | The channel's state plus one small round trip (`GET /internal/protocol`) over it; `/health` is not probed. A bound host whose channel is down reads as unreachable. |
+| Browser WebSocket                                                           | Still the advertised URL (a follow-up).                                                                                                                             |
+
+A bound host whose channel is down fails each of these as unreachable; none is
+ever dialed on the advertised URL. A host that never negotiated the channel
+keeps the inbound path unchanged. The tunnel buffers a transfer on the agent up
+to the channel's own limits (64 MiB for an upload, download or preview body;
+`FILE_TRANSFER_MAX_BYTES` still applies below that), so a file above 64 MiB is
+refused (`413`) over the channel and needs the inbound URL. A preview response
+is held whole on the agent before it is sent, so a long-lived streaming
+response (server-sent events) does not stream over the channel; HMR uses the
+WebSocket, which does. The wire change is additive under the existing
+operations: run the primary and the agent on the same build or newer (an older
+agent answers an unknown preview stream `404` and replays only the narrow
+header set).
 
 The existing limits are unchanged: 64 relayed control-relay connections per host
 and 16 open streams per connection (nested inside one channel stream), 256 ssh-agent channels,

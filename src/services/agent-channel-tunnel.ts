@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import type { FastifyInstance } from "fastify";
 import { type MuxChannel, MuxBusyError } from "./ssh-agent-mux.js";
 import type { ConnectedAgentChannel } from "../plugins/agent-channel.js";
@@ -52,6 +53,24 @@ const REQUEST_RECEIVE_TIMEOUT_MS = 120_000;
 const WRITE_CHUNK_BYTES = 32 * 1024;
 const FORWARDED_HEADERS = new Set(["content-type", "accept"]);
 const REPLAY_METHODS = new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
+// A preview forwards whatever method the browser used.
+const PREVIEW_REPLAY_METHODS = new Set([...REPLAY_METHODS, "HEAD", "OPTIONS"]);
+// Never replayed for a preview: framing the agent's own inject recomputes, and
+// every credential header (the replay presents the channel's own token; a
+// browser-supplied one must not reach a project's dev server).
+const PREVIEW_DROPPED_REQUEST_HEADERS = new Set([
+  "host",
+  "content-length",
+  "transfer-encoding",
+  "connection",
+  "keep-alive",
+  "upgrade",
+  "authorization",
+  "x-request-signature",
+  "x-request-timestamp",
+  "x-request-nonce",
+]);
+const DROPPED_RESPONSE_HEADERS = new Set(["connection", "keep-alive", "transfer-encoding"]);
 
 // --- transport errors ------------------------------------------------------
 
@@ -96,13 +115,20 @@ export function isDownloadPath(path: string): boolean {
   return p === "/internal/project-files/download";
 }
 
+/** The HTTP preview forwards (#2620): they carry a browser's request, so they
+ * get the browser-facing header treatment and the large body limits. */
+export function isPreviewPath(path: string): boolean {
+  const p = path.split("?")[0]!;
+  return p.startsWith("/internal/preview/") || p === "/internal/configured-preview";
+}
+
 export function maxRequestBodyBytesForPath(path: string): number {
-  if (isUploadPath(path)) return AGENT_CHANNEL_MAX_RESPONSE_BYTES;
+  if (isUploadPath(path) || isPreviewPath(path)) return AGENT_CHANNEL_MAX_RESPONSE_BYTES;
   return AGENT_CHANNEL_DEFAULT_MAX_REQUEST_BYTES;
 }
 
 export function maxResponseBodyBytesForPath(path: string): number {
-  if (isDownloadPath(path)) return AGENT_CHANNEL_MAX_RESPONSE_BYTES;
+  if (isDownloadPath(path) || isPreviewPath(path)) return AGENT_CHANNEL_MAX_RESPONSE_BYTES;
   return AGENT_CHANNEL_DEFAULT_MAX_RESPONSE_BYTES;
 }
 
@@ -208,6 +234,13 @@ class HeadAndBodyParser {
   body(): Buffer {
     return Buffer.concat(this.bodyChunks);
   }
+
+  /** The body bytes so far, which the caller now owns. */
+  takeBody(): Buffer {
+    const taken = Buffer.concat(this.bodyChunks);
+    this.bodyChunks = [];
+    return taken;
+  }
 }
 
 // --- primary side ------------------------------------------------------------
@@ -216,15 +249,30 @@ export interface ChannelRequest {
   method: string;
   path: string;
   headers?: Record<string, string>;
-  body?: string | Buffer;
+  /** A Readable is sent as it is produced, under the channel's send window. */
+  body?: string | Buffer | Readable;
   timeoutMs: number;
+  /** Replaces the total `timeoutMs` budget with one that re-arms whenever a
+   * byte moves in either direction (large transfers, #2620). */
+  idleTimeoutMs?: number;
+  /** Closes the channel (and fails the exchange) when it fires. */
+  signal?: AbortSignal;
   maxResponseBytes?: number;
 }
 
 export interface ChannelResponse {
   status: number;
-  headers: Record<string, string>;
+  headers: Record<string, string | string[]>;
   body: Buffer;
+}
+
+/** channelFetchStream's result: the response body is read as it arrives. */
+export interface ChannelStreamResponse {
+  status: number;
+  headers: Record<string, string | string[]>;
+  /** Ends at EOF; errors if the channel is lost or the response outgrows
+   * `maxResponseBytes`. Destroying it closes the channel. */
+  stream: Readable;
 }
 
 /**
@@ -236,30 +284,74 @@ export async function channelFetch(
   entry: ConnectedAgentChannel,
   req: ChannelRequest,
 ): Promise<ChannelResponse> {
+  return (await exchange(entry, req, false)) as ChannelResponse;
+}
+
+/**
+ * channelFetch, but the response body is handed back as a Readable as soon as
+ * the head arrives (#2620), so a large download never sits in memory whole. The
+ * mux window is only re-opened as the consumer reads, so buffering is bounded
+ * by the window plus the Readable's own high-water mark.
+ */
+export async function channelFetchStream(
+  entry: ConnectedAgentChannel,
+  req: ChannelRequest,
+): Promise<ChannelStreamResponse> {
+  return (await exchange(entry, req, true)) as ChannelStreamResponse;
+}
+
+async function exchange(
+  entry: ConnectedAgentChannel,
+  req: ChannelRequest,
+  streaming: boolean,
+): Promise<ChannelResponse | ChannelStreamResponse> {
   const fail = (message: string, phase: "before-send" | "after-send"): ChannelTransportError =>
     new ChannelTransportError(message, phase, entry.terminal);
   let sendStarted = false;
   let channel: MuxChannel | null = null;
   let timedOut = false;
+  let aborted = false;
   let waitingForSlot = false;
   let abortOpen: ((err: Error) => void) | null = null;
-  const timer = setTimeout(() => {
+  const limitMs = req.idleTimeoutMs ?? req.timeoutMs;
+  const timeoutMessage = `timed out after ${limitMs} ms${req.idleTimeoutMs ? " idle" : ""}`;
+  let timer: NodeJS.Timeout | undefined;
+  const onTimeout = () => {
     timedOut = true;
     channel?.close();
     if (waitingForSlot) {
       abortOpen?.(
-        new ChannelBusyError(`timed out after ${req.timeoutMs} ms waiting for free channel slot`),
+        new ChannelBusyError(`timed out after ${limitMs} ms waiting for free channel slot`),
       );
     } else {
-      abortOpen?.(
-        fail(`timed out after ${req.timeoutMs} ms`, sendStarted ? "after-send" : "before-send"),
-      );
+      abortOpen?.(fail(timeoutMessage, sendStarted ? "after-send" : "before-send"));
     }
-  }, req.timeoutMs);
+  };
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(onTimeout, limitMs);
+  };
+  // An idle budget re-arms on every byte that moves; a total one never does.
+  const touch = req.idleTimeoutMs !== undefined ? arm : () => undefined;
+  const onAbort = () => {
+    aborted = true;
+    channel?.close();
+    abortOpen?.(fail("aborted", sendStarted ? "after-send" : "before-send"));
+  };
+  const release = () => {
+    clearTimeout(timer);
+    req.signal?.removeEventListener("abort", onAbort);
+  };
+  if (req.signal?.aborted) throw fail("aborted", "before-send");
+  req.signal?.addEventListener("abort", onAbort, { once: true });
+  arm();
+  // A streamed response outlives this call: its Readable owns the channel and
+  // the timer from the head on.
+  let handedOff = false;
 
   const slotWaitTimeoutMs = Math.min(
     AGENT_CHANNEL_SLOT_WAIT_MS,
-    Math.max(0, req.timeoutMs - AGENT_CHANNEL_MIN_EXCHANGE_MS),
+    Math.max(0, limitMs - AGENT_CHANNEL_MIN_EXCHANGE_MS),
   );
 
   try {
@@ -302,30 +394,95 @@ export async function channelFetch(
         );
     });
     abortOpen = null;
-    if (timedOut) {
+    if (timedOut || aborted) {
       channel.close();
-      throw fail(`timed out after ${req.timeoutMs} ms`, "before-send");
+      throw fail(timedOut ? timeoutMessage : "aborted", "before-send");
     }
     const ch = channel;
 
     const parser = new HeadAndBodyParser();
     const maxResponseBytes = req.maxResponseBytes ?? maxResponseBodyBytesForPath(req.path);
-    const response = new Promise<ChannelResponse>((resolve, reject) => {
+    const lostMessage = () =>
+      timedOut
+        ? timeoutMessage
+        : aborted
+          ? "aborted"
+          : entry.terminal
+            ? `outbound channel closed: ${entry.terminal}`
+            : "outbound channel lost before the response completed";
+    const response = new Promise<ChannelResponse | ChannelStreamResponse>((resolve, reject) => {
       let settled = false;
-      const settle = (err: ChannelTransportError | null, value?: ChannelResponse) => {
+      const settle = (
+        err: ChannelTransportError | null,
+        value?: ChannelResponse | ChannelStreamResponse,
+      ) => {
         if (settled) return;
         settled = true;
         if (err) reject(err);
         else resolve(value!);
       };
+      // Streaming: set once the head is in, from then on the body goes here.
+      let out: Readable | null = null;
+      let eofSeen = false;
+      let bodyBytes = 0;
+      // Bytes received but not yet released to the peer's send window (the
+      // consumer has not asked for them).
+      let held = 0;
+      const startStream = () => {
+        let head: ChannelResponseHead;
+        try {
+          head = JSON.parse(parser.headLine!) as ChannelResponseHead;
+          if (!Number.isInteger(head.status)) throw new Error("bad status");
+        } catch {
+          settle(fail("malformed response head", "after-send"));
+          ch.close();
+          return;
+        }
+        const body = new Readable({
+          read() {
+            if (held > 0) {
+              const n = held;
+              held = 0;
+              ch.acknowledgeConsumed(n);
+            }
+          },
+          destroy(err, cb) {
+            cb(err);
+            ch.close();
+          },
+        });
+        out = body;
+        const first = parser.takeBody();
+        bodyBytes = first.length;
+        if (first.length > 0) body.push(first);
+        settle(null, { status: head.status, headers: head.headers ?? {}, stream: body });
+      };
       ch.onData((chunk) => {
+        touch();
+        if (out) {
+          bodyBytes += chunk.length;
+          if (bodyBytes > maxResponseBytes) {
+            out.destroy(fail("response exceeds the channel limit", "after-send"));
+            return;
+          }
+          if (out.push(chunk)) ch.acknowledgeConsumed(chunk.length);
+          else held += chunk.length;
+          return;
+        }
         ch.acknowledgeConsumed(chunk.length);
         if (!parser.push(chunk, maxResponseBytes)) {
           settle(fail("response exceeds the channel limit", "after-send"));
           ch.close();
+          return;
         }
+        if (streaming && parser.headLine !== null) startStream();
       });
       ch.onEof(() => {
+        if (out) {
+          eofSeen = true;
+          out.push(null);
+          return;
+        }
         if (parser.headLine === null) {
           return settle(fail("channel ended before a response head", "after-send"));
         }
@@ -338,16 +495,11 @@ export async function channelFetch(
         }
       });
       ch.onClose(() => {
-        settle(
-          fail(
-            timedOut
-              ? `timed out after ${req.timeoutMs} ms`
-              : entry.terminal
-                ? `outbound channel closed: ${entry.terminal}`
-                : "outbound channel lost before the response completed",
-            "after-send",
-          ),
-        );
+        if (out) {
+          if (!eofSeen) out.destroy(fail(lostMessage(), "after-send"));
+          return;
+        }
+        settle(fail(lostMessage(), "after-send"));
       });
     });
     // Keeps an unobserved rejection (a send failure wins the race) quiet.
@@ -360,31 +512,122 @@ export async function channelFetch(
       headers: req.headers ?? {},
     };
     const write = makeWriter(ch);
+    // Returns why the request body could not be sent in full (its own source
+    // failed, or it outgrew the limit), or null. A failure of the channel
+    // itself is thrown.
+    const sendBody = async (): Promise<string | null> => {
+      const body = req.body;
+      if (body === undefined) return null;
+      if (!(body instanceof Readable)) {
+        if (body.length > 0)
+          await write(typeof body === "string" ? Buffer.from(body, "utf8") : body);
+        return null;
+      }
+      const cap = maxRequestBodyBytesForPath(req.path);
+      let sent = 0;
+      let writing = false;
+      try {
+        // destroyOnReturn: false — an early exit (the agent answered 413 while
+        // the body was still arriving) must not tear down the caller's own
+        // request; it drains what is left itself.
+        for await (const piece of body.iterator({ destroyOnReturn: false })) {
+          const buf = Buffer.isBuffer(piece) ? piece : Buffer.from(piece as Uint8Array);
+          sent += buf.length;
+          if (sent > cap) return "request body exceeds the channel limit";
+          writing = true;
+          await write(buf);
+          writing = false;
+          touch();
+        }
+      } catch (err) {
+        if (writing) throw err;
+        return "request body stream failed";
+      }
+      return null;
+    };
+    let res: ChannelResponse | ChannelStreamResponse | undefined;
+    let bodyFailure: string | null = null;
     try {
       await write(Buffer.from(`${JSON.stringify(head)}\n`, "utf8"));
-      if (req.body !== undefined && req.body.length > 0) {
-        await write(typeof req.body === "string" ? Buffer.from(req.body, "utf8") : req.body);
-      }
-      ch.eof();
+      touch();
+      bodyFailure = await sendBody();
+      if (bodyFailure === null) ch.eof();
     } catch {
       try {
-        return await response;
+        res = await response;
       } catch {
         ch.close();
         throw fail(
-          timedOut ? `timed out after ${req.timeoutMs} ms` : "outbound channel lost while sending",
+          timedOut ? timeoutMessage : aborted ? "aborted" : "outbound channel lost while sending",
           "after-send",
         );
       }
     }
-    try {
-      return await response;
-    } finally {
+    if (bodyFailure !== null) {
+      // Half a request was sent: the agent must not run it, so end the channel
+      // rather than the body.
+      // The agent only runs a request once it has the whole body and EOF, so a
+      // request cut short here never ran: nothing for the caller to doubt.
+      ch.close();
+      throw fail(bodyFailure, "before-send");
+    }
+    if (res === undefined) {
+      try {
+        res = await response;
+      } catch (err) {
+        ch.close();
+        throw err;
+      }
+    }
+    if ("stream" in res) {
+      handedOff = true;
+      res.stream.once("close", release);
+    } else {
       ch.close();
     }
+    return res;
   } finally {
-    clearTimeout(timer);
+    if (!handedOff) release();
   }
+}
+
+/**
+ * Maps a failed exchange onto the RemoteHostClient error taxonomy, the same for
+ * every caller of the channel: busy is retryable, a failure after the request
+ * began sending is an unknown outcome unless the request is idempotent, a
+ * channel the primary ended (revoked / expired) is a 401, anything else is the
+ * host being unreachable.
+ */
+export function mapChannelError(hostId: string, err: unknown, method: string, path: string): Error {
+  if (err instanceof ChannelBusyError) return new HostBusyError(hostId, err);
+  if (!(err instanceof ChannelTransportError)) return new HostUnreachableError(hostId, err);
+  if (err.phase === "after-send" && !isIdempotentRequest(method, path)) {
+    return new HostOutcomeUnknownError(hostId, err);
+  }
+  if (err.terminal) return new HostRequestError(hostId, 401, err.message);
+  return new HostUnreachableError(hostId, err);
+}
+
+/** The error a non-2xx status stands for (4xx a rejection, 5xx unreachable), or null. */
+export function refusalForStatus(
+  hostId: string,
+  status: number,
+  bodyText: () => string,
+): Error | null {
+  if (status >= 200 && status < 300) return null;
+  if (status >= 400 && status < 500) return new HostRequestError(hostId, status, bodyText());
+  return new HostUnreachableError(hostId, new Error(`HTTP ${status}`));
+}
+
+/**
+ * The error for a bound host whose channel is down. One message, so a caller
+ * cannot drift from request(): the advertised URL is never dialed instead.
+ */
+export function channelDownError(hostId: string): HostUnreachableError {
+  return new HostUnreachableError(
+    hostId,
+    new Error("outbound channel is not connected (not falling back to the advertised URL)"),
+  );
 }
 
 /**
@@ -417,23 +660,10 @@ export async function requestViaChannel<T>(
       timeoutMs,
     });
   } catch (err) {
-    if (err instanceof ChannelBusyError) {
-      throw new HostBusyError(hostId, err);
-    }
-    if (!(err instanceof ChannelTransportError)) throw new HostUnreachableError(hostId, err);
-    if (err.phase === "after-send" && !isIdempotentRequest(method, path)) {
-      throw new HostOutcomeUnknownError(hostId, err);
-    }
-    // The primary ended the channel: identity revoked / credential expired.
-    if (err.terminal) throw new HostRequestError(hostId, 401, err.message);
-    throw new HostUnreachableError(hostId, err);
+    throw mapChannelError(hostId, err, method, path);
   }
-  if (res.status < 200 || res.status >= 300) {
-    if (res.status >= 400 && res.status < 500) {
-      throw new HostRequestError(hostId, res.status, res.body.toString("utf8"));
-    }
-    throw new HostUnreachableError(hostId, new Error(`HTTP ${res.status}`));
-  }
+  const refusal = refusalForStatus(hostId, res.status, () => res.body.toString("utf8"));
+  if (refusal) throw refusal;
   if (res.status === 204) return undefined as T;
   return JSON.parse(res.body.toString("utf8")) as T;
 }
@@ -463,7 +693,11 @@ export function createRequestSink(
   receiveDeadline.unref?.();
   channel.onClose(() => clearTimeout(receiveDeadline));
 
-  const respond = async (status: number, headers: Record<string, string>, body: Buffer) => {
+  const respond = async (
+    status: number,
+    headers: Record<string, string | string[]>,
+    body: Buffer,
+  ) => {
     try {
       const head: ChannelResponseHead = { status, headers };
       await write(Buffer.from(`${JSON.stringify(head)}\n`, "utf8"));
@@ -529,7 +763,10 @@ export function createRequestSink(
           return await refuse(400, "malformed request head");
         }
         const method = String(head.method).toUpperCase();
-        if (!REPLAY_METHODS.has(method)) return await refuse(405, "method not allowed");
+        const preview = typeof head.path === "string" && isPreviewPath(head.path);
+        if (!(preview ? PREVIEW_REPLAY_METHODS : REPLAY_METHODS).has(method)) {
+          return await refuse(405, "method not allowed");
+        }
         // Decode the path and check for undecodable/double-encoded segments, dot-segments,
         // control characters, and websocket routes.
         if (typeof head.path !== "string") {
@@ -543,7 +780,16 @@ export function createRequestSink(
         for (const [name, value] of Object.entries(head.headers ?? {})) {
           const key = name.toLowerCase();
           if (typeof value !== "string") continue;
-          if (FORWARDED_HEADERS.has(key) || key.startsWith("x-mullion-")) headers[key] = value;
+          if (preview) {
+            // A browser's own headers (cookies, validators, range ...) travel to
+            // the dev server; its credentials, and anything claiming to be
+            // Mullion's, never do (the replay's own token is set below).
+            if (!PREVIEW_DROPPED_REQUEST_HEADERS.has(key) && !key.startsWith("x-mullion-")) {
+              headers[key] = value;
+            }
+          } else if (FORWARDED_HEADERS.has(key) || key.startsWith("x-mullion-")) {
+            headers[key] = value;
+          }
         }
         // The presented credential is ours, never the peer's.
         headers[AGENT_CHANNEL_AUTH_HEADER] = authToken;
@@ -556,9 +802,14 @@ export function createRequestSink(
           remoteAddress: `channel:${peer}`,
           ...(body.length > 0 ? { payload: body } : {}),
         });
-        const outHeaders: Record<string, string> = {};
-        const contentType = res.headers["content-type"];
-        if (typeof contentType === "string") outHeaders["content-type"] = contentType;
+        // Every response header but the framing the channel replaces: a
+        // download needs its content-length, a preview its location,
+        // set-cookie and validators.
+        const outHeaders: Record<string, string | string[]> = {};
+        for (const [name, value] of Object.entries(res.headers)) {
+          if (value === undefined || DROPPED_RESPONSE_HEADERS.has(name.toLowerCase())) continue;
+          outHeaders[name.toLowerCase()] = Array.isArray(value) ? value.map(String) : String(value);
+        }
         await respond(res.statusCode, outHeaders, res.rawPayload);
       } catch (err) {
         app.log.warn({ err }, "[agent-channel] replayed request failed");

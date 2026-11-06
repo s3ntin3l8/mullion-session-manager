@@ -38,7 +38,14 @@ import type { GitBranchInfo, GitWorktreeInfo } from "./git-refs.js";
 import type { GitDiffStats } from "./git-diff.js";
 import type { CommitDetail, CommitLogEntry } from "./git-log.js";
 import type { UpdateStatus, ApplyUpdateBody } from "./update-apply.js";
-import { requestViaChannel, type HostTransport } from "./agent-channel-tunnel.js";
+import { channelDownError, requestViaChannel, type HostTransport } from "./agent-channel-tunnel.js";
+import {
+  downloadOverChannel,
+  idleAbort,
+  previewHttpOverChannel,
+  readJsonResponse,
+  uploadOverChannel,
+} from "./remote-host-channel-transfers.js";
 import { attachStreamQuery, openStreamOnTransport } from "./agent-channel-streams.js";
 import {
   AGENT_CHANNEL_STREAMS_OPERATION,
@@ -596,7 +603,7 @@ export class RemoteHostClient {
       throw new HostUnreachableError(
         this.hostId,
         new Error(
-          "this host has no advertised address and this operation is not carried over its outbound channel yet",
+          "this host has no advertised address and this operation is not carried over its outbound channel",
         ),
       );
     }
@@ -688,22 +695,28 @@ export class RemoteHostClient {
     }
   }
 
+  /**
+   * How this host is reached for a request/response exchange (#2451, #2620):
+   * request(), the file transfers, the HTTP preview forward and the health ping
+   * all ask here, so a bound host never has one of them dial the advertised URL.
+   */
+  private requestTransport(): HostTransport {
+    return this.resolveTransport?.() ?? { kind: "inbound" };
+  }
+
   private async request<T>(
     path: string,
     init?: RequestInit,
     timeoutMs: number = defaultRequestTimeoutMs,
   ): Promise<T> {
-    const transport = this.resolveTransport?.() ?? { kind: "inbound" as const };
+    const transport = this.requestTransport();
     if (transport.kind === "channel") {
       return requestViaChannel<T>(this.hostId, transport.channel, path, init, timeoutMs);
     }
     if (transport.kind === "channel-down") {
       // Negotiated the outbound channel and it is down: report it, do not dial
       // the advertised URL (a mutation must not silently change transports).
-      throw new HostUnreachableError(
-        this.hostId,
-        new Error("outbound channel is not connected (not falling back to the advertised URL)"),
-      );
+      throw channelDownError(this.hostId);
     }
     let res = await this.rawFetch(path, init, timeoutMs);
     // Retry-once-on-401 (issue #245 / roadmap 7.1): a session credential
@@ -1465,7 +1478,11 @@ export class RemoteHostClient {
     const query = new URLSearchParams({ cwd, path: relPath });
     if (opts.mkdirs) query.set("mkdirs", "1");
     const requestTarget = `/internal/project-files/upload?${query.toString()}`;
-    const idle = this.idleAbort(transferIdleTimeoutMs);
+    const t = this.requestTransport();
+    if (t.kind !== "inbound") {
+      return uploadOverChannel(this.hostId, t, requestTarget, body, transferIdleTimeoutMs);
+    }
+    const idle = idleAbort(transferIdleTimeoutMs);
     const metered = body.pipe(
       new Transform({
         transform(chunk, _enc, cb) {
@@ -1511,7 +1528,7 @@ export class RemoteHostClient {
       // Read the JSON refusal (409/413 carry `code`) BEFORE discarding the
       // request body. Destroying a still-uploading body first makes undici
       // tear down the connection the response is arriving on.
-      return await this.readJsonResponse<{ path: string; size: number }>(res);
+      return await readJsonResponse<{ path: string; size: number }>(this.hostId, res);
     } catch (err) {
       // An abort from the idle timer surfaces as a fetch/body error: that is
       // the agent going quiet, not a refusal.
@@ -1540,10 +1557,14 @@ export class RemoteHostClient {
     cwd: string,
     relPath: string,
   ): Promise<{ stream: Readable; size: number | null; path: string; name: string }> {
+    const t = this.requestTransport();
+    if (t.kind !== "inbound") {
+      return downloadOverChannel(this.hostId, t, cwd, relPath, transferIdleTimeoutMs);
+    }
     const open = async () => {
       const requestTarget = "/internal/project-files/download";
       const payload = JSON.stringify({ cwd, path: relPath });
-      const idle = this.idleAbort(transferIdleTimeoutMs);
+      const idle = idleAbort(transferIdleTimeoutMs);
       try {
         const res = await fetch(`${this.baseUrl}${requestTarget}`, {
           method: "POST",
@@ -1576,7 +1597,7 @@ export class RemoteHostClient {
     }
     if (!res.ok || !res.body) {
       idle.clear();
-      return this.readJsonResponse(res);
+      return readJsonResponse(this.hostId, res);
     }
     // Null-safe: Number(null) and Number("") are 0, which would read as "an
     // empty file" and truncate the download the primary then serves.
@@ -1604,40 +1625,6 @@ export class RemoteHostClient {
       path: relPath,
       name: path.basename(relPath),
     };
-  }
-
-  /** An AbortSignal that fires after `ms` without a `touch()`. */
-  private idleAbort(ms: number): { signal: AbortSignal; touch: () => void; clear: () => void } {
-    const controller = new AbortController();
-    let timer: NodeJS.Timeout | undefined;
-    const arm = () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => controller.abort(new Error("transfer idle timeout")), ms);
-    };
-    arm();
-    return {
-      signal: controller.signal,
-      touch: arm,
-      clear: () => {
-        if (timer) clearTimeout(timer);
-        timer = undefined;
-      },
-    };
-  }
-
-  /** request()'s response handling, for the streaming methods that issue
-   * their own fetch: 4xx -> HostRequestError (with the agent's body, so the
-   * route can read its `code`), 5xx -> unreachable, 2xx -> parsed JSON. */
-  private async readJsonResponse<T>(res: Response): Promise<T> {
-    if (!res.ok) {
-      if (res.status >= 400 && res.status < 500) {
-        const text = await res.text().catch(() => `(no response body — HTTP ${res.status})`);
-        throw new HostRequestError(this.hostId, res.status, text);
-      }
-      await res.body?.cancel().catch(() => undefined);
-      throw new HostUnreachableError(this.hostId, new Error(`HTTP ${res.status}`));
-    }
-    return (await res.json()) as T;
   }
 
   async searchProjectFiles(cwd: string, query: string): Promise<ProjectSearchListing> {
@@ -2404,6 +2391,8 @@ export class RemoteHostClient {
   }
 
   openConfiguredPreviewWs(url: string): NodeWebSocket {
+    const viaChannel = this.channelStream("configured-preview", url, { url });
+    if (viaChannel) return viaChannel;
     const requestTarget = `/internal/ws/configured-preview?${new URLSearchParams({ url })}`;
     return this.inboundStream(requestTarget, false);
   }
@@ -2426,6 +2415,17 @@ export class RemoteHostClient {
     headers.delete(SIGNATURE_HEADER);
     headers.delete(TIMESTAMP_HEADER);
     headers.delete(NONCE_HEADER);
+    const t = this.requestTransport();
+    if (t.kind !== "inbound") {
+      return previewHttpOverChannel(
+        this.hostId,
+        t,
+        requestTarget,
+        init,
+        headers,
+        PREVIEW_REQUEST_TIMEOUT_MS,
+      );
+    }
     headers.set("authorization", `Bearer ${this.token}`);
     for (const [key, value] of Object.entries(
       this.signatureHeaders(init.method, requestTarget, undefined),
@@ -2472,6 +2472,11 @@ export class RemoteHostClient {
    * not diverging on here in isolation.
    */
   openPreviewWs(port: number, pathAndQuery: string): NodeWebSocket {
+    const viaChannel = this.channelStream("preview", `${port}${pathAndQuery}`, {
+      port: String(port),
+      path: pathAndQuery,
+    });
+    if (viaChannel) return viaChannel;
     const query = new URLSearchParams({ port: String(port), path: pathAndQuery });
     const requestTarget = `/internal/ws/preview?${query.toString()}`;
     return this.inboundStream(requestTarget, false);
@@ -2482,9 +2487,13 @@ export class RemoteHostClient {
    * header/timeout semantics that throw on any non-2xx, since a healthy
    * agent's /health is intentionally unauthenticated. */
   async ping(): Promise<boolean> {
-    if (this.baseUrl === "") {
-      // No address to probe (#2572): the host is as reachable as its channel
-      // is, and a round trip through it proves the agent answers.
+    const transport = this.requestTransport();
+    // A host bound to its outbound channel is as reachable as the channel is,
+    // and one small round trip through it proves the agent answers. It never
+    // probes /health (#2620): there may be no address to probe (#2572), and a
+    // bound host must not be judged by a transport it does not use.
+    if (transport.kind === "channel-down") return false;
+    if (transport.kind === "channel" || this.baseUrl === "") {
       try {
         await this.request("/internal/protocol", { method: "GET" }, defaultRequestTimeoutMs);
         return true;

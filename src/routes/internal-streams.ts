@@ -1,7 +1,13 @@
 import type { FastifyInstance } from "fastify";
-import type { WebSocket as NodeWebSocket } from "ws";
 import { expandHome } from "../services/project-config.js";
+import { WebSocket as NodeWebSocket } from "ws";
 import { createMuxConnection } from "../services/ssh-agent-mux.js";
+import { pipeWsFrames, toWsUrl } from "../services/ws-pipe.js";
+import { getPinnedWsAgent } from "../services/pinned-connect.js";
+import {
+  normalizePreviewDestination,
+  CONFIGURED_PREVIEW_POLICY,
+} from "../services/preview-targets.js";
 import { attachSocketToSession } from "./terminal.js";
 import { attachLocalEventsSocket, attachCursorsAndSeenBroadcast } from "./events.js";
 import {
@@ -108,4 +114,108 @@ export function acceptSshAgentStream(app: FastifyInstance, socket: NodeWebSocket
       app.log.debug({ reason }, "ssh-agent: primary<->agent connection closed");
     }
   });
+}
+
+// Same shape as projects.ts's DEV_SERVER_PORT_ONLY — a bare 1-65535 port,
+// nothing else. Used for both /internal/preview/:port/* and
+// /internal/ws/preview's ?port= (issue #28 phase 6).
+const PORT_PATTERN = /^\d{1,5}$/;
+
+export function parsePort(value: string): number | null {
+  if (!PORT_PATTERN.test(value)) return null;
+  const port = Number(value);
+  return port >= 1 && port <= 65535 ? port : null;
+}
+
+/**
+ * Resolves a caller-supplied path+query (from the primary, ultimately
+ * derived from a browser's preview request) against this agent's own
+ * loopback dev server at `port` — and never anything else. This is the
+ * whole security promise of this phase (see projects.ts's own
+ * isValidDevServerUrl comment: "the preview proxy forces the connection to
+ * the owning agent's own loopback"), so it's deliberately not just "parse
+ * and trust": naively string-concatenating `pathAndQuery` into
+ * `http://127.0.0.1:${port}${pathAndQuery}` (or its ws:// equivalent) is
+ * bypassable — a network-path reference ("//evil.com/x") overrides the
+ * host entirely, and a leading "@evil.com/" turns "127.0.0.1:<port>" into
+ * HTTP userinfo with "evil.com" as the actual host — both confirmed via
+ * `new URL()` directly, not just reasoned about. The fix: `pathAndQuery` is
+ * first parsed *alone*, against a throwaway placeholder base, so any
+ * authority-like syntax it contains resolves into that placeholder's own
+ * host/userinfo — which is then thrown away, keeping only `.pathname` and
+ * `.search`. Only those two — guaranteed to start with "/" or be empty,
+ * never authority syntax — are then combined with the real,
+ * literally-constructed loopback base. The `hostname`/`port` assertion
+ * below is redundant with that construction by design; it's still worth
+ * asserting outright rather than trusting reasoning about which forms of
+ * `pathAndQuery` are safe (see internal.test.ts's adversarial cases for
+ * both).
+ */
+export function resolveLoopbackPreviewUrl(pathAndQuery: string, port: number): URL | null {
+  // Both `new URL()` calls below can throw outright for a sufficiently
+  // malformed `pathAndQuery` (confirmed: a bracketed-but-invalid literal
+  // like "//[::a.b.c.d]/x" throws TypeError rather than just parsing into
+  // something this function would otherwise reject) — every caller already
+  // treats a null return as "reject with 400", so folding a parse failure
+  // into that same null case (Hermes review, PR #48) keeps this function's
+  // contract honest ("tells you whether the input is usable," not "usable
+  // unless it happens to throw") without pushing a try/catch onto every
+  // call site.
+  try {
+    const parsed = new URL(pathAndQuery, "http://internal-preview-placeholder/");
+    const upstreamUrl = new URL(parsed.pathname + parsed.search, `http://127.0.0.1:${port}`);
+    const resolvedPort = upstreamUrl.port === "" ? 80 : Number(upstreamUrl.port);
+    if (upstreamUrl.hostname !== "127.0.0.1" || resolvedPort !== port) return null;
+    return upstreamUrl;
+  } catch {
+    return null;
+  }
+}
+
+/** Why a preview WebSocket must be refused, or null: the checks
+ * `/internal/ws/preview` runs before the upgrade completes. */
+export function previewQueryError(query: Record<string, string | undefined>): string | null {
+  const port = query.port !== undefined ? parsePort(query.port) : null;
+  if (port === null) return "port must be 1-65535";
+  if (query.path === undefined) return "path query param is required";
+  if (!resolveLoopbackPreviewUrl(query.path, port)) return "invalid preview path";
+  return null;
+}
+
+/** The WS analog of `/internal/preview/:port/*`, for a remote-hosted project's
+ * HMR connection (issue #28 phase 6): the dev server on this agent's own
+ * loopback. */
+export function acceptPreviewStream(
+  app: FastifyInstance,
+  socket: StreamSocket,
+  query: Record<string, string | undefined>,
+): void {
+  // Re-derived, not trusted from the validation run: cheap, pure, and already
+  // proven to succeed by it passing at all.
+  const port = parsePort(query.port as string) as number;
+  const upstreamUrl = resolveLoopbackPreviewUrl(query.path as string, port) as URL;
+  const upstream = new NodeWebSocket(toWsUrl(upstreamUrl), {
+    headers: { host: upstreamUrl.host },
+  });
+  pipeWsFrames(app, socket as unknown as NodeWebSocket, upstream, { port });
+}
+
+export function configuredPreviewQueryError(query: { url?: string }): string | null {
+  return normalizePreviewDestination(query.url ?? "")
+    ? null
+    : "Invalid configured preview destination";
+}
+
+export function acceptConfiguredPreviewStream(
+  app: FastifyInstance,
+  socket: StreamSocket,
+  query: { url: string },
+): void {
+  const destination = normalizePreviewDestination(query.url)!;
+  const url = toWsUrl(new URL(destination));
+  const upstream = new NodeWebSocket(url, {
+    headers: { host: new URL(destination).host },
+    agent: getPinnedWsAgent(CONFIGURED_PREVIEW_POLICY, url),
+  });
+  pipeWsFrames(app, socket as unknown as NodeWebSocket, upstream, { kind: "configured-preview" });
 }
