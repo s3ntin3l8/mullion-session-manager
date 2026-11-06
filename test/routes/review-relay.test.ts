@@ -1475,11 +1475,10 @@ describe("review-request routes", () => {
       ]);
       const res = await get(sessionId);
       expect(res.statusCode).toBe(200);
-      expect(mocks.getHermesReviewStatus).toHaveBeenCalledWith(expect.anything(), {
-        owner: "acme",
-        repo: "widgets",
-        prNumber: 42,
-      });
+      expect(mocks.getHermesReviewStatus).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ owner: "acme", repo: "widgets", prNumber: 42 }),
+      );
       expect(res.json()).toMatchObject({
         runId: "run_1",
         status: "completed",
@@ -2293,11 +2292,10 @@ describe("review-request routes", () => {
       it("reads the run for the named repo's PR", async () => {
         const res = await get(siblingSessionId, "?repo=acme/.github&prNumber=7");
         expect(res.statusCode).toBe(200);
-        expect(mocks.getHermesReviewStatus).toHaveBeenCalledWith(expect.anything(), {
-          owner: "acme",
-          repo: ".github",
-          prNumber: 7,
-        });
+        expect(mocks.getHermesReviewStatus).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ owner: "acme", repo: ".github", prNumber: 7 }),
+        );
       });
 
       it("403s an unregistered repo", async () => {

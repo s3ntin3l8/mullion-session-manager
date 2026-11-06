@@ -40,6 +40,7 @@ import {
   getRelayStatus,
   getRunForTarget,
   markerConclusionForRunStatus,
+  orphanMarkerConclusion,
   requestHermesReview,
   requestRelay,
   stopHermesReview,
@@ -805,12 +806,23 @@ export async function reviewRequestRoute(app: FastifyInstance) {
       const { owner, repo, prNumber, token } = target;
 
       try {
-        const status = await getHermesReviewStatus(app, { owner, repo, prNumber });
+        const status = await getHermesReviewStatus(app, {
+          owner,
+          repo,
+          prNumber,
+          // With the head and a token that reads check runs, a review this
+          // Mullion did not dispatch (the repository's own workflow, or a run
+          // index lost in a restart) is found through the head's ledger marker.
+          headSha: target.headSha,
+          readToken: target.markerReadToken ?? token,
+        });
         const record = getReviewRunForPr(owner, repo, prNumber);
+        const ledger = "ledger" in status ? status.ledger : undefined;
         // Close the in-flight marker once the run it names has finished, so a
         // later request does not mistake a finished review for a live one.
-        // The shared workflow closes its own marker the same way.
-        if (record?.markerCheckRunId && target.markerToken) {
+        // The shared workflow closes its own marker the same way. (Not when the
+        // answer is the head's ledger marker: its run is not the record's.)
+        if (!ledger && record?.markerCheckRunId && target.markerToken) {
           const conclusion = markerConclusionForRunStatus(status.status);
           if (conclusion) {
             try {
@@ -828,9 +840,45 @@ export async function reviewRequestRoute(app: FastifyInstance) {
             }
           }
         }
+        // An orphaned marker: the run behind the head's "Hermes review" check
+        // is not one this Mullion tracks, so the sweep never closes it and the
+        // check stays pending after its run is gone.
+        const startedAtMs = "dispatchedAt" in status ? Date.parse(status.dispatchedAt) : NaN;
+        // The marker's id is the route's business, not the caller's.
+        const { ledger: _ledger, ...publicStatus } = status as typeof status & {
+          ledger?: unknown;
+        };
+        if (ledger?.open && target.markerToken) {
+          const conclusion = orphanMarkerConclusion(status.status, startedAtMs);
+          if (conclusion) {
+            try {
+              await completeReviewMarkerCheckRun(
+                target.markerToken,
+                owner,
+                repo,
+                ledger.checkRunId,
+                conclusion,
+              );
+            } catch (err) {
+              // Not a failed status read — and a marker written by a different
+              // GitHub App cannot be closed by this one.
+              app.log.warn(
+                { detail: (err as Error).message, owner, repo, prNumber },
+                "review-status: could not close the orphaned ledger marker",
+              );
+            }
+          }
+        }
         return {
-          ...status,
-          github: await findLandedReview(app, token, target, record),
+          ...publicStatus,
+          github: await findLandedReview(
+            app,
+            token,
+            target,
+            // A review found through the ledger has no relay record: match its
+            // landed review by when the marker's run started.
+            ledger ? { dispatchedAt: startedAtMs } : record,
+          ),
         };
       } catch (err) {
         return replyReviewError(reply, err);

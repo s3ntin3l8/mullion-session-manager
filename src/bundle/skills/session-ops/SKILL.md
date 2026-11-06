@@ -193,7 +193,9 @@ What you _can_ do for a dev-server-shaped task, at session scope:
   refuses with a 409; `--force` / `force` is only for a change that grew
   beyond them or a human's ask). If a requested review never appears, `mullion review status` (or
   `review_status`) shows the run's state, the bot's reply, whether its
-  review landed and the review's own text; `mullion review stop <runId>` (or
+  review landed and the review's own text — and `stuck` when the review
+  will not finish on its own (tell the human, or stop it if it is yours; never @mention the review
+  bot, which queues another run behind the stuck one); `mullion review stop <runId>` (or
   `stop_review`) cancels a run you started. If the PR is in a **different
   repository** than the session's project (you are also changing a sibling
   repo such as `.github`), run `mullion review` from that checkout — the CLI
