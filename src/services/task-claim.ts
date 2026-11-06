@@ -1049,7 +1049,6 @@ export async function dispatchClaimedTask(
               "task dispatch: spawn outcome unknown, adopted the kept session",
             );
           }
-          committed = true;
           return { ok: false, reason: "spawn-failed", detail: reason };
         }
         await release(reason);
