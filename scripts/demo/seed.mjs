@@ -164,11 +164,35 @@ export function agentTranscriptScript({
   return `#!/usr/bin/env bash\nset -u\nclear\n${hold}${lead}${body}${hook}\n${keepalive}\n`;
 }
 
-/** The last non-blank line of a transcript: once it's in the scrollback, the whole transcript is. */
+/**
+ * The last non-blank line of a transcript. Once it is in the scrollback the text is complete, but not the
+ * output: the script prints a blank line 0.25 s after the line before it, so a transcript that ends with
+ * blank lines is still moving the cursor. Wait for `transcriptEnd` when a shot depends on where it sits.
+ */
 export function lastTranscriptLine(lines) {
   const last = lines.findLast((l) => l.trim() !== "");
   if (last === undefined) throw new Error("transcript has no non-blank line");
   return last;
+}
+
+/**
+ * What the scrollback ends with once the whole transcript has been printed: the last non-blank line and the
+ * number of line breaks after it (its own plus one per trailing blank line).
+ */
+export function transcriptEnd(lines) {
+  const last = lastTranscriptLine(lines);
+  const trailingBlanks = lines.length - 1 - lines.findLastIndex((l) => l.trim() !== "");
+  return { last, lineBreaks: 1 + trailingBlanks };
+}
+
+/**
+ * A pattern for the scrollback text of a finished transcript: the last non-blank line followed by every line
+ * break the transcript ends with (`\r\n` from a PTY, `\n` from a file). Unanchored, so output that follows
+ * the transcript (the keepalive's escape codes) does not matter.
+ */
+export function transcriptEndPattern(lines) {
+  const { last, lineBreaks } = transcriptEnd(lines);
+  return new RegExp(`${last.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\r?\\n){${lineBreaks}}`);
 }
 
 export const AUTH_TRANSCRIPT = [
