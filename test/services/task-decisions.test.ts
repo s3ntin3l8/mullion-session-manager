@@ -183,6 +183,33 @@ describe("worker decisions PR section", () => {
     expect(applyWorkerDecisionsSection(body, [])).toBe(body);
   });
 
+  it("leaves a heading-qualified marker pair quoted in the issue body intact", () => {
+    const issue = [
+      "The PR description carries this block:",
+      "",
+      "<!-- mullion:worker-decisions -->",
+      "### Worker decisions",
+      "",
+      "- Decision: example-from-the-docs",
+      "<!-- /mullion:worker-decisions -->",
+      "",
+      "ISSUE-PROSE-THAT-MUST-SURVIVE",
+    ].join("\n");
+    const body = `${issue}\n\nCloses #99\n\n---\nOpened by Mullion Task Master.`;
+    const first = applyWorkerDecisionsSection(body, ["Decision: real"]);
+    expect(first).toContain("example-from-the-docs");
+    expect(first).toContain("ISSUE-PROSE-THAT-MUST-SURVIVE");
+    expect(first).toContain("- Decision: real");
+    expect(first.indexOf("- Decision: real")).toBeGreaterThan(
+      first.indexOf("ISSUE-PROSE-THAT-MUST-SURVIVE"),
+    );
+    // The next sync converges on the appended block rather than the quoted one.
+    const second = applyWorkerDecisionsSection(first, ["Decision: real2"]);
+    expect(second).toContain("example-from-the-docs");
+    expect(second).toContain("- Decision: real2");
+    expect(second).not.toContain("Decision: real\n");
+  });
+
   it("still replaces or removes a section whose heading was edited", () => {
     const first = applyWorkerDecisionsSection("Issue body\n\n---\nfooter", ["Decision: a"]);
     const renamed = first.replace("### Worker decisions", "### Decisions the worker made");

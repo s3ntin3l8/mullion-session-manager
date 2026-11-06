@@ -118,6 +118,13 @@ const LINE_START_MARKER_RE = new RegExp(`^${SECTION_START}`, "gm");
 // What may follow our block: nothing, or the "---" footer Task Master writes.
 const AFTER_BLOCK_RE = /^\s*---\r?\n/;
 
+/** Whether a block ending at `blockEnd` sits where we write ours: at the end
+ * of the body or directly above the footer. A pair quoted in the issue body is
+ * followed by more issue text. */
+function endsOurBlock(body: string, blockEnd: number): boolean {
+  return blockEnd === body.length || AFTER_BLOCK_RE.test(body.slice(blockEnd));
+}
+
 /**
  * Neutralises a declared-decision line so it is safe to render in GitHub
  * markdown (the PR description and the review comment):
@@ -164,8 +171,10 @@ export function applyWorkerDecisionsSection(body: string, decisions: string[]): 
     const lastMatch = matches[matches.length - 1];
     const startIndex = lastMatch.index!;
     const endIndex = startIndex + lastMatch[0].length;
-    const replacement = section === "" ? "" : `\n\n${section}`;
-    return `${body.slice(0, startIndex)}${replacement}${body.slice(endIndex)}`;
+    if (endsOurBlock(body, endIndex)) {
+      const replacement = section === "" ? "" : `\n\n${section}`;
+      return `${body.slice(0, startIndex)}${replacement}${body.slice(endIndex)}`;
+    }
   }
   // A human renamed the heading, so the heading-qualified match found nothing:
   // replace the block we wrote (start marker on its own line, any heading line,
@@ -175,8 +184,11 @@ export function applyWorkerDecisionsSection(body: string, decisions: string[]): 
   if (renamed.length > 0) {
     const last = renamed[renamed.length - 1];
     const startIndex = last.index!;
-    const replacement = section === "" ? "" : `\n\n${section}`;
-    return `${body.slice(0, startIndex)}${replacement}${body.slice(startIndex + last[0].length)}`;
+    const endIndex = startIndex + last[0].length;
+    if (endsOurBlock(body, endIndex)) {
+      const replacement = section === "" ? "" : `\n\n${section}`;
+      return `${body.slice(0, startIndex)}${replacement}${body.slice(endIndex)}`;
+    }
   }
   // Heading deleted or replaced by non-heading text: our block is structurally
   // the last one and ends the body (or sits directly above the footer). A
@@ -188,7 +200,7 @@ export function applyWorkerDecisionsSection(body: string, decisions: string[]): 
     const endAt = body.indexOf(SECTION_END, startAt);
     if (endAt !== -1) {
       const blockEnd = endAt + SECTION_END.length;
-      if (blockEnd === body.length || AFTER_BLOCK_RE.test(body.slice(blockEnd))) {
+      if (endsOurBlock(body, blockEnd)) {
         const head = body.slice(0, startAt).replace(/(?:\r?\n)+$/, "");
         const replacement = section === "" ? "" : `\n\n${section}`;
         return `${head}${replacement}${body.slice(blockEnd)}`;

@@ -1317,14 +1317,14 @@ wins (the issue body is prepended, so ours is last): first the start marker
 plus `### Worker decisions`; then the start marker plus any heading line, so a
 renamed heading is still replaced rather than duplicated; then, when the
 heading was deleted or turned into non-heading text, the last line-start start
-marker with an end marker after it, but only if that block ends the body or
-sits directly above the `---` footer (a line-start pair quoted in the issue
-body is followed by more issue text, so it is left alone). Lookalike markers
-in the issue body that are mid-line or unclosed match none of these, so they
-do not corrupt replacement. Review-focus items are neutralised in review
-comments only; the worker prompt keeps them raw. Do not
-simplify the passes away. Review-focus items in the review comment are
-neutralised the same way. These steps are ordered so that any failure leaves the
+marker with an end marker after it. Every pass replaces only a block that
+ends the body or sits directly above the `---` footer (a pair quoted in the
+issue body, with or without a heading line, is followed by more issue text, so
+it is left alone and a new section is appended above the footer instead; the
+next sync then replaces that one). Lookalike markers in the issue body that
+are mid-line or unclosed match none of these, so they do not corrupt
+replacement. Do not simplify the passes away. Review-focus items are
+neutralised in review comments only; the worker prompt keeps them raw. These steps are ordered so that any failure leaves the
 task in `reviewing`, untouched and safely retryable — never half-promoted.
 
 On reject (`reviewing → in_progress`): the feedback is typed into the
