@@ -42,6 +42,11 @@ const OFFLINE_AFTER_MISSED = 3;
  */
 export class HostHeartbeatTracker {
   private state = new Map<string, HeartbeatEntry>();
+  private onOnline?: (hostId: string) => void;
+
+  setOnOnline(fn?: (hostId: string) => void): void {
+    this.onOnline = fn;
+  }
 
   getHealth(hostId: string): HostHealth {
     if (hostId === LOCAL_HOST_ID)
@@ -104,6 +109,7 @@ export class HostHeartbeatTracker {
       lastSeenAt: Date.now(),
       lastCheckedAt: Date.now(),
     });
+    this.onOnline?.(hostId);
     return wasUnreachable;
   }
 
@@ -200,8 +206,11 @@ async function sweepHost(
   let recovered = false;
   try {
     reachable = await getRemoteHostClient(app, hostId).ping();
-    if (reachable) recovered = tracker.recordSuccess(hostId);
-    else tracker.recordFailure(hostId);
+    if (reachable) {
+      recovered = tracker.recordSuccess(hostId);
+    } else {
+      tracker.recordFailure(hostId);
+    }
   } catch (err) {
     // getRemoteHostClient throws synchronously if the row vanished
     // between listHosts() and here (e.g. concurrent delete) — treat
@@ -333,6 +342,9 @@ export function startHostHeartbeat(
   onHostOnline?: (hostId: string) => void,
 ): () => void {
   const hostHeartbeatTracker = tracker ?? new HostHeartbeatTracker();
+  hostHeartbeatTracker.setOnOnline((hostId) => {
+    app.hostAgentTracker?.clearProtocolReadFailure(hostId);
+  });
   app.hostHeartbeatTracker = hostHeartbeatTracker;
   // Issue #1721 / roadmap 8.7 — the CAPACITY cache lives here too, on the
   // same timer as the health sweep (there is deliberately no second timer:

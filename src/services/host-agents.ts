@@ -71,6 +71,8 @@ export class HostAgentTracker {
   readonly inflight = new Map<string, Promise<void>>();
   /** The bounded read a gate started per host, shared by concurrent gates (issue #2596). */
   readonly ensuring = new Map<string, Promise<HostProtocol>>();
+  /** When a bounded protocol read timed out or failed (other than 404), per host (issue #2625). */
+  private protocolReadFailures = new Map<string, number>();
 
   epoch(hostId: string): number {
     return this.epochs.get(hostId) ?? 0;
@@ -81,7 +83,25 @@ export class HostAgentTracker {
   }
 
   record(hostId: string, entry: Omit<HostAgentEntry, "checkedAt">, now = Date.now()): void {
+    if (entry.protocol) this.protocolReadFailures.delete(hostId);
     this.entries.set(hostId, { ...entry, checkedAt: now });
+  }
+
+  recordProtocolReadFailure(hostId: string, now = Date.now()): void {
+    this.protocolReadFailures.set(hostId, now);
+  }
+
+  clearProtocolReadFailure(hostId: string): void {
+    this.protocolReadFailures.delete(hostId);
+  }
+
+  hasRecentProtocolReadFailure(
+    hostId: string,
+    ttlMs = PROTOCOL_READ_FAILURE_TTL_MS,
+    now = Date.now(),
+  ): boolean {
+    const failedAt = this.protocolReadFailures.get(hostId);
+    return failedAt !== undefined && now - failedAt < ttlMs;
   }
 
   /** True when nothing is cached for the host or the entry is older than the TTL. */
@@ -94,6 +114,9 @@ export class HostAgentTracker {
     for (const id of this.entries.keys()) {
       if (id !== LOCAL_HOST_ID && !currentIds.has(id)) this.entries.delete(id);
     }
+    for (const id of this.protocolReadFailures.keys()) {
+      if (id !== LOCAL_HOST_ID && !currentIds.has(id)) this.protocolReadFailures.delete(id);
+    }
   }
 
   /**
@@ -104,6 +127,7 @@ export class HostAgentTracker {
    * capabilities are kept too (stale, real).
    */
   markProtocolStale(hostId: string): void {
+    this.protocolReadFailures.delete(hostId);
     const entry = this.entries.get(hostId);
     if (entry) this.entries.set(hostId, { ...entry, protocolStale: true, checkedAt: 0 });
   }
@@ -112,10 +136,12 @@ export class HostAgentTracker {
   invalidateHost(hostId: string): void {
     this.epochs.set(hostId, this.epoch(hostId) + 1);
     this.entries.delete(hostId);
+    this.protocolReadFailures.delete(hostId);
   }
 
   clearForTests(): void {
     this.entries.clear();
+    this.protocolReadFailures.clear();
   }
 }
 
@@ -352,6 +378,12 @@ export function effectiveProtocol(app: FastifyInstance, hostId: string): HostPro
 export const PROTOCOL_READ_TIMEOUT_MS = 3000;
 
 /**
+ * How long a failed or timed-out bounded protocol read is remembered per host
+ * before another Auto placement attempts to read it again (issue #2625).
+ */
+export const PROTOCOL_READ_FAILURE_TTL_MS = 60_000;
+
+/**
  * Makes sure a remote host's protocol is known before a gate decides on it
  * (issue #2596). A known protocol (even a stale one) returns at once. An
  * unknown one costs one bounded read through `refreshRemoteHostAgents`, shared
@@ -372,6 +404,7 @@ export function ensureHostProtocol(app: FastifyInstance, hostId: string): Promis
     let timer: NodeJS.Timeout | undefined;
     try {
       const pending = tracker.inflight.get(hostId) ?? refreshRemoteHostAgents(app, hostId);
+      pending.catch(() => {});
       await Promise.race([
         pending,
         new Promise<void>((resolve) => {
@@ -383,7 +416,11 @@ export function ensureHostProtocol(app: FastifyInstance, hostId: string): Promis
     } finally {
       clearTimeout(timer);
     }
-    return hostProtocol(app, hostId) ?? LEGACY_PROTOCOL;
+    const result = hostProtocol(app, hostId);
+    if (!result) {
+      tracker.recordProtocolReadFailure(hostId);
+    }
+    return result ?? LEGACY_PROTOCOL;
   })().finally(() => {
     tracker.ensuring.delete(hostId);
   });
@@ -391,16 +428,21 @@ export function ensureHostProtocol(app: FastifyInstance, hostId: string): Promis
   return read;
 }
 
-/** `ensureHostProtocol` for every registered remote host, before a placement reads them. */
+/** `ensureHostProtocol` for registered remote hosts before a placement reads them (issue #2596, #2625). */
 export async function ensureRemoteHostProtocols(app: FastifyInstance): Promise<void> {
   if (!app.db || !app.hostAgentTracker) return;
-  const ids = app.db
-    .select({ id: hosts.id })
-    .from(hosts)
-    .all()
-    .map((h) => h.id)
-    .filter((id) => id !== LOCAL_HOST_ID);
-  await Promise.all(ids.map((id) => ensureHostProtocol(app, id)));
+  const tracker = app.hostAgentTracker;
+  const rows = app.db.select({ id: hosts.id, drained: hosts.drained }).from(hosts).all();
+  const toRead = rows
+    .filter((h) => {
+      if (h.id === LOCAL_HOST_ID) return false;
+      if (h.drained) return false;
+      if (app.hostHeartbeatTracker?.getHealth(h.id)?.status === "offline") return false;
+      if (tracker.hasRecentProtocolReadFailure(h.id)) return false;
+      return true;
+    })
+    .map((h) => h.id);
+  await Promise.all(toRead.map((id) => ensureHostProtocol(app, id)));
 }
 
 /** `requireOperation` after one bounded read of an unread protocol. */

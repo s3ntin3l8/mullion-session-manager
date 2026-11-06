@@ -1377,10 +1377,14 @@ hostId)` (`src/services/host-agents.ts`) read the cache; the local host is this
   operations go through `gateOperation` / `gateLaunchOptions`, which first make
   one bounded read (`ensureHostProtocol`: `refreshRemoteHostAgents`, 3 s;
   concurrent gates for a host share it). If the read times out or fails with a
-  non-404 error, that decision uses the baseline and nothing is cached, so the
-  next gate reads again. A re-registration, renewal or applied update keeps the
-  last known protocol (flagged `protocolStale`) and refreshes in the
-  background, so a routine renewal never opens an ungated window.
+  non-404 error, that decision uses the baseline and nothing is cached, but the
+  failure is remembered for 60 seconds so subsequent Auto placements do not wait
+  on it again (cleared on any successful read, re-registration/renewal, or
+  heartbeat seeing the host online); the explicit-host gate still makes its
+  bounded read for the host it is launching on. A re-registration, renewal or
+  applied update keeps the last known protocol (flagged `protocolStale`) and
+  refreshes in the background, so a routine renewal never opens an ungated
+  window.
 - **Hosts API / UI.** `GET /api/hosts` adds `protocol: { protocolVersion,
 incompatible, missingOperations, legacy } | null`; Settings → Hosts shows the
   version, "incompatible" and the missing operations. The remedy is the row's
@@ -1414,8 +1418,10 @@ code: "unsupported", missing, updateHint, message}`. The three former ad-hoc 404
 - **Auto and targeted placement** skip a host known to lack a required launch
   option or operation, and name the skipped host in the recorded placement
   reason (`skipped <host>: host does not support the model launch option`).
-  A host whose protocol is unknown is read once (bounded) first, then judged
-  as the legacy baseline if that read fails.
+  Before Auto placement, `ensureRemoteHostProtocols` reads unknown protocols
+  (bounded), but skips hosts already reported offline by the heartbeat, drained
+  or parked hosts, and hosts whose bounded read failed within the last 60
+  seconds; skipped hosts read as the legacy baseline for the decision.
 - **Old agents refuse newer launches.** A host whose agent lacks `taskId`,
   `gitIdentity`, `githubAuth` or the other newer launch options refuses Task
   Master worker launches and any launch that uses them; the remedy is the

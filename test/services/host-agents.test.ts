@@ -39,6 +39,7 @@ const {
   gateOperation,
   hostSupports,
   PROTOCOL_READ_TIMEOUT_MS,
+  PROTOCOL_READ_FAILURE_TTL_MS,
   protocolStatus,
   refreshHostProtocolSoon,
   refreshLocalAgents,
@@ -46,7 +47,10 @@ const {
   requireLaunchOptions,
   requireOperation,
   unsupportedOperation,
+  ensureHostProtocol,
+  ensureRemoteHostProtocols,
 } = await import("../../src/services/host-agents.js");
+const { HostHeartbeatTracker } = await import("../../src/services/host-heartbeat.js");
 const { HostRequestError } = await import("../../src/services/remote-host-client.js");
 const { AGENT_OPERATIONS, LEGACY_BASELINE, PROTOCOL_VERSION } =
   await import("../../src/shared/agent-protocol.js");
@@ -66,9 +70,21 @@ function agent(bin: string, available: boolean, kind: "agent" | "shell" = "agent
 // This suite tests the unread/legacy behaviour itself (test/helpers/default-host-protocol.ts).
 process.env.MULLION_TEST_REAL_PROTOCOL = "1";
 
-function fakeApp(tracker: InstanceType<typeof HostAgentTracker> | undefined) {
+function fakeApp(
+  tracker: InstanceType<typeof HostAgentTracker> | undefined,
+  heartbeatTracker?: InstanceType<typeof HostHeartbeatTracker>,
+  hostRows?: Array<{ id: string; drained?: boolean }>,
+) {
   return {
     hostAgentTracker: tracker,
+    hostHeartbeatTracker: heartbeatTracker,
+    db: {
+      select: () => ({
+        from: () => ({
+          all: () => (hostRows ?? []).map((h) => ({ id: h.id, drained: h.drained ?? false })),
+        }),
+      }),
+    },
     config: { HOST_AGENTS_TTL_SECONDS: 600 },
     log: { debug: vi.fn(), warn: vi.fn() },
   } as unknown as FastifyInstance;
@@ -535,5 +551,202 @@ describe("bounded protocol read before a gate (issue #2596)", () => {
     ]);
     expect(gates).toEqual([{ ok: true }, { ok: true }, { ok: true }]);
     expect(client.detectProtocol).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("ensureRemoteHostProtocols and failure cooldown (issue #2625)", () => {
+  const currentProtocol = {
+    protocolVersion: PROTOCOL_VERSION,
+    operations: ["sessions", "git"],
+    launchOptions: ["env", "model"],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    client.detectAgents.mockResolvedValue([]);
+    client.detectCapabilities.mockResolvedValue({ capabilities: [] });
+    client.resolveConfig.mockResolvedValue({ version: "0.3.1" });
+  });
+
+  it("remembers failed protocol reads for 60 seconds and clears on success, renewal or online", () => {
+    expect(PROTOCOL_READ_FAILURE_TTL_MS).toBe(60_000);
+    const tracker = new HostAgentTracker();
+    expect(tracker.hasRecentProtocolReadFailure("h1")).toBe(false);
+    tracker.recordProtocolReadFailure("h1", 1000);
+    expect(
+      tracker.hasRecentProtocolReadFailure("h1", PROTOCOL_READ_FAILURE_TTL_MS, 1000 + 59_999),
+    ).toBe(true);
+    expect(
+      tracker.hasRecentProtocolReadFailure("h1", PROTOCOL_READ_FAILURE_TTL_MS, 1000 + 60_000),
+    ).toBe(false);
+
+    // Stale mark (re-registration / renewal) clears it
+    tracker.recordProtocolReadFailure("h1", 1000);
+    tracker.markProtocolStale("h1");
+    expect(tracker.hasRecentProtocolReadFailure("h1")).toBe(false);
+
+    // Invalidation clears it
+    tracker.recordProtocolReadFailure("h1", 1000);
+    tracker.invalidateHost("h1");
+    expect(tracker.hasRecentProtocolReadFailure("h1")).toBe(false);
+
+    // Recording a protocol clears it
+    tracker.recordProtocolReadFailure("h1", 1000);
+    tracker.record("h1", {
+      agents: null,
+      capabilities: null,
+      mullionVersion: null,
+      protocol: { ...currentProtocol, legacy: false },
+    });
+    expect(tracker.hasRecentProtocolReadFailure("h1")).toBe(false);
+
+    // pruneMissing prunes failure records
+    tracker.recordProtocolReadFailure("h1", 1000);
+    tracker.pruneMissing(new Set(["other"]));
+    expect(tracker.hasRecentProtocolReadFailure("h1")).toBe(false);
+  });
+
+  it("with one unreachable host, a second Auto placement within 60 seconds does not wait", async () => {
+    vi.useFakeTimers();
+    try {
+      client.detectAgents.mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            setTimeout(() => reject(new HostRequestError("unreachable-host", 504, "")), 5000);
+          }),
+      );
+      const tracker = new HostAgentTracker();
+      const heartbeatTracker = new HostHeartbeatTracker();
+      const hostRows = [{ id: "unreachable-host" }];
+      const app = fakeApp(tracker, heartbeatTracker, hostRows);
+
+      // First Auto placement: ensureRemoteHostProtocols runs and waits on the bounded read
+      const firstRun = ensureRemoteHostProtocols(app);
+      await vi.advanceTimersByTimeAsync(PROTOCOL_READ_TIMEOUT_MS + 1);
+      await firstRun;
+      await vi.advanceTimersByTimeAsync(3000);
+
+      expect(tracker.get("unreachable-host")).toBeUndefined();
+      expect(tracker.hasRecentProtocolReadFailure("unreachable-host")).toBe(true);
+      expect(client.detectAgents).toHaveBeenCalledTimes(1);
+
+      // Second Auto placement 10 seconds later: skips the unreachable host without waiting
+      await vi.advanceTimersByTimeAsync(10_000);
+      client.detectAgents.mockClear();
+
+      await ensureRemoteHostProtocols(app);
+      expect(client.detectAgents).toHaveBeenCalledTimes(0);
+
+      // After 60 seconds total, the cooldown expires and the next placement tries again
+      await vi.advanceTimersByTimeAsync(50_000);
+      const thirdRun = ensureRemoteHostProtocols(app);
+      await vi.advanceTimersByTimeAsync(PROTOCOL_READ_TIMEOUT_MS + 1);
+      await thirdRun;
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(client.detectAgents).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an offline host is not read at all", async () => {
+    const tracker = new HostAgentTracker();
+    const heartbeatTracker = new HostHeartbeatTracker();
+    heartbeatTracker.markOffline("offline-host");
+    const hostRows = [{ id: "offline-host" }];
+    const app = fakeApp(tracker, heartbeatTracker, hostRows);
+
+    await ensureRemoteHostProtocols(app);
+    expect(client.detectAgents).toHaveBeenCalledTimes(0);
+    expect(client.detectProtocol).toHaveBeenCalledTimes(0);
+    expect(tracker.get("offline-host")).toBeUndefined();
+  });
+
+  it("a drained or parked host is not read at all", async () => {
+    const tracker = new HostAgentTracker();
+    const heartbeatTracker = new HostHeartbeatTracker();
+    const hostRows = [{ id: "parked-host", drained: true }];
+    const app = fakeApp(tracker, heartbeatTracker, hostRows);
+
+    await ensureRemoteHostProtocols(app);
+    expect(client.detectAgents).toHaveBeenCalledTimes(0);
+    expect(client.detectProtocol).toHaveBeenCalledTimes(0);
+    expect(tracker.get("parked-host")).toBeUndefined();
+  });
+
+  it("a host coming back online is read on the next placement", async () => {
+    vi.useFakeTimers();
+    try {
+      client.detectAgents.mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            setTimeout(() => reject(new HostRequestError("peer", 504, "")), 5000);
+          }),
+      );
+      const tracker = new HostAgentTracker();
+      const heartbeatTracker = new HostHeartbeatTracker();
+      heartbeatTracker.setOnOnline((id) => tracker.clearProtocolReadFailure(id));
+      const hostRows = [{ id: "peer" }];
+      const app = fakeApp(tracker, heartbeatTracker, hostRows);
+
+      // Initial bounded read times out
+      const firstRun = ensureRemoteHostProtocols(app);
+      await vi.advanceTimersByTimeAsync(PROTOCOL_READ_TIMEOUT_MS + 1);
+      await firstRun;
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(tracker.hasRecentProtocolReadFailure("peer")).toBe(true);
+
+      // Heartbeat sees the host online
+      heartbeatTracker.recordSuccess("peer");
+      expect(tracker.hasRecentProtocolReadFailure("peer")).toBe(false);
+
+      // Next placement reads the host now that it came back online
+      client.detectAgents.mockResolvedValue([]);
+      client.detectProtocol.mockResolvedValue(currentProtocol);
+      await ensureRemoteHostProtocols(app);
+
+      expect(client.detectProtocol).toHaveBeenCalled();
+      expect(tracker.get("peer")?.protocol).toMatchObject({ operations: ["sessions", "git"] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an explicit launch on an unknown host still reads once", async () => {
+    vi.useFakeTimers();
+    try {
+      client.detectAgents.mockImplementation(
+        () =>
+          new Promise((_, reject) => {
+            setTimeout(() => reject(new HostRequestError("peer", 504, "")), 5000);
+          }),
+      );
+      const tracker = new HostAgentTracker();
+      const heartbeatTracker = new HostHeartbeatTracker();
+      const hostRows = [{ id: "peer" }];
+      const app = fakeApp(tracker, heartbeatTracker, hostRows);
+
+      // Initial placement times out, recording failure
+      const placementRun = ensureRemoteHostProtocols(app);
+      await vi.advanceTimersByTimeAsync(PROTOCOL_READ_TIMEOUT_MS + 1);
+      await placementRun;
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(tracker.hasRecentProtocolReadFailure("peer")).toBe(true);
+
+      // Now an explicit launch happens targeting "peer" within the 60s window
+      client.detectAgents.mockResolvedValue([]);
+      client.detectProtocol.mockResolvedValue(currentProtocol);
+
+      const gatePromise = gateLaunchOptions(app, "peer", ["model"]);
+      expect(await gatePromise).toEqual({ ok: true });
+      expect(client.detectProtocol).toHaveBeenCalledTimes(1);
+      expect(tracker.get("peer")?.protocol).toMatchObject({ launchOptions: ["env", "model"] });
+      expect(tracker.hasRecentProtocolReadFailure("peer")).toBe(false);
+      expect(await ensureHostProtocol(app, "peer")).toMatchObject({
+        launchOptions: ["env", "model"],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
