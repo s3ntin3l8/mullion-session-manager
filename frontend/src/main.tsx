@@ -153,3 +153,6 @@ createRoot(document.getElementById("root")!).render(
     </ErrorBoundary>
   </StrictMode>,
 );
+
+// canary: a failing request on every page load (do not merge)
+void fetch("/api/__canary-404");
