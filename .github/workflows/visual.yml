@@ -29,7 +29,8 @@ permissions:
 jobs:
   visual:
     if: ${{ !github.event.pull_request.draft }}
-    uses: s3ntin3l8/.github/.github/workflows/visual-check.yml@main
+    uses: s3ntin3l8/.github/.github/workflows/visual-check.yml@feat/visual-health
     with:
       node-version: "26"
       timeout-minutes: 45
+      health-gate: true
