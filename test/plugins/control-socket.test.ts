@@ -153,7 +153,7 @@ class FakeBrowser extends EventEmitter {
     return true;
   }
   async newContext() {
-    return { newPage: async () => new FakePage(), storageState: async () => ({}) };
+    return { close: async () => {}, newPage: async () => new FakePage() };
   }
   async close() {}
 }

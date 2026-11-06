@@ -34,6 +34,12 @@ class FakeContext {
 
   addCookiesSpy = vi.fn(async (_cookies: unknown[]) => {});
 
+  closeSpy = vi.fn(async () => {});
+
+  async close() {
+    await this.closeSpy();
+  }
+
   async newPage() {
     return new FakePage();
   }
@@ -142,7 +148,7 @@ describe("BrowserManager", () => {
       os.tmpdir(),
       `browser-manager-test-${crypto.randomBytes(4).toString("hex")}`,
     );
-    manager = new BrowserManager({ enabled: true, maxInstances: 2, dataDir });
+    manager = new BrowserManager({ enabled: true, maxContexts: 2, dataDir });
   });
 
   afterEach(() => {
@@ -153,7 +159,7 @@ describe("BrowserManager", () => {
     const disabledDataDir = path.join(dataDir, "disabled-should-not-exist");
     const disabled = new BrowserManager({
       enabled: false,
-      maxInstances: 2,
+      maxContexts: 2,
       dataDir: disabledDataDir,
     });
     expect(disabled.isEnabled()).toBe(false);
@@ -175,25 +181,99 @@ describe("BrowserManager", () => {
     expect(launchedBrowsers).toHaveLength(1);
   });
 
-  it("launches separate instances per project", async () => {
-    await manager.getOrLaunch(target(1));
-    await manager.getOrLaunch(target(2));
-    expect(launchedBrowsers).toHaveLength(2);
+  it("shares one Chromium process across targets, with a context each", async () => {
+    const a = await manager.getOrLaunch(target(1));
+    const b = await manager.getOrLaunch(target(2));
+    expect(launchedBrowsers).toHaveLength(1);
+    expect(manager.processCount).toBe(1);
     expect(manager.instanceCount).toBe(2);
+    expect(a.browser).toBe(b.browser);
+    expect(a.context).not.toBe(b.context);
+    expect(a.page).not.toBe(b.page);
   });
 
-  it("enforces maxInstances", async () => {
+  it("keeps cookies and downloads isolated per target", async () => {
+    const withHook = new BrowserManager({
+      enabled: true,
+      maxContexts: 2,
+      dataDir,
+      loadCookies: async (id) =>
+        id === 1
+          ? [{ name: "s", value: "v", domain: "a.test", path: "/", httpOnly: false, secure: false }]
+          : [],
+    });
+    const a = await withHook.getOrLaunch(target(1));
+    const b = await withHook.getOrLaunch(target(2));
+    expect((a.context as unknown as FakeContext).addCookiesSpy).toHaveBeenCalledTimes(1);
+    expect((b.context as unknown as FakeContext).addCookiesSpy).not.toHaveBeenCalled();
+
+    (a.page as unknown as FakePage).emit("download", new FakeDownload("a.csv"));
+    (b.page as unknown as FakePage).emit("download", new FakeDownload("b.csv"));
+    await vi.waitFor(() => {
+      expect(a.downloads).toHaveLength(1);
+      expect(b.downloads).toHaveLength(1);
+    });
+    expect(path.dirname(a.downloads[0].path)).not.toBe(path.dirname(b.downloads[0].path));
+    await withHook.closeAll();
+  });
+
+  it("closing one target leaves the other and the process open", async () => {
+    const a = await manager.getOrLaunch(target(1));
+    const b = await manager.getOrLaunch(target(2));
+    await manager.closeTarget(target(1));
+    expect(a.closed).toBe(true);
+    expect((a.context as unknown as FakeContext).closeSpy).toHaveBeenCalled();
+    expect(b.closed).toBe(false);
+    expect(manager.get(target(2))).toBe(b);
+    expect(launchedBrowsers[0].closeSpy).not.toHaveBeenCalled();
+    expect(manager.processCount).toBe(1);
+  });
+
+  it("closes the process after the last target closes and relaunches on demand", async () => {
+    await manager.getOrLaunch(target(1));
+    await manager.getOrLaunch(target(2));
+    await manager.closeTarget(target(1));
+    await manager.closeTarget(target(2));
+    expect(launchedBrowsers[0].closeSpy).toHaveBeenCalled();
+    expect(manager.processCount).toBe(0);
+    await manager.getOrLaunch(target(1));
+    expect(launchedBrowsers).toHaveLength(2);
+  });
+
+  it("gives two endpoints of one checkout separate contexts", async () => {
+    const a = await manager.getOrLaunch({ ...target(1), endpoint: "http://localhost:3000" });
+    const b = await manager.getOrLaunch({ ...target(1), endpoint: "http://localhost:4000" });
+    expect(a).not.toBe(b);
+    expect(a.context).not.toBe(b.context);
+    const paths = manager as unknown as {
+      storageStatePath(t: unknown): string;
+      downloadsDir(t: unknown): string;
+    };
+    expect(paths.storageStatePath(a.target)).not.toBe(paths.storageStatePath(b.target));
+    expect(paths.downloadsDir(a.target)).not.toBe(paths.downloadsDir(b.target));
+    expect(launchedBrowsers).toHaveLength(1);
+    // A caller with no endpoint is the legacy value, distinct from both.
+    const legacy = await manager.getOrLaunch(target(1)).catch((e) => e);
+    expect(String(legacy)).toMatch(/pool exhausted/i);
+  });
+
+  it("enforces maxContexts per process", async () => {
     await manager.getOrLaunch(target(1));
     await manager.getOrLaunch(target(2));
     await expect(manager.getOrLaunch(target(3))).rejects.toThrow(/pool exhausted/i);
-    expect(launchedBrowsers).toHaveLength(2);
+    expect(launchedBrowsers).toHaveLength(1);
   });
 
-  it("auto-restarts (relaunches) after a crash", async () => {
+  it("a crash closes every target, and the next request relaunches", async () => {
     const first = await manager.getOrLaunch(target(1));
+    const other = await manager.getOrLaunch(target(2));
     (first.browser as unknown as FakeBrowser).simulateCrash();
+    expect(first.closed).toBe(true);
+    expect(other.closed).toBe(true);
+    expect(manager.instanceCount).toBe(0);
     const second = await manager.getOrLaunch(target(1));
     expect(second).not.toBe(first);
+    expect(second.closed).toBe(false);
     expect(launchedBrowsers).toHaveLength(2);
   });
 
@@ -231,7 +311,7 @@ describe("BrowserManager", () => {
       const main = await manager.getOrLaunch(target(1, "/work/main"));
       const wt = await manager.getOrLaunch({ ...target(1, "/work/wt"), legacy: false });
       expect(wt).not.toBe(main);
-      expect(launchedBrowsers).toHaveLength(2);
+      expect(launchedBrowsers).toHaveLength(1);
       await manager.closeTarget(main.target);
       await manager.closeTarget(wt.target);
       const paths = [main, wt].map(
@@ -301,7 +381,7 @@ describe("BrowserManager", () => {
         },
       ];
       const loadCookies = vi.fn().mockResolvedValue(cookies);
-      const withHook = new BrowserManager({ enabled: true, maxInstances: 2, dataDir, loadCookies });
+      const withHook = new BrowserManager({ enabled: true, maxContexts: 2, dataDir, loadCookies });
 
       const managed = await withHook.getOrLaunch(target(1));
 
@@ -313,7 +393,7 @@ describe("BrowserManager", () => {
 
     it("does not call addCookies when loadCookies returns an empty array", async () => {
       const loadCookies = vi.fn().mockResolvedValue([]);
-      const withHook = new BrowserManager({ enabled: true, maxInstances: 2, dataDir, loadCookies });
+      const withHook = new BrowserManager({ enabled: true, maxContexts: 2, dataDir, loadCookies });
 
       const managed = await withHook.getOrLaunch(target(1));
 
@@ -326,7 +406,7 @@ describe("BrowserManager", () => {
       const onCookieLoadError = vi.fn();
       const withHook = new BrowserManager({
         enabled: true,
-        maxInstances: 2,
+        maxContexts: 2,
         dataDir,
         loadCookies,
         onCookieLoadError,
@@ -338,7 +418,7 @@ describe("BrowserManager", () => {
 
     it("still launches successfully when loadCookies throws and no onCookieLoadError is provided", async () => {
       const loadCookies = vi.fn().mockRejectedValue(new Error("decrypt failed"));
-      const withHook = new BrowserManager({ enabled: true, maxInstances: 2, dataDir, loadCookies });
+      const withHook = new BrowserManager({ enabled: true, maxContexts: 2, dataDir, loadCookies });
 
       await expect(withHook.getOrLaunch(target(1))).resolves.toBeDefined();
     });
@@ -479,7 +559,7 @@ describe("BrowserManager", () => {
       const onDownloadError = vi.fn();
       const withHook = new BrowserManager({
         enabled: true,
-        maxInstances: 2,
+        maxContexts: 2,
         dataDir,
         onDownloadError,
       });

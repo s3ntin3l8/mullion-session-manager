@@ -27,7 +27,13 @@ function parseBrowserTarget(
   // A target names the machine that runs it; this pool only holds this
   // machine's browsers, so another host's target is a misrouted request.
   if (!agentServesHost(app.config.SESSIONS_DIR, hostId)) return null;
-  return { projectId, hostId, checkoutRoot, legacy: query.legacy === "1" };
+  return {
+    projectId,
+    hostId,
+    checkoutRoot,
+    endpoint: query.endpoint,
+    legacy: query.legacy === "1",
+  };
 }
 
 /**

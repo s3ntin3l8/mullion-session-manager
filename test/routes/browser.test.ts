@@ -176,6 +176,7 @@ vi.mock("playwright", () => ({
       // BrowserManager actually does (one context+page per launch).
       browser.newContext = async () => ({
         newPage: async () => page,
+        close: async () => {},
         storageState: async () => ({ cookies: [], origins: [] }),
       });
       return browser;

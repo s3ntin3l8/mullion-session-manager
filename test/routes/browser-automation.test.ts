@@ -305,7 +305,7 @@ class FakeBrowser extends EventEmitter {
     return this.connected;
   }
   async newContext() {
-    return { newPage: async () => new FakePage(), storageState: async () => ({}) };
+    return { close: async () => {}, newPage: async () => new FakePage() };
   }
   async close() {
     this.connected = false;
@@ -322,7 +322,7 @@ vi.mock("playwright", () => ({
       launchedPages.push(page);
       browser.newContext = async () => ({
         newPage: async () => page,
-        storageState: async () => ({ cookies: [], origins: [] }),
+        close: async () => {},
       });
       return browser;
     }),

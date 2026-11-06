@@ -5,16 +5,23 @@ import { rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 
-// Manages a pool of Playwright Chromium instances, one per execution target (Phase 3,
-// issue #179) — the CDP-controllable browser agents script via 3.2's WS
-// frame stream and 3.5's automation API. Distinct from the existing
-// iframe-based BrowserPanel/preview-host proxy: that's an unauthenticated
-// dev-server preview, this is a real browser process this app drives.
+// Manages the Playwright Chromium that agents script via 3.2's WS frame stream
+// and 3.5's automation API (Phase 3, issue #179): ONE Chromium process per
+// machine (the primary, and separately each agent host, which runs its own
+// manager) with one isolated BrowserContext per execution target. Distinct
+// from the existing iframe-based BrowserPanel/preview-host proxy: that's an
+// unauthenticated dev-server preview, this is a real browser this app drives.
 //
-// An instance is launched lazily on first getOrLaunch(target) and reused
-// across pane open/close — closing the pane doesn't kill the browser, only
+// The process is launched lazily on the first getOrLaunch(target) and closed
+// after the last target closes; a target's context is reused across pane
+// open/close — closing the pane doesn't kill it, only closeTarget/
 // closeForProject/closeAll do. This mirrors PtyManager's "spawned once, kept
 // alive independent of viewer count" model (src/services/pty-manager.ts).
+//
+// Isolation is per context: each target has its own cookie jar, storage-state
+// file and download directory. The one deliberate exception is the imported
+// project cookie profile (`loadCookies`), which is project-scoped state and is
+// applied to EVERY target of the project.
 
 /** Matches Playwright's own BrowserContext.addCookies() param shape exactly
  * (see src/services/browser-cookie-import.ts's ImportedCookie, which this
@@ -35,15 +42,17 @@ export interface BrowserManagerOptions {
    * silently no-op, so a misconfigured caller fails loudly instead of
    * quietly getting no browser. */
   enabled: boolean;
-  /** Bounds concurrent Chromium processes — each is real host memory. */
-  maxInstances: number;
+  /** Bounds the browser contexts (targets) held open in the shared Chromium
+   * process — each is real host memory. Fed by BROWSER_MAX_INSTANCES. */
+  maxContexts: number;
   /** Where per-project Playwright storage state (cookies/localStorage) is
    * persisted so a project's browser starts already-authenticated across
    * process restarts — see BROWSER_DATA_DIR in src/plugins/env.ts. */
   dataDir: string;
   /** Phase 3, issue #184 — optional hook returning a project's imported
    * browser cookies (src/services/browser-cookies.ts), applied to the
-   * context on every launch. Kept as an injected callback rather than this
+   * context on every launch (of every target of that project: the profile is
+   * project-scoped, not target-isolated). Kept as an injected callback rather than this
    * class reaching into app.db directly, matching #179's original design:
    * BrowserManager is a pure, DB-agnostic service, independently testable —
    * see src/plugins/browser.ts for how this is actually wired to storage. */
@@ -64,10 +73,13 @@ export interface BrowserManagerOptions {
   onDownloadError?: (projectId: number, err: unknown) => void;
 }
 
+/** Endpoint of a caller that names none (the project's single/default preview). */
+export const LEGACY_BROWSER_ENDPOINT = "";
+
 /** The execution target a browser belongs to (issue #2448): the project plus
- * the host and checkout its work lives in. Two sessions on the same target
- * share one browser (cookies, navigation, downloads); a different host or
- * checkout gets its own, so a session placed elsewhere never inspects another
+ * the host, checkout and preview endpoint its work lives in. Two sessions on
+ * the same target share one browser context (cookies, navigation, downloads);
+ * a different host, checkout or endpoint gets its own, so a session placed elsewhere never inspects another
  * checkout's application. `localhost` in a page is interpreted by the machine
  * running the browser, which is the target's host. */
 export interface BrowserTarget {
@@ -75,34 +87,47 @@ export interface BrowserTarget {
   hostId: string;
   /** Absolute checkout directory on `hostId` (a sibling worktree is its own). */
   checkoutRoot: string;
+  /** The selected preview endpoint within the checkout; two previews of one
+   * checkout get separate contexts. Absent for callers that have none, which
+   * is `LEGACY_BROWSER_ENDPOINT`. */
+  endpoint?: string;
   /** The project's default checkout on its default host: keeps the storage
    * state this project's browser had before targets existed (`project-<id>.json`)
    * instead of sharing it with unrelated checkouts. */
   legacy: boolean;
 }
 
-/** Stable pool key. A pool only ever holds browsers running on its own
- * machine (the primary's for its local host, each agent's for itself), so the
- * checkout path identifies the target within it; two hosts with the same path
- * live in different pools. NUL-separated so no path can collide with another. */
+/** Stable pool key. A pool only ever holds contexts running on its own
+ * machine (the primary's for its local host, each agent's for itself), so
+ * checkout + endpoint identify the target within it; two hosts with the same
+ * path live in different pools. NUL-separated so no path can collide with
+ * another. */
 export function browserTargetKey(target: BrowserTarget): string {
-  return [target.projectId, target.checkoutRoot].join("\0");
+  return [target.projectId, target.checkoutRoot, target.endpoint ?? LEGACY_BROWSER_ENDPOINT].join(
+    "\0",
+  );
 }
 
 /** The query string naming a target on an agent's browser routes. */
 export function browserTargetQuery(target: BrowserTarget): string {
   const { projectId, hostId, checkoutRoot } = target;
-  return new URLSearchParams({
+  const params = new URLSearchParams({
     projectId: String(projectId),
     hostId,
     checkoutRoot,
     legacy: target.legacy ? "1" : "0",
-  }).toString();
+  });
+  if (target.endpoint) params.set("endpoint", target.endpoint);
+  return params.toString();
 }
 
 /** Short filesystem-safe id for a target's on-disk state. */
 function targetFileId(target: BrowserTarget): string {
-  if (target.legacy) return `project-${target.projectId}`;
+  // Only the endpoint-less legacy target keeps the unhashed id; endpoints in
+  // the default checkout must not share storage or downloads.
+  if (target.legacy && (!target.endpoint || target.endpoint === LEGACY_BROWSER_ENDPOINT)) {
+    return `project-${target.projectId}`;
+  }
   const digest = createHash("sha1").update(browserTargetKey(target)).digest("hex").slice(0, 16);
   return `project-${target.projectId}-${digest}`;
 }
@@ -144,9 +169,14 @@ const MAX_DOWNLOADS = 50;
 export interface ManagedBrowser {
   projectId: number;
   target: BrowserTarget;
+  /** The machine's shared Chromium process (not owned by this target). */
   browser: Browser;
   context: BrowserContext;
   page: Page;
+  /** Set when the target's context is gone (closed, or the shared process
+   * crashed); the entry is no longer in the pool, so holders see it as closed
+   * rather than waiting on a dead page. */
+  closed: boolean;
   consoleLogs: ConsoleLogEntry[];
   pageErrors: PageErrorEntry[];
   downloads: DownloadEntry[];
@@ -169,21 +199,22 @@ const BROWSER_DISABLED_MESSAGE =
 
 export class BrowserManager {
   private readonly enabled: boolean;
-  private readonly maxInstances: number;
+  private readonly maxContexts: number;
   private readonly dataDir: string;
   private readonly loadCookies?: (projectId: number) => LaunchCookie[] | Promise<LaunchCookie[]>;
   private readonly onCookieLoadError?: (projectId: number, err: unknown) => void;
   private readonly onDownloadError?: (projectId: number, err: unknown) => void;
   private readonly instances = new Map<string, ManagedBrowser>();
-  // Instances closeForProject/closeAll are actively tearing down — guards
-  // the 'disconnected' listener below from re-deleting an entry that a
-  // concurrent getOrLaunch() call has already replaced with a fresh one for
-  // the same projectId.
-  private readonly closing = new Set<string>();
+  // Targets whose context is being opened, so concurrent callers share one
+  // launch and the pool bound counts them before they land in `instances`.
+  private readonly pending = new Map<string, Promise<ManagedBrowser>>();
+  // The machine's single Chromium process; null until the first target.
+  private process: Browser | null = null;
+  private processLaunch: Promise<Browser> | null = null;
 
   constructor(options: BrowserManagerOptions) {
     this.enabled = options.enabled;
-    this.maxInstances = options.maxInstances;
+    this.maxContexts = options.maxContexts;
     this.dataDir = options.dataDir;
     this.loadCookies = options.loadCookies;
     this.onCookieLoadError = options.onCookieLoadError;
@@ -195,8 +226,14 @@ export class BrowserManager {
     return this.enabled;
   }
 
+  /** Open target contexts (not processes: see `processCount`). */
   get instanceCount(): number {
     return this.instances.size;
+  }
+
+  /** Chromium processes this manager has running: 0 or 1. */
+  get processCount(): number {
+    return this.process?.isConnected() ? 1 : 0;
   }
 
   get(target: BrowserTarget): ManagedBrowser | undefined {
@@ -216,25 +253,96 @@ export class BrowserManager {
     return path.join(this.dataDir, "downloads", targetFileId(target));
   }
 
-  /** Returns the pooled browser/context/page for a project, launching a
-   * fresh Chromium instance on first access or after a crash. Not
-   * re-entrant-safe for concurrent calls with the same projectId (callers —
-   * the 3.2 WS route and 3.5 automation API — are expected to serialize per
-   * session, matching how a single browser tab is used). */
+  /** The shared Chromium, launched on first use and again after a crash or
+   * once the last target closed it. */
+  private async ensureProcess(): Promise<Browser> {
+    if (this.process?.isConnected()) return this.process;
+    if (!this.processLaunch) {
+      this.processLaunch = chromium
+        .launch({
+          headless: true,
+          // Unprivileged LXC/container hosts commonly block the user namespaces
+          // Chromium's sandbox needs — see deploy/README.md's Playwright
+          // prerequisites. This process already runs behind Mullion's own auth
+          // gate, so the sandbox isn't this feature's only isolation boundary.
+          args: ["--no-sandbox"],
+        })
+        .then((browser) => {
+          this.process = browser;
+          // Chromium dying unexpectedly (OOM-killed, segfault) fires
+          // 'disconnected' same as a deliberate close(); a deliberate close
+          // clears `this.process` first, so the identity check tells them apart.
+          browser.on("disconnected", () => {
+            if (this.process !== browser) return;
+            this.process = null;
+            this.dropContextsOf(browser);
+          });
+          return browser;
+        })
+        .finally(() => {
+          this.processLaunch = null;
+        });
+    }
+    return this.processLaunch;
+  }
+
+  /** The process is gone: every target on it is closed, and the next
+   * getOrLaunch() relaunches. */
+  private dropContextsOf(browser: Browser): void {
+    for (const [key, managed] of this.instances) {
+      if (managed.browser !== browser) continue;
+      managed.closed = true;
+      this.instances.delete(key);
+    }
+  }
+
+  /** Closes the shared process once no target uses it or is being opened. */
+  private async closeProcessIfIdle(): Promise<void> {
+    if (this.instances.size > 0 || this.pending.size > 0) return;
+    const browser = this.process;
+    if (!browser) return;
+    this.process = null;
+    await browser.close().catch(() => {});
+  }
+
+  /** Returns the pooled context/page for a target, opening it in the shared
+   * Chromium (launched here if not running) on first access or after a crash.
+   * Concurrent calls for the same target share one launch. */
   async getOrLaunch(target: BrowserTarget): Promise<ManagedBrowser> {
     if (!this.enabled) throw new Error(BROWSER_DISABLED_MESSAGE);
 
-    const { projectId } = target;
     const key = browserTargetKey(target);
     const existing = this.instances.get(key);
     if (existing && existing.browser.isConnected()) return existing;
-    if (existing) this.instances.delete(key);
+    if (existing) {
+      existing.closed = true;
+      this.instances.delete(key);
+    }
 
-    if (this.instances.size >= this.maxInstances) {
+    const inFlight = this.pending.get(key);
+    if (inFlight) return inFlight;
+
+    const open = this.instances.size + this.pending.size;
+    if (open >= this.maxContexts) {
       throw new Error(
-        `Browser pool exhausted: ${this.instances.size}/${this.maxInstances} instances already running.`,
+        `Browser pool exhausted: ${open}/${this.maxContexts} instances already running.`,
       );
     }
+
+    const launch = this.openTarget(target, key).finally(() => {
+      this.pending.delete(key);
+    });
+    this.pending.set(key, launch);
+    try {
+      return await launch;
+    } catch (err) {
+      await this.closeProcessIfIdle();
+      throw err;
+    }
+  }
+
+  private async openTarget(target: BrowserTarget, key: string): Promise<ManagedBrowser> {
+    const { projectId } = target;
 
     // Issue #381 — the `downloads` array below (and the 50-entry eviction
     // that deletes files as they age out of it) is a plain closure variable,
@@ -264,14 +372,7 @@ export class BrowserManager {
       force: true,
     }).catch(() => {});
 
-    const browser = await chromium.launch({
-      headless: true,
-      // Unprivileged LXC/container hosts commonly block the user namespaces
-      // Chromium's sandbox needs — see deploy/README.md's Playwright
-      // prerequisites. This process already runs behind Mullion's own auth
-      // gate, so the sandbox isn't this feature's only isolation boundary.
-      args: ["--no-sandbox"],
-    });
+    const browser = await this.ensureProcess();
 
     const storageStatePath = this.storageStatePath(target);
     const context = await browser.newContext(
@@ -308,6 +409,7 @@ export class BrowserManager {
       browser,
       context,
       page,
+      closed: false,
       consoleLogs,
       pageErrors,
       downloads,
@@ -398,63 +500,61 @@ export class BrowserManager {
       }
     });
 
-    // Auto-restart on crash (#179): Chromium dying unexpectedly (OOM-killed,
-    // segfault) fires 'disconnected' same as a deliberate close() — the
-    // `closing` guard is what tells the two apart, since a caller in the
-    // middle of tearing this instance down has already removed it from
-    // `instances` and doesn't want this listener to race that removal for a
-    // *different*, newer instance that might already occupy the same key.
-    browser.on("disconnected", () => {
-      if (this.closing.has(key)) return;
-      if (this.instances.get(key) === managed) this.instances.delete(key);
-    });
-
     this.instances.set(key, managed);
     return managed;
   }
 
-  /** Health-check sweep: evicts any pooled entry whose underlying Chromium
-   * process has died without firing 'disconnected' yet (there's normally no
-   * gap, but this is cheap, idempotent housekeeping — see the browser
-   * plugin's periodic timer). Eviction is lazy: a dead entry is dropped so
-   * the next getOrLaunch() call relaunches it, rather than proactively
-   * relaunching browsers nobody is currently viewing. */
+  /** Health-check sweep: evicts the shared process and its targets if it
+   * died without firing 'disconnected' yet (there's normally no gap, but this
+   * is cheap, idempotent housekeeping — see the browser plugin's periodic
+   * timer). Eviction is lazy: the next getOrLaunch() relaunches, rather than
+   * proactively relaunching a browser nobody is currently viewing. */
   healthCheck(): void {
+    const browser = this.process;
+    if (browser && !browser.isConnected()) {
+      this.process = null;
+      this.dropContextsOf(browser);
+    }
     for (const [key, managed] of this.instances) {
-      if (!managed.browser.isConnected()) this.instances.delete(key);
+      if (!managed.browser.isConnected()) {
+        managed.closed = true;
+        this.instances.delete(key);
+      }
     }
   }
 
   /** Persists storage state (cookies/localStorage) and closes one target's
-   * browser, if one is running. Safe to call when none is running. */
+   * context, if one is open; the last close shuts the shared process down.
+   * Safe to call when none is open. */
   async closeTarget(target: BrowserTarget): Promise<void> {
     const key = browserTargetKey(target);
     const existing = this.instances.get(key);
     if (!existing) return;
 
-    this.closing.add(key);
+    existing.closed = true;
     this.instances.delete(key);
     try {
       if (existing.browser.isConnected()) {
         await existing.context.storageState({ path: this.storageStatePath(target) });
       }
     } catch {
-      // Best-effort persistence — a browser that's already gone (crash,
+      // Best-effort persistence — a context that's already gone (crash,
       // race with the 'disconnected' handler) simply skips this, same as
       // any other already-dead session's teardown.
     }
-    await existing.browser.close().catch(() => {});
-    this.closing.delete(key);
+    await existing.context.close().catch(() => {});
+    await this.closeProcessIfIdle();
   }
 
-  /** Closes every target's browser of a project (project deleted or merged
+  /** Closes every target of a project (project deleted or merged
    * away). Safe to call when none is running. */
   async closeForProject(projectId: number): Promise<void> {
     await Promise.all(this.listForProject(projectId).map((m) => this.closeTarget(m.target)));
   }
 
-  /** Closes every pooled browser — called from the plugin's onClose hook. */
+  /** Closes every target and the shared process — called from the plugin's onClose hook. */
   async closeAll(): Promise<void> {
     await Promise.all([...this.instances.values()].map((m) => this.closeTarget(m.target)));
+    await this.closeProcessIfIdle();
   }
 }
