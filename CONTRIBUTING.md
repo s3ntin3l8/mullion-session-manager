@@ -86,7 +86,9 @@ how the CI runner provides both.
 
 In CI the check also publishes `visual / health`, a separate, non-required check that goes red when a PR adds
 a console error or a serious/critical axe node to any compared shot. Pixel differences stay advisory in the
-sticky comment. Locally, `HEALTH_GATE=1 make visual-check` exits non-zero on the same condition.
+sticky comment. It also fails when the run produced no report at all (the demo did not start) or the report has
+no health verdict, so read the run log before assuming a console error. Locally, `HEALTH_GATE=1 make visual-check`
+exits non-zero on a real health finding.
 
 `visual/hooks.mjs` holds what a declarative scene cannot: the terminal scenes wait for
 the terminal to settle, then release the demo's held transcript through

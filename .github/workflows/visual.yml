@@ -1,7 +1,9 @@
 name: Visual check
 
 # Before/after screenshots of the scenes in visual/scenes.json, posted as a sticky
-# comment. Advisory: it never blocks a merge. The runner and report format live in
+# comment. Advisory: it never blocks a merge. `health-gate` adds a second, separate check
+# (`visual / health`, not required) for new console errors and serious axe nodes.
+# The runner and report format live in
 # visual-kit (https://github.com/s3ntin3l8/visual-kit); the reusable workflow in
 # s3ntin3l8/.github runs `make visual-check BASE=origin/<base>` and posts the report.
 on:
