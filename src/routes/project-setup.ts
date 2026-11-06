@@ -57,7 +57,7 @@ import {
   type ScaffoldConflict,
 } from "../services/scaffold-generate.js";
 import {
-  PREVIEW_TTL_MS,
+  isPreviewExpired,
   startGenerateJob,
   getGenerateJob,
   getActiveGenerateJob,
@@ -115,7 +115,8 @@ import {
 // separate string-vs-string differ this repo doesn't otherwise have.
 // Apply's own request carries back the exact previewId that write produced
 // so a stale preview (the underlying repo changed between preview and
-// apply) can't be blindly re-applied — see PREVIEW_TTL_MS below.
+// apply) can't be blindly re-applied — a template preview is kept 15 minutes, an
+// agent-generated one 24 hours (isPreviewExpired).
 
 const SETUP_RATE_LIMIT = { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } };
 
@@ -526,7 +527,12 @@ function deletePreview(previewId: string): void {
 function sweepExpiredPreviews(now = Date.now()): void {
   sweepExpiredGenerateJobs(now);
   for (const [previewId, record] of previews) {
-    if (now - record.createdAt > PREVIEW_TTL_MS) {
+    if (
+      isPreviewExpired(
+        { createdAt: record.createdAt, generated: Boolean(record.snapshot.generated) },
+        now,
+      )
+    ) {
       deletePreview(previewId);
     }
   }

@@ -11,7 +11,7 @@ import { parseUnifiedDiff } from "./diffUtils.js";
 import { EmptyStateNote } from "./ui/EmptyState.js";
 import { FileTextIcon } from "./ui/icons.js";
 import { useDashboardStore } from "./store/index.js";
-import { EMPTY_SCAFFOLD_DRAFT, SCAFFOLD_PREVIEW_TTL_MS } from "./store/slices/scaffold.js";
+import { EMPTY_SCAFFOLD_DRAFT, isScaffoldPreviewExpired } from "./store/slices/scaffold.js";
 import type { ScaffoldDraft, ScaffoldPreview } from "./store/types.js";
 import { Row, Segmented, TextInput, Toggle } from "./ui/primitives.js";
 
@@ -290,7 +290,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
     if (
       preview &&
       previewCreatedAt !== null &&
-      Date.now() - previewCreatedAt > SCAFFOLD_PREVIEW_TTL_MS
+      isScaffoldPreviewExpired(preview, previewCreatedAt)
     ) {
       patch({
         preview: null,
@@ -360,7 +360,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
             agent: job.result.agent ?? job.agent ?? defaultAgent,
             instructionsMode: job.mode,
           },
-          // The SERVER's clock: the preview expires PREVIEW_TTL_MS after the
+          // The SERVER's clock: the preview expires its TTL after the
           // job finished, not after the panel noticed it.
           previewCreatedAt: job.finishedAt ?? Date.now(),
           // The result is an agent-generated preview for this slug — the form
@@ -432,7 +432,8 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
           if (tracked?.jobId !== generateJobId) return;
           patch({
             generateJob: null,
-            error: "That generation job is gone — the server may have restarted. Generate again.",
+            error:
+              "That generation result is gone — it expired or the server restarted. Generate again.",
           });
         }
         // Any other failure (a network blip, a rate limit) is transient: the
@@ -663,7 +664,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
 
   const handleApply = useCallback(async () => {
     if (!preview) return;
-    if (previewCreatedAt !== null && Date.now() - previewCreatedAt > SCAFFOLD_PREVIEW_TTL_MS) {
+    if (previewCreatedAt !== null && isScaffoldPreviewExpired(preview, previewCreatedAt)) {
       patch({
         preview: null,
         previewCreatedAt: null,

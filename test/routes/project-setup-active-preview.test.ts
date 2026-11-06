@@ -6,7 +6,10 @@ import { execFileSync } from "node:child_process";
 import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { gitEnv } from "../../src/services/git-env.js";
-import { PREVIEW_TTL_MS } from "../../src/services/scaffold-generate-jobs.js";
+import {
+  GENERATED_PREVIEW_TTL_MS,
+  PREVIEW_TTL_MS,
+} from "../../src/services/scaffold-generate-jobs.js";
 import type * as GithubIntegration from "../../src/services/github-integration.js";
 import type * as ScaffoldGenerate from "../../src/services/scaffold-generate.js";
 
@@ -126,6 +129,31 @@ describe("project-setup route", () => {
       expect(body.sandboxed).toBe(true);
       expect(body.agent).toBe(gen.json().agent);
       expect(body.instructionsMode).toBe("keep");
+      await app.close();
+    });
+
+    it("keeps a generated preview past the template TTL, and drops it after the generated TTL", async () => {
+      mockValidGeneration("gen-keep");
+      const app = await buildApp();
+      const projectId = await createProject(app, repoDir);
+      const gen = await app.inject({
+        method: "POST",
+        url: `/api/projects/${projectId}/setup/generate`,
+        payload: { slug: "gen-keep" },
+      });
+      expect(gen.statusCode).toBe(200);
+      const url = `/api/projects/${projectId}/setup/preview/active`;
+      const realNow = Date.now();
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(realNow + PREVIEW_TTL_MS + 1000);
+      try {
+        const kept = await app.inject({ method: "GET", url });
+        expect(kept.statusCode).toBe(200);
+        expect(kept.json().previewId).toBe(gen.json().previewId);
+        nowSpy.mockReturnValue(realNow + GENERATED_PREVIEW_TTL_MS + 1000);
+        expect((await app.inject({ method: "GET", url })).statusCode).toBe(204);
+      } finally {
+        nowSpy.mockRestore();
+      }
       await app.close();
     });
 
