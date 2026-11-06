@@ -266,6 +266,10 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
     [patchScaffoldDraft, projectId],
   );
   const [previewing, setPreviewing] = useState(false);
+  // Issue #2650 — a template preview supersedes (and deletes) the finished
+  // agent result, so replacing a generated preview waits for a confirmation.
+  // Holds the skill-and-reviewer choice the confirmed preview would use.
+  const [pendingReplace, setPendingReplace] = useState<{ skillAndReviewer: boolean } | null>(null);
   // True while the START call is in flight — the job itself lives in the
   // store (see `generateJob` above), because it outlives this panel.
   const [starting, setStarting] = useState(false);
@@ -568,12 +572,12 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
   // without them; a generated one cost an agent turn, so the panel goes back
   // to the form with the option off and the user generates again.
   const handleLeaveOut = useCallback(() => {
-    patch({ includeSkillAndReviewer: false });
     // With the existing instructions kept, a scaffold without the skill and
     // reviewer has no agent-written content (Generate would refuse it), so
     // the starter-template preview is the right thing to show.
     if (preview?.generated && existingInstructions !== "keep") {
       patch({
+        includeSkillAndReviewer: false,
         preview: null,
         previewCreatedAt: null,
         error:
@@ -581,8 +585,32 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
       });
       return;
     }
+    // Issue #2650 — this would replace the generated result with a starter
+    // template, so it asks first; the toggle flips once the user agrees.
+    if (preview?.generated) {
+      setPendingReplace({ skillAndReviewer: false });
+      return;
+    }
+    patch({ includeSkillAndReviewer: false });
     void handlePreview(false);
   }, [patch, preview, existingInstructions, handlePreview]);
+
+  const handleForceAdd = useCallback(() => {
+    if (preview?.generated) {
+      setPendingReplace({ skillAndReviewer: true });
+      return;
+    }
+    patch({ includeSkillAndReviewer: true });
+    void handlePreview(true);
+  }, [patch, preview, handlePreview]);
+
+  const handleConfirmReplace = useCallback(() => {
+    if (!pendingReplace) return;
+    const { skillAndReviewer } = pendingReplace;
+    setPendingReplace(null);
+    patch({ includeSkillAndReviewer: skillAndReviewer });
+    void handlePreview(skillAndReviewer);
+  }, [pendingReplace, patch, handlePreview]);
 
   const generateInFlight = useRef(false);
 
@@ -693,6 +721,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
   }, [params.projectId, preview, previewCreatedAt, patch, refreshProjects]);
 
   const handleBack = useCallback(() => {
+    setPendingReplace(null);
     patch({
       offerRefresh: false,
       refreshSkill: false,
@@ -825,10 +854,7 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
                 type="radio"
                 name="ignored-paths-choice"
                 checked={includeSkillAndReviewer}
-                onChange={() => {
-                  patch({ includeSkillAndReviewer: true });
-                  void handlePreview(true);
-                }}
+                onChange={handleForceAdd}
                 disabled={applying || previewing}
               />{" "}
               Commit them anyway (force-add)
@@ -843,6 +869,20 @@ export function ProjectSetupPanel({ params }: { params: ProjectSetupPanelParams 
               />{" "}
               Leave the skill and reviewer out
             </label>
+            {pendingReplace && (
+              <div
+                className="agent-rules-panel-notice warning"
+                data-testid="replace-generated-confirm"
+              >
+                This replaces the generated result with the starter template. Continue?{" "}
+                <button className="git-panel-fetch-btn" onClick={handleConfirmReplace}>
+                  Replace
+                </button>{" "}
+                <button className="git-panel-fetch-btn" onClick={() => setPendingReplace(null)}>
+                  Keep generated result
+                </button>
+              </div>
+            )}
           </div>
         )}
         {preview.hasAgentsOverride && (
