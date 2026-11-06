@@ -869,6 +869,90 @@ describe("ProjectSetupPanel", () => {
       expect(bodies[1]).toMatchObject({ includeSkillAndReviewer: false });
     });
 
+    describe("replacing a generated result (#2650)", () => {
+      const seed = (generated: boolean) =>
+        useDashboardStore.getState().patchScaffoldDraft(1, {
+          slug: "demo",
+          existingInstructions: "keep",
+          preview: {
+            previewId: "gen1",
+            diff: "diff --git a/AGENTS.md b/AGENTS.md\n+new line\n",
+            files: ["AGENTS.md"],
+            hasAgentsOverride: false,
+            ignoredPaths,
+            ...(generated ? { generated: true, agent: "claude" } : {}),
+          },
+          previewCreatedAt: Date.now(),
+        });
+
+      it("asks first when the preview is generated, and only previews on Replace", async () => {
+        const bodies: Array<Record<string, unknown>> = [];
+        vi.stubGlobal(
+          "fetch",
+          mockFetch({
+            preview: (body) => {
+              bodies.push(body as Record<string, unknown>);
+              return jsonResponse(200, previewBody());
+            },
+          }),
+        );
+        seed(true);
+        const user = userEvent.setup();
+        render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+        await user.click(await screen.findByLabelText("Leave the skill and reviewer out"));
+
+        expect(await screen.findByTestId("replace-generated-confirm")).toHaveTextContent(
+          "replaces the generated result",
+        );
+        expect(bodies).toHaveLength(0);
+        await user.click(screen.getByRole("button", { name: "Replace" }));
+        await waitFor(() => expect(bodies).toHaveLength(1));
+        expect(bodies[0]).toMatchObject({ includeSkillAndReviewer: false });
+      });
+
+      it("keeps the generated result when the user declines", async () => {
+        const bodies: Array<Record<string, unknown>> = [];
+        vi.stubGlobal(
+          "fetch",
+          mockFetch({
+            preview: (body) => {
+              bodies.push(body as Record<string, unknown>);
+              return jsonResponse(200, previewBody());
+            },
+          }),
+        );
+        seed(true);
+        const user = userEvent.setup();
+        render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+        await user.click(await screen.findByLabelText("Leave the skill and reviewer out"));
+        await user.click(await screen.findByRole("button", { name: "Keep generated result" }));
+
+        expect(screen.queryByTestId("replace-generated-confirm")).toBeNull();
+        expect(bodies).toHaveLength(0);
+        expect(screen.getByLabelText("Commit them anyway (force-add)")).toBeChecked();
+      });
+
+      it("does not ask for a template preview", async () => {
+        const bodies: Array<Record<string, unknown>> = [];
+        vi.stubGlobal(
+          "fetch",
+          mockFetch({
+            preview: (body) => {
+              bodies.push(body as Record<string, unknown>);
+              return jsonResponse(200, previewBody());
+            },
+          }),
+        );
+        seed(false);
+        const user = userEvent.setup();
+        render(<ProjectSetupPanel params={{ projectId: 1 }} />);
+        await user.click(await screen.findByLabelText("Leave the skill and reviewer out"));
+
+        expect(screen.queryByTestId("replace-generated-confirm")).toBeNull();
+        await waitFor(() => expect(bodies).toHaveLength(1));
+      });
+    });
+
     it("the Skill and reviewer agent toggle defaults on and is sent off when switched", async () => {
       const bodies: Array<Record<string, unknown>> = [];
       vi.stubGlobal(
