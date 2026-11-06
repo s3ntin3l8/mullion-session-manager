@@ -215,6 +215,28 @@
       }
     },
     {
+      "name": "terminal-motion",
+      "path": "/",
+      "viewports": ["mobile", "phone"],
+      "steps": [
+        {
+          "click": "[class*=\"toolbar\"] button >> nth=0"
+        },
+        {
+          "wait": 800
+        },
+        {
+          "click": ".session-item:has-text(\"mobile-demo.sh\")"
+        }
+      ],
+      "settle": ".xterm-screen",
+      "emphasis": {
+        "css": "button[aria-label^=\"Notifications\"] .attention-badge { visibility: hidden !important; } .mobile-session-unread { visibility: hidden !important; }"
+      },
+      "tags": ["check", "audit"],
+      "motion": "normal"
+    },
+    {
       "name": "terminal-stream",
       "path": "/",
       "tags": ["presentation"],
