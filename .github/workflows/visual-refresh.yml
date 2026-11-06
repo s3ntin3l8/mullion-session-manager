@@ -1,0 +1,16 @@
+name: Visual refresh (canary)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  refresh:
+    uses: s3ntin3l8/.github/.github/workflows/visual-refresh.yml@feat/visual-refresh
+    with:
+      node-version: "26"
+      title: "chore(uiux): refresh screenshots"
