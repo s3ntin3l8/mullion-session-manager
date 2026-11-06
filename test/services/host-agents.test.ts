@@ -73,7 +73,7 @@ process.env.MULLION_TEST_REAL_PROTOCOL = "1";
 function fakeApp(
   tracker: InstanceType<typeof HostAgentTracker> | undefined,
   heartbeatTracker?: InstanceType<typeof HostHeartbeatTracker>,
-  hostRows?: Array<{ id: string; drained?: boolean }>,
+  hostRows?: Array<{ id: string; drained?: boolean; platform?: string }>,
 ) {
   return {
     hostAgentTracker: tracker,
@@ -81,7 +81,12 @@ function fakeApp(
     db: {
       select: () => ({
         from: () => ({
-          all: () => (hostRows ?? []).map((h) => ({ id: h.id, drained: h.drained ?? false })),
+          all: () =>
+            (hostRows ?? []).map((h) => ({
+              id: h.id,
+              drained: h.drained ?? false,
+              platform: h.platform ?? null,
+            })),
         }),
       }),
     },
@@ -657,8 +662,22 @@ describe("ensureRemoteHostProtocols and failure cooldown (issue #2625)", () => {
     await ensureRemoteHostProtocols(app);
     expect(client.detectAgents).toHaveBeenCalledTimes(0);
 
-    await ensureRemoteHostProtocols(app, { force: ["named-host"] });
+    await ensureRemoteHostProtocols(app, { target: { hostId: "named-host" } });
     expect(client.detectAgents).toHaveBeenCalledTimes(1);
+  });
+
+  it("hosts a platform target could match are read despite a remembered failure", async () => {
+    const tracker = new HostAgentTracker();
+    const app = fakeApp(tracker, new HostHeartbeatTracker(), [
+      { id: "mac", platform: "darwin" },
+      { id: "linux-box", platform: "linux" },
+      { id: "unreported" },
+    ]);
+    for (const id of ["mac", "linux-box", "unreported"]) tracker.recordProtocolReadFailure(id);
+
+    await ensureRemoteHostProtocols(app, { target: { platform: "Darwin" } });
+    // The Mac and the host with no platform yet; not the Linux box.
+    expect(client.detectAgents).toHaveBeenCalledTimes(2);
   });
 
   it("an offline host is not read at all", async () => {

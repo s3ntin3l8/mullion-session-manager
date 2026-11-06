@@ -1381,7 +1381,9 @@ hostId)` (`src/services/host-agents.ts`) read the cache; the local host is this
   failure is remembered for 60 seconds so subsequent Auto placements do not wait
   on it again (cleared on any successful read, re-registration/renewal, or
   heartbeat seeing the host online); the explicit-host gate still makes its
-  bounded read for the host it is launching on. A re-registration, renewal or
+  bounded read for the host it is launching on, and a placement with a target
+  (a `hostId` or a `platform`) reads every host that could satisfy it despite the
+  memory (a host that has not reported its platform yet counts). A re-registration, renewal or
   applied update keeps the last known protocol (flagged `protocolStale`) and
   refreshes in the background, so a routine renewal never opens an ungated
   window.

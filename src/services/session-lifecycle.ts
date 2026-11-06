@@ -1241,9 +1241,7 @@ async function createSessionRecordInner(
   };
   // Issue #2596 — read every unread host protocol (bounded) before placement
   // decides on it; an unread one would otherwise be gated as the legacy baseline.
-  await ensureRemoteHostProtocols(app, {
-    force: params.target !== undefined && "hostId" in params.target ? [params.target.hostId] : [],
-  });
+  await ensureRemoteHostProtocols(app, { target: params.target });
   const placementResult = resolveSessionPlacement(app, project, params, needs);
   if (!placementResult.ok) {
     if (placementResult.reason === "preparing-checkout") return placementResult;

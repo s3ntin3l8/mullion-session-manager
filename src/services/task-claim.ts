@@ -618,9 +618,7 @@ export async function dispatchClaimedTask(
     .filter((bin, i, all): bin is string => bin !== null && all.indexOf(bin) === i);
 
   // Issue #2596 — read any unread host protocol (bounded) before placement.
-  await ensureRemoteHostProtocols(app, {
-    force: requirement !== null && "hostId" in requirement ? [requirement.hostId] : [],
-  });
+  await ensureRemoteHostProtocols(app, { target: requirement });
   let placement: PlacementDecision;
   if (requirement !== null) {
     const targeted = resolveTargetHost(app, {

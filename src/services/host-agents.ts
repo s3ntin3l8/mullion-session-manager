@@ -429,25 +429,42 @@ export function ensureHostProtocol(app: FastifyInstance, hostId: string): Promis
   return read;
 }
 
+function couldSatisfyTarget(
+  h: { id: string; platform: string | null },
+  target: { hostId?: string; platform?: string } | null | undefined,
+): boolean {
+  if (!target) return false;
+  if (target.hostId !== undefined && h.id !== target.hostId) return false;
+  if (target.platform === undefined) return target.hostId !== undefined;
+  // A host that has not reported its platform may turn out to match.
+  return (h.platform ?? "") === "" || h.platform?.toLowerCase() === target.platform.toLowerCase();
+}
+
 /**
  * `ensureHostProtocol` for registered remote hosts before a placement reads them
- * (issue #2596, #2625). `force` names hosts the caller targets: they are read
- * despite a remembered failure, so a launch is never judged on a guess for its
- * own target.
+ * (issue #2596, #2625). `target` is the placement target the caller resolves:
+ * every host that could satisfy it (the named host, or a host of the named
+ * platform, or one that has not reported a platform yet) is read despite a
+ * remembered failure, so a launch is never judged on a guess for its own target.
  */
 export async function ensureRemoteHostProtocols(
   app: FastifyInstance,
-  opts: { force?: readonly string[] } = {},
+  opts: { target?: { hostId?: string; platform?: string } | null } = {},
 ): Promise<void> {
   if (!app.db || !app.hostAgentTracker) return;
   const tracker = app.hostAgentTracker;
-  const rows = app.db.select({ id: hosts.id, drained: hosts.drained }).from(hosts).all();
+  const rows = app.db
+    .select({ id: hosts.id, drained: hosts.drained, platform: hosts.platform })
+    .from(hosts)
+    .all();
   const toRead = rows
     .filter((h) => {
       if (h.id === LOCAL_HOST_ID) return false;
       if (h.drained) return false;
       if (app.hostHeartbeatTracker?.getHealth(h.id)?.status === "offline") return false;
-      if (!opts.force?.includes(h.id) && tracker.hasRecentProtocolReadFailure(h.id)) return false;
+      if (!couldSatisfyTarget(h, opts.target) && tracker.hasRecentProtocolReadFailure(h.id)) {
+        return false;
+      }
       return true;
     })
     .map((h) => h.id);
