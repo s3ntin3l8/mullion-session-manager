@@ -277,6 +277,9 @@ function scaffoldableRelPaths(slug: string, options: ScaffoldOptions): string[] 
       : []),
   ];
   if (options.includeDockConfig) paths.push(path.join(".crs", "dock.json"));
+  // Read so computeScaffold can offer the missing mirror ignore line when it
+  // covers only one of `.claude/` and `.agents/` (a file mirror only).
+  if (withSkillAndReviewer && !options.symlinkAgentsSkills) paths.push(".prettierignore");
   // Issue #942 — without this, readScaffoldableFiles below never sees a real
   // repo's CONTRIBUTING.md, computeScaffold treats it as absent, and the
   // apply path would silently OVERWRITE a real Code-of-Conduct/dev-setup

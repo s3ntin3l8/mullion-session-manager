@@ -100,7 +100,10 @@ describe("computeScaffold", () => {
       SCAFFOLD_REGION_END,
     );
     expect(region).toContain("demo");
-    expect(region).toContain(".claude/skills/demo/SKILL.md");
+    // The vendor-neutral copies, since the mirrors are written.
+    expect(region).toContain(".agents/skills/demo/SKILL.md");
+    expect(region).toContain(".agents/skills/demo-reviewer/SKILL.md");
+    expect(region).not.toContain(".claude/");
   });
 
   it("upserts the region in place when AGENTS.md already has other content", () => {
@@ -376,8 +379,8 @@ describe("computeScaffold", () => {
       expect(region).toBe(
         "This repository uses [Mullion](https://github.com/s3ntin3l8/mullion-session-manager)\n" +
           "to run AI coding agents. A project-specific skill and reviewer subagent for\n" +
-          "this repo live at `.claude/skills/demo/SKILL.md` and\n" +
-          "`.claude/agents/demo-reviewer.md` — read the skill before making\n" +
+          "this repo live at `.agents/skills/demo/SKILL.md` and\n" +
+          "`.agents/skills/demo-reviewer/SKILL.md` — read the skill before making\n" +
           "changes, and use the reviewer subagent (or `/code-review`) before\n" +
           "declaring a change done.\n\n" +
           "## Workflow Conventions\n\n" +

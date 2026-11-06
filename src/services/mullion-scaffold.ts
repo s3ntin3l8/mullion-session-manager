@@ -74,6 +74,37 @@ export const MOVED_MARKER_END = "<!-- mullion:moved:end -->";
 export const WORKTREES_IGNORE_MARKER_START = "# mullion:worktrees:start";
 export const WORKTREES_IGNORE_MARKER_END = "# mullion:worktrees:end";
 
+// The `.prettierignore` region that keeps the `.claude/` and `.agents/` skill
+// mirrors formatted alike (see `missingPrettierIgnoreDir`).
+export const PRETTIER_IGNORE_MARKER_START = "# mullion:prettierignore:start";
+export const PRETTIER_IGNORE_MARKER_END = "# mullion:prettierignore:end";
+
+/** Whether a `.prettierignore` has a line covering `dir` (e.g. `.claude`):
+ * `.claude`, `/.claude/`, `**\/.claude/**` or a path below it. Comments and
+ * negations are not coverage. */
+function prettierIgnoresDir(text: string, dir: string): boolean {
+  return text.split(/\r?\n/).some((raw) => {
+    const line = raw.trim();
+    if (!line || line.startsWith("#") || line.startsWith("!")) return false;
+    const norm = line
+      .replace(/^\/+/, "")
+      .replace(/^(\*\*\/)+/, "")
+      .replace(/(\/\*{0,2})+$/, "");
+    return norm === dir || norm.startsWith(`${dir}/`);
+  });
+}
+
+/** When a `.prettierignore` covers only one of the two skill-mirror trees,
+ * `prettier --write` rewrites just the other copy and the pair drifts. Returns
+ * the tree to add an ignore line for, or null when both or neither are covered
+ * (neither: the repo formats both alike). */
+export function missingPrettierIgnoreDir(text: string): ".claude" | ".agents" | null {
+  const claude = prettierIgnoresDir(text, ".claude");
+  const agents = prettierIgnoresDir(text, ".agents");
+  if (claude === agents) return null;
+  return claude ? ".agents" : ".claude";
+}
+
 /** Whether the conventions text that will be committed puts worktrees under `.wt/`. */
 export function conventionsUseWtDirectory(text: string | undefined): boolean {
   // A path segment, not any substring: `foo.wt/` is not the directory.
@@ -559,12 +590,22 @@ export const SCAFFOLD_DEFAULT_WORKFLOW_ANSWERS: Record<string, string> = {
 // conventions section, then told the model to report back "the
 // scaffold-region paragraph only"). This function now returns ONLY the pointer prose
 // naming where the skill/reviewer live; it never mentions conventions.
-function scaffoldRegionPointerBody(slug: string): string {
+//
+// The region is read by every CLI, so it cites the vendor-neutral
+// `.agents/skills/` copies, which the scaffold always writes alongside the
+// `.claude/` ones (a symlinked skill mirror resolves to the same SKILL.md).
+// The reviewer falls back to its `.claude/agents/` path when no codex mirror
+// was emitted (`reviewerMirrored` false: unparseable preserved frontmatter).
+function scaffoldRegionPointerBody(slug: string, reviewerMirrored: boolean): string {
+  const skill = path.posix.join(".agents", "skills", slug, "SKILL.md");
+  const reviewer = reviewerMirrored
+    ? path.posix.join(".agents", "skills", `${slug}-reviewer`, "SKILL.md")
+    : path.posix.join(".claude", "agents", `${slug}-reviewer.md`);
   return (
     `This repository uses [Mullion](https://github.com/s3ntin3l8/mullion-session-manager)\n` +
     `to run AI coding agents. A project-specific skill and reviewer subagent for\n` +
-    `this repo live at \`.claude/skills/${slug}/SKILL.md\` and\n` +
-    `\`.claude/agents/${slug}-reviewer.md\` — read the skill before making\n` +
+    `this repo live at \`${skill}\` and\n` +
+    `\`${reviewer}\` — read the skill before making\n` +
     `changes, and use the reviewer subagent (or \`/code-review\`) before\n` +
     `declaring a change done.`
   );
@@ -839,11 +880,20 @@ export function computeScaffold(
   // agent's own paragraph about the repo) is dropped with it: it is written
   // to describe the same skill/reviewer pair the prompt asked for.
   const includeSkillAndReviewer = options.includeSkillAndReviewer !== false;
+  // Whether the codex reviewer mirror will be emitted below decides which
+  // reviewer path the static pointer cites.
+  const reviewerMirrored =
+    includeSkillAndReviewer &&
+    deriveCodexReviewerSkillContent(
+      existingFiles[scaffoldReviewerPath(slug)] ??
+        stampScaffoldBody(options.generated?.reviewer ?? reviewerAgentFileContents(slug), slug),
+      slug,
+    ) !== null;
   const pointerBody = !includeSkillAndReviewer
     ? ""
     : (options.generated?.scaffoldRegion
         ? stripStrayWorkflowConventionsHeading(options.generated.scaffoldRegion)
-        : scaffoldRegionPointerBody(slug)
+        : scaffoldRegionPointerBody(slug, reviewerMirrored)
       ).trimEnd();
   const conventionsSection = workflowConventionsSection(options.workflowConventionsText);
   const region = pointerBody ? `${pointerBody}\n\n${conventionsSection}` : conventionsSection;
@@ -1052,6 +1102,34 @@ export function computeScaffold(
         kind: "file",
         contents: skillContent,
       });
+
+      // Two plain-file copies drift when a formatter touches only one: a
+      // `.prettierignore` covering `.claude/` but not `.agents/` (or the
+      // reverse) makes `prettier --write` rewrite just the other. Offer the
+      // missing ignore line, in a marked region of its own, as part of the
+      // diff. Judged on the file without that region, so a re-run is stable.
+      const existingPrettierIgnore = existingFiles[".prettierignore"];
+      if (existingPrettierIgnore !== undefined) {
+        const missing = missingPrettierIgnoreDir(
+          stripMarkedRegion(
+            existingPrettierIgnore,
+            PRETTIER_IGNORE_MARKER_START,
+            PRETTIER_IGNORE_MARKER_END,
+          ),
+        );
+        if (missing) {
+          entries.push({
+            path: ".prettierignore",
+            kind: "file",
+            contents: upsertMarkedRegion(
+              existingPrettierIgnore,
+              PRETTIER_IGNORE_MARKER_START,
+              PRETTIER_IGNORE_MARKER_END,
+              `${missing}/`,
+            ),
+          });
+        }
+      }
     }
   }
 
