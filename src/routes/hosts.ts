@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { closeAgentChannel } from "./agent-channel.js";
+import { isChannelHostBound, unbindChannelHost } from "../services/agent-channel-tunnel.js";
 import { AgentChannelCloseCode, type HostChannelStatus } from "../shared/agent-channel.js";
 import { HOST_EDITABLE_ROLES, type HostEditableRole } from "../shared/constants.js";
 import {
@@ -113,8 +114,16 @@ function isValidHttpUrl(value: string): boolean {
 // and rotate-token so the two cannot drift.
 function channelStatus(app: FastifyInstance, hostId: string): HostChannelStatus {
   const channel = app.agentChannels?.get(hostId);
+  const bound = isChannelHostBound(app, hostId);
+  const status = channel
+    ? "connected"
+    : bound
+      ? "bound to the outbound channel, not connected"
+      : "not connected";
   return {
     ready: channel !== undefined,
+    bound,
+    status,
     connectedAt: channel ? new Date(channel.connectedAt).toISOString() : null,
     carriedOperations: channel ? [...channel.carriedOperations] : [],
   };
@@ -347,6 +356,18 @@ export async function hostsRoute(app: FastifyInstance) {
     // A revoked identity must stop being served now, not at the next redial.
     closeAgentChannel(app, id, AgentChannelCloseCode.Revoked);
     reply.code(204);
+  });
+
+  // Explicit unbind from the outbound channel (#2622). Clears the sticky binding
+  // when an agent has stopped dialing, so callers can manage the host.
+  app.post<{ Params: { id: string } }>("/api/hosts/:id/unbind", async (request, reply) => {
+    const { id } = request.params;
+    if (id === LOCAL_HOST_ID) return reply.notFound("local host cannot be unbound");
+    const host = getHostRow(app, id);
+    if (!host) return reply.notFound(`host ${id} not found`);
+    unbindChannelHost(app, id);
+    app.log.info({ hostId: id }, "host unbound from outbound channel");
+    return { ok: true };
   });
 
   // Connection-test ping for the Settings hosts panel — `local` is always

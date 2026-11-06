@@ -78,3 +78,45 @@ export class HostRequestError extends Error {
     this.name = "HostRequestError";
   }
 }
+
+/**
+ * Thrown when the outbound channel has reached its concurrency cap and no slot
+ * became free within the wait budget. Distinct from HostUnreachableError so callers
+ * treat it as retryable rather than marking the host down.
+ */
+export class HostBusyError extends Error {
+  readonly retryable = true as const;
+
+  constructor(hostId: string, cause?: unknown) {
+    const detail = cause instanceof Error ? cause.message : String(cause ?? "");
+    super(`Host ${hostId} is busy: ${detail || "outbound channel concurrency cap reached"}`);
+    this.name = "HostBusyError";
+    this.cause = cause;
+  }
+}
+
+/**
+ * Returns true when `err` indicates a transient host saturation/busy condition
+ * (such as outbound channel cap reached) rather than a persistent error or unreachability.
+ */
+export function isHostBusyError(err: unknown): err is HostBusyError {
+  return (
+    err instanceof HostBusyError ||
+    (typeof err === "object" &&
+      err !== null &&
+      "name" in err &&
+      (err as { name: unknown }).name === "HostBusyError") ||
+    (typeof err === "object" &&
+      err !== null &&
+      "retryable" in err &&
+      (err as { retryable: unknown }).retryable === true)
+  );
+}
+
+/**
+ * Shared predicate for retryable host errors so call sites do not drift
+ * from the error taxonomy.
+ */
+export function isRetryableHostError(err: unknown): boolean {
+  return isHostBusyError(err);
+}

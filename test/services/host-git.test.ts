@@ -69,6 +69,7 @@ const {
 } = await import("../../src/services/host-git.js");
 const { HostRequestError, HostUnreachableError } =
   await import("../../src/services/remote-host-client.js");
+const { HostBusyError } = await import("../../src/services/remote-host-errors.js");
 
 const fakeApp = { config: {} } as never;
 
@@ -218,6 +219,22 @@ describe("host-git.ts", () => {
 
       expect(result.ok).toBe(false);
       if (!result.ok) expect(result.reason).toBe("unreachable");
+    });
+
+    it("remote: a busy host maps to reason 'busy' with retryable flag", async () => {
+      mockGetRemoteHostClient.mockReturnValue({
+        resolveHostBaseRef: vi
+          .fn()
+          .mockRejectedValue(new HostBusyError("h1", new Error("concurrency cap"))),
+      });
+
+      const result = await resolveHostBaseRef(fakeApp, "remote-host-1", "/remote/project");
+
+      expect(result.ok).toBe(false);
+      if (!result.ok && result.reason === "busy") {
+        expect(result.reason).toBe("busy");
+        expect(result.retryable).toBe(true);
+      }
     });
   });
 

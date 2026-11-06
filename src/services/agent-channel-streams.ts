@@ -178,6 +178,7 @@ export function serveChannel(
   channel: MuxChannel,
   authToken: string,
   handlers: AgentStreamHandlers,
+  peerId?: string,
 ): void {
   let sink: ChannelSink | null = null;
   let pending = Buffer.alloc(0);
@@ -226,7 +227,7 @@ export function serveChannel(
     if (head === null || !("stream" in head)) {
       // A request head (no `stream` key) or garbage: the tunnel parses and
       // answers it, including the 400 for a malformed one.
-      sink = createRequestSink(app, channel, authToken);
+      sink = createRequestSink(app, channel, authToken, peerId);
       const all = pending;
       pending = Buffer.alloc(0);
       sink.data(all);
@@ -255,7 +256,7 @@ export function serveChannel(
     pendingEof = true;
     // EOF before a complete head: the tunnel answers a malformed request.
     if (pending.length > 0 && pending.indexOf(0x0a) === -1) {
-      sink = createRequestSink(app, channel, authToken);
+      sink = createRequestSink(app, channel, authToken, peerId);
       sink.data(pending);
       pending = Buffer.alloc(0);
       sink.eof();

@@ -223,7 +223,9 @@ export const agentChannelClientPlugin = fp(async (app: FastifyInstance) => {
           maxChannels: AGENT_CHANNEL_MAX_CHANNELS,
           maxBufferedBytes: AGENT_CHANNEL_MAX_BUFFERED_BYTES,
         });
-        mux.onChannel((channel) => serveChannel(app, channel, requestAuthToken, streamHandlers));
+        mux.onChannel((channel) =>
+          serveChannel(app, channel, requestAuthToken, streamHandlers, identity.hostId),
+        );
         app.log.info({ hostId: identity.hostId }, "[agent-channel] ready");
         return;
       }

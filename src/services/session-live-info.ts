@@ -9,6 +9,7 @@ import { deriveSessionStatus } from "./session-status.js";
 import { getPreviewWorktree } from "./git-worktree.js";
 import { resolveBackend } from "./session-backend.js";
 import { HostRequestError } from "./remote-host-client.js";
+import { isHostBusyError } from "./remote-host-errors.js";
 import { invalidateOwnedScopesCache, type SessionLiveness } from "./session-process.js";
 
 // Every SessionInfo field EXCEPT the ones `row` (the DB row) already carries
@@ -393,23 +394,25 @@ export async function readSessionLiveInfo(
   info: SessionInfo | null;
   hostReachable: boolean;
   /** Why the read failed, classified once here: the host `unreachable` (a
-   * network fault, a timeout) or `refused` the request (it ANSWERED with an
-   * error: its rate limit, a stale token). Absent when the read succeeded. */
-  failure?: "unreachable" | "refused";
+   * network fault, a timeout), `refused` the request (it ANSWERED with an
+   * error: its rate limit, a stale token), or `busy` (outbound channel concurrency
+   * cap reached). Absent when the read succeeded. */
+  failure?: "unreachable" | "refused" | "busy";
   error?: unknown;
   /** The HTTP status the host refused with — set exactly when `failure` is `refused`. */
   hostRefusedStatus?: number;
 }> {
   const id = String(row.id);
   // The one place the result is built, so `hostReachable` and `failure` cannot
-  // disagree: a read reached the host exactly when it did not fail.
+  // disagree: a read reached the host exactly when it did not fail, or when
+  // the failure is a transient concurrency busy condition (host is up).
   const outcome = (
     info: SessionInfo | null,
-    failure?: "unreachable" | "refused",
+    failure?: "unreachable" | "refused" | "busy",
     error?: unknown,
   ) => ({
     info,
-    hostReachable: failure === undefined,
+    hostReachable: failure === undefined || failure === "busy",
     ...(failure === undefined ? {} : { failure, error }),
     // From `failure`, not a second `instanceof` test, so the pair cannot disagree.
     ...(failure === "refused" && error instanceof HostRequestError
@@ -431,12 +434,18 @@ export async function readSessionLiveInfo(
     // Say which it was: a host that ANSWERED with an error (its rate limit, a
     // stale token) is not a network fault, and a log that blames one sends
     // whoever reads it looking in the wrong place.
-    const failure = err instanceof HostRequestError ? "refused" : "unreachable";
+    const failure = isHostBusyError(err)
+      ? "busy"
+      : err instanceof HostRequestError
+        ? "refused"
+        : "unreachable";
     app.log.warn(
       { hostId, sessionId: row.id, err },
-      failure === "refused"
-        ? "host answered the live-status request with an error, reporting default live status"
-        : "host unreachable, reporting default live status",
+      failure === "busy"
+        ? "host busy, reporting default live status"
+        : failure === "refused"
+          ? "host answered the live-status request with an error, reporting default live status"
+          : "host unreachable, reporting default live status",
     );
     return outcome(null, failure, err);
   }

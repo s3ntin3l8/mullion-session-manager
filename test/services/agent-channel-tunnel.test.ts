@@ -1,16 +1,24 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
+import rateLimit from "@fastify/rate-limit";
 import { WebSocketServer, WebSocket } from "ws";
-import { createMuxConnection } from "../../src/services/ssh-agent-mux.js";
+import {
+  createMuxConnection,
+  MuxBusyError,
+  type MuxChannel,
+} from "../../src/services/ssh-agent-mux.js";
 import {
   AGENT_CHANNEL_AUTH_HEADER,
+  AGENT_CHANNEL_MAX_CHANNELS,
   bindChannelHost,
   channelFetch,
+  ChannelBusyError,
   ChannelTransportError,
   resolveHostTransport,
   serveChannelRequest,
   unbindChannelHost,
 } from "../../src/services/agent-channel-tunnel.js";
+import { HostBusyError } from "../../src/services/remote-host-errors.js";
 import {
   HostOutcomeUnknownError,
   HostRequestError,
@@ -48,8 +56,14 @@ async function rig(routes: Routes): Promise<Rig> {
   const primarySocket = await serverSide;
   await new Promise((r) => agentSocket.once("open", r));
 
-  const primaryMux = createMuxConnection(primarySocket as never, { channelIdParity: "even" });
-  const agentMux = createMuxConnection(agentSocket as never, { channelIdParity: "odd" });
+  const primaryMux = createMuxConnection(primarySocket as never, {
+    channelIdParity: "even",
+    maxChannels: AGENT_CHANNEL_MAX_CHANNELS,
+  });
+  const agentMux = createMuxConnection(agentSocket as never, {
+    channelIdParity: "odd",
+    maxChannels: AGENT_CHANNEL_MAX_CHANNELS,
+  });
   const agent = Fastify({ bodyLimit: 8 * 1024 * 1024 });
   agent.addHook("onRequest", async (request, reply) => {
     if (request.headers[AGENT_CHANNEL_AUTH_HEADER] !== TOKEN) {
@@ -140,6 +154,9 @@ describe("request/response over the outbound channel (#2451)", () => {
     for (const p of [
       "/api/hosts",
       "/internal/ws/attach",
+      "/internal/%77s/attach",
+      "/internal/%2577s/attach",
+      "/internal/%ZZ/attach",
       "/internal/../api/hosts",
       "/internal/%2e%2e/api/hosts",
     ]) {
@@ -257,6 +274,212 @@ describe("request/response over the outbound channel (#2451)", () => {
     }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ChannelTransportError);
     expect((err as ChannelTransportError).phase).toBe("after-send");
+  });
+
+  it("70 concurrent requests to one host do not fail as unreachable and never exceed 64 open channels", async () => {
+    let maxConcurrent = 0;
+    const r = await rig((agent) => {
+      agent.get("/internal/config", async () => {
+        await sleep(50);
+        return { ok: true };
+      });
+    });
+    const interval = setInterval(() => {
+      const open = r.entry.mux.openChannelCount;
+      if (open > maxConcurrent) maxConcurrent = open;
+    }, 5);
+    try {
+      const results = await Promise.all(Array.from({ length: 70 }, () => r.client.resolveConfig()));
+      expect(results).toHaveLength(70);
+      expect(results.every((res) => (res as unknown as { ok: boolean }).ok === true)).toBe(true);
+      expect(maxConcurrent).toBeLessThanOrEqual(64);
+      expect(maxConcurrent).toBeGreaterThanOrEqual(40);
+    } finally {
+      clearInterval(interval);
+    }
+  });
+
+  it("closes a channel if openChannel resolves after the request has timed out", async () => {
+    let resolveOpen!: (ch: unknown) => void;
+    const openPromise = new Promise<unknown>((res) => {
+      resolveOpen = res;
+    });
+    const mockChannel = {
+      close: vi.fn(),
+      send: vi.fn(),
+      onData: vi.fn(),
+      onEof: vi.fn(),
+      onClose: vi.fn(),
+    };
+    const mockMux = {
+      openChannel: vi.fn().mockReturnValue(openPromise),
+      close: vi.fn(),
+    };
+    const entry = {
+      hostId: "h1",
+      mux: mockMux as never,
+    } as unknown as ConnectedAgentChannel;
+
+    const fetchPromise = channelFetch(entry, {
+      method: "GET",
+      path: "/internal/config",
+      timeoutMs: 50,
+    });
+
+    await expect(fetchPromise).rejects.toBeInstanceOf(ChannelTransportError);
+
+    resolveOpen(mockChannel);
+    await sleep(20);
+
+    expect(mockChannel.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("two hosts tunnelling at once do not share a rate bucket", async () => {
+    const app = Fastify();
+    await app.register(rateLimit, { max: 2, timeWindow: 60_000 });
+    app.get("/internal/test", async () => ({ ok: true }));
+    await app.ready();
+    closers.push(async () => {
+      await app.close();
+    });
+
+    const sendRequest = async (peerId: string) => {
+      let onDataCb: ((chunk: Buffer) => void) | null = null;
+      let onEofCb: (() => void) | null = null;
+      const sent: Buffer[] = [];
+      let resolveDone!: () => void;
+      const done = new Promise<void>((res) => {
+        resolveDone = res;
+      });
+      const channel = {
+        id: 1,
+        closed: false,
+        sendWindow: 65536,
+        close: vi.fn(() => resolveDone()),
+        send: vi.fn((buf: Buffer) => {
+          sent.push(buf);
+          return true;
+        }),
+        onData: vi.fn((cb) => {
+          onDataCb = cb;
+        }),
+        onEof: vi.fn((cb) => {
+          onEofCb = cb;
+        }),
+        onClose: vi.fn(),
+        onDrain: vi.fn(),
+        eof: vi.fn(),
+        acknowledgeConsumed: vi.fn(),
+      } as unknown as MuxChannel;
+
+      serveChannelRequest(app, channel, "auth-token", peerId);
+      onDataCb!(Buffer.from(JSON.stringify({ method: "GET", path: "/internal/test" }) + "\n"));
+      onEofCb!();
+      await done;
+      const headLine = sent[0]?.toString("utf8").split("\n")[0] ?? "";
+      const head = JSON.parse(headLine) as { status: number };
+      return head.status;
+    };
+
+    // Host A hits rate limit
+    expect(await sendRequest("host-a")).toBe(200);
+    expect(await sendRequest("host-a")).toBe(200);
+    expect(await sendRequest("host-a")).toBe(429);
+
+    // Host B is in its own bucket and is not blocked
+    expect(await sendRequest("host-b")).toBe(200);
+
+    // Loopback 127.0.0.1 is also separate and not blocked
+    const reqLocal = await app.inject({
+      method: "GET",
+      url: "/internal/test",
+      remoteAddress: "127.0.0.1",
+    });
+    expect(reqLocal.statusCode).toBe(200);
+  });
+
+  it("rejects with ChannelBusyError when slot wait is busy for a short request timeout", async () => {
+    const openPromise = new Promise<unknown>(() => {});
+    const mockMux = {
+      openChannel: vi.fn((opts?: { onWaiting?: () => void }) => {
+        opts?.onWaiting?.();
+        return openPromise;
+      }),
+      close: vi.fn(),
+    };
+    const entry = {
+      hostId: "h1",
+      mux: mockMux as never,
+      terminal: null,
+    } as unknown as ConnectedAgentChannel;
+
+    const err = await channelFetch(entry, {
+      method: "GET",
+      path: "/internal/config",
+      timeoutMs: 300,
+    }).catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ChannelBusyError);
+    expect((err as ChannelBusyError).isBusy).toBe(true);
+    expect((err as ChannelBusyError).message).toContain("waiting for free channel slot");
+  });
+
+  it("enforces default request body limit on non-upload paths while permitting large uploads", async () => {
+    const r = await rig((agent) => {
+      agent.post("/internal/sessions", async () => ({ ok: true }));
+      agent.post("/internal/uploads", async (req) => ({
+        size: (req.body as Buffer).length,
+      }));
+    });
+
+    // 2.5MB payload to /internal/sessions (default limit is 2MB)
+    const largeBody = Buffer.alloc(2.5 * 1024 * 1024, 65);
+    const resSessions = await channelFetch(r.entry, {
+      method: "POST",
+      path: "/internal/sessions",
+      headers: {
+        "content-type": "application/octet-stream",
+        "content-length": String(largeBody.length),
+      },
+      body: largeBody,
+      timeoutMs: 2000,
+    });
+    expect(resSessions.status).toBe(413);
+
+    // 3MB payload to /internal/uploads (upload limit is 64MB)
+    const uploadBody = Buffer.alloc(3 * 1024 * 1024, 66);
+    const resUpload = await channelFetch(r.entry, {
+      method: "POST",
+      path: "/internal/uploads",
+      headers: {
+        "content-type": "application/octet-stream",
+        "content-length": String(uploadBody.length),
+      },
+      body: uploadBody,
+      timeoutMs: 5000,
+    });
+    expect(resUpload.status).toBe(200);
+    expect(JSON.parse(resUpload.body.toString("utf8"))).toEqual({
+      size: 3 * 1024 * 1024,
+    });
+  });
+
+  it("rejects with ChannelBusyError when openChannel throws MuxBusyError", async () => {
+    const r = await rig(() => {});
+    vi.spyOn(r.entry.mux, "openChannel").mockRejectedValueOnce(
+      new MuxBusyError("local channel cap reached"),
+    );
+    await expect(
+      channelFetch(r.entry, { method: "GET", path: "/internal/sessions", timeoutMs: 1000 }),
+    ).rejects.toBeInstanceOf(ChannelBusyError);
+  });
+
+  it("maps ChannelBusyError to HostBusyError on RemoteHostClient operations", async () => {
+    const r = await rig(() => {});
+    vi.spyOn(r.entry.mux, "openChannel").mockRejectedValueOnce(
+      new MuxBusyError("local channel cap reached"),
+    );
+    await expect(r.client.resolveConfig()).rejects.toBeInstanceOf(HostBusyError);
   });
 });
 

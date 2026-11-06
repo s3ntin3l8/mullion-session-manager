@@ -99,4 +99,23 @@ describe("readSessionLiveInfo", () => {
     expect(view.sessionStatus).toBe("suspended");
     expect(view.sessionStatusDetail).toBe("host rejected the request (HTTP 403)");
   });
+
+  it("treats a busy host as reachable and reports default live status", async () => {
+    const { HostBusyError } = await import("../../src/services/remote-host-errors.js");
+    const err = new HostBusyError("mac", new Error("slot cap"));
+    liveStatus.mockRejectedValue(err);
+
+    const result = await readSessionLiveInfo(app, row, 30_000, "mac");
+
+    expect(result).toEqual({
+      info: null,
+      hostReachable: true,
+      failure: "busy",
+      error: err,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: "mac", sessionId: 7 }),
+      "host busy, reporting default live status",
+    );
+  });
 });

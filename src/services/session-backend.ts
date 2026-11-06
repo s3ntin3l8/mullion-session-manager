@@ -15,6 +15,7 @@ import type { SessionLiveness } from "./session-process.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient, HostRequestError, type SpawnResult } from "./remote-host-client.js";
+import { isHostBusyError } from "./remote-host-errors.js";
 import { invalidateRemoteWorktreeCache } from "./remote-worktree-cache.js";
 import { saveSessionFileUpload, saveSessionUpload, uploadRetentionMs } from "./session-upload.js";
 import {
@@ -75,7 +76,12 @@ export function warnHostError(
   err: unknown,
   rejectedMsg: string,
   unreachableMsg: string,
+  busyMsg?: string,
 ): err is HostRequestError {
+  if (isHostBusyError(err)) {
+    log.warn({ ...bindings, err }, busyMsg ?? unreachableMsg.replace("unreachable", "busy"));
+    return false;
+  }
   const rejected = err instanceof HostRequestError;
   log.warn({ ...bindings, err }, rejected ? rejectedMsg : unreachableMsg);
   return rejected;

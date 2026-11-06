@@ -51,13 +51,20 @@ its authorization are the ones the inbound transport runs. The differences:
   header and forwards nothing but `content-type`, `accept` and `x-mullion-*`).
   Per-session authorization stays where it was (the primary's routes, the
   agent's session lookups).
-- **Only the agent API.** Paths must start with `/internal/`, may not contain a
-  dot segment, control characters or `/internal/ws/`; anything else is answered
-  400 without being replayed.
-- **Timeouts** are the same per-call budgets as inbound and cover opening the
-  channel, sending and the full response. Bodies are bounded (64 MiB).
+- **Only the agent API.** Paths must start with `/internal/`, are validated
+  and percent-decoded, and may not contain double-encoded segments, undecodable
+  sequences, dot segments, control characters, or `/internal/ws/`; anything else
+  is answered 400 without being replayed.
+- **Timeouts and body limits.** Timeouts are the same per-call budgets as inbound
+  and cover opening the channel, sending and the full response. Bodies default
+  to 2 MiB for requests and 8 MiB for responses (`AGENT_CHANNEL_DEFAULT_MAX_REQUEST_BYTES`,
+  `AGENT_CHANNEL_DEFAULT_MAX_RESPONSE_BYTES`), with explicit overrides up to 64 MiB
+  for operations like `/internal/uploads` and `/internal/project-files/{upload,write}`.
 - **Errors keep their meaning.** A 4xx from the agent is a rejection
   (`HostRequestError`); a 5xx or a transport failure is `HostUnreachableError`.
+  When all 64 outbound channel slots are busy, callers queue up to 5 seconds
+  (`AGENT_CHANNEL_SLOT_WAIT_MS`) before failing with `HostBusyError` (`retryable: true`),
+  which callers treat as retryable rather than marking the host unreachable.
 
 Preview HTTP/WS, the browser WebSocket, the file-browser transfers
 (`uploadProjectFile` / `downloadProjectFile`) and the unauthenticated `/health`
@@ -125,7 +132,8 @@ attach query validation is shared, not copied.
 ### Never replayed, never switched
 
 - A failure **before** the request started sending (the channel could not be
-  opened) is plain unreachability: nothing ran.
+  opened) is plain unreachability (`HostUnreachableError`), or `HostBusyError`
+  if the outbound channel cap was saturated: nothing ran.
 - A failure **after** it started (the link dropped, the request timed out) on a
   non-idempotent request surfaces as `HostOutcomeUnknownError` (a
   `HostUnreachableError` with `outcomeUnknown: true`): the agent may have

@@ -98,6 +98,14 @@ export const AGENT_CHANNEL_CREDENTIAL_RECHECK_MS = 60_000;
 export const AGENT_CHANNEL_MAX_HEAD_BYTES = 64 * 1024;
 /** Largest tunnelled response body the primary buffers. */
 export const AGENT_CHANNEL_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
+/** Default body limit on tunnelled requests. Sized to cover ordinary JSON RPCs while bounding worst-case buffering. */
+export const AGENT_CHANNEL_DEFAULT_MAX_REQUEST_BYTES = 2 * 1024 * 1024;
+/** Default body limit on tunnelled responses for non-download operations. */
+export const AGENT_CHANNEL_DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+/** How long channelFetch waits for a channel slot to become free when at capacity. */
+export const AGENT_CHANNEL_SLOT_WAIT_MS = 5_000;
+/** Minimum time reserved for the exchange once a channel is opened, so slot waiting times out before the total request budget. */
+export const AGENT_CHANNEL_MIN_EXCHANGE_MS = 250;
 
 /** The first line of a tunnelled request: JSON, terminated by "\n"; the raw
  * request body follows, then EOF. */
@@ -199,6 +207,10 @@ export function backoffDelayMs(attempt: number, random: () => number = Math.rand
 export interface HostChannelStatus {
   /** An authenticated channel is open right now. */
   ready: boolean;
+  /** Whether the host is bound to the outbound channel transport. */
+  bound: boolean;
+  /** Human-readable status description. */
+  status: "connected" | "bound to the outbound channel, not connected" | "not connected";
   connectedAt: string | null;
   carriedOperations: string[];
 }

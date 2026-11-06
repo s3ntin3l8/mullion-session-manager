@@ -31,6 +31,7 @@ import {
   HostRequestError,
   HostUnreachableError,
 } from "./remote-host-client.js";
+import { isHostBusyError } from "./remote-host-errors.js";
 
 export type HostGitResult<T> =
   | { ok: true; value: T }
@@ -44,6 +45,15 @@ export type HostGitResult<T> =
       updateHint: string;
       /** Names the host and what it lacks, ending with the hint. */
       detail: string;
+    }
+  | {
+      ok: false;
+      /** The host is busy (outbound channel concurrency cap reached).
+       * Distinct from unreachable so callers treat it as retryable rather
+       * than marking the host down. */
+      reason: "busy";
+      detail: string;
+      retryable: true;
     }
   | {
       ok: false;
@@ -113,6 +123,9 @@ export async function viaRemote<T>(
     const value = await fn(getRemoteHostClient(app, hostId));
     return { ok: true, value };
   } catch (err) {
+    if (isHostBusyError(err)) {
+      return { ok: false, reason: "busy", detail: err.message, retryable: true };
+    }
     if (err instanceof HostRequestError) {
       if (err.statusCode === 404) {
         const refusal = unsupportedOperation(hostId, op);

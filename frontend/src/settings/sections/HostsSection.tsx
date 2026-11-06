@@ -123,6 +123,7 @@ export function HostsSection() {
     pingHost,
     rotateHostToken,
     revokeHost,
+    unbindHost,
   } = useDashboardStore();
 
   // Issue #1725 / roadmap 8.11 — park a host, or un-park it.
@@ -348,6 +349,13 @@ export function HostsSection() {
     );
   };
 
+  const handleUnbind = (host: Host) => {
+    setDeleteError(null);
+    unbindHost(host.id).catch((err: unknown) =>
+      setDeleteError(err instanceof Error ? err.message : "Could not unbind the channel."),
+    );
+  };
+
   const handleRotate = (host: Host) => {
     setRotateError(null);
     rotateHostToken(host.id)
@@ -455,6 +463,17 @@ export function HostsSection() {
                         </span>
                       </>
                     )}
+                    {host.channel?.bound && !host.channel?.ready && (
+                      <>
+                        {" · "}
+                        <span
+                          style={{ color: "var(--y)" }}
+                          title="Bound to the outbound channel, but no connection is currently open."
+                        >
+                          bound to the outbound channel, not connected
+                        </span>
+                      </>
+                    )}
                     {" · "}
                     <HostCapacityLine host={host} />
                     {" · "}
@@ -550,6 +569,14 @@ export function HostsSection() {
                     >
                       Test
                     </SecondaryButton>
+                    {host.channel?.bound && !host.channel?.ready && (
+                      <SecondaryButton
+                        onClick={() => handleUnbind(host)}
+                        data-testid={`unbind-host-${host.id}`}
+                      >
+                        Unbind
+                      </SecondaryButton>
+                    )}
                     <KebabMenu
                       title="More…"
                       items={[
@@ -577,6 +604,16 @@ export function HostsSection() {
                           icon: <MoonIcon size={14} style={{ color: "var(--muted)" }} />,
                           onClick: () => toggleDrain(host),
                         },
+                        ...(host.channel?.bound && !host.channel?.ready
+                          ? [
+                              {
+                                key: "unbind",
+                                label: "Unbind channel",
+                                icon: <CloseIcon size={14} style={{ color: "var(--muted)" }} />,
+                                onClick: () => handleUnbind(host),
+                              },
+                            ]
+                          : []),
                         // An enrolled host re-registers with the fleet secret, so it
                         // has no per-host token to rotate.
                         ...(host.origin === "enrolled"
