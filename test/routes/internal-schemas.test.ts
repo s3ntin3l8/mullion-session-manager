@@ -116,6 +116,17 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
               hint: { type: "string", maxLength: 1024 },
             },
           },
+          browserTarget: {
+            type: "object",
+            additionalProperties: false,
+            required: ["projectId", "hostId", "checkoutRoot", "legacy"],
+            properties: {
+              projectId: { type: "integer" },
+              hostId: { type: "string", minLength: 1, maxLength: 256 },
+              checkoutRoot: { type: "string", minLength: 1, maxLength: 4096 },
+              legacy: { type: "boolean" },
+            },
+          },
           gitIdentity: {
             type: "object",
             additionalProperties: false,

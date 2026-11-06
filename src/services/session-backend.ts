@@ -1,5 +1,6 @@
 import { compareWorktreePaths } from "./worktree-paths.js";
 import type { GitIdentity } from "./git-env.js";
+import type { BrowserTarget } from "./browser-manager.js";
 import type { SessionGithubAuth } from "./session-github-token.js";
 import type { WorktreePathCandidate, WorktreePathRelation } from "./worktree-paths.js";
 import { renderScrollback } from "./scrollback-render.js";
@@ -156,6 +157,9 @@ export interface SpawnOpts {
   // and forwarded to a remote host verbatim: it becomes user.name/user.email in
   // the session's numbered GIT_CONFIG_* env (session-env.ts buildGitConfigEnv).
   gitIdentity?: GitIdentity;
+  // Issue #2639 — see CreateSessionOptions.browserTarget (session-types.ts).
+  // Forwarded to a remote host verbatim.
+  browserTarget?: BrowserTarget;
   // #2246 — see CreateSessionOptions.githubAuth. Forwarded to a remote host in
   // the (signed) spawn body and kept in that agent's memory only.
   githubAuth?: SessionGithubAuth;

@@ -158,6 +158,10 @@ import {
   resolveLoopbackPreviewUrl,
 } from "./internal-streams.js";
 import { AGENT_CHANNEL_AUTH_HEADER } from "../services/agent-channel-tunnel.js";
+import {
+  rememberSessionBrowserTarget,
+  sessionBrowserTarget,
+} from "../services/session-browser-targets.js";
 import { acceptControlRelayConnection } from "../plugins/control-relay.js";
 import { resolveSshAuthSock } from "../services/ssh-agent-socket.js";
 import type { SessionInfo } from "../services/pty-manager.js";
@@ -2476,6 +2480,9 @@ export async function internalRoutes(app: FastifyInstance) {
         // An older agent build strips it (additionalProperties: false) and
         // the session simply commits with the host's own identity.
         gitIdentity,
+        // Issue #2639 — the session's browser target, resolved on the primary
+        // (kept by session-browser-targets.ts, not on the Session).
+        browserTarget,
         // #2246 — the session's GitHub credential; getOrCreate stores it in
         // this agent's memory (session-github-token.ts) and never persists it.
         githubAuth,
@@ -2521,6 +2528,7 @@ export async function internalRoutes(app: FastifyInstance) {
         model,
         smallModel,
       });
+      rememberSessionBrowserTarget(app.pty, id, browserTarget);
       reply.code(201);
       // Hermes review, PR #538 — an agent build too old to have this route's
       // `initialPrompt`/`skipPermissions` schema properties silently strips
@@ -2584,7 +2592,10 @@ export async function internalRoutes(app: FastifyInstance) {
     "/internal/sessions/live",
     { ...INTERNAL_RATE_LIMIT, schema: liveStatusSchema },
     async (request) => {
-      const { ids, idleThresholdMs, sessionProjectIds } = request.body;
+      // `sessionProjectIds` is still accepted (an older primary sends it) but
+      // no longer read: a project id cannot tell which checkout's browser a
+      // session is looking at.
+      const { ids, idleThresholdMs } = request.body;
       // Use Map to store key-value pairs (prototype injection safe), then
       // convert to a null-prototype object using Object.fromEntries(..., null).
       // This satisfies the CodeQL remote property injection scanner while
@@ -2592,21 +2603,18 @@ export async function internalRoutes(app: FastifyInstance) {
       const result = new Map<string, SessionInfo | null>();
       for (const id of ids) {
         const info = app.pty.get(id)?.toInfo(idleThresholdMs) ?? null;
-        if (info && app.browserEnabled && sessionProjectIds) {
-          const projectId = sessionProjectIds[id];
-          if (projectId !== undefined) {
-            // This agent has no way to tell which checkout the session is on,
-            // so only an unambiguous answer (one running browser for the
-            // project) is reported — never another target's page.
-            const running = app.browser
-              .listForProject(projectId)
-              .filter((m) => m.browser.isConnected());
-            if (running.length === 1) {
-              try {
-                info.browserUrl = running[0].page.url();
-              } catch {
-                // Best-effort
-              }
+        // Issue #2639 — only the browser of the session's OWN target (the one
+        // the primary sent at spawn), never another checkout's page: a URL can
+        // carry tokens or query secrets. A session with no target, or whose
+        // target has no running browser, reports nothing.
+        const target = sessionBrowserTarget(id);
+        if (info && app.browserEnabled && target) {
+          const managed = app.browser.get(target);
+          if (managed?.browser.isConnected()) {
+            try {
+              info.browserUrl = managed.page.url();
+            } catch {
+              // Best-effort
             }
           }
         }

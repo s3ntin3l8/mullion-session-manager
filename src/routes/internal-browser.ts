@@ -10,16 +10,23 @@ import {
 import type { AgentAction, FindElementsBody } from "./browser-automation.js";
 import { attachSocketToBrowser } from "./browser.js";
 import type { BrowserTarget } from "../services/browser-manager.js";
+import { agentServesHost } from "../services/agent-identity.js";
 import { SESSION_ID_PARAMS_SCHEMA } from "./internal-schemas.js";
 
 /** The browser target an agent browser route was asked for (issue #2448). The
  * primary names it in the query; an agent never derives one from the project
  * id alone, so a caller that omits it is refused instead of silently getting
  * a project-wide browser shared across checkouts. */
-function parseBrowserTarget(query: Record<string, string | undefined>): BrowserTarget | null {
+function parseBrowserTarget(
+  app: FastifyInstance,
+  query: Record<string, string | undefined>,
+): BrowserTarget | null {
   const projectId = Number(query.projectId);
   const { hostId, checkoutRoot } = query;
   if (!Number.isInteger(projectId) || !hostId || !checkoutRoot) return null;
+  // A target names the machine that runs it; this pool only holds this
+  // machine's browsers, so another host's target is a misrouted request.
+  if (!agentServesHost(app.config.SESSIONS_DIR, hostId)) return null;
   return { projectId, hostId, checkoutRoot, legacy: query.legacy === "1" };
 }
 
@@ -43,7 +50,7 @@ export function registerBrowserRoutes(app: FastifyInstance, rateLimit: { config:
     },
     async (request, reply) => {
       const sessionId = Number(request.params.id);
-      const target = parseBrowserTarget(request.query);
+      const target = parseBrowserTarget(app, request.query);
       if (!Number.isInteger(sessionId) || !target) {
         return reply.badRequest("Invalid session id or browser target");
       }
@@ -83,7 +90,7 @@ export function registerBrowserRoutes(app: FastifyInstance, rateLimit: { config:
     },
     async (request, reply) => {
       const sessionId = Number(request.params.id);
-      const target = parseBrowserTarget(request.query);
+      const target = parseBrowserTarget(app, request.query);
       if (!Number.isInteger(sessionId) || !target) {
         return reply.badRequest("Invalid session id or browser target");
       }
@@ -130,14 +137,14 @@ export function registerBrowserRoutes(app: FastifyInstance, rateLimit: { config:
         if (!Number.isInteger(sessionId)) {
           return reply.badRequest("Invalid sessionId");
         }
-        if (!parseBrowserTarget(request.query as Record<string, string | undefined>)) {
+        if (!parseBrowserTarget(app, request.query as Record<string, string | undefined>)) {
           return reply.badRequest("Invalid browser target");
         }
       },
     },
     (socket, req) => {
       const sessionId = Number(req.params.sessionId);
-      const target = parseBrowserTarget(req.query as Record<string, string | undefined>);
+      const target = parseBrowserTarget(app, req.query as Record<string, string | undefined>);
       if (!target) {
         socket.close();
         return;
@@ -152,7 +159,7 @@ export function registerBrowserRoutes(app: FastifyInstance, rateLimit: { config:
     "/internal/browser/close",
     { ...rateLimit },
     async (request, reply) => {
-      const target = parseBrowserTarget(request.query);
+      const target = parseBrowserTarget(app, request.query);
       if (!target) return reply.badRequest("Invalid browser target");
       if (!app.browserEnabled) return { ok: true };
       await app.browser.closeTarget(target);

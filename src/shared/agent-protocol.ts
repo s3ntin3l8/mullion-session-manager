@@ -73,6 +73,9 @@ export const AGENT_LAUNCH_OPTIONS = [
   "taskId",
   "githubAuth",
   "gitIdentity",
+  // Issue #2639: the session's browser target, resolved on the primary. An
+  // agent without it cannot know which target its hook-socket browser serves.
+  "browserTarget",
 ] as const;
 export type AgentLaunchOption = (typeof AGENT_LAUNCH_OPTIONS)[number];
 

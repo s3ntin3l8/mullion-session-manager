@@ -30,7 +30,9 @@ worktree or host has its own. `localhost` is the **target host's** loopback, so
 in a session placed on another machine it is that machine's dev server. If the
 target can't be resolved or its host is too old for per-target browsers you get
 an error (400/501/503), never another checkout's browser — update the host or fix
-the placement instead of working around it. Your binding stays on its original
+the placement instead of working around it. A session on another machine whose
+primary predates this (it never sent a target) is refused with a message saying
+so; restart it from an up-to-date primary. Your binding stays on its original
 target even if the human switches focus to another session.
 
 ## Actions

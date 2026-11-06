@@ -94,3 +94,11 @@ export async function saveAgentIdentity(statePath: string, identity: AgentIdenti
     throw err;
   }
 }
+
+/** Whether `hostId` is this agent. An agent that has not enrolled yet (a
+ * legacy or manual deployment) has no id of its own to compare against, so it
+ * cannot tell and accepts the name the primary gave it. */
+export function agentServesHost(sessionsDir: string, hostId: string): boolean {
+  const own = loadAgentIdentity(identityStatePath(sessionsDir))?.hostId;
+  return own === undefined || own === hostId;
+}

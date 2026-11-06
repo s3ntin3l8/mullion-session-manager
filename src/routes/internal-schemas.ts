@@ -1,3 +1,4 @@
+import type { BrowserTarget } from "../services/browser-manager.js";
 import type { SessionGithubAuth } from "../services/session-github-token.js";
 import type { PromoteDecision } from "../plugins/hooks.js";
 import { DEFAULT_GENERATION_TIMEOUT_MS } from "../services/scaffold-generate.js";
@@ -114,6 +115,9 @@ export interface SpawnSessionBody {
   // see CreateSessionOptions.gitIdentity (session-types.ts). Bounded like any
   // other free-text value forwarded from the primary.
   gitIdentity?: { name: string; email: string };
+  // Issue #2639 — the session's browser target, resolved on the primary; an
+  // older agent strips it and its hook-socket browser then has no target.
+  browserTarget?: BrowserTarget;
   // #2246 — the session's GitHub credential, resolved on the primary (see
   // session-github-token.ts). Held in the agent's memory only; an older agent
   // strips it and the session's git/gh simply have no Mullion token.
@@ -226,6 +230,17 @@ export const spawnSessionSchema = {
       // field.
       taskId: { type: "integer" },
       githubAuth: SESSION_GITHUB_AUTH_SCHEMA,
+      browserTarget: {
+        type: "object",
+        additionalProperties: false,
+        required: ["projectId", "hostId", "checkoutRoot", "legacy"],
+        properties: {
+          projectId: { type: "integer" },
+          hostId: { type: "string", minLength: 1, maxLength: 256 },
+          checkoutRoot: { type: "string", minLength: 1, maxLength: 4096 },
+          legacy: { type: "boolean" },
+        },
+      },
       gitIdentity: {
         type: "object",
         additionalProperties: false,

@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
+import fs from "node:fs";
 import { buildApp } from "../../src/app.js";
+import { rememberSessionBrowserTarget } from "../../src/services/session-browser-targets.js";
+import { identityStatePath } from "../../src/services/agent-identity.js";
 
 // Issue #2448 — the agent-side browser routes take the target from the query
 // (the primary names it) and refuse a caller that omits it.
@@ -47,6 +50,46 @@ describe("agent browser routes (/internal/.../browser)", () => {
     }
     const close = await app.inject({ method: "POST", url: "/internal/browser/close", headers });
     expect(close.statusCode).toBe(400);
+  });
+
+  it("refuses a target that names another host once this agent knows its own id", async () => {
+    const statePath = identityStatePath(app.config.SESSIONS_DIR);
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify({ hostId: "agent-own", machineCredential: "c".repeat(32) }),
+    );
+    try {
+      const launch = vi.spyOn(app.browser, "getOrLaunch");
+      const wrong = await app.inject({
+        method: "POST",
+        url: `/internal/sessions/7/browser?${query.replace("hostId=local", "hostId=someone-else")}`,
+        headers,
+        payload: { action: "get" },
+      });
+      expect(wrong.statusCode).toBe(400);
+      const close = await app.inject({
+        method: "POST",
+        url: `/internal/browser/close?${query.replace("hostId=local", "hostId=someone-else")}`,
+        headers,
+      });
+      expect(close.statusCode).toBe(400);
+      expect(launch).not.toHaveBeenCalled();
+
+      launch.mockResolvedValue({
+        page: fakePage(),
+        consoleLogs: [],
+        pageErrors: [],
+      } as unknown as Awaited<ReturnType<typeof app.browser.getOrLaunch>>);
+      const own = await app.inject({
+        method: "POST",
+        url: `/internal/sessions/7/browser?${query.replace("hostId=local", "hostId=agent-own")}`,
+        headers,
+        payload: { action: "get" },
+      });
+      expect(own.statusCode).toBe(200);
+    } finally {
+      fs.rmSync(statePath, { force: true });
+    }
   });
 
   it("runs an action on the target's page", async () => {
@@ -127,6 +170,43 @@ describe("agent browser routes (/internal/.../browser)", () => {
       payload: { by: "text", value: "x" },
     });
     expect(findFail.statusCode).toBe(400);
+  });
+
+  it("reports a session's browserUrl only for the browser of its own target", async () => {
+    const own = { projectId: 3, hostId: "h", checkoutRoot: "/work/a", legacy: true };
+    const other = { projectId: 3, hostId: "h", checkoutRoot: "/work/b", legacy: false };
+    const targets: Record<string, typeof own | null> = { "601": own, "602": other, "603": null };
+    vi.spyOn(app.pty, "get").mockImplementation(
+      () => ({ toInfo: () => ({ browserUrl: null }) }) as unknown as ReturnType<typeof app.pty.get>,
+    );
+    for (const [id, t] of Object.entries(targets)) {
+      rememberSessionBrowserTarget(app.pty, id, t ?? undefined);
+    }
+    // Only worktree A's browser is running.
+    vi.spyOn(app.browser, "get").mockImplementation((t) =>
+      t.checkoutRoot === "/work/a"
+        ? ({
+            browser: { isConnected: () => true },
+            page: { url: () => "http://localhost:3000/?token=secret" },
+          } as unknown as ReturnType<typeof app.browser.get>)
+        : undefined,
+    );
+    const res = await app.inject({
+      method: "POST",
+      url: "/internal/sessions/live",
+      headers,
+      // An older primary's per-project hint is accepted but no longer used.
+      payload: {
+        ids: ["601", "602", "603"],
+        idleThresholdMs: 30_000,
+        sessionProjectIds: { "602": 3 },
+      },
+    });
+    const live = res.json();
+    expect(live["601"].browserUrl).toBe("http://localhost:3000/?token=secret");
+    // A session in another worktree must not see A's page.
+    expect(live["602"].browserUrl).toBeNull();
+    expect(live["603"].browserUrl).toBeNull();
   });
 
   it("closes one target's browser, idempotently", async () => {

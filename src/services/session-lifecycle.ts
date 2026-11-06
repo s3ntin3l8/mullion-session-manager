@@ -43,7 +43,7 @@ import {
 } from "./session-github-auth.js";
 import type { SessionGithubAuth } from "./session-github-token.js";
 import { startSetupRecipe } from "./setup-recipe.js";
-import { closeSessionBrowserBindings } from "./session-browsers.js";
+import { closeSessionBrowserBindings, recordSessionBrowserBinding } from "./session-browsers.js";
 import { resolveSessionHostId } from "./session-live-info.js";
 import {
   parseHostCwds,
@@ -53,7 +53,14 @@ import {
   type LaunchNeeds,
   type PlacementTarget,
 } from "./placement.js";
-import { ensureRemoteHostProtocols, gateLaunchOptions, gateOperation } from "./host-agents.js";
+import {
+  ensureRemoteHostProtocols,
+  gateLaunchOptions,
+  gateOperation,
+  hostLaunchOptions,
+} from "./host-agents.js";
+import type { BrowserTarget } from "./browser-manager.js";
+import { resolveSessionBrowserTarget } from "./browser-target.js";
 import { requiredLaunchOptions, type LaunchFields } from "./launch-requirements.js";
 import { isReservedSessionEnvKey } from "./session-env-keys.js";
 import { commandAgentBin } from "./hook-adapters/index.js";
@@ -1897,6 +1904,30 @@ async function resolveSpawnGithubAuth(
   }
 }
 
+// The browser target to send an agent host with a spawn (issue #2639), or
+// undefined when there is none to send: a local session (the primary resolves
+// it from its own database), the browser disabled, or an agent that predates
+// the launch option / per-target browsers (it keeps its own behaviour, which
+// is refused rather than guessed). Never throws: a session without a browser
+// target still launches; only its browser is unavailable.
+export async function resolveAgentBrowserTarget(
+  app: FastifyInstance,
+  project: ProjectRow,
+  sessionId: number,
+  placementHost: string,
+): Promise<BrowserTarget | undefined> {
+  if (placementHost === LOCAL_HOST_ID || !app.browserEnabled) return undefined;
+  if (!hostLaunchOptions(app, placementHost).includes("browserTarget")) return undefined;
+  try {
+    const resolved = await resolveSessionBrowserTarget(app, project.id, sessionId);
+    if (!resolved.ok || resolved.target.hostId !== placementHost) return undefined;
+    return resolved.target;
+  } catch (err) {
+    app.log.warn({ err, sessionId }, "could not resolve the session's browser target");
+    return undefined;
+  }
+}
+
 // Spawns the session; on failure unwinds everything this create made (see
 // the catch). On success also logs the version-skew diagnostics.
 async function spawnOrRollback(
@@ -1921,7 +1952,16 @@ async function spawnOrRollback(
       requiredLaunchOptions: requiredLaunchOptions(spawnOpts),
     });
     if (unsupported !== null) throw new Error(unsupported);
-    spawnResult = await resolveBackend(app, placementHost).spawn(spawnOpts);
+    // Issue #2639 — an agent host has no database to resolve the session's
+    // browser target with, so the primary resolves it here, once, and sends
+    // it. The agent's hook-socket browser serves exactly this target (the
+    // pool entry the panel resolves), and the binding recorded below is what
+    // closes it when the session ends.
+    const browserTarget = await resolveAgentBrowserTarget(app, project, sessionId, placementHost);
+    spawnResult = await resolveBackend(app, placementHost).spawn(
+      browserTarget ? { ...spawnOpts, browserTarget } : spawnOpts,
+    );
+    if (browserTarget) recordSessionBrowserBinding(app, sessionId, browserTarget);
     // Version-skew safety net — "echoed back, not assumed" (SpawnResult's
     // own doc comment), logged rather than threaded up into
     // CreateSessionResult: nothing downstream currently needs to REACT to
