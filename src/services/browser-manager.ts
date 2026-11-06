@@ -123,7 +123,11 @@ export function browserTargetQuery(target: BrowserTarget): string {
 
 /** Short filesystem-safe id for a target's on-disk state. */
 function targetFileId(target: BrowserTarget): string {
-  if (target.legacy) return `project-${target.projectId}`;
+  // Only the endpoint-less legacy target keeps the unhashed id; endpoints in
+  // the default checkout must not share storage or downloads.
+  if (target.legacy && (!target.endpoint || target.endpoint === LEGACY_BROWSER_ENDPOINT)) {
+    return `project-${target.projectId}`;
+  }
   const digest = createHash("sha1").update(browserTargetKey(target)).digest("hex").slice(0, 16);
   return `project-${target.projectId}-${digest}`;
 }

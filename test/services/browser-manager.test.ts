@@ -245,6 +245,12 @@ describe("BrowserManager", () => {
     const b = await manager.getOrLaunch({ ...target(1), endpoint: "http://localhost:4000" });
     expect(a).not.toBe(b);
     expect(a.context).not.toBe(b.context);
+    const paths = manager as unknown as {
+      storageStatePath(t: unknown): string;
+      downloadsDir(t: unknown): string;
+    };
+    expect(paths.storageStatePath(a.target)).not.toBe(paths.storageStatePath(b.target));
+    expect(paths.downloadsDir(a.target)).not.toBe(paths.downloadsDir(b.target));
     expect(launchedBrowsers).toHaveLength(1);
     // A caller with no endpoint is the legacy value, distinct from both.
     const legacy = await manager.getOrLaunch(target(1)).catch((e) => e);
