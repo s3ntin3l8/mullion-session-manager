@@ -171,4 +171,24 @@ describe("worker decisions PR section", () => {
     expect(cleared).toContain("Issue body");
     expect(cleared).toContain("\n\n---\nfooter");
   });
+
+  it.each([
+    ["bold text", (b: string) => b.replace("### Worker decisions", "**Worker decisions**")],
+    ["a deleted heading line", (b: string) => b.replace("### Worker decisions\n\n", "")],
+    ["a blank line before the heading", (b: string) => b.replace("### Worker", "\n### Worker")],
+  ])("replaces or removes a section whose heading became %s", (_name, edit) => {
+    const first = applyWorkerDecisionsSection("Issue body\n\nCloses #7\n\n---\nfooter", [
+      "Decision: a",
+    ]);
+    const edited = edit(first);
+    const updated = applyWorkerDecisionsSection(edited, ["Decision: b"]);
+    expect(updated).toContain("- Decision: b");
+    expect(updated).not.toContain("Decision: a");
+    expect(updated.match(/<!-- mullion:worker-decisions -->/g)).toHaveLength(1);
+    expect(updated).toContain("\n\n---\nfooter");
+    const cleared = applyWorkerDecisionsSection(edited, []);
+    expect(cleared).not.toContain("mullion:worker-decisions");
+    expect(cleared).toContain("Closes #7");
+    expect(cleared).toContain("\n\n---\nfooter");
+  });
 });

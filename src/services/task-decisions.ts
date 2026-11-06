@@ -112,6 +112,11 @@ const RENAMED_SECTION_RE = new RegExp(
   "gm",
 );
 
+// The heading line is gone or no longer a heading (deleted, bold, a blank line
+// before it): the span from a line-start start marker to the next end marker.
+const LINE_START_MARKER_RE = new RegExp(`^${SECTION_START}`, "gm");
+const BARE_SECTION_RE = new RegExp(`\\r?\\n*^${SECTION_START}[\\s\\S]*?${SECTION_END}`, "m");
+
 /**
  * Neutralises a declared-decision line so it is safe to render in GitHub
  * markdown (the PR description and the review comment):
@@ -171,6 +176,16 @@ export function applyWorkerDecisionsSection(body: string, decisions: string[]): 
     const startIndex = last.index!;
     const replacement = section === "" ? "" : `\n\n${section}`;
     return `${body.slice(0, startIndex)}${replacement}${body.slice(startIndex + last[0].length)}`;
+  }
+  // Heading deleted or replaced by non-heading text: only trust a lone line-start
+  // marker that has an end marker after it, so a lookalike marker in prose (which
+  // never sits alone at a line start with a closing marker) is still left alone.
+  if (body.match(LINE_START_MARKER_RE)?.length === 1) {
+    const bare = BARE_SECTION_RE.exec(body);
+    if (bare) {
+      const replacement = section === "" ? "" : `\n\n${section}`;
+      return `${body.slice(0, bare.index)}${replacement}${body.slice(bare.index + bare[0].length)}`;
+    }
   }
   if (section === "") return body;
   const footer = body.lastIndexOf("\n\n---\n");

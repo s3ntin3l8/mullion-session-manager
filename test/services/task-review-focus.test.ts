@@ -131,3 +131,15 @@ describe("review focus in the review prompt and findings", () => {
     expect(md).toContain("- **clear** — races: checked a.ts");
   });
 });
+
+describe("renderFocusSection neutralisation", () => {
+  it("defuses mentions and HTML in focus items and evidence", async () => {
+    const { renderFocusSection } = await import("../../src/services/task-review-focus.js");
+    const out = renderFocusSection([
+      { item: "ping @someone <b>x</b>", status: "ok", evidence: "see [a](http://x)" },
+    ] as never).join("\n");
+    expect(out).not.toContain("@someone");
+    expect(out).not.toContain("<b>");
+    expect(out).toContain("\\[a\\]");
+  });
+});
