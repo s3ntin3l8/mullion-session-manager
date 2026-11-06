@@ -1209,6 +1209,75 @@ describe("computeScaffold — restructured instructions (issue #2316)", () => {
   const get = (entries: ReturnType<typeof computeScaffold>, p: string) =>
     (entries.find((e) => e.path === p) as { contents: string } | undefined)?.contents;
 
+  describe("CLAUDE.md reduction (issue #2646)", () => {
+    const longClaude =
+      "# My Project\n\n" +
+      Array.from({ length: 200 }, (_, i) => `Rule number ${i}: do the thing.`).join("\n") +
+      "\n";
+
+    it("reduces a long CLAUDE.md to its title plus the @AGENTS.md import", () => {
+      const entries = computeScaffold(
+        { "CLAUDE.md": longClaude },
+        { slug: "demo", generated: { agentsMdBody: body, conflicts: [] } },
+      );
+      const claude = get(entries, "CLAUDE.md")!;
+      expect(claude.startsWith("# My Project\n")).toBe(true);
+      expect(claude).not.toContain("Rule number");
+      expect(claude.split("\n").filter((l) => l === "@AGENTS.md")).toHaveLength(1);
+      expect(claude.split("\n").length).toBeLessThan(12);
+    });
+
+    it("is stable on a re-run over its own output", () => {
+      const opts = { slug: "demo", generated: { agentsMdBody: body } };
+      const first = get(computeScaffold({ "CLAUDE.md": longClaude }, opts), "CLAUDE.md")!;
+      expect(get(computeScaffold({ "CLAUDE.md": first }, opts), "CLAUDE.md")).toBe(first);
+    });
+
+    it("keeps the body while the agent reports an uncovered CLAUDE.md passage", () => {
+      const entries = computeScaffold(
+        { "CLAUDE.md": longClaude },
+        {
+          slug: "demo",
+          generated: { agentsMdBody: body, conflicts: [{ file: "CLAUDE.md" }] },
+        },
+      );
+      expect(get(entries, "CLAUDE.md")).toContain("Rule number 199");
+    });
+
+    it("keeps the body when the rewrite looks lossy", () => {
+      const entries = computeScaffold(
+        { "CLAUDE.md": longClaude },
+        { slug: "demo", generated: { agentsMdBody: body, possiblyLossy: true } },
+      );
+      expect(get(entries, "CLAUDE.md")).toContain("Rule number 199");
+    });
+
+    it("ignores conflicts about other files", () => {
+      const entries = computeScaffold(
+        { "CLAUDE.md": longClaude },
+        {
+          slug: "demo",
+          generated: { agentsMdBody: body, conflicts: [{ file: "CONTRIBUTING.md" }] },
+        },
+      );
+      expect(get(entries, "CLAUDE.md")).not.toContain("Rule number");
+    });
+
+    it("leaves CLAUDE.md alone without a restructure", () => {
+      const entries = computeScaffold({ "CLAUDE.md": longClaude }, { slug: "demo" });
+      expect(get(entries, "CLAUDE.md")).toContain("Rule number 199");
+    });
+
+    it("keeps CRLF endings when reducing", () => {
+      const entries = computeScaffold(
+        { "CLAUDE.md": "# T\r\n\r\nbody\r\n" },
+        { slug: "demo", generated: { agentsMdBody: body } },
+      );
+      expect(get(entries, "CLAUDE.md")!.startsWith("# T\r\n")).toBe(true);
+      expect(get(entries, "CLAUDE.md")).not.toContain("body");
+    });
+  });
+
   it("replaces the placeholder line with Mullion's region and keeps the rest of the body", () => {
     const entries = computeScaffold(
       { "AGENTS.md": "# P\n\n## Old rules\n- @bot Review\n" },
