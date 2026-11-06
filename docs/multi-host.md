@@ -1911,6 +1911,18 @@ terminal attach, live events, the control relay, ssh-agent fan-out, previews and
 file transfers; the browser WebSocket fails as unreachable with "no advertised
 address" until it moves too.
 
+What "reachable" means for the subsystems that select remote hosts (#2636): a
+host with a `baseUrl`, **or** one bound to the outbound channel (connected or
+not; `hasReachablePath`). Live events, the control relay, ssh-agent forwarding,
+bundle sync and terminal-palette sync all use that test, so an outbound-only host
+gets them over its channel. Each fan-out reconnects when a host's channel comes
+up (or is replaced), and a manual host with neither a URL nor a channel is still
+skipped without error. Project creation, per-host project paths and the project
+modal accept an outbound-only host as soon as it has a machine identity, even
+between channel connections. The duplicate-row flag never matches two rows by
+hostname unless both have a `baseUrl`, so two outbound agents with the same
+hostname keep separate rows.
+
 ### Mixed fleets: which transport a host uses
 
 | Agent                                                                                    | Transport for request/response calls and streams                                                                                                                                                                                                                                                                                                                                                                                                                                               |

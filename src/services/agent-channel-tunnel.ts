@@ -872,6 +872,23 @@ export function isChannelHostBound(
   return boundHosts.get(key)?.get(hostId)?.has(operation) ?? false;
 }
 
+/**
+ * Whether the primary has any way to reach a host: an address to dial
+ * (`baseUrl`), or an outbound channel the agent dials in on — connected right
+ * now, or bound from an earlier connection (#2636). A manual host with neither
+ * has nothing to reach yet, so the fan-outs and syncs skip it.
+ */
+export function hasReachablePath(
+  app: FastifyInstance,
+  host: { id: string; baseUrl: string | null },
+): boolean {
+  return (
+    host.baseUrl !== null ||
+    app.agentChannels?.has(host.id) === true ||
+    isChannelHostBound(app, host.id)
+  );
+}
+
 export type HostTransport =
   | { kind: "channel"; channel: ConnectedAgentChannel }
   /** Negotiated the channel, which is down right now: fail, do not dial inbound. */

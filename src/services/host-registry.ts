@@ -224,7 +224,14 @@ export function findPossibleDuplicates(
           old.id !== newer.id &&
           old.createdAt.getTime() < newer.createdAt.getTime() &&
           ((newer.baseUrl !== null && old.baseUrl === newer.baseUrl) ||
-            (hostname !== null && reportedHostname(old) === hostname)),
+            // A hostname is not an identity: an outbound-only agent (no
+            // baseUrl, #2636) has no address to tell it from another machine
+            // by, and two of them can share a hostname, so only a pair of
+            // addressed rows (the lost-state-file case) matches on it.
+            (hostname !== null &&
+              old.baseUrl !== null &&
+              newer.baseUrl !== null &&
+              reportedHostname(old) === hostname)),
       )
       .map((old) => old.id);
     if (olderIds.length > 0) result.set(newer.id, olderIds);

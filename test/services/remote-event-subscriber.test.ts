@@ -131,6 +131,21 @@ describe("startRemoteEventSubscriber", () => {
     expect(getRemoteHostClientMock).not.toHaveBeenCalled();
   });
 
+  it("subscribes to an outbound-only host (no baseUrl) once its channel is up, and skips it before (#2636)", () => {
+    listHostsMock.mockReturnValue([fakeHost("outbound", { baseUrl: null })]);
+    openEventsStreamMock.mockImplementation(() => new MockSocket());
+    const channels = new Map<string, unknown>();
+    const app = Object.assign(fakeApp(), { agentChannels: channels });
+
+    const handle = startRemoteEventSubscriber(app, vi.fn());
+    handle.reconcile();
+    expect(getRemoteHostClientMock).not.toHaveBeenCalled();
+
+    channels.set("outbound", { carriedOperations: [] });
+    handle.reconcile();
+    expect(getRemoteHostClientMock).toHaveBeenCalledWith(app, "outbound");
+  });
+
   it("opens no subscriptions when sessions.eventPersistence is off, and closes any already open", () => {
     listHostsMock.mockReturnValue([fakeHost("remote-a")]);
     const socket = new MockSocket();

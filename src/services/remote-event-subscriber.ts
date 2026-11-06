@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { hasReachablePath } from "./agent-channel-tunnel.js";
 import type { WebSocket as NodeWebSocket } from "ws";
 import { listHosts } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
@@ -267,15 +268,12 @@ export function startRemoteEventSubscriber(
 
     const desiredIds = new Set(
       listHosts(app)
-        // baseUrl is only ever null for "local" today (enrollHost/claimHost
-        // always set it atomically, host-registry.ts's own doc comment) —
-        // this second filter is the same defensive-for-any-future-row
-        // posture host-heartbeat.ts's sweep() already takes (Hermes review,
-        // PR #564). Without it, a baseUrl-less non-local row would make
-        // getRemoteHostClient throw synchronously on every attempt
-        // (remote-host-client.ts), parked in an infinite 30s warn+retry
-        // loop that can never succeed.
-        .filter((h) => !h.isLocal && h.baseUrl !== null)
+        // A row with no address and no outbound channel (a manual host whose
+        // agent has not registered) would make getRemoteHostClient throw on
+        // every attempt, parked in an infinite warn+retry loop. An
+        // outbound-only agent (#2636) has no baseUrl but is reached over its
+        // channel, and the channel route reconciles when it comes up.
+        .filter((h) => !h.isLocal && hasReachablePath(app, h))
         .map((h) => h.id),
     );
     const forceReconnect = new Set(opts?.forceReconnect ?? []);

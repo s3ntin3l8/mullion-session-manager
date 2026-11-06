@@ -734,6 +734,25 @@ describe("host-registry", () => {
       await appRef.close();
     });
 
+    it("keeps two outbound-only agents with the same hostname on separate rows (#2636)", async () => {
+      appRef = await buildApp();
+      const name = `h-${crypto.randomUUID()}`;
+      const mk = (ageSec: number) => {
+        const { hostId } = enrollHost(appRef!, { hostname: name, wantsMachineCredential: true });
+        appRef!.db
+          .update(hosts)
+          .set({ createdAt: new Date(Date.now() - ageSec * 1000) })
+          .where(eq(hosts.id, hostId))
+          .run();
+        return hostId;
+      };
+      const stale = mk(100);
+      const fresh = mk(0);
+      const map = findPossibleDuplicates(appRef, (id) => (id === stale ? "offline" : "online"));
+      expect(map.has(fresh)).toBe(false);
+      await appRef.close();
+    });
+
     it("does not flag two live agents sharing a URL", async () => {
       appRef = await buildApp();
       const url = u();

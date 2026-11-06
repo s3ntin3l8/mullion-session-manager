@@ -75,6 +75,20 @@ describe("startControlRelayFanout — connection lifecycle (#1656)", () => {
     fanout.stop();
   });
 
+  it("connects to an outbound-only host with a live channel and skips it without one (#2636)", () => {
+    listHostsMock.mockReturnValue([host("outbound", { baseUrl: null })]);
+    openControlRelayStreamMock.mockImplementation(() => new MockSocket());
+    const channels = new Map<string, unknown>();
+    const app = Object.assign(fakeApp(), { agentChannels: channels });
+    const fanout = startControlRelayFanout(app);
+    fanout.reconcile();
+    expect(openControlRelayStreamMock).not.toHaveBeenCalled();
+    channels.set("outbound", { carriedOperations: [] });
+    fanout.reconcile();
+    expect(openControlRelayStreamMock).toHaveBeenCalledTimes(1);
+    fanout.stop();
+  });
+
   it("closes a host that is no longer enrolled and on forceReconnect", () => {
     const sockets: MockSocket[] = [];
     openControlRelayStreamMock.mockImplementation(() => {

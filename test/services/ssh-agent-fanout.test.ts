@@ -165,6 +165,19 @@ describe("startSshAgentFanout — connection lifecycle", () => {
     expect(getRemoteHostClientMock).not.toHaveBeenCalled();
   });
 
+  it("connects to an outbound-only host with a live channel and skips it without one (#2636)", () => {
+    listHostsMock.mockReturnValue([fakeHost("outbound", { baseUrl: null })]);
+    openSshAgentStreamMock.mockImplementation(() => new MockSocket());
+    const channels = new Map<string, unknown>();
+    const app = Object.assign(fakeApp(1), { agentChannels: channels });
+    const fanout = startSshAgentFanout(app);
+    fanout.reconcile();
+    expect(getRemoteHostClientMock).not.toHaveBeenCalled();
+    channels.set("outbound", { carriedOperations: [] });
+    fanout.reconcile();
+    expect(getRemoteHostClientMock).toHaveBeenCalledWith(app, "outbound");
+  });
+
   it("closes every open connection the instant the LAST bridge disconnects, even though no host was removed", () => {
     listHostsMock.mockReturnValue([fakeHost("agent-a")]);
     const socket = new MockSocket();

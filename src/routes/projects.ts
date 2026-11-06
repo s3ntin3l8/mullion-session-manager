@@ -61,6 +61,7 @@ import { KNOWN_AGENTS } from "../services/agent-detect.js";
 import { HERMES_REVIEW_AGENT, hermesReviewAgentRefusal } from "../services/task-agent-resolve.js";
 import { resolveGlobalPresets } from "./actions.js";
 import { LOCAL_HOST_ID, getHostRow } from "../services/host-registry.js";
+import { hasReachablePath } from "../services/agent-channel-tunnel.js";
 import {
   MAX_HOST_CWDS,
   PLACEMENT_MODES,
@@ -399,16 +400,28 @@ interface DiscoveredProject extends DiscoveredCandidate {
  *
  * Returns the offending host id, or null when the map is fine.
  */
+/**
+ * Whether a host is somewhere a project can be pinned: reachable, or an
+ * outbound-only agent (#2636) with a machine identity that is between
+ * connections. The same set the project modal offers.
+ */
+function isHostRegistered(
+  app: FastifyInstance,
+  host: { id: string; baseUrl: string | null; hasMachineIdentity: boolean },
+): boolean {
+  return host.hasMachineIdentity || hasReachablePath(app, host);
+}
+
 function unknownHostInCwds(
   app: FastifyInstance,
   map: Record<string, string> | null | undefined,
 ): string | null {
   if (map === null || map === undefined) return null;
-  // A pending host (no baseUrl yet) is not somewhere a session can run, so a
-  // cwd keyed to one is as wrong as a typo.
+  // A pending host (no address, no channel, no machine identity yet) is not
+  // somewhere a session can run, so a cwd keyed to one is as wrong as a typo.
   const known = new Set(
     listHosts(app)
-      .filter((host) => host.id === LOCAL_HOST_ID || host.baseUrl !== null)
+      .filter((host) => host.id === LOCAL_HOST_ID || isHostRegistered(app, host))
       .map((host) => host.id),
   );
   for (const hostId of Object.keys(map)) {
@@ -2942,7 +2955,14 @@ export async function projectsRoute(app: FastifyInstance) {
       }
       // A host added without a Base URL is still waiting for its agent: there
       // is nowhere to run the project yet.
-      if (targetHost && targetHost.baseUrl === null) {
+      if (
+        targetHost &&
+        !isHostRegistered(app, {
+          id: targetHost.id,
+          baseUrl: targetHost.baseUrl,
+          hasMachineIdentity: targetHost.machineCredentialEnc !== null,
+        })
+      ) {
         return reply.badRequest(`Host ${targetHost.name} hasn't registered yet`);
       }
       // A remote project's directory lives on the agent's own filesystem,

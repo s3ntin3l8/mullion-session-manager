@@ -103,6 +103,23 @@ describe("GET /ws/agent-channel (#2450)", () => {
     expect(app.agentChannels.get(id.hostId)?.hostId).toBe(id.hostId);
   });
 
+  it("reconnects the fan-outs when an outbound-only host's channel comes up (#2636)", async () => {
+    const reg = enrollHost(app, { hostname: "ob", wantsMachineCredential: true });
+    const events = vi.fn();
+    const relay = vi.fn();
+    const sshAgent = vi.fn();
+    app.reconfigureRemoteEventSubscriptions = events;
+    app.reconfigureControlRelayFanout = relay;
+    app.reconfigureSshAgentFanout = sshAgent;
+    const { reply: r } = await handshake(
+      authFrame({ hostId: reg.hostId, credential: reg.machineCredential! }),
+    );
+    expect(r.type).toBe("ready");
+    for (const spy of [events, relay, sshAgent]) {
+      expect(spy).toHaveBeenCalledWith({ forceReconnect: [reg.hostId] });
+    }
+  });
+
   it("reports readiness on GET /api/hosts separately from credential state", async () => {
     const id = enroll();
     const list = async () =>
