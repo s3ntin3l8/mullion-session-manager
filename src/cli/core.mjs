@@ -25,6 +25,7 @@ import {
   REVIEW_REQUEST_TIMEOUT_MS,
   REVIEW_PROTOCOL_NOTE,
   TASK_PUSH_REQUEST_TIMEOUT_MS,
+  reviewStatusLines,
 } from "./review-protocol.mjs";
 
 /** Reads a whole stream (io.stdin in production, a fake in tests) as UTF-8. */
@@ -1798,10 +1799,8 @@ function markerNote(result) {
 }
 
 function formatReviewStatus(r) {
-  if (r.status === "not_found") {
-    return `no review run known for ${r.repo}#${r.prNumber} — none requested from this Mullion, or the server restarted`;
-  }
-  const lines = [`review run ${r.runId} for ${r.repo}#${r.prNumber}: ${r.status}`];
+  const lines = reviewStatusLines(r);
+  if (r.status === "not_found") return lines[0];
   if (r.shuttingDown) lines.push("the review gateway is shutting down");
   if (r.error) lines.push(`error: ${r.error}`);
   if (r.output) lines.push(`reply: ${r.output}`);

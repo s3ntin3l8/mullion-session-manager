@@ -11,6 +11,7 @@ import {
   REVIEW_FORCE_NOTE,
   REVIEW_PROTOCOL_NOTE,
   REVIEW_REPO_NOTE,
+  REVIEW_STATUS_NOTE,
 } from "../cli/review-protocol.mjs";
 
 /**
@@ -945,9 +946,8 @@ const reviewStatus = {
     "review takes 10-30 minutes, and this is not a poll loop — a second request_review while " +
     "one is in flight is refused, and asking again anyway is what used to queue a second " +
     "review behind the first. " +
-    "Omit pr_number to use the open PR for the session's current branch; pass the same repo " +
-    "you requested with when the PR is not in the session's project's repository. not_found means " +
-    "this Mullion has no run for the PR (never requested here, or the server restarted); unknown means Hermes answered with something unreadable — retry later.",
+    "Omit pr_number to use the open PR for the session's current branch; pass the same repo you requested with when the PR is not in the session's project's repository. " +
+    REVIEW_STATUS_NOTE,
   inputSchema: {
     type: "object",
     properties: {

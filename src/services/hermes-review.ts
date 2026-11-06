@@ -787,9 +787,9 @@ async function findLiveRun(
   target: RelayTarget,
   root: string,
   key: string,
-): Promise<ReviewRunRecord | null> {
+): Promise<{ runId: string; headSha?: string } | null> {
   const record = getRunForTarget(target.kind, target.owner, target.repo, target.number);
-  if (!record) return null;
+  if (!record) return findLiveMarkerRun(app, target, root, key);
   try {
     const status = await fetchRun(root, key, record);
     // An unreadable status is not proof of a live run (it is also not proof of
@@ -798,6 +798,39 @@ async function findLiveRun(
     if (isTerminal(status.status)) return null;
     if (isGone(status.status)) return null;
     return record;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The live run behind the head's open ledger marker, for a review this Mullion
+ * did not dispatch (the repository's own workflow started it, or the run index
+ * was lost in a restart). Without this the in-flight refusal is blind to it and
+ * a request queues a second review behind the first.
+ *
+ * Same rule as above, inverted on purpose: a marker that cannot be read, a run
+ * Hermes no longer knows and a finished run are all "not live", so a request is
+ * never dropped on an unreadable answer.
+ */
+async function findLiveMarkerRun(
+  app: FastifyInstance,
+  target: RelayTarget,
+  root: string,
+  key: string,
+): Promise<{ runId: string; headSha?: string } | null> {
+  if (target.kind !== "pull_request" || !target.headSha || !target.githubToken) return null;
+  const marker = await findHeadMarkerRun(app, {
+    owner: target.owner,
+    repo: target.repo,
+    headSha: target.headSha,
+    readToken: target.githubToken,
+  });
+  if (!marker?.open) return null;
+  try {
+    const { status } = await getRun({ root, key }, marker.runId);
+    if (!status || isTerminal(status) || isGone(status)) return null;
+    return { runId: marker.runId, headSha: target.headSha };
   } catch {
     return null;
   }
@@ -1229,6 +1262,105 @@ export interface ReviewRunStatus {
   dispatchedAt: string;
   /** Whether the in-flight marker was written, and why not (#1790). */
   marker?: ReviewMarkerResult;
+  /**
+   * "ledger" when this Mullion did not dispatch the run and the answer comes
+   * from the head's ledger marker instead (the repository's own workflow
+   * started the review, or the run index was lost in a restart).
+   */
+  source?: "ledger";
+  /**
+   * The review looks stuck: tell the human, do not @mention the review bot (that
+   * queues another run behind this one). `status` stays Hermes' own.
+   */
+  stuck?: true;
+  stuckReason?: ReviewStuckReason;
+  /** The marker behind a `source: "ledger"` answer — the route closes an orphan. */
+  ledger?: { checkRunId: number; open: boolean };
+}
+
+/**
+ * How long a review may run before it counts as stuck. A review takes 10-30
+ * minutes; this leaves headroom over that, and below `MARKER_MAX_AGE_MS`, where
+ * the sweep gives up on the run's marker.
+ */
+export const REVIEW_STUCK_AFTER_MS = 60 * 60 * 1000;
+
+/**
+ * Why a review is stuck:
+ *  - `dead_run`: the marker is open but Hermes says the run failed, was
+ *    cancelled or interrupted (a gateway crash) — nothing is working on it;
+ *  - `lost_run`: the marker is open, past the window, and Hermes no longer
+ *    knows the run;
+ *  - `overdue`: the run is still queued or running, but past the window.
+ */
+export type ReviewStuckReason = "dead_run" | "lost_run" | "overdue";
+
+/**
+ * The stuck verdict for a run's Hermes status. `open` is whether its ledger
+ * marker is still open: a finished or lost run behind a CLOSED marker is settled,
+ * not stuck. A completed run is never stuck either — whether it posted is the
+ * `github` half of the status.
+ */
+export function reviewStuckReason(input: {
+  status: string;
+  open: boolean;
+  startedAtMs: number;
+  now?: number;
+}): ReviewStuckReason | null {
+  const aged = (input.now ?? Date.now()) - input.startedAtMs > REVIEW_STUCK_AFTER_MS;
+  if (isGone(input.status)) return input.open && aged ? "lost_run" : null;
+  if (isTerminal(input.status)) {
+    return input.open && input.status !== "completed" ? "dead_run" : null;
+  }
+  return aged ? "overdue" : null;
+}
+
+/** The newest ledger marker on a head: the review check run the PR shows. */
+export interface HeadMarkerRun {
+  checkRunId: number;
+  /** The Hermes run id — the marker's `external_id`. */
+  runId: string;
+  /** Still `queued`/`in_progress`: nobody has closed it. */
+  open: boolean;
+  startedAt: string;
+}
+
+/**
+ * The ledger marker on a PR's head, for a review this Mullion has no record of.
+ *
+ * The marker is the "Hermes review" check run on the head; its `external_id` is
+ * the Hermes run id, and the repository's own workflow writes it the same way
+ * the relay does. So the run behind a pending check can be asked about directly.
+ *
+ * Null when the ledger is off (`reviewRelay.ledgerName` empty), there is no
+ * marker, the newest one carries no run id (not one of ours), or the read fails:
+ * a caller treats all of those as "nothing known", never as an error.
+ */
+export async function findHeadMarkerRun(
+  app: FastifyInstance,
+  t: { owner: string; repo: string; headSha: string; readToken: string },
+): Promise<HeadMarkerRun | null> {
+  const { ledgerName } = getStoredSettings(app.db).reviewRelay;
+  if (ledgerName === "") return null;
+  try {
+    // Newest first, whatever order the endpoint answers in.
+    const marker = (await listCommitCheckRuns(t.readToken, t.owner, t.repo, t.headSha)).find(
+      (r) => r.name === ledgerName,
+    );
+    if (!marker || marker.externalId === "") return null;
+    return {
+      checkRunId: marker.id,
+      runId: marker.externalId,
+      open: marker.status !== "completed",
+      startedAt: marker.startedAt,
+    };
+  } catch (err) {
+    app.log.warn(
+      { detail: (err as Error).message, owner: t.owner, repo: t.repo },
+      "review-status: could not read the head's ledger marker",
+    );
+    return null;
+  }
 }
 
 function toStatus(record: ReviewRunRecord, run: HermesRun): ReviewRunStatus {
@@ -1283,10 +1415,20 @@ export function getReviewRunForPr(
   return getRunForTarget("pull_request", owner, repo, prNumber);
 }
 
-/** Status of the latest review run for a PR; `status: "not_found"` when none is known. */
+/**
+ * Status of the latest review run for a PR; `status: "not_found"` when none is
+ * known. With the head and a token that can read check runs, a review this
+ * Mullion did not dispatch is found through the head's ledger marker.
+ */
 export async function getHermesReviewStatus(
   app: FastifyInstance,
-  { owner, repo, prNumber }: { owner: string; repo: string; prNumber: number },
+  {
+    owner,
+    repo,
+    prNumber,
+    headSha,
+    readToken,
+  }: { owner: string; repo: string; prNumber: number; headSha?: string; readToken?: string },
 ): Promise<
   ReviewRunStatus | { provider: "hermes"; status: "not_found"; repo: string; prNumber: number }
 > {
@@ -1295,6 +1437,8 @@ export async function getHermesReviewStatus(
     owner,
     repo,
     number: prNumber,
+    headSha,
+    readToken,
   });
 }
 
@@ -1302,10 +1446,23 @@ export async function getHermesReviewStatus(
  * Status of the latest relay run for a target; `status: "not_found"` when
  * none is known (issue #1629 — the same surface serves a review and a
  * triage).
+ *
+ * A pull request with no run in this Mullion's index (a restart, or the
+ * repository's own workflow started the review) is looked up through the head's
+ * ledger marker when the caller passes `headSha` and a `readToken`: the marker's
+ * `external_id` is the Hermes run id, so the run can be asked about directly.
+ * Only when there is no marker either is the answer `not_found`.
  */
 export async function getRelayStatus(
   app: FastifyInstance,
-  target: { kind: RelayTargetKind; owner: string; repo: string; number: number },
+  target: {
+    kind: RelayTargetKind;
+    owner: string;
+    repo: string;
+    number: number;
+    headSha?: string;
+    readToken?: string;
+  },
 ): Promise<
   | ReviewRunStatus
   | {
@@ -1321,9 +1478,46 @@ export async function getRelayStatus(
   const root = baseUrl(getStoredSettings(app.db).reviewRelay.apiUrl);
   const record = getRunForTarget(target.kind, target.owner, target.repo, target.number);
   if (!record) {
-    // Nothing tracked here (restart, or the workflow started the review).
-    // Hermes still holds the run under the idempotency key but offers no
-    // lookup by key, so say so plainly.
+    const marker =
+      target.kind === "pull_request" && target.headSha && target.readToken
+        ? await findHeadMarkerRun(app, {
+            owner: target.owner,
+            repo: target.repo,
+            headSha: target.headSha,
+            readToken: target.readToken,
+          })
+        : null;
+    if (marker && target.headSha) {
+      const startedAtMs = Date.parse(marker.startedAt);
+      const run = await getRun({ root, key }, marker.runId);
+      const status = toStatus(
+        {
+          runId: marker.runId,
+          kind: target.kind,
+          owner: target.owner,
+          repo: target.repo,
+          prNumber: target.number,
+          headSha: target.headSha,
+          // A marker GitHub gave no start time for reads as "now" rather than
+          // as an invalid date, which would throw on the way out.
+          dispatchedAt: Number.isNaN(startedAtMs) ? Date.now() : startedAtMs,
+        },
+        run,
+      );
+      const stuckReason = reviewStuckReason({
+        status: run.status,
+        open: marker.open,
+        startedAtMs,
+      });
+      return {
+        ...status,
+        source: "ledger",
+        ledger: { checkRunId: marker.checkRunId, open: marker.open },
+        ...(stuckReason ? { stuck: true as const, stuckReason } : {}),
+      };
+    }
+    // Nothing tracked here and no marker on the head. Hermes still holds a run
+    // under the idempotency key but offers no lookup by key, so say so plainly.
     return {
       provider: "hermes",
       status: "not_found",
@@ -1333,7 +1527,32 @@ export async function getRelayStatus(
       kind: target.kind,
     };
   }
-  return fetchRun(root, key, record);
+  const status = await fetchRun(root, key, record);
+  // Only "overdue" applies to a run the relay tracks: its own marker closer
+  // settles a finished one, and a failed status already says what happened.
+  const stuckReason = reviewStuckReason({
+    status: status.status,
+    open: false,
+    startedAtMs: record.dispatchedAt,
+  });
+  return stuckReason ? { ...status, stuck: true, stuckReason } : status;
+}
+
+/**
+ * The conclusion to close an ORPHANED ledger marker with — one whose run this
+ * Mullion does not track, so the sweep never sees it. The finished-run mapping
+ * is the sweep's; a run Hermes has lost closes `neutral` once it is past
+ * `MARKER_MAX_AGE_MS`, the same limit the sweep applies, so a pending check
+ * does not outlive a run nobody can finish. Null while the run may still work.
+ */
+export function orphanMarkerConclusion(
+  status: string,
+  startedAtMs: number,
+  now: number = Date.now(),
+): "success" | "failure" | "neutral" | null {
+  const finished = markerConclusionForRunStatus(status);
+  if (finished) return finished;
+  return isGone(status) && now - startedAtMs > MARKER_MAX_AGE_MS ? "neutral" : null;
 }
 
 /**

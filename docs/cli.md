@@ -503,8 +503,21 @@ review`; **empty = the ledger is off**, like `hermes-review-ledger: off`), and
   a review from a bot account actually landed on the PR after the request
   (Hermes can report `completed` for a run that posted nothing, e.g. when it
   had no App credentials) — including the review's own text and a link to
-  it. `not_found` means this Mullion has no run for the
-  PR: nothing was requested here, or the server restarted. Call it once,
+  it. A review this Mullion did not dispatch (the repository's own
+  workflow started it, or the server restarted) is found through the PR's
+  `Hermes review` check — the ledger marker, whose `external_id` is the Hermes
+  run id — and prints `(started outside this Mullion …)`. `stuck (<reason>)`
+  means nothing is working on it any more: `dead_run` (the marker is open but
+  Hermes says the run failed, was cancelled or interrupted), `lost_run` (open,
+  past an hour, and Hermes no longer knows the run) or `overdue` (still
+  running past an hour). Tell the human; do not @mention the review bot, which
+  only queues another run behind the dead one — a dead run is no longer "in
+  flight", so `review` may be requested again. Status also closes such an
+  orphaned marker when its run finished (`success` or `failure`, `neutral` for
+  a lost run past two hours), so the pending check clears — only if the GitHub
+  App that wrote the marker is the one Mullion writes with. `not_found` means
+  this Mullion has no run for the PR and its head has no review check.
+  Call it once,
   about ten minutes after requesting — a review takes 10-30 minutes, and
   asking again while one is in flight is refused (so the answer to "still
   nothing" is to wait, not to ask again). The MCP spelling of this command
