@@ -167,6 +167,13 @@ export interface DeriveSessionStatusInput {
    * but the detail must not say the host is unreachable when it is up.
    */
   hostRefusedStatus?: number;
+  /**
+   * Set when the read failed because the host was saturated (outbound channel
+   * concurrency cap reached). Only read when `hostReachable === false`; the
+   * session is still `suspended` (nothing about it could be observed), but
+   * the detail says the host was busy rather than unreachable or refusing.
+   */
+  hostBusy?: boolean;
   info: Pick<
     SessionInfo,
     | "activity"
@@ -245,6 +252,7 @@ export function deriveSessionStatus({
   dbStatus,
   hostReachable,
   hostRefusedStatus,
+  hostBusy,
   info,
 }: DeriveSessionStatusInput): DerivedSessionStatus {
   // --- Liveness axis wins outright: dbStatus is the DB row's own recorded
@@ -294,9 +302,11 @@ export function deriveSessionStatus({
   if (hostReachable === false) {
     return make(
       "suspended",
-      hostRefusedStatus === undefined
-        ? "host unreachable — may still be running"
-        : `host rejected the request (HTTP ${hostRefusedStatus})`,
+      hostBusy
+        ? "host busy — may still be running"
+        : hostRefusedStatus === undefined
+          ? "host unreachable — may still be running"
+          : `host rejected the request (HTTP ${hostRefusedStatus})`,
     );
   }
 

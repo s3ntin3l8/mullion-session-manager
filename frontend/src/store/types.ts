@@ -594,6 +594,8 @@ export interface HostsSlice {
   rotateHostToken: (id: string) => Promise<string>;
   /** Issue #2568 — revokes the host's machine identity for good. */
   revokeHost: (id: string) => Promise<void>;
+  /** Issue #2622 — unbinds the host from the outbound channel. */
+  unbindHost: (id: string) => Promise<void>;
   updateHost: (
     id: string,
     // Issue #1725 / roadmap 8.11 — `drained` parks the host (it takes no

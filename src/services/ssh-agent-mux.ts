@@ -282,7 +282,25 @@ export interface MuxConnectionOptions {
   maxBufferedBytes?: number;
 }
 
+export class MuxBusyError extends Error {
+  constructor(message = "ssh-agent-mux: timed out waiting for a free channel slot") {
+    super(message);
+    this.name = "MuxBusyError";
+  }
+}
+
+export interface OpenChannelOptions {
+  /** When at maxChannels, wait up to this long for a slot before rejecting with MuxBusyError. */
+  waitTimeoutMs?: number;
+  /** Cancels waiting in the slot queue. */
+  signal?: AbortSignal;
+  /** Notified when the open request has been queued waiting for a channel slot. */
+  onWaiting?: () => void;
+}
+
 export interface MuxConnection {
+  /** Total number of open and pending-open channels on this connection. */
+  readonly openChannelCount: number;
   /** Opens a new channel and resolves once the peer OpenAcks it. Rejects on
    * OpenFail (peer at its own channel cap, or otherwise refusing), on
    * connection close/error while pending, or if this side has hit
@@ -301,7 +319,7 @@ export interface MuxConnection {
    * channel. Caught in review (Hermes) before this PR merged; fixed by the
    * parity split, not by hoping every caller happens to satisfy a
    * single-opener convention. */
-  openChannel(): Promise<MuxChannel>;
+  openChannel(opts?: OpenChannelOptions): Promise<MuxChannel>;
   /** Fired for every peer-initiated channel this side accepts (i.e. did not
    * already reject for being at `maxChannels`) — the OpenAck has already
    * been sent by the time this fires. */
@@ -602,6 +620,24 @@ export function createMuxConnection(
   let pingTimer: ReturnType<typeof setInterval> | null = null;
   let pongTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
+  interface SlotWaiter {
+    proceed: () => void;
+    reject: (err: Error) => void;
+    timer: ReturnType<typeof setTimeout> | null;
+    cleanup?: () => void;
+  }
+  const slotWaiters: SlotWaiter[] = [];
+
+  function drainSlotWaiters(): void {
+    if (closed) return;
+    while (slotWaiters.length > 0 && channels.size + pendingOpens.size < maxChannels) {
+      const next = slotWaiters.shift()!;
+      if (next.timer !== null) clearTimeout(next.timer);
+      next.cleanup?.();
+      next.proceed();
+    }
+  }
+
   function sendFrame(frame: Buffer): void {
     // A frame produced after the socket has started closing (e.g. a
     // channel's own close() racing the connection's own teardown) is
@@ -625,6 +661,12 @@ export function createMuxConnection(
     closed = true;
     if (pingTimer !== null) clearInterval(pingTimer);
     if (pongTimeoutTimer !== null) clearTimeout(pongTimeoutTimer);
+    while (slotWaiters.length > 0) {
+      const w = slotWaiters.shift()!;
+      if (w.timer !== null) clearTimeout(w.timer);
+      w.cleanup?.();
+      w.reject(new Error("ssh-agent-mux: connection closed while waiting for free channel slot"));
+    }
     for (const { reject } of pendingOpens.values()) {
       reject(new Error("ssh-agent-mux: connection closed while channel open was pending"));
     }
@@ -640,6 +682,7 @@ export function createMuxConnection(
   // connection's remaining budget instead of freeing it back up).
   function removeChannel(id: number): void {
     channels.delete(id);
+    drainSlotWaiters();
   }
 
   function allocateChannelId(): number {
@@ -687,10 +730,65 @@ export function createMuxConnection(
     return out;
   }
 
-  function openChannel(): Promise<MuxChannel> {
+  function openChannel(opts?: OpenChannelOptions): Promise<MuxChannel> {
     if (closed) return Promise.reject(new Error("ssh-agent-mux: connection already closed"));
     if (channels.size + pendingOpens.size >= maxChannels) {
-      return Promise.reject(new Error(`ssh-agent-mux: local channel cap (${maxChannels}) reached`));
+      if (!opts?.waitTimeoutMs || opts.waitTimeoutMs <= 0) {
+        return Promise.reject(
+          new MuxBusyError(`ssh-agent-mux: local channel cap (${maxChannels}) reached`),
+        );
+      }
+      if (opts.signal?.aborted) {
+        return Promise.reject(opts.signal.reason ?? new Error("ssh-agent-mux: open aborted"));
+      }
+      opts.onWaiting?.();
+      return new Promise<MuxChannel>((resolve, reject) => {
+        let timer: ReturnType<typeof setTimeout> | null = null;
+        let onAbort: (() => void) | null = null;
+        const waiter: SlotWaiter = {
+          proceed: () => {
+            if (timer !== null) clearTimeout(timer);
+            waiter.cleanup?.();
+            onAbort = null;
+            openChannel().then(resolve, reject);
+          },
+          reject: (err: Error) => {
+            if (timer !== null) clearTimeout(timer);
+            waiter.cleanup?.();
+            reject(err);
+          },
+          timer: null,
+          cleanup: () => {
+            if (opts.signal && onAbort) {
+              opts.signal.removeEventListener("abort", onAbort);
+            }
+          },
+        };
+        timer = setTimeout(() => {
+          const idx = slotWaiters.indexOf(waiter);
+          if (idx !== -1) slotWaiters.splice(idx, 1);
+          waiter.cleanup?.();
+          reject(
+            new MuxBusyError(
+              `ssh-agent-mux: timed out after ${opts.waitTimeoutMs}ms waiting for free channel slot (local channel cap ${maxChannels} reached)`,
+            ),
+          );
+        }, opts.waitTimeoutMs);
+        timer.unref?.();
+        waiter.timer = timer;
+
+        if (opts.signal) {
+          onAbort = () => {
+            const idx = slotWaiters.indexOf(waiter);
+            if (idx !== -1) slotWaiters.splice(idx, 1);
+            if (timer !== null) clearTimeout(timer);
+            reject(opts.signal!.reason ?? new Error("ssh-agent-mux: open aborted"));
+          };
+          opts.signal.addEventListener("abort", onAbort, { once: true });
+        }
+
+        slotWaiters.push(waiter);
+      });
     }
     const id = allocateChannelId();
     return new Promise<MuxChannel>((resolve, reject) => {
@@ -709,6 +807,7 @@ export function createMuxConnection(
               `${OPEN_ACK_TIMEOUT_MS}ms — peer may have dropped the Open frame`,
           ),
         );
+        drainSlotWaiters();
       }, OPEN_ACK_TIMEOUT_MS);
       timeoutTimer.unref?.();
       pendingOpens.set(id, {
@@ -807,6 +906,7 @@ export function createMuxConnection(
       if (pending === undefined) return;
       pendingOpens.delete(frame.channelId);
       pending.reject(new Error(`ssh-agent-mux: peer refused channel ${frame.channelId}`));
+      drainSlotWaiters();
       return;
     }
 
@@ -830,6 +930,7 @@ export function createMuxConnection(
       case FrameType.Close:
         channels.delete(frame.channelId);
         channel.closeLocally();
+        drainSlotWaiters();
         return;
     }
   }
@@ -871,6 +972,9 @@ export function createMuxConnection(
   pingTimer.unref?.();
 
   return {
+    get openChannelCount() {
+      return channels.size + pendingOpens.size;
+    },
     openChannel,
     onChannel(listener) {
       channelListeners.push(listener);
@@ -883,6 +987,12 @@ export function createMuxConnection(
     },
     close() {
       if (closed) return;
+      while (slotWaiters.length > 0) {
+        const w = slotWaiters.shift()!;
+        if (w.timer !== null) clearTimeout(w.timer);
+        w.cleanup?.();
+        w.reject(new Error("ssh-agent-mux: connection closed while waiting for free channel slot"));
+      }
       // Give every still-open channel a chance to tell its peer it's
       // closing (rather than jumping straight to closeLocally via
       // teardown) before tearing the whole connection down.

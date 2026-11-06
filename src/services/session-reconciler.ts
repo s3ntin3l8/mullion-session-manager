@@ -104,6 +104,7 @@ export async function reconcileExitedSessions(app: FastifyInstance): Promise<voi
           err,
           "session reconcile: host rejected the liveness request (reachable but erroring), skipping its sessions",
           "session reconcile: host unreachable, skipping its sessions",
+          "session reconcile: host busy (concurrency cap reached), retrying its sessions next tick",
         );
         return;
       }

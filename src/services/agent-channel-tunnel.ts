@@ -1,19 +1,26 @@
 import type { FastifyInstance } from "fastify";
-import type { MuxChannel } from "./ssh-agent-mux.js";
+import { type MuxChannel, MuxBusyError } from "./ssh-agent-mux.js";
 import type { ConnectedAgentChannel } from "../plugins/agent-channel.js";
 import {
+  HostBusyError,
   HostOutcomeUnknownError,
   HostRequestError,
   HostUnreachableError,
   isIdempotentRequest,
 } from "./remote-host-errors.js";
 import {
+  AGENT_CHANNEL_DEFAULT_MAX_REQUEST_BYTES,
+  AGENT_CHANNEL_DEFAULT_MAX_RESPONSE_BYTES,
   AGENT_CHANNEL_MAX_HEAD_BYTES,
   AGENT_CHANNEL_MAX_RESPONSE_BYTES,
+  AGENT_CHANNEL_MIN_EXCHANGE_MS,
   AGENT_CHANNEL_REQUESTS_OPERATION,
+  AGENT_CHANNEL_SLOT_WAIT_MS,
   type ChannelRequestHead,
   type ChannelResponseHead,
 } from "../shared/agent-channel.js";
+
+export { AGENT_CHANNEL_MAX_CHANNELS } from "../shared/agent-channel.js";
 
 // Issue #2451 — request/response operations over the outbound agent channel.
 //
@@ -65,6 +72,40 @@ export class ChannelTransportError extends Error {
   }
 }
 
+/** Thrown when the channel concurrency cap is reached and no slot opens in time. */
+export class ChannelBusyError extends Error {
+  readonly busy = true as const;
+  readonly isBusy = true as const;
+  constructor(message = "outbound channel concurrency cap reached") {
+    super(message);
+    this.name = "ChannelBusyError";
+  }
+}
+
+export function isUploadPath(path: string): boolean {
+  const p = path.split("?")[0]!;
+  return (
+    p === "/internal/uploads" ||
+    p === "/internal/project-files/upload" ||
+    p === "/internal/project-files/write"
+  );
+}
+
+export function isDownloadPath(path: string): boolean {
+  const p = path.split("?")[0]!;
+  return p === "/internal/project-files/download";
+}
+
+export function maxRequestBodyBytesForPath(path: string): number {
+  if (isUploadPath(path)) return AGENT_CHANNEL_MAX_RESPONSE_BYTES;
+  return AGENT_CHANNEL_DEFAULT_MAX_REQUEST_BYTES;
+}
+
+export function maxResponseBodyBytesForPath(path: string): number {
+  if (isDownloadPath(path)) return AGENT_CHANNEL_MAX_RESPONSE_BYTES;
+  return AGENT_CHANNEL_DEFAULT_MAX_RESPONSE_BYTES;
+}
+
 // --- shared helpers ----------------------------------------------------------
 
 /** Writes `data` honouring the channel's send window; rejects if it closes. */
@@ -106,18 +147,35 @@ function hasUnsafeChar(target: string): boolean {
   return false;
 }
 
-/** True when the path (before any query) has a "." / ".." segment, also when
- * percent-encoded: the router would normalise it out of /internal/. */
-function hasDotSegment(target: string): boolean {
+/**
+ * Decodes path segments and checks for undecodable, double-encoded, ws, and dot-segment paths.
+ * Returns null if the path is invalid, malformed or prohibited.
+ */
+export function validateAndDecodePath(target: string): string | null {
   const pathname = target.split("?")[0]!;
-  return pathname.split("/").some((segment) => {
+  const segments = pathname.split("/");
+  const decodedSegments: string[] = [];
+  for (const seg of segments) {
+    let decoded: string;
     try {
-      const decoded = decodeURIComponent(segment);
-      return decoded === "." || decoded === "..";
+      decoded = decodeURIComponent(seg);
     } catch {
-      return true;
+      return null;
     }
-  });
+    // Reject double-encoded segments (e.g. %2577 -> %77 or %25 -> %)
+    if (decoded.includes("%")) {
+      return null;
+    }
+    if (decoded === "." || decoded === "..") {
+      return null;
+    }
+    decodedSegments.push(decoded);
+  }
+  const decodedPath = decodedSegments.join("/");
+  if (!decodedPath.startsWith("/internal/")) return null;
+  if (decodedPath.startsWith("/internal/ws/")) return null;
+  if (hasUnsafeChar(target) || hasUnsafeChar(decodedPath)) return null;
+  return decodedPath;
 }
 
 /** Splits a stream of chunks into one "\n"-terminated head and the body bytes. */
@@ -160,6 +218,7 @@ export interface ChannelRequest {
   headers?: Record<string, string>;
   body?: string | Buffer;
   timeoutMs: number;
+  maxResponseBytes?: number;
 }
 
 export interface ChannelResponse {
@@ -182,22 +241,64 @@ export async function channelFetch(
   let sendStarted = false;
   let channel: MuxChannel | null = null;
   let timedOut = false;
-  let abortOpen: ((err: ChannelTransportError) => void) | null = null;
+  let waitingForSlot = false;
+  let abortOpen: ((err: Error) => void) | null = null;
   const timer = setTimeout(() => {
     timedOut = true;
     channel?.close();
-    abortOpen?.(
-      fail(`timed out after ${req.timeoutMs} ms`, sendStarted ? "after-send" : "before-send"),
-    );
+    if (waitingForSlot) {
+      abortOpen?.(
+        new ChannelBusyError(`timed out after ${req.timeoutMs} ms waiting for free channel slot`),
+      );
+    } else {
+      abortOpen?.(
+        fail(`timed out after ${req.timeoutMs} ms`, sendStarted ? "after-send" : "before-send"),
+      );
+    }
   }, req.timeoutMs);
+
+  const slotWaitTimeoutMs = Math.min(
+    AGENT_CHANNEL_SLOT_WAIT_MS,
+    Math.max(0, req.timeoutMs - AGENT_CHANNEL_MIN_EXCHANGE_MS),
+  );
 
   try {
     channel = await new Promise<MuxChannel>((resolve, reject) => {
-      abortOpen = reject;
+      let settled = false;
+      abortOpen = (err) => {
+        settled = true;
+        reject(err);
+      };
       entry.mux
-        .openChannel()
-        .then(resolve, (err: unknown) =>
-          reject(fail(err instanceof Error ? err.message : String(err), "before-send")),
+        .openChannel({
+          waitTimeoutMs: slotWaitTimeoutMs,
+          onWaiting: () => {
+            waitingForSlot = true;
+          },
+        })
+        .then(
+          (ch) => {
+            waitingForSlot = false;
+            if (settled) {
+              ch.close();
+              return;
+            }
+            settled = true;
+            resolve(ch);
+          },
+          (err: unknown) => {
+            waitingForSlot = false;
+            if (settled) return;
+            settled = true;
+            if (
+              err instanceof MuxBusyError ||
+              (err instanceof Error && err.message.includes("channel cap"))
+            ) {
+              reject(new ChannelBusyError(err instanceof Error ? err.message : String(err)));
+            } else {
+              reject(fail(err instanceof Error ? err.message : String(err), "before-send"));
+            }
+          },
         );
     });
     abortOpen = null;
@@ -208,6 +309,7 @@ export async function channelFetch(
     const ch = channel;
 
     const parser = new HeadAndBodyParser();
+    const maxResponseBytes = req.maxResponseBytes ?? maxResponseBodyBytesForPath(req.path);
     const response = new Promise<ChannelResponse>((resolve, reject) => {
       let settled = false;
       const settle = (err: ChannelTransportError | null, value?: ChannelResponse) => {
@@ -218,7 +320,7 @@ export async function channelFetch(
       };
       ch.onData((chunk) => {
         ch.acknowledgeConsumed(chunk.length);
-        if (!parser.push(chunk, AGENT_CHANNEL_MAX_RESPONSE_BYTES)) {
+        if (!parser.push(chunk, maxResponseBytes)) {
           settle(fail("response exceeds the channel limit", "after-send"));
           ch.close();
         }
@@ -265,11 +367,15 @@ export async function channelFetch(
       }
       ch.eof();
     } catch {
-      ch.close();
-      throw fail(
-        timedOut ? `timed out after ${req.timeoutMs} ms` : "outbound channel lost while sending",
-        "after-send",
-      );
+      try {
+        return await response;
+      } catch {
+        ch.close();
+        throw fail(
+          timedOut ? `timed out after ${req.timeoutMs} ms` : "outbound channel lost while sending",
+          "after-send",
+        );
+      }
     }
     try {
       return await response;
@@ -311,6 +417,9 @@ export async function requestViaChannel<T>(
       timeoutMs,
     });
   } catch (err) {
+    if (err instanceof ChannelBusyError) {
+      throw new HostBusyError(hostId, err);
+    }
     if (!(err instanceof ChannelTransportError)) throw new HostUnreachableError(hostId, err);
     // The primary ended the channel: identity revoked / credential expired.
     if (err.terminal) throw new HostRequestError(hostId, 401, err.message);
@@ -340,10 +449,12 @@ export function createRequestSink(
   app: FastifyInstance,
   channel: MuxChannel,
   authToken: string,
+  peerId?: string,
 ): ChannelSink {
   const parser = new HeadAndBodyParser();
   const write = makeWriter(channel);
   let dispatched = false;
+  let maxBodyBytes = AGENT_CHANNEL_DEFAULT_MAX_REQUEST_BYTES;
   // A peer that opens a channel and never finishes its request must not hold
   // it (and a channel slot) open forever.
   const receiveDeadline = setTimeout(() => {
@@ -372,9 +483,38 @@ export function createRequestSink(
   const onData = (chunk: Buffer) => {
     channel.acknowledgeConsumed(chunk.length);
     if (dispatched) return;
-    if (!parser.push(chunk, AGENT_CHANNEL_MAX_RESPONSE_BYTES)) {
-      dispatched = true;
-      void refuse(413, "request too large").finally(() => channel.close());
+    if (parser.headLine === null) {
+      if (!parser.push(chunk, maxBodyBytes)) {
+        dispatched = true;
+        void refuse(413, "request too large").finally(() => channel.close());
+        return;
+      }
+      if (parser.headLine !== null) {
+        try {
+          const head = JSON.parse(parser.headLine) as ChannelRequestHead;
+          if (typeof head.path === "string") {
+            maxBodyBytes = maxRequestBodyBytesForPath(head.path);
+          }
+          const cl = Number(head.headers?.["content-length"] ?? head.headers?.["Content-Length"]);
+          if (Number.isFinite(cl) && cl > maxBodyBytes) {
+            dispatched = true;
+            void refuse(413, "request too large").finally(() => channel.close());
+            return;
+          }
+        } catch {
+          // malformed head, handled on EOF
+        }
+        if (parser.bodyBytes > maxBodyBytes) {
+          dispatched = true;
+          void refuse(413, "request too large").finally(() => channel.close());
+          return;
+        }
+      }
+    } else {
+      if (!parser.push(chunk, maxBodyBytes)) {
+        dispatched = true;
+        void refuse(413, "request too large").finally(() => channel.close());
+      }
     }
   };
   const onEof = () => {
@@ -390,15 +530,13 @@ export function createRequestSink(
         }
         const method = String(head.method).toUpperCase();
         if (!REPLAY_METHODS.has(method)) return await refuse(405, "method not allowed");
-        // Only the token-gated agent API; never a WebSocket route or anything
-        // outside /internal/. Control characters would split the request line.
-        if (
-          typeof head.path !== "string" ||
-          !head.path.startsWith("/internal/") ||
-          head.path.startsWith("/internal/ws/") ||
-          hasUnsafeChar(head.path) ||
-          hasDotSegment(head.path)
-        ) {
+        // Decode the path and check for undecodable/double-encoded segments, dot-segments,
+        // control characters, and websocket routes.
+        if (typeof head.path !== "string") {
+          return await refuse(400, "path not carried by the channel");
+        }
+        const decodedPath = validateAndDecodePath(head.path);
+        if (decodedPath === null) {
           return await refuse(400, "path not carried by the channel");
         }
         const headers: Record<string, string> = {};
@@ -410,10 +548,12 @@ export function createRequestSink(
         // The presented credential is ours, never the peer's.
         headers[AGENT_CHANNEL_AUTH_HEADER] = authToken;
         const body = parser.body();
+        const peer = peerId ?? "peer";
         const res = await app.inject({
           method: method as "GET",
           url: head.path,
           headers,
+          remoteAddress: `channel:${peer}`,
           ...(body.length > 0 ? { payload: body } : {}),
         });
         const outHeaders: Record<string, string> = {};
@@ -436,8 +576,9 @@ export function serveChannelRequest(
   app: FastifyInstance,
   channel: MuxChannel,
   authToken: string,
+  peerId?: string,
 ): void {
-  const sink = createRequestSink(app, channel, authToken);
+  const sink = createRequestSink(app, channel, authToken, peerId);
   channel.onData(sink.data);
   channel.onEof(sink.eof);
 }
@@ -451,20 +592,33 @@ export function serveChannelRequest(
 // silently change transport under its consumer (#2571). Replaced on every
 // handshake (so one that no longer negotiates an operation clears it) and
 // cleared on revoke / delete.
-const boundHosts = new WeakMap<FastifyInstance, Map<string, ReadonlySet<string>>>();
+// Keyed on app.agentChannels (decorated by fastify-plugin) so encapsulated route
+// instances share the same binding set as the root app.
+const boundHosts = new WeakMap<object, Map<string, ReadonlySet<string>>>();
 
 export function bindChannelHost(
   app: FastifyInstance,
   hostId: string,
   operations: readonly string[] = [AGENT_CHANNEL_REQUESTS_OPERATION],
 ): void {
-  let map = boundHosts.get(app);
-  if (!map) boundHosts.set(app, (map = new Map()));
+  const key = (app.agentChannels as unknown as object) ?? app;
+  let map = boundHosts.get(key);
+  if (!map) boundHosts.set(key, (map = new Map()));
   map.set(hostId, new Set(operations));
 }
 
 export function unbindChannelHost(app: FastifyInstance, hostId: string): void {
-  boundHosts.get(app)?.delete(hostId);
+  const key = (app.agentChannels as unknown as object) ?? app;
+  boundHosts.get(key)?.delete(hostId);
+}
+
+export function isChannelHostBound(
+  app: FastifyInstance,
+  hostId: string,
+  operation: string = AGENT_CHANNEL_REQUESTS_OPERATION,
+): boolean {
+  const key = (app.agentChannels as unknown as object) ?? app;
+  return boundHosts.get(key)?.get(hostId)?.has(operation) ?? false;
 }
 
 export type HostTransport =
@@ -479,11 +633,12 @@ export function resolveHostTransport(
   hostId: string,
   operation: string = AGENT_CHANNEL_REQUESTS_OPERATION,
 ): HostTransport {
-  const channel = app.agentChannels.get(hostId);
+  const channel = app.agentChannels?.get(hostId);
   if (channel && channel.carriedOperations.includes(operation)) {
     return { kind: "channel", channel };
   }
-  return boundHosts.get(app)?.get(hostId)?.has(operation)
+  const key = (app.agentChannels as unknown as object) ?? app;
+  return boundHosts.get(key)?.get(hostId)?.has(operation)
     ? { kind: "channel-down" }
     : { kind: "inbound" };
 }

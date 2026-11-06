@@ -14,6 +14,7 @@ import {
   revokeMachineIdentity,
 } from "../../src/services/host-registry.js";
 import { overrideCredentialRecheckForTests } from "../../src/routes/agent-channel.js";
+import { isChannelHostBound } from "../../src/services/agent-channel-tunnel.js";
 import { localProtocolInfo } from "../../src/shared/agent-protocol.js";
 import { AgentChannelCloseCode } from "../../src/shared/agent-channel.js";
 
@@ -183,6 +184,21 @@ describe("GET /ws/agent-channel (#2450)", () => {
         .where(eq(hosts.id, id.hostId))
         .run();
       expect(await gone).toBe(AgentChannelCloseCode.Expired);
+    } finally {
+      restore();
+    }
+  });
+
+  it("closes an open channel and unbinds the host when its identity is revoked (#2622)", async () => {
+    const restore = overrideCredentialRecheckForTests(20);
+    try {
+      const id = enroll();
+      const { ws } = await handshake(authFrame(id));
+      expect(isChannelHostBound(app, id.hostId)).toBe(true);
+      const gone = closed(ws);
+      revokeMachineIdentity(app, id.hostId);
+      expect(await gone).toBe(AgentChannelCloseCode.Revoked);
+      expect(isChannelHostBound(app, id.hostId)).toBe(false);
     } finally {
       restore();
     }

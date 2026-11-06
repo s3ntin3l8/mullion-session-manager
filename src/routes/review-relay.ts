@@ -402,6 +402,12 @@ async function selectRelayRepo(
       },
       `${logLabel}: could not resolve the project host's GitHub remote`,
     );
+    if (repoResult.reason === "busy") {
+      reply
+        .status(503)
+        .send({ message: "The project host is busy — try again shortly", retryable: true });
+      return null;
+    }
     if (repoResult.reason === "unreachable") {
       reply.serviceUnavailable("The project host is unreachable — try again shortly");
       return null;
@@ -442,6 +448,13 @@ async function selectRelayRepo(
     // repository's PR. Say so instead (a 503 is never retried that way). A
     // host that is merely too old ("unsupported") can't be told apart from
     // not registered and stays a 403.
+    if (results.some((result) => !result.ok && result.reason === "busy")) {
+      reply.status(503).send({
+        message: `Could not check whether ${requested} is registered: a registered project's host is busy — try again shortly`,
+        retryable: true,
+      });
+      return null;
+    }
     if (results.some((result) => !result.ok && result.reason === "unreachable")) {
       reply.serviceUnavailable(
         `Could not check whether ${requested} is registered: a registered project's host is unreachable — try again shortly`,

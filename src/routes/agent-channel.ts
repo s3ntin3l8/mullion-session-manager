@@ -199,6 +199,7 @@ export async function agentChannelRoute(app: FastifyInstance) {
           const result = checkMachineCredential(app, hostId, auth.credential);
           if (result === "ok") return;
           app.log.info({ hostId, result }, "agent channel credential no longer valid");
+          if (result === "revoked") unbindChannelHost(app, hostId);
           entry.close(
             result === "revoked" ? AgentChannelCloseCode.Revoked : AgentChannelCloseCode.Expired,
             result === "revoked" ? "identity revoked" : "credential expired",

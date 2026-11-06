@@ -102,6 +102,21 @@ describe("deriveSessionStatus", () => {
       });
     });
 
+    it("says the host is busy, not that it is unreachable, when the channel cap was reached", () => {
+      const derived = deriveSessionStatus({
+        dbStatus: "active",
+        hostReachable: false,
+        hostBusy: true,
+        info: BASE,
+      });
+      expect(derived).toEqual({
+        status: "suspended",
+        severity: "dormant",
+        detail: "host busy — may still be running",
+        attentionRequired: false,
+      });
+    });
+
     it("ignores a refused status on a reachable host", () => {
       const derived = deriveSessionStatus({
         dbStatus: "active",

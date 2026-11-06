@@ -14,6 +14,7 @@ import { ensurePreviewSyncTick, stopPreviewSyncTick } from "../services/git-work
 import { getStoredSettings } from "../services/settings.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { HostRequestError } from "../services/remote-host-client.js";
+import { isHostBusyError } from "../services/remote-host-errors.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { parseHostCwds, projectCwdOnHost } from "../services/placement.js";
 import type { SessionInfo } from "../services/pty-manager.js";
@@ -382,7 +383,7 @@ export async function sessionsRoute(app: FastifyInstance) {
       // Issue #2010 — a host that ANSWERED with an error (rate limit, stale
       // token) is in the map too, with the HTTP status it refused with, so
       // the detail does not call a host that is up "unreachable".
-      const failedHosts = new Map<string, { refusedStatus?: number }>();
+      const failedHosts = new Map<string, { refusedStatus?: number; busy?: boolean }>();
       await Promise.all(
         [...idsByHost.entries()].map(async ([hostId, ids]) => {
           try {
@@ -391,14 +392,17 @@ export async function sessionsRoute(app: FastifyInstance) {
               await resolveBackend(app, hostId).liveStatus(ids, idleThresholdMs),
             );
           } catch (err) {
+            const isBusy = isHostBusyError(err);
             const refusedStatus = err instanceof HostRequestError ? err.statusCode : undefined;
             app.log.warn(
               { hostId, err },
-              refusedStatus === undefined
-                ? "host unreachable, reporting default live status for its sessions"
-                : "host answered the live-status request with an error, reporting default live status for its sessions",
+              isBusy
+                ? "host busy, reporting default live status for its sessions"
+                : refusedStatus === undefined
+                  ? "host unreachable, reporting default live status for its sessions"
+                  : "host answered the live-status request with an error, reporting default live status for its sessions",
             );
-            failedHosts.set(hostId, { refusedStatus });
+            failedHosts.set(hostId, { refusedStatus, busy: isBusy });
             liveByHost.set(hostId, Object.create(null));
           }
         }),
@@ -407,9 +411,11 @@ export async function sessionsRoute(app: FastifyInstance) {
       return rows.map((row) => {
         const hostId = sessionHostIds.get(row.id) ?? LOCAL_HOST_ID;
         const info = liveByHost.get(hostId)?.[String(row.id)];
+        const failed = failedHosts.get(hostId);
         return withLiveInfo(app, row, info, hostId, {
           hostReachable: !failedHosts.has(hostId),
-          hostRefusedStatus: failedHosts.get(hostId)?.refusedStatus,
+          hostRefusedStatus: failed?.refusedStatus,
+          hostBusy: failed?.busy === true,
         });
       });
     },
@@ -993,6 +999,12 @@ export async function sessionsRoute(app: FastifyInstance) {
         `promote-${sessionId}-${Date.now()}`,
       );
       if (!resolvedWorktree.created || !resolvedWorktree.path || !resolvedWorktree.branch) {
+        if (resolvedWorktree.reason === "host-busy") {
+          return reply.status(503).send({
+            message: resolvedWorktree.detail ?? `Host ${srcHostId} is busy`,
+            retryable: true,
+          });
+        }
         // Issue #677 — surface the actual reason (e.g. "branch already
         // exists") when the backend supplied one, instead of always
         // showing the same generic "check that the base ref exists"

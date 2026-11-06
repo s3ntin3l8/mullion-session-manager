@@ -75,6 +75,7 @@ import {
   HostRequestError,
   HostUnreachableError,
 } from "../services/remote-host-client.js";
+import { isHostBusyError } from "../services/remote-host-errors.js";
 import { previewPlacement } from "../services/placement.js";
 import { commandAgentBin } from "../services/hook-adapters/index.js";
 import { portFromUrl } from "../plugins/preview-proxy.js";
@@ -1987,20 +1988,18 @@ export async function projectsRoute(app: FastifyInstance) {
     if (!result.ok) {
       if (result.reason === "unsupported") {
         reply.code(204).send();
-      } else if (result.status !== undefined) {
-        // The agent answered with a 4xx (e.g. a cwd outside its
-        // PROJECTS_ROOTS, a 429): it is up, so say so rather than "unreachable".
-        app.log.warn(
-          { hostId: project.hostId, detail: result.detail },
-          "host rejected git history request",
-        );
-        reply.badGateway(result.detail);
       } else {
-        app.log.warn(
-          { hostId: project.hostId, detail: result.detail },
-          "host unreachable, git history unavailable",
-        );
-        reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        const bindings = { hostId: project.hostId, detail: result.detail };
+        if (result.reason === "busy") {
+          app.log.warn(bindings, "host busy, git history temporarily unavailable");
+          reply.status(503).send({ message: `Host ${project.hostId} is busy`, retryable: true });
+        } else if (result.status !== undefined) {
+          app.log.warn(bindings, "host rejected git history request");
+          reply.badGateway(result.detail);
+        } else {
+          app.log.warn(bindings, "host unreachable, git history unavailable");
+          reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        }
       }
       return undefined;
     }
@@ -2474,18 +2473,23 @@ export async function projectsRoute(app: FastifyInstance) {
         const linked = (worktrees ?? [])
           .filter((w) => !w.isMain && !isWithinAnyWorktree(project.cwd, [w.path]))
           .map((w) => w.path);
-        const sessionIds = sessionsInProjectCheckout(
-          app,
-          project,
-          linked,
-          sessionId === undefined ? undefined : Number(sessionId),
-        );
+        const sid = sessionId === undefined ? undefined : Number(sessionId);
+        const sessionIds = sessionsInProjectCheckout(app, project, linked, sid);
         if (sessionIds.length > 0) {
           return { ok: false, reason: "sessions-active", detail: sessionIds.join(",") };
         }
       }
       return await op(backend, project);
     } catch (err) {
+      if (isHostBusyError(err)) {
+        app.log.warn(
+          { hostId: project.hostId, err },
+          `host busy, git ${opts.label} temporarily unavailable`,
+        );
+        return reply
+          .status(503)
+          .send({ message: `Host ${project.hostId} is busy`, retryable: true });
+      }
       if (!(err instanceof HostUnreachableError || err instanceof HostRequestError)) throw err;
       if (replyUnsupportedOnAgent(err, sessionId, project.hostId, reply)) return reply;
       return reply.serviceUnavailable(

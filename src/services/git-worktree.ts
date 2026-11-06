@@ -257,7 +257,8 @@ export type CreateWorktreeReason =
   // ("HostRequestError covers any 4xx, not just 404") is exactly the
   // mistake this split exists to avoid repeating.
   | "host-unreachable"
-  | "host-rejected";
+  | "host-rejected"
+  | "host-busy";
 
 export interface CreateWorktreeResult {
   created: boolean;

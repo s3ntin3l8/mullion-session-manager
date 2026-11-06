@@ -9,6 +9,7 @@ import { deriveSessionStatus } from "./session-status.js";
 import { getPreviewWorktree } from "./git-worktree.js";
 import { resolveBackend } from "./session-backend.js";
 import { HostRequestError } from "./remote-host-client.js";
+import { isHostBusyError } from "./remote-host-errors.js";
 import { invalidateOwnedScopesCache, type SessionLiveness } from "./session-process.js";
 
 // Every SessionInfo field EXCEPT the ones `row` (the DB row) already carries
@@ -155,7 +156,9 @@ export function withLiveInfo(
   // Issue #2010 — `hostRefusedStatus` is set when the host answered with an
   // error (HTTP status) instead of not answering; it only changes the
   // suspended detail, never the status.
-  opts: { hostReachable?: boolean; hostRefusedStatus?: number } = {},
+  // `hostBusy` is set when the host reached its outbound channel concurrency
+  // cap — the host is up, but no channel opened so nothing was observed.
+  opts: { hostReachable?: boolean; hostRefusedStatus?: number; hostBusy?: boolean } = {},
 ) {
   const live = buildLiveInfo(info);
   let browserUrl = live.browserUrl;
@@ -183,6 +186,7 @@ export function withLiveInfo(
     dbStatus: row.status,
     hostReachable: opts.hostReachable,
     hostRefusedStatus: opts.hostRefusedStatus,
+    hostBusy: opts.hostBusy,
     info: live,
   });
   return {
@@ -362,13 +366,13 @@ export async function withLiveStatus(
   idleThresholdMs: number,
   hostId: string,
 ) {
-  const { info, hostReachable, hostRefusedStatus } = await readSessionLiveInfo(
+  const { info, hostReachable, hostRefusedStatus, hostBusy } = await readSessionLiveInfo(
     app,
     row,
     idleThresholdMs,
     hostId,
   );
-  return withLiveInfo(app, row, info, hostId, { hostReachable, hostRefusedStatus });
+  return withLiveInfo(app, row, info, hostId, { hostReachable, hostRefusedStatus, hostBusy });
 }
 
 /**
@@ -379,9 +383,9 @@ export async function withLiveStatus(
  *
  * `fresh` (a remote host only) bypasses the host client's 1.5 s cache. On any
  * failure `info` is null, `hostReachable` is false, `failure` says which kind
- * (`unreachable` or `refused`) and `error` is what was thrown; callers that
+ * (`unreachable`, `refused`, or `busy`) and `error` is what was thrown; callers that
  * only want a view ignore the last two, a caller that must tell "the host is
- * down" from "the host answered and refused" reads `failure`.
+ * down" from "the host answered and refused" or "the host is busy" reads `failure`.
  */
 export async function readSessionLiveInfo(
   app: FastifyInstance,
@@ -393,19 +397,24 @@ export async function readSessionLiveInfo(
   info: SessionInfo | null;
   hostReachable: boolean;
   /** Why the read failed, classified once here: the host `unreachable` (a
-   * network fault, a timeout) or `refused` the request (it ANSWERED with an
-   * error: its rate limit, a stale token). Absent when the read succeeded. */
-  failure?: "unreachable" | "refused";
+   * network fault, a timeout), `refused` the request (it ANSWERED with an
+   * error: its rate limit, a stale token), or `busy` (outbound channel concurrency
+   * cap reached). Absent when the read succeeded. */
+  failure?: "unreachable" | "refused" | "busy";
   error?: unknown;
   /** The HTTP status the host refused with — set exactly when `failure` is `refused`. */
   hostRefusedStatus?: number;
+  /** Set when failure is 'busy' (concurrency cap reached). */
+  hostBusy?: boolean;
 }> {
   const id = String(row.id);
   // The one place the result is built, so `hostReachable` and `failure` cannot
-  // disagree: a read reached the host exactly when it did not fail.
+  // disagree: a read reached the host exactly when it did not fail. On any
+  // failure (unreachable, refused, or busy), hostReachable is false because
+  // nothing about the session was observed.
   const outcome = (
     info: SessionInfo | null,
-    failure?: "unreachable" | "refused",
+    failure?: "unreachable" | "refused" | "busy",
     error?: unknown,
   ) => ({
     info,
@@ -415,6 +424,7 @@ export async function readSessionLiveInfo(
     ...(failure === "refused" && error instanceof HostRequestError
       ? { hostRefusedStatus: error.statusCode }
       : {}),
+    ...(failure === "busy" ? { hostBusy: true } : {}),
   });
   try {
     const backend = resolveBackend(app, hostId);
@@ -431,12 +441,18 @@ export async function readSessionLiveInfo(
     // Say which it was: a host that ANSWERED with an error (its rate limit, a
     // stale token) is not a network fault, and a log that blames one sends
     // whoever reads it looking in the wrong place.
-    const failure = err instanceof HostRequestError ? "refused" : "unreachable";
+    const failure = isHostBusyError(err)
+      ? "busy"
+      : err instanceof HostRequestError
+        ? "refused"
+        : "unreachable";
     app.log.warn(
       { hostId, sessionId: row.id, err },
-      failure === "refused"
-        ? "host answered the live-status request with an error, reporting default live status"
-        : "host unreachable, reporting default live status",
+      failure === "busy"
+        ? "host busy, reporting default live status"
+        : failure === "refused"
+          ? "host answered the live-status request with an error, reporting default live status"
+          : "host unreachable, reporting default live status",
     );
     return outcome(null, failure, err);
   }

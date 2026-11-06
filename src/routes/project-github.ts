@@ -156,6 +156,14 @@ export async function loadProjectRepoContext(
     // site now gets the 404-vs-everything-else split in its log message,
     // not just `/github/prs`. The 503 response itself is unchanged either
     // way, for every reason.
+    if (result.reason === "busy") {
+      app.log.warn(
+        { hostId: project.hostId, reason: result.reason, detail: result.detail },
+        `host busy, ${options.unavailableLabel} temporarily unavailable`,
+      );
+      reply.status(503).send({ message: `Host ${project.hostId} is busy`, retryable: true });
+      return null;
+    }
     const message =
       result.reason === "unsupported"
         ? `agent rejected github-repo request, ${options.unavailableLabel} unavailable`
