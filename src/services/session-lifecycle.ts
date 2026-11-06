@@ -1990,19 +1990,15 @@ async function spawnOrRollback(
     // its hookToken -> id entry until the process restarts. A no-op for the
     // remote case.
     app.pty.kill(String(sessionId));
-    untrackSessionGithubAuth(String(sessionId));
-    // B9 — the row itself is deleted right below, so this id is genuinely
-    // done: discard any stashed seed too rather than leaking it forever
-    // (see PtyManager.discardPendingSeed's own doc comment for why kill()
-    // itself deliberately does NOT do this).
-    app.pty.discardPendingSeed(String(sessionId));
     if (unsupported === null && isOutcomeUnknown(err)) {
       // #2621 — the channel closed after the spawn request was written: the
       // agent may well have started the session. Rolling back would delete
       // the row, worktree and branch the caller is told to re-check (and
       // strand a live agent in a removed cwd), so everything stays put;
       // `rb.done` turns createSessionRecord's own rollback into a no-op and
-      // `sessionId` lets the caller find the row.
+      // `sessionId` lets the caller find the row. The GitHub-auth tracking
+      // stays too: the session may be live on the host, and
+      // refreshSessionGithubAuth is what re-sends its renewed credential.
       rb.done = true;
       app.log.warn(
         { err, hostId: placementHost, sessionId },
@@ -2018,6 +2014,12 @@ async function spawnOrRollback(
         },
       };
     }
+    untrackSessionGithubAuth(String(sessionId));
+    // B9 — the row itself is deleted right below, so this id is genuinely
+    // done: discard any stashed seed too rather than leaking it forever
+    // (see PtyManager.discardPendingSeed's own doc comment for why kill()
+    // itself deliberately does NOT do this).
+    app.pty.discardPendingSeed(String(sessionId));
     await rollbackCreate(app, rb);
     app.log.error({ err, hostId: placementHost }, "session spawn failed, rolled back row");
     if (unsupported !== null) {

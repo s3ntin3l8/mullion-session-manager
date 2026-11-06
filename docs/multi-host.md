@@ -1959,8 +1959,10 @@ usual re-attach scrollback replay / events replay snapshot resynchronizes it.
   caller or task failure reason.
   A failed spawn with an unknown outcome also **keeps** the session row, worktree
   and branch (no rollback, no promote-route cleanup), so the state the caller is
-  told to re-check still exists; a Task Master review spawn adopts that row as the
-  task's reviewer rather than leaving the decision to the stale-claim sweep.
+  told to re-check still exists. The two spawn HTTP routes name it as `sessionId` in
+  the 503 body; a Task Master worker (dispatch and retry) and review spawn adopt that
+  row instead of releasing the task, so the next dispatch never removes the kept
+  worktree or branch under a live agent.
 - **`HostUnreachableError`**: A network failure before sending, a dropped link on an
   idempotent request, or a 5xx HTTP response. Read-only calls and idempotent probes
   keep retrying as before.

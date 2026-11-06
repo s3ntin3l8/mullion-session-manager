@@ -169,11 +169,21 @@ export async function spawnReviewAgentNow(
       // reviewer; if it did not, the ordinary dead-reviewer handling takes over.
       // Either way no second reviewer is spawned into the same worktree.
       if (result.sessionId !== undefined) {
-        app.db
+        const adopted = app.db
           .update(tasks)
           .set({ reviewSessionId: result.sessionId, reviewSeedDelivered: false })
           .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
           .run();
+        if (adopted.changes === 0) {
+          // The task left "reviewing" while the spawn was in flight (see the
+          // CAS comment below): nothing points at the kept row, so reap it
+          // rather than leave an untracked, possibly live reviewer.
+          app.log.warn(
+            { taskId: task.id, reviewSessionId: result.sessionId },
+            "task reconcile: task left 'reviewing' while its review agent was spawning — killing the orphaned session",
+          );
+          await killSession(app, result.sessionId);
+        }
       }
       return;
     }

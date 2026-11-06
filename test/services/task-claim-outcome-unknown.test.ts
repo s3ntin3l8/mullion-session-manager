@@ -46,7 +46,7 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { enqueueTask, dispatchClaimedTask, retryTask } =
   await import("../../src/services/task-claim.js");
-const { tasks } = await import("../../src/db/schema.js");
+const { tasks, sessions } = await import("../../src/db/schema.js");
 const { createWorktree } = await import("../../src/services/git-worktree.js");
 const sessionsModule = await import("../../src/services/session-lifecycle.js");
 
@@ -145,6 +145,67 @@ describe("an unknown spawn outcome is surfaced to the task (#2621)", () => {
     const outcome = await retryTask(app, row.id);
 
     expect(outcome).toMatchObject({ ok: false, reason: "spawn-failed", detail: "channel closed" });
+
+    vi.restoreAllMocks();
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("dispatch adopts the kept session instead of releasing the task", async () => {
+    const { app, cwd, row, rowNow } = await setup();
+    const sessionId = Number(
+      app.db
+        .insert(sessions)
+        .values({ projectId: row.projectId, command: "bash", cwd: "/tmp/kept" })
+        .run().lastInsertRowid,
+    );
+    vi.spyOn(sessionsModule, "createSessionRecord").mockResolvedValue({
+      ok: false,
+      reason: "outcome-unknown",
+      detail: "channel closed",
+      sessionId,
+    });
+
+    await enqueueTask(app, row.id, { auto: false });
+    const outcome = await dispatchClaimedTask(app, row.id);
+
+    expect(outcome).toMatchObject({ ok: false, reason: "spawn-failed" });
+    expect(rowNow()).toMatchObject({
+      status: "in_progress",
+      sessionId,
+      worktreePath: "/tmp/kept",
+    });
+
+    vi.restoreAllMocks();
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("retry adopts the kept session instead of releasing the task", async () => {
+    const { app, cwd, row, rowNow } = await setup();
+    const branchName = deriveTaskBranchName(row);
+    const created = await createWorktree({ cwd, baseRef: "main", seed: branchName, branchName });
+    app.db
+      .update(tasks)
+      .set({ status: "failed", worktreePath: created.path as string, branchName })
+      .where(eq(tasks.id, row.id))
+      .run();
+    const sessionId = Number(
+      app.db
+        .insert(sessions)
+        .values({ projectId: row.projectId, command: "bash", cwd: created.path as string })
+        .run().lastInsertRowid,
+    );
+    vi.spyOn(sessionsModule, "createSessionRecord").mockResolvedValue({
+      ok: false,
+      reason: "outcome-unknown",
+      detail: "channel closed",
+      sessionId,
+    });
+
+    await retryTask(app, row.id);
+
+    expect(rowNow()).toMatchObject({ status: "in_progress", sessionId });
 
     vi.restoreAllMocks();
     fs.rmSync(cwd, { recursive: true, force: true });

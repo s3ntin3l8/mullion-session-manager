@@ -857,11 +857,16 @@ export async function sessionsRoute(app: FastifyInstance) {
           return reply.badRequest(`env key "${result.detail}" is reserved and cannot be set`);
         }
         if (result.reason === "outcome-unknown") {
-          return reply.serviceUnavailable(
-            result.detail
+          // #2621 — name the kept session so the caller re-checks it rather
+          // than blindly retrying into a second one.
+          return reply.code(503).send({
+            statusCode: 503,
+            error: "Service Unavailable",
+            message: result.detail
               ? `Host connection lost mid-request; spawn outcome is unknown: ${result.detail}`
               : "Host connection lost mid-request; spawn outcome is unknown",
-          );
+            sessionId: result.sessionId,
+          });
         }
         return reply.badGateway("Failed to spawn session on host");
       }
@@ -1176,11 +1181,16 @@ export async function sessionsRoute(app: FastifyInstance) {
         // this worktree. Leave the worktree and branch for the caller to
         // re-check instead of deleting them.
         if (created.reason === "outcome-unknown") {
-          return reply.serviceUnavailable(
-            created.detail
+          // #2621 — name the kept session so the caller re-checks it rather
+          // than blindly retrying into a second one.
+          return reply.code(503).send({
+            statusCode: 503,
+            error: "Service Unavailable",
+            message: created.detail
               ? `Host connection lost mid-request; spawn outcome is unknown: ${created.detail}`
               : "Host connection lost mid-request; spawn outcome is unknown",
-          );
+            sessionId: created.sessionId,
+          });
         }
         const backend = resolveBackend(app, srcHostId);
         try {
