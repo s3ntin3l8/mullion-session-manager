@@ -175,6 +175,26 @@ describe("failReviewingGate — failure diagnostics", () => {
     await app.close();
   });
 
+  it("fails the gate open when the WIP salvage outcome is unknown (#2621)", async () => {
+    const { app, run, row } = await setup(async () => Buffer.from("tail"));
+    mockResolveHostGitStatus.mockResolvedValue({
+      ok: true,
+      value: { isRepo: false, status: null },
+    });
+    mockCommitHostWipChanges.mockResolvedValue({
+      ok: false,
+      reason: "outcome-unknown",
+      detail: "channel closed",
+    });
+
+    await run();
+
+    // Fails open: the WIP salvage is skipped, nothing is retried.
+    expect(mockCommitHostWipChanges).toHaveBeenCalledTimes(1);
+    expect(row().status).not.toBe("completed");
+    await app.close();
+  });
+
   it("caps an oversized scrollback", async () => {
     const { app, run, row } = await setup(async () => Buffer.from("z".repeat(200_000)));
     mockResolveHostGitStatus.mockResolvedValue({
