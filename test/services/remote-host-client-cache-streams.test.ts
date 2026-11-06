@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import type { FastifyInstance } from "fastify";
 import { WebSocketServer, type WebSocket } from "ws";
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { hosts } from "../../src/db/schema.js";
 import { buildTestApp } from "../helpers/app.js";
@@ -126,10 +126,10 @@ describe("RemoteHostClient construction sites (#2635)", () => {
   it("every non-test construction passes channelApp alongside resolveTransport", () => {
     const sites: string[] = [];
     const walk = (dir: string) => {
-      for (const name of readdirSync(dir)) {
-        const p = path.join(dir, name);
-        if (statSync(p).isDirectory()) walk(p);
-        else if (p.endsWith(".ts")) {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(p);
+        else if (entry.name.endsWith(".ts")) {
           const src = readFileSync(p, "utf8");
           for (const m of src.matchAll(/new RemoteHostClient\(\{([\s\S]*?)\n\s*\}\);/g)) {
             if (m[1]!.includes("resolveTransport") && !m[1]!.includes("channelApp")) sites.push(p);
