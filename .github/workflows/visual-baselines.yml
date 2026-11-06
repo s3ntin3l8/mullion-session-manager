@@ -1,0 +1,17 @@
+name: Update visual baselines (canary)
+
+on:
+  push:
+    branches: [canary/visual-baselines]
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  baselines:
+    uses: s3ntin3l8/.github/.github/workflows/visual-baselines.yml@feat/visual-baselines
+    with:
+      pr-number: "2665"
+      node-version: "26"
