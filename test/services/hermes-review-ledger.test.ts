@@ -168,9 +168,13 @@ describe("hermes review relay — ledger marker", () => {
         expect(reviewStuckReason({ status: runStatus, open, startedAtMs, now })).toBe(expected);
       });
 
-      it("never calls a run with an unreadable start time overdue", () => {
+      it("treats a run with no start time as wedged, like the in-flight refusal does", () => {
+        expect(reviewStuckReason({ status: "running", open: true, startedAtMs: NaN, now })).toBe(
+          "overdue",
+        );
+        // A closed marker's finished run is still settled, not stuck.
         expect(
-          reviewStuckReason({ status: "running", open: true, startedAtMs: NaN, now }),
+          reviewStuckReason({ status: "failed", open: false, startedAtMs: NaN, now }),
         ).toBeNull();
       });
     });
@@ -218,6 +222,12 @@ describe("hermes review relay — ledger marker", () => {
 
       it("flags a run still running past the window as overdue", async () => {
         withMarkers(markerRun({ started_at: minutesAgo(90) }));
+        runEndpoint = hermesRun("running");
+        await expect(status()).resolves.toMatchObject({ stuck: true, stuckReason: "overdue" });
+      });
+
+      it("flags a running run whose marker has no start time, as the refusal does", async () => {
+        withMarkers(markerRun({ started_at: null }));
         runEndpoint = hermesRun("running");
         await expect(status()).resolves.toMatchObject({ stuck: true, stuckReason: "overdue" });
       });

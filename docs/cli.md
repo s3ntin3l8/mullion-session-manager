@@ -517,9 +517,10 @@ review`; **empty = the ledger is off**, like `hermes-review-ledger: off`), and
   requested again. Status also closes such an
   orphaned marker when its run finished (`success` or `failure`, `neutral` for
   a lost run past two hours), so the pending check clears — only if the GitHub
-  App that wrote the marker is the one Mullion writes with. A `not_found` with no
-  run id means this Mullion has no run for the PR and its head has no review
-  check.
+  App that wrote the marker is the one Mullion writes with. A `not_found` with a
+  run id means Hermes no longer knows that run (it expired or was lost); one
+  without a run id means this Mullion has no run for the PR and its head has no
+  review check.
   Call it once,
   about ten minutes after requesting — a review takes 10-30 minutes, and
   asking again while one is in flight is refused (so the answer to "still

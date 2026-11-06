@@ -7,6 +7,7 @@ export const TASK_PUSH_REQUEST_TIMEOUT_MS: number;
 export const REVIEW_PROTOCOL_NOTE: string;
 export const REVIEW_REPO_NOTE: string;
 export const REVIEW_STATUS_NOTE: string;
+export function hasNoReviewRun(r: { status: string; runId?: string }): boolean;
 export function reviewStatusLines(r: {
   status: string;
   repo: string;

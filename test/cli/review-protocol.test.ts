@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { REVIEW_STATUS_NOTE, reviewStatusLines } from "../../src/cli/review-protocol.mjs";
+import {
+  REVIEW_STATUS_NOTE,
+  hasNoReviewRun,
+  reviewStatusLines,
+} from "../../src/cli/review-protocol.mjs";
 import { TOOLS } from "../../src/mcp/tools.mjs";
 
 // #2634 — what an agent is told about a review that is not the relay's own run,
@@ -61,6 +65,17 @@ describe("reviewStatusLines", () => {
     expect(advice).not.toContain("nothing is working");
     expect(advice).toContain("mullion review stop run_wf");
     expect(advice).toContain("do not @mention the review bot");
+  });
+
+  it("explains a not_found that has a run id: Hermes no longer knows that run", () => {
+    // A relay run whose status window elapsed: a run, not an absence.
+    const lines = reviewStatusLines({ ...base, status: "not_found" });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("review run run_wf for acme/widgets#42: not_found");
+    expect(lines[0]).toContain("Hermes no longer knows this run");
+    expect(hasNoReviewRun({ ...base, status: "not_found" })).toBe(false);
+    expect(hasNoReviewRun({ status: "not_found" })).toBe(true);
+    expect(hasNoReviewRun({ ...base, status: "running" })).toBe(false);
   });
 
   it("is a single line for not_found, naming the missing review check", () => {

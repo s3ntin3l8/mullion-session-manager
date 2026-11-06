@@ -25,6 +25,7 @@ import {
   REVIEW_REQUEST_TIMEOUT_MS,
   REVIEW_PROTOCOL_NOTE,
   TASK_PUSH_REQUEST_TIMEOUT_MS,
+  hasNoReviewRun,
   reviewStatusLines,
 } from "./review-protocol.mjs";
 
@@ -1800,7 +1801,7 @@ function markerNote(result) {
 
 function formatReviewStatus(r) {
   const lines = reviewStatusLines(r);
-  if (r.status === "not_found" && !r.runId) return lines[0];
+  if (hasNoReviewRun(r)) return lines[0];
   if (r.shuttingDown) lines.push("the review gateway is shutting down");
   if (r.error) lines.push(`error: ${r.error}`);
   if (r.output) lines.push(`reply: ${r.output}`);

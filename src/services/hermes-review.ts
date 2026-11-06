@@ -1316,7 +1316,11 @@ export function reviewStuckReason(input: {
   startedAtMs: number;
   now?: number;
 }): ReviewStuckReason | null {
-  const aged = (input.now ?? Date.now()) - input.startedAtMs > REVIEW_STUCK_AFTER_MS;
+  // A run with no start time cannot be aged; the in-flight refusal treats it as
+  // wedged (`findLiveMarkerRun`), so the verdict does too — one rule for both.
+  const aged =
+    Number.isNaN(input.startedAtMs) ||
+    (input.now ?? Date.now()) - input.startedAtMs > REVIEW_STUCK_AFTER_MS;
   if (isGone(input.status)) return input.open && aged ? "lost_run" : null;
   if (isTerminal(input.status)) {
     return input.open && input.status !== "completed" ? "dead_run" : null;
