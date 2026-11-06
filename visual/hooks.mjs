@@ -15,6 +15,8 @@ const HELD_SCRIPT = {
   dashboard: { script: "fake-agent", lines: AUTH_TRANSCRIPT },
   "git-panel": { script: "fake-agent", lines: AUTH_TRANSCRIPT },
   terminal: { script: "mobile-demo", lines: MOBILE_TRANSCRIPT },
+  // Same terminal, rendered with normal motion (see scenes.json).
+  "terminal-motion": { script: "mobile-demo", lines: MOBILE_TRANSCRIPT },
 };
 
 // The landing loop is set up and released in settle() instead: the loop recorder
