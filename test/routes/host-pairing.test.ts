@@ -14,6 +14,7 @@ import {
   consumeHostPairing,
   issueHostPairingCode,
   listHostPairings,
+  revokeHostPairing,
 } from "../../src/services/host-pairing.js";
 
 // Issue #2449 — one-time execution-host pairing.
@@ -226,9 +227,52 @@ describe("host pairing (issue #2449)", () => {
       const blocked = await redeem("cd".repeat(32));
       expect(blocked.statusCode).toBe(429);
       expect(Number(blocked.headers["retry-after"])).toBeGreaterThanOrEqual(1);
-      // Blocked means blocked: even a valid code waits.
-      const valid = issueHostPairingCode(app);
-      expect((await redeem(valid.code, { requestId: "request-late" })).statusCode).toBe(429);
+    });
+
+    describe("blocked address", () => {
+      const exhaust = async () => {
+        for (let i = 0; i < 20; i++) expect((await redeem("cd".repeat(32))).statusCode).toBe(401);
+        expect((await redeem("cd".repeat(32))).statusCode).toBe(429);
+      };
+
+      it("still redeems a valid code, and a wrong code is still 429", async () => {
+        await exhaust();
+        const valid = issueHostPairingCode(app);
+        expect((await redeem(valid.code, { requestId: "request-late" })).statusCode).toBe(200);
+        const blocked = await redeem("ef".repeat(32));
+        expect(blocked.statusCode).toBe(429);
+        expect(Number(blocked.headers["retry-after"])).toBeGreaterThanOrEqual(1);
+      });
+
+      it("still answers a same-request retry, but not a different request id", async () => {
+        const p = issueHostPairingCode(app);
+        expect((await redeem(p.code, { requestId: "request-keep" })).statusCode).toBe(200);
+        await exhaust();
+        expect((await redeem(p.code, { requestId: "request-keep" })).statusCode).toBe(200);
+        expect((await redeem(p.code, { requestId: "request-other" })).statusCode).toBe(429);
+      });
+
+      it("does not let a revoked code through", async () => {
+        const revoked = issueHostPairingCode(app);
+        revokeHostPairing(app, revoked.id);
+        await exhaust();
+        expect((await redeem(revoked.code)).statusCode).toBe(429);
+      });
+
+      it("does not count matching redeems as failures", async () => {
+        await exhaust();
+        for (let i = 0; i < 25; i++) {
+          const issued = issueHostPairingCode(app);
+          expect((await redeem(issued.code, { requestId: `request-ok-${i}` })).statusCode).toBe(
+            200,
+          );
+        }
+        // A matching request with a bad baseUrl (400) is not a failure either.
+        const bad = issueHostPairingCode(app);
+        expect((await redeem(bad.code, { baseUrl: "ftp://x" })).statusCode).toBe(400);
+        // Still blocked for non-matching traffic, with the same single window.
+        expect((await redeem("ef".repeat(32))).statusCode).toBe(429);
+      });
     });
 
     it("counts schema failures (400) as failures", async () => {

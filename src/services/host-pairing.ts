@@ -158,20 +158,7 @@ export function redeemHostPairingCode(
   input: RedeemHostPairingInput,
 ): HostRegistration | null {
   const now = new Date();
-  const matched = app.db
-    .select()
-    .from(hostPairings)
-    .where(
-      and(
-        eq(hostPairings.codeHash, sha256Hex(presentedCode)),
-        isNull(hostPairings.revokedAt),
-        or(
-          gt(hostPairings.expiresAt, now),
-          gt(hostPairings.redeemedAt, new Date(now.getTime() - HOST_PAIRING_RETRY_WINDOW_MS)),
-        ),
-      ),
-    )
-    .get();
+  const matched = findLivePairing(app, presentedCode, now);
   if (matched === undefined) return null;
   const requestHash = sha256Hex(input.requestId);
 
@@ -186,6 +173,51 @@ export function redeemHostPairingCode(
   if (matched.expiresAt.getTime() <= now.getTime()) return null;
 
   return consumeHostPairing(app, matched, requestHash, input);
+}
+
+/**
+ * Whether a redeem carrying this code and request id would be processed: the
+ * code is unredeemed, unexpired and unrevoked, or it is a same-request retry of
+ * a redeemed one inside its retry window. A cheap hash lookup that changes
+ * nothing, so the route can let a legitimate redeem through its failure limiter.
+ */
+export function pairingRedeemWouldProceed(
+  app: FastifyInstance,
+  presentedCode: string,
+  requestId: string,
+): boolean {
+  const now = new Date();
+  const matched = findLivePairing(app, presentedCode, now);
+  if (matched === undefined) return false;
+  if (!matched.redeemedAt) return matched.expiresAt.getTime() > now.getTime();
+  const prior = matched.redeemRequestHash;
+  return (
+    !!prior &&
+    !!matched.redeemedHostId &&
+    matched.redeemedAt.getTime() > now.getTime() - HOST_PAIRING_RETRY_WINDOW_MS &&
+    timingSafeTokenMatch(sha256Hex(requestId), prior)
+  );
+}
+
+function findLivePairing(
+  app: FastifyInstance,
+  presentedCode: string,
+  now: Date,
+): PairingRow | undefined {
+  return app.db
+    .select()
+    .from(hostPairings)
+    .where(
+      and(
+        eq(hostPairings.codeHash, sha256Hex(presentedCode)),
+        isNull(hostPairings.revokedAt),
+        or(
+          gt(hostPairings.expiresAt, now),
+          gt(hostPairings.redeemedAt, new Date(now.getTime() - HOST_PAIRING_RETRY_WINDOW_MS)),
+        ),
+      ),
+    )
+    .get();
 }
 
 /**
