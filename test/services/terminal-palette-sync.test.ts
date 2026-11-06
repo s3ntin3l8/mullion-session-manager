@@ -76,6 +76,20 @@ describe("terminal palette sync", () => {
     expect(getClient.mock.calls.map((c) => c[1])).toEqual(["h1", "h3"]);
   });
 
+  it("pushes to an outbound-only host with a live channel, skipping one without (#2636)", async () => {
+    setTerminalPalette(palette);
+    mockListHosts.mockReturnValue([
+      { id: "ob-up", baseUrl: null },
+      { id: "ob-down", baseUrl: null },
+    ]);
+    const channelApp = {
+      ...app,
+      agentChannels: new Map([["ob-up", { carriedOperations: [] }]]),
+    } as unknown as FastifyInstance;
+    await pushTerminalPaletteToHosts(channelApp);
+    expect(getClient.mock.calls.map((c) => c[1])).toEqual(["ob-up"]);
+  });
+
   it("swallows an unreachable host quietly", async () => {
     setTerminalPalette(palette);
     setPalette.mockRejectedValueOnce(new Error("offline"));

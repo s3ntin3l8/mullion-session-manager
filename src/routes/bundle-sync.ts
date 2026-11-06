@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { hasReachablePath } from "../services/agent-channel-tunnel.js";
 import { getCachedAgents } from "../services/agent-detect.js";
 import {
   getBundleSyncStatus,
@@ -110,11 +111,11 @@ export async function bundleSyncRoute(app: FastifyInstance) {
     applySettingsPatch(app, { sessions: { injectMullionBundle: false } });
     const result = await uninstallBundleContent();
 
-    // Same `!h.isLocal && h.baseUrl !== null` filter as ssh-agent-fanout.ts's
-    // own reconcile() — every registered host except the primary itself
-    // (which this route just handled directly, above) and any legacy row
-    // with no baseUrl at all (pre-#245, never actually reachable).
-    const agentHosts = listHosts(app).filter((h) => !h.isLocal && h.baseUrl !== null);
+    // Same reachability filter as ssh-agent-fanout.ts's own reconcile() —
+    // every registered host except the primary itself (which this route just
+    // handled directly, above) and any row with no address and no outbound
+    // channel (never actually reachable).
+    const agentHosts = listHosts(app).filter((h) => !h.isLocal && hasReachablePath(app, h));
     await Promise.all(
       agentHosts.map(async (host) => {
         const hostResult = await removeHostBundle(app, host.id, true);

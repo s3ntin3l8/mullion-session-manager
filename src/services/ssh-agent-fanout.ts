@@ -1,4 +1,5 @@
 import type { FastifyInstance } from "fastify";
+import { hasReachablePath } from "./agent-channel-tunnel.js";
 import type { WebSocket as NodeWebSocket } from "ws";
 import { listHosts } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
@@ -404,7 +405,7 @@ export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle 
       app.connectedBridges.size > 0
         ? new Set(
             listHosts(app)
-              .filter((h) => !h.isLocal && h.baseUrl !== null)
+              .filter((h) => !h.isLocal && hasReachablePath(app, h))
               .map((h) => h.id),
           )
         : new Set<string>();

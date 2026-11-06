@@ -1,6 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import type { WebSocket as NodeWebSocket, RawData } from "ws";
-import { checkMachineCredential, markChannelConnected } from "../services/host-registry.js";
+import {
+  checkMachineCredential,
+  getHostRow,
+  markChannelConnected,
+} from "../services/host-registry.js";
 import { createMuxConnection } from "../services/ssh-agent-mux.js";
 import { bindChannelHost, unbindChannelHost } from "../services/agent-channel-tunnel.js";
 import { AGENT_OPERATIONS, localProtocolInfo } from "../shared/agent-protocol.js";
@@ -189,6 +193,17 @@ export async function agentChannelRoute(app: FastifyInstance) {
         // the agent serves them, so a peer-initiated channel is refused.
         if (carried.length > 0) bindChannelHost(app, hostId, carried);
         else unbindChannelHost(app, hostId);
+        // An outbound-only host has no address, so its streams (events, control
+        // relay, ssh-agent) can only start now that its channel is up. Any
+        // earlier one rode a channel that is gone (or was never possible), so
+        // rebuild it now rather than wait out its backoff (#2636). A host that
+        // also has a URL is already covered by the heartbeat's recovery path.
+        if (getHostRow(app, hostId)?.baseUrl === null) {
+          const opts = { forceReconnect: [hostId] };
+          app.reconfigureRemoteEventSubscriptions?.(opts);
+          app.reconfigureSshAgentFanout?.(opts);
+          app.reconfigureControlRelayFanout?.(opts);
+        }
         mux.onChannel((channel) => channel.close());
 
         // Re-validate the credential this channel authenticated with while it

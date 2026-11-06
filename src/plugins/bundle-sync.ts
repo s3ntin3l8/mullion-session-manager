@@ -1,4 +1,5 @@
 import fp from "fastify-plugin";
+import { hasReachablePath } from "../services/agent-channel-tunnel.js";
 import type { FastifyInstance } from "fastify";
 import { getStoredSettings } from "../services/settings.js";
 import { runBundleSyncExclusive } from "../services/bundle-sync.js";
@@ -79,11 +80,11 @@ async function runBundleSync(app: FastifyInstance): Promise<void> {
 // one bad host block another or the setting write that already happened
 // before this runs.
 function reenableAgentBundles(app: FastifyInstance): void {
-  // Same `!h.isLocal && h.baseUrl !== null` filter as routes/bundle-sync.ts's
-  // own `/remove` fan-out — every registered host except the primary itself
-  // (handled directly above) and any legacy row with no baseUrl at all
-  // (pre-#245, never actually reachable).
-  const agentHosts = listHosts(app).filter((h) => !h.isLocal && h.baseUrl !== null);
+  // Same reachability filter as routes/bundle-sync.ts's own `/remove`
+  // fan-out — every registered host except the primary itself (handled
+  // directly above) and any row with no address and no outbound channel
+  // (never actually reachable).
+  const agentHosts = listHosts(app).filter((h) => !h.isLocal && hasReachablePath(app, h));
   for (const host of agentHosts) {
     void removeHostBundle(app, host.id, false)
       .then((hostResult) => {

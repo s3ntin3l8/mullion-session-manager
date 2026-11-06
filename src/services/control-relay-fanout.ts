@@ -1,4 +1,5 @@
 import type net from "node:net";
+import { hasReachablePath } from "./agent-channel-tunnel.js";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket as NodeWebSocket } from "ws";
 import { handleConnection, relayedSessionDenied } from "../plugins/control-socket.js";
@@ -279,7 +280,7 @@ export function startControlRelayFanout(app: FastifyInstance): ControlRelayFanou
     if (stopped) return;
     const desiredIds = new Set(
       listHosts(app)
-        .filter((h) => !h.isLocal && h.baseUrl !== null)
+        .filter((h) => !h.isLocal && hasReachablePath(app, h))
         .map((h) => h.id),
     );
     const forceReconnect = new Set(opts?.forceReconnect ?? []);
