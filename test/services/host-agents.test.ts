@@ -678,6 +678,27 @@ describe("ensureRemoteHostProtocols and failure cooldown (issue #2625)", () => {
     await ensureRemoteHostProtocols(app, { target: { platform: "Darwin" } });
     // The Mac and the host with no platform yet; not the Linux box.
     expect(client.detectAgents).toHaveBeenCalledTimes(2);
+    expect(tracker.get("mac")).toBeDefined();
+    expect(tracker.get("unreported")).toBeDefined();
+    expect(tracker.get("linux-box")).toBeUndefined();
+  });
+
+  it("a platform target uses the capacity-reported platform when the column is null", async () => {
+    const tracker = new HostAgentTracker();
+    const app = fakeApp(tracker, new HostHeartbeatTracker(), [{ id: "h" }]) as unknown as {
+      hostCapacityTracker: unknown;
+    };
+    app.hostCapacityTracker = { get: () => ({ capacity: { platform: "darwin" } }) };
+    tracker.recordProtocolReadFailure("h");
+
+    await ensureRemoteHostProtocols(app as unknown as FastifyInstance, {
+      target: { platform: "win32" },
+    });
+    expect(client.detectAgents).toHaveBeenCalledTimes(0);
+    await ensureRemoteHostProtocols(app as unknown as FastifyInstance, {
+      target: { platform: "darwin" },
+    });
+    expect(client.detectAgents).toHaveBeenCalledTimes(1);
   });
 
   it("an offline host is not read at all", async () => {

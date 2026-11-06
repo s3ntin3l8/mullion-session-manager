@@ -1424,8 +1424,9 @@ code: "unsupported", missing, updateHint, message}`. The three former ad-hoc 404
   (bounded), but skips hosts already reported offline by the heartbeat, drained
   or parked hosts, and hosts whose bounded read failed within the last 60
   seconds; skipped hosts read as the legacy baseline for the decision. A host the
-  launch names (a task requirement or a spawn `target` with a `hostId`) is read
-  regardless of that memory, so its own launch is never judged on a guess. The
+  launch names (a task requirement or a spawn `target` with a `hostId` or a `platform`;
+  a host that has not reported its platform counts) is read regardless of that
+  memory, so its own launch is never judged on a guess. The
   memory is cleared by every successful heartbeat ping, so it mainly helps with
   hosts that are offline, drained or not answering pings.
 - **Old agents refuse newer launches.** A host whose agent lacks `taskId`,

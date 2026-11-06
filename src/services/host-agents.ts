@@ -430,14 +430,17 @@ export function ensureHostProtocol(app: FastifyInstance, hostId: string): Promis
 }
 
 function couldSatisfyTarget(
+  app: FastifyInstance,
   h: { id: string; platform: string | null },
   target: { hostId?: string; platform?: string } | null | undefined,
 ): boolean {
   if (!target) return false;
   if (target.hostId !== undefined && h.id !== target.hostId) return false;
   if (target.platform === undefined) return target.hostId !== undefined;
+  // Same effective platform as placement matches on: the column, else the capacity reading.
+  const platform = h.platform ?? app.hostCapacityTracker?.get(h.id)?.capacity.platform ?? null;
   // A host that has not reported its platform may turn out to match.
-  return (h.platform ?? "") === "" || h.platform?.toLowerCase() === target.platform.toLowerCase();
+  return (platform ?? "") === "" || platform?.toLowerCase() === target.platform.toLowerCase();
 }
 
 /**
@@ -462,7 +465,7 @@ export async function ensureRemoteHostProtocols(
       if (h.id === LOCAL_HOST_ID) return false;
       if (h.drained) return false;
       if (app.hostHeartbeatTracker?.getHealth(h.id)?.status === "offline") return false;
-      if (!couldSatisfyTarget(h, opts.target) && tracker.hasRecentProtocolReadFailure(h.id)) {
+      if (!couldSatisfyTarget(app, h, opts.target) && tracker.hasRecentProtocolReadFailure(h.id)) {
         return false;
       }
       return true;
