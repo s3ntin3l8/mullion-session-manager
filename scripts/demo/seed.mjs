@@ -185,6 +185,16 @@ export function transcriptEnd(lines) {
   return { last, lineBreaks: 1 + trailingBlanks };
 }
 
+/**
+ * A pattern for the scrollback text of a finished transcript: the last non-blank line followed by every line
+ * break the transcript ends with (`\r\n` from a PTY, `\n` from a file). Unanchored, so output that follows
+ * the transcript (the keepalive's escape codes) does not matter.
+ */
+export function transcriptEndPattern(lines) {
+  const { last, lineBreaks } = transcriptEnd(lines);
+  return new RegExp(`${last.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\r?\\n){${lineBreaks}}`);
+}
+
 export const AUTH_TRANSCRIPT = [
   "Claude Code v2.1.0",
   "",

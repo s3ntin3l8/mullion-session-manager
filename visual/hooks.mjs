@@ -8,7 +8,12 @@
 // already attached and fitted. These hooks are that wait-then-release step,
 // ported from the capture script this replaced.
 import { checkTerminalGeometry, parseSttySize } from "../scripts/demo/geometry.mjs";
-import { AUTH_TRANSCRIPT, MOBILE_TRANSCRIPT, transcriptEnd } from "../scripts/demo/seed.mjs";
+import {
+  AUTH_TRANSCRIPT,
+  MOBILE_TRANSCRIPT,
+  transcriptEnd,
+  transcriptEndPattern,
+} from "../scripts/demo/seed.mjs";
 
 // Scenes that show a held transcript in a terminal, by the script they open.
 const HELD_SCRIPT = {
@@ -150,10 +155,7 @@ export async function settle({ page, scene, host }) {
   await host("release", held.script);
   // The last line and the blank lines after it: the script prints them 0.25 s apart, and a shot taken between
   // them has the cursor one row higher than one taken after (a 384 px difference on the README terminal shot).
-  const { last, lineBreaks } = transcriptEnd(held.lines);
-  const finished = new RegExp(
-    `${last.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\r?\\n){${lineBreaks}}`,
-  );
+  const finished = transcriptEndPattern(held.lines);
   await waitUntil(async () => {
     const session = await find();
     if (!session) return false;
@@ -161,24 +163,35 @@ export async function settle({ page, scene, host }) {
     return finished.test(Buffer.from(b64, "base64").toString("utf8"));
   }, `${held.script} to finish its transcript`);
   // The scrollback being complete is the server's view. A terminal that replays it on attach (every variant after
-  // the first) can still be drawing the last lines, so wait for the cursor to sit where the transcript leaves it.
-  await waitUntil(
+  // the first) can still be drawing the last lines. Two waits cover that, for different renderers:
+  //  - DOM renderer (the mobile variants): the cursor row must sit where the transcript leaves it.
+  //  - Every renderer, WebGL canvases included (the desktop variants, which have no rows to read): the terminal's
+  //    pixels must hold still for a second.
+  const { last, lineBreaks } = transcriptEnd(held.lines);
+  const cursorRow = await waitUntil(
     () =>
       page.evaluate(
-        ({ tail, breaks }) => {
+        ({ lastLine, breaks }) => {
           const rows = [...globalThis.document.querySelectorAll(".xterm-rows > div")];
           const cursor = rows.findIndex((r) => r.querySelector(".xterm-cursor"));
-          if (cursor < 0) return true; // no cursor to read (another renderer): nothing to wait for
+          if (cursor < 0) return "none"; // no DOM rows to read: the pixel wait below is all there is
           const text = (r) => r.textContent.replaceAll("\u00a0", " ").trim();
           const lastText = rows.findLastIndex((r) => text(r) !== "");
-          return (
-            lastText >= 0 && text(rows[lastText]).includes(tail) && cursor - lastText === breaks
-          );
+          if (lastText < 0 || cursor - lastText !== breaks) return false;
+          const row = text(rows[lastText]);
+          // A line wider than the terminal ends on a row holding only its tail.
+          return row.includes(lastLine) || lastLine.endsWith(row) ? "read" : false;
         },
-        { tail: last.slice(-6), breaks: lineBreaks },
+        { lastLine: last, breaks: lineBreaks },
       ),
     `the terminal to draw the end of ${held.script}'s transcript`,
   );
+  if (cursorRow === "none") {
+    console.error(
+      `[screenshots] ${scene.name}: no DOM cursor row to read (canvas renderer); waiting on pixels only`,
+    );
+  }
+  await waitForStillPixels(page);
 
   const { terminal } = await api("/api/settings");
   const pty = parseSttySize(await host("size", held.script));
@@ -258,6 +271,33 @@ async function waitUntil(check, what, timeoutMs = 60_000) {
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
     await new Promise((r) => setTimeout(r, 250));
   }
+}
+
+/**
+ * Waits until the terminal's pixels are identical across four samples 250 ms apart: a renderer-independent
+ * "it has stopped drawing". Gives up quietly after 10 s (a terminal that never holds still is reported by the
+ * geometry check that follows, not by this).
+ */
+async function waitForStillPixels(page) {
+  let previous;
+  let same = 0;
+  await waitUntil(
+    async () => {
+      const shot = await page
+        .locator(".xterm-screen")
+        .first()
+        .screenshot({ animations: "disabled" });
+      same = previous && shot.equals(previous) ? same + 1 : 0;
+      previous = shot;
+      return same >= 3;
+    },
+    "the terminal to stop changing",
+    10_000,
+  ).catch(() => {
+    console.error(
+      "[screenshots] the terminal's pixels never held still for a second; shooting anyway",
+    );
+  });
 }
 
 /**

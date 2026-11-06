@@ -12,6 +12,7 @@ import {
   lastTranscriptLine,
   seedDemo,
   transcriptEnd,
+  transcriptEndPattern,
 } from "../../scripts/demo/seed.mjs";
 import { pinnedPath } from "../helpers/pinned-path.js";
 
@@ -135,6 +136,27 @@ describe("transcriptEnd", () => {
 
   it("throws on an all-blank transcript", () => {
     expect(() => transcriptEnd(["", "  "])).toThrow("no non-blank line");
+  });
+});
+
+describe("transcriptEndPattern", () => {
+  const lines = ["a", "Total: $5 (done). [ok]", ""];
+
+  it("matches the last line followed by exactly the transcript's line breaks, in a PTY's or a file's flavour", () => {
+    const pattern = transcriptEndPattern(lines);
+    expect(pattern.test("a\r\nTotal: $5 (done). [ok]\r\n\r\n")).toBe(true);
+    expect(pattern.test("a\nTotal: $5 (done). [ok]\n\n")).toBe(true);
+    expect(pattern.test("Total: $5 (done). [ok]\r\n\r\n\u001b[0m")).toBe(true);
+  });
+
+  it("does not match while a line break is still missing", () => {
+    const pattern = transcriptEndPattern(lines);
+    expect(pattern.test("a\r\nTotal: $5 (done). [ok]\r\n")).toBe(false);
+    expect(pattern.test("a\r\nTotal: $5 (done). [ok]")).toBe(false);
+  });
+
+  it("treats regex metacharacters in the last line literally", () => {
+    expect(transcriptEndPattern(lines).test("Total: $X (done). [ok]\r\n\r\n")).toBe(false);
   });
 });
 
