@@ -1,7 +1,8 @@
 name: Visual refresh (canary)
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [canary/visual-refresh]
 
 permissions:
   contents: write
