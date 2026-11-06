@@ -1997,6 +1997,17 @@ usual re-attach scrollback replay / events replay snapshot resynchronizes it.
   the 503 body; a Task Master worker (dispatch and retry) and review spawn adopt that
   row instead of releasing the task, so the next dispatch never removes the kept
   worktree or branch under a live agent.
+  Every other caller of the spawn adopts the kept row the same way: a Task Master
+  re-seed (reject / review-feedback) binds the task to it and does not re-seed while
+  it is alive; the auto-rebase worker records its rebase CAS and attempt count; a branch
+  preview binds it; a Docker stack action returns it as `reused: true`.
+  A **prompt** (`sessions.prompt`, and message delivery) lost mid-request replies
+  with an explicit "may have been delivered (outcome unknown)" error, never "the
+  host is unreachable", and is not retried: the calling agent should read the
+  session's output before sending it again.
+  The idempotent (retry-safe) POST list is pinned against the agent's `/internal`
+  routes by a test; it includes the read-only `read-files`, `worktrees/compare-paths`
+  and `project-files/download`, and `git-repair` only for its `confirm: false` plan.
 - **`HostUnreachableError`**: A network failure before sending, a dropped link on an
   idempotent request, or a 5xx HTTP response. Read-only calls and idempotent probes
   keep retrying as before.

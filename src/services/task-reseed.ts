@@ -15,7 +15,7 @@ import { resolveTaskMasterConfig } from "./task-config.js";
 import { resolveBackend } from "./session-backend.js";
 // createSessionRecord is pure business logic filed under services/
 // (session-lifecycle.ts) precisely so a service can reuse it directly.
-import { createSessionRecord } from "./session-lifecycle.js";
+import { createSessionRecord, killSession } from "./session-lifecycle.js";
 // Not killSession() here (see the doc comment at its call site below) — but
 // killSession's OTHER two side effects (this one and cleanupPreviewWorktree)
 // still need to happen on a confirmed-successful terminate, or they silently
@@ -293,6 +293,31 @@ export async function reseedTaskIfSessionExited(
     unattended: true,
     hostId: resolveTaskWorkerHost(app, task),
   });
+  if (!result.ok && result.reason === "outcome-unknown" && result.sessionId !== undefined) {
+    // #2637 — the spawn may have landed: createSessionRecord kept the row. Bind
+    // the task to it (seedDelivered unknown, so false) rather than report a
+    // failure, which would leave the task on the old killed session and let the
+    // next tick re-seed a second worker into this worktree. If the agent never
+    // started, the ordinary dead-session handling picks the kept row up.
+    const adopted = app.db
+      .update(tasks)
+      .set({ sessionId: result.sessionId, seedDelivered: false })
+      .where(and(eq(tasks.id, task.id), eq(tasks.status, "in_progress")))
+      .run();
+    if (adopted.changes === 0) {
+      app.log.warn(
+        { taskId: task.id, sessionId: result.sessionId },
+        `${logContext}: task changed while its re-seed was spawning — killing the orphaned session`,
+      );
+      await killSession(app, result.sessionId);
+      return false;
+    }
+    app.log.warn(
+      { taskId: task.id, previousSessionId: task.sessionId, newSessionId: result.sessionId },
+      `${logContext}: re-seed spawn outcome unknown — adopted the kept session instead of spawning again`,
+    );
+    return true;
+  }
   if (!result.ok) {
     app.log.warn(
       {

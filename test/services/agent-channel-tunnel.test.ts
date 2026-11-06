@@ -243,6 +243,19 @@ describe("request/response over the outbound channel (#2451)", () => {
     expect(err).not.toBeInstanceOf(HostOutcomeUnknownError);
   });
 
+  it("treats a dropped read-only POST (/internal/read-files) as unreachable, not an unknown outcome (#2637)", async () => {
+    const r = await rig((agent, drop) => {
+      agent.post("/internal/read-files", async () => {
+        drop();
+        await sleep(200);
+        return {};
+      });
+    });
+    const err = await r.client.readFiles("/w", ["a.txt"]).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HostUnreachableError);
+    expect(err).not.toBeInstanceOf(HostOutcomeUnknownError);
+  });
+
   it("raises HostOutcomeUnknownError when a non-idempotent POST is in flight when the channel is closed with expired", async () => {
     const r = await rig((agent) => {
       agent.post("/internal/uploads", async () => {

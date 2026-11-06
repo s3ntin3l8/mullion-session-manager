@@ -15,7 +15,7 @@ import type { SessionLiveness } from "./session-process.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient, HostRequestError, type SpawnResult } from "./remote-host-client.js";
-import { isHostBusyError } from "./remote-host-errors.js";
+import { isHostBusyError, isOutcomeUnknown } from "./remote-host-errors.js";
 import { invalidateRemoteWorktreeCache } from "./remote-worktree-cache.js";
 import { saveSessionFileUpload, saveSessionUpload, uploadRetentionMs } from "./session-upload.js";
 import {
@@ -937,6 +937,15 @@ class RemoteBackend implements SessionBackend {
    * route at all; anything else is a rejection or an unreachable host.
    */
   private remoteRefusal(err: unknown, op: string): { status: number; error: string } {
+    // #2637 — the channel closed after the request was sent: the host may have
+    // acted on it. Say so explicitly; "unreachable" invites the calling agent to
+    // retry, which for a prompt types it twice.
+    if (isOutcomeUnknown(err)) {
+      return {
+        status: 502,
+        error: `the connection to the session's host was lost after the request was sent, so the ${op} request MAY HAVE BEEN DELIVERED (outcome unknown); check the session's output before sending it again`,
+      };
+    }
     if (err instanceof HostRequestError) {
       if (err.statusCode === 404) {
         return { status: 501, error: unsupportedOperation(this.hostId, op).message };

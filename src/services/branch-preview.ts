@@ -316,6 +316,15 @@ async function startOnPort(
       control.worktreeRefresh ?? getStoredSettings(app.db).dock.defaultWorktreeRefresh ?? false,
     env: { ...control.env, PORT: String(port) },
   });
+  if (!result.ok && result.reason === "outcome-unknown" && result.sessionId !== undefined) {
+    // #2637 — the spawn may have landed and createSessionRecord kept the row:
+    // bind the preview to it like the success path, so the dev server isn't
+    // left running behind a "failed" answer.
+    const row = upsertBranchPreview(app, projectId, branch);
+    return (
+      bindBranchPreview(app, row.slug, { sessionId: result.sessionId, upstreamPort: port }) ?? row
+    );
+  }
   if (!result.ok) {
     throw new BranchPreviewError(
       "start_failed",

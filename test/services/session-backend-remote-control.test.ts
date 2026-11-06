@@ -18,6 +18,7 @@ vi.mock("../../src/services/remote-host-client.js", async (importActual) => ({
 import { resolveBackend } from "../../src/services/session-backend.js";
 import { REMOTE_WAIT_CHUNK_MS } from "../../src/services/session-prompt.js";
 import { HostRequestError, HostUnreachableError } from "../../src/services/remote-host-client.js";
+import { HostOutcomeUnknownError } from "../../src/services/remote-host-errors.js";
 
 // Issue #1951 — `sessions.prompt` / `sessions.wait_for_output` against a child
 // whose PTY lives on another host. A refusal is a VALUE, never a throw.
@@ -104,6 +105,19 @@ describe("RemoteBackend.prompt", () => {
       status: 502,
       error: expect.stringMatching(/unreachable/),
     });
+  });
+
+  it("reports a channel lost mid-prompt as possibly delivered, never as unreachable (#2637)", async () => {
+    clientMock.resolvePrompt.mockRejectedValue(
+      new HostOutcomeUnknownError("mac-1", new Error("channel closed")),
+    );
+    const out = await backend().prompt("5", { text: "go", submit: true });
+    expect(out).toMatchObject({
+      ok: false,
+      status: 502,
+      error: expect.stringMatching(/MAY HAVE BEEN DELIVERED/),
+    });
+    expect((out as { error: string }).error).not.toMatch(/unreachable/);
   });
 });
 
