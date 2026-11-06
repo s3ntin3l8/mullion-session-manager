@@ -1016,7 +1016,7 @@ export async function dispatchClaimedTask(
             ? undefined
             : app.db.select().from(sessions).where(eq(sessions.id, result.sessionId)).get();
         if (kept !== undefined) {
-          app.db
+          const adopted = app.db
             .update(tasks)
             .set({
               sessionId: kept.id,
@@ -1030,14 +1030,26 @@ export async function dispatchClaimedTask(
               seedDelivered: false,
               failureReason: reason,
               dispatchHeld: false,
+              dispatchFailingSince: null,
             })
-            .where(eq(tasks.id, taskId))
+            .where(and(eq(tasks.id, taskId), eq(tasks.status, "in_progress")))
             .run();
+          if (adopted.changes === 0) {
+            // The task left "in_progress" while the spawn was in flight:
+            // nothing points at the kept row, so reap it rather than leave an
+            // untracked, possibly live unattended agent.
+            app.log.warn(
+              { taskId, sessionId: kept.id },
+              "task dispatch: task changed while its worker was spawning — killing the orphaned session",
+            );
+            await killSession(app, kept.id);
+          } else {
+            app.log.warn(
+              { taskId, sessionId: kept.id, hostId: placement.hostId },
+              "task dispatch: spawn outcome unknown, adopted the kept session",
+            );
+          }
           committed = true;
-          app.log.warn(
-            { taskId, sessionId: kept.id, hostId: placement.hostId },
-            "task dispatch: spawn outcome unknown, adopted the kept session",
-          );
           return { ok: false, reason: "spawn-failed", detail: reason };
         }
         await release(reason);
@@ -1584,21 +1596,42 @@ export async function retryTask(
           ? app.db.select().from(sessions).where(eq(sessions.id, result.sessionId)).get()
           : undefined;
       if (kept !== undefined) {
-        app.db
+        const keptPatch: Partial<typeof tasks.$inferInsert> = {
+          status: "in_progress",
+          startedAt: new Date(),
+          sessionId: kept.id,
+          worktreePath: kept.cwd,
+          agentCommand: command,
+          model: model ?? null,
+          smallModel: smallModel ?? null,
+          seedDelivered: false,
+          failureReason: reason,
+          dispatchFailingSince: null,
+          completedAt: null,
+          // Issue #1038 — same stale-announcement clears as the success patch.
+          autoReturnCapAnnouncedAt: null,
+          needsHumanReason: null,
+          approvalCarriedAt: null,
+        };
+        if (opts.agent !== undefined) keptPatch.agent = opts.agent;
+        if (opts.reviewAgent !== undefined) keptPatch.reviewAgent = opts.reviewAgent;
+        Object.assign(keptPatch, agentChangeModelPatch);
+        const adopted = app.db
           .update(tasks)
-          .set({
-            status: "in_progress",
-            startedAt: new Date(),
-            sessionId: kept.id,
-            worktreePath: kept.cwd,
-            agentCommand: command,
-            seedDelivered: false,
-            failureReason: reason,
-            completedAt: null,
-          })
-          .where(eq(tasks.id, taskId))
+          .set(keptPatch)
+          .where(and(eq(tasks.id, taskId), eq(tasks.status, "claimed")))
           .run();
         committed = true;
+        if (adopted.changes === 0) {
+          // The task moved on while the retry's spawn was in flight: nothing
+          // points at the kept row, so reap it.
+          app.log.warn(
+            { taskId, sessionId: kept.id },
+            "task retry: task changed while its worker was spawning — killing the orphaned session",
+          );
+          await killSession(app, kept.id);
+          return { ok: false, reason: "spawn-failed", detail: reason };
+        }
         recordTaskTransition(app, {
           taskId,
           projectId: project.id,
