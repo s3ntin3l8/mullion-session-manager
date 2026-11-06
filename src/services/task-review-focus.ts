@@ -95,14 +95,16 @@ export function normalizeFocus(raw: unknown): FocusCheck[] {
  * Notes for `focus` entries the verdict does not act on: a `not-checked` item
  * is surfaced prominently, and a `finding` entry with no finding behind it is
  * flagged. Neither changes the verdict (`deriveVerdict` reads `findings`).
+ * The text is raw (the worker prompt keeps it so); the comment renderers
+ * neutralise a `FOCUS_NOTE_PREFIX` note.
  */
+export const FOCUS_NOTE_PREFIX = "**Review focus NOT CHECKED:**";
+
 export function focusNotes(focus: FocusCheck[], findingCount: number): string[] {
   const notes: string[] = [];
   for (const c of focus) {
     if (c.status === "not-checked") {
-      notes.push(
-        `**Review focus NOT CHECKED:** ${neutraliseDecisionLine(c.item)}${c.evidence ? ` — ${neutraliseDecisionLine(c.evidence)}` : ""}`,
-      );
+      notes.push(`${FOCUS_NOTE_PREFIX} ${c.item}${c.evidence ? ` — ${c.evidence}` : ""}`);
     }
   }
   if (findingCount === 0 && focus.some((c) => c.status === "finding")) {

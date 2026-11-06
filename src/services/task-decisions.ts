@@ -113,9 +113,10 @@ const RENAMED_SECTION_RE = new RegExp(
 );
 
 // The heading line is gone or no longer a heading (deleted, bold, a blank line
-// before it): the span from a line-start start marker to the next end marker.
+// before it): a line-start start marker.
 const LINE_START_MARKER_RE = new RegExp(`^${SECTION_START}`, "gm");
-const BARE_SECTION_RE = new RegExp(`\\r?\\n*^${SECTION_START}[\\s\\S]*?${SECTION_END}`, "m");
+// What may follow our block: nothing, or the "---" footer Task Master writes.
+const AFTER_BLOCK_RE = /^\s*---\r?\n/;
 
 /**
  * Neutralises a declared-decision line so it is safe to render in GitHub
@@ -177,14 +178,21 @@ export function applyWorkerDecisionsSection(body: string, decisions: string[]): 
     const replacement = section === "" ? "" : `\n\n${section}`;
     return `${body.slice(0, startIndex)}${replacement}${body.slice(startIndex + last[0].length)}`;
   }
-  // Heading deleted or replaced by non-heading text: only trust a lone line-start
-  // marker that has an end marker after it, so a lookalike marker in prose (which
-  // never sits alone at a line start with a closing marker) is still left alone.
-  if (body.match(LINE_START_MARKER_RE)?.length === 1) {
-    const bare = BARE_SECTION_RE.exec(body);
-    if (bare) {
-      const replacement = section === "" ? "" : `\n\n${section}`;
-      return `${body.slice(0, bare.index)}${replacement}${body.slice(bare.index + bare[0].length)}`;
+  // Heading deleted or replaced by non-heading text: our block is structurally
+  // the last one and ends the body (or sits directly above the footer). A
+  // line-start pair quoted in the issue body is followed by more issue text, so
+  // it fails the tail check and is left alone.
+  const starts = [...body.matchAll(LINE_START_MARKER_RE)];
+  if (starts.length > 0) {
+    const startAt = starts[starts.length - 1].index!;
+    const endAt = body.indexOf(SECTION_END, startAt);
+    if (endAt !== -1) {
+      const blockEnd = endAt + SECTION_END.length;
+      if (blockEnd === body.length || AFTER_BLOCK_RE.test(body.slice(blockEnd))) {
+        const head = body.slice(0, startAt).replace(/(?:\r?\n)+$/, "");
+        const replacement = section === "" ? "" : `\n\n${section}`;
+        return `${head}${replacement}${body.slice(blockEnd)}`;
+      }
     }
   }
   if (section === "") return body;

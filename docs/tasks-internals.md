@@ -1316,9 +1316,13 @@ decisions, so it can judge exactly what the worker wrote.
 wins (the issue body is prepended, so ours is last): first the start marker
 plus `### Worker decisions`; then the start marker plus any heading line, so a
 renamed heading is still replaced rather than duplicated; then, when the
-heading was deleted or turned into non-heading text, a lone line-start start
-marker with an end marker after it. Lookalike markers in the issue body (mid-line,
-or unclosed) match none of these, so they do not corrupt replacement. Do not
+heading was deleted or turned into non-heading text, the last line-start start
+marker with an end marker after it, but only if that block ends the body or
+sits directly above the `---` footer (a line-start pair quoted in the issue
+body is followed by more issue text, so it is left alone). Lookalike markers
+in the issue body that are mid-line or unclosed match none of these, so they
+do not corrupt replacement. Review-focus items are neutralised in review
+comments only; the worker prompt keeps them raw. Do not
 simplify the passes away. Review-focus items in the review comment are
 neutralised the same way. These steps are ordered so that any failure leaves the
 task in `reviewing`, untouched and safely retryable — never half-promoted.

@@ -158,6 +158,31 @@ describe("worker decisions PR section", () => {
     expect(cleared).toContain("<!-- mullion:worker-decisions --> unclosed markers.");
   });
 
+  it("leaves a line-start marker pair quoted in the issue body intact", () => {
+    const issue = [
+      "<!-- mullion:worker-decisions -->",
+      "ISSUE-TEXT-THAT-MUST-SURVIVE",
+      "<!-- /mullion:worker-decisions -->",
+      "more issue prose",
+    ].join("\n");
+    const body = `${issue}\n\nCloses #99\n\n---\nOpened by Mullion Task Master.`;
+    const withSection = applyWorkerDecisionsSection(body, ["Decision: x"]);
+    expect(withSection).toContain("ISSUE-TEXT-THAT-MUST-SURVIVE");
+    expect(withSection).toContain("more issue prose");
+    expect(withSection).toContain("- Decision: x");
+    // Heading deleted: still our block, replaced in place, issue text kept.
+    const noHeading = withSection.replace("### Worker decisions\n", "");
+    const updated = applyWorkerDecisionsSection(noHeading, ["Decision: y"]);
+    expect(updated).toContain("ISSUE-TEXT-THAT-MUST-SURVIVE");
+    expect(updated).toContain("- Decision: y");
+    expect(updated).not.toContain("Decision: x");
+    const cleared = applyWorkerDecisionsSection(updated, []);
+    expect(cleared).toContain("ISSUE-TEXT-THAT-MUST-SURVIVE");
+    expect(cleared).not.toContain("Decision: y");
+    // No section written yet: only the issue's pair exists, and it is not touched.
+    expect(applyWorkerDecisionsSection(body, [])).toBe(body);
+  });
+
   it("still replaces or removes a section whose heading was edited", () => {
     const first = applyWorkerDecisionsSection("Issue body\n\n---\nfooter", ["Decision: a"]);
     const renamed = first.replace("### Worker decisions", "### Decisions the worker made");
