@@ -15,6 +15,7 @@ class FakeBrowser extends EventEmitter {
   async newContext() {
     return {
       newPage: async () => new EventEmitter(),
+      close: async () => {},
       storageState: async () => ({ cookies: [], origins: [] }),
     };
   }

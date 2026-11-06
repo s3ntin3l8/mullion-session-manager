@@ -460,4 +460,4 @@ Named targets on remote hosts use a separate authenticated configured-target tra
 
 ## Browser panes follow the session's execution target
 
-The Browser pane and the agent's `use_browser` automation open the session's own execution target (host and checkout), the same one its preview and git routes use, not the project's. A pane stays on the target it was opened on when the session focus changes. See [Browser automation → Execution targets](browser-automation.md#execution-targets).
+The Browser pane and the agent's `use_browser` automation open the session's own execution target (host and checkout), the same one its preview and git routes use, not the project's. A pane stays on the target it was opened on when the session focus changes. All targets on a machine share one Chromium process, each in its own isolated browser context, keyed by project, checkout and preview endpoint, so two previews of one checkout never share cookies or storage. Imported project cookie profiles are applied to every target of the project. See [Browser automation → Execution targets](browser-automation.md#execution-targets).

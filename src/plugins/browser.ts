@@ -33,7 +33,7 @@ export const browserPlugin = fp(async (app: FastifyInstance) => {
   app.decorate("browserEnabled", enabled);
   const manager = new BrowserManager({
     enabled,
-    maxInstances,
+    maxContexts: maxInstances,
     dataDir: path.isAbsolute(dataDir) ? dataDir : path.resolve(dataDir),
     loadCookies: app.db ? (projectId) => loadStoredCookiesForProject(app, projectId) : undefined,
     onCookieLoadError: (projectId, err) => {
