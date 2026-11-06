@@ -166,12 +166,13 @@ export async function settle({ page, scene, host }) {
   // the first) can still be drawing the last lines. Two waits cover that, for different renderers:
   //  - DOM renderer (the mobile variants): the cursor row must sit where the transcript leaves it.
   //  - Every renderer, WebGL canvases included (the desktop variants, which have no rows to read): the terminal's
-  //    pixels must hold still for a second.
+  //    pixels must hold still across three equal 250 ms samples (about 750 ms).
   const { last, lineBreaks } = transcriptEnd(held.lines);
   const cursorRow = await waitUntil(
     () =>
       page.evaluate(
         ({ lastLine, breaks }) => {
+          const wanted = lastLine.trim(); // the rows are compared trimmed, and transcript lines may be indented
           const rows = [...globalThis.document.querySelectorAll(".xterm-rows > div")];
           const cursor = rows.findIndex((r) => r.querySelector(".xterm-cursor"));
           if (cursor < 0) return "none"; // no DOM rows to read: the pixel wait below is all there is
@@ -180,7 +181,7 @@ export async function settle({ page, scene, host }) {
           if (lastText < 0 || cursor - lastText !== breaks) return false;
           const row = text(rows[lastText]);
           // A line wider than the terminal ends on a row holding only its tail.
-          return row.includes(lastLine) || lastLine.endsWith(row) ? "read" : false;
+          return row.includes(wanted) || wanted.endsWith(row) ? "read" : false;
         },
         { lastLine: last, breaks: lineBreaks },
       ),
@@ -274,7 +275,7 @@ async function waitUntil(check, what, timeoutMs = 60_000) {
 }
 
 /**
- * Waits until the terminal's pixels are identical across four samples 250 ms apart: a renderer-independent
+ * Waits until the terminal's pixels are identical across four samples 250 ms apart (three equal transitions, about 750 ms): a renderer-independent
  * "it has stopped drawing". Gives up quietly after 10 s (a terminal that never holds still is reported by the
  * geometry check that follows, not by this).
  */
@@ -295,7 +296,7 @@ async function waitForStillPixels(page) {
     10_000,
   ).catch(() => {
     console.error(
-      "[screenshots] the terminal's pixels never held still for a second; shooting anyway",
+      "[screenshots] the terminal's pixels never held still for three samples in a row; shooting anyway (this line is only in the run log)",
     );
   });
 }
