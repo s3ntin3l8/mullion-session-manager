@@ -856,6 +856,13 @@ export async function sessionsRoute(app: FastifyInstance) {
         if (result.reason === "reserved-env-key") {
           return reply.badRequest(`env key "${result.detail}" is reserved and cannot be set`);
         }
+        if (result.reason === "outcome-unknown") {
+          return reply.serviceUnavailable(
+            result.detail
+              ? `Host connection lost mid-request; spawn outcome is unknown: ${result.detail}`
+              : "Host connection lost mid-request; spawn outcome is unknown",
+          );
+        }
         return reply.badGateway("Failed to spawn session on host");
       }
 
@@ -1176,6 +1183,13 @@ export async function sessionsRoute(app: FastifyInstance) {
           });
         } catch {
           // Best-effort, same posture as removeWorktree above.
+        }
+        if (created.reason === "outcome-unknown") {
+          return reply.serviceUnavailable(
+            created.detail
+              ? `Host connection lost mid-request; spawn outcome is unknown: ${created.detail}`
+              : "Host connection lost mid-request; spawn outcome is unknown",
+          );
         }
         return reply.badGateway("Failed to spawn the promoted session");
       }

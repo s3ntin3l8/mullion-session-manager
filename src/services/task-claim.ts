@@ -1002,6 +1002,13 @@ export async function dispatchClaimedTask(
         await release(result.detail);
         return { ok: false, reason: "spawn-failed", detail: result.detail };
       }
+      if (result.reason === "outcome-unknown") {
+        const reason = result.detail
+          ? `session spawn outcome unknown on host ${placement.hostId}: ${result.detail}`
+          : "session spawn outcome unknown";
+        await release(reason);
+        return { ok: false, reason: "spawn-failed", detail: reason };
+      }
       await release("session spawn failed");
       return { ok: false, reason: "spawn-failed" };
     }
@@ -1531,8 +1538,12 @@ export async function retryTask(
       placementReason: `task #${task.id} retry joins its worker's host ${workerHostId} (the worktree lives there)`,
     });
     if (!result.ok) {
-      await release("session spawn failed", worktree);
-      return { ok: false, reason: "spawn-failed" };
+      const reason =
+        result.reason === "outcome-unknown"
+          ? (result.detail ?? "session spawn outcome unknown")
+          : "session spawn failed";
+      await release(reason, worktree);
+      return { ok: false, reason: "spawn-failed", detail: reason };
     }
 
     // Issue #1724 — the retry runs on the worker host (it resumes the

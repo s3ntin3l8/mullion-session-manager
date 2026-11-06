@@ -258,7 +258,8 @@ export type CreateWorktreeReason =
   // mistake this split exists to avoid repeating.
   | "host-unreachable"
   | "host-rejected"
-  | "host-busy";
+  | "host-busy"
+  | "host-outcome-unknown";
 
 export interface CreateWorktreeResult {
   created: boolean;

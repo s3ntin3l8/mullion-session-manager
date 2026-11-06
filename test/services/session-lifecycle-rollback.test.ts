@@ -157,4 +157,15 @@ describe("createSessionRecord rollback (M5)", () => {
     expect(backend.deleteBranch).not.toHaveBeenCalled();
     await app.close();
   });
+
+  it("spawn failure with HostOutcomeUnknownError returns outcome-unknown", async () => {
+    const { HostOutcomeUnknownError } = await import("../../src/services/remote-host-client.js");
+    const { app, projectId, backend } = await setup(async () => {
+      throw new HostOutcomeUnknownError("remote-1", new Error("connection dropped mid-request"));
+    });
+    const res = await createSessionRecord(app, params(projectId));
+    expect(res).toMatchObject({ ok: false, reason: "outcome-unknown" });
+    expectWorktreeAndBranchRemoved(backend);
+    await app.close();
+  });
 });

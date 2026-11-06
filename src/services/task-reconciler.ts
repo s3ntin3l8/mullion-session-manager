@@ -70,6 +70,7 @@ import {
 import { recordTaskTransition } from "./task-state.js";
 import { endIfRebaseEmptied, endReviewingOnPrState } from "./task-review-end.js";
 import { HostUnreachableError } from "./remote-host-client.js";
+import { spawnReviewAgentNow, unlinkFindingsFileIfPresent } from "./task-review-spawn.js";
 import { resolveTaskIssueContextSafe } from "./task-issue-context.js";
 import {
   buildReviewPrompt,
@@ -78,7 +79,6 @@ import {
   buildCiFailurePrompt,
   buildRebasePrompt,
   buildPrReviewCommentsPrompt,
-  taskReviewFindingsPath,
   taskCommitTitlePath,
   taskRereviewRequestPath,
   isApprovingVerdict,
@@ -90,7 +90,7 @@ import {
   type ReviewCiInfo,
   type PrReviewCommentInfo,
 } from "./task-prompt.js";
-import { priorRoundFor, reviewPromptContext } from "./task-prior-round.js";
+import { priorRoundFor } from "./task-prior-round.js";
 import { openDraftPRForTask } from "./task-promote.js";
 import { maybeAutoEnableConventionalTitles } from "./project-release-please.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "./task-approve.js";
@@ -249,197 +249,8 @@ function hasCurrentApproval(task: typeof tasks.$inferSelect): boolean {
  * the task with no reviewer forever — see schema.ts's
  * `reviewSpawnClaimedAt` doc comment.
  */
-async function spawnReviewAgentNow(
-  app: FastifyInstance,
-  task: typeof tasks.$inferSelect,
-  project: typeof projects.$inferSelect,
-  skipPermissions: boolean,
-  reviewCommand: string,
-  ci: ReviewCiInfo | undefined,
-  model: string | undefined,
-  smallModel: string | undefined,
-): Promise<void> {
-  if (!task.worktreePath) return;
-  // Hoisted out of the `try` (Hermes review, PR #742) — a throw AFTER
-  // createSessionRecord succeeds (a DB error on the CAS update below, or
-  // resolveSeedDelivered itself throwing) used to fall into the generic
-  // `catch`, which only cleared the claim and had no way to reach the
-  // session it had just created — left "active" and untracked, it would
-  // surface later at the exited-session reconciler as a mystery crash with
-  // no task behind it, same failure mode the `changes === 0` branch below
-  // exists to prevent for the "task moved on" case.
-  let spawnedSessionId: number | undefined;
-  try {
-    // Delivered as argv, not stashSeed — same fix as task-claim.ts's own
-    // worker spawns: SessionStart's `additionalContext` (stashSeed's only
-    // consumer) injects context but never submits a turn, which would leave
-    // an unattended review agent idling exactly like an unattended worker
-    // did before this fix.
-    const seedCapable = commandSupportsSeed(reviewCommand);
-    // #778 — resolved against the OWNING host's own sessionsDir (falls back
-    // to the primary's local path, with a warn, if that lookup fails) so
-    // the review agent is told to write somewhere it can actually reach on
-    // its own filesystem, not wherever the primary's own hookSocketPath
-    // happens to live.
-    // Issue #1724 / roadmap 8.10 — the review agent reads the task's
-    // worktree, so it runs on the host that HOLDS it: the worker session's
-    // own host, which is where the worktree was cut. The sessions dir it is
-    // told to write to has to be that host's too (#778's own reasoning: the
-    // agent is told to write somewhere it can actually reach on its own
-    // filesystem).
-    const workerHostId = resolveTaskWorkerHost(app, task);
-    const backend = resolveBackend(app, workerHostId);
-    const sessionsDir = await resolveSessionsDirWithFallback(app, backend, {
-      taskId: task.id,
-      hostId: workerHostId,
-    });
-    // task.autoReturnRounds is the round THIS review belongs to: 0 for the
-    // first review, 1 for the one spawned after an auto-returned round —
-    // see taskReviewFindingsPath's own doc comment for why round-suffixing
-    // matters here.
-    const findingsPath = taskReviewFindingsPath(sessionsDir, task.id, task.autoReturnRounds);
-    // Task Master trial 220921 / PR #743's incident left exactly this file
-    // on disk: `processReviewingTasks`'s own unlink-on-ingest ran before the
-    // real (late-arriving) findings file existed, so it found nothing to
-    // remove, and the file that appeared 21 seconds later was never cleaned
-    // up. `autoReturnRounds` doesn't change on a same-round re-review (a
-    // rejected task's next review reuses this exact round-suffixed path —
-    // see `taskReviewFindingsPath`'s own doc comment on why round-suffixing
-    // exists at all), so a leftover from a PRIOR attempt at this round would
-    // otherwise be silently re-ingested as THIS attempt's fresh output.
-    // Unlinking here, before the agent gets a chance to write anything, is
-    // the fix: whatever this fresh spawn's own agent writes is now
-    // guaranteed to be the only thing this path can ever contain.
-    await unlinkFindingsFileIfPresent(app, backend, task.id, task.autoReturnRounds);
-    // Both operands already live here — no new lookup. Clamped to 0 rather
-    // than allowed to go negative: a project's own cap can be lowered after
-    // a task has already spent more rounds than the new cap allows.
-    const roundsRemaining = Math.max(
-      0,
-      resolveMaxAutoReturnRounds(project, resolveTaskMasterConfig(app).maxAutoReturnRounds) -
-        task.autoReturnRounds,
-    );
-    const prompt = buildReviewPrompt({
-      task,
-      worktreePath: task.worktreePath,
-      findingsPath,
-      ci,
-      roundsRemaining,
-      ...(await reviewPromptContext(app, task, project, ci?.headSha, workerHostId)),
-    });
-    const result = await createSessionRecord(app, {
-      projectId: project.id,
-      command: reviewCommand,
-      cwd: task.worktreePath,
-      initialPrompt: seedCapable ? prompt : undefined,
-      skipPermissions,
-      // #9 — named and locked so this session reads as "task #N's review"
-      // anywhere it's shown. `nameLocked: true` deliberately overrides this
-      // column's own documented default intent (schema.ts) — see
-      // task-claim.ts's own worker-spawn comment for the full reasoning.
-      name: `Task #${task.id} · review`,
-      nameLocked: true,
-      model,
-      smallModel,
-      // Review agents are also unattended (no human in the loop) and run
-      // in the same worktree as the worker, so they're just as exposed to
-      // the brainstorming-skill failure mode verified in branchdam-mobile
-      // tasks #66 / #67. Mark as a Task Master session so the opencode
-      // and codex adapters deny the same three skills.
-      taskId: task.id,
-      // #2246 — a review agent's own git/gh holds a read-only token.
-      taskRole: "reviewer",
-      // Issue #1724 — an unattended session (the placement policy scores it
-      // with no local bonus) AND pinned to the worker's host: the review
-      // reads that worktree, so it cannot be placed anywhere else.
-      unattended: true,
-      hostId: workerHostId,
-    });
-    if (!result.ok) {
-      app.log.warn(
-        { taskId: task.id, reviewCommand, reason: result.reason },
-        "task reconcile: review agent spawn failed",
-      );
-      clearReviewSpawnClaim(app, task.id);
-      return;
-    }
-    spawnedSessionId = result.row.id;
-    // Same version-skew guard as task-claim.ts's own — see
-    // resolveSeedDelivered's doc comment.
-    const seedDelivered = resolveSeedDelivered(
-      seedCapable,
-      workerHostId,
-      result.initialPromptApplied,
-    );
-    if (!seedDelivered) {
-      app.log.warn(
-        { taskId: task.id, reviewCommand, hostId: workerHostId, seedCapable },
-        seedCapable
-          ? "task reconcile: sent an initial prompt to a remote host but it wasn't confirmed applied — possible version skew"
-          : "task reconcile: review agent's adapter can't receive an initial prompt — spawning with no instructions",
-      );
-    }
-    // CAS on `status = "reviewing"`, not just `id` — the claim slot
-    // (`reviewSpawnClaimedAt`) only protects against a second
-    // `processPendingReviewSpawns` pass racing this one; it says nothing
-    // about Reject/Give-up/Approve, which CAS on `status` alone and don't
-    // know this claim exists. `createSessionRecord` above is a real spawn
-    // (possibly a network round-trip to a remote host), long enough for one
-    // of those routes to land while it's in flight. If the task has moved
-    // on, attaching `reviewSessionId` here would leave a live, untracked
-    // session pointed at a worktree Approve may already be deleting —
-    // discard it instead of recording it.
-    const updated = app.db
-      .update(tasks)
-      .set({ reviewSessionId: result.row.id, reviewSeedDelivered: seedDelivered })
-      .where(and(eq(tasks.id, task.id), eq(tasks.status, "reviewing")))
-      .run();
-    if (updated.changes === 0) {
-      app.log.warn(
-        { taskId: task.id, reviewSessionId: result.row.id },
-        "task reconcile: task left 'reviewing' while its review agent was spawning — killing the orphaned session",
-      );
-      // killSession, not a bare backend.terminate — this session was never
-      // attached to the task (the write above just refused), so nothing
-      // else will ever flip its `sessions` row to "killed." Left "active",
-      // the exited-session reconciler would find the now-dead process later
-      // and surface it as a crashed session with no task, agent, or
-      // worktree behind it — a live "kill" here folds that into the normal
-      // human-initiated-kill path instead of inventing a new terminal state
-      // for it.
-      await killSession(app, result.row.id);
-      return;
-    }
-    app.log.info(
-      { taskId: task.id, reviewSessionId: result.row.id, reviewCommand, seedDelivered },
-      "task reconcile: review agent spawned",
-    );
-  } catch (err) {
-    app.log.warn({ err, taskId: task.id, reviewCommand }, "task reconcile: review agent threw");
-    clearReviewSpawnClaim(app, task.id);
-    if (spawnedSessionId !== undefined) {
-      await killSession(app, spawnedSessionId).catch((killErr: unknown) => {
-        app.log.warn(
-          { err: killErr, taskId: task.id, reviewSessionId: spawnedSessionId },
-          "task reconcile: failed to kill the orphaned review session after a post-spawn throw",
-        );
-      });
-    }
-  }
-}
-
-// Guarded on `reviewSessionId IS NULL` — if some other path already landed a
-// real session between the failure and this write (shouldn't happen, given
-// the CAS claim, but this is a cheap belt-and-suspenders match for the
-// discipline every other write in this file already follows), this must not
-// clobber it back to an unspawned-looking state.
-function clearReviewSpawnClaim(app: FastifyInstance, taskId: number): void {
-  app.db
-    .update(tasks)
-    .set({ reviewSpawnClaimedAt: null })
-    .where(and(eq(tasks.id, taskId), isNull(tasks.reviewSessionId)))
-    .run();
-}
+// Actually spawning — `spawnReviewAgentNow` and `clearReviewSpawnClaim` —
+// live in task-review-spawn.ts.
 
 /**
  * Shared primitive behind both `resolveReviewCi` below (which layers a
@@ -4316,31 +4127,7 @@ export async function autoReturnTask(
   return { ok: reseeded };
 }
 
-// #760 — takes a resolved backend + round rather than a raw path, so this
-// works identically for a local or a remote-hosted task's review session
-// (SessionBackend.deleteTaskReviewFindings derives the actual path on
-// whichever host holds it). Best-effort by design, same as before this
-// PR: a delete failure (including a remote host going unreachable between
-// the read above and this call) is logged and otherwise ignored — the
-// content is already durably ingested into the DB by the time this runs,
-// so a leftover file on disk costs nothing but a stray bytes; it would
-// only ever cause a same-round re-review (reject keeps the round
-// unchanged) to needlessly re-read it, not a correctness problem.
-async function unlinkFindingsFileIfPresent(
-  app: FastifyInstance,
-  backend: SessionBackend,
-  taskId: number,
-  round: number,
-): Promise<void> {
-  try {
-    await backend.deleteTaskReviewFindings(taskId, round);
-  } catch (err) {
-    app.log.warn(
-      { err, taskId, round },
-      "task reconcile: failed to remove an ingested review findings file",
-    );
-  }
-}
+// unlinkFindingsFileIfPresent is imported from ./task-review-spawn.js
 
 /**
  * D1 — on any repo with `required_conversation_resolution` enabled (this

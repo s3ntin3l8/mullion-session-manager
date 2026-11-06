@@ -421,11 +421,11 @@ export async function requestViaChannel<T>(
       throw new HostBusyError(hostId, err);
     }
     if (!(err instanceof ChannelTransportError)) throw new HostUnreachableError(hostId, err);
-    // The primary ended the channel: identity revoked / credential expired.
-    if (err.terminal) throw new HostRequestError(hostId, 401, err.message);
     if (err.phase === "after-send" && !isIdempotentRequest(method, path)) {
       throw new HostOutcomeUnknownError(hostId, err);
     }
+    // The primary ended the channel: identity revoked / credential expired.
+    if (err.terminal) throw new HostRequestError(hostId, 401, err.message);
     throw new HostUnreachableError(hostId, err);
   }
   if (res.status < 200 || res.status >= 300) {

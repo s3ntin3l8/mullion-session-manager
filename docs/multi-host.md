@@ -1943,13 +1943,23 @@ usual re-attach scrollback replay / events replay snapshot resynchronizes it.
 - **Path decoding and route filtering**: All tunnelled request paths are validated and percent-decoded before routing. Any double-encoded segments, undecodable sequences, websocket endpoints (`/internal/ws/*`), control characters, or dot-segments (`..`) are refused with HTTP 400 before replay.
 - **Per-host rate limit buckets**: Tunnelled requests replayed through `app.inject` present `remoteAddress: channel:<peerId>` instead of loopback `127.0.0.1`. This keeps each host's rate-limit bucket isolated from other hosts and preserves the separate loopback bucket for local traffic.
 
-If the link drops while a **mutation** (spawn, prompt, a git push/commit, a file
-write) is in flight, the caller gets an explicit unknown-outcome error
-(`HostOutcomeUnknownError`: "lost the outbound connection mid-request; the
-outcome is unknown and the request was not repeated"). Check the result before
-re-running it: the session list after a spawn, `git status` / the branch's log
-after a git mutation, the transcript after a prompt. Reads simply report the
-host as unreachable and can be retried.
+### Outbound transport error classes
+
+- **`HostRequestError` (HTTP 401)**: The channel closed with a terminal reason
+  (`expired` credential or `revoked` identity) **before** the request began sending,
+  or for an **idempotent** request (`GET`, or read-only `POST` paths like liveness).
+  Because nothing mutated, callers know the operation was rejected.
+- **`HostOutcomeUnknownError` (`isOutcomeUnknown`)**: Raised when the channel closes
+  mid-request (for any terminal reason, including `expired`, or a transport drop)
+  **after** a non-idempotent request (a spawn, prompt, git mutation, or upload)
+  was sent. Whether the host received and executed the call is unknown. Callers
+  **never silently retry** on another transport or repeat the call on the next tick
+  without first re-reading the state it would change (session existence, worktree
+  existence, HEAD moved); where they cannot, they surface "outcome unknown" to the
+  caller or task failure reason.
+- **`HostUnreachableError`**: A network failure before sending, a dropped link on an
+  idempotent request, or a 5xx HTTP response. Read-only calls and idempotent probes
+  keep retrying as before.
 
 **Troubleshooting.** A host with no URL that never leaves `pending`: its channel
 has not connected; check the agent's log for `[agent-channel]` lines and that

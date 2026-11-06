@@ -1376,7 +1376,9 @@ export async function projectSetupRoute(app: FastifyInstance) {
         return reply.internalServerError(
           commitResult.reason === "unsupported"
             ? "This host's agent build doesn't support committing scaffold changes yet — update the agent build (see issue #895)."
-            : `Could not commit the scaffold branch: ${commitResult.detail}`,
+            : commitResult.reason === "outcome-unknown"
+              ? `Host connection lost mid-request; commit outcome is unknown: ${commitResult.detail}`
+              : `Could not commit the scaffold branch: ${commitResult.detail}`,
         );
       }
       if (!commitResult.value.committed && commitResult.value.error) {
