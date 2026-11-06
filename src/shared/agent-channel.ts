@@ -18,6 +18,15 @@ export const AGENT_CHANNEL_PATH = "/ws/agent-channel";
 export const AGENT_CHANNEL_HANDSHAKE_TIMEOUT_MS = 10_000;
 /** Channels per connection; a peer's Open beyond this is refused (OpenFail). */
 export const AGENT_CHANNEL_MAX_CHANNELS = 64;
+/** Slots kept for request/response exchanges. Streams (attach, events, control
+ * relay, ssh-agent, preview) live as long as their user, so waiting never frees
+ * a slot for a request when streams hold them all. */
+export const AGENT_CHANNEL_REQUEST_RESERVED_CHANNELS = AGENT_CHANNEL_MAX_CHANNELS / 2;
+/** Most channels a connection holds once a stream is opened: a stream open
+ * beyond this is refused, so at least `AGENT_CHANNEL_REQUEST_RESERVED_CHANNELS`
+ * slots are never taken by streams. */
+export const AGENT_CHANNEL_MAX_STREAM_CHANNELS =
+  AGENT_CHANNEL_MAX_CHANNELS - AGENT_CHANNEL_REQUEST_RESERVED_CHANNELS;
 /** Queued-but-unsent bytes at which a side closes the connection. */
 export const AGENT_CHANNEL_MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
 /** Largest first frame accepted, so the handshake cannot be used to buffer. */
@@ -100,7 +109,7 @@ export const AGENT_CHANNEL_CREDENTIAL_RECHECK_MS = 60_000;
 
 /** Largest request/response head (method, path, headers) on a tunnelled request. */
 export const AGENT_CHANNEL_MAX_HEAD_BYTES = 64 * 1024;
-/** Largest tunnelled response body the primary buffers. */
+/** Largest tunnelled response body the primary buffers (downloads, previews). */
 export const AGENT_CHANNEL_MAX_RESPONSE_BYTES = 64 * 1024 * 1024;
 /** Default body limit on tunnelled requests. Sized to cover ordinary JSON RPCs while bounding worst-case buffering. */
 export const AGENT_CHANNEL_DEFAULT_MAX_REQUEST_BYTES = 2 * 1024 * 1024;
@@ -108,8 +117,10 @@ export const AGENT_CHANNEL_DEFAULT_MAX_REQUEST_BYTES = 2 * 1024 * 1024;
 export const AGENT_CHANNEL_DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
 /** How long channelFetch waits for a channel slot to become free when at capacity. */
 export const AGENT_CHANNEL_SLOT_WAIT_MS = 5_000;
-/** Minimum time reserved for the exchange once a channel is opened, so slot waiting times out before the total request budget. */
-export const AGENT_CHANNEL_MIN_EXCHANGE_MS = 250;
+/** Backstop on the slot wait itself (the mux enforces `AGENT_CHANNEL_SLOT_WAIT_MS`;
+ * this only covers a mux that never settles). The wait is not charged to the
+ * request: its timeout starts when the slot is granted. */
+export const AGENT_CHANNEL_SLOT_WAIT_GRACE_MS = 250;
 
 /** The first line of a tunnelled request: JSON, terminated by "\n"; the raw
  * request body follows, then EOF. */

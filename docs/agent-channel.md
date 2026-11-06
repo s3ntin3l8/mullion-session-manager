@@ -63,7 +63,7 @@ its authorization are the ones the inbound transport runs. The differences:
 - **Errors keep their meaning.** A 4xx from the agent is a rejection
   (`HostRequestError`); a 5xx or a transport failure is `HostUnreachableError`.
   When all 64 outbound channel slots are busy, callers queue up to 5 seconds
-  (`AGENT_CHANNEL_SLOT_WAIT_MS`) before failing with `HostBusyError` (`retryable: true`),
+  (`AGENT_CHANNEL_SLOT_WAIT_MS`) before failing with `HostBusyError`,
   which callers treat as retryable rather than marking the host unreachable.
 
 Since #2620 the same exchange also carries the file-browser transfers

@@ -5,7 +5,8 @@ import { projects, tasks } from "../db/schema.js";
 import { startTaskWatcher } from "../services/task-watcher.js";
 import { ACTIVE_TASK_STATUSES } from "../services/task-state.js";
 import { resolveBackend } from "../services/session-backend.js";
-import { HostRequestError, HostUnreachableError } from "../services/remote-host-client.js";
+import { HostRequestError } from "../services/remote-host-client.js";
+import { isHostTransientError } from "../services/remote-host-errors.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 import { REBASE_ATTEMPT_STALE_MS } from "../services/task-reconciler.js";
@@ -41,7 +42,7 @@ const ACTIVE_WORKTREE_STATUSES = [...ACTIVE_TASK_STATUSES];
  * than reading the primary's own filesystem directly — mirrors
  * task-reconciler.ts's own byHost grouping shape exactly, including
  * fail-fast per host, but ONLY on a transport-level failure
- * (`HostUnreachableError`, or a `HostRequestError` whose `statusCode` is
+ * (`isHostTransientError`: unreachable or busy, or a `HostRequestError` whose `statusCode` is
  * specifically `404` — a missing route, confirming this host's agent build
  * predates #484's proxy routes; any OTHER 4xx is a per-project problem, see
  * the catch block's own comment) — the rest of that host's projects are
@@ -180,7 +181,7 @@ async function pruneOrphanTaskWorktreesOnBoot(app: FastifyInstance): Promise<voi
           // alone: logged and skipped, the loop continues to the next
           // project on the same host.
           if (
-            err instanceof HostUnreachableError ||
+            isHostTransientError(err) ||
             (err instanceof HostRequestError && err.statusCode === 404)
           ) {
             app.log.warn(

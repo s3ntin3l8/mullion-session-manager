@@ -365,6 +365,11 @@ export async function hostsRoute(app: FastifyInstance) {
     if (id === LOCAL_HOST_ID) return reply.notFound("local host cannot be unbound");
     const host = getHostRow(app, id);
     if (!host) return reply.notFound(`host ${id} not found`);
+    // A connected channel is in use: unbinding it would send the host's
+    // requests to the advertised URL while the agent is still dialed in.
+    if (app.agentChannels?.has(id)) {
+      return reply.conflict(`host ${id} has a connected outbound channel; disconnect it first`);
+    }
     unbindChannelHost(app, id);
     app.log.info({ hostId: id }, "host unbound from outbound channel");
     return { ok: true };

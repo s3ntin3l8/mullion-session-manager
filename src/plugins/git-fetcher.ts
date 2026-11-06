@@ -3,7 +3,8 @@ import type { FastifyInstance } from "fastify";
 import { projects } from "../db/schema.js";
 import { sql } from "drizzle-orm";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
-import { getRemoteHostClient, HostUnreachableError } from "../services/remote-host-client.js";
+import { getRemoteHostClient } from "../services/remote-host-client.js";
+import { isHostTransientError } from "../services/remote-host-errors.js";
 import { getStoredSettings } from "../services/settings.js";
 import { runGitFetch } from "../services/git-fetch.js";
 import { isCloneBusy, markCloneBusy, releaseClone } from "../services/git-clone-busy.js";
@@ -112,8 +113,11 @@ async function fetchManagedCheckouts(
         );
       }
     } catch (err) {
-      if (err instanceof HostUnreachableError) {
-        app.log.debug({ projectId: project.id, hostId }, "managed checkout host unreachable");
+      if (isHostTransientError(err)) {
+        app.log.debug(
+          { projectId: project.id, hostId },
+          "managed checkout host unreachable or busy",
+        );
       } else {
         app.log.warn({ err, projectId: project.id, hostId }, "git fetch failed (managed checkout)");
       }

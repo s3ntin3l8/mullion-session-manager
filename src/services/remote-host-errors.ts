@@ -95,13 +95,13 @@ export class HostRequestError extends Error {
 }
 
 /**
- * Thrown when the outbound channel has reached its concurrency cap and no slot
- * became free within the wait budget. Distinct from HostUnreachableError so callers
- * treat it as retryable rather than marking the host down.
+ * Thrown when the outbound channel has no free request slot (the mux cap was
+ * reached and none opened within the wait budget, or the peer refused the open
+ * for being at its own cap). Distinct from HostUnreachableError so a caller can
+ * tell "saturated right now" from "down", but every caller that retries or skips
+ * on unreachable must do the same for busy: use `isHostTransientError`.
  */
 export class HostBusyError extends Error {
-  readonly retryable = true as const;
-
   constructor(hostId: string, cause?: unknown) {
     const detail = cause instanceof Error ? cause.message : String(cause ?? "");
     super(`Host ${hostId} is busy: ${detail || "outbound channel concurrency cap reached"}`);
@@ -110,28 +110,18 @@ export class HostBusyError extends Error {
   }
 }
 
-/**
- * Returns true when `err` indicates a transient host saturation/busy condition
- * (such as outbound channel cap reached) rather than a persistent error or unreachability.
- */
+/** True for a host that is saturated right now. An `instanceof` check on
+ * purpose: duck-typing on a property would match unrelated errors. */
 export function isHostBusyError(err: unknown): err is HostBusyError {
-  return (
-    err instanceof HostBusyError ||
-    (typeof err === "object" &&
-      err !== null &&
-      "name" in err &&
-      (err as { name: unknown }).name === "HostBusyError") ||
-    (typeof err === "object" &&
-      err !== null &&
-      "retryable" in err &&
-      (err as { retryable: unknown }).retryable === true)
-  );
+  return err instanceof HostBusyError;
 }
 
 /**
- * Shared predicate for retryable host errors so call sites do not drift
- * from the error taxonomy.
+ * True for a condition that heals by waiting: the host cannot be reached
+ * (HostUnreachableError, including an unknown outcome) or is busy. The one
+ * predicate for the sites that retry next tick, skip the host, or log at a
+ * lower level; do not test `instanceof HostUnreachableError` there.
  */
-export function isRetryableHostError(err: unknown): boolean {
-  return isHostBusyError(err);
+export function isHostTransientError(err: unknown): err is HostUnreachableError | HostBusyError {
+  return err instanceof HostUnreachableError || err instanceof HostBusyError;
 }

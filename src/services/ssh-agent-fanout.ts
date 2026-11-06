@@ -342,7 +342,7 @@ export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle 
           hasLoggedBridgeAmbiguity = false;
         }
         bridge.mux
-          .openChannel()
+          .openChannel({ stream: true })
           .then((bridgeChannel) => {
             // Re-checked after the await: stopped (or the agent channel
             // itself closed) while this was pending is a real possibility

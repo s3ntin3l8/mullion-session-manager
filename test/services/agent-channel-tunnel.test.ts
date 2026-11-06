@@ -5,6 +5,7 @@ import { WebSocketServer, WebSocket } from "ws";
 import {
   createMuxConnection,
   MuxBusyError,
+  MuxPeerRefusedError,
   type MuxChannel,
 } from "../../src/services/ssh-agent-mux.js";
 import {
@@ -428,30 +429,136 @@ describe("request/response over the outbound channel (#2451)", () => {
     expect(reqLocal.statusCode).toBe(200);
   });
 
-  it("rejects with ChannelBusyError when slot wait is busy for a short request timeout", async () => {
-    const openPromise = new Promise<unknown>(() => {});
-    const mockMux = {
-      openChannel: vi.fn((opts?: { onWaiting?: () => void }) => {
-        opts?.onWaiting?.();
-        return openPromise;
-      }),
-      close: vi.fn(),
-    };
-    const entry = {
-      hostId: "h1",
-      mux: mockMux as never,
-      terminal: null,
-    } as unknown as ConnectedAgentChannel;
+  it("rejects with ChannelBusyError when the slot wait backstop fires on a mux that never settles", async () => {
+    vi.useFakeTimers();
+    try {
+      const mockMux = {
+        openChannel: vi.fn((opts?: { onWaiting?: () => void }) => {
+          opts?.onWaiting?.();
+          return new Promise<never>(() => {});
+        }),
+        close: vi.fn(),
+      };
+      const entry = {
+        hostId: "h1",
+        mux: mockMux as never,
+        terminal: null,
+      } as unknown as ConnectedAgentChannel;
+      const pending = channelFetch(entry, {
+        method: "GET",
+        path: "/internal/config",
+        timeoutMs: 300,
+      }).catch((e: unknown) => e);
+      // Past the request timeout: the wait is not charged to it ...
+      await vi.advanceTimersByTimeAsync(1000);
+      let settled = false;
+      void pending.then(() => (settled = true));
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      // ... and only the slot-wait backstop ends it, as busy.
+      await vi.advanceTimersByTimeAsync(5000);
+      const err = await pending;
+      expect(err).toBeInstanceOf(ChannelBusyError);
+      expect((err as ChannelBusyError).message).toContain("waiting for free channel slot");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
-    const err = await channelFetch(entry, {
-      method: "GET",
-      path: "/internal/config",
-      timeoutMs: 300,
-    }).catch((e: unknown) => e);
+  it("gives a request its full timeout after a 4 s slot wait", async () => {
+    vi.useFakeTimers();
+    try {
+      let acquire: (() => void) | undefined;
+      let finish: ((ch: never) => void) | undefined;
+      const mockMux = {
+        openChannel: vi.fn(
+          (opts?: { onWaiting?: () => void; onSlotAcquired?: () => void }) =>
+            new Promise((resolve) => {
+              opts?.onWaiting?.();
+              acquire = () => opts?.onSlotAcquired?.();
+              finish = resolve as never;
+            }),
+        ),
+      };
+      const entry = {
+        hostId: "h1",
+        mux: mockMux as never,
+        terminal: null,
+      } as unknown as ConnectedAgentChannel;
+      const pending = channelFetch(entry, {
+        method: "POST",
+        path: "/internal/sessions",
+        timeoutMs: 5000,
+      }).catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(4000);
+      acquire!();
+      // The slot arrives, then the peer never answers: the request's own 5 s
+      // budget applies from here, not the 1 s that was left of it.
+      await vi.advanceTimersByTimeAsync(1000);
+      const closeHandlers: Array<() => void> = [];
+      const ch = {
+        send: vi.fn(),
+        eof: vi.fn(),
+        close: vi.fn(() => closeHandlers.forEach((h) => h())),
+        onData: vi.fn(),
+        onEof: vi.fn(),
+        onClose: vi.fn((h: () => void) => closeHandlers.push(h)),
+        onDrain: vi.fn(),
+        acknowledgeConsumed: vi.fn(),
+        sendWindow: 1 << 20,
+        closed: false,
+      };
+      finish!(ch as never);
+      await vi.advanceTimersByTimeAsync(3500);
+      let settled = false;
+      void pending.then(() => (settled = true));
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1000);
+      const err = (await pending) as ChannelTransportError;
+      expect(err).toBeInstanceOf(ChannelTransportError);
+      expect(err.message).toContain("timed out after 5000 ms");
+      expect(err.phase).toBe("after-send");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
-    expect(err).toBeInstanceOf(ChannelBusyError);
-    expect((err as ChannelBusyError).isBusy).toBe(true);
-    expect((err as ChannelBusyError).message).toContain("waiting for free channel slot");
+  it("reports an open-ack timeout after the slot was granted as a timeout, not busy", async () => {
+    vi.useFakeTimers();
+    try {
+      const mockMux = {
+        openChannel: vi.fn(
+          (opts?: { onWaiting?: () => void; onSlotAcquired?: () => void }) =>
+            new Promise<never>(() => {
+              opts?.onWaiting?.();
+              opts?.onSlotAcquired?.();
+            }),
+        ),
+      };
+      const entry = {
+        hostId: "h1",
+        mux: mockMux as never,
+        terminal: null,
+      } as unknown as ConnectedAgentChannel;
+      const pending = channelFetch(entry, {
+        method: "GET",
+        path: "/internal/config",
+        timeoutMs: 300,
+      }).catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(400);
+      const err = await pending;
+      expect(err).toBeInstanceOf(ChannelTransportError);
+      expect((err as ChannelTransportError).phase).toBe("before-send");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("maps a peer OpenFail to HostBusyError", async () => {
+    const r = await rig(() => {});
+    vi.spyOn(r.entry.mux, "openChannel").mockRejectedValueOnce(new MuxPeerRefusedError(7));
+    await expect(r.client.resolveConfig()).rejects.toBeInstanceOf(HostBusyError);
   });
 
   it("enforces default request body limit on non-upload paths while permitting large uploads", async () => {

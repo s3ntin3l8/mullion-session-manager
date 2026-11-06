@@ -77,6 +77,7 @@ import {
   HostUnreachableError,
 } from "../services/remote-host-client.js";
 import { isHostBusyError, isOutcomeUnknown } from "../services/remote-host-errors.js";
+import { isHostTransientError } from "../services/remote-host-errors.js";
 import { previewPlacement } from "../services/placement.js";
 import { commandAgentBin } from "../services/hook-adapters/index.js";
 import { portFromUrl } from "../plugins/preview-proxy.js";
@@ -2826,9 +2827,8 @@ export async function projectsRoute(app: FastifyInstance) {
         } catch (err) {
           app.log.warn({ hostId: target.hostId, err }, "worktree usage check failed");
           if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
-          if (err instanceof HostUnreachableError) {
-            return reply.serviceUnavailable(`Host ${target.hostId} is unreachable`);
-          }
+          if (isHostTransientError(err))
+            return reply.serviceUnavailable(`Host ${target.hostId} is unavailable`);
           return reply.serviceUnavailable(
             "Could not check whether sessions are using this worktree",
           );

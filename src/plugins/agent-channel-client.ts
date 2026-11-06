@@ -22,6 +22,7 @@ import {
   AGENT_CHANNEL_HANDSHAKE_TIMEOUT_MS,
   AGENT_CHANNEL_MAX_BUFFERED_BYTES,
   AGENT_CHANNEL_MAX_CHANNELS,
+  AGENT_CHANNEL_MAX_STREAM_CHANNELS,
   AGENT_CHANNEL_PATH,
   AGENT_CHANNEL_REJECTED_RETRY_MS,
   AGENT_CHANNEL_SUPERSEDED_RETRY_MS,
@@ -230,6 +231,7 @@ export const agentChannelClientPlugin = fp(async (app: FastifyInstance) => {
         mux = createMuxConnection(ws, {
           channelIdParity: "odd",
           maxChannels: AGENT_CHANNEL_MAX_CHANNELS,
+          maxStreamChannels: AGENT_CHANNEL_MAX_STREAM_CHANNELS,
           maxBufferedBytes: AGENT_CHANNEL_MAX_BUFFERED_BYTES,
         });
         mux.onChannel((channel) =>
