@@ -66,6 +66,10 @@ inherit `node_modules`: run `npm ci` at the repo root **and**
 demo projects, sessions and tasks, and prints its URL. Ctrl-C stops its
 sessions and deletes everything it created.
 
+The demo reports a fixed version (`DEMO_VERSION` in `scripts/demo/instance.mjs`, handed to the backend as
+`MULLION_DEMO_VERSION`), not the checkout's: the toolbar prints it, so a real one would change every screenshot and
+committed baseline at each release. Its fake GitHub offers the next minor, so the update banner still shows.
+
 Screenshots and visual checks run on [visual-kit](https://github.com/s3ntin3l8/visual-kit)
 (its `CONTRACT.md` is the spec), which needs Docker: it starts `make demo`, drives
 the scenes in `visual/scenes.json` in a pinned browser image, and stops the demo.
@@ -98,7 +102,10 @@ the demo, a hook or a scene, or when a shot flips between runs. The base is rend
 `scripts/demo` and `scripts/git-env.mjs` (`baseHarness`), so a PR that fixes the demo harness is not compared against its
 own bug. App code (`frontend/`, `src/`) comes from the merge base, so a fix there is the diff the check shows. One
 seam to know: `scripts/demo/env.mjs` imports `src/cli/sun-path.mjs`, so a PR that renames one of its exports and updates
-`env.mjs` leaves the base demo failing at import, and every shot then reads `new`.
+`env.mjs` leaves the base demo failing at import, and every shot then reads `new`. The same coupling shows when a PR changes the harness and the app together (the one that made the demo report a fixed version
+made the base show an "update available" banner the head did not, so most shots read `changed` once): the base is the
+merge base's app with the PR's harness, so judge such a PR by the baseline scenes, which are compared with the committed
+baselines instead.
 
 These scheduled and on-demand workflows keep the images current without a local Docker (they call shared workflows in `s3ntin3l8/.github`):
 

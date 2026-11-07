@@ -198,6 +198,10 @@ describe("assertDemoEnv refuses a poisoned environment", () => {
     refuses({}, { cwd });
   });
 
+  it("allows the demo flag and the fixed version it reports", () => {
+    expect(problems({ MULLION_DEMO: "true", MULLION_DEMO_VERSION: "1.0.0" })).toEqual([]);
+  });
+
   it("allows the loopback fake GitHub URL, and nothing else for that key", () => {
     expect(problems({ MULLION_GITHUB_API_URL: "http://127.0.0.1:41233" })).toEqual([]);
     for (const url of [

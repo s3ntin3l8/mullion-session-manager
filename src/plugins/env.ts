@@ -525,6 +525,16 @@ export const schema = {
       type: "boolean",
       default: false,
     },
+    // The version a demo instance reports (and only a demo, see
+    // `reportedVersion` in src/routes/server-info.ts): the release number
+    // is part of every screenshot (the toolbar's version label), so a real one
+    // would make the README images and the committed visual baselines stale at
+    // each release. Set only by scripts/demo/instance.mjs; empty = the
+    // package.json version.
+    MULLION_DEMO_VERSION: {
+      type: "string",
+      default: "",
+    },
     // Gates autonomous Task Master behavior — the background watcher's
     // GitHub ingest + auto-claim, and the claim/approve endpoints. Default
     // OFF, same "real feature, off by default" posture the roadmap
@@ -1165,6 +1175,7 @@ declare module "fastify" {
       MULLION_SERVICE_UNIT: string;
       MULLION_KEEP_AWAKE: boolean;
       MULLION_DEMO: boolean;
+      MULLION_DEMO_VERSION: string;
       MULLION_TASK_MASTER_ENABLED: boolean;
       MULLION_TASK_LABEL: string;
       MULLION_TASK_POLL_INTERVAL: number;

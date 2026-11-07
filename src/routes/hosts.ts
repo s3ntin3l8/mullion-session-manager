@@ -27,7 +27,7 @@ import { autoFillHostCwds } from "../services/host-checkout-detect.js";
 import { forwardHostRequestError } from "../services/host-error-reply.js";
 import { MAX_PROJECTS_ROOTS } from "../services/agent-projects-roots.js";
 import { buildAgentConfig } from "./internal.js";
-import { appVersion } from "./server-info.js";
+import { appVersion, reportedVersion } from "./server-info.js";
 import {
   protocolStatus,
   refreshHostProtocolSoon,
@@ -238,7 +238,7 @@ export async function hostsRoute(app: FastifyInstance) {
         // state (hasMachineIdentity / machineIdentityRevoked above).
         channel: channelStatus(app, host.id),
         mullionVersion:
-          host.id === LOCAL_HOST_ID ? appVersion : (agentEntry?.mullionVersion ?? null),
+          host.id === LOCAL_HOST_ID ? reportedVersion(app) : (agentEntry?.mullionVersion ?? null),
         // The LOCAL host's platform is this process's own — the row simply
         // never had one, because nothing self-reported it. Reporting it
         // here keeps one fact in one place: without it, the same response

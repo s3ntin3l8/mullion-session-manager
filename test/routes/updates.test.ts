@@ -66,6 +66,8 @@ describe("updates route", () => {
     vi.unstubAllGlobals();
     delete process.env.MULLION_HOME;
     delete process.env.MULLION_SERVICE_UNIT;
+    delete process.env.MULLION_DEMO;
+    delete process.env.MULLION_DEMO_VERSION;
     fs.rmSync(mullionHome, { recursive: true, force: true });
   });
 
@@ -89,6 +91,29 @@ describe("updates route", () => {
       const res = await app.inject({ method: "GET", url: "/api/updates/check" });
 
       expect(res.json()).toMatchObject({ applyAvailable: true });
+      await app.close();
+    });
+
+    it("a demo instance reports MULLION_DEMO_VERSION as the current version, so screenshots do not change at a release", async () => {
+      process.env.MULLION_DEMO = "true";
+      process.env.MULLION_DEMO_VERSION = "1.0.0";
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, [{ tag_name: "v1.1.0" }]));
+      const app = await buildApp();
+
+      const res = await app.inject({ method: "GET", url: "/api/updates/check" });
+
+      expect(res.json()).toMatchObject({ currentVersion: "1.0.0", updateAvailable: true });
+      await app.close();
+    });
+
+    it("ignores MULLION_DEMO_VERSION outside a demo: a real install reports its own version", async () => {
+      process.env.MULLION_DEMO_VERSION = "1.0.0";
+      fetchMock.mockResolvedValueOnce(jsonResponse(200, [{ tag_name: "v0.0.1" }]));
+      const app = await buildApp();
+
+      const res = await app.inject({ method: "GET", url: "/api/updates/check" });
+
+      expect(res.json().currentVersion).not.toBe("1.0.0");
       await app.close();
     });
 

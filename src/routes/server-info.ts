@@ -16,6 +16,22 @@ export const appVersion =
   (JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as { version?: string }).version ??
   "unknown";
 
+/**
+ * The version this instance shows to users (the toolbar label, Settings -> Server
+ * info, the update check). A throwaway demo instance reports `MULLION_DEMO_VERSION`
+ * instead of the checkout's, so its screenshots do not change at every release.
+ * Everywhere else, for a demo without the key and for a key that is not a
+ * `major.minor.patch` version (the update check cannot parse anything else), it is
+ * `appVersion`.
+ */
+const DEMO_VERSION_SHAPE = /^\d+\.\d+\.\d+$/;
+export function reportedVersion(app: FastifyInstance): string {
+  const { MULLION_DEMO, MULLION_DEMO_VERSION } = app.config;
+  return MULLION_DEMO && DEMO_VERSION_SHAPE.test(MULLION_DEMO_VERSION)
+    ? MULLION_DEMO_VERSION
+    : appVersion;
+}
+
 // `DATABASE_URL` is a `file:` URL (e.g. "file:./data/app.db", see
 // plugins/env.ts) — strip the scheme for a plain filesystem path to display,
 // same idea as the sessionsDir/crsConfigDir paths below.
@@ -30,7 +46,7 @@ function dbPathFromUrl(databaseUrl: string): string {
 export async function serverInfoRoute(app: FastifyInstance) {
   app.get("/api/server-info", async () => {
     return {
-      version: appVersion,
+      version: reportedVersion(app),
       // "primary" always, in practice — this route only registers on the
       // primary role branch (src/app.ts skips it for "agent"), but surfaced
       // anyway so the Settings -> Server info tab has a single source for
