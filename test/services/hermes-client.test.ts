@@ -141,6 +141,25 @@ describe("hermes client", () => {
       await expect(postRun(CFG, req)).rejects.toBeInstanceOf(HermesUnavailableError);
     });
 
+    it("maps a 409 for a retired (pruned) session to a refused session, only with a session", async () => {
+      for (const code of ["not_found", "session_deleted"]) {
+        route = async () => json({ error: { code } }, { status: 409 });
+        await expect(postRun(CFG, { ...req, sessionId: "s1" })).rejects.toMatchObject({
+          name: "ReviewSessionRefusedError",
+          sessionId: "s1",
+          reason: "retired",
+        });
+        await expect(postRun(CFG, req)).rejects.toBeInstanceOf(HermesUnavailableError);
+      }
+    });
+
+    it("keeps an unknown 409 code a plain refusal, even with a session", async () => {
+      route = async () => json({ error: { code: "permission_denied" } }, { status: 409 });
+      await expect(postRun(CFG, { ...req, sessionId: "s1" })).rejects.toBeInstanceOf(
+        HermesUnavailableError,
+      );
+    });
+
     it("fails on a run-less 202 and on other statuses", async () => {
       route = async () => json({ status: "queued" }, { status: 202 });
       await expect(postRun(CFG, req)).rejects.toThrow(/no run id/);

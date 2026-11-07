@@ -659,33 +659,32 @@ describe("hermes review relay", () => {
       }
     });
 
-    it("retries a stuck review session in a fresh one", async () => {
-      // Hermes' session authority refused the turn: the session this pull
-      // request's reviews run in is stuck — the gateway paused it on an
-      // earlier conflict and never recovers
-      // (NousResearch/hermes-agent#142731) — so it refuses every later round.
-      // The relay starts over in a fresh session, and under a key that moves
-      // with it, because the body carries the session id.
-      let n = 0;
-      dispatch = async () => {
-        n += 1;
-        if (n === 1) {
-          return new Response('{"error":{"code":"admission_conflict"}}', { status: 409 });
-        }
-        return accepted("run_fresh");
-      };
-      await expect(requestHermesReview(app, PR)).resolves.toMatchObject({ runId: "run_fresh" });
-      const posts = calls("/v1/runs");
-      const bodyOf = (i: number) => JSON.parse((posts[i][1] as RequestInit).body as string);
-      const keyOf = (i: number) =>
-        (posts[i][1] as RequestInit & { headers: Record<string, string> }).headers[
-          "Idempotency-Key"
-        ];
-      expect(bodyOf(0).session_id).toBe("hermes-review-acme-widgets-7");
-      expect(bodyOf(1).session_id).toBe("hermes-review-acme-widgets-7-2");
-      expect(keyOf(0)).toBe("hermes-review:acme/widgets#7@..abc1234");
-      expect(keyOf(1)).toBe("hermes-review:acme/widgets#7@..abc1234#session-2");
-    });
+    // admission_conflict: the session is stuck — the gateway paused it on an
+    // earlier conflict and never recovers (NousResearch/hermes-agent#142731).
+    // not_found: Hermes' idle-session prune deleted it and fenced its id for
+    // good. Either way it refuses every later round, so the relay starts over
+    // in a fresh session, under a key that moves with it (the body carries
+    // the session id).
+    it.each(["admission_conflict", "not_found"])(
+      "retries a refused (%s) review session in a fresh one",
+      async (code) => {
+        let n = 0;
+        const refusal = `{"error":{"code":"${code}"}}`;
+        dispatch = async () =>
+          ++n === 1 ? new Response(refusal, { status: 409 }) : accepted("run_fresh");
+        await expect(requestHermesReview(app, PR)).resolves.toMatchObject({ runId: "run_fresh" });
+        const posts = calls("/v1/runs");
+        const bodyOf = (i: number) => JSON.parse((posts[i][1] as RequestInit).body as string);
+        const keyOf = (i: number) =>
+          (posts[i][1] as RequestInit & { headers: Record<string, string> }).headers[
+            "Idempotency-Key"
+          ];
+        expect(bodyOf(0).session_id).toBe("hermes-review-acme-widgets-7");
+        expect(bodyOf(1).session_id).toBe("hermes-review-acme-widgets-7-2");
+        expect(keyOf(0)).toBe("hermes-review:acme/widgets#7@..abc1234");
+        expect(keyOf(1)).toBe("hermes-review:acme/widgets#7@..abc1234#session-2");
+      },
+    );
 
     it("names the range in a follow-up dispatch, and the NEW session after a refusal", async () => {
       let n = 0;

@@ -68,24 +68,40 @@ export class ReviewConflictError extends Error {
 }
 
 /**
- * Hermes' session authority refused the turn (409 `admission_conflict`).
+ * Hermes refused the turn for the pull request's own session, for good.
  *
- * The session is stuck — the gateway paused it on an earlier conflict and
- * never recovers (NousResearch/hermes-agent#142731) — so every later round
- * for that pull request is refused at the door. The way out is a fresh
- * session — the caller retries the attempt there.
+ * - `stuck` (409 `admission_conflict`): the gateway paused the session on an
+ *   earlier conflict and never recovers (NousResearch/hermes-agent#142731).
+ * - `retired` (409 `not_found` / `session_deleted`): the session was deleted —
+ *   in practice by Hermes' idle-session prune — and its id is fenced by a
+ *   permanent tombstone, so it can never be used again.
+ *
+ * Either way every later round for that pull request is refused at the door.
+ * The way out is a fresh session — the caller retries the attempt there.
  */
 export class ReviewSessionRefusedError extends Error {
   constructor(
     /** The session that refused the turn. */
     readonly sessionId: string,
+    readonly reason: "stuck" | "retired" = "stuck",
   ) {
     super(
-      `Hermes refused the turn for the review session of this pull request (${sessionId}) — that session is stuck and refuses every later round. The relay retries in a fresh session; asking again is not the way out of it.`,
+      `Hermes refused the turn for review session ${sessionId} — that session ${
+        reason === "retired"
+          ? "was deleted (pruned) and can never be used again"
+          : "is stuck and refuses every later round"
+      }. It needs a fresh session; asking again in this one is not the way out of it.`,
     );
     this.name = "ReviewSessionRefusedError";
   }
 }
+
+/**
+ * The 409 codes Hermes gives for an explicit session id that was deleted: a
+ * run admission answers `not_found` (the id carries a retired-session
+ * tombstone), a create answers `session_deleted`.
+ */
+const RETIRED_SESSION_CODES = new Set(["not_found", "session_deleted"]);
 
 /**
  * The statuses that mean the run is FINISHED. Everything else is treated as
@@ -300,11 +316,16 @@ export async function postRun(
   if (res.status === 409) {
     // 409 also covers ownership / generation / identity refusals, which are not
     // "a review is already coming": only the idempotency conflict means that.
+    // Hermes maps every session-store refusal it has no other status for to
+    // 409, so a code this does not know stays a plain refusal.
     const refusal = await readJson<{ error?: { code?: unknown }; code?: unknown }>(res);
     const code = refusal?.error?.code ?? refusal?.code;
     if (code === "idempotency_key_conflict") throw new ReviewConflictError();
     if (code === "admission_conflict" && r.sessionId) {
       throw new ReviewSessionRefusedError(r.sessionId);
+    }
+    if (typeof code === "string" && RETIRED_SESSION_CODES.has(code) && r.sessionId) {
+      throw new ReviewSessionRefusedError(r.sessionId, "retired");
     }
     throw new HermesUnavailableError(
       "Hermes refused the review request (HTTP 409) — review not dispatched",
