@@ -1,6 +1,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useDashboardStore } from "../../store/index.js";
+import { themeClassName } from "../../store/theme.js";
 
 const VIEWPORT_MARGIN = 6;
 const GAP = 6;
@@ -38,7 +39,7 @@ export function TooltipBubble({ label, anchor, id }: TooltipProps) {
       ref={ref}
       id={id}
       role="tooltip"
-      className={`cmux-root${theme === "light" ? " light" : ""} sb-tooltip`}
+      className={themeClassName(theme, "sb-tooltip")}
       style={pos}
     >
       {label}

@@ -5,6 +5,7 @@ import { BottomSheet } from "./ui/BottomSheet.js";
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import type { Range } from "@tanstack/react-virtual";
 import { eventKey, useDashboardStore } from "./store/index.js";
+import { themeClassName } from "./store/theme.js";
 import {
   describeEvent,
   notifyKind,
@@ -714,7 +715,7 @@ export function NotificationBell({
         createPortal(
           <div
             ref={panelRef}
-            className={`cmux-root${theme === "light" ? " light" : ""} pane-tab-overflow-menu notif-panel`}
+            className={themeClassName(theme, "pane-tab-overflow-menu", "notif-panel")}
             style={{ position: "fixed", top: pos.top, left: pos.left }}
             onClick={(e) => e.stopPropagation()}
             onKeyDown={onPanelKeyDown}

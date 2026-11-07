@@ -4,6 +4,7 @@ import { createPortal } from "react-dom";
 import type { DockviewApi, DockviewPanelApi } from "dockview";
 import type { TerminalPaneParams } from "./TerminalPane.js";
 import { useDashboardStore } from "./store/index.js";
+import { themeClassName } from "./store/theme.js";
 import {
   BellIcon,
   BellOffIcon,
@@ -376,7 +377,7 @@ export function PaneActionsMenu({
             // classes here, var(--chrome) etc. resolve to nothing and the
             // menu renders with a transparent background instead of falling
             // back to the theme.
-            className={`cmux-root${theme === "light" ? " light" : ""} pane-tab-overflow-menu`}
+            className={themeClassName(theme, "pane-tab-overflow-menu")}
             style={{
               position: "fixed",
               top: overflowPos.top,

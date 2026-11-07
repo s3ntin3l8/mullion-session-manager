@@ -3,6 +3,7 @@ import { api, ApiError, type AuthStatus } from "./api/index.js";
 import { App } from "./App.js";
 import { MullionMark } from "./assets/MullionMark.js";
 import { readThemeHint, systemPrefersDark } from "./store/helpers.js";
+import { themeClassName } from "./store/theme.js";
 import { ErrorText } from "./ui/ErrorText.js";
 import { AuthStatusContext } from "./authContext.js";
 
@@ -116,7 +117,7 @@ function Login({
     // renders instead of <App/>, outside the element that normally carries
     // those classes, so none of tokens.css's custom properties (--chrome,
     // --accent-solid, --muted, ...) would otherwise resolve at all.
-    <div className={`login-root cmux-root${theme === "light" ? " light" : ""}`}>
+    <div className={themeClassName(theme, "login-root")}>
       <div className="login-brand">
         <MullionMark size={26} />
         <span className="login-wordmark">Mullion</span>
