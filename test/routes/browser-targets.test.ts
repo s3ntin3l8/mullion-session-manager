@@ -632,5 +632,28 @@ describe("browser execution targets", () => {
       expect(post).toHaveBeenCalledTimes(2);
       expect(app.db.select().from(pendingBrowserCloses).all()).toHaveLength(0);
     });
+
+    it("re-arms a gave-up close when a forget request escalates it", async () => {
+      const a = await addHost();
+      negotiate(a, AGENT_OPERATIONS);
+      const projectId = addProject("/work/p", "local", { [a]: "/work/p" });
+      const post = vi
+        .spyOn(RemoteHostClient.prototype, "postBrowser")
+        .mockRejectedValueOnce(new Error("close failed"))
+        .mockRejectedValueOnce(new Error("forget failed"))
+        .mockResolvedValue({});
+      const target = { projectId, hostId: a, checkoutRoot: "/work/p-wt", legacy: false };
+      await closeCheckoutBrowsers(app, projectId, a, "/work/p-wt");
+      // First (forget) attempt failed and left a record; mark it as given up.
+      app.db.update(pendingBrowserCloses).set({ forget: false, gaveUpAt: new Date() }).run();
+      expect(listLeakedBrowserCloses(app)).toHaveLength(1);
+      await closeCheckoutBrowsers(app, projectId, a, "/work/p-wt");
+      const [row] = app.db.select().from(pendingBrowserCloses).all();
+      expect(row).toMatchObject({ forget: true, gaveUpAt: null, lastError: "forget failed" });
+      expect(listLeakedBrowserCloses(app)).toHaveLength(0);
+      await processPendingBrowserCloses(app, new Date(Date.now() + 2 * 60_000));
+      expect(post).toHaveBeenLastCalledWith("/internal/browser/forget", target);
+      expect(app.db.select().from(pendingBrowserCloses).all()).toHaveLength(0);
+    });
   });
 });

@@ -272,7 +272,18 @@ function recordPendingClose(
         pendingBrowserCloses.checkoutRoot,
         pendingBrowserCloses.endpoint,
       ],
-      set: { lastError: error, ...(forget ? { forget: true } : {}) },
+      // Escalating to forget re-arms a record that already gave up, so the
+      // newly requested cleanup is retried when the host returns.
+      set: {
+        lastError: error,
+        ...(forget
+          ? {
+              forget: true,
+              gaveUpAt: null,
+              nextAttemptAt: new Date(now.getTime() + CLOSE_RETRY_BASE_MS),
+            }
+          : {}),
+      },
     })
     .run();
   app.log.warn({ target, error }, "remote browser close not delivered; will retry");
