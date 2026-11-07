@@ -1896,6 +1896,29 @@ naming the limit (a declared `Content-Length` before any byte is sent, otherwise
 as soon as the running count passes it); it is never reported as an unreachable
 host. A host that must move larger files needs an advertised URL (inbound).
 
+**Edge cases of the ceiling (#2690).**
+
+- A response that has no body is never measured: a `HEAD` reply and a `1xx`,
+  `204` or `304` carry the `Content-Length` of a representation that does not
+  follow, so a `HEAD` of a 100 MiB asset passes. The same head on a `GET` is
+  refused 413 (the check applies on the agent and on the primary).
+- **Error end marker.** A complete response ends with EOF. When the agent cuts
+  a response of undeclared length at the limit it closes the channel _without_
+  EOF, which the primary treats as a failed response, never as a short, clean
+  one: before the head it is a `502` (host unreachable, outcome of a read
+  unknown), after the head the preview response is errored so the browser's
+  socket is aborted (an SSE preview is cut at 64 MiB cumulative this way, and
+  the dev-server UI sees a dropped connection, not a normal end).
+- **Cancellation.** The agent registers the channel's close handler before it
+  replays the request and aborts the replay on close, so a primary that timed
+  out or disconnected while the dev server was still producing headers drops
+  the upstream request at once instead of when the server finally answers.
+- **Unknown-length uploads.** A chunked upload (no `Content-Length`) is counted
+  as it arrives on the primary, for a remote host too: at `FILE_TRANSFER_MAX_BYTES`
+  the route stops forwarding, discards the rest of the body and answers `413`
+  with `code: "too_large"` and a message naming the limit. Nothing is written
+  on the agent, which only runs an upload once it has the whole body.
+
 **Previews stream.** The agent reads the replayed response as a stream: the head
 goes out first and each body chunk is forwarded as the dev server writes it, so
 SSE and long-poll previews work, and the idle timeout re-arms on every chunk

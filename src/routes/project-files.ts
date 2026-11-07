@@ -4,7 +4,7 @@
 // (services/project-files.ts), a remote-hosted one proxies through
 // /internal/project-files/* on that host. Contents are secrets-adjacent
 // (.env) — nothing here logs a request body or a file's content.
-import type { Readable } from "node:stream";
+import { Transform, type Readable } from "node:stream";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
@@ -481,15 +481,50 @@ export async function projectFilesRoute(app: FastifyInstance) {
         });
       }
       const mkdirs = request.query.mkdirs === "1";
+      // A body with no (or a false) Content-Length is counted as it arrives,
+      // for a remote host too: the upload is cut off the moment it passes the
+      // limit (nothing past it is forwarded), and the 413 names the limit.
+      let overLimit = false;
+      const limited = (): Readable => {
+        let seen = 0;
+        const counter = new Transform({
+          transform(chunk: Buffer, _enc, cb) {
+            seen += chunk.length;
+            if (seen > max) {
+              overLimit = true;
+              cb(new Error("upload over the transfer limit"));
+              return;
+            }
+            cb(null, chunk);
+          },
+        });
+        body.on("error", (err) => counter.destroy(err));
+        return body.pipe(counter);
+      };
       return dispatch(
         reply,
         ctx,
         (cwd) => writeProjectFileFromStream(cwd, relPath, body, { maxBytes: max, mkdirs }),
-        (client, cwd) =>
-          client.uploadProjectFile(cwd, relPath, body, {
-            mkdirs,
-            ...(Number.isFinite(declared) ? { declaredBytes: declared } : {}),
-          }),
+        async (client, cwd) => {
+          try {
+            return await client.uploadProjectFile(cwd, relPath, limited(), {
+              mkdirs,
+              ...(Number.isFinite(declared) ? { declaredBytes: declared } : {}),
+            });
+          } catch (err) {
+            if (!overLimit) throw err;
+            // The rest of the client's body is discarded so the 413 reaches it.
+            body.resume();
+            throw new HostRequestError(
+              ctx.hostId,
+              413,
+              JSON.stringify({
+                message: `"${relPath}" is over the ${max} byte transfer limit`,
+                code: "too_large",
+              }),
+            );
+          }
+        },
       );
     },
   );
