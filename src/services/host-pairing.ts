@@ -20,11 +20,13 @@ import {
 // agent-bridge pairing). Headless Ansible enrollment (routes/enrollment.ts)
 // is untouched and converges on the same identity.
 
-export const HOST_PAIRING_TTL_MS = 10 * 60 * 1000;
-// After a successful redeem the code stays matchable this long, but only for
-// the SAME request id: a Helper whose response was lost retries onto the same
-// host instead of leaving an orphan and needing a new code.
-export const HOST_PAIRING_RETRY_WINDOW_MS = 10 * 60 * 1000;
+// The pairing code's two policy windows live in their own module: the host
+// registry reads the retry window too, and it used to import THIS module for
+// the sake of one constant — an import cycle between two services with
+// nothing else to do with each other (issue #2414). Re-exported here, so
+// every existing importer keeps its path.
+import { HOST_PAIRING_RETRY_WINDOW_MS, HOST_PAIRING_TTL_MS } from "./host-pairing-policy.js";
+export { HOST_PAIRING_RETRY_WINDOW_MS, HOST_PAIRING_TTL_MS };
 
 export type PairingState = "pending" | "paired" | "expired" | "revoked";
 

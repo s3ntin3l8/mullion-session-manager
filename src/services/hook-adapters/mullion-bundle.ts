@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseSkillFrontmatter } from "../skills.js";
+import { parseSkillFrontmatter } from "../skill-frontmatter.js";
 import { isDangerousSkillName } from "./skill-name.js";
 import { validateOpenCodeModel } from "./shared.js";
 

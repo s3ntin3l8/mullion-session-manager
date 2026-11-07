@@ -13,7 +13,7 @@ import { commandSupportsSeed, resolveSeedDelivered } from "./task-agent-resolve.
 import { isOutcomeUnknown } from "./remote-host-errors.js";
 import { buildReviewPrompt, taskReviewFindingsPath, type ReviewCiInfo } from "./task-prompt.js";
 import { reviewPromptContext } from "./task-prior-round.js";
-import { resolveMaxAutoReturnRounds } from "./task-reconciler.js";
+import { resolveMaxAutoReturnRounds } from "./task-auto-return-rounds.js";
 
 export async function unlinkFindingsFileIfPresent(
   app: FastifyInstance,

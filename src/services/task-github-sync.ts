@@ -52,7 +52,7 @@ import { getDiffStats, type GitDiffStats } from "./git-diff.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { resolveTaskWorkerHost } from "./session-live-info.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
-import { cleanupTaskSessions, cleanupTaskWorktree } from "./task-approve.js";
+import { cleanupTaskSessions, cleanupTaskWorktree } from "./task-cleanup.js";
 
 export const LABEL_CLAIMED = "mullion-claimed";
 export const LABEL_REVIEWING = "mullion-reviewing";

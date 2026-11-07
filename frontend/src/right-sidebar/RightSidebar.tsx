@@ -8,7 +8,8 @@ import { useDashboardStore } from "../store/index.js";
 import { RIGHT_SIDEBAR_MAX_WIDTH, RIGHT_SIDEBAR_MIN_WIDTH } from "../store/constants.js";
 import { RightRail } from "./RightRail.js";
 import { RightSidebarPanel } from "./RightSidebarPanel.js";
-import { RIGHT_SIDEBAR_VIEWS, type RightSidebarActions } from "./views.js";
+import { RIGHT_SIDEBAR_VIEWS } from "./views-registry.js";
+import type { RightSidebarActions } from "./views.js";
 
 export interface RightSidebarProps {
   tier: LayoutTier;

@@ -715,3 +715,15 @@ export interface ReviewSummary {
 // "pinned" (the default) keeps today's behaviour exactly: every session
 // under the project runs on the project's own host. "auto" opts the project
 // into automatic placement.
+
+// ---------------------------------------------------------------------------
+// github.ts — GitHubCiStatus
+// ---------------------------------------------------------------------------
+//
+// The backend's own declaration (src/services/github.ts) and the frontend's
+// hand-mirrored copy (frontend/src/api/types.ts) were the SAME union spelled
+// twice, and the backend's copy sat in a module the PR-phase helper imported
+// back — so github.ts and github-pr-phase.ts imported each other (issue
+// #2414). One declaration, both sides.
+
+export type GitHubCiStatus = "success" | "failure" | "in_progress" | null;
