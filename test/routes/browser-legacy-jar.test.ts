@@ -65,7 +65,12 @@ describe("legacy browser cookie jar and mixed-version closes (#2701)", () => {
   let n = 0;
   let dataRoot = "";
   const dataDir = () => (primary.browser as unknown as { dataDir: string }).dataDir;
-  const files = () => fs.readdirSync(dataDir()).sort();
+  // The `.endpoints` index (#2700) is bookkeeping, not storage state.
+  const files = () =>
+    fs
+      .readdirSync(dataDir())
+      .filter((f) => !f.endsWith(".endpoints"))
+      .sort();
 
   beforeAll(async () => {
     fs.rmSync(tmpDb, { force: true });
