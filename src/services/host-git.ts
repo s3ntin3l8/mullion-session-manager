@@ -31,7 +31,7 @@ import {
   HostRequestError,
   HostUnreachableError,
 } from "./remote-host-client.js";
-import { isHostBusyError, isOutcomeUnknown } from "./remote-host-errors.js";
+import { isHostBusyError, isOutcomeUnknown, unknownOutcomeDetail } from "./remote-host-errors.js";
 
 export type HostGitResult<T> =
   | { ok: true; value: T }
@@ -150,7 +150,7 @@ export async function viaRemote<T>(
       return {
         ok: false,
         reason: "outcome-unknown",
-        detail: err instanceof Error ? err.message : String(err),
+        detail: unknownOutcomeDetail(err) ?? (err instanceof Error ? err.message : String(err)),
       };
     }
     const detail =

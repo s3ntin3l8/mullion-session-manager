@@ -4,4 +4,6 @@ export interface ClearDoneBranchResult {
   branch: string;
   deleted: boolean;
   reason?: string;
+  /** For `outcome-unknown`: the host's "may have been delivered" sentence. */
+  detail?: string;
 }

@@ -2096,8 +2096,14 @@ usual re-attach scrollback replay / events replay snapshot resynchronizes it.
   the routes answer with 502 and that wording ("MAY HAVE BEEN DELIVERED"), never
   "failed to reach host". The wording comes from ONE helper
   (`unknownOutcomeText`, `remote-host-errors.ts`) and is the same on every
-  surface: spawn (503, with the kept `sessionId`), git writes (503), uploads,
-  promote decision/accept, the scaffold commit and the task push. Task Master's
+  surface: spawn (503, with the kept `sessionId`), git writes (503, including
+  git fetch and the worktree prune), uploads, promote decision/accept, the
+  scaffold commit and the task push. The agent-rules, dock-config, skill-toggle,
+  project-roots, update-apply and project-file write routes answer 502 with the
+  same sentence (`replyHostUnreachable`, `host-error-reply.ts`), where a host
+  that never got the request is still a plain 503 "unreachable". The sentence
+  carries the transport error as its detail (`unknownOutcomeDetail`), never the
+  error's own message, so "MAY HAVE BEEN DELIVERED" appears once. Task Master's
   branch clean-up reports it too: `clear-done` answers `reason: "outcome-unknown"`
   with a `detail`, and a dispatch whose orphaned-worktree clear is lost fails
   with the same text instead of "unclean worktree". A test enumerates every

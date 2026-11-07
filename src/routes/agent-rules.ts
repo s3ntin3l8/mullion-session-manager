@@ -18,7 +18,7 @@ import { eq } from "drizzle-orm";
 import { projects } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
-import { forwardHostRequestError } from "../services/host-error-reply.js";
+import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
 import {
   listAgentRules,
   getAgentRule,
@@ -150,7 +150,7 @@ export async function agentRulesRoute(app: FastifyInstance) {
           { hostId: project.hostId, err },
           "host unreachable, could not write agent rule",
         );
-        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        return replyHostUnreachable(reply, project.hostId, err, "writing the agent rule");
       }
     },
   );
@@ -190,7 +190,7 @@ export async function agentRulesRoute(app: FastifyInstance) {
           { hostId: project.hostId, err },
           "host unreachable, could not delete agent rule",
         );
-        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        return replyHostUnreachable(reply, project.hostId, err, "deleting the agent rule");
       }
     },
   );

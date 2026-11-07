@@ -321,6 +321,27 @@ describe("store.createTask / updateTask / deleteTask (local-board CRUD, 6.9/#233
     );
   });
 
+  // #2723 — a 204 is a clean Abandon. A 200 means the task is gone but part of
+  // the host-side cleanup lost its connection mid-request, so it may or may not
+  // have run: the store says so in a toast, since the drawer closes right after.
+  it("deleteTask raises a toast when the Abandon's cleanup outcome is unknown", async () => {
+    useDashboardStore.setState({ toasts: [] });
+    const message = "Host connection lost mid-request: the branch delete MAY HAVE BEEN DELIVERED";
+    fetchMock.mockImplementationOnce(async () =>
+      jsonResponse(200, { outcomeUnknown: ["the branch delete"], message }),
+    );
+    await useDashboardStore.getState().deleteTask(2, { force: true });
+    expect(useDashboardStore.getState().toasts).toEqual([
+      expect.objectContaining({ message, kind: "error" }),
+    ]);
+  });
+
+  it("deleteTask raises no toast for a clean delete", async () => {
+    useDashboardStore.setState({ toasts: [] });
+    await useDashboardStore.getState().deleteTask(2);
+    expect(useDashboardStore.getState().toasts).toEqual([]);
+  });
+
   // #1014 (Abandon) — force is opt-in via the querystring, mirroring
   // api/hosts.ts's deleteHost cascade pattern; a plain call must never send
   // it.

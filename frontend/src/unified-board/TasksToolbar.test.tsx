@@ -323,6 +323,33 @@ describe("UnifiedBoard clear-done", () => {
     ).toBeInTheDocument();
   });
 
+  it("shows an unknown branch-delete outcome as the host's sentence, not the raw reason (#2723)", async () => {
+    clearDoneTasks.mockResolvedValue({
+      deleted: [1],
+      failed: [],
+      branches: [
+        {
+          id: 1,
+          branch: "mullion/task-1",
+          deleted: false,
+          reason: "outcome-unknown",
+          detail: "Host connection lost mid-request: the branch delete MAY HAVE BEEN DELIVERED",
+        },
+      ],
+      remaining: 0,
+    });
+    const user = userEvent.setup();
+    render(<UnifiedBoard onOpenSession={vi.fn()} onSessionEnded={vi.fn()} />);
+
+    await user.click(screen.getByRole("button", { name: "Clear done" }));
+    await user.click(screen.getByRole("button", { name: "Confirm clear" }));
+
+    expect(
+      await screen.findByText(/the branch delete MAY HAVE BEEN DELIVERED/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/not deleted: outcome-unknown/)).toBeNull();
+  });
+
   it("shows a generic error when clearDoneTasks rejects", async () => {
     clearDoneTasks.mockRejectedValueOnce(new Error("network down"));
     const user = userEvent.setup();

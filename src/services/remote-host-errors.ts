@@ -106,6 +106,26 @@ export function unknownOutcomeText(what: string, detail?: string): string {
   }`;
 }
 
+/**
+ * The transport error text behind an unknown-outcome error: what belongs in
+ * `unknownOutcomeText`'s `detail`. Never the error's own message, which is
+ * already a sentence about the outcome (`HostOutcomeUnknownError`: "lost the
+ * outbound connection mid-request ... outcome is unknown";
+ * `MutationOutcomeUnknownError`: the whole `unknownOutcomeText`), so quoting it
+ * would say "MAY HAVE BEEN DELIVERED" twice.
+ */
+export function unknownOutcomeDetail(err: unknown): string | undefined {
+  // `MutationOutcomeUnknownError` wraps a `HostOutcomeUnknownError`, whose own
+  // message is again a sentence about the outcome: go down to the transport error.
+  let current: unknown = err;
+  while (current instanceof Error && isOutcomeUnknown(current) && isOutcomeUnknown(current.cause)) {
+    current = current.cause;
+  }
+  const cause = current instanceof Error ? current.cause : undefined;
+  if (cause === undefined || cause === null) return undefined;
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
 /** The agent responded — it IS reachable — but rejected the request (4xx):
  * a real client-side error (a malformed body, an unknown session id), not
  * a connectivity problem. Distinct from HostUnreachableError so a caller

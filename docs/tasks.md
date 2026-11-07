@@ -536,7 +536,10 @@ non-Abandon-path task) are not gated either way.
   discard whatever's there), and the branch is force-deleted last. A
   leftover session/worktree/branch after a teardown failure is a cleanup
   gap, not a correctness problem, since the task row itself is already
-  gone. Only offered for `failed`/`done` tasks — never one with a live
+  gone. When the host's connection drops after the worktree removal or the
+  branch delete was sent, that step may or may not have run: the response is
+  then a `200` with `{ outcomeUnknown, message }` (instead of the usual `204`)
+  and the UI shows the message as a toast. Only offered for `failed`/`done` tasks — never one with a live
   in-flight worker.
 - **Archive / Unarchive** (issue `#1015`) — `POST`/`DELETE
 /api/tasks/:id/archive`, orthogonal to `status`, not a transition: hides a
