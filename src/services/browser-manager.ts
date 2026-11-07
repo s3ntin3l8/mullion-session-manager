@@ -594,7 +594,7 @@ export class BrowserManager {
     });
 
     // Issue #381 (3.10) — installed once, here, at launch time — NOT inside
-    // the `download` action's own handler (src/routes/browser-automation.ts).
+    // the `download` action's own handler (src/services/browser-automation-actions.ts).
     // A download event fires during the PRECEDING action (e.g. a click on a
     // "Download CSV" button), not during a later `download` action call, so
     // a listener installed only when that action runs would frequently miss

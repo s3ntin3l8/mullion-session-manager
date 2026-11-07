@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { LOCAL_HOST_ID } from "../shared/constants.js";
-import { appVersion } from "../routes/server-info.js";
+import { appVersion } from "./app-version.js";
 import { getCachedAgents, type DetectedAgent } from "./agent-detect.js";
 import { getCachedCapabilities } from "./host-capabilities.js";
 import {

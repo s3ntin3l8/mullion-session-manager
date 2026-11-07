@@ -556,7 +556,18 @@ if (options.update) {
       }))
       .sort((a, b) => `${a.from} -> ${a.to}`.localeCompare(`${b.from} -> ${b.to}`)),
   };
-  writeFileSync(baselinePath, `${JSON.stringify(updated, null, 2)}\n`);
+  // The file is written through the repo's own Prettier, with the repo's own
+  // config: `--update` rewrites this file, so what it writes has to be
+  // Prettier-clean — otherwise the commit that used `--update` fails
+  // `npm run format:check`, and a check that writes a file the repo's
+  // formatter rejects is a check nobody can use.
+  const { default: prettier } = await import("prettier");
+  const prettierConfig = (await prettier.resolveConfig(baselinePath)) ?? {};
+  const formatted = await prettier.format(`${JSON.stringify(updated, null, 2)}\n`, {
+    ...prettierConfig,
+    filepath: baselinePath,
+  });
+  writeFileSync(baselinePath, formatted);
   console.log(
     `Updated ${BASELINE_PATH}: ${updated.cycles.length} cycle group(s), ${updated.inversions.length} inversion(s).`,
   );

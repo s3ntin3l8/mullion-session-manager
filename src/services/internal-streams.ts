@@ -1,26 +1,29 @@
+// The agent-side bodies of `/internal/ws/attach`, `/internal/ws/events` and
+// `/internal/ws/ssh-agent` — shared by the inbound routes (routes/internal.ts)
+// and the streams carried over the outbound channel (#2571,
+// services/agent-channel-streams.ts) so both transports validate and behave
+// identically. The socket may be a real WebSocket or a ChannelSocket.
+//
+// They live in a service because the OUTBOUND channel's plugin
+// (src/plugins/agent-channel-client.ts)
+// serves the same streams, and a plugin importing a route inverts the
+// layering (routes -> services -> db, plugins above both) — issue #2413's
+// whole subject.
+
 import type { FastifyInstance } from "fastify";
-import { expandHome } from "../services/project-config.js";
+import { expandHome } from "./project-config.js";
 import { WebSocket as NodeWebSocket } from "ws";
-import { createMuxConnection } from "../services/ssh-agent-mux.js";
-import { pipeWsFrames, toWsUrl } from "../services/ws-pipe.js";
-import { getPinnedWsAgent } from "../services/pinned-connect.js";
-import {
-  normalizePreviewDestination,
-  CONFIGURED_PREVIEW_POLICY,
-} from "../services/preview-targets.js";
-import { attachSocketToSession } from "./terminal.js";
-import { attachLocalEventsSocket, attachCursorsAndSeenBroadcast } from "./events.js";
+import { createMuxConnection } from "./ssh-agent-mux.js";
+import { pipeWsFrames, toWsUrl } from "./ws-pipe.js";
+import { getPinnedWsAgent } from "./pinned-connect.js";
+import { normalizePreviewDestination, CONFIGURED_PREVIEW_POLICY } from "./preview-targets.js";
+import { attachSocketToSession } from "./session-attach.js";
+import { attachLocalEventsSocket, attachCursorsAndSeenBroadcast } from "./session-events.js";
 import {
   MAX_SESSION_ENV_ENTRIES,
   MAX_SESSION_ENV_VALUE_LENGTH,
   SESSION_ID_PATTERN,
-} from "./internal-schemas.js";
-
-// The agent-side bodies of `/internal/ws/attach`, `/internal/ws/events` and
-// `/internal/ws/ssh-agent`, shared by the inbound routes (routes/internal.ts)
-// and the streams carried over the outbound channel (#2571,
-// services/agent-channel-streams.ts) so both transports validate and behave
-// identically. The socket may be a real WebSocket or a ChannelSocket.
+} from "./session-limits.js";
 
 /** Why an attach request must be refused, or null when it is acceptable. The
  * checks `/internal/ws/attach` runs before the upgrade completes. */

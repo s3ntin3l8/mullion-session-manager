@@ -1,20 +1,14 @@
 import type { FastifyInstance } from "fastify";
 import { runtimeEnvDefaults } from "../services/runtime-config.js";
-import fs from "node:fs";
-import { fileURLToPath } from "node:url";
 import { resolveTaskMasterConfig } from "../services/task-config.js";
 
-// Read once at module load — package.json never changes at runtime, and this
-// avoids a filesystem hit on every request. Resolved relative to this file
-// (not process.cwd()) so it's correct regardless of where the process is
-// launched from, matching the pattern other path-resolution in this repo
-// uses (see pty-manager.ts's constructor comment on SESSIONS_DIR).
-const packageJsonPath = fileURLToPath(new URL("../../package.json", import.meta.url));
-// Exported for reuse by src/routes/updates.ts, which needs the same
-// "what version am I" value to compare against the latest GitHub release.
-export const appVersion =
-  (JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as { version?: string }).version ??
-  "unknown";
+// The running version lives in a service: two services need it (host-agents.ts
+// and placement.ts), and a service importing a route file inverts the
+// layering (issue #2413). Re-exported here so every existing importer —
+// src/routes/updates.ts, src/routes/hosts.ts, src/routes/internal.ts and the
+// tests — keeps its import path unchanged.
+import { appVersion } from "../services/app-version.js";
+export { appVersion };
 
 /**
  * The version this instance shows to users (the toolbar label, Settings -> Server

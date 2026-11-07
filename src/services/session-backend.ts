@@ -55,7 +55,7 @@ import {
   rebaseBranch,
   type GitBranchOpResult,
 } from "./git-branch-ops.js";
-import type { PromoteDecision } from "../plugins/hooks.js";
+import type { PromoteDecision } from "../shared/promote-decision.js";
 import { adapterHasInitialPromptArgs } from "./hook-adapters/index.js";
 import { compileOutputMatcher, waitForOutput } from "./output-wait.js";
 import { gateOperation, unsupportedOperation } from "./host-agents.js";

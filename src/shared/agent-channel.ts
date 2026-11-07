@@ -6,11 +6,13 @@
 // After `ready` the socket carries the binary mux of services/ssh-agent-mux.ts.
 // docs/agent-channel.md is the prose contract.
 
+import type { WebSocket as NodeWebSocket } from "ws";
 import {
   isProtocolCompatible,
   PROTOCOL_VERSION,
   type AgentProtocolInfo,
 } from "./agent-protocol.js";
+import type { MuxConnection } from "../services/ssh-agent-mux.js";
 
 export const AGENT_CHANNEL_PATH = "/ws/agent-channel";
 
@@ -242,4 +244,29 @@ export interface HostChannelStatus {
   status: "connected" | "bound to the outbound channel, not connected" | "not connected";
   connectedAt: string | null;
   carriedOperations: string[];
+}
+
+/** A live, authenticated outbound channel from one execution agent.
+ *
+ * It lives here rather than in src/plugins/agent-channel.ts because two
+ * SERVICES consume it (agent-channel-tunnel.ts and agent-channel-streams.ts),
+ * and a service importing a plugin inverts the layering (routes -> services
+ * -> db, plugins above both) — issue #2413's whole subject. The plugin
+ * re-exports it, so every existing importer keeps its path.
+ */
+export interface ConnectedAgentChannel {
+  readonly hostId: string;
+  readonly socket: NodeWebSocket;
+  readonly mux: MuxConnection;
+  readonly connectedAt: number;
+  readonly protocolVersion: number;
+  readonly negotiatedOperations: readonly string[];
+  /** See AgentChannelReadyFrame.carriedOperations. */
+  readonly carriedOperations: readonly string[];
+  /** Set by `close` when the primary ended the channel because the host's
+   * identity was revoked / deleted or its credential expired (#2451), so an
+   * in-flight operation can fail as rejected rather than unreachable. */
+  terminal: "revoked" | "expired" | null;
+  /** Closes the socket with an application code. */
+  close(code: number, reason: string): void;
 }

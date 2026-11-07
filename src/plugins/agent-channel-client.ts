@@ -15,7 +15,7 @@ import {
   attachQueryError,
   configuredPreviewQueryError,
   previewQueryError,
-} from "../routes/internal-streams.js";
+} from "../services/internal-streams.js";
 import { toWsUrl } from "../services/ws-pipe.js";
 import { localProtocolInfo } from "../shared/agent-protocol.js";
 import {

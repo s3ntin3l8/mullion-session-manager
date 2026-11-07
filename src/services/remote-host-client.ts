@@ -61,7 +61,7 @@ export {
 } from "./remote-host-errors.js";
 import { assertAllowedUrl, getPinnedDispatcher, getPinnedWsAgent } from "./pinned-connect.js";
 import type { UrlGuardPolicy } from "./url-guard.js";
-import type { PromoteDecision } from "../plugins/hooks.js";
+import type { PromoteDecision } from "../shared/promote-decision.js";
 import type {
   ClearOrphanedTaskWorktreeResult,
   CommitWipChangesResult,

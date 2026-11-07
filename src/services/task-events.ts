@@ -14,7 +14,7 @@ export type { TaskEvent };
 // events, deliberately NOT built on pty-manager.ts's NotificationEvent
 // model. That model is per-session by construction at four independent
 // layers: the type itself (`sessionId: number`), server-side replay/filter
-// keying (routes/events.ts), the frontend's wire-frame validator (which
+// keying (services/session-events.ts), the frontend's wire-frame validator (which
 // hard-rejects any frame lacking a numeric sessionId — eventsClient.ts),
 // and the store's `Record<number, NotificationEvent[]>` slice, rendered by
 // indexing off the sessions list (NotificationBell.tsx). A task in

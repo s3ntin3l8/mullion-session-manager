@@ -2,15 +2,17 @@ import type net from "node:net";
 
 // Phase 4 (#186) — a minimal WS-shaped façade over ONE multiplexed NDJSON
 // stream on the control socket (src/plugins/control-socket.ts), keyed by the
-// request's own `id`. Exists so `attachSocketToSession`/`proxyToRemoteAttach`
-// (routes/terminal.ts) — written once against a real `@fastify/websocket`
+// request's own `id`. Exists so `attachSocketToSession`
+// (services/session-attach.ts) and `proxyToRemoteAttach` (routes/terminal.ts) —
+// written once against a real `@fastify/websocket`
 // WebSocket — work completely unmodified against this transport too: this
 // class implements exactly the subset of the WS surface those functions
 // actually call, nothing more.
 //
 // `SocketData`/`SocketLike` live here (the concrete implementation), not in
-// routes/terminal.ts (a consumer) — terminal.ts imports them from this
-// module instead, so services/ never depends on routes/.
+// the modules that consume them (services/session-attach.ts,
+// routes/terminal.ts) — they import them from this module instead, so
+// services/ never depends on routes/.
 //
 // Framing: a raw PTY byte chunk becomes `{id, type:"data", b64}`; any other
 // `send()` call is assumed to already be a JSON-encoded control message
@@ -23,8 +25,9 @@ import type net from "node:net";
 export type SocketData = string | Buffer | ArrayBuffer | Buffer[];
 
 /** The exact subset of `@fastify/websocket`'s WebSocket surface
- * attachSocketToSession/proxyToRemoteAttach (routes/terminal.ts) actually
- * call — generalized (rather than importing the real `WebSocket` type) so
+ * attachSocketToSession (services/session-attach.ts) and proxyToRemoteAttach
+ * (routes/terminal.ts) actually call — generalized (rather than importing the
+ * real `WebSocket` type) so
  * this class can stand in for a real WS connection without either function
  * knowing which transport it's actually talking to. A real
  * `@fastify/websocket` socket satisfies this structurally, unchanged. */
@@ -47,7 +50,7 @@ export interface SocketLike {
 export const WRITE_HARD_CEILING_BYTES = 16 * 1024 * 1024;
 
 /** Per-channel ceiling on `bufferedBytes` (#1546). The soft 4 MiB drop in
- * routes/terminal.ts only protects the PTY-output path; this bounds ANY
+ * services/session-attach.ts only protects the PTY-output path; this bounds ANY
  * sender (proxied remote-attach frames, control messages) one channel at a
  * time, so a single stalled stream is closed before it can consume the whole
  * connection-level WRITE_HARD_CEILING_BYTES (16 MiB) and take every other

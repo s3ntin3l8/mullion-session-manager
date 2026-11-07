@@ -1,7 +1,7 @@
 import { Readable } from "node:stream";
 import type { FastifyInstance } from "fastify";
 import { type MuxChannel, MuxBusyError } from "./ssh-agent-mux.js";
-import type { ConnectedAgentChannel } from "../plugins/agent-channel.js";
+import type { ConnectedAgentChannel } from "../shared/agent-channel.js";
 import {
   HostBusyError,
   HostOutcomeUnknownError,
