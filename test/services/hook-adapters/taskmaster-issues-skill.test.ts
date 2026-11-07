@@ -335,3 +335,17 @@ describe("taskmaster-issues skill — governs every agent-filed issue, not only 
     expect(skillBody).toMatch(/not by writing "blocked by #N" in\s+prose/);
   });
 });
+
+describe("taskmaster-issues skill — the wiring rules for writing a spec body", () => {
+  it("pins the three rules and the clauses that scope them", () => {
+    // Collapse whitespace once so a cosmetic reflow never turns a pin red.
+    const flat = skillBody.replace(/\s+/g, " ");
+    expect(flat).toMatch(/\*\*Name the producer and the consumer of anything new\.\*\*/);
+    expect(flat).toMatch(/passes every test that sets it by hand/);
+    expect(flat).toMatch(/\*\*Give the search, not the list, for a family of call sites\.\*\*/);
+    expect(flat).toMatch(/git grep "instanceof HostUnreachableError"/);
+    expect(flat).toMatch(/\*\*One entry-point test per behavioural claim\.\*\*/);
+    expect(flat).toMatch(/When the behaviour is only observable at such a boundary/);
+    expect(flat).toMatch(/pure resolver or parser is its own entry point/);
+  });
+});

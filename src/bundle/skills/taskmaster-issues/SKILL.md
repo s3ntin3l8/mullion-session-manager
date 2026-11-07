@@ -142,6 +142,28 @@ conclusion instead.
 checkable by reading the changed code; "improve error handling" is not —
 and your body is literally what the review agent judges the diff against.
 
+**Name the producer and the consumer of anything new.** A new field, flag,
+option, capability or exported helper in Scope says who sets it and who reads
+it ("`Target.endpoint` is set by `resolveTarget` from the session's preview
+and read by `closeSessionBrowserBindings`"). If the issue only defines it,
+say so under Out of scope and file the wiring issue. A definition with no
+producer passes every test that sets it by hand, and the reviewer sees a diff
+that looks complete.
+
+**Give the search, not the list, for a family of call sites.** When the change
+is "every place that does X", name the search that finds them (`git grep
+"instanceof HostUnreachableError"`, `git grep "openChannel("`) and say all
+matches are in scope; line numbers are examples. A list of sites invites a
+worker to fix exactly those lines and stop.
+
+**One entry-point test per behavioural claim.** Each claim in Scope
+("retried", "closed on session end", "reports busy as 503") names a test
+through the real entry point: the route via `app.inject()`, the reconciler
+tick, the real mux. When the behaviour is only observable at such a boundary,
+a test that calls the new function directly, spies on it, or mocks the
+component the claim is about does not satisfy it. (A pure resolver or parser
+is its own entry point, and testing it directly is fine.)
+
 **State non-goals explicitly.** An "Out of scope" line keeps a worker from
 wandering, and stops a reviewer flagging a deliberate omission as a
 defect.
@@ -300,6 +322,12 @@ Review relay → Review policy → Model setting).
   "`Manual: true` is the exception, not the default" above.
 - Forgetting `Manual: true` on something that genuinely needs a human to
   weigh in before work starts, and being surprised when it auto-claims.
+- A new option or helper with no named producer and consumer — the PR
+  passes review and the feature is never wired.
+- A list of call sites instead of the search that finds them — the worker
+  fixes exactly those lines and the rest keep the old behaviour.
+- A behavioural claim whose only test injects the thing under test — the test
+  passes whether or not the product ever reaches it.
 - Sequencing a roadmap with parent/sub-issue nesting instead of
   `blocked_by` — nesting doesn't gate auto-claim, only dependencies do.
 

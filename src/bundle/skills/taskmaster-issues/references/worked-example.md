@@ -15,6 +15,7 @@ outbound mailer silently drops it.
 ## Scope
 
 - [ ] `updateEmail()` rejects a malformed address instead of writing it, using the existing `isValidEmail()` helper in `src/services/validate.ts`.
+- [ ] Every caller of `updateEmail()` (`git grep "updateEmail("`) handles the rejection; the route below is the only one today.
 - [ ] `POST /api/users/:id/email` returns 400 with a clear message when `updateEmail()` rejects.
 - [ ] Test coverage: one rejected malformed address, one accepted valid address, both via `app.inject()` against the route.
 - [ ] Update `docs/api.md`'s `/api/users/:id/email` entry to document the new 400 case.
