@@ -726,14 +726,8 @@ export class BrowserManager {
   /** `forgetTarget` for every target of one checkout: each running endpoint,
    * each endpoint recorded in the checkout's index (stopped contexts, whose
    * files are named by a one-way digest and could not be found otherwise),
-   * any `extraEndpoints` the caller knows of, and the default-endpoint
-   * target. */
-  async forgetCheckout(
-    projectId: number,
-    hostId: string,
-    checkoutRoot: string,
-    extraEndpoints: readonly string[] = [],
-  ): Promise<void> {
+   * and the default-endpoint target. */
+  async forgetCheckout(projectId: number, hostId: string, checkoutRoot: string): Promise<void> {
     const targets = new Map<string, BrowserTarget>();
     for (const managed of this.listForProject(projectId)) {
       if (managed.target.checkoutRoot === checkoutRoot) {
@@ -741,8 +735,7 @@ export class BrowserManager {
       }
     }
     const indexFile = endpointIndexPath(this.dataDir, projectId, checkoutRoot);
-    const endpoints = [...readEndpointIndex(indexFile), ...extraEndpoints];
-    for (const endpoint of endpoints) {
+    for (const endpoint of readEndpointIndex(indexFile)) {
       const t: BrowserTarget = { projectId, hostId, checkoutRoot, legacy: false, endpoint };
       targets.set(browserTargetKey(t), t);
     }

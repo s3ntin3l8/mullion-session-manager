@@ -28,6 +28,7 @@ import {
   syncWorktree,
   trackPreviewWorktree,
 } from "../../src/services/git-worktree.js";
+import { trackLocalPreviewWorktree } from "../helpers/preview-worktree.js";
 import { listWorktrees } from "../../src/services/git-refs.js";
 import { gitEnv } from "../../src/services/git-env.js";
 import { clearGitStatusCacheForTests } from "../../src/services/git-status.js";
@@ -634,7 +635,7 @@ describe("cleanupPreviewWorktree (pendingRemoval retry)", () => {
   });
 
   it("marks the entry pendingRemoval on a failed removal, then clears it once removal succeeds", async () => {
-    trackPreviewWorktree(sessionId, {
+    trackLocalPreviewWorktree(sessionId, {
       worktreePath: "/nonexistent/path",
       branch: "main",
       worktreeRefresh: false,
@@ -662,7 +663,7 @@ describe("cleanupPreviewWorktree (pendingRemoval retry)", () => {
     // a second cleanup attempt succeeds and clears it from the map.
     const created = await checkoutBranchWorktree(tmpDir, "main");
     expect(created).not.toBeNull();
-    trackPreviewWorktree(sessionId, {
+    trackLocalPreviewWorktree(sessionId, {
       worktreePath: created!.path,
       branch: "main",
       worktreeRefresh: false,
@@ -757,10 +758,10 @@ describe("preview worktree host-routed remove/sync closures (issue #345)", () =>
     expect(getPreviewWorktree(sessionId)?.pendingRemoval).toBe(true);
   });
 
-  it("omitting the closures preserves today's local-only behavior (falls back to real git)", async () => {
+  it("a local tracked preview is removed through its remove closure (git, for a local checkout)", async () => {
     const created = await checkoutBranchWorktree(tmpDir, "main");
     expect(created).not.toBeNull();
-    trackPreviewWorktree(sessionId, {
+    trackLocalPreviewWorktree(sessionId, {
       worktreePath: created!.path,
       branch: "main",
       worktreeRefresh: false,
@@ -1228,7 +1229,7 @@ describe("removeListedWorktree (issue #442)", () => {
     // A distinct, high sessionId avoids colliding with anything else
     // touching the shared module-level previewWorktrees map in this file.
     const sessionId = Math.floor(Math.random() * 1_000_000) + 800_000;
-    trackPreviewWorktree(sessionId, {
+    trackLocalPreviewWorktree(sessionId, {
       worktreePath: created!.path,
       branch: "main",
       worktreeRefresh: true,
@@ -1256,7 +1257,7 @@ describe("removeListedWorktree (issue #442)", () => {
       parentCwd: tmpDir,
       projectId: 1,
     };
-    trackPreviewWorktree(sessionId, previewInfo);
+    const tracked = trackLocalPreviewWorktree(sessionId, previewInfo);
 
     // Force `git worktree remove` itself to fail (a real, reproducible
     // failure, not a mock — this repo's own test convention) by denying
@@ -1270,7 +1271,7 @@ describe("removeListedWorktree (issue #442)", () => {
       // The whole point of the fix: a failed removal must not permanently
       // and silently stop the sync tick for a worktree that's still on
       // disk — the entry is re-tracked exactly as it was.
-      expect(getPreviewWorktree(sessionId)).toEqual(previewInfo);
+      expect(getPreviewWorktree(sessionId)).toEqual(tracked);
     } finally {
       fs.chmodSync(adminDir, 0o700);
       deletePreviewWorktree(sessionId);
@@ -1281,7 +1282,7 @@ describe("removeListedWorktree (issue #442)", () => {
     const created = await checkoutBranchWorktree(tmpDir, "main");
     expect(created).not.toBeNull();
     const sessionId = Math.floor(Math.random() * 1_000_000) + 800_000;
-    trackPreviewWorktree(sessionId, {
+    trackLocalPreviewWorktree(sessionId, {
       worktreePath: created!.path,
       branch: "main",
       worktreeRefresh: true,

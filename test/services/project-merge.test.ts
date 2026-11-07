@@ -225,17 +225,17 @@ describe("project-merge", () => {
       expect(app.db.select().from(projectPreviewTargets).get()?.projectId).toBe(survivorId);
     });
 
-    it("pins host-less legacy sessions to the duplicate's host, re-keys live sessions and closes the duplicate's browser", () => {
+    it("pins host-less legacy sessions to the duplicate's host, re-keys live sessions and forgets the duplicate's browser", () => {
       const legacy = app.db
         .insert(sessions)
         .values({ projectId: dupId, command: "bash", status: "active" })
         .returning()
         .get();
       const repoint = vi.spyOn(app.pty, "repointProject");
-      const closeBrowser = vi.spyOn(app.browser, "closeForProject").mockResolvedValue();
+      const forgetBrowser = vi.spyOn(app.browser, "forgetProject").mockResolvedValue();
       expect(merge().ok).toBe(true);
       expect(repoint).toHaveBeenCalledWith(dupId, survivorId);
-      expect(closeBrowser).toHaveBeenCalledWith(dupId);
+      expect(forgetBrowser).toHaveBeenCalledWith(dupId);
       expect(app.db.select().from(sessions).where(eq(sessions.id, legacy.id)).get()?.hostId).toBe(
         macId,
       );

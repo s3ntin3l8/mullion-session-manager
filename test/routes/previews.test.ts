@@ -14,7 +14,8 @@ import {
   upsertBranchPreview,
 } from "../../src/services/preview-registry.js";
 import * as branchPreviewModule from "../../src/services/branch-preview.js";
-import { trackPreviewWorktree, deletePreviewWorktree } from "../../src/services/git-worktree.js";
+import { deletePreviewWorktree } from "../../src/services/git-worktree.js";
+import { trackLocalPreviewWorktree } from "../helpers/preview-worktree.js";
 import { verifyPreviewToken } from "../../src/services/preview-auth.js";
 
 const tmpDb = path.join(os.tmpdir(), `previews-test-${process.pid}.db`);
@@ -499,7 +500,7 @@ describe("previews route (issue #28)", () => {
       vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue({
         liveStatus: vi.fn().mockResolvedValue({}),
       } as unknown as ReturnType<typeof sessionBackendModule.resolveBackend>);
-      trackPreviewWorktree(sessionId, {
+      trackLocalPreviewWorktree(sessionId, {
         worktreePath: path.join(cwd, "wt"),
         branch: "feat/worktree",
         worktreeRefresh: false,

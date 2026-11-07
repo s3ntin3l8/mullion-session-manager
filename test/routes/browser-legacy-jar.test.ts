@@ -213,6 +213,24 @@ describe("legacy browser cookie jar and mixed-version closes (#2701)", () => {
     expect(listSessionBrowserBindings(primary, sessionId)).toHaveLength(1);
   });
 
+  it("a preview that appears after the first resolve does not re-key an open panel", async () => {
+    // The endpoint is fixed at the session's first browser resolve. A preview
+    // accepted afterwards must not give use_browser a different key (a second
+    // context, and the first one leaked on close).
+    const { id, dir } = addLocalProject();
+    const sessionId = addSession(id, dir);
+    expect((await open(sessionId)).statusCode).toBe(200); // no preview yet
+    expect(listSessionBrowserBindings(primary, sessionId)).toEqual([
+      expect.objectContaining({ targetEndpoint: "" }),
+    ]);
+    addPreview(id, sessionId, "arrives-late");
+
+    expect((await open(sessionId)).statusCode).toBe(200);
+    expect(primary.browser.instanceCount).toBe(1);
+    const [binding] = listSessionBrowserBindings(primary, sessionId);
+    expect(binding.targetEndpoint).toBe("");
+  });
+
   it("getOrBindEndpoint is a compare-and-set: the first endpoint wins for both callers", () => {
     const { id, dir } = addLocalProject();
     const sessionId = addSession(id, dir);
@@ -320,6 +338,59 @@ describe("legacy browser cookie jar and mixed-version closes (#2701)", () => {
         closeSessionBrowserBindings(primary, sessionId);
         await vi.waitFor(() => expect(closes).toBe(1));
         expect(contexts.size).toBe(0);
+      } finally {
+        await old.close();
+      }
+    });
+
+    it("a real old agent still closes a session whose binding already carries an endpoint", async () => {
+      // The binding was recorded while the host spoke endpoints; the agent now
+      // refuses an `endpoint` query parameter outright (its schema is strict).
+      // The close must reach it without that parameter, not 400 into a leak.
+      let closes = 0;
+      const oldQuery = {
+        type: "object",
+        additionalProperties: false,
+        required: ["projectId", "hostId", "checkoutRoot"],
+        properties: {
+          projectId: { type: "number" },
+          hostId: { type: "string" },
+          checkoutRoot: { type: "string" },
+          legacy: { type: "string" },
+        },
+      };
+      const { app: old, port } = await agentApp((a) => {
+        a.post("/internal/browser/close", { schema: { querystring: oldQuery } }, async () => {
+          closes++;
+          return { ok: true };
+        });
+      });
+      try {
+        const ops = AGENT_OPERATIONS.filter((op) => op !== "browser-endpoints");
+        const hostId = await addHost(port, ops);
+        const dir = "/work/old-agent-bound";
+        const projectId = primary.db
+          .insert(projects)
+          .values({ name: `bl-${++n}`, cwd: dir, hostId })
+          .returning({ id: projects.id })
+          .get().id;
+        const sessionId = addSession(projectId, dir, hostId);
+        recordSessionBrowserBinding(primary, sessionId, {
+          projectId,
+          hostId,
+          checkoutRoot: dir,
+          endpoint: "bound-slug",
+          legacy: true,
+        });
+        closeSessionBrowserBindings(primary, sessionId);
+        await vi.waitFor(() => expect(closes).toBeGreaterThan(0), { timeout: 8000 });
+        expect(
+          primary.db
+            .select()
+            .from(pendingBrowserCloses)
+            .where(eq(pendingBrowserCloses.projectId, projectId))
+            .all(),
+        ).toEqual([]);
       } finally {
         await old.close();
       }

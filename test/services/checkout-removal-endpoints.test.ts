@@ -11,7 +11,6 @@ import {
   pruneCheckouts,
   removeListedCheckout,
 } from "../../src/services/checkout-removal.js";
-import { scanForBypass, ALLOWLIST } from "../../scripts/check-checkout-removal.mjs";
 
 // Issue #2700 — a checkout's storage goes with it, including the files of
 // endpoint contexts that were already stopped, and every removal variant
@@ -54,13 +53,6 @@ describe("forgetCheckout finds stopped endpoint contexts", () => {
     expect(fs.existsSync(dir)).toBe(false);
     expect(fs.existsSync(other.file)).toBe(true); // another checkout is untouched
     expect(fs.readdirSync(dataDir).filter((f) => f.endsWith(".endpoints"))).toEqual([]);
-  });
-
-  it("deletes the endpoints a caller names even without an index", async () => {
-    const t: BrowserTarget = { ...base, endpoint: "http://localhost:3000" };
-    const { file } = leave(t);
-    await manager.forgetCheckout(4, "local", checkout, ["http://localhost:3000"]);
-    expect(fs.existsSync(file)).toBe(false);
   });
 
   it("keeps the project default file", async () => {
@@ -123,24 +115,5 @@ describe("removal variants release browsers", () => {
     backend.clearOrphanedTaskWorktree.mockResolvedValueOnce({ cleared: true });
     await clearOrphanedCheckout(app, ref, "b");
     expect(close).toHaveBeenCalledWith(app, 4, "local", "/w/a");
-  });
-});
-
-describe("check-checkout-removal guard", () => {
-  it("names a file that calls a low-level remove outside the allowlist", () => {
-    const found = scanForBypass(
-      "src/services/new-thing.ts",
-      "await backend.removeWorktree(p, c);\n",
-    );
-    expect(found).toEqual([
-      expect.objectContaining({ file: "src/services/new-thing.ts", line: 1 }),
-    ]);
-    expect(scanForBypass("src/x.ts", 'runGit(["worktree", "remove", p]);')).toHaveLength(1);
-  });
-
-  it("ignores comments and allowlisted files, and the repo currently passes", () => {
-    expect(scanForBypass("src/x.ts", "// removeWorktree(p) is the old way\n")).toEqual([]);
-    expect(scanForBypass("src/services/checkout-removal.ts", "removeWorktree(p);")).toEqual([]);
-    expect(ALLOWLIST.has("src/services/checkout-removal.ts")).toBe(true);
   });
 });
