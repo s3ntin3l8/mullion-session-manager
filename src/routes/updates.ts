@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { appVersion } from "./server-info.js";
+import { reportedVersion } from "./server-info.js";
 import { checkForUpdate, UpdateCheckError } from "../services/update-checker.js";
 import {
   applyUpdateSchema,
@@ -59,7 +59,7 @@ export async function updatesRoute(app: FastifyInstance) {
         return reply.tooManyRequests("too many forced update checks — try again later");
       }
       try {
-        return await checkForUpdate(repo, appVersion, applyAvailable, force);
+        return await checkForUpdate(repo, reportedVersion(app), applyAvailable, force);
       } catch (err) {
         if (!(err instanceof UpdateCheckError)) throw err;
         app.log.warn({ repo, statusCode: err.statusCode }, "update check unavailable");

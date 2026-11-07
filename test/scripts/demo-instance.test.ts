@@ -130,6 +130,11 @@ describe("releaseTag", () => {
     expect(demo.releaseTag("0.3.58", { newer: false })).toBe("v0.3.58");
   });
 
+  it("keeps the update banner one minor above the fixed demo version, whatever the checkout's version", () => {
+    expect(demo.DEMO_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(demo.releaseTag(demo.DEMO_VERSION)).toBe("v1.1.0");
+  });
+
   it("falls back to a far-future tag for a version it cannot parse", () => {
     expect(demo.releaseTag("next")).toBe("v999.0.0");
   });

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,6 +26,14 @@ import { seedDemo } from "./seed.mjs";
  */
 
 /**
+ * The version the demo reports instead of the checkout's (MULLION_DEMO_VERSION): it is
+ * printed in the toolbar, so a real one would change every screenshot and visual baseline
+ * at each release. The fake GitHub's release tag is derived from it, so the update banner
+ * stays one minor ahead.
+ */
+export const DEMO_VERSION = "1.0.0";
+
+/**
  * The release tag the fake GitHub reports: one minor above `version` (this
  * checkout's), so the update banner always shows whatever it is on, or `version`
  * itself when `newer` is false, so nothing is offered.
@@ -34,10 +42,6 @@ export function releaseTag(version, { newer = true } = {}) {
   const [major, minor] = version.split(".").map(Number);
   if (!Number.isInteger(major) || !Number.isInteger(minor)) return "v999.0.0";
   return newer ? `v${major}.${minor + 1}.0` : `v${version}`;
-}
-
-function checkoutVersion() {
-  return JSON.parse(readFileSync(path.join(REPO_ROOT, "package.json"), "utf8")).version;
 }
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -193,6 +197,8 @@ export async function startDemo({
       MULLION_GITHUB_API_URL: githubUrl,
       // Registers the demo-only fixture routes the seed uses (src/routes/demo-fixtures.ts).
       MULLION_DEMO: "true",
+      // The toolbar prints the version: a fixed one keeps screenshots and baselines the same across releases.
+      MULLION_DEMO_VERSION: DEMO_VERSION,
       // The default 300 requests a minute per address is a real deployment's abuse
       // guard. A renderer that loads the app dozens of times and polls for
       // readiness (visual-kit) hits it and gets 429 on every read, which leaves the
@@ -280,7 +286,7 @@ export async function startDemo({
     await symlink(path.join(REPO_ROOT, "drizzle"), path.join(runDir, "drizzle"));
     fakeGithub = await startFakeGithub({
       tickMs: githubTickMs,
-      latestRelease: releaseTag(checkoutVersion(), { newer: updateBanner }),
+      latestRelease: releaseTag(DEMO_VERSION, { newer: updateBanner }),
       now: nowMs,
     });
     const backendEnv = backendEnvFor(fakeGithub.url);

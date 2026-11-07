@@ -42,12 +42,14 @@ const PASSTHROUGH = [
 
 /**
  * The only MULLION_* keys the demo sets: no auth on a loopback-only instance,
- * and the base URL of the loopback fake GitHub API (scripts/demo/fake-github.mjs).
+ * the base URL of the loopback fake GitHub API (scripts/demo/fake-github.mjs), the demo flag
+ * and the fixed version it reports.
  */
 const ALLOWED_MULLION = new Set([
   "MULLION_TRUST_GATEWAY",
   "MULLION_GITHUB_API_URL",
   "MULLION_DEMO",
+  "MULLION_DEMO_VERSION",
 ]);
 
 /** The fake GitHub API is the only GitHub the demo may reach: loopback only. */

@@ -66,6 +66,10 @@ inherit `node_modules`: run `npm ci` at the repo root **and**
 demo projects, sessions and tasks, and prints its URL. Ctrl-C stops its
 sessions and deletes everything it created.
 
+The demo reports a fixed version (`DEMO_VERSION` in `scripts/demo/instance.mjs`, handed to the backend as
+`MULLION_DEMO_VERSION`), not the checkout's: the toolbar prints it, so a real one would change every screenshot and
+committed baseline at each release. Its fake GitHub offers the next minor, so the update banner still shows.
+
 Screenshots and visual checks run on [visual-kit](https://github.com/s3ntin3l8/visual-kit)
 (its `CONTRACT.md` is the spec), which needs Docker: it starts `make demo`, drives
 the scenes in `visual/scenes.json` in a pinned browser image, and stops the demo.

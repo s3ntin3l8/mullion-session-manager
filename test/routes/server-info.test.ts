@@ -193,4 +193,23 @@ describe("server-info route", () => {
     await app.close();
     delete process.env.DATABASE_URL;
   });
+
+  it("a demo instance reports MULLION_DEMO_VERSION; the key alone changes nothing", async () => {
+    process.env.DATABASE_URL = `file:${tmpDb}`;
+    process.env.MULLION_DEMO_VERSION = "1.0.0";
+    const real = await buildApp();
+    const realVersion = (await real.inject({ method: "GET", url: "/api/server-info" })).json()
+      .version;
+    await real.close();
+    expect(realVersion).not.toBe("1.0.0");
+
+    process.env.MULLION_DEMO = "true";
+    const demo = await buildApp();
+    const res = await demo.inject({ method: "GET", url: "/api/server-info" });
+    expect(res.json().version).toBe("1.0.0");
+    await demo.close();
+    delete process.env.MULLION_DEMO;
+    delete process.env.MULLION_DEMO_VERSION;
+    delete process.env.DATABASE_URL;
+  });
 });
