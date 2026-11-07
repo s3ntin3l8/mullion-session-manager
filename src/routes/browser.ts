@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
 import type { BrowserTarget } from "../services/browser-manager.js";
 import { resolveSessionBrowserTarget } from "../services/browser-target.js";
-import { beginBrowserAttach, recordSessionBrowserBinding } from "../services/session-browsers.js";
+import { beginBrowserAttach, recordBindingOrRelease } from "../services/session-browsers.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { resolveBrowserFramerate } from "../services/runtime-config.js";
@@ -34,6 +34,10 @@ import { getStoredSettings } from "../services/settings.js";
 // in practice.
 
 const BACKPRESSURE_MAX_BUFFERED_BYTES = 4 * 1024 * 1024;
+
+// How long a remote agent has to open the browser WebSocket upstream before the
+// attach is given up (and its in-flight claim on the target released).
+export const REMOTE_BROWSER_OPEN_TIMEOUT_MS = 15_000;
 
 // Mirrors routes/device.ts's own CLIPBOARD_MAX_BYTES (scrcpy server's
 // CONTROL_MSG_CLIPBOARD_TEXT_MAX_LENGTH) — that constant isn't exported (and
@@ -444,8 +448,22 @@ export async function attachSocketToBrowser(
 
   // #182 — "when a session spawns a browser pane, record the binding." An
   // agent host has no DB; the primary records the binding for its sessions.
-  if (app.hasDecorator("db")) recordSessionBrowserBinding(app, sessionId, target);
-  attachDone();
+  // A binding that cannot be recorded (the session row was deleted while the
+  // browser launched) releases the target instead of wedging it: the attach
+  // window is always ended and the context closed if nothing else uses it.
+  if (app.hasDecorator("db")) {
+    if (!recordBindingOrRelease(app, sessionId, target, attachDone)) {
+      if (socket.readyState === socket.OPEN) {
+        socket.send(
+          JSON.stringify({ type: "error", message: "Could not bind this session to its browser" }),
+        );
+        socket.close();
+      }
+      return;
+    }
+  } else {
+    attachDone();
+  }
 
   const { page, browser } = managed;
   let closed = false;
@@ -592,18 +610,45 @@ export function proxyToRemoteBrowser(
     upstream.send(data, { binary: isBinary });
   });
   browserSocket.on("close", closeUpstream);
+  // A socket error must not escape as an uncaught exception; the close that
+  // follows tears everything down.
+  browserSocket.on("error", (err) => {
+    app.log.warn({ err, hostId, sessionId }, "browser socket error");
+  });
 
-  upstream.on("close", closeBrowser);
+  // An upstream that neither opens nor fails would keep the attach window (and
+  // so the target) pinned forever.
+  const openTimer = setTimeout(() => {
+    app.log.warn({ hostId, sessionId }, "remote browser ws upstream did not open in time");
+    closeUpstream();
+    closeBrowser();
+  }, REMOTE_BROWSER_OPEN_TIMEOUT_MS);
+  openTimer.unref();
+
+  upstream.on("close", () => {
+    clearTimeout(openTimer);
+    closeBrowser();
+  });
   upstream.on("error", (err) => {
+    clearTimeout(openTimer);
     app.log.error({ err, hostId, sessionId }, "remote browser ws upstream error");
     closeBrowser();
   });
   upstream.on("open", () => {
+    clearTimeout(openTimer);
     // A viewer that left while the upstream was connecting binds nothing.
-    if (browserSocket.readyState === browserSocket.OPEN) {
-      recordSessionBrowserBinding(app, sessionId, target);
+    if (browserSocket.readyState !== browserSocket.OPEN) {
+      attachDone();
+      closeUpstream();
+      return;
     }
-    attachDone();
+    if (!recordBindingOrRelease(app, sessionId, target, attachDone)) {
+      browserSocket.send(
+        JSON.stringify({ type: "error", message: "Could not bind this session to its browser" }),
+      );
+      closeUpstream();
+      browserSocket.close();
+    }
   });
   upstream.on("message", (data, isBinary) => {
     if (browserSocket.readyState !== browserSocket.OPEN) return;
@@ -648,7 +693,13 @@ export async function browserRoute(app: FastifyInstance): Promise<void> {
           if (!resolved.ok) {
             app.log.warn({ sessionId, reason: resolved.message }, "browser target unavailable");
             if (socket.readyState === socket.OPEN) {
-              socket.send(JSON.stringify({ type: "error", message: resolved.message }));
+              socket.send(
+                JSON.stringify({
+                  type: "error",
+                  message: resolved.message,
+                  ...(resolved.code ? { code: resolved.code } : {}),
+                }),
+              );
               socket.close();
             }
             return;

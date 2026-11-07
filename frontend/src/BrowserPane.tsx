@@ -3,6 +3,7 @@ import { RefreshIcon, WifiOffIcon } from "./ui/icons.js";
 import { Spinner } from "./ui/Spinner.js";
 import { isMacPlatform, macChordPress } from "./browserKeyMap.js";
 import { TextInput } from "./ui/primitives.js";
+import { browserApi } from "./api/browser.js";
 
 export interface BrowserPaneParams {
   sessionId: number;
@@ -24,6 +25,8 @@ interface ExitedMessage {
 interface ErrorMessage {
   type: "error";
   message: string;
+  /** `binding_unavailable`: the session's recorded browser target is gone. */
+  code?: string;
 }
 // Page -> host clipboard, sent by the server only in reply to this pane's
 // own `{type:"copy"}`/`{type:"cut"}` request (see the onKeyDown Ctrl/Cmd+C/X
@@ -50,7 +53,11 @@ function parseControlMessage(raw: string): ControlMessage | null {
   if (v.type === "title" && typeof v.title === "string") return { type: "title", title: v.title };
   if (v.type === "exited") return { type: "exited" };
   if (v.type === "error" && typeof v.message === "string") {
-    return { type: "error", message: v.message };
+    return {
+      type: "error",
+      message: v.message,
+      ...(typeof v.code === "string" ? { code: v.code } : {}),
+    };
   }
   if (v.type === "clipboard" && typeof v.text === "string") {
     return { type: "clipboard", text: v.text };
@@ -81,6 +88,11 @@ export function BrowserPane(props: {
   const [reconnectAttempt, setReconnectAttempt] = useState(0);
   const [addressInput, setAddressInput] = useState("");
   const [lastError, setLastError] = useState<string | null>(null);
+  // Set when the server refuses the attach because the session's recorded
+  // browser target is gone (its worktree was deleted, its host was removed):
+  // retrying cannot help, only unbinding can.
+  const [bindingError, setBindingError] = useState<string | null>(null);
+  const [unbinding, setUnbinding] = useState(false);
   // Exposes the mount effect's live `sendControl` (closed over the current
   // WebSocket) to the toolbar's back/forward/reload/navigate buttons,
   // rendered outside the effect — same ref-bridge pattern as TerminalPane's
@@ -92,6 +104,23 @@ export function BrowserPane(props: {
     onTitleChangeRef.current = props.onTitleChange;
   });
 
+  // "Re-bind" drops the dead binding and attaches again, which resolves the
+  // session's current host and checkout; "Unbind" only drops it (the next
+  // attach — a Retry, or reopening the pane — re-binds).
+  async function unbind(reattach: boolean): Promise<void> {
+    setUnbinding(true);
+    try {
+      await browserApi.unbindSessionBrowser(props.params.sessionId);
+      setBindingError(null);
+      if (reattach) retryRef.current();
+      else setLastError("Browser unbound. Retry to bind it to the session's current checkout.");
+    } catch (err) {
+      setLastError(`Could not unbind: ${(err as Error).message}`);
+    } finally {
+      setUnbinding(false);
+    }
+  }
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -101,6 +130,7 @@ export function BrowserPane(props: {
     let ws: WebSocket | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let reconnectAttempt = 0;
+    let bindingBlocked = false;
 
     function paintFrame(data: ArrayBuffer) {
       if (!ctx) return;
@@ -141,8 +171,10 @@ export function BrowserPane(props: {
 
       socket.addEventListener("open", () => {
         reconnectAttempt = 0;
+        bindingBlocked = false;
         setStatus("open");
         setLastError(null);
+        setBindingError(null);
       });
 
       socket.addEventListener("message", (event) => {
@@ -152,8 +184,14 @@ export function BrowserPane(props: {
           if (message.type === "url") setAddressInput(message.url);
           else if (message.type === "title") onTitleChangeRef.current?.(message.title);
           else if (message.type === "exited") setStatus("failed");
-          else if (message.type === "error") setLastError(message.message);
-          else if (message.type === "clipboard") {
+          else if (message.type === "error") {
+            if (message.code === "binding_unavailable") {
+              bindingBlocked = true;
+              setBindingError(message.message);
+            } else {
+              setLastError(message.message);
+            }
+          } else if (message.type === "clipboard") {
             // Page -> host clipboard, only ever in reply to our own
             // copy/cut request (see onKeyDown below) — never a page-
             // initiated write (issue #1478). Unlike DevicePane.tsx's
@@ -178,6 +216,12 @@ export function BrowserPane(props: {
 
       socket.addEventListener("close", () => {
         if (destroyed) return;
+        // The server refused the attach with a reason only an unbind clears;
+        // reconnecting would just hit it again.
+        if (bindingBlocked) {
+          setStatus("failed");
+          return;
+        }
         if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
           setStatus("failed");
           return;
@@ -194,6 +238,7 @@ export function BrowserPane(props: {
     retryRef.current = () => {
       if (reconnectTimer) clearTimeout(reconnectTimer);
       reconnectAttempt = 0;
+      bindingBlocked = false;
       connect();
     };
 
@@ -401,7 +446,29 @@ export function BrowserPane(props: {
       <div className="browser-pane-canvas-wrap">
         <canvas ref={canvasRef} className="browser-pane-canvas" tabIndex={0} />
         {lastError && <div className="browser-pane-error-toast">{lastError}</div>}
-        {status !== "open" && (
+        {bindingError && (
+          <div className="terminal-status-overlay failed" role="alert">
+            <WifiOffIcon size={22} style={{ color: "var(--r)" }} />
+            <span className="terminal-status-text">{bindingError}</span>
+            <div>
+              <button
+                className="terminal-status-retry"
+                disabled={unbinding}
+                onClick={() => void unbind(true)}
+              >
+                Re-bind
+              </button>{" "}
+              <button
+                className="terminal-status-retry"
+                disabled={unbinding}
+                onClick={() => void unbind(false)}
+              >
+                Unbind
+              </button>
+            </div>
+          </div>
+        )}
+        {status !== "open" && !bindingError && (
           <div className={`terminal-status-overlay ${status}`}>
             {status === "connecting" && (
               <>

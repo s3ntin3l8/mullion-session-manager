@@ -61,7 +61,7 @@ itself.
 mullion session list|get|children|wait|prompt|create|spawn-child|kill|rename|logs|transcript|exec
 mullion browser navigate|click|fill|type|press|select|check|uncheck|hover|
                 scroll|wait|dialog|get|eval|snapshot|screenshot|find|console|errors|
-                download
+                download|unbind
 mullion project list|actions|targets|dock|tooling
 mullion review [--pr <n>] [--repo <owner/name>] [--branch <b>] [--force]
 mullion review status [--pr <n>] [--repo <owner/name>] [--branch <b>]
@@ -123,6 +123,13 @@ iframe) aren't supported — `--frame` resolves one selector against the
 top-level page only. A ref returned from a `--frame`-scoped `snapshot`/
 `find` only resolves against that same frame — pass `--frame` again on the
 follow-up action, or the ref lookup won't find it.
+
+`mullion browser unbind [--session <id>]` is not an action: it drops the
+session's browser binding (the `browser.unbind` op, `DELETE
+/api/sessions/:id/browser`) so the next browser command re-binds to the
+session's current host and checkout. Run it when a browser command is refused
+with a "binding unavailable" reason (its worktree was deleted or its host
+removed); the error text says so.
 
 All 20 actions (19 `AgentAction` variants plus `find`) are exercised against
 a real Playwright page, not just ajv-validated, in

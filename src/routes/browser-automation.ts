@@ -8,7 +8,11 @@ import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import type { BrowserTarget, DownloadEntry } from "../services/browser-manager.js";
 import { resolveSessionBrowserTarget } from "../services/browser-target.js";
-import { recordSessionBrowserBinding } from "../services/session-browsers.js";
+import {
+  beginBrowserAttach,
+  recordBindingOrRelease,
+  recordSessionBrowserBinding,
+} from "../services/session-browsers.js";
 
 // Phase 3, issue #183 — REST API for an agent to control a session's bound
 // browser programmatically: navigate/snapshot/click/fill/eval/screenshot,
@@ -755,7 +759,12 @@ export async function executeBrowserFind(
 export async function browserAutomationRoute(app: FastifyInstance): Promise<void> {
   type Resolved =
     | { ok: true; target: BrowserTarget; page: Page | null }
-    | { ok: false; status: 400 | 404 | 501 | 502 | 503; message: string };
+    | {
+        ok: false;
+        status: 400 | 404 | 501 | 502 | 503;
+        message: string;
+        code?: "binding_unavailable";
+      };
 
   // The session's own execution target (host + checkout), resolved through the
   // same resolver as the browser panel, so the agent drives the browser the
@@ -772,7 +781,6 @@ export async function browserAutomationRoute(app: FastifyInstance): Promise<void
     // A remote target is driven by its own agent, whose browser setting
     // decides; this primary's switch only governs the browsers it hosts.
     if (target.hostId !== LOCAL_HOST_ID) {
-      recordSessionBrowserBinding(app, sessionId, target);
       return { ok: true, target, page: null };
     }
     if (!app.browserEnabled) {
@@ -796,8 +804,34 @@ export async function browserAutomationRoute(app: FastifyInstance): Promise<void
     }
   }
 
+  // Drives a remote target through its agent. The binding is recorded only once
+  // the agent has taken the call, so a refused or failed call leaves none (and
+  // an unreachable host is not "bound" to a browser that never opened). Until
+  // then the call counts as an attach in flight, which keeps a session ending
+  // meanwhile from closing the target. A binding that cannot be recorded
+  // releases the target (closed if nothing else uses it) but does not fail the
+  // call that already ran.
+  async function callRemote<T>(
+    sessionId: number,
+    target: BrowserTarget,
+    call: () => Promise<T>,
+  ): Promise<T> {
+    const attachDone = beginBrowserAttach(target);
+    try {
+      const result = await call();
+      recordBindingOrRelease(app, sessionId, target, attachDone);
+      return result;
+    } finally {
+      attachDone();
+    }
+  }
+
   function refuse(reply: FastifyReply, resolved: Extract<Resolved, { ok: false }>) {
-    return reply.send(app.httpErrors.createError(resolved.status, resolved.message));
+    const error = app.httpErrors.createError(resolved.status, resolved.message);
+    // The machine-readable reason (`binding_unavailable`) rides along in the
+    // body so a client can offer the way out instead of parsing the message.
+    if (resolved.code) Object.assign(error, { code: resolved.code });
+    return reply.send(error);
   }
 
   app.post<{ Params: { id: string }; Body: AgentAction }>(
@@ -813,10 +847,12 @@ export async function browserAutomationRoute(app: FastifyInstance): Promise<void
 
       if (!page) {
         try {
-          return await getRemoteHostClient(app, target.hostId).browserAutomationAction(
-            sessionId,
-            target,
-            request.body,
+          return await callRemote(sessionId, target, () =>
+            getRemoteHostClient(app, target.hostId).browserAutomationAction(
+              sessionId,
+              target,
+              request.body,
+            ),
           );
         } catch (err) {
           app.log.error(
@@ -852,10 +888,12 @@ export async function browserAutomationRoute(app: FastifyInstance): Promise<void
 
       if (!page) {
         try {
-          return await getRemoteHostClient(app, target.hostId).browserAutomationFind(
-            sessionId,
-            target,
-            request.body,
+          return await callRemote(sessionId, target, () =>
+            getRemoteHostClient(app, target.hostId).browserAutomationFind(
+              sessionId,
+              target,
+              request.body,
+            ),
           );
         } catch (err) {
           app.log.error(

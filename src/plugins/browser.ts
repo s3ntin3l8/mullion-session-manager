@@ -10,6 +10,8 @@ import { DEFAULT_SETTINGS, getStoredSettings } from "../services/settings.js";
 // Cheap, idempotent housekeeping — see BrowserManager.healthCheck's own
 // comment on why this evicts rather than proactively relaunches.
 const HEALTH_CHECK_INTERVAL_MS = 30_000;
+// How often queued remote closes are looked at; each is retried on its own backoff.
+export const PENDING_CLOSE_RETRY_INTERVAL_MS = 30_000;
 
 // Decorates app.browser with the Playwright browser-pool manager (Phase 3,
 // issue #179 — see src/services/browser-manager.ts for what it actually
@@ -59,19 +61,29 @@ export const browserPlugin = fp(async (app: FastifyInstance) => {
 
   let healthTimer: ReturnType<typeof setInterval> | null = null;
   if (enabled) {
-    healthTimer = setInterval(() => {
-      manager.healthCheck();
-      // Remote closes that could not be delivered (host offline, ...) retry
-      // here once their backoff is due; a no-op on an agent host (no DB).
-      void processPendingBrowserCloses(app);
-    }, HEALTH_CHECK_INTERVAL_MS);
+    healthTimer = setInterval(() => manager.healthCheck(), HEALTH_CHECK_INTERVAL_MS);
     // unref() so this timer alone never keeps the process (or, in tests, a
     // fastify instance that's about to be closed) alive.
     healthTimer.unref();
   }
 
+  // Remote closes that could not be delivered (host offline, ...) retry here
+  // once their backoff is due. Independent of `enabled`: the browsers that
+  // need closing run on OTHER hosts, whose own switch decides, so a primary
+  // with its own browser off must still chase them. An agent host has no DB
+  // (and no queue), so it needs no timer.
+  let closeRetryTimer: ReturnType<typeof setInterval> | null = null;
+  if (app.hasDecorator("db")) {
+    closeRetryTimer = setInterval(
+      () => void processPendingBrowserCloses(app),
+      PENDING_CLOSE_RETRY_INTERVAL_MS,
+    );
+    closeRetryTimer.unref();
+  }
+
   app.addHook("onClose", async () => {
     if (healthTimer) clearInterval(healthTimer);
+    if (closeRetryTimer) clearInterval(closeRetryTimer);
     await manager.closeAll();
   });
 });

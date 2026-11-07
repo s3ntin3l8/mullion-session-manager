@@ -187,7 +187,8 @@ export async function hostsRoute(app: FastifyInstance) {
       app,
       (id) => app.hostHeartbeatTracker?.getHealth(id).status ?? "pending",
     );
-    // Issue #2641 — browsers the primary gave up closing, by host.
+    // Issue #2641 — browsers the primary gave up closing, by host. (Listing
+    // also prunes pending closes of hosts that no longer exist, #2687.)
     const leakedByHost = new Map<string, number>();
     for (const leak of listLeakedBrowserCloses(app)) {
       leakedByHost.set(leak.hostId, (leakedByHost.get(leak.hostId) ?? 0) + 1);

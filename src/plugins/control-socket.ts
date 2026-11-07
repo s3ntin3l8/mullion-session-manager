@@ -2467,12 +2467,15 @@ export const OPS: Record<string, OpSpec> = {
     ["full", "session"],
     onSession((id, { body }) => {
       const { sessionId: _sessionId, ...findBody } = body ?? {};
-      return {
-        method: "POST",
-        url: `/api/sessions/${enc(id)}/browser/find`,
-        payload: json(findBody),
-      };
+      const url = `/api/sessions/${enc(id)}/browser/find`;
+      return { method: "POST", url, payload: json(findBody) };
     }),
+  ),
+  // The way out of a `binding_unavailable` browser: drops the session's
+  // binding so its next browser call resolves its current host and checkout.
+  "browser.unbind": routeOp(
+    ["full", "session"],
+    onSession((id) => ({ method: "DELETE", url: `/api/sessions/${enc(id)}/browser` })),
   ),
   // Read-only inspect of which browser pane(s) a session is bound to —
   // same target-id shape as sessions.get, no request body beyond sessionId.

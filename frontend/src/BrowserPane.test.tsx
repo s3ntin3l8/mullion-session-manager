@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, fireEvent, act } from "@testing-library/react";
 import { BrowserPane } from "./BrowserPane.js";
+import { browserApi } from "./api/browser.js";
 
 // Same fake-WebSocket shape as TerminalPane.test.tsx, extended to also track
 // message/close handlers (that file only ever needed "open"). BrowserPane
@@ -546,5 +547,69 @@ describe("BrowserPane", () => {
     const firstSocket = fakeSocket;
     rerender(<BrowserPane params={{ sessionId: 2 }} />);
     expect(firstSocket.close).toHaveBeenCalled();
+  });
+
+  describe("an unavailable binding (issue #2687)", () => {
+    const REASON =
+      "The browser's checkout /w/wt no longer exists. Unbind this session's browser to re-bind it.";
+
+    function refuse() {
+      openSocket();
+      emitControlMessage({ type: "error", code: "binding_unavailable", message: REASON });
+      act(() => {
+        fakeSocket._closeHandlers.forEach((h) => h());
+      });
+    }
+
+    it("shows the reason with Re-bind and Unbind, and does not retry the dead binding", () => {
+      vi.useFakeTimers();
+      try {
+        const { getByRole, getByText } = render(<BrowserPane params={{ sessionId: 7 }} />);
+        refuse();
+        expect(getByRole("alert").textContent).toContain(REASON);
+        expect(getByText("Re-bind")).toBeTruthy();
+        expect(getByText("Unbind")).toBeTruthy();
+        // The ordinary reconnect loop must not hammer a refusal that only an unbind clears.
+        const sockets = fakeSocket;
+        act(() => {
+          vi.advanceTimersByTime(20_000);
+        });
+        expect(fakeSocket).toBe(sockets);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("Re-bind calls the unbind route for the session and reconnects", async () => {
+      const unbind = vi
+        .spyOn(browserApi, "unbindSessionBrowser")
+        .mockResolvedValue({ ok: true, unbound: 1 });
+      const { getByText, queryByRole } = render(<BrowserPane params={{ sessionId: 7 }} />);
+      refuse();
+      const first = fakeSocket;
+      stubFakeWebSocket();
+      await act(async () => {
+        fireEvent.click(getByText("Re-bind"));
+      });
+      expect(unbind).toHaveBeenCalledWith(7);
+      expect(queryByRole("alert")).toBeNull();
+      expect(fakeSocket).not.toBe(first); // a fresh socket was opened
+    });
+
+    it("Unbind calls the unbind route without reconnecting", async () => {
+      const unbind = vi
+        .spyOn(browserApi, "unbindSessionBrowser")
+        .mockResolvedValue({ ok: true, unbound: 1 });
+      const { getByText } = render(<BrowserPane params={{ sessionId: 9 }} />);
+      refuse();
+      const first = fakeSocket;
+      stubFakeWebSocket();
+      await act(async () => {
+        fireEvent.click(getByText("Unbind"));
+      });
+      expect(unbind).toHaveBeenCalledWith(9);
+      expect(fakeSocket).not.toBe(first);
+      expect(fakeSocket.addEventListener).not.toHaveBeenCalled();
+    });
   });
 });
