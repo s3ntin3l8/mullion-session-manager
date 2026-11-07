@@ -65,6 +65,9 @@ its authorization are the ones the inbound transport runs. The differences:
   When all 64 outbound channel slots are busy, callers queue up to 5 seconds
   (`AGENT_CHANNEL_SLOT_WAIT_MS`) before failing with `HostBusyError`,
   which callers treat as retryable rather than marking the host unreachable.
+  The health ping follows the same rule: a `HostBusyError` means the channel is
+  up and the agent is serving, so `ping()` reports the host alive and the
+  heartbeat records no failure; only unreachable and timeout count against it.
 
 Since #2620 the same exchange also carries the file-browser transfers
 (`uploadProjectFile` / `downloadProjectFile`, with a streamed request body and a
@@ -79,6 +82,15 @@ health ping is `GET /internal/protocol` over the channel, not `/health`. The
 browser WebSocket stays on the inbound transport.
 
 ## Streams (#2571)
+
+Every stream opener passes `{ stream: true }` to `openChannel`: the attach and
+events streams, the control relay (both ends), the ssh-agent fan-out and each
+per-SSH-connection ssh-agent session channel. The mux counts streams
+separately from requests: a stream counter is incremented on a stream open and
+released on close (or a failed open), and `AGENT_CHANNEL_MAX_STREAM_CHANNELS` (32)
+applies to that counter only. In-flight requests and peer-opened channels no
+longer eat stream slots, and 32 open streams still leave
+`AGENT_CHANNEL_REQUEST_RESERVED_CHANNELS` (32) free for requests.
 
 Terminal attach, the events stream, the control relay and ssh-agent forwarding
 ride the channel when the host negotiated `channel-streams`. Each stream is one
@@ -126,6 +138,10 @@ attach query validation is shared, not copied.
   agent's sessions themselves keep running. The primary does **not** reopen a
   stream by itself: the browser's reconnect (attach), the event subscriber and the
   relay/ssh-agent fan-outs redial on their own backoff, over the channel again.
+  A fan-out skips a host bound to the channel while the channel is down (a debug
+  log line, no warning per attempt), and when the channel comes up the primary
+  reconnects that host's fan-outs immediately, whether or not the host also has
+  an address.
 - **Resume signal.** A stream reopened on a later connection of the same host
   (the primary compares the channel's `connectedAt`) carries `resumed: true` in
   its open head; the agent echoes it in the accept head, the socket exposes

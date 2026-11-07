@@ -51,7 +51,7 @@ import {
   AGENT_CHANNEL_STREAMS_OPERATION,
   type AgentChannelStreamKind,
 } from "../shared/agent-channel.js";
-import { HostRequestError, HostUnreachableError } from "./remote-host-errors.js";
+import { HostRequestError, HostUnreachableError, isHostBusyError } from "./remote-host-errors.js";
 
 export {
   HostOutcomeUnknownError,
@@ -2497,8 +2497,11 @@ export class RemoteHostClient {
       try {
         await this.request("/internal/protocol", { method: "GET" }, defaultRequestTimeoutMs);
         return true;
-      } catch {
-        return false;
+      } catch (err) {
+        // A saturated channel (uploads, downloads and previews hold request
+        // slots) means the host is busy, not down: the channel is up and the
+        // agent is serving. Only unreachable and timeout count against it.
+        return isHostBusyError(err);
       }
     }
     try {

@@ -210,6 +210,32 @@ describe("ssh-agent-mux slot waiting", () => {
     await expect(connA.openChannel()).rejects.toThrow(MuxBusyError);
   });
 
+  it("in-flight requests do not block a stream open, and streams are released on close", async () => {
+    const a = new FakeSocket();
+    const b = new FakeSocket();
+    link(a, b);
+    const connA = createMuxConnection(a as never, {
+      maxChannels: AGENT_CHANNEL_MAX_CHANNELS,
+      maxStreamChannels: AGENT_CHANNEL_MAX_STREAM_CHANNELS,
+      channelIdParity: "odd",
+    });
+    createMuxConnection(b as never, {
+      maxChannels: AGENT_CHANNEL_MAX_CHANNELS,
+      channelIdParity: "even",
+    });
+    // A burst of requests as large as the stream cap...
+    for (let i = 0; i < AGENT_CHANNEL_MAX_STREAM_CHANNELS; i++) await connA.openChannel();
+    // ... still leaves every stream slot: only streams count against the cap.
+    const streams = [];
+    for (let i = 0; i < AGENT_CHANNEL_MAX_STREAM_CHANNELS; i++) {
+      streams.push(await connA.openChannel({ stream: true }));
+    }
+    await expect(connA.openChannel({ stream: true })).rejects.toThrow(MuxBusyError);
+    // Closing a stream frees a stream slot.
+    streams[0]!.close();
+    await expect(connA.openChannel({ stream: true })).resolves.toBeDefined();
+  });
+
   it("reports a peer OpenFail as busy", async () => {
     const a = new FakeSocket();
     const b = new FakeSocket();

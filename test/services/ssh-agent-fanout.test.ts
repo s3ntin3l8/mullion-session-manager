@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import type { FastifyInstance } from "fastify";
 import { createMuxConnection, type MuxChannel } from "../../src/services/ssh-agent-mux.js";
 import type { ConnectedBridge } from "../../src/plugins/agent-bridge.js";
+import { bindChannelHost, unbindChannelHost } from "../../src/services/agent-channel-tunnel.js";
 import { SSH_AGENTC_SIGN_REQUEST } from "../../src/services/ssh-agent-filter.js";
 
 // Two complementary test styles, mirroring the two closest existing
@@ -119,7 +120,7 @@ function fakeApp(connectedBridgeCount = 1): FastifyInstance {
     });
   }
   return {
-    log: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
+    log: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     connectedBridges,
   } as unknown as FastifyInstance;
 }
@@ -219,6 +220,25 @@ describe("startSshAgentFanout — connection lifecycle", () => {
     expect(getRemoteHostClientMock).toHaveBeenLastCalledWith(app, "agent-a");
     // agent-b was left alone.
     expect(sockets[1].closeSpy).not.toHaveBeenCalled();
+  });
+
+  it("skips a bound host whose channel is down, without a warning, and resumes on forceReconnect once it is up", () => {
+    listHostsMock.mockReturnValue([fakeHost("agent-a")]);
+    openSshAgentStreamMock.mockImplementation(() => new MockSocket());
+    const app = fakeApp(1);
+    // Bound to the channel (streams negotiated) but no connected channel.
+    bindChannelHost(app, "agent-a", ["channel-requests", "channel-streams"]);
+
+    const handle = startSshAgentFanout(app);
+    handle.reconcile();
+    expect(getRemoteHostClientMock).not.toHaveBeenCalled();
+    expect(app.log.warn).not.toHaveBeenCalled();
+    expect(app.log.debug).toHaveBeenCalled();
+
+    // Channel up: the route's reconcile forces the reconnect straight away.
+    unbindChannelHost(app, "agent-a");
+    handle.reconcile({ forceReconnect: ["agent-a"] });
+    expect(getRemoteHostClientMock).toHaveBeenCalledTimes(1);
   });
 
   it("forceReconnect does not disturb a host that is not named", () => {
@@ -799,6 +819,8 @@ describe("startSshAgentFanout — channel fan-out", () => {
     // `.then()` has not run, so `agentChannel.onData` has not been
     // attached yet. This is the exact window the bug lives in.
     expect(bridgeOpenChannel).toHaveBeenCalledOnce();
+    // The fanout's bridge channel is a stream: it must count against the stream cap.
+    expect(bridgeOpenChannel).toHaveBeenCalledWith({ stream: true });
     agentChannel.send(frame(SSH_AGENTC_SIGN_REQUEST, Buffer.from("digest")));
 
     // Now let the bridge-side open resolve and its `.then()` actually run.

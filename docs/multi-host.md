@@ -1874,6 +1874,13 @@ include file uploads and downloads, the HTTP preview forward and the health ping
 (#2620), and the streams (#2571: terminal attach, events, the control relay and
 ssh-agent; #2620: the two preview WebSockets); see [agent-channel.md](agent-channel.md) for the contract.
 `GET /api/hosts` reports it as `channel`, separate from the credential state.
+Streams are counted apart from requests in the channel's mux (the stream cap
+applies to open streams only, and every stream opener, including each ssh-agent
+session channel, passes `stream: true`). A busy channel reads as alive to the
+health ping, so saturating uploads or downloads never degrades a healthy host.
+A bound host whose channel is down is skipped by the event, relay and ssh-agent
+fan-outs (debug log, no warning), and they reconnect immediately when the
+channel comes up, for hosts with an address as well as outbound-only ones.
 
 ### Outbound-only agents (no advertised URL or inbound port)
 

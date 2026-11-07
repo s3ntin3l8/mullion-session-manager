@@ -82,6 +82,12 @@ describe("GET /ws/agent-channel (#2450)", () => {
     app = await buildTestApp();
     await app.listen({ port: 0, host: "127.0.0.1" });
     port = (app.server.address() as { port: number }).port;
+    // Channel-up now reconnects the streams of every bound host, so a host with
+    // an address would dial real streams over this test's bare socket. The tests
+    // that care about the reconnect install their own spies.
+    app.reconfigureRemoteEventSubscriptions = vi.fn();
+    app.reconfigureControlRelayFanout = vi.fn();
+    app.reconfigureSshAgentFanout = vi.fn();
   });
   afterEach(() => {
     for (const ws of open.splice(0)) ws.terminate();
@@ -117,6 +123,21 @@ describe("GET /ws/agent-channel (#2450)", () => {
     expect(r.type).toBe("ready");
     for (const spy of [events, relay, sshAgent]) {
       expect(spy).toHaveBeenCalledWith({ forceReconnect: [reg.hostId] });
+    }
+  });
+
+  it("reconnects the streams of a host that has an address too, instead of waiting out their backoff", async () => {
+    const id = enroll(); // enrolled with a baseUrl
+    const events = vi.fn();
+    const relay = vi.fn();
+    const sshAgent = vi.fn();
+    app.reconfigureRemoteEventSubscriptions = events;
+    app.reconfigureControlRelayFanout = relay;
+    app.reconfigureSshAgentFanout = sshAgent;
+    const { reply: r } = await handshake(authFrame(id));
+    expect(r.type).toBe("ready");
+    for (const spy of [events, relay, sshAgent]) {
+      expect(spy).toHaveBeenCalledWith({ forceReconnect: [id.hostId] });
     }
   });
 

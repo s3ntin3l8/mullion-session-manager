@@ -62,7 +62,8 @@ export const sshAgentPlugin = fp(async (app: FastifyInstance) => {
   if (isAgent) {
     const holder: SshAgentConnectionHolder = { current: null };
     app.decorate("sshAgentBridgeConnection", holder);
-    openChannel = () => (holder.current ? holder.current.openChannel() : Promise.resolve(null));
+    openChannel = () =>
+      holder.current ? holder.current.openChannel({ stream: true }) : Promise.resolve(null);
   } else {
     // Primary-local sessions, unfiltered by design (not an oversight): the
     // sign-only filter's home is ssh-agent-fanout.ts's
@@ -84,7 +85,7 @@ export const sshAgentPlugin = fp(async (app: FastifyInstance) => {
     // is deliberately not bundled into this PR.
     openChannel = () => {
       const bridge = pickBridge(app);
-      return bridge ? bridge.mux.openChannel() : Promise.resolve(null);
+      return bridge ? bridge.mux.openChannel({ stream: true }) : Promise.resolve(null);
     };
   }
 

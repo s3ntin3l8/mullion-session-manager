@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import net from "node:net";
 import path from "node:path";
 import { mkdirSync } from "node:fs";
@@ -103,9 +103,10 @@ describe("sshAgentPlugin — primary role (#873 PR-B)", () => {
   it("routes a local connection's bytes to the most recently connected bridge via pickBridge, unfiltered", async () => {
     const app = await buildTestApp();
     const channel = new FakeChannel();
+    const openChannel = vi.fn((_opts?: { stream?: boolean }) => Promise.resolve(channel));
     app.connectedBridges.set("bridge-0", {
       socket: {} as never,
-      mux: { openChannel: () => Promise.resolve(channel) } as never,
+      mux: { openChannel } as never,
       connectedAt: Date.now(),
       // The two fields ConnectedBridge grew since this double was written
       // (issue #1313's `priority`, issue #1051's `lastPongAt`) — a
@@ -130,6 +131,8 @@ describe("sshAgentPlugin — primary role (#873 PR-B)", () => {
     client.write(Buffer.from("raw-unfiltered-request-bytes"));
     await waitUntil(() => channel.sent.length > 0);
     expect(Buffer.concat(channel.sent).toString()).toBe("raw-unfiltered-request-bytes");
+    // Per-SSH-connection channels are streams: they must honour the stream cap.
+    expect(openChannel).toHaveBeenCalledWith({ stream: true });
 
     const received: Buffer[] = [];
     client.on("data", (chunk: Buffer) => received.push(chunk));

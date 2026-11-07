@@ -618,6 +618,11 @@ export function createMuxConnection(
     number,
     { resolve: (ch: MuxChannel) => void; reject: (err: Error) => void }
   >();
+  // Ids of locally-opened STREAM channels (pending or open). The stream cap
+  // applies to this set alone, so in-flight requests and peer-opened channels
+  // can no longer starve a stream open, and streams (capped below maxChannels)
+  // always leave the request reservation free.
+  const streamIds = new Set<number>();
   const channelListeners: Array<(channel: MuxChannel) => void> = [];
   const closeListeners: Array<(reason: string) => void> = [];
   // Issue #1051 — fires every time this side receives a PONG. Consumed
@@ -690,6 +695,7 @@ export function createMuxConnection(
       reject(new Error("ssh-agent-mux: connection closed while channel open was pending"));
     }
     pendingOpens.clear();
+    streamIds.clear();
     for (const channel of channels.values()) channel.closeLocally();
     channels.clear();
     for (const listener of closeListeners) invokeListener(listener, reason);
@@ -701,6 +707,7 @@ export function createMuxConnection(
   // connection's remaining budget instead of freeing it back up).
   function removeChannel(id: number): void {
     channels.delete(id);
+    streamIds.delete(id);
     drainSlotWaiters();
   }
 
@@ -751,7 +758,7 @@ export function createMuxConnection(
 
   function openChannel(opts?: OpenChannelOptions): Promise<MuxChannel> {
     if (closed) return Promise.reject(new Error("ssh-agent-mux: connection already closed"));
-    if (opts?.stream && channels.size + pendingOpens.size >= maxStreamChannels) {
+    if (opts?.stream && streamIds.size >= maxStreamChannels) {
       return Promise.reject(
         new MuxBusyError(
           `ssh-agent-mux: stream channel cap (${maxStreamChannels} of ${maxChannels}) reached`,
@@ -818,6 +825,7 @@ export function createMuxConnection(
       });
     }
     const id = allocateChannelId();
+    if (opts?.stream) streamIds.add(id);
     return new Promise<MuxChannel>((resolve, reject) => {
       // See OPEN_ACK_TIMEOUT_MS's own doc for why this exists at all.
       // Wrapping resolve/reject (rather than reading them back out of
@@ -828,6 +836,7 @@ export function createMuxConnection(
       // know this timer exists.
       const timeoutTimer = setTimeout(() => {
         pendingOpens.delete(id);
+        streamIds.delete(id);
         reject(
           new Error(
             `ssh-agent-mux: no OpenAck/OpenFail for channel ${id} within ` +
@@ -932,6 +941,7 @@ export function createMuxConnection(
       const pending = pendingOpens.get(frame.channelId);
       if (pending === undefined) return;
       pendingOpens.delete(frame.channelId);
+      streamIds.delete(frame.channelId);
       pending.reject(new MuxPeerRefusedError(frame.channelId));
       drainSlotWaiters();
       return;
@@ -956,6 +966,7 @@ export function createMuxConnection(
         return;
       case FrameType.Close:
         channels.delete(frame.channelId);
+        streamIds.delete(frame.channelId);
         channel.closeLocally();
         drainSlotWaiters();
         return;

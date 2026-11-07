@@ -251,6 +251,16 @@ describe("streams over the outbound channel (#2571)", () => {
     expect(errors[0]?.message).toContain("outbound channel");
   });
 
+  it("every stream kind opens its channel as a stream (counted against the stream cap)", async () => {
+    const r = await rig();
+    const spy = vi.spyOn(r.primaryMux, "openChannel");
+    for (const kind of ["attach", "events", "control-relay", "ssh-agent", "preview"] as const) {
+      openChannelStream(r.app, r.entry, kind, undefined);
+    }
+    expect(spy).toHaveBeenCalledTimes(5);
+    for (const call of spy.mock.calls) expect(call[0]).toEqual({ stream: true });
+  });
+
   it("an open refused by the mux (channel cap) is an unreachable failure", async () => {
     const r = await rig();
     vi.spyOn(r.primaryMux, "openChannel").mockRejectedValue(new Error("channel limit"));
