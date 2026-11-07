@@ -2,8 +2,8 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import crypto from "node:crypto";
 import { closeDb } from "../../src/db/client.js";
+import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
 
 const tmpDb = path.join(os.tmpdir(), `agent-rules-test-${process.pid}.db`);
 process.env.DATABASE_URL = `file:${tmpDb}`;
@@ -14,12 +14,6 @@ process.env.DATABASE_URL = `file:${tmpDb}`;
 // so their hooksPlugin listeners (registered for both roles) would collide
 // on the same hooks.sock path. Gives each agent instance its own scratch
 // directory instead.
-function uniqueSessionsDir(): string {
-  return path.join(
-    os.tmpdir(),
-    `agent-rules-agent-sessions-${process.pid}-${crypto.randomBytes(4).toString("hex")}`,
-  );
-}
 
 const { buildApp } = await import("../../src/app.js");
 
@@ -261,7 +255,7 @@ describe("agent-rules routes", () => {
         MULLION_ROLE: "agent",
         MULLION_AGENT_TOKEN: "agent-rules-remote-token",
         PROJECTS_ROOTS: os.tmpdir(),
-        SESSIONS_DIR: uniqueSessionsDir(),
+        SESSIONS_DIR: uniqueSessionsDir("agent-rules"),
       };
       for (const key of Object.keys(agentEnv)) {
         prevEnv[key] = process.env[key];
@@ -323,7 +317,7 @@ describe("agent-rules routes", () => {
         MULLION_ROLE: "agent",
         MULLION_AGENT_TOKEN: "the-real-agent-token",
         PROJECTS_ROOTS: os.tmpdir(),
-        SESSIONS_DIR: uniqueSessionsDir(),
+        SESSIONS_DIR: uniqueSessionsDir("agent-rules"),
       };
       for (const key of Object.keys(agentEnv)) {
         prevEnv[key] = process.env[key];

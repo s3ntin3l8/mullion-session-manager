@@ -4,6 +4,8 @@ import path from "node:path";
 import fs from "node:fs";
 
 import type * as GithubAppModule from "../../src/services/github-app.js";
+import type { FastifyInstance } from "fastify";
+import { buildTestApp, buildTeardownApp } from "../helpers/app.js";
 
 // A fake PEM, never a real key.
 const FAKE_APP_PRIVATE_KEY = "-----BEGIN RSA PRIVATE KEY-----\nfake\n-----END RSA PRIVATE KEY-----"; // pragma: allowlist secret
@@ -18,7 +20,6 @@ vi.mock("../../src/services/github-app.js", async (importOriginal) => {
 // thread, comment on an issue or PR, submit a PR review. Own file (like
 // projects-release.test.ts) rather than growing projects.test.ts; these
 // routes never spawn a PTY session.
-const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { resetGitHubRateLimitForTests } = await import("../../src/services/github-fetch.js");
 const { getPrDetail, resetPrDetailCacheForTests } =
@@ -85,13 +86,6 @@ describe("GitHub sidebar write routes (#1672)", () => {
     delete process.env.DATABASE_URL;
   });
 
-  let apps: Awaited<ReturnType<typeof buildApp>>[] = [];
-  async function makeApp() {
-    const app = await buildApp();
-    apps.push(app);
-    return app;
-  }
-
   let fetchMock: ReturnType<typeof vi.fn>;
   let cwds: string[] = [];
 
@@ -107,19 +101,16 @@ describe("GitHub sidebar write routes (#1672)", () => {
 
   afterEach(async () => {
     vi.unstubAllGlobals();
-    const toClose = apps;
-    apps = [];
-    await Promise.all(toClose.map((app) => app.close()));
     for (const cwd of cwds) fs.rmSync(cwd, { recursive: true, force: true });
     cwds = [];
     // The `integrations` row is a singleton across this file's DB.
-    const app = await buildApp();
+    const teardownApp = await buildTeardownApp("project-github-writes-teardown");
     const { disconnect } = await import("../../src/services/github-integration.js");
-    disconnect(app);
-    await app.close();
+    disconnect(teardownApp);
+    await teardownApp.close();
   });
 
-  async function connectedProject(app: Awaited<ReturnType<typeof buildApp>>) {
+  async function connectedProject(app: FastifyInstance) {
     const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "project-github-writes-"));
     cwds.push(projectCwd);
     fs.mkdirSync(path.join(projectCwd, ".git"));
@@ -208,7 +199,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
             },
           }),
       });
-      const app = await makeApp();
+      const app = await buildTestApp();
       const id = await connectedProject(app);
       await getPrDetail("ghp_connected", "acme", "widgets", 7);
       expect(detailReads(calls)).toBe(1);
@@ -234,7 +225,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
 
     it("400s a blank body before calling GitHub", async () => {
       const calls = mockGithub({});
-      const app = await makeApp();
+      const app = await buildTestApp();
       const id = await connectedProject(app);
       const before = calls.length;
       const blank = await app.inject({
@@ -261,7 +252,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
     it("maps a PAT's GraphQL scope refusals to 403, a GraphQL rate limit to 429, no data to 502", async () => {
       let answer: unknown = {};
       mockGithub({ mutation: () => jsonResponse(200, answer) });
-      const app = await makeApp();
+      const app = await buildTestApp();
       const id = await connectedProject(app);
       const post = () =>
         app.inject({
@@ -287,7 +278,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
         mutation: () =>
           jsonResponse(200, { errors: [{ message: "Resource not accessible by integration" }] }),
       });
-      const app = await makeApp();
+      const app = await buildTestApp();
       const id = await connectedProject(app);
       const res = await app.inject({
         method: "POST",
@@ -305,7 +296,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
             errors: [{ message: "Could not resolve to a node with the global id of 'nope'" }],
           }),
       });
-      const app = await makeApp();
+      const app = await buildTestApp();
       const id = await connectedProject(app);
       const res = await app.inject({
         method: "POST",
@@ -321,7 +312,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
         mutation: () =>
           jsonResponse(200, { data: { addPullRequestReviewThreadReply: { comment: null } } }),
       });
-      const app = await makeApp();
+      const app = await buildTestApp();
       const id = await connectedProject(app);
       const res = await app.inject({
         method: "POST",
@@ -333,7 +324,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
 
     it("502s with a clear message when no write token is available", async () => {
       mockGithub({});
-      const app = await makeApp();
+      const app = await buildTestApp();
       const id = await connectedProject(app);
       await app.inject({ method: "DELETE", url: "/api/integrations/github" });
       const res = await app.inject({
@@ -352,7 +343,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
         mutation: () =>
           jsonResponse(200, { data: { resolveReviewThread: { thread: { id: "PRRT_1" } } } }),
       });
-      const app = await makeApp();
+      const app = await buildTestApp();
       const id = await connectedProject(app);
       const res = await app.inject({
         method: "POST",
@@ -367,7 +358,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
     it("maps a 403 to a write-access refusal and an outage to 502", async () => {
       let status = 403;
       mockGithub({ mutation: () => jsonResponse(status, { message: "nope" }) });
-      const app = await makeApp();
+      const app = await buildTestApp();
       const id = await connectedProject(app);
       const url = `/api/projects/${id}/github/prs/7/threads/PRRT_1/resolve`;
       const forbidden = await app.inject({ method: "POST", url });
@@ -379,7 +370,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
 
     it("400s an invalid PR number", async () => {
       mockGithub({});
-      const app = await makeApp();
+      const app = await buildTestApp();
       const id = await connectedProject(app);
       const res = await app.inject({
         method: "POST",
@@ -400,7 +391,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
               })
             : null,
       });
-      const app = await makeApp();
+      const app = await buildTestApp();
       const id = await connectedProject(app);
       const res = await app.inject({
         method: "POST",
@@ -417,7 +408,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
 
     it("400s a blank comment and an invalid number", async () => {
       mockGithub({});
-      const app = await makeApp();
+      const app = await buildTestApp();
       const id = await connectedProject(app);
       const blank = await app.inject({
         method: "POST",
@@ -444,7 +435,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
               })
             : jsonResponse(status, { message: "nope" }),
       });
-      const app = await makeApp();
+      const app = await buildTestApp();
       const id = await connectedProject(app);
       const url = `/api/projects/${id}/github/issues/7/comments`;
       const missing = await app.inject({ method: "POST", url, payload: { body: "hi" } });
@@ -472,7 +463,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
     it("posts with the connected account's token even when an App is installed", async () => {
       mockGetInstallationToken.mockResolvedValue({ token: "ghs_app", installationsChecked: null });
       const calls = reviewRoute(() => jsonResponse(200, { id: 5, html_url: "u" }));
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { setGitHubApp } = await import("../../src/services/github-integration.js");
       setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
       const id = await connectedProject(app);
@@ -500,7 +491,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
           return null;
         },
       });
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { setGitHubApp } = await import("../../src/services/github-integration.js");
       setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
       app.config.MULLION_TASK_MASTER_ENABLED = true;
@@ -532,7 +523,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
     it("refuses the issue detail when no account is connected, even with an App installed", async () => {
       mockGetInstallationToken.mockResolvedValue({ token: "ghs_app", installationsChecked: null });
       mockGithub({ rest: () => null });
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { setGitHubApp, resetSidebarIdentityCache } =
         await import("../../src/services/github-integration.js");
       resetSidebarIdentityCache();
@@ -547,7 +538,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
     it("lets the App comment but refuses its verdicts when no account is connected", async () => {
       mockGetInstallationToken.mockResolvedValue({ token: "ghs_app", installationsChecked: null });
       reviewRoute(() => jsonResponse(200, { id: 5, html_url: "u" }));
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { setGitHubApp } = await import("../../src/services/github-integration.js");
       setGitHubApp(app, "123", FAKE_APP_PRIVATE_KEY);
       const id = await connectedProject(app);
@@ -575,7 +566,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
       const calls = reviewRoute(() =>
         jsonResponse(200, { id: 5, html_url: "https://github.com/acme/widgets/pull/7#r5" }),
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const id = await connectedProject(app);
       const url = `/api/projects/${id}/github/prs/7/reviews`;
 
@@ -603,7 +594,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
 
     it("400s a comment without a body, an unknown event and a malformed sha", async () => {
       const calls = reviewRoute(() => jsonResponse(200, { id: 1, html_url: "x" }));
-      const app = await makeApp();
+      const app = await buildTestApp();
       const id = await connectedProject(app);
       const url = `/api/projects/${id}/github/prs/7/reviews`;
       for (const payload of [
@@ -631,7 +622,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
           errors: ["Can not approve your own pull request"],
         }),
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const id = await connectedProject(app);
       const res = await app.inject({
         method: "POST",
@@ -651,7 +642,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
           ],
         }),
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const id = await connectedProject(app);
       const res = await app.inject({
         method: "POST",
@@ -666,7 +657,7 @@ describe("GitHub sidebar write routes (#1672)", () => {
       reviewRoute(() =>
         jsonResponse(422, { message: "Unprocessable Entity", errors: ["Review body is too long"] }),
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const id = await connectedProject(app);
       const res = await app.inject({
         method: "POST",

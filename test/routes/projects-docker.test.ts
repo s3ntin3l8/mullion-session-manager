@@ -2,11 +2,11 @@ import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../../src/db/schema.js";
+import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
 
 // Issue #73 — GET /api/projects/:id/dock merging in discovered Compose
 // services, and the two docker/check-update + docker/update routes.
@@ -144,13 +144,6 @@ const { closeDb } = await import("../../src/db/client.js");
 const { createKeyedLock } = await import("../../src/routes/project-docker.js");
 
 const tmpDb = path.join(os.tmpdir(), `projects-docker-test-${process.pid}.db`);
-
-function uniqueSessionsDir(): string {
-  return path.join(
-    os.tmpdir(),
-    `projects-docker-agent-sessions-${process.pid}-${crypto.randomBytes(4).toString("hex")}`,
-  );
-}
 
 describe("projects route — Docker Compose service discovery (issue #73)", () => {
   beforeAll(() => {
@@ -1507,7 +1500,7 @@ describe("projects route — Docker Compose service discovery (issue #73)", () =
         MULLION_ROLE: "agent",
         MULLION_AGENT_TOKEN: AGENT_TOKEN,
         PROJECTS_ROOTS: os.tmpdir(),
-        SESSIONS_DIR: uniqueSessionsDir(),
+        SESSIONS_DIR: uniqueSessionsDir("projects-docker"),
       };
       const prevEnv: Record<string, string | undefined> = {};
       for (const key of Object.keys(agentEnv)) {

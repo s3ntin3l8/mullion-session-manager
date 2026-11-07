@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import { PR_REVIEW_DEFAULTS } from "../helpers/pr-review-defaults.js";
+import type { FastifyInstance } from "fastify";
+import { buildTestApp, buildTeardownApp } from "../helpers/app.js";
 
 // #744 — release-please detection/run/merge routes. Kept in its own file
 // (the same split test/routes/projects-docker.test.ts and
@@ -10,7 +12,6 @@ import { PR_REVIEW_DEFAULTS } from "../helpers/pr-review-defaults.js";
 // growing the already-huge projects.test.ts, and because these routes never
 // spawn a PTY session — no node-pty/child_process mocking needed at all,
 // same posture as test/routes/ws-github.test.ts.
-const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const {
   setRepoPRsStatus,
@@ -80,13 +81,6 @@ describe("release-please routes (#744)", () => {
     delete process.env.DATABASE_URL;
   });
 
-  let apps: Awaited<ReturnType<typeof buildApp>>[] = [];
-  async function makeApp(): Promise<Awaited<ReturnType<typeof buildApp>>> {
-    const app = await buildApp();
-    apps.push(app);
-    return app;
-  }
-
   let fetchMock: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
@@ -108,18 +102,15 @@ describe("release-please routes (#744)", () => {
 
   afterEach(async () => {
     vi.unstubAllGlobals();
-    const toClose = apps;
-    apps = [];
-    await Promise.all(toClose.map((app) => app.close()));
 
     // The `integrations` row is a singleton across this file's whole DB —
     // reset it after every test so a connected token doesn't leak into an
     // unrelated "no token" case (same reasoning as
     // test/routes/projects.test.ts's "github" describe block).
-    const app = await buildApp();
+    const teardownApp = await buildTeardownApp("projects-release-teardown");
     const { disconnect } = await import("../../src/services/github-integration.js");
-    disconnect(app);
-    await app.close();
+    disconnect(teardownApp);
+    await teardownApp.close();
 
     invalidatePRsCache("acme", "widgets");
     clearReleaseWorkflowCacheForTests();
@@ -129,7 +120,7 @@ describe("release-please routes (#744)", () => {
   });
 
   async function createConnectedProject(
-    app: Awaited<ReturnType<typeof buildApp>>,
+    app: FastifyInstance,
   ): Promise<{ projectId: number; projectCwd: string }> {
     const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-release-"));
     fs.mkdirSync(path.join(projectCwd, ".git"));
@@ -245,13 +236,13 @@ describe("release-please routes (#744)", () => {
 
   describe("GET /api/projects/:id/release", () => {
     it("400s for a non-integer project id", async () => {
-      const app = await makeApp();
+      const app = await buildTestApp();
       const res = await app.inject({ method: "GET", url: "/api/projects/not-a-number/release" });
       expect(res.statusCode).toBe(400);
     });
 
     it("404s for an unknown project", async () => {
-      const app = await makeApp();
+      const app = await buildTestApp();
       const res = await app.inject({ method: "GET", url: "/api/projects/999999/release" });
       expect(res.statusCode).toBe(404);
     });
@@ -263,7 +254,7 @@ describe("release-please routes (#744)", () => {
         path.join(projectCwd, ".git", "config"),
         '[remote "origin"]\n\turl = git@github.com:acme/widgets.git\n',
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const created = await app.inject({
         method: "POST",
         url: "/api/projects",
@@ -279,7 +270,7 @@ describe("release-please routes (#744)", () => {
 
     it("returns detection: found and the full PR status, including cached ciStatus", async () => {
       fetchMock.mockImplementation(githubApiRouter({}));
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
 
       setRepoPRsStatus("acme", "widgets", {
@@ -340,7 +331,7 @@ describe("release-please routes (#744)", () => {
 
     it("returns detection: found and pr: null when no release PR is open", async () => {
       fetchMock.mockImplementation(githubApiRouter({ releasePrs: () => jsonResponse(200, []) }));
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
 
       const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` });
@@ -354,7 +345,7 @@ describe("release-please routes (#744)", () => {
 
     it("reports dispatchable: false when the workflow has no workflow_dispatch trigger", async () => {
       fetchMock.mockImplementation(githubApiRouter({ workflowBody: () => UNDISPATCHABLE_BODY }));
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
 
       const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` });
@@ -369,7 +360,7 @@ describe("release-please routes (#744)", () => {
       fetchMock.mockImplementation(
         githubApiRouter({ workflows: () => jsonResponse(200, { workflows: [CI_WORKFLOW] }) }),
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
 
       const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` });
@@ -387,7 +378,7 @@ describe("release-please routes (#744)", () => {
           workflows: () => new Response("nope", { status: 403 }),
         }),
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
 
       const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` });
@@ -409,7 +400,7 @@ describe("release-please routes (#744)", () => {
             new Response("rate limited", { status: 429, headers: { "retry-after": "30" } }),
         }),
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
 
       const res = await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` });
@@ -429,7 +420,7 @@ describe("release-please routes (#744)", () => {
         fetchMock.mockImplementation(
           githubApiRouter({ workflows: () => jsonResponse(200, { workflows: [CI_WORKFLOW] }) }),
         );
-        const app = await makeApp();
+        const app = await buildTestApp();
         const { projectId } = await createConnectedProject(app);
         // Explicit human choice, same as an existing project a human already
         // configured before this feature shipped — permanent per
@@ -464,7 +455,7 @@ describe("release-please routes (#744)", () => {
 
       it("is false, and skips the probe entirely, once the flag is on", async () => {
         fetchMock.mockImplementation(githubApiRouter({}));
-        const app = await makeApp();
+        const app = await buildTestApp();
         const { projectId } = await createConnectedProject(app);
         await app.inject({
           method: "PATCH",
@@ -490,7 +481,7 @@ describe("release-please routes (#744)", () => {
     it("dispatches the detected workflow against the default branch", async () => {
       const dispatchSpy = vi.fn(() => new Response(null, { status: 204 }));
       fetchMock.mockImplementation(githubApiRouter({ dispatch: dispatchSpy }));
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
 
       const res = await app.inject({
@@ -510,7 +501,7 @@ describe("release-please routes (#744)", () => {
       fetchMock.mockImplementation(
         githubApiRouter({ workflows: () => jsonResponse(200, { workflows: [CI_WORKFLOW] }) }),
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
 
       const res = await app.inject({
@@ -528,7 +519,7 @@ describe("release-please routes (#744)", () => {
             new Response("Workflow does not have 'workflow_dispatch' trigger", { status: 422 }),
         }),
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
 
       const res = await app.inject({
@@ -548,7 +539,7 @@ describe("release-please routes (#744)", () => {
             new Response("Workflow does not have 'workflow_dispatch' trigger", { status: 422 }),
         }),
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
       const read = async () =>
         (await app.inject({ method: "GET", url: `/api/projects/${projectId}/release` })).json()
@@ -565,7 +556,7 @@ describe("release-please routes (#744)", () => {
       fetchMock.mockImplementation(
         githubApiRouter({ dispatch: () => new Response("server error", { status: 500 }) }),
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
 
       const res = await app.inject({
@@ -581,7 +572,7 @@ describe("release-please routes (#744)", () => {
     it("merges a clean release PR", async () => {
       const mergeSpy = vi.fn(() => jsonResponse(200, { merged: true, sha: "merged-sha" }));
       fetchMock.mockImplementation(githubApiRouter({ merge: mergeSpy }));
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
 
       const res = await app.inject({
@@ -616,7 +607,7 @@ describe("release-please routes (#744)", () => {
           merge: mergeSpy,
         }),
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
 
       const res = await app.inject({
@@ -630,7 +621,7 @@ describe("release-please routes (#744)", () => {
 
     it("refuses with reason: no-release-pr when nothing is open", async () => {
       fetchMock.mockImplementation(githubApiRouter({ releasePrs: () => jsonResponse(200, []) }));
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
 
       const res = await app.inject({
@@ -650,7 +641,7 @@ describe("release-please routes (#744)", () => {
       fetchMock.mockImplementation(
         githubApiRouter({ defaultBranch: () => new Response("nope", { status: 403 }) }),
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
 
       const res = await app.inject({
@@ -673,7 +664,7 @@ describe("release-please routes (#744)", () => {
           prDetail: (n) => jsonResponse(200, releasePr({ number: n, mergeableState: "behind" })),
         }),
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
 
       const res = await app.inject({
@@ -694,7 +685,7 @@ describe("release-please routes (#744)", () => {
           prDetail: (n) => jsonResponse(200, releasePr({ number: n, mergeableState: "unstable" })),
         }),
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
 
       const res = await app.inject({
@@ -716,7 +707,7 @@ describe("release-please routes (#744)", () => {
             jsonResponse(200, releasePr({ number: n, merged: true, state: "closed" })),
         }),
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
 
       const res = await app.inject({
@@ -745,7 +736,7 @@ describe("release-please routes (#744)", () => {
             jsonResponse(200, releasePr({ number: n, merged: true, state: "closed" })),
         }),
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
 
       const res = await app.inject({
@@ -773,7 +764,7 @@ describe("release-please routes (#744)", () => {
             jsonResponse(200, releasePr({ number: n, merged: false, state: "closed" })),
         }),
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
 
       const res = await app.inject({
@@ -803,7 +794,7 @@ describe("release-please routes (#744)", () => {
           contents: () => jsonResponse(200, [{ name: "release-please-config.json", type: "file" }]),
         }),
       );
-      const app = await makeApp();
+      const app = await buildTestApp();
       const { projectId } = await createConnectedProject(app);
       // Plant an EXPLICIT human choice (issue #1034's motivating case): the
       // sweep ran before release-please was adopted and stamped a `false`,
@@ -835,7 +826,7 @@ describe("release-please routes (#744)", () => {
     });
 
     it("404s for an unknown project", async () => {
-      const app = await makeApp();
+      const app = await buildTestApp();
       const res = await app.inject({
         method: "POST",
         url: `/api/projects/999999/release-please/recheck`,
@@ -844,7 +835,7 @@ describe("release-please routes (#744)", () => {
     });
 
     it("400s for a non-integer project id", async () => {
-      const app = await makeApp();
+      const app = await buildTestApp();
       const res = await app.inject({
         method: "POST",
         url: `/api/projects/not-a-number/release-please/recheck`,

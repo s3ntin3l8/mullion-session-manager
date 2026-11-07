@@ -15,9 +15,9 @@ import { plainNodePtyMock } from "../helpers/mock-pty.js";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import crypto from "node:crypto";
 import { PR_REVIEW_DEFAULTS } from "../helpers/pr-review-defaults.js";
 import { buildTestApp } from "../helpers/app.js";
+import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
 
 const { buildApp } = await import("../../src/app.js");
 
@@ -35,12 +35,6 @@ function jsonResponse(status: number, body: unknown) {
 // SAME SESSIONS_DIR (test/setup.ts sets it once per file), so their
 // hooksPlugin listeners would collide on the same hooks.sock path. Gives each
 // instance its own scratch directory instead.
-function uniqueSessionsDir(): string {
-  return path.join(
-    os.tmpdir(),
-    `projects-agent-sessions-${process.pid}-${crypto.randomBytes(4).toString("hex")}`,
-  );
-}
 
 // Captured before any test stubs globalThis.fetch — lets the remote-host
 // success test (issue #222) delegate real loopback calls to its own
@@ -395,7 +389,7 @@ describe("projects route", () => {
         MULLION_ROLE: "agent",
         MULLION_AGENT_TOKEN: AGENT_TOKEN,
         PROJECTS_ROOTS: os.tmpdir(),
-        SESSIONS_DIR: uniqueSessionsDir(),
+        SESSIONS_DIR: uniqueSessionsDir("projects"),
       };
       for (const key of Object.keys(agentEnv)) {
         prevEnv[key] = process.env[key];
