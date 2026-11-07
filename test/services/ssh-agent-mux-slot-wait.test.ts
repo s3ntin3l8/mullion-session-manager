@@ -268,6 +268,23 @@ describe("ssh-agent-mux slot waiting", () => {
     await expect(conn.openChannel()).resolves.toBeDefined();
   });
 
+  it("a queued preview open that is granted counts against the preview cap (#2702)", async () => {
+    const conn = pair({ maxChannels: 3, maxStreamChannels: 2, maxPreviewChannels: 1 });
+    const held = [await conn.openChannel(), await conn.openChannel(), await conn.openChannel()];
+    // The total is full, so the preview queues ...
+    const queued = conn.openChannel({ preview: true, waitTimeoutMs: 1000 });
+    // ... and already holds the one preview slot: a second preview is refused.
+    await expect(conn.openChannel({ preview: true, waitTimeoutMs: 1000 })).rejects.toThrow(
+      /preview channel cap/,
+    );
+    for (const h of held) h.close();
+    const granted = await queued;
+    // Granted, it still counts: the cap holds, and closing it frees the slot.
+    await expect(conn.openChannel({ preview: true })).rejects.toThrow(/preview channel cap/);
+    granted.close();
+    await expect(conn.openChannel({ preview: true })).resolves.toBeDefined();
+  });
+
   it("a timed-out queued stream open frees its stream reservation", async () => {
     const conn = pair({ maxChannels: 1, maxStreamChannels: 1 });
     await conn.openChannel();

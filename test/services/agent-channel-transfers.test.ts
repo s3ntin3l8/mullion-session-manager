@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import crypto from "node:crypto";
+import http from "node:http";
 import { PassThrough, Readable } from "node:stream";
 import Fastify, { type FastifyInstance } from "fastify";
 import { WebSocketServer, WebSocket } from "ws";
@@ -15,6 +16,7 @@ import {
   AGENT_CHANNEL_MAX_PREVIEW_CHANNELS,
   AGENT_CHANNEL_MAX_STREAM_CHANNELS,
 } from "../../src/shared/agent-channel.js";
+import { relayFetchResponse } from "../../src/services/http-proxy.js";
 import { HostBusyError } from "../../src/services/remote-host-errors.js";
 import {
   HostRequestError,
@@ -130,10 +132,12 @@ async function rig(opts: { download?: Buffer; agentCap?: number } = {}): Promise
       return reply.code(200).send("late");
     }
     if (wildcard === "head-big") {
-      return reply
+      // HEAD: the head declares 70 MiB and no body follows. GET: a real
+      // 70 MiB body follows the same head.
+      const base = reply
         .header("content-type", "application/octet-stream")
-        .header("content-length", String(70 * MIB))
-        .send();
+        .header("content-length", String(70 * MIB));
+      return request.method === "HEAD" ? base.send() : base.send(Readable.from(bigPieces()));
     }
     if (wildcard === "three") {
       return reply.type("application/octet-stream").send(
@@ -521,13 +525,17 @@ describe("outbound transfer edge cases (#2690)", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("content-length")).toBe(String(70 * MIB));
     expect(await res.text()).toBe("");
-    // The same response to a GET is still refused: a body that size would follow.
-    const get = await r.client.openPreviewHttp(1, "/head-big", {
-      method: "GET",
-      headers: new Headers(),
-    });
-    expect(get.status).toBe(200);
-    await get.body?.cancel().catch(() => undefined);
+    // The same response to a GET is refused: a body that size really follows
+    // (as an upstream-response error, not a request one).
+    const get = await r.client
+      .openPreviewHttp(1, "/head-big", { method: "GET", headers: new Headers() })
+      .then(async (res) => {
+        await res.arrayBuffer();
+        return res;
+      })
+      .catch((e: unknown) => e);
+    expect(get).toBeInstanceOf(Error);
+    expect(get).not.toBeInstanceOf(Response);
   }, 60_000);
 
   it("refuses a bodied response whose head declares more than the limit", async () => {
@@ -551,6 +559,40 @@ describe("outbound transfer edge cases (#2690)", () => {
     const err = await drain(res.stream).catch((e: Error) => e);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message).toMatch(/channel/);
+  }, 30_000);
+
+  it("ends the browser response with a reset, never a clean end, when the preview fails after the head", async () => {
+    const r = await rig({ agentCap: MIB });
+    // The primary's real client, relayed by the same function the preview
+    // proxy uses, to a real HTTP client.
+    const proxy = Fastify();
+    proxy.get("/*", async (request, reply) => {
+      const upstream = await r.client.openPreviewHttp(1, "/three", {
+        method: "GET",
+        headers: new Headers(),
+      });
+      return relayFetchResponse(reply, request.method, upstream, null);
+    });
+    await proxy.listen({ port: 0, host: "127.0.0.1" });
+    closers.push(() => proxy.close());
+    const port = (proxy.server.address() as { port: number }).port;
+    const outcome = await new Promise<{ status: number; ended: boolean; failed: boolean }>(
+      (resolve) => {
+        const req = http.get({ host: "127.0.0.1", port, path: "/" }, (res) => {
+          let ended = false;
+          res.on("end", () => (ended = true));
+          res.on("data", () => undefined);
+          res.on("error", () => resolve({ status: res.statusCode ?? 0, ended, failed: true }));
+          res.on("close", () =>
+            resolve({ status: res.statusCode ?? 0, ended, failed: !res.complete }),
+          );
+        });
+        req.on("error", () => resolve({ status: 0, ended: false, failed: true }));
+      },
+    );
+    expect(outcome.status).toBe(200);
+    expect(outcome.failed).toBe(true);
+    expect(outcome.ended).toBe(false);
   }, 30_000);
 
   it("lets the same 3 MiB response through when neither side's limit is hit", async () => {

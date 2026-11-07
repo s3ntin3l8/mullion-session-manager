@@ -2488,7 +2488,9 @@ export class RemoteHostClient {
    * connection" action — deliberately doesn't use `request()`'s bearer
    * header/timeout semantics that throw on any non-2xx, since a healthy
    * agent's /health is intentionally unauthenticated. */
-  ping = (): Promise<boolean> => this.probe().then((r) => r !== "down");
+  async ping(): Promise<boolean> {
+    return (await this.probe()) !== "down";
+  }
 
   /** ping() with "busy" (channel up, saturated) kept apart for the heartbeat. */
   async probe(): Promise<"ok" | "busy" | "down"> {
@@ -2506,20 +2508,16 @@ export class RemoteHostClient {
         (err: unknown) => (isHostBusyError(err) ? "busy" : "down"),
       );
     }
-    try {
-      const res = await fetch(`${this.baseUrl}/health`, {
-        signal: AbortSignal.timeout(defaultRequestTimeoutMs),
-        // Same redirect-bypass reasoning as request() above — no bearer
-        // token to leak here, but a followed redirect would still report
-        // "online" based on an unvalidated target's response instead of
-        // the configured baseUrl's own.
-        redirect: "manual",
-        dispatcher: this.pinnedDispatcher(),
-      });
-      return res.ok ? "ok" : "down";
-    } catch {
-      return "down";
-    }
+    const res = await fetch(`${this.baseUrl}/health`, {
+      signal: AbortSignal.timeout(defaultRequestTimeoutMs),
+      // Same redirect-bypass reasoning as request() above — no bearer
+      // token to leak here, but a followed redirect would still report
+      // "online" based on an unvalidated target's response instead of
+      // the configured baseUrl's own.
+      redirect: "manual",
+      dispatcher: this.pinnedDispatcher(),
+    }).catch(() => null);
+    return res?.ok ? "ok" : "down";
   }
 
   // Cookie profiles are primary-only state (see routes/browser-cookies.ts's

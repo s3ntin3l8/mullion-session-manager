@@ -265,5 +265,19 @@ export function relayFetchResponse(
   if (method === "HEAD" || upstreamResponse.body === null) {
     return reply.send();
   }
-  return reply.send(Readable.fromWeb(upstreamResponse.body));
+  // stripFramingHeaders removed `transfer-encoding`, and Node then stops
+  // chunking the response: a body with no content-length would be delimited by
+  // the connection closing, so a reset reads as a clean end. Chunk it
+  // explicitly so an aborted body is distinguishable from a finished one.
+  if (!headersToSend.has("content-length") && reply.request.raw.httpVersionMajor === 1) {
+    reply.header("transfer-encoding", "chunked");
+  }
+  const body = Readable.fromWeb(upstreamResponse.body);
+  // A body that fails after the head went out (the channel was lost, or the
+  // upstream outgrew a limit) must reset the browser's connection: ending it
+  // cleanly would hand the browser a silently truncated asset (#2702).
+  body.once("error", () => {
+    if (!reply.raw.destroyed) reply.raw.destroy();
+  });
+  return reply.send(body);
 }

@@ -18,6 +18,16 @@ describe("HostStatusLabel (issue #1892)", () => {
     expect(screen.queryByText("unreachable")).toBeNull();
   });
 
+  it("says why a degraded host is degraded when the primary reports a reason (#2702)", () => {
+    render(
+      <HostStatusLabel
+        host={makeHost({ health: "degraded", healthReason: "channel saturated" })}
+      />,
+    );
+    expect(screen.getByText("channel saturated")).toBeInTheDocument();
+    expect(screen.queryByText("missed a ping")).toBeNull();
+  });
+
   it("says unreachable for a host that did not answer", () => {
     render(<HostStatusLabel host={makeHost({ health: "offline" })} />);
     expect(screen.getByText("unreachable")).toBeInTheDocument();

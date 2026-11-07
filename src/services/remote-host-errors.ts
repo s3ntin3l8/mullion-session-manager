@@ -115,6 +115,16 @@ export class HostRequestError extends Error {
   }
 }
 
+/** The host's RESPONSE outgrew the channel's limit, not the caller's request.
+ * Still a 413 `HostRequestError` for callers that only check the status; the
+ * preview proxy tells the two apart by class (#2702). */
+export class HostResponseTooLargeError extends HostRequestError {
+  constructor(hostId: string, body: string) {
+    super(hostId, 413, body);
+    this.name = "HostResponseTooLargeError";
+  }
+}
+
 /**
  * Thrown when the outbound channel has no free request slot (the mux cap was
  * reached and none opened within the wait budget, or the peer refused the open
