@@ -95,7 +95,7 @@ import { openDraftPRForTask } from "./task-promote.js";
 import { maybeAutoEnableConventionalTitles } from "./project-release-please.js";
 import { approveTask, cleanupTaskWorktree, cleanupTaskSessions } from "./task-approve.js";
 import { markTaskMerged, notifyTaskMerged } from "./task-merged.js";
-import { reseedTaskIfSessionExited } from "./task-reseed.js";
+import { reseedTaskIfSessionExited, recheckAdoptedSeeds } from "./task-reseed.js";
 import { resolveHostGitStatus, resolveRepoRef } from "./host-git.js";
 import { deriveTaskBranchName, deriveWorktreePath } from "./git-worktree.js";
 import type { GitHubRepoRef } from "./git-remote.js";
@@ -5180,7 +5180,9 @@ export async function reconcileTasks(app: FastifyInstance): Promise<void> {
   // its own `rows.length === 0` early return, or a reviewing task's
   // findings would never be processed on a tick with no claimed/in_progress
   // work at all.
-  await processHermesRuns(app);
+  // #2637 — alongside the Hermes sweep: a re-seed adopted after an unknown spawn
+  // outcome gets its seed typed if it never arrived (never spawns anything).
+  await Promise.all([processHermesRuns(app), recheckAdoptedSeeds(app)]);
   await processReviewingTasks(app);
   // Runs right after processReviewingTasks, same tick — both re-read from
   // the DB, so a verdict ingested earlier in this pass is already visible

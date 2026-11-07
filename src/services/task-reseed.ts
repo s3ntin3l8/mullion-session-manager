@@ -312,6 +312,12 @@ export async function reseedTaskIfSessionExited(
       await killSession(app, result.sessionId);
       return false;
     }
+    pendingAdoptedSeeds.set(task.id, {
+      sessionId: result.sessionId,
+      prompt,
+      adoptedAt: Date.now(),
+      logContext,
+    });
     app.log.warn(
       { taskId: task.id, previousSessionId: task.sessionId, newSessionId: result.sessionId },
       `${logContext}: re-seed spawn outcome unknown — adopted the kept session instead of spawning again`,
@@ -383,4 +389,120 @@ export async function reseedTaskIfSessionExited(
       : `${logContext}: re-seeded a fresh session in the same worktree (previous session had exited)`,
   );
   return true;
+}
+
+/**
+ * #2637 follow-up — a re-seed whose spawn outcome was unknown adopts the kept
+ * session with `seedDelivered: false`. If the agent did start but without its
+ * seed (the prompt rides on argv, and the request that carried it may be the
+ * one that was lost), nothing else would ever send it. Remembered here, in
+ * memory only: a restart forgets the entry and the task falls back to the
+ * ordinary dead/idle-session handling, which is the safe direction.
+ */
+interface PendingAdoptedSeed {
+  sessionId: number;
+  prompt: string;
+  adoptedAt: number;
+  logContext: string;
+}
+const pendingAdoptedSeeds = new Map<number, PendingAdoptedSeed>();
+
+/** An agent still booting reads its argv prompt on its own; do not type over it. */
+export const ADOPTED_SEED_GRACE_MS = 30_000;
+/** Stop re-checking a session that never became typeable. */
+export const ADOPTED_SEED_MAX_AGE_MS = 30 * 60_000;
+
+const squash = (text: string): string => text.replace(/\s+/g, " ").trim();
+
+/** A distinctive opening of the seed, to look for in the session's own output. */
+function seedFingerprint(prompt: string): string {
+  const firstLine = prompt.split("\n").find((l) => l.trim() !== "") ?? "";
+  return squash(firstLine).slice(0, 40);
+}
+
+/** Test seam: forget every remembered adoption. */
+export function resetPendingAdoptedSeeds(): void {
+  pendingAdoptedSeeds.clear();
+}
+
+/**
+ * Runs once per reconcile tick. For each adopted re-seed session that is still
+ * the task's worker and still flagged `seedDelivered: false`: once the grace
+ * window has passed and the session can be typed into, look for the seed in its
+ * output; if it is absent, type it into THIS session. Never spawns a session —
+ * the one adopted is the only one there is.
+ */
+export async function recheckAdoptedSeeds(app: FastifyInstance, now = Date.now()): Promise<void> {
+  try {
+    await recheckEach(app, now);
+  } catch (err) {
+    app.log.warn({ err }, "task reconcile: re-checking adopted re-seed sessions failed");
+  }
+}
+
+async function recheckEach(app: FastifyInstance, now: number): Promise<void> {
+  for (const [taskId, pending] of [...pendingAdoptedSeeds]) {
+    const [task] = app.db.select().from(tasks).where(eq(tasks.id, taskId)).all();
+    if (
+      !task ||
+      task.status !== "in_progress" ||
+      task.sessionId !== pending.sessionId ||
+      task.seedDelivered !== false ||
+      now - pending.adoptedAt > ADOPTED_SEED_MAX_AGE_MS
+    ) {
+      pendingAdoptedSeeds.delete(taskId);
+      continue;
+    }
+    if (now - pending.adoptedAt < ADOPTED_SEED_GRACE_MS) continue;
+
+    const state = await readLiveWorkerState(app, task);
+    // Gone: the ordinary dead-session handling owns it. Unreachable or blocked:
+    // say nothing about whether it has the seed, so look again next tick.
+    if (state.kind === "none") {
+      pendingAdoptedSeeds.delete(taskId);
+      continue;
+    }
+    if (state.kind !== "quiet") continue;
+
+    let hasSeed: boolean;
+    try {
+      const screen = await resolveBackend(app, state.hostId).getRenderedScrollback(
+        String(task.sessionId),
+      );
+      const fingerprint = seedFingerprint(pending.prompt);
+      hasSeed = fingerprint !== "" && squash(screen).includes(fingerprint);
+    } catch (err) {
+      app.log.warn(
+        { err, taskId, sessionId: task.sessionId },
+        `${pending.logContext}: could not read the adopted session's output, will check again`,
+      );
+      continue;
+    }
+    if (!hasSeed) {
+      const outcome = await promptLiveTaskWorker(
+        app,
+        task,
+        pending.prompt,
+        pending.logContext,
+        state,
+      );
+      if (outcome !== "typed") continue;
+      app.log.warn(
+        { taskId, sessionId: task.sessionId },
+        `${pending.logContext}: the adopted re-seed session had no seed — typed it`,
+      );
+    }
+    app.db
+      .update(tasks)
+      .set({ seedDelivered: true })
+      .where(
+        and(
+          eq(tasks.id, taskId),
+          eq(tasks.sessionId, pending.sessionId),
+          eq(tasks.status, "in_progress"),
+        ),
+      )
+      .run();
+    pendingAdoptedSeeds.delete(taskId);
+  }
 }

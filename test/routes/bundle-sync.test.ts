@@ -356,6 +356,45 @@ describe("POST /api/bundle-sync/remove", () => {
       expect(mockGetRemoteHostClient).not.toHaveBeenCalled();
     });
 
+    // #2636 — reachability is "has an address, or an outbound channel connected or
+    // bound", not "has a baseUrl": an outbound-only host is swept, a host with
+    // nothing to reach is skipped.
+    it("sweeps an outbound-only host whose channel is bound but currently disconnected", async () => {
+      const app = await buildTestApp();
+      const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
+      const { bindChannelHost, unbindChannelHost } =
+        await import("../../src/services/agent-channel-tunnel.js");
+      const host = createHost(app, { name: "outbound-only", token: "tok" });
+      expect(app.agentChannels.has(host.id)).toBe(false);
+      bindChannelHost(app, host.id);
+      const removeAgentBundleMock = vi.fn().mockResolvedValue({ removed: 1, legacySwept: 0 });
+      mockGetRemoteHostClient.mockReturnValue({ removeAgentBundle: removeAgentBundleMock });
+
+      try {
+        const res = await app.inject({ method: "POST", url: "/api/bundle-sync/remove" });
+        expect(res.statusCode).toBe(200);
+        expect(removeAgentBundleMock).toHaveBeenCalledWith(true);
+      } finally {
+        unbindChannelHost(app, host.id);
+        deleteHost(app, host.id);
+      }
+    });
+
+    it("skips a host with no address and no channel, bound or connected", async () => {
+      const app = await buildTestApp();
+      const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
+      const host = createHost(app, { name: "nothing-to-reach", token: "tok" });
+      mockGetRemoteHostClient.mockReturnValue({ removeAgentBundle: vi.fn() });
+
+      try {
+        const res = await app.inject({ method: "POST", url: "/api/bundle-sync/remove" });
+        expect(res.statusCode).toBe(200);
+        expect(mockGetRemoteHostClient).not.toHaveBeenCalled();
+      } finally {
+        deleteHost(app, host.id);
+      }
+    });
+
     it("with TWO registered agent hosts, one unreachable does not prevent the other from being dispatched to", async () => {
       const app = await buildTestApp();
       const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
@@ -437,6 +476,33 @@ describe("re-enabling sessions.injectMullionBundle fans out to registered agent 
       expect(mockGetRemoteHostClient).toHaveBeenCalledWith(expect.anything(), host.id);
     } finally {
       deleteHost(app, host.id);
+    }
+  });
+
+  it("re-enables on an outbound-only host whose channel is bound but disconnected, and skips an unreachable one", async () => {
+    const app = await buildTestApp();
+    await setInjectMullionBundle(app, false);
+    const { createHost, deleteHost } = await import("../../src/services/host-registry.js");
+    const { bindChannelHost, unbindChannelHost } =
+      await import("../../src/services/agent-channel-tunnel.js");
+    const outbound = createHost(app, { name: "outbound-only", token: "tok" });
+    const nothing = createHost(app, { name: "nothing-to-reach", token: "tok" });
+    bindChannelHost(app, outbound.id);
+    const removeAgentBundleMock = vi.fn().mockResolvedValue({ removed: 0, legacySwept: 0 });
+    mockGetRemoteHostClient.mockReturnValue({ removeAgentBundle: removeAgentBundleMock });
+
+    try {
+      await setInjectMullionBundle(app, true);
+
+      await vi.waitFor(() => {
+        expect(removeAgentBundleMock).toHaveBeenCalledWith(false);
+      });
+      expect(mockGetRemoteHostClient).toHaveBeenCalledWith(expect.anything(), outbound.id);
+      expect(mockGetRemoteHostClient).not.toHaveBeenCalledWith(expect.anything(), nothing.id);
+    } finally {
+      unbindChannelHost(app, outbound.id);
+      deleteHost(app, outbound.id);
+      deleteHost(app, nothing.id);
     }
   });
 
