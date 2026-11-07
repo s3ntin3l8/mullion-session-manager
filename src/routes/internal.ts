@@ -162,6 +162,7 @@ import {
   rememberSessionBrowserTarget,
   sessionBrowserTarget,
   forgetSessionBrowserTarget,
+  touchSessionBrowserTarget,
 } from "../services/session-browser-targets.js";
 import { acceptControlRelayConnection } from "../plugins/control-relay.js";
 import { resolveSshAuthSock } from "../services/ssh-agent-socket.js";
@@ -2609,6 +2610,8 @@ export async function internalRoutes(app: FastifyInstance) {
         // carry tokens or query secrets. A session with no target, or whose
         // target has no running browser, reports nothing.
         const target = sessionBrowserTarget(id, app.config.SESSIONS_DIR);
+        // Seen alive: keeps a long-running session's target out of the prune.
+        if (info && target) touchSessionBrowserTarget(id, app.config.SESSIONS_DIR);
         if (info && app.browserEnabled && target) {
           const managed = app.browser.get(target);
           if (managed?.browser.isConnected()) {

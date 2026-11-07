@@ -2,7 +2,11 @@ import type { FastifyInstance } from "fastify";
 import { eq, and, ne, isNull, isNotNull, lte } from "drizzle-orm";
 import { pendingBrowserCloses, projects, sessionBrowsers } from "../db/schema.js";
 import { browserTargetKey, type BrowserTarget } from "./browser-manager.js";
-import { BROWSER_TARGETS_OPERATION, bindingBrowserTarget } from "./browser-target.js";
+import {
+  BROWSER_TARGETS_OPERATION,
+  agentBrowserTarget,
+  bindingBrowserTarget,
+} from "./browser-target.js";
 import { requireOperation } from "./host-agents.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
@@ -24,6 +28,7 @@ export function recordSessionBrowserBinding(
   app: FastifyInstance,
   sessionId: number,
   target: BrowserTarget,
+  opts: { endpointUnfixed?: boolean } = {},
 ): void {
   const now = new Date();
   app.db
@@ -33,7 +38,8 @@ export function recordSessionBrowserBinding(
       projectId: target.projectId,
       targetHostId: target.hostId,
       targetCheckoutRoot: target.checkoutRoot,
-      targetEndpoint: target.endpoint ?? null,
+      // "" = fixed with no endpoint; NULL = decided at first use (issue #2688).
+      targetEndpoint: opts.endpointUnfixed ? null : (target.endpoint ?? ""),
       createdAt: now,
       lastAttachedAt: now,
     })
@@ -231,7 +237,7 @@ async function deliverRemoteClose(
   try {
     await getRemoteHostClient(app, target.hostId).postBrowser(
       forget ? "/internal/browser/forget" : "/internal/browser/close",
-      target,
+      agentBrowserTarget(app, target),
     );
     return null;
   } catch (err) {

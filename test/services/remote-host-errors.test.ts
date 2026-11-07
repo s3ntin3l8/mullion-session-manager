@@ -69,6 +69,7 @@ const MUTATING_INTERNAL_POSTS = [
   // act on a running page or server: never assume a repeat is safe.
   "/internal/sessions/:id/browser",
   "/internal/sessions/:id/browser/find",
+  "/internal/sessions/:id/browser-target",
   "/internal/browser/close",
   "/internal/browser/forget",
   "/internal/configured-preview",

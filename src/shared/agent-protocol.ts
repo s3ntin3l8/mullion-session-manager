@@ -32,6 +32,13 @@ export const AGENT_OPERATIONS = [
   "previews",
   "browser",
   "browser-targets",
+  // Issue #2688: the agent keys its browser contexts by the preview endpoint
+  // (`?endpoint=`, the spawn body's `browserTarget.endpoint`) and accepts a
+  // later target (`POST /internal/sessions/:id/browser-target`). An agent
+  // without it ignores or strips the endpoint, so the primary sends the legacy
+  // (empty) endpoint on every path and the panel and `use_browser` share one
+  // context.
+  "browser-endpoints",
   "uploads",
   "updates",
   "capacity",
@@ -101,6 +108,7 @@ const LATE_OPERATIONS: ReadonlySet<string> = new Set([
   "channel-requests",
   "channel-streams",
   "browser-targets",
+  "browser-endpoints",
 ]);
 
 /**

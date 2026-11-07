@@ -22,7 +22,10 @@ import {
 import type { AgentAction, FindElementsBody } from "../routes/browser-automation.js";
 import type { BrowserTarget } from "../services/browser-manager.js";
 import { resolveSessionBrowserTarget } from "../services/browser-target.js";
-import { sessionBrowserTarget } from "../services/session-browser-targets.js";
+import {
+  sessionBrowserTarget,
+  touchSessionBrowserTarget,
+} from "../services/session-browser-targets.js";
 import { agentServesHost } from "../services/agent-identity.js";
 import { recordSessionBrowserBinding } from "../services/session-browsers.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
@@ -712,6 +715,7 @@ function handleConnection(
               continue;
             }
             target = sent;
+            touchSessionBrowserTarget(sessionId, app.config.SESSIONS_DIR);
           }
 
           let page: Page;
