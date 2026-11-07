@@ -227,25 +227,86 @@ describe("check-import-boundaries.mjs", () => {
     expect(baseline.inversions).toHaveLength(1);
     expect(baseline.inversions[0].from).toBe("src/services/thing.ts");
 
-    // The freshly written baseline must satisfy the check that wrote it.
+    // The freshly written baseline does NOT pass yet: its entries carry no
+    // reason, and a reasonless entry is a failure. `--update` can record
+    // that a violation exists; only a human can say why it is allowed.
+    const withoutReason = await run();
+    expect(withoutReason.code).toBe(1);
+    expect(withoutReason.stderr).toContain("BASELINE ENTRY WITHOUT A REASON");
+
+    // With the reason filled in, the same baseline satisfies the check.
+    baseline.cycles[0].note = "deliberate: the two halves really do need each other";
+    baseline.inversions[0].note = "deliberate: the service reads the route's own constant";
+    writeBaseline(baseline);
     const result = await run();
     expect(result.code).toBe(0);
   });
 
-  it("ignores a worktree checkout of the same repository", async () => {
+  it("ignores the excluded directories inside a walked root", async () => {
     write("src/services/a.ts", 'import { b } from "./b.js";\nexport const a = b;\n');
     write("src/services/b.ts", 'import { a } from "./a.js";\nexport const b = a;\n');
-    // The same cycle, inside the directory the audit excludes as a
-    // developer worktree (.wt/) — it must not be counted.
-    write(".wt/other/src/services/a.ts", 'import { b } from "./b.js";\nexport const a = b;\n');
-    write(".wt/other/src/services/b.ts", 'import { a } from "./a.js";\nexport const b = a;\n');
+    // The same cycle, under each excluded directory, INSIDE the walked root:
+    // those are the copies a stale build or a nested checkout leaves behind,
+    // and counting them would report a cycle that does not exist.
+    write("src/node_modules/pkg/a.ts", 'import { b } from "./b.js";\nexport const a = b;\n');
+    write("src/node_modules/pkg/b.ts", 'import { a } from "./a.js";\nexport const b = a;\n');
+    write("src/coverage/a.ts", 'import { b } from "./b.js";\nexport const a = b;\n');
+    write("src/coverage/b.ts", 'import { a } from "./a.js";\nexport const b = a;\n');
+    write("src/.wt/other/a.ts", 'import { b } from "./b.js";\nexport const a = b;\n');
+    write("src/.wt/other/b.ts", 'import { a } from "./a.js";\nexport const b = a;\n');
 
     const result = await run();
 
     expect(result.code).toBe(1);
-    // Only the real tree's two files are reported, and the worktree copy
-    // is not among them.
+    // Only the real tree's two files are reported; the excluded copies are
+    // not among them.
     expect(result.stderr).toContain("src/services/a.ts -> src/services/b.ts");
-    expect(result.stderr).not.toContain(".wt/");
+    expect(result.stderr).not.toContain("node_modules");
+    expect(result.stderr).not.toContain("coverage");
+    expect(result.stderr).not.toContain(".wt");
+  });
+
+  it("fails when the database imports a layer above it", async () => {
+    write("src/services/thing.ts", "export const thing = 1;\n");
+    write("src/db/client.ts", 'import { thing } from "../services/thing.js";\nexport { thing };\n');
+
+    const result = await run();
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("NEW LAYERING INVERSION");
+    expect(result.stderr).toContain("src/db/client.ts -> src/services/thing.ts");
+  });
+
+  it("fails when a baseline entry carries no reason", async () => {
+    write("src/routes/thing.ts", "export const thing = 1;\n");
+    write(
+      "src/services/thing.ts",
+      'import { thing } from "../routes/thing.js";\nexport { thing };\n',
+    );
+    writeBaseline({
+      cycles: [],
+      inversions: [{ from: "src/services/thing.ts", to: "src/routes/thing.ts", note: "" }],
+    });
+
+    const result = await run();
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("BASELINE ENTRY WITHOUT A REASON");
+  });
+
+  it("fails when the repository grows a path alias", async () => {
+    write("src/services/a.ts", "export const a = 1;\n");
+    // A tsconfig `paths` entry names a file in this repository under a BARE
+    // specifier, which the checker does not resolve — so it fails rather
+    // than taking neither the cycle nor the inversion rule for it.
+    write(
+      "tsconfig.json",
+      JSON.stringify({ compilerOptions: { paths: { "@app/*": ["./src/*"] } } }, null, 2),
+    );
+
+    const result = await run();
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("path aliases");
   });
 });

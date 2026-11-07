@@ -46,7 +46,6 @@
       "note": "issue #2414 — the services' type-level mesh (session, browser and host modules importing each other's types). The runtime cycles inside this group are broken separately; what is left here is type-only.",
       "edges": [
         "src/plugins/hooks.ts -> src/routes/browser-automation.ts",
-        "src/plugins/hooks.ts -> src/routes/browser-automation.ts",
         "src/plugins/hooks.ts -> src/services/browser-target.ts",
         "src/plugins/hooks.ts -> src/services/session-browsers.ts",
         "src/plugins/hooks.ts -> src/services/session-github-auth.ts",
@@ -118,7 +117,6 @@
         "src/services/session-worktree-reclaim.ts -> src/services/host-git.ts",
         "src/services/session-worktree-reclaim.ts -> src/services/session-backend.ts",
         "src/services/session-worktree-reclaim.ts -> src/services/session-live-info.ts",
-        "src/services/session-worktree-reclaim.ts -> src/services/worktree-usage.ts",
         "src/services/session-worktree-reclaim.ts -> src/services/worktree-usage.ts",
         "src/services/setup-recipe.ts -> src/services/host-git.ts",
         "src/services/task-decisions.ts -> src/services/host-git.ts",

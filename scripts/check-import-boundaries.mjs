@@ -75,7 +75,7 @@
 // of every entry that still exists. It is how the baseline is born and
 // how it shrinks; the diff it produces is meant to be read.
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -97,14 +97,54 @@ const SOURCE_ROOTS = ["src", "frontend/src"];
  * The frontend is not layered this way (it is one workspace of components
  * and an API client), so it contributes no inversions — but it does
  * contribute cycles, which is why it is in SOURCE_ROOTS at all.
+ *
+ * WHICH DIRECTIONS ARE ALLOWED, spelled out (the diagram above does not
+ * show them all, and the rule set is the part that matters):
+ *
+ *   routes  -> services -> db          the intended direction
+ *   routes  -> plugins                 allowed (plugins are above routes)
+ *   plugins -> services, db            allowed
+ *   services -> routes                 FORBIDDEN — reaching up to a route
+ *   services -> plugins                FORBIDDEN — reaching up to a plugin
+ *   plugins  -> routes                 FORBIDDEN — reaching down to a route
+ *   db       -> anything above it      FORBIDDEN — the database reaching back
+ *
+ * The frontend's own `api/` directory is the API CLIENT, not the route
+ * layer, so it is not part of this model.
  */
 const LAYERS = [
   { prefix: "src/services/", name: "services" },
   { prefix: "src/routes/", name: "routes" },
   { prefix: "src/plugins/", name: "plugins" },
+  { prefix: "src/db/", name: "db" },
 ];
 
-const FORBIDDEN_EDGES = new Set(["services>routes", "services>plugins", "plugins>routes"]);
+// The edges that invert the layering. Everything else is allowed:
+//
+//   routes  -> services  ->  db        the intended direction
+//   routes  ->  plugins               a route may use a plugin
+//   plugins ->  services              a plugin may use a service
+//   plugins ->  db                    a plugin may use the database
+//
+// and these four are NOT:
+//
+//   services -> routes                a service reaching up to a route
+//   services -> plugins               a service reaching up to a plugin
+//   plugins  -> routes                a plugin reaching down to a route
+//   db       -> services|routes|plugins   the database reaching back up
+//
+// `routes -> plugins` is deliberately ALLOWED: the plugins are the layer
+// above the routes, and a route that registers a plugin (or reads one)
+// is not inverting anything. The plugin side of that pair is what is
+// forbidden: a plugin must not reach DOWN into a route.
+const FORBIDDEN_EDGES = new Set([
+  "services>routes",
+  "services>plugins",
+  "plugins>routes",
+  "db>services",
+  "db>routes",
+  "db>plugins",
+]);
 
 /**
  * @param {string[]} argv
@@ -208,14 +248,26 @@ function readImports(absPath, relPath) {
  * @returns {string | null}
  */
 function resolveSpecifier(fromRelPath, spec, knownFiles) {
+  // A BARE specifier ("some-package/thing") is not resolved here: it names a
+  // package, not a file in this repository, so it can be neither a layering
+  // inversion nor a cycle between two of this repository's modules. The
+  // assumption that makes that true is that the repository has NO path
+  // aliases — no tsconfig `paths`, no package.json `imports`, no Vite
+  // `resolve.alias` — because an alias would name a file IN this repository
+  // under a bare specifier, and the checker would silently take neither the
+  // cycle nor the inversion rule for it. assertNoPathAliases() below fails
+  // the lint if an alias ever appears, so the assumption cannot rot
+  // unnoticed.
   if (!spec.startsWith(".")) return null;
   const base = path.posix.join(path.posix.dirname(fromRelPath), spec);
   const candidates = [
+    // The specifier carries the ".js" extension even when the file is
+    // TypeScript (Node16 resolution, AGENTS.md's ESM rule), so the
+    // extension is swapped back before the lookup.
     base.replace(/\.js$/, ".ts"),
     base.replace(/\.js$/, ".tsx"),
-    base.replace(/\.mjs$/, ".mjs"),
-    base.replace(/\.js$/, ".js"),
-    base.replace(/\.jsx$/, ".jsx"),
+    base.replace(/\.jsx$/, ".tsx"),
+    // The specifier as written (a real .js/.mjs/.cjs file).
     base,
     `${base}/index.ts`,
     `${base}/index.tsx`,
@@ -282,7 +334,80 @@ function findCycles(adjacency) {
   return components;
 }
 
+/**
+ * Fail if the repository grows a path alias.
+ *
+ * The checker resolves RELATIVE specifiers only. An alias (a tsconfig
+ * `paths` entry, a package.json `imports` map, a Vite `resolve.alias`)
+ * names a file inside this repository under a bare specifier, and the
+ * checker would take neither the cycle nor the inversion rule for it —
+ * silently. There are none today; this makes that a build failure rather
+ * than a silent blind spot.
+ *
+ * @param {string} root
+ * @returns {string[]} the aliases found, empty when there are none
+ */
+function findPathAliases(root) {
+  const found = [];
+  const tsconfigCandidates = [
+    "tsconfig.json",
+    "frontend/tsconfig.json",
+    "frontend/tsconfig.app.json",
+  ];
+  for (const rel of tsconfigCandidates) {
+    const abs = path.join(root, rel);
+    if (!existsSync(abs)) continue;
+    try {
+      const parsed = JSON.parse(stripJsonComments(readFileSync(abs, "utf8")));
+      const paths = parsed?.compilerOptions?.paths;
+      if (paths && Object.keys(paths).length > 0) found.push(`${rel}: compilerOptions.paths`);
+    } catch {
+      // A tsconfig with comments (the repo's own does) — the JSON.parse above
+      // may fail; the alias scan below covers the common shapes, and a
+      // parse failure here is not evidence of an alias.
+    }
+  }
+  for (const rel of ["package.json", "frontend/package.json"]) {
+    const abs = path.join(root, rel);
+    if (!existsSync(abs)) continue;
+    try {
+      const parsed = JSON.parse(readFileSync(abs, "utf8"));
+      if (parsed?.imports && Object.keys(parsed.imports).length > 0) found.push(`${rel}: imports`);
+    } catch {
+      // Not JSON — nothing to check.
+    }
+  }
+  const viteConfig = path.join(root, "frontend/vite.config.ts");
+  if (existsSync(viteConfig) && /\balias\s*:/.test(readFileSync(viteConfig, "utf8"))) {
+    found.push("frontend/vite.config.ts: resolve.alias");
+  }
+  return found;
+}
+
+/**
+ * Strip `//` and block comments from a JSON-with-comments file.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function stripJsonComments(text) {
+  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
 const options = parseArgs(process.argv.slice(2));
+
+const pathAliases = findPathAliases(options.root);
+if (pathAliases.length > 0) {
+  console.error(
+    "This repository has path aliases, and the import-boundary checker does\n" +
+      "not resolve them — a bare specifier that names a file in this\n" +
+      "repository would be invisible to both the cycle rule and the layering\n" +
+      "rule. Resolve the alias here first, or teach this checker to resolve\n" +
+      "it. Found:",
+  );
+  for (const alias of pathAliases) console.error(`  ${alias}`);
+  process.exit(1);
+}
 
 const files = collectSourceFiles(options.root, SOURCE_ROOTS);
 const knownFiles = new Set(files);
@@ -311,14 +436,17 @@ const cycleEdges = new Set();
 const cycleFiles = new Map();
 for (const component of cycleComponents) {
   const members = new Set(component);
-  const groupEdges = [];
+  // A Set, not an array: `edges` holds one entry per import STATEMENT, so a
+  // module imported twice would push the same edge twice and the baseline
+  // would list it twice.
+  const groupEdges = new Set();
   for (const edge of edges) {
     if (!members.has(edge.from) || !members.has(edge.to)) continue;
     const key = `${edge.from} -> ${edge.to}`;
     cycleEdges.add(key);
-    groupEdges.push(key);
+    groupEdges.add(key);
   }
-  cycleFiles.set(groupEdges.sort().join("\n"), component);
+  cycleFiles.set([...groupEdges].sort().join("\n"), component);
 }
 
 // The layering inversions, counted per (from, to) pair — a type-only import
@@ -407,6 +535,22 @@ if (options.update) {
   process.exit(0);
 }
 
+// A baselined entry must say WHY it is allowed. Without that, `--update` is
+// a one-command way to launder a brand-new cycle or inversion into the
+// baseline: the cycle fails, you run `--update`, and the new entry lands
+// with an empty note that nobody ever reads. The note is the point.
+const blankNotes = [];
+for (const group of baselineCycles) {
+  if (!group.note || group.note.trim() === "") {
+    blankNotes.push(`cycle edge ${(group.edges ?? [])[0] ?? "(no edges)"}`);
+  }
+}
+for (const entry of baselineInversions) {
+  if (!entry.note || entry.note.trim() === "") {
+    blankNotes.push(`inversion ${entry.from} -> ${entry.to}`);
+  }
+}
+
 const report = {
   cycleGroups: cycleComponents.length,
   cycleEdges: cycleEdges.size,
@@ -415,6 +559,7 @@ const report = {
   staleCycleEdges,
   newInversions,
   staleInversions,
+  blankNotes,
 };
 
 if (options.json) {
@@ -425,7 +570,8 @@ const failed =
   newCycleEdges.length > 0 ||
   staleCycleEdges.length > 0 ||
   newInversions.length > 0 ||
-  staleInversions.length > 0;
+  staleInversions.length > 0 ||
+  blankNotes.length > 0;
 
 if (!failed) {
   if (!options.json) {
@@ -464,5 +610,15 @@ if (staleInversions.length > 0) {
   console.error("\nSTALE BASELINE ENTRY — a baselined inversion that is no longer there:");
   for (const edge of staleInversions) console.error(`  ${edge}`);
   console.error("  Remove these from scripts/import-boundaries.baseline.json.");
+}
+if (blankNotes.length > 0) {
+  console.error(
+    "\nBASELINE ENTRY WITHOUT A REASON — the baseline says what is allowed, not just what exists:",
+  );
+  for (const entry of blankNotes) console.error(`  ${entry}`);
+  console.error(
+    "  Every entry needs a note saying why it is allowed. An empty one means\n" +
+      "  `--update` laundered a new violation into the baseline.",
+  );
 }
 process.exit(1);
