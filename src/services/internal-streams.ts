@@ -16,10 +16,7 @@ import { WebSocket as NodeWebSocket } from "ws";
 import { createMuxConnection } from "./ssh-agent-mux.js";
 import { pipeWsFrames, toWsUrl } from "./ws-pipe.js";
 import { getPinnedWsAgent } from "./pinned-connect.js";
-import {
-  normalizePreviewDestination,
-  CONFIGURED_PREVIEW_POLICY,
-} from "./preview-targets.js";
+import { normalizePreviewDestination, CONFIGURED_PREVIEW_POLICY } from "./preview-targets.js";
 import { attachSocketToSession } from "./session-attach.js";
 import { attachLocalEventsSocket, attachCursorsAndSeenBroadcast } from "./session-events.js";
 import {
