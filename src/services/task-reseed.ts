@@ -272,6 +272,10 @@ export async function reseedTaskIfSessionExited(
   // unattended as an autonomous claim.
   const seedCapable = commandSupportsSeed(task.agentCommand);
   const taskMasterConfig = resolveTaskMasterConfig(app);
+  // Issue #1724 — the re-seed runs on the host that holds the task's worktree, so
+  // that is the host the spawn joins AND the host whose version skew decides
+  // whether the seed's delivery can be trusted. One value for all three uses.
+  const workerHostId = resolveTaskWorkerHost(app, task);
   const result = await createSessionRecord(app, {
     projectId: project.id,
     command: task.agentCommand,
@@ -291,7 +295,7 @@ export async function reseedTaskIfSessionExited(
     // (`cwd: task.worktreePath`), which lives on the host the worker was
     // placed on, so the re-seed joins that host.
     unattended: true,
-    hostId: resolveTaskWorkerHost(app, task),
+    hostId: workerHostId,
   });
   if (!result.ok && result.reason === "outcome-unknown" && result.sessionId !== undefined) {
     // #2637 — the spawn may have landed: createSessionRecord kept the row. Bind
@@ -319,7 +323,7 @@ export async function reseedTaskIfSessionExited(
       logContext,
       // No applied-echo exists after an unknown outcome, so only the local host
       // (same build) makes delivery certain.
-      seedCertain: resolveSeedDelivered(seedCapable, resolveTaskWorkerHost(app, task), undefined),
+      seedCertain: resolveSeedDelivered(seedCapable, workerHostId, undefined),
     });
     app.log.warn(
       { taskId: task.id, previousSessionId: task.sessionId, newSessionId: result.sessionId },
@@ -340,9 +344,6 @@ export async function reseedTaskIfSessionExited(
   }
   // Same version-skew guard as task-claim.ts's own — see
   // resolveSeedDelivered's doc comment.
-  // Issue #1724 — the re-seed runs on the host that holds the task's
-  // worktree, so that is the host whose version skew matters here.
-  const workerHostId = resolveTaskWorkerHost(app, task);
   const seedDelivered = resolveSeedDelivered(
     seedCapable,
     workerHostId,
@@ -549,6 +550,7 @@ async function recheckEach(app: FastifyInstance, now: number): Promise<void> {
     if (state.kind !== "quiet") continue;
 
     let hasSeed: boolean;
+    let absenceShown: boolean;
     try {
       const screen = await resolveBackend(app, state.hostId).getRenderedScrollback(
         String(task.sessionId),
@@ -570,6 +572,9 @@ async function recheckEach(app: FastifyInstance, now: number): Promise<void> {
           fromTranscript === true ? true : fromTranscript === false && measurable ? false : null;
       }
       hasSeed = verdict ?? pending.seedCertain;
+      // Typed because absence was shown, or only because delivery could not be
+      // confirmed: the log says which.
+      absenceShown = verdict === false;
       if (verdict === null && pending.seedCertain) {
         app.log.info(
           { taskId, sessionId: task.sessionId },
@@ -594,7 +599,9 @@ async function recheckEach(app: FastifyInstance, now: number): Promise<void> {
       if (outcome !== "typed") continue;
       app.log.warn(
         { taskId, sessionId: task.sessionId },
-        `${pending.logContext}: the adopted re-seed session had no seed — typed it`,
+        absenceShown
+          ? `${pending.logContext}: the adopted re-seed session had no seed — typed it`
+          : `${pending.logContext}: could not confirm the seed reached the adopted re-seed session (delivery was not certain) — typed it`,
       );
     }
     app.db

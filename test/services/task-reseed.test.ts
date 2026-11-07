@@ -519,6 +519,33 @@ describe("reseedTaskIfSessionExited", () => {
       },
     );
 
+    // The warn that records a typed seed is the diagnostic for this whole
+    // scenario, so it must say WHY it typed: absence shown, or only that delivery
+    // could not be confirmed.
+    it.each([
+      ["absence shown", "claude", "local", /had no seed — typed it/],
+      ["delivery not certain", "claude", "remote-mac", /could not confirm the seed reached/],
+    ])("logs why the seed was typed: %s", async (_name, agentCommand, hostId, message) => {
+      const warn = vi.spyOn(app.log, "warn");
+      await adopt({ agentCommand, hostId });
+      mockRenderedScrollback.mockResolvedValue("> ");
+      // Absent for the local worker (the transcript answered); unanswerable for
+      // the remote one.
+      mockTranscript.mockResolvedValue(
+        hostId === "local"
+          ? transcriptOf({ role: "user", text: "something else" })
+          : { ok: false, status: 404, error: "no transcript" },
+      );
+
+      await recheckAdoptedSeeds(app, later());
+
+      expect(mockPrompt).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls.map((c) => String(c[1]))).toEqual(
+        expect.arrayContaining([expect.stringMatching(message)]),
+      );
+      warn.mockRestore();
+    });
+
     it("does not call an unmeasurable seed absent: a terse re-seed prompt is cannot-say", async () => {
       // "PR fails CI" has no fragment long enough to look for, so neither the
       // screen nor the transcript can ever show it.
