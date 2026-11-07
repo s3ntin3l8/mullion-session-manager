@@ -145,9 +145,9 @@ and your body is literally what the review agent judges the diff against.
 **Name the producer and the consumer of anything new.** A new field, flag,
 option, capability or exported helper in Scope says who sets it and who reads
 it ("`Target.endpoint` is set by `resolveTarget` from the session's preview
-and read by `closeSessionBrowserBindings`"). If the issue only defines it, say so under Out
-of scope and file the wiring issue. A definition with no producer passes every
-test that sets it by hand, and the reviewer sees a diff that looks complete.
+and read by `closeSessionBrowserBindings`"). If the issue only defines it,
+say so under Out of scope and file the wiring issue. A definition with no
+producer passes every test that sets it by hand, and the reviewer sees a diff that looks complete.
 
 **Give the search, not the list, for a family of call sites.** When the change
 is "every place that does X", name the search that finds them (`git grep

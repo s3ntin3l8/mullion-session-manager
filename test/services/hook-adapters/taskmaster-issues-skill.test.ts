@@ -328,21 +328,24 @@ describe("taskmaster-issues skill — governs every agent-filed issue, not only 
     expect(skillBody).toMatch(/may only have\s+one parent/);
   });
 
-  it("pins the three wiring rules for the Scope of a spec", () => {
-    expect(skillBody).toMatch(/\*\*Name the producer and the consumer of anything new\.\*\*/);
-    expect(skillBody).toMatch(/passes every\s+test that sets it by hand/);
-    expect(skillBody).toMatch(
-      /\*\*Give the search, not the list, for a family of call sites\.\*\*/,
-    );
-    expect(skillBody).toContain('git grep\n"instanceof HostUnreachableError"');
-    expect(skillBody).toMatch(/\*\*One entry-point test per behavioural claim\.\*\*/);
-    expect(skillBody).toMatch(/pure resolver or parser\s+is its own entry point/);
-  });
-
   it("documents the blocked_by dependency endpoint, and says to set it rather than write prose", () => {
     expect(skillBody).toContain(
       "/issues/<blocked>/dependencies/blocked_by -F issue_id=<blocker id>",
     );
     expect(skillBody).toMatch(/not by writing "blocked by #N" in\s+prose/);
+  });
+});
+
+describe("taskmaster-issues skill — the wiring rules for writing a spec body", () => {
+  it("pins the three rules and the clauses that scope them", () => {
+    expect(skillBody).toMatch(/\*\*Name the producer and the consumer of anything new\.\*\*/);
+    expect(skillBody).toMatch(/passes every\s+test that sets it by hand/);
+    expect(skillBody).toMatch(
+      /\*\*Give the search, not the list, for a family of call sites\.\*\*/,
+    );
+    expect(skillBody).toMatch(/git\s+grep\s+"instanceof HostUnreachableError"/);
+    expect(skillBody).toMatch(/\*\*One entry-point test per behavioural claim\.\*\*/);
+    expect(skillBody).toMatch(/When the behaviour is only observable at such a\s+boundary/);
+    expect(skillBody).toMatch(/pure resolver or parser\s+is its own entry point/);
   });
 });
