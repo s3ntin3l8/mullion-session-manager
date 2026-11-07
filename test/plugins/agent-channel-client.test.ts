@@ -230,6 +230,11 @@ describe("agent channel client (#2450)", () => {
       });
       const app = await startAgent(primary.url);
       await advance(2500);
+      // Real socket I/O races the fake clock: give the redial (due ~1 s in)
+      // a few more real-I/O rounds to land instead of one fixed window.
+      for (let i = 0; i < 20 && primary.connections() < 2; i++) {
+        await advance(1000);
+      }
       await settleIo();
       expect(primary.connections()).toBe(2);
       expect(app.agentChannelStatus.state).toBe("ready");
