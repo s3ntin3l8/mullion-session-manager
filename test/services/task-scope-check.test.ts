@@ -203,6 +203,7 @@ describe("scope check (#2599)", () => {
       });
       expect(out).toContain("names the follow-up issue");
       expect(out).toContain("treated as `partial`");
+      expect(out.replace(/\s+/g, " ")).toContain("is a claim to check, not a fact");
     });
 
     it("the review prompt carries the wiring and call-site checks as suggestions", () => {

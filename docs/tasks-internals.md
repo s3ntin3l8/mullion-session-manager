@@ -731,7 +731,8 @@ focus` section (`task-review-focus.ts`; a `not-checked` entry becomes a note
   (never as a sub-issue of the task's own issue, which would park the task) and to
   name it on the line:
   `Deferred: <what> (#<number>)`. If it cannot file one (issues disabled, no
-  permission) it says so on a `Decision:` line instead. At parse time each
+  permission) it says so on a `Decision:` line instead, which the reviewer is told
+  to check rather than take on the worker's word. At parse time each
   declaration in a `deviated` entry's evidence is judged on its own text, up to
   the next declaration: a `Skipped:` or `Deferred:` one with no `#<number>`
   rewrites the entry to `partial`, so it sends the task back like any unfinished
