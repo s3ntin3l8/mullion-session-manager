@@ -1,7 +1,7 @@
 import { chromium } from "playwright";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
-import { rm, stat } from "node:fs/promises";
+import { readdir, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
 
@@ -148,34 +148,32 @@ function readEndpointIndex(file: string): string[] {
   }
 }
 
-/** Short filesystem-safe id for a target's on-disk state.
- *
- * The project's default checkout keeps the storage file its browser had before
- * targets existed (`project-<id>.json`, the legacy cookie jar) (issue #2688).
- * That jar belongs to ONE endpoint at a time: whichever endpoint of the default
- * checkout first loads it claims it (`project-<id>.owner`), including the
- * empty legacy endpoint and a preview slug the session only got after its
- * dev server was accepted. A second, different endpoint opened in the same
- * checkout is the user's explicit choice of a second context and gets a hashed
- * file of its own, so two previews never share cookies or downloads. */
-function targetFileId(dataDir: string, target: BrowserTarget): string {
-  if (!target.legacy) return hashedFileId(target);
-  const endpoint = target.endpoint ?? LEGACY_BROWSER_ENDPOINT;
-  const claimFile = path.join(dataDir, `project-${target.projectId}.owner`);
-  try {
-    const owner = readFileSync(claimFile, "utf8");
-    return owner === endpoint ? `project-${target.projectId}` : hashedFileId(target);
-  } catch {
-    // Unclaimed: this endpoint takes the legacy jar. An unwritable claim is
-    // not fatal; the jar is then simply shared by whoever asks next.
-    try {
-      mkdirSync(dataDir, { recursive: true });
-      writeFileSync(claimFile, endpoint);
-    } catch {
-      // best-effort
-    }
-    return `project-${target.projectId}`;
-  }
+/** The legacy cookie jar's id for a project (`project-<id>.json`). */
+function legacyFileId(projectId: number): string {
+  return `project-${projectId}`;
+}
+
+// Which file a target's state lives in (issues #2688, #2701)
+// ----------------------------------------------------------
+// The project's default checkout (`target.legacy`) keeps the storage file its
+// browser had before targets existed, `project-<id>.json`, whatever preview
+// endpoint a session happens to have: every default-checkout session loads it.
+// A SECOND, different endpoint of that checkout open at the same time (the
+// user's explicit choice of a second context) cannot share the jar's file
+// without clobbering it, so it gets a hashed file of its own. The rule is
+// therefore "the legacy file belongs to the default checkout's one running
+// context; a concurrent second endpoint is hashed", decided in `fileIdFor`,
+// the only place that does so. A non-default checkout is always hashed.
+
+/** Whether a name in the data dir (or its downloads dir) is one of the project's. */
+function isProjectFile(name: string, projectId: number): boolean {
+  const prefix = legacyFileId(projectId);
+  return (
+    name === `${prefix}.json` ||
+    name === `${prefix}.owner` ||
+    (name.startsWith(`${prefix}-`) &&
+      /^[0-9a-f]{16}(\.json|\.endpoints)?$/.test(name.slice(prefix.length + 1)))
+  );
 }
 
 export interface ConsoleLogEntry {
@@ -269,6 +267,8 @@ export class BrowserManager {
   // the downloads the old context is still saving and load a half-written
   // storage-state file.
   private readonly closing = new Map<string, Promise<void>>();
+  // Storage id each target in the pool was opened with (see `fileIdFor`).
+  private readonly fileIds = new Map<string, string>();
   // The machine's single Chromium process; null until the first target.
   private process: Browser | null = null;
   private processLaunch: Promise<Browser> | null = null;
@@ -321,12 +321,42 @@ export class BrowserManager {
     }
   }
 
+  /** Whether a target currently occupies the pool (open, opening or closing). */
+  private isLive(key: string): boolean {
+    return this.instances.has(key) || this.pending.has(key) || this.closing.has(key);
+  }
+
+  /** Storage id of a target. A target in the pool keeps the id it was opened
+   * with. `claim` (the open path) decides it afresh: a default-checkout target
+   * gets the legacy jar unless a different endpoint of the same project holds
+   * it right now, and the answer is recorded for the target's lifetime. The
+   * check and the record are one synchronous step, so two concurrent first
+   * opens cannot both take the jar. */
+  private fileIdFor(target: BrowserTarget, claim = false): string {
+    const key = browserTargetKey(target);
+    if (!claim) {
+      const held = this.fileIds.get(key);
+      if (held) return held;
+    }
+    for (const other of [...this.fileIds.keys()]) {
+      if (other !== key && !this.isLive(other)) this.fileIds.delete(other);
+    }
+    let id = hashedFileId(target);
+    if (target.legacy) {
+      const jar = legacyFileId(target.projectId);
+      const taken = [...this.fileIds].some(([other, otherId]) => other !== key && otherId === jar);
+      if (!taken) id = jar;
+    }
+    if (claim) this.fileIds.set(key, id);
+    return id;
+  }
+
   private storageStatePath(target: BrowserTarget): string {
-    return path.join(this.dataDir, `${targetFileId(this.dataDir, target)}.json`);
+    return path.join(this.dataDir, `${this.fileIdFor(target)}.json`);
   }
 
   private downloadsDir(target: BrowserTarget): string {
-    return path.join(this.dataDir, "downloads", targetFileId(this.dataDir, target));
+    return path.join(this.dataDir, "downloads", this.fileIdFor(target));
   }
 
   /** The shared Chromium, launched on first use and again after a crash or
@@ -436,6 +466,8 @@ export class BrowserManager {
   }
 
   private async openTarget(target: BrowserTarget, key: string): Promise<ManagedBrowser> {
+    // Synchronous, before the first await: decides the storage file.
+    this.fileIdFor(target, true);
     // Issue #381 — the `downloads` array below (and the 50-entry eviction
     // that deletes files as they age out of it) is a plain closure variable,
     // scoped to THIS launch's lifetime. It has no memory of files saved by a
@@ -717,6 +749,26 @@ export class BrowserManager {
     targets.set(browserTargetKey(base), base);
     for (const target of targets.values()) await this.forgetTarget(target);
     await rm(indexFile, { force: true });
+  }
+
+  /** A project is gone: closes its browsers and deletes everything it left on
+   * disk, the legacy cookie jar, its (obsolete) claim file and every
+   * per-target file and downloads directory. */
+  async forgetProject(projectId: number): Promise<void> {
+    await this.closeForProject(projectId);
+    const names = await readdir(this.dataDir).catch(() => [] as string[]);
+    for (const name of names) {
+      if (!isProjectFile(name, projectId)) continue;
+      await rm(path.join(this.dataDir, name), { force: true }).catch(() => {});
+    }
+    for (const name of await readdir(path.join(this.dataDir, "downloads")).catch(() => [])) {
+      if (isProjectFile(name, projectId)) {
+        await rm(path.join(this.dataDir, "downloads", name), {
+          recursive: true,
+          force: true,
+        }).catch(() => {});
+      }
+    }
   }
 
   /** Closes every target of a project (project deleted or merged

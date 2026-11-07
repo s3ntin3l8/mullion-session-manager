@@ -19,7 +19,7 @@ import {
 import { LOCAL_HOST_ID, getHostRow } from "./host-registry.js";
 import { hostSupports, requireOperation } from "./host-agents.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
-import { listSessionBrowserBindings } from "./session-browsers.js";
+import { getOrBindEndpoint, listSessionBrowserBindings } from "./session-browsers.js";
 import { parseHostCwds, projectCwdOnHost } from "./placement.js";
 
 /** The negotiated agent operation that understands a per-target browser. An
@@ -274,7 +274,14 @@ export async function resolveSessionBrowserTarget(
       }
     }
   }
-  return resolveTarget(app, { projectId, sessionId });
+  const resolved = await resolveTarget(app, { projectId, sessionId });
+  // A local session's endpoint is fixed here, once (issue #2701): the panel
+  // and `use_browser` both come through this function before anything is
+  // opened, and whichever binds first decides for both.
+  if (resolved.ok && resolved.target.hostId === LOCAL_HOST_ID && app.hasDecorator("db")) {
+    return { ok: true, target: getOrBindEndpoint(app, sessionId, resolved.target) };
+  }
+  return resolved;
 }
 
 /** The target a stored binding row points at. A row from before targets

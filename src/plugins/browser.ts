@@ -59,6 +59,22 @@ export const browserPlugin = fp(async (app: FastifyInstance) => {
 
   app.decorate("browser", manager);
 
+  // A deleted project takes its browsers and everything they stored (cookie
+  // jar, obsolete claim file, per-target state, downloads) with it (#2701).
+  // Hooked here rather than in the route so the browser owns its own cleanup;
+  // best-effort, after the response, like the terminate in that route.
+  if (app.db) {
+    app.addHook("onResponse", async (request, reply) => {
+      if (request.method !== "DELETE" || reply.statusCode !== 204) return;
+      if (request.routeOptions.url !== "/api/projects/:id") return;
+      const projectId = Number((request.params as { id?: string }).id);
+      if (!Number.isInteger(projectId)) return;
+      await manager.forgetProject(projectId).catch((err) => {
+        app.log.warn({ err, projectId }, "project delete: best-effort browser cleanup failed");
+      });
+    });
+  }
+
   let healthTimer: ReturnType<typeof setInterval> | null = null;
   if (enabled) {
     healthTimer = setInterval(() => manager.healthCheck(), HEALTH_CHECK_INTERVAL_MS);
