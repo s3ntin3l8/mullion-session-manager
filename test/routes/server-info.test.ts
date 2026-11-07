@@ -208,6 +208,15 @@ describe("server-info route", () => {
     const res = await demo.inject({ method: "GET", url: "/api/server-info" });
     expect(res.json().version).toBe("1.0.0");
     await demo.close();
+
+    // The safety net: a demo with an empty or malformed key still reports the real version.
+    for (const bad of ["", "next", "1.0"]) {
+      process.env.MULLION_DEMO_VERSION = bad;
+      const odd = await buildApp();
+      const body = (await odd.inject({ method: "GET", url: "/api/server-info" })).json();
+      expect(body.version, `MULLION_DEMO_VERSION=${JSON.stringify(bad)}`).toBe(realVersion);
+      await odd.close();
+    }
     delete process.env.MULLION_DEMO;
     delete process.env.MULLION_DEMO_VERSION;
     delete process.env.DATABASE_URL;

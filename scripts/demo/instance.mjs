@@ -34,9 +34,9 @@ import { seedDemo } from "./seed.mjs";
 export const DEMO_VERSION = "1.0.0";
 
 /**
- * The release tag the fake GitHub reports: one minor above `version` (this
- * checkout's), so the update banner always shows whatever it is on, or `version`
- * itself when `newer` is false, so nothing is offered.
+ * The release tag the fake GitHub reports: one minor above the `version` it is given
+ * (the demo's, `DEMO_VERSION`), so the update banner shows, or `version` itself when
+ * `newer` is false, so nothing is offered.
  */
 export function releaseTag(version, { newer = true } = {}) {
   const [major, minor] = version.split(".").map(Number);

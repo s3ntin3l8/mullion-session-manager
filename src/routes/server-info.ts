@@ -20,11 +20,16 @@ export const appVersion =
  * The version this instance shows to users (the toolbar label, Settings -> Server
  * info, the update check). A throwaway demo instance reports `MULLION_DEMO_VERSION`
  * instead of the checkout's, so its screenshots do not change at every release.
- * Everywhere else, and for a demo without the key, it is `appVersion`.
+ * Everywhere else, for a demo without the key and for a key that is not a
+ * `major.minor.patch` version (the update check cannot parse anything else), it is
+ * `appVersion`.
  */
+const DEMO_VERSION_SHAPE = /^\d+\.\d+\.\d+$/;
 export function reportedVersion(app: FastifyInstance): string {
   const { MULLION_DEMO, MULLION_DEMO_VERSION } = app.config;
-  return MULLION_DEMO && MULLION_DEMO_VERSION !== "" ? MULLION_DEMO_VERSION : appVersion;
+  return MULLION_DEMO && DEMO_VERSION_SHAPE.test(MULLION_DEMO_VERSION)
+    ? MULLION_DEMO_VERSION
+    : appVersion;
 }
 
 // `DATABASE_URL` is a `file:` URL (e.g. "file:./data/app.db", see
