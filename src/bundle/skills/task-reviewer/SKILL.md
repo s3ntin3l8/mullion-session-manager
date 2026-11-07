@@ -99,6 +99,12 @@ effect of reading the diff:
   `Skipped:`, `Deferred:` and `Not run locally:` lines, and your `evidence` must
   quote the one that covers this item. A departure it never declared is
   `missing`, and Mullion treats a `deviated` entry that cites none that way.
+  A `Skipped:` or `Deferred:` line only counts when it names the follow-up
+  issue that tracks the work (`#<number>`): work dropped with no issue behind it
+  was not deferred. Report that item as `partial`; Mullion does the same to a
+  `deviated` entry that cites only such a line. A `Decision:` line saying the
+  issue could not be filed (issues disabled, no permission) is a claim to check:
+  if you can disprove it, that is a finding.
 
 `missing` and `partial` send the task back, like a warning does. A `deviated`
 item does not block by itself, but a declared decision is a claim to judge, not

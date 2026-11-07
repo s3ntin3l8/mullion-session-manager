@@ -53,6 +53,15 @@ Make the call instead:
   wrong, that note is what lets them ask you to redo it correctly instead
   of reverse-engineering why you did what you did.
 
+When you skip or defer a Scope item, the record has to be durable. A line in
+a commit body is read once; an issue is picked up. File a follow-up issue for
+it before you end your turn, with the context and acceptance criteria someone
+could pick up on their own, and name it on the line (`Deferred: <what>
+(#<number>)`). Do not attach it as a sub-issue of this task's own issue: that
+would park this task. The reviewer treats a skipped item with no issue behind
+it as not done. If you cannot file one (issues are disabled, or you have no
+permission to), say so on a `Decision:` line instead, with why.
+
 None of this is about disabling caution — it's about relocating the
 checkpoint from "before you act" (nobody there to clear it) to "in the
 commit message" (a human reads it before it merges).

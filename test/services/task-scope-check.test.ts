@@ -147,9 +147,85 @@ describe("scope check (#2599)", () => {
     expect(deriveVerdict({ ...base, scope: [entry("deviated", "x") as never] })).toBe(
       "changes-requested",
     );
+    expect(
+      deriveVerdict({ ...base, scope: [entry("deviated", "Skipped: x (#12)") as never] }),
+    ).toBe("approved");
+    // A skip that names no follow-up issue is unfinished work, not a deferral.
     expect(deriveVerdict({ ...base, scope: [entry("deviated", "Skipped: x") as never] })).toBe(
-      "approved",
+      "changes-requested",
     );
+  });
+
+  describe("a skipped or deferred item must name its follow-up issue (#2724)", () => {
+    it.each(["Skipped: docs for the new flag", "Deferred: the migration, too big for one task"])(
+      "downgrades `%s` to partial and sends the task back",
+      (evidence) => {
+        const parsed = parse({ scope: [entry("deviated", evidence)] });
+        expect(parsed.scope[0].status).toBe("partial");
+        expect(parsed.scope[0].evidence).toContain("without a follow-up issue");
+        expect(parsed.scope[0].evidence).toContain(evidence);
+        expect(parsed.verdict).toBe("changes-requested");
+      },
+    );
+
+    it.each([
+      "Skipped: docs for the new flag (#123)",
+      "Deferred: the migration, tracked in #456",
+      "Decision: kept the old API",
+      "Not run locally: the e2e suite needs a display",
+      "Deferred: migrations (#12). Skipped: the suite (#13)",
+      "Decision: could not file an issue, issues are disabled on this repo",
+    ])("accepts `%s` as a declared deviation", (evidence) => {
+      const parsed = parse({ scope: [entry("deviated", evidence)] });
+      expect(parsed.scope[0].status).toBe("deviated");
+      expect(parsed.verdict).toBe("approved");
+    });
+
+    it.each([
+      // One tracked skip cannot carry an untracked one.
+      "Deferred: migrations (#12). Skipped: the whole test suite",
+      "Skipped: docs. Deferred: the migration (#12). Skipped: the tests",
+      // A Decision line covers only itself, not a Skipped line beside it.
+      "Decision: descoped the retry. Skipped: its test",
+      // The number must sit on the skip's own line, not on another declaration's.
+      "Skipped: the tests. Deferred: the migration (#12)",
+    ])("judges each declaration on its own: `%s` is partial", (evidence) => {
+      const parsed = parse({ scope: [entry("deviated", evidence)] });
+      expect(parsed.scope[0].status).toBe("partial");
+      expect(parsed.verdict).toBe("changes-requested");
+    });
+
+    it("the review prompt states the rule", () => {
+      const out = buildReviewPrompt({
+        task: TASK,
+        worktreePath: BASE.worktreePath,
+        findingsPath: FINDINGS_PATH,
+      });
+      expect(out).toContain("names the follow-up issue");
+      expect(out).toContain("treated as `partial`");
+      expect(out.replace(/\s+/g, " ")).toContain("is a claim to check, not a fact");
+    });
+
+    it("the review prompt carries the wiring and call-site checks as suggestions", () => {
+      const out = buildReviewPrompt({
+        task: TASK,
+        worktreePath: BASE.worktreePath,
+        findingsPath: FINDINGS_PATH,
+      });
+      expect(out).toContain("who sets it and who reads it");
+      expect(out).toContain("report it as a suggestion anchored on its definition");
+      const flat = out.replace(/\s+/g, " ");
+      expect(flat).toContain('"every place that does X", grep for the other places that do X');
+      expect(flat).toContain("a match the diff left untouched is a suggestion");
+    });
+
+    it("the worker prompt tells the worker to file the issue, and not under its own", () => {
+      const out = buildTaskMasterPreamble(BASE);
+      expect(out).toContain("file a follow-up issue");
+      expect(out).toContain("`Deferred: <what> (#<number>)`");
+      expect(out).toContain("say so on a `Decision:` line instead");
+      expect(out).toContain("Do not attach it as a sub-issue of this task's");
+    });
   });
 
   it("renders a Scope check section in the comment and review-body modes", () => {

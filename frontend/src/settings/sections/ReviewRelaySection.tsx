@@ -388,7 +388,7 @@ export function ReviewRelaySection() {
           <SettingsGroup title="Review prompts">
             <TextSettingRow
               label="Prompt repository"
-              desc="Optional. Public owner/repo holding a custom review prompt; leave empty for Mullion's built-in prompt."
+              desc="Optional. Public owner/repo holding a custom prompt for GitHub-side reviews (the relay); leave empty for Mullion's built-in prompt. Task Master reviews always use Mullion's own prompt, whichever agent runs them (Hermes included)."
               key={`relay-promptRepo:${relay.promptRepo}`}
               value={relay.promptRepo}
               placeholder="owner/repo"
