@@ -532,7 +532,11 @@ export`/`import --standalone`, re-keying the imported session to the
     `github-write` (GitHub status + connect flows + webhook registration +
     adaptive polling + WS push + GitHub App installation-token minting +
     the write-side API client Task Master's sync/promote use — see
-    [`github-integration.md`](github-integration.md)).
+    [`github-integration.md`](github-integration.md)), `github-request` (the
+    shared REST request path those clients use — `githubRequest` and the
+    scope error it raises), `github-pagination` (the one paginated-list
+    helper the GitHub clients share), `github-release` (the release-please
+    detection/dispatch feature and its two module-level caches).
   - **Host & update**: `systemd-unit` (cgroup-based autodetection of the
     running unit for self-update), `update-checker` (Settings → Server's
     update surface).

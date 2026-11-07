@@ -2411,7 +2411,7 @@ async function processMergeRequests(app: FastifyInstance): Promise<void> {
   // Deliberately NOT grouped/concurrent by host the way retryStrandedDraftPRs
   // is above. That grouping exists because openDraftPRForTask does a real
   // git push with up to GIT_TIMEOUT_MS (120s); this sweep only ever makes
-  // GitHub API calls with a 5s timeout (REQUEST_TIMEOUT_MS, github-write.ts),
+  // GitHub API calls with a 5s timeout (REQUEST_TIMEOUT_MS, github-request.ts),
   // so there's no slow-host stall here worth isolating a flat sequential
   // loop from.
   for (const { task, project } of rows) {

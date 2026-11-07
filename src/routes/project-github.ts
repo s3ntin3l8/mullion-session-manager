@@ -1101,7 +1101,7 @@ export async function projectGitHubRoute(app: FastifyInstance): Promise<void> {
       let pr: ReleasePullRequestStatus | null = null;
       if (detection.kind === "found") {
         try {
-          // Cached (getCachedReleasePullRequestStatus, github-write.ts) —
+          // Cached (getCachedReleasePullRequestStatus, github-release.ts) —
           // the frontend refetches this route on every /ws/github frame
           // (pr/issue/ci/push/release, not just release-relevant ones), so
           // an uncached assembly here would spend 3 live calls per frame
