@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import crypto from "node:crypto";
-import { Readable } from "node:stream";
+import { PassThrough, Readable } from "node:stream";
 import Fastify, { type FastifyInstance } from "fastify";
 import { WebSocketServer, WebSocket } from "ws";
 import { createMuxConnection } from "../../src/services/ssh-agent-mux.js";
@@ -8,8 +8,10 @@ import {
   AGENT_CHANNEL_AUTH_HEADER,
   AGENT_CHANNEL_MAX_CHANNELS,
   channelFetchStream,
+  maxRequestBodyBytesForPath,
   serveChannelRequest,
 } from "../../src/services/agent-channel-tunnel.js";
+import { AGENT_CHANNEL_MAX_STREAM_CHANNELS } from "../../src/shared/agent-channel.js";
 import { HostBusyError } from "../../src/services/remote-host-errors.js";
 import {
   HostRequestError,
@@ -39,8 +41,14 @@ interface Rig {
   transport: { current: "up" | "down" | "inbound" };
   uploads: Array<{ bytes: number; sha: string; query: unknown }>;
   previewHeaders: Array<Record<string, unknown>>;
+  /** Open "/sse" preview responses, one per request, ended by the test. */
+  sse: PassThrough[];
 }
 
+function* bigPieces() {
+  const piece = Buffer.alloc(MIB);
+  for (let i = 0; i < 70; i++) yield piece;
+}
 const sha = (b: Buffer) => crypto.createHash("sha256").update(b).digest("hex");
 
 async function rig(opts: { download?: Buffer } = {}): Promise<Rig> {
@@ -55,6 +63,7 @@ async function rig(opts: { download?: Buffer } = {}): Promise<Rig> {
   const primaryMux = createMuxConnection(primarySocket as never, {
     channelIdParity: "even",
     maxChannels: AGENT_CHANNEL_MAX_CHANNELS,
+    maxStreamChannels: AGENT_CHANNEL_MAX_STREAM_CHANNELS,
   });
   const agentMux = createMuxConnection(agentSocket as never, {
     channelIdParity: "odd",
@@ -63,6 +72,7 @@ async function rig(opts: { download?: Buffer } = {}): Promise<Rig> {
 
   const uploads: Rig["uploads"] = [];
   const previewHeaders: Rig["previewHeaders"] = [];
+  const sse: PassThrough[] = [];
   const agent: FastifyInstance = Fastify({ bodyLimit: 8 * MIB });
   agent.addHook("onRequest", async (request, reply) => {
     if (request.headers[AGENT_CHANNEL_AUTH_HEADER] !== TOKEN) {
@@ -95,6 +105,16 @@ async function rig(opts: { download?: Buffer } = {}): Promise<Rig> {
     const wildcard = (request.params as { "*": string })["*"];
     if (wildcard === "gone") return reply.code(404).send("nope");
     if (wildcard === "unchanged") return reply.code(304).send();
+    if (wildcard === "sse") {
+      const body = new PassThrough();
+      sse.push(body);
+      body.write("data: one\n\n");
+      return reply.header("content-type", "text/event-stream").send(body);
+    }
+    if (wildcard === "big") {
+      // No content-length: only the running count can catch it.
+      return reply.type("application/octet-stream").send(Readable.from(bigPieces()));
+    }
     return reply
       .header("set-cookie", ["a=1; Path=/", "b=2; Path=/"])
       .header("x-up", "1")
@@ -135,7 +155,7 @@ async function rig(opts: { download?: Buffer } = {}): Promise<Rig> {
     wss.close();
     await agent.close();
   });
-  return { entry, client, transport, uploads, previewHeaders };
+  return { entry, client, transport, uploads, previewHeaders, sse };
 }
 
 const drain = async (r: Readable) => {
@@ -217,16 +237,66 @@ describe("file transfers over the outbound channel (#2620)", () => {
   it("fails a response that outgrows the limit instead of buffering it", async () => {
     const file = crypto.randomBytes(2 * MIB);
     const r = await rig({ download: file });
-    const res = await channelFetchStream(r.entry, {
-      method: "POST",
-      path: "/internal/project-files/download",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ cwd: "/p", path: "f" }),
-      timeoutMs: 5000,
-      maxResponseBytes: MIB,
-    });
-    await expect(drain(res.stream)).rejects.toThrow(/exceeds the channel limit/);
+    // The head declares 2 MiB: refused before a body byte is read.
+    await expect(
+      channelFetchStream(r.entry, {
+        method: "POST",
+        path: "/internal/project-files/download",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ cwd: "/p", path: "f" }),
+        timeoutMs: 5000,
+        maxResponseBytes: MIB,
+      }),
+    ).rejects.toThrow(/exceeds the 1 MiB limit/);
   });
+});
+
+describe("transfers above the channel limit (#2674)", () => {
+  it("refuses an upload that declares more than the limit as 413 before sending a byte", async () => {
+    const r = await rig();
+    const limit = maxRequestBodyBytesForPath("/internal/project-files/upload");
+    const body = new Readable({ read() {} });
+    const err = await r.client
+      .uploadProjectFile("/proj", "up.bin", body, { declaredBytes: limit + 1 })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(HostRequestError);
+    expect(err.statusCode).toBe(413);
+    expect(err.body).toMatch(/exceeds the 64 MiB limit/);
+    expect(r.uploads).toEqual([]);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("cuts a streamed upload off at the limit with a 413, not 'host unreachable'", async () => {
+    const r = await rig();
+    const piece = Buffer.alloc(MIB);
+    const body = Readable.from(
+      (function* () {
+        for (let i = 0; i < 66; i++) yield piece;
+      })(),
+    );
+    const err = await r.client.uploadProjectFile("/proj", "up.bin", body).catch((e) => e);
+    expect(err).toBeInstanceOf(HostRequestError);
+    expect(err).not.toBeInstanceOf(HostUnreachableError);
+    expect(err.statusCode).toBe(413);
+    expect(r.uploads).toEqual([]);
+  }, 60_000);
+
+  it("refuses a download above the limit as 413", async () => {
+    const r = await rig({ download: Buffer.alloc(65 * MIB) });
+    const err = await r.client.downloadProjectFile("/proj", "huge.bin").catch((e) => e);
+    expect(err).toBeInstanceOf(HostRequestError);
+    expect(err.statusCode).toBe(413);
+    expect(err.body).toMatch(/64 MiB/);
+  }, 60_000);
+
+  it("cuts a response of undeclared length off at the limit instead of buffering it", async () => {
+    const r = await rig();
+    const res = await r.client.openPreviewHttp(1, "/big", {
+      method: "GET",
+      headers: new Headers(),
+    });
+    await expect(res.arrayBuffer()).rejects.toThrow();
+  }, 60_000);
 });
 
 describe("HTTP preview forward over the outbound channel (#2620)", () => {
@@ -283,6 +353,45 @@ describe("HTTP preview forward over the outbound channel (#2620)", () => {
     });
     expect(head.status).toBe(200);
     expect(await head.text()).toBe("");
+  });
+
+  it("delivers an SSE-style response chunk by chunk, before it ends", async () => {
+    const r = await rig();
+    const res = await r.client.openPreviewHttp(1, "/sse", {
+      method: "GET",
+      headers: new Headers(),
+    });
+    // Headers are here while the dev server is still holding the response open.
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/event-stream");
+    const reader = res.body!.getReader();
+    const first = await reader.read();
+    expect(Buffer.from(first.value!).toString()).toBe("data: one\n\n");
+    r.sse[0]!.write("data: two\n\n");
+    const second = await reader.read();
+    expect(Buffer.from(second.value!).toString()).toBe("data: two\n\n");
+    expect(second.done).toBe(false);
+    r.sse[0]!.end();
+    expect((await reader.read()).done).toBe(true);
+  });
+
+  it("does not let held previews exhaust the request slots", async () => {
+    const r = await rig();
+    const open: Response[] = [];
+    for (let i = 0; i < AGENT_CHANNEL_MAX_STREAM_CHANNELS; i++) {
+      open.push(
+        await r.client.openPreviewHttp(1, "/sse", { method: "GET", headers: new Headers() }),
+      );
+    }
+    // The stream budget is spent: one more preview is refused as busy ...
+    const over = await r.client
+      .openPreviewHttp(1, "/sse", { method: "GET", headers: new Headers() })
+      .catch((e) => e);
+    expect(over).toBeInstanceOf(HostBusyError);
+    // ... while an ordinary request still gets a slot.
+    await expect(r.client.ping()).resolves.toBeDefined();
+    for (const b of r.sse) b.end();
+    for (const res of open) await res.body?.cancel().catch(() => undefined);
   });
 
   it("streams a POST body to the dev server and uses the configured-preview path", async () => {

@@ -10,6 +10,7 @@ import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
+import { isHostBusyError } from "../services/remote-host-errors.js";
 import { forwardHostRequestError } from "../services/host-error-reply.js";
 import { getStoredSettings } from "../services/settings.js";
 import {
@@ -132,6 +133,14 @@ export async function projectFilesRoute(app: FastifyInstance) {
         return reply.code(err.statusCode).send({ message, code });
       }
       return forwardHostRequestError(reply, err);
+    }
+    if (isHostBusyError(err)) {
+      // A saturated outbound channel is a retry-later, not a failure (#2674).
+      app.log.warn({ hostId, err }, "host busy, project files temporarily unavailable");
+      return reply
+        .header("Retry-After", "1")
+        .code(503)
+        .send({ message: `Host ${hostId} is busy`, retryable: true });
     }
     app.log.warn({ hostId, err }, "host unreachable, project files unavailable");
     return reply.serviceUnavailable(`Host ${hostId} is unreachable`);
@@ -476,7 +485,11 @@ export async function projectFilesRoute(app: FastifyInstance) {
         reply,
         ctx,
         (cwd) => writeProjectFileFromStream(cwd, relPath, body, { maxBytes: max, mkdirs }),
-        (client, cwd) => client.uploadProjectFile(cwd, relPath, body, { mkdirs }),
+        (client, cwd) =>
+          client.uploadProjectFile(cwd, relPath, body, {
+            mkdirs,
+            ...(Number.isFinite(declared) ? { declaredBytes: declared } : {}),
+          }),
       );
     },
   );

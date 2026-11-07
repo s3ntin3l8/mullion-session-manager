@@ -584,7 +584,8 @@ describe("request/response over the outbound channel (#2451)", () => {
 
     // 2.5MB payload to /internal/sessions (default limit is 2MB)
     const largeBody = Buffer.alloc(2.5 * 1024 * 1024, 65);
-    const resSessions = await channelFetch(r.entry, {
+    // The primary refuses it before opening a channel (#2674).
+    const refused = await channelFetch(r.entry, {
       method: "POST",
       path: "/internal/sessions",
       headers: {
@@ -593,8 +594,9 @@ describe("request/response over the outbound channel (#2451)", () => {
       },
       body: largeBody,
       timeoutMs: 2000,
-    });
-    expect(resSessions.status).toBe(413);
+    }).catch((e: unknown) => e);
+    expect(refused).toBeInstanceOf(ChannelTransportError);
+    expect(refused).toMatchObject({ phase: "before-send", tooLarge: true });
 
     // 3MB payload to /internal/uploads (upload limit is 64MB)
     const uploadBody = Buffer.alloc(3 * 1024 * 1024, 66);

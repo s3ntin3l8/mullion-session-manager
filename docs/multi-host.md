@@ -1886,6 +1886,25 @@ A bound host whose channel is down is skipped by the event, relay and ssh-agent
 fan-outs (debug log, no warning), and they reconnect immediately when the
 channel comes up, for hosts with an address as well as outbound-only ones.
 
+**Transfer ceiling (#2674).** Over the channel a file upload or download, and a
+preview response, is capped at **64 MiB** (the inbound path allows up to
+`FILE_TRANSFER_MAX_BYTES`). This is a decision, not a gap to be closed later:
+the agent replays each operation through its own Fastify instance, and raising
+the ceiling would mean a bespoke streaming path for every transfer route. A
+transfer over the cap is refused **413** by `RemoteHostClient` with a message
+naming the limit (a declared `Content-Length` before any byte is sent, otherwise
+as soon as the running count passes it); it is never reported as an unreachable
+host. A host that must move larger files needs an advertised URL (inbound).
+
+**Previews stream.** The agent reads the replayed response as a stream: the head
+goes out first and each body chunk is forwarded as the dev server writes it, so
+SSE and long-poll previews work, and the idle timeout re-arms on every chunk
+rather than running to the end. A preview takes a **stream-class** channel slot
+(the same 32-of-64 budget as the stream operations), so held-open previews can
+never take the slots ordinary requests need; past that budget a new preview is
+refused as busy. A busy channel is a `503` with `Retry-After` on the file routes
+(never a 500).
+
 ### Outbound-only agents (no advertised URL or inbound port)
 
 An agent that persists a machine identity (every current build) registers with

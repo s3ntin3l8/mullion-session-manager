@@ -1473,14 +1473,14 @@ export class RemoteHostClient {
     cwd: string,
     relPath: string,
     body: Readable,
-    opts: { mkdirs?: boolean } = {},
+    opts: { mkdirs?: boolean; declaredBytes?: number } = {},
   ): Promise<{ path: string; size: number }> {
     const query = new URLSearchParams({ cwd, path: relPath });
     if (opts.mkdirs) query.set("mkdirs", "1");
     const requestTarget = `/internal/project-files/upload?${query.toString()}`;
     const t = this.requestTransport();
     if (t.kind !== "inbound") {
-      return uploadOverChannel(this.hostId, t, requestTarget, body, transferIdleTimeoutMs);
+      return uploadOverChannel(this.hostId, t, requestTarget, body, transferIdleTimeoutMs, opts);
     }
     const idle = idleAbort(transferIdleTimeoutMs);
     const metered = body.pipe(
