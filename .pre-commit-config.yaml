@@ -56,6 +56,20 @@ repos:
         pass_filenames: false
         stages: [pre-commit]
 
+      # Issue #2413 / #2414 — the import-boundary guardrail: no new import
+      # cycle and no new layering inversion (routes -> services -> db, plugins
+      # above both). `npm run lint` already runs it for a backend change;
+      # this hook is the frontend half, because the frontend lint runs in its
+      # own workspace and would otherwise never see it. The check reads BOTH
+      # roots (src/ and frontend/src/), so one run covers the whole tree.
+      - id: import-boundaries
+        name: import boundaries (no new cycles or layering inversions)
+        entry: node scripts/check-import-boundaries.mjs
+        language: system
+        files: '^frontend/src/.*\.(ts|tsx)$'
+        pass_filenames: false
+        stages: [pre-commit]
+
       # Issue #647 / roadmap 7.8 — added while hardening scripts/self-update.sh
       # (the agent auto-update mechanism). Uses the already-installed system
       # `shellcheck` binary, same "language: system" convention as every
