@@ -98,7 +98,9 @@ Two workflows keep the images current without a local Docker (both call shared w
   it; the next run rewrites the branch.
 - **`/update-baselines`**: comment it on a pull request (write access, branch in this repository) and CI regenerates
   `visual/baselines/` and pushes one commit of the images that really changed to that branch, then replies with the list.
-  Forks, closed PRs and commenters without write access are refused with a reply.
+  Forks, closed PRs and commenters without write access are refused with a reply. Two ordinary outcomes also
+  reply: "the baselines already match, nothing to commit" (no commit is made), and "the branch moved while the
+  baselines rendered" (nothing is pushed: comment the command again).
 
 Both push with `GITHUB_TOKEN`, so the PR's `pull_request` runs would sit at `action_required` waiting for a maintainer to
 click "Approve and run"; the workflows approve them themselves, only for the commit they just pushed. If checks never start
