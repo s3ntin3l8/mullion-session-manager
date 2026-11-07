@@ -90,6 +90,11 @@ sticky comment. It also fails when the run produced no report at all (the demo d
 no health verdict, so read the run log before assuming a console error. Locally, `HEALTH_GATE=1 make visual-check`
 exits non-zero on a real health finding.
 
+`REPEAT=2 make visual-check` proves the capture is deterministic: it renders the working tree twice and compares the
+runs with the same tolerance, exiting 4 and naming each shot (with its pixel count) that differs. Run it when you change
+the demo, a hook or a scene, or when a shot flips between runs. The base is rendered with the working tree's
+`scripts/demo` (`baseHarness`), so a PR that fixes the demo is not compared against its own bug.
+
 Two workflows keep the images current without a local Docker (both call shared workflows in `s3ntin3l8/.github`):
 
 - **Weekly refresh** (`visual-refresh.yml`, Mondays, or run it from the Actions tab): regenerates the README and PWA
