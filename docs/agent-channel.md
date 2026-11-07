@@ -65,9 +65,14 @@ its authorization are the ones the inbound transport runs. The differences:
   When all 64 outbound channel slots are busy, callers queue up to 5 seconds
   (`AGENT_CHANNEL_SLOT_WAIT_MS`) before failing with `HostBusyError`,
   which callers treat as retryable rather than marking the host unreachable.
-  The health ping follows the same rule: a `HostBusyError` means the channel is
-  up and the agent is serving, so `ping()` reports the host alive and the
-  heartbeat records no failure; only unreachable and timeout count against it.
+  The health ping keeps busy apart (`RemoteHostClient.probe()` returns `ok`,
+  `busy` or `down`): a busy sweep records neither success nor failure, so a
+  saturated channel does not trigger the recovery rescan and does not hide a
+  host that then stops answering. The heartbeat counts consecutive busy sweeps
+  and, at `DEGRADED_AFTER_BUSY` (3), marks the host degraded with the reason
+  "channel saturated" (`healthReason` on `GET /api/hosts`). Any `ok` or `down`
+  result resets the count. `ping()` stays a boolean (busy is true) for the
+  Settings "Test connection" button.
 
 Since #2620 the same exchange also carries the file-browser transfers
 (`uploadProjectFile` / `downloadProjectFile`, with a streamed request body and a
@@ -88,7 +93,18 @@ events streams, the control relay (both ends), the ssh-agent fan-out and each
 per-SSH-connection ssh-agent session channel. The mux counts streams
 separately from requests: a stream counter is incremented on a stream open and
 released on close (or a failed open), and `AGENT_CHANNEL_MAX_STREAM_CHANNELS` (32)
-applies to that counter only. In-flight requests and peer-opened channels no
+applies to that counter only. A stream open that has to queue because the total
+is full keeps its flag: queued stream opens count against the cap while they
+wait, so the cap cannot be exceeded by a burst of queued opens, and a stream
+open over the cap is refused at once, never queued.
+
+Preview responses (`previewHttpOverChannel`, `{ preview: true }`) are a stream
+subclass with their own, smaller budget: `AGENT_CHANNEL_MAX_PREVIEW_CHANNELS`
+(a quarter of the stream slots, 8). A page loading many modules in parallel or a
+few open SSE previews therefore cannot starve attach, events, control-relay and
+ssh-agent streams. A preview past its cap fails as `HostBusyError`, which the
+preview proxy answers with `503` and `Retry-After` (a 413 from the agent is
+passed through as 413; other failures stay `502`). In-flight requests and peer-opened channels no
 longer eat stream slots, and 32 open streams still leave
 `AGENT_CHANNEL_REQUEST_RESERVED_CHANNELS` (32) free for requests.
 

@@ -12,6 +12,7 @@ import {
 } from "../../src/services/remote-host-errors.js";
 import {
   AGENT_CHANNEL_MAX_CHANNELS,
+  AGENT_CHANNEL_MAX_PREVIEW_CHANNELS,
   AGENT_CHANNEL_MAX_STREAM_CHANNELS,
   AGENT_CHANNEL_REQUEST_RESERVED_CHANNELS,
 } from "../../src/shared/agent-channel.js";
@@ -234,6 +235,89 @@ describe("ssh-agent-mux slot waiting", () => {
     // Closing a stream frees a stream slot.
     streams[0]!.close();
     await expect(connA.openChannel({ stream: true })).resolves.toBeDefined();
+  });
+
+  function pair(o: {
+    maxChannels: number;
+    maxStreamChannels?: number;
+    maxPreviewChannels?: number;
+  }) {
+    const a = new FakeSocket();
+    const b = new FakeSocket();
+    link(a, b);
+    const conn = createMuxConnection(a as never, { ...o, channelIdParity: "odd" });
+    createMuxConnection(b as never, { maxChannels: o.maxChannels, channelIdParity: "even" });
+    return conn;
+  }
+
+  it("a queued stream open keeps its stream flag and counts against the cap once granted", async () => {
+    const conn = pair({ maxChannels: 3, maxStreamChannels: 2 });
+    const held = [await conn.openChannel(), await conn.openChannel(), await conn.openChannel()];
+    // Two stream opens queue (the total is full) ...
+    const q1 = conn.openChannel({ stream: true, waitTimeoutMs: 1000 });
+    const q2 = conn.openChannel({ stream: true, waitTimeoutMs: 1000 });
+    // ... and a queued stream already counts: a third is refused, never queued past the cap.
+    await expect(conn.openChannel({ stream: true, waitTimeoutMs: 1000 })).rejects.toThrow(
+      MuxBusyError,
+    );
+    for (const h of held) h.close();
+    await Promise.all([q1, q2]);
+    // Granted opens joined the stream set: the cap still holds ...
+    await expect(conn.openChannel({ stream: true })).rejects.toThrow(MuxBusyError);
+    // ... and the request reservation is still free.
+    await expect(conn.openChannel()).resolves.toBeDefined();
+  });
+
+  it("a timed-out queued stream open frees its stream reservation", async () => {
+    const conn = pair({ maxChannels: 1, maxStreamChannels: 1 });
+    await conn.openChannel();
+    await expect(conn.openChannel({ stream: true, waitTimeoutMs: 20 })).rejects.toThrow(
+      MuxBusyError,
+    );
+    const later = conn.openChannel({ stream: true, waitTimeoutMs: 20 });
+    await expect(later).rejects.toThrow(/timed out/);
+  });
+
+  it("32 open streams still leave request slots, and a request burst leaves stream slots", async () => {
+    const conn = pair({
+      maxChannels: AGENT_CHANNEL_MAX_CHANNELS,
+      maxStreamChannels: AGENT_CHANNEL_MAX_STREAM_CHANNELS,
+    });
+    for (let i = 0; i < AGENT_CHANNEL_MAX_STREAM_CHANNELS; i++) {
+      await conn.openChannel({ stream: true });
+    }
+    await expect(conn.openChannel({ stream: true })).rejects.toThrow(MuxBusyError);
+    for (let i = 0; i < AGENT_CHANNEL_REQUEST_RESERVED_CHANNELS; i++) {
+      await expect(conn.openChannel()).resolves.toBeDefined();
+    }
+  });
+
+  it("previews at their cap leave attach and events streams openable", async () => {
+    const conn = pair({
+      maxChannels: AGENT_CHANNEL_MAX_CHANNELS,
+      maxStreamChannels: AGENT_CHANNEL_MAX_STREAM_CHANNELS,
+      maxPreviewChannels: AGENT_CHANNEL_MAX_PREVIEW_CHANNELS,
+    });
+    const previews = [];
+    for (let i = 0; i < AGENT_CHANNEL_MAX_PREVIEW_CHANNELS; i++) {
+      previews.push(await conn.openChannel({ preview: true }));
+    }
+    await expect(conn.openChannel({ preview: true })).rejects.toThrow(MuxBusyError);
+    await expect(conn.openChannel({ preview: true, waitTimeoutMs: 1000 })).rejects.toThrow(
+      /preview channel cap/,
+    );
+    // Every non-preview stream slot is still there.
+    for (
+      let i = 0;
+      i < AGENT_CHANNEL_MAX_STREAM_CHANNELS - AGENT_CHANNEL_MAX_PREVIEW_CHANNELS;
+      i++
+    ) {
+      await conn.openChannel({ stream: true });
+    }
+    await expect(conn.openChannel({ stream: true })).rejects.toThrow(MuxBusyError);
+    // A closed preview frees a preview slot (and a stream slot).
+    previews[0]!.close();
+    await expect(conn.openChannel({ preview: true })).resolves.toBeDefined();
   });
 
   it("reports a peer OpenFail as busy", async () => {

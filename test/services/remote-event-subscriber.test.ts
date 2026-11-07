@@ -67,6 +67,7 @@ vi.mock("../../src/services/settings.js", () => ({
 
 const { startRemoteEventSubscriber } =
   await import("../../src/services/remote-event-subscriber.js");
+import { bindChannelHost, unbindChannelHost } from "../../src/services/agent-channel-tunnel.js";
 
 function fakeHost(
   id: string,
@@ -85,7 +86,7 @@ function fakeHost(
 
 function fakeApp(): FastifyInstance {
   return {
-    log: { info: vi.fn(), error: vi.fn(), warn: vi.fn() },
+    log: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     db: {},
   } as unknown as FastifyInstance;
 }
@@ -144,6 +145,25 @@ describe("startRemoteEventSubscriber", () => {
     channels.set("outbound", { carriedOperations: [] });
     handle.reconcile();
     expect(getRemoteHostClientMock).toHaveBeenCalledWith(app, "outbound");
+  });
+
+  it("skips a bound host whose channel is down, without a warning, and resumes on forceReconnect once it is up", () => {
+    listHostsMock.mockReturnValue([fakeHost("agent-a")]);
+    openEventsStreamMock.mockImplementation(() => new MockSocket());
+    const app = fakeApp();
+    // Bound to the channel (streams negotiated) but no connected channel.
+    bindChannelHost(app, "agent-a", ["channel-requests", "channel-streams"]);
+
+    const handle = startRemoteEventSubscriber(app, vi.fn());
+    handle.reconcile();
+    expect(getRemoteHostClientMock).not.toHaveBeenCalled();
+    expect(app.log.warn).not.toHaveBeenCalled();
+
+    // Channel up: the route's reconcile forces the reconnect straight away.
+    unbindChannelHost(app, "agent-a");
+    handle.reconcile({ forceReconnect: ["agent-a"] });
+    expect(getRemoteHostClientMock).toHaveBeenCalledTimes(1);
+    handle.stop();
   });
 
   it("opens no subscriptions when sessions.eventPersistence is off, and closes any already open", () => {

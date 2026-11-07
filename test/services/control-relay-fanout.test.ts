@@ -37,6 +37,7 @@ vi.mock("../../src/services/host-registry.js", () => ({
 }));
 
 const { startControlRelayFanout } = await import("../../src/services/control-relay-fanout.js");
+import { bindChannelHost, unbindChannelHost } from "../../src/services/agent-channel-tunnel.js";
 
 const host = (id: string, extra: Partial<{ isLocal: boolean; baseUrl: string | null }> = {}) => ({
   id,
@@ -49,7 +50,9 @@ const host = (id: string, extra: Partial<{ isLocal: boolean; baseUrl: string | n
 });
 
 function fakeApp(): FastifyInstance {
-  return { log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } } as unknown as FastifyInstance;
+  return {
+    log: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+  } as unknown as FastifyInstance;
 }
 
 describe("startControlRelayFanout — connection lifecycle (#1656)", () => {
@@ -87,6 +90,25 @@ describe("startControlRelayFanout — connection lifecycle (#1656)", () => {
     fanout.reconcile();
     expect(openControlRelayStreamMock).toHaveBeenCalledTimes(1);
     fanout.stop();
+  });
+
+  it("skips a bound host whose channel is down, without a warning, and resumes on forceReconnect once it is up", () => {
+    listHostsMock.mockReturnValue([host("agent-a")]);
+    openControlRelayStreamMock.mockImplementation(() => new MockSocket());
+    const app = fakeApp();
+    // Bound to the channel (streams negotiated) but no connected channel.
+    bindChannelHost(app, "agent-a", ["channel-requests", "channel-streams"]);
+
+    const handle = startControlRelayFanout(app);
+    handle.reconcile();
+    expect(openControlRelayStreamMock).not.toHaveBeenCalled();
+    expect(app.log.warn).not.toHaveBeenCalled();
+
+    // Channel up: the route's reconcile forces the reconnect straight away.
+    unbindChannelHost(app, "agent-a");
+    handle.reconcile({ forceReconnect: ["agent-a"] });
+    expect(openControlRelayStreamMock).toHaveBeenCalledTimes(1);
+    handle.stop();
   });
 
   it("closes a host that is no longer enrolled and on forceReconnect", () => {

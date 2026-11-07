@@ -1880,8 +1880,10 @@ ssh-agent; #2620: the two preview WebSockets); see [agent-channel.md](agent-chan
 `GET /api/hosts` reports it as `channel`, separate from the credential state.
 Streams are counted apart from requests in the channel's mux (the stream cap
 applies to open streams only, and every stream opener, including each ssh-agent
-session channel, passes `stream: true`). A busy channel reads as alive to the
-health ping, so saturating uploads or downloads never degrades a healthy host.
+session channel, passes `stream: true`). A busy channel is not a failed ping
+and not a success either: the heartbeat tolerates up to two consecutive busy
+sweeps, then marks the host degraded with the reason "channel saturated"
+(`healthReason`), so hung transfers cannot hold a dead host looking alive.
 A bound host whose channel is down is skipped by the event, relay and ssh-agent
 fan-outs (debug log, no warning), and they reconnect immediately when the
 channel comes up, for hosts with an address as well as outbound-only ones.
@@ -1925,7 +1927,12 @@ SSE and long-poll previews work, and the idle timeout re-arms on every chunk
 rather than running to the end. A preview takes a **stream-class** channel slot
 (the same 32-of-64 budget as the stream operations), so held-open previews can
 never take the slots ordinary requests need; past that budget a new preview is
-refused as busy. A busy channel is a `503` with `Retry-After` on the file routes
+refused as busy. Previews also have their own cap (a quarter of the stream slots,
+`AGENT_CHANNEL_MAX_PREVIEW_CHANNELS`) so they cannot starve attach, events,
+control-relay or ssh-agent streams; the preview proxy answers a busy channel
+with `503` + `Retry-After` and an over-limit body with `413`, not a blanket
+`502`. A stream open queued behind a full channel keeps its stream flag and counts
+against the stream cap while it waits. A busy channel is a `503` with `Retry-After` on the file routes
 (never a 500).
 
 ### Outbound-only agents (no advertised URL or inbound port)
@@ -2026,7 +2033,7 @@ usual re-attach scrollback replay / events replay snapshot resynchronizes it.
 
 ### Channel concurrency, buffering limits, and isolation
 
-- **Concurrency cap, slot waiting and the stream reservation**: Each host's outbound channel is capped at 64 concurrent channels (`AGENT_CHANNEL_MAX_CHANNELS`). Long-lived streams (attach, events, control relay, ssh-agent, preview) may hold at most half of them (`AGENT_CHANNEL_MAX_STREAM_CHANNELS`, 32); the other half (`AGENT_CHANNEL_REQUEST_RESERVED_CHANNELS`) is kept for request/response exchanges, so open streams cannot make a healthy host fail every request as busy. A stream open past its cap is refused at once, because waiting never frees a stream's slot. When all 64 slots are occupied, a request queues up to 5 seconds (`AGENT_CHANNEL_SLOT_WAIT_MS`) before failing with `HostBusyError`. The wait is not charged to the request: its timeout (or idle timeout) starts when the slot is granted, so a mutation that waited 4 s still has its full budget. A timeout after the slot was granted is an ordinary timeout (before-send or after-send), and a peer that refuses the open because it is at its own cap is also reported as `HostBusyError`.
+- **Concurrency cap, slot waiting and the stream reservation**: Each host's outbound channel is capped at 64 concurrent channels (`AGENT_CHANNEL_MAX_CHANNELS`). Long-lived streams (attach, events, control relay, ssh-agent, preview) may hold at most half of them (`AGENT_CHANNEL_MAX_STREAM_CHANNELS`, 32); the other half (`AGENT_CHANNEL_REQUEST_RESERVED_CHANNELS`) is kept for request/response exchanges, so open streams cannot make a healthy host fail every request as busy. A stream open past its cap is refused at once, because waiting never frees a stream's slot (queued stream opens keep the flag and count against the cap). Previews hold at most a quarter of the stream slots (`AGENT_CHANNEL_MAX_PREVIEW_CHANNELS`, 8). When all 64 slots are occupied, a request queues up to 5 seconds (`AGENT_CHANNEL_SLOT_WAIT_MS`) before failing with `HostBusyError`. The wait is not charged to the request: its timeout (or idle timeout) starts when the slot is granted, so a mutation that waited 4 s still has its full budget. A timeout after the slot was granted is an ordinary timeout (before-send or after-send), and a peer that refuses the open because it is at its own cap is also reported as `HostBusyError`.
 - **Busy is transient, like unreachable**: `HostBusyError` is distinct from `HostUnreachableError` and does not mark a healthy host down, but every caller that retries next tick, skips a host, or logs at a lower level for an unreachable host does the same for busy. They test `isHostTransientError` (unreachable or busy, from `remote-host-errors.ts`) rather than `instanceof HostUnreachableError`; `isHostBusyError` is an `instanceof` check.
 - **Unbind**: `POST /api/hosts/:id/unbind` answers 409 while an outbound channel is connected; disconnect it first.
 - **Request and response body limits**: To bound worst-case memory buffering across concurrent channels, requests default to a 2 MiB limit (`AGENT_CHANNEL_DEFAULT_MAX_REQUEST_BYTES`) and responses default to 8 MiB (`AGENT_CHANNEL_DEFAULT_MAX_RESPONSE_BYTES`). Operations that legitimately transfer larger files (such as `/internal/uploads` and `/internal/project-files/{upload,write}`) explicitly permit up to 64 MiB (`AGENT_CHANNEL_MAX_RESPONSE_BYTES`). The paged reads were measured against the 8 MiB default and need no override: scrollback is at most about 1.4 MiB (1 MiB ring buffer as base64), a transcript page is cut at 256 KiB, and a git-log page is at most 200 commits. `test/shared/agent-channel-limits.test.ts` fails if one outgrows it.

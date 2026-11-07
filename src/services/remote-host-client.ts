@@ -2486,23 +2486,23 @@ export class RemoteHostClient {
    * connection" action — deliberately doesn't use `request()`'s bearer
    * header/timeout semantics that throw on any non-2xx, since a healthy
    * agent's /health is intentionally unauthenticated. */
-  async ping(): Promise<boolean> {
+  ping = (): Promise<boolean> => this.probe().then((r) => r !== "down");
+
+  /** ping() with "busy" (channel up, saturated) kept apart for the heartbeat. */
+  async probe(): Promise<"ok" | "busy" | "down"> {
     const transport = this.requestTransport();
     // A host bound to its outbound channel is as reachable as the channel is,
     // and one small round trip through it proves the agent answers. It never
     // probes /health (#2620): there may be no address to probe (#2572), and a
     // bound host must not be judged by a transport it does not use.
-    if (transport.kind === "channel-down") return false;
+    if (transport.kind === "channel-down") return "down";
     if (transport.kind === "channel" || this.baseUrl === "") {
-      try {
-        await this.request("/internal/protocol", { method: "GET" }, defaultRequestTimeoutMs);
-        return true;
-      } catch (err) {
-        // A saturated channel (uploads, downloads and previews hold request
-        // slots) means the host is busy, not down: the channel is up and the
-        // agent is serving. Only unreachable and timeout count against it.
-        return isHostBusyError(err);
-      }
+      // Saturated (transfers/previews hold slots) is busy, not down; the
+      // heartbeat bounds how long that may last.
+      return this.request("/internal/protocol", { method: "GET" }, defaultRequestTimeoutMs).then(
+        () => "ok",
+        (err: unknown) => (isHostBusyError(err) ? "busy" : "down"),
+      );
     }
     try {
       const res = await fetch(`${this.baseUrl}/health`, {
@@ -2514,9 +2514,9 @@ export class RemoteHostClient {
         redirect: "manual",
         dispatcher: this.pinnedDispatcher(),
       });
-      return res.ok;
+      return res.ok ? "ok" : "down";
     } catch {
-      return false;
+      return "down";
     }
   }
 

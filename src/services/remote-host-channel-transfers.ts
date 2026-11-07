@@ -143,8 +143,10 @@ export async function previewHttpOverChannel(
       idleTimeoutMs,
       // A preview can run for as long as its dev server keeps the response
       // open (SSE, long-poll): it takes a stream-class slot, so it cannot
-      // starve the request slots (#2674).
+      // starve the request slots (#2674); the preview cap keeps previews from
+      // taking the stream slots attach, events and relay need.
       stream: true,
+      preview: true,
     });
   } catch (err) {
     throw mapChannelError(hostId, err, init.method.toUpperCase(), requestTarget);

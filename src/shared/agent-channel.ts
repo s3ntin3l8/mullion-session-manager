@@ -27,6 +27,11 @@ export const AGENT_CHANNEL_REQUEST_RESERVED_CHANNELS = AGENT_CHANNEL_MAX_CHANNEL
  * slots are never taken by streams. */
 export const AGENT_CHANNEL_MAX_STREAM_CHANNELS =
   AGENT_CHANNEL_MAX_CHANNELS - AGENT_CHANNEL_REQUEST_RESERVED_CHANNELS;
+/** Most of those stream slots long-lived preview responses may hold (a quarter),
+ * so a page loading many modules or a few open SSE previews cannot starve
+ * attach, events, control-relay and ssh-agent streams. A preview open beyond
+ * this is refused at once and the proxy answers 503 with Retry-After. */
+export const AGENT_CHANNEL_MAX_PREVIEW_CHANNELS = Math.floor(AGENT_CHANNEL_MAX_STREAM_CHANNELS / 4);
 /** Queued-but-unsent bytes at which a side closes the connection. */
 export const AGENT_CHANNEL_MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
 /** Largest first frame accepted, so the handshake cannot be used to buffer. */
