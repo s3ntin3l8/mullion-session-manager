@@ -185,7 +185,7 @@ function reportedHostname(row: HostRow): string | null {
  * new host. Computed on read, no column; never merges or deletes anything.
  *
  * Returns newer-host-id -> ids of OLDER enrolled rows that share its advertised
- * baseUrl or self-reported hostname, are offline, and have no active session.
+ * baseUrl or (legacy identity-less rows only) self-reported hostname, are offline, and have no active session.
  * Two live agents behind one URL are never flagged: neither is offline.
  * `healthOf` is the heartbeat verdict, so this module stays free of the tracker.
  */
@@ -224,11 +224,16 @@ export function findPossibleDuplicates(
           old.id !== newer.id &&
           old.createdAt.getTime() < newer.createdAt.getTime() &&
           ((newer.baseUrl !== null && old.baseUrl === newer.baseUrl) ||
-            // A hostname is not an identity: an outbound-only agent (no
-            // baseUrl, #2636) has no address to tell it from another machine
-            // by, and two of them can share a hostname, so only a pair of
-            // addressed rows (the lost-state-file case) matches on it.
+            // A hostname is not an identity. Only a legacy row (no machine
+            // identity, so nothing else can tell it from its successor) and a
+            // pair of addressed rows may be matched on it: a row that carries
+            // an identity (#2568) belongs to the agent that holds it, and two
+            // such agents on one hostname (cloned images, a shared default)
+            // must never be offered for cleanup because of the name alone,
+            // addressed or not. An outbound-only agent (no baseUrl, #2636) that
+            // lost its state therefore leaves its old row for the operator.
             (hostname !== null &&
+              old.machineCredentialEnc === null &&
               old.baseUrl !== null &&
               newer.baseUrl !== null &&
               reportedHostname(old) === hostname)),

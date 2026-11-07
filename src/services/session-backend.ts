@@ -62,6 +62,28 @@ import {
   type WaitOutputRequest,
 } from "./session-prompt.js";
 
+/** A mutating remote call whose connection was lost after the request was sent:
+ * the host may have acted on it. A value, not a throw, so a route can say so
+ * instead of "failed to reach host" (which invites a blind retry). */
+export interface UnknownMutationOutcome {
+  outcomeUnknown: true;
+  error: string;
+}
+
+export function isUnknownMutationOutcome(v: unknown): v is UnknownMutationOutcome {
+  return (
+    typeof v === "object" && v !== null && (v as UnknownMutationOutcome).outcomeUnknown === true
+  );
+}
+
+function unknownMutationOutcome(err: unknown, op: string): UnknownMutationOutcome | null {
+  if (!isOutcomeUnknown(err)) return null;
+  return {
+    outcomeUnknown: true,
+    error: `the connection to the session's host was lost after the ${op} request was sent, so it MAY HAVE BEEN DELIVERED (outcome unknown); check the session's state before sending it again`,
+  };
+}
+
 export type HostErrorClassification = "rejected" | "busy" | "unreachable";
 
 /**
@@ -241,7 +263,7 @@ export interface SessionBackend {
     gateId: string | undefined,
     decision: "approved" | "denied",
     reason?: string,
-  ): Promise<boolean>;
+  ): Promise<boolean | UnknownMutationOutcome>;
   // Issue #1472 — clears non-blocking attention (issue #1430's explicit
   // "acknowledge" action) on whichever host actually tracks this session's
   // live PtyManager state, the same local/remote split resolveReviewGate
@@ -250,7 +272,7 @@ export interface SessionBackend {
   // genuinely still-pending blocking kind, or an id the OWNING host itself
   // doesn't track — both of which the route reports as the same 409; a
   // caller here has no way (and no need) to distinguish them further.
-  acknowledgeAttention(id: string): Promise<boolean>;
+  acknowledgeAttention(id: string): Promise<boolean | UnknownMutationOutcome>;
   // Issue #1951 — types a prompt into the session's agent on whichever host
   // owns its PTY (`sessions.prompt` for a child on another host). Resolves a
   // refusal as a value, never a throw: an unreachable host or an agent too
@@ -854,7 +876,7 @@ class RemoteBackend implements SessionBackend {
     } catch (err) {
       // A refusal is a value, like prompt/wait: an agent too old for the route
       // (404), a rejection, or an unreachable host each get their own status.
-      return { ok: false, ...this.remoteRefusal(err, "session-transcript") };
+      return { ok: false, ...this.remoteRefusal(err, "session-transcript", false) };
     }
   }
 
@@ -872,17 +894,29 @@ class RemoteBackend implements SessionBackend {
     return this.client.uploadFile(cwd, buffer, name);
   }
 
-  resolveReviewGate(
+  async resolveReviewGate(
     id: string,
     gateId: string | undefined,
     decision: "approved" | "denied",
     reason?: string,
-  ): Promise<boolean> {
-    return this.client.resolveReviewGate(id, gateId, decision, reason);
+  ): Promise<boolean | UnknownMutationOutcome> {
+    try {
+      return await this.client.resolveReviewGate(id, gateId, decision, reason);
+    } catch (err) {
+      const unknown = unknownMutationOutcome(err, "review-gate");
+      if (unknown) return unknown;
+      throw err;
+    }
   }
 
-  acknowledgeAttention(id: string): Promise<boolean> {
-    return this.client.acknowledgeAttention(id);
+  async acknowledgeAttention(id: string): Promise<boolean | UnknownMutationOutcome> {
+    try {
+      return await this.client.acknowledgeAttention(id);
+    } catch (err) {
+      const unknown = unknownMutationOutcome(err, "attention-ack");
+      if (unknown) return unknown;
+      throw err;
+    }
   }
 
   async prompt(id: string, opts: { text: string; submit: boolean }): Promise<PromptOutcome> {
@@ -892,7 +926,7 @@ class RemoteBackend implements SessionBackend {
       const delivered = await this.client.resolvePrompt(id, opts);
       return { ok: true, outputOffset: delivered.outputOffset, afterSeq: delivered.afterSeq };
     } catch (err) {
-      return { ok: false, ...this.remoteRefusal(err, "session-control") };
+      return { ok: false, ...this.remoteRefusal(err, "session-control", true) };
     }
   }
 
@@ -923,7 +957,7 @@ class RemoteBackend implements SessionBackend {
           ...(cursor !== undefined ? { afterOffset: cursor } : {}),
         });
       } catch (err) {
-        return { failed: true, ...this.remoteRefusal(err, "session-control") };
+        return { failed: true, ...this.remoteRefusal(err, "session-control", false) };
       }
       if ("notRunning" in chunk) return { notRunning: true };
       if ("matched" in chunk && chunk.matched) return chunk;
@@ -940,11 +974,17 @@ class RemoteBackend implements SessionBackend {
    * discards the body of a 5xx); a 404 is an agent build too old to have the
    * route at all; anything else is a rejection or an unreachable host.
    */
-  private remoteRefusal(err: unknown, op: string): { status: number; error: string } {
-    // #2637 — the channel closed after the request was sent: the host may have
-    // acted on it. Say so explicitly; "unreachable" invites the calling agent to
-    // retry, which for a prompt types it twice.
-    if (isOutcomeUnknown(err)) {
+  private remoteRefusal(
+    err: unknown,
+    op: string,
+    mutating: boolean,
+  ): { status: number; error: string } {
+    // #2637 — the channel closed after the request was sent: for a MUTATING call
+    // (a prompt) the host may have acted on it. Say so explicitly; "unreachable"
+    // invites the calling agent to retry, which types the prompt twice. A read
+    // (wait-output, transcript) has nothing to double, so it falls through to the
+    // plain unreachable answer below.
+    if (mutating && isOutcomeUnknown(err)) {
       return {
         status: 502,
         error: `the connection to the session's host was lost after the request was sent, so the ${op} request MAY HAVE BEEN DELIVERED (outcome unknown); check the session's output before sending it again`,

@@ -6,12 +6,13 @@ import { findSsrfBlock, type SsrfBlockedError } from "./pinned-connect.js";
 // them, so existing imports are unchanged.
 
 /**
- * Read-only POSTs; every other non-GET request is treated as a mutation. A
+ * Read-only POSTs (a mid-request close is reported as plain unreachable, not as an
+ * unknown outcome; nothing here retries); every other non-GET request is a mutation. A
  * test pins this list against the `/internal` POST routes, so a new route has
  * to be classified (here, or in the mutation list that test keeps).
  */
 const IDEMPOTENT_POST_PATHS =
-  /^\/internal\/(sessions\/(live|liveness)|project-files\/(list|read|stat|search|download)|scaffold-scan|read-files|worktrees\/compare-paths)(\?|$)/;
+  /^\/internal\/(sessions\/(live|liveness|[^/]+\/wait-output)|project-files\/(list|read|stat|search|download)|scaffold-scan|read-files|worktrees\/compare-paths)(\?|$)/;
 
 /** `/internal/git-repair` is a read-only plan unless the body says `confirm: true`. */
 const GIT_REPAIR_PATH = /^\/internal\/git-repair(\?|$)/;

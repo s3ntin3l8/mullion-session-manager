@@ -175,8 +175,12 @@ in `machine_credential`.
   The primary never merges these rows by URL or hostname (that is the
   hijack risk the identity removed). Instead `GET /api/hosts` marks the newer
   row with `possibleDuplicateOf`: older enrolled rows with the same advertised
-  `baseUrl` or self-reported hostname that are offline and have no active
-  session. Settings → Hosts shows "Possible duplicate of <name>" on the newer
+  `baseUrl`, or (only for a legacy row with no machine identity, when both rows
+  advertise a URL) the same self-reported hostname, that are offline and have no
+  active session. A row that carries a machine identity is never offered on
+  hostname alone, addressed or not, so two agents that share a hostname are not
+  flagged; and an outbound-only agent that lost its state (a new identity, no
+  address) leaves its old row unflagged, to be removed by hand. Settings → Hosts shows "Possible duplicate of <name>" on the newer
   row and offers _Remove stale host_ on the stale ones, which is the normal
   delete (with its confirmation, and its refusal while projects still
   reference the host). Two live agents sharing a URL are not flagged. Nothing
@@ -2011,16 +2015,29 @@ usual re-attach scrollback replay / events replay snapshot resynchronizes it.
   re-seed (reject / review-feedback) binds the task to it and does not re-seed while
   it is alive; the auto-rebase worker records its rebase CAS and attempt count; a branch
   preview binds it; a Docker stack action returns it as `reused: true`.
+  A Task Master re-seed adopted this way is re-checked on each reconcile tick
+  (in memory; a primary restart forgets it): once a 30 s boot grace has passed and
+  the session can be typed into, the seed is looked for in its output and typed
+  into that same session if it is missing. It never spawns a second session. An
+  auto-rebase worker whose rebase CAS is lost is killed, whether its spawn was
+  clean or adopted after an unknown outcome.
   A **prompt** (`sessions.prompt`, and message delivery) lost mid-request replies
   with an explicit "may have been delivered (outcome unknown)" error, never "the
   host is unreachable", and is not retried: the calling agent should read the
-  session's output before sending it again.
-  The idempotent (retry-safe) POST list is pinned against the agent's `/internal`
-  routes by a test; it includes the read-only `read-files`, `worktrees/compare-paths`
-  and `project-files/download`, and `git-repair` only for its `confirm: false` plan.
+  session's output before sending it again. The same applies to the other mutating
+  control calls (review-gate decision, attention acknowledge), which reply 502 with
+  that wording. A **read** (`wait-output`, the transcript read) has nothing to
+  repeat, so a lost connection there is a plain "host is unreachable".
+  The read-only (idempotent) POST list is pinned against the agent's registered
+  `/internal` routes by a test (an unclassified route, or a stale entry, fails it);
+  it includes `wait-output`, `read-files`, `worktrees/compare-paths` and
+  `project-files/download`, and `git-repair` only for its `confirm: false` plan.
+  **There is no retry layer.** "Idempotent" only changes what a mid-request close
+  is reported as: a plain `HostUnreachableError` ("reported as unreachable, not
+  unknown outcome"), so the caller may re-issue the read itself.
 - **`HostUnreachableError`**: A network failure before sending, a dropped link on an
-  idempotent request, or a 5xx HTTP response. Read-only calls and idempotent probes
-  keep retrying as before.
+  idempotent request, or a 5xx HTTP response. The transport does not retry; callers
+  that poll (probes, reconcilers) try again on their next tick.
 
 **Troubleshooting.** A host with no URL that never leaves `pending`: its channel
 has not connected; check the agent's log for `[agent-channel]` lines and that

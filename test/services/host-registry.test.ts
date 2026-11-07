@@ -723,14 +723,57 @@ describe("host-registry", () => {
       await appRef.close();
     });
 
-    it("flags by self-reported hostname when the URL differs", async () => {
+    it("flags a legacy (identity-less) row by self-reported hostname when the URL differs", async () => {
+      appRef = await buildApp();
+      const name = `h-${crypto.randomUUID()}`;
+      const mk = (ageSec: number) => {
+        const { hostId } = enrollHost(appRef!, { baseUrl: u(), hostname: name });
+        appRef!.db
+          .update(hosts)
+          .set({ createdAt: new Date(Date.now() - ageSec * 1000) })
+          .where(eq(hosts.id, hostId))
+          .run();
+        return hostId;
+      };
+      const stale = mk(100);
+      const fresh = mk(0);
+      const map = findPossibleDuplicates(appRef, (id) => (id === stale ? "offline" : "online"));
+      expect(map.get(fresh)).toEqual([stale]);
+      expect(map.has(stale)).toBe(false);
+      await appRef.close();
+    });
+
+    it("never offers an identity-bearing row on hostname alone, even when both advertise a URL", async () => {
       appRef = await buildApp();
       const name = `h-${crypto.randomUUID()}`;
       const stale = enroll(u(), name, 100);
       const fresh = enroll(u(), name, 0);
       const map = findPossibleDuplicates(appRef, (id) => (id === stale ? "offline" : "online"));
-      expect(map.get(fresh)).toEqual([stale]);
+      expect(map.has(fresh)).toBe(false);
       expect(map.has(stale)).toBe(false);
+      await appRef.close();
+    });
+
+    it("leaves the stale row of a lost-state outbound-only agent alone: its re-enrolment is a new identity", async () => {
+      appRef = await buildApp();
+      const name = `h-${crypto.randomUUID()}`;
+      const mk = (ageSec: number) => {
+        const { hostId } = enrollHost(appRef!, { hostname: name, wantsMachineCredential: true });
+        appRef!.db
+          .update(hosts)
+          .set({ createdAt: new Date(Date.now() - ageSec * 1000) })
+          .where(eq(hosts.id, hostId))
+          .run();
+        return hostId;
+      };
+      const stale = mk(100);
+      const fresh = mk(0);
+      expect(stale).not.toBe(fresh);
+      // Both rows survive, and nothing is flagged or pruned on a hostname.
+      expect(getHostRow(appRef, stale)).toBeDefined();
+      expect(getHostRow(appRef, fresh)).toBeDefined();
+      const map = findPossibleDuplicates(appRef, (id) => (id === stale ? "offline" : "online"));
+      expect(map.size).toBe(0);
       await appRef.close();
     });
 

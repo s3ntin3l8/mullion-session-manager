@@ -7,10 +7,12 @@ const mockCreateSessionRecord = vi.fn();
 const mockTerminate = vi.fn();
 const mockLiveStatus = vi.fn();
 const mockPrompt = vi.fn();
+const mockRenderedScrollback = vi.fn();
 const mockResolveBackend = vi.fn(() => ({
   terminate: mockTerminate,
   liveStatus: mockLiveStatus,
   prompt: mockPrompt,
+  getRenderedScrollback: mockRenderedScrollback,
 }));
 const mockCloseSessionBrowserBindings = vi.fn();
 
@@ -29,8 +31,14 @@ const { buildApp } = await import("../../src/app.js");
 const { closeDb } = await import("../../src/db/client.js");
 const { tasks, sessions } = await import("../../src/db/schema.js");
 const { eq } = await import("drizzle-orm");
-const { reseedTaskIfSessionExited, promptLiveTaskWorker, readLiveWorkerState } =
-  await import("../../src/services/task-reseed.js");
+const {
+  reseedTaskIfSessionExited,
+  promptLiveTaskWorker,
+  readLiveWorkerState,
+  recheckAdoptedSeeds,
+  resetPendingAdoptedSeeds,
+  ADOPTED_SEED_GRACE_MS,
+} = await import("../../src/services/task-reseed.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-reseed-test-${process.pid}.db`);
 
@@ -62,6 +70,8 @@ describe("reseedTaskIfSessionExited", () => {
     mockTerminate.mockResolvedValue(undefined);
     mockLiveStatus.mockResolvedValue({});
     mockPrompt.mockResolvedValue({ ok: true, outputOffset: 0 });
+    mockRenderedScrollback.mockResolvedValue("");
+    resetPendingAdoptedSeeds();
   });
 
   function insertSessionRow(status: "active" | "exited") {
@@ -332,6 +342,72 @@ describe("reseedTaskIfSessionExited", () => {
     const again = await reseedTaskIfSessionExited(app, updated, project, "prompt", "test reject");
     expect(again).toBe(false);
     expect(mockCreateSessionRecord).not.toHaveBeenCalled();
+  });
+
+  describe("re-checking an adopted re-seed session (#2637)", () => {
+    const SEED = "Reviewer feedback: please fix the flaky test\nmore detail";
+
+    async function adopt() {
+      const { task } = insertTaskWithSession("exited");
+      const kept = insertSessionRow("active");
+      mockCreateSessionRecord.mockResolvedValue({
+        ok: false,
+        reason: "outcome-unknown",
+        sessionId: kept.id,
+      });
+      await reseedTaskIfSessionExited(app, task, project, SEED, "test reject");
+      mockCreateSessionRecord.mockClear();
+      return { task, kept };
+    }
+    const seedOf = (id: number) =>
+      app.db.select().from(tasks).where(eq(tasks.id, id)).all()[0].seedDelivered;
+    const later = () => Date.now() + ADOPTED_SEED_GRACE_MS + 1000;
+
+    it("types the seed into the adopted session once, never spawning a second one", async () => {
+      const { task } = await adopt();
+
+      await recheckAdoptedSeeds(app, later());
+
+      expect(mockPrompt).toHaveBeenCalledTimes(1);
+      expect(mockPrompt).toHaveBeenCalledWith(expect.any(String), { text: SEED, submit: true });
+      expect(mockCreateSessionRecord).not.toHaveBeenCalled();
+      expect(seedOf(task.id)).toBe(true);
+
+      await recheckAdoptedSeeds(app, later());
+      expect(mockPrompt).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not type over an agent that already has its seed", async () => {
+      const { task } = await adopt();
+      mockRenderedScrollback.mockResolvedValue("> Reviewer  feedback: please fix\nthe flaky test");
+
+      await recheckAdoptedSeeds(app, later());
+
+      expect(mockPrompt).not.toHaveBeenCalled();
+      expect(seedOf(task.id)).toBe(true);
+    });
+
+    it("waits out the boot grace window", async () => {
+      const { task } = await adopt();
+
+      await recheckAdoptedSeeds(app, Date.now() + 1000);
+
+      expect(mockPrompt).not.toHaveBeenCalled();
+      expect(seedOf(task.id)).toBe(false);
+    });
+
+    it("leaves an unreachable host for the next tick and drops a gone session", async () => {
+      const { task, kept } = await adopt();
+      mockLiveStatus.mockRejectedValueOnce(new Error("down"));
+      await recheckAdoptedSeeds(app, later());
+      expect(mockPrompt).not.toHaveBeenCalled();
+      expect(seedOf(task.id)).toBe(false);
+
+      app.db.update(sessions).set({ status: "exited" }).where(eq(sessions.id, kept.id)).run();
+      await recheckAdoptedSeeds(app, later());
+      await recheckAdoptedSeeds(app, later());
+      expect(mockPrompt).not.toHaveBeenCalled();
+    });
   });
 
   // Hermes review, PR #580 — the final sessionId write had no status guard;
