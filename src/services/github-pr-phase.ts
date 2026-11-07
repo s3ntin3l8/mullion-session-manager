@@ -3,7 +3,7 @@
 // badge) so they can never disagree. No I/O, no imports beyond a type: kept
 // out of github.ts so the frontend-facing shape can be unit-tested alone.
 
-import type { GitHubCiStatus } from "./github.js";
+import type { GitHubCiStatus } from "../shared/types.js";
 import type { RelayReviewState } from "../shared/types.js";
 
 export type PrReviewDecision = "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;

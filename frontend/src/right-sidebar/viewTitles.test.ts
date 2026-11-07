@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
-import { RIGHT_SIDEBAR_VIEWS } from "./views.js";
+import { RIGHT_SIDEBAR_VIEWS } from "./views-registry.js";
 import { VIEW_TITLES } from "./viewTitles.js";
 
 describe("VIEW_TITLES", () => {

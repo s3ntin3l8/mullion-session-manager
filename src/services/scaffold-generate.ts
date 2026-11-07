@@ -7,6 +7,13 @@ import type { FastifyInstance } from "fastify";
 import { createWorktree, removeWorktree } from "./git-worktree.js";
 import { deleteBranch } from "./git-branch-delete.js";
 import { resolveHostBaseRef, viaRemote } from "./host-git.js";
+// The turn's shape and its time bound live in their own module: the remote
+// host client needs them too, and importing them from here closed an import
+// cycle with it (issue #2414). Re-exported, so every existing importer keeps
+// its path.
+import { DEFAULT_GENERATION_TIMEOUT_MS, type GenerationTurnResult } from "./scaffold-turn.js";
+export { DEFAULT_GENERATION_TIMEOUT_MS };
+export type { GenerationTurnResult };
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { gitEnv } from "./git-env.js";
 import { CANARY_MISSING_MESSAGE, placeCanary } from "./scaffold-canary.js";
@@ -20,18 +27,6 @@ import {
 } from "./scaffold-failure.js";
 
 export { agentLogLabel, describeSpawnFailure, redactSecrets } from "./scaffold-failure.js";
-import {
-  scaffoldSkillPath,
-  scaffoldReviewerPath,
-  CODEX_REVIEWER_DELEGATION_CLAUSE,
-  SCAFFOLD_REGION_START,
-  SCAFFOLD_REGION_END,
-  MULLION_REGION_PLACEHOLDER,
-} from "./mullion-scaffold.js";
-import { parseSkillFrontmatter } from "./skills.js";
-import { stripMarkedRegion, topLevelLines } from "./marked-region.js";
-import type { ExistingInstructionsMode } from "../shared/constants.js";
-
 // Issue #956 — replaces mullion-scaffold.ts's static placeholder skill/
 // reviewer/AGENTS.md-region text with genuinely codebase-specific content, by
 // spawning a real, read-only agent turn against the project's own repo and
@@ -209,7 +204,18 @@ import type { ExistingInstructionsMode } from "../shared/constants.js";
 // documented non-interactive/print mode, bounded by `timeoutMs` — the
 // same posture the route's own rate limit already assumes ("a real, costly
 // turn", not an instant call), just made explicit here too.
-export const DEFAULT_GENERATION_TIMEOUT_MS = 5 * 60 * 1000;
+
+import {
+  scaffoldSkillPath,
+  scaffoldReviewerPath,
+  CODEX_REVIEWER_DELEGATION_CLAUSE,
+  SCAFFOLD_REGION_START,
+  SCAFFOLD_REGION_END,
+  MULLION_REGION_PLACEHOLDER,
+} from "./mullion-scaffold.js";
+import { parseSkillFrontmatter } from "./skills.js";
+import { stripMarkedRegion, topLevelLines } from "./marked-region.js";
+import type { ExistingInstructionsMode } from "../shared/constants.js";
 
 export class UnsupportedGenerationAgentError extends Error {
   constructor(agentCommand: string) {
@@ -2018,40 +2024,6 @@ export const defaultSpawnGenerationTurn: SpawnGenerationTurn = async ({
 };
 
 /** The `outcome`-discriminated result `/internal/run-generation-turn`
- * returns (issue #1101) — ALWAYS a 200, never an HTTP status for an
- * application-level failure (unsupported agent CLI, scratch-worktree
- * creation failure, the spawn itself failing). Same "200 + reason
- * envelope, never a git-level refusal as a 5xx" convention as
- * `DeleteBranchResult`/`CreateWorktreeResult` elsewhere in this codebase —
- * chosen deliberately here because `host-git.ts`'s `viaRemote` (which this
- * module's own remote dispatch reuses for the outer HTTP-level
- * unreachable/version-skew split) only distinguishes a 404 from
- * "everything else": carrying these three distinguishable local error
- * classes as HTTP status instead would collapse them into one
- * indistinguishable `"unreachable"` bucket by the time they reached
- * `generateScaffoldContent`'s remote branch below.
- *
- * `sandboxed` on `"ok"` is optional on the wire type because this route
- * shipped in 0.3.9 (PR #1134, issue #1101) before 0.3.11 (PR #1167, issues
- * #1144/#1159) added the field, and
- * `RemoteHostClient.resolveRunGenerationTurn` does a raw fetch-and-cast
- * with no runtime validation (same version-skew posture as `SpawnResult`,
- * `AgentConfig`, and `resolveGitBranches` in `remote-host-client.ts`): a
- * remote agent on a 0.3.9 or 0.3.10 build omits `sandboxed`, and
- * `generateScaffoldContent` defaults it to `false` so the unsandboxed
- * warning still surfaces rather than assuming the turn was sandboxed. A
- * current agent build (`routes/internal.ts`) always populates it.
- *
- * `canary` (#2554) is the same kind of optional field: `true` when the agent
- * ran the read canary (`withReadCanary`) around the turn. An agent build that
- * predates the canary omits it and returns plain stdout, which the primary
- * cannot otherwise tell from a verified turn; `generateScaffoldContent`
- * reports its absence as `canary: false` rather than failing the turn. */
-export type GenerationTurnResult =
-  | { outcome: "ok"; stdout: string; sandboxed?: boolean; canary?: boolean }
-  | { outcome: "unsupported-agent"; detail: string }
-  | { outcome: "worktree-error"; detail: string }
-  | { outcome: "spawn-error"; detail: string };
 
 /** Issue #2535 — wraps a spawn so the turn must prove it could read the
  * repository: a canary file is placed in its cwd (see scaffold-canary.ts) and

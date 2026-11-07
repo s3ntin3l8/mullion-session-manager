@@ -1,22 +1,12 @@
+// The right sidebar's shared TYPES.
+//
+// This file holds types and nothing else, on purpose: every view component
+// imports its props type from here, so anything this file imported back
+// would close an import cycle with the registry that lists those same
+// components (issue #2414). The registry lives in views-registry.ts and the
+// badge hooks in views-badges.ts.
 import type { ComponentType, SVGProps } from "react";
 import type { CheckoutChoice } from "../hooks/useCheckoutTarget.js";
-import { useDashboardStore } from "../store/index.js";
-import { needsYouTasks } from "../github/taskMasterSummary.js";
-import { ATTENTION_ORDER, PHASE_LABEL, attentionSummary } from "../github/prPhase.js";
-import {
-  FolderIcon,
-  GitBranchIcon,
-  GitHubIcon,
-  GearIcon,
-  HistoryIcon,
-  ListIcon,
-} from "../ui/icons.js";
-import { FilesSidebarView } from "./FilesSidebarView.js";
-import { GitHubSidebarView } from "./GitHubSidebarView.js";
-import { GitSidebarView } from "./GitSidebarView.js";
-import { HistorySidebarView } from "./HistorySidebarView.js";
-import { ProjectSidebarView } from "./ProjectSidebarView.js";
-import { TasksSidebarView } from "./TasksSidebarView.js";
 
 type ViewIconProps = SVGProps<SVGSVGElement> & { size?: number };
 
@@ -66,118 +56,3 @@ export interface RightSidebarView {
   // useBadge). `useAlwaysEnabled` for the views that are always there.
   useEnabled: () => boolean;
 }
-
-export function useNoBadge(): RailBadge | null {
-  return null;
-}
-
-export function useAlwaysEnabled(): boolean {
-  return true;
-}
-
-function useTaskMasterEnabled(): boolean {
-  return useDashboardStore((s) => s.taskMasterEnabled);
-}
-
-// Tasks that want a human (failed, awaiting approval, a merge/release error)
-// for the followed project. Archived tasks never count.
-function useTasksBadge(projectId: number | null): RailBadge | null {
-  const tasks = useDashboardStore((s) => s.tasks);
-  if (projectId == null) return null;
-  const n = needsYouTasks(tasks.filter((t) => t.projectId === projectId)).length;
-  if (n === 0) return null;
-  return {
-    kind: "count",
-    value: n,
-    title: `${n} task${n === 1 ? "" : "s"} ${n === 1 ? "needs" : "need"} you`,
-  };
-}
-
-function useGitBadge(projectId: number | null): RailBadge | null {
-  const status = useDashboardStore((s) => (projectId != null ? s.gitStatuses[projectId] : null));
-  if (!status) return null;
-  if (status.hasConflicts) return { kind: "alert", title: "Unresolved merge conflicts" };
-  if (status.files.length > 0) {
-    return {
-      kind: "count",
-      value: status.files.length,
-      title: `${status.files.length} changed file${status.files.length === 1 ? "" : "s"}`,
-    };
-  }
-  return null;
-}
-
-// PRs that want the user (failing CI, requested changes, conflicts, unresolved
-// conversations, a head behind its base — by phase, not just red CI) and a red default branch both
-// come straight from the live store (prsByProject from the /ws/github push,
-// defaultBranchCiByProject from the poller via the same refreshGitRefs
-// batch), so the badge costs no extra requests.
-function useGitHubBadge(projectId: number | null): RailBadge | null {
-  const prs = useDashboardStore((s) =>
-    projectId != null ? s.prsByProject[projectId]?.prs : undefined,
-  );
-  const defaultBranchFailing = useDashboardStore((s) =>
-    projectId != null ? s.defaultBranchCiByProject[projectId] === "failure" : false,
-  );
-  const { total, byPhase } = attentionSummary(prs ?? []);
-  if (total === 0 && !defaultBranchFailing) return null;
-  const reasons: string[] = [];
-  for (const phase of ATTENTION_ORDER) {
-    const n = byPhase[phase];
-    if (n) reasons.push(`${n} PR${n === 1 ? "" : "s"}: ${PHASE_LABEL[phase].toLowerCase()}`);
-  }
-  if (defaultBranchFailing) reasons.push("default branch CI failing");
-  return { kind: "alert", title: reasons.join(", ") };
-}
-
-// Registry — adding a view is one entry here.
-export const RIGHT_SIDEBAR_VIEWS: RightSidebarView[] = [
-  {
-    id: "git",
-    label: "Git",
-    icon: GitBranchIcon,
-    Component: GitSidebarView,
-    useBadge: useGitBadge,
-    useEnabled: useAlwaysEnabled,
-  },
-  {
-    id: "history",
-    label: "History",
-    icon: HistoryIcon,
-    Component: HistorySidebarView,
-    useBadge: useNoBadge,
-    useEnabled: useAlwaysEnabled,
-  },
-  {
-    id: "github",
-    label: "GitHub",
-    icon: GitHubIcon,
-    Component: GitHubSidebarView,
-    useBadge: useGitHubBadge,
-    useEnabled: useAlwaysEnabled,
-  },
-  {
-    id: "tasks",
-    label: "Tasks",
-    icon: ListIcon,
-    Component: TasksSidebarView,
-    useBadge: useTasksBadge,
-    useEnabled: useTaskMasterEnabled,
-  },
-  {
-    id: "files",
-    label: "Files",
-    icon: FolderIcon,
-    Component: FilesSidebarView,
-    useBadge: useNoBadge,
-    useEnabled: useAlwaysEnabled,
-  },
-  {
-    id: "project",
-    label: "Project",
-    icon: GearIcon,
-    Component: ProjectSidebarView,
-    useBadge: useNoBadge,
-    useEnabled: useAlwaysEnabled,
-  },
-];

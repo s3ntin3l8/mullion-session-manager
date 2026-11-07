@@ -618,12 +618,16 @@ describe("task-github-sync", () => {
     // "syncs a tracked task to done when its issue closes".
     it("calls cleanupTaskWorktree and cleanupTaskSessions once the transition lands", async () => {
       mockGetIssueState.mockResolvedValue({ state: "closed", labels: [] });
-      const taskApproveModule = await import("../../src/services/task-approve.js");
+      // The cleanup helpers live in task-cleanup.ts (they moved out of
+      // task-approve.ts to break the approve/promote/github-sync import
+      // cycle, issue #2414) — the spy has to target the module that owns
+      // them now.
+      const taskCleanupModule = await import("../../src/services/task-cleanup.js");
       const worktreeSpy = vi
-        .spyOn(taskApproveModule, "cleanupTaskWorktree")
+        .spyOn(taskCleanupModule, "cleanupTaskWorktree")
         .mockImplementation(() => {});
       const sessionsSpy = vi
-        .spyOn(taskApproveModule, "cleanupTaskSessions")
+        .spyOn(taskCleanupModule, "cleanupTaskSessions")
         .mockImplementation(() => {});
 
       const task = insertTask("reviewing", 107);
@@ -656,12 +660,16 @@ describe("task-github-sync", () => {
     // gets a second (harmless but wasteful, and log-noisy) kill attempt.
     it("does not run cleanup again on a second pass over an already-done task", async () => {
       mockGetIssueState.mockResolvedValue({ state: "closed", labels: [] });
-      const taskApproveModule = await import("../../src/services/task-approve.js");
+      // The cleanup helpers live in task-cleanup.ts (they moved out of
+      // task-approve.ts to break the approve/promote/github-sync import
+      // cycle, issue #2414) — the spy has to target the module that owns
+      // them now.
+      const taskCleanupModule = await import("../../src/services/task-cleanup.js");
       const worktreeSpy = vi
-        .spyOn(taskApproveModule, "cleanupTaskWorktree")
+        .spyOn(taskCleanupModule, "cleanupTaskWorktree")
         .mockImplementation(() => {});
       const sessionsSpy = vi
-        .spyOn(taskApproveModule, "cleanupTaskSessions")
+        .spyOn(taskCleanupModule, "cleanupTaskSessions")
         .mockImplementation(() => {});
 
       const task = insertTask("reviewing", 108);

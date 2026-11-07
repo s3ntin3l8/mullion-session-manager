@@ -8,7 +8,12 @@ import type {
   ReviewSummary,
 } from "../api/types.js";
 import { legacyPillClass, statusTone, type Tone } from "../lib/statusTone.js";
-import type { TriadItem } from "../ui/sidebar/index.js";
+// The type comes from the component's own module, not from the sidebar
+// barrel: the barrel exports the component, and the component's module is
+// reachable from the sidebar's own origin filter, which reaches back into
+// github/rowOrigin.ts — importing through the barrel closed that loop
+// (issue #2414).
+import type { TriadItem } from "../ui/sidebar/StatusTriad.js";
 import { checkDotClass } from "./checkDot.js";
 
 export const PHASE_LABEL: Record<GitHubPrPhase, string> = {

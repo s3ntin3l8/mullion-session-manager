@@ -3,8 +3,11 @@ import crypto from "node:crypto";
 import { eq, and, isNotNull, isNull, ne } from "drizzle-orm";
 import { hostPairings, hosts, projects, sessions } from "../db/schema.js";
 import { timingSafeTokenMatch } from "./crypto-utils.js";
-// Used only inside listHosts (call time), so the import cycle with host-pairing is inert.
-import { HOST_PAIRING_RETRY_WINDOW_MS } from "./host-pairing.js";
+// Used only inside listHosts (call time). The constant lives in its own
+// module because the pairing flow needs it too, and importing host-pairing.ts
+// from here was an import cycle between two services with nothing else to do
+// with each other (issue #2414).
+import { HOST_PAIRING_RETRY_WINDOW_MS } from "./host-pairing-policy.js";
 // LOCAL_HOST_ID now physically lives in src/shared/constants.ts
 // (re-exported by the frontend too, from the same file — see
 // frontend/src/api.ts's own re-export). Re-exported below so every existing

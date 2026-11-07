@@ -45,7 +45,10 @@ import {
 } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveClaudeConfigDir } from "./hook-adapters/claude-code.js";
+// The resolver itself lives in claude-config-dir.ts (issue #2091) —
+// claude-code.ts only re-exports it. Importing it from the ADAPTER instead
+// made bundle-sync.ts and claude-code.ts import each other (issue #2414).
+import { resolveClaudeConfigDir } from "./hook-adapters/claude-config-dir.js";
 import { resolveCodexAgentsSkillsDir } from "./hook-adapters/codex.js";
 import {
   resolveAgyGlobalSkillsDir,

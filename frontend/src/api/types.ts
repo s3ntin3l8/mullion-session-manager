@@ -9,6 +9,7 @@
 // name below unchanged so no call site anywhere in the frontend needs to
 // change its import.
 import type {
+  GitHubCiStatus,
   SessionStatus,
   SessionSeverity,
   GitBranchInfo,
@@ -1329,7 +1330,9 @@ export interface GitHubActionsRun {
   headSha: string;
 }
 
-export type GitHubCiStatus = "success" | "failure" | "in_progress" | null;
+// The backend's declaration, shared rather than hand-mirrored (the two were
+// the same union spelled twice) — src/shared/types.ts.
+export type { GitHubCiStatus } from "../../../src/shared/types.js";
 
 // Per-PR CI status (issue #102) — mirrors src/services/github.ts's
 // PROrWithChecks 1:1.

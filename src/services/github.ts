@@ -7,7 +7,7 @@
 // independently testable).
 
 import { githubApiBase, githubApiFetch, GitHubApiError } from "./github-fetch.js";
-import type { RelayReviewState, ReviewSummary } from "../shared/types.js";
+import type { GitHubCiStatus, RelayReviewState, ReviewSummary } from "../shared/types.js";
 import {
   derivePrPhase,
   type PrMergeable,
@@ -86,7 +86,11 @@ export interface GitHubStep {
 // all (disabled, no runs, or the lookup itself failed) — the dot/section
 // just doesn't render for that case (routes/projects.ts's GET .../github
 // still 200s; this is a feature-detect, not an error).
-export type GitHubCiStatus = "success" | "failure" | "in_progress" | null;
+// The CI-status union lives in src/shared/types.ts: the frontend mirrors it
+// by hand (frontend/src/api/types.ts), and this module is imported back by
+// the PR-phase helper — declaring it here made the two import each other
+// (issue #2414). Re-exported, so every existing importer keeps its path.
+export type { GitHubCiStatus };
 
 /** GitHub's `statusCheckRollup.state` for a head commit, collapsed to three. */
 export type ChecksRollupState = "success" | "failure" | "pending" | null;

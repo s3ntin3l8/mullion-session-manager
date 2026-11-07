@@ -1,5 +1,6 @@
 import { useDashboardStore } from "../store/index.js";
-import { RIGHT_SIDEBAR_VIEWS, type RightSidebarView } from "./views.js";
+import { RIGHT_SIDEBAR_VIEWS } from "./views-registry.js";
+import type { RightSidebarView } from "./views.js";
 
 interface RailButtonProps {
   view: RightSidebarView;

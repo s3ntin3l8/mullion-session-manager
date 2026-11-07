@@ -22,7 +22,7 @@ import {
   sign,
 } from "./request-signature.js";
 import type { HostCapacityReport } from "./host-capacity.js";
-import { DEFAULT_GENERATION_TIMEOUT_MS, type GenerationTurnResult } from "./scaffold-generate.js";
+import { DEFAULT_GENERATION_TIMEOUT_MS, type GenerationTurnResult } from "./scaffold-turn.js";
 import { GIT_CLONE_TIMEOUT_MS } from "./git-run.js";
 import type { CloneResult } from "./git-clone.js";
 import type { DiscoveredCandidate, Launcher, DockControl } from "./project-config.js";
