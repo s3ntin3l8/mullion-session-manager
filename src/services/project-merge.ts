@@ -624,10 +624,12 @@ export function mergeProjects(
     // Live local sessions keep their project id in memory: re-key them.
     app.pty.repointProject(opts.duplicateId, opts.survivorId);
     // The browser pool is keyed by project id: close the merged-away project's
-    // Chromium (it would keep counting against the pool until a restart). A
-    // session bound to it relaunches one under the survivor on next use.
-    app.browser.closeForProject(opts.duplicateId).catch((err) => {
-      app.log.warn({ err, projectId: opts.duplicateId }, "merge: failed to close project browser");
+    // Chromium (it would keep counting against the pool until a restart) and
+    // delete what it left on disk (its cookie jar, per-target files and
+    // downloads, which nothing else would ever remove). A session bound to it
+    // relaunches one under the survivor on next use.
+    app.browser.forgetProject(opts.duplicateId).catch((err) => {
+      app.log.warn({ err, projectId: opts.duplicateId }, "merge: failed to forget project browser");
     });
     // #2522 — stop the superseded copies' workers, then clear their
     // worktrees the way a failed task's is (clean-check-gated, branch kept).

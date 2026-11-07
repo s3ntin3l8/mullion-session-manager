@@ -27,8 +27,8 @@ import {
   ensureLocalBranch,
   getPreviewWorktree,
   removeWorktree,
-  trackPreviewWorktree,
 } from "../../src/services/git-worktree.js";
+import { trackLocalPreviewWorktree } from "../helpers/preview-worktree.js";
 import { gitEnv } from "../../src/services/git-env.js";
 
 type App = Awaited<ReturnType<typeof buildApp>>;
@@ -422,7 +422,7 @@ describe("branch previews (issues #2016/#2018)", () => {
       const [dead] = app.db.select().from(sessions).where(eq(sessions.cwd, wt)).all();
       // Still tracked (the reconciler hasn't swept it): it must be untracked,
       // or a later sweep would remove the recut worktree under the new session.
-      trackPreviewWorktree(dead.id, {
+      trackLocalPreviewWorktree(dead.id, {
         worktreePath: wt,
         branch: "feat/x",
         worktreeRefresh: false,

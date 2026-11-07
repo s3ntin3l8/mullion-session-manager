@@ -1243,7 +1243,7 @@ export interface PreviewWorktreeInfo {
   // for every existing (local) test. Must never reject — an unreachable
   // remote agent has to read as `false` (queues a retry), not as a thrown
   // error escaping into killSession/the reconciler/the sync tick.
-  remove?: () => Promise<boolean>;
+  remove: () => Promise<boolean>;
   sync?: () => Promise<boolean>;
   /** Set when a prior removal attempt (killSession or the reconciler) failed.
    * The sync tick below retries removal for these entries every tick instead
@@ -1322,7 +1322,6 @@ export function findPreviewWorktreeSessionId(worktreePath: string): number | und
 // own), same "best-effort, retry next tick" posture as every other failure
 // path in this module.
 async function previewRemove(info: PreviewWorktreeInfo): Promise<boolean> {
-  if (!info.remove) return removeWorktree(info.worktreePath, info.parentCwd);
   try {
     return await info.remove();
   } catch {
