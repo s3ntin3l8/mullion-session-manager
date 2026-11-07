@@ -3,11 +3,11 @@ import { eq, and, ne, isNull, isNotNull, lte } from "drizzle-orm";
 import { pendingBrowserCloses, projects, sessionBrowsers } from "../db/schema.js";
 import { browserTargetKey, type BrowserTarget } from "./browser-manager.js";
 import {
+  BROWSER_ENDPOINTS_OPERATION,
   BROWSER_TARGETS_OPERATION,
-  agentBrowserTarget,
   bindingBrowserTarget,
 } from "./browser-target.js";
-import { requireOperation } from "./host-agents.js";
+import { hostSupports, requireOperation } from "./host-agents.js";
 import { LOCAL_HOST_ID, getHostRow } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
 import { parseHostCwds, projectCwdOnHost } from "./placement.js";
@@ -48,6 +48,43 @@ export function recordSessionBrowserBinding(
       set: { lastAttachedAt: now },
     })
     .run();
+}
+
+/** The one place a LOCAL session's endpoint is fixed (issue #2701): records
+ * `target` as the session's binding unless it already has one (compare and
+ * set, in one synchronous insert) and returns the binding that won, so the
+ * panel and `use_browser` resolving at the same moment, before either has
+ * opened a context, both get the same target and so the same context. Falls
+ * back to `target` when the row cannot be written (the session was deleted
+ * mid-resolve); the attach then fails to record its binding and releases. */
+export function getOrBindEndpoint(
+  app: FastifyInstance,
+  sessionId: number,
+  target: BrowserTarget,
+): BrowserTarget {
+  try {
+    const now = new Date();
+    app.db
+      .insert(sessionBrowsers)
+      .values({
+        sessionId,
+        projectId: target.projectId,
+        targetHostId: target.hostId,
+        targetCheckoutRoot: target.checkoutRoot,
+        targetEndpoint: target.endpoint ?? "",
+        createdAt: now,
+        lastAttachedAt: now,
+      })
+      .onConflictDoNothing({ target: sessionBrowsers.sessionId })
+      .run();
+    const [binding] = listSessionBrowserBindings(app, sessionId);
+    const [project] = app.db.select().from(projects).where(eq(projects.id, target.projectId)).all();
+    const winner = binding && project ? bindingBrowserTarget(project, binding) : null;
+    return winner ?? target;
+  } catch (err) {
+    app.log.warn({ err, sessionId }, "could not bind the session's browser endpoint");
+    return target;
+  }
 }
 
 /** Records the binding of an attach that already launched (or proxied to) the
@@ -269,7 +306,15 @@ async function closeBrowserTarget(
   }
 }
 
-/** `null` when the host took the close, else why it did not. */
+/** `null` when the host took the close, else why it did not.
+ *
+ * The close is sent under the key the target was OPENED with (its recorded
+ * endpoint), whatever the host negotiates now: after a capability downgrade
+ * the endpoint-keyed context is still running on the agent, and an agent that
+ * never knew endpoints ignores the field. While the host does not currently
+ * advertise `browser-endpoints`, the session's browser may also have been
+ * (re)opened under the legacy key by the downgraded primary-to-agent path, so
+ * that key is closed too, unless another session is bound to it. */
 async function deliverRemoteClose(
   app: FastifyInstance,
   target: BrowserTarget,
@@ -277,11 +322,15 @@ async function deliverRemoteClose(
 ): Promise<string | null> {
   const gate = requireOperation(app, target.hostId, BROWSER_TARGETS_OPERATION);
   if (!gate.ok) return gate.message;
+  const path = forget ? "/internal/browser/forget" : "/internal/browser/close";
+  const targets = [target];
+  if (target.endpoint && !hostSupports(app, target.hostId, BROWSER_ENDPOINTS_OPERATION)) {
+    const { endpoint: _endpoint, ...legacyKey } = target;
+    const [project] = app.db.select().from(projects).where(eq(projects.id, target.projectId)).all();
+    if (forget || !project || !targetInUse(app, project, legacyKey)) targets.push(legacyKey);
+  }
   try {
-    await getRemoteHostClient(app, target.hostId).postBrowser(
-      forget ? "/internal/browser/forget" : "/internal/browser/close",
-      agentBrowserTarget(app, target),
-    );
+    for (const t of targets) await getRemoteHostClient(app, target.hostId).postBrowser(path, t);
     return null;
   } catch (err) {
     return (err as Error).message;

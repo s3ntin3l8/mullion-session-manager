@@ -249,8 +249,10 @@ describe("browser endpoints (#2688)", () => {
       .where(eq(sessionBrowsers.sessionId, sessionId))
       .run();
     closeSessionBrowserBindings(primary, sessionId);
-    await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(1));
-    expect(close.mock.calls[0][0].endpoint).toBeUndefined();
+    // The close names the key the context was opened with (the endpoint) and,
+    // as the host does not advertise endpoints now, the legacy key too.
+    await vi.waitFor(() => expect(close).toHaveBeenCalledTimes(2));
+    expect(close.mock.calls.map(([t]) => t.endpoint)).toEqual(["prev-old", undefined]);
   });
 
   it("a local session opens its browser with the preview endpoint and closes it on session end", async () => {
@@ -381,20 +383,15 @@ describe("legacy cookie jar of the default checkout (#2688)", () => {
   }
   const base = { projectId: 4, hostId: "local", checkoutRoot: "/r", legacy: true };
 
-  it("keeps project-<id>.json for the endpoint that first loads it, even a slug accepted later", () => {
+  it("gives any default-checkout endpoint the legacy jar when no other endpoint holds it", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "be-jar-"));
-    expect(path.basename(jar(dir, { ...base, endpoint: "prev-a" }))).toBe("project-4.json");
-    expect(path.basename(jar(dir, { ...base, endpoint: "prev-a" }))).toBe("project-4.json");
-    // The user explicitly opens a second endpoint: it gets its own file.
-    const second = path.basename(jar(dir, { ...base, endpoint: "prev-b" }));
-    expect(second).toMatch(/^project-4-[0-9a-f]{16}\.json$/);
-    expect(path.basename(jar(dir, base))).not.toBe("project-4.json");
-  });
-
-  it("keeps the jar for the legacy endpoint when it is the one in use", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "be-jar-"));
-    expect(path.basename(jar(dir, base))).toBe("project-4.json");
-    expect(path.basename(jar(dir, { ...base, endpoint: "prev-a" }))).not.toBe("project-4.json");
+    for (const endpoint of [undefined, "prev-a", "prev-b"]) {
+      expect(path.basename(jar(dir, { ...base, ...(endpoint ? { endpoint } : {}) }))).toBe(
+        "project-4.json",
+      );
+    }
+    // The claim is not a file any more: nothing is written to the data dir.
+    expect(fs.readdirSync(dir)).toEqual([]);
   });
 
   it("never gives a non-default checkout the legacy file", () => {
