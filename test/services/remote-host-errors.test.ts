@@ -70,6 +70,7 @@ const MUTATING_INTERNAL_POSTS = [
   "/internal/sessions/:id/browser",
   "/internal/sessions/:id/browser/find",
   "/internal/browser/close",
+  "/internal/browser/forget",
   "/internal/configured-preview",
   "/internal/preview/:port/*",
   "/internal/uploads",

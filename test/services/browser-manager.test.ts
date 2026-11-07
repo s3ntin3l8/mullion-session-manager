@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import crypto from "node:crypto";
 import { EventEmitter } from "node:events";
 
 // BrowserManager launches real Chromium via Playwright — CI has no browser
@@ -12,6 +11,8 @@ import { EventEmitter } from "node:events";
 // real Browser/BrowserContext/Page, with every launched instance collected
 // for assertions. Never launch a real Chromium in a unit test.
 const launchedBrowsers: FakeBrowser[] = [];
+// Makes every FakeContext.newPage() throw while set (the open-failure tests).
+let newPageError: Error | null = null;
 
 class FakeContext {
   storageStateOptions?: { storageState?: string };
@@ -41,6 +42,7 @@ class FakeContext {
   }
 
   async newPage() {
+    if (newPageError) throw newPageError;
     return new FakePage();
   }
 
@@ -142,12 +144,10 @@ describe("BrowserManager", () => {
   let manager: InstanceType<typeof BrowserManager>;
 
   beforeEach(() => {
+    newPageError = null;
     launchedBrowsers.length = 0;
     vi.mocked(chromium.launch).mockClear();
-    dataDir = path.join(
-      os.tmpdir(),
-      `browser-manager-test-${crypto.randomBytes(4).toString("hex")}`,
-    );
+    dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "browser-manager-test-"));
     manager = new BrowserManager({ enabled: true, maxContexts: 2, dataDir });
   });
 
@@ -257,6 +257,106 @@ describe("BrowserManager", () => {
     expect(String(legacy)).toMatch(/pool exhausted/i);
   });
 
+  it("closes the context it created when a later open step throws, and does not count it (#2672)", async () => {
+    await manager.getOrLaunch(target(1));
+    newPageError = new Error("newPage failed");
+    await expect(manager.getOrLaunch(target(2))).rejects.toThrow(/newPage failed/);
+    const failed = launchedBrowsers[0].contexts[1];
+    expect(failed.closeSpy).toHaveBeenCalledTimes(1);
+    expect(manager.instanceCount).toBe(1);
+    // The slot is free again: a third target fits under maxContexts (2).
+    newPageError = null;
+    await expect(manager.getOrLaunch(target(3))).resolves.toBeDefined();
+    expect(manager.instanceCount).toBe(2);
+  });
+
+  it("shuts the process down when the only open attempt failed (#2672)", async () => {
+    newPageError = new Error("newPage failed");
+    await expect(manager.getOrLaunch(target(1))).rejects.toThrow(/newPage failed/);
+    expect(launchedBrowsers[0].contexts[0].closeSpy).toHaveBeenCalled();
+    expect(launchedBrowsers[0].closeSpy).toHaveBeenCalled();
+    expect(manager.processCount).toBe(0);
+  });
+
+  it("makes a relaunch wait for the target's close to finish, then starts clean (#2672)", async () => {
+    const first = await manager.getOrLaunch(target(1));
+    const ctx = first.context as unknown as FakeContext;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    ctx.closeSpy.mockImplementation(() => gate);
+
+    const closing = manager.closeTarget(target(1));
+    await vi.waitFor(() => expect(ctx.closeSpy).toHaveBeenCalled());
+    // The entry is out of the pool but still saving its storage state.
+    const downloadsDir = path.join(dataDir, "downloads", "project-1");
+    fs.mkdirSync(downloadsDir, { recursive: true });
+    fs.writeFileSync(path.join(downloadsDir, "saving.bin"), "x");
+
+    let relaunched = false;
+    const relaunch = manager.getOrLaunch(target(1)).then((m) => {
+      relaunched = true;
+      return m;
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(relaunched).toBe(false);
+    expect(fs.existsSync(path.join(downloadsDir, "saving.bin"))).toBe(true);
+    expect(launchedBrowsers[0].contexts).toHaveLength(1);
+
+    release();
+    await closing;
+    const second = await relaunch;
+    expect(second).not.toBe(first);
+    expect(launchedBrowsers.flatMap((b) => b.contexts)).toHaveLength(2);
+    expect(fs.existsSync(path.join(downloadsDir, "saving.bin"))).toBe(false);
+  });
+
+  it("counts a closing target against maxContexts until its close finishes (#2672)", async () => {
+    const a = await manager.getOrLaunch(target(1));
+    await manager.getOrLaunch(target(2));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    (a.context as unknown as FakeContext).closeSpy.mockImplementation(() => gate);
+    const closing = manager.closeTarget(target(1));
+    await vi.waitFor(() => expect(manager.instanceCount).toBe(1));
+    await expect(manager.getOrLaunch(target(3))).rejects.toThrow(/pool exhausted/i);
+    release();
+    await closing;
+    await expect(manager.getOrLaunch(target(3))).resolves.toBeDefined();
+  });
+
+  it("keeps the process up while another target is still closing (#2672)", async () => {
+    const a = await manager.getOrLaunch(target(1));
+    const b = await manager.getOrLaunch(target(2));
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    (b.context as unknown as FakeContext).closeSpy.mockImplementation(() => gate);
+    const closingB = manager.closeTarget(target(2));
+    await manager.closeTarget(target(1));
+    expect(a.closed).toBe(true);
+    expect(launchedBrowsers[0].closeSpy).not.toHaveBeenCalled();
+    release();
+    await closingB;
+    expect(launchedBrowsers[0].closeSpy).toHaveBeenCalled();
+  });
+
+  it("tells a holder when its target is closed, by a close or a crash (#2672)", async () => {
+    const a = await manager.getOrLaunch(target(1));
+    const b = await manager.getOrLaunch(target(2));
+    const onA = vi.fn();
+    const onB = vi.fn();
+    a.onClosed(onA);
+    const off = b.onClosed(onB);
+    await manager.closeTarget(target(1));
+    expect(onA).toHaveBeenCalledTimes(1);
+    off();
+    (b.browser as unknown as FakeBrowser).simulateCrash();
+    expect(onB).not.toHaveBeenCalled();
+    // Registering after the fact reports at once rather than never.
+    const late = vi.fn();
+    b.onClosed(late);
+    expect(late).toHaveBeenCalledTimes(1);
+  });
+
   it("enforces maxContexts per process", async () => {
     await manager.getOrLaunch(target(1));
     await manager.getOrLaunch(target(2));
@@ -361,6 +461,19 @@ describe("BrowserManager", () => {
     expect(secondContext.storageStateOptions?.storageState).toBe(
       path.join(dataDir, "project-1.json"),
     );
+  });
+
+  it("loads the legacy project-<id>.json for a default-checkout target, and only for it (#2672)", async () => {
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dataDir, "project-1.json"),
+      JSON.stringify({ cookies: [], origins: [] }),
+    );
+    await manager.getOrLaunch(target(1)); // legacy, no endpoint
+    await manager.getOrLaunch({ ...target(1), endpoint: "prev-a" }); // same checkout, a preview
+    const [legacy, preview] = launchedBrowsers[0].contexts;
+    expect(legacy.storageStateOptions?.storageState).toBe(path.join(dataDir, "project-1.json"));
+    expect(preview.storageStateOptions?.storageState).toBeUndefined();
   });
 
   it("does not pass storageState on first launch (nothing persisted yet)", async () => {

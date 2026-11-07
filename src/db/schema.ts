@@ -905,6 +905,10 @@ export const sessionBrowsers = sqliteTable(
     // (project host, project checkout) — see services/session-browsers.ts.
     targetHostId: text("target_host_id"),
     targetCheckoutRoot: text("target_checkout_root"),
+    // Issue #2672 — the preview endpoint within that checkout (the pool key's
+    // third part), so closing the session rebuilds the SAME target it opened.
+    // NULL = no endpoint (the legacy value).
+    targetEndpoint: text("target_endpoint"),
   },
   (table) => [uniqueIndex("session_browsers_session_id_unique").on(table.sessionId)],
 );

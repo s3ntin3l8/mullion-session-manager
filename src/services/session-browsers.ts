@@ -33,6 +33,7 @@ export function recordSessionBrowserBinding(
       projectId: target.projectId,
       targetHostId: target.hostId,
       targetCheckoutRoot: target.checkoutRoot,
+      targetEndpoint: target.endpoint ?? null,
       createdAt: now,
       lastAttachedAt: now,
     })

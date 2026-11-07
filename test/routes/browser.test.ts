@@ -834,6 +834,26 @@ describe("browser route (/ws/browser/:sessionId)", () => {
     await app.close();
   });
 
+  it("tells the panel the browser exited when its target is closed underneath it (#2672)", async () => {
+    const { app, port } = await buildAndListen();
+    const { sessionId, projectId } = await createProjectAndSession(app);
+
+    const pageCountBefore = launchedPages.length;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/browser/${sessionId}`);
+    const messages = collectMessages(ws);
+    await waitForOpenOrClose(ws);
+    await waitForNewestPage(pageCountBefore);
+
+    const [managed] = app.browser.listForProject(projectId);
+    await app.browser.closeTarget(managed.target);
+
+    await waitUntilReal(() =>
+      messages.some((m) => !m.binary && JSON.parse(m.data as string).type === "exited"),
+    );
+    ws.close();
+    await app.close();
+  });
+
   it("sends url + title updates on navigation", async () => {
     const { app, port } = await buildAndListen();
     const { sessionId } = await createProjectAndSession(app);

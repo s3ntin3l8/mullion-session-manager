@@ -506,10 +506,18 @@ export async function attachSocketToBrowser(
   };
   page.on("framenavigated", onNavigated);
 
+  // The target's context went away: the shared Chromium crashed, or the
+  // target was closed (its last session ended, the project was deleted).
+  // Either way no frame will come, so say so instead of leaving the panel
+  // waiting on a stream that has stopped.
+  let announcedExit = false;
   const onDisconnected = () => {
+    if (announcedExit) return;
+    announcedExit = true;
     if (socket.readyState === socket.OPEN) socket.send(JSON.stringify({ type: "exited" }));
   };
   browser.once("disconnected", onDisconnected);
+  const offClosed = managed.onClosed(onDisconnected);
 
   socket.on("message", (data, isBinary) => {
     // Unlike terminal.ts's dual raw-bytes/JSON channel, browser input is
@@ -536,6 +544,7 @@ export async function attachSocketToBrowser(
     clearInterval(frameTimer);
     page.off("framenavigated", onNavigated);
     browser.off("disconnected", onDisconnected);
+    offClosed();
   });
 }
 

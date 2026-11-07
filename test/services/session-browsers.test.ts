@@ -6,7 +6,9 @@ import { eq } from "drizzle-orm";
 import { buildTestApp } from "../helpers/app.js";
 
 const { closeDb } = await import("../../src/db/client.js");
-const { sessionBrowsers, sessions } = await import("../../src/db/schema.js");
+const { sessionBrowsers, sessions, previews } = await import("../../src/db/schema.js");
+const { resolveSessionBrowserTarget } = await import("../../src/services/browser-target.js");
+const { browserTargetKey } = await import("../../src/services/browser-manager.js");
 const { recordSessionBrowserBinding, listSessionBrowserBindings, closeSessionBrowserBindings } =
   await import("../../src/services/session-browsers.js");
 
@@ -137,6 +139,84 @@ describe("session-browsers", () => {
       // Closing the last remaining session's binding now does close it.
       closeSessionBrowserBindings(app, sessionIds[1]);
       expect(closeTargetSpy).toHaveBeenCalledWith(localTarget(projectId));
+    });
+
+    it("gives two preview endpoints of one checkout separate contexts through the real resolver, and closes both on session end (#2672)", async () => {
+      const app = await buildTestApp();
+      const { projectId, sessionIds } = await createProjectAndSessions(app, 2);
+      // Two previews of the same (default) checkout, one bound to each session.
+      app.db
+        .insert(previews)
+        .values([
+          { slug: "prev-a", kind: "project", projectId, sessionId: sessionIds[0], branch: "" },
+          { slug: "prev-b", kind: "project", projectId, sessionId: sessionIds[1], branch: "b" },
+        ])
+        .run();
+      const targets = [];
+      for (const id of sessionIds) {
+        const resolved = await resolveSessionBrowserTarget(app, projectId, id);
+        expect(resolved.ok).toBe(true);
+        if (!resolved.ok) return;
+        targets.push(resolved.target);
+        recordSessionBrowserBinding(app, id, resolved.target);
+      }
+      expect(targets[0].checkoutRoot).toBe(targets[1].checkoutRoot);
+      expect(targets.map((t) => t.endpoint)).toEqual(["prev-a", "prev-b"]);
+      expect(browserTargetKey(targets[0])).not.toBe(browserTargetKey(targets[1]));
+      expect(listSessionBrowserBindings(app, sessionIds[0])[0].targetEndpoint).toBe("prev-a");
+
+      // A resolve after the binding stays on the stored target (and endpoint).
+      const again = await resolveSessionBrowserTarget(app, projectId, sessionIds[0]);
+      expect(again.ok && again.target).toEqual(targets[0]);
+
+      const closeTargetSpy = vi.spyOn(app.browser, "closeTarget").mockResolvedValue(undefined);
+      closeSessionBrowserBindings(app, sessionIds[0]);
+      closeSessionBrowserBindings(app, sessionIds[1]);
+      expect(closeTargetSpy).toHaveBeenCalledTimes(2);
+      expect(closeTargetSpy).toHaveBeenCalledWith(targets[0]);
+      expect(closeTargetSpy).toHaveBeenCalledWith(targets[1]);
+    });
+
+    it("keeps a shared endpoint open until its last session ends, and a different endpoint apart (#2672)", async () => {
+      const app = await buildTestApp();
+      const { projectId, sessionIds } = await createProjectAndSessions(app, 3);
+      const closeTargetSpy = vi.spyOn(app.browser, "closeTarget").mockResolvedValue(undefined);
+      const withEndpoint = (endpoint?: string) => ({ ...localTarget(projectId), endpoint });
+      recordSessionBrowserBinding(app, sessionIds[0], withEndpoint("p1"));
+      recordSessionBrowserBinding(app, sessionIds[1], withEndpoint("p1"));
+      recordSessionBrowserBinding(app, sessionIds[2], withEndpoint("p2"));
+
+      closeSessionBrowserBindings(app, sessionIds[2]);
+      expect(closeTargetSpy).toHaveBeenCalledWith(withEndpoint("p2"));
+      closeTargetSpy.mockClear();
+      closeSessionBrowserBindings(app, sessionIds[0]);
+      expect(closeTargetSpy).not.toHaveBeenCalled();
+      closeSessionBrowserBindings(app, sessionIds[1]);
+      expect(closeTargetSpy).toHaveBeenCalledWith(withEndpoint("p1"));
+    });
+
+    it("closes a remote session's browser on its agent, endpoint included (#2672)", async () => {
+      const app = await buildTestApp();
+      const { projectId, sessionIds } = await createProjectAndSessions(app);
+      const remote = {
+        projectId,
+        hostId: "agent-9",
+        checkoutRoot: "/r/p",
+        endpoint: "e",
+        legacy: false,
+      };
+      recordSessionBrowserBinding(app, sessionIds[0], remote);
+      const postBrowser = vi.fn().mockResolvedValue({ ok: true });
+      const hostAgents = await import("../../src/services/host-agents.js");
+      vi.spyOn(hostAgents, "requireOperation").mockReturnValue({ ok: true } as never);
+      const remoteClient = await import("../../src/services/remote-host-client.js");
+      vi.spyOn(remoteClient, "getRemoteHostClient").mockReturnValue({ postBrowser } as never);
+
+      closeSessionBrowserBindings(app, sessionIds[0]);
+
+      await vi.waitFor(() =>
+        expect(postBrowser).toHaveBeenCalledWith("/internal/browser/close", remote),
+      );
     });
 
     it("cascade-deletes a session's binding row when the session row itself is deleted", async () => {

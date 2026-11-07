@@ -701,7 +701,7 @@ function handleConnection(
             target = resolved.target;
             recordSessionBrowserBinding(app, Number(sessionId), target);
           } else {
-            const sent = sessionBrowserTarget(sessionId);
+            const sent = sessionBrowserTarget(sessionId, app.config.SESSIONS_DIR);
             const refusal = !sent
               ? "This session has no browser target: the primary that launched it did not send one. Restart the session from an up-to-date primary."
               : !agentServesHost(app.config.SESSIONS_DIR, sent.hostId)

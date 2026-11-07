@@ -238,6 +238,10 @@ export const spawnSessionSchema = {
           projectId: { type: "integer" },
           hostId: { type: "string", minLength: 1, maxLength: 256 },
           checkoutRoot: { type: "string", minLength: 1, maxLength: 4096 },
+          // Issue #2672 — the preview endpoint within the checkout. An older
+          // agent strips it and keys the browser by checkout alone (the
+          // legacy endpoint) without error.
+          endpoint: { type: "string", maxLength: 256 },
           legacy: { type: "boolean" },
         },
       },
