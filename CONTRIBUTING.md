@@ -76,19 +76,29 @@ transient systemd scope. On a host without them (a container, macOS) the demo fa
 at startup with `master bootstrap exited with code 1`. `.github/visual-setup.sh` shows
 how the CI runner provides both.
 
-| Target                                                 | What it does                                                                                                                                                         |
-| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `make screenshots`                                     | README images into `docs/screenshots/` (light and dark), plus the dark copies the PWA manifest lists in `frontend/public/screenshots/`                               |
-| `make screenshots-landing OUT=<dir>`                   | landing-page stills and the terminal loop, for personal-landing's `npm run assets:sync` (the loop needs `ffmpeg`)                                                    |
-| `make visual-check [ROUTES=a,b] [BASE=ref]`            | renders the scenes tagged `check` before (merge base) and after your change into `visual/.out/check/`; run it twice on an unchanged tree and it must say `0 changed` |
-| `make visual-baseline`                                 | regenerates the committed `visual/baselines/` (the scenes flagged `"baseline": true`); commit them with the change that moved the page                               |
-| `make screenshots-audit AUDIT=YYYY-MM-<scope>-<topic>` | every form factor into `docs/audit/assets/<slug>/` (local only)                                                                                                      |
+| Target                                                 | What it does                                                                                                                                |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `make screenshots`                                     | README images into `docs/screenshots/` (light and dark), plus the dark copies the PWA manifest lists in `frontend/public/screenshots/`      |
+| `make screenshots-landing OUT=<dir>`                   | landing-page stills and the terminal loop, for personal-landing's `npm run assets:sync` (the loop needs `ffmpeg`)                           |
+| `make visual-check [ROUTES=a,b] [BASE=ref]`            | renders the scenes tagged `check` before (merge base) and after your change into `visual/.out/check/`; `REPEAT=2` proves it repeats (below) |
+| `make visual-baseline`                                 | regenerates the committed `visual/baselines/` (the scenes flagged `"baseline": true`); commit them with the change that moved the page      |
+| `make screenshots-audit AUDIT=YYYY-MM-<scope>-<topic>` | every form factor into `docs/audit/assets/<slug>/` (local only)                                                                             |
 
 In CI the check also publishes `visual / health`, a separate, non-required check that goes red when a PR adds
 a console error or a serious/critical axe node to any compared shot. Pixel differences stay advisory in the
 sticky comment. It also fails when the run produced no report at all (the demo did not start) or the report has
 no health verdict, so read the run log before assuming a console error. Locally, `HEALTH_GATE=1 make visual-check`
 exits non-zero on a real health finding.
+
+`REPEAT=2 make visual-check` proves the capture is deterministic: it renders the working tree twice and compares the
+runs with the same tolerance. A shot that differs is a determinism failure: the launcher prints `visual-kit: not deterministic`
+and names each such shot with its pixel count, and the reports are in `visual/.out/check/determinism-2/`. (The
+launcher exits 4, but `make` folds every failure into exit 2, so read that message, not the status.) Run it when you change
+the demo, a hook or a scene, or when a shot flips between runs. The base is rendered with the working tree's
+`scripts/demo` and `scripts/git-env.mjs` (`baseHarness`), so a PR that fixes the demo harness is not compared against its
+own bug. App code (`frontend/`, `src/`) comes from the merge base, so a fix there is the diff the check shows. One
+seam to know: `scripts/demo/env.mjs` imports `src/cli/sun-path.mjs`, so a PR that renames one of its exports and updates
+`env.mjs` leaves the base demo failing at import, and every shot then reads `new`.
 
 Two workflows keep the images current without a local Docker (both call shared workflows in `s3ntin3l8/.github`):
 
