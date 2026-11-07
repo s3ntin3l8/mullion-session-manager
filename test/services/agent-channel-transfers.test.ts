@@ -17,7 +17,7 @@ import {
   AGENT_CHANNEL_MAX_STREAM_CHANNELS,
 } from "../../src/shared/agent-channel.js";
 import { relayFetchResponse } from "../../src/services/http-proxy.js";
-import { HostBusyError } from "../../src/services/remote-host-errors.js";
+import { HostBusyError, HostResponseTooLargeError } from "../../src/services/remote-host-errors.js";
 import {
   HostRequestError,
   HostUnreachableError,
@@ -534,8 +534,10 @@ describe("outbound transfer edge cases (#2690)", () => {
         return res;
       })
       .catch((e: unknown) => e);
-    expect(get).toBeInstanceOf(Error);
-    expect(get).not.toBeInstanceOf(Response);
+    // Raised at the open, from the agent's marked 413, so it is the response
+    // error class and not any failure (a timeout or a reset would also be an Error).
+    expect(get).toBeInstanceOf(HostResponseTooLargeError);
+    expect((get as HostResponseTooLargeError).statusCode).toBe(413);
   }, 60_000);
 
   it("refuses a bodied response whose head declares more than the limit", async () => {

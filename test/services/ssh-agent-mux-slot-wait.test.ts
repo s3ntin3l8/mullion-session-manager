@@ -13,6 +13,7 @@ import {
 import {
   AGENT_CHANNEL_MAX_CHANNELS,
   AGENT_CHANNEL_MAX_PREVIEW_CHANNELS,
+  AGENT_CHANNEL_MAX_PREVIEW_WS_CHANNELS,
   AGENT_CHANNEL_MAX_STREAM_CHANNELS,
   AGENT_CHANNEL_REQUEST_RESERVED_CHANNELS,
 } from "../../src/shared/agent-channel.js";
@@ -241,6 +242,7 @@ describe("ssh-agent-mux slot waiting", () => {
     maxChannels: number;
     maxStreamChannels?: number;
     maxPreviewChannels?: number;
+    maxPreviewWsChannels?: number;
   }) {
     const a = new FakeSocket();
     const b = new FakeSocket();
@@ -335,6 +337,41 @@ describe("ssh-agent-mux slot waiting", () => {
     // A closed preview frees a preview slot (and a stream slot).
     previews[0]!.close();
     await expect(conn.openChannel({ preview: true })).resolves.toBeDefined();
+  });
+
+  it("a queued preview WebSocket open that is granted counts against the WebSocket cap", async () => {
+    const conn = pair({ maxChannels: 3, maxStreamChannels: 2, maxPreviewWsChannels: 1 });
+    const held = [await conn.openChannel(), await conn.openChannel(), await conn.openChannel()];
+    const queued = conn.openChannel({ previewWs: true, waitTimeoutMs: 1000 });
+    await expect(conn.openChannel({ previewWs: true, waitTimeoutMs: 1000 })).rejects.toThrow(
+      /preview websocket cap/,
+    );
+    for (const h of held) h.close();
+    const granted = await queued;
+    await expect(conn.openChannel({ previewWs: true })).rejects.toThrow(/preview websocket cap/);
+    granted.close();
+    await expect(conn.openChannel({ previewWs: true })).resolves.toBeDefined();
+  });
+
+  it("a full set of preview WebSockets leaves the HTTP preview budget and other streams open", async () => {
+    const conn = pair({
+      maxChannels: AGENT_CHANNEL_MAX_CHANNELS,
+      maxStreamChannels: AGENT_CHANNEL_MAX_STREAM_CHANNELS,
+      maxPreviewChannels: AGENT_CHANNEL_MAX_PREVIEW_CHANNELS,
+      maxPreviewWsChannels: AGENT_CHANNEL_MAX_PREVIEW_WS_CHANNELS,
+    });
+    for (let i = 0; i < AGENT_CHANNEL_MAX_PREVIEW_WS_CHANNELS; i++) {
+      await conn.openChannel({ previewWs: true });
+    }
+    // The next HMR socket is refused at once ...
+    await expect(conn.openChannel({ previewWs: true })).rejects.toThrow(MuxBusyError);
+    // ... while every HTTP preview slot is still free: sockets do not eat assets.
+    for (let i = 0; i < AGENT_CHANNEL_MAX_PREVIEW_CHANNELS; i++) {
+      await expect(conn.openChannel({ preview: true })).resolves.toBeDefined();
+    }
+    await expect(conn.openChannel({ preview: true })).rejects.toThrow(MuxBusyError);
+    // And plain streams keep what the previews and sockets left of the stream slots.
+    await expect(conn.openChannel({ stream: true })).resolves.toBeDefined();
   });
 
   it("reports a peer OpenFail as busy", async () => {

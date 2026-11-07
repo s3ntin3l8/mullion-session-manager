@@ -25,6 +25,17 @@ describe("deriveHostStatus (issue #246)", () => {
     expect(display).toEqual({ dot: "warn", label: "missed a ping", color: "var(--y)" });
   });
 
+  it("carries the explanation for a saturated channel with its label (#2702)", () => {
+    const host = makeHost({
+      health: "degraded",
+      healthReason: "channel saturated",
+      lastCheckedAt: "2026-01-01T00:00:10.000Z",
+    });
+    const display = deriveHostStatus(host, { status: "unknown", lastCheckedAtSnapshot: null });
+    expect(display.label).toBe("channel saturated");
+    expect(display.title).toMatch(/every request slot has been busy/);
+  });
+
   it("shows a hollow 'unreachable' for an offline heartbeat status", () => {
     // Issue #1727 — the backend cannot tell a sleeping host from an
     // unreachable one, so the UI says what is knowable ("unreachable") and

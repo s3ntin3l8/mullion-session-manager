@@ -103,13 +103,19 @@ open over the cap is refused at once, never queued.
 
 Preview responses (`previewHttpOverChannel`, `{ preview: true }`) and preview
 WebSockets (the `preview` and `configured-preview` stream kinds, e.g. Vite HMR,
-opened by `openChannelStream` with `{ preview: true }`) are a stream
-subclass with their own, smaller budget: `AGENT_CHANNEL_MAX_PREVIEW_CHANNELS`
-(a quarter of the stream slots, 8). A page loading many modules in parallel or a
-few open SSE previews therefore cannot starve attach, events, control-relay and
-ssh-agent streams. A preview past its cap fails as `HostBusyError`, which the
-preview proxy answers with `503` and `Retry-After` (a preview WebSocket past
-the cap is refused at the open). A 413 for an over-limit _request_ body is
+opened by `openChannelStream` with `{ previewWs: true }`) are two stream
+subclasses with their own, smaller budgets, counted apart:
+`AGENT_CHANNEL_MAX_PREVIEW_CHANNELS` for responses and
+`AGENT_CHANNEL_MAX_PREVIEW_WS_CHANNELS` for WebSockets (a quarter of the stream
+slots each, 8). Each open dev tab holds its HMR socket for as long as the tab is
+open, so the sockets get a budget of their own: they cannot take the slots
+preview assets need, and neither budget can fill the stream slots that attach,
+events, control-relay and ssh-agent use. A page loading many modules in
+parallel or a few open SSE previews therefore cannot starve them either. A
+preview response past its cap fails as `HostBusyError`, which the preview proxy
+answers with `503` and `Retry-After`; a preview WebSocket past its cap is
+refused at the open and the browser socket closes (the upgrade is already
+accepted by then, so there is no `503` to send). A 413 for an over-limit _request_ body is
 passed through as 413; a dev-server _response_ that outgrows the channel limit
 (`HostResponseTooLargeError`, the agent's marked 413) is a `502`, since it is
 the upstream's doing; other failures stay `502`. A response that fails after its

@@ -25,7 +25,16 @@ export interface HostStatusDisplay {
   dot: "on" | "off" | "warn" | undefined;
   label: string | null;
   color: string;
+  /** Hover text that explains the label, when the label alone does not. */
+  title?: string;
 }
+
+// The server sends a short reason code with a degraded host (host-heartbeat.ts's
+// CHANNEL_SATURATED_REASON); this is what it means to the person reading it.
+const HEALTH_REASON_TITLES: Record<string, string> = {
+  "channel saturated":
+    "The host's connection is up and answering, but every request slot has been busy for several checks in a row (large transfers or previews in flight). It is not marked unreachable.",
+};
 
 // Issue #246 — the primary's background heartbeat sweep (host.health) is
 // the preferred source of truth once it has swept a host at least once;
@@ -66,7 +75,8 @@ export function deriveHostStatus(host: Host, click: PingState): HostStatusDispla
     if (host.health === "degraded") {
       // A degraded host whose channel answered but is full says why (#2702).
       const label = host.healthReason ? host.healthReason : "missed a ping";
-      return { dot: "warn", label, color: "var(--y)" };
+      const title = host.healthReason ? HEALTH_REASON_TITLES[host.healthReason] : undefined;
+      return { dot: "warn", label, color: "var(--y)", ...(title ? { title } : {}) };
     }
     // The "off" dot IS the hollow dim ring (.settings-status-dot.off) —
     // the same shape an idle dot uses, so no new dot value is needed.

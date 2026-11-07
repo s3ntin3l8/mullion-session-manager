@@ -23,6 +23,7 @@ import {
   AGENT_CHANNEL_MAX_BUFFERED_BYTES,
   AGENT_CHANNEL_MAX_CHANNELS,
   AGENT_CHANNEL_MAX_PREVIEW_CHANNELS,
+  AGENT_CHANNEL_MAX_PREVIEW_WS_CHANNELS,
   AGENT_CHANNEL_MAX_STREAM_CHANNELS,
   AGENT_CHANNEL_PATH,
   AGENT_CHANNEL_REJECTED_RETRY_MS,
@@ -234,6 +235,7 @@ export const agentChannelClientPlugin = fp(async (app: FastifyInstance) => {
           maxChannels: AGENT_CHANNEL_MAX_CHANNELS,
           maxStreamChannels: AGENT_CHANNEL_MAX_STREAM_CHANNELS,
           maxPreviewChannels: AGENT_CHANNEL_MAX_PREVIEW_CHANNELS,
+          maxPreviewWsChannels: AGENT_CHANNEL_MAX_PREVIEW_WS_CHANNELS,
           maxBufferedBytes: AGENT_CHANNEL_MAX_BUFFERED_BYTES,
         });
         mux.onChannel((channel) =>

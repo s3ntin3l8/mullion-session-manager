@@ -269,7 +269,10 @@ export function relayFetchResponse(
   // chunking the response: a body with no content-length would be delimited by
   // the connection closing, so a reset reads as a clean end. Chunk it
   // explicitly so an aborted body is distinguishable from a finished one.
-  if (!headersToSend.has("content-length") && reply.request.raw.httpVersionMajor === 1) {
+  // content-length is always stripped above, so there is nothing to test for
+  // here; only HTTP/1.1 and later clients can parse chunked framing.
+  const raw = reply.request.raw;
+  if (raw.httpVersionMajor > 1 || (raw.httpVersionMajor === 1 && raw.httpVersionMinor >= 1)) {
     reply.header("transfer-encoding", "chunked");
   }
   const body = Readable.fromWeb(upstreamResponse.body);

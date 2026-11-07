@@ -261,14 +261,14 @@ describe("streams over the outbound channel (#2571)", () => {
     for (const call of spy.mock.calls) expect(call[0]).toEqual({ stream: true });
   });
 
-  it("preview WebSocket kinds also count against the preview cap (#2702)", async () => {
+  it("preview WebSocket kinds count against the preview WebSocket cap, not the HTTP preview cap", async () => {
     const r = await rig();
     const spy = vi.spyOn(r.primaryMux, "openChannel");
     for (const kind of ["preview", "configured-preview"] as const) {
       openChannelStream(r.app, r.entry, kind, undefined);
     }
     expect(spy).toHaveBeenCalledTimes(2);
-    for (const call of spy.mock.calls) expect(call[0]).toEqual({ preview: true });
+    for (const call of spy.mock.calls) expect(call[0]).toEqual({ previewWs: true });
   });
 
   it("an open refused by the mux (channel cap) is an unreachable failure", async () => {

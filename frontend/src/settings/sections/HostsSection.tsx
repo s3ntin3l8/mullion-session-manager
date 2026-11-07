@@ -509,7 +509,10 @@ export function HostsSection() {
                 trailing={
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     {display.label && (
-                      <span style={{ fontSize: "0.65625rem", color: display.color }}>
+                      <span
+                        style={{ fontSize: "0.65625rem", color: display.color }}
+                        title={display.title}
+                      >
                         {display.label}
                       </span>
                     )}

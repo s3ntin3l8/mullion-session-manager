@@ -28,6 +28,21 @@ describe("HostStatusLabel (issue #1892)", () => {
     expect(screen.queryByText("missed a ping")).toBeNull();
   });
 
+  it("explains a saturated channel on hover, and gives a plain missed ping no tooltip", () => {
+    const { unmount } = render(
+      <HostStatusLabel
+        host={makeHost({ health: "degraded", healthReason: "channel saturated" })}
+      />,
+    );
+    expect(screen.getByText("channel saturated").closest("span")).toHaveAttribute(
+      "title",
+      expect.stringMatching(/every request slot has been busy/),
+    );
+    unmount();
+    render(<HostStatusLabel host={makeHost({ health: "degraded" })} />);
+    expect(screen.getByText("missed a ping").closest("span")).not.toHaveAttribute("title");
+  });
+
   it("says unreachable for a host that did not answer", () => {
     render(<HostStatusLabel host={makeHost({ health: "offline" })} />);
     expect(screen.getByText("unreachable")).toBeInTheDocument();
