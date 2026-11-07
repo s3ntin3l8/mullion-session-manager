@@ -350,9 +350,13 @@ describe("reseedTaskIfSessionExited", () => {
   describe("re-checking an adopted re-seed session (#2637)", () => {
     const SEED = "Reviewer feedback: please fix the flaky test\nmore detail";
 
-    async function adopt(agentCommand = "claude") {
-      const { task: inserted } = insertTaskWithSession("exited");
+    async function adopt(opts: { agentCommand?: string; hostId?: string; seed?: string } = {}) {
+      const { agentCommand = "claude", hostId = "local", seed = SEED } = opts;
+      const { task: inserted, sessionId } = insertTaskWithSession("exited");
       app.db.update(tasks).set({ agentCommand }).where(eq(tasks.id, inserted.id)).run();
+      // The worker's host is the host of the session it was on (#1722): that is
+      // what decides whether this build is the one that attached the argv.
+      app.db.update(sessions).set({ hostId }).where(eq(sessions.id, sessionId)).run();
       const task = { ...inserted, agentCommand };
       const kept = insertSessionRow("active");
       mockCreateSessionRecord.mockResolvedValue({
@@ -360,7 +364,7 @@ describe("reseedTaskIfSessionExited", () => {
         reason: "outcome-unknown",
         sessionId: kept.id,
       });
-      await reseedTaskIfSessionExited(app, task, project, SEED, "test reject");
+      await reseedTaskIfSessionExited(app, task, project, seed, "test reject");
       mockCreateSessionRecord.mockClear();
       return { task, kept };
     }
@@ -482,9 +486,56 @@ describe("reseedTaskIfSessionExited", () => {
     it("still falls back to the screen's verdict for an agent whose spawn carried no seed", async () => {
       // Not seed-capable: the argv carried nothing, so a screen without the seed
       // does mean it has to be typed.
-      await adopt("bash");
+      await adopt({ agentCommand: "bash" });
       mockRenderedScrollback.mockResolvedValue("unrelated\n> ");
       mockTranscript.mockRejectedValue(new Error("host went away"));
+
+      await recheckAdoptedSeeds(app, later());
+
+      expect(mockPrompt).toHaveBeenCalledTimes(1);
+    });
+
+    // On a remote host the spawn can strip `initialPrompt` silently (an agent
+    // build too old for it, #538), and with the outcome unknown there is no
+    // `initialPromptApplied` to tell. A 404/501 transcript is that same old
+    // build, so "cannot say" there is not reassurance: the seed is typed.
+    it.each([
+      ["a transcript the agent does not keep (404)", () => undefined],
+      [
+        "a transcript call that fails",
+        () => mockTranscript.mockRejectedValue(new Error("host went away")),
+      ],
+    ])(
+      "types a remote worker's seed when nothing can say it arrived (%s)",
+      async (_name, arrange) => {
+        const { task } = await adopt({ hostId: "remote-mac" });
+        mockRenderedScrollback.mockResolvedValue("[Pasted text #1 +2 lines]\n> ");
+        arrange();
+
+        await recheckAdoptedSeeds(app, later());
+
+        expect(mockPrompt).toHaveBeenCalledTimes(1);
+        expect(seedOf(task.id)).toBe(true);
+      },
+    );
+
+    it("does not call an unmeasurable seed absent: a terse re-seed prompt is cannot-say", async () => {
+      // "PR fails CI" has no fragment long enough to look for, so neither the
+      // screen nor the transcript can ever show it.
+      const { task } = await adopt({ seed: "PR fails CI" });
+      mockRenderedScrollback.mockResolvedValue("> ");
+      mockTranscript.mockResolvedValue(transcriptOf({ role: "user", text: "something else" }));
+
+      await recheckAdoptedSeeds(app, later());
+
+      expect(mockPrompt).not.toHaveBeenCalled();
+      expect(seedOf(task.id)).toBe(true);
+    });
+
+    it("types a terse seed where delivery was not certain", async () => {
+      await adopt({ hostId: "remote-mac", seed: "PR fails CI" });
+      mockRenderedScrollback.mockResolvedValue("> ");
+      mockTranscript.mockResolvedValue(transcriptOf({ role: "user", text: "something else" }));
 
       await recheckAdoptedSeeds(app, later());
 

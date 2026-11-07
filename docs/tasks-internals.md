@@ -1016,13 +1016,18 @@ it checks the rendered screen for the seed (a majority of up to three short
 fragments, compared as letters and digits only, so wrapping, borders and
 indentation do not matter) and then the session's transcript (user turns only).
 Typing the seed again is the dangerous move (the worker would do the task
-twice), so for a **seed-capable** agent, whose spawn request carried the seed as
-argv, it needs positive evidence of absence: a transcript that answered and
-holds no matching user turn. A screen that does not show the seed (a collapsed
-"pasted text" placeholder, a line that scrolled off) with a transcript that
-cannot answer (an agent that keeps none, a host that does not answer) marks
-`seedDelivered: true` without typing. An agent whose spawn carried no seed is
-typed to as soon as the screen lacks it. The check gives up after 30 minutes.
+twice), so where the spawn **certainly** carried the seed (a seed-capable agent
+on the local host, where this build attached it as argv; a remote agent build too
+old for `initialPrompt` strips it silently, and after an unknown outcome there is
+no applied-echo to tell) it needs positive evidence of absence: a transcript that
+answered, about a seed it can measure, and holds no matching user turn. A screen
+that does not show the seed (a collapsed "pasted text" placeholder, a line that
+scrolled off), a transcript that cannot answer, or a seed too terse to yield a
+fragment to look for is "cannot say": the seed is marked `seedDelivered: true`
+without typing. Where delivery was not certain (a remote host, an agent whose
+spawn carried no seed), "cannot say" falls back to the screen's verdict, so the
+seed is typed; a 404/501 transcript on a remote host is the same old build that
+may have dropped the argv. The check gives up after 30 minutes.
 
 ## GitHub sync
 

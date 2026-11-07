@@ -317,7 +317,9 @@ export async function reseedTaskIfSessionExited(
       prompt,
       adoptedAt: Date.now(),
       logContext,
-      seedCapable,
+      // No applied-echo exists after an unknown outcome, so only the local host
+      // (same build) makes delivery certain.
+      seedCertain: resolveSeedDelivered(seedCapable, resolveTaskWorkerHost(app, task), undefined),
     });
     app.log.warn(
       { taskId: task.id, previousSessionId: task.sessionId, newSessionId: result.sessionId },
@@ -401,21 +403,28 @@ export async function reseedTaskIfSessionExited(
  * ordinary dead/idle-session handling, which is the safe direction.
  *
  * Typing the seed again is the dangerous move (the worker does the task twice),
- * so for a seed-capable agent it needs positive evidence the seed is absent: a
- * transcript that answered and holds no matching user turn. A screen that does
- * not show it (a collapsed "pasted text" placeholder, a scrolled-off line) or a
- * transcript that cannot answer is not that evidence: the session was started by
- * the very request that carried the seed.
+ * so where delivery was certain (`seedCertain`) it needs positive evidence the
+ * seed is absent: a transcript that answered, about a seed it can measure, and
+ * holds no matching user turn. A screen that does not show it (a collapsed
+ * "pasted text" placeholder, a scrolled-off line), a transcript that cannot
+ * answer, or a seed too terse to look for is not that evidence. Where delivery
+ * was not certain (a remote host, whose old agent build may have dropped the
+ * argv, and whose 404/501 transcript is the same old build) "cannot say" falls
+ * back to the screen's verdict and the seed is typed.
  */
 interface PendingAdoptedSeed {
   sessionId: number;
   prompt: string;
   adoptedAt: number;
   logContext: string;
-  /** The spawn request carried the seed as argv (a seed-capable agent). A live,
-   * quiet session that request started therefore HAS the seed, whatever its
-   * screen shows. */
-  seedCapable: boolean;
+  /** Delivery of the seed by the spawn itself was guaranteed: a seed-capable
+   * agent on the LOCAL host, where this build is the one that attached it as
+   * argv. Not merely "capable": a remote agent build too old for `initialPrompt`
+   * strips it silently (#538), and with the outcome unknown there is no
+   * `initialPromptApplied` to tell (`resolveSeedDelivered`). A live, quiet
+   * session started by a request that certainly carried the seed has it,
+   * whatever its screen shows. */
+  seedCertain: boolean;
 }
 const pendingAdoptedSeeds = new Map<number, PendingAdoptedSeed>();
 
@@ -544,27 +553,28 @@ async function recheckEach(app: FastifyInstance, now: number): Promise<void> {
       const screen = await resolveBackend(app, state.hostId).getRenderedScrollback(
         String(task.sessionId),
       );
-      hasSeed = screenShowsSeed(screen, pending.prompt);
-      // Not on screen is not "not delivered": ask the transcript before typing
-      // the seed a second time (#2703). It cannot say (null): a seed-capable
-      // agent got the seed on argv, so it is not typed again; any other agent
-      // trusts the screen.
-      if (!hasSeed) {
+      // true: the seed is there. false: the transcript answered, about a seed it
+      // can measure, and it is not there. null: nothing here can say.
+      let verdict: boolean | null = screenShowsSeed(screen, pending.prompt) ? true : null;
+      if (verdict === null) {
         const fromTranscript = await transcriptShowsSeed(
           app,
           state.hostId,
           task.sessionId!,
           pending.prompt,
         ).catch(() => null);
-        hasSeed = fromTranscript === true;
-        if (fromTranscript === null && pending.seedCapable) {
-          // No positive evidence the seed is absent: the spawn carried it as argv.
-          hasSeed = true;
-          app.log.info(
-            { taskId, sessionId: task.sessionId },
-            `${pending.logContext}: the seed is not on the adopted session's screen and its transcript cannot say; not typing it again (the spawn carried it)`,
-          );
-        }
+        // A prompt too terse to yield a fragment shows up nowhere, so "absent"
+        // would be a guess: it is cannot-say, not false.
+        const measurable = seedFragments(pending.prompt).length > 0;
+        verdict =
+          fromTranscript === true ? true : fromTranscript === false && measurable ? false : null;
+      }
+      hasSeed = verdict ?? pending.seedCertain;
+      if (verdict === null && pending.seedCertain) {
+        app.log.info(
+          { taskId, sessionId: task.sessionId },
+          `${pending.logContext}: nothing shows the seed on the adopted session and nothing can say it is missing; not typing it again (the spawn certainly carried it)`,
+        );
       }
     } catch (err) {
       app.log.warn(
