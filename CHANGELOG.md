@@ -1,5 +1,81 @@
 # Changelog
 
+## [0.3.59](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.58...v0.3.59) (2026-11-07)
+
+
+### Features
+
+* **browser:** bind browser state and automation to execution targets ([2f6fc74](https://github.com/s3ntin3l8/mullion-session-manager/commit/2f6fc74bb26410c84c17aaa148ef302d5178df97))
+* **git:** bind files and source control to the selected session checkout ([5978617](https://github.com/s3ntin3l8/mullion-session-manager/commit/59786171d179316ee2f87a46c6830d45e1843476))
+* **git:** session-scoped git routes via the execution-context resolver ([c95544e](https://github.com/s3ntin3l8/mullion-session-manager/commit/c95544e011cbd3d2d1a398ea7ebe3ac86a426391))
+* **hosts:** carry agent operations over outbound connections ([9bf2733](https://github.com/s3ntin3l8/mullion-session-manager/commit/9bf2733fa7546c505813d8104e703eded2178bba))
+* **hosts:** carry attach, events, control relay and ssh-agent streams over outbound channels ([bce03a2](https://github.com/s3ntin3l8/mullion-session-manager/commit/bce03a282f653029cc81c7584a1902d718be85bc))
+* **hosts:** establish authenticated outbound agent channels ([349c51b](https://github.com/s3ntin3l8/mullion-session-manager/commit/349c51b7e62d54f9d81174c21018938531a7ae5e))
+* **hosts:** gate launches and operations on negotiated agent support ([2232037](https://github.com/s3ntin3l8/mullion-session-manager/commit/22320377e61f338055544c376a91f28b22bc3e11))
+* **hosts:** negotiate agent protocol and operation support ([fc04f8d](https://github.com/s3ntin3l8/mullion-session-manager/commit/fc04f8d6d52c358cec2aba840e1bfc9549e8a77d))
+* **hosts:** outbound-capable agents need no advertised URL or inbound port ([4215772](https://github.com/s3ntin3l8/mullion-session-manager/commit/42157724a23bc838adda19a6ca68ca3997207bd9))
+* **hosts:** pair execution agents with one-time codes ([a00a5cb](https://github.com/s3ntin3l8/mullion-session-manager/commit/a00a5cbcf9cdcfae920a859293c4083210453d03))
+* **hosts:** persistent machine identity and renewable machine credentials ([c7d15a5](https://github.com/s3ntin3l8/mullion-session-manager/commit/c7d15a5717271e2466017532b2a1d62fd1798fc8))
+* **previews:** bind dev servers and previews to their execution checkout ([a545d94](https://github.com/s3ntin3l8/mullion-session-manager/commit/a545d94d55e603d67379e6e7b21561fe8404dabd))
+* **review-relay:** review_status sees workflow-started reviews and flags stuck ones ([#2645](https://github.com/s3ntin3l8/mullion-session-manager/issues/2645)) ([0d2ad3f](https://github.com/s3ntin3l8/mullion-session-manager/commit/0d2ad3feca5ed68cbb977c70da2ecc27ff33976a)), closes [#2634](https://github.com/s3ntin3l8/mullion-session-manager/issues/2634)
+* **scaffold:** let the user cancel a running Generate job ([5863b31](https://github.com/s3ntin3l8/mullion-session-manager/commit/5863b3148e764040a13c7c17930d71f5c32a4a2d))
+* **scaffold:** restructure reduces CLAUDE.md to the @AGENTS.md import ([61f33e7](https://github.com/s3ntin3l8/mullion-session-manager/commit/61f33e70aebc3a6488d3d704650c4a0652a57056))
+* **scaffold:** warn before a template Preview replaces a finished agent result ([dba3368](https://github.com/s3ntin3l8/mullion-session-manager/commit/dba3368feb7d836d56e5b05ac68f86757e077ec9))
+* **tasks:** let an issue name a review focus that the task reviewer must report on ([04cdeae](https://github.com/s3ntin3l8/mullion-session-manager/commit/04cdeae6c7e85a0b8442e549cd799ff5b29c607b))
+* **tasks:** the task reviewer checks the diff against the issue's Scope and records the worker's declared decisions ([2e7bf16](https://github.com/s3ntin3l8/mullion-session-manager/commit/2e7bf1646b9718478c0cc64aa35f439a0e046803))
+
+
+### Bug Fixes
+
+* **browser:** agent-host browser uses the primary-resolved target and reports only its own URL ([d85bcf0](https://github.com/s3ntin3l8/mullion-session-manager/commit/d85bcf0d3ba68b7d3677e367368c0c8754039ad2))
+* **browser:** attach and removal paths always release targets, delete storage and retry leaked closes ([1d0ff10](https://github.com/s3ntin3l8/mullion-session-manager/commit/1d0ff10b6e7c8fa65b63684a18205adc18b186b1))
+* **browser:** every worktree removal closes browsers and deletes storage through one guarded helper ([ef7caba](https://github.com/s3ntin3l8/mullion-session-manager/commit/ef7caba6bdb20f111c89c11af888e19d485f1e4a))
+* **browser:** keep the agent-host browser target across restarts, wire the endpoint and close failed or racing contexts ([39a8a3b](https://github.com/s3ntin3l8/mullion-session-manager/commit/39a8a3b51fa00223126307ac5d8fb42a614d8b5a))
+* **browser:** keep the legacy cookie jar for default-checkout sessions and reconcile mixed-version closes ([764779c](https://github.com/s3ntin3l8/mullion-session-manager/commit/764779c28e019b626a0eaf350f621a54620ad130))
+* **browser:** one Chromium per machine with a context per target, and the endpoint in the pool key ([494059a](https://github.com/s3ntin3l8/mullion-session-manager/commit/494059afccb9d205c14c6f7316a538236eb7abc3))
+* **browser:** re-validate browser bindings and clean up closed and removed targets ([72d17c7](https://github.com/s3ntin3l8/mullion-session-manager/commit/72d17c7d59e4c5340a79525f941b2bc32a7400c2))
+* **browser:** sessions get a real endpoint, mixed-version agents agree on one context, and the legacy cookie jar is kept ([28701ae](https://github.com/s3ntin3l8/mullion-session-manager/commit/28701ae34df7fed892a506c42574fcd9be89169d))
+* **hosts:** a pairing redeem with a valid code is not blocked by other clients' failed attempts ([15db221](https://github.com/s3ntin3l8/mullion-session-manager/commit/15db22159dc5784795cc964932874e18949bfcfc))
+* **hosts:** carry uploads, downloads, preview forwarding and the health ping over the outbound channel ([7f61297](https://github.com/s3ntin3l8/mullion-session-manager/commit/7f612973e43f9d5d66e17a1cd29c6c4187a830e3))
+* **hosts:** classify every remote mutation as unknown-outcome and fix the revoked-agent recipe, headless spawn test and stdin descope ([8b34bed](https://github.com/s3ntin3l8/mullion-session-manager/commit/8b34bed498a1a95e2e785ec9fc6d73d2426930d9))
+* **hosts:** correct unknown-outcome messaging and pinning, finish adoption edges and host pruning ([a76782f](https://github.com/s3ntin3l8/mullion-session-manager/commit/a76782f295135bb5f1e62c2f3d99e280df6497e8))
+* **hosts:** document TLS for the agent channel and probe the launch host's dock config ([c1367de](https://github.com/s3ntin3l8/mullion-session-manager/commit/c1367def52b59d90c41eccf50a504637cfbbef67))
+* **hosts:** don't make every Auto placement wait on a host that is known to be down ([11a2c0b](https://github.com/s3ntin3l8/mullion-session-manager/commit/11a2c0b0b032acff35dfd7a5dcb4a227e6a124ea))
+* **hosts:** flag and clean up duplicate host rows left by agents that lose their identity ([d0bbcc4](https://github.com/s3ntin3l8/mullion-session-manager/commit/d0bbcc4c26799aad3ce58cc9d6de099ee790db9a))
+* **hosts:** harden one-time pairing: unclaimed hosts, rate limit, public URL, code storage ([82d813e](https://github.com/s3ntin3l8/mullion-session-manager/commit/82d813e3e02719bea92bdd0b4e49ed5e532ace22))
+* **hosts:** include outbound-only hosts in events, relay, ssh-agent, sync and project creation ([1080f18](https://github.com/s3ntin3l8/mullion-session-manager/commit/1080f18260646f9b70f1e7639d64beaa4f64bc13))
+* **hosts:** outbound channel client must not fight a superseded connection ([9b8b1f9](https://github.com/s3ntin3l8/mullion-session-manager/commit/9b8b1f97bd1973207ad681297b17c5fff88a140f))
+* **hosts:** outbound channel hardening for channel cap, binding, and rate limiting ([b5b9b64](https://github.com/s3ntin3l8/mullion-session-manager/commit/b5b9b646943121ef10438fa52792923dee6cb54a))
+* **hosts:** outbound transfer edge cases for HEAD, truncation, upstream cancel and unknown-length uploads ([9aff242](https://github.com/s3ntin3l8/mullion-session-manager/commit/9aff242ef355b895bbdf17047900fdd5e12ea720))
+* **hosts:** preserve explicit placement defaults and keep Auto opt-in ([01bb6b1](https://github.com/s3ntin3l8/mullion-session-manager/commit/01bb6b176ac82b6e0ebcb2dec9b89a0da7060fd5))
+* **hosts:** preview websockets honour the preview cap, saturation is visible, and the transfer and busy tests are tightened ([994c019](https://github.com/s3ntin3l8/mullion-session-manager/commit/994c019949a9bb61398d50edecdccfb1bb8b1015))
+* **hosts:** queued stream opens keep the stream flag, previews have their own cap, and a busy ping is bounded ([bc2f76b](https://github.com/s3ntin3l8/mullion-session-manager/commit/bc2f76ba86742e8bf0641ee8218ae1c93445498a))
+* **hosts:** refuse over-limit outbound transfers with 413 and stream preview responses over the channel ([199063e](https://github.com/s3ntin3l8/mullion-session-manager/commit/199063e890e93ce4a33978e94962af56fe3977f7))
+* **hosts:** report an unknown outcome when a channel closes after a mutating request was sent ([09737b2](https://github.com/s3ntin3l8/mullion-session-manager/commit/09737b246222f1b54f70e4d0af3a2966b060b7ba))
+* **hosts:** stream openers honour the stream cap, streams are counted separately, and ping treats busy as alive ([0262786](https://github.com/s3ntin3l8/mullion-session-manager/commit/026278629d2dc88e7a6c72952fe43f1e057b032a))
+* **hosts:** streams never use the outbound channel because the client is built without channelApp ([3a21f92](https://github.com/s3ntin3l8/mullion-session-manager/commit/3a21f92d6c653d1c4545e872b221ed19deb6216d))
+* **hosts:** treat a busy channel like an unreachable host, and keep request slots free of streams ([7587862](https://github.com/s3ntin3l8/mullion-session-manager/commit/7587862a3be46e954ab18f8f96458451833ed76e))
+* **hosts:** treat an unread agent protocol as the legacy baseline, not as fully supported ([ed291e7](https://github.com/s3ntin3l8/mullion-session-manager/commit/ed291e7e9d6f41bce029a3390bf149cac3b38ee3))
+* **hosts:** unknown outcome for every mutating remote call, reseed wiring, and the revoked-agent recipe with a headless test ([e6dd955](https://github.com/s3ntin3l8/mullion-session-manager/commit/e6dd955f71a7f3429555554e0760cc07cbe29a17))
+* **review-relay:** start a fresh Hermes session when the PR's session was pruned ([#2669](https://github.com/s3ntin3l8/mullion-session-manager/issues/2669)) ([91bc03a](https://github.com/s3ntin3l8/mullion-session-manager/commit/91bc03a1b54cd199774c3a3efe2b381f33dbbd46))
+* **review-relay:** walk past retired Hermes sessions instead of giving up after three ([#2681](https://github.com/s3ntin3l8/mullion-session-manager/issues/2681)) ([8ac0ab2](https://github.com/s3ntin3l8/mullion-session-manager/commit/8ac0ab208531bbae9ee3db74c254a1d2fe9ede6f))
+* **scaffold:** hide credentialed remote URLs from the git config a generation turn can read ([8f13579](https://github.com/s3ntin3l8/mullion-session-manager/commit/8f135795dd08c3fe81eaea8ce398fb94aad9ada8))
+* **scaffold:** keep a generated preview long enough to come back to it ([#2647](https://github.com/s3ntin3l8/mullion-session-manager/issues/2647)) ([0ba9798](https://github.com/s3ntin3l8/mullion-session-manager/commit/0ba97988344f57b69944222a81711cb065ad800c))
+* **scaffold:** keep the skill mirrors from drifting and cite the vendor-neutral copy ([b3720db](https://github.com/s3ntin3l8/mullion-session-manager/commit/b3720dbd86d49645f66d4014be06e1642070c2bb))
+* **sessions:** callers of createSessionRecord must adopt an unknown spawn outcome, and prompts must report one ([be634db](https://github.com/s3ntin3l8/mullion-session-manager/commit/be634dbfa1ffea4710ee13956e962e68f23359da))
+* **sessions:** the session reconciler declares a just-created session dead before its scope exists ([5a013ca](https://github.com/s3ntin3l8/mullion-session-manager/commit/5a013ca85c3d6dce909dc4745bc131dc98919975))
+* **skills:** print the matched review references' text so the reviewer actually reads them ([339215d](https://github.com/s3ntin3l8/mullion-session-manager/commit/339215d3a105404fead9a703e1b9e98aed52c592))
+* **skills:** size the inlined references to the tool window and keep the readable ones ([#2605](https://github.com/s3ntin3l8/mullion-session-manager/issues/2605)) ([91d4769](https://github.com/s3ntin3l8/mullion-session-manager/commit/91d47692b7f39dc6fe4cbed719f0e1ae639889f2))
+* **tasks:** neutralise mentions and markers in the worker decisions written to the PR description ([f1d0a12](https://github.com/s3ntin3l8/mullion-session-manager/commit/f1d0a12722377886d396328275217d4770500246))
+* **terminal:** reduced motion no longer leaves the text canvas at 1x ([#2581](https://github.com/s3ntin3l8/mullion-session-manager/issues/2581)) ([ceac1d0](https://github.com/s3ntin3l8/mullion-session-manager/commit/ceac1d0c4c50a6f108d5240b499aff9ed5daa464))
+* **uiux:** dev proxy keeps the browser's Host so writes pass the origin check ([#2587](https://github.com/s3ntin3l8/mullion-session-manager/issues/2587)) ([4f12957](https://github.com/s3ntin3l8/mullion-session-manager/commit/4f12957df1fc96e7a530416db65544b92c13417d))
+* **uiux:** wait for the terminal to draw the end of a held transcript before the shot ([#2666](https://github.com/s3ntin3l8/mullion-session-manager/issues/2666)) ([b5061ab](https://github.com/s3ntin3l8/mullion-session-manager/commit/b5061abbde2d75322481155cc41f7fd53880b34e))
+
+
+### Performance Improvements
+
+* **hosts:** cache remote worktree lookups in the execution-context resolver ([d57769d](https://github.com/s3ntin3l8/mullion-session-manager/commit/d57769d6147594a1e972a47c5d3488120131e344))
+
 ## [0.3.58](https://github.com/s3ntin3l8/mullion-session-manager/compare/v0.3.57...v0.3.58) (2026-11-02)
 
 
