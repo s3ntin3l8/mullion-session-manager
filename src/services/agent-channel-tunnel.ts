@@ -86,6 +86,9 @@ export class ChannelTransportError extends Error {
     /** Set when the primary itself closed the channel because the host's
      * identity was revoked or its credential expired. */
     readonly terminal: "revoked" | "expired" | null = null,
+    /** The transfer outgrew the channel's size limit (#2674): a refusal of the
+     * request (413), not a sign the host is down. */
+    readonly tooLarge: boolean = false,
   ) {
     super(message);
     this.name = "ChannelTransportError";
@@ -131,6 +134,16 @@ export function maxRequestBodyBytesForPath(path: string): number {
 export function maxResponseBodyBytesForPath(path: string): number {
   if (isDownloadPath(path) || isPreviewPath(path)) return AGENT_CHANNEL_MAX_RESPONSE_BYTES;
   return AGENT_CHANNEL_DEFAULT_MAX_RESPONSE_BYTES;
+}
+
+function formatLimit(bytes: number): string {
+  return bytes >= 1024 * 1024 ? `${Math.round(bytes / (1024 * 1024))} MiB` : `${bytes} bytes`;
+}
+export function requestTooLargeMessage(cap: number): string {
+  return `request body exceeds the ${formatLimit(cap)} limit of the outbound channel to this host`;
+}
+export function responseTooLargeMessage(cap: number): string {
+  return `response exceeds the ${formatLimit(cap)} limit of the outbound channel to this host`;
 }
 
 // --- shared helpers ----------------------------------------------------------
@@ -259,6 +272,15 @@ export interface ChannelRequest {
   /** Closes the channel (and fails the exchange) when it fires. */
   signal?: AbortSignal;
   maxResponseBytes?: number;
+  /** Size of a streamed `body`, when the caller already knows it (a
+   * Content-Length): above the channel's limit it is refused before any byte
+   * is sent. */
+  declaredBodyBytes?: number;
+  /** Takes a stream-class slot (`AGENT_CHANNEL_MAX_STREAM_CHANNELS`) instead
+   * of a request slot, so long-lived exchanges (a preview's SSE / long-poll)
+   * can never starve ordinary requests. Refused at once, not queued, when the
+   * stream budget is spent. */
+  stream?: boolean;
 }
 
 export interface ChannelResponse {
@@ -306,8 +328,11 @@ async function exchange(
   req: ChannelRequest,
   streaming: boolean,
 ): Promise<ChannelResponse | ChannelStreamResponse> {
-  const fail = (message: string, phase: "before-send" | "after-send"): ChannelTransportError =>
-    new ChannelTransportError(message, phase, entry.terminal);
+  const fail = (
+    message: string,
+    phase: "before-send" | "after-send",
+    tooLarge = false,
+  ): ChannelTransportError => new ChannelTransportError(message, phase, entry.terminal, tooLarge);
   let sendStarted = false;
   let channel: MuxChannel | null = null;
   let timedOut = false;
@@ -350,6 +375,16 @@ async function exchange(
     req.signal?.removeEventListener("abort", onAbort);
   };
   if (req.signal?.aborted) throw fail("aborted", "before-send");
+  // An over-limit body that is already in memory is refused before a channel
+  // is even opened (#2674). A streamed one is cut off at the limit in sendBody.
+  const requestCap = maxRequestBodyBytesForPath(req.path);
+  if (req.body !== undefined && !(req.body instanceof Readable)) {
+    const len = typeof req.body === "string" ? Buffer.byteLength(req.body) : req.body.length;
+    if (len > requestCap) throw fail(requestTooLargeMessage(requestCap), "before-send", true);
+  }
+  if (req.declaredBodyBytes !== undefined && req.declaredBodyBytes > requestCap) {
+    throw fail(requestTooLargeMessage(requestCap), "before-send", true);
+  }
   req.signal?.addEventListener("abort", onAbort, { once: true });
   arm();
   // A streamed response outlives this call: its Readable owns the channel and
@@ -366,6 +401,7 @@ async function exchange(
       entry.mux
         .openChannel({
           waitTimeoutMs: AGENT_CHANNEL_SLOT_WAIT_MS,
+          ...(req.stream ? { stream: true } : {}),
           onWaiting: () => {
             clearTimeout(timer);
             slotWaitTimer = setTimeout(
@@ -462,12 +498,22 @@ async function exchange(
         if (first.length > 0) body.push(first);
         settle(null, { status: head.status, headers: head.headers ?? {}, stream: body });
       };
+      const declaredLength = (): number => {
+        try {
+          const head = JSON.parse(parser.headLine!) as ChannelResponseHead;
+          const raw = head.headers?.["content-length"];
+          const n = Number(Array.isArray(raw) ? raw[0] : raw);
+          return Number.isFinite(n) ? n : 0;
+        } catch {
+          return 0;
+        }
+      };
       ch.onData((chunk) => {
         touch();
         if (out) {
           bodyBytes += chunk.length;
           if (bodyBytes > maxResponseBytes) {
-            out.destroy(fail("response exceeds the channel limit", "after-send"));
+            out.destroy(fail(responseTooLargeMessage(maxResponseBytes), "after-send", true));
             return;
           }
           if (out.push(chunk)) ch.acknowledgeConsumed(chunk.length);
@@ -476,7 +522,14 @@ async function exchange(
         }
         ch.acknowledgeConsumed(chunk.length);
         if (!parser.push(chunk, maxResponseBytes)) {
-          settle(fail("response exceeds the channel limit", "after-send"));
+          settle(fail(responseTooLargeMessage(maxResponseBytes), "after-send", true));
+          ch.close();
+          return;
+        }
+        if (parser.headLine !== null && declaredLength() > maxResponseBytes) {
+          // The head already says the body will not fit: refuse before any of
+          // it is read (#2674).
+          settle(fail(responseTooLargeMessage(maxResponseBytes), "after-send", true));
           ch.close();
           return;
         }
@@ -528,7 +581,7 @@ async function exchange(
           await write(typeof body === "string" ? Buffer.from(body, "utf8") : body);
         return null;
       }
-      const cap = maxRequestBodyBytesForPath(req.path);
+      const cap = requestCap;
       let sent = 0;
       let writing = false;
       try {
@@ -538,7 +591,7 @@ async function exchange(
         for await (const piece of body.iterator({ destroyOnReturn: false })) {
           const buf = Buffer.isBuffer(piece) ? piece : Buffer.from(piece as Uint8Array);
           sent += buf.length;
-          if (sent > cap) return "request body exceeds the channel limit";
+          if (sent > cap) return requestTooLargeMessage(cap);
           writing = true;
           await write(buf);
           writing = false;
@@ -574,7 +627,7 @@ async function exchange(
       // The agent only runs a request once it has the whole body and EOF, so a
       // request cut short here never ran: nothing for the caller to doubt.
       ch.close();
-      throw fail(bodyFailure, "before-send");
+      throw fail(bodyFailure, "before-send", bodyFailure === requestTooLargeMessage(requestCap));
     }
     if (res === undefined) {
       try {
@@ -612,6 +665,12 @@ export function mapChannelError(
 ): Error {
   if (err instanceof ChannelBusyError) return new HostBusyError(hostId, err);
   if (!(err instanceof ChannelTransportError)) return new HostUnreachableError(hostId, err);
+  // An over-limit transfer is the request's fault, not the host's: 413 with the
+  // limit named. A response that outgrew the limit of a non-idempotent request
+  // already ran, so that stays an unknown outcome.
+  if (err.tooLarge && (err.phase === "before-send" || isIdempotentRequest(method, path, body))) {
+    return new HostRequestError(hostId, 413, JSON.stringify({ message: err.message }));
+  }
   if (err.phase === "after-send" && !isIdempotentRequest(method, path, body)) {
     return new HostOutcomeUnknownError(hostId, err);
   }
@@ -806,11 +865,16 @@ export function createRequestSink(
         headers[AGENT_CHANNEL_AUTH_HEADER] = authToken;
         const body = parser.body();
         const peer = peerId ?? "peer";
+        // payloadAsStream: the inject resolves once the response's headers are
+        // out, and the body is read chunk by chunk below. Nothing is buffered
+        // past the channel's own limit (#2674), and an SSE / long-poll preview
+        // delivers each chunk as it is written instead of at the end.
         const res = await app.inject({
           method: method as "GET",
           url: head.path,
           headers,
           remoteAddress: `channel:${peer}`,
+          payloadAsStream: true,
           ...(body.length > 0 ? { payload: body } : {}),
         });
         // Every response header but the framing the channel replaces: a
@@ -821,7 +885,43 @@ export function createRequestSink(
           if (value === undefined || DROPPED_RESPONSE_HEADERS.has(name.toLowerCase())) continue;
           outHeaders[name.toLowerCase()] = Array.isArray(value) ? value.map(String) : String(value);
         }
-        await respond(res.statusCode, outHeaders, res.rawPayload);
+        const payload = res.stream();
+        const cap = maxResponseBodyBytesForPath(head.path);
+        const declared = Number(outHeaders["content-length"]);
+        if (Number.isFinite(declared) && declared > cap) {
+          payload.destroy();
+          return await refuse(413, responseTooLargeMessage(cap));
+        }
+        // The primary went away (timeout, disconnect): stop reading the replay.
+        channel.onClose(() => payload.destroy());
+        let wroteHead = false;
+        try {
+          await write(
+            Buffer.from(
+              `${JSON.stringify({ status: res.statusCode, headers: outHeaders })}\n`,
+              "utf8",
+            ),
+          );
+          wroteHead = true;
+          let sent = 0;
+          for await (const piece of payload) {
+            const buf = Buffer.isBuffer(piece) ? piece : Buffer.from(piece as Uint8Array);
+            sent += buf.length;
+            // An undeclared length is bounded as it arrives: past the limit
+            // the channel is cut (the primary reports a truncated response).
+            if (sent > cap) {
+              payload.destroy();
+              return;
+            }
+            await write(buf);
+          }
+          channel.eof();
+        } catch (err) {
+          payload.destroy();
+          // Before the head went out the primary can still be answered; after
+          // that the channel just ends short and the primary reports it lost.
+          if (!wroteHead && !channel.closed) throw err;
+        }
       } catch (err) {
         app.log.warn({ err }, "[agent-channel] replayed request failed");
         await refuse(500, "agent failed to handle the request");

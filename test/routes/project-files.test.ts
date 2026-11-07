@@ -11,6 +11,7 @@ import { projects, sessions } from "../../src/db/schema.js";
 import { eq } from "drizzle-orm";
 import { gitEnv } from "../../src/services/git-env.js";
 import { RemoteHostClient } from "../../src/services/remote-host-client.js";
+import { HostBusyError } from "../../src/services/remote-host-errors.js";
 import { uniqueSessionsDir } from "../helpers/sessions-dir.js";
 
 const tmpDb = path.join(os.tmpdir(), `project-files-test-${process.pid}.db`);
@@ -801,6 +802,27 @@ describe("project-files routes", () => {
       expect(res.statusCode).toBe(501);
       await primary.close();
       await agentApp.close();
+    });
+
+    it("answers a busy outbound channel 503 with Retry-After, not 500 (#2674)", async () => {
+      const { agentApp, port } = await startAgent("pf-token-busy");
+      const { primary, projectId } = await remoteProject(port, "pf-token-busy", projectCwd);
+      const spy = vi
+        .spyOn(RemoteHostClient.prototype, "listProjectDir")
+        .mockRejectedValue(new HostBusyError("h1"));
+      try {
+        const res = await primary.inject({
+          method: "GET",
+          url: `/api/projects/${projectId}/files`,
+        });
+        expect(res.statusCode).toBe(503);
+        expect(res.headers["retry-after"]).toBe("1");
+        expect(res.json().retryable).toBe(true);
+      } finally {
+        spy.mockRestore();
+        await primary.close();
+        await agentApp.close();
+      }
     });
 
     it("round-trips list/read/write and forwards coded errors", async () => {

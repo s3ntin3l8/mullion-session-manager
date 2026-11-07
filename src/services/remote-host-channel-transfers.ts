@@ -29,7 +29,8 @@ function channelOf(hostId: string, transport: BoundTransport) {
  * uploadProjectFile over the outbound channel (#2620): the body is sent as it
  * is produced under the mux's send window, with the same idle (not total)
  * budget. The agent holds the body up to the channel's own limit before it
- * writes the file; a transfer above that is refused 413.
+ * writes the file; a transfer above that is refused 413 (the exchange
+ * rejects a declared size, or a body that outgrows the limit, before the agent runs anything).
  */
 export async function uploadOverChannel(
   hostId: string,
@@ -37,6 +38,7 @@ export async function uploadOverChannel(
   requestTarget: string,
   body: Readable,
   idleTimeoutMs: number,
+  opts: { declaredBytes?: number } = {},
 ): Promise<{ path: string; size: number }> {
   const channel = channelOf(hostId, transport);
   let res;
@@ -46,6 +48,7 @@ export async function uploadOverChannel(
       path: requestTarget,
       headers: { "content-type": FILE_STREAM_CONTENT_TYPE },
       body,
+      ...(opts.declaredBytes !== undefined ? { declaredBodyBytes: opts.declaredBytes } : {}),
       timeoutMs: idleTimeoutMs,
       idleTimeoutMs,
     });
@@ -138,6 +141,10 @@ export async function previewHttpOverChannel(
         : {}),
       timeoutMs: idleTimeoutMs,
       idleTimeoutMs,
+      // A preview can run for as long as its dev server keeps the response
+      // open (SSE, long-poll): it takes a stream-class slot, so it cannot
+      // starve the request slots (#2674).
+      stream: true,
     });
   } catch (err) {
     throw mapChannelError(hostId, err, init.method.toUpperCase(), requestTarget);
