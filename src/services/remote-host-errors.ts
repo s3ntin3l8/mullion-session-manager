@@ -93,6 +93,19 @@ export function isOutcomeUnknown(err: unknown): err is HostOutcomeUnknownError {
   );
 }
 
+/**
+ * The ONE wording for an unknown mutation outcome, used by every route and
+ * service that reports one (spawn, git writes, uploads, promote, push, ...):
+ * the request may have been delivered, so check before retrying. `what` names
+ * the operation ("the spawn", "git pull"); `detail` is the optional transport
+ * error text.
+ */
+export function unknownOutcomeText(what: string, detail?: string): string {
+  return `Host connection lost mid-request: ${what} MAY HAVE BEEN DELIVERED (outcome unknown); check the state on the host before retrying${
+    detail ? ` (${detail})` : ""
+  }`;
+}
+
 /** The agent responded — it IS reachable — but rejected the request (4xx):
  * a real client-side error (a malformed body, an unknown session id), not
  * a connectivity problem. Distinct from HostUnreachableError so a caller

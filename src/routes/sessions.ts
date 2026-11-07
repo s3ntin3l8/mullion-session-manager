@@ -14,7 +14,7 @@ import { ensurePreviewSyncTick, stopPreviewSyncTick } from "../services/git-work
 import { getStoredSettings } from "../services/settings.js";
 import { resolveBackend, unknownOutcomeMessage } from "../services/session-backend.js";
 import { HostRequestError } from "../services/remote-host-client.js";
-import { isHostBusyError } from "../services/remote-host-errors.js";
+import { isHostBusyError, unknownOutcomeText } from "../services/remote-host-errors.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { removeCheckoutForced } from "../services/checkout-removal.js";
 import { parseHostCwds, projectCwdOnHost } from "../services/placement.js";
@@ -866,9 +866,7 @@ export async function sessionsRoute(app: FastifyInstance) {
           return reply.code(503).send({
             statusCode: 503,
             error: "Service Unavailable",
-            message: result.detail
-              ? `Host connection lost mid-request; spawn outcome is unknown: ${result.detail}`
-              : "Host connection lost mid-request; spawn outcome is unknown",
+            message: unknownOutcomeText("the spawn", result.detail),
             sessionId: result.sessionId,
           });
         }
@@ -1190,9 +1188,7 @@ export async function sessionsRoute(app: FastifyInstance) {
           return reply.code(503).send({
             statusCode: 503,
             error: "Service Unavailable",
-            message: created.detail
-              ? `Host connection lost mid-request; spawn outcome is unknown: ${created.detail}`
-              : "Host connection lost mid-request; spawn outcome is unknown",
+            message: unknownOutcomeText("the spawn", created.detail),
             sessionId: created.sessionId,
           });
         }
@@ -1280,7 +1276,7 @@ export async function sessionsRoute(app: FastifyInstance) {
         }
         warnings.push(
           unknownOutcomeMessage(err)
-            ? "The promoted session is running, but the connection to the source session's host was lost while resolving its pending promote request, so the decision MAY HAVE BEEN DELIVERED (outcome unknown)."
+            ? `The promoted session is running, but ${unknownOutcomeText("resolving the source session's pending promote request")}`
             : "The promoted session is running, but the source session's pending promote request could not be resolved on its host.",
         );
       }

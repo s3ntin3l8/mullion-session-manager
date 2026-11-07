@@ -49,6 +49,8 @@ const { enqueueTask, dispatchClaimedTask, retryTask } =
 const { tasks, sessions } = await import("../../src/db/schema.js");
 const { createWorktree } = await import("../../src/services/git-worktree.js");
 const sessionsModule = await import("../../src/services/session-lifecycle.js");
+const sessionBackendModule = await import("../../src/services/session-backend.js");
+const { HostOutcomeUnknownError } = await import("../../src/services/remote-host-errors.js");
 
 const tmpDb = path.join(os.tmpdir(), `task-claim-outcome-unknown-${process.pid}.db`);
 
@@ -104,6 +106,34 @@ describe("an unknown spawn outcome is surfaced to the task (#2621)", () => {
 
     expect(outcome).toMatchObject({ ok: false, reason: "spawn-failed" });
     expect(rowNow().failureReason).toMatch(/outcome unknown.*channel closed/);
+
+    vi.restoreAllMocks();
+    fs.rmSync(cwd, { recursive: true, force: true });
+    await app.close();
+  });
+
+  it("dispatch surfaces an unknown outcome from clearing the orphaned worktree (#2703)", async () => {
+    const { app, cwd, row, rowNow } = await setup();
+    const real = sessionBackendModule.resolveBackend;
+    vi.spyOn(sessionBackendModule, "resolveBackend").mockImplementation((a, hostId) => {
+      const backend = Object.create(real(a, hostId)) as ReturnType<typeof real>;
+      backend.clearOrphanedTaskWorktree = () =>
+        Promise.reject(
+          new sessionBackendModule.MutationOutcomeUnknownError(
+            hostId,
+            "clearOrphanedTaskWorktree",
+            new HostOutcomeUnknownError(hostId, new Error("closed")),
+          ),
+        );
+      return backend;
+    });
+
+    await enqueueTask(app, row.id, { auto: false });
+    const outcome = await dispatchClaimedTask(app, row.id);
+
+    expect(outcome).toMatchObject({ ok: false, reason: "worktree-failed" });
+    expect((outcome as { detail: string }).detail).toContain("MAY HAVE BEEN DELIVERED");
+    expect(rowNow().failureReason).toContain("MAY HAVE BEEN DELIVERED");
 
     vi.restoreAllMocks();
     fs.rmSync(cwd, { recursive: true, force: true });

@@ -32,7 +32,7 @@ import { approveWorkflowChange } from "../services/task-workflow-gate.js";
 import { resolveTaskWorkerHost } from "../services/session-live-info.js";
 import { deliverRejectFeedback } from "../services/task-reject.js";
 import { readLiveWorkerState } from "../services/task-reseed.js";
-import { resolveBackend } from "../services/session-backend.js";
+import { deleteTaskBranch, type TaskBranchDelete } from "../services/task-branch-delete.js";
 import { removeCheckoutForced } from "../services/checkout-removal.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { resolveRepoRef } from "../services/host-git.js";
@@ -793,23 +793,12 @@ export async function tasksRoute(app: FastifyInstance) {
 
     let branchDeleted = false;
     if (task.branchName) {
-      try {
-        const result = await resolveBackend(app, project.hostId).deleteBranch(
-          project.cwd,
-          task.branchName,
-          { force: true },
-        );
-        branchDeleted = result.deleted;
-        if (!result.deleted) {
-          app.log.warn(
-            { taskId: task.id, branch: task.branchName, reason: result.reason },
-            "abandon: deleteBranch did not delete",
-          );
-        }
-      } catch (err) {
+      const result = await deleteTaskBranch(app, project, task.branchName);
+      branchDeleted = result.deleted;
+      if (!result.deleted) {
         app.log.warn(
-          { err, branch: task.branchName, taskId: task.id },
-          "abandon: deleteBranch threw",
+          { taskId: task.id, branch: task.branchName, reason: result.reason },
+          "abandon: deleteBranch did not delete",
         );
       }
     }
@@ -924,7 +913,7 @@ export async function tasksRoute(app: FastifyInstance) {
     task: typeof tasks.$inferSelect,
     project: typeof projects.$inferSelect,
     rateLimited: boolean,
-  ): Promise<{ id: number; branch: string; deleted: boolean; reason?: string }> {
+  ): Promise<{ id: number; branch: string } & TaskBranchDelete> {
     const branch = task.branchName!;
     if (task.prNumber === null) {
       return { id: task.id, branch, deleted: false, reason: "no-pr" };
@@ -954,23 +943,7 @@ export async function tasksRoute(app: FastifyInstance) {
     if (!merged) {
       return { id: task.id, branch, deleted: false, reason: "not-merged" };
     }
-    try {
-      // resolveBackend, not the local deleteBranch function directly — a
-      // remote-hosted project's branch lives on that host's own
-      // filesystem (/internal/git-branch-delete).
-      const result = await resolveBackend(app, project.hostId).deleteBranch(project.cwd, branch, {
-        force: true,
-      });
-      return {
-        id: task.id,
-        branch,
-        deleted: result.deleted,
-        reason: result.deleted ? undefined : (result.reason ?? "delete-failed"),
-      };
-    } catch (err) {
-      app.log.warn({ err, taskId: task.id, branch }, "clear-done: deleteBranch threw");
-      return { id: task.id, branch, deleted: false, reason: "delete-failed" };
-    }
+    return { id: task.id, branch, ...(await deleteTaskBranch(app, project, branch)) };
   }
 
   // #746 — bulk companion to DELETE /api/tasks/:id above, scoped to `done`

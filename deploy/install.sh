@@ -227,6 +227,25 @@ fi
 # Matches self-update.sh's own NPM_CI_TIMEOUT_SECONDS.
 NPM_CI_TIMEOUT_SECONDS=600
 
+# Issue #2703 — the enrollment token from stdin, for a caller that must not put
+# it in an environment (a `ssh host install.sh` pipeline, a CI secret store):
+# MULLION_AGENT_ENROLLMENT_TOKEN_STDIN=1 reads the FIRST LINE of stdin into
+# MULLION_AGENT_ENROLLMENT_TOKEN (the Windows bootstrap's -TokenFromStdin does
+# the same). It never appears in a process argument. Agent role only, so a
+# primary install never consumes stdin it was not asked to.
+if [ "${MULLION_AGENT_ENROLLMENT_TOKEN_STDIN:-}" = "1" ] && [ "$ROLE" = "agent" ]; then
+  stdin_token=""
+  IFS= read -r stdin_token || true
+  stdin_token="${stdin_token%$'\r'}"
+  if [ -z "${stdin_token//[[:space:]]/}" ]; then
+    echo "MULLION_AGENT_ENROLLMENT_TOKEN_STDIN=1 was set but stdin carried no token on its first line." >&2
+    exit 1
+  fi
+  MULLION_AGENT_ENROLLMENT_TOKEN="$stdin_token"
+  export MULLION_AGENT_ENROLLMENT_TOKEN
+  unset stdin_token
+fi
+
 mkdir -p "$MULLION_HOME_INPUT"
 MULLION_HOME="$(cd "$MULLION_HOME_INPUT" && pwd)"
 # On Windows Git Bash's `pwd` is an MSYS path (/c/Users/me/Mullion), which
@@ -237,6 +256,10 @@ MULLION_HOME="$(cd "$MULLION_HOME_INPUT" && pwd)"
 MULLION_HOME="$(native_path "$MULLION_HOME")"
 echo "==> Installing into $MULLION_HOME"
 
+# Issue #2703 — fingerprint of the .env as found, so a running unit is
+# restarted below when this run changed it (`enable --now` does nothing for a
+# unit that is already running, and an agent only reads its .env at start).
+ENV_SUM_BEFORE="$(cksum <"$MULLION_HOME/.env" 2>/dev/null || echo none)"
 if [ -f "$MULLION_HOME/.env" ]; then
   # Hermes review, PR #529: an existing .env from a prior run at a
   # different --role must not be silently kept while THIS run installs the
@@ -1135,7 +1158,19 @@ else
     fi
   fi
 
+  UNIT_WAS_ACTIVE=false
+  if systemctl --user --quiet is-active "$UNIT_NAME" 2>/dev/null; then UNIT_WAS_ACTIVE=true; fi
   systemctl --user enable --now "$UNIT_NAME"
+
+  # Issue #2703 — a unit that was already running keeps the credentials it
+  # booted with. When this run rewrote the .env (a deleted .env re-templated
+  # with a new token, a filled-in HOST/PORT), restart it so the change takes
+  # effect; an agent that was revoked is terminal in memory until restarted.
+  ENV_SUM_AFTER="$(cksum <"$MULLION_HOME/.env" 2>/dev/null || echo none)"
+  if [ "$UNIT_WAS_ACTIVE" = true ] && [ "$ENV_SUM_BEFORE" != "$ENV_SUM_AFTER" ]; then
+    echo "==> $MULLION_HOME/.env changed while $UNIT_NAME was running; restarting it"
+    systemctl --user restart "$UNIT_NAME"
+  fi
 
   echo "==> Done. Status:"
   systemctl --user --no-pager status "$UNIT_NAME" || true

@@ -32,7 +32,11 @@ import {
   HostRequestError,
   HostUnreachableError,
 } from "../services/remote-host-client.js";
-import { isHostBusyError, isOutcomeUnknown } from "../services/remote-host-errors.js";
+import {
+  isHostBusyError,
+  isOutcomeUnknown,
+  unknownOutcomeText,
+} from "../services/remote-host-errors.js";
 import { isHostTransientError } from "../services/remote-host-errors.js";
 import { resolveBackend } from "../services/session-backend.js";
 import { resolveSessionHostId } from "../services/session-live-info.js";
@@ -184,7 +188,7 @@ function hostFailMsg(app: FastifyInstance, hostId: string, err: unknown, what: s
     err instanceof HostRequestError
       ? `Host ${hostId} rejected ${what}: ${err.message}`
       : isOutcomeUnknown(err)
-        ? `Host ${hostId} connection lost mid-request; outcome of ${what} is unknown: ${err.message}`
+        ? unknownOutcomeText(what, err.message)
         : `Host ${hostId} is unreachable`;
   app.log.warn({ hostId, err }, message);
   return message;

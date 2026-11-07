@@ -27,6 +27,7 @@ const clientMock = vi.hoisted(() => ({
   resolveGitRebase: reject,
   resolveRemoveListedWorktree: reject,
   resolvePruneWorktreeMetadata: reject,
+  resolveDeleteTaskReviewFindings: reject,
 }));
 
 vi.mock("../../src/services/remote-host-client.js", async (importActual) => ({
@@ -83,7 +84,52 @@ const CALLS: Call[] = [
   ["rebaseBranch", (b) => b.rebaseBranch("/x" as never)],
   ["removeListedWorktree", (b) => b.removeListedWorktree("/x" as never, "/w" as never)],
   ["pruneWorktreeMetadata", (b) => b.pruneWorktreeMetadata("/x" as never)],
+  ["deleteTaskReviewFindings", (b) => b.deleteTaskReviewFindings(1 as never, 1 as never)],
 ];
+
+// Every RemoteBackend method must be classified here. A new method that is in
+// neither list fails the test below, so it cannot be added unclassified:
+// mutating ones belong in CALLS (above), read-only ones in READ_ONLY.
+// `prompt` is mutating but answers an unknown outcome as a VALUE (a refusal with
+// the "MAY HAVE BEEN DELIVERED" error), covered in session-backend-remote-control.test.ts.
+const MUTATING_AS_VALUE = ["prompt"];
+const READ_ONLY = [
+  "liveStatus",
+  "liveness",
+  "compareWorktreePaths",
+  "getScrollback",
+  "getRenderedScrollback",
+  "getTranscript",
+  "listSessionProcesses",
+  "waitOutput",
+  "listTaskWorktreeDirs",
+  "readTaskReviewFindings",
+  "resolveSessionsDir",
+  "readTaskCommitTitle",
+  "readTaskRereviewRequest",
+];
+
+describe("RemoteBackend method classification (#2703)", () => {
+  it("every method is classified mutating (CALLS) or read-only (READ_ONLY), exactly once", () => {
+    const proto = Object.getPrototypeOf(backend()) as object;
+    const methods = Object.getOwnPropertyNames(proto).filter(
+      (n) => n !== "constructor" && typeof (proto as Record<string, unknown>)[n] === "function",
+    );
+    // Private helpers are not part of the SessionBackend surface.
+    const surface = methods.filter(
+      (n) => n !== "mutating" && n !== "changedWorktrees" && n !== "remoteRefusal",
+    );
+    const classified = [...CALLS.map(([n]) => n), ...MUTATING_AS_VALUE, ...READ_ONLY];
+    expect(classified.filter((n, i) => classified.indexOf(n) !== i)).toEqual([]);
+    expect(surface.filter((n) => !classified.includes(n))).toEqual([]);
+    expect(classified.filter((n) => !surface.includes(n))).toEqual([]);
+  });
+
+  it("the Local/Remote backend methods that mutate are the ones in CALLS", () => {
+    // A read-only entry must never also be a mutating call.
+    expect(READ_ONLY.filter((n) => CALLS.some(([c]) => c === n))).toEqual([]);
+  });
+});
 
 describe("RemoteBackend mutating calls: unknown outcome (#2691)", () => {
   it.each(CALLS)(
