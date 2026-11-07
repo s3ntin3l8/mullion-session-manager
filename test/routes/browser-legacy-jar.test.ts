@@ -63,6 +63,7 @@ type App = Awaited<ReturnType<typeof buildApp>>;
 describe("legacy browser cookie jar and mixed-version closes (#2701)", () => {
   let primary: App;
   let n = 0;
+  let dataRoot = "";
   const dataDir = () => (primary.browser as unknown as { dataDir: string }).dataDir;
   const files = () => fs.readdirSync(dataDir()).sort();
 
@@ -70,13 +71,15 @@ describe("legacy browser cookie jar and mixed-version closes (#2701)", () => {
     fs.rmSync(tmpDb, { force: true });
     process.env.DATABASE_URL = `file:${tmpDb}`;
     process.env.BROWSER_ENABLED = "true";
-    process.env.BROWSER_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "bl-jar-data-"));
+    dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bl-jar-data-"));
+    process.env.BROWSER_DATA_DIR = dataRoot;
     primary = await buildApp();
   });
   afterAll(async () => {
     await primary.close();
     closeDb();
     fs.rmSync(tmpDb, { force: true });
+    fs.rmSync(dataRoot, { recursive: true, force: true });
     delete process.env.DATABASE_URL;
     delete process.env.BROWSER_ENABLED;
     delete process.env.BROWSER_DATA_DIR;
@@ -181,6 +184,7 @@ describe("legacy browser cookie jar and mixed-version closes (#2701)", () => {
     fs.mkdirSync(path.join(dataDir(), "downloads", `project-${id}-0123456789abcdef`), {
       recursive: true,
     });
+    fs.mkdirSync(path.join(dataDir(), "downloads", `project-${id}`), { recursive: true });
     const res = await primary.inject({ method: "DELETE", url: `/api/projects/${id}` });
     expect(res.statusCode).toBe(204);
     await vi.waitFor(() =>
@@ -190,6 +194,7 @@ describe("legacy browser cookie jar and mixed-version closes (#2701)", () => {
     expect(fs.existsSync(path.join(dataDir(), "downloads", `project-${id}-0123456789abcdef`))).toBe(
       false,
     );
+    expect(fs.existsSync(path.join(dataDir(), "downloads", `project-${id}`))).toBe(false);
   });
 
   it("the panel and use_browser resolving together produce one context", async () => {

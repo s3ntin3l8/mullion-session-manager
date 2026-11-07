@@ -169,6 +169,7 @@ function legacyFileId(projectId: number): string {
 function isProjectFile(name: string, projectId: number): boolean {
   const prefix = legacyFileId(projectId);
   return (
+    name === prefix ||
     name === `${prefix}.json` ||
     name === `${prefix}.owner` ||
     (name.startsWith(`${prefix}-`) &&
