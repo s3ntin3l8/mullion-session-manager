@@ -4,8 +4,8 @@
 // services/agent-channel-streams.ts) so both transports validate and behave
 // identically. The socket may be a real WebSocket or a ChannelSocket.
 //
-// It lives in a service rather than in src/routes/internal-streams.ts
-// because the OUTBOUND channel's plugin (src/plugins/agent-channel-client.ts)
+// They live in a service because the OUTBOUND channel's plugin
+// (src/plugins/agent-channel-client.ts)
 // serves the same streams, and a plugin importing a route inverts the
 // layering (routes -> services -> db, plugins above both) — issue #2413's
 // whole subject.

@@ -751,7 +751,7 @@ export class Session {
   // read/unread primitive future PRs — 1.3's tab badges, 1.4's event feed —
   // both reuse): unread = events with seq > lastSeenSeq. Advanced only via
   // markEventsSeen(), driven by a client's "seen" WS message
-  // (routes/events.ts). Starts at 0 so every event a session has ever
+  // (services/session-events.ts). Starts at 0 so every event a session has ever
   // produced is initially unread.
   private lastSeenSeq = 0;
   private lastActivityAt: number | null = null;
@@ -1153,7 +1153,7 @@ export class Session {
 
   // The post-clamp geometry actually applied to the pty (constructor and
   // resize() above both funnel through clampTerminalSize before assigning
-  // this.cols/this.rows) — routes/terminal.ts echoes this back to the
+  // this.cols/this.rows) — services/session-attach.ts echoes this back to the
   // browser as a GeometryMessage so xterm's own grid never drifts from what
   // a too-small request was floored to. See MIN_TERMINAL_COLS/ROWS's own
   // doc comment for why that floor exists.
@@ -3039,7 +3039,7 @@ export class Session {
    * PtyManager (below) is the only caller: it subscribes once per session
    * (in getOrCreate) and re-emits through its own manager-level onEvent()
    * fan-out, the same one-layer-up relationship dataListeners has to
-   * routes/terminal.ts's per-session subscriptions — except here the
+   * services/session-attach.ts's per-session subscriptions — except here the
    * manager itself is the aggregation point, not each route call. */
   onEvent(listener: EventListener): () => void {
     this.eventListeners.add(listener);
@@ -3058,7 +3058,7 @@ export class Session {
    * emitted, i.e. the head of its event log. Neither this nor `seenSeq`
    * below is persisted (not part of `StoredStateFields`), so both reset to
    * 0 whenever this process restarts and reconstructs the `Session` — issue
-   * #1427's "cursors" frame (routes/events.ts) relies on that reset being
+   * #1427's "cursors" frame (services/session-events.ts) relies on that reset being
    * visible so a client can tell "the server restarted, my seq is stale"
    * apart from "I've simply seen further than the server has replayed". */
   get eventSeqHead(): number {
@@ -3079,7 +3079,7 @@ export class Session {
    * last-known seq survived) is harmless to just accept.
    *
    * Returns whether the cursor actually advanced — issue #1427's
-   * cross-client "seen" broadcast (routes/events.ts) uses this so a
+   * cross-client "seen" broadcast (services/session-events.ts) uses this so a
    * stale/duplicate "seen" message (e.g. replayed by a reconnecting
    * client) doesn't re-broadcast a no-op update to every other connection. */
   markEventsSeen(seq: number): boolean {
@@ -3174,7 +3174,7 @@ export class Session {
   }
 
   /**
-   * Writes browser/control-socket input into the pty. B9 — routes/terminal.ts's
+   * Writes browser/control-socket input into the pty. B9 — services/session-attach.ts's
    * `message` handler (and control-socket.ts's `sessions.input` op, which
    * ultimately calls this too) used to write straight through with no cap,
    * while the PTY->WS direction (Session.onData's consumer in terminal.ts)
@@ -3656,7 +3656,7 @@ export class Session {
    * otherwise not get: attachClient() nudges on every spawn/respawn, but a
    * reattach to a still-alive client never respawns, so it must ask
    * explicitly (see attachSocketToSession's `wasAlive` check in
-   * routes/terminal.ts). Safe to call any time — RedrawNudgeHost.resize()'s
+   * services/session-attach.ts). Safe to call any time — RedrawNudgeHost.resize()'s
    * optional chaining no-ops if the client has since died. Passes
    * suppressCapture: true — see RedrawNudge.trigger()'s docstring for why
    * this path (unlike the initial spawn-time nudge) shouldn't buffer its
@@ -3980,7 +3980,7 @@ export class PtyManager {
   // was fully caught up before a restart, if enough new events land before
   // the client reconnects, can end up numerically BELOW the new head even
   // though every one of those new events is unread). Included in the
-  // `cursors` frame (routes/events.ts) precisely so the client has a
+  // `cursors` frame (services/session-events.ts) precisely so the client has a
   // deterministic, non-numeric signal for "this is a different process
   // than last time I connected" instead of relying on that heuristic alone.
   readonly bootId: string = crypto.randomUUID();
@@ -4409,7 +4409,8 @@ export class PtyManager {
   /** Every currently-buffered event across every tracked session (alive or
    * not — a session's final `status_change` "exited" event is exactly the
    * kind of thing a client connecting moments later still wants to see),
-   * unsorted. Callers (routes/events.ts) sort/cap this for replay. */
+   * unsorted. Callers (services/session-events.ts, routes/events.ts) sort/cap
+   * this for replay. */
   listEvents(): NotificationEvent[] {
     return [...this.sessions.values()].flatMap((s) => s.getEvents());
   }

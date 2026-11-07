@@ -12,7 +12,7 @@
 // (non-type-only) counterpart to this file.
 
 // ---------------------------------------------------------------------------
-// routes/terminal.ts — TerminalWSMessage (ResizeMessage | ExitedMessage)
+// services/session-attach.ts — TerminalWSMessage (ResizeMessage | ExitedMessage)
 // ---------------------------------------------------------------------------
 //
 // The full set of JSON control frames that cross /ws/terminal (and the
@@ -20,7 +20,7 @@
 // per-session control-socket relay) in EITHER direction. Everything else
 // that crosses this socket is raw binary (browser->PTY keystrokes,
 // PTY->browser output) and is deliberately NOT part of this union — see
-// routes/terminal.ts's `socket.on("message", ...)` handler, which branches
+// services/session-attach.ts's `socket.on("message", ...)` handler, which branches
 // on `isBinary` before ever attempting to JSON.parse.
 //
 // Verified by reading the whole handler (not just grepping for "type:")
@@ -69,7 +69,7 @@ export interface ExitedMessage {
 // its own fetch/negotiation just to learn a value that's already constant
 // server-side.
 //
-// Optional, not required: `attachSocketToSession` (routes/terminal.ts)
+// Optional, not required: `attachSocketToSession` (services/session-attach.ts)
 // always sends both, but `proxyToRemoteAttach` forwards a remote host's
 // frames as an opaque, unvalidated pass-through (see isGeometryMessage's own
 // comment in TerminalPane.tsx) — a remote host still on a pre-this-fix wire

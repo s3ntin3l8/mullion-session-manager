@@ -338,7 +338,7 @@ export class AttentionTracker {
    * solely on the next 4s poll picking up the new `lastTurnEndedAt` isn't
    * enough here. A harmless redundant emit in the case clearAttention()
    * DID already emit one — over-delivery, never under-delivery, same
-   * posture routes/events.ts's replay-vs-live dedupe already assumes.
+   * posture services/session-events.ts's replay-vs-live dedupe already assumes.
    */
   acknowledgeAttention(): boolean {
     if (this.state.confirmedKind !== null && ACK_BLOCKING_KINDS.has(this.state.confirmedKind)) {

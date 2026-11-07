@@ -15,7 +15,7 @@ import { getStoredSettings } from "../services/settings.js";
 // Phase 3, issue #180 — streams a project's Playwright-controlled Chromium
 // page to the frontend BrowserPane (#181) as binary JPEG frames over
 // WebSocket, and proxies mouse/keyboard/navigation input back. Modeled on
-// src/routes/terminal.ts's attachSocketToSession: preValidation rejects a
+// src/services/session-attach.ts's attachSocketToSession: preValidation rejects a
 // bad request before the upgrade, backpressure drops frames rather than
 // queuing them, and per-connection state is torn down on socket close.
 //

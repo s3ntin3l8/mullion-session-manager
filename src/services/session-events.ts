@@ -2,7 +2,7 @@
 // notification events onto a socket, and the cross-connection "cursors"/
 // "seen" broadcast.
 //
-// It lives in a service rather than in src/routes/events.ts because the
+// They live in a service because the
 // agent-side `/internal/ws/events` path lives in a service too
 // (services/internal-streams.ts) and needs the same core — a service
 // importing a route inverts the layering (issue #2413's subject).

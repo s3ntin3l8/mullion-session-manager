@@ -1,28 +1,20 @@
 // The bounds the agent-side attach path and the session routes share.
 //
-// They live here, in a module with no dependencies at all, because three
-// different callers need them and none of them should have to import a
-// heavy module (or a route) to get two numbers:
+// They live here, in a module with no dependencies at all, because the
+// canonical home (session-lifecycle.ts) pulls in the primary's DB schema and
+// the agent-side schema file (routes/internal-schemas.ts) has no business
+// importing that for two numeric bounds — so the two were DUPLICATED,
+// "kept in sync by hand", which is exactly the drift the constants' own
+// comment below claims to prevent. This module has no DB dependency, so
+// there is one copy now.
 //
-//   - src/routes/sessions.ts's `env` schema property,
-//   - src/routes/internal-schemas.ts's agent-side spawn schema, and
-//   - src/services/session-lifecycle.ts's own session spawn.
-//
-// The env bounds used to be DUPLICATED between session-lifecycle.ts and
-// internal-schemas.ts — "kept in sync by hand" — which is exactly the drift
-// the comment on the constants claims to prevent ("so 'how much env is too
-// much' has one answer regardless of which write path a caller used"). The
-// duplication existed only because the canonical home pulled in the primary's
-// DB schema; this module has no DB dependency, so there is no reason for it
-// any more.
-//
-// Issue #822 — bounds shared between routes/sessions.ts's `env` schema
-// property, routes/internal-schemas.ts's duplicate for the agent-side
-// spawn schema, and services/dock-config.ts's own env validation, so "how
-// much env is too much" has one answer regardless of which write path a
-// caller used. Not a security boundary (a full-scope caller can already
-// achieve an arbitrary env var via `command` composition, e.g. `FOO=bar
-// claude`) — the real constraint is transport, not intent:
+// Issue #822 — the bounds are shared between routes/sessions.ts's `env`
+// schema property, the agent-side spawn schema in
+// routes/internal-schemas.ts, and services/dock-config.ts's own env
+// validation, so "how much env is too much" has one answer regardless of
+// which write path a caller used. Not a security boundary (a full-scope
+// caller can already achieve an arbitrary env var via `command` composition,
+// e.g. `FOO=bar claude`) — the real constraint is transport, not intent:
 // remote-host-client.ts's openAttach() has nowhere to put `env` but the WS
 // upgrade's query string (a GET has no body, and the `ws` package exposes
 // no custom-body-on-upgrade option), which shares Node's 16 KB
@@ -42,8 +34,13 @@
 export const MAX_SESSION_ENV_ENTRIES = 16;
 export const MAX_SESSION_ENV_VALUE_LENGTH = 256;
 
-/** A session id is always the primary's stringified integer row id
- * (String(sessionId) — see terminal.ts/sessions.ts) by construction, but
- * writes it as a string, and an array, never a shell string), but would
- * make bootstrap/terminate silently target the wrong unit/file. */
+// A session id is always the primary's stringified integer row id
+// (String(sessionId) — see terminal.ts/sessions.ts) by construction, but
+// this pattern is the agent's only defense against a malformed one: it
+// flows straight into pty-manager.ts's scopeUnitName(instanceId, id) ->
+// `crs-session-<instanceId>-<id>`, naming a real systemd --user scope and
+// dtach socket file. An id with systemd- or filesystem-illegal characters
+// (e.g. "/") wouldn't be an injection (spawn/stop always use an argv
+// array, never a shell string), but would make bootstrap/terminate
+// silently target the wrong unit/file.
 export const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
