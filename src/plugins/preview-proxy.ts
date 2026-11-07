@@ -10,6 +10,7 @@ import { projects, projectPreviewTargets } from "../db/schema.js";
 import { resolveExecutionContext } from "../services/execution-context.js";
 import { getPreviewBySlug } from "../services/preview-registry.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
+import { HostRequestError, isHostBusyError } from "../services/remote-host-errors.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { buildPreviewHostPattern, extractPreviewSlug } from "../services/preview-host.js";
 import { requestScheme } from "../services/request-scheme.js";
@@ -327,6 +328,8 @@ async function resolvePreviewTarget(
 // actual reason is always still available server-side, in the app.log.warn/
 // error call alongside each call site below.
 const PREVIEW_UNAVAILABLE_MESSAGE = "preview unavailable";
+/** Retry-After on a 503 for a saturated agent channel (preview cap reached). */
+const PREVIEW_BUSY_RETRY_AFTER_SECONDS = 1;
 
 // Lets a cross-origin fetch() from the dashboard's own page (BrowserPanel.tsx's
 // probe of a resolved preview `src`, ahead of mounting the iframe) read one
@@ -463,6 +466,20 @@ async function handlePreviewRequest(
       request.raw.resume();
       app.log.warn({ err, slug, hostId: target.hostId }, "preview proxy: upstream unreachable");
       addPreviewErrorCorsHeaders(request, reply);
+      if (isHostBusyError(err)) {
+        // Saturated right now (the preview stream cap or no free slot): the
+        // browser may retry, so say 503 + Retry-After rather than a hard 502.
+        void reply.header("retry-after", String(PREVIEW_BUSY_RETRY_AFTER_SECONDS));
+        return reply.serviceUnavailable(PREVIEW_UNAVAILABLE_MESSAGE);
+      }
+      if (err instanceof HostRequestError && err.statusCode === 413) {
+        // An over-limit request body is the caller's doing, not a bad gateway.
+        return reply.code(413).send({
+          statusCode: 413,
+          error: "Payload Too Large",
+          message: PREVIEW_UNAVAILABLE_MESSAGE,
+        });
+      }
       return reply.badGateway(PREVIEW_UNAVAILABLE_MESSAGE);
     }
     // The loopback base this hop actually forced the connection to (see the

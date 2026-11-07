@@ -12,7 +12,7 @@ import type * as SettingsModule from "../../src/services/settings.js";
 // force the reconnect.
 
 const mockListHosts = vi.hoisted(() => vi.fn(() => [] as unknown[]));
-const pingMock = vi.hoisted(() => vi.fn(async () => true));
+const pingMock = vi.hoisted(() => vi.fn(async (): Promise<boolean | "busy"> => true));
 const detectAgentsMock = vi.hoisted(() => vi.fn(async () => [] as unknown[]));
 const resolveConfigMock = vi.hoisted(() => vi.fn(async () => ({ version: "0.3.40" })));
 
@@ -26,7 +26,10 @@ vi.mock("../../src/services/remote-host-client.js", () => ({
   // means "an agent build without the capacity route" and keeps the sweep
   // free of noise.
   getRemoteHostClient: () => ({
-    ping: pingMock,
+    probe: async () => {
+      const v = await pingMock();
+      return v === "busy" ? "busy" : v ? "ok" : "down";
+    },
     resolveCapacity: async () => null,
     // Issue #2240 — the agent-CLI list rides on the same client.
     detectAgents: detectAgentsMock,
@@ -436,6 +439,76 @@ describe("startHostHeartbeat: agent list refresh", () => {
     expect(app.hostAgentTracker?.get("h1")).toBeUndefined();
     vi.unstubAllEnvs();
     expect(pingMock.mock.calls.length).toBeGreaterThan(1);
+    cleanup();
+  });
+});
+
+describe("startHostHeartbeat: a saturated channel (busy ping)", () => {
+  const fakeApp = () =>
+    ({
+      db: {},
+      log: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() },
+      config: { HOST_HEARTBEAT_INTERVAL_SECONDS: 30 },
+    }) as unknown as FastifyInstance;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockListHosts.mockReset();
+    pingMock.mockReset();
+    mockListHosts.mockReturnValue([fakeHost("h1")]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("neither fails nor succeeds for a few busy sweeps, then degrades with a reason", async () => {
+    const tracker = new HostHeartbeatTracker();
+    tracker.recordSuccess("h1");
+    const success = vi.spyOn(tracker, "recordSuccess");
+    const failure = vi.spyOn(tracker, "recordFailure");
+    pingMock.mockResolvedValue("busy");
+    const onHostRecovered = vi.fn();
+    const onHostOnline = vi.fn();
+
+    const cleanup = startHostHeartbeat(
+      fakeApp(),
+      tracker,
+      undefined,
+      onHostRecovered,
+      onHostOnline,
+    );
+    await waitForAssertion(() => expect(tracker.getHealth("h1").lastCheckedAt).not.toBeNull());
+    // Sweep 1 and 2 are busy: the previous verdict stands, with no reason.
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(tracker.getHealth("h1").status).toBe("online");
+    expect(tracker.getHealth("h1").reason).toBeUndefined();
+    // Sweep 3 crosses the threshold.
+    await vi.advanceTimersByTimeAsync(30_000);
+    await waitForAssertion(() => expect(tracker.getHealth("h1").status).toBe("degraded"));
+    expect(tracker.getHealth("h1").reason).toBe("channel saturated");
+
+    expect(failure).not.toHaveBeenCalled();
+    expect(success).not.toHaveBeenCalled();
+    expect(onHostRecovered).not.toHaveBeenCalled();
+    expect(onHostOnline).not.toHaveBeenCalled();
+
+    // A real answer clears it.
+    pingMock.mockResolvedValue(true);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await waitForAssertion(() => expect(tracker.getHealth("h1").status).toBe("online"));
+    expect(tracker.getHealth("h1").reason).toBeUndefined();
+    cleanup();
+  });
+
+  it("does not let busy sweeps mask a host that then stops answering", async () => {
+    const tracker = new HostHeartbeatTracker();
+    tracker.recordSuccess("h1");
+    pingMock.mockResolvedValueOnce("busy").mockResolvedValue(false);
+    const cleanup = startHostHeartbeat(fakeApp(), tracker);
+    await vi.advanceTimersByTimeAsync(90_000);
+    await waitForAssertion(() => expect(tracker.getHealth("h1").status).toBe("offline"));
+    expect(tracker.getHealth("h1").reason).toBeUndefined();
     cleanup();
   });
 });

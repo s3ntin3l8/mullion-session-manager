@@ -281,6 +281,9 @@ export interface ChannelRequest {
    * can never starve ordinary requests. Refused at once, not queued, when the
    * stream budget is spent. */
   stream?: boolean;
+  /** A preview response: a stream that also counts against the (smaller)
+   * preview cap (`AGENT_CHANNEL_MAX_PREVIEW_CHANNELS`). Implies `stream`. */
+  preview?: boolean;
 }
 
 export interface ChannelResponse {
@@ -401,7 +404,7 @@ async function exchange(
       entry.mux
         .openChannel({
           waitTimeoutMs: AGENT_CHANNEL_SLOT_WAIT_MS,
-          ...(req.stream ? { stream: true } : {}),
+          ...(req.preview ? { preview: true } : req.stream ? { stream: true } : {}),
           onWaiting: () => {
             clearTimeout(timer);
             slotWaitTimer = setTimeout(

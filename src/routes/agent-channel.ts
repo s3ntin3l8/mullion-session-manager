@@ -8,6 +8,7 @@ import {
   AGENT_CHANNEL_HANDSHAKE_TIMEOUT_MS,
   AGENT_CHANNEL_MAX_BUFFERED_BYTES,
   AGENT_CHANNEL_MAX_CHANNELS,
+  AGENT_CHANNEL_MAX_PREVIEW_CHANNELS,
   AGENT_CHANNEL_MAX_STREAM_CHANNELS,
   AGENT_CHANNEL_CREDENTIAL_RECHECK_MS,
   AGENT_CHANNEL_MAX_HANDSHAKE_BYTES,
@@ -163,6 +164,7 @@ export async function agentChannelRoute(app: FastifyInstance) {
           channelIdParity: "even",
           maxChannels: AGENT_CHANNEL_MAX_CHANNELS,
           maxStreamChannels: AGENT_CHANNEL_MAX_STREAM_CHANNELS,
+          maxPreviewChannels: AGENT_CHANNEL_MAX_PREVIEW_CHANNELS,
           maxBufferedBytes: AGENT_CHANNEL_MAX_BUFFERED_BYTES,
         });
         const carried = carriedOperationsFor(negotiated);

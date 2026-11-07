@@ -245,6 +245,7 @@ export async function hostsRoute(app: FastifyInstance) {
         // the same host, and #1726's UI would have to pick a winner.
         platform: host.id === LOCAL_HOST_ID ? process.platform : host.platform,
         health: health.status,
+        healthReason: health.reason ?? null,
         lastSeenAt: toIso(health.lastSeenAt),
         lastCheckedAt: toIso(health.lastCheckedAt),
         capacity,

@@ -11,7 +11,10 @@ import {
   maxRequestBodyBytesForPath,
   serveChannelRequest,
 } from "../../src/services/agent-channel-tunnel.js";
-import { AGENT_CHANNEL_MAX_STREAM_CHANNELS } from "../../src/shared/agent-channel.js";
+import {
+  AGENT_CHANNEL_MAX_PREVIEW_CHANNELS,
+  AGENT_CHANNEL_MAX_STREAM_CHANNELS,
+} from "../../src/shared/agent-channel.js";
 import { HostBusyError } from "../../src/services/remote-host-errors.js";
 import {
   HostRequestError,
@@ -64,6 +67,7 @@ async function rig(opts: { download?: Buffer } = {}): Promise<Rig> {
     channelIdParity: "even",
     maxChannels: AGENT_CHANNEL_MAX_CHANNELS,
     maxStreamChannels: AGENT_CHANNEL_MAX_STREAM_CHANNELS,
+    maxPreviewChannels: AGENT_CHANNEL_MAX_PREVIEW_CHANNELS,
   });
   const agentMux = createMuxConnection(agentSocket as never, {
     channelIdParity: "odd",
@@ -378,18 +382,20 @@ describe("HTTP preview forward over the outbound channel (#2620)", () => {
   it("does not let held previews exhaust the request slots", async () => {
     const r = await rig();
     const open: Response[] = [];
-    for (let i = 0; i < AGENT_CHANNEL_MAX_STREAM_CHANNELS; i++) {
+    for (let i = 0; i < AGENT_CHANNEL_MAX_PREVIEW_CHANNELS; i++) {
       open.push(
         await r.client.openPreviewHttp(1, "/sse", { method: "GET", headers: new Headers() }),
       );
     }
-    // The stream budget is spent: one more preview is refused as busy ...
+    // The preview budget is spent: one more preview is refused as busy ...
+
     const over = await r.client
       .openPreviewHttp(1, "/sse", { method: "GET", headers: new Headers() })
       .catch((e) => e);
     expect(over).toBeInstanceOf(HostBusyError);
-    // ... while an ordinary request still gets a slot.
-    await expect(r.client.ping()).resolves.toBeDefined();
+    // ... while an ordinary request still gets a slot: ping() is a request
+    // over the channel, and "ok" (not "busy") proves one was free.
+    expect(await r.client.probe()).toBe("ok");
     for (const b of r.sse) b.end();
     for (const res of open) await res.body?.cancel().catch(() => undefined);
   });
@@ -424,8 +430,10 @@ describe("ping when the channel is saturated", () => {
     };
     request.mockRejectedValue(new HostBusyError("h1"));
     expect(await r.client.ping()).toBe(true);
+    expect(await r.client.probe()).toBe("busy");
     request.mockRejectedValue(new HostUnreachableError("h1", new Error("timeout")));
     expect(await r.client.ping()).toBe(false);
+    expect(await r.client.probe()).toBe("down");
   });
 });
 

@@ -17,6 +17,8 @@ export interface HostHealth {
   // click completed" apart from "the host was last reachable at this time"
   // — lastSeenAt alone can't do that, since it never moves on failure.
   lastCheckedAt: number | null;
+  /** Why the host is degraded, when it is not simply missing pings. */
+  reason?: string;
 }
 
 interface HeartbeatEntry {
@@ -24,11 +26,17 @@ interface HeartbeatEntry {
   missed: number;
   lastSeenAt: number | null;
   lastCheckedAt: number;
+  /** Consecutive sweeps whose ping found the channel saturated. */
+  busy?: number;
 }
 
 // Issue #246 / roadmap 7.2: <=2 consecutive missed pings -> degraded,
 // >=3 -> offline. Success at any point resets to online/missed:0.
 const OFFLINE_AFTER_MISSED = 3;
+// Consecutive busy pings (channel up, every slot held) tolerated before the
+// host is called degraded: hung transfers must not read as healthy forever.
+export const DEGRADED_AFTER_BUSY = 3;
+export const CHANNEL_SATURATED_REASON = "channel saturated";
 
 /**
  * Live-state health tracker for remote hosts — the same DB-row-records-
@@ -57,6 +65,7 @@ export class HostHeartbeatTracker {
       status: entry.status,
       lastSeenAt: entry.lastSeenAt,
       lastCheckedAt: entry.lastCheckedAt,
+      ...((entry.busy ?? 0) >= DEGRADED_AFTER_BUSY ? { reason: CHANNEL_SATURATED_REASON } : {}),
     };
   }
 
@@ -111,6 +120,27 @@ export class HostHeartbeatTracker {
     });
     this.onOnline?.(hostId);
     return wasUnreachable;
+  }
+
+  /**
+   * The ping found the channel up but saturated. That is neither a success
+   * (it must not reset the missed count or fire the recovery rescan) nor a
+   * failure (the host is serving): the previous verdict stands for the first
+   * few sweeps, then, past DEGRADED_AFTER_BUSY in a row, the host is degraded
+   * with the reason "channel saturated". Returns true once past the threshold.
+   */
+  recordBusy(hostId: string): boolean {
+    const prev = this.state.get(hostId);
+    const busy = (prev?.busy ?? 0) + 1;
+    const saturated = busy >= DEGRADED_AFTER_BUSY;
+    this.state.set(hostId, {
+      status: saturated && prev?.status !== "offline" ? "degraded" : (prev?.status ?? "pending"),
+      missed: prev?.missed ?? 0,
+      lastSeenAt: prev?.lastSeenAt ?? null,
+      lastCheckedAt: Date.now(),
+      busy,
+    });
+    return saturated;
   }
 
   recordFailure(hostId: string): void {
@@ -205,7 +235,14 @@ async function sweepHost(
   // HostHeartbeatTracker.recordSuccess). The caller acts on it.
   let recovered = false;
   try {
-    reachable = await getRemoteHostClient(app, hostId).ping();
+    const probe = await getRemoteHostClient(app, hostId).probe();
+    if (probe === "busy") {
+      // Up but saturated: bounded by the tracker, and no capacity poll (it
+      // would only queue behind the same hung transfers).
+      tracker.recordBusy(hostId);
+      return { recovered: false, cameOnline: false };
+    }
+    reachable = probe === "ok";
     if (reachable) {
       recovered = tracker.recordSuccess(hostId);
     } else {
