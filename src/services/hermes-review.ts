@@ -187,6 +187,17 @@ const MAX_REVIEW_ATTEMPTS = 3;
  */
 const MAX_SESSION_ATTEMPTS = 3;
 
+/**
+ * How many RETIRED session ids one attempt may skip, on top of
+ * MAX_SESSION_ATTEMPTS. A retired id (Hermes' prune deleted it and fenced it
+ * for good) is not a sign the next id is bad, only that the counter has to
+ * move past what was pruned; with no in-flight marker to remember where the
+ * pull request got to, a request would otherwise walk the same few pruned ids
+ * forever and the pull request could never be reviewed again (#2668). The cap
+ * keeps a Hermes that refuses everything from costing unbounded POSTs.
+ */
+const MAX_RETIRED_SESSION_SKIPS = 8;
+
 /** A session tried to stop a run another session dispatched. */
 export class ReviewRunForbiddenError extends Error {
   constructor() {
@@ -1000,7 +1011,9 @@ export async function requestRelay(
       // (it is stuck) is not a failed attempt at this range, so it must not
       // eat the range's attempts — otherwise two stuck sessions would leave
       // no attempt for the dispatch itself.
-      for (let sessionTry = 0; sessionTry < MAX_SESSION_ATTEMPTS; sessionTry++) {
+      let stuckRefusals = 0;
+      let retiredSkips = 0;
+      for (;;) {
         try {
           dispatched = await dispatchReview(root, key, {
             idempotencyKey,
@@ -1028,6 +1041,13 @@ export async function requestRelay(
           sessionId = `${baseSessionId}-${sessionAttempt}`;
           idempotencyKey = `${idempotencyKey}#session-${sessionAttempt}`;
           lastError = err;
+          // A stuck session spends the session budget; a retired id has its
+          // own, larger one, so a pruned id never leaves a stuck one short.
+          if (err.reason === "retired") retiredSkips += 1;
+          else stuckRefusals += 1;
+          if (stuckRefusals >= MAX_SESSION_ATTEMPTS || retiredSkips >= MAX_RETIRED_SESSION_SKIPS) {
+            break;
+          }
           continue;
         }
         break;
@@ -1036,8 +1056,12 @@ export async function requestRelay(
         // Every session id for this range was refused. The range itself was
         // never tried — report the session refusal, not a failed range.
         throw new HermesUnavailableError(
-          "The review could not be started — Hermes refused every session for this pull request",
-          `gave up after ${MAX_SESSION_ATTEMPTS} sessions${lastError ? `: ${lastError.message}` : ""}`,
+          // Pruned ids never come back, so this is not worth retrying later:
+          // say so instead of reading like a transient refusal.
+          retiredSkips >= MAX_RETIRED_SESSION_SKIPS
+            ? "The review could not be started — Hermes deleted (pruned) every session id tried for this pull request, and a deleted id can never be used again. Retrying will not help until Hermes keeps review sessions longer"
+            : "The review could not be started — Hermes refused every session for this pull request",
+          `gave up after ${stuckRefusals} stuck and ${retiredSkips} retired sessions${lastError ? `: ${lastError.message}` : ""}`,
         );
       }
       if (!dispatched.replayed) {
