@@ -16,7 +16,11 @@ import type { SessionLiveness } from "./session-process.js";
 import type { CgroupProcess } from "./cgroup-inventory.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient, HostRequestError, type SpawnResult } from "./remote-host-client.js";
-import { isHostBusyError, isOutcomeUnknown } from "./remote-host-errors.js";
+import {
+  HostOutcomeUnknownError,
+  isHostBusyError,
+  isOutcomeUnknown,
+} from "./remote-host-errors.js";
 import { invalidateRemoteWorktreeCache } from "./remote-worktree-cache.js";
 import { saveSessionFileUpload, saveSessionUpload, uploadRetentionMs } from "./session-upload.js";
 import {
@@ -62,26 +66,33 @@ import {
   type WaitOutputRequest,
 } from "./session-prompt.js";
 
-/** A mutating remote call whose connection was lost after the request was sent:
- * the host may have acted on it. A value, not a throw, so a route can say so
- * instead of "failed to reach host" (which invites a blind retry). */
-export interface UnknownMutationOutcome {
-  outcomeUnknown: true;
-  error: string;
+/**
+ * A mutating remote call whose connection was lost after the request was sent:
+ * the host may have acted on it. Raised (never returned) by every mutating
+ * `RemoteBackend` call, so a truthiness check on a boolean result can never read
+ * it as success, and typed so a route can answer "MAY HAVE BEEN DELIVERED"
+ * instead of "failed to reach host" (which invites a blind retry).
+ */
+export class MutationOutcomeUnknownError extends HostOutcomeUnknownError {
+  constructor(
+    hostId: string,
+    readonly op: string,
+    cause: unknown,
+  ) {
+    super(hostId, cause);
+    this.name = "MutationOutcomeUnknownError";
+    this.message = `the connection to the session's host was lost after the ${op} request was sent, so it MAY HAVE BEEN DELIVERED (outcome unknown); check the state on the host before sending it again`;
+  }
 }
 
-export function isUnknownMutationOutcome(v: unknown): v is UnknownMutationOutcome {
-  return (
-    typeof v === "object" && v !== null && (v as UnknownMutationOutcome).outcomeUnknown === true
-  );
-}
-
-function unknownMutationOutcome(err: unknown, op: string): UnknownMutationOutcome | null {
-  if (!isOutcomeUnknown(err)) return null;
-  return {
-    outcomeUnknown: true,
-    error: `the connection to the session's host was lost after the ${op} request was sent, so it MAY HAVE BEEN DELIVERED (outcome unknown); check the session's state before sending it again`,
-  };
+/** The explicit "may have been delivered" message for an unknown-outcome error,
+ * or null when `err` is any other failure. */
+export function unknownOutcomeMessage(err: unknown): string | null {
+  if (err instanceof MutationOutcomeUnknownError) return err.message;
+  if (isOutcomeUnknown(err)) {
+    return "the connection to the session's host was lost after the request was sent, so it MAY HAVE BEEN DELIVERED (outcome unknown); check the state on the host before sending it again";
+  }
+  return null;
 }
 
 export type HostErrorClassification = "rejected" | "busy" | "unreachable";
@@ -263,7 +274,7 @@ export interface SessionBackend {
     gateId: string | undefined,
     decision: "approved" | "denied",
     reason?: string,
-  ): Promise<boolean | UnknownMutationOutcome>;
+  ): Promise<boolean>;
   // Issue #1472 — clears non-blocking attention (issue #1430's explicit
   // "acknowledge" action) on whichever host actually tracks this session's
   // live PtyManager state, the same local/remote split resolveReviewGate
@@ -272,7 +283,7 @@ export interface SessionBackend {
   // genuinely still-pending blocking kind, or an id the OWNING host itself
   // doesn't track — both of which the route reports as the same 409; a
   // caller here has no way (and no need) to distinguish them further.
-  acknowledgeAttention(id: string): Promise<boolean | UnknownMutationOutcome>;
+  acknowledgeAttention(id: string): Promise<boolean>;
   // Issue #1951 — types a prompt into the session's agent on whichever host
   // owns its PTY (`sessions.prompt` for a child on another host). Resolves a
   // refusal as a value, never a throw: an unreachable host or an agent too
@@ -771,11 +782,23 @@ class RemoteBackend implements SessionBackend {
    * cannot produce a client still throws synchronously, exactly as it did
    * before (see session-lifecycle.ts's own note about that getter).
    */
-  private async changedWorktrees<T>(result: Promise<T>): Promise<T> {
+  private async changedWorktrees<T>(op: string, result: Promise<T>): Promise<T> {
     try {
-      return await result;
+      return await this.mutating(op, result);
     } finally {
       invalidateRemoteWorktreeCache(this.app, this.hostId);
+    }
+  }
+
+  /** Wraps a MUTATING remote call: a connection lost after the request was
+   * sent is re-raised as MutationOutcomeUnknownError (the host may have acted);
+   * every other failure propagates unchanged. */
+  private async mutating<T>(op: string, result: Promise<T>): Promise<T> {
+    try {
+      return await result;
+    } catch (err) {
+      if (isOutcomeUnknown(err)) throw new MutationOutcomeUnknownError(this.hostId, op, err);
+      throw err;
     }
   }
 
@@ -787,7 +810,7 @@ class RemoteBackend implements SessionBackend {
     // sessions.ts's promote handler), so this is a defensive no-op, not a
     // silently-lossy path a real caller would hit.
     const { resumeAgentSessionId: _resumeAgentSessionId, ...remoteSpawnOpts } = opts;
-    return this.client.spawn(remoteSpawnOpts);
+    return this.mutating("spawn", this.client.spawn(remoteSpawnOpts));
   }
 
   liveStatus(
@@ -857,7 +880,7 @@ class RemoteBackend implements SessionBackend {
   }
 
   terminate(id: string): Promise<void> {
-    return this.client.terminate(id);
+    return this.mutating("terminate", this.client.terminate(id));
   }
 
   getScrollback(id: string): Promise<Buffer> {
@@ -887,11 +910,11 @@ class RemoteBackend implements SessionBackend {
   }
 
   uploadImage(cwd: string, buffer: Buffer, mime: string): Promise<{ path: string }> {
-    return this.client.uploadImage(cwd, buffer, mime);
+    return this.mutating("image upload", this.client.uploadImage(cwd, buffer, mime));
   }
 
   uploadFile(cwd: string, buffer: Buffer, name: string): Promise<{ path: string }> {
-    return this.client.uploadFile(cwd, buffer, name);
+    return this.mutating("file upload", this.client.uploadFile(cwd, buffer, name));
   }
 
   async resolveReviewGate(
@@ -899,24 +922,15 @@ class RemoteBackend implements SessionBackend {
     gateId: string | undefined,
     decision: "approved" | "denied",
     reason?: string,
-  ): Promise<boolean | UnknownMutationOutcome> {
-    try {
-      return await this.client.resolveReviewGate(id, gateId, decision, reason);
-    } catch (err) {
-      const unknown = unknownMutationOutcome(err, "review-gate");
-      if (unknown) return unknown;
-      throw err;
-    }
+  ): Promise<boolean> {
+    return this.mutating(
+      "review-gate",
+      this.client.resolveReviewGate(id, gateId, decision, reason),
+    );
   }
 
-  async acknowledgeAttention(id: string): Promise<boolean | UnknownMutationOutcome> {
-    try {
-      return await this.client.acknowledgeAttention(id);
-    } catch (err) {
-      const unknown = unknownMutationOutcome(err, "attention-ack");
-      if (unknown) return unknown;
-      throw err;
-    }
+  acknowledgeAttention(id: string): Promise<boolean> {
+    return this.mutating("attention-ack", this.client.acknowledgeAttention(id));
   }
 
   async prompt(id: string, opts: { text: string; submit: boolean }): Promise<PromptOutcome> {
@@ -1018,23 +1032,35 @@ class RemoteBackend implements SessionBackend {
     seed: string,
     branchName?: string,
   ): Promise<CreateWorktreeResult> {
-    return this.changedWorktrees(this.client.resolveCreateWorktree(cwd, baseRef, seed, branchName));
+    return this.changedWorktrees(
+      "worktree create",
+      this.client.resolveCreateWorktree(cwd, baseRef, seed, branchName),
+    );
   }
 
   checkoutBranchWorktree(cwd: string, branch: string): Promise<WorktreeResult | null> {
-    return this.changedWorktrees(this.client.resolveCheckoutBranchWorktree(cwd, branch));
+    return this.changedWorktrees(
+      "worktree checkout",
+      this.client.resolveCheckoutBranchWorktree(cwd, branch),
+    );
   }
 
   removeWorktree(worktreePath: string, parentCwd?: string): Promise<boolean> {
-    return this.changedWorktrees(this.client.resolveRemoveWorktree(worktreePath, parentCwd));
+    return this.changedWorktrees(
+      "worktree remove",
+      this.client.resolveRemoveWorktree(worktreePath, parentCwd),
+    );
   }
 
   syncWorktree(worktreePath: string, branch: string): Promise<boolean> {
-    return this.client.resolveSyncWorktree(worktreePath, branch);
+    return this.mutating("worktree sync", this.client.resolveSyncWorktree(worktreePath, branch));
   }
 
   resumeTaskWorktree(cwd: string, branchName: string): Promise<WorktreeResult | null> {
-    return this.changedWorktrees(this.client.resolveResumeTaskWorktree(cwd, branchName));
+    return this.changedWorktrees(
+      "worktree resume",
+      this.client.resolveResumeTaskWorktree(cwd, branchName),
+    );
   }
 
   listTaskWorktreeDirs(cwd: string): Promise<string[]> {
@@ -1042,19 +1068,25 @@ class RemoteBackend implements SessionBackend {
   }
 
   stashSeed(id: string, seed: string): Promise<void> {
-    return this.client.resolveStashSeed(id, seed);
+    return this.mutating("seed stash", this.client.resolveStashSeed(id, seed));
   }
 
   resolvePendingPromote(id: string, decision: PromoteDecision): Promise<boolean> {
-    return this.client.resolvePendingPromote(id, decision);
+    return this.mutating("promote decision", this.client.resolvePendingPromote(id, decision));
   }
 
   removeWorktreeIfClean(worktreePath: string, parentCwd?: string): Promise<RemoveIfCleanResult> {
-    return this.changedWorktrees(this.client.resolveRemoveWorktreeIfClean(worktreePath, parentCwd));
+    return this.changedWorktrees(
+      "worktree remove",
+      this.client.resolveRemoveWorktreeIfClean(worktreePath, parentCwd),
+    );
   }
 
   pruneWorktrees(cwd: string, orphanPaths: string[]): Promise<PruneWorktreesResult> {
-    return this.changedWorktrees(this.client.resolvePruneWorktrees(cwd, orphanPaths));
+    return this.changedWorktrees(
+      "worktree prune",
+      this.client.resolvePruneWorktrees(cwd, orphanPaths),
+    );
   }
 
   clearOrphanedTaskWorktree(
@@ -1063,16 +1095,17 @@ class RemoteBackend implements SessionBackend {
     branchName: string,
   ): Promise<ClearOrphanedTaskWorktreeResult> {
     return this.changedWorktrees(
+      "worktree clear",
       this.client.resolveClearOrphanedTaskWorktree(cwd, worktreePath, branchName),
     );
   }
 
   deleteBranch(cwd: string, name: string, opts?: { force?: boolean }): Promise<DeleteBranchResult> {
-    return this.client.resolveDeleteBranch(cwd, name, opts?.force);
+    return this.mutating("branch delete", this.client.resolveDeleteBranch(cwd, name, opts?.force));
   }
 
   checkoutBranch(cwd: string, branch: string): Promise<GitBranchOpResult> {
-    return this.client.resolveGitCheckout(cwd, branch);
+    return this.mutating("branch checkout", this.client.resolveGitCheckout(cwd, branch));
   }
 
   createBranch(
@@ -1081,11 +1114,14 @@ class RemoteBackend implements SessionBackend {
     startPoint: string,
     opts?: { checkout?: boolean },
   ): Promise<GitBranchOpResult> {
-    return this.client.resolveGitBranchCreate(cwd, name, startPoint, opts?.checkout);
+    return this.mutating(
+      "branch create",
+      this.client.resolveGitBranchCreate(cwd, name, startPoint, opts?.checkout),
+    );
   }
 
   rebaseBranch(cwd: string, onto?: string): Promise<GitBranchOpResult> {
-    return this.client.resolveGitRebase(cwd, onto);
+    return this.mutating("rebase", this.client.resolveGitRebase(cwd, onto));
   }
 
   removeListedWorktree(
@@ -1094,12 +1130,13 @@ class RemoteBackend implements SessionBackend {
     opts?: { force?: boolean },
   ): Promise<RemoveListedWorktreeResult> {
     return this.changedWorktrees(
+      "worktree remove",
       this.client.resolveRemoveListedWorktree(cwd, worktreePath, opts?.force),
     );
   }
 
   pruneWorktreeMetadata(cwd: string): Promise<{ pruned: boolean }> {
-    return this.changedWorktrees(this.client.resolvePruneWorktreeMetadata(cwd));
+    return this.changedWorktrees("worktree prune", this.client.resolvePruneWorktreeMetadata(cwd));
   }
 
   // #760 — mirrors LocalBackend's own pair exactly, over the wire. `null`
