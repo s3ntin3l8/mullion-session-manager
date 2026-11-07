@@ -43,7 +43,7 @@ describe("credential transitions (issue #2452)", () => {
     app.inject({
       method: "POST",
       url: "/api/internal/register",
-      payload: { baseUrl: "http://10.2.0.1:4000", hostname: "box", ...payload },
+      payload: { hostname: "box", ...payload },
     });
   const renew = (hostId: string, machineCredential: string, extra = {}) =>
     register({ hostId, machineCredential, ...extra });
@@ -58,7 +58,6 @@ describe("credential transitions (issue #2452)", () => {
     const claim = await register({
       token: created.token,
       wantsMachineCredential: true,
-      baseUrl: `http://${name}.example:4000`,
     });
     expect(claim.statusCode).toBe(200);
     return { id: created.id, token: created.token, first: claim.json() };
@@ -137,7 +136,7 @@ describe("credential transitions (issue #2452)", () => {
         (await renew(id, rotated.machine_credential)).statusCode,
         (await renew(id, first.machine_credential)).statusCode,
         (await register({ token, wantsMachineCredential: true })).statusCode,
-        (await register({ token })).statusCode,
+        (await register({ token, baseUrl: "http://10.2.0.1:4000" })).statusCode,
       ];
       expect(await attempts()).toEqual([401, 401, 401, 401]);
 
@@ -198,7 +197,9 @@ describe("credential transitions (issue #2452)", () => {
       const res = await post(`/api/hosts/${id}/rotate-token`);
       const newToken = res.json().token as string;
 
-      expect((await register({ token: oldToken })).statusCode).toBe(401);
+      expect(
+        (await register({ token: oldToken, baseUrl: "http://10.2.0.1:4000" })).statusCode,
+      ).toBe(401);
       const renewed = await renew(id, first.machine_credential);
       expect(renewed.statusCode).toBe(200);
       // Re-claiming with the new token is the deliberate re-enroll: the live
