@@ -12,14 +12,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 // "node-pty" — see mock-pty.ts's header comment for the empirically
 // confirmed hoisting/ordering failure mode.
 import { plainNodePtyMock } from "../helpers/mock-pty.js";
-import os from "node:os";
-import path from "node:path";
 import fs from "node:fs";
 import type * as HermesReview from "../../src/services/hermes-review.js";
 import type * as TaskApprove from "../../src/services/task-approve.js";
 import type * as TaskReconciler from "../../src/services/task-reconciler.js";
 import { assertReviewerConfigured, requestHermesReview } from "../../src/services/hermes-review.js";
-import { PR_REVIEW_DEFAULTS } from "../helpers/pr-review-defaults.js";
+import { connectedProject, gqlPr, warmCiCache, mockGithub } from "../helpers/pr-detail-fixtures.js";
 import { buildTestApp } from "../helpers/app.js";
 
 const { buildApp } = await import("../../src/app.js");
@@ -86,134 +84,8 @@ describe("projects route", () => {
   describe("GET /api/projects/:id/github (issue #27)", () => {
     describe("PR detail routes", () => {
       // The PR-detail fixtures (connectedProject, gqlPr, warmCiCache and
-      // mockGithub) — the same four helpers as
-      // test/routes/project-github-pr-detail.test.ts, which holds the read
-      // side of this describe. They are duplicated rather than shared: a
-      // test file in this repo stands alone, and the alternative — a shared
-      // fixture module — is more coupling than a duplicated helper is worth
-      // here.
-      async function connectedProject(app: Awaited<ReturnType<typeof buildApp>>) {
-        const projectCwd = fs.mkdtempSync(path.join(os.tmpdir(), "projects-github-prdetail-"));
-        fs.mkdirSync(path.join(projectCwd, ".git"));
-        fs.writeFileSync(
-          path.join(projectCwd, ".git", "config"),
-          '[remote "origin"]\n\turl = git@github.com:acme/widgets.git\n',
-        );
-        await app.inject({
-          method: "PUT",
-          url: "/api/integrations/github/token",
-          payload: { token: "ghp_connected" },
-        });
-        const created = await app.inject({
-          method: "POST",
-          url: "/api/projects",
-          payload: { createDir: true, allowDuplicate: true, name: "pr-detail", cwd: projectCwd },
-        });
-        return { projectCwd, id: created.json().id as number };
-      }
-
-      const gqlPr = (number: number, over: Record<string, unknown> = {}) => ({
-        number,
-        title: `PR ${number}`,
-        url: `https://github.com/acme/widgets/pull/${number}`,
-        bodyHTML: "<p>b</p>",
-        state: "OPEN",
-        isDraft: false,
-        baseRefName: "main",
-        headRefName: "feat",
-        headRefOid: `sha${number}`,
-        additions: 1,
-        deletions: 1,
-        changedFiles: 1,
-        createdAt: "2026-01-01T00:00:00Z",
-        updatedAt: "2026-01-01T00:00:00Z",
-        author: { login: "me" },
-        mergeable: "MERGEABLE",
-        mergeStateStatus: "CLEAN",
-        reviewDecision: "APPROVED",
-        commits: { totalCount: 0, nodes: [] },
-        reviewRequests: { nodes: [] },
-        latestOpinionatedReviews: { nodes: [{ author: { login: "bob" }, state: "APPROVED" }] },
-        latestReviews: { nodes: [{ author: { login: "bob" }, state: "APPROVED" }] },
-        reviews: { nodes: [] },
-        reviewThreads: {
-          nodes: [
-            {
-              isResolved: false,
-              isOutdated: false,
-              path: "a.ts",
-              line: 2,
-              comments: {
-                nodes: [{ author: { login: "bob" }, bodyHTML: "<p>fix</p>", createdAt: "t" }],
-              },
-            },
-          ],
-        },
-        comments: { nodes: [] },
-        ...over,
-      });
-
-      // The poller's CI view for a PR; without it the phase can't be "ready".
-      async function warmCiCache(
-        number: number,
-        ciStatus: "success" | "failure" | null,
-        // Whether the head-run lookup answered. Independent of ciStatus: an
-        // answered-but-empty lookup is { ciStatus: null, ciFetched: true }, and
-        // a failed one is { ciStatus: null, ciFetched: false }. Always explicit.
-        ciFetched: boolean,
-        headSha: string = `sha${number}`,
-        actionsRuns: Array<{
-          name: string;
-          status: string;
-          conclusion: string | null;
-          htmlUrl: string;
-          headSha: string;
-        }> = [],
-      ) {
-        const { setRepoPRsStatus } = await import("../../src/services/github.js");
-        setRepoPRsStatus("acme", "widgets", {
-          prs: [
-            {
-              ...PR_REVIEW_DEFAULTS,
-              number,
-              title: `PR ${number}`,
-              htmlUrl: `https://github.com/acme/widgets/pull/${number}`,
-              author: "me",
-              headSha,
-              headBranch: "feat",
-              baseBranch: "main",
-              ciStatus,
-              ciFetched,
-              actionsRuns,
-            },
-          ],
-          prSummary: { total: 1, pass: 1, fail: 0, pending: 0, unknown: 0 },
-        });
-      }
-
-      function mockGithub(
-        pr: Record<string, unknown>,
-        extra?: (url: string, init?: RequestInit) => Response | null,
-      ) {
-        fetchMock.mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
-          const url = String(input);
-          const custom = extra?.(url, init);
-          if (custom) return Promise.resolve(custom);
-          if (url === "https://api.github.com/user") {
-            return Promise.resolve(jsonResponse(200, { login: "octocat" }));
-          }
-          if (url.endsWith("/graphql")) {
-            return Promise.resolve(
-              jsonResponse(200, { data: { repository: { pullRequest: pr } } }),
-            );
-          }
-          if (url.includes("/pulls/") && url.includes("/files")) {
-            return Promise.resolve(jsonResponse(200, []));
-          }
-          return Promise.reject(new Error(`unexpected fetch in test: ${url}`));
-        });
-      }
-
+      // mockGithub) are shared with test/routes/project-github-pr-detail.test.ts
+      // through test/helpers/pr-detail-fixtures.ts (#2671, settling #2476).
       it("merge: refuses a stale head, an unready PR, and merges a ready one", async () => {
         let merged: unknown = null;
         mockGithub(gqlPr(43), (url, init) => {
