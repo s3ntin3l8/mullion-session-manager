@@ -613,7 +613,7 @@ export function Sidebar({
                 <SearchIcon size={13} strokeWidth={1.9} />
                 <TextInput
                   small
-                  placeholder="Search sessions…"
+                  placeholder="Filter sessions…"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   aria-label="Filter sessions"
