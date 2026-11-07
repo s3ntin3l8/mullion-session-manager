@@ -26,7 +26,10 @@ import {
   extensionForMime,
   matchesMagicBytes,
 } from "../services/session-upload.js";
-import { listSessionBrowserBindings } from "../services/session-browsers.js";
+import {
+  closeSessionBrowserBindings,
+  listSessionBrowserBindings,
+} from "../services/session-browsers.js";
 import { readSessionSetupLog } from "../services/setup-recipe.js";
 import {
   createSessionRecord,
@@ -1672,6 +1675,22 @@ export async function sessionsRoute(app: FastifyInstance) {
     if (!row) return reply.notFound();
 
     return listSessionBrowserBindings(app, sessionId);
+  });
+
+  // Unbinds the session's browser so the next attach or automation call
+  // resolves its current host and checkout afresh — the way out of a binding
+  // that reports "unavailable" (its worktree was deleted, its host went away).
+  // Closes the target's browser when no other session uses it.
+  app.delete<{ Params: { id: string } }>("/api/sessions/:id/browser", async (request, reply) => {
+    const sessionId = Number(request.params.id);
+    if (!Number.isInteger(sessionId)) return reply.badRequest("Invalid session id");
+
+    const [row] = app.db.select().from(sessions).where(eq(sessions.id, sessionId)).all();
+    if (!row) return reply.notFound();
+
+    const had = listSessionBrowserBindings(app, sessionId).length;
+    closeSessionBrowserBindings(app, sessionId);
+    return { ok: true, unbound: had };
   });
 
   // Fully ends the session (attach-client, dtach master, and the program

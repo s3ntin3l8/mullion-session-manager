@@ -72,6 +72,13 @@ describe("HostsSection token rotation", () => {
     expect(screen.queryByText(/waiting for the agent/)).not.toBeInTheDocument();
   });
 
+  it("flags a host with leaked browsers (issue #2641)", () => {
+    stubFetch({});
+    useDashboardStore.setState({ hosts: [makeHost({ id: "h", name: "ctr", leakedBrowsers: 2 })] });
+    render(<HostsSection />);
+    expect(screen.getByText("2 leaked browsers")).toBeInTheDocument();
+  });
+
   it("flags a possible duplicate and offers Remove stale host on the older row only (issue #2582)", async () => {
     stubFetch({});
     useDashboardStore.setState({

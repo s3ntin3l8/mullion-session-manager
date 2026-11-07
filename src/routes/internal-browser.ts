@@ -13,6 +13,12 @@ import type { BrowserTarget } from "../services/browser-manager.js";
 import { agentServesHost } from "../services/agent-identity.js";
 import { SESSION_ID_PARAMS_SCHEMA } from "./internal-schemas.js";
 
+/** What a caller that names no (or a foreign) target is told. An older primary
+ * only sends `?projectId=`, which an agent cannot map to one checkout's
+ * browser, so the answer says what to do rather than a bare 400. */
+export const MISSING_TARGET_MESSAGE =
+  "This request names no browser target for this host (projectId, hostId and checkoutRoot are required). The primary is older than this agent: update the primary.";
+
 /** The browser target an agent browser route was asked for (issue #2448). The
  * primary names it in the query; an agent never derives one from the project
  * id alone, so a caller that omits it is refused instead of silently getting
@@ -58,7 +64,9 @@ export function registerBrowserRoutes(app: FastifyInstance, rateLimit: { config:
       const sessionId = Number(request.params.id);
       const target = parseBrowserTarget(app, request.query);
       if (!Number.isInteger(sessionId) || !target) {
-        return reply.badRequest("Invalid session id or browser target");
+        return reply.badRequest(
+          Number.isInteger(sessionId) ? MISSING_TARGET_MESSAGE : "Invalid session id",
+        );
       }
 
       if (!app.browserEnabled) {
@@ -98,7 +106,9 @@ export function registerBrowserRoutes(app: FastifyInstance, rateLimit: { config:
       const sessionId = Number(request.params.id);
       const target = parseBrowserTarget(app, request.query);
       if (!Number.isInteger(sessionId) || !target) {
-        return reply.badRequest("Invalid session id or browser target");
+        return reply.badRequest(
+          Number.isInteger(sessionId) ? MISSING_TARGET_MESSAGE : "Invalid session id",
+        );
       }
 
       if (!app.browserEnabled) {
@@ -144,7 +154,7 @@ export function registerBrowserRoutes(app: FastifyInstance, rateLimit: { config:
           return reply.badRequest("Invalid sessionId");
         }
         if (!parseBrowserTarget(app, request.query as Record<string, string | undefined>)) {
-          return reply.badRequest("Invalid browser target");
+          return reply.badRequest(MISSING_TARGET_MESSAGE);
         }
       },
     },
@@ -166,9 +176,24 @@ export function registerBrowserRoutes(app: FastifyInstance, rateLimit: { config:
     { ...rateLimit },
     async (request, reply) => {
       const target = parseBrowserTarget(app, request.query);
-      if (!target) return reply.badRequest("Invalid browser target");
+      if (!target) return reply.badRequest(MISSING_TARGET_MESSAGE);
       if (!app.browserEnabled) return { ok: true };
       await app.browser.closeTarget(target);
+      return { ok: true };
+    },
+  );
+
+  // Closes a target's browser and deletes its stored state, for a checkout the
+  // primary removed (issue #2641). The project-default target keeps its files.
+  app.post<{ Querystring: Record<string, string | undefined> }>(
+    "/internal/browser/forget",
+    { ...rateLimit },
+    async (request, reply) => {
+      const target = parseBrowserTarget(app, request.query);
+      if (!target) return reply.badRequest(MISSING_TARGET_MESSAGE);
+      if (!app.browserEnabled) return { ok: true };
+      if (target.legacy) await app.browser.closeTarget(target);
+      else await app.browser.forgetCheckout(target.projectId, target.hostId, target.checkoutRoot);
       return { ok: true };
     },
   );

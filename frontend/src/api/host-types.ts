@@ -39,6 +39,9 @@ export interface Host {
   // Issue #2582 — ids of older, offline, session-free enrolled rows this host
   // probably replaced. Absent from an older primary.
   possibleDuplicateOf?: string[];
+  // Issue #2641 — browsers left running on this host after the primary gave up
+  // closing them. Absent from an older primary.
+  leakedBrowsers?: number;
   health: HostHealthStatus;
   // Not currently rendered anywhere — kept for a future "last seen Nm ago"
   // affordance (would make a "degraded" host more actionable than a bare

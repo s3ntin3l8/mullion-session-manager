@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
+import { listLeakedBrowserCloses } from "../services/session-browsers.js";
 import { eq } from "drizzle-orm";
 import { projects, sessions } from "../db/schema.js";
 import { closeAgentChannel } from "./agent-channel.js";
@@ -186,6 +187,11 @@ export async function hostsRoute(app: FastifyInstance) {
       app,
       (id) => app.hostHeartbeatTracker?.getHealth(id).status ?? "pending",
     );
+    // Issue #2641 — browsers the primary gave up closing, by host.
+    const leakedByHost = new Map<string, number>();
+    for (const leak of listLeakedBrowserCloses(app)) {
+      leakedByHost.set(leak.hostId, (leakedByHost.get(leak.hostId) ?? 0) + 1);
+    }
     return listHosts(app).map((host) => {
       const health = app.hostHeartbeatTracker?.getHealth(host.id) ?? {
         status: "pending" as const,
@@ -244,6 +250,9 @@ export async function hostsRoute(app: FastifyInstance) {
         capacity,
         // Issue #2582 — older offline rows this one probably replaced.
         possibleDuplicateOf: duplicates.get(host.id) ?? [],
+        // Issue #2641 — browsers still running on this host that the primary
+        // could not close and stopped retrying.
+        leakedBrowsers: leakedByHost.get(host.id) ?? 0,
       };
     });
   });

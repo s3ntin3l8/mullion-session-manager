@@ -22,6 +22,7 @@
 // module boundary for no reason or make
 // projects.ts -> project-git-writes.ts -> projects.ts an import cycle.
 
+import { closeCheckoutBrowsers } from "../services/session-browsers.js";
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { and, eq, inArray } from "drizzle-orm";
 import { projects, sessions, tasks } from "../db/schema.js";
@@ -916,6 +917,9 @@ export async function projectGitWritesRoute(app: FastifyInstance): Promise<void>
           }
         }
         const result = await backend.removeListedWorktree(target.cwd, worktreePath, { force });
+        if (result.removed || result.reason === "directory-gone") {
+          await closeCheckoutBrowsers(app, project.id, target.hostId, worktreePath);
+        }
         // `not-listed` / `directory-gone`: git no longer has a worktree at
         // this path, or its directory is already gone — nothing of the
         // session's is left to remove, so the row must not linger. Not

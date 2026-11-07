@@ -546,6 +546,33 @@ export class BrowserManager {
     await this.closeProcessIfIdle();
   }
 
+  /** Closes a target's browser and deletes the storage state and downloads it
+   * left on disk. For a checkout that no longer exists: its cookies would
+   * otherwise stay forever. The project-default target (`legacy`) keeps its
+   * files — that checkout is not going away. */
+  async forgetTarget(target: BrowserTarget): Promise<void> {
+    await this.closeTarget(target);
+    if (target.legacy) return;
+    await rm(this.storageStatePath(target), { force: true });
+    await rm(this.downloadsDir(target), { recursive: true, force: true });
+  }
+
+  /** `forgetTarget` for every target of one checkout: each running endpoint
+   * plus the checkout's default-endpoint target, whose files may exist with
+   * nothing running. (A stopped endpoint's file cannot be found: its name is a
+   * one-way digest of the endpoint.) */
+  async forgetCheckout(projectId: number, hostId: string, checkoutRoot: string): Promise<void> {
+    const targets = new Map<string, BrowserTarget>();
+    for (const managed of this.listForProject(projectId)) {
+      if (managed.target.checkoutRoot === checkoutRoot) {
+        targets.set(browserTargetKey(managed.target), managed.target);
+      }
+    }
+    const base: BrowserTarget = { projectId, hostId, checkoutRoot, legacy: false };
+    targets.set(browserTargetKey(base), base);
+    for (const target of targets.values()) await this.forgetTarget(target);
+  }
+
   /** Closes every target of a project (project deleted or merged
    * away). Safe to call when none is running. */
   async closeForProject(projectId: number): Promise<void> {
