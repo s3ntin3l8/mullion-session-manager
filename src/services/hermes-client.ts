@@ -86,9 +86,11 @@ export class ReviewSessionRefusedError extends Error {
     readonly reason: "stuck" | "retired" = "stuck",
   ) {
     super(
-      `Hermes refused the turn for the review session of this pull request (${sessionId}) — that session ${
-        reason === "retired" ? "was deleted (pruned), and its id cannot be reused" : "is stuck"
-      } and refuses every later round. The relay retries in a fresh session; asking again is not the way out of it.`,
+      `Hermes refused the turn for review session ${sessionId} — that session ${
+        reason === "retired"
+          ? "was deleted (pruned) and can never be used again"
+          : "is stuck and refuses every later round"
+      }. It needs a fresh session; asking again in this one is not the way out of it.`,
     );
     this.name = "ReviewSessionRefusedError";
   }
