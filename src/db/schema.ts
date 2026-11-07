@@ -909,6 +909,44 @@ export const sessionBrowsers = sqliteTable(
   (table) => [uniqueIndex("session_browsers_session_id_unique").on(table.sessionId)],
 );
 
+// Issue #2641 — a remote target's browser the primary failed to close (host
+// offline, agent too old, request error). One row per target, so a close the
+// primary could not deliver is retried with backoff instead of leaking the
+// browser on that host; `gaveUpAt` marks a leak the retries stopped chasing,
+// which the Hosts view reports. `forget` asks the host to also delete the
+// target's storage state (a removed checkout).
+export const pendingBrowserCloses = sqliteTable(
+  "pending_browser_closes",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    projectId: integer("project_id")
+      .notNull()
+      .references(() => projects.id, { onDelete: "cascade" }),
+    hostId: text("host_id").notNull(),
+    checkoutRoot: text("checkout_root").notNull(),
+    endpoint: text("endpoint").notNull().default(""),
+    legacy: integer("legacy", { mode: "boolean" }).notNull().default(false),
+    forget: integer("forget", { mode: "boolean" }).notNull().default(false),
+    attempts: integer("attempts").notNull().default(0),
+    lastError: text("last_error"),
+    nextAttemptAt: integer("next_attempt_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    gaveUpAt: integer("gave_up_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" })
+      .notNull()
+      .$defaultFn(() => new Date()),
+  },
+  (table) => [
+    uniqueIndex("pending_browser_closes_target_unique").on(
+      table.projectId,
+      table.hostId,
+      table.checkoutRoot,
+      table.endpoint,
+    ),
+  ],
+);
+
 // Phase 3, issue #184 — a named cookie profile imported from the operator's
 // real Chrome/Firefox browser on this same host, applied to a project's
 // pooled Playwright browser (BrowserManager, #179) on launch so it starts

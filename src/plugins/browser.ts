@@ -1,4 +1,5 @@
 import fp from "fastify-plugin";
+import { processPendingBrowserCloses } from "../services/session-browsers.js";
 import type { FastifyInstance } from "fastify";
 import path from "node:path";
 import { BrowserManager } from "../services/browser-manager.js";
@@ -60,6 +61,9 @@ export const browserPlugin = fp(async (app: FastifyInstance) => {
   if (enabled) {
     healthTimer = setInterval(() => {
       manager.healthCheck();
+      // Remote closes that could not be delivered (host offline, ...) retry
+      // here once their backoff is due; a no-op on an agent host (no DB).
+      void processPendingBrowserCloses(app);
     }, HEALTH_CHECK_INTERVAL_MS);
     // unref() so this timer alone never keeps the process (or, in tests, a
     // fastify instance that's about to be closed) alive.

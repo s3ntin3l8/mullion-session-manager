@@ -479,6 +479,17 @@ export function HostsSection() {
                     {" · "}
                     <HostCapabilitiesLine host={host} />
                     <HostProtocolLine host={host} />
+                    {(host.leakedBrowsers ?? 0) > 0 && (
+                      <>
+                        {" · "}
+                        <span
+                          style={{ color: "var(--y)" }}
+                          title="Mullion could not close these browsers when their session or worktree ended and stopped retrying. They stay running until this host's Mullion restarts."
+                        >
+                          {host.leakedBrowsers} leaked browser{host.leakedBrowsers === 1 ? "" : "s"}
+                        </span>
+                      </>
+                    )}
                     {(host.possibleDuplicateOf?.length ?? 0) > 0 && (
                       <>
                         {" · "}

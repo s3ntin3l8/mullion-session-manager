@@ -6,7 +6,7 @@ import { eq } from "drizzle-orm";
 import { sessions } from "../db/schema.js";
 import type { BrowserTarget } from "../services/browser-manager.js";
 import { resolveSessionBrowserTarget } from "../services/browser-target.js";
-import { recordSessionBrowserBinding } from "../services/session-browsers.js";
+import { beginBrowserAttach, recordSessionBrowserBinding } from "../services/session-browsers.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { resolveBrowserFramerate } from "../services/runtime-config.js";
@@ -419,10 +419,14 @@ export async function attachSocketToBrowser(
   { sessionId, target }: AttachBrowserParams,
 ): Promise<void> {
   const { projectId } = target;
+  // Until the binding below is recorded this target looks unused, so a session
+  // ending now must not close it under the viewer that is attaching.
+  const attachDone = beginBrowserAttach(target);
   let managed;
   try {
     managed = await app.browser.getOrLaunch(target);
   } catch (err) {
+    attachDone();
     app.log.error({ err, sessionId, target }, "failed to launch target browser");
     if (socket.readyState === socket.OPEN) {
       socket.send(JSON.stringify({ type: "error", message: (err as Error).message }));
@@ -433,11 +437,15 @@ export async function attachSocketToBrowser(
 
   // The socket may already be gone by the time the (possibly slow, first-
   // launch) getOrLaunch() above resolves.
-  if (socket.readyState !== socket.OPEN) return;
+  if (socket.readyState !== socket.OPEN) {
+    attachDone();
+    return;
+  }
 
   // #182 — "when a session spawns a browser pane, record the binding." An
   // agent host has no DB; the primary records the binding for its sessions.
   if (app.hasDecorator("db")) recordSessionBrowserBinding(app, sessionId, target);
+  attachDone();
 
   const { page, browser } = managed;
   let closed = false;
@@ -538,14 +546,19 @@ export async function attachSocketToBrowser(
 // bytes exceed BACKPRESSURE_MAX_BUFFERED_BYTES is silently dropped just like
 // a JPEG frame would be, so delivery isn't guaranteed under sustained
 // backpressure (pre-existing behavior, not new to these message types).
-function proxyToRemoteBrowser(
+export function proxyToRemoteBrowser(
   app: FastifyInstance,
   browserSocket: WebSocket,
   sessionId: number,
   target: BrowserTarget,
 ): void {
   const { hostId } = target;
+  // The binding is recorded only once the upstream is open, so a failed
+  // upstream leaves none; until then the attach is in flight, which keeps a
+  // session ending meanwhile from closing the target.
+  const attachDone = beginBrowserAttach(target);
   const closeBrowser = () => {
+    attachDone();
     if (browserSocket.readyState === browserSocket.OPEN) browserSocket.close();
   };
 
@@ -577,7 +590,11 @@ function proxyToRemoteBrowser(
     closeBrowser();
   });
   upstream.on("open", () => {
-    // Upstream opened
+    // A viewer that left while the upstream was connecting binds nothing.
+    if (browserSocket.readyState === browserSocket.OPEN) {
+      recordSessionBrowserBinding(app, sessionId, target);
+    }
+    attachDone();
   });
   upstream.on("message", (data, isBinary) => {
     if (browserSocket.readyState !== browserSocket.OPEN) return;
@@ -629,7 +646,6 @@ export async function browserRoute(app: FastifyInstance): Promise<void> {
           }
           const { target } = resolved;
           if (target.hostId !== LOCAL_HOST_ID) {
-            recordSessionBrowserBinding(app, sessionId, target);
             proxyToRemoteBrowser(app, socket, sessionId, target);
           } else {
             return attachSocketToBrowser(app, socket, { sessionId, target });

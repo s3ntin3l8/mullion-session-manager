@@ -47,6 +47,7 @@ describe("agent browser routes (/internal/.../browser)", () => {
         payload: { action: "get", by: "text", value: "x" },
       });
       expect(res.statusCode).toBe(400);
+      expect(res.json().message).toMatch(/update the primary/);
     }
     const close = await app.inject({ method: "POST", url: "/internal/browser/close", headers });
     expect(close.statusCode).toBe(400);
@@ -223,5 +224,22 @@ describe("agent browser routes (/internal/.../browser)", () => {
       checkoutRoot: "/work/p",
       legacy: true,
     });
+  });
+
+  it("forgets a removed checkout's browser and storage, but only closes the project default", async () => {
+    const forget = vi.spyOn(app.browser, "forgetCheckout").mockResolvedValue(undefined);
+    const close = vi.spyOn(app.browser, "closeTarget").mockResolvedValue(undefined);
+    const res = await app.inject({
+      method: "POST",
+      url: `/internal/browser/forget?${query.replace("legacy=1", "legacy=0")}`,
+      headers,
+    });
+    expect(res.json()).toEqual({ ok: true });
+    expect(forget).toHaveBeenCalledWith(1, "local", "/work/p");
+    await app.inject({ method: "POST", url: `/internal/browser/forget?${query}`, headers });
+    expect(forget).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    const none = await app.inject({ method: "POST", url: "/internal/browser/forget", headers });
+    expect(none.statusCode).toBe(400);
   });
 });

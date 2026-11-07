@@ -1,11 +1,12 @@
 import type { FastifyInstance } from "fastify";
-import { eq, and, ne } from "drizzle-orm";
-import { projects, sessionBrowsers } from "../db/schema.js";
+import { eq, and, ne, isNull, isNotNull, lte } from "drizzle-orm";
+import { pendingBrowserCloses, projects, sessionBrowsers } from "../db/schema.js";
 import { browserTargetKey, type BrowserTarget } from "./browser-manager.js";
 import { BROWSER_TARGETS_OPERATION, bindingBrowserTarget } from "./browser-target.js";
 import { requireOperation } from "./host-agents.js";
 import { LOCAL_HOST_ID } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
+import { parseHostCwds, projectCwdOnHost } from "./placement.js";
 
 // Phase 3, issue #182 — the sessionId<->projectId binding table itself
 // (schema.ts) has the full rationale for why this is one row per session
@@ -56,24 +57,77 @@ export function listSessionBrowserBindings(
     .all();
 }
 
+/** Stable key of a target across hosts: the pool key only names the target
+ * within one machine's pool. */
+function targetKey(target: BrowserTarget): string {
+  return `${target.hostId}\0${browserTargetKey(target)}`;
+}
+
+// Attaches in flight, by target. A browser is launched (or a remote WS
+// proxied) BEFORE the session's binding is recorded, so for that window the
+// target has no binding yet; without this a session ending right then would
+// close the browser out from under the viewer that is attaching (#2641).
+const attachesInFlight = new Map<string, number>();
+
+/** Marks an attach to `target` as in progress; call the returned function once
+ * the binding is recorded or the attach failed. Idempotent. */
+export function beginBrowserAttach(target: BrowserTarget): () => void {
+  const key = targetKey(target);
+  attachesInFlight.set(key, (attachesInFlight.get(key) ?? 0) + 1);
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    const left = (attachesInFlight.get(key) ?? 1) - 1;
+    if (left <= 0) attachesInFlight.delete(key);
+    else attachesInFlight.set(key, left);
+  };
+}
+
+/** Whether a session other than `exceptSessionId` is bound to, or is attaching
+ * to, `target` — the close path and the attach path agree on this. */
+function targetInUse(
+  app: FastifyInstance,
+  project: typeof projects.$inferSelect,
+  target: BrowserTarget,
+  exceptSessionId?: number,
+): boolean {
+  const key = targetKey(target);
+  if (attachesInFlight.has(key)) return true;
+  return app.db
+    .select()
+    .from(sessionBrowsers)
+    .where(
+      exceptSessionId === undefined
+        ? eq(sessionBrowsers.projectId, project.id)
+        : and(
+            eq(sessionBrowsers.projectId, project.id),
+            ne(sessionBrowsers.sessionId, exceptSessionId),
+          ),
+    )
+    .all()
+    .some((other) => {
+      const otherTarget = bindingBrowserTarget(project, other);
+      return otherTarget !== null && targetKey(otherTarget) === key;
+    });
+}
+
 /** Tears down a session's browser binding (#182: "session close kills
  * associated browser instances") — called from both killSession
  * (session-lifecycle.ts, reached via routes/sessions.ts's user-initiated
  * DELETE) and reconcileExitedSessions
  * (session-reconciler.ts, program-exited-on-its-own), in both cases *after*
- * the session's row has already been updated to killed/exited. Deletes this
- * session's own binding row(s) first, then closes the underlying project
- * browser ONLY if no other session still holds a binding to that same
- * project — BrowserManager's per-project pool means a sibling session in
- * the same project may still be using it. A no-op when the session had no
- * binding (the common case: most sessions never open a browser pane).
+ * the session's row has already been updated to killed/exited, and from the
+ * explicit unbind (DELETE /api/sessions/:id/browser). Deletes this session's
+ * own binding row(s) first, then closes the underlying target's browser ONLY
+ * if no other session still holds a binding to it or is attaching to it. A
+ * no-op when the session had no binding (the common case).
  *
  * Never throws: both callers have already committed the session's
  * killed/exited status by the time this runs, so a DB error here must not
- * surface as an HTTP 500 on an otherwise-successful kill (session-lifecycle.ts)
- * or abort reconcileExitedSessions' per-session loop partway through a host
- * group (session-reconciler.ts) — logged and swallowed instead, same
- * defensive posture as closeForProject's own .catch() below. */
+ * surface as an HTTP 500 on an otherwise-successful kill — logged and
+ * swallowed instead. The close itself is fire-and-forget; a remote close that
+ * fails is recorded as pending and retried (`processPendingBrowserCloses`). */
 export function closeSessionBrowserBindings(app: FastifyInstance, sessionId: number): void {
   try {
     const bindings = app.db
@@ -94,43 +148,210 @@ export function closeSessionBrowserBindings(app: FastifyInstance, sessionId: num
       if (!project) continue;
       const target = bindingBrowserTarget(project, binding);
       if (!target) continue;
-      const key = `${target.hostId}\0${browserTargetKey(target)}`;
-      const stillBound = app.db
-        .select()
-        .from(sessionBrowsers)
-        .where(
-          and(
-            eq(sessionBrowsers.projectId, binding.projectId),
-            ne(sessionBrowsers.sessionId, sessionId),
-          ),
-        )
-        .all()
-        .some((other) => {
-          const otherTarget = bindingBrowserTarget(project, other);
-          return (
-            otherTarget !== null &&
-            `${otherTarget.hostId}\0${browserTargetKey(otherTarget)}` === key
-          );
-        });
-      if (stillBound) continue; // another session still uses this target's browser
-
-      closeBrowserTarget(app, target).catch((err) => {
-        app.log.warn({ err, target, sessionId }, "failed to close session's browser target");
-      });
+      if (targetInUse(app, project, target, sessionId)) continue;
+      void closeBrowserTarget(app, target);
     }
   } catch (err) {
     app.log.warn({ err, sessionId }, "failed to tear down session's browser binding");
   }
 }
 
-/** Closes one target's browser on the host that runs it: this process for the
- * local host, the owning agent otherwise. A host that cannot be reached or
- * predates per-target browsers keeps its browser until it restarts. */
-async function closeBrowserTarget(app: FastifyInstance, target: BrowserTarget): Promise<void> {
-  if (target.hostId === LOCAL_HOST_ID) {
-    await app.browser.closeTarget(target);
-    return;
+/** A checkout is being removed: closes every browser running in it, drops the
+ * bindings that point at it and deletes the stored state of those targets
+ * (the project-default target keeps its file). Never throws. */
+export async function closeCheckoutBrowsers(
+  app: FastifyInstance,
+  projectId: number,
+  hostId: string,
+  checkoutRoot: string,
+): Promise<void> {
+  try {
+    if (!app.hasDecorator("db")) return;
+    const [project] = app.db.select().from(projects).where(eq(projects.id, projectId)).all();
+    if (!project) return;
+    for (const binding of app.db
+      .select()
+      .from(sessionBrowsers)
+      .where(eq(sessionBrowsers.projectId, projectId))
+      .all()) {
+      const bound = bindingBrowserTarget(project, binding);
+      if (bound && bound.hostId === hostId && bound.checkoutRoot === checkoutRoot) {
+        app.db.delete(sessionBrowsers).where(eq(sessionBrowsers.id, binding.id)).run();
+      }
+    }
+    const root = projectCwdOnHost(project, hostId, parseHostCwds(project.hostCwds));
+    // The project's own checkout is not "removed" by deleting a worktree.
+    if (root === checkoutRoot) return;
+    await closeBrowserTarget(
+      app,
+      { projectId, hostId, checkoutRoot, legacy: false },
+      { forget: true },
+    );
+  } catch (err) {
+    app.log.warn(
+      { err, projectId, hostId, checkoutRoot },
+      "failed to close removed checkout's browsers",
+    );
   }
-  if (!requireOperation(app, target.hostId, BROWSER_TARGETS_OPERATION).ok) return;
-  await getRemoteHostClient(app, target.hostId).postBrowser("/internal/browser/close", target);
+}
+
+/** Closes one target's browser on the host that runs it: this process for the
+ * local host, the owning agent otherwise. `forget` also deletes the target's
+ * stored state. A remote close that cannot be delivered (host offline, agent
+ * predates per-target browsers, request error) is recorded and retried by
+ * `processPendingBrowserCloses` rather than dropped. Never throws. */
+async function closeBrowserTarget(
+  app: FastifyInstance,
+  target: BrowserTarget,
+  opts: { forget?: boolean } = {},
+): Promise<void> {
+  try {
+    if (target.hostId === LOCAL_HOST_ID) {
+      if (opts.forget)
+        await app.browser.forgetCheckout(target.projectId, target.hostId, target.checkoutRoot);
+      else await app.browser.closeTarget(target);
+      return;
+    }
+    const failure = await deliverRemoteClose(app, target, opts.forget === true);
+    if (failure) recordPendingClose(app, target, opts.forget === true, failure);
+  } catch (err) {
+    app.log.warn({ err, target }, "failed to close session's browser target");
+  }
+}
+
+/** `null` when the host took the close, else why it did not. */
+async function deliverRemoteClose(
+  app: FastifyInstance,
+  target: BrowserTarget,
+  forget: boolean,
+): Promise<string | null> {
+  const gate = requireOperation(app, target.hostId, BROWSER_TARGETS_OPERATION);
+  if (!gate.ok) return gate.message;
+  try {
+    await getRemoteHostClient(app, target.hostId).postBrowser(
+      forget ? "/internal/browser/forget" : "/internal/browser/close",
+      target,
+    );
+    return null;
+  } catch (err) {
+    return (err as Error).message;
+  }
+}
+
+// Retry schedule for a close the host could not take: starts at a minute,
+// doubles, capped at 15 minutes, and stops chasing after a day — the browser
+// is then reported as leaked on that host.
+const CLOSE_RETRY_BASE_MS = 60_000;
+const CLOSE_RETRY_MAX_MS = 15 * 60_000;
+export const CLOSE_RETRY_GIVE_UP_MS = 24 * 60 * 60_000;
+
+function recordPendingClose(
+  app: FastifyInstance,
+  target: BrowserTarget,
+  forget: boolean,
+  error: string,
+): void {
+  const now = new Date();
+  app.db
+    .insert(pendingBrowserCloses)
+    .values({
+      projectId: target.projectId,
+      hostId: target.hostId,
+      checkoutRoot: target.checkoutRoot,
+      endpoint: target.endpoint ?? "",
+      legacy: target.legacy,
+      forget,
+      lastError: error,
+      nextAttemptAt: new Date(now.getTime() + CLOSE_RETRY_BASE_MS),
+      createdAt: now,
+    })
+    .onConflictDoUpdate({
+      target: [
+        pendingBrowserCloses.projectId,
+        pendingBrowserCloses.hostId,
+        pendingBrowserCloses.checkoutRoot,
+        pendingBrowserCloses.endpoint,
+      ],
+      set: { lastError: error, ...(forget ? { forget: true } : {}) },
+    })
+    .run();
+  app.log.warn({ target, error }, "remote browser close not delivered; will retry");
+}
+
+let processingPending = false;
+
+/** Retries the closes the primary could not deliver. Run on a timer; a
+ * success deletes the record, a failure backs off, and a record older than
+ * `CLOSE_RETRY_GIVE_UP_MS` is kept as leaked (`listLeakedBrowserCloses`). A
+ * target that a session has bound to since is left running. Never throws. */
+export async function processPendingBrowserCloses(
+  app: FastifyInstance,
+  now: Date = new Date(),
+): Promise<void> {
+  if (processingPending || !app.hasDecorator("db")) return;
+  processingPending = true;
+  try {
+    const due = app.db
+      .select()
+      .from(pendingBrowserCloses)
+      .where(
+        and(isNull(pendingBrowserCloses.gaveUpAt), lte(pendingBrowserCloses.nextAttemptAt, now)),
+      )
+      .all();
+    for (const row of due) {
+      const target: BrowserTarget = {
+        projectId: row.projectId,
+        hostId: row.hostId,
+        checkoutRoot: row.checkoutRoot,
+        legacy: row.legacy,
+        ...(row.endpoint ? { endpoint: row.endpoint } : {}),
+      };
+      const [project] = app.db.select().from(projects).where(eq(projects.id, row.projectId)).all();
+      const done = () =>
+        app.db.delete(pendingBrowserCloses).where(eq(pendingBrowserCloses.id, row.id)).run();
+      // A plain close of a target someone uses again is stale; a forget of a
+      // removed checkout never is (its bindings were dropped with it).
+      if (!project || (!row.forget && targetInUse(app, project, target))) {
+        done();
+        continue;
+      }
+      const failure = await deliverRemoteClose(app, target, row.forget);
+      if (failure === null) {
+        done();
+        continue;
+      }
+      const attempts = row.attempts + 1;
+      const gaveUp = now.getTime() - row.createdAt.getTime() >= CLOSE_RETRY_GIVE_UP_MS;
+      app.db
+        .update(pendingBrowserCloses)
+        .set({
+          attempts,
+          lastError: failure,
+          nextAttemptAt: new Date(
+            now.getTime() + Math.min(CLOSE_RETRY_MAX_MS, CLOSE_RETRY_BASE_MS * 2 ** attempts),
+          ),
+          gaveUpAt: gaveUp ? now : null,
+        })
+        .where(eq(pendingBrowserCloses.id, row.id))
+        .run();
+      if (gaveUp)
+        app.log.error({ target, failure }, "gave up closing a remote browser; it is leaked");
+    }
+  } catch (err) {
+    app.log.warn({ err }, "retrying pending browser closes failed");
+  } finally {
+    processingPending = false;
+  }
+}
+
+/** Remote browsers the primary stopped trying to close: still running on their
+ * host until it restarts. For the Hosts view. */
+export function listLeakedBrowserCloses(
+  app: FastifyInstance,
+): Array<typeof pendingBrowserCloses.$inferSelect> {
+  return app.db
+    .select()
+    .from(pendingBrowserCloses)
+    .where(isNotNull(pendingBrowserCloses.gaveUpAt))
+    .all();
 }

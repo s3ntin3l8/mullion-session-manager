@@ -7,6 +7,7 @@
 // checkout when a session's own target cannot be resolved: inspecting the
 // wrong application is worse than a refusal.
 import type { FastifyInstance } from "fastify";
+import { existsSync } from "node:fs";
 import { eq } from "drizzle-orm";
 import { projects, type sessionBrowsers } from "../db/schema.js";
 import type { BrowserTarget } from "./browser-manager.js";
@@ -15,6 +16,7 @@ import {
   resolveExecutionContext,
   type ExecutionContext,
 } from "./execution-context.js";
+import { LOCAL_HOST_ID, getHostRow } from "./host-registry.js";
 import { requireOperation } from "./host-agents.js";
 import { listSessionBrowserBindings } from "./session-browsers.js";
 import { parseHostCwds, projectCwdOnHost } from "./placement.js";
@@ -25,7 +27,16 @@ import { parseHostCwds, projectCwdOnHost } from "./placement.js";
 export const BROWSER_TARGETS_OPERATION = "browser-targets";
 
 export type BrowserTargetResult =
-  { ok: true; target: BrowserTarget } | { ok: false; status: 400 | 501 | 503; message: string };
+  | { ok: true; target: BrowserTarget }
+  | {
+      ok: false;
+      status: 400 | 501 | 503;
+      message: string;
+      /** `binding_unavailable`: the session's recorded target can no longer be
+       * used and the session must unbind (DELETE /api/sessions/:id/browser)
+       * to re-bind to its current host and checkout. */
+      code?: "binding_unavailable";
+    };
 
 /** Target for an already-resolved execution context. `legacy` marks the
  * project's default checkout on its default host, which keeps the storage
@@ -66,10 +77,30 @@ async function resolveTarget(
   return { ok: true, target: browserTargetFromContext(project, result.context) };
 }
 
-/** The browser target of a session. An existing binding wins: a panel or
- * automation that already opened a browser stays on that target even if the
- * session's placement changed since, so the pool entry, the stored binding and
- * the cleanup on session exit all name the same target. Only a session with no
+/** Why a recorded binding can no longer be used, or null when it still can.
+ * Only what the primary can know without a round trip: a host that is gone
+ * from the registry, or a local checkout whose directory was deleted. A remote
+ * host that is merely offline is NOT a reason — it reports unavailable on use
+ * and the binding survives its return. */
+function bindingUnavailableReason(app: FastifyInstance, target: BrowserTarget): string | null {
+  if (target.hostId === LOCAL_HOST_ID) {
+    return existsSync(target.checkoutRoot)
+      ? null
+      : `The browser's checkout ${target.checkoutRoot} no longer exists`;
+  }
+  const host = getHostRow(app, target.hostId);
+  if (!host || (!host.baseUrl && !host.machineCredentialEnc)) {
+    return `The browser's host ${target.hostId} is no longer available`;
+  }
+  return null;
+}
+
+/** The browser target of a session. An existing binding that still resolves
+ * wins: a panel or automation that already opened a browser stays on that
+ * target even if the session's placement changed since, so the pool entry, the
+ * stored binding and the cleanup on session exit all name the same target. A
+ * binding whose checkout or host is gone is reported unavailable (with the way
+ * out) instead of failing until the session ends. Only a session with no
  * binding yet resolves its current host and checkout. */
 export async function resolveSessionBrowserTarget(
   app: FastifyInstance,
@@ -86,6 +117,15 @@ export async function resolveSessionBrowserTarget(
         .all();
       const target = project ? bindingBrowserTarget(project, binding) : null;
       if (target) {
+        const gone = bindingUnavailableReason(app, target);
+        if (gone) {
+          return {
+            ok: false,
+            status: 400,
+            code: "binding_unavailable",
+            message: `${gone}. Unbind this session's browser (DELETE /api/sessions/${sessionId}/browser) to re-bind it to its current host and checkout.`,
+          };
+        }
         const gate = requireOperation(app, target.hostId, BROWSER_TARGETS_OPERATION);
         if (!gate.ok) return { ok: false, status: 501, message: gate.message };
         return { ok: true, target };
@@ -93,15 +133,6 @@ export async function resolveSessionBrowserTarget(
     }
   }
   return resolveTarget(app, { projectId, sessionId });
-}
-
-/** The project-default target. A caller with no session must ask for this
- * explicitly; the pool no longer answers "the project's browser". */
-export function resolveProjectDefaultBrowserTarget(
-  app: FastifyInstance,
-  projectId: number,
-): Promise<BrowserTargetResult> {
-  return resolveTarget(app, { projectId, projectDefault: true });
 }
 
 /** The target a stored binding row points at. A row from before targets
