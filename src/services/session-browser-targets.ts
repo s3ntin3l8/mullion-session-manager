@@ -14,10 +14,15 @@ import type { BrowserTarget } from "./browser-manager.js";
 // a target is plain placement data. The dir is optional: callers without one
 // (tests, a process with no SESSIONS_DIR) keep the old memory-only behaviour.
 const STATE_FILE_NAME = "browser-targets.json";
-/** An entry whose session this agent no longer knows is dropped after this
- * long. Not at once: right after a restart the sessions are not re-registered
- * with the PTY manager yet, and their targets must survive that window. */
+/** An entry whose session this agent no longer knows is dropped once the
+ * session has not been seen alive for this long. Not at once: right after a
+ * restart the sessions are not re-registered with the PTY manager yet, and
+ * their targets must survive that window. `savedAt` is the time the session
+ * was last seen alive (issue #2688: refreshed by `touchSessionBrowserTarget`,
+ * not only set at spawn), so a long-running session is never pruned for age. */
 const STALE_AFTER_MS = 30 * 24 * 60 * 60 * 1000;
+/** `touchSessionBrowserTarget` rewrites the state file at most this often. */
+const TOUCH_INTERVAL_MS = 60 * 60 * 1000;
 const MAX_ENTRIES = 2000;
 
 interface Entry {
@@ -100,6 +105,19 @@ export function rememberSessionBrowserTarget(
   }
   if (target) targets.set(id, { target, savedAt: now });
   else targets.delete(id);
+  if (sessionsDir) persist(sessionsDir);
+}
+
+/** Records that session `id` was seen alive (it answered a status poll or used
+ * its browser), so pruning follows the session's liveness and not the age of
+ * its spawn. Throttled: the state file is rewritten at most hourly. */
+export function touchSessionBrowserTarget(id: string, sessionsDir?: string): void {
+  if (sessionsDir) hydrate(sessionsDir);
+  const entry = targets.get(id);
+  if (!entry) return;
+  const now = Date.now();
+  if (now - entry.savedAt < TOUCH_INTERVAL_MS) return;
+  entry.savedAt = now;
   if (sessionsDir) persist(sessionsDir);
 }
 

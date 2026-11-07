@@ -1,6 +1,6 @@
 import { chromium } from "playwright";
 import type { Browser, BrowserContext, Page } from "playwright";
-import { mkdirSync, existsSync } from "node:fs";
+import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -121,15 +121,40 @@ export function browserTargetQuery(target: BrowserTarget): string {
   return params.toString();
 }
 
-/** Short filesystem-safe id for a target's on-disk state. */
-function targetFileId(target: BrowserTarget): string {
-  // Only the endpoint-less legacy target keeps the unhashed id; endpoints in
-  // the default checkout must not share storage or downloads.
-  if (target.legacy && (!target.endpoint || target.endpoint === LEGACY_BROWSER_ENDPOINT)) {
-    return `project-${target.projectId}`;
-  }
+/** Hashed on-disk id of a target (checkout + endpoint). */
+function hashedFileId(target: BrowserTarget): string {
   const digest = createHash("sha1").update(browserTargetKey(target)).digest("hex").slice(0, 16);
   return `project-${target.projectId}-${digest}`;
+}
+
+/** Short filesystem-safe id for a target's on-disk state.
+ *
+ * The project's default checkout keeps the storage file its browser had before
+ * targets existed (`project-<id>.json`, the legacy cookie jar) (issue #2688).
+ * That jar belongs to ONE endpoint at a time: whichever endpoint of the default
+ * checkout first loads it claims it (`project-<id>.owner`), including the
+ * empty legacy endpoint and a preview slug the session only got after its
+ * dev server was accepted. A second, different endpoint opened in the same
+ * checkout is the user's explicit choice of a second context and gets a hashed
+ * file of its own, so two previews never share cookies or downloads. */
+function targetFileId(dataDir: string, target: BrowserTarget): string {
+  if (!target.legacy) return hashedFileId(target);
+  const endpoint = target.endpoint ?? LEGACY_BROWSER_ENDPOINT;
+  const claimFile = path.join(dataDir, `project-${target.projectId}.owner`);
+  try {
+    const owner = readFileSync(claimFile, "utf8");
+    return owner === endpoint ? `project-${target.projectId}` : hashedFileId(target);
+  } catch {
+    // Unclaimed: this endpoint takes the legacy jar. An unwritable claim is
+    // not fatal; the jar is then simply shared by whoever asks next.
+    try {
+      mkdirSync(dataDir, { recursive: true });
+      writeFileSync(claimFile, endpoint);
+    } catch {
+      // best-effort
+    }
+    return `project-${target.projectId}`;
+  }
 }
 
 export interface ConsoleLogEntry {
@@ -261,11 +286,11 @@ export class BrowserManager {
   }
 
   private storageStatePath(target: BrowserTarget): string {
-    return path.join(this.dataDir, `${targetFileId(target)}.json`);
+    return path.join(this.dataDir, `${targetFileId(this.dataDir, target)}.json`);
   }
 
   private downloadsDir(target: BrowserTarget): string {
-    return path.join(this.dataDir, "downloads", targetFileId(target));
+    return path.join(this.dataDir, "downloads", targetFileId(this.dataDir, target));
   }
 
   /** The shared Chromium, launched on first use and again after a crash or

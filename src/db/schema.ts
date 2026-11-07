@@ -907,7 +907,11 @@ export const sessionBrowsers = sqliteTable(
     targetCheckoutRoot: text("target_checkout_root"),
     // Issue #2672 — the preview endpoint within that checkout (the pool key's
     // third part), so closing the session rebuilds the SAME target it opened.
-    // NULL = no endpoint (the legacy value).
+    // Issue #2688 — "" = fixed with no endpoint (the legacy value). NULL on a
+    // remote host's row = not fixed yet: the spawn-time binding exists so the
+    // session end can close the browser, but the endpoint is decided when the
+    // browser is first used (services/browser-target.ts). NULL on a local
+    // host's row (or a pre-#2688 row) reads as "no endpoint".
     targetEndpoint: text("target_endpoint"),
   },
   (table) => [uniqueIndex("session_browsers_session_id_unique").on(table.sessionId)],

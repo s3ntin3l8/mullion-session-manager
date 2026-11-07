@@ -35,6 +35,23 @@ export const SESSION_ID_SCHEMA = {
 // The `{ params: { id } }` shape repeated across ~7 routes in internal.ts
 // (terminate, review-gate, scrollback, stash-seed, promote, browser action,
 // browser find) — factored out once these were all found byte-identical.
+/** A session's browser target on the wire (spawn body, `browser-target` push). */
+export const BROWSER_TARGET_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["projectId", "hostId", "checkoutRoot", "legacy"],
+  properties: {
+    projectId: { type: "integer" },
+    hostId: { type: "string", minLength: 1, maxLength: 256 },
+    checkoutRoot: { type: "string", minLength: 1, maxLength: 4096 },
+    // Issue #2672 — the preview endpoint within the checkout. An agent without
+    // the "browser-endpoints" operation (#2688) strips it, so the primary
+    // never sends one to it.
+    endpoint: { type: "string", maxLength: 256 },
+    legacy: { type: "boolean" },
+  },
+} as const;
+
 export const SESSION_ID_PARAMS_SCHEMA = {
   type: "object",
   required: ["id"],
@@ -230,21 +247,7 @@ export const spawnSessionSchema = {
       // field.
       taskId: { type: "integer" },
       githubAuth: SESSION_GITHUB_AUTH_SCHEMA,
-      browserTarget: {
-        type: "object",
-        additionalProperties: false,
-        required: ["projectId", "hostId", "checkoutRoot", "legacy"],
-        properties: {
-          projectId: { type: "integer" },
-          hostId: { type: "string", minLength: 1, maxLength: 256 },
-          checkoutRoot: { type: "string", minLength: 1, maxLength: 4096 },
-          // Issue #2672 — the preview endpoint within the checkout. An older
-          // agent strips it and keys the browser by checkout alone (the
-          // legacy endpoint) without error.
-          endpoint: { type: "string", maxLength: 256 },
-          legacy: { type: "boolean" },
-        },
-      },
+      browserTarget: BROWSER_TARGET_SCHEMA,
       gitIdentity: {
         type: "object",
         additionalProperties: false,

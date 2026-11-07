@@ -11,7 +11,13 @@ import type { AgentAction, FindElementsBody } from "./browser-automation.js";
 import { attachSocketToBrowser } from "./browser.js";
 import type { BrowserTarget } from "../services/browser-manager.js";
 import { agentServesHost } from "../services/agent-identity.js";
-import { SESSION_ID_PARAMS_SCHEMA } from "./internal-schemas.js";
+import { BROWSER_TARGET_SCHEMA, SESSION_ID_PARAMS_SCHEMA } from "./internal-schemas.js";
+import { browserTargetKey } from "../services/browser-manager.js";
+import {
+  rememberSessionBrowserTarget,
+  sessionBrowserTarget,
+  touchSessionBrowserTarget,
+} from "../services/session-browser-targets.js";
 
 /** What a caller that names no (or a foreign) target is told. An older primary
  * only sends `?projectId=`, which an agent cannot map to one checkout's
@@ -47,6 +53,48 @@ function parseBrowserTarget(
  * `internalRoutes` so they sit behind its auth hook and share its rate limit.
  */
 export function registerBrowserRoutes(app: FastifyInstance, rateLimit: { config: object }): void {
+  // The primary sends a session's browser target once it has decided the
+  // session's preview endpoint (issue #2688), which is after spawn: the agent
+  // has no database to resolve it with. The agent answers with the target it
+  // will serve. A context that already runs for the session is kept (the
+  // session's `use_browser` opened it with the spawn-time target), so the
+  // primary adopts that one and the panel and the agent share one context.
+  app.post<{ Params: { id: string }; Body: BrowserTarget }>(
+    "/internal/sessions/:id/browser-target",
+    {
+      ...rateLimit,
+      schema: { params: SESSION_ID_PARAMS_SCHEMA, body: BROWSER_TARGET_SCHEMA },
+    },
+    async (request, reply) => {
+      const { id } = request.params;
+      const next = request.body;
+      if (!agentServesHost(app.config.SESSIONS_DIR, next.hostId)) {
+        return reply.badRequest("This browser target belongs to another host");
+      }
+      const dir = app.config.SESSIONS_DIR;
+      const current = sessionBrowserTarget(id, dir);
+      if (current) {
+        if (
+          current.projectId !== next.projectId ||
+          current.hostId !== next.hostId ||
+          current.checkoutRoot !== next.checkoutRoot
+        ) {
+          return reply.conflict("This session already has a browser target for another checkout");
+        }
+        if (
+          browserTargetKey(current) !== browserTargetKey(next) &&
+          app.browserEnabled &&
+          app.browser.get(current)
+        ) {
+          touchSessionBrowserTarget(id, dir);
+          return { target: current };
+        }
+      }
+      rememberSessionBrowserTarget(app.pty, id, next, dir);
+      return { target: next };
+    },
+  );
+
   app.post<{
     Params: { id: string };
     Querystring: Record<string, string | undefined>;
@@ -72,6 +120,7 @@ export function registerBrowserRoutes(app: FastifyInstance, rateLimit: { config:
       if (!app.browserEnabled) {
         return reply.badRequest("Browser feature is disabled");
       }
+      touchSessionBrowserTarget(String(sessionId), app.config.SESSIONS_DIR);
 
       let page: Page;
       try {
@@ -114,6 +163,7 @@ export function registerBrowserRoutes(app: FastifyInstance, rateLimit: { config:
       if (!app.browserEnabled) {
         return reply.badRequest("Browser feature is disabled");
       }
+      touchSessionBrowserTarget(String(sessionId), app.config.SESSIONS_DIR);
 
       let page: Page;
       try {

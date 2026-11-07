@@ -1921,7 +1921,12 @@ export async function resolveAgentBrowserTarget(
   try {
     const resolved = await resolveSessionBrowserTarget(app, project.id, sessionId);
     if (!resolved.ok || resolved.target.hostId !== placementHost) return undefined;
-    return resolved.target;
+    // Issue #2688 — the endpoint is decided when the browser is first used,
+    // from the preview the session serves by then (none exists at spawn), and
+    // is sent to the agent with that request. The spawn carries the legacy
+    // target only, so a session never has two keys for one browser.
+    const { endpoint: _endpoint, ...legacy } = resolved.target;
+    return legacy;
   } catch (err) {
     app.log.warn({ err, sessionId }, "could not resolve the session's browser target");
     return undefined;
@@ -1961,7 +1966,9 @@ async function spawnOrRollback(
     spawnResult = await resolveBackend(app, placementHost).spawn(
       browserTarget ? { ...spawnOpts, browserTarget } : spawnOpts,
     );
-    if (browserTarget) recordSessionBrowserBinding(app, sessionId, browserTarget);
+    if (browserTarget) {
+      recordSessionBrowserBinding(app, sessionId, browserTarget, { endpointUnfixed: true });
+    }
     // Version-skew safety net — "echoed back, not assumed" (SpawnResult's
     // own doc comment), logged rather than threaded up into
     // CreateSessionResult: nothing downstream currently needs to REACT to

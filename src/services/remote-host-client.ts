@@ -2254,7 +2254,9 @@ export class RemoteHostClient {
   postBrowser(path: string, target: BrowserTarget, body?: unknown): Promise<unknown> {
     return this.request(`${path}?${browserTargetQuery(target)}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      // No JSON content type without a body: Fastify refuses an empty body
+      // under it, which failed every close against a real agent (#2688).
+      headers: body === undefined ? undefined : { "content-type": "application/json" },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   }

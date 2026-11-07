@@ -72,6 +72,26 @@ describe("session browser targets", () => {
     expect(fresh.sessionBrowserTarget("10", dir)).toBeNull();
   });
 
+  it("keeps a session's target past the stale window while the session is seen alive (#2688)", async () => {
+    const mod = await load();
+    mod.rememberSessionBrowserTarget(known, "10", target, dir);
+    const file = path.join(dir, "browser-targets.json");
+    const stored = JSON.parse(fs.readFileSync(file, "utf8"));
+    stored["10"].savedAt = Date.now() - 31 * 24 * 60 * 60 * 1000;
+    fs.writeFileSync(file, JSON.stringify(stored));
+    vi.resetModules();
+    const fresh = await load();
+    // After the restart the PTY manager does not know the session yet, but the
+    // primary's status poll sees it alive and refreshes the entry.
+    fresh.sessionBrowserTarget("10", dir);
+    fresh.touchSessionBrowserTarget("10", dir);
+    fresh.rememberSessionBrowserTarget(unknown, "11", target, dir); // any other spawn prunes
+    expect(fresh.sessionBrowserTarget("10", dir)).toEqual(target);
+    expect(JSON.parse(fs.readFileSync(file, "utf8"))["10"].savedAt).toBeGreaterThan(
+      Date.now() - 60_000,
+    );
+  });
+
   it("ignores a corrupt or malformed state file", async () => {
     const file = path.join(dir, "browser-targets.json");
     fs.writeFileSync(file, "{not json");
