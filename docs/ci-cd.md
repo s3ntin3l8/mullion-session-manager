@@ -51,6 +51,11 @@ repo is live on the next run:
   - `codeql` needs `security-events: write`
   - `release-please` needs `contents: write` + `pull-requests: write`
   - `build-tarball` needs `contents: write` (to upload gh release assets)
+  - `visual-refresh` and `visual-baselines` need `contents: write` +
+    `pull-requests: write` + `actions: write`. `actions: write` is the unusual
+    one: the callee pushes with `GITHUB_TOKEN` and then approves the pushed
+    commit's held `pull_request` runs itself (see the `strict` note below), so a
+    caller copied from the list above without it fails at startup.
 
 ## `ci-cd.yml` structure
 
@@ -329,8 +334,12 @@ retries. It is **dormant now**, not a remaining rebase: GitHub reports
 `mergeable_state: "behind"` only while `strict` is on, so with it off a behind
 PR with green checks reports `clean` and is merged directly. If `strict` is
 ever turned back on, a behind PR is refreshed with `gh pr update-branch <pr>`
-(a push made with `GITHUB_TOKEN` triggers no workflows, so it must be a
-user/App token) and that sweep branch becomes live again.
+(a push made with `GITHUB_TOKEN` does create the PR's `pull_request` runs,
+but GitHub holds them at `action_required` until a maintainer approves, as
+the shared visual workflows' spike showed in 2026-11 (PR #2601). The visual
+workflows get past the hold by approving those runs themselves with
+`actions: write`, only for the commit they just pushed; a user/App token avoids
+it too) and that sweep branch becomes live again.
 
 **How this was set and checked.** Set on 2026-10-25 with a PATCH on the
 targeted sub-endpoint, which changes only that field:
