@@ -75,7 +75,7 @@
 // of every entry that still exists. It is how the baseline is born and
 // how it shrinks; the diff it produces is meant to be read.
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
@@ -119,24 +119,10 @@ const LAYERS = [
   { prefix: "src/db/", name: "db" },
 ];
 
-// The edges that invert the layering. Everything else is allowed:
-//
-//   routes  -> services  ->  db        the intended direction
-//   routes  ->  plugins               a route may use a plugin
-//   plugins ->  services              a plugin may use a service
-//   plugins ->  db                    a plugin may use the database
-//
-// and these four are NOT:
-//
-//   services -> routes                a service reaching up to a route
-//   services -> plugins               a service reaching up to a plugin
-//   plugins  -> routes                a plugin reaching down to a route
-//   db       -> services|routes|plugins   the database reaching back up
-//
-// `routes -> plugins` is deliberately ALLOWED: the plugins are the layer
-// above the routes, and a route that registers a plugin (or reads one)
-// is not inverting anything. The plugin side of that pair is what is
-// forbidden: a plugin must not reach DOWN into a route.
+// The edges that invert the layering. WHICH DIRECTIONS ARE ALLOWED, AND
+// WHICH ARE NOT, is spelled out once — in the LAYERS docblock above. This
+// list is the same rule in code; it does not repeat the table, so the two
+// cannot drift.
 const FORBIDDEN_EDGES = new Set([
   "services>routes",
   "services>plugins",
@@ -349,23 +335,36 @@ function findCycles(adjacency) {
  */
 function findPathAliases(root) {
   const found = [];
-  const tsconfigCandidates = [
-    "tsconfig.json",
-    "frontend/tsconfig.json",
-    "frontend/tsconfig.app.json",
-  ];
+  // EVERY tsconfig in the repository, not a hand-written list: a list
+  // would silently skip whichever one a `paths` map is added to next (this
+  // repo has six), and the whole point of the guard is that the blind spot
+  // cannot open unnoticed.
+  const tsconfigCandidates = [];
+  for (const dir of [root, path.join(root, "frontend")]) {
+    if (!existsSync(dir)) continue;
+    for (const entry of readdirSync(dir)) {
+      if (/^tsconfig.*\.json$/.test(entry)) {
+        tsconfigCandidates.push(
+          path.relative(root, path.join(dir, entry)).split(path.sep).join("/"),
+        );
+      }
+    }
+  }
   for (const rel of tsconfigCandidates) {
     const abs = path.join(root, rel);
-    if (!existsSync(abs)) continue;
-    try {
-      const parsed = JSON.parse(stripJsonComments(readFileSync(abs, "utf8")));
-      const paths = parsed?.compilerOptions?.paths;
-      if (paths && Object.keys(paths).length > 0) found.push(`${rel}: compilerOptions.paths`);
-    } catch {
-      // A tsconfig with comments (the repo's own does) — the JSON.parse above
-      // may fail; the alias scan below covers the common shapes, and a
-      // parse failure here is not evidence of an alias.
+    // TypeScript's own config reader: this repo's tsconfig files carry
+    // comments and trailing commas, and a regex stripper cannot be trusted
+    // with them. A parse FAILURE is reported rather than swallowed — a
+    // tsconfig this guard cannot read is a tsconfig it cannot vouch for.
+    const parsed = ts.readConfigFile(abs, ts.sys.readFile);
+    if (parsed.error) {
+      found.push(
+        `${rel}: could not be parsed (${ts.flattenDiagnosticMessageText(parsed.error.messageText, " ")})`,
+      );
+      continue;
     }
+    const paths = parsed.config?.compilerOptions?.paths;
+    if (paths && Object.keys(paths).length > 0) found.push(`${rel}: compilerOptions.paths`);
   }
   for (const rel of ["package.json", "frontend/package.json"]) {
     const abs = path.join(root, rel);
@@ -382,16 +381,6 @@ function findPathAliases(root) {
     found.push("frontend/vite.config.ts: resolve.alias");
   }
   return found;
-}
-
-/**
- * Strip `//` and block comments from a JSON-with-comments file.
- *
- * @param {string} text
- * @returns {string}
- */
-function stripJsonComments(text) {
-  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
 const options = parseArgs(process.argv.slice(2));
@@ -512,7 +501,7 @@ if (options.update) {
   const notesByEdge = new Map(baselineCycleNotes);
   const updated = {
     $comment:
-      "The import-boundary baseline — issue #2413 / #2414. Every import cycle and every layering inversion the tree has today is listed here with a note saying why it is still allowed. The guard (scripts/check-import-boundaries.mjs) fails on a violation that is NOT listed, and on a listed entry that no longer describes a real violation: the baseline only turns down. Regenerate with `node scripts/check-import-boundaries.mjs --update` and read the diff.",
+      "The import-boundary baseline — issue #2413 / #2414. Every import cycle and every layering inversion the tree has today is listed here with a note saying why it is still allowed. The guard (scripts/check-import-boundaries.mjs) fails on a violation that is NOT listed, and on a listed entry that no longer describes a real violation: the baseline only turns down. Regenerate with `node scripts/check-import-boundaries.mjs --update` and read the diff — and note that `--update` writes a NEW entry with an empty note, which the check then rejects: `--update` can record that a violation exists, but only a human can say why it is allowed, so fill the note in before the check will pass.",
     cycles: [...cycleFiles.entries()]
       .map(([key, filesInCycle]) => ({
         note: notesByEdge.get(key.split("\n")[0]) ?? "",
@@ -531,6 +520,10 @@ if (options.update) {
   writeFileSync(baselinePath, `${JSON.stringify(updated, null, 2)}\n`);
   console.log(
     `Updated ${BASELINE_PATH}: ${updated.cycles.length} cycle group(s), ${updated.inversions.length} inversion(s).`,
+  );
+  console.log(
+    "A NEW entry has no note yet, and the check rejects a note-less entry: fill in\n" +
+      "why each new cycle or inversion is allowed before the check will pass.",
   );
   process.exit(0);
 }

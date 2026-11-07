@@ -299,8 +299,12 @@ describe("check-import-boundaries.mjs", () => {
     // A tsconfig `paths` entry names a file in this repository under a BARE
     // specifier, which the checker does not resolve — so it fails rather
     // than taking neither the cycle nor the inversion rule for it.
+    //
+    // In `tsconfig.test.json`, NOT in `tsconfig.json`: the guard has to read
+    // EVERY tsconfig, because a hand-written list silently skips whichever
+    // one an alias is added to next.
     write(
-      "tsconfig.json",
+      "tsconfig.test.json",
       JSON.stringify({ compilerOptions: { paths: { "@app/*": ["./src/*"] } } }, null, 2),
     );
 
@@ -308,5 +312,34 @@ describe("check-import-boundaries.mjs", () => {
 
     expect(result.code).toBe(1);
     expect(result.stderr).toContain("path aliases");
+    expect(result.stderr).toContain("tsconfig.test.json");
+  });
+
+  it("fails on a path alias in a tsconfig with comments and trailing commas", async () => {
+    write("src/services/a.ts", "export const a = 1;\n");
+    // The repo's own tsconfig files carry comments and trailing commas, so
+    // the alias scan has to read them the way TypeScript does — a JSON.parse
+    // would fail here, and a failed parse that is swallowed is exactly how
+    // the guard fails open.
+    write(
+      "tsconfig.json",
+      [
+        "{",
+        "  // the paths map below names a file in this repository",
+        '  "compilerOptions": {',
+        '    "paths": {',
+        '      "@app/*": ["./src/*"],',
+        "    },",
+        "  },",
+        "}",
+        "",
+      ].join("\n"),
+    );
+
+    const result = await run();
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("path aliases");
+    expect(result.stderr).toContain("tsconfig.json");
   });
 });
