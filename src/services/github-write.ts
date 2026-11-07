@@ -1,134 +1,45 @@
-// Shared GitHub REST write client (Phase 6 Task Master, 6.4/#217) — the
-// first write capability beyond registerHook/unregisterHook
-// (github-webhook.ts). One `githubRequest()` helper (owner/repo/method/
-// path-suffix/optional JSON body), modeled on github-webhook.ts's
-// registerHook shape: validateGitHubRepoRef() first, the standard header
-// block, AbortSignal.timeout, error-body-into-message on failure.
-// Deliberately THROWS on failure — unlike unregisterHook's
-// `.catch(() => {})`, a dropped label or comment here would silently
-// desync the local task row from the issue-of-record, which
-// task-github-sync.ts's callers need to know about (even if they choose to
-// treat it as best-effort themselves).
+// The GitHub write client (Phase 6 Task Master, 6.4/#217) — the first write
+// capability beyond registerHook/unregisterHook (github-webhook.ts).
 //
-// validateGitHubRepoRef() runs INSIDE githubRequest itself, in the same
-// function that builds the URL and calls fetch — not just in each public
-// wrapper before calling in here. Every wrapper below already validated
-// once too, so this looks redundant, but it isn't: CodeQL's
-// js/request-forgery dataflow analysis doesn't reliably connect a
-// sanitizer call to a tainted value across a function-call boundary when
-// the fetch itself happens one level deeper (a real finding on this file's
-// first version, not a false-positive dismissal) — github.ts's own
-// functions all validate-and-fetch in the same function body for exactly
-// this reason, and this file now matches that precedent.
+// Everything here is the write API's own surface: labels, comments,
+// assignees, issues, pull requests, reviews, and the check-run markers the
+// review relay writes.
+//
+// The request path itself — `githubRequest()`, its rate-limit short-circuit,
+// and the scope error it raises — lives in github-request.ts (issue #2405),
+// shared with the release-please client. The release-please feature moved
+// out to github-release.ts for the same reason, and the four hand-rolled
+// pagination loops became one helper in github-pagination.ts. The symbols
+// that moved are re-exported from here, so every importer that reaches for
+// them through `github-write.js` — and this module's own test file — keeps
+// working unchanged.
 
-import { GitHubApiError, validateGitHubRepoRef, getDefaultBranch, getPRsStatus } from "./github.js";
-import {
-  githubApiFetch,
-  githubApiBase,
-  classifyRateLimit,
-  recordGitHubRateLimit,
-  isGitHubRateLimited,
-  githubRateLimitRemainingMs,
-  GitHubRateLimitError,
-} from "./github-fetch.js";
-import type { ReleaseDetectionResult, ReleasePullRequestStatus } from "../shared/types.js";
+import { GitHubApiError, validateGitHubRepoRef } from "./github.js";
+import { githubApiFetch, classifyRateLimit } from "./github-fetch.js";
+import { GitHubWriteScopeError, githubRequest } from "./github-request.js";
+import { fetchAllPages } from "./github-pagination.js";
 
-const REQUEST_TIMEOUT_MS = 5_000;
-const USER_AGENT = "mullion-session-manager";
-
-/**
- * A write rejected with 403/404 almost always means the connected token
- * lacks the required scope, not a transient API error — device-flow tokens
- * carry OAuth `repo` (read+write) and just work, while every fine-grained
- * PAT provisioned per today's docs is read-only and 403s on the first
- * label/comment/close write. Distinct from GitHubApiError so callers (and
- * their logs) can tell "GitHub is down" from "this token can't do this,"
- * per docs/github-integration.md's scope table. Only raised for a
- * write-method (POST/PATCH/DELETE) request — see githubRequest's own
- * comment on why a 404 on a GET means something else entirely.
- */
-export class GitHubWriteScopeError extends GitHubApiError {
-  constructor(message: string, statusCode: number) {
-    super(message, statusCode);
-    this.name = "GitHubWriteScopeError";
-  }
-}
-
-export async function githubRequest<T>(
-  token: string,
-  owner: string,
-  repo: string,
-  method: string,
-  pathSuffix: string,
-  body?: unknown,
-): Promise<T> {
-  validateGitHubRepoRef(owner, repo);
-  const path = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}${pathSuffix}`;
-
-  // #759 — same short-circuit as githubApiFetch's own (github-fetch.ts);
-  // duplicated here, not reused, because this function deliberately bypasses
-  // githubApiFetch entirely (see the file-header comment on why).
-  if (isGitHubRateLimited()) {
-    throw new GitHubRateLimitError(
-      "GitHub rate limit is in effect — not making this request",
-      429,
-      githubRateLimitRemainingMs(),
-    );
-  }
-
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
-    Accept: "application/vnd.github+json",
-    "User-Agent": USER_AGENT,
-  };
-  if (body !== undefined) headers["Content-Type"] = "application/json";
-
-  let res: Response;
-  try {
-    res = await fetch(`${githubApiBase()}${path}`, {
-      method,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    });
-  } catch (err) {
-    throw new GitHubApiError(
-      `Could not reach GitHub: ${err instanceof Error ? err.message : String(err)}`,
-      0,
-    );
-  }
-
-  if (!res.ok) {
-    const responseBody = await res.text().catch(() => "");
-    // #759 — classify BEFORE the write-scope branch below: a rate-limited
-    // 403 must never be reported as "the token lacks write access" (the
-    // exact misdiagnosis this feature exists to fix).
-    const rateLimit = classifyRateLimit(res);
-    if (rateLimit) {
-      recordGitHubRateLimit(Date.now() + rateLimit.retryAfterMs);
-      throw rateLimit;
-    }
-    // A 404 on a write (label/comment/assignee/close/PR-create endpoints
-    // all live under an issue/repo path a write implies exists) almost
-    // always means "no write access" rather than "not found" — GitHub
-    // returns 404, not 403, for a resource a token can't see at all. A GET
-    // is different: a 404 there is a completely ordinary "this issue
-    // doesn't exist" (or the repo doesn't), not a scope problem, so it's
-    // left as a plain GitHubApiError instead.
-    if (res.status === 403 || (res.status === 404 && method !== "GET")) {
-      throw new GitHubWriteScopeError(
-        `GitHub rejected this write (HTTP ${res.status}) for ${method} ${path} — the connected token likely lacks write access. See docs/github-integration.md for the required scopes. ${responseBody}`.trim(),
-        res.status,
-      );
-    }
-    throw new GitHubApiError(
-      `GitHub API error (HTTP ${res.status}) for ${method} ${path}: ${responseBody}`,
-      res.status,
-    );
-  }
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
-}
+// Re-exported rather than re-implemented: these now live in modules that
+// sit BESIDE this one. github-release.ts needs the transport too, so
+// importing it back from here would make the two modules import each
+// other; re-exporting keeps `github-write.js` the single import site its
+// existing callers already use.
+export { GitHubWriteScopeError, githubRequest };
+export { getPullRequestByNumber } from "./github-request.js";
+export {
+  RELEASE_PLEASE_BRANCH_PREFIX,
+  listWorkflows,
+  findReleasePleaseWorkflow,
+  dispatchWorkflow,
+  findReleasePullRequest,
+  detectReleaseWorkflow,
+  invalidateReleaseWorkflowCache,
+  clearReleaseWorkflowCacheForTests,
+  getCachedReleasePullRequestStatus,
+  invalidateReleaseCache,
+  clearReleasePrCacheForTests,
+} from "./github-release.js";
+export type { GitHubWorkflow, ReleasePullRequestSummary } from "./github-release.js";
 
 export async function addLabels(
   token: string,
@@ -225,41 +136,41 @@ export async function listIssueComments(
   issueNumber: number,
   opts: { since?: string } = {},
 ): Promise<IssueCommentSummary[]> {
-  const out: IssueCommentSummary[] = [];
   const since = opts.since ? `&since=${encodeURIComponent(opts.since)}` : "";
-  for (let page = 1; page <= ISSUE_COMMENTS_MAX_PAGES; page += 1) {
-    const comments = await githubRequest<
-      Array<{
-        user: { login: string; type: string } | null;
-        body?: string | null;
-        created_at: string | null;
-        html_url?: string | null;
-      }>
-    >(
-      token,
-      owner,
-      repo,
-      "GET",
-      `/issues/${issueNumber}/comments?per_page=${ISSUE_COMMENTS_PAGE_SIZE}${since}&page=${page}`,
-    );
-    for (const c of comments) {
-      const body = typeof c.body === "string" ? c.body : "";
-      // truncateText cuts by code point and marks the cut with an ellipsis —
-      // the same helper the review body uses (a plain slice would split a
-      // surrogate pair).
-      const truncated = [...body].length > MAX_ISSUE_COMMENT_CHARS;
-      out.push({
-        author: c.user?.login ?? "ghost",
-        authorIsBot: c.user?.type === "Bot",
-        body: truncated ? truncateText(body, MAX_ISSUE_COMMENT_CHARS) : body,
-        bodyTruncated: truncated,
-        createdAt: c.created_at,
-        ...(typeof c.html_url === "string" ? { htmlUrl: c.html_url } : {}),
-      });
-    }
-    if (comments.length < ISSUE_COMMENTS_PAGE_SIZE) break;
-  }
-  return out;
+  // Bare-array response: the endpoint answers with the comments themselves.
+  const comments = await fetchAllPages(
+    (page) =>
+      githubRequest<
+        Array<{
+          user: { login: string; type: string } | null;
+          body?: string | null;
+          created_at: string | null;
+          html_url?: string | null;
+        }>
+      >(
+        token,
+        owner,
+        repo,
+        "GET",
+        `/issues/${issueNumber}/comments?per_page=${ISSUE_COMMENTS_PAGE_SIZE}${since}&page=${page}`,
+      ),
+    { maxPages: ISSUE_COMMENTS_MAX_PAGES, pageSize: ISSUE_COMMENTS_PAGE_SIZE },
+  );
+  return comments.map((c) => {
+    const body = typeof c.body === "string" ? c.body : "";
+    // truncateText cuts by code point and marks the cut with an ellipsis —
+    // the same helper the review body uses (a plain slice would split a
+    // surrogate pair).
+    const truncated = [...body].length > MAX_ISSUE_COMMENT_CHARS;
+    return {
+      author: c.user?.login ?? "ghost",
+      authorIsBot: c.user?.type === "Bot",
+      body: truncated ? truncateText(body, MAX_ISSUE_COMMENT_CHARS) : body,
+      bodyTruncated: truncated,
+      createdAt: c.created_at,
+      ...(typeof c.html_url === "string" ? { htmlUrl: c.html_url } : {}),
+    };
+  });
 }
 
 export async function setAssignees(
@@ -501,90 +412,6 @@ export async function createPullRequest(
     },
   );
   return { number: result.number, htmlUrl: result.html_url, nodeId: result.node_id };
-}
-
-/**
- * Looks a PR up by number — used to resolve its GraphQL node id (REST
- * doesn't expose a `draft` -> ready-for-review transition; see
- * markPullRequestReadyForReview below) when all a caller has on hand is the
- * `pr_number` recorded on a task row, not the id from the create response
- * that minted it (approve can run in a fresh process from whichever
- * `-> reviewing` transition opened the draft).
- *
- * `headSha` was already on the wire and previously discarded — added for
- * `createPullRequestReview` below, which needs the exact commit its
- * `comments[]` anchors bind to.
- *
- * `mergeable`/`mergeableState`/`state`/`merged`/`title`/`headRef` — added for
- * the merge-on-approve sweep (`processMergeRequests`, task-reconciler.ts).
- * `mergeable` is `boolean | null`: GitHub computes it asynchronously after a
- * push, and `null` means "still computing, ask again" — never treat it as
- * false. `mergeableState` (GitHub's `mergeable_state`) is the finer-grained
- * signal the sweep actually branches on (`clean`/`behind`/`blocked`/
- * `unstable`/`dirty`/`unknown`); it's stable in practice but officially
- * undocumented by GitHub's REST API. Read via REST rather than GraphQL's
- * `mergeStateStatus` purely to avoid adding a second query shape to this
- * file for one more field — REST already returns it on the same response
- * every other field here comes from.
- *
- * `baseRef` — added for #755's red-CI-return gate, which needs the PR's
- * actual base branch to look up branch protection against (never assume
- * `main`/`default_branch`: a task's PR can target any branch a human chose
- * when opening it, e.g. when stacking on another feature branch).
- */
-export async function getPullRequestByNumber(
-  token: string,
-  owner: string,
-  repo: string,
-  number: number,
-): Promise<{
-  number: number;
-  htmlUrl: string;
-  nodeId: string;
-  draft: boolean;
-  headSha: string;
-  headRef: string;
-  baseRef: string;
-  title: string;
-  state: "open" | "closed";
-  merged: boolean;
-  // #1015 (archive), review fix — GitHub's own `merged_at` (ISO 8601, null
-  // until merged), a deliberate addition to this whitelisted shape so the
-  // archive-merged backfill route can record the PR's actual merge time
-  // instead of "whenever this endpoint happened to run."
-  mergedAt: string | null;
-  mergeable: boolean | null;
-  mergeableState: string;
-}> {
-  const result = await githubRequest<{
-    number: number;
-    html_url: string;
-    node_id: string;
-    draft: boolean;
-    head: { sha: string; ref: string };
-    base: { ref: string };
-    title: string;
-    state: "open" | "closed";
-    merged: boolean;
-    merged_at: string | null;
-    mergeable: boolean | null;
-    mergeable_state: string;
-  }>(token, owner, repo, "GET", `/pulls/${number}`);
-  return {
-    number: result.number,
-    htmlUrl: result.html_url,
-    nodeId: result.node_id,
-    draft: result.draft,
-    headSha: result.head.sha,
-    headRef: result.head.ref,
-    baseRef: result.base.ref,
-    title: result.title,
-    state: result.state,
-    merged: result.merged,
-    mergedAt: result.merged_at,
-    mergeable: result.mergeable,
-    mergeableState: result.mergeable_state,
-  };
 }
 
 /**
@@ -905,41 +732,44 @@ export async function listCommitCheckRuns(
   repo: string,
   sha: string,
 ): Promise<CommitCheckRunSummary[]> {
-  const out: CommitCheckRunSummary[] = [];
-  for (let page = 1; page <= CHECK_RUNS_MAX_PAGES; page++) {
-    const data = await githubRequest<{
-      check_runs?: Array<{
-        id: number;
-        name: string;
-        external_id?: string | null;
-        status?: string;
-        conclusion?: string | null;
-        started_at?: string | null;
-        completed_at?: string | null;
-        output?: { summary?: string | null } | null;
-      }>;
-    }>(
-      token,
-      owner,
-      repo,
-      "GET",
-      `/commits/${encodeURIComponent(sha)}/check-runs?per_page=${CHECK_RUNS_PAGE_SIZE}&page=${page}`,
-    );
-    const runs = data.check_runs ?? [];
-    for (const r of runs) {
-      out.push({
-        id: r.id,
-        name: r.name,
-        externalId: r.external_id ?? "",
-        status: r.status ?? "",
-        conclusion: r.conclusion ?? null,
-        summary: r.output?.summary ?? "",
-        startedAt: r.started_at ?? "",
-        completedAt: r.completed_at ?? "",
-      });
-    }
-    if (runs.length < CHECK_RUNS_PAGE_SIZE) break;
-  }
+  // Envelope response: this endpoint answers `{ check_runs: [...] }`, so the
+  // helper unwraps the inner array rather than measuring the response.
+  const runs = await fetchAllPages(
+    (page) =>
+      githubRequest<{
+        check_runs?: Array<{
+          id: number;
+          name: string;
+          external_id?: string | null;
+          status?: string;
+          conclusion?: string | null;
+          started_at?: string | null;
+          completed_at?: string | null;
+          output?: { summary?: string | null } | null;
+        }>;
+      }>(
+        token,
+        owner,
+        repo,
+        "GET",
+        `/commits/${encodeURIComponent(sha)}/check-runs?per_page=${CHECK_RUNS_PAGE_SIZE}&page=${page}`,
+      ),
+    {
+      maxPages: CHECK_RUNS_MAX_PAGES,
+      pageSize: CHECK_RUNS_PAGE_SIZE,
+      envelopeKey: "check_runs",
+    },
+  );
+  const out: CommitCheckRunSummary[] = runs.map((r) => ({
+    id: r.id,
+    name: r.name,
+    externalId: r.external_id ?? "",
+    status: r.status ?? "",
+    conclusion: r.conclusion ?? null,
+    summary: r.output?.summary ?? "",
+    startedAt: r.started_at ?? "",
+    completedAt: r.completed_at ?? "",
+  }));
   // Newest first, by id — the endpoint's own order is not the contract.
   return out.sort((a, b) => b.id - a.id);
 }
@@ -1088,18 +918,22 @@ export async function listReviewMarkers(
   onError?: (detail: string) => void,
 ): Promise<ReviewMarker[]> {
   // The PR's commits, oldest first; only the newest window is searched.
-  const commits: string[] = [];
-  for (let page = 1; page <= PR_COMMITS_MAX_PAGES; page++) {
-    const data = await githubRequest<Array<{ sha: string }>>(
-      prToken,
-      owner,
-      repo,
-      "GET",
-      `/pulls/${prNumber}/commits?per_page=${PR_COMMITS_PAGE_SIZE}&page=${page}`,
-    );
-    commits.push(...data.map((c) => c.sha));
-    if (data.length < PR_COMMITS_PAGE_SIZE) break;
-  }
+  // Bare-array response, and this endpoint's own cap is THREE pages — GitHub
+  // lists at most 250 commits of a PR, so three 100-item pages is the whole
+  // list.
+  const commits = (
+    await fetchAllPages(
+      (page) =>
+        githubRequest<Array<{ sha: string }>>(
+          prToken,
+          owner,
+          repo,
+          "GET",
+          `/pulls/${prNumber}/commits?per_page=${PR_COMMITS_PAGE_SIZE}&page=${page}`,
+        ),
+      { maxPages: PR_COMMITS_MAX_PAGES, pageSize: PR_COMMITS_PAGE_SIZE },
+    )
+  ).map((c) => c.sha);
   const forcePushed = await listForcePushedHeads(prToken, owner, repo, prNumber);
   if ("reason" in forcePushed) {
     onError?.(
@@ -1234,46 +1068,46 @@ export async function listPullRequestReviews(
   repo: string,
   number: number,
 ): Promise<PullRequestReviewSummary[]> {
-  const out: PullRequestReviewSummary[] = [];
-  for (let page = 1; page <= REVIEWS_MAX_PAGES; page += 1) {
-    const reviews = await githubRequest<
-      Array<{
-        user: { login: string; type: string } | null;
-        state: string;
-        commit_id: string;
-        submitted_at: string | null;
-        body?: string | null;
-        html_url?: string | null;
-      }>
-    >(
-      token,
-      owner,
-      repo,
-      "GET",
-      `/pulls/${number}/reviews?per_page=${REVIEWS_PAGE_SIZE}&page=${page}`,
-    );
-    for (const r of reviews) {
-      const body = typeof r.body === "string" ? r.body : "";
-      // The cut is by code point, so the flag has to be too — a body of
-      // 4000 emoji is 8000 UTF-16 units but no code point is dropped.
-      const truncated = [...body].length > MAX_REVIEW_BODY_CHARS;
-      out.push({
-        author: r.user?.login ?? "ghost",
-        authorIsBot: r.user?.type === "Bot",
-        state: r.state,
-        commitId: r.commit_id,
-        submittedAt: r.submitted_at,
-        // An empty body is left undefined rather than "" — "this review said
-        // nothing" and "this review's text was not fetched" are the same
-        // thing to every caller, and neither is worth a field.
-        ...(body ? { body: truncated ? truncateText(body, MAX_REVIEW_BODY_CHARS) : body } : {}),
-        ...(truncated ? { bodyTruncated: true } : {}),
-        ...(typeof r.html_url === "string" ? { htmlUrl: r.html_url } : {}),
-      });
-    }
-    if (reviews.length < REVIEWS_PAGE_SIZE) break;
-  }
-  return out;
+  // Bare-array response: the endpoint answers with the reviews themselves.
+  const reviews = await fetchAllPages(
+    (page) =>
+      githubRequest<
+        Array<{
+          user: { login: string; type: string } | null;
+          state: string;
+          commit_id: string;
+          submitted_at: string | null;
+          body?: string | null;
+          html_url?: string | null;
+        }>
+      >(
+        token,
+        owner,
+        repo,
+        "GET",
+        `/pulls/${number}/reviews?per_page=${REVIEWS_PAGE_SIZE}&page=${page}`,
+      ),
+    { maxPages: REVIEWS_MAX_PAGES, pageSize: REVIEWS_PAGE_SIZE },
+  );
+  return reviews.map((r) => {
+    const body = typeof r.body === "string" ? r.body : "";
+    // The cut is by code point, so the flag has to be too — a body of
+    // 4000 emoji is 8000 UTF-16 units but no code point is dropped.
+    const truncated = [...body].length > MAX_REVIEW_BODY_CHARS;
+    return {
+      author: r.user?.login ?? "ghost",
+      authorIsBot: r.user?.type === "Bot",
+      state: r.state,
+      commitId: r.commit_id,
+      submittedAt: r.submitted_at,
+      // An empty body is left undefined rather than "" — "this review said
+      // nothing" and "this review's text was not fetched" are the same
+      // thing to every caller, and neither is worth a field.
+      ...(body ? { body: truncated ? truncateText(body, MAX_REVIEW_BODY_CHARS) : body } : {}),
+      ...(truncated ? { bodyTruncated: true } : {}),
+      ...(typeof r.html_url === "string" ? { htmlUrl: r.html_url } : {}),
+    };
+  });
 }
 
 /**
@@ -1813,396 +1647,4 @@ export async function listClosedPullRequests(
     mergedAt: pr.merged_at,
     updatedAt: pr.updated_at,
   }));
-}
-
-// #744 — release-please detection/trigger/merge. `release-please--branches--`
-// is release-please-action's own fixed branch-name prefix (verified against
-// PR #803/#801/#807 in this repo — head `release-please--branches--main--
-// components--mullion-session-manager`); a release PR is identified by that
-// prefix, never by title text, which a repo/human could edit.
-export const RELEASE_PLEASE_BRANCH_PREFIX = "release-please--branches--";
-
-/**
- * Candidate workflow-file basenames release-please-action commonly ships
- * under — mirrors `COMPOSE_DEFAULT_FILENAMES`'s candidate-list-of-known-names
- * shape (docker-service-detect.ts), the closest existing precedent for "does
- * this repo have X configured" in this codebase. Unlike that probe, this one
- * can't be a local `existsSync` (a project may be remote-hosted, and this
- * repo has no GitHub contents-API client at all — see the #744 plan) — GitHub
- * Actions is the only source of truth for "is there a dispatchable workflow"
- * anyway, since that's also where the workflow id dispatch needs comes from.
- *
- * Deliberately narrow — `release-please.yml`/`.yaml` only, NOT the more
- * generic `release.yml`/`.yaml` a first draft of this list included.
- * `release.yml` is one of the most common workflow filenames for something
- * that has nothing to do with release-please (goreleaser, semantic-release,
- * an `npm publish` job) — matching it would make the Run button dispatch an
- * arbitrary, unrelated, outward-facing workflow under a label that says
- * "release-please." A false negative here (a release-please repo that named
- * its file something else) just hides the section; a false positive
- * publishes something. The asymmetry is why this stays narrow rather than
- * permissive.
- */
-const RELEASE_WORKFLOW_FILENAMES = ["release-please.yml", "release-please.yaml"];
-const RELEASE_PLEASE_ACTION_REFERENCE = "release-please-action";
-const RELEASE_PLEASE_REUSABLE_REFERENCE = "s3ntin3l8/.github/.github/workflows/release-please.yml@";
-
-export interface GitHubWorkflow {
-  id: number;
-  name: string;
-  path: string;
-}
-
-/**
- * Lists a repo's Actions workflows — `GET /actions/workflows`. Used to
- * detect a release-please workflow (matching `path`'s basename against
- * RELEASE_WORKFLOW_FILENAMES) and to resolve the id `dispatchWorkflow` below
- * needs. Read-shaped (a GET, no side effect) but lives in this write-client
- * file rather than github.ts for cohesion with `dispatchWorkflow` — the two
- * are always used together and the "does this repo have workflow_dispatch
- * wired up" answer for one is meaningless without the other.
- */
-export async function listWorkflows(
-  token: string,
-  owner: string,
-  repo: string,
-): Promise<GitHubWorkflow[]> {
-  const result = await githubRequest<{
-    workflows: Array<{ id: number; name: string; path: string }>;
-  }>(token, owner, repo, "GET", "/actions/workflows?per_page=100");
-  return result.workflows.map((w) => ({ id: w.id, name: w.name, path: w.path }));
-}
-
-/**
- * Finds the release-please workflow among a repo's Actions workflows, by
- * matching `path`'s basename (e.g. `.github/workflows/release-please.yml`)
- * against RELEASE_WORKFLOW_FILENAMES. Exported separately from
- * `listWorkflows` so callers needing only "is this a release-please repo"
- * don't have to duplicate the matching logic.
- */
-export function findReleasePleaseWorkflow(workflows: GitHubWorkflow[]): GitHubWorkflow | null {
-  return (
-    workflows.find((w) => {
-      const basename = w.path.split("/").pop();
-      return basename !== undefined && RELEASE_WORKFLOW_FILENAMES.includes(basename);
-    }) ?? null
-  );
-}
-
-async function fetchWorkflowBody(
-  token: string,
-  owner: string,
-  repo: string,
-  workflow: GitHubWorkflow,
-): Promise<string | null> {
-  try {
-    const result = await githubRequest<{ content?: string; encoding?: string }>(
-      token,
-      owner,
-      repo,
-      "GET",
-      `/contents/${workflow.path.split("/").map(encodeURIComponent).join("/")}`,
-    );
-    if (result.encoding !== "base64" || typeof result.content !== "string") return null;
-    return Buffer.from(result.content, "base64").toString("utf8");
-  } catch (err) {
-    if (err instanceof GitHubRateLimitError) throw err;
-    return null;
-  }
-}
-
-function isReleasePleaseBody(body: string): boolean {
-  return (
-    body.includes(RELEASE_PLEASE_ACTION_REFERENCE) ||
-    body.includes(RELEASE_PLEASE_REUSABLE_REFERENCE)
-  );
-}
-
-/**
- * Whether a workflow file declares a `workflow_dispatch` trigger — the one
- * thing GitHub's dispatch API needs, and it 422s without. Comments are
- * stripped first so a `# add workflow_dispatch: here` note doesn't count.
- */
-function hasDispatchTrigger(body: string): boolean {
-  return /\bworkflow_dispatch\b/.test(body.replace(/#.*$/gm, ""));
-}
-
-async function findReleasePleaseWorkflowByContent(
-  token: string,
-  owner: string,
-  repo: string,
-  workflows: GitHubWorkflow[],
-): Promise<{ workflow: GitHubWorkflow; body: string } | null> {
-  for (const workflow of workflows) {
-    const basename = workflow.path.split("/").pop();
-    if (basename === undefined) continue;
-    if (RELEASE_WORKFLOW_FILENAMES.includes(basename)) continue;
-    const body = await fetchWorkflowBody(token, owner, repo, workflow);
-    if (body !== null && isReleasePleaseBody(body)) return { workflow, body };
-  }
-  return null;
-}
-
-interface ReleaseWorkflowCacheEntry {
-  result: ReleaseDetectionResult;
-  expiresAt: number;
-}
-const releaseWorkflowCache = new Map<string, ReleaseWorkflowCacheEntry>();
-// The release workflow's id never changes, but the frontend keys its GET
-// .../release call on `prsRefreshTrigger`, which bumps on every /ws/github
-// frame (pr, issue, ci, release, push — store/slices/github.ts) — without a
-// cache, an active repo would spend a live `listWorkflows` call per frame
-// against the process-wide rate-limit budget `github-fetch.ts` shares with
-// the PR poller. Same TTL/"only successes cached" posture as
-// the other hourly caches in this module.
-const RELEASE_WORKFLOW_CACHE_TTL_MS = 60 * 60_000;
-// A workflow that isn't (known to be) dispatchable is re-read sooner, so a
-// repo that just added `workflow_dispatch:` gets its Run button back without
-// waiting out the hour.
-const RELEASE_WORKFLOW_UNDISPATCHABLE_TTL_MS = 5 * 60_000;
-
-/**
- * Detects whether a repo has a release-please workflow, distinguishing "not
- * configured" (the token could list workflows; none matched) from
- * "no-actions-scope" (the list call itself was rejected — a PAT without
- * `Actions: read` is an explicitly supported configuration, not an error;
- * see docs/github-integration.md). Only a `"found"`/`"not-configured"`
- * result is cached — a scope failure isn't, in case the connected token is
- * fixed later.
- */
-export async function detectReleaseWorkflow(
-  token: string,
-  owner: string,
-  repo: string,
-): Promise<ReleaseDetectionResult> {
-  const key = `${owner}/${repo}`;
-  const cached = releaseWorkflowCache.get(key);
-  if (cached && Date.now() < cached.expiresAt) return cached.result;
-
-  let result: ReleaseDetectionResult;
-  try {
-    const workflows = await listWorkflows(token, owner, repo);
-    let workflow = findReleasePleaseWorkflow(workflows);
-    let body: string | null = null;
-    if (workflow) {
-      body = await fetchWorkflowBody(token, owner, repo, workflow);
-    } else {
-      const hit = await findReleasePleaseWorkflowByContent(token, owner, repo, workflows);
-      workflow = hit?.workflow ?? null;
-      body = hit?.body ?? null;
-    }
-    result = workflow
-      ? {
-          kind: "found",
-          workflow: {
-            ...workflow,
-            // null = the file couldn't be read, so Run stays enabled and a
-            // real dispatch decides.
-            dispatchable: body === null ? null : hasDispatchTrigger(body),
-          },
-        }
-      : { kind: "not-configured" };
-  } catch (err) {
-    // Narrowed to GitHubWriteScopeError specifically, NOT the base
-    // GitHubApiError — GitHubRateLimitError also extends GitHubApiError
-    // (github-fetch.ts), and #759's whole point is that a rate-limited 403
-    // must never be reported as "the token lacks scope" (githubRequest's
-    // own doc comment). A rate limit — or a network failure, a 5xx, any
-    // other non-scope error — rethrows here and is the GET route's problem
-    // to surface (it already catches GitHubApiError), not silently
-    // relabeled as "no-actions-scope" and hidden.
-    if (!(err instanceof GitHubWriteScopeError)) throw err;
-    return { kind: "no-actions-scope" };
-  }
-
-  const ttl =
-    result.kind === "found" && result.workflow.dispatchable !== true
-      ? RELEASE_WORKFLOW_UNDISPATCHABLE_TTL_MS
-      : RELEASE_WORKFLOW_CACHE_TTL_MS;
-  releaseWorkflowCache.set(key, { result, expiresAt: Date.now() + ttl });
-  return result;
-}
-
-/**
- * Drops the cached detection for `owner/repo` — called when a dispatch 422s,
- * so the next read re-checks the workflow file instead of trusting a cached
- * "dispatchable" answer.
- */
-export function invalidateReleaseWorkflowCache(owner: string, repo: string): void {
-  releaseWorkflowCache.delete(`${owner}/${repo}`);
-}
-
-// Test-only: clears the module-scope cache above so one test's cached
-// detection result can't leak into another's assertions.
-export function clearReleaseWorkflowCacheForTests(): void {
-  releaseWorkflowCache.clear();
-}
-
-/**
- * Dispatches a workflow run — `POST /actions/workflows/:id/dispatches`,
- * always 204 with no body (GitHub gives no run id back; a caller wanting to
- * link to the resulting run has to poll
- * `GET /actions/workflows/:id/runs?event=workflow_dispatch` and match on
- * `created_at` after this call, not implemented here).
- *
- * `ref` must be a branch/tag the workflow file already exists on — dispatch
- * fails with 404 for an unknown ref (github.ts's `default_branch`, from
- * `GET /repos/{o}/{r}`, is what release-please callers should pass; never
- * assume `main`, same reasoning as `getPullRequestByNumber`'s `baseRef`).
- *
- * A workflow whose file has no `workflow_dispatch:` trigger 422s with
- * "Workflow does not have 'workflow_dispatch' trigger" — surfaced as a plain
- * `GitHubApiError` (not `GitHubWriteScopeError`; this isn't a permission
- * problem), so callers can map it to "this repo's release workflow isn't
- * wired up for manual runs" rather than a generic failure or a scope
- * misdiagnosis. Needs a token minted with `actions: write`
- * (github-app.ts's DISPATCH_PERMISSIONS) — neither WRITE_PERMISSIONS nor
- * READ_PERMISSIONS grants it.
- */
-export async function dispatchWorkflow(
-  token: string,
-  owner: string,
-  repo: string,
-  workflowId: number,
-  ref: string,
-): Promise<void> {
-  await githubRequest(token, owner, repo, "POST", `/actions/workflows/${workflowId}/dispatches`, {
-    ref,
-  });
-}
-
-export interface ReleasePullRequestSummary {
-  number: number;
-  htmlUrl: string;
-  headRef: string;
-  title: string;
-}
-
-/**
- * Finds the release-please PR for `base` (the repo's default branch),
- * identified by its head branch's fixed `release-please--branches--<base>`
- * prefix — release-please-action's own naming, not something a title-text
- * match could rely on (a human/bot can retitle a PR; release-please doesn't
- * rename its own branch). `sort=created&direction=desc` mirrors
- * `findPullRequestByHead`'s own reasoning above: release-please closes/
- * reopens rather than reusing a stale closed PR, so taking the newest by
- * creation date is always the current one for this repo's release cycle,
- * regardless of `state`.
- *
- * `state` defaults to `"open"` — every caller wanting "the release PR a
- * human can act on right now" (the GitHub panel's own Release section,
- * `getCachedReleasePullRequestStatus` below) wants exactly that, and
- * scoping to `open` there is strictly more correct: a closed one from a
- * skipped/out-of-band cycle isn't something to show as pending.
- * `resolveReleaseMerge` (release-merge.ts) passes `"all"` explicitly for
- * its own fallback check — see that file's own doc comment on why.
- */
-export async function findReleasePullRequest(
-  token: string,
-  owner: string,
-  repo: string,
-  base: string,
-  state: "open" | "all" = "open",
-): Promise<ReleasePullRequestSummary | null> {
-  const results = await githubRequest<
-    Array<{ number: number; html_url: string; head: { ref: string }; title: string }>
-  >(
-    token,
-    owner,
-    repo,
-    "GET",
-    `/pulls?state=${state}&base=${encodeURIComponent(base)}&sort=created&direction=desc`,
-  );
-  const match = results.find((pr) => pr.head.ref.startsWith(RELEASE_PLEASE_BRANCH_PREFIX));
-  return match
-    ? {
-        number: match.number,
-        htmlUrl: match.html_url,
-        headRef: match.head.ref,
-        title: match.title,
-      }
-    : null;
-}
-
-interface ReleasePrCacheEntry {
-  pr: ReleasePullRequestStatus | null;
-  expiresAt: number;
-}
-const releasePrCache = new Map<string, ReleasePrCacheEntry>();
-// Same TTL as getRepoStatus's own CACHE_TTL_MS (github.ts) — this is the
-// same "glance-level widget, not a live feed" tradeoff. Without this, GET
-// .../release costs THREE live calls (getDefaultBranch, findReleasePullRequest,
-// getPullRequestByNumber) every time the frontend refetches — and it refetches
-// on every /ws/github frame (pr, issue, ci, push, release —
-// store/slices/github.ts's prsRefreshTrigger), not just release-relevant
-// ones. An active repo's webhook traffic would otherwise spend three calls
-// per frame against the process-wide rate-limit budget (github-fetch.ts)
-// the PR poller and every Task Master write share — degrading features
-// well outside this one panel section.
-const RELEASE_PR_CACHE_TTL_MS = 60_000;
-
-/**
- * Assembles the open release PR's status (or `null`) for `owner/repo`,
- * cached for `RELEASE_PR_CACHE_TTL_MS` — the read path behind GET
- * .../release. Resolves the default branch, finds the release-please PR
- * against it, reads its full mergeability, and merges in `ciStatus` from
- * the PR poller's own warm cache (github.ts's `getPRsStatus`) when present
- * — never a live Actions-runs call of its own, same posture as
- * `/github/prs`.
- *
- * `invalidateReleaseCache` below lets a route drop the cache immediately
- * after an action it just took (a merge that just closed the PR) rather
- * than waiting out the TTL and showing stale state right after the user's
- * own click.
- */
-export async function getCachedReleasePullRequestStatus(
-  token: string,
-  owner: string,
-  repo: string,
-): Promise<ReleasePullRequestStatus | null> {
-  const key = `${owner}/${repo}`;
-  const cached = releasePrCache.get(key);
-  if (cached && Date.now() < cached.expiresAt) return cached.pr;
-
-  const defaultBranch = await getDefaultBranch(token, owner, repo);
-  const summary = await findReleasePullRequest(token, owner, repo, defaultBranch);
-
-  let pr: ReleasePullRequestStatus | null = null;
-  if (summary) {
-    const full = await getPullRequestByNumber(token, owner, repo, summary.number);
-    const cachedPrs = getPRsStatus(owner, repo);
-    const ciMatch = cachedPrs?.prs.find((p) => p.number === full.number);
-    pr = {
-      number: full.number,
-      htmlUrl: full.htmlUrl,
-      title: full.title,
-      headRef: full.headRef,
-      headSha: full.headSha,
-      draft: full.draft,
-      mergeable: full.mergeable,
-      mergeableState: full.mergeableState,
-      ciStatus: ciMatch?.ciStatus ?? null,
-    };
-  }
-
-  releasePrCache.set(key, { pr, expiresAt: Date.now() + RELEASE_PR_CACHE_TTL_MS });
-  return pr;
-}
-
-/**
- * Drops the cached release PR status for `owner/repo` — called after a
- * successful `/release/run` (a new PR may appear shortly) or
- * `/release/merge` (the PR the cache was holding just closed), so the
- * user's own action is reflected on their very next fetch instead of
- * waiting out RELEASE_PR_CACHE_TTL_MS. Same role as github.ts's own
- * `invalidatePRsCache`.
- */
-export function invalidateReleaseCache(owner: string, repo: string): void {
-  releasePrCache.delete(`${owner}/${repo}`);
-}
-
-// Test-only: clears the module-scope cache above so one test's cached
-// result can't leak into another's assertions.
-export function clearReleasePrCacheForTests(): void {
-  releasePrCache.clear();
 }

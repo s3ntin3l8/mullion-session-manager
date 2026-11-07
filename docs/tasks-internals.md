@@ -1076,7 +1076,7 @@ any response classifies as a rate limit (`429` unconditionally, or `403`
 carrying `Retry-After` or `X-RateLimit-Remaining: 0` alongside a
 not-yet-passed `X-RateLimit-Reset`), and observed by both transports —
 `githubApiFetch` (the shared chokepoint most reads and `githubGraphQL` go
-through) and `github-write.ts`'s own `githubRequest` (which deliberately
+through) and `github-request.ts`'s own `githubRequest` (which deliberately
 bypasses `githubApiFetch` — see that file's header comment — so it checks
 and records independently). A call made while the budget is in effect
 fails fast and locally with `GitHubRateLimitError`, without spending a
@@ -1637,7 +1637,7 @@ IS NULL` so each project costs at most one real detection attempt, ever.
   GitHub panel renders it as a sibling of the Release section (which itself
   returns nothing for `detection.kind === "not-configured"`, precisely this
   incident's own shape; see `RELEASE_WORKFLOW_FILENAMES`'s own doc comment,
-  github-write.ts, for why a real release-please repo routinely fails that
+  github-release.ts, for why a real release-please repo routinely fails that
   narrower, filename-based detection). Short-circuits to no probe at all
   once the flag is already on.
 

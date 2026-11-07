@@ -432,7 +432,7 @@ export function GitHubPanel({
           "not-configured" case — that's the ONE branch ReleaseSection
           returns null for with no header of its own (precisely the
           branchdam-mobile incident's own shape; see RELEASE_WORKFLOW_FILENAMES's
-          own doc comment, github-write.ts, for why a real release-please repo
+          own doc comment, github-release.ts, for why a real release-please repo
           routinely fails THAT detection). Every other detection kind renders
           this same warning row INSIDE ReleaseSection itself, right under
           its own "Release" header — see conventionalTitlesWarningRow's own

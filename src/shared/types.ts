@@ -430,7 +430,7 @@ export interface ProjectReleaseStatus {
   // (release-please-config.json / .release-please-manifest.json) but
   // `projects.conventionalCommitTitles` is off — the branchdam-mobile
   // incident's shape: `detection` above is commonly `"not-configured"` here
-  // too (see RELEASE_WORKFLOW_FILENAMES's own doc comment, github-write.ts,
+  // too (see RELEASE_WORKFLOW_FILENAMES's own doc comment, github-release.ts,
   // for why a real release-please repo routinely fails THAT detection), so
   // this is deliberately a second, independent signal rather than a variant
   // of `detection` — widening `ReleaseDetectionResult` itself would make the

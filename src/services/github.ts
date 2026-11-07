@@ -1130,7 +1130,7 @@ export async function fetchCheckRunsForHead(
 // The release-please auto-enable sweep (project-release-please.ts) needs
 // "does this repo run release-please" — deliberately NOT
 // `detectReleaseWorkflow`/`RELEASE_WORKFLOW_FILENAMES`
-// (github-write.ts), whose own doc comment explains why that list stays
+// (github-release.ts), whose own doc comment explains why that list stays
 // narrowly `release-please.yml`/`.yaml` only (a false positive there makes
 // the Run button dispatch an unrelated workflow). That narrowness makes it
 // a false NEGATIVE for most real release-please repos: surveying every repo
