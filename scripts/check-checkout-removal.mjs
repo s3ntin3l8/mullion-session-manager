@@ -37,7 +37,8 @@ export const NAMES = new Set([
 // Scopes that may use them, and why. `scope` is `file` or `file#function`; a
 // function matches a class's methods too (`LocalBackend` covers
 // `LocalBackend.removeWorktree`) and `import` is the file's import list.
-// `max` caps the uses inside the scope, so a new call there is still found.
+// `count` pins the number of uses inside the scope EXACTLY: a new call there is
+// found, and so is a deleted one (a stale entry would silently leave headroom).
 export const ALLOWLIST = [
   { scope: "src/services/checkout-removal.ts", why: "the helper itself" },
   {
@@ -59,7 +60,7 @@ export const ALLOWLIST = [
   {
     scope: "src/routes/internal.ts#internalRoutes",
     why: "the five agent-side endpoints the remote backend calls",
-    max: 5,
+    count: 5,
   },
   { scope: "src/hooks/worktree-hook.mjs", why: "a hook's own throwaway worktree, not a checkout" },
   {
@@ -106,7 +107,7 @@ export function scanForBypass(relPath, content, allowlist = ALLOWLIST) {
   if (wholeFile) return [];
   const scoped = allowlist
     .filter((a) => a.scope.startsWith(`${relPath}#`))
-    .map((a) => ({ fn: a.scope.slice(relPath.length + 1), max: a.max }));
+    .map((a) => ({ fn: a.scope.slice(relPath.length + 1), count: a.count }));
   const sf = ts.createSourceFile(relPath, content, ts.ScriptTarget.Latest, true);
   const findings = [];
   const counts = new Map();
@@ -118,10 +119,10 @@ export function scanForBypass(relPath, content, allowlist = ALLOWLIST) {
     const chain = containers(node);
     for (const s of scoped) {
       if (chain.some((c) => c === s.fn || c.startsWith(`${s.fn}.`))) {
-        if (s.max === undefined) return true;
+        if (s.count === undefined) return true;
         const n = (counts.get(s.fn) ?? 0) + 1;
         counts.set(s.fn, n);
-        return n <= s.max;
+        return n <= s.count;
       }
     }
     return false;
@@ -161,6 +162,17 @@ export function scanForBypass(relPath, content, allowlist = ALLOWLIST) {
     ts.forEachChild(node, visit);
   };
   visit(sf);
+  // A pinned scope that now holds FEWER uses than its entry says is stale.
+  for (const s of scoped) {
+    const n = counts.get(s.fn) ?? 0;
+    if (s.count !== undefined && n < s.count) {
+      findings.push({
+        file: relPath,
+        line: 1,
+        text: `${relPath}#${s.fn} now holds ${n} uses, its allowlist entry says ${s.count}: lower \`count\` in scripts/check-checkout-removal.mjs`,
+      });
+    }
+  }
   return findings;
 }
 

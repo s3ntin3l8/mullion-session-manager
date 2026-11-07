@@ -758,7 +758,7 @@ describe("preview worktree host-routed remove/sync closures (issue #345)", () =>
     expect(getPreviewWorktree(sessionId)?.pendingRemoval).toBe(true);
   });
 
-  it("omitting the closures preserves today's local-only behavior (falls back to real git)", async () => {
+  it("a local tracked preview is removed through its remove closure (git, for a local checkout)", async () => {
     const created = await checkoutBranchWorktree(tmpDir, "main");
     expect(created).not.toBeNull();
     trackLocalPreviewWorktree(sessionId, {

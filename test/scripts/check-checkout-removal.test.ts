@@ -59,13 +59,17 @@ describe("check-checkout-removal guard", () => {
     expect(found).toEqual([expect.objectContaining({ line: 2 })]);
   });
 
-  it("caps the agent endpoints at their five, so a sixth call there is found", () => {
+  it("pins the agent endpoints at exactly five uses: a sixth is found, and so is a deleted one", () => {
     const route = (n: number) =>
       "async function internalRoutes() {\n" +
       Array.from({ length: n }, () => "  await removeWorktree(p);").join("\n") +
       "\n}\n";
     expect(scanForBypass("src/routes/internal.ts", route(5))).toEqual([]);
     expect(scanForBypass("src/routes/internal.ts", route(6))).toHaveLength(1);
+    // Four: an endpoint was removed, the entry is stale and would leave headroom.
+    const stale = scanForBypass("src/routes/internal.ts", route(4));
+    expect(stale).toEqual([expect.objectContaining({ line: 1 })]);
+    expect(stale[0].text).toContain("now holds 4 uses");
   });
 
   it("gives every allowlist entry a reason", () => {

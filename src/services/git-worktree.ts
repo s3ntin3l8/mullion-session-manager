@@ -1237,12 +1237,15 @@ export interface PreviewWorktreeInfo {
   // Issue #345 — host-routed removal/sync, captured (as closures over a
   // specific FastifyInstance + hostId) at trackPreviewWorktree time by the
   // caller, which has resolveBackend available and this module does not
-  // (no DB/FastifyInstance import here — see the module header). Left
-  // undefined for a local host: falls back to this module's own
-  // removeWorktree/syncWorktree below, preserving today's exact code path
-  // for every existing (local) test. Must never reject — an unreachable
-  // remote agent has to read as `false` (queues a retry), not as a thrown
-  // error escaping into killSession/the reconciler/the sync tick.
+  // (no DB/FastifyInstance import here — see the module header).
+  // `remove` is REQUIRED, for every host including the local one (production
+  // passes checkout-removal's `previewRemover`): a removal that did not go
+  // through that helper would skip closing the checkout's browsers and deleting
+  // their stored state (#2725), so there is no fallback to this module's own
+  // removeWorktree. `sync` is still optional and falls back to syncWorktree.
+  // Neither may reject — an unreachable remote agent has to read as `false`
+  // (queues a retry), not as a thrown error escaping into killSession/the
+  // reconciler/the sync tick.
   remove: () => Promise<boolean>;
   sync?: () => Promise<boolean>;
   /** Set when a prior removal attempt (killSession or the reconciler) failed.
@@ -1310,11 +1313,12 @@ export function findPreviewWorktreeSessionId(worktreePath: string): number | und
   return undefined;
 }
 
-// Issue #345 — routes removal/sync through a tracked entry's own host-routed
-// closure when present (a remote host), falling back to this module's local
-// removeWorktree/syncWorktree otherwise (a local host — today's exact
-// behavior, unchanged). Centralized here so cleanupPreviewWorktree and the
-// tick below don't each re-implement the fallback. The closure's own
+// Issue #345 — routes removal through a tracked entry's own host-routed
+// `remove` closure (required, #2725: it is what closes the checkout's browsers)
+// and sync through its `sync` closure when present, falling back to this
+// module's local syncWorktree otherwise. Centralized here so
+// cleanupPreviewWorktree and the tick below don't each re-implement it. The
+// closure's own
 // contract (see PreviewWorktreeInfo.remove/sync's doc comment, and
 // trackPreviewWorktree's call site in sessions.ts) is to never reject; the
 // try/catch here is a defensive backstop only — a violation must not crash

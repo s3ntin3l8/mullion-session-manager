@@ -88,6 +88,11 @@ describe("worktree removal entry points release the checkout's browsers (#2725)"
       deleteBranch: vi.fn().mockResolvedValue({ deleted: true }),
       terminate: vi.fn().mockResolvedValue(undefined),
       stashSeed: vi.fn().mockResolvedValue(undefined),
+      // The app's own dispatch sweep keeps running while this file does and
+      // reaches whichever backend a test installed: give it the calls a claim
+      // makes, so it cannot trip over a missing one.
+      clearOrphanedTaskWorktree: vi.fn().mockResolvedValue({ cleared: true }),
+      createWorktree: vi.fn().mockResolvedValue(null),
       ...overrides,
     };
     vi.spyOn(sessionBackendModule, "resolveBackend").mockReturnValue(
