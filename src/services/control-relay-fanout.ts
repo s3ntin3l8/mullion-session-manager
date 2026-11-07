@@ -1,5 +1,5 @@
 import type net from "node:net";
-import { hasReachablePath } from "./agent-channel-tunnel.js";
+import { hasReachablePath, isStreamChannelDown } from "./agent-channel-tunnel.js";
 import type { FastifyInstance } from "fastify";
 import type { WebSocket as NodeWebSocket } from "ws";
 import { handleConnection, relayedSessionDenied } from "../plugins/control-socket.js";
@@ -194,6 +194,15 @@ export function startControlRelayFanout(app: FastifyInstance): ControlRelayFanou
 
   function connect(f: HostFanout): void {
     if (f.stopped || stopped) return;
+    // A bound host whose channel is down can only fail this stream; wait for
+    // the channel-up reconcile (routes/agent-channel.ts) rather than retry.
+    if (isStreamChannelDown(app, f.hostId)) {
+      app.log.debug(
+        { hostId: f.hostId },
+        "[control-relay-fanout] channel down, waiting for it to come up",
+      );
+      return;
+    }
     let socket: NodeWebSocket;
     try {
       socket = getRemoteHostClient(app, f.hostId).openControlRelayStream();

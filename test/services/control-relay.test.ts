@@ -232,15 +232,18 @@ describe("agent relay socket", () => {
       },
       close: () => {},
     };
+    // Asserted at the openChannel seam: a relay connection is a stream.
+    const openChannel = vi.fn(async (_opts?: { stream?: boolean }) => closedChannel);
     handles.push(
       await materializeControlRelaySocket({
         socketPath,
         resolveToken: () => "7",
-        getMux: () => ({ openChannel: async () => closedChannel }) as never,
+        getMux: () => ({ openChannel }) as never,
       }),
     );
     const [frame] = await talk(socketPath, ['{"token":"t"}']);
     expect(frame).toMatchObject({ ok: false, fatal: true, status: 503 });
+    expect(openChannel).toHaveBeenCalledWith({ stream: true });
   });
 
   it("tells the client when the primary closes its channel (a graceful primary shutdown)", async () => {

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { hasReachablePath } from "./agent-channel-tunnel.js";
+import { hasReachablePath, isStreamChannelDown } from "./agent-channel-tunnel.js";
 import type { WebSocket as NodeWebSocket } from "ws";
 import { listHosts } from "./host-registry.js";
 import { getRemoteHostClient } from "./remote-host-client.js";
@@ -263,6 +263,15 @@ export function startSshAgentFanout(app: FastifyInstance): SshAgentFanoutHandle 
     // scheduling a reconnect and this attempt firing must not dial in
     // anyway just because it looked live a few seconds ago.
     if (app.connectedBridges.size === 0) return;
+    // A bound host whose channel is down can only fail this stream; wait for
+    // the channel-up reconcile (routes/agent-channel.ts) rather than retry.
+    if (isStreamChannelDown(app, f.hostId)) {
+      app.log.debug(
+        { hostId: f.hostId },
+        "[ssh-agent-fanout] channel down, waiting for it to come up",
+      );
+      return;
+    }
 
     let socket: NodeWebSocket;
     try {

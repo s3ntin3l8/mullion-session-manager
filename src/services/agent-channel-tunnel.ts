@@ -17,6 +17,7 @@ import {
   AGENT_CHANNEL_SLOT_WAIT_GRACE_MS,
   AGENT_CHANNEL_REQUESTS_OPERATION,
   AGENT_CHANNEL_SLOT_WAIT_MS,
+  AGENT_CHANNEL_STREAMS_OPERATION,
   type ChannelRequestHead,
   type ChannelResponseHead,
 } from "../shared/agent-channel.js";
@@ -919,4 +920,15 @@ export function resolveHostTransport(
   return boundHosts.get(key)?.get(hostId)?.has(operation)
     ? { kind: "channel-down" }
     : { kind: "inbound" };
+}
+
+/**
+ * Whether a host's streams are bound to its outbound channel while that channel
+ * is down. A stream there can only fail with "not connected", so a fan-out
+ * skips the attempt (at debug level) and waits for the channel-up reconcile
+ * (routes/agent-channel.ts) instead of retrying with backoff and a warning each
+ * time.
+ */
+export function isStreamChannelDown(app: FastifyInstance, hostId: string): boolean {
+  return resolveHostTransport(app, hostId, AGENT_CHANNEL_STREAMS_OPERATION).kind === "channel-down";
 }

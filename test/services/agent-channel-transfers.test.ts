@@ -10,6 +10,7 @@ import {
   channelFetchStream,
   serveChannelRequest,
 } from "../../src/services/agent-channel-tunnel.js";
+import { HostBusyError } from "../../src/services/remote-host-errors.js";
 import {
   HostRequestError,
   HostUnreachableError,
@@ -303,6 +304,19 @@ describe("ping over the outbound channel (#2620)", () => {
     const r = await rig();
     expect(await r.client.ping()).toBe(true);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("ping when the channel is saturated", () => {
+  it("treats a busy channel as alive, but an unreachable host or timeout as down", async () => {
+    const r = await rig();
+    const request = vi.spyOn(r.client as never, "request" as never) as unknown as {
+      mockRejectedValue(e: unknown): void;
+    };
+    request.mockRejectedValue(new HostBusyError("h1"));
+    expect(await r.client.ping()).toBe(true);
+    request.mockRejectedValue(new HostUnreachableError("h1", new Error("timeout")));
+    expect(await r.client.ping()).toBe(false);
   });
 });
 
