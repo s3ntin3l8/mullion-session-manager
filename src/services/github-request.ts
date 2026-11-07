@@ -91,6 +91,19 @@ export async function githubRequest<T>(
 
   let res: Response;
   try {
+    // CodeQL's js/file-access-to-http fires on the fetch below: `owner`/
+    // `repo` trace back to a project's `.git/config` (file data) and reach an
+    // outbound request. That is the intended, expected shape of a GitHub
+    // integration — the same shape github.ts's own request functions guard
+    // against — and it is dismissed as won't-fix on this request: the
+    // sanitizer runs right here (validateGitHubRepoRef, above), the owner/repo
+    // are encodeURIComponent'd into the path, and the API base is operator
+    // config set once at boot (github-fetch.ts), never request-derived.
+    //
+    // The dismissal is anchored to the file the code lives in, so moving this
+    // function re-fires it — see the dismissed alerts on github-write.ts for
+    // the history, and github-app.ts's own note for the same finding on its
+    // request.
     res = await fetch(`${githubApiBase()}${path}`, {
       method,
       headers,

@@ -9,10 +9,10 @@
 // and the scope error it raises — lives in github-request.ts (issue #2405),
 // shared with the release-please client. The release-please feature moved
 // out to github-release.ts for the same reason, and the four hand-rolled
-// pagination loops became one helper in github-pagination.ts. All three are
-// re-exported from here, so every importer that reaches for them through
-// `github-write.js` — and this module's own test file — keeps working
-// unchanged.
+// pagination loops became one helper in github-pagination.ts. The symbols
+// that moved are re-exported from here, so every importer that reaches for
+// them through `github-write.js` — and this module's own test file — keeps
+// working unchanged.
 
 import { GitHubApiError, validateGitHubRepoRef } from "./github.js";
 import { githubApiFetch, classifyRateLimit } from "./github-fetch.js";
