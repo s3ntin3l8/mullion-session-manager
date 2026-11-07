@@ -8,11 +8,13 @@ const mockTerminate = vi.fn();
 const mockLiveStatus = vi.fn();
 const mockPrompt = vi.fn();
 const mockRenderedScrollback = vi.fn();
+const mockTranscript = vi.fn();
 const mockResolveBackend = vi.fn(() => ({
   terminate: mockTerminate,
   liveStatus: mockLiveStatus,
   prompt: mockPrompt,
   getRenderedScrollback: mockRenderedScrollback,
+  getTranscript: mockTranscript,
 }));
 const mockCloseSessionBrowserBindings = vi.fn();
 
@@ -71,6 +73,7 @@ describe("reseedTaskIfSessionExited", () => {
     mockLiveStatus.mockResolvedValue({});
     mockPrompt.mockResolvedValue({ ok: true, outputOffset: 0 });
     mockRenderedScrollback.mockResolvedValue("");
+    mockTranscript.mockResolvedValue({ ok: false, status: 404, error: "no transcript" });
     resetPendingAdoptedSeeds();
   });
 
@@ -399,15 +402,64 @@ describe("reseedTaskIfSessionExited", () => {
       expect(seedOf(task.id)).toBe(true);
     });
 
-    it("types the seed once when the screen shows nothing of it (scrolled away)", async () => {
+    const transcriptOf = (...entries: Array<{ role: string; text: string }>) => ({
+      ok: true,
+      entries: entries.map((e, seq) => ({ seq, ts: null, ...e })),
+      nextSeq: entries.length,
+      more: false,
+      file: "f",
+    });
+
+    it("types the seed once when neither the screen nor the transcript shows it", async () => {
       const { task } = await adopt();
       mockRenderedScrollback.mockResolvedValue("some unrelated later output\n> ");
+      mockTranscript.mockResolvedValue(
+        transcriptOf({ role: "user", text: "an unrelated first message" }),
+      );
 
       await recheckAdoptedSeeds(app, later());
+      await recheckAdoptedSeeds(app, later());
+
+      expect(mockTranscript).toHaveBeenCalledTimes(1);
+      expect(mockPrompt).toHaveBeenCalledTimes(1);
+      expect(seedOf(task.id)).toBe(true);
+    });
+
+    it("does not type the seed a second time when it scrolled off or was collapsed to a paste placeholder but the transcript has it (#2703)", async () => {
+      const { task } = await adopt();
+      mockRenderedScrollback.mockResolvedValue("[Pasted text #1 +2 lines]\n> ");
+      mockTranscript.mockResolvedValue(
+        transcriptOf(
+          { role: "assistant", text: "Reviewer feedback: not a user turn, ignored" },
+          { role: "user", text: SEED },
+        ),
+      );
+
+      await recheckAdoptedSeeds(app, later());
+      await recheckAdoptedSeeds(app, later());
+
+      expect(mockPrompt).not.toHaveBeenCalled();
+      expect(seedOf(task.id)).toBe(true);
+    });
+
+    it("only counts the user's own turns in the transcript, not the assistant quoting the seed", async () => {
+      await adopt();
+      mockRenderedScrollback.mockResolvedValue("unrelated\n> ");
+      mockTranscript.mockResolvedValue(transcriptOf({ role: "assistant", text: SEED }));
+
       await recheckAdoptedSeeds(app, later());
 
       expect(mockPrompt).toHaveBeenCalledTimes(1);
-      expect(seedOf(task.id)).toBe(true);
+    });
+
+    it("falls back to the screen's verdict when the transcript cannot answer", async () => {
+      await adopt();
+      mockRenderedScrollback.mockResolvedValue("unrelated\n> ");
+      mockTranscript.mockRejectedValue(new Error("host went away"));
+
+      await recheckAdoptedSeeds(app, later());
+
+      expect(mockPrompt).toHaveBeenCalledTimes(1);
     });
 
     it("waits out the boot grace window", async () => {

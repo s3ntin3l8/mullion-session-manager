@@ -446,6 +446,43 @@ export function screenShowsSeed(screen: string, prompt: string): boolean {
   return found >= Math.ceil(fragments.length / 2);
 }
 
+/** Pages of the session's transcript read when looking for the seed (500 entries each). */
+const TRANSCRIPT_SEED_PAGES = 4;
+
+/**
+ * Issue #2703 — is the seed in the session's own conversation record? The
+ * screen is the first look, but a multi-line seed the TUI collapsed to a
+ * "pasted text" placeholder, or one that scrolled off, is NOT on it even though
+ * the agent received it; typing it then would deliver it twice. The user
+ * messages of the transcript (an agent that keeps one) answer that.
+ *
+ * `null` when the transcript cannot answer (no transcript for this agent, the
+ * agent predates the route, the host did not answer): the caller then falls back
+ * to the screen's verdict.
+ */
+async function transcriptShowsSeed(
+  app: FastifyInstance,
+  hostId: string,
+  sessionId: number,
+  prompt: string,
+): Promise<boolean | null> {
+  const backend = resolveBackend(app, hostId);
+  let afterSeq = 0;
+  let userText = "";
+  for (let page = 0; page < TRANSCRIPT_SEED_PAGES; page++) {
+    const result = await backend.getTranscript(String(sessionId), {
+      afterSeq,
+      limit: 500,
+      fullTools: false,
+    });
+    if (!result.ok) return null;
+    for (const entry of result.entries) if (entry.role === "user") userText += `\n${entry.text}`;
+    if (!result.more) return screenShowsSeed(userText, prompt);
+    afterSeq = result.nextSeq;
+  }
+  return screenShowsSeed(userText, prompt);
+}
+
 /** Test seam: forget every remembered adoption. */
 export function resetPendingAdoptedSeeds(): void {
   pendingAdoptedSeeds.clear();
@@ -496,6 +533,14 @@ async function recheckEach(app: FastifyInstance, now: number): Promise<void> {
         String(task.sessionId),
       );
       hasSeed = screenShowsSeed(screen, pending.prompt);
+      // Not on screen is not "not delivered": ask the transcript before typing
+      // the seed a second time (#2703). It cannot say (null) -> trust the screen.
+      if (!hasSeed) {
+        hasSeed =
+          (await transcriptShowsSeed(app, state.hostId, task.sessionId!, pending.prompt).catch(
+            () => null,
+          )) === true;
+      }
     } catch (err) {
       app.log.warn(
         { err, taskId, sessionId: task.sessionId },

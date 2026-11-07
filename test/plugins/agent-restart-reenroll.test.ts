@@ -7,7 +7,7 @@ import { buildApp } from "../../src/app.js";
 import { closeDb } from "../../src/db/client.js";
 import { hosts } from "../../src/db/schema.js";
 import { identityStatePath, loadAgentIdentity } from "../../src/services/agent-identity.js";
-import { reloadDotenvOverrides } from "../../src/plugins/env.js";
+import { setDotenvPathForTests } from "../../src/plugins/env.js";
 
 // Issue #2452 — headless enrollment end to end: a REAL primary behind a fetch
 // adapter, an agent that advertises no URL, and repeated agent daemon restarts.
@@ -204,9 +204,15 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
     expect(stale.statusCode).toBe(401);
   });
 
-  // deploy/README.md, "Bring a revoked per-host agent back". install.sh never
-  // rewrites an existing .env and the agent lets .env win over the process
-  // environment, so the new token reaches the agent only through a fresh .env.
+  // deploy/README.md, "Bring a revoked per-host agent back". A rejected agent is
+  // terminal in memory, install.sh never rewrites an existing .env and the
+  // agent lets .env win over the process environment, so the new token reaches
+  // the agent only through a fresh .env AND a restart of the agent unit.
+  //
+  // The daemon boots through the REAL env plugin: setDotenvPathForTests makes
+  // loadDotenvOverrides() read the install's .env (the production precedence,
+  // .env over the process environment) instead of a hand-written copy of that
+  // load, and a restart is closing the agent app and building a new one.
   describe("bringing a revoked per-host agent back (deploy/README.md recipe)", () => {
     let home: string;
     const envPath = () => path.join(home, ".env");
@@ -217,25 +223,29 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
         `MULLION_ROLE=agent\nMULLION_PRIMARY_URL=http://primary.invalid\nMULLION_ENROLLMENT_TOKEN=${token}\n`,
         { mode: 0o600 },
       );
-    // The daemon as the launcher starts it: the Ansible task's environment
-    // first, then the install's .env on top of it (env.ts loadDotenvOverrides).
-    async function launchDaemon(ansibleToken: string) {
+    // `systemctl --user restart`: the unit starts again with the Ansible task's
+    // environment, and the install's .env wins over it.
+    async function startAgentUnit(ansibleToken: string) {
       process.env.MULLION_HOME = home;
       process.env.PROJECTS_ROOTS = os.tmpdir();
       process.env.SESSIONS_DIR = sessionsDir;
       process.env.MULLION_ROLE = "agent";
       process.env.MULLION_PRIMARY_URL = "http://primary.invalid";
       process.env.MULLION_ENROLLMENT_TOKEN = ansibleToken;
-      Object.assign(process.env, reloadDotenvOverrides(home));
+      setDotenvPathForTests(envPath());
       delete process.env.MULLION_ENROLLMENT_SECRET;
-      const agent = await buildApp();
-      process.env.MULLION_ENROLLMENT_SECRET = "fleet-secret"; // pragma: allowlist secret
-      agents.push(agent);
-      await agent.ready();
-      return agent;
+      try {
+        const agent = await buildApp();
+        agents.push(agent);
+        await agent.ready();
+        return agent;
+      } finally {
+        setDotenvPathForTests(null);
+        process.env.MULLION_ENROLLMENT_SECRET = "fleet-secret"; // pragma: allowlist secret
+      }
     }
 
-    it("a rotated token in the role variables alone does nothing; deleting .env and the identity re-enrolls the SAME row", async () => {
+    it("a rotated token in the role variables alone does nothing; a fresh .env needs a restart to reach a rejected agent", async () => {
       newSessionsDir();
       home = fs.mkdtempSync(path.join(os.tmpdir(), "agent-recipe-home-"));
       stubPrimaryFetch();
@@ -244,39 +254,69 @@ describe("agent restart and re-enrollment (issue #2452)", () => {
       ).json() as { id: string; token: string };
       writeEnvFile(created.token);
 
-      await launchDaemon(created.token);
+      await startAgentUnit(created.token);
       await waitUntil(() => loadAgentIdentity(statePath) !== null);
       expect(loadAgentIdentity(statePath)!.hostId).toBe(created.id);
 
-      // Revoke, then rotate: the operator's side of the recipe.
+      // The operator revokes, then rotates; the agent unit restarts (a reboot)
+      // and finds itself rejected: terminal in memory.
       await primary.inject({ method: "POST", url: `/api/hosts/${created.id}/revoke` });
       const newToken = (
         await primary.inject({ method: "POST", url: `/api/hosts/${created.id}/rotate-token` })
       ).json().token as string;
       expect(newToken).not.toBe(created.token);
       await agents.pop()!.close();
+      registerBodies.length = 0;
+      const rejected = await startAgentUnit(created.token);
+      await waitUntil(() => rejected.agentEnrollment?.state === "rejected");
 
-      // The README's OLD recipe: clear the identity, re-run with the new token.
-      // install.sh leaves .env alone, and .env wins: the old (now dead) token
-      // is what the agent presents, and it stays unenrolled and retrying.
+      // Recipe steps 1-2 WITHOUT the restart: identity gone, fresh .env with the
+      // new token. The running agent does not notice: still rejected, nothing
+      // sent to the primary.
+      fs.rmSync(statePath);
+      fs.rmSync(envPath());
+      writeEnvFile(newToken);
+      const sent = registerBodies.length;
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(rejected.agentEnrollment?.state).toBe("rejected");
+      expect(registerBodies).toHaveLength(sent);
+      expect(loadAgentIdentity(statePath)).toBeNull();
+      await agents.pop()!.close(); // step 3 starts here: the unit stops...
+
+      // ...and starts again. The role variable still carries the OLD token, as
+      // an unrotated inventory would; the fresh .env wins.
+      registerBodies.length = 0;
+      const back = await startAgentUnit(created.token);
+      await waitUntil(() => back.agentEnrollment?.state === "registered");
+      expect(registerBodies[0]).toMatchObject({ token: newToken });
+      expect(registerBodies.every((b) => b.token !== created.token)).toBe(true);
+      expect(loadAgentIdentity(statePath)!.hostId).toBe(created.id);
+      fs.rmSync(home, { recursive: true, force: true });
+    });
+
+    it("the old recipe (identity cleared, .env kept) leaves the agent presenting the dead token", async () => {
+      newSessionsDir();
+      home = fs.mkdtempSync(path.join(os.tmpdir(), "agent-recipe-old-home-"));
+      stubPrimaryFetch();
+      const created = (
+        await primary.inject({ method: "POST", url: "/api/hosts", payload: { name: "recipe-old" } })
+      ).json() as { id: string; token: string };
+      writeEnvFile(created.token);
+      await startAgentUnit(created.token);
+      await waitUntil(() => loadAgentIdentity(statePath) !== null);
+      await primary.inject({ method: "POST", url: `/api/hosts/${created.id}/revoke` });
+      const newToken = (
+        await primary.inject({ method: "POST", url: `/api/hosts/${created.id}/rotate-token` })
+      ).json().token as string;
+      await agents.pop()!.close();
+
       fs.rmSync(statePath);
       registerBodies.length = 0;
-      const stuck = await launchDaemon(newToken);
+      const stuck = await startAgentUnit(newToken);
       await waitUntil(() => (stuck.agentEnrollment?.failedAttempts ?? 0) >= 1);
       expect(registerBodies.every((b) => b.token === created.token)).toBe(true);
       expect(stuck.agentEnrollment?.state).toBe("registering");
       expect(loadAgentIdentity(statePath)).toBeNull();
-      await agents.pop()!.close();
-
-      // The corrected recipe: also delete .env, so install.sh writes it afresh
-      // from the new token.
-      fs.rmSync(envPath());
-      writeEnvFile(newToken);
-      registerBodies.length = 0;
-      const back = await launchDaemon(newToken);
-      await waitUntil(() => back.agentEnrollment?.state === "registered");
-      expect(registerBodies[0]).toMatchObject({ token: newToken });
-      expect(loadAgentIdentity(statePath)!.hostId).toBe(created.id);
       fs.rmSync(home, { recursive: true, force: true });
     });
   });

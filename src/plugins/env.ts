@@ -929,6 +929,16 @@ export const schema = {
   },
 };
 
+let testDotenvPath: string | null = null;
+
+/** TEST HOOK (issue #2703): under NODE_ENV=test, makes loadDotenvOverrides()
+ * read `path` instead of returning {} — so the real boot path (the env plugin's
+ * `data: loadDotenvOverrides()`) is exercised with a fixture .env. Pass null to
+ * restore the default. Has no effect outside NODE_ENV=test. */
+export function setDotenvPathForTests(path: string | null): void {
+  testDotenvPath = path;
+}
+
 // Makes this project's own .env authoritative over whatever happened to
 // already be in process.env — needed because a terminal session run
 // *inside* Mullion inherits the server's entire environment (PORT,
@@ -969,7 +979,8 @@ export const schema = {
 // deploy/README.md) — existsSync(".env") is false there, so nothing is
 // overridden.
 //
-// Skipped entirely under test — see env.test.ts for why the "respects
+// Skipped entirely under test unless setDotenvPathForTests() names a file —
+// see env.test.ts for why the "respects
 // environment variable overrides" test isn't affected by (and doesn't
 // guard) this.
 //
@@ -979,7 +990,14 @@ export const schema = {
 // inherited process.env losing to .env), which the default call path can't
 // exercise since it always resolves to this same real, gitignored file.
 export function loadDotenvOverrides(path = ".env"): NodeJS.Dict<string> {
-  if (process.env.NODE_ENV === "test") return {};
+  if (process.env.NODE_ENV === "test") {
+    // Issue #2703 — the explicit test hook: a test that boots the REAL env
+    // plugin and wants the install's .env to win over the process environment
+    // (the production precedence) points this at a fixture file. Unset (the
+    // default), a test never reads a .env, as before.
+    if (testDotenvPath === null) return {};
+    path = testDotenvPath;
+  }
   if (!existsSync(path)) return {};
   return parseEnv(readFileSync(path, "utf8"));
 }

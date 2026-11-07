@@ -34,7 +34,7 @@ import {
 } from "../services/host-git.js";
 import { readHostFiles, writeHostFiles, type IgnoredPath } from "../services/host-files.js";
 import { HostRequestError } from "../services/remote-host-client.js";
-import { isOutcomeUnknown } from "../services/remote-host-errors.js";
+import { isOutcomeUnknown, unknownOutcomeText } from "../services/remote-host-errors.js";
 import { PathEscapeError, resolveWithin } from "../services/safe-path.js";
 import { getToken } from "../services/github-integration.js";
 import { createPullRequest, findPullRequestByHead } from "../services/github-write.js";
@@ -1412,7 +1412,7 @@ export async function projectSetupRoute(app: FastifyInstance) {
           commitResult.reason === "unsupported"
             ? "This host's agent build doesn't support committing scaffold changes yet — update the agent build (see issue #895)."
             : commitResult.reason === "outcome-unknown"
-              ? `Host connection lost mid-request; commit outcome is unknown: ${commitResult.detail}`
+              ? unknownOutcomeText("the commit", commitResult.detail)
               : `Could not commit the scaffold branch: ${commitResult.detail}`,
         );
       }

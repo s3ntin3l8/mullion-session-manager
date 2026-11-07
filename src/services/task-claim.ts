@@ -35,6 +35,7 @@ import {
   resolveBackend,
   resolveSessionsDirWithFallback,
   type SessionBackend,
+  unknownOutcomeMessage,
 } from "./session-backend.js";
 import { HostRequestError } from "./remote-host-client.js";
 import { clearOrphanedCheckout, removeCheckoutIfClean } from "./checkout-removal.js";
@@ -850,16 +851,30 @@ export async function dispatchClaimedTask(
     // previous attempt would have left one.
     const backend = resolveBackend(app, placement.hostId);
     // Orphan-clearing (6.8/#283) — unchanged from the old claimTask.
-    const clearResult = await clearOrphanedCheckout(
-      app,
-      {
-        projectId: project.id,
-        hostId: placement.hostId,
-        cwd: placementCwd,
-        worktreePath: predictedWorktreePath,
-      },
-      branchName,
-    );
+    let clearResult: Awaited<ReturnType<typeof clearOrphanedCheckout>>;
+    try {
+      clearResult = await clearOrphanedCheckout(
+        app,
+        {
+          projectId: project.id,
+          hostId: placement.hostId,
+          cwd: placementCwd,
+          worktreePath: predictedWorktreePath,
+        },
+        branchName,
+      );
+    } catch (err) {
+      const unknown = unknownOutcomeMessage(err);
+      if (!unknown) throw err;
+      // The clear may have landed (or half-landed): not a plain failure, and
+      // the next dispatch must look at the host before cutting a new worktree.
+      await release(`clearing the previous attempt's worktree: ${unknown}`);
+      return {
+        ok: false,
+        reason: "worktree-failed",
+        detail: `Clearing a previous attempt's worktree at ${predictedWorktreePath}: ${unknown}`,
+      };
+    }
     if (!clearResult.cleared) {
       await release(
         `a previous attempt left an unclean worktree at ${predictedWorktreePath} (${clearResult.reason})`,

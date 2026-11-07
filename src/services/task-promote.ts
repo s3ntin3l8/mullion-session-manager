@@ -72,6 +72,7 @@ import {
   pushHostBranch,
   resolveRepoRef,
 } from "./host-git.js";
+import { unknownOutcomeText } from "./remote-host-errors.js";
 import { recordGithubSyncError, clearGithubSyncError } from "./task-github-sync.js";
 import { broadcastTaskEvent } from "./task-events.js";
 import { notifyTaskNeedsAttention } from "./push-delivery.js";
@@ -439,7 +440,7 @@ async function pushForPromotion(
       pushResult.reason === "unsupported"
         ? "This host's agent build doesn't support pushing a task's branch yet — update it and retry"
         : pushResult.reason === "outcome-unknown"
-          ? `Host connection lost mid-request; push outcome is unknown: ${pushResult.detail}`
+          ? unknownOutcomeText("the push", pushResult.detail)
           : `Could not reach the task's host: ${pushResult.detail}`;
     recordGithubSyncError(app, task.id, detail);
     return { ok: false, reason: "push-failed", detail };

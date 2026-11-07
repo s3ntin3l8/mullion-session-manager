@@ -20,6 +20,7 @@ import {
   HostOutcomeUnknownError,
   isHostBusyError,
   isOutcomeUnknown,
+  unknownOutcomeText,
 } from "./remote-host-errors.js";
 import { invalidateRemoteWorktreeCache } from "./remote-worktree-cache.js";
 import { saveSessionFileUpload, saveSessionUpload, uploadRetentionMs } from "./session-upload.js";
@@ -81,7 +82,7 @@ export class MutationOutcomeUnknownError extends HostOutcomeUnknownError {
   ) {
     super(hostId, cause);
     this.name = "MutationOutcomeUnknownError";
-    this.message = `the connection to the session's host was lost after the ${op} request was sent, so it MAY HAVE BEEN DELIVERED (outcome unknown); check the state on the host before sending it again`;
+    this.message = unknownOutcomeText(`the ${op} request`);
   }
 }
 
@@ -90,7 +91,7 @@ export class MutationOutcomeUnknownError extends HostOutcomeUnknownError {
 export function unknownOutcomeMessage(err: unknown): string | null {
   if (err instanceof MutationOutcomeUnknownError) return err.message;
   if (isOutcomeUnknown(err)) {
-    return "the connection to the session's host was lost after the request was sent, so it MAY HAVE BEEN DELIVERED (outcome unknown); check the state on the host before sending it again";
+    return unknownOutcomeText("the request");
   }
   return null;
 }
@@ -1152,7 +1153,10 @@ class RemoteBackend implements SessionBackend {
   }
 
   deleteTaskReviewFindings(taskId: number, round: number): Promise<void> {
-    return this.client.resolveDeleteTaskReviewFindings(taskId, round);
+    return this.mutating(
+      "deleteTaskReviewFindings",
+      this.client.resolveDeleteTaskReviewFindings(taskId, round),
+    );
   }
 
   // #778 — reuses the existing `/internal/config` route (issue #247/roadmap

@@ -149,8 +149,13 @@ in `machine_credential`.
   host. For an agent that claimed a manual host with its per-host token, that
   does not work (the token still matches only the revoked row): rotate the
   host's token (`POST /api/hosts/:id/rotate-token`, which re-arms the row),
-  put the new token in the agent's `.env`, delete `agent-identity.json`, then
-  restart. A credential unused for 90 days is rejected the same way as a
+  put the new token in the agent's `.env` (`MULLION_ENROLLMENT_TOKEN`; the
+  variable `install.sh` reads it from is `MULLION_AGENT_ENROLLMENT_TOKEN`),
+  delete `agent-identity.json`, then **restart the agent unit** (a rejected
+  agent is terminal in memory, so nothing short of a restart re-reads either
+  file; `install.sh` restarts a unit that was running when it rewrote the
+  `.env`). The recipe is tested through the real boot path
+  (`test/plugins/agent-restart-reenroll.test.ts`). A credential unused for 90 days is rejected the same way as a
   revoked one, so the agent log's "revoked or unknown" can also mean expiry.
   **Accepted disclosure:** on the unauthenticated channel handshake
   (`/ws/agent-channel`) a revoked host id is answered `revoked` before any
@@ -2072,8 +2077,11 @@ usual re-attach scrollback replay / events replay snapshot resynchronizes it.
   preview binds it; a Docker stack action returns it as `reused: true`.
   A Task Master re-seed adopted this way is re-checked on each reconcile tick
   (in memory; a primary restart forgets it): once a 30 s boot grace has passed and
-  the session can be typed into, the seed is looked for in its output and typed
-  into that same session if it is missing. It never spawns a second session. An
+  the session can be typed into, the seed is looked for in its output. A seed that
+  is not on screen (scrolled off, or collapsed by the TUI to a "pasted text"
+  placeholder) is then looked for among the **user turns of the session's
+  transcript**; only when that does not show it either, or the agent keeps no
+  transcript, is it typed into that same session. It never spawns a second session. An
   auto-rebase worker whose rebase CAS is lost is killed, whether its spawn was
   clean or adopted after an unknown outcome.
   A **prompt** (`sessions.prompt`, and message delivery) lost mid-request replies
@@ -2086,7 +2094,15 @@ usual re-attach scrollback replay / events replay snapshot resynchronizes it.
   typed `MutationOutcomeUnknownError` (a `HostOutcomeUnknownError`, never a returned
   value, so a truthiness check on a boolean result cannot read it as success), which
   the routes answer with 502 and that wording ("MAY HAVE BEEN DELIVERED"), never
-  "failed to reach host". A **read** (`wait-output`, the transcript read) has nothing to
+  "failed to reach host". The wording comes from ONE helper
+  (`unknownOutcomeText`, `remote-host-errors.ts`) and is the same on every
+  surface: spawn (503, with the kept `sessionId`), git writes (503), uploads,
+  promote decision/accept, the scaffold commit and the task push. Task Master's
+  branch clean-up reports it too: `clear-done` answers `reason: "outcome-unknown"`
+  with a `detail`, and a dispatch whose orphaned-worktree clear is lost fails
+  with the same text instead of "unclean worktree". A test enumerates every
+  `RemoteBackend` method and requires it to be classified mutating or read-only,
+  so a new method cannot be added unclassified. A **read** (`wait-output`, the transcript read) has nothing to
   repeat, so a lost connection there is a plain "host is unreachable".
   The read-only (idempotent) POST list is pinned against the agent's registered
   `/internal` routes by a test (an unclassified route, or a stale entry, fails it);
@@ -2210,3 +2226,19 @@ How it works:
 
 The SSH agent bridge is **not** this path — see
 [`ssh-agent.md`](ssh-agent.md#not-the-github-auth-path).
+
+### Headless enrollment: stdin token and the descoped items (issue #2703)
+
+- `install.sh --role agent` reads the enrollment token from the first line of
+  stdin when `MULLION_AGENT_ENROLLMENT_TOKEN_STDIN=1` (the shell counterpart of
+  the Windows bootstrap's `-TokenFromStdin`, which has its own test in
+  `test/scripts/windows-mullion-install.test.ts`). It never appears in a process
+  argument or the install log; an empty first line is refused. Tested in a
+  sandbox in `test/scripts/install-identity.test.ts`. This closes the stdin
+  token item of #2452; nothing about it is descoped.
+- The Ansible example task and the revoked-agent recipe as tasks are in
+  `deploy/README.md` ("Reruns, upgrades and changing credentials").
+- The headless test (`test/plugins/headless-agent-control.test.ts`) carries a
+  spawn, the agent's recorded seed and a terminate over the real channel. The
+  agent's pty and systemd processes are faked in it (a test never lets a real
+  `systemd-run` fire); the hop is not.

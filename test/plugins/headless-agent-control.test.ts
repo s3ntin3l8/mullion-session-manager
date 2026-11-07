@@ -1,13 +1,29 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { createNodePtyMock } from "../helpers/mock-pty.js";
+import { mockChildProcessSpawn } from "../helpers/mock-spawn.js";
+import type * as ChildProcess from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import type { FastifyInstance } from "fastify";
-import { buildApp } from "../../src/app.js";
-import { closeDb } from "../../src/db/client.js";
-import { hosts } from "../../src/db/schema.js";
-import { identityStatePath, loadAgentIdentity } from "../../src/services/agent-identity.js";
-import { resolveBackend } from "../../src/services/session-backend.js";
+
+// Issue #2703 — the agent's session spawn runs through fakes for node-pty and
+// the systemd/dtach child processes (a test must never let a real systemd-run
+// fire, #1137); the primary-to-agent hop itself — HTTP, WebSocket, the channel
+// — stays real.
+const ptyMock = createNodePtyMock();
+vi.mock("node-pty", () => ({ spawn: ptyMock.spawn }));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof ChildProcess>();
+  return mockChildProcessSpawn(actual);
+});
+
+const { buildApp } = await import("../../src/app.js");
+const { closeDb } = await import("../../src/db/client.js");
+const { hosts } = await import("../../src/db/schema.js");
+const { identityStatePath, loadAgentIdentity } =
+  await import("../../src/services/agent-identity.js");
+const { resolveBackend } = await import("../../src/services/session-backend.js");
 
 // Issue #2691 — ongoing operations of a HEADLESS enrolled agent. The #2452
 // registrations send no baseUrl so the relay never dials the agent; this proves
@@ -85,5 +101,33 @@ describe("headless enrolled agent: ongoing control operations (issue #2691)", ()
     const liveness = await backend.liveness(["4242"]);
     expect(liveness["4242"]).toBeDefined();
     await expect(backend.stashSeed("4242", "seed over the channel")).resolves.toBeUndefined();
+  });
+
+  it("does real work over the channel: spawns a session, the agent records the seed, and terminates it (#2703)", async () => {
+    await waitUntil(() => loadAgentIdentity(identityStatePath(sessionsDir)) !== null);
+    const { hostId } = loadAgentIdentity(identityStatePath(sessionsDir))!;
+    await waitUntil(() => agent.agentChannelStatus.state === "ready");
+    const backend = resolveBackend(primary, hostId);
+    const id = "99901";
+
+    // The seed is stashed on the AGENT before the session starts (promote's order).
+    await backend.stashSeed(id, "seed recorded by the agent");
+    const spawned = await backend.spawn({
+      id,
+      cwd: os.tmpdir(),
+      command: "sleep 60",
+      cols: 80,
+      rows: 24,
+    });
+    expect(spawned).toBeDefined();
+
+    // The agent really holds the session, and really recorded the seed:
+    // consumeSeed is the agent's own read of what stashSeed wrote.
+    expect(agent.pty.get(id)).toBeDefined();
+    expect(agent.pty.consumeSeed(id)).toBe("seed recorded by the agent");
+
+    await expect(backend.terminate(id)).resolves.toBeUndefined();
+    expect(agent.pty.get(id)).toBeUndefined();
+    expect(agent.pty.consumeSeed(id)).toBeNull();
   });
 });

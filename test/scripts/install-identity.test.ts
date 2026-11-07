@@ -118,13 +118,19 @@ describeOnLinux("deploy/install.sh reruns keep the enrolled identity (issue #245
     expect(env.HOME).not.toBe(os.homedir());
   }
 
-  async function run(mullionHome: string, env: Record<string, string> = ansibleEnv) {
+  async function run(
+    mullionHome: string,
+    env: Record<string, string> = ansibleEnv,
+    stdin: string = "",
+  ) {
     const full: NodeJS.ProcessEnv = { ...baseEnv, ...env };
     await assertSandboxed(full);
-    return execFileAsync("bash", [INSTALL_SCRIPT, "--role", "agent", mullionHome], {
+    const pending = execFileAsync("bash", [INSTALL_SCRIPT, "--role", "agent", mullionHome], {
       env: full,
       timeout: 20_000,
     });
+    pending.child.stdin?.end(stdin);
+    return pending;
   }
 
   // Pre-created releases skip the download-and-build branch (install.test.ts).
@@ -218,5 +224,54 @@ describeOnLinux("deploy/install.sh reruns keep the enrolled identity (issue #245
     expect(again).toMatch(/^PORT=4000$/m);
     expect(again).toMatch(/^MULLION_AGENT_ADVERTISE_URL=https:\/\/agent\.example\.com$/m);
     expect(again).toMatch(/^MULLION_ENROLLMENT_TOKEN=fixture-enroll-tok$/m);
+  });
+
+  // Issue #2703 — the stdin token input (the Windows bootstrap's -TokenFromStdin,
+  // for the shell installer) and the restart of a running unit.
+  const { MULLION_AGENT_ENROLLMENT_TOKEN: _omit, ...noTokenEnv } = ansibleEnv;
+
+  it("reads the enrollment token from the first line of stdin, never from an argument or the log", async () => {
+    const home = freshHome();
+    const result = await run(
+      home,
+      { ...noTokenEnv, MULLION_AGENT_ENROLLMENT_TOKEN_STDIN: "1" },
+      `${ROTATED_TOKEN}\r\nsecond line ignored\n`,
+    );
+    expect(envFile(home)).toMatch(new RegExp(`^MULLION_ENROLLMENT_TOKEN=${ROTATED_TOKEN}$`, "m"));
+    expect(envFile(home)).not.toContain("second line");
+    const commands = fs.readFileSync(path.join(binDir, "commands.log"), "utf8");
+    expect(commands).not.toContain(ROTATED_TOKEN);
+    expect(result.stdout + result.stderr).not.toContain(ROTATED_TOKEN);
+  });
+
+  it("refuses an empty stdin token instead of writing a credential-less .env", async () => {
+    const home = freshHome();
+    await expect(
+      run(home, { ...noTokenEnv, MULLION_AGENT_ENROLLMENT_TOKEN_STDIN: "1" }, "\n"),
+    ).rejects.toMatchObject({ stderr: expect.stringContaining("stdin carried no token") });
+    expect(fs.existsSync(path.join(home, ".env"))).toBe(false);
+  });
+
+  it("restarts a running unit when it rewrote the .env, and leaves an untouched .env's unit alone", async () => {
+    const home = freshHome();
+    await run(home);
+    // From here on the unit reports active.
+    writeShim(
+      binDir,
+      "systemctl",
+      `#!/usr/bin/env bash\nDIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"\necho "systemctl $*" >> "$DIR/commands.log"\ncase "$*" in *"is-enabled mullion.service"*|*"is-active mullion.service"*) exit 1;; *is-enabled*|*is-active*) exit 0;; *) exit 0;; esac\n`,
+    );
+    const restarts = () =>
+      fs
+        .readFileSync(path.join(binDir, "commands.log"), "utf8")
+        .split("\n")
+        .filter((l) => l.includes("restart mullion-agent.service")).length;
+
+    await run(home); // .env kept as is
+    expect(restarts()).toBe(0);
+
+    fs.rmSync(path.join(home, ".env")); // the revoked-agent recipe
+    await run(home, { ...ansibleEnv, MULLION_AGENT_ENROLLMENT_TOKEN: ROTATED_TOKEN });
+    expect(restarts()).toBe(1);
   });
 });
