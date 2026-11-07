@@ -6,6 +6,7 @@ import {
   HostBusyError,
   HostOutcomeUnknownError,
   HostRequestError,
+  HostResponseTooLargeError,
   HostUnreachableError,
   isIdempotentRequest,
 } from "./remote-host-errors.js";
@@ -151,6 +152,10 @@ export function responseHasNoBody(method: string, status: number): boolean {
 export function requestTooLargeMessage(cap: number): string {
   return `request body exceeds the ${formatLimit(cap)} limit of the outbound channel to this host`;
 }
+/** Set on the 413 the agent answers when a response head declares more than
+ * the channel's limit, so it is not mistaken for the origin's own 413. */
+export const RESPONSE_TOO_LARGE_HEADER = "x-mullion-response-too-large";
+
 export function responseTooLargeMessage(cap: number): string {
   return `response exceeds the ${formatLimit(cap)} limit of the outbound channel to this host`;
 }
@@ -685,7 +690,10 @@ export function mapChannelError(
   // limit named. A response that outgrew the limit of a non-idempotent request
   // already ran, so that stays an unknown outcome.
   if (err.tooLarge && (err.phase === "before-send" || isIdempotentRequest(method, path, body))) {
-    return new HostRequestError(hostId, 413, JSON.stringify({ message: err.message }));
+    const body = JSON.stringify({ message: err.message });
+    return err.phase === "before-send"
+      ? new HostRequestError(hostId, 413, body)
+      : new HostResponseTooLargeError(hostId, body);
   }
   if (err.phase === "after-send" && !isIdempotentRequest(method, path, body)) {
     return new HostOutcomeUnknownError(hostId, err);
@@ -941,7 +949,13 @@ export function createRequestSink(
         const declared = Number(outHeaders["content-length"]);
         if (!bodyless && Number.isFinite(declared) && declared > cap) {
           stream.destroy();
-          return await refuse(413, responseTooLargeMessage(cap));
+          // Marked so the primary can tell the dev server's response outgrew the
+          // limit from a 413 the dev server itself answered (#2702).
+          return await respond(
+            413,
+            { "content-type": "application/json", [RESPONSE_TOO_LARGE_HEADER]: "1" },
+            Buffer.from(JSON.stringify({ message: responseTooLargeMessage(cap) })),
+          );
         }
         let wroteHead = false;
         try {

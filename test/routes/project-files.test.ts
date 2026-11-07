@@ -4,7 +4,7 @@ import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import http from "node:http";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { execFileSync } from "node:child_process";
 import { closeDb } from "../../src/db/client.js";
 import { projects, sessions } from "../../src/db/schema.js";
@@ -844,7 +844,21 @@ describe("project-files routes", () => {
       const config = primary.config as { FILE_TRANSFER_MAX_BYTES: number };
       const max = config.FILE_TRANSFER_MAX_BYTES;
       config.FILE_TRANSFER_MAX_BYTES = 1024;
-      let produced = 0;
+      // Counts the bytes the route actually hands to the host client.
+      let forwarded = 0;
+      const original = RemoteHostClient.prototype.uploadProjectFile;
+      const uploadSpy = vi
+        .spyOn(RemoteHostClient.prototype, "uploadProjectFile")
+        .mockImplementation(function (this: RemoteHostClient, cwd, file, body, opts) {
+          const counted = new Transform({
+            transform(chunk: Buffer, _enc, cb) {
+              forwarded += chunk.length;
+              cb(null, chunk);
+            },
+          });
+          body.on("error", (err) => counted.destroy(err));
+          return original.call(this, cwd, file, body.pipe(counted), opts);
+        });
       try {
         const res = await primary.inject({
           method: "POST",
@@ -854,7 +868,6 @@ describe("project-files routes", () => {
           payload: Readable.from(
             (function* () {
               for (let i = 0; i < 64; i++) {
-                produced += 512;
                 yield Buffer.alloc(512);
               }
             })(),
@@ -864,9 +877,10 @@ describe("project-files routes", () => {
         expect(res.json().code).toBe("too_large");
         expect(res.json().message).toContain("1024 byte transfer limit");
         expect(fs.existsSync(path.join(projectCwd, "chunked.bin"))).toBe(false);
-        // Stopped at the limit; the rest was discarded, not forwarded.
-        expect(produced).toBeGreaterThan(1024);
+        // Nothing past the limit was forwarded to the host.
+        expect(forwarded).toBeLessThanOrEqual(1024);
       } finally {
+        uploadSpy.mockRestore();
         config.FILE_TRANSFER_MAX_BYTES = max;
         await primary.close();
         await agentApp.close();

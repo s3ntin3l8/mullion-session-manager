@@ -63,7 +63,12 @@ export function openChannelStream(
   socket.once("open", () => clearTimeout(timer));
   socket.once("close", () => clearTimeout(timer));
 
-  entry.mux.openChannel({ stream: true }).then(
+  // A preview WebSocket (Vite HMR) counts against the smaller preview cap, like
+  // the HTTP preview forward: a few open dev pages must not fill every stream
+  // slot and starve attach / events / relay (#2702).
+  const openOpts =
+    kind === "preview" || kind === "configured-preview" ? { preview: true } : { stream: true };
+  entry.mux.openChannel(openOpts).then(
     (channel) => {
       socket.bind(channel);
       channel.onData((chunk) => socket.ingest(chunk));

@@ -7,10 +7,15 @@ import {
   channelFetch,
   channelFetchStream,
   mapChannelError,
+  RESPONSE_TOO_LARGE_HEADER,
   refusalForStatus,
   type HostTransport,
 } from "./agent-channel-tunnel.js";
-import { HostRequestError, HostUnreachableError } from "./remote-host-errors.js";
+import {
+  HostRequestError,
+  HostResponseTooLargeError,
+  HostUnreachableError,
+} from "./remote-host-errors.js";
 
 /** A transport the exchange must not leave: the channel, or its absence. */
 type BoundTransport = Exclude<HostTransport, { kind: "inbound" }>;
@@ -150,6 +155,11 @@ export async function previewHttpOverChannel(
     });
   } catch (err) {
     throw mapChannelError(hostId, err, init.method.toUpperCase(), requestTarget);
+  }
+  if (res.status === 413 && res.headers[RESPONSE_TOO_LARGE_HEADER] !== undefined) {
+    const text = await readAll(res.stream, 4096).catch(() => "");
+    res.stream.destroy();
+    throw new HostResponseTooLargeError(hostId, text);
   }
   const responseHeaders = new Headers();
   for (const [name, value] of Object.entries(res.headers)) {

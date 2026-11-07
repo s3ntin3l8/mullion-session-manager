@@ -72,7 +72,10 @@ its authorization are the ones the inbound transport runs. The differences:
   and, at `DEGRADED_AFTER_BUSY` (3), marks the host degraded with the reason
   "channel saturated" (`healthReason` on `GET /api/hosts`). Any `ok` or `down`
   result resets the count. `ping()` stays a boolean (busy is true) for the
-  Settings "Test connection" button.
+  Settings "Test connection" button; it is a prototype method (not a class
+  property) so `vi.spyOn(RemoteHostClient.prototype, "ping")` works. The
+  Settings host row and `HostStatusLabel` show `healthReason` in place of
+  "missed a ping".
 
 Since #2620 the same exchange also carries the file-browser transfers
 (`uploadProjectFile` / `downloadProjectFile`, with a streamed request body and a
@@ -98,13 +101,21 @@ is full keeps its flag: queued stream opens count against the cap while they
 wait, so the cap cannot be exceeded by a burst of queued opens, and a stream
 open over the cap is refused at once, never queued.
 
-Preview responses (`previewHttpOverChannel`, `{ preview: true }`) are a stream
+Preview responses (`previewHttpOverChannel`, `{ preview: true }`) and preview
+WebSockets (the `preview` and `configured-preview` stream kinds, e.g. Vite HMR,
+opened by `openChannelStream` with `{ preview: true }`) are a stream
 subclass with their own, smaller budget: `AGENT_CHANNEL_MAX_PREVIEW_CHANNELS`
 (a quarter of the stream slots, 8). A page loading many modules in parallel or a
 few open SSE previews therefore cannot starve attach, events, control-relay and
 ssh-agent streams. A preview past its cap fails as `HostBusyError`, which the
-preview proxy answers with `503` and `Retry-After` (a 413 from the agent is
-passed through as 413; other failures stay `502`). In-flight requests and peer-opened channels no
+preview proxy answers with `503` and `Retry-After` (a preview WebSocket past
+the cap is refused at the open). A 413 for an over-limit _request_ body is
+passed through as 413; a dev-server _response_ that outgrows the channel limit
+(`HostResponseTooLargeError`, the agent's marked 413) is a `502`, since it is
+the upstream's doing; other failures stay `502`. A response that fails after its
+head went out resets the browser connection (the relay sets
+`transfer-encoding: chunked` so an abort is not mistaken for a close-delimited
+end). In-flight requests and peer-opened channels no
 longer eat stream slots, and 32 open streams still leave
 `AGENT_CHANNEL_REQUEST_RESERVED_CHANNELS` (32) free for requests.
 

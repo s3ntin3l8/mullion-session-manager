@@ -43,6 +43,8 @@ export interface Host {
   // closing them. Absent from an older primary.
   leakedBrowsers?: number;
   health: HostHealthStatus;
+  // Why the host is degraded when the primary knows ("channel saturated"). Absent from an older primary.
+  healthReason?: string | null;
   // Not currently rendered anywhere — kept for a future "last seen Nm ago"
   // affordance (would make a "degraded" host more actionable than a bare
   // color). Deliberate forward-plumbing, not dead code: it's the one field

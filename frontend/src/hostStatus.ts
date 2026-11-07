@@ -64,7 +64,9 @@ export function deriveHostStatus(host: Host, click: PingState): HostStatusDispla
     // fleet of broken machines.
     if (host.health === "online") return { dot: "on", label: "online", color: "var(--g)" };
     if (host.health === "degraded") {
-      return { dot: "warn", label: "missed a ping", color: "var(--y)" };
+      // A degraded host whose channel answered but is full says why (#2702).
+      const label = host.healthReason ? host.healthReason : "missed a ping";
+      return { dot: "warn", label, color: "var(--y)" };
     }
     // The "off" dot IS the hollow dim ring (.settings-status-dot.off) —
     // the same shape an idle dot uses, so no new dot value is needed.

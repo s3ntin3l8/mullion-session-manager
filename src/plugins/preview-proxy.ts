@@ -10,7 +10,11 @@ import { projects, projectPreviewTargets } from "../db/schema.js";
 import { resolveExecutionContext } from "../services/execution-context.js";
 import { getPreviewBySlug } from "../services/preview-registry.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
-import { HostRequestError, isHostBusyError } from "../services/remote-host-errors.js";
+import {
+  HostRequestError,
+  HostResponseTooLargeError,
+  isHostBusyError,
+} from "../services/remote-host-errors.js";
 import { getRemoteHostClient } from "../services/remote-host-client.js";
 import { buildPreviewHostPattern, extractPreviewSlug } from "../services/preview-host.js";
 import { requestScheme } from "../services/request-scheme.js";
@@ -471,6 +475,15 @@ async function handlePreviewRequest(
         // browser may retry, so say 503 + Retry-After rather than a hard 502.
         void reply.header("retry-after", String(PREVIEW_BUSY_RETRY_AFTER_SECONDS));
         return reply.serviceUnavailable(PREVIEW_UNAVAILABLE_MESSAGE);
+      }
+      if (err instanceof HostResponseTooLargeError) {
+        // The dev server's answer outgrew the channel's limit: the upstream's
+        // doing, not the browser's request, so a gateway error (#2702).
+        return reply.code(502).send({
+          statusCode: 502,
+          error: "Bad Gateway",
+          message: "The dev server's response is too large to preview through this host.",
+        });
       }
       if (err instanceof HostRequestError && err.statusCode === 413) {
         // An over-limit request body is the caller's doing, not a bad gateway.
