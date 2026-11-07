@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { ChevronDownIcon } from "./icons.js";
 import { menuMaxHeight, visibleViewport } from "../hooks/useVisualViewportChange.js";
 import { useDashboardStore } from "../store/index.js";
+import { themeClassName } from "../store/theme.js";
 import { truncateMiddle } from "../lib/truncatePath.js";
 
 export interface CustomSelectOption {
@@ -403,7 +404,7 @@ export function CustomSelect({
         createPortal(
           <div
             ref={menuRef}
-            className={`cmux-root${theme === "light" ? " light" : ""} custom-select-menu`}
+            className={themeClassName(theme, "custom-select-menu")}
             style={getMenuStyle()}
             onClick={(e) => e.stopPropagation()}
           >

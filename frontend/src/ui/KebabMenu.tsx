@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useDashboardStore } from "../store/index.js";
+import { themeClassName } from "../store/theme.js";
 import { OverflowIcon } from "./icons.js";
 import { useFocusTrap } from "../hooks/useFocusTrap.js";
 import {
@@ -328,7 +329,7 @@ export function KebabMenu({
         createPortal(
           <div
             ref={menuRef}
-            className={`cmux-root${theme === "light" ? " light" : ""} pane-tab-overflow-menu`}
+            className={themeClassName(theme, "pane-tab-overflow-menu")}
             style={menuStyle}
             role="menu"
             onKeyDown={onMenuKeyDown}

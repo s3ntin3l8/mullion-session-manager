@@ -29,6 +29,7 @@ import {
   SIDEBAR_MIN_WIDTH,
   SIDEBAR_MAX_WIDTH,
 } from "./store/index.js";
+import { themeClassName } from "./store/theme.js";
 import { useShallow } from "zustand/react/shallow";
 import type { Session } from "./api/index.js";
 import { getSchemeBackground } from "./terminalTheme.js";
@@ -1638,7 +1639,16 @@ export function App() {
   return (
     <div
       data-tier={layoutTier}
-      className={`app cmux-root${theme === "light" ? " light" : ""}${sidebarOpen ? " sb-open" : ""}${compact && viewMode === "kanban" ? " nav-tasks" : ""}${sidebarCollapsed ? " sidebar-collapsed" : ""}${sidebarResizing ? " sidebar-resizing" : ""}${settings.sidebarDensity === "compact" ? " density-compact" : ""}${isCoarsePointer && activeTerminalSession ? " key-bar" : ""}`}
+      className={themeClassName(
+        theme,
+        "app",
+        sidebarOpen && "sb-open",
+        compact && viewMode === "kanban" && "nav-tasks",
+        sidebarCollapsed && "sidebar-collapsed",
+        sidebarResizing && "sidebar-resizing",
+        settings.sidebarDensity === "compact" && "density-compact",
+        isCoarsePointer && activeTerminalSession && "key-bar",
+      )}
       style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
     >
       {/* The app has no visible title, but a document with no top-level

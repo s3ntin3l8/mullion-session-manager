@@ -7,6 +7,7 @@ import type {
 } from "react";
 import { createPortal } from "react-dom";
 import { useDashboardStore } from "../store/index.js";
+import { themeClassName } from "../store/theme.js";
 import { useFocusTrap } from "../hooks/useFocusTrap.js";
 import { usePhoneBackStack } from "../hooks/usePhoneBackStack.js";
 import { CloseIcon } from "./icons.js";
@@ -171,7 +172,7 @@ export function BottomSheet({
   if (!open) return null;
 
   const backdropClass = [
-    portal ? `cmux-root${theme === "light" ? " light" : ""}` : null,
+    portal ? themeClassName(theme) : null,
     "mobile-session-backdrop",
     backdropClassName ?? null,
   ]
