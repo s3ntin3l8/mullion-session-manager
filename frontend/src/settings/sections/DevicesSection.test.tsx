@@ -2,9 +2,13 @@
 // Issue #2411 — the five lazy loads this section used to hand-roll (each
 // its own `let cancelled = false` effect) now go through the shared
 // useAsyncData hook. This file is the coverage that came with the
-// migration: the loading, empty, failed and in-flight state of each of
-// those loads, plus the guarantee the hook has to keep — a superseded load
-// must not apply its result.
+// migration: the loading, empty, failed and in-flight state of the three
+// loads a user reaches on their own — the AVD picker, the New-AVD
+// provisioning data and the available-images list — plus the guarantee the
+// hook has to keep: a superseded load must not apply its result.
+//
+// The two install-driven refreshes keep the coverage they already had in
+// Settings.devices.test.tsx, which this change leaves untouched.
 //
 // It renders DevicesSection directly rather than the whole Settings modal.
 // Settings.devices.test.tsx stays untouched and keeps covering the section
@@ -45,6 +49,9 @@ const DEFAULTS = {
 
 type RouteName = keyof typeof DEFAULTS;
 
+/** The requests the last installed backend did not stub. */
+let unexpectedRequestLog: string[] = [];
+
 interface Deferred {
   promise: Promise<Response>;
   resolve: (value: Response) => void;
@@ -83,6 +90,9 @@ function installBackend(overrides: Partial<Record<RouteName, Handler>> = {}) {
     "GET /api/system-images/available": track("availableImages", handlers.availableImages),
   });
   vi.stubGlobal("fetch", fetchMock);
+  // Kept where the afterEach can assert it: a request no test stubbed would
+  // otherwise surface only as a swallowed rejection inside the component.
+  unexpectedRequestLog = unexpectedCalls;
   return { calls, unexpectedCalls };
 }
 
@@ -97,6 +107,9 @@ describe("DevicesSection — the useAsyncData loads (issue #2411)", () => {
   });
 
   afterEach(() => {
+    // A request no test stubbed would otherwise surface only as a swallowed
+    // rejection inside the component (mockFetch.ts's own contract).
+    expect(unexpectedRequestLog).toEqual([]);
     vi.unstubAllGlobals();
   });
 

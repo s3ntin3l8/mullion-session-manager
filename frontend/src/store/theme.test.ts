@@ -55,8 +55,9 @@ describe("theme class guard (issue #2517)", () => {
   it("has no hand-written theme class outside the helper", async () => {
     const offenders: string[] = [];
     for (const [path, load] of Object.entries(sources)) {
-      // The helper is where the classes are spelled out.
-      if (path.endsWith("/store/theme.ts")) continue;
+      // The helper is where the classes are spelled out. The glob's keys are
+      // relative to THIS module, so the helper's key is "./theme.ts".
+      if (path === "./theme.ts") continue;
       const source = await load();
       if (source.includes(HAND_WRITTEN_THEME_CLASS)) offenders.push(path);
     }
