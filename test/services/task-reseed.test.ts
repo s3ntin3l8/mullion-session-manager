@@ -350,8 +350,10 @@ describe("reseedTaskIfSessionExited", () => {
   describe("re-checking an adopted re-seed session (#2637)", () => {
     const SEED = "Reviewer feedback: please fix the flaky test\nmore detail";
 
-    async function adopt() {
-      const { task } = insertTaskWithSession("exited");
+    async function adopt(agentCommand = "claude") {
+      const { task: inserted } = insertTaskWithSession("exited");
+      app.db.update(tasks).set({ agentCommand }).where(eq(tasks.id, inserted.id)).run();
+      const task = { ...inserted, agentCommand };
       const kept = insertSessionRow("active");
       mockCreateSessionRecord.mockResolvedValue({
         ok: false,
@@ -368,6 +370,9 @@ describe("reseedTaskIfSessionExited", () => {
 
     it("types the seed into the adopted session once, never spawning a second one", async () => {
       const { task } = await adopt();
+      // The transcript answered and holds no such user turn: positive evidence
+      // the seed never arrived (the screen alone is not).
+      mockTranscript.mockResolvedValue(transcriptOf({ role: "user", text: "something else" }));
 
       await recheckAdoptedSeeds(app, later());
 
@@ -452,10 +457,44 @@ describe("reseedTaskIfSessionExited", () => {
       expect(mockPrompt).toHaveBeenCalledTimes(1);
     });
 
-    it("falls back to the screen's verdict when the transcript cannot answer", async () => {
-      await adopt();
+    // A seed-capable agent got the seed on argv from the very request that
+    // spawned it, so a screen that does not show it (a paste placeholder, a line
+    // that scrolled off) with a transcript that cannot answer is not evidence it
+    // is missing: typing it again would make the worker do the task twice.
+    it.each([
+      ["a transcript the agent does not keep (404)", () => undefined],
+      [
+        "a transcript call that fails",
+        () => mockTranscript.mockRejectedValue(new Error("host went away")),
+      ],
+    ])("does not retype a seed-capable agent's seed with %s", async (_name, arrange) => {
+      const { task } = await adopt();
+      mockRenderedScrollback.mockResolvedValue("[Pasted text #1 +2 lines]\n> ");
+      arrange();
+
+      await recheckAdoptedSeeds(app, later());
+      await recheckAdoptedSeeds(app, later());
+
+      expect(mockPrompt).not.toHaveBeenCalled();
+      expect(seedOf(task.id)).toBe(true);
+    });
+
+    it("still falls back to the screen's verdict for an agent whose spawn carried no seed", async () => {
+      // Not seed-capable: the argv carried nothing, so a screen without the seed
+      // does mean it has to be typed.
+      await adopt("bash");
       mockRenderedScrollback.mockResolvedValue("unrelated\n> ");
       mockTranscript.mockRejectedValue(new Error("host went away"));
+
+      await recheckAdoptedSeeds(app, later());
+
+      expect(mockPrompt).toHaveBeenCalledTimes(1);
+    });
+
+    it("types the seed when a seed-capable agent's transcript answers with an empty conversation", async () => {
+      await adopt();
+      mockRenderedScrollback.mockResolvedValue("> ");
+      mockTranscript.mockResolvedValue(transcriptOf());
 
       await recheckAdoptedSeeds(app, later());
 

@@ -1005,6 +1005,25 @@ handler has no idea the field exists and simply never includes it. A
 local-hosted spawn skips this uncertainty entirely (same process/build as
 the primary, so there's nothing to skew).
 
+**An adopted re-seed session (#2726).** When a re-seed's spawn request is lost
+after it was sent, `createSessionRecord` keeps the row and the task adopts it
+with `seedDelivered: false` (`reseedTaskIfSessionExited`, `task-reseed.ts`),
+remembering the prompt, the session and whether the agent is seed-capable in
+memory (`pendingAdoptedSeeds`; a restart forgets it and the ordinary dead or
+idle-session handling takes over). Every reconcile tick `recheckAdoptedSeeds`
+looks at each such session once its 30 s boot grace has passed and it is quiet:
+it checks the rendered screen for the seed (a majority of up to three short
+fragments, compared as letters and digits only, so wrapping, borders and
+indentation do not matter) and then the session's transcript (user turns only).
+Typing the seed again is the dangerous move (the worker would do the task
+twice), so for a **seed-capable** agent, whose spawn request carried the seed as
+argv, it needs positive evidence of absence: a transcript that answered and
+holds no matching user turn. A screen that does not show the seed (a collapsed
+"pasted text" placeholder, a line that scrolled off) with a transcript that
+cannot answer (an agent that keeps none, a host that does not answer) marks
+`seedDelivered: true` without typing. An agent whose spawn carried no seed is
+typed to as soon as the screen lacks it. The check gives up after 30 minutes.
+
 ## GitHub sync
 
 **Issue import is per repo, not per project (#2233).** `pollOnce` resolves

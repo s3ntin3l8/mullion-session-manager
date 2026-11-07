@@ -317,6 +317,7 @@ export async function reseedTaskIfSessionExited(
       prompt,
       adoptedAt: Date.now(),
       logContext,
+      seedCapable,
     });
     app.log.warn(
       { taskId: task.id, previousSessionId: task.sessionId, newSessionId: result.sessionId },
@@ -398,12 +399,23 @@ export async function reseedTaskIfSessionExited(
  * one that was lost), nothing else would ever send it. Remembered here, in
  * memory only: a restart forgets the entry and the task falls back to the
  * ordinary dead/idle-session handling, which is the safe direction.
+ *
+ * Typing the seed again is the dangerous move (the worker does the task twice),
+ * so for a seed-capable agent it needs positive evidence the seed is absent: a
+ * transcript that answered and holds no matching user turn. A screen that does
+ * not show it (a collapsed "pasted text" placeholder, a scrolled-off line) or a
+ * transcript that cannot answer is not that evidence: the session was started by
+ * the very request that carried the seed.
  */
 interface PendingAdoptedSeed {
   sessionId: number;
   prompt: string;
   adoptedAt: number;
   logContext: string;
+  /** The spawn request carried the seed as argv (a seed-capable agent). A live,
+   * quiet session that request started therefore HAS the seed, whatever its
+   * screen shows. */
+  seedCapable: boolean;
 }
 const pendingAdoptedSeeds = new Map<number, PendingAdoptedSeed>();
 
@@ -534,12 +546,25 @@ async function recheckEach(app: FastifyInstance, now: number): Promise<void> {
       );
       hasSeed = screenShowsSeed(screen, pending.prompt);
       // Not on screen is not "not delivered": ask the transcript before typing
-      // the seed a second time (#2703). It cannot say (null) -> trust the screen.
+      // the seed a second time (#2703). It cannot say (null): a seed-capable
+      // agent got the seed on argv, so it is not typed again; any other agent
+      // trusts the screen.
       if (!hasSeed) {
-        hasSeed =
-          (await transcriptShowsSeed(app, state.hostId, task.sessionId!, pending.prompt).catch(
-            () => null,
-          )) === true;
+        const fromTranscript = await transcriptShowsSeed(
+          app,
+          state.hostId,
+          task.sessionId!,
+          pending.prompt,
+        ).catch(() => null);
+        hasSeed = fromTranscript === true;
+        if (fromTranscript === null && pending.seedCapable) {
+          // No positive evidence the seed is absent: the spawn carried it as argv.
+          hasSeed = true;
+          app.log.info(
+            { taskId, sessionId: task.sessionId },
+            `${pending.logContext}: the seed is not on the adopted session's screen and its transcript cannot say; not typing it again (the spawn carried it)`,
+          );
+        }
       }
     } catch (err) {
       app.log.warn(

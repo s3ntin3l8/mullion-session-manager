@@ -8,11 +8,13 @@ const mockTerminate = vi.fn();
 const mockLiveStatus = vi.fn();
 const mockPrompt = vi.fn();
 const mockRenderedScrollback = vi.fn();
+const mockTranscript = vi.fn();
 const mockResolveBackend = vi.fn(() => ({
   terminate: mockTerminate,
   liveStatus: mockLiveStatus,
   prompt: mockPrompt,
   getRenderedScrollback: mockRenderedScrollback,
+  getTranscript: mockTranscript,
 }));
 const mockCloseSessionBrowserBindings = vi.fn();
 
@@ -71,10 +73,12 @@ describe("reconcileTasks re-checks an adopted re-seed session", () => {
     mockLiveStatus.mockResolvedValue({});
     mockPrompt.mockResolvedValue({ ok: true, outputOffset: 0 });
     mockRenderedScrollback.mockResolvedValue("");
+    mockTranscript.mockResolvedValue({ ok: false, status: 404, error: "no transcript" });
     resetPendingAdoptedSeeds();
   });
 
-  it("types the seed into an adopted session once, through reconcileTasks, and never spawns", async () => {
+  /** An in-progress task whose re-seed spawn outcome was unknown: adopted, seedDelivered false. */
+  async function adoptedTask() {
     const dead = app.db
       .insert(sessions)
       .values({ projectId, command: "claude", cwd: "/tmp", status: "exited" })
@@ -113,6 +117,19 @@ describe("reconcileTasks re-checks an adopted re-seed session", () => {
     mockCreateSessionRecord.mockClear();
     const seedOf = () =>
       app.db.select().from(tasks).where(eq(tasks.id, task.id)).all()[0].seedDelivered;
+    return { kept, seedOf };
+  }
+
+  it("types the seed into an adopted session once, through reconcileTasks, and never spawns", async () => {
+    const { kept, seedOf } = await adoptedTask();
+    // The transcript answered and holds no such user turn: the seed never arrived.
+    mockTranscript.mockResolvedValue({
+      ok: true,
+      entries: [{ seq: 0, ts: null, role: "user", text: "something else" }],
+      nextSeq: 1,
+      more: false,
+      file: "f",
+    });
     expect(seedOf()).toBe(false);
 
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -125,6 +142,25 @@ describe("reconcileTasks re-checks an adopted re-seed session", () => {
 
       await reconcileTasks(app);
       expect(mockPrompt).toHaveBeenCalledTimes(1);
+      expect(mockCreateSessionRecord).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retype a collapsed seed when no transcript can say, through reconcileTasks", async () => {
+    // The paste placeholder is all the screen shows, and the agent keeps no
+    // transcript: the spawn carried the seed on argv, so it is not typed again.
+    const { seedOf } = await adoptedTask();
+    mockRenderedScrollback.mockResolvedValue("[Pasted text #1 +2 lines]\n> ");
+    expect(seedOf()).toBe(false);
+
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.now() + ADOPTED_SEED_GRACE_MS + 1000);
+    try {
+      await reconcileTasks(app);
+      expect(mockPrompt).not.toHaveBeenCalled();
+      expect(seedOf()).toBe(true);
       expect(mockCreateSessionRecord).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
