@@ -124,6 +124,7 @@ describe("internal-schemas.ts — byte-identical output regression guard", () =>
               projectId: { type: "integer" },
               hostId: { type: "string", minLength: 1, maxLength: 256 },
               checkoutRoot: { type: "string", minLength: 1, maxLength: 4096 },
+              endpoint: { type: "string", maxLength: 256 },
               legacy: { type: "boolean" },
             },
           },

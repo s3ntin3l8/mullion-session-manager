@@ -177,6 +177,11 @@ export interface ManagedBrowser {
    * crashed); the entry is no longer in the pool, so holders see it as closed
    * rather than waiting on a dead page. */
   closed: boolean;
+  /** Called once when `closed` flips, so a holder that streams from the page
+   * (the browser panel's socket) can report "browser closed" instead of
+   * waiting on frames that will never come. Fires immediately for a holder
+   * that registers after the fact. */
+  onClosed(listener: () => void): () => void;
   consoleLogs: ConsoleLogEntry[];
   pageErrors: PageErrorEntry[];
   downloads: DownloadEntry[];
@@ -197,6 +202,10 @@ function sanitizeDownloadFilename(name: string): string {
 const BROWSER_DISABLED_MESSAGE =
   "Browser feature is disabled — turn it on in Settings → Browser (or set BROWSER_ENABLED=true), then restart the Mullion server.";
 
+// Listeners live beside the entry, not on it, so ManagedBrowser stays a plain
+// data shape that tests can construct.
+const closeListeners = new WeakMap<ManagedBrowser, Set<() => void>>();
+
 export class BrowserManager {
   private readonly enabled: boolean;
   private readonly maxContexts: number;
@@ -208,6 +217,12 @@ export class BrowserManager {
   // Targets whose context is being opened, so concurrent callers share one
   // launch and the pool bound counts them before they land in `instances`.
   private readonly pending = new Map<string, Promise<ManagedBrowser>>();
+  // Targets whose context is being saved and closed. They are out of
+  // `instances` but still occupy the shared process (and a pool slot), and a
+  // relaunch of the same key must wait for the close: it would otherwise wipe
+  // the downloads the old context is still saving and load a half-written
+  // storage-state file.
+  private readonly closing = new Map<string, Promise<void>>();
   // The machine's single Chromium process; null until the first target.
   private process: Browser | null = null;
   private processLaunch: Promise<Browser> | null = null;
@@ -286,19 +301,34 @@ export class BrowserManager {
     return this.processLaunch;
   }
 
+  /** Flips a pooled entry to closed and tells whoever is streaming from it. */
+  private markClosed(managed: ManagedBrowser): void {
+    if (managed.closed) return;
+    managed.closed = true;
+    const listeners = closeListeners.get(managed);
+    closeListeners.delete(managed);
+    for (const listener of listeners ?? []) {
+      try {
+        listener();
+      } catch {
+        // a holder's callback must not break the pool's own bookkeeping
+      }
+    }
+  }
+
   /** The process is gone: every target on it is closed, and the next
    * getOrLaunch() relaunches. */
   private dropContextsOf(browser: Browser): void {
     for (const [key, managed] of this.instances) {
       if (managed.browser !== browser) continue;
-      managed.closed = true;
+      this.markClosed(managed);
       this.instances.delete(key);
     }
   }
 
   /** Closes the shared process once no target uses it or is being opened. */
   private async closeProcessIfIdle(): Promise<void> {
-    if (this.instances.size > 0 || this.pending.size > 0) return;
+    if (this.instances.size > 0 || this.pending.size > 0 || this.closing.size > 0) return;
     const browser = this.process;
     if (!browser) return;
     this.process = null;
@@ -312,17 +342,20 @@ export class BrowserManager {
     if (!this.enabled) throw new Error(BROWSER_DISABLED_MESSAGE);
 
     const key = browserTargetKey(target);
+    // A close of this very target is still saving: start clean after it.
+    const closingNow = this.closing.get(key);
+    if (closingNow) await closingNow;
     const existing = this.instances.get(key);
     if (existing && existing.browser.isConnected()) return existing;
     if (existing) {
-      existing.closed = true;
+      this.markClosed(existing);
       this.instances.delete(key);
     }
 
     const inFlight = this.pending.get(key);
     if (inFlight) return inFlight;
 
-    const open = this.instances.size + this.pending.size;
+    const open = this.instances.size + this.pending.size + this.closing.size;
     if (open >= this.maxContexts) {
       throw new Error(
         `Browser pool exhausted: ${open}/${this.maxContexts} instances already running.`,
@@ -342,8 +375,6 @@ export class BrowserManager {
   }
 
   private async openTarget(target: BrowserTarget, key: string): Promise<ManagedBrowser> {
-    const { projectId } = target;
-
     // Issue #381 — the `downloads` array below (and the 50-entry eviction
     // that deletes files as they age out of it) is a plain closure variable,
     // scoped to THIS launch's lifetime. It has no memory of files saved by a
@@ -378,6 +409,24 @@ export class BrowserManager {
     const context = await browser.newContext(
       existsSync(storageStatePath) ? { storageState: storageStatePath } : {},
     );
+    // The context lives in the shared process but is not in `instances` until
+    // the target is fully open, so a failure from here on must close it or it
+    // would stay there uncounted by `maxContexts`.
+    try {
+      return await this.finishOpen(target, key, browser, context);
+    } catch (err) {
+      await context.close().catch(() => {});
+      throw err;
+    }
+  }
+
+  private async finishOpen(
+    target: BrowserTarget,
+    key: string,
+    browser: Browser,
+    context: BrowserContext,
+  ): Promise<ManagedBrowser> {
+    const { projectId } = target;
 
     // #184 — applied after context creation regardless of whether
     // storageState above already had cookies: addCookies() upserts by
@@ -410,6 +459,18 @@ export class BrowserManager {
       context,
       page,
       closed: false,
+      onClosed: (listener) => {
+        if (managed.closed) {
+          listener();
+          return () => {};
+        }
+        let set = closeListeners.get(managed);
+        if (!set) closeListeners.set(managed, (set = new Set()));
+        set.add(listener);
+        return () => {
+          set.delete(listener);
+        };
+      },
       consoleLogs,
       pageErrors,
       downloads,
@@ -517,7 +578,7 @@ export class BrowserManager {
     }
     for (const [key, managed] of this.instances) {
       if (!managed.browser.isConnected()) {
-        managed.closed = true;
+        this.markClosed(managed);
         this.instances.delete(key);
       }
     }
@@ -528,11 +589,22 @@ export class BrowserManager {
    * Safe to call when none is open. */
   async closeTarget(target: BrowserTarget): Promise<void> {
     const key = browserTargetKey(target);
+    const inFlight = this.closing.get(key);
+    if (inFlight) return inFlight;
     const existing = this.instances.get(key);
     if (!existing) return;
 
-    existing.closed = true;
+    this.markClosed(existing);
     this.instances.delete(key);
+    const close = this.saveAndClose(existing, target).finally(() => {
+      this.closing.delete(key);
+    });
+    this.closing.set(key, close);
+    await close;
+    await this.closeProcessIfIdle();
+  }
+
+  private async saveAndClose(existing: ManagedBrowser, target: BrowserTarget): Promise<void> {
     try {
       if (existing.browser.isConnected()) {
         await existing.context.storageState({ path: this.storageStatePath(target) });
@@ -543,7 +615,6 @@ export class BrowserManager {
       // any other already-dead session's teardown.
     }
     await existing.context.close().catch(() => {});
-    await this.closeProcessIfIdle();
   }
 
   /** Closes a target's browser and deletes the storage state and downloads it

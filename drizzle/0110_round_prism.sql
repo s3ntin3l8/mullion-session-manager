@@ -1,0 +1,1 @@
+ALTER TABLE `session_browsers` ADD `target_endpoint` text;

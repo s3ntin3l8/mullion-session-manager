@@ -97,7 +97,14 @@ export async function saveAgentIdentity(statePath: string, identity: AgentIdenti
 
 /** Whether `hostId` is this agent. An agent that has not enrolled yet (a
  * legacy or manual deployment) has no id of its own to compare against, so it
- * cannot tell and accepts the name the primary gave it. */
+ * cannot tell and accepts the name the primary gave it.
+ *
+ * That fail-open case is deliberate (issue #2672): refusing would break every
+ * legacy deployment's browser, and the agent has nothing to check the name
+ * against. What still holds there is that the request already passed the
+ * agent's bearer-token gate and the target only ever selects a context in this
+ * machine's own pool, so a wrong `hostId` names a pool key, not another
+ * machine. An enrolled agent enforces the check. */
 export function agentServesHost(sessionsDir: string, hostId: string): boolean {
   const own = loadAgentIdentity(identityStatePath(sessionsDir))?.hostId;
   return own === undefined || own === hostId;

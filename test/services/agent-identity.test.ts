@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
 import {
+  agentServesHost,
   identityStatePath,
   loadAgentIdentity,
   saveAgentIdentity,
@@ -58,5 +59,19 @@ describe("agent identity state file", () => {
     expect(loadAgentIdentity(file)).toBeNull();
     fs.writeFileSync(file, JSON.stringify({ hostId: "h1" }));
     expect(loadAgentIdentity(file)).toBeNull();
+  });
+
+  describe("agentServesHost (#2672)", () => {
+    it("fails open, by design, on an agent with no enrolled identity", () => {
+      // Nothing to compare against: a legacy/manual deployment accepts the
+      // name the primary gave it (documented on agentServesHost).
+      expect(agentServesHost(dir, "any-host")).toBe(true);
+    });
+
+    it("enforces its own id once enrolled", async () => {
+      await saveAgentIdentity(file, { hostId: "h1", machineCredential: "c1".repeat(16) });
+      expect(agentServesHost(dir, "h1")).toBe(true);
+      expect(agentServesHost(dir, "h2")).toBe(false);
+    });
   });
 });

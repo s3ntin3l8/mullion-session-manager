@@ -8,8 +8,8 @@
 // wrong application is worse than a refusal.
 import type { FastifyInstance } from "fastify";
 import { existsSync } from "node:fs";
-import { eq } from "drizzle-orm";
-import { projects, type sessionBrowsers } from "../db/schema.js";
+import { asc, eq } from "drizzle-orm";
+import { previews, projects, type sessionBrowsers } from "../db/schema.js";
 import type { BrowserTarget } from "./browser-manager.js";
 import {
   executionContextErrorStatus,
@@ -44,14 +44,34 @@ export type BrowserTargetResult =
 export function browserTargetFromContext(
   project: typeof projects.$inferSelect,
   context: ExecutionContext,
+  endpoint?: string,
 ): BrowserTarget {
   const root = projectCwdOnHost(project, context.hostId, parseHostCwds(project.hostCwds));
   return {
     projectId: context.projectId,
     hostId: context.hostId,
     checkoutRoot: context.checkoutRoot,
+    ...(endpoint ? { endpoint } : {}),
     legacy: context.hostId === project.hostId && root !== null && context.checkoutRoot === root,
   };
+}
+
+/** The preview endpoint a session is serving (issue #2672): the slug of the
+ * preview row bound to it, which names one preview of the checkout, so two
+ * previews in one checkout get separate browser contexts. Undefined when the
+ * session has no preview, which is the legacy (empty) endpoint. */
+export function sessionPreviewEndpoint(
+  app: FastifyInstance,
+  sessionId: number,
+): string | undefined {
+  const [row] = app.db
+    .select({ slug: previews.slug })
+    .from(previews)
+    .where(eq(previews.sessionId, sessionId))
+    .orderBy(asc(previews.id))
+    .limit(1)
+    .all();
+  return row?.slug;
 }
 
 async function resolveTarget(
@@ -74,7 +94,11 @@ async function resolveTarget(
   if (!project) return { ok: false, status: 400, message: "Project not found" };
   const gate = requireOperation(app, result.context.hostId, BROWSER_TARGETS_OPERATION);
   if (!gate.ok) return { ok: false, status: 501, message: gate.message };
-  return { ok: true, target: browserTargetFromContext(project, result.context) };
+  const endpoint =
+    "sessionId" in ref && typeof ref.sessionId === "number"
+      ? sessionPreviewEndpoint(app, ref.sessionId)
+      : undefined;
+  return { ok: true, target: browserTargetFromContext(project, result.context, endpoint) };
 }
 
 /** Why a recorded binding can no longer be used, or null when it still can.
@@ -143,7 +167,8 @@ export function bindingBrowserTarget(
   binding: Pick<
     typeof sessionBrowsers.$inferSelect,
     "projectId" | "targetHostId" | "targetCheckoutRoot"
-  >,
+  > &
+    Partial<Pick<typeof sessionBrowsers.$inferSelect, "targetEndpoint">>,
 ): BrowserTarget | null {
   if (binding.targetHostId !== null && binding.targetCheckoutRoot !== null) {
     const root = projectCwdOnHost(project, binding.targetHostId, parseHostCwds(project.hostCwds));
@@ -151,6 +176,7 @@ export function bindingBrowserTarget(
       projectId: binding.projectId,
       hostId: binding.targetHostId,
       checkoutRoot: binding.targetCheckoutRoot,
+      ...(binding.targetEndpoint ? { endpoint: binding.targetEndpoint } : {}),
       legacy: binding.targetHostId === project.hostId && root === binding.targetCheckoutRoot,
     };
   }

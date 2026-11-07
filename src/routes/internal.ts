@@ -161,6 +161,7 @@ import { AGENT_CHANNEL_AUTH_HEADER } from "../services/agent-channel-tunnel.js";
 import {
   rememberSessionBrowserTarget,
   sessionBrowserTarget,
+  forgetSessionBrowserTarget,
 } from "../services/session-browser-targets.js";
 import { acceptControlRelayConnection } from "../plugins/control-relay.js";
 import { resolveSshAuthSock } from "../services/ssh-agent-socket.js";
@@ -2528,7 +2529,7 @@ export async function internalRoutes(app: FastifyInstance) {
         model,
         smallModel,
       });
-      rememberSessionBrowserTarget(app.pty, id, browserTarget);
+      rememberSessionBrowserTarget(app.pty, id, browserTarget, app.config.SESSIONS_DIR);
       reply.code(201);
       // Hermes review, PR #538 — an agent build too old to have this route's
       // `initialPrompt`/`skipPermissions` schema properties silently strips
@@ -2607,7 +2608,7 @@ export async function internalRoutes(app: FastifyInstance) {
         // the primary sent at spawn), never another checkout's page: a URL can
         // carry tokens or query secrets. A session with no target, or whose
         // target has no running browser, reports nothing.
-        const target = sessionBrowserTarget(id);
+        const target = sessionBrowserTarget(id, app.config.SESSIONS_DIR);
         if (info && app.browserEnabled && target) {
           const managed = app.browser.get(target);
           if (managed?.browser.isConnected()) {
@@ -2716,6 +2717,7 @@ export async function internalRoutes(app: FastifyInstance) {
     { ...INTERNAL_RATE_LIMIT, schema: terminateSchema },
     async (request, reply) => {
       await app.pty.terminate(request.params.id);
+      forgetSessionBrowserTarget(request.params.id, app.config.SESSIONS_DIR);
       reply.code(204);
     },
   );

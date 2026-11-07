@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import fs from "node:fs";
+import path from "node:path";
 import net from "node:net";
 import { EventEmitter } from "node:events";
 import type * as ChildProcess from "node:child_process";
@@ -80,6 +81,7 @@ describe("hook-socket browser on an agent host (issue #2639)", () => {
   async function agentSession(
     browserTarget?: { projectId: number; hostId: string; checkoutRoot: string; legacy: boolean },
     prepare?: (a: NonNullable<typeof app>) => void,
+    opts: { remember?: boolean } = {},
   ) {
     process.env.MULLION_ROLE = "agent";
     process.env.MULLION_AGENT_TOKEN = "agent-hook-test-token";
@@ -95,7 +97,7 @@ describe("hook-socket browser on an agent host (issue #2639)", () => {
       rows: 24,
       projectId: 7,
     });
-    rememberSessionBrowserTarget(app.pty, "321", browserTarget);
+    if (opts.remember !== false) rememberSessionBrowserTarget(app.pty, "321", browserTarget);
     const socket = await connect(app.pty.hookSocketPath);
     socket.write(`${JSON.stringify({ token: session.hookToken })}\n`);
     const replyPromise = waitForLine(socket);
@@ -146,6 +148,41 @@ describe("hook-socket browser on an agent host (issue #2639)", () => {
       expect(reply.error).toMatch(/another host/);
     } finally {
       fs.rmSync(statePath, { force: true });
+    }
+  });
+
+  it("keeps use_browser for a session whose agent restarted (#2672)", async () => {
+    // The target was written by the previous agent process; this one never
+    // saw the spawn (the session survived in dtach) and loads it from disk.
+    const file = path.join(process.env.SESSIONS_DIR!, "browser-targets.json");
+    const target = { projectId: 7, hostId: "agent-1", checkoutRoot: "/work/p", legacy: true };
+    fs.writeFileSync(file, JSON.stringify({ "321": { target, savedAt: Date.now() } }));
+    const launch = vi.fn();
+    try {
+      const reply = await agentSession(
+        undefined,
+        (a) => {
+          launch.mockResolvedValue({
+            page: {
+              url: () => "about:blank",
+              title: async () => "t",
+              content: async () => "<html></html>",
+              evaluate: async () => null,
+              locator: () => ({ ariaSnapshot: async () => "- body", all: async () => [] }),
+            },
+            consoleLogs: [],
+            pageErrors: [],
+          });
+          vi.spyOn(a.browser, "getOrLaunch").mockImplementation(
+            launch as unknown as typeof a.browser.getOrLaunch,
+          );
+        },
+        { remember: false },
+      );
+      expect(reply.error).toBeUndefined();
+      expect(launch).toHaveBeenCalledWith(target);
+    } finally {
+      fs.rmSync(file, { force: true });
     }
   });
 
