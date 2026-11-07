@@ -31,6 +31,51 @@ describe("probeHealth", () => {
   });
 });
 
+describe("probeHealth diagnosis", () => {
+  const logger = () => ({ warn: vi.fn(), debug: vi.fn() });
+
+  it("warns, naming the host, when the SSRF policy refuses the URL", async () => {
+    const log = logger();
+    vi.stubGlobal("fetch", vi.fn());
+    const client = new RemoteHostClient({
+      hostId: "h-blocked",
+      baseUrl: "http://169.254.169.254",
+      token: "tok",
+      channelApp: { log } as never,
+    });
+    await expect(client.probe()).resolves.toBe("down");
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ hostId: "h-blocked", err: expect.anything() }),
+      "host health probe failed",
+    );
+    expect(log.debug).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("only debug-logs an ordinary network failure, the heartbeat's normal business", async () => {
+    const log = logger();
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+    await expect(
+      probeHealth("http://h:1", 1000, () => undefined, { hostId: "h1", log }),
+    ).resolves.toBe("down");
+    expect(log.debug).toHaveBeenCalledTimes(1);
+    expect(log.warn).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+
+  it("is quiet when nothing failed, and without a logger", async () => {
+    const log = logger();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("ok", { status: 200 })));
+    await expect(
+      probeHealth("http://h:1", 1000, () => undefined, { hostId: "h1", log }),
+    ).resolves.toBe("ok");
+    await expect(probeHealth("http://h:1", 1000, () => undefined)).resolves.toBe("ok");
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.debug).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
+});
+
 describe("RemoteHostClient.probe / ping", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   beforeEach(() => {

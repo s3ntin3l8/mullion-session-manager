@@ -2509,7 +2509,10 @@ export class RemoteHostClient {
         (err: unknown) => (isHostBusyError(err) ? "busy" : "down"),
       );
     }
-    return probeHealth(this.baseUrl, defaultRequestTimeoutMs, () => this.pinnedDispatcher());
+    return probeHealth(this.baseUrl, defaultRequestTimeoutMs, () => this.pinnedDispatcher(), {
+      hostId: this.hostId,
+      log: this.channelApp?.log,
+    });
   }
 
   // Cookie profiles are primary-only state (see routes/browser-cookies.ts's

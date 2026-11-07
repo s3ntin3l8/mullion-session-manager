@@ -270,9 +270,10 @@ export function relayFetchResponse(
   // the connection closing, so a reset reads as a clean end. Chunk it
   // explicitly so an aborted body is distinguishable from a finished one.
   // content-length is always stripped above, so there is nothing to test for
-  // here; only HTTP/1.1 and later clients can parse chunked framing.
+  // here; only an HTTP/1.1 client can parse chunked framing (HTTP/1.0 cannot,
+  // and HTTP/2 forbids the header).
   const raw = reply.request.raw;
-  if (raw.httpVersionMajor > 1 || (raw.httpVersionMajor === 1 && raw.httpVersionMinor >= 1)) {
+  if (raw.httpVersionMajor === 1 && raw.httpVersionMinor >= 1) {
     reply.header("transfer-encoding", "chunked");
   }
   const body = Readable.fromWeb(upstreamResponse.body);
