@@ -11,6 +11,7 @@ import type {
 import { deviceDotClass } from "../../deviceStatus.js";
 import { matchesQuery } from "../../matchQuery.js";
 import { usePolling } from "../../hooks/usePolling.js";
+import { useAsyncData } from "../../hooks/useAsyncData.js";
 import { useSystemImageInstall } from "../../hooks/useSystemImageInstall.js";
 import { useSdkLicenses } from "../../hooks/useSdkLicenses.js";
 import { DEVICES_POLL_MS } from "../../SidebarDevices.js";
@@ -273,78 +274,71 @@ export function DevicesSection() {
   const [pendingInstallPath, setPendingInstallPath] = useState<string | null>(null);
   const pendingInstallRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    if (!createOpen) return;
-    let cancelled = false;
-    api
-      .listAvds()
-      .then(({ avds: list }) => {
-        if (cancelled) return;
-        setAvds(list);
-        setAvdsLoaded(true);
-        setAvdsError(null);
-        setAvdName((prev) => (list.includes(prev) ? prev : (list[0] ?? "")));
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setAvdsError(err instanceof ApiError ? err.message : "Could not load AVDs");
-        setAvdsLoaded(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [createOpen]);
+  // The AVD list — fetched only while the create form is open. The old
+  // hand-rolled effect's `if (!createOpen) return;` guard is the hook's
+  // `enabled` flag, and its `cancelled` flag is the hook's own guard, so a
+  // superseded request still cannot apply its result (issue #2411).
+  useAsyncData(
+    () => api.listAvds().then(({ avds: list }) => list),
+    (list) => {
+      setAvds(list);
+      setAvdsLoaded(true);
+      setAvdsError(null);
+      setAvdName((prev) => (list.includes(prev) ? prev : (list[0] ?? "")));
+    },
+    (err: unknown) => {
+      setAvdsError(err instanceof ApiError ? err.message : "Could not load AVDs");
+      setAvdsLoaded(true);
+    },
+    [createOpen],
+    { enabled: createOpen },
+  );
 
-  useEffect(() => {
-    if (!newAvdOpen) return;
-    let cancelled = false;
-    Promise.all([api.listSystemImages(), api.listDeviceProfiles()])
-      .then(([imagesResult, profilesResult]) => {
-        if (cancelled) return;
-        setSystemImages(imagesResult.systemImages);
-        setDeviceProfiles(profilesResult.deviceProfiles);
-        setProvisioningLoaded(true);
-        setCreateAvdError(null);
-        setSelectedSystemImage((prev) => prev || (imagesResult.systemImages[0]?.packagePath ?? ""));
-        setSelectedDeviceProfile((prev) => prev || (profilesResult.deviceProfiles[0] ?? ""));
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setCreateAvdError(
-          err instanceof ApiError ? err.message : "Could not load system images/device profiles",
-        );
-        setProvisioningLoaded(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [newAvdOpen]);
+  // The "New AVD" sub-form's provisioning data — fetched only while that
+  // sub-form is open (issue #2411).
+  useAsyncData(
+    () =>
+      Promise.all([api.listSystemImages(), api.listDeviceProfiles()]).then(
+        ([imagesResult, profilesResult]) => ({ imagesResult, profilesResult }),
+      ),
+    ({ imagesResult, profilesResult }) => {
+      setSystemImages(imagesResult.systemImages);
+      setDeviceProfiles(profilesResult.deviceProfiles);
+      setProvisioningLoaded(true);
+      setCreateAvdError(null);
+      setSelectedSystemImage((prev) => prev || (imagesResult.systemImages[0]?.packagePath ?? ""));
+      setSelectedDeviceProfile((prev) => prev || (profilesResult.deviceProfiles[0] ?? ""));
+    },
+    (err: unknown) => {
+      setCreateAvdError(
+        err instanceof ApiError ? err.message : "Could not load system images/device profiles",
+      );
+      setProvisioningLoaded(true);
+    },
+    [newAvdOpen],
+    { enabled: newAvdOpen },
+  );
 
   // Available system images — fetched lazily, only once the SDK section is
-  // actually expanded (same pattern as the AVD picker and provisioning data).
+  // actually expanded (same pattern as the AVD picker and provisioning data,
+  // and the same `useAsyncData` shape — issue #2411).
   const [sdkImagesOpen, setSdkImagesOpen] = useState(false);
-  useEffect(() => {
-    if (!sdkImagesOpen) return;
-    let cancelled = false;
-    api
-      .listAvailableSystemImages()
-      .then(({ systemImages: images }) => {
-        if (cancelled) return;
-        setAvailableImages(images);
-        setAvailableLoaded(true);
-        setAvailableError(null);
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return;
-        setAvailableError(
-          err instanceof ApiError ? err.message : "Could not load available system images",
-        );
-        setAvailableLoaded(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [sdkImagesOpen]);
+  useAsyncData(
+    () => api.listAvailableSystemImages().then(({ systemImages: images }) => images),
+    (images) => {
+      setAvailableImages(images);
+      setAvailableLoaded(true);
+      setAvailableError(null);
+    },
+    (err: unknown) => {
+      setAvailableError(
+        err instanceof ApiError ? err.message : "Could not load available system images",
+      );
+      setAvailableLoaded(true);
+    },
+    [sdkImagesOpen],
+    { enabled: sdkImagesOpen },
+  );
 
   // Distinct variant tags present, in first-seen order (the list is already
   // sorted newest-API-first by the backend, so the option order follows that).
@@ -418,24 +412,19 @@ export function DevicesSection() {
   };
 
   // Refresh available images after a successful install/uninstall.
-  useEffect(() => {
-    if (installOp.status !== "done") return;
-    let cancelled = false;
-    api
-      .listAvailableSystemImages()
-      .then(({ systemImages: images }) => {
-        if (cancelled) return;
-        setAvailableImages(images);
-        setAvailableLoaded(true);
-      })
-      .catch(() => {
-        // Non-critical — the stale list will still render; the user can
-        // re-open the section to retry.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [installOp.status]);
+  useAsyncData(
+    () => api.listAvailableSystemImages().then(({ systemImages: images }) => images),
+    (images) => {
+      setAvailableImages(images);
+      setAvailableLoaded(true);
+    },
+    () => {
+      // Non-critical — the stale list will still render; the user can
+      // re-open the section to retry.
+    },
+    [installOp.status],
+    { enabled: installOp.status === "done" },
+  );
 
   // Refresh the installed-image list the New-AVD dropdown reads so a freshly
   // installed image (e.g. a Play Store image) shows up without reopening the
@@ -446,28 +435,36 @@ export function DevicesSection() {
   useEffect(() => {
     newAvdOpenRef.current = newAvdOpen;
   }, [newAvdOpen]);
-  useEffect(() => {
-    if (installOp.status !== "done" || !newAvdOpenRef.current) return;
-    let cancelled = false;
-    api
-      .listSystemImages()
-      .then(({ systemImages: images }) => {
-        if (cancelled) return;
-        setSystemImages(images);
-        setSelectedSystemImage((prev) =>
-          prev && images.some((img) => img.packagePath === prev)
-            ? prev
-            : (images[0]?.packagePath ?? ""),
-        );
-      })
-      .catch(() => {
-        // Non-critical — same posture as above: the dropdown keeps its
-        // current list and refetches the next time the form is opened.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [installOp.status]);
+  // The form-open check stays in the FETCHER, not in `enabled`: the old
+  // effect read the ref inside the effect body, so it saw the form's state
+  // as of the moment the effect ran. `enabled` is computed during render,
+  // one commit earlier, so a form that opens in the same commit as the
+  // install finishing would read a stale `false` there. The fetcher runs
+  // synchronously inside the effect, so it sees the same value the old
+  // guard did — and it keeps the request off the wire when the form is
+  // closed, exactly as the old early return did (issue #2411).
+  useAsyncData(
+    async () => {
+      if (!newAvdOpenRef.current) return null;
+      const { systemImages: images } = await api.listSystemImages();
+      return images;
+    },
+    (images) => {
+      if (!images) return;
+      setSystemImages(images);
+      setSelectedSystemImage((prev) =>
+        prev && images.some((img) => img.packagePath === prev)
+          ? prev
+          : (images[0]?.packagePath ?? ""),
+      );
+    },
+    () => {
+      // Non-critical — same posture as above: the dropdown keeps its
+      // current list and refetches the next time the form is opened.
+    },
+    [installOp.status],
+    { enabled: installOp.status === "done" },
+  );
 
   // Issue #1347 — editing a physical device's stored adb address in place,
   // without delete-and-recreate. Keyed by device id (not a boolean) so only
