@@ -315,6 +315,36 @@ describe("check-import-boundaries.mjs", () => {
     expect(result.stderr).toContain("tsconfig.test.json");
   });
 
+  it("fails on a path alias in a NESTED tsconfig", async () => {
+    write("src/services/a.ts", "export const a = 1;\n");
+    // The alias is in a tsconfig three directories down: the guard reads every
+    // tsconfig in the tree, not only the ones at a workspace root.
+    write(
+      "frontend/e2e/tsconfig.json",
+      JSON.stringify({ compilerOptions: { paths: { "@app/*": ["./src/*"] } } }, null, 2),
+    );
+
+    const result = await run();
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("path aliases");
+    expect(result.stderr).toContain("frontend/e2e/tsconfig.json");
+  });
+
+  it("fails with its own wording when a tsconfig cannot be read", async () => {
+    write("src/services/a.ts", "export const a = 1;\n");
+    // A tsconfig the checker cannot parse is not the same problem as a path
+    // alias: it is one the guard cannot vouch for, and it must not be
+    // reported as an alias.
+    write("tsconfig.json", "{ this is not json");
+
+    const result = await run();
+
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain("cannot READ");
+    expect(result.stderr).not.toContain("This repository has path aliases");
+  });
+
   it("fails on a path alias in a tsconfig with comments and trailing commas", async () => {
     write("src/services/a.ts", "export const a = 1;\n");
     // The repo's own tsconfig files carry comments and trailing commas, so

@@ -79,7 +79,7 @@ import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { collectSourceFiles } from "./lib/audit-loc-core.mjs";
+import { collectSourceFiles, SKIP_DIRS } from "./lib/audit-loc-core.mjs";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const BASELINE_PATH = "scripts/import-boundaries.baseline.json";
@@ -321,6 +321,40 @@ function findCycles(adjacency) {
 }
 
 /**
+ * Every tsconfig in the tree, at any depth.
+ *
+ * The walk skips the same directories the rest of the repo's file collection
+ * skips (node_modules, dist, build, coverage, .wt, .mullion-worktrees,
+ * .claude) — a nested checkout or an install directory is not part of this
+ * repository's source tree.
+ *
+ * @param {string} root
+ * @returns {string[]} repo-relative POSIX paths
+ */
+function findTsconfigs(root) {
+  const found = [];
+  const walk = (dir) => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (SKIP_DIRS.has(entry.name)) continue;
+        walk(full);
+      } else if (entry.isFile() && /^tsconfig.*\.json$/.test(entry.name)) {
+        found.push(path.relative(root, full).split(path.sep).join("/"));
+      }
+    }
+  };
+  walk(root);
+  return found.sort();
+}
+
+/**
  * Fail if the repository grows a path alias.
  *
  * The checker resolves RELATIVE specifiers only. An alias (a tsconfig
@@ -334,22 +368,15 @@ function findCycles(adjacency) {
  * @returns {string[]} the aliases found, empty when there are none
  */
 function findPathAliases(root) {
+  /** @type {string[]} the aliases found */
   const found = [];
+  /** @type {string[]} the tsconfigs this guard could not read */
+  const unreadable = [];
   // EVERY tsconfig in the repository, not a hand-written list: a list
   // would silently skip whichever one a `paths` map is added to next (this
   // repo has six), and the whole point of the guard is that the blind spot
   // cannot open unnoticed.
-  const tsconfigCandidates = [];
-  for (const dir of [root, path.join(root, "frontend")]) {
-    if (!existsSync(dir)) continue;
-    for (const entry of readdirSync(dir)) {
-      if (/^tsconfig.*\.json$/.test(entry)) {
-        tsconfigCandidates.push(
-          path.relative(root, path.join(dir, entry)).split(path.sep).join("/"),
-        );
-      }
-    }
-  }
+  const tsconfigCandidates = findTsconfigs(root);
   for (const rel of tsconfigCandidates) {
     const abs = path.join(root, rel);
     // TypeScript's own config reader: this repo's tsconfig files carry
@@ -358,7 +385,7 @@ function findPathAliases(root) {
     // tsconfig this guard cannot read is a tsconfig it cannot vouch for.
     const parsed = ts.readConfigFile(abs, ts.sys.readFile);
     if (parsed.error) {
-      found.push(
+      unreadable.push(
         `${rel}: could not be parsed (${ts.flattenDiagnosticMessageText(parsed.error.messageText, " ")})`,
       );
       continue;
@@ -380,12 +407,24 @@ function findPathAliases(root) {
   if (existsSync(viteConfig) && /\balias\s*:/.test(readFileSync(viteConfig, "utf8"))) {
     found.push("frontend/vite.config.ts: resolve.alias");
   }
-  return found;
+  return { aliases: found, unreadable };
 }
 
 const options = parseArgs(process.argv.slice(2));
 
-const pathAliases = findPathAliases(options.root);
+const { aliases: pathAliases, unreadable: unreadableTsconfigs } = findPathAliases(options.root);
+if (unreadableTsconfigs.length > 0) {
+  console.error(
+    "This repository has a tsconfig the import-boundary checker cannot READ.\n" +
+      "That is not the same problem as a path alias: an unreadable tsconfig is\n" +
+      "one this guard cannot vouch for, and a `paths` map hiding inside it would\n" +
+      "name a file in this repository under a bare specifier — invisible to both\n" +
+      "the cycle rule and the layering rule. Fix the tsconfig, or teach this\n" +
+      "checker to read it. Found:",
+  );
+  for (const entry of unreadableTsconfigs) console.error(`  ${entry}`);
+  process.exit(1);
+}
 if (pathAliases.length > 0) {
   console.error(
     "This repository has path aliases, and the import-boundary checker does\n" +
@@ -521,10 +560,17 @@ if (options.update) {
   console.log(
     `Updated ${BASELINE_PATH}: ${updated.cycles.length} cycle group(s), ${updated.inversions.length} inversion(s).`,
   );
-  console.log(
-    "A NEW entry has no note yet, and the check rejects a note-less entry: fill in\n" +
-      "why each new cycle or inversion is allowed before the check will pass.",
-  );
+  const withoutNote = [
+    ...updated.cycles.filter((group) => !group.note || group.note.trim() === ""),
+    ...updated.inversions.filter((entry) => !entry.note || entry.note.trim() === ""),
+  ];
+  if (withoutNote.length > 0) {
+    console.log(
+      `${withoutNote.length} NEW entry/entries have no note yet, and the check rejects a\n` +
+        "note-less entry: fill in why each new cycle or inversion is allowed before the\n" +
+        "check will pass.",
+    );
+  }
   process.exit(0);
 }
 
