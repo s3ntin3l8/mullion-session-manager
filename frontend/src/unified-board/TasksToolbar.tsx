@@ -247,7 +247,8 @@ export function TasksToolbar({
                 .filter((b) => !b.deleted)
                 .map((b) => (
                   <li key={b.id}>
-                    Branch {b.branch} not deleted: {b.reason}
+                    Branch {b.branch} not deleted:{" "}
+                    {b.reason === "outcome-unknown" && b.detail ? b.detail : b.reason}
                   </li>
                 ))}
             </ul>

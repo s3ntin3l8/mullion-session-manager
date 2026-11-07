@@ -34,6 +34,7 @@ import { deliverRejectFeedback } from "../services/task-reject.js";
 import { readLiveWorkerState } from "../services/task-reseed.js";
 import { deleteTaskBranch, type TaskBranchDelete } from "../services/task-branch-delete.js";
 import { removeCheckoutForced } from "../services/checkout-removal.js";
+import { isOutcomeUnknown, unknownOutcomeText } from "../services/remote-host-errors.js";
 import { resolveGitHubToken } from "../services/github-integration.js";
 import { resolveRepoRef } from "../services/host-git.js";
 import { removeLabel } from "../services/github-write.js";
@@ -763,7 +764,10 @@ export async function tasksRoute(app: FastifyInstance) {
   async function teardownAbandonedTask(
     task: typeof tasks.$inferSelect,
     project: typeof projects.$inferSelect,
-  ): Promise<{ worktreeRemoved: boolean; branchDeleted: boolean }> {
+  ): Promise<{ worktreeRemoved: boolean; branchDeleted: boolean; unknown: string[] }> {
+    // Steps whose connection dropped after the request was sent: the host may
+    // have done them, so the caller says so instead of reporting nothing.
+    const unknown: string[] = [];
     stopHermesRunQuietly(app, task.reviewRunId);
     for (const sessionId of new Set([task.sessionId, task.reviewSessionId])) {
       if (sessionId === null) continue;
@@ -788,6 +792,7 @@ export async function tasksRoute(app: FastifyInstance) {
           { err, worktreePath: task.worktreePath, taskId: task.id },
           "abandon: removeWorktree threw",
         );
+        if (isOutcomeUnknown(err)) unknown.push("the worktree removal");
       }
     }
 
@@ -800,10 +805,11 @@ export async function tasksRoute(app: FastifyInstance) {
           { taskId: task.id, branch: task.branchName, reason: result.reason },
           "abandon: deleteBranch did not delete",
         );
+        if (result.reason === "outcome-unknown") unknown.push("the branch delete");
       }
     }
 
-    return { worktreeRemoved, branchDeleted };
+    return { worktreeRemoved, branchDeleted, unknown };
   }
 
   app.delete<{ Params: { id: string }; Querystring: { force?: string } }>(
@@ -889,7 +895,15 @@ export async function tasksRoute(app: FastifyInstance) {
 
       if (force) {
         project ??= getProjectOr404(existing.projectId);
-        if (project) await teardownAbandonedTask(existing, project);
+        const torndown = project ? await teardownAbandonedTask(existing, project) : null;
+        if (torndown && torndown.unknown.length > 0) {
+          // The task is gone either way; a 204 here would hide that part of the
+          // cleanup may have run (or not) and is not safe to repeat blindly.
+          return {
+            outcomeUnknown: torndown.unknown,
+            message: unknownOutcomeText(torndown.unknown.join(" and ")),
+          };
+        }
       }
 
       reply.code(204);
@@ -992,7 +1006,13 @@ export async function tasksRoute(app: FastifyInstance) {
       const rateLimited = isGitHubRateLimited();
       const deleted: number[] = [];
       const failed: { id: number; error: string }[] = [];
-      const branches: { id: number; branch: string; deleted: boolean; reason?: string }[] = [];
+      const branches: {
+        id: number;
+        branch: string;
+        deleted: boolean;
+        reason?: string;
+        detail?: string;
+      }[] = [];
 
       for (const task of attempted) {
         if (task.issueNumber !== null && rateLimited) {

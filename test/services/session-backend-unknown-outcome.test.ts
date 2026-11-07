@@ -42,6 +42,7 @@ import {
 } from "../../src/services/session-backend.js";
 import { HostOutcomeUnknownError } from "../../src/services/remote-host-errors.js";
 import { HostUnreachableError } from "../../src/services/remote-host-client.js";
+import { MUTATING_AS_VALUE, READ_ONLY } from "../helpers/remote-backend-classification.js";
 
 // #2691 — every mutating RemoteBackend call raises ONE typed unknown-outcome
 // error when the channel closes after the request was sent. It is raised, never
@@ -87,33 +88,18 @@ const CALLS: Call[] = [
   ["deleteTaskReviewFindings", (b) => b.deleteTaskReviewFindings(1 as never, 1 as never)],
 ];
 
-// Every RemoteBackend method must be classified here. A new method that is in
-// neither list fails the test below, so it cannot be added unclassified:
-// mutating ones belong in CALLS (above), read-only ones in READ_ONLY.
-// `prompt` is mutating but answers an unknown outcome as a VALUE (a refusal with
-// the "MAY HAVE BEEN DELIVERED" error), covered in session-backend-remote-control.test.ts.
-const MUTATING_AS_VALUE = ["prompt"];
-const READ_ONLY = [
-  "liveStatus",
-  "liveness",
-  "compareWorktreePaths",
-  "getScrollback",
-  "getRenderedScrollback",
-  "getTranscript",
-  "listSessionProcesses",
-  "waitOutput",
-  "listTaskWorktreeDirs",
-  "readTaskReviewFindings",
-  "resolveSessionsDir",
-  "readTaskCommitTitle",
-  "readTaskRereviewRequest",
-];
-
+// Every RemoteBackend method must be classified: mutating ones in CALLS (above)
+// or MUTATING_AS_VALUE, read-only ones in READ_ONLY (the shared helper, whose
+// entries session-backend-read-only.test.ts verifies on the wire). A new method
+// in none of them fails the test below, so it cannot be added unclassified.
 describe("RemoteBackend method classification (#2703)", () => {
   it("every method is classified mutating (CALLS) or read-only (READ_ONLY), exactly once", () => {
     const proto = Object.getPrototypeOf(backend()) as object;
+    // Read the descriptor's value: `proto[n]` would run the `client` getter.
     const methods = Object.getOwnPropertyNames(proto).filter(
-      (n) => n !== "constructor" && typeof (proto as Record<string, unknown>)[n] === "function",
+      (n) =>
+        n !== "constructor" &&
+        typeof Object.getOwnPropertyDescriptor(proto, n)?.value === "function",
     );
     // Private helpers are not part of the SessionBackend surface.
     const surface = methods.filter(
@@ -125,9 +111,12 @@ describe("RemoteBackend method classification (#2703)", () => {
     expect(classified.filter((n) => !surface.includes(n))).toEqual([]);
   });
 
-  it("the Local/Remote backend methods that mutate are the ones in CALLS", () => {
-    // A read-only entry must never also be a mutating call.
-    expect(READ_ONLY.filter((n) => CALLS.some(([c]) => c === n))).toEqual([]);
+  it("has no arrow-function fields, which the prototype scan above cannot see", () => {
+    const instance = backend() as Record<string, unknown>;
+    const fields = Object.getOwnPropertyNames(instance).filter(
+      (n) => typeof instance[n] === "function",
+    );
+    expect(fields).toEqual([]);
   });
 });
 

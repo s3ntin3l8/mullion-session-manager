@@ -24,7 +24,7 @@ import { getRemoteHostClient, HostRequestError } from "../services/remote-host-c
 import { isAllowedHttpUrl } from "../services/url-guard.js";
 import { measureHostCapacity } from "../services/host-capacity.js";
 import { autoFillHostCwds } from "../services/host-checkout-detect.js";
-import { forwardHostRequestError } from "../services/host-error-reply.js";
+import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
 import { MAX_PROJECTS_ROOTS } from "../services/agent-projects-roots.js";
 import { buildAgentConfig } from "./internal.js";
 import { appVersion, reportedVersion } from "./server-info.js";
@@ -512,7 +512,7 @@ export async function hostsRoute(app: FastifyInstance) {
           return forwardHostRequestError(reply, err);
         }
         app.log.warn({ hostId: id, err }, "host unreachable, project roots not changed");
-        return reply.serviceUnavailable(`Host ${id} is unreachable`);
+        return replyHostUnreachable(reply, id, err, "changing the project roots");
       }
     },
   );
@@ -676,7 +676,8 @@ export async function hostsRoute(app: FastifyInstance) {
     } catch (err) {
       if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
       app.log.warn({ hostId: id, err }, "host unreachable, update apply failed");
-      return reply.serviceUnavailable(`Host ${id} is unreachable`);
+      // The call that matters: the update may already be installing.
+      return replyHostUnreachable(reply, id, err, "applying the update");
     }
   });
 

@@ -126,8 +126,11 @@ describe("headless enrolled agent: ongoing control operations (issue #2691)", ()
     expect(agent.pty.get(id)).toBeDefined();
     expect(agent.pty.consumeSeed(id)).toBe("seed recorded by the agent");
 
+    // terminate must remove the session from the agent, and the primary must
+    // then read it as not alive through the same channel (the seed was consumed
+    // above, so a second read of it would prove nothing about terminate).
     await expect(backend.terminate(id)).resolves.toBeUndefined();
     expect(agent.pty.get(id)).toBeUndefined();
-    expect(agent.pty.consumeSeed(id)).toBeNull();
+    expect((await backend.liveness([id]))[id]).not.toBe("alive");
   });
 });

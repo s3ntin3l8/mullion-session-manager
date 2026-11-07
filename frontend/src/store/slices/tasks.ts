@@ -143,8 +143,13 @@ export const createTasksSlice: StateCreator<DashboardState, [], [], TasksSlice> 
     },
 
     deleteTask: async (id, opts) => {
-      await api.deleteTask(id, opts);
+      const result = await api.deleteTask(id, opts);
       void get().refreshTasks();
+      // The task is gone, but part of an Abandon's cleanup may or may not have
+      // run: say so where it will be seen after the panel closes.
+      if (result?.outcomeUnknown?.length) {
+        get().pushToast({ message: result.message, kind: "error" });
+      }
     },
 
     archiveTask: async (id) => {

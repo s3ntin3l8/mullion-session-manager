@@ -35,6 +35,7 @@ import {
 import {
   isHostBusyError,
   isOutcomeUnknown,
+  unknownOutcomeDetail,
   unknownOutcomeText,
 } from "../services/remote-host-errors.js";
 import { isHostTransientError } from "../services/remote-host-errors.js";
@@ -188,7 +189,7 @@ function hostFailMsg(app: FastifyInstance, hostId: string, err: unknown, what: s
     err instanceof HostRequestError
       ? `Host ${hostId} rejected ${what}: ${err.message}`
       : isOutcomeUnknown(err)
-        ? unknownOutcomeText(what, err.message)
+        ? unknownOutcomeText(what, unknownOutcomeDetail(err))
         : `Host ${hostId} is unreachable`;
   app.log.warn({ hostId, err }, message);
   return message;
@@ -347,7 +348,7 @@ export async function projectGitWritesRoute(app: FastifyInstance): Promise<void>
         } catch (err) {
           if (replyUnsupportedOnAgent(err, request.query.sessionId, project.hostId, reply))
             return reply;
-          return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+          return reply.serviceUnavailable(hostFailMsg(app, project.hostId, err, "the git fetch"));
         }
       } finally {
         releaseClone(project.hostId, project.cwd);
@@ -962,8 +963,9 @@ export async function projectGitWritesRoute(app: FastifyInstance): Promise<void>
       try {
         return await backend.pruneWorktreeMetadata(project.cwd);
       } catch (err) {
-        app.log.warn({ hostId: project.hostId, err }, "host unreachable, worktree prune failed");
-        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        return reply.serviceUnavailable(
+          hostFailMsg(app, project.hostId, err, "the worktree prune"),
+        );
       }
     },
   );

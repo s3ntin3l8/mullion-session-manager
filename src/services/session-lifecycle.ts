@@ -1695,7 +1695,9 @@ async function stashSeedBestEffort(
   } catch (err) {
     app.log.warn(
       { hostId, sessionId, err },
-      "stashSeed: host unreachable or rejected the request — proceeding to spawn without it",
+      isOutcomeUnknown(err)
+        ? "stashSeed: the connection dropped after the request was sent, so the seed may have landed — proceeding to spawn"
+        : "stashSeed: host unreachable or rejected the request — proceeding to spawn without it",
     );
   }
 }

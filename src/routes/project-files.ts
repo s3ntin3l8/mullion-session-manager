@@ -11,7 +11,7 @@ import { projects, sessions } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
 import { isHostBusyError } from "../services/remote-host-errors.js";
-import { forwardHostRequestError } from "../services/host-error-reply.js";
+import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
 import { getStoredSettings } from "../services/settings.js";
 import {
   executionContextErrorStatus,
@@ -143,7 +143,7 @@ export async function projectFilesRoute(app: FastifyInstance) {
         .send({ message: `Host ${hostId} is busy`, retryable: true });
     }
     app.log.warn({ hostId, err }, "host unreachable, project files unavailable");
-    return reply.serviceUnavailable(`Host ${hostId} is unreachable`);
+    return replyHostUnreachable(reply, hostId, err, "the file operation");
   }
 
   interface Ctx {

@@ -28,7 +28,7 @@ import {
   resolveExecutionContext,
 } from "../services/execution-context.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
-import { forwardHostRequestError } from "../services/host-error-reply.js";
+import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
 import {
   readDockConfig,
   writeDockConfig,
@@ -206,7 +206,7 @@ export async function dockConfigRoute(app: FastifyInstance) {
           { hostId: target.hostId, err },
           "host unreachable, could not write dock config",
         );
-        return reply.serviceUnavailable(`Host ${target.hostId} is unreachable`);
+        return replyHostUnreachable(reply, target.hostId, err, "writing the dock config");
       }
     },
   );

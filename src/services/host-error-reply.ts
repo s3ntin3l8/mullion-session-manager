@@ -14,6 +14,30 @@
 // home, and to retire dock-config.ts's duplicate.
 import type { FastifyReply } from "fastify";
 import type { HostRequestError } from "./remote-host-client.js";
+import {
+  isOutcomeUnknown,
+  unknownOutcomeDetail,
+  unknownOutcomeText,
+} from "./remote-host-errors.js";
+
+/**
+ * The reply for a mutation whose host could not be reached: a 503 "unreachable"
+ * for a host that never got the request, but a 502 that says the request MAY
+ * HAVE BEEN DELIVERED when the connection was lost after it was sent. A plain
+ * "unreachable" there invites a blind retry of something that already landed.
+ * `what` names the operation ("writing the agent rule").
+ */
+export function replyHostUnreachable(
+  reply: FastifyReply,
+  hostId: string,
+  err: unknown,
+  what: string,
+) {
+  if (isOutcomeUnknown(err)) {
+    return reply.badGateway(unknownOutcomeText(what, unknownOutcomeDetail(err)));
+  }
+  return reply.serviceUnavailable(`Host ${hostId} is unreachable`);
+}
 
 export function forwardHostRequestError(reply: FastifyReply, err: HostRequestError) {
   // Independent review, PR #458 — a 401/403 from the agent means its own

@@ -62,8 +62,14 @@ export const tasksApi = {
   // still-tracked-issue guards, mirroring the Hosts cascade-delete pattern
   // (api/hosts.ts's deleteHost): a plain delete first, and only on a 409
   // does the UI re-prompt and re-issue with force.
+  // A 204 is a clean delete. A 200 means the task is gone but part of the
+  // Abandon cleanup (the worktree removal, the branch delete) lost its
+  // connection mid-request, so it may or may not have run (`message` says so).
   deleteTask: (id: number, opts?: { force?: boolean }) =>
-    request<void>(`/api/tasks/${id}${opts?.force ? "?force=true" : ""}`, { method: "DELETE" }),
+    request<{ outcomeUnknown: string[]; message: string } | undefined>(
+      `/api/tasks/${id}${opts?.force ? "?force=true" : ""}`,
+      { method: "DELETE" },
+    ),
 
   // #1015 (archive) — orthogonal to status (see db/schema.ts's own doc
   // comment); restricted server-side to done/failed tasks.

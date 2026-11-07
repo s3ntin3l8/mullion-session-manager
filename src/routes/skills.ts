@@ -12,7 +12,7 @@ import { eq } from "drizzle-orm";
 import { projects } from "../db/schema.js";
 import { LOCAL_HOST_ID } from "../services/host-registry.js";
 import { getRemoteHostClient, HostRequestError } from "../services/remote-host-client.js";
-import { forwardHostRequestError } from "../services/host-error-reply.js";
+import { forwardHostRequestError, replyHostUnreachable } from "../services/host-error-reply.js";
 import {
   listGlobalSkills,
   listProjectSkills,
@@ -151,7 +151,7 @@ export async function skillsRoute(app: FastifyInstance) {
       } catch (err) {
         if (err instanceof HostRequestError) return forwardHostRequestError(reply, err);
         app.log.warn({ hostId: project.hostId, err }, "host unreachable, could not toggle skill");
-        return reply.serviceUnavailable(`Host ${project.hostId} is unreachable`);
+        return replyHostUnreachable(reply, project.hostId, err, "toggling the skill");
       }
     },
   );
