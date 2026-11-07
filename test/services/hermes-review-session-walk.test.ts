@@ -28,6 +28,8 @@ describe("hermes review session walk", () => {
   let fetchMock: ReturnType<typeof vi.fn>;
   // The Hermes POST /v1/runs: given the session id of the request body.
   let dispatch: (sessionId: string) => Response;
+  // The check runs on the base commit — where the in-flight marker is read.
+  let checkRuns: () => Response;
 
   beforeAll(async () => {
     fs.rmSync(tmpDb, { force: true });
@@ -55,8 +57,9 @@ describe("hermes review session walk", () => {
         cooldownMinutes: 10,
       },
     });
-    setHermesKey(app, "sekret-key"); // pragma: allowlist secret
+    setHermesKey(app, "sekret-key");
     dispatch = () => accepted();
+    checkRuns = () => new Response(JSON.stringify({ check_runs: [] }), { status: 200 });
     fetchMock = vi.fn((url: string, init?: RequestInit) => {
       if (url === PROMPT_URL) return Promise.resolve(new Response("PROMPT", { status: 200 }));
       if (url === `${API}/health`) return Promise.resolve(new Response("ok", { status: 200 }));
@@ -65,7 +68,7 @@ describe("hermes review session walk", () => {
         return Promise.resolve(dispatch(body.session_id));
       }
       if (url.includes("/commits/") && url.includes("/check-runs")) {
-        return Promise.resolve(new Response(JSON.stringify({ check_runs: [] }), { status: 200 }));
+        return Promise.resolve(checkRuns());
       }
       if (url === "https://api.github.com/repos/acme/widgets/check-runs") {
         return Promise.resolve(new Response(JSON.stringify({ id: 4242 }), { status: 201 }));
@@ -120,5 +123,35 @@ describe("hermes review session walk", () => {
     dispatch = (id) => (refusals[id] ? refused(refusals[id]) : accepted());
     await expect(requestHermesReview(app, PR)).resolves.toMatchObject({ runId: "run_ok" });
     expect(tried()).toHaveLength(5);
+  });
+
+  it("resumes from a remembered session that is itself retired, with the key sequence to match", async () => {
+    // The previous round's marker names -4 (the pull request got that far),
+    // and -4 has been pruned since: the walk resumes at -5, not at the base.
+    checkRuns = () =>
+      new Response(
+        JSON.stringify({
+          check_runs: [{ id: 9, name: "Hermes review", output: { summary: `session: ${BASE}-4` } }],
+        }),
+        { status: 200 },
+      );
+    dispatch = (id) => (id === `${BASE}-4` ? refused("not_found") : accepted());
+    await expect(
+      requestHermesReview(app, {
+        ...PR,
+        githubToken: "gh-token",
+        resolveBase: async () => "base123",
+      }),
+    ).resolves.toMatchObject({ runId: "run_ok" });
+    expect(tried()).toEqual([`${BASE}-4`, `${BASE}-5`]);
+    const keys = fetchMock.mock.calls
+      .filter(([url]) => String(url).endsWith("/v1/runs"))
+      .map(([, init]) => (init as { headers: Record<string, string> }).headers["Idempotency-Key"]);
+    expect(keys[1]).toBe(`${keys[0]}#session-5`);
+  });
+
+  it("says a pruned-out give-up is not worth retrying", async () => {
+    dispatch = () => refused("not_found");
+    await expect(requestHermesReview(app, PR)).rejects.toThrow(/can never be used again/);
   });
 });

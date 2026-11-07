@@ -1056,7 +1056,11 @@ export async function requestRelay(
         // Every session id for this range was refused. The range itself was
         // never tried — report the session refusal, not a failed range.
         throw new HermesUnavailableError(
-          "The review could not be started — Hermes refused every session for this pull request",
+          // Pruned ids never come back, so this is not worth retrying later:
+          // say so instead of reading like a transient refusal.
+          retiredSkips >= MAX_RETIRED_SESSION_SKIPS
+            ? "The review could not be started — Hermes deleted (pruned) every session id tried for this pull request, and a deleted id can never be used again. Retrying will not help until Hermes keeps review sessions longer"
+            : "The review could not be started — Hermes refused every session for this pull request",
           `gave up after ${stuckRefusals} stuck and ${retiredSkips} retired sessions${lastError ? `: ${lastError.message}` : ""}`,
         );
       }
